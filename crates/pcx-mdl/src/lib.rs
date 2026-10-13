@@ -54,12 +54,18 @@
 
 mod fafx1800;
 mod geoset1800;
+mod joint1800;
 mod material;
 mod material1800;
 mod particle2;
 pub use fafx1800::{FafxRecord1800, FafxStream1800};
 pub use geoset1800::{
     GeosetStreams1800, SkinRecord1800, SkinStream1800, StoredGeosetBlock, TangentStream1800,
+};
+pub use joint1800::{
+    BindPoseRecord1800, BindPoseStream1800, MatrixPalette1800, MatrixPaletteEntry1800,
+    PrimaryJointJoin1800, PrimaryJointReference1800, PrimaryJointRefusal1800,
+    SkinWeightDiagnostics1800,
 };
 pub use material::{MaterialLayer, TextureFrameTrack};
 pub use material1800::{MaterialLayer1800, MaterialTrack1800, SubTexture1800};
@@ -162,6 +168,19 @@ pub enum Error {
     },
     #[error("duplicate geoset sub-block {tag:?} at +{at}")]
     DuplicateGeosetTag { at: usize, tag: [u8; 4] },
+    #[error(
+        "primary-convention v{version} joint join at {at} (geoset {geoset_offset}, vertex {vertex}, lane {lane}) refused: {reason:?}"
+    )]
+    PrimaryJointRefusal {
+        version: u32,
+        /// Absolute source offset of the geoset's inclusive-size word.
+        geoset_offset: usize,
+        vertex: usize,
+        lane: usize,
+        /// Absolute source offset of the joint word, or the available stream start.
+        at: usize,
+        reason: PrimaryJointRefusal1800,
+    },
     #[error("chunk {chunk} is {size} bytes, not a whole number of {stride}-byte records")]
     RaggedRecords {
         chunk: &'static str,
