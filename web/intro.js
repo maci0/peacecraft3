@@ -19,7 +19,10 @@ function finish(why) {
   video.load();
   section.hidden = true;
   const canvas = document.querySelector('#launcher-canvas');
-  if (canvas) canvas.hidden = previousCanvasHidden;
+  if (canvas) {
+    canvas.hidden = previousCanvasHidden;
+    if (!canvas.hidden) canvas.focus({ preventScroll: true });
+  }
   globalThis.peacecraft3Audio?.resumeAfterIntro?.();
   document.dispatchEvent(new CustomEvent('peacecraft3-intro-finished', { detail: why }));
 }

@@ -874,6 +874,8 @@ Format: `date — subsystem — symptom — root cause — status`
   pass. Per-entry handles now apply to the label root and every authored run;
   a two-face ECS regression verifies unrelated launcher/F8 text is untouched.
   Six browser F8 visibility checks pass before/after import and after resize.
+  Skipping the movie with Escape or its button returns focus to the visible
+  canvas; direct F8 works without an extra click in both browser checks.
   Shadow offset, FIXEDSIZE and accelerator dispatch remain unresolved.
 
 - Checked CASC readers and asset-source layering belong to the strict workspace.

@@ -186,7 +186,7 @@ function mdlTextures(bytes) {
   throw Error('Missing authored model TEXS');
 }
 async function run() {
-  assert.equal(process.env.PCX_APP_IMPORT_WASM_READY, '1', 'WAIT: root must notify generated WASM/glue readiness before this running-app check');
+  assert.equal(process.env.PCX_APP_IMPORT_WASM_READY, '1', 'Generated WASM/glue readiness required before this running-app check');
   const fixture = JSON.parse(await readFile(`${output}/prepared.json`, 'utf8'));
   const { chromium } = await import(pathToFileURL(process.env.PCX_PLAYWRIGHT_MODULE ?? `${root}.scratch/browser-check/node_modules/playwright-core/index.mjs`));
   const origin = process.env.PCX_APP_IMPORT_ORIGIN ?? 'http://127.0.0.1:8931';
@@ -207,8 +207,9 @@ async function run() {
     const settingsCapture = `${output}/settings.png`; await page.screenshot({ path: settingsCapture });
     const { stdout } = await exec('/usr/bin/tesseract', [settingsCapture, 'stdout', '--psm', '11', 'tsv'], { maxBuffer: 4 * 1024 * 1024 });
     const words = stdout.split('\n').slice(1).map(l => l.split('\t')).filter(v => v.length >= 12);
-    const mainWord = words.find((v, i) => /^main$/i.test(v[11]) && /^menu$/i.test(words[i + 1]?.[11] ?? ''));
-    assert(mainWord, 'Rendered Main menu control not found by local OCR; root must inspect settings.png');
+    const controlWord = value => value.replace(/[^a-z]/gi, '').toLowerCase();
+    const mainWord = words.find((v, i) => controlWord(v[11]) === 'main' && controlWord(words[i + 1]?.[11] ?? '') === 'menu');
+    assert(mainWord, 'Rendered Main menu control not found by local OCR; inspect settings.png');
     await page.mouse.move(Number(mainWord[6]) + Number(mainWord[8]) / 2, Number(mainWord[7]) + Number(mainWord[9]) / 2);
     await page.waitForTimeout(250);
     await page.mouse.down(); await page.waitForTimeout(100); await page.mouse.up();
@@ -217,6 +218,9 @@ async function run() {
     const scenePattern = `Original menu background: ${fixture.expectedScene.geosets} geosets, ${fixture.expectedScene.paths.length} textures, ${fixture.expectedScene.duration} ms loop; missing []`;
     await poll(() => logs.some(l => l.text.includes(scenePattern)), 'Initial running scene must render all required assets');
     await page.screenshot({ path: `${output}/before-import.png` });
+    const f8Proof = [];
+    f8Proof.push(await captureFps(page, 'before-import-f8-hidden', false));
+    await toggleFps(page); f8Proof.push(await captureFps(page, 'before-import-f8-visible', true));
     const initialRevision = await page.evaluate(() => peacecraft3.asset_revision());
     const logStart = logs.length, importRequestStart = requests.length;
     await page.locator('#iso').setInputFiles(fixture.isoPath);
@@ -234,6 +238,8 @@ async function run() {
       const font = fixture.fonts.find(font => font.id === label.id); assert(font);
       await poll(() => logs.slice(logStart).some(l => l.text.includes(`Menu label ${label.id}: ${label.visible} (hotkey `) && l.text.includes(`face ${JSON.stringify(font.face)}`)), `Imported authored label/font ${label.id} must rebuild`);
     }
+    f8Proof.push(await captureFps(page, 'after-import-f8-visible', true));
+    await toggleFps(page); f8Proof.push(await captureFps(page, 'after-import-f8-hidden', false));
     await page.screenshot({ path: `${output}/after-import-menu.png` });
     await page.locator('#launcher-canvas').screenshot({ path: `${output}/after-import-canvas.png` });
     const canvasGeometry = await page.locator('#launcher-canvas').evaluate(c => ({ width: c.width, height: c.height, bounds: c.getBoundingClientRect().toJSON() }));
@@ -250,6 +256,9 @@ async function run() {
     assert.equal(afterClick.clicks, committed.audio.clicks + 1, 'Real rendered menu button must play imported local click');
     await page.setViewportSize({ width: 1500, height: 1000 }); await page.waitForTimeout(1000); await page.screenshot({ path: `${output}/resized-menu.png` });
     await page.locator('#launcher-canvas').screenshot({ path: `${output}/resized-canvas.png` });
+    f8Proof.push(await captureFps(page, 'resized-f8-hidden', false));
+    await toggleFps(page); f8Proof.push(await captureFps(page, 'resized-f8-visible', true));
+    await toggleFps(page);
     const resizedGeometry = await page.locator('#launcher-canvas').evaluate(c => ({ width: c.width, height: c.height, bounds: c.getBoundingClientRect().toJSON() }));
     await writeFile(`${output}/canvas-geometry.json`, JSON.stringify({ imported: canvasGeometry, resized: resizedGeometry }, null, 2));
     await page.waitForFunction(() => peacecraft3Audio.status().clickPaused); await clickAuthoredEntry(page, fixture);
@@ -263,11 +272,83 @@ async function run() {
     assert.equal(await page.evaluate(() => peacecraft3.asset_revision()), stableRevision); await page.screenshot({ path: `${output}/unequal-refused-menu-retained.png` });
     const unexpected = requests.filter(r => !r.url.startsWith('blob:') && (!r.url.startsWith(`${origin}/`) || r.method !== 'GET' || r.body || /\.(iso|mpq)(?:[?#]|$)/i.test(r.url)));
     assert.deepEqual(unexpected, []); assert.deepEqual(sockets, []); assert.deepEqual(errors, []);
-    const proof = { ok: true, automaticLabelProof, visualAcceptance: 'pending independent capture review', fixture: `${output}/prepared.json`, importedFonts, committed, logs, network: { requests, requestsDuringLocalImport: requests.slice(importRequestStart), uploads: 0, unexpected: 0, sockets: 0 },
-      captures: ['settings.png', 'before-import.png', 'after-import-menu.png', 'after-import-canvas.png', 'resized-menu.png', 'resized-canvas.png', 'unequal-refused-menu-retained.png'].map(p => `${output}/${p}`),
-      visualReview: 'Root must inspect captures for actual visible authored labels/menu; console and DOM canvas alone are insufficient', limitation: fixture.limitation };
+    const proof = { ok: true, automaticLabelProof, visualAcceptance: 'pending independent capture review', fixture: `${output}/prepared.json`, importedFonts, f8Proof, committed, logs, network: { requests, requestsDuringLocalImport: requests.slice(importRequestStart), uploads: 0, unexpected: 0, sockets: 0 },
+      captures: ['settings.png', 'before-import.png', 'after-import-menu.png', 'after-import-canvas.png', 'resized-menu.png', 'resized-canvas.png', 'unequal-refused-menu-retained.png'].map(p => `${output}/${p}`).concat(f8Proof.flatMap(p => [p.capture, p.roi])),
+      visualReview: 'Independent capture review required for visible authored labels/menu; console and DOM canvas alone are insufficient', limitation: fixture.limitation };
     await writeFile(`${output}/proof.json`, JSON.stringify(proof, null, 2)); console.log(JSON.stringify({ ok: true, proof: `${output}/proof.json`, visualReview: proof.visualReview, limitation: proof.limitation }));
   } finally { await writeFile(`${output}/run-diagnostics.json`, JSON.stringify({ logs, requests, sockets, errors }, null, 2)); await browser.close(); }
+}
+async function runFocusHandoff() {
+  assert.equal(process.env.PCX_APP_IMPORT_WASM_READY, '1', 'Generated WASM readiness required');
+  await mkdir(output, { recursive: true });
+  const { chromium } = await import(pathToFileURL(process.env.PCX_PLAYWRIGHT_MODULE ?? `${root}.scratch/browser-check/node_modules/playwright-core/index.mjs`));
+  const origin = process.env.PCX_APP_IMPORT_ORIGIN ?? 'http://127.0.0.1:8931';
+  const browser = await chromium.launch({ executablePath: '/usr/bin/chromium', args: ['--no-sandbox', '--enable-unsafe-swiftshader'] });
+  const outcomes = [], requests = [], errors = [], sockets = [], logs = [];
+  try {
+    for (const method of ['escape', 'skip-button']) {
+      const context = await browser.newContext({ viewport: { width: 1200, height: 1120 }, deviceScaleFactor: 1 });
+      try {
+        context.on('request', r => requests.push({ method, url: r.url(), verb: r.method(), body: r.postDataBuffer() !== null }));
+        const page = await context.newPage(); page.setDefaultTimeout(120000);
+        page.on('pageerror', e => errors.push({ method, error: e.message }));
+        page.on('console', m => logs.push({ method, type: m.type(), text: m.text() }));
+        page.on('websocket', socket => sockets.push(socket.url()));
+        await page.addInitScript(() => {
+          window.focusCompletions = [];
+          document.addEventListener('peacecraft3-intro-finished', event => focusCompletions.push({ reason: event.detail,
+            activeElement: document.activeElement?.id, canvasHidden: document.querySelector('#launcher-canvas')?.hidden,
+            scrollX, scrollY, intro: peacecraft3Intro.status() }));
+        });
+        await page.goto(`${origin}/index.html`, { waitUntil: 'domcontentloaded' });
+        await page.waitForFunction(() => globalThis.peacecraft3?.stored_asset('menu/standardtemplates.fdf') && peacecraft3.stored_asset('menu/mainmenu.fdf') && peacecraft3.stored_asset('menu/war3skins.txt'));
+        const settings = `${output}/${method}-launcher.png`; await page.screenshot({ path: settings });
+        const { stdout } = await exec('/usr/bin/tesseract', [settings, 'stdout', '--psm', '11', 'tsv']);
+        const words = stdout.split('\n').slice(1).map(line => line.split('\t')).filter(v => v.length >= 12);
+        const normalized = value => value.replace(/[^a-z]/gi, '').toLowerCase();
+        const control = words.find((v, i) => normalized(v[11]) === 'main' && normalized(words[i + 1]?.[11] ?? '') === 'menu');
+        assert(control, `${method}: visible Main menu control not recognized`);
+        await page.mouse.move(Number(control[6]) + Number(control[8]) / 2, Number(control[7]) + Number(control[9]) / 2);
+        await page.waitForTimeout(250); await page.mouse.down(); await page.waitForTimeout(100); await page.mouse.up();
+        await page.waitForFunction(() => peacecraft3Intro.status().active);
+        const before = await page.evaluate(() => ({ activeTag: document.activeElement?.tagName, scrollX, scrollY, intro: peacecraft3Intro.status() }));
+        if (method === 'escape') await page.keyboard.press('Escape');
+        else await page.locator('.intro-skip').click();
+        await page.waitForFunction(() => focusCompletions.length === 1);
+        const completion = await page.evaluate(() => focusCompletions[0]);
+        assert.equal(completion.reason, 'skipped'); assert.equal(completion.activeElement, 'launcher-canvas');
+        assert.equal(completion.canvasHidden, false); assert.equal(completion.intro.active, false);
+        assert.equal(completion.scrollX, before.scrollX); assert.equal(completion.scrollY, before.scrollY);
+        const immediateFocus = await page.evaluate(() => document.activeElement?.id); assert.equal(immediateFocus, 'launcher-canvas');
+        // Deliberately no canvas.focus(), pointer interaction or screenshot scrolling before this key.
+        await page.keyboard.down('F8'); await page.waitForTimeout(100); await page.keyboard.up('F8'); await page.waitForTimeout(300);
+        const visible = await captureFps(page, `${method}-direct-f8-visible`, true);
+        await page.keyboard.down('F8'); await page.waitForTimeout(100); await page.keyboard.up('F8'); await page.waitForTimeout(300);
+        const hidden = await captureFps(page, `${method}-direct-f8-hidden`, false);
+        outcomes.push({ method, before, completion, immediateFocus, visible, hidden, input: 'Real Escape key or real rendered Skip button; F8 directly without canvas refocus', limitation: 'Skip/focus/key path proof, not original movie decoding/end-of-movie runtime proof' });
+      } finally { await context.close(); }
+    }
+    const unexpected = requests.filter(r => !r.url.startsWith('blob:') && (!r.url.startsWith(`${origin}/`) || r.verb !== 'GET' || r.body || /\.(iso|mpq)(?:[?#]|$)/i.test(r.url)));
+    assert.deepEqual(unexpected, []); assert.deepEqual(errors, []); assert.deepEqual(sockets, []);
+    const proof = { ok: true, outcomes, network: { requests, unexpected, uploads: 0, sockets: 0 }, errors, logs };
+    await writeFile(`${output}/focus-handoff-proof.json`, JSON.stringify(proof, null, 2));
+    console.log(JSON.stringify({ ok: true, cases: outcomes.length, proof: `${output}/focus-handoff-proof.json` }));
+  } finally { await writeFile(`${output}/focus-handoff-diagnostics.json`, JSON.stringify({ outcomes, requests, errors, sockets, logs }, null, 2)); await browser.close(); }
+}
+async function toggleFps(page) {
+  await page.locator('#launcher-canvas').focus();
+  await page.keyboard.down('F8'); await page.waitForTimeout(100); await page.keyboard.up('F8'); await page.waitForTimeout(300);
+}
+async function captureFps(page, name, visible) {
+  const canvas = page.locator('#launcher-canvas');
+  const capture = `${output}/${name}.png`, roi = `${output}/${name}-roi.png`;
+  await canvas.screenshot({ path: capture });
+  const bounds = await canvas.boundingBox(); assert(bounds);
+  // Source overlay is top-right; a relative quadrant is an inspection region, not an authored layout replacement.
+  await page.screenshot({ path: roi, clip: { x: bounds.x + bounds.width / 2, y: bounds.y, width: bounds.width / 2, height: bounds.height / 4 } });
+  const { stdout } = await exec('/usr/bin/tesseract', [roi, 'stdout', '--psm', '6'], { maxBuffer: 4 * 1024 * 1024 });
+  const recognized = /\bFPS\b/.test(stdout); assert.equal(recognized, visible, `${name}: rendered F8 glyph visibility mismatch: ${stdout}`);
+  return { name, visible, recognized, ocr: stdout, capture, roi, limitation: 'Readable FPS glyph and preserved toggle state; exact font-handle identity remains source/ECS proof' };
 }
 async function poll(predicate, message) { const deadline = Date.now() + 120000; while (!predicate()) { if (Date.now() > deadline) throw Error(message); await new Promise(r => setTimeout(r, 250)); } }
 async function clickAuthoredEntry(page, fixture) {
@@ -292,6 +373,7 @@ async function clickAuthoredEntry(page, fixture) {
   await page.mouse.move(x, y); await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))); await page.mouse.down(); await page.waitForTimeout(100); await page.mouse.up();
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) try {
-  if (process.argv.includes('--run')) await run();
+  if (process.argv.includes('--focus-handoff')) await runFocusHandoff();
+  else if (process.argv.includes('--run')) await run();
   else { const f = await prepare(); console.log(JSON.stringify({ prepared: `${output}/prepared.json`, members: f.provenance.length, expectedScene: f.expectedScene, labels: f.labels.map(l => ({ id: l.id, visible: l.visible })), limitation: f.limitation })); }
 } catch (error) { await mkdir(output, { recursive: true }); await writeFile(`${output}/blocker.json`, JSON.stringify({ error: String(error), stack: error.stack }, null, 2)); console.error(String(error)); process.exitCode = 1; }
