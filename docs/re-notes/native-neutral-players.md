@@ -1332,3 +1332,104 @@ opener implementation remain uninspected here. No source-category/priority,
 incoming basename, selected runtime context, field semantics or lifetime is
 inferred from the API identity. `GetPlayerNeutralPassive` remains unsupported;
 original campaign runtime remains blocked.
+
+
+## Complete builder body: module handle origin and output normalization
+
+GNU objdump 2.47 inspected only **`0x435850..0x435a50`**, half-open, 512 bytes,
+on exact Legacy executable SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+Original range SHA-256:
+`5703fa0869c30e227d592e69a05f849bfb227cc7497dbb37bfd36ac1ba83ca04`.
+The complete builder ends at `0x435931`. Adjacent functions within the window
+are not used to infer its path contract. Artifacts remain local in
+`.scratch/neutral-base-builder-435850.objdump`,
+`.scratch/neutral-base-builder-range.json` and `.scratch/neutral-module-origin-import.json`.
+The preceding 77,560 note bytes are unchanged, SHA-256
+`272d5a7e4e9c4e7444361ed7a807749de737d3b73d59af410bc62f4b6f535c55`.
+No builder delegate, other import, literal contents or runtime was queried.
+
+### One named import and corrected stack grouping
+
+IAT VA **`0xe66160`**, RVA `0xa66160`, belongs to descriptor RVA `0xcd7170`,
+OriginalFirstThunk RVA `0xcd73c0`, FirstThunk RVA `0xa66160`, index **zero**.
+Its lookup thunk contains import-by-name RVA `0xcd82a0`: DLL **`KERNEL32.dll`**,
+name **`GetModuleHandleA`**, hint **533**, ordinal flag clear. Timestamp and
+forwarder-chain fields are zero. This is a metadata-proved module-handle API,
+not a guessed module-filename API.
+
+| Selected metadata | RVA | Bytes | Original-byte SHA-256 |
+| --- | --- | ---: | --- |
+| descriptor | `0xcd7170` | 20 | `89d44d243eef4bfa6681ae1ebb313801672746ae1bfb8e0b9228e55a60186816` |
+| DLL | `0xcd8c7c` | 13 | `f8efc1f27ef6c525f7fd20dcb8d65e8197e97410eced20db4d323dfbf230a2a4` |
+| lookupThunk | `0xcd73c0` | 4 | `724f1e28ce8c1893cd773210e4fe279c5769d1385ef71cbe091d88eb7314a999` |
+| iatThunk | `0xa66160` | 4 | `724f1e28ce8c1893cd773210e4fe279c5769d1385ef71cbe091d88eb7314a999` |
+| importByName | `0xcd82a0` | 19 | `217ef264962dfcf872d3b54e696b59bf9e726a8d985fdd715092b0fc94320ccb` |
+
+[Microsoft's GetModuleHandleA signature](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulehandlea)
+has one module-name argument; NULL selects the executable used to create the
+calling process. It returns a module handle on success and NULL on failure.
+This documented contract is separate from observing the target execute.
+
+This identity corrects the earlier unresolved-call argument grouping. The
+three pushes before `0x435880` are **not three GetModuleHandleA parameters**.
+The imported one-argument call consumes the null argument; the other pushed
+words remain for the next call. `0x435887` therefore passes
+**`0x4394a0(module_handle, global_buffer_0x112ec10, 0x104)`**. The remaining
+stack cleanup at `0x435898` balances that call and the following two-argument
+helper. Prior unresolved prose must be read as raw pushed-word evidence, not
+a proved three-parameter API signature. No earlier reviewed bytes are rewritten.
+
+### Cached base and candidate selection
+
+Arguments to the complete builder are candidate pointer, output pointer and
+selector. It initializes the cached base only if byte `0x112ec10` is zero.
+The module handle is passed to `0x4394a0` without an explicit null-result check.
+Afterward, `0x4333d0(global_buffer, slash_byte)` is called. A nonzero return
+pointer is directly overwritten with a NUL byte. The cached buffer, uninspected
+literal pointer `0xe695c4`, and capacity `0x104` then reach `0x433140`.
+Module filename extraction, search position and literal operation remain
+unproved delegate contracts; the module handle alone does not supply a filename.
+
+If the builder's selector is nonzero, `0x433410(candidate, slash_byte)` runs.
+When its result is nonzero, the candidate pointer becomes returned pointer plus
+one; otherwise the original candidate remains. A zero selector keeps the
+original candidate. This proves pointer selection, but not whether the helper
+finds a first/last occurrence or implements another matching rule. Accordingly
+"basename stripping" is still an inference rather than a complete contract.
+
+### Final output pipeline and directly observed byte mutation
+
+At `0x4358e3`, unresolved IAT slot **`0xe665e8`** receives a local buffer pointer,
+literal pointer **`0xe6a110`**, cached base pointer, and selected candidate
+pointer. A formatting-like operation is plausible, but no API name, literal
+format or complete produced string is assigned from that shape.
+
+`0xa793bc` next receives output pointer, local buffer and `0x104`. Its return
+is not checked. The already closed `0x433910` length contract is applied to the
+output. The subsequent complete loop examines bytes through that length,
+stopping on an encountered NUL, and directly replaces every encountered
+**backslash byte `0x5c` with slash byte `0x2f`**. This normalization is proved by
+load/compare/store instructions, independent of the uninspected formatter and
+output-transfer helper.
+
+There is no final explicit Boolean/result assignment. The loop loads bytes
+into AL, so the earlier length in EAX is not a preserved return-length contract;
+its caller already ignores the builder return and obtains acceptance from the
+separately proved attribute/conversion gate. No safe output default or checked
+failure branch is established by the complete body. The formatter/local-buffer
+and transfer outcomes remain delegated; the cached base may also be reused
+without reinitialization when its first byte is nonzero.
+
+### Closed coverage and essential remaining boundary
+
+Body/tail coverage is complete; **full final pathname semantics are not**.
+The module-origin connection is now named and the final slash normalization is
+proved. Stop at **`0x4394a0`**, which consumes the documented executable module
+handle and cached buffer/capacity, and is essential to prove the base bytes.
+A next bounded entry window would be `0x4394a0..0x439570` if separately authorized.
+The formatter/import/literals remain additional distinct contracts, not license
+for an automatic expansion. No `0x436fa0` or other delegate was inspected.
+Actual input basename, archive priority, selected native context and metadata
+meaning/defaults remain unproved. `GetPlayerNeutralPassive` stays unsupported;
+original campaign runtime remains blocked.
