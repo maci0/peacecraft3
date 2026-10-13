@@ -430,3 +430,97 @@ metadata destination on missing input. Start with `0x70e320..0x70e520` only;
 follow a directly evidenced producer/error edge only if needed. This function
 was not inspected here. Runtime applicability, context lifetime and field-name
 corroboration remain separate gates even if that dispatch connection closes.
+
+
+## Dispatcher: callback ABI and input/default boundary
+
+Only the authorized half-open range **`0x70e320..0x70e520`**, 512 bytes, was
+inspected with GNU objdump 2.47. Its original-byte SHA-256 is
+`96eabc7385211bf53675e7fffb2929aa3a5b9d9a56ed249aafe5af3d9a79b5e8`.
+The exact Legacy executable SHA-256 remains
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+The dispatcher body ends at `0x70e493`; padding and the start of the adjacent
+function inside the authorized window are not used to extend its semantics.
+Raw disassembly and range identity stay under `.scratch/neutral-dispatch-*`.
+No provider retry, game execution, additional delegate inspection or build ran.
+The preceding 25,133 bytes remain unchanged,
+SHA-256 `8666d58b0afc38d8fabe83a83cd0054670c28948cc4b40155c9db0237d295629`.
+
+### Verified argument and callback flow
+
+The dispatcher takes five stack arguments. It loads argument 2 into ESI,
+argument 3 (callback) into EDI, argument 4 (record) into EBX, and later argument
+5 into ESI as a selector. The retained `0x71d4e0` wrapper supplies the known
+`.w3i` pointer, `0x71fb90`, the local metadata record, and zero in arguments
+2 through 5 respectively.
+
+At `0x70e363..0x70e375`, argument 1 and a local buffer are passed with capacity
+`0x104` to `0x433500`. If argument 2 is nonzero, `0x70e37c..0x70e389` passes
+that pointer and the same local buffer to **`0x4d28b0`**. Thus `.w3i` demonstrably
+participates in the buffer-preparation call. Appending/replacing an extension,
+selecting `war3map.w3i`, or choosing an archive member remains inference until
+that helper is inspected; the literal alone does not establish those operations.
+
+For the wrapper's zero argument 5, `0x70e399` passes this buffer to `0x438e30`.
+A nonzero return is required before `0x439570` receives the buffer, two local
+output addresses and literals `1, 0`. The nonzero-selector alternative calls
+`0x438e80` and `0x4395d0` instead. These delegates were not inspected, so their
+file/archive lookup policy, output types and error details remain unproved.
+
+After both zero-selector calls succeed, `0x70e416` requests `0x18` bytes through
+`0x440610`. On a nonnull result the dispatcher constructs a wrapper with:
+
+- `+0`: literal `0xe6c818` (a table address, inferred vtable from later calls).
+- `+4`: local output from `[ebp-0x10c]`.
+- `+8`: zero; `+0xc`: `0xffffffff`.
+- `+0x10`: local output from `[ebp-0x110]`.
+- `+0x14`: zero.
+
+The prior four-byte reader uses these fields as buffer/base/limit/cursor. This
+connects loader outputs to the source wrapper, without assigning names or
+ownership contracts to the uninspected loader delegates.
+
+At **`0x70e45b..0x70e45f`**, it explicitly calls the callback with three arguments:
+**`callback(stream_wrapper, 0, record)`**. Therefore the known wrapper really
+selects `0x71fb90`'s **zero branch**, which forwards record `+0` metadata to
+`0x71e8d0`; this is no longer an unverified callback-mode hypothesis. Combining
+this wrapper's zero initial cursor with the previously proven reader shows:
+when the initial tag and both leading destination reads succeed, metadata `+4`
+is sourced from **input byte offset 8**, the third four-byte word. This is a
+physical input position, not an established field name or editor-version rule.
+
+### Success, missing input and defaults
+
+A null callback first calls `0x43eca0` with `0x57`, then returns zero. The meaning
+of that reporting helper is not established. Zero returns from either selected
+input delegate branch to `0x70e350`, returning zero **without invoking the
+callback**. Those visible paths do not initialize metadata `+4`.
+
+The allocation-failure path sets the stream-wrapper pointer to zero and still
+calls the callback; no null-stream check is visible here. Whether allocation
+can return null under this caller's actual conditions is not established.
+It must not be replaced by invented successful data or a guessed safe default.
+
+The callback's EAX is saved in EDI. A nonnull stream wrapper is then passed to
+its table slot `+0x10` with argument `1`; the local loader output is passed to
+`0x43a940`. Finally EDI is restored to EAX and returned. These are observed
+cleanup calls; exact destructor/free contracts are unverified. The callback's
+numeric return survives them, but its overall parse-success/error convention
+still depends on the uninspected tail of `0x71e8d0`. The dispatcher neither
+examines nor directly defaults metadata `+4`.
+
+### Frozen boundary and next exact action
+
+The callback-mode and input-wrapper connection is proved statically. Exact
+input filename/member selection, semantic identity of the third input word,
+caller allocation/default state and runtime map-context applicability remain
+unproved. Existing writer/reader findings and the unsigned getter failure path
+remain separate; `GetPlayerNeutralPassive` stays unsupported and original
+campaign execution remains blocked.
+
+Stop at the essential delegate: the next exact action is **`0x4d28b0`**, starting
+with a bounded `0x4d28b0..0x4d29b0` window, to establish what the supplied `.w3i`
+pointer does to the local buffer. This delegate was not queried here. After
+that, the directly evidenced zero-selector loader boundary is `0x439570`, not
+an image-wide search; inspecting it would require a separately authorized
+bounded step. No Host implementation follows from this dispatcher inspection.

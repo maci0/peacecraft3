@@ -4816,6 +4816,8 @@ checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
 name = "pcx-assets"
 version = "0.1.0"
 dependencies = [
+ "pcx-casc",
+ "pcx-mpq",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

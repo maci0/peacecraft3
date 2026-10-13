@@ -73,6 +73,8 @@ pub enum SourceError {
     Truncated { expected: u64, actual: u64 },
     #[error("source member is ambiguous: {detail}")]
     Ambiguous { detail: String },
+    #[error("source member requires {requested} decoded bytes, exceeding caller limit {limit}")]
+    Limit { requested: u64, limit: u64 },
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -87,9 +89,10 @@ pub struct SourceContent {
 }
 
 /// Read-only archive boundary. Each instance represents one explicitly ordered
-/// layer. `paths` returns original member names; `read` receives those names
-/// verbatim. MPQ/CASC decoding, version detection and path inventories belong to
-/// the adapter. An unavailable inventory must return an error, not an empty list.
+/// layer. `paths` returns the mounted logical names; `read` receives those names
+/// verbatim. An adapter retains the exact archive member behind each logical name.
+/// The mounted inventory may be an explicitly declared subset. An unavailable
+/// inventory must return an error, not silently claim an empty archive.
 pub trait ContentSource: Send + Sync {
     fn info(&self) -> &SourceInfo;
     fn paths(&self) -> Result<Vec<String>, SourceError>;

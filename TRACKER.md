@@ -144,8 +144,9 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
       to full EKey/CKey identities. Verified named Footman content and two manifest
       links; no shorthand, module/HD/locale precedence or native lookup claim.
 - [~] `pcx-assets`: caller-ordered source layers and real `override/` resolution
-      retain provenance and produce deterministic indexes. MPQ/CASC app adapters
-      and exact-target archive priority remain unwired/unproven.
+      retain provenance and produce deterministic indexes. Concrete MPQ/CASC
+      adapters read explicitly mapped members and retain their identities;
+      application mode selection and exact-target archive priority remain open.
 - [ ] Asset modes: `vanilla` (default) / `reforged` / `reforged-hd` / `reforged-fixes`
 - [x] Library `override/` drop-in tree + generated `index.json`; app wiring pending
 - [~] Gate: Reforged Footman geometry loads through the same `pcx-gfx` path as vanilla.
@@ -887,6 +888,10 @@ Format: `date — subsystem — symptom — root cause — status`
   The named Footman verifies to 105,602 MDLX bytes. Version-1800 geometry now
   decodes into five geosets and 582 Bevy mesh vertices. Authored LoD metadata is
   preserved; no LoD selection or newer material/rendering behavior is inferred.
+  Four asset-adapter regressions and two explicitly supplied original members
+  pass through source layering. MPQ decoded budgets and locale/platform ambiguity
+  are checked before reads; CASC locators retain config/encoding/manifest keys
+  and source spans. Unsupported winning content does not fall through.
 
 - Rust 1.99 format cleanup preserves classic framing and output while adopting
   typed array chunks, let chains and `is_multiple_of`. Scoped strict Clippy covers
