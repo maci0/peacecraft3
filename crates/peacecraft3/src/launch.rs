@@ -370,7 +370,7 @@ pub fn stage(mode: &GameMode, source: &Source, dest: impl AsRef<Path>) -> Result
 /// The legacy build and the Reforged build live side by side under
 /// `Warcraft III` and `Warcraft III (Legacy)`, so which one a mode wants is
 /// decided by its asset mode rather than by the user remembering the name.
-fn pick_product(root: &Path, mode: &GameMode) -> Result<PathBuf, Error> {
+pub(crate) fn pick_product(root: &Path, mode: &GameMode) -> Result<PathBuf, Error> {
     let want_reforged = mode.assets == AssetMode::Reforged;
     let mut found = Vec::new();
     if let Ok(rd) = std::fs::read_dir(root) {

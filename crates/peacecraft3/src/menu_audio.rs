@@ -8,8 +8,12 @@ pub fn install(app: &mut App) {
     app.init_resource::<MenuSounds>().add_systems(Startup, load);
     app.add_systems(
         Update,
-        feedback.before(crate::launch_gui::apply_menu_clicks),
+        feedback
+            .before(crate::launch_gui::LauncherInput)
+            .before(crate::intro::IntroUpdate),
     );
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_systems(Update, pause_for_movie.after(crate::intro::IntroUpdate));
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -20,8 +24,17 @@ extern "C" {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn feedback(pressed: Query<(), (With<Button>, Added<Pressed>, Without<InteractionDisabled>)>) {
-    if !pressed.is_empty() {
+fn feedback(
+    intro: Res<crate::intro::Intro>,
+    actions: Res<crate::button_actions::ButtonActions>,
+    enabled: Query<(), (With<Button>, Without<InteractionDisabled>)>,
+) {
+    if !intro.playing()
+        && actions
+            .entities
+            .iter()
+            .any(|entity| enabled.contains(*entity))
+    {
         browser_click();
     }
 }
@@ -35,6 +48,22 @@ struct MenuSounds {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Component)]
 struct ClickSound;
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Component)]
+struct MenuMusic;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn pause_for_movie(intro: Res<crate::intro::Intro>, music: Query<&AudioSink, With<MenuMusic>>) {
+    use bevy::audio::AudioSinkPlayback;
+    for sink in &music {
+        if intro.playing() {
+            sink.pause();
+        } else {
+            sink.play();
+        }
+    }
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn local_audio(name: &str) -> Option<Vec<u8>> {
@@ -67,6 +96,7 @@ fn load(
                 bytes: bytes.into(),
             })),
             PlaybackSettings::LOOP,
+            MenuMusic,
         ));
     } else {
         warn!(
@@ -87,13 +117,21 @@ fn load(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn feedback(
+    intro: Res<crate::intro::Intro>,
     mut commands: Commands,
     sounds: Res<MenuSounds>,
     active: Query<(), With<ClickSound>>,
-    pressed: Query<(), (With<Button>, Added<Pressed>, Without<InteractionDisabled>)>,
+    actions: Res<crate::button_actions::ButtonActions>,
+    enabled: Query<(), (With<Button>, Without<InteractionDisabled>)>,
 ) {
     // UISounds.slk: GlueScreenClick has volume 100/127 and NODUPLICATES.
-    if pressed.is_empty() || !active.is_empty() {
+    if intro.playing()
+        || !actions
+            .entities
+            .iter()
+            .any(|entity| enabled.contains(*entity))
+        || !active.is_empty()
+    {
         return;
     }
     if let Some(handle) = &sounds.click {
@@ -112,10 +150,14 @@ mod tests {
     #[test]
     fn disabled_and_held_clicks_do_not_repeat_feedback() {
         let mut world = World::new();
+        world.init_resource::<crate::intro::Intro>();
         world.insert_resource(MenuSounds {
             click: Some(Handle::default()),
         });
         let disabled = world.spawn((Button, Pressed, InteractionDisabled)).id();
+        world.insert_resource(crate::button_actions::ButtonActions {
+            entities: vec![disabled],
+        });
         world.run_system_once(feedback).unwrap();
         assert_eq!(
             world
@@ -125,6 +167,9 @@ mod tests {
             0
         );
         world.entity_mut(disabled).remove::<InteractionDisabled>();
+        world.insert_resource(crate::button_actions::ButtonActions {
+            entities: vec![disabled],
+        });
         world.run_system_once(feedback).unwrap();
         assert_eq!(
             world
@@ -133,6 +178,9 @@ mod tests {
                 .count(),
             1
         );
+        world.insert_resource(crate::button_actions::ButtonActions {
+            entities: vec![disabled],
+        });
         world.run_system_once(feedback).unwrap();
         assert_eq!(
             world

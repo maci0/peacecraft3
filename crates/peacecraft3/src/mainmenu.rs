@@ -129,8 +129,12 @@ pub fn logo_alpha_at(ms: u32) -> f32 {
 pub const BUTTON_W: f32 = 0.256;
 /// `StandardMenuButtonBaseBackdrop`'s `Height`.
 pub const BUTTON_H: f32 = 0.064;
-/// The gap between one button's bottom and the next button's top.
-pub const BUTTON_GAP: f32 = 0.005;
+/// Signed separation: +0.005 at BOTTOMRIGHT overlaps the previous frame.
+pub const BUTTON_GAP: f32 = -0.005;
+pub const FRAME_W: f32 = 0.8;
+pub const FRAME_H: f32 = 0.6;
+pub const EXIT_W: f32 = 0.24;
+pub const EXIT_BOTTOM: f32 = 0.05;
 /// `SinglePlayerBackdrop`'s right-anchored x offset.
 pub const FIRST_RIGHT: f32 = 0.015;
 /// `SinglePlayerBackdrop`'s top offset.
@@ -188,8 +192,10 @@ pub fn split_label(raw: &'static str) -> Result<Label, String> {
 pub struct ButtonGeometry {
     /// The left edge, in fractions of the window width.
     pub left: f32,
-    /// The bottom edge, in fractions of the window height.
+    /// The top edge, in fractions of the authored viewport height.
     pub top: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 /// The geometry of [`MENU`]'s `i`th entry, exactly as the FDF stacks them.
@@ -198,38 +204,24 @@ pub struct ButtonGeometry {
 /// button width. Each button's top edge is the previous one's bottom plus
 /// `BUTTON_GAP`; the first is `FIRST_TOP`.
 ///
-/// # Coordinate extent — unresolved, and deliberately not guessed
-///
-/// The FDF numbers are treated here as direct fractions of the window. A
-/// well-known alternative reading is that WC3's frame coordinates live in an
-/// **0.8 × 0.6** space (the 4:3 screen), in which case `0.256` is 32% of the
-/// width rather than 25.6%, and `0.110625` is 18.4% of the height rather than
-/// 11.1%.
-///
-/// That reading was **not** proven, so it was not applied. The investigation is
-/// closed; do not reopen it by inference. What was actually checked:
-///
-/// * A float table in `game.dll` at file `0x939f80–0x93a0a0` holds exactly
-///   `0.3, 0.4, 0.5, 0.6, 0.8` — the values such a space would use. But a full
-///   scan of `.text` found **no RIP-relative and no absolute references** to any
-///   of them (only `0.4`, once, at `0x33c7b2`), so the table is not evidenced as
-///   the frame normaliser.
-/// * Across all 46 shipped FDFs, 609 `Width`/`Height` declarations have a
-///   maximum of **0.60** wide and **0.425** tall. That is consistent with
-///   either space and therefore decides nothing.
-/// * Nearby `0.8`/`1.25` and `0.8`/`0.6` clusters turned out to be a
-///   `__RESOURCES` string table and a trig table — false leads.
-///
-/// Settling it needs a runtime or disassembly result on the `SetPoint` handler
-/// (`SetPoint` literal at `game.dll` VA `0x6f96c0dc`), not more statistics. If
-/// that ever lands and shows the 0.8/0.6 space, the fix is to divide
-/// [`BUTTON_W`] and [`BUTTON_H`] by 0.8 and 0.6 respectively and re-derive the
-/// anchors; nothing else here changes.
+/// Original 1.29.2.9231 CFrame rendering divides X by 0.8 and Y by 0.6;
+/// its relative anchor evaluator adds the FDF's offsets. See
+/// `docs/re-notes/glue-coordinate-runtime.md`. Quit has its own bottom anchor.
 #[must_use]
 pub fn button_geometry(i: usize) -> ButtonGeometry {
-    let top = FIRST_TOP + i as f32 * (BUTTON_H + BUTTON_GAP);
-    let left = 1.0 - FIRST_RIGHT - BUTTON_W;
-    ButtonGeometry { left, top }
+    let width = if i == 5 { EXIT_W } else { BUTTON_W } / FRAME_W;
+    let height = BUTTON_H / FRAME_H;
+    let top = if i == 5 {
+        1.0 - EXIT_BOTTOM / FRAME_H - height
+    } else {
+        (FIRST_TOP + i as f32 * (BUTTON_H + BUTTON_GAP)) / FRAME_H
+    };
+    ButtonGeometry {
+        left: 1.0 - FIRST_RIGHT / FRAME_W - width,
+        top,
+        width,
+        height,
+    }
 }
 
 /// Marker for a menu button, carrying its index in [`MENU`], so a click can be
@@ -245,7 +237,7 @@ pub fn hit(x: f32, y: f32) -> Option<usize> {
         .enumerate()
         .find(|(i, _)| {
             let g = button_geometry(*i);
-            x >= g.left && x <= g.left + BUTTON_W && y >= g.top && y <= g.top + BUTTON_H
+            x >= g.left && x <= g.left + g.width && y >= g.top && y <= g.top + g.height
         })
         .map(|(i, _)| i)
 }
@@ -461,18 +453,18 @@ mod tests {
     }
 
     /// The stacking relation, asserted against the FDF's own numbers: each
-    /// button starts exactly `BUTTON_GAP` below the previous one's bottom edge.
+    /// upper button starts 0.005 above the previous one's bottom edge.
     #[test]
     fn the_stack_matches_the_frame_definition() {
         let first = button_geometry(0);
-        assert!((first.top - FIRST_TOP).abs() < 1e-6);
-        assert!((first.left - (1.0 - FIRST_RIGHT - BUTTON_W)).abs() < 1e-6);
+        assert!((first.top - FIRST_TOP / FRAME_H).abs() < 1e-6);
+        assert!((first.left - (1.0 - (FIRST_RIGHT + BUTTON_W) / FRAME_W)).abs() < 1e-6);
         let second = button_geometry(1);
-        assert!((second.top - (first.top + BUTTON_H + BUTTON_GAP)).abs() < 1e-6);
-        for i in 0..MENU.len() {
+        assert!((second.top - (first.top + (BUTTON_H + BUTTON_GAP) / FRAME_H)).abs() < 1e-6);
+        for i in 0..5 {
             let g = button_geometry(i);
             assert_eq!(g.left, first.left, "every button is right-anchored alike");
-            assert!(g.top + BUTTON_H < 1.0, "button {i} runs off the bottom");
+            assert!(g.top + g.height < 1.0, "button {i} runs off the bottom");
         }
     }
 
@@ -480,25 +472,23 @@ mod tests {
     #[test]
     fn the_menu_fits_inside_the_window() {
         let last = button_geometry(MENU.len() - 1);
-        assert!(last.top + BUTTON_H <= 1.0);
+        assert!(last.top + last.height <= 1.0);
     }
 
     #[test]
     fn clicks_land_on_the_entries_and_between_them_on_nothing() {
         let g = button_geometry(1);
-        assert_eq!(
-            hit(g.left + BUTTON_W / 2.0, g.top + BUTTON_H / 2.0),
-            Some(1)
-        );
-        assert_eq!(hit(g.left + BUTTON_W / 2.0, g.top - 0.001), None);
+        assert_eq!(hit(g.left + g.width / 2.0, g.top + g.height / 2.0), Some(1));
+        let quit = button_geometry(5);
+        assert_eq!(hit(quit.left + quit.width / 2.0, quit.top - 0.01), None);
         assert_eq!(hit(0.0, 0.0), None);
-        assert_eq!(hit(g.left + BUTTON_W + 0.01, g.top), None);
+        assert_eq!(hit(g.left + g.width + 0.01, g.top), None);
     }
 
     #[test]
     fn clicks_do_not_straddle_a_button_boundary() {
         let g = button_geometry(0);
-        assert_eq!(hit(g.left + BUTTON_W, g.top + BUTTON_H / 2.0), Some(0));
+        assert_eq!(hit(g.left + g.width, g.top + g.height / 2.0), Some(0));
     }
 
     /// The real install, when present: the art must be there. This is the gate

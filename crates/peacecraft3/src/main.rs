@@ -3,11 +3,14 @@
 #[cfg(target_arch = "wasm32")]
 mod browser;
 
+mod button_actions;
+mod intro;
 mod launch;
 mod launch_gui;
 mod mainmenu;
-mod menu_audio;
 mod mainmenu_scene;
+mod menu_audio;
+mod menu_panel;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

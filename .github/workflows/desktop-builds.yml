@@ -65,6 +65,7 @@ jobs:
             ~/.cargo/git
             target
           key: desktop-${{ matrix.target }}-rust-1.99-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: desktop-${{ matrix.target }}-rust-1.99-
       - name: Check packaging helper
         run: ${{ matrix.python }} tools/build-desktop.py --self-test
       - name: Build, test, and package

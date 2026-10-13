@@ -175,7 +175,7 @@ fn find_archive_ci(dir: &Path, name: &str) -> Option<PathBuf> {
 pub enum Version {
     /// The Complete Edition retail build this project was first built against.
     V1_28,
-    /// Battle.net product `w3_legacy`, build 1.29.2.9232-legacy-tft. The last
+    /// Battle.net product `w3_legacy`, build 1.29.2.9231 (installed executable VERSIONINFO). The last
     /// stable legacy release and this project's primary target.
     V1_29,
     /// The build could not be identified. Reported rather than guessed.
@@ -213,7 +213,7 @@ pub fn fnv1a64(data: &[u8]) -> u64 {
 pub fn known_digests() -> std::collections::HashMap<u64, Version> {
     let mut m = std::collections::HashMap::new();
 
-    // 1.29b — Battle.net product `w3_legacy`, build 1.29.2.9232-legacy-tft.
+    // 1.29b — Battle.net product `w3_legacy`, build 1.29.2.9231 (installed executable VERSIONINFO).
     // Archives: War3.mpq, War3x.mpq, War3Local.mpq, War3xLocal.mpq,
     // Deprecated.mpq. Only the two largest carry a distinctive digest, but all
     // five are recorded so that a truncated install is still recognisable.

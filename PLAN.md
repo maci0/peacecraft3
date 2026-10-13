@@ -47,19 +47,19 @@ carry this requirement, and [§6](#6-definition-of-faithful) is gated on it.
 
 ### Supported versions
 
-Two classic retail builds are in scope. Neither is optional:
+The installed classic 1.29b release is the target. Other local artifacts are compatibility evidence, with their identities recorded separately:
 
 | Version | Role | Status |
 |---|---|---|
-| **1.29b** | **The target.** Battle.net product `w3_legacy`, build `1.29.2.9232-legacy-tft`. | installed, verified |
-| 1.28c | Not a goal. Works anyway; extracted at `wc3/game/`, used only as a free cross-check. | incidental |
+| **1.29b** | **The target.** Battle.net product `w3_legacy`; installed executable VERSIONINFO is `1.29.2.9231`. Earlier `9232` label withdrawn. | installed; executable identity measured |
+| Extracted compatibility tree | Not a target. `wc3/game/app/game.dll` reports `1.26.0.6401`; the historical “1.28c” label does not establish its archives’ versions. | mixed-tree identity unresolved |
 
-Both are already verified end-to-end (see §5.1). Local sources by version:
+Archive opening and parser checks in §5.1 do not prove end-to-end game fidelity. PE VERSIONINFO identifies the executable files; it does not prove that every adjacent MPQ or movie belongs to the same release. See [the runtime evidence](docs/re-notes/glue-coordinate-runtime.md). Local sources:
 
 | Source | Version | Location |
 |---|---|---|
 | Battle.net legacy | **1.29b** | `~/Faugus/battle-net/drive_c/Program Files (x86)/Warcraft III (Legacy)` |
-| Extracted install | 1.28c | `wc3/game/` |
+| Extracted install | Game.dll `1.26.0.6401`; archive identity unresolved | `wc3/game/` |
 | Inno installer | 1.27b | `wc3/warcraft-3-expansion/…/War3TFT_127b_English.exe` |
 | ISO (GOG Complete Edition) | 1.27b | `wc3/WarCraft III Complete Edition.iso` |
 | Reforged | 2.0.1 | `~/Faugus/battle-net/drive_c/Program Files (x86)/Warcraft III` |
@@ -1225,6 +1225,10 @@ layer in the trace header.
 
 ### M10 — Multiplayer
 
+- [x] Local browser WebSocket transport to the existing authoritative movement simulation: two browsers exchange binary commands and matching snapshots; same-tick input merging, spoof rejection and reconnect/resync verified. See [browser sessions](docs/browser-online.md).
+- [ ] Connect the session to actual game input/rendering and original lobby flow; complete map initialization, combat and economy. The movement transport does not close the multiplayer-match gate.
+- [ ] Public sessions: asynchronous admission, TLS, room isolation and identity; no public service deployed.
+
 - [ ] `pcx-net`: transport traits, command codec, authoritative lockstep server
 - [ ] Gate: a real 1.29b LAN client joins a game we host and plays it out
 - [ ] Classic Battle.net client against an emulator realm
@@ -1232,6 +1236,10 @@ layer in the trace header.
 - [ ] Every path obeys *server holds state* — the client proposes, never authors
 
 ### M11 — WASM build
+
+- [x] Skippable original startup cinematic from locally supplied media, followed by the menu. Browser playback, soundtrack pausing/resuming, mute preference and native decoder cleanup are implemented; see [movie evidence](docs/intro-movie.md).
+- [x] TFT logo uses parsed authored Birth Bézier and the traced default sprite origin; hanging-panel entrance is still open.
+- [ ] Preserve original resolution handling across common classic and widescreen modes, resize and display density. Background fills the display; ordinary UI follows the original wide-window branch and direct classic conversion. Portrait containment is a browser extension. Record native live flags before claiming exact parity at every resolution.
 
 - [ ] **Local ISO import, entirely inside the browser.** The user selects an
       ISO through the file picker. Its contents are never uploaded to a server,

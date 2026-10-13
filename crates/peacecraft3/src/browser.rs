@@ -36,9 +36,9 @@
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
+use bevy::asset::AssetApp;
 use bevy::asset::io::memory::{Dir, MemoryAssetReader};
 use bevy::asset::io::{AssetSourceBuilder, AssetSourceId, ErasedAssetReader};
-use bevy::asset::AssetApp;
 use bevy::prelude::*;
 use wasm_bindgen::prelude::*;
 

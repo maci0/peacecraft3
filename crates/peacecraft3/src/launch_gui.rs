@@ -56,6 +56,9 @@ enum Pick {
     Menu,
 }
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct LauncherInput;
+
 #[derive(Component)]
 struct SourcePath;
 
@@ -206,19 +209,23 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
         .insert_resource(Launcher::default())
         .init_resource::<MenuArtCache>()
         .init_resource::<SceneLoad>()
+        .init_resource::<crate::menu_panel::LogoEntrance>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
             (
                 scale_menu_text,
                 colour_picks,
-                apply_clicks,
+                apply_clicks.in_set(LauncherInput),
+                finish_intro,
                 apply_menu_clicks,
                 apply_menu_art,
+                initialize_menu_logo,
                 initialize_menu_scene,
                 show_menu_or_launcher,
                 scroll_launcher,
                 refresh,
+                crate::button_actions::clear,
             )
                 .chain(),
         );
@@ -229,11 +236,31 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
             .run_if(resource_exists::<crate::mainmenu_scene::MainMenuScene>)
             .run_if(menu_is_visible),
     );
+    app.add_systems(
+        Update,
+        crate::menu_panel::advance_logo
+            .after(initialize_menu_logo)
+            .run_if(menu_is_visible),
+    );
+    crate::intro::install(&mut app);
+    app.configure_sets(
+        Update,
+        crate::intro::IntroUpdate
+            .after(LauncherInput)
+            .before(finish_intro),
+    );
     crate::menu_audio::install(&mut app);
     app
 }
 
 fn default_source() -> String {
+    for key in ["PEACECRAFT3_INSTALL", "PEACECRAFT3_LEGACY_DIR"] {
+        if let Ok(path) = std::env::var(key) {
+            if classify(&path).is_ok() {
+                return path;
+            }
+        }
+    }
     for c in [
         "/home/maci/Faugus/battle-net/drive_c/Program Files (x86)",
         "/home/maci/Desktop/peacecraft3/wc3/game/app",
@@ -243,6 +270,16 @@ fn default_source() -> String {
         }
     }
     "wc3/game/app".to_string()
+}
+
+fn selected_install(launcher: &Launcher) -> Option<std::path::PathBuf> {
+    match classify(&launcher.source).ok()? {
+        crate::launch::Source::Directory(path) => Some(path),
+        crate::launch::Source::BattleNet(path) => {
+            crate::launch::pick_product(&path, &launcher.mode).ok()
+        }
+        crate::launch::Source::Iso(_) => None,
+    }
 }
 
 fn setup(mut commands: Commands, l: Res<Launcher>) {
@@ -303,29 +340,54 @@ fn spawn_main_menu(commands: &mut Commands) {
     commands
         .spawn((
             Node {
+                display: Display::Grid,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                grid_template_columns: vec![GridTrack::percent(100.0)],
+                grid_template_rows: vec![GridTrack::percent(100.0)],
+                ..default()
+            },
+            MenuLayer,
+        ))
+        .with_children(|root| {
+            root.spawn(Node {
+                grid_row: GridPlacement::start(1),
+                grid_column: GridPlacement::start(1),
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::FlexEnd,
-                row_gap: Val::Vh(mainmenu::BUTTON_GAP * 100.0),
                 padding: UiRect {
-                    top: Val::Vh(mainmenu::FIRST_TOP * 100.0),
-                    right: Val::Vw(mainmenu::FIRST_RIGHT * 100.0),
+                    top: Val::Vh(mainmenu::FIRST_TOP / mainmenu::FRAME_H * 100.0),
+                    right: Val::Vw(mainmenu::FIRST_RIGHT / mainmenu::FRAME_W * 100.0),
+                    bottom: Val::Vh(mainmenu::EXIT_BOTTOM / mainmenu::FRAME_H * 100.0),
                     ..default()
                 },
                 ..default()
-            },
-            BackgroundColor(Color::NONE),
-            MenuLayer,
-        ))
-        .with_children(|root| {
-            for (i, (id, raw)) in mainmenu::MENU.iter().enumerate() {
-                let label = mainmenu::split_label(raw).unwrap_or(mainmenu::Label {
-                    hotkey: '?',
-                    rest: raw,
-                });
-                spawn_menu_button(root, i, *id, label);
-            }
+            })
+            .with_children(|buttons| {
+                for (i, (id, raw)) in mainmenu::MENU.iter().enumerate() {
+                    let label = mainmenu::split_label(raw).unwrap_or(mainmenu::Label {
+                        hotkey: '?',
+                        rest: raw,
+                    });
+                    spawn_menu_button(buttons, i, *id, label);
+                }
+            });
+            root.spawn((
+                Node {
+                    grid_row: GridPlacement::start(1),
+                    grid_column: GridPlacement::start(1),
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::FlexStart,
+                    ..default()
+                },
+                LogoLayer,
+                Pickable::IGNORE,
+                ZIndex(1),
+            ));
         });
 }
 
@@ -333,10 +395,82 @@ fn spawn_main_menu(commands: &mut Commands) {
 #[derive(Component)]
 pub(crate) struct MenuLayer;
 
+#[derive(Component)]
+struct LogoLayer;
+
 #[derive(Resource, Default)]
 struct SceneLoad {
     finished: bool,
     addon: Option<Addon>,
+}
+
+/// The original default CSpriteFrame projection adds vertices to LEFT/BOTTOM.
+/// See the executable trace in docs/re-notes/glue-coordinate-runtime.md.
+fn initialize_menu_logo(
+    mut commands: Commands,
+    launcher: Res<Launcher>,
+    layers: Query<Entity, With<LogoLayer>>,
+    logos: Query<Entity, With<crate::menu_panel::MenuLogo>>,
+    mut images: ResMut<Assets<Image>>,
+    mut entrance: ResMut<crate::menu_panel::LogoEntrance>,
+) {
+    let Ok(layer) = layers.single() else {
+        return;
+    };
+    if !logos.is_empty() || launcher.mode.addon != Addon::Tft {
+        return;
+    }
+    let install = selected_install(&launcher);
+    let assets = crate::menu_panel::load_logo(install.as_deref());
+    if !assets.is_complete() {
+        return;
+    }
+    let data = match crate::menu_panel::LogoData::parse(assets.model.as_deref().unwrap()) {
+        Ok(data) => data,
+        Err(error) => {
+            warn!("Original menu logo: {error}");
+            return;
+        }
+    };
+    if !data.planar
+        || !data
+            .texture
+            .eq_ignore_ascii_case(crate::menu_panel::LOGO_TEXTURE)
+    {
+        warn!("Original menu logo: unsupported geometry or texture binding");
+        return;
+    }
+    let texture = match pcx_gfx::load_image(assets.texture.as_deref().unwrap(), &data.texture) {
+        Ok(texture) => texture,
+        Err(error) => {
+            warn!("Original menu logo texture: {error}");
+            return;
+        }
+    };
+    // FDF TOPLEFT (.13,+.04); native implicit height is maxY-minY.
+    // Its LEFT/BOTTOM model origin does not subtract the vertex minimum.
+    let left = crate::menu_panel::LOGO_ANCHOR_UNITS.0 + data.quad.0;
+    let top = data.quad_height() - crate::menu_panel::LOGO_ANCHOR_UNITS.1 - data.quad.3;
+    let node = Node {
+        width: Val::Vw(data.quad_width() / crate::mainmenu::FRAME_W * 100.0),
+        height: Val::Vh(data.quad_height() / crate::mainmenu::FRAME_H * 100.0),
+        margin: UiRect {
+            left: Val::Vw(left / crate::mainmenu::FRAME_W * 100.0),
+            top: Val::Vh(top / crate::mainmenu::FRAME_H * 100.0),
+            ..default()
+        },
+        flex_shrink: 0.0,
+        ..default()
+    };
+    let mut image = ImageNode::new(images.add(pcx_gfx::viewer::rgba_image(&texture)));
+    image.color = Color::srgba(1.0, 1.0, 1.0, 0.0);
+    let entity = commands
+        .spawn((node, image, crate::menu_panel::MenuLogo, Pickable::IGNORE))
+        .id();
+    commands.entity(layer).add_child(entity);
+    entrance.elapsed_ms = 0.0;
+    entrance.data = Some(data);
+    info!("Original menu logo: parsed authored Birth and native LEFT/BOTTOM projection");
 }
 
 fn initialize_menu_scene(
@@ -363,10 +497,10 @@ fn initialize_menu_scene(
     if state.finished {
         return;
     }
-    let install = pcx_gfx::viewer::resolve_install(None);
+    let install = selected_install(&launcher);
     let (source, served, directory) =
         crate::mainmenu_scene::scene_source(launcher.mode.addon == Addon::Tft);
-    let bytes = crate::mainmenu::art_bytes_named(Some(&install), source, served);
+    let bytes = crate::mainmenu::art_bytes_named(install.as_deref(), source, served);
     let Some(bytes) = bytes else {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -383,7 +517,7 @@ fn initialize_menu_scene(
         return;
     }
     state.finished = true;
-    let textures = crate::mainmenu_scene::load_textures_in(Some(&install), &bytes, directory);
+    let textures = crate::mainmenu_scene::load_textures_in(install.as_deref(), &bytes, directory);
     match crate::mainmenu_scene::spawn(
         &mut commands,
         &mut meshes,
@@ -405,6 +539,8 @@ fn initialize_menu_scene(
 }
 
 fn show_menu_or_launcher(
+    intro: Res<crate::intro::Intro>,
+    windows: Query<&Window>,
     menu: Query<Entity, With<MenuLayer>>,
     mut launcher: Query<&mut Visibility, With<LauncherPanel>>,
     mut cameras: Query<&mut Camera, With<crate::mainmenu_scene::MainMenuSceneCamera>>,
@@ -416,8 +552,31 @@ fn show_menu_or_launcher(
         ),
     >,
 ) {
+    // The original CFrame renderer has a centered 4:3 branch. Its main-menu
+    // live flags are unmeasured; keep the authored extent without stretching.
+    let viewport = if !menu.is_empty() {
+        windows.single().ok().map(|window| {
+            let full = UVec2::new(window.physical_width(), window.physical_height());
+            // Classic square/5:4 displays use the original direct conversion.
+            // Portrait browser windows contain the authored UI to keep it usable.
+            let (width, height) =
+                if full.x >= full.y && u64::from(full.x) * 3 <= u64::from(full.y) * 4 {
+                    (full.x.max(1), full.y.max(1))
+                } else {
+                    let height = full.y.min((full.x as u64 * 3 / 4) as u32).max(1);
+                    (full.x.min((height as u64 * 4 / 3) as u32).max(1), height)
+                };
+            bevy::camera::Viewport {
+                physical_position: (full.saturating_sub(UVec2::new(width, height))) / 2,
+                physical_size: UVec2::new(width, height),
+                ..default()
+            }
+        })
+    } else {
+        None
+    };
     for mut visibility in &mut launcher {
-        let desired = if menu.is_empty() {
+        let desired = if menu.is_empty() && !intro.playing() {
             Visibility::Visible
         } else {
             Visibility::Hidden
@@ -427,6 +586,11 @@ fn show_menu_or_launcher(
         }
     }
     for mut camera in &mut cameras {
+        // Original GlueSpriteLayerBackground explicitly sets frame flag bit 0;
+        // it fills the display independently of the authored panel coordinates.
+        if camera.viewport.is_some() {
+            camera.viewport = None;
+        }
         let active = !menu.is_empty();
         if camera.is_active != active {
             camera.is_active = active;
@@ -439,6 +603,16 @@ fn show_menu_or_launcher(
         bevy::camera::ClearColorConfig::Custom(BG_APP)
     };
     for mut camera in &mut ui_cameras {
+        if camera
+            .viewport
+            .as_ref()
+            .map(|v| (v.physical_position, v.physical_size))
+            != viewport
+                .as_ref()
+                .map(|v| (v.physical_position, v.physical_size))
+        {
+            camera.viewport = viewport.clone();
+        }
         let matches = match (camera.clear_color, clear) {
             (bevy::camera::ClearColorConfig::None, bevy::camera::ClearColorConfig::None) => true,
             (
@@ -465,6 +639,8 @@ struct MenuArtCache {
     panel: Option<Handle<Image>>,
     font: Option<Handle<Font>>,
     native_loaded: bool,
+    install: Option<std::path::PathBuf>,
+    selection: Option<String>,
 }
 
 /// Puts the original's frame art on the menu buttons once it can be read.
@@ -475,6 +651,7 @@ struct MenuArtCache {
 /// and doing nothing until the bytes exist means one code path serves both, and
 /// a button that is already wearing its art is skipped rather than re-dressed.
 fn apply_menu_art(
+    launcher: Res<Launcher>,
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut fonts: ResMut<Assets<Font>>,
@@ -486,25 +663,38 @@ fn apply_menu_art(
     panels: Query<Entity, (With<Wc3Panel>, Without<ImageNode>)>,
     mut text: Query<&mut TextFont>,
 ) {
+    let selection = format!("{}:{:?}", launcher.source, launcher.mode.assets);
+    if cache.selection.as_ref() != Some(&selection) {
+        let install = selected_install(&launcher);
+        if cache.install != install {
+            cache.button = None;
+            cache.panel = None;
+            cache.font = None;
+            cache.native_loaded = false;
+            cache.install = install;
+        }
+        cache.selection = Some(selection);
+    }
+    let install = cache.install.clone();
     // The desktop install is read once; the browser store fills asynchronously.
     if !cache.native_loaded || cfg!(target_arch = "wasm32") {
         if cache.button.is_none() {
             let path = crate::mainmenu::BUTTON_ART;
-            if let Some(bytes) = menu_art_bytes(path) {
+            if let Some(bytes) = crate::mainmenu::art_bytes(install.as_deref(), path) {
                 if let Ok(tex) = pcx_gfx::load_image(&bytes, path) {
                     cache.button = Some(images.add(pcx_gfx::viewer::rgba_image(&tex)));
                 }
             }
         }
         if cache.panel.is_none() {
-            if let Some(bytes) = menu_art_bytes(PANEL_ART) {
+            if let Some(bytes) = crate::mainmenu::art_bytes(install.as_deref(), PANEL_ART) {
                 if let Ok(tex) = pcx_gfx::load_image(&bytes, PANEL_ART) {
                     cache.panel = Some(images.add(pcx_gfx::viewer::rgba_image(&tex)));
                 }
             }
         }
         if cache.font.is_none() {
-            if let Some(bytes) = menu_art_bytes(FONT_ART) {
+            if let Some(bytes) = crate::mainmenu::art_bytes(install.as_deref(), FONT_ART) {
                 cache.font = Some(fonts.add(Font::from_bytes(bytes)));
             }
         }
@@ -561,12 +751,6 @@ fn apply_menu_art(
     }
 }
 
-/// Read original artwork from the install or browser store.
-fn menu_art_bytes(path: &str) -> Option<Vec<u8>> {
-    let dir = pcx_gfx::viewer::resolve_install(None);
-    crate::mainmenu::art_bytes(Some(dir.as_path()), path)
-}
-
 /// One menu button, positioned from the original's own frame definition.
 fn spawn_menu_button(
     root: &mut ChildSpawnerCommands,
@@ -574,14 +758,45 @@ fn spawn_menu_button(
     id: &str,
     label: crate::mainmenu::Label,
 ) {
+    let geometry = crate::mainmenu::button_geometry(index);
+    let backdrop_width = if index == 5 {
+        crate::mainmenu::EXIT_W
+    } else {
+        crate::mainmenu::BUTTON_W
+    };
+    let right = if index < 2 { 0.042 } else { 0.012 };
+    let text_width = if index < 2 {
+        0.149
+    } else if index == 5 {
+        0.168
+    } else {
+        0.179
+    };
     let mut e = root.spawn((
         Node {
-            width: Val::Vw(crate::mainmenu::BUTTON_W * 100.0),
-            height: Val::Vh(crate::mainmenu::BUTTON_H * 100.0),
-            min_width: Val::Rem(13.75),
+            width: Val::Vw(geometry.width * 100.0),
+            height: Val::Vh(geometry.height * 100.0),
+            min_width: Val::Rem(0.0),
             max_width: Val::Percent(100.0),
-            min_height: Val::Rem(2.75),
+            min_height: Val::Rem(0.0),
             flex_shrink: 0.0,
+            margin: UiRect {
+                top: if index == 5 {
+                    Val::Auto
+                } else if index == 0 {
+                    Val::Rem(0.0)
+                } else {
+                    Val::Vh(crate::mainmenu::BUTTON_GAP / crate::mainmenu::FRAME_H * 100.0)
+                },
+                ..default()
+            },
+            padding: UiRect {
+                left: Val::Percent((backdrop_width - right - text_width) / backdrop_width * 100.0),
+                right: Val::Percent(right / backdrop_width * 100.0),
+                top: Val::Vh(0.0165 / crate::mainmenu::FRAME_H * 100.0),
+                bottom: Val::Vh(0.0165 / crate::mainmenu::FRAME_H * 100.0),
+            },
+            flex_direction: FlexDirection::Column,
             // `StandardButtonTextTemplate` justifies H *center* and V *middle*,
             // so the label sits centred in its own frame — not against the
             // right edge, which is where the frame itself is anchored.
@@ -605,17 +820,30 @@ fn spawn_menu_button(
         b.spawn((
             Text::new(label.hotkey.to_string()),
             TextFont {
-                font_size: bevy::text::FontSize::Rem(1.0),
+                font_size: bevy::text::FontSize::Vh(
+                    crate::mainmenu::LABEL_FONT_FRACTION / crate::mainmenu::FRAME_H * 100.0,
+                ),
                 ..default()
             },
             TextColor(crate::mainmenu::HOTKEY),
+            TextLayout::new(bevy::text::Justify::Center, bevy::text::LineBreak::NoWrap),
+            Node {
+                flex_shrink: 0.0,
+                ..default()
+            },
+            bevy::ui::widget::TextShadow {
+                offset: Vec2::ZERO,
+                color: Color::srgba(0.0, 0.0, 0.0, 0.9),
+            },
             ZIndex(1),
         ))
         .with_children(|text| {
             text.spawn((
                 TextSpan::new(label.rest),
                 TextFont {
-                    font_size: bevy::text::FontSize::Rem(1.0),
+                    font_size: bevy::text::FontSize::Vh(
+                        crate::mainmenu::LABEL_FONT_FRACTION / crate::mainmenu::FRAME_H * 100.0,
+                    ),
                     ..default()
                 },
                 TextColor(crate::mainmenu::LABEL),
@@ -714,30 +942,25 @@ fn mode_card(root: &mut ChildSpawnerCommands, mode: GameMode) {
                     "Build",
                     vec![
                         (
-                            Pick::Build(pcx_mpq::Version::V1_28),
-                            "1.28c".into(),
-                            "Retail Complete Edition. Extra, not required.".into(),
-                        ),
-                        (
                             Pick::Build(pcx_mpq::Version::V1_29),
                             "1.29b".into(),
-                            "The last stable legacy build. The target.".into(),
+                            "The classic target release.".into(),
                         ),
                     ],
                     "",
                 ),
                 (
-                    "Addon",
+                    "Edition",
                     vec![
-                        (
-                            Pick::Addon(Addon::Tft),
-                            "The Frozen Throne".into(),
-                            "Full unit, ability and campaign set. The default.".into(),
-                        ),
                         (
                             Pick::Addon(Addon::Roc),
                             "Reign of Chaos".into(),
-                            "Pre-addon only: no TFT heroes, items or maps.".into(),
+                            "The base game.".into(),
+                        ),
+                        (
+                            Pick::Addon(Addon::Tft),
+                            "The Frozen Throne".into(),
+                            "The expansion. Selected by default.".into(),
                         ),
                     ],
                     "",
@@ -994,11 +1217,19 @@ fn log_card(root: &mut ChildSpawnerCommands) {
 
 // ------------------------------------------------------------------ systems
 
-fn scale_menu_text(windows: Query<&Window>, mut rem: ResMut<bevy::text::RemSize>) {
+fn scale_menu_text(windows: Query<&Window>, mut shadows: Query<&mut bevy::ui::widget::TextShadow>) {
     if let Ok(window) = windows.single() {
-        let size = (window.height() * crate::mainmenu::LABEL_FONT_FRACTION).max(16.0);
-        if rem.0 != size {
-            rem.0 = size;
+        let height =
+            if window.width() >= window.height() && window.width() / window.height() <= 4.0 / 3.0 {
+                window.height()
+            } else {
+                window.height().min(window.width() * 0.75)
+            };
+        let offset = Vec2::splat(height * 0.001 / crate::mainmenu::FRAME_H);
+        for mut shadow in &mut shadows {
+            if shadow.offset != offset {
+                shadow.offset = offset;
+            }
         }
     }
 }
@@ -1097,11 +1328,15 @@ fn scroll_launcher(
 /// implemented rather than pretending a button led somewhere.
 pub(crate) fn apply_menu_clicks(
     mut commands: Commands,
-    q: Query<&crate::mainmenu::MenuButton, Added<Pressed>>,
+    actions: Res<crate::button_actions::ButtonActions>,
+    q: Query<&crate::mainmenu::MenuButton>,
     menu: Query<Entity, With<MenuLayer>>,
 ) {
     use crate::mainmenu;
-    for entry in &q {
+    for entity in &actions.entities {
+        let Ok(entry) = q.get(*entity) else {
+            continue;
+        };
         let (id, raw) = mainmenu::MENU[entry.0];
         match id {
             "options" => {
@@ -1124,10 +1359,15 @@ pub(crate) fn apply_menu_clicks(
 /// Clicks on the original main menu.
 fn apply_clicks(
     mut l: ResMut<Launcher>,
+    mut intro: ResMut<crate::intro::Intro>,
     mut commands: Commands,
-    mut q: Query<(&Pick, Option<&InteractionDisabled>), (With<Button>, Added<Pressed>)>,
+    actions: Res<crate::button_actions::ButtonActions>,
+    q: Query<(&Pick, Option<&InteractionDisabled>), With<Button>>,
 ) {
-    for (p, disabled) in &mut q {
+    for entity in &actions.entities {
+        let Ok((p, disabled)) = q.get(*entity) else {
+            continue;
+        };
         // Disabled means disabled: the click is dropped here as well as being
         // greyed, so the control cannot be "fixed" by a stray pointer event.
         // `ui_widgets::Button` never presses a disabled button either.
@@ -1142,9 +1382,17 @@ fn apply_clicks(
             Pick::Stage => l.staging = true,
             Pick::Download => {}
             Pick::Menu => {
-                spawn_main_menu(&mut commands);
+                if !intro.request_with_install(l.mode.addon == Addon::Tft, selected_install(&l)) {
+                    spawn_main_menu(&mut commands);
+                }
             }
         }
+    }
+}
+
+fn finish_intro(mut intro: ResMut<crate::intro::Intro>, mut commands: Commands) {
+    if intro.take_finished() {
+        spawn_main_menu(&mut commands);
     }
 }
 
@@ -1320,6 +1568,7 @@ mod menu_tests {
     fn cameras_clear_settings_and_only_run_the_visible_scene() {
         use bevy::camera::ClearColorConfig;
         let mut world = World::new();
+        world.init_resource::<crate::intro::Intro>();
         let ui = world
             .spawn((Camera::default(), bevy::ui::IsDefaultUiCamera))
             .id();
@@ -1342,21 +1591,51 @@ mod menu_tests {
             ClearColorConfig::None
         ));
 
+        let window = world
+            .spawn(Window {
+                resolution: (1600u32, 900u32).into(),
+                ..default()
+            })
+            .id();
+        world.run_system_once(show_menu_or_launcher).unwrap();
+        let viewport = world.get::<Camera>(ui).unwrap().viewport.as_ref().unwrap();
+        assert_eq!(viewport.physical_position, UVec2::new(200, 0));
+        assert_eq!(viewport.physical_size, UVec2::new(1200, 900));
+        world
+            .get_mut::<Window>(window)
+            .unwrap()
+            .resolution
+            .set(600.0, 900.0);
+        world.run_system_once(show_menu_or_launcher).unwrap();
+        let viewport = world.get::<Camera>(ui).unwrap().viewport.as_ref().unwrap();
+        assert_eq!(viewport.physical_position, UVec2::new(0, 225));
+        assert_eq!(viewport.physical_size, UVec2::new(600, 450));
+        assert!(
+            world.get::<Camera>(scene).unwrap().viewport.is_none(),
+            "original background fills the display"
+        );
+
         // An unavailable original scene must not leave the settings' old pixels.
         world.despawn(scene);
         world.run_system_once(show_menu_or_launcher).unwrap();
         assert!(matches!(world.get::<Camera>(ui).unwrap().clear_color,
             ClearColorConfig::Custom(color) if color == BG_APP));
         world.despawn(menu);
+        world.run_system_once(show_menu_or_launcher).unwrap();
+        assert!(world.get::<Camera>(ui).unwrap().viewport.is_none());
     }
 
     #[test]
-    fn holding_stage_fires_once_until_the_button_is_released() {
+    fn a_consumed_activation_does_not_stage_again_until_another_activation() {
         let mut app = App::new();
         app.insert_resource(Launcher::default())
+            .init_resource::<crate::intro::Intro>()
             .init_resource::<Assets<Image>>()
-            .add_systems(Update, apply_clicks);
-        let button = app.world_mut().spawn((Button, Pick::Stage, Pressed)).id();
+            .add_systems(Update, (apply_clicks, crate::button_actions::clear).chain());
+        crate::button_actions::install(&mut app);
+        let button = app.world_mut().spawn((Button, Pick::Stage)).id();
+        app.world_mut()
+            .trigger(bevy::ui_widgets::Activate { entity: button });
         app.update();
         assert!(app.world().resource::<Launcher>().staging);
         app.world_mut().resource_mut::<Launcher>().staging = false;
@@ -1364,7 +1643,8 @@ mod menu_tests {
         assert!(!app.world().resource::<Launcher>().staging);
         app.world_mut().entity_mut(button).remove::<Pressed>();
         app.update();
-        app.world_mut().entity_mut(button).insert(Pressed);
+        app.world_mut()
+            .trigger(bevy::ui_widgets::Activate { entity: button });
         app.update();
         assert!(app.world().resource::<Launcher>().staging);
     }
@@ -1385,6 +1665,9 @@ mod menu_tests {
             .spawn((Button, MenuButton(3), Pressed, Name::new("menu-options")))
             .id();
 
+        world.insert_resource(crate::button_actions::ButtonActions {
+            entities: vec![entry],
+        });
         world.run_system_once(apply_menu_clicks).unwrap();
 
         assert!(
@@ -1401,8 +1684,11 @@ mod menu_tests {
     fn a_pressed_non_options_entry_leaves_the_menu_up() {
         let mut world = World::new();
         let layer = world.spawn(MenuLayer).id();
-        let _ = world.spawn((Button, MenuButton(0), Pressed));
+        let entry = world.spawn((Button, MenuButton(0), Pressed)).id();
 
+        world.insert_resource(crate::button_actions::ButtonActions {
+            entities: vec![entry],
+        });
         world.run_system_once(apply_menu_clicks).unwrap();
 
         assert!(

@@ -73,11 +73,7 @@ Source is in the private [maci0/peacecraft3 repository](https://github.com/maci0
 The [first native four-target run](https://github.com/maci0/peacecraft3/actions/runs/38409132391)
 compiled Windows ARM64 and macOS ARM64. Their test phase failed because a
 local-install integration test assumed developer folders existed on the runner;
-that test is now explicitly ignored by default. Corrected artifacts are pending.
-Each target remains unverified until its compile, tests, executable header check
-and artifact upload finish successfully. The native Windows
-runners include the actual CRT headers and SDK missing from the Linux
-cross-check environment.
+that test is now explicitly ignored by default. The [corrected four-target run](https://github.com/maci0/peacecraft3/actions/runs/38419274743) passed compilation, native unit tests, executable-header checks and artifact upload on **all four OS/CPU combinations** at commit `3055771d80a8b4f28fb06162c52652051757ca5d`. All four downloaded archives passed independent checksum and executable-header checks; both macOS tar archives preserve executable permissions. These artifacts predate the later TFT selection, startup movie and coordinate-layout changes; subsequent source pushes trigger a new matrix run. Native GPU/audio behavior on Windows/macOS is not established by build and unit-test success. The native Windows runners include the actual CRT headers and SDK missing from the Linux cross-check environment.
 
 Archives contain only the executable; players supply their own Warcraft III
 assets. Point `PEACECRAFT3_INSTALL` at a directory containing the original MPQs:

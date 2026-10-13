@@ -2,21 +2,25 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
-Last updated: 2026-10-13
+Last updated: 2026-10-14
 
-Current menu verification (2026-10-13): WASM release build succeeds; selected
-decoder, graphics and app tests pass (131 passed, 6 explicitly ignored).
-PeaceCraft settings precede the menu, buttons use relative flow and rem/viewport
-sizing, and hidden scenes stop rendering and advancing. Bone pivots, parent
-rotations, sparse node IDs and fractional global-sequence timing have regression
-tests. Original JPEG logo alpha is decoded; no-alpha decoding is preserved.
-Desktop and narrow browser checks verify menu entry, clean screen clearing,
-resize hit-testing and original click/music playback without JavaScript errors.
-Those checks isolate UI from the unfinished 3D scene.
-Full browser scene captures now show coherent Orc camp geometry; the previous
-large red planes no longer reproduce. Full fidelity remains open: exact TFT
-scene/logo selection, grey sky, helper inheritance, particles, texture animation
-and blend/lighting behavior still need evidence.
+Current menu verification (2026-10-14): WASM release build succeeds; the app
+has 65 passing tests and three explicitly ignored local-fixture tests. PeaceCraft
+settings precede the skippable original cinematic and original menu. Edition is
+RoC on the left and TFT on the right, with TFT selected by default; 1.28 is absent
+from settings. Original font, logo alpha and parsed 500 ms logo entrance are
+integrated. Relative layout follows native 0.8 × 0.6 frame conversion and its
+widescreen branch; the 3D background fills the window independently.
+
+Browser checks exercise resizing, click/music playback and real cinematic
+playback. UI-only resize/click cases pass at 320×240, 640×480, 1280×1024,
+1280×720, 1920×1080, 2560×1080, 3840×2160 and 430×932. Browser-native 2×
+DPI checks pass at 1280×720 and 430×932; DPR emulation alone reported an
+inconsistent physical pixel box and is not used as the DPI oracle. The TFT scene selects its original 18 geosets and 49 textures and
+honours authored wrapping. Full fidelity remains open: the hanging blue panel
+is located and being decoded but is not rendered, and lighting, particles,
+texture animation, material blending and original options/gameplay remain
+unfinished. Parser and screenshot success do not establish native behavior.
 
 Earlier format-sweep baseline: **15 crates / 336 tests passing, 0 failing**, `cargo fmt`
 clean — expect the number to move, because `pcx-trig` is still being edited
@@ -725,6 +729,14 @@ Format: `date — subsystem — symptom — root cause — status`
 
 ## WASM build
 
+- [x] Original startup movie playback with Escape/visible skip/end/error paths, soundtrack ownership, browser mute setting and native decoder cleanup. Native cinematic playback currently needs an installed FFmpeg; original startup dispatch and frame-perfect A/V parity remain unverified.
+- [x] Parsed TFT logo Birth curve and native default sprite-origin placement; shipped-model fixture and browser render verified. The hanging panel entrance remains open.
+- [x] Settings expose 1.29b only; Edition is RoC on the left, TFT on the right, TFT selected by default.
+- [ ] Complete original resolution parity: full-window background and conditional authored UI branch are traced and implemented; portrait containment is an extension, live expansion flags remain unmeasured.
+
+- [x] Two-browser local WebSocket command/snapshot path for existing movement rules, including same-tick merging, identity rejection and disconnect/reconnect/resync.
+- [ ] Actual gameplay/lobby integration and public multiplayer service; see `docs/browser-online.md` for the current limits.
+
 - [ ] Browser-only ISO import: local File/Blob reads, filesystem discovery,
       validated Warcraft III archive selection and in-memory asset loading.
       **No server upload or remote extraction.** Track unsupported repacked
@@ -771,12 +783,13 @@ Format: `date — subsystem — symptom — root cause — status`
 
 - [x] Four-target native CI matrix and packaging helper added; executable
       header validation covers both Windows PE and macOS Mach-O architectures.
-- [ ] Windows x86-64 compiled, tested and artifact verified.
-- [ ] Windows ARM64 compiled, tested and artifact verified.
-- [ ] macOS Intel x86-64 compiled, tested and artifact verified.
-- [ ] macOS Apple Silicon ARM64 compiled, tested and artifact verified.
+- [x] Windows x86-64 compiled, tested and artifact verified.
+- [x] Windows ARM64 compiled, tested and artifact verified.
+- [x] macOS Intel x86-64 compiled, tested and artifact verified.
+- [x] macOS Apple Silicon ARM64 compiled, tested and artifact verified.
 - [ ] Menu GPU rendering and audio verified on both desktop operating systems.
-      First run `38409132391` compiled Windows ARM64 and macOS ARM64, but their
-      tests failed because a local-install test assumed developer folders.
-      That test is now explicitly ignored; corrected artifacts remain pending.
+      Corrected run `38419274743` at `3055771` succeeded on all four targets.
+      Downloaded artifact checksums and PE/Mach-O architectures were independently
+      verified. Those artifacts predate the later menu/movie/layout changes;
+      the next push requires a new matrix build.
       Commands and limitations are recorded in `docs/build-desktop.md`.

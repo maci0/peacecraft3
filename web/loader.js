@@ -58,10 +58,38 @@ async function loadGlueArt() {
     }
   }
 
+  // The logo model and its texture, for the expansion menu's entrance.
+  let panelOk = 0;
+  const panelMissing = [];
+  for (const [name, url] of MENU_PANEL) {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) { panelMissing.push(name); continue; }
+      add_asset(name, new Uint8Array(await r.arrayBuffer()));
+      panelOk += 1;
+    } catch (err) {
+      panelMissing.push(name);
+    }
+  }
+  say(
+    `menu-exp logo: ${panelOk}/${MENU_PANEL.length}` +
+      (panelMissing.length ? `, absent: ${panelMissing.join(', ')}` : ''),
+    panelMissing.length > 0,
+  );
+
   for (const scene of SCENES) {
     await loadScene(scene);
   }
 }
+
+// The expansion menu's own entrance sprite: the Frozen Throne logo. A separate
+// namespace from the scene because it is separate art with its own model and
+// texture — see `docs/re-notes/menu-panel.md`. Served names match
+// `menu_panel::LOGO_MODEL_SERVED` / `LOGO_TEXTURE_SERVED`.
+const MENU_PANEL = [
+  ['menu-exp/warcraftiiilogo_exp.mdx', './assets/menu-exp/warcraftiiilogo_exp.mdx'],
+  ['menu-exp/warcraftiiiftlogo.blp', './assets/menu-exp/warcraftiiiftlogo.blp'],
+];
 
 // The two shipped main-menu scenes. They are **different scenes in different
 // archives** — see `docs/re-notes/main-menu-rendering.md` — so both are served
@@ -233,12 +261,14 @@ function fail(where, err) {
   say(`${where}: ${err instanceof Error ? err.message : String(err)}`, true);
 }
 
-await init().catch((err) => fail('wasm module', err));
+try {
+  await init();
+} catch (error) {
+  fail('wasm module', error);
+  for (const id of ['archives', 'self', 'drop']) document.getElementById(id).disabled = true;
+  throw error;
+}
 say('wasm module loaded');
-
-// Hand the original button frames to the running app. The menu re-checks for
-// them every frame, so registering them here is enough — no ordering dance.
-await loadGlueArt();
 
 // Every archive the user picks is read into memory and opened there. Nothing is
 // written anywhere: `add_archive` reports what the archive's own tables say.
@@ -281,3 +311,7 @@ window.peacecraft3 = {
   stored_asset,
   stored_assets,
 };
+
+// Expose initialized APIs and attach controls before the larger scene assets
+// arrive. Each renderer waits for its own required bytes in the memory store.
+await loadGlueArt();

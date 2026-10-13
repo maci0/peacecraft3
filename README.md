@@ -40,10 +40,14 @@ cargo run -p peacecraft3
 ```
 
 PeaceCraft settings open first. Use **Main menu** to enter the original game
-menu. Original menu rendering and audio are being verified; full gameplay and
-exact visual fidelity are still in progress.
-The target is 1.29b (`1.29.2.9232-legacy-tft`). The older 1.28c asset tree is an
-incidental compatibility cross-check, not the main target.
+menu after the skippable original startup cinematic. The menu uses shipped
+font/art data and traced original layout rules; full gameplay and exact
+visual fidelity are still in progress. Browser fullscreen is available.
+The target is the installed classic 1.29b release. Its executable reports
+`1.29.2.9231`; the earlier `9232` label was not verified. The extracted
+compatibility tree contains a `1.26.0.6401` Game.dll, so its old “1.28c” label
+is not reliable evidence of every archive’s version. See the
+[original-runtime evidence](docs/re-notes/glue-coordinate-runtime.md).
 
 [Windows and macOS builds](docs/build-desktop.md) cover Intel/x64 and ARM64.
 The [native build workflow](https://github.com/maci0/peacecraft3/actions/workflows/desktop-builds.yml)
