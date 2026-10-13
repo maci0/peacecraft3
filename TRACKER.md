@@ -152,7 +152,8 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
 - [~] Gate: Reforged Footman geometry loads through the same `pcx-gfx` path as vanilla.
       The checked version-1800 LoD trailer yields five geosets and 582 vertices
       from the verified 105,602-byte CASC asset. Bevy mesh construction passes;
-      newer materials, TANG/SKIN and actual rendering remain unsupported/unverified.
+      explicit stored material parsing also passes. Shader semantics, TANG/SKIN
+      and actual rendering remain unsupported/unverified.
 - [ ] `docs/reforged-fixes.md` fix ledger; rows default to `defer`
 
 ## M2 — Asset decoders + first Bevy render — **render smoke passed; full material fidelity open**
@@ -888,6 +889,11 @@ Format: `date — subsystem — symptom — root cause — status`
   The named Footman verifies to 105,602 MDLX bytes. Version-1800 geometry now
   decodes into five geosets and 582 Bevy mesh vertices. Authored LoD metadata is
   preserved; no LoD selection or newer material/rendering behavior is inferred.
+  The explicit version-1800 material reader tiles the supplied Footman's 404-byte
+  MTLS payload into three materials/four layers, preserving four subtextures and
+  seven KMTA keys. Three discriminating synthetic tests and the original parse
+  gate pass. Classic accessors retain their newer-version refusal; no shader,
+  interpolation evaluation or rendering parity follows from stored framing.
   Four asset-adapter regressions and two explicitly supplied original members
   pass through source layering. MPQ decoded budgets and locale/platform ambiguity
   are checked before reads; CASC locators retain config/encoding/manifest keys

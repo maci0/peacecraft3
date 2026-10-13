@@ -53,8 +53,10 @@
 //! the worst failure mode available here. See [`CollisionShape`].
 
 mod material;
+mod material1800;
 mod particle2;
 pub use material::{MaterialLayer, TextureFrameTrack};
+pub use material1800::{MaterialLayer1800, MaterialTrack1800, SubTexture1800};
 pub use particle2::Particle2Properties;
 
 use std::collections::BTreeSet;

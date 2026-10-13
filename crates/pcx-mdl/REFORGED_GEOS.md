@@ -53,11 +53,12 @@ Existing raw slot/flag interpretations remain unchanged.
 
 The same revision's newer material reader expects a shader-name field that
 this v1800 asset does not have at that location. It cannot establish v1800
-material semantics. The classic checked layer parser instead fails at LAYS+44
-(bytes of a float, not a track). Materials therefore remain a separate typed
-`UnsupportedVersionedChunk { version: 1800, chunk: "MTLS" }` refusal. The next
-probe is the version-1800 layer/subtexture framing from primary implementation
-or exact-target code, checked against this MTLS payload at `[0x850,0x9e4)`.
+material semantics. The classic checked layer parser instead fails at
+Material.data+44 (file `0x880`, layer+28: emissive data mistaken for a track).
+The classic `materials()` accessor retains its typed
+`UnsupportedVersionedChunk { version: 1800, chunk: "MTLS" }` refusal. The
+separate `materials_v1800()` accessor now checks stored layer/subtexture framing;
+see [REFORGED_MTLS.md](REFORGED_MTLS.md). Shader/render semantics remain open.
 
 ## API and limits
 
