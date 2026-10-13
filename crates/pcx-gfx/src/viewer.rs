@@ -66,6 +66,9 @@ pub fn spawn_model(
         (model.minimum_extent[2] + model.maximum_extent[2]) * 0.5,
     ];
     let height = (model.maximum_extent[2] - model.minimum_extent[2]).max(1.0);
+    let authored = pcx_mdl::Mdlx::parse(bytes)
+        .and_then(|mdl| mdl.textures(bytes))
+        .unwrap_or_default();
 
     let mut spawned = 0;
     for (mesh, path) in &parts {
@@ -78,10 +81,15 @@ pub fn spawn_model(
         } else {
             pick(textures, path)
         };
+        // The model's own `TEXS` flags decide whether this texture repeats.
+        // Read once per model below and looked up per geoset.
+        let authored_flags = authored_texture_flags(&authored, path);
 
         let material = match image {
             Some(tex) => {
-                let handle = images.add(rgba_image(&tex));
+                let mut image = rgba_image(&tex);
+                image.sampler = sampler_for_texture_flags(authored_flags);
+                let handle = images.add(image);
                 materials.add(StandardMaterial {
                     base_color_texture: Some(handle),
                     perceptual_roughness: 0.9,
@@ -129,6 +137,17 @@ pub fn spawn_model(
     Ok(spawned)
 }
 
+/// The authored `TEXS` flags for `path`, or `0` for an unnamed texture.
+fn authored_texture_flags(textures: &[pcx_mdl::Texture], path: &str) -> u32 {
+    let norm = |s: &str| s.replace('/', "\\").to_ascii_lowercase();
+    let want = norm(path);
+    textures
+        .iter()
+        .find(|t| norm(&t.path) == want)
+        .map(|t| t.flags)
+        .unwrap_or(0)
+}
+
 /// Finds the loaded texture whose source path matches `path`.
 ///
 /// Both spellings are accepted because the archives use backslashes while a
@@ -159,6 +178,44 @@ pub fn rgba_image(tex: &LoadedTexture) -> Image {
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::default(),
     )
+}
+
+/// The sampler a texture's own `TEXS` flags ask for.
+///
+/// The authored bits are [`pcx_mdl::TEXTURE_WRAP_WIDTH`] and
+/// [`pcx_mdl::TEXTURE_WRAP_HEIGHT`]; an unset bit means the texture does not
+/// repeat along that axis, and Bevy's default is to clamp. Textures in the
+/// shipped main-menu scenes carry UVs far outside `[0, 1]` — the expansion
+/// scene's sky spans roughly `U -2.6 .. 4.3` — so a clamp smears the last row
+/// and column across the whole surface, which is what streaked ice and water
+/// looked like.
+///
+/// The filter is left at its default: nothing in the format flags says which
+/// filter to use, and inventing one would be a change the original does not ask
+/// for.
+#[must_use]
+pub fn sampler_for_texture_flags(flags: u32) -> bevy::image::ImageSampler {
+    use bevy::image::ImageSampler as S;
+    use bevy::image::{ImageAddressMode, ImageSamplerDescriptor};
+
+    if flags & (pcx_mdl::TEXTURE_WRAP_WIDTH | pcx_mdl::TEXTURE_WRAP_HEIGHT) == 0 {
+        // Neither axis wraps: the default sampler is already correct, and
+        // returning it unchanged keeps a non-wrapping texture byte-identical to
+        // what it was before this existed.
+        return S::default();
+    }
+    let wrap = |set: bool| {
+        if set {
+            ImageAddressMode::Repeat
+        } else {
+            ImageAddressMode::ClampToEdge
+        }
+    };
+    S::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: wrap(flags & pcx_mdl::TEXTURE_WRAP_WIDTH != 0),
+        address_mode_v: wrap(flags & pcx_mdl::TEXTURE_WRAP_HEIGHT != 0),
+        ..ImageSamplerDescriptor::default()
+    })
 }
 
 /// Opens a window and draws a model.
@@ -971,5 +1028,64 @@ mod tests {
         let img = rgba_image(&tex);
         assert_eq!(img.texture_descriptor.size.width, 4);
         assert_eq!(img.texture_descriptor.size.height, 3);
+    }
+}
+
+#[cfg(test)]
+mod sampler_tests {
+    use super::*;
+    use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
+
+    fn modes(flags: u32) -> (ImageAddressMode, ImageAddressMode) {
+        match sampler_for_texture_flags(flags) {
+            ImageSampler::Descriptor(d) => (d.address_mode_u, d.address_mode_v),
+            other => panic!("expected a descriptor for flags {flags:#x}, got {other:?}"),
+        }
+    }
+
+    /// The two authored bits map to the two axes, and nothing else does.
+    #[test]
+    fn the_wrap_flags_choose_repeat_per_axis() {
+        assert_eq!(
+            modes(pcx_mdl::TEXTURE_WRAP_WIDTH | pcx_mdl::TEXTURE_WRAP_HEIGHT),
+            (ImageAddressMode::Repeat, ImageAddressMode::Repeat),
+            "0x3, the expansion scene's ice and sky"
+        );
+        assert_eq!(
+            modes(pcx_mdl::TEXTURE_WRAP_WIDTH),
+            (ImageAddressMode::Repeat, ImageAddressMode::ClampToEdge)
+        );
+        assert_eq!(
+            modes(pcx_mdl::TEXTURE_WRAP_HEIGHT),
+            (ImageAddressMode::ClampToEdge, ImageAddressMode::Repeat)
+        );
+    }
+
+    /// A texture that wraps on neither axis keeps the default sampler exactly,
+    /// so nothing that was already correct changes.
+    #[test]
+    fn a_non_wrapping_texture_keeps_the_default_sampler() {
+        assert!(matches!(
+            sampler_for_texture_flags(0x0),
+            ImageSampler::Default
+        ));
+        assert!(matches!(
+            sampler_for_texture_flags(0xfffc),
+            ImageSampler::Default
+        ));
+    }
+
+    /// The filter is not invented from a flag word.
+    #[test]
+    fn the_filter_stays_at_its_default() {
+        let d = ImageSamplerDescriptor::default();
+        match sampler_for_texture_flags(0x3) {
+            ImageSampler::Descriptor(got) => {
+                assert_eq!(got.mag_filter, d.mag_filter);
+                assert_eq!(got.min_filter, d.min_filter);
+                assert_eq!(got.mipmap_filter, d.mipmap_filter);
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }

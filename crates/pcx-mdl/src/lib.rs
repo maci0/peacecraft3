@@ -586,6 +586,43 @@ pub struct Texture {
     /// Unclassified leading field. Not assumed to be a replaceable id.
     pub slot: u32,
     pub path: String,
+    /// The record's trailing flag word, at `+264`.
+    ///
+    /// A `TEXS` record is `slot(4) + path(260) + flags(4)` = 268 bytes, so the
+    /// word after the path is the texture's own flags. They were being dropped
+    /// because the record was read as `slot` + path only.
+    ///
+    /// The two bits that matter for sampling are [`TEXTURE_WRAP_WIDTH`] and
+    /// [`TEXTURE_WRAP_HEIGHT`]. Measured on the expansion main menu — where a
+    /// wrapping bug is visible as streaked ice and water — 35 of its 49 textures
+    /// set both, including `SKY2`, `Ice_Ice`, `Ice_Icedull`, `Iceberg_New` and
+    /// every `ocean_h.*`; 14 set neither, including `FrostWyrm`. Those textures'
+    /// geoset UVs run well outside `[0, 1]` (the sky geoset's U spans approx
+    /// `-2.6 .. 4.3`), so a clamp instead of a repeat streaks the whole surface.
+    pub flags: u32,
+}
+
+/// `TEXS` flag `0x1`: the texture repeats along U.
+///
+/// From the published format implementations — Retera's Model Studio and the
+/// open-realm MDX documentation; see `docs/re-notes/main-menu-rendering.md` for
+/// the attribution and for what that class of evidence does and does not prove.
+pub const TEXTURE_WRAP_WIDTH: u32 = 0x1;
+/// `TEXS` flag `0x2`: the texture repeats along V.
+pub const TEXTURE_WRAP_HEIGHT: u32 = 0x2;
+
+impl Texture {
+    /// Whether the texture repeats along U, per its authored flags.
+    #[must_use]
+    pub fn wraps_width(&self) -> bool {
+        self.flags & TEXTURE_WRAP_WIDTH != 0
+    }
+
+    /// Whether the texture repeats along V, per its authored flags.
+    #[must_use]
+    pub fn wraps_height(&self) -> bool {
+        self.flags & TEXTURE_WRAP_HEIGHT != 0
+    }
 }
 
 /// Byte length of a `SEQS` record in the shipped set.
@@ -3316,6 +3353,9 @@ impl Mdlx {
             out.push(Texture {
                 slot: read_u32(r, 0)?,
                 path: read_cstr_bounded(r, 4, 260),
+                // `slot(4) + path(260)` is 264, so the flag word is the last
+                // four bytes of the 268-byte record.
+                flags: read_u32(r, 264)?,
             });
         }
         Ok(out)
@@ -6900,5 +6940,62 @@ mod compose_tests {
         // index 9 (which would be out of bounds).
         assert_eq!(world[0], identity());
         assert_eq!(world[1], identity());
+    }
+}
+
+#[cfg(test)]
+mod texture_flag_tests {
+    use super::*;
+
+    /// A minimal model holding one `TEXS` record with the given flag word.
+    fn model_with_texture(path: &str, flags: u32) -> Vec<u8> {
+        let mut rec = vec![0u8; TEXTURE_SIZE];
+        rec[0..4].copy_from_slice(&0u32.to_le_bytes()); // slot
+        let b = path.as_bytes();
+        rec[4..4 + b.len()].copy_from_slice(b); // path, NUL-terminated by the zeroes
+        rec[264..268].copy_from_slice(&flags.to_le_bytes());
+        let mut d = Vec::new();
+        d.extend_from_slice(b"MDLX");
+        // `VERS` is required by the parser; 800 is the format the shipped set uses.
+        d.extend_from_slice(b"VERS");
+        d.extend_from_slice(&4u32.to_le_bytes());
+        d.extend_from_slice(&800u32.to_le_bytes());
+        d.extend_from_slice(b"TEXS");
+        d.extend_from_slice(&(rec.len() as u32).to_le_bytes());
+        d.extend_from_slice(&rec);
+        d
+    }
+
+    /// The flag word is the record's last four bytes, and it is read.
+    ///
+    /// This is the regression for the bug: `Texture` used to be `slot` + path
+    /// only, so the trailing word was silently dropped and every texture sampled
+    /// as though it did not wrap.
+    #[test]
+    fn the_trailing_flag_word_is_parsed() {
+        let m = Mdlx::parse(&model_with_texture("Ice_Ice.blp", 0x3)).expect("parses");
+        let t = m
+            .textures(&model_with_texture("Ice_Ice.blp", 0x3))
+            .expect("textures");
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].path, "Ice_Ice.blp");
+        assert_eq!(t[0].flags, 0x3, "the word at +264");
+        let _ = m;
+    }
+
+    /// Both bits, separately, so a parser that read the wrong offset or the
+    /// wrong byte order would not pass by accident.
+    #[test]
+    fn the_wrap_bits_are_read_individually() {
+        let get = |flags: u32| {
+            let d = model_with_texture("x.blp", flags);
+            Mdlx::parse(&d).unwrap().textures(&d).unwrap()[0].clone()
+        };
+        assert!(!get(0x0).wraps_width() && !get(0x0).wraps_height());
+        assert!(get(0x1).wraps_width() && !get(0x1).wraps_height());
+        assert!(!get(0x2).wraps_width() && get(0x2).wraps_height());
+        assert!(get(0x3).wraps_width() && get(0x3).wraps_height());
+        // A word with unrelated high bits set must not turn either wrap on.
+        assert!(!get(0xfffc).wraps_width() && !get(0xfffc).wraps_height());
     }
 }

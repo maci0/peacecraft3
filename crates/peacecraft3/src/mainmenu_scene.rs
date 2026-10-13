@@ -468,6 +468,14 @@ pub fn spawn(
     // the flags the layer actually carries.
     let paths = pcx_gfx::model_texture_paths(bytes, source).unwrap_or_default();
     let mdl_materials = m.materials(bytes).unwrap_or_default();
+    // The model's own texture flags, by path, so each geoset's texture repeats
+    // exactly as authored rather than as this module decides.
+    let authored: Vec<(String, u32)> = m
+        .textures(bytes)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| (t.path, t.flags))
+        .collect();
     let mut handles = Vec::with_capacity(model.meshes.len());
     for mesh in &model.meshes {
         let id = mesh.material_id as usize;
@@ -477,7 +485,18 @@ pub fn spawn(
             info.blend_gaps.push(gap);
         }
         let texture = pick(textures, &path);
-        let handle = texture.map(|t| images.add(pcx_gfx::viewer::rgba_image(t)));
+        // The texture's own `TEXS` flags decide whether it repeats. This scene's
+        // UVs run far outside `[0, 1]` — its sky spans about `U -2.6 .. 4.3` —
+        // so a clamp smears one row and column across the surface, which is what
+        // the streaked ice and water were. `rgba_image` is left alone; the
+        // sampler is set on the image it returns, so a caller that does not know
+        // about flags keeps the default it had.
+        let handle = texture.map(|t| {
+            let mut image = pcx_gfx::viewer::rgba_image(t);
+            image.sampler =
+                pcx_gfx::viewer::sampler_for_texture_flags(texture_flags(&authored, &path));
+            images.add(image)
+        });
         if texture.is_none() && !path.is_empty() {
             info.missing_textures.push(path.clone());
         }
@@ -641,6 +660,21 @@ pub struct MainMenuSceneCamera;
 /// All entities owned by a scene, so changing expansion removes the old scene.
 #[derive(Component)]
 pub struct MainMenuSceneEntity;
+
+/// The authored `TEXS` flags for a texture path, or `0` when the model does not
+/// name that path.
+///
+/// Paths are compared with either separator and without case, the same rule
+/// [`pick`] uses, so a lookup here cannot disagree with which image was chosen.
+fn texture_flags(authored: &[(String, u32)], path: &str) -> u32 {
+    let norm = |s: &str| s.replace('/', "\\").to_ascii_lowercase();
+    let want = norm(path);
+    authored
+        .iter()
+        .find(|(p, _)| norm(p) == want)
+        .map(|(_, f)| *f)
+        .unwrap_or(0)
+}
 
 /// Finds the loaded texture whose source path matches `path`.
 ///

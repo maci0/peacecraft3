@@ -147,3 +147,46 @@ No culling or depth behaviour has been changed on any of this.
   established here; that needs the shipped runtime or a capture.
 - The expansion scene's `SEQS`, `CAMS`, `LITE` and `PRE2` have not been read
   here; its sky, geometry and materials are what establish the selection.
+
+## The black band at the bottom of the frame
+
+The TFT capture has scene content down to about 87% of the canvas height and
+**pure black `(0,0,0)` below it** — the clear colour, not dark terrain.
+
+**What it is, measured.** The expansion scene has exactly **one** camera,
+`Camera02good` (the whole `CAMS` chunk is 664 bytes, one record):
+
+```
+eye (4205, 506, 415)   target (-1802, 349, 940)   fov 1.0466 rad (60.0°)   near 331   far 70,000
+```
+
+The camera sits 6,031 units from its target and its view direction is
+`(-0.9959, -0.0261, +0.0872)` — it looks very slightly **upward**. The whole
+scene's geometry spans `z -1841 .. 27867`, and the sky dome `SKY2` (geoset 14)
+spans `z -1841 .. 21634`: the **lowest geometry in the model is `z = -1841`**.
+
+With a 60° vertical field of view and a near-horizontal view, the bottom edge of
+the frame looks about 25° below the horizon. At the dome's distance that is tens
+of thousands of units down, far below `z = -1841`. The frame therefore extends
+past the bottom of the model, and what is drawn there is the **clear colour**.
+
+So the band is not missing geometry in the decoder's sense and not a texture
+fault; it is the camera's frustum reaching below a diorama that has a bottom.
+
+**Candidates, none established.**
+
+1. **The camera is animated and we use its static default.** The 664-byte record
+   is about 120 bytes of fixed fields plus roughly 544 bytes of tracks, so
+   `Camera02good` moves. This note's numbers are the record's default
+   eye/target, which is what the scene renders from. Sampling the camera's own
+   tracks, the way bone tracks are sampled, is the first thing to try.
+2. **The field of view's axis.** The model stores `1.0466` without saying whether
+   it is vertical or horizontal. Read as horizontal, the vertical angle would be
+   about 47° at 4:3 — less of the frame below the horizon, a smaller band. Read
+   as vertical, as it is here, the band is larger. Nothing measured so far
+   decides this.
+3. **The clear colour.** WC3 may not clear the menu to black. A capture of the
+   original is needed; no amount of reading the model settles it.
+
+Choosing between these needs the shipped runtime or a capture of it. No clear
+colour, field-of-view axis or camera sampling has been changed on this evidence.
