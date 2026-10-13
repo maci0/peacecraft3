@@ -386,7 +386,10 @@ The list below is the measured part; the rest of the container surface is tracke
 - [~] `pcx-map`: `war3map.w3i` MapInfo parser exists; complete slot/object semantics and runtime integration remain open
 - [ ] `pcx-map`: preplaced units, item sets, random tables
 - [~] `pcx-tera`: corner terrain meshes exist; slot texture blending and world runtime integration remain open
-- [ ] `pcx-tera`: cliff walls, water rendering
+- [~] `pcx-tera`: caller-selected cliff wall geometry is implemented and tested;
+      original cliff placement/threshold and water rendering remain open.
+      `WaterData` preserves source records and reports unproven level/geometry
+      explicitly; see `crates/pcx-tera/WATER_EVIDENCE.md`.
 - [ ] Camera: bounds, pitch, pan speed, zoom steps — values from RE
 - [ ] **Gate:** Human campaign mission 1 loads and pans identically
 - [ ] **Gate:** a community map's full container parses — container, `w3e`, `doo`, `shd`,
@@ -457,6 +460,10 @@ ship custom objects, and a map whose rawcodes do not resolve is unplayable.
       mixed-case raw codes in that column alone. A case-sensitive join drops records
       the map really declares
 - [ ] `pcx-objects`: `game.dll`-derived default tables
+- [x] Asset-derived stock tables: all seven families retain SLK/profile cells,
+      source fingerprints, aliases, level columns and metadata. Ambiguous,
+      missing and unsupported joins are reported. This is supplied-asset data,
+      not proof of engine defaults, tech-tree behavior or gameplay parity.
 - [ ] `pcx-objects`: `war3map.wpmp` allied shared data
 - [ ] Unit table: 4 races + neutral, buildings, heroes
 - [ ] Ability table + ability levels/objects

@@ -106,24 +106,35 @@
 //! plus a vertical wall quad — and neither the threshold nor the wall is in any
 //! shipped byte this crate measured. The measured primitives are handed out
 //! ([`TileProfile`]) and the decision is refused (see [`cliff`]).
+//!
+//! [`cliff_wall`] constructs optional wall quads from caller-supplied geometry
+//! and a caller-supplied threshold; it does not answer the refused cliff rule.
+//! [`WaterData`] preserves original corner records with explicit provenance and
+//! refuses water-level decoding and water meshes. Authored water settings exist
+//! in `TerrainArt\\Water.slk` and `UI\\MiscData.txt`, but their relation to W3E
+//! corner words has not been established. See the crate's `WATER_EVIDENCE.md`.
 
 use std::fmt;
 
 pub use pcx_map::{Corner, Terrain};
 
 pub mod cliff;
+pub mod cliff_wall;
 pub mod ground;
 pub mod mesh;
 pub mod tiles;
+pub mod water;
 pub mod world;
 
 #[cfg(test)]
 mod tests;
 
 pub use cliff::{CliffClass, TileProfile, cliff_class};
+pub use cliff_wall::{WallGeometryError, WallQuad, cliff_wall, cliff_walls};
 pub use ground::{GroundSlot, GroundTiles, select_slot, slot_fourcc};
 pub use mesh::{ManifoldReport, TerrainMesh};
 pub use tiles::{TileCatalog, TilesetError};
+pub use water::{MissingWaterProvenance, RawWaterCorner, WaterData, WaterMesh, WaterProvenance};
 pub use world::{
     TILE_XY, Z_PER_INDEX, Z_REFERENCE_INDEX, corner_world, corner_world_scaled, height_index,
     world_z,
@@ -165,6 +176,11 @@ pub enum Unsupported {
     CliffRule,
     /// Where the cliff threshold sits in world units.
     CliffThreshold,
+    /// W3E second-word/flag interpretation and water-height world conversion.
+    /// `Water.slk` carries settings but does not by itself establish this join.
+    WaterLevel,
+    /// Water presence and surface topology have not been established.
+    WaterGeometry,
     /// Whether ground is walkable. The game answers this from its own pathing
     /// tables and `game.dll`, not from the terrain file; `Terrain.slk`'s
     /// `walkable` column is per *tile type*, not per tile.
@@ -186,6 +202,14 @@ impl fmt::Display for Unsupported {
             }
             Unsupported::CliffThreshold => {
                 "the cliff threshold in world units is a renderer constant, not a measured one"
+            }
+            Unsupported::WaterLevel => {
+                "W3E corner +2 word and +4 flags have no established water-level mapping; \
+                 Water.slk settings alone do not prove it (see WATER_EVIDENCE.md)"
+            }
+            Unsupported::WaterGeometry => {
+                "water presence, world height and surface topology are unproven; \
+                 no water plane is invented (see WATER_EVIDENCE.md)"
             }
             Unsupported::Walkability => "walkability is game.dll's, not the terrain file's",
         };

@@ -73,6 +73,148 @@ fn fixture_terrain() -> Terrain {
 }
 
 #[test]
+fn water_preserves_original_corner_bytes_and_provenance() {
+    let original = fixture_terrain();
+    let mut bytes = original.raw().to_vec();
+    let body = bytes.len() - original.corner_count() * pcx_map::CORNER_RECORD;
+    // Synthetic reserved bits and opaque fields must survive without meanings.
+    bytes[body..body + pcx_map::CORNER_RECORD]
+        .copy_from_slice(&[0xff, 0xff, 0xab, 0xcd, 0xe1, 0x82, 0x94]);
+    let terrain = Terrain::from_bytes(bytes).unwrap();
+    let water = crate::WaterData::new(&terrain, "synthetic edition", "fixture.w3m").unwrap();
+    let corner = water.raw_corner(0, 0).unwrap();
+    assert_eq!(corner.byte_offset, body);
+    assert_eq!(corner.record, &[0xff, 0xff, 0xab, 0xcd, 0xe1, 0x82, 0x94]);
+    assert_eq!(corner.corner.position_word, 0xcdab);
+    assert_eq!(corner.corner.corner_flags, 0xe);
+    assert_eq!(corner.provenance, water.provenance());
+    assert_eq!(corner.provenance.terrain_version, terrain.version());
+    assert_eq!(corner.provenance.map_source, "fixture.w3m");
+    assert_eq!(corner.provenance.edition, "synthetic edition");
+    assert_eq!(
+        water.raw_corner(1, 1).unwrap().byte_offset,
+        body + 4 * pcx_map::CORNER_RECORD
+    );
+    assert_eq!(
+        water.raw_corner(2, 2).unwrap().byte_offset,
+        body + 8 * pcx_map::CORNER_RECORD
+    );
+    assert!(water.raw_corner(3, 0).is_none());
+    assert!(water.raw_corner(0, u32::MAX).is_none());
+}
+
+#[test]
+fn water_refuses_semantics_instead_of_returning_a_dry_plane() {
+    let terrain = fixture_terrain();
+    let water = crate::WaterData::new(&terrain, "synthetic edition", "fixture.w3m").unwrap();
+    assert_eq!(water.water_level(0, 0), Err(crate::Unsupported::WaterLevel));
+    assert_eq!(water.water_level(2, 2), Err(crate::Unsupported::WaterLevel));
+    assert_eq!(water.water_level(3, 0), Ok(None));
+    assert_eq!(water.mesh(), Err(crate::Unsupported::WaterGeometry));
+    assert!(crate::Unsupported::WaterLevel.to_string().contains("+2"));
+    assert!(
+        crate::Unsupported::WaterGeometry
+            .to_string()
+            .contains("unproven")
+    );
+    assert!(matches!(
+        crate::WaterData::new(&terrain, " ", "fixture.w3m"),
+        Err(crate::MissingWaterProvenance("edition"))
+    ));
+    assert!(matches!(
+        crate::WaterData::new(&terrain, "synthetic edition", ""),
+        Err(crate::MissingWaterProvenance("map source"))
+    ));
+}
+
+#[test]
+fn wall_geometry_uses_only_the_callers_coordinates_and_threshold() {
+    let edge = [[10.0, -4.0, 3.0], [13.0, 0.0, 7.0]];
+    let wall = crate::cliff_wall(edge, 3.0).unwrap().unwrap();
+    assert_eq!(
+        wall.positions,
+        [
+            [10.0, -4.0, 3.0],
+            [13.0, 0.0, 3.0],
+            [13.0, 0.0, 7.0],
+            [10.0, -4.0, 7.0],
+        ]
+    );
+    assert_eq!(wall.normal, [0.8, -0.6, 0.0]);
+    assert_eq!(crate::cliff_wall(edge, 4.0).unwrap(), None);
+    assert_eq!(crate::cliff_wall(edge, 5.0).unwrap(), None);
+    assert!(crate::cliff_wall(edge, 0.0).unwrap().is_some());
+    let reversed = crate::cliff_wall([edge[1], edge[0]], 3.0).unwrap().unwrap();
+    assert_eq!(reversed.normal, [-0.8, 0.6, 0.0]);
+    for quad in [wall, reversed] {
+        for tri in crate::WallQuad::TRIANGLE_INDICES.chunks_exact(3) {
+            let a = quad.positions[tri[0] as usize];
+            let b = quad.positions[tri[1] as usize];
+            let c = quad.positions[tri[2] as usize];
+            let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let normal = [
+                ab[1] * ac[2] - ab[2] * ac[1],
+                ab[2] * ac[0] - ab[0] * ac[2],
+                ab[0] * ac[1] - ab[1] * ac[0],
+            ];
+            let dot = normal
+                .iter()
+                .zip(quad.normal)
+                .map(|(a, b)| a * b)
+                .sum::<f32>();
+            assert!(dot > 0.0, "triangle winding must match the face normal");
+        }
+    }
+}
+
+#[test]
+fn wall_tile_perimeter_has_no_diagonal_or_implicit_cliff_rule() {
+    let corners = [
+        [2.0, 3.0, 1.0],
+        [9.0, 3.0, 5.0],
+        [2.0, 11.0, 1.0],
+        [9.0, 11.0, 5.0],
+    ];
+    let walls = crate::cliff_walls(corners, 2.0).unwrap();
+    assert_eq!(walls.len(), 2);
+    assert_eq!(walls[0].normal, [0.0, -1.0, 0.0]);
+    assert_eq!(walls[1].normal, [0.0, 1.0, 0.0]);
+    assert!(crate::cliff_walls(corners, 4.0).unwrap().is_empty());
+    let profile = crate::TileProfile::of(&fixture_terrain(), 0, 0).unwrap();
+    assert_eq!(
+        crate::cliff_class(&profile),
+        Err(crate::Unsupported::CliffRule)
+    );
+    assert_eq!(
+        crate::cliff::cliff_threshold(),
+        Err(crate::Unsupported::CliffThreshold)
+    );
+}
+
+#[test]
+fn wall_rejects_invalid_geometry_and_skips_flat_edges() {
+    use crate::WallGeometryError::{CoincidentEndpoints, InvalidThreshold, NonFiniteGeometry};
+    let edge = [[0.0, 0.0, 0.0], [2.0, 3.0, 4.0]];
+    for threshold in [-1.0, f32::NAN, f32::INFINITY] {
+        assert_eq!(crate::cliff_wall(edge, threshold), Err(InvalidThreshold));
+    }
+    assert_eq!(crate::cliff_wall([[0.0; 3]; 2], 0.0), Ok(None));
+    assert_eq!(
+        crate::cliff_wall([[0.0; 3], [0.0, 0.0, 1.0]], 0.0),
+        Err(CoincidentEndpoints)
+    );
+    assert_eq!(
+        crate::cliff_wall([[f32::NAN; 3], edge[1]], 0.0),
+        Err(NonFiniteGeometry)
+    );
+    assert_eq!(
+        crate::cliff_wall([[f32::MAX; 3], [-f32::MAX; 3]], 0.0),
+        Err(NonFiniteGeometry)
+    );
+}
+
+#[test]
 fn fixture_terrain_is_exactly_the_shipped_framing() {
     let t = fixture_terrain();
     assert_eq!((t.width(), t.height()), (2, 2));
