@@ -1,0 +1,64 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pcx-mpq",
+    "crates/pcx-blp",
+    "crates/pcx-tga",
+    "crates/pcx-mdl",
+    "crates/pcx-slq",
+    "crates/pcx-script",
+    "crates/pcx-trig",
+    "crates/pcx-objects",
+    "crates/pcx-map",
+    "crates/pcx-tera",
+    "crates/pcx-net",
+    "crates/pcx-sim",
+    "crates/pcx-play",
+    "crates/pcx-gfx",
+    "crates/peacecraft3",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+pcx-mpq = { path = "crates/pcx-mpq" }
+pcx-blp = { path = "crates/pcx-blp" }
+pcx-tga = { path = "crates/pcx-tga" }
+pcx-mdl = { path = "crates/pcx-mdl" }
+pcx-slq = { path = "crates/pcx-slq" }
+pcx-script = { path = "crates/pcx-script" }
+pcx-trig = { path = "crates/pcx-trig" }
+pcx-objects = { path = "crates/pcx-objects" }
+pcx-map = { path = "crates/pcx-map" }
+pcx-tera = { path = "crates/pcx-tera" }
+pcx-sim = { path = "crates/pcx-sim" }
+pcx-gfx = { path = "crates/pcx-gfx" }
+
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+bytemuck = { version = "1", features = ["derive"] }
+rayon = "1"
+flate2 = "1"
+implode = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+opt-level = 1
+
+# naga 26.0.0 emits relaxed atomics with a UniformMemory/WorkgroupMemory
+# bit. Current Vulkan validation rejects that
+# (VUID-StandaloneSpirv-MemorySemantics-10871). vendor/naga is that crate
+# with the wgpu#8391 semantics change, nothing else.
+[patch.crates-io]
+naga = { path = "vendor/naga" }

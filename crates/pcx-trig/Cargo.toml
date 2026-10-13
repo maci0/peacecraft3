@@ -1,0 +1,12 @@
+[package]
+name = "pcx-trig"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "war3map.wts / war3map.wtg / war3map.wct scripting-side map files"
+
+[dependencies]
+pcx-mpq.workspace = true
+pcx-map.workspace = true
+thiserror.workspace = true

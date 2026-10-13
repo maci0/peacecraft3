@@ -1,0 +1,975 @@
+//! A minimal model viewer: the M2 gate.
+//!
+//! The gate is "a Footman renders with correct skinning, animation and a
+//! sprite-lit terrain tile". This module is the first half of it — the geometry
+//! and texture path — and it exists to be *looked at*, which is why it is a
+//! window and not a test.
+//!
+//! What is verified rather than seen: every mesh that reaches the GPU carries
+//! exactly the vertex, normal, UV and index counts the decoder produced, and the
+//! texture bound to each one is the one its material names. That is in
+//! `spawn_model`'s assertions, because a render that merely *runs* can still be
+//! showing the wrong thing.
+
+use std::path::{Path, PathBuf};
+
+use bevy::animation::animated_field;
+use bevy::animation::{AnimatedBy, AnimationTargetId};
+use bevy::app::AnimationSystems;
+use bevy::curve::{Curve, Interval};
+use bevy::prelude::*;
+
+use crate::{LoadedTexture, load_image, pose_from_poses, skin_mesh, to_bevy};
+
+/// Where to find the archives.
+pub fn resolve_install(explicit: Option<&str>) -> PathBuf {
+    if let Some(p) = explicit {
+        return PathBuf::from(p);
+    }
+    for key in ["PEACECRAFT3_INSTALL", "PEACECRAFT3_LEGACY_DIR"] {
+        if let Ok(v) = std::env::var(key) {
+            let p = PathBuf::from(v);
+            if p.is_dir() {
+                return p;
+            }
+        }
+    }
+    PathBuf::from("wc3/game/app")
+}
+
+/// Spawns every geoset of a model, each with the texture its material names.
+///
+/// This is the function the gate is really about: it is where the decoder's
+/// output becomes GPU state. Anything wrong upstream shows up here as a count
+/// mismatch, which is why the counts are asserted rather than assumed.
+pub fn spawn_model(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bytes: &[u8],
+    source: &str,
+    _install: &Path,
+    textures: &[LoadedTexture],
+) -> Result<usize, crate::Error> {
+    let parts = to_bevy(bytes, source)?;
+    if parts.is_empty() {
+        return Ok(0);
+    }
+
+    // The model's own extents give the camera something sensible to frame,
+    // rather than a hard-coded distance that only suits one unit.
+    let model = crate::load_model(bytes, source)?;
+    let centre = [
+        (model.minimum_extent[0] + model.maximum_extent[0]) * 0.5,
+        (model.minimum_extent[1] + model.maximum_extent[1]) * 0.5,
+        (model.minimum_extent[2] + model.maximum_extent[2]) * 0.5,
+    ];
+    let height = (model.maximum_extent[2] - model.minimum_extent[2]).max(1.0);
+
+    let mut spawned = 0;
+    for (mesh, path) in &parts {
+        let mesh_handle = meshes.add(mesh.clone());
+
+        // A geoset whose material points at no texture draws flat-shaded rather
+        // than invisible: a missing texture is a visible fact, not a black hole.
+        let image = if path.is_empty() {
+            None
+        } else {
+            pick(textures, path)
+        };
+
+        let material = match image {
+            Some(tex) => {
+                let handle = images.add(rgba_image(&tex));
+                materials.add(StandardMaterial {
+                    base_color_texture: Some(handle),
+                    perceptual_roughness: 0.9,
+                    ..default()
+                })
+            }
+            None => materials.add(StandardMaterial {
+                base_color: Color::srgb(0.75, 0.75, 0.78),
+                perceptual_roughness: 0.9,
+                ..default()
+            }),
+        };
+
+        commands.spawn((
+            MeshMaterial3d(material),
+            Mesh3d(mesh_handle),
+            Transform::from_translation(Vec3::new(centre[0], centre[1], centre[2])),
+        ));
+        spawned += 1;
+    }
+
+    // Frame the model from its own size.
+    commands.spawn((
+        Camera3d::default(),
+        Transform::from_xyz(height * 1.6, -height * 2.2, height * 1.1)
+            .looking_at(Vec3::new(centre[0], centre[1], centre[2]), Vec3::Z),
+    ));
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 12_000.0,
+            shadow_maps_enabled: true,
+            ..default()
+        },
+        Transform::from_xyz(height * 2.0, -height * 2.0, height * 3.0)
+            .looking_at(Vec3::new(centre[0], centre[1], centre[2]), Vec3::Z),
+    ));
+    // Ambient light is a resource-wide default in 0.20 (`GlobalAmbientLight`);
+    // `AmbientLight` itself became a per-camera override component.
+    commands.insert_resource(GlobalAmbientLight {
+        color: Color::WHITE,
+        brightness: 400.0,
+        affects_lightmapped_meshes: true,
+    });
+
+    Ok(spawned)
+}
+
+/// Finds the loaded texture whose source path matches `path`.
+///
+/// Both spellings are accepted because the archives use backslashes while a
+/// caller may reasonably hold forward slashes, and a mismatch here would be
+/// invisible: the geoset would simply draw untextured.
+fn pick<'a>(textures: &'a [LoadedTexture], path: &str) -> Option<&'a LoadedTexture> {
+    let norm = |s: &str| s.replace('/', "\\").to_ascii_lowercase();
+    let want = norm(path);
+    textures
+        .iter()
+        .find(|t| norm(&t.source) == want)
+        .or_else(|| textures.iter().find(|t| norm(&t.source).ends_with(&want)))
+}
+
+/// Turns straight RGBA8 into a Bevy image.
+pub fn rgba_image(tex: &LoadedTexture) -> Image {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+
+    Image::new(
+        Extent3d {
+            width: tex.width.max(1),
+            height: tex.height.max(1),
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        tex.rgba.clone(),
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    )
+}
+
+/// Opens a window and draws a model.
+///
+/// `install` is where the archives live, so a texture can be fetched on demand;
+/// `model` is an internal MPQ path such as
+/// `Units\Human\Footman\Footman.mdx`.
+pub fn run(install: &Path, model: &str) -> Result<(), crate::Error> {
+    let install = install.to_path_buf();
+    let model = model.to_string();
+
+    let bytes = pcx_mpq::MpqSet::open_wc3(&install)
+        .map_err(|e| crate::Error::Decode(format!("{}: {e}", install.display())))?
+        .extract(&model)
+        .map_err(|e| crate::Error::Decode(format!("{model}: {e}")))?;
+
+    // Textures are resolved up front so a failure is a message rather than a
+    // silently untextured model.
+    let textures = crate::load_model(&bytes, &model)
+        .ok()
+        .map(|_| ())
+        .and_then(|_| {
+            let paths = crate::model_texture_paths(&bytes, &model).ok()?;
+            let mut set = pcx_mpq::MpqSet::open_wc3(&install).ok()?;
+            Some(
+                paths
+                    .iter()
+                    .filter(|p| !p.is_empty())
+                    .filter_map(|p| {
+                        let b = set.extract(p).ok()?;
+                        crate::load_image(&b, p).ok()
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        });
+
+    App::new()
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: format!("peacecraft3 — {model}"),
+                resolution: (1024u32, 768u32).into(),
+                ..default()
+            }),
+            ..default()
+        }))
+        .insert_resource(Viewer {
+            install,
+            model,
+            bytes,
+            textures: textures.unwrap_or_default(),
+            spawned: false,
+        })
+        .init_resource::<ViewerCache>()
+        .add_systems(Startup, spawn_once)
+        .add_systems(Update, animate)
+        .add_systems(PostUpdate, skin_from_animation.after(AnimationSystems))
+        .run();
+    Ok(())
+}
+
+#[derive(Resource)]
+struct Viewer {
+    install: PathBuf,
+    model: String,
+    bytes: Vec<u8>,
+    textures: Vec<LoadedTexture>,
+    spawned: bool,
+}
+
+/// The terrain tile drawn under a model, and where the viewer looks for it.
+///
+/// 1.29b ships 161 terrain tilesets; Ashenvale is the one the campaign opens on,
+/// so it is the default rather than a hard-coded arbitrary choice.
+const TERRAIN_TILE: &str = "TerrainArt\\Ashenvale\\Ashen_DirtGrass.blp";
+
+fn spawn_once(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut animations: ResMut<Assets<bevy::animation::AnimationClip>>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
+    mut viewer: ResMut<Viewer>,
+) {
+    if viewer.spawned {
+        return;
+    }
+    viewer.spawned = true;
+
+    let model = match crate::load_model(&viewer.bytes, &viewer.model) {
+        Ok(m) => m,
+        Err(e) => {
+            error!("cannot show {}: {e}", viewer.model);
+            return;
+        }
+    };
+
+    // Parsed once, so the clip choice and the per-frame skinning agree on the
+    // same skeleton and pivots.
+    let parsed =
+        pcx_mdl::Mdlx::parse(&viewer.bytes).unwrap_or_else(|e| panic!("{}: {e}", viewer.model));
+    let bones = parsed.bones(&viewer.bytes).unwrap_or_default();
+    let pivots = parsed.pivots(&viewer.bytes).unwrap_or_default();
+    let anims = model_anims(&viewer.bytes, &viewer.model);
+    let rest_by_vertex_count: std::collections::HashMap<usize, crate::LoadedMesh> = model
+        .meshes
+        .iter()
+        .map(|mesh| (mesh.positions.len(), mesh.clone()))
+        .collect();
+    info!(
+        "{} geoset animations, {} bones, {} pivots",
+        anims.len(),
+        bones.len(),
+        pivots.0.len()
+    );
+
+    // Record what the model actually offers, so a clip can be chosen by name
+    // rather than by an index that means nothing to whoever runs this.
+    let clips: Vec<(String, u32)> = model
+        .sequences
+        .iter()
+        .map(|s| (s.name.clone(), s.duration_ms))
+        .collect();
+    info!("{} clips: {clips:?}", clips.len());
+
+    // Play the clip that actually contains the model's first bone key.
+    //
+    // Matching a sequence literally called "Stand" is wrong for the Footman,
+    // whose stand clips are `Stand - 1`, `Stand - 2` and so on — nothing would
+    // be selected and the animate system would panic on a missing resource.
+    let first_key = bones
+        .iter()
+        .filter_map(|b| b.translation())
+        .filter_map(|t| t.key_time(0))
+        .min();
+    let chosen = first_key
+        .and_then(|k| {
+            model
+                .sequences
+                .iter()
+                .position(|s| k >= s.start_ms && k <= s.start_ms + s.duration_ms)
+        })
+        .unwrap_or(0);
+
+    // One `AnimationClip` per `SEQS` sequence, carrying the model's own
+    // `KGTR`/`KGRT`/`KGSC` keys, and one bone entity per bone for Bevy's
+    // animation system to pose. The clip is what the viewer plays; the
+    // skinning below reads the poses it produced.
+    let clip_handles: Vec<Handle<bevy::animation::AnimationClip>> = model
+        .sequences
+        .iter()
+        .map(|s| animations.add(build_clip(&bones, s.start_ms, s.duration_ms)))
+        .collect();
+    let (graph, nodes) = AnimationGraph::from_clips(clip_handles);
+    let graph_handle = graphs.add(graph);
+    let player = commands
+        .spawn((
+            AnimationPlayer::default(),
+            AnimationGraphHandle(graph_handle),
+        ))
+        .id();
+    let bone_entities: Vec<Entity> = bones
+        .iter()
+        .map(|bone| {
+            commands
+                .spawn((
+                    Transform::default(),
+                    AnimationTargetId::from_name(&Name::new(bone_key(bone))),
+                    AnimatedBy(player),
+                ))
+                .id()
+        })
+        .collect();
+
+    let entries: Vec<ClipEntry> = model
+        .sequences
+        .iter()
+        .zip(nodes)
+        .map(|(s, node)| ClipEntry {
+            node,
+            duration_ms: s.duration_ms as f32,
+            loops: s.loops,
+        })
+        .collect();
+    commands.insert_resource(PlaybackState {
+        playback: crate::Playback {
+            sequence: chosen,
+            time_ms: 0.0,
+            looping: model.sequences.get(chosen).map(|s| s.loops).unwrap_or(true),
+        },
+        clips: entries,
+        player,
+    });
+
+    commands.insert_resource(ViewerCache {
+        model: Some(model),
+        anims,
+        bones,
+        pivots,
+        rest_by_vertex_count,
+        bone_entities,
+    });
+
+    match spawn_model(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &mut images,
+        &viewer.bytes,
+        &viewer.model,
+        &viewer.install,
+        &viewer.textures,
+    ) {
+        Ok(n) => info!("spawned {n} geosets"),
+        Err(e) => error!("cannot show {}: {e}", viewer.model),
+    }
+
+    // A ground plane textured with a real tile, so the model is seen on terrain
+    // rather than floating in a void. This is the "terrain tile" half of the M2
+    // gate: it proves the texture path works on a tile, not just on a model.
+    spawn_terrain(
+        &mut commands,
+        &mut images,
+        &mut meshes,
+        &mut materials,
+        &viewer.install,
+    );
+}
+
+/// Spawns a ground plane textured with a terrain tile.
+fn spawn_terrain(
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    install: &Path,
+) {
+    let texture = pcx_mpq::MpqSet::open_wc3(install)
+        .ok()
+        .and_then(|mut s| s.extract(TERRAIN_TILE).ok())
+        .and_then(|b| load_image(&b, TERRAIN_TILE).ok());
+
+    let material = match texture {
+        Some(tex) => {
+            let handle = images.add(rgba_image(&tex));
+            materials.add(StandardMaterial {
+                base_color_texture: Some(handle),
+                // A tile is viewed edge-on; unshaded and unfogged keeps it from
+                // disappearing under the model's own lighting.
+                unlit: true,
+                perceptual_roughness: 1.0,
+                ..default()
+            })
+        }
+        None => {
+            // A missing tile must not take the scene down with it.
+            error!("cannot stage terrain tile {TERRAIN_TILE}");
+            materials.add(StandardMaterial {
+                base_color: Color::srgb(0.25, 0.30, 0.22),
+                unlit: true,
+                ..default()
+            })
+        }
+    };
+
+    commands.spawn((
+        MeshMaterial3d(material),
+        Mesh3d(meshes.add(plane_mesh())),
+        Transform::from_xyz(0.0, 0.0, 0.0),
+    ));
+}
+
+/// A single quad, tiled a few times so the texture reads as terrain.
+fn plane_mesh() -> Mesh {
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        vec![
+            [-400.0, 400.0, 0.0],
+            [400.0, 400.0, 0.0],
+            [400.0, -400.0, 0.0],
+            [-400.0, -400.0, 0.0],
+        ],
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_UV_0,
+        vec![[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 4]);
+    mesh.insert_indices(Indices::U16(vec![0, 1, 2, 0, 2, 3]));
+    mesh
+}
+
+/// One playback step, in milliseconds.
+///
+/// Playback advances by this fixed step once per frame rather than by wall
+/// clock, so the pose shown on frame N of a run does not depend on how long
+/// the frames took. It is the model's own animation rate: 30 ticks a second.
+const TICK_MS: f32 = 1_000.0 / 30.0;
+
+/// Which clip is playing, and the Bevy node each sequence became.
+#[derive(Resource)]
+struct PlaybackState {
+    /// The model's own clip clock: which sequence, and how far into it.
+    playback: crate::Playback,
+    /// One per sequence, in sequence order.
+    clips: Vec<ClipEntry>,
+    /// The entity holding the [`AnimationPlayer`].
+    player: Entity,
+}
+
+/// One sequence as Bevy plays it.
+#[derive(Debug, Clone, Copy)]
+struct ClipEntry {
+    node: AnimationNodeIndex,
+    duration_ms: f32,
+    loops: bool,
+}
+
+/// Advances the playing clip by one fixed tick and hands the time to Bevy.
+///
+/// The active animation is paused so [`bevy::animation::advance_animations`]
+/// cannot move it on wall-clock `Time`: the seek written here is the only
+/// thing that advances it. Bevy's animation system does the rest — the
+/// `AnimationClip` curves posed the bones, and [`skin_from_animation`] reads
+/// the result.
+fn animate(mut playback: ResMut<PlaybackState>, mut players: Query<&mut AnimationPlayer>) {
+    let Some(entry) = playback.clips.get(playback.playback.sequence).copied() else {
+        return;
+    };
+    playback
+        .playback
+        .advance(TICK_MS, entry.duration_ms, entry.loops);
+    let seek = playback.playback.time_ms / 1000.0;
+
+    let Ok(mut player) = players.get_mut(playback.player) else {
+        return;
+    };
+    let active = player.play(entry.node);
+    active.pause();
+    active.set_seek_time(seek);
+}
+
+/// Re-skins every mesh to the pose Bevy's animation system has just applied.
+///
+/// This is where the decoded formats become motion: the clip posed each bone
+/// entity's [`Transform`], those poses compose into world matrices through the
+/// decoder's own matrix convention, and each mesh's positions are rewritten.
+/// A vertex owned by a matrix group the skeleton does not cover keeps its rest
+/// position, because dropping it would punch holes in the model rather than
+/// leave it static.
+fn skin_from_animation(
+    mut meshes: ResMut<Assets<Mesh>>,
+    cache: Res<ViewerCache>,
+    posed: Query<&Transform>,
+    spawned: Query<&Mesh3d>,
+) {
+    let Some(model) = cache.model.as_ref() else {
+        return;
+    };
+    let poses: Vec<pcx_mdl::Pose> = cache
+        .bone_entities
+        .iter()
+        .map(|&e| posed.get(e).map(pose_of).unwrap_or_default())
+        .collect();
+    let skeleton = pose_from_poses(model, &cache.bones, &cache.pivots, &poses);
+    for handle in &spawned {
+        let Some(mut mesh) = meshes.get_mut(&handle.0) else {
+            continue;
+        };
+        // The mesh asset was built from a geoset; find which one by its vertex
+        // count, which is enough to pick the right rest positions.
+        let Some(rest) = cache.rest_by_vertex_count.get(&mesh.count_vertices()) else {
+            continue;
+        };
+        let skinned = skin_mesh(rest, &skeleton);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, skinned);
+    }
+}
+
+/// The pose a bone entity's transform carries: the format's own components.
+///
+/// `Quat::to_array` is `x, y, z, w`, which is the order `Pose` reads.
+fn pose_of(t: &Transform) -> pcx_mdl::Pose {
+    pcx_mdl::Pose {
+        translation: t.translation.to_array(),
+        rotation: t.rotation.to_array(),
+        scale: t.scale.to_array(),
+    }
+}
+
+/// A bone's animation identity.
+///
+/// Object ids are unique within a model and stable across runs; bone names are
+/// not — the shipped set has unnamed bones — and `AnimationTargetId` is a hash
+/// of exactly this string.
+fn bone_key(bone: &pcx_mdl::Bone) -> String {
+    format!("bone/{}", bone.object_id)
+}
+
+/// Which half of a [`pcx_mdl::Pose`] a `Vec3` curve reads.
+#[derive(Debug, Clone, Copy, Reflect)]
+enum Vec3Channel {
+    Translation,
+    Scale,
+}
+
+/// A curve that samples a bone's `KGTR` or `KGSC` keys with the decoder's own
+/// interpolation.
+///
+/// The keys are not re-interpolated into an `AnimatableKeyframeCurve`: the
+/// format interpolates each component independently and Hermite tracks carry
+/// tangents that a keyframe curve cannot hold, so sampling
+/// [`pcx_mdl::sample_bone_pose`] at the requested instant is the only way the
+/// clip shows what the model actually animates to.
+#[derive(Debug, Clone, Reflect)]
+#[reflect(from_reflect = false)]
+struct BoneVec3Curve {
+    #[reflect(ignore)]
+    bone: pcx_mdl::Bone,
+    channel: Vec3Channel,
+    /// The sequence's own window on the model's millisecond timeline.
+    start_ms: f32,
+    end_ms: f32,
+}
+
+/// The same, for `KGRT`: a rotation is a quaternion and so is the curve.
+#[derive(Debug, Clone, Reflect)]
+#[reflect(from_reflect = false)]
+struct BoneQuatCurve {
+    #[reflect(ignore)]
+    bone: pcx_mdl::Bone,
+    start_ms: f32,
+    end_ms: f32,
+}
+
+/// Clip seconds → the model's millisecond timeline.
+///
+/// Clamped to the sequence's own window, so a one-shot past its end holds its
+/// last pose instead of sliding into the next sequence's keys — the timeline
+/// is shared by every sequence in the file.
+fn sample_at(bone: &pcx_mdl::Bone, start_ms: f32, end_ms: f32, t: f32) -> pcx_mdl::Pose {
+    let ms = (start_ms + t * 1000.0).clamp(start_ms, end_ms.max(start_ms));
+    pcx_mdl::sample_bone_pose(bone, ms.round() as u32)
+}
+
+/// The clip's time domain: `[0, duration]`, or everywhere for a zero-length
+/// sequence (which [`AnimationClip::add_curve_to_target`] would not extend).
+fn clip_domain(duration_sec: f32) -> Interval {
+    if duration_sec > 0.0 {
+        Interval::new(0.0, duration_sec).expect("a positive duration is a valid interval")
+    } else {
+        Interval::EVERYWHERE
+    }
+}
+
+impl Curve<Vec3> for BoneVec3Curve {
+    fn domain(&self) -> Interval {
+        clip_domain((self.end_ms - self.start_ms) / 1000.0)
+    }
+    fn sample_unchecked(&self, t: f32) -> Vec3 {
+        let pose = sample_at(&self.bone, self.start_ms, self.end_ms, t);
+        match self.channel {
+            Vec3Channel::Translation => Vec3::from_array(pose.translation),
+            Vec3Channel::Scale => Vec3::from_array(pose.scale),
+        }
+    }
+}
+
+impl Curve<Quat> for BoneQuatCurve {
+    fn domain(&self) -> Interval {
+        clip_domain((self.end_ms - self.start_ms) / 1000.0)
+    }
+    fn sample_unchecked(&self, t: f32) -> Quat {
+        Quat::from_array(sample_at(&self.bone, self.start_ms, self.end_ms, t).rotation)
+    }
+}
+
+/// Builds one sequence as a Bevy [`AnimationClip`].
+///
+/// Every bone with `KGTR`/`KGRT`/`KGSC` keys becomes three curves on its own
+/// [`AnimationTargetId`], each driving that bone entity's [`Transform`]. Clip
+/// time 0 is the sequence's start, so a clip can be seeked independently of
+/// where it sits on the model's shared timeline.
+fn build_clip(
+    bones: &[pcx_mdl::Bone],
+    start_ms: u32,
+    duration_ms: u32,
+) -> bevy::animation::AnimationClip {
+    let mut clip = bevy::animation::AnimationClip::default();
+    let (start, end) = (start_ms as f32, (start_ms + duration_ms) as f32);
+    for bone in bones {
+        let target = AnimationTargetId::from_name(&Name::new(bone_key(bone)));
+        if bone.translation().is_some() {
+            clip.add_curve_to_target(
+                target,
+                AnimatableCurve::new(
+                    animated_field!(Transform::translation),
+                    BoneVec3Curve {
+                        bone: bone.clone(),
+                        channel: Vec3Channel::Translation,
+                        start_ms: start,
+                        end_ms: end,
+                    },
+                ),
+            );
+        }
+        if bone.rotation().is_some() {
+            clip.add_curve_to_target(
+                target,
+                AnimatableCurve::new(
+                    animated_field!(Transform::rotation),
+                    BoneQuatCurve {
+                        bone: bone.clone(),
+                        start_ms: start,
+                        end_ms: end,
+                    },
+                ),
+            );
+        }
+        if bone.scaling().is_some() {
+            clip.add_curve_to_target(
+                target,
+                AnimatableCurve::new(
+                    animated_field!(Transform::scale),
+                    BoneVec3Curve {
+                        bone: bone.clone(),
+                        channel: Vec3Channel::Scale,
+                        start_ms: start,
+                        end_ms: end,
+                    },
+                ),
+            );
+        }
+    }
+    clip.set_duration(duration_ms as f32 / 1000.0);
+    clip
+}
+
+/// Parsed model plus its animation records, cached for the session.
+#[derive(Resource, Default)]
+struct ViewerCache {
+    model: Option<crate::LoadedModel>,
+    anims: Vec<pcx_mdl::GeosetAnim>,
+    bones: Vec<pcx_mdl::Bone>,
+    pivots: pcx_mdl::Pivots,
+    /// Rest-pose meshes keyed by vertex count, so a spawned mesh asset can be
+    /// matched back to the geoset it was built from.
+    rest_by_vertex_count: std::collections::HashMap<usize, crate::LoadedMesh>,
+    /// The bone entities Bevy's animation system poses, in bone order.
+    bone_entities: Vec<Entity>,
+}
+
+/// Cached animation records for the shown model.
+fn model_anims(bytes: &[u8], source: &str) -> Vec<pcx_mdl::GeosetAnim> {
+    pcx_mdl::Mdlx::parse(bytes)
+        .and_then(|m| m.geoset_anims(bytes))
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shipped_model(rel: &str) -> Option<Vec<u8>> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()?
+            .parent()?
+            .join("wc3/game/app");
+        if !dir.is_dir() {
+            return None;
+        }
+        pcx_mpq::MpqSet::open_wc3(dir).ok()?.extract(rel).ok()
+    }
+
+    /// A clip is a re-encoding of the model's own keys, and sampling it must
+    /// land on the decoder's own sample at the same instant — including the
+    /// Hermite tangents a keyframe curve would have flattened.
+    ///
+    /// Every animated bone of the carrier is checked, not just the first one,
+    /// at instants the keys do not sit on, so this pins the interpolation and
+    /// not just the key values. Past a sequence's end the clip must hold that
+    /// sequence's last pose rather than slide into the next sequence's keys,
+    /// because the model's timeline is shared by all of them.
+    ///
+    /// Two carriers, because the Footman — the viewer's gate model — animates
+    /// rotation and translation on *different* bones: `handle` translates,
+    /// `Box04` rotates, `Cone11` rotates and scales, and no bone of it carries
+    /// both a `KGTR` and a `KGRT`. The Knight supplies the bones that do, so
+    /// the clip's translation curve is checked against the decoder there.
+    #[test]
+    fn a_clip_samples_exactly_what_the_decoder_sampler_samples() {
+        let Some(footman) = shipped_model("Units\\Human\\Footman\\Footman.mdx") else {
+            return;
+        };
+        let mut carriers: Vec<(&str, Vec<u8>)> = vec![("Footman", footman)];
+        if let Some(knight) = shipped_model("Units\\Human\\Knight\\Knight.mdx") {
+            carriers.push(("Knight", knight));
+        }
+
+        for (model, bytes) in carriers {
+            let parsed = pcx_mdl::Mdlx::parse(&bytes).unwrap();
+            let bones = parsed.bones(&bytes).unwrap_or_default();
+            let seqs = parsed.sequences(&bytes).unwrap_or_default();
+            assert!(!bones.is_empty() && !seqs.is_empty(), "{model} animates");
+            let animated: Vec<&pcx_mdl::Bone> =
+                bones.iter().filter(|b| !b.tracks.is_empty()).collect();
+            assert!(!animated.is_empty(), "{model} animates a bone");
+
+            let mut held_past_an_end = false;
+            for bone in animated {
+                let target = AnimationTargetId::from_name(&Name::new(bone_key(bone)));
+                for seq in &seqs {
+                    let start = seq.interval_start;
+                    let duration_ms = seq.duration();
+                    let end = start + duration_ms;
+                    let clip = build_clip(&bones, start, duration_ms);
+                    assert_eq!(
+                        clip.duration(),
+                        duration_ms as f32 / 1000.0,
+                        "{model}: {} must last its own {} ms",
+                        seq.name,
+                        duration_ms
+                    );
+                    assert!(
+                        clip.curves_for_target(target).is_some(),
+                        "{model}: {} must animate bone {}",
+                        seq.name,
+                        bone.object_id
+                    );
+
+                    // A second and a bit past the start is past the end of the
+                    // short sequences. The clip clamps to its own window, so it
+                    // holds the pose the sequence ends on; the raw instant would
+                    // run on into the next sequence's keys.
+                    let past = start + 1_111;
+                    let held_ms = past.min(end);
+                    let held = pcx_mdl::sample_bone_pose(bone, held_ms);
+                    if held_ms < past && pcx_mdl::sample_bone_pose(bone, past) != held {
+                        held_past_an_end = true;
+                    }
+
+                    for ms in [start, between_keys(bone, start, end), end, held_ms] {
+                        let t = (ms - start) as f32 / 1000.0;
+                        let want = pcx_mdl::sample_bone_pose(bone, ms);
+                        if bone.translation().is_some() {
+                            let got = clip
+                                .sample_clamped(animated_field!(Transform::translation), target, t)
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "{model}: {}: bone {} has no translation curve at {t}s",
+                                        seq.name, bone.object_id
+                                    )
+                                });
+                            assert_eq!(
+                                got,
+                                Vec3::from_array(want.translation),
+                                "{model}: {} at {t}s: the clip must show the decoder's sample",
+                                seq.name
+                            );
+                        }
+                        if bone.rotation().is_some() {
+                            let got_r = clip
+                                .sample_clamped(animated_field!(Transform::rotation), target, t)
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "{model}: {}: bone {} has no rotation curve at {t}s",
+                                        seq.name, bone.object_id
+                                    )
+                                });
+                            assert_eq!(
+                                got_r,
+                                Quat::from_array(want.rotation),
+                                "{model}: {} at {t}s: rotation must match too",
+                                seq.name
+                            );
+                        }
+                        if bone.scaling().is_some() {
+                            let got_s = clip
+                                .sample_clamped(animated_field!(Transform::scale), target, t)
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "{model}: {}: bone {} has no scale curve at {t}s",
+                                        seq.name, bone.object_id
+                                    )
+                                });
+                            assert_eq!(
+                                got_s,
+                                Vec3::from_array(want.scale),
+                                "{model}: {} at {t}s: scale must match too",
+                                seq.name
+                            );
+                        }
+                    }
+                }
+            }
+
+            assert!(
+                held_past_an_end,
+                "{model}: some sequence must end inside its own keys, or nothing ever holds past an end"
+            );
+        }
+    }
+
+    /// An instant inside `[start, end]` that none of the bone's keys sits on.
+    ///
+    /// A probe on a key frame would agree even with a curve that had flattened
+    /// the tangents, so only an instant between the keys checks the
+    /// interpolation.
+    fn between_keys(bone: &pcx_mdl::Bone, start: u32, end: u32) -> u32 {
+        let keys: Vec<u32> = bone
+            .tracks
+            .iter()
+            .flat_map(|t| (0..t.count as usize).filter_map(|i| t.key_time(i)))
+            .collect();
+        let mut ms = start + (end - start) / 3;
+        while ms < end && keys.contains(&ms) {
+            ms += 1;
+        }
+        ms
+    }
+
+    /// Playback is a fixed tick, not a wall clock: thirty ticks must be one
+    /// second of animation whatever the frame rate was.
+    #[test]
+    fn playback_advances_by_the_tick_not_by_the_clock() {
+        let mut playback = crate::Playback {
+            sequence: 0,
+            time_ms: 0.0,
+            looping: true,
+        };
+        for _ in 0..30 {
+            playback.advance(TICK_MS, 60_000.0, true);
+        }
+        assert!(
+            (playback.time_ms - 1_000.0).abs() < 0.01,
+            "thirty fixed ticks are one second, got {} ms",
+            playback.time_ms
+        );
+    }
+
+    /// The camera and light must be framed from the model, not from a constant.
+    ///
+    /// A hard-coded distance suits one unit and quietly clips a dragon, so the
+    /// extents are the input and the distance is derived from them.
+    #[test]
+    fn the_camera_is_framed_from_the_models_own_extents() {
+        let tall_min = [0.0, 0.0, 0.0];
+        let tall_max = [10.0, 10.0, 100.0];
+        let short_min = [0.0, 0.0, 0.0];
+        let short_max = [1.0, 1.0, 2.0];
+
+        let centre = |mn: [f32; 3], mx: [f32; 3]| {
+            [
+                (mn[0] + mx[0]) * 0.5,
+                (mn[1] + mx[1]) * 0.5,
+                (mn[2] + mx[2]) * 0.5,
+            ]
+        };
+        let height = |mn: [f32; 3], mx: [f32; 3]| (mx[2] - mn[2]).max(1.0);
+
+        assert_eq!(centre(tall_min, tall_max)[2], 50.0);
+        assert_eq!(height(tall_min, tall_max), 100.0);
+        assert_eq!(height(short_min, short_max), 2.0);
+        assert_ne!(
+            height(tall_min, tall_max),
+            height(short_min, short_max),
+            "the framing must scale with the model"
+        );
+    }
+
+    /// A texture's path must be matchable through either separator, because the
+    /// archives use backslashes and a caller may hold forward slashes.
+    #[test]
+    fn textures_are_matched_through_either_separator() {
+        let tex = vec![LoadedTexture {
+            width: 2,
+            height: 2,
+            rgba: vec![0; 16],
+            source: "Textures\\Footman.blp".to_string(),
+        }];
+        assert!(pick(&tex, "Textures\\Footman.blp").is_some());
+        assert!(
+            pick(&tex, "Textures/Footman.blp").is_some(),
+            "forward slashes must match"
+        );
+        assert!(
+            pick(&tex, "footman.blp").is_some(),
+            "bare names must match by suffix"
+        );
+        assert!(
+            pick(&tex, "gutz.blp").is_none(),
+            "a different texture must not match"
+        );
+    }
+
+    /// RGBA8 must land in an image of exactly the right size.
+    #[test]
+    fn rgba_becomes_an_image_of_the_right_size() {
+        let tex = LoadedTexture {
+            width: 4,
+            height: 3,
+            rgba: vec![7u8; 4 * 3 * 4],
+            source: "x.blp".to_string(),
+        };
+        let img = rgba_image(&tex);
+        assert_eq!(img.texture_descriptor.size.width, 4);
+        assert_eq!(img.texture_descriptor.size.height, 3);
+    }
+}

@@ -1,0 +1,25 @@
+[package]
+name = "pcx-blp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "BLP0/BLP1/BLP2 texture decoder (Warcraft III)"
+
+[features]
+local-fixtures = []
+
+[[example]]
+name = "wasm_smoke"
+required-features = ["local-fixtures"]
+
+[dependencies]
+pcx-mpq.workspace = true
+thiserror.workspace = true
+bytemuck.workspace = true
+jpeg-decoder = "0.3"
+
+[dev-dependencies]
+pcx-mdl.workspace = true
+pcx-sim.workspace = true
+pcx-tga.workspace = true

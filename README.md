@@ -9,7 +9,7 @@ Bevy engine, reading the **original game assets directly from the shipped MPQ ar
 - **[tools/rea.sh](tools/rea.sh)** — REA driver with per-target analysis snapshots
 
 No Blizzard assets are committed. The game reads them from your own install at runtime
-(`PCX_WC3_INSTALL`, default `wc3/game/app`).
+(`PEACECRAFT3_INSTALL`, default `wc3/game/app`).
 
 ## Status
 
@@ -23,10 +23,22 @@ wc3/game/app/Storm.dll    1 341 procedures /   736 strings
 ## Quick start
 
 ```sh
-export PCX_WC3_INSTALL="$PWD/wc3/game/app"
+export PEACECRAFT3_INSTALL="$PWD/wc3/game/app"
 
 cargo test -p pcx-mpq          # header assertions against the four real archives
 tools/rea.sh doctor            # REA + Ghidra readiness
 tools/rea.sh search  wc3/game/app/Storm.dll "SFile"
 cargo run -p peacecraft3
 ```
+
+PeaceCraft settings open first. Use **Main menu** to enter the original game
+menu. Original menu rendering and audio are being verified; full gameplay and
+exact visual fidelity are still in progress.
+
+[Windows and macOS builds](docs/build-desktop.md) cover Intel/x64 and ARM64.
+Browser-only ISO asset discovery, without uploading the ISO to a server, is
+planned in [PLAN.md](PLAN.md).
+
+The optional `pcx-blp` `wasm_smoke` example requires `--features local-fixtures`
+and locally extracted `SelectionCircleLarge.blp`, `Footman.mdx` and `misc.tga`
+under `crates/pcx-blp/tests/fixtures/`. These original assets stay untracked.

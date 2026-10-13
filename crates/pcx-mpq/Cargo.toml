@@ -1,0 +1,14 @@
+[package]
+name = "pcx-mpq"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "MPQ archive reader for Warcraft III assets"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+flate2.workspace = true
+implode.workspace = true

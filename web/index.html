@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>PeaceCraft III launcher</title>
+    <link rel="icon" href="data:," />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      @font-face { font-family: Warcraft; src: url('./assets/menu.ttf') format('truetype'); font-display: swap; }
+      :root {
+        color-scheme: dark;
+        --bg: #06090c;
+        --panel: #111315;
+        --edge: #655738;
+        --gold: #fcd313;
+        --text: #ebd9ab;
+        --dim: #c9b58e;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 Warcraft, Georgia, serif; }
+      ::selection { background: #796225; color: #fff7dc; }
+      :focus-visible:not(canvas) { outline: 2px solid var(--gold); outline-offset: 4px; }
+      #layout { width: min(100%, 1040px); margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+      #stage { order: -1; position: relative; width: 100%; height: 80vh; min-height: 32rem; border: 2px solid var(--edge); background: #06090c; }
+      #launcher-canvas { display: block; width: 100%; height: 100%; }
+      fieldset { border: 2px solid var(--edge); background: var(--panel) url('./assets/bg.png'); background-blend-mode: multiply; padding: 18px 22px; margin: 0; }
+      legend { padding: 0 10px; color: var(--gold); font-size: 20px; }
+      .hint { color: var(--dim); font-size: 14px; margin: 0 0 14px; max-width: 68ch; }
+      .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+      button, input[type="file"] { font: inherit; color: var(--text); background: #101214; border: 1px solid var(--edge); padding: 10px 16px; max-width: 100%; }
+      button { min-height: 46px; color: var(--gold); cursor: pointer; background: #101214 url('./assets/button.png') center / 100% 100% no-repeat; padding-left: 28px; }
+      button:hover { color: #fff8ce; border-color: var(--gold); }
+      button:active { transform: translateY(1px); }
+      button[disabled] { opacity: .55; cursor: default; }
+      input::file-selector-button { font: inherit; color: var(--gold); background: #24231d; border: 1px solid var(--edge); padding: 6px 10px; margin-right: 12px; cursor: pointer; }
+      #log { margin: 14px 0 0; padding: 0; list-style: none; font: 13px/1.7 Warcraft, Georgia, serif; color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; }
+      #log li.bad { color: #ffd273; }
+      a { color: var(--gold); text-underline-offset: .2em; }
+      * { scrollbar-color: #796742 #111315; scrollbar-width: thin; }
+      @media (max-width: 600px) { #layout { padding: 10px; gap: 14px; } fieldset { padding: 14px; } button { flex: 1; } }
+    </style>
+  </head>
+  <body>
+    <div id="layout">
+      <fieldset>
+        <legend>Local game archives</legend>
+        <p class="hint">Open your Warcraft III MPQ files in this browser. Desktop asset staging is available in the native launcher.</p>
+        <div class="row">
+          <input aria-label="Choose Warcraft III archives" id="archives" type="file" multiple accept=".mpq,.MPQ" />
+          <button id="drop" type="button">Clear loaded archives</button>
+          <button id="self" type="button">Archive status</button>
+          <button id="sound" type="button" aria-pressed="false">Mute sound</button>
+        </div>
+        <ul id="log" role="status" aria-live="polite"></ul>
+      </fieldset>
+
+      <div id="stage"><canvas id="launcher-canvas" aria-label="PeaceCraft III game menu and asset launcher"></canvas></div>
+    </div>
+
+    <script type="module" src="./menu-audio.js"></script>
+    <script type="module" src="./loader.js"></script>
+  </body>
+</html>

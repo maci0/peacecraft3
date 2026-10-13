@@ -1,0 +1,30 @@
+[package]
+name = "peacecraft3"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Faithful Warcraft III reimplementation on the Bevy engine"
+
+[dependencies]
+pcx-mpq.workspace = true
+pcx-sim.workspace = true
+pcx-gfx.workspace = true
+pcx-mdl.workspace = true
+bevy = "0.20"
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bevy = { version = "0.20", features = ["mp3", "wav"] }
+
+# The browser target (PLAN.md §3.8). A wasm build needs glue to call into and out
+# of JavaScript, which only exists for wasm32 — not a gate to make a desktop
+# build compile, and it changes nothing for one.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+# `Window`, for the one capability question the browser entry point asks: is
+# there a DOM to attach a canvas to?
+web-sys = { version = "0.3", features = ["Window"] }

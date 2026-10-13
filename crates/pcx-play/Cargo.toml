@@ -1,0 +1,11 @@
+[package]
+name = "pcx-play"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Play-test harness: scenarios, deterministic runner, trace schema, trace diff"
+
+[dependencies]
+pcx-sim.workspace = true
+thiserror.workspace = true

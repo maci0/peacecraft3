@@ -1,0 +1,16 @@
+[package]
+name = "pcx-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Transports, command codec and authoritative lockstep server"
+
+[dependencies]
+pcx-sim.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+pcx-mpq.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]

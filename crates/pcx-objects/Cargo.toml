@@ -1,0 +1,12 @@
+[package]
+name = "pcx-objects"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "W3U/W3T/W3A/W3D/W3H/W3B/W3Q object data reader"
+
+[dependencies]
+pcx-mpq.workspace = true
+pcx-slq.workspace = true
+thiserror.workspace = true

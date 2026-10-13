@@ -1,0 +1,11 @@
+[package]
+name = "pcx-slq"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Miles sound-list parser for WC3 audio"
+
+[dependencies]
+pcx-mpq.workspace = true
+thiserror.workspace = true

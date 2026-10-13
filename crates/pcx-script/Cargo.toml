@@ -1,0 +1,13 @@
+[package]
+name = "pcx-script"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "JASS lexer, parser and exact syntax tree for WC3 maps"
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+pcx-mpq.workspace = true

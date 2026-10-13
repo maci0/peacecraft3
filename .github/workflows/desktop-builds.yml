@@ -1,0 +1,70 @@
+name: Desktop builds
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'crates/**'
+      - 'vendor/**'
+      - 'tools/build-desktop.py'
+      - '.github/workflows/desktop-builds.yml'
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'crates/**'
+      - 'vendor/**'
+      - 'tools/build-desktop.py'
+      - '.github/workflows/desktop-builds.yml'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_BUILD_JOBS: 2
+
+jobs:
+  desktop:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2025
+            python: python
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            python: python
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+            python: python3
+          - target: aarch64-apple-darwin
+            runner: macos-15
+            python: python3
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Install native Rust 1.99
+        run: rustup toolchain install '1.99.0-${{ matrix.target }}' --profile minimal
+      - name: Check packaging helper
+        run: ${{ matrix.python }} tools/build-desktop.py --self-test
+      - name: Build, test, and package
+        run: ${{ matrix.python }} tools/build-desktop.py '${{ matrix.target }}'
+      - uses: actions/upload-artifact@v6
+        with:
+          name: peacecraft3-${{ matrix.target }}
+          path: dist/peacecraft3-${{ matrix.target }}.*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

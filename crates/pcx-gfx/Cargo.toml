@@ -1,0 +1,19 @@
+[package]
+name = "pcx-gfx"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Bevy asset loaders for the pcx-* decoders"
+
+[dependencies]
+bevy = "0.20"
+pcx-mpq.workspace = true
+pcx-blp.workspace = true
+pcx-tga.workspace = true
+pcx-mdl.workspace = true
+pcx-slq.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+image = "0.25"
