@@ -42,7 +42,9 @@ python tools/build-desktop.py aarch64-pc-windows-msvc
 ```
 
 The helper rejects a different compiler host, builds release binaries, runs unit
-tests, checks PE / Mach-O OS and CPU headers, and packages into `dist/`.
+tests in that same release profile, checks PE / Mach-O OS and CPU headers, and
+packages into `dist/`. Tests reuse the built dependencies instead of compiling
+Bevy again in a second profile.
 macOS tar archives preserve executable permissions during artifact download.
 The workflow `.github/workflows/desktop-builds.yml` runs this same helper on
 pushes / pull requests affecting the build, and offers a manual **Desktop builds**
@@ -67,11 +69,15 @@ does not link a Windows executable. ARM64 checking stopped at Blake3's NEON C
 code because the Microsoft CRT header `assert.h` is absent on this Linux host;
 no code or features were changed to bypass that dependency.
 
-This checkout has no GitHub remote configured. No Windows or macOS CI run has
-been dispatched, and none of the four linked binaries has been produced here.
-Compilation needs the corresponding native machine or a workflow run after the
-source is available in a GitHub repository. The native Windows runners include
-the actual CRT headers and SDK missing from the Linux cross-check environment.
+Source is in the private [maci0/peacecraft3 repository](https://github.com/maci0/peacecraft3).
+The [first native four-target run](https://github.com/maci0/peacecraft3/actions/runs/38409132391)
+compiled Windows ARM64 and macOS ARM64. Their test phase failed because a
+local-install integration test assumed developer folders existed on the runner;
+that test is now explicitly ignored by default. Corrected artifacts are pending.
+Each target remains unverified until its compile, tests, executable header check
+and artifact upload finish successfully. The native Windows
+runners include the actual CRT headers and SDK missing from the Linux
+cross-check environment.
 
 Archives contain only the executable; players supply their own Warcraft III
 assets. Point `PEACECRAFT3_INSTALL` at a directory containing the original MPQs:

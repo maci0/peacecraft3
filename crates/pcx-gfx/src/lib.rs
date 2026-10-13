@@ -118,6 +118,14 @@ pub fn load_image(bytes: &[u8], source: &str) -> Result<LoadedTexture, crate::Er
 pub struct Skeleton {
     /// One 4x4 matrix per bone, in the model's bone order.
     pub matrices: Vec<[f32; 16]>,
+    /// Each bone's **node id**, parallel to `matrices`.
+    ///
+    /// A geoset's `MATS` entries name bones by node id, and node ids are not
+    /// array positions: the node space also holds helpers, so the ids in a
+    /// model with helpers are sparse. Indexing `matrices` with an id therefore
+    /// picks the wrong bone — with 374 bones and 417 nodes in `MainMenu3d` the
+    /// error compounds down the chain. This is what makes the lookup correct.
+    pub ids: Vec<u32>,
     /// Bone names, parallel to `matrices`.
     pub names: Vec<String>,
 }
@@ -151,6 +159,7 @@ pub fn pose_skeleton(
     let matrices = pcx_mdl::bone_matrices(bones, &parent, pivots, frame);
     Skeleton {
         matrices,
+        ids: bones.iter().map(|b| b.object_id).collect(),
         names: model.bone_names.clone(),
     }
 }
@@ -197,6 +206,7 @@ pub fn pose_from_poses(
     let matrices = pcx_mdl::bone_matrices(&keyed, &parent, pivots, 0);
     Skeleton {
         matrices,
+        ids: bones.iter().map(|b| b.object_id).collect(),
         names: model.bone_names.clone(),
     }
 }
@@ -255,13 +265,19 @@ fn one_key_bone(bone: &pcx_mdl::Bone, pose: pcx_mdl::Pose) -> pcx_mdl::Bone {
 pub fn skin_mesh(mesh: &LoadedMesh, skeleton: &Skeleton) -> Vec<[f32; 3]> {
     // Flatten the group counts into a per-group bone index, exactly as the
     // decoder's invariant says they nest.
-    let mut group_bone = Vec::with_capacity(mesh.group_counts.len());
+    let mut group_matrix = Vec::with_capacity(mesh.group_counts.len());
     let mut at = 0usize;
     for &c in &mesh.group_counts {
         let n = c as usize;
         // The first bone of a group is the one that carries the whole group,
         // which is what a single-matrix skin needs.
-        group_bone.push(mesh.bone_indices.get(at).copied());
+        // Resolve sparse node ids once per group, rather than per vertex.
+        let matrix = mesh
+            .bone_indices
+            .get(at)
+            .and_then(|id| skeleton.ids.iter().position(|found| found == id))
+            .and_then(|index| skeleton.matrices.get(index));
+        group_matrix.push(matrix);
         at += n;
     }
 
@@ -272,8 +288,7 @@ pub fn skin_mesh(mesh: &LoadedMesh, skeleton: &Skeleton) -> Vec<[f32; 3]> {
             let bone = mesh
                 .vertex_groups
                 .get(i)
-                .and_then(|&g| group_bone.get(g as usize).copied().flatten())
-                .and_then(|b| skeleton.matrices.get(b as usize));
+                .and_then(|&g| group_matrix.get(g as usize).copied().flatten());
             match bone {
                 Some(m) => pcx_mdl::transform_point(m, *p),
                 None => *p,
@@ -1024,6 +1039,52 @@ mod bevy_tests {
                 "Textures\\gutz.blp",
             ],
             "geoset 4 is the blood geoset and must draw with gutz.blp"
+        );
+    }
+}
+
+#[cfg(test)]
+mod sparse_id_tests {
+    use super::*;
+
+    /// A geoset's `MATS` entries are **node ids**, and node ids are sparse once a
+    /// model has helpers. `skin_mesh` used to index the matrix list with the id,
+    /// so a group pointing at node 9 in a two-bone model read a matrix that did
+    /// not exist (falling back to rest) or, worse, the wrong bone's.
+    #[test]
+    fn a_geoset_matrix_is_found_by_node_id_not_array_position() {
+        let mesh = LoadedMesh {
+            positions: vec![[0.0, 0.0, 0.0]],
+            normals: vec![[0.0, 0.0, 1.0]],
+            tex_coords: vec![[0.0, 0.0]],
+            indices: vec![0],
+            vertex_groups: vec![0],
+            // The geoset's one group is carried by node **9**.
+            bone_indices: vec![9],
+            group_counts: vec![1],
+            geoset: 0,
+            material_id: 0,
+        };
+        // Two bones, at node ids 5 and 9 — neither is its own array position.
+        let translate = |dx: f32| {
+            let mut m = pcx_mdl::identity();
+            m[12] = dx;
+            m
+        };
+        let skeleton = Skeleton {
+            matrices: vec![translate(100.0), translate(7.0)],
+            ids: vec![5, 9],
+            names: vec!["five".into(), "nine".into()],
+        };
+        let out = skin_mesh(&mesh, &skeleton);
+        assert_eq!(out.len(), 1);
+        // Node 9 is the second bone, so the vertex moves by 7 — not by 100
+        // (index 0, which an id-as-index lookup could reach) and not by 0 (the
+        // rest fallback when the id looked out of bounds).
+        assert!(
+            (out[0][0] - 7.0).abs() < 1e-6,
+            "expected node 9's matrix, got x={}",
+            out[0][0]
         );
     }
 }

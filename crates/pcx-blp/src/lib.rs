@@ -657,22 +657,49 @@ pub fn decode_jpeg(d: &[u8], h: &Header, index: usize) -> Result<Vec<u8>, Error>
         });
     }
 
+    // Whether a fourth JPEG component is an alpha channel. `alpha_bits` is the
+    // BLP1 flag at `0x08`: a non-zero value is the texture saying it has alpha.
+    let has_alpha = h.alpha_bits > 0;
     let mut out = vec![0u8; px * 4];
     for i in 0..px {
         let p = &rgb[i * channels..(i + 1) * channels];
-        let [r, g, b] = match format {
-            jpeg_decoder::PixelFormat::L8 => [p[0], p[0], p[0]],
-            jpeg_decoder::PixelFormat::L16 => {
-                let v = (u16::from(p[0]) << 8 | u16::from(p[1])) as u32;
-                let s = (v >> 8) as u8;
-                [s, s, s]
-            }
-            jpeg_decoder::PixelFormat::RGB24 => [p[0], p[1], p[2]],
-            jpeg_decoder::PixelFormat::CMYK32 => cmyk_to_rgb(p[0], p[1], p[2], p[3]),
-        };
-        out[i * 4..i * 4 + 4].copy_from_slice(&[r, g, b, 255]);
+        out[i * 4..i * 4 + 4].copy_from_slice(&rgba_from_jpeg(format, p, has_alpha));
     }
     Ok(out)
+}
+
+/// One JPEG pixel's components as straight RGBA8.
+///
+/// `has_alpha` is whether the header's `alpha_bits` says the texture carries an
+/// alpha channel, which decides how a four-component pixel is read:
+///
+/// * **with alpha** the four components are inverted RGBA, so the raw value is
+///   `255 - p` and the fourth is alpha. Verified against
+///   `Textures\WarcraftIII-logo-alpha.blp`: read this way it is the *Warcraft
+///   III: Reign of Chaos* logo on a transparent field (8.9% fully transparent,
+///   37.9% partial); read as CMYK with opaque alpha the same bytes are an
+///   opaque black rectangle.
+/// * **without alpha** the previous reading is kept — [`cmyk_to_rgb`], which
+///   mixes the fourth component in as black ink and returns opaque. The two
+///   readings agree whenever the fourth component is zero, which is why no
+///   shipped texture that lacks the alpha flag has forced the question.
+fn rgba_from_jpeg(format: jpeg_decoder::PixelFormat, p: &[u8], has_alpha: bool) -> [u8; 4] {
+    match format {
+        jpeg_decoder::PixelFormat::L8 => [p[0], p[0], p[0], 255],
+        jpeg_decoder::PixelFormat::L16 => {
+            let v = (u16::from(p[0]) << 8 | u16::from(p[1])) as u32;
+            let s = (v >> 8) as u8;
+            [s, s, s, 255]
+        }
+        jpeg_decoder::PixelFormat::RGB24 => [p[0], p[1], p[2], 255],
+        jpeg_decoder::PixelFormat::CMYK32 if has_alpha => {
+            [255 - p[0], 255 - p[1], 255 - p[2], 255 - p[3]]
+        }
+        jpeg_decoder::PixelFormat::CMYK32 => {
+            let [r, g, b] = cmyk_to_rgb(p[0], p[1], p[2], p[3]);
+            [r, g, b, 255]
+        }
+    }
 }
 
 /// Convenience: decode mip 0.
@@ -1674,6 +1701,167 @@ mod tests {
             framing_failures.is_empty(),
             "{} textures violate the framing relation",
             framing_failures.len()
+        );
+    }
+}
+
+#[cfg(test)]
+mod jpeg_component_tests {
+    use super::*;
+    use jpeg_decoder::PixelFormat;
+
+    /// The alpha gate, on both sides, with no Warcraft files involved.
+    ///
+    /// The two readings of a four-component pixel agree when the fourth
+    /// component is zero, so a test that only covered `(c, m, y, 0)` would pass
+    /// whichever path the code took. The fourth value here is deliberately
+    /// non-zero, which is what separates them.
+    #[test]
+    fn four_components_read_as_alpha_only_when_the_header_says_so() {
+        // A pixel whose fourth component is half-way: opaque-ish as CMYK, half
+        // transparent as alpha.
+        let p = [200u8, 100, 50, 128];
+
+        let with_alpha = rgba_from_jpeg(PixelFormat::CMYK32, &p, true);
+        assert_eq!(
+            with_alpha,
+            [55, 155, 205, 127],
+            "inverted RGBA: 255 - component, fourth is alpha"
+        );
+
+        // Without the flag the previous reading is kept: `cmyk_to_rgb` mixes the
+        // fourth component in as black ink and the pixel is opaque. This is the
+        // behaviour the alpha change must not have moved.
+        let without_alpha = rgba_from_jpeg(PixelFormat::CMYK32, &p, false);
+        assert_eq!(without_alpha, [0, 27, 77, 255], "255 - clamp(c + 128)");
+        assert_eq!(
+            without_alpha[..3],
+            cmyk_to_rgb(200, 100, 50, 128),
+            "the no-alpha path is still cmyk_to_rgb"
+        );
+        assert_ne!(
+            with_alpha, without_alpha,
+            "the gate has to change something"
+        );
+    }
+
+    /// With a zero fourth component the two readings coincide, which is exactly
+    /// why the mistake survived this long — and why a regression here would be
+    /// invisible on every texture that is not the logo.
+    #[test]
+    fn a_zero_fourth_component_reads_the_same_either_way() {
+        let p = [40u8, 66, 67, 0];
+        let a = rgba_from_jpeg(PixelFormat::CMYK32, &p, true);
+        let b = rgba_from_jpeg(PixelFormat::CMYK32, &p, false);
+        assert_eq!(a, [215, 189, 188, 255]);
+        assert_eq!(b, [215, 189, 188, 255]);
+    }
+
+    /// Three-component and grey JPEGs are unaffected by the gate.
+    #[test]
+    fn other_pixel_formats_are_untouched_by_the_gate() {
+        assert_eq!(
+            rgba_from_jpeg(PixelFormat::RGB24, &[1, 2, 3], true),
+            [1, 2, 3, 255]
+        );
+        assert_eq!(
+            rgba_from_jpeg(PixelFormat::RGB24, &[1, 2, 3], false),
+            [1, 2, 3, 255]
+        );
+        assert_eq!(rgba_from_jpeg(PixelFormat::L8, &[9], true), [9, 9, 9, 255]);
+        assert_eq!(rgba_from_jpeg(PixelFormat::L8, &[9], false), [9, 9, 9, 255]);
+    }
+}
+
+#[cfg(test)]
+mod logo_alpha_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Where the shipped logo might be, from the environment or the repository.
+    ///
+    /// No absolute home directory: a test that only runs on one machine is a
+    /// test that fails everywhere else, and one that silently returns is worse.
+    fn install_roots() -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+        if let Some(p) = std::env::var_os("PEACECRAFT3_LEGACY_DIR") {
+            roots.push(PathBuf::from(p));
+        }
+        if let Some(p) = std::env::var_os("PEACECRAFT3_INSTALL") {
+            roots.push(PathBuf::from(p));
+        }
+        // The repository's own extracted tree, relative to this crate.
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.join("wc3/game/app"));
+        if let Some(p) = repo {
+            roots.push(p);
+        }
+        roots
+    }
+
+    /// The shipped `WarcraftIII-logo-alpha.blp`, or `None` when no install is
+    /// present. The caller turns that into a skip, so the reason is explicit.
+    fn logo() -> Option<(Vec<u8>, String)> {
+        for root in install_roots() {
+            if !root.is_dir() {
+                continue;
+            }
+            if let Ok(mut set) = pcx_mpq::MpqSet::open_wc3(&root) {
+                if let Ok(b) = set.extract(r"Textures\WarcraftIII-logo-alpha.blp") {
+                    if !b.is_empty() {
+                        return Some((b, root.display().to_string()));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// The logo's fourth JPEG component is **alpha**, and reading it as CMYK
+    /// makes the whole texture opaque black.
+    ///
+    /// Ignored by default because it needs a local Warcraft III install: the
+    /// fixture is a shipped asset and this repository does not commit those.
+    /// Run it with `cargo test -p pcx-blp -- --ignored` where an install exists,
+    /// setting `PEACECRAFT3_LEGACY_DIR` if it is not at the repository path.
+    #[test]
+    #[ignore = "needs a local Warcraft III install; run with --ignored and PEACECRAFT3_LEGACY_DIR set"]
+    fn the_logo_decodes_to_transparent_artwork() {
+        let Some((bytes, root)) = logo() else {
+            panic!(
+                "no Warcraft III install found; set PEACECRAFT3_LEGACY_DIR to one of {:?}",
+                install_roots()
+            );
+        };
+        let (h, px) = decode(&bytes).unwrap_or_else(|e| panic!("{root}: {e}"));
+        assert_eq!((h.width, h.height), (512, 256), "the logo's own size");
+        assert_eq!(h.content, 0, "JPEG-content BLP");
+        assert!(h.alpha_bits > 0, "the texture declares alpha");
+        assert_eq!(px.len(), 512 * 256 * 4);
+
+        let at = |x: usize, y: usize| {
+            let i = (y * 512 + x) * 4;
+            [px[i], px[i + 1], px[i + 2], px[i + 3]]
+        };
+        let corner = at(0, 0);
+        assert_eq!(corner[3], 0, "corner alpha, got {corner:?}");
+        let body = at(256, 20);
+        assert!(body[3] > 200, "logo body alpha, got {body:?}");
+        assert!(
+            body[2] > body[0] && body[2] > 150,
+            "the lettering is blue, got {body:?}"
+        );
+
+        let partial = px
+            .chunks_exact(4)
+            .filter(|p| (1..255).contains(&p[3]))
+            .count();
+        let total = 512 * 256;
+        assert!(
+            partial * 10 > total,
+            "expected antialiased edges, only {partial} of {total} partial"
         );
     }
 }

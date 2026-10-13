@@ -84,7 +84,7 @@ def build(target):
     cargo = ["rustup", "run", toolchain, "cargo"]
     args = ["--locked", "-p", "peacecraft3", "--bin", "peacecraft3", "--target", target]
     subprocess.run(cargo + ["build", "--release"] + args, check=True)
-    subprocess.run(cargo + ["test"] + args, check=True)
+    subprocess.run(cargo + ["test", "--release"] + args, check=True)
     binary_name = "peacecraft3.exe" if "windows" in target else "peacecraft3"
     binary = Path(os.environ.get("CARGO_TARGET_DIR", "target")) / target / "release" / binary_name
     verify_header(binary.read_bytes(), target)

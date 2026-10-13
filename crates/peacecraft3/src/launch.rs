@@ -669,6 +669,7 @@ mod tests {
     /// The 1.29b and 1.28c installs that are actually on this machine, so the
     /// classifier is measured against real sources rather than a fixture.
     #[test]
+    #[ignore = "requires local Warcraft III and Battle.net installations"]
     fn classifies_the_installs_that_are_actually_present() {
         let candidates = [
             Path::new(env!("CARGO_MANIFEST_DIR"))

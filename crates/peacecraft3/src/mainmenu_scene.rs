@@ -64,7 +64,6 @@
 
 use bevy::prelude::*;
 
-
 /// The model this module renders.
 pub const SCENE_ART: &str = r"UI\Glues\MainMenu\MainMenu3d\MainMenu3d.mdx";
 
@@ -373,7 +372,7 @@ pub struct MainMenuScene {
     /// Position within the clip.
     time_ms: f32,
     /// Monotonic elapsed time, which is what global sequences run on.
-    elapsed_ms: u32,
+    elapsed: std::time::Duration,
     /// `GLBS` durations, indexed by global-sequence id.
     global_durations: Vec<u32>,
     /// What was built, for the caller to report.
@@ -406,8 +405,8 @@ pub fn spawn(
     textures: &[pcx_gfx::LoadedTexture],
 ) -> Result<SceneInfo, SceneError> {
     let m = pcx_mdl::Mdlx::parse(bytes).map_err(|e| SceneError::Decode(e.to_string()))?;
-    let model = pcx_gfx::load_model(bytes, SCENE_ART)
-        .map_err(|e| SceneError::Decode(e.to_string()))?;
+    let model =
+        pcx_gfx::load_model(bytes, SCENE_ART).map_err(|e| SceneError::Decode(e.to_string()))?;
     let bones = m
         .bones(bytes)
         .map_err(|e| SceneError::Decode(e.to_string()))?;
@@ -533,21 +532,39 @@ pub fn spawn(
                         illuminance: (l.intensity.max(0.0) * 20_000.0).max(1.0),
                         ..default()
                     },
-                    Transform::from_xyz(0.0, 0.0, 5000.0)
-                        .looking_at(Vec3::ZERO, Vec3::Z),
+                    Transform::from_xyz(0.0, 0.0, 5000.0).looking_at(Vec3::ZERO, Vec3::Z),
                     Name::new(format!("menu3d-light-{i}")),
                 ));
                 info.lights += 1;
             }
             pcx_mdl::LightKind::Omnidirectional => {
+                // The light's position is its **node pivot**, which is where the
+                // model's own rest pose puts it. Placing these all at the origin
+                // — which an earlier version did — stacks five point lights in
+                // one spot and blows the scene out. The light's animated node
+                // position is not sampled (its `KeyTrack`s have no public
+                // sampler here), so a light that moves sits still; that is
+                // recorded rather than approximated.
+                let pos = pivots
+                    .as_ref()
+                    .and_then(|p| p.position(l.object_id))
+                    .unwrap_or([0.0; 3]);
                 commands.spawn((
                     PointLight {
                         color: colour,
-                        intensity: (l.intensity.max(0.0) * 200_000.0).max(1.0),
+                        // WC3's intensity is its own unit, not lumens, so this
+                        // is a scale factor and an approximation: the shipped
+                        // values are 40..175 and Bevy wants thousands of lumens
+                        // for a room-sized light. `×200` puts them at 8,000..
+                        // 35,000 lm. The original's exact photometric behaviour
+                        // is not reproduced.
+                        intensity: (l.intensity.max(0.0) * 200.0).max(1.0),
+                        // `attenuation_end` (200 in every shipped record) is the
+                        // radius in the model's own units.
                         range: l.attenuation_end.max(1.0),
                         ..default()
                     },
-                    Transform::from_xyz(0.0, 0.0, 0.0),
+                    Transform::from_translation(Vec3::from(pos)),
                     Name::new(format!("menu3d-light-{i}")),
                 ));
                 info.lights += 1;
@@ -576,7 +593,7 @@ pub fn spawn(
         interval_start: clip.map(|s| s.interval_start).unwrap_or(0),
         duration_ms: clip.map(|s| s.duration()).unwrap_or(0),
         time_ms: 0.0,
-        elapsed_ms: 0,
+        elapsed: std::time::Duration::ZERO,
         global_durations: global_sequence_durations(bytes),
         info: info.clone(),
     });
@@ -623,8 +640,8 @@ pub fn global_sequence_durations(bytes: &[u8]) -> Vec<u32> {
     let mut i = 4usize;
     while i + 8 <= bytes.len() {
         let tag = &bytes[i..i + 4];
-        let size = u32::from_le_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]])
-            as usize;
+        let size =
+            u32::from_le_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]]) as usize;
         if tag == b"GLBS" {
             let body = &bytes[i + 8..(i + 8 + size).min(bytes.len())];
             return body
@@ -639,14 +656,8 @@ pub fn global_sequence_durations(bytes: &[u8]) -> Vec<u32> {
 
 /// One bone's pose with global-sequence tracks sampled on their **own** clock.
 ///
-/// This is the fix for the scene's geometry exploding into stretched planes.
-/// `pcx_mdl::sample_bone_pose` samples every track at the frame it is handed,
-/// and **258 of this model's 482 bone tracks carry a global-sequence id** — the
-/// majority. A global sequence does not follow the model's `Stand` clip; it runs
-/// on its own timeline, so handing those tracks the `Stand` frame poses the
-/// bones at instants the sequence does not reach at all. The result was tens of
-/// thousands of world units of stretch, which is what the red and white planes
-/// were.
+/// A global sequence does not follow the model's `Stand` clip; it runs on its
+/// own timeline and continues across clip wraps.
 ///
 /// A bone whose tracks are all local still goes straight to the crate's sampler,
 /// so nothing about the ordinary path changes. A bone with any global track has
@@ -714,7 +725,7 @@ pub fn advance(
     scene.time_ms = (scene.time_ms + dt_ms) % scene.duration_ms as f32;
     // The elapsed clock does *not* wrap with the clip: a global sequence keeps
     // running across a clip wrap, which is the whole point of it being global.
-    scene.elapsed_ms = scene.elapsed_ms.wrapping_add(dt_ms as u32);
+    scene.elapsed += time.delta();
     let frame = scene.interval_start + scene.time_ms as u32;
 
     let Some(model) = scene.model.as_ref() else {
@@ -726,7 +737,14 @@ pub fn advance(
     let poses: Vec<pcx_mdl::Pose> = scene
         .bones
         .iter()
-        .map(|b| tracked_pose(b, frame, scene.elapsed_ms, &scene.global_durations))
+        .map(|b| {
+            tracked_pose(
+                b,
+                frame,
+                scene.elapsed.as_millis() as u32,
+                &scene.global_durations,
+            )
+        })
         .collect();
     let skeleton = pcx_gfx::pose_from_poses(model, &scene.bones, pivots, &poses);
 
@@ -734,13 +752,43 @@ pub fn advance(
         let Some(mut mesh) = meshes.get_mut(handle) else {
             continue;
         };
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pcx_gfx::skin_mesh(rest, &skeleton));
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_POSITION,
+            pcx_gfx::skin_mesh(rest, &skeleton),
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn global_clock_keeps_fractional_milliseconds_across_frames() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_nanos(16_666_667));
+        world.insert_resource(time);
+        world.insert_resource(Assets::<Mesh>::default());
+        world.insert_resource(MainMenuScene {
+            model: Some(pcx_gfx::LoadedModel {
+                name: String::new(),
+                minimum_extent: [0.0; 3],
+                maximum_extent: [0.0; 3],
+                meshes: Vec::new(),
+                bone_names: Vec::new(),
+                bone_parents: Vec::new(),
+                sequences: Vec::new(),
+            }),
+            duration_ms: 16_667,
+            ..default()
+        });
+        for _ in 0..60 {
+            world.run_system_once(advance).unwrap();
+        }
+        assert_eq!(world.resource::<MainMenuScene>().elapsed.as_millis(), 1_000);
+    }
 
     fn scene_bytes() -> Option<Vec<u8>> {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -761,7 +809,10 @@ mod tests {
             texture_served_name(r"ui\Glues\MainMenu\MainMenu3d\Wetrock1.blp"),
             "menu3d/wetrock1.blp"
         );
-        assert_eq!(texture_served_name("Textures/Dirt2c.blp"), "menu3d/dirt2c.blp");
+        assert_eq!(
+            texture_served_name("Textures/Dirt2c.blp"),
+            "menu3d/dirt2c.blp"
+        );
     }
 
     /// The scene is the one the FDF names, and its texture list comes from the
@@ -772,7 +823,9 @@ mod tests {
         let names = texture_served_names(&bytes);
         assert_eq!(names.len(), 33, "the model's TEXS count");
         assert!(
-            names.iter().all(|n| n.starts_with("menu3d/") && n.ends_with(".blp")),
+            names
+                .iter()
+                .all(|n| n.starts_with("menu3d/") && n.ends_with(".blp")),
             "every name is served under menu3d/"
         );
         // No duplicates: a repeated basename would make two geosets share one
@@ -860,26 +913,49 @@ mod tests {
         let Some(bytes) = scene_bytes() else { return };
         let m = pcx_mdl::Mdlx::parse(&bytes).expect("parses");
         let materials = m.materials(&bytes).expect("materials");
-        let all: Vec<_> = (0..materials.len()).map(|i| layer_flags(&materials, i)).collect();
+        let all: Vec<_> = (0..materials.len())
+            .map(|i| layer_flags(&materials, i))
+            .collect();
 
-        let opaque = all.iter().filter(|f| f.alpha_mode == AlphaMode::Opaque).count();
-        let blend = all.iter().filter(|f| f.alpha_mode == AlphaMode::Blend).count();
-        let add = all.iter().filter(|f| f.alpha_mode == AlphaMode::Add).count();
+        let opaque = all
+            .iter()
+            .filter(|f| f.alpha_mode == AlphaMode::Opaque)
+            .count();
+        let blend = all
+            .iter()
+            .filter(|f| f.alpha_mode == AlphaMode::Blend)
+            .count();
+        let add = all
+            .iter()
+            .filter(|f| f.alpha_mode == AlphaMode::Add)
+            .count();
         // filterMode 0:18, 1:6, 2:4, 3:1, 4:2 across the 31 layers.
         assert_eq!(opaque, 18, "filterMode 0");
         assert_eq!(blend, 10, "filterMode 1 and 2");
         assert_eq!(add, 3, "filterMode 3 and 4");
-        assert_eq!(all.iter().filter(|f| f.unshaded).count(), 4, "shadingFlags bit 0");
+        assert_eq!(
+            all.iter().filter(|f| f.unshaded).count(),
+            4,
+            "shadingFlags bit 0"
+        );
         // filterMode 1 (x6) alpha-tests and filterMode 3 (x1) is ONE/ONE;
         // filterMode 2 (x4) and 4 (x2) are exact.
         let gaps: Vec<BlendGap> = all.iter().filter_map(|f| f.blend_gap).collect();
-        assert_eq!(gaps.len(), 7, "six alpha-test plus one non-premultiplied additive");
         assert_eq!(
-            gaps.iter().filter(|g| **g == BlendGap::AlphaTestThresholdUnproven).count(),
+            gaps.len(),
+            7,
+            "six alpha-test plus one non-premultiplied additive"
+        );
+        assert_eq!(
+            gaps.iter()
+                .filter(|g| **g == BlendGap::AlphaTestThresholdUnproven)
+                .count(),
             6
         );
         assert_eq!(
-            gaps.iter().filter(|g| **g == BlendGap::AdditiveIsPremultiplied).count(),
+            gaps.iter()
+                .filter(|g| **g == BlendGap::AdditiveIsPremultiplied)
+                .count(),
             1
         );
 
@@ -888,7 +964,11 @@ mod tests {
         let mut alphas: Vec<String> = all.iter().map(|f| format!("{:.2}", f.alpha)).collect();
         alphas.sort();
         alphas.dedup();
-        assert_eq!(alphas, ["0.30", "0.55", "1.00"], "the scene's static alphas");
+        assert_eq!(
+            alphas,
+            ["0.30", "0.55", "1.00"],
+            "the scene's static alphas"
+        );
     }
 
     /// The offset the crate reads is not the alpha, and this pins the
@@ -909,7 +989,10 @@ mod tests {
             assert!(real > 0.0, "the real alpha is non-zero");
             differences += 1;
         }
-        assert_eq!(differences, 31, "every layer differs, so the workaround matters");
+        assert_eq!(
+            differences, 31,
+            "every layer differs, so the workaround matters"
+        );
     }
 
     /// Every `filterMode` word's mapping, pinned. The three gaps are asserted
@@ -930,7 +1013,10 @@ mod tests {
         // Mode 4 is `SRC_ALPHA / ONE`, which is exactly what Bevy's `Add` does.
         assert_eq!(alpha_mode_of(4), (AlphaMode::Add, None));
         assert_eq!(alpha_mode_of(5), (AlphaMode::Multiply, None));
-        assert_eq!(alpha_mode_of(6), (AlphaMode::Opaque, Some(BlendGap::Modulate2x)));
+        assert_eq!(
+            alpha_mode_of(6),
+            (AlphaMode::Opaque, Some(BlendGap::Modulate2x))
+        );
     }
 
     /// The camera and lights are the model's, not defaults.
@@ -1015,50 +1101,36 @@ mod global_seq_tests {
         assert!(durations[max_id as usize] > 0, "and it has a duration");
     }
 
-    /// Where the scene actually is: the camera's own numbers, and whether the
-    /// skinned vertices move at all under a pose.
+    /// The lights, pinned: the values that made the blow-out possible.
+    ///
+    /// An earlier version scaled `intensity` by 200,000 and put every light at
+    /// the origin, which drove five point lights to tens of millions of lumens
+    /// in one spot — the white, blown-out planes the browser showed. The scale
+    /// is now 200 and each light takes its own node pivot.
     #[test]
-    fn diagnosis_camera_and_skin() {
+    fn the_lights_are_the_models_own_and_not_blown_out() {
         let Some((bytes, m)) = scene() else { return };
-        let bones = m.bones(&bytes).expect("bones");
-        let pivots = m.pivots(&bytes).expect("pivots");
-        let model = pcx_gfx::load_model(&bytes, SCENE_ART).expect("model");
-        let cams = m.cameras(&bytes).expect("cameras");
-        for c in &cams {
-            println!("CAM {} eye={:?} target={:?} fov={} near={} far={} tracks={}",
-                c.name, c.eye, c.target, c.field_of_view, c.near, c.far, c.tracks.len());
-        }
-        // mesh 0: rest bounds, then both skinning paths at a mid frame
-        let mesh = &model.meshes[0];
-        let rest_span = {
-            let mut lo=f32::INFINITY; let mut hi=f32::NEG_INFINITY;
-            for p in &mesh.positions { for c in p { lo=lo.min(*c); hi=hi.max(*c);} }
-            hi-lo
-        };
-        let durations = global_sequence_durations(&bytes);
-        let skin_span = |poses: Vec<pcx_mdl::Pose>| -> f32 {
-            let sk = pcx_gfx::pose_from_poses(&model, &bones, &pivots, &poses);
-            let mut lo=f32::INFINITY; let mut hi=f32::NEG_INFINITY;
-            for p in pcx_gfx::skin_mesh(mesh, &sk) { for c in p { lo=lo.min(c); hi=hi.max(c);} }
-            hi-lo
-        };
-        let crate_poses: Vec<_> = bones.iter().map(|b| pcx_mdl::sample_bone_pose(b, 8000)).collect();
-        let timed_poses: Vec<_> = bones.iter().map(|b| tracked_pose(b, 8000, 21000, &durations)).collect();
-        let mut moved = 0;
-        for (a,b) in crate_poses.iter().zip(&timed_poses) {
-            if a.translation != b.translation || a.rotation != b.rotation || a.scale != b.scale { moved += 1; }
-        }
-        println!("mesh0 rest_span={:.0} crate_span={:.0} timed_span={:.0} bones_whose_pose_differs={}",
-            rest_span, skin_span(crate_poses.clone()), skin_span(timed_poses.clone()), moved);
-        println!("mesh0 matrix_indices_len={} group_counts_len={} vertex_groups_len={}",
-            mesh.bone_indices.len(), mesh.group_counts.len(), mesh.vertex_groups.len());
-        let mut nonempty=0; for b in &bones { if !b.tracks.is_empty() { nonempty+=1; } }
-        println!("bones_with_tracks={} bones_total={} pivots={}", nonempty, bones.len(), pivots.0.len());
         let lights = m.lights(&bytes).expect("lights");
-        println!("LITE count={}", lights.len());
+        let pivots = m.pivots(&bytes).expect("pivots");
+        assert_eq!(lights.len(), 5, "the scene's five lights");
         for l in &lights {
-            println!("  {:<20} kind={:?} colour={:?} intensity={} att={}..{} amb_col={:?} amb_int={}",
-                l.name, l.kind, l.colour, l.intensity, l.attenuation_start, l.attenuation_end, l.ambient_colour, l.ambient_intensity);
+            assert_eq!(l.kind, pcx_mdl::LightKind::Omnidirectional);
+            assert!(
+                (1.0..=200.0).contains(&l.intensity),
+                "{}: intensity {} is the shipped range",
+                l.name,
+                l.intensity
+            );
+            // The scale this module applies must keep a light inside the range a
+            // scene light can plausibly be, not millions.
+            let scaled = l.intensity.max(0.0) * 200.0;
+            assert!(scaled <= 40_000.0, "{}: {scaled} lumens", l.name);
+            // And every light has a real place to stand, not the origin.
+            let p = pivots.position(l.object_id).expect("a pivot");
+            assert!(p != [0.0, 0.0, 0.0], "{}: placed at the origin", l.name);
         }
+        // Ambient is zero in every record, so the module's floor is what lights
+        // the unlit pieces; that floor is not zero.
+        assert!(lights.iter().all(|l| l.ambient_intensity == 0.0));
     }
 }

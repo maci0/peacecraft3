@@ -1375,49 +1375,63 @@ pub fn bone_matrices(
 }
 
 /// Composes a parent's world matrix, a pose, and the bone's pivot.
+///
+/// The format's local transform turns about the bone's **pivot**, so the local
+/// matrix is
+///
+/// ```text
+/// T(pivot) * T(translation) * R * S * T(-pivot)
+/// ```
+///
+/// which collapses to a linear part `R * S` and a translation column of
+/// `(pivot + translation) - (R * S) * pivot`. The world matrix is then
+/// `parent * local` — **both** the 3×3 and the translation column, because a
+/// bone inside a rotated parent has to inherit that parent's rotation.
 fn compose(parent: [f32; 16], pose: Pose, pivot: [f32; 3]) -> [f32; 16] {
-    // Local matrix = T(pose.translation + pivot) * R * S, and the pivot is
-    // removed again so the bone rotates about its own rest point.
-    let t = [
-        pose.translation[0] + pivot[0],
-        pose.translation[1] + pivot[1],
-        pose.translation[2] + pivot[2],
-    ];
     let q = pose.rotation;
-    let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
     let s = pose.scale;
-    let mut out = [0.0f32; 16];
-    // Rotation part of the quaternion, scaled.
-    let r = [
+    let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
+    // `R * S`: the rotation's columns, each scaled by the matching axis.
+    let rs = [
         [
-            1.0 - 2.0 * (y * y + z * z),
-            2.0 * (x * y - z * w),
-            2.0 * (x * z + y * w),
+            (1.0 - 2.0 * (y * y + z * z)) * s[0],
+            2.0 * (x * y - z * w) * s[1],
+            2.0 * (x * z + y * w) * s[2],
         ],
         [
-            2.0 * (x * y + z * w),
-            1.0 - 2.0 * (x * x + z * z),
-            2.0 * (y * z - x * w),
+            2.0 * (x * y + z * w) * s[0],
+            (1.0 - 2.0 * (x * x + z * z)) * s[1],
+            2.0 * (y * z - x * w) * s[2],
         ],
         [
-            2.0 * (x * z - y * w),
-            2.0 * (y * z + x * w),
-            1.0 - 2.0 * (x * x + y * y),
+            2.0 * (x * z - y * w) * s[0],
+            2.0 * (y * z + x * w) * s[1],
+            (1.0 - 2.0 * (x * x + y * y)) * s[2],
         ],
     ];
-    for i in 0..3 {
-        for j in 0..3 {
-            out[i * 4 + j] = r[i][j] * s[j];
+    // `(pivot + translation) - (R * S) * pivot`.
+    let local_t = [
+        pivot[0] + pose.translation[0]
+            - (rs[0][0] * pivot[0] + rs[0][1] * pivot[1] + rs[0][2] * pivot[2]),
+        pivot[1] + pose.translation[1]
+            - (rs[1][0] * pivot[0] + rs[1][1] * pivot[1] + rs[1][2] * pivot[2]),
+        pivot[2] + pose.translation[2]
+            - (rs[2][0] * pivot[0] + rs[2][1] * pivot[1] + rs[2][2] * pivot[2]),
+    ];
+    // `parent * local`, written out: the parent's 3×3 multiplies the local 3×3,
+    // and its 3×3 and translation both act on the local translation.
+    let mut out = [0.0f32; 16];
+    for col in 0..3 {
+        for row in 0..3 {
+            out[col * 4 + row] = parent[row] * rs[0][col]
+                + parent[4 + row] * rs[1][col]
+                + parent[8 + row] * rs[2][col];
         }
     }
-    out[0] = out[0] * s[0];
-    // Translation column is parent * local.
-    let local_t = [t[0] - pivot[0], t[1] - pivot[1], t[2] - pivot[2]];
-    let rotated = rotate(q, local_t);
-    out[12] = parent[0] * rotated[0] + parent[4] * rotated[1] + parent[8] * rotated[2] + parent[12];
-    out[13] = parent[1] * rotated[0] + parent[5] * rotated[1] + parent[9] * rotated[2] + parent[13];
+    out[12] = parent[0] * local_t[0] + parent[4] * local_t[1] + parent[8] * local_t[2] + parent[12];
+    out[13] = parent[1] * local_t[0] + parent[5] * local_t[1] + parent[9] * local_t[2] + parent[13];
     out[14] =
-        parent[2] * rotated[0] + parent[6] * rotated[1] + parent[10] * rotated[2] + parent[14];
+        parent[2] * local_t[0] + parent[6] * local_t[1] + parent[10] * local_t[2] + parent[14];
     out[15] = 1.0;
     out
 }
@@ -6727,5 +6741,164 @@ mod pre2_tests {
             eprintln!("  fail {f}");
         }
         assert!(failed.is_empty(), "{} PRE2 records failed", failed.len());
+    }
+}
+
+#[cfg(test)]
+mod compose_tests {
+    use super::*;
+
+    fn pose(t: [f32; 3], q: [f32; 4], s: [f32; 3]) -> Pose {
+        Pose {
+            translation: t,
+            rotation: q,
+            scale: s,
+        }
+    }
+    const I: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+    fn id() -> [f32; 16] {
+        identity()
+    }
+
+    /// The linear part must be `R * S` exactly. The old code applied `s[0]` to
+    /// `out[0]` twice, so any bone with a non-unit scale sheared its matrix.
+    #[test]
+    fn scale_is_applied_once() {
+        let m = compose(id(), pose([0.0; 3], I, [2.0, 3.0, 4.0]), [0.0; 3]);
+        assert_eq!(
+            (m[0], m[5], m[10]),
+            (2.0, 3.0, 4.0),
+            "the diagonal is the scale"
+        );
+        assert_eq!(m[1], 0.0);
+        assert_eq!(m[4], 0.0);
+    }
+
+    /// The pivot decides where the bone's origin sits, so a rotation about a
+    /// pivot that is not the origin must move the translation column. The old
+    /// code computed `R * translation`, dropping the pivot entirely, which put
+    /// every bone at its parent's origin.
+    #[test]
+    fn the_pivot_is_restored_in_the_translation() {
+        // 90 degrees about +Z.
+        let half = std::f32::consts::FRAC_PI_4;
+        let q = [0.0, 0.0, (half).sin(), (half).cos()];
+        let m = compose(id(), pose([0.0; 3], q, [1.0; 3]), [1.0, 0.0, 0.0]);
+        // (pivot + t) - R * pivot  =  [1,0,0] - [0,1,0]  =  [1,-1,0]
+        assert!((m[12] - 1.0).abs() < 1e-5, "x {}", m[12]);
+        assert!((m[13] + 1.0).abs() < 1e-5, "y {}", m[13]);
+        assert!(m[14].abs() < 1e-5, "z {}", m[14]);
+    }
+
+    /// A bone with no animation and no parent must be the identity, because the
+    /// format stores vertices already in model space. Anything else collapses
+    /// the model on the first frame.
+    #[test]
+    fn a_rest_bone_is_the_identity() {
+        let m = compose(id(), pose([0.0; 3], I, [1.0; 3]), [123.0, -45.0, 6.0]);
+        assert_eq!(m, identity(), "rest pose leaves the mesh where it is");
+    }
+
+    #[test]
+    fn rotation_keeps_the_pivot_fixed_and_turns_nearby_vertices() {
+        let half = std::f32::consts::FRAC_PI_4;
+        let rotation = [0.0, 0.0, half.sin(), half.cos()];
+        let pivot = [1.0, 2.0, 3.0];
+        let matrix = compose(id(), pose([0.0; 3], rotation, [1.0; 3]), pivot);
+        for (point, expected) in [(pivot, pivot), ([2.0, 2.0, 3.0], [1.0, 3.0, 3.0])] {
+            let actual = transform_point(&matrix, point);
+            for axis in 0..3 {
+                assert!((actual[axis] - expected[axis]).abs() < 1e-5);
+            }
+        }
+    }
+
+    #[test]
+    fn parent_and_child_rotations_compose_in_model_space() {
+        let half = std::f32::consts::FRAC_PI_4;
+        let parent = compose(
+            id(),
+            pose(
+                [5.0, 1.0, 0.0],
+                [0.0, 0.0, half.sin(), half.cos()],
+                [1.0; 3],
+            ),
+            [0.0; 3],
+        );
+        let child_pose = pose(
+            [2.0, 1.0, -3.0],
+            [half.sin(), 0.0, 0.0, half.cos()],
+            [2.0, 1.0, 1.0],
+        );
+        let pivot = [1.0, 0.0, 2.0];
+        let local = compose(id(), child_pose, pivot);
+        let world = compose(parent, child_pose, pivot);
+        let point = [2.0, 3.0, 4.0];
+        let expected = transform_point(&parent, transform_point(&local, point));
+        let actual = transform_point(&world, point);
+        for axis in 0..3 {
+            assert!((actual[axis] - expected[axis]).abs() < 1e-5);
+        }
+    }
+
+    /// A parent's rotation must reach the child's 3x3 as well as its
+    /// translation; the old code wrote `R * S` alone and lost the inheritance.
+    #[test]
+    fn a_parent_rotates_its_child() {
+        let half = std::f32::consts::FRAC_PI_4;
+        let rq = [0.0, 0.0, (half).sin(), (half).cos()];
+        let parent = compose(id(), pose([5.0, 0.0, 0.0], rq, [1.0; 3]), [0.0; 3]);
+        let child = compose(parent, pose([0.0; 3], I, [1.0; 3]), [0.0; 3]);
+        // The child's linear part is the parent's rotation, not the identity.
+        assert!((child[0] - parent[0]).abs() < 1e-5);
+        assert!((child[1] - parent[1]).abs() < 1e-5);
+        assert!(
+            (child[12] - parent[12]).abs() < 1e-5,
+            "and it rides the parent"
+        );
+    }
+
+    /// `bone_matrices` returns one matrix per **bone**, in bone order. Sparse
+    /// node ids are exactly why a caller must not use an id as an index.
+    #[test]
+    fn matrices_come_back_in_bone_order_even_with_sparse_ids() {
+        let mk = |object_id: u32, parent_id: i32| Bone {
+            offset: 0,
+            span: 0,
+            name: String::new(),
+            object_id,
+            parent_id,
+            flags: 0x100,
+            tracks: Vec::new(),
+            geoset_id: -1,
+            geoset_anim_id: -1,
+        };
+        // Node ids 3 and 9, i.e. nothing like their array positions 0 and 1.
+        let bones = vec![mk(3, -1), mk(9, 3)];
+        let pivots = Pivots(vec![
+            [0.0; 3],
+            [0.0; 3],
+            [0.0; 3],
+            [10.0, 0.0, 0.0],
+            [0.0; 3],
+            [0.0; 3],
+            [0.0; 3],
+            [0.0; 3],
+            [0.0; 3],
+            [1.0, 0.0, 0.0],
+        ]);
+        let parent = |oid: u32| -> Option<u32> {
+            bones
+                .iter()
+                .find(|b| b.object_id == oid)
+                .and_then(|b| (b.parent_id >= 0).then_some(b.parent_id as u32))
+        };
+        let world = bone_matrices(&bones, &parent, &pivots, 0);
+        assert_eq!(world.len(), 2, "one per bone");
+        // A rest bone is identity regardless of where its pivot is, so the
+        // ordering is what this pins: `world[1]` is id 9's, not a matrix at
+        // index 9 (which would be out of bounds).
+        assert_eq!(world[0], identity());
+        assert_eq!(world[1], identity());
     }
 }

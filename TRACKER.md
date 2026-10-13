@@ -4,7 +4,19 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 
 Last updated: 2026-10-13
 
-Workspace: **15 crates / 336 tests passing, 0 failing** as of this write, `cargo fmt`
+Current menu verification (2026-10-13): WASM release build succeeds; selected
+decoder, graphics and app tests pass (131 passed, 6 explicitly ignored).
+PeaceCraft settings precede the menu, buttons use relative flow and rem/viewport
+sizing, and hidden scenes stop rendering and advancing. Bone pivots, parent
+rotations, sparse node IDs and fractional global-sequence timing have regression
+tests. Original JPEG logo alpha is decoded; no-alpha decoding is preserved.
+Desktop and narrow browser checks verify menu entry, clean screen clearing,
+resize hit-testing and original click/music playback without JavaScript errors.
+Those checks isolate UI from the unfinished 3D scene.
+Full scene fidelity remains open: red planes, helper inheritance, particles,
+texture animation and exact blend/lighting behavior still need evidence.
+
+Earlier format-sweep baseline: **15 crates / 336 tests passing, 0 failing**, `cargo fmt`
 clean — expect the number to move, because `pcx-trig` is still being edited
 concurrently. Engine is **Bevy 0.20** (upgraded from 0.17 this wave; the four API
 migrations that forced are in the fidelity log). The coordinator's last measurement
@@ -762,5 +774,7 @@ Format: `date — subsystem — symptom — root cause — status`
 - [ ] macOS Intel x86-64 compiled, tested and artifact verified.
 - [ ] macOS Apple Silicon ARM64 compiled, tested and artifact verified.
 - [ ] Menu GPU rendering and audio verified on both desktop operating systems.
-      Current Linux checkout has no GitHub remote; CI has not run. Commands and
-      limitations are recorded in `docs/build-desktop.md`.
+      First run `38409132391` compiled Windows ARM64 and macOS ARM64, but their
+      tests failed because a local-install test assumed developer folders.
+      That test is now explicitly ignored; corrected artifacts remain pending.
+      Commands and limitations are recorded in `docs/build-desktop.md`.

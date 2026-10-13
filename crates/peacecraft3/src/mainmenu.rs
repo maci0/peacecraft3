@@ -70,40 +70,18 @@ pub const LOGO_ART: &str = r"UI\Glues\MainMenu\WarCraftIIILogo\WarCraftIIILogo.m
 /// The texture `WarCraftIIILogo.mdx` names in its own `TEXS` chunk — the only
 /// texture it uses.
 ///
-/// Measured: BLP1 **content 0 (JPEG)**, 512×256, mipmapped, 3 mips, and its own
-/// layer is `filterMode 2` (blend), `shadingFlags 0x41` (`Unshaded`), static
-/// alpha `1.0`.
+/// The texture the logo model names in its own `TEXS`.
 ///
-/// # The texture's transparency is **unresolved**, and nothing here assumes it
+/// Measured: BLP1 content 0 (JPEG), 512×256, mipmapped, `alpha_bits 8`, and the
+/// JPEG is four-component. The fourth component is **alpha**, not black ink:
+/// read as inverted RGBA the file is the *Warcraft III: Reign of Chaos* logo on
+/// a transparent field (8.9% fully transparent, 37.9% partial), while reading it
+/// as CMYK with opaque alpha gives an opaque black rectangle. `pcx-blp` reads it
+/// the first way when `alpha_bits > 0` and keeps its previous CMYK reading
+/// otherwise; `pcx-blp`'s `jpeg_component_tests` pins both sides and
+/// `logo_alpha_tests` pins the real file.
 ///
-/// What is proven:
-///
-/// * Every mip's JPEG ends exactly at its own EOI marker with **zero trailing
-///   bytes**, so there is no *separate* alpha plane after the image data.
-/// * The mip is a **four-component JPEG** — not three. That is why the decoder's
-///   own note says "every shipped texture decodes to a 4-channel layout".
-/// * The fourth channel varies across the whole `0..255` range: it is `255` at
-///   the corner `(0, 0)` and `0` at the visible centre `(256, 128)`.
-///
-/// Together those rule out *one* reading and leave two standing. `pcx-blp`
-/// currently treats the four channels as **inverted CMYK** (`255 - clamp(C + K)`)
-/// and then forces output alpha to `255`; under that reading the corner is black
-/// and the logo is an opaque image on black. But a fourth channel that is `255`
-/// in the corner and `0` where the logo is drawn is also exactly what an
-/// **inverted alpha** channel looks like (`255 - ch4` gives transparent
-/// background, opaque logo) — the name `-alpha` in the file's own path points
-/// that way too.
-///
-/// Which it is needs the shipped reader's own channel handling, not an argument
-/// from the bytes: both readings fit the same data. Until that is established,
-/// **do not composite this texture as if it were transparent** — an
-/// `ImageNode` with normal blending over the scene would draw an opaque black
-/// rectangle if the CMYK reading is right, and would be needlessly clever if the
-/// alpha reading is. A caller that needs the logo now should draw it on the dark
-/// backdrop it already assumes, and record the gap.
-///
-/// The fade-in is the model's `KMTA` material-alpha track, which is separate from
-/// all of the above.
+/// The fade-in is the model's `KMTA` material-alpha track, separate from this.
 pub const LOGO_TEXTURE: &str = r"Textures\WarcraftIII-logo-alpha.blp";
 /// How long the logo's `Birth` sequence runs, in milliseconds, measured from the
 /// model's `SEQS` chunk (`Birth` spans frames 0..500) — the crate's frame times

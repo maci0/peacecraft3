@@ -111,8 +111,8 @@ fn tint(s: impl Into<String>, size: f32, colour: Color) -> impl Bundle {
     (
         Text(s.into()),
         TextFont {
-            // `font_size` is a `FontSize` in 0.20; `f32` converts as pixels.
-            font_size: size.into(),
+            // Share the viewport-scaled root font size with layout dimensions.
+            font_size: bevy::text::FontSize::Rem(size / 16.0),
             ..default()
         },
         TextColor(colour),
@@ -125,11 +125,11 @@ fn card() -> impl Bundle {
     (
         Node {
             width: Val::Percent(100.0),
-            min_width: Val::Px(0.0),
+            min_width: Val::Rem(0.0),
             flex_direction: FlexDirection::Column,
-            padding: UiRect::axes(Val::Px(20.0), Val::Px(16.0)),
-            row_gap: Val::Px(12.0),
-            border: UiRect::all(Val::Px(2.0)),
+            padding: UiRect::axes(Val::Rem(1.25), Val::Rem(1.0)),
+            row_gap: Val::Rem(0.75),
+            border: UiRect::all(Val::Rem(0.125)),
             // `BorderRadius` is a `Node` field in 0.20, not a component.
             border_radius: card_radius(),
             ..default()
@@ -145,11 +145,11 @@ fn section(c: &mut ChildSpawnerCommands, title: &str, hint: Option<&str>) {
     c.spawn(Node {
         flex_direction: FlexDirection::Row,
         align_items: AlignItems::Center,
-        column_gap: Val::Px(8.0),
-        row_gap: Val::Px(4.0),
+        column_gap: Val::Rem(0.5),
+        row_gap: Val::Rem(0.25),
         flex_wrap: FlexWrap::Wrap,
         width: Val::Percent(100.0),
-        min_width: Val::Px(0.0),
+        min_width: Val::Rem(0.0),
         ..default()
     })
     .with_children(|r| {
@@ -159,9 +159,9 @@ fn section(c: &mut ChildSpawnerCommands, title: &str, hint: Option<&str>) {
                 tint(h, 12.0, TEXT_FAINT),
                 Node {
                     max_width: Val::Percent(100.0),
-                    min_width: Val::Px(0.0),
+                    min_width: Val::Rem(0.0),
                     flex_grow: 1.0,
-                    flex_basis: Val::Px(300.0),
+                    flex_basis: Val::Rem(18.75),
                     ..default()
                 },
             ));
@@ -210,6 +210,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
         .add_systems(
             Update,
             (
+                scale_menu_text,
                 colour_picks,
                 apply_clicks,
                 apply_menu_clicks,
@@ -224,7 +225,8 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     app.add_systems(
         Update,
         crate::mainmenu_scene::advance
-            .run_if(resource_exists::<crate::mainmenu_scene::MainMenuScene>),
+            .run_if(resource_exists::<crate::mainmenu_scene::MainMenuScene>)
+            .run_if(menu_is_visible),
     );
     crate::menu_audio::install(&mut app);
     app
@@ -245,8 +247,9 @@ fn default_source() -> String {
 fn setup(mut commands: Commands, l: Res<Launcher>) {
     commands.spawn((
         Camera2d,
+        bevy::ui::IsDefaultUiCamera,
         Camera {
-            clear_color: bevy::camera::ClearColorConfig::None,
+            clear_color: bevy::camera::ClearColorConfig::Custom(BG_APP),
             ..default()
         },
     ));
@@ -255,11 +258,11 @@ fn setup(mut commands: Commands, l: Res<Launcher>) {
         .spawn((
             Node {
                 width: Val::Percent(100.0),
-                min_width: Val::Px(0.0),
+                min_width: Val::Rem(0.0),
                 height: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
-                padding: UiRect::all(Val::Px(26.0)),
-                row_gap: Val::Px(18.0),
+                padding: UiRect::all(Val::Rem(1.625)),
+                row_gap: Val::Rem(1.125),
                 overflow: Overflow::scroll_y(),
                 ..default()
             },
@@ -389,14 +392,54 @@ fn initialize_menu_scene(
 fn show_menu_or_launcher(
     menu: Query<Entity, With<MenuLayer>>,
     mut launcher: Query<&mut Visibility, With<LauncherPanel>>,
+    mut cameras: Query<&mut Camera, With<crate::mainmenu_scene::MainMenuSceneCamera>>,
+    mut ui_cameras: Query<
+        &mut Camera,
+        (
+            With<bevy::ui::IsDefaultUiCamera>,
+            Without<crate::mainmenu_scene::MainMenuSceneCamera>,
+        ),
+    >,
 ) {
     for mut visibility in &mut launcher {
-        *visibility = if menu.is_empty() {
+        let desired = if menu.is_empty() {
             Visibility::Visible
         } else {
             Visibility::Hidden
         };
+        if *visibility != desired {
+            *visibility = desired;
+        }
     }
+    for mut camera in &mut cameras {
+        let active = !menu.is_empty();
+        if camera.is_active != active {
+            camera.is_active = active;
+        }
+    }
+    // Without an active scene camera, UI must clear the previous screen itself.
+    let clear = if !menu.is_empty() && !cameras.is_empty() {
+        bevy::camera::ClearColorConfig::None
+    } else {
+        bevy::camera::ClearColorConfig::Custom(BG_APP)
+    };
+    for mut camera in &mut ui_cameras {
+        let matches = match (camera.clear_color, clear) {
+            (bevy::camera::ClearColorConfig::None, bevy::camera::ClearColorConfig::None) => true,
+            (
+                bevy::camera::ClearColorConfig::Custom(a),
+                bevy::camera::ClearColorConfig::Custom(b),
+            ) => a == b,
+            _ => false,
+        };
+        if !matches {
+            camera.clear_color = clear;
+        }
+    }
+}
+
+fn menu_is_visible(menu: Query<Entity, With<MenuLayer>>) -> bool {
+    !menu.is_empty()
 }
 
 /// The menu's frame art, decoded once and shared by all six buttons.
@@ -421,7 +464,10 @@ fn apply_menu_art(
     mut images: ResMut<Assets<Image>>,
     mut fonts: ResMut<Assets<Font>>,
     mut cache: ResMut<MenuArtCache>,
-    buttons: Query<(Entity, Option<&InteractionDisabled>), (With<Button>, Without<ButtonArt>)>,
+    mut buttons: Query<
+        (Entity, &mut Node, &Children, Option<&InteractionDisabled>),
+        (With<Button>, Without<ButtonArt>),
+    >,
     panels: Query<Entity, (With<Wc3Panel>, Without<ImageNode>)>,
     mut text: Query<&mut TextFont>,
 ) {
@@ -450,12 +496,33 @@ fn apply_menu_art(
         cache.native_loaded = true;
     }
     if let Some(handle) = &cache.button {
-        for (entity, disabled) in &buttons {
+        for (entity, mut node, children, disabled) in &mut buttons {
             let mut image = ImageNode::new(handle.clone()).with_mode(NodeImageMode::Stretch);
             if disabled.is_some() {
                 image.color = DISABLED_FG;
             }
-            commands.entity(entity).insert((ButtonArt, image));
+            // Keep the frame on the outer button and padding on its contents.
+            let content = commands
+                .spawn(Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    padding: node.padding,
+                    flex_direction: node.flex_direction,
+                    justify_content: node.justify_content,
+                    align_items: node.align_items,
+                    row_gap: node.row_gap,
+                    column_gap: node.column_gap,
+                    ..default()
+                })
+                .id();
+            for child in children.iter() {
+                commands.entity(content).add_child(child);
+            }
+            node.padding = UiRect::ZERO;
+            commands
+                .entity(entity)
+                .insert((ButtonArt, image))
+                .add_child(content);
         }
     }
     if let Some(handle) = &cache.panel {
@@ -523,7 +590,7 @@ fn spawn_menu_button(
         b.spawn((
             Text::new(label.hotkey.to_string()),
             TextFont {
-                font_size: bevy::text::FontSize::Vh(crate::mainmenu::LABEL_FONT_FRACTION * 100.0),
+                font_size: bevy::text::FontSize::Rem(1.0),
                 ..default()
             },
             TextColor(crate::mainmenu::HOTKEY),
@@ -533,9 +600,7 @@ fn spawn_menu_button(
             text.spawn((
                 TextSpan::new(label.rest),
                 TextFont {
-                    font_size: bevy::text::FontSize::Vh(
-                        crate::mainmenu::LABEL_FONT_FRACTION * 100.0,
-                    ),
+                    font_size: bevy::text::FontSize::Rem(1.0),
                     ..default()
                 },
                 TextColor(crate::mainmenu::LABEL),
@@ -550,14 +615,14 @@ fn header(root: &mut ChildSpawnerCommands, _l: &Launcher) {
         justify_content: JustifyContent::SpaceBetween,
         align_items: AlignItems::Center,
         flex_wrap: FlexWrap::Wrap,
-        row_gap: Val::Px(12.0),
+        row_gap: Val::Rem(0.75),
         width: Val::Percent(100.0),
         ..default()
     })
     .with_children(|r| {
         r.spawn(Node {
             flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(4.0),
+            row_gap: Val::Rem(0.25),
             ..default()
         })
         .with_children(|c| {
@@ -569,11 +634,11 @@ fn header(root: &mut ChildSpawnerCommands, _l: &Launcher) {
             Hovered::default(),
             Pick::Menu,
             Node {
-                width: Val::Px(168.0),
-                height: Val::Px(48.0),
+                width: Val::Rem(10.5),
+                height: Val::Rem(3.0),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                border: UiRect::all(Val::Px(1.0)),
+                border: UiRect::all(Val::Rem(0.0625)),
                 ..default()
             },
             BackgroundColor(BG_PILL),
@@ -596,10 +661,10 @@ fn source_card(root: &mut ChildSpawnerCommands, l: &Launcher) {
         c.spawn((
             Node {
                 width: Val::Percent(100.0),
-                min_height: Val::Px(38.0),
+                min_height: Val::Rem(2.375),
                 justify_content: JustifyContent::Center,
-                padding: UiRect::horizontal(Val::Px(12.0)),
-                border: UiRect::all(Val::Px(1.0)),
+                padding: UiRect::horizontal(Val::Rem(0.75)),
+                border: UiRect::all(Val::Rem(0.0625)),
                 border_radius: field_radius(),
                 ..default()
             },
@@ -612,7 +677,7 @@ fn source_card(root: &mut ChildSpawnerCommands, l: &Launcher) {
         c.spawn(Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
-            column_gap: Val::Px(6.0),
+            column_gap: Val::Rem(0.375),
             ..default()
         })
         .with_children(|r| {
@@ -712,10 +777,10 @@ fn mode_card(root: &mut ChildSpawnerCommands, mode: GameMode) {
         c.spawn((
             Node {
                 width: Val::Percent(100.0),
-                margin: UiRect::top(Val::Px(4.0)),
-                padding: UiRect::axes(Val::Px(12.0), Val::Px(9.0)),
-                column_gap: Val::Px(10.0),
-                border: UiRect::all(Val::Px(1.0)),
+                margin: UiRect::top(Val::Rem(0.25)),
+                padding: UiRect::axes(Val::Rem(0.75), Val::Rem(0.5625)),
+                column_gap: Val::Rem(0.625),
+                border: UiRect::all(Val::Rem(0.0625)),
                 border_radius: pill_radius(),
                 ..default()
             },
@@ -740,16 +805,16 @@ fn row_axis(
         flex_direction: FlexDirection::Row,
         flex_wrap: FlexWrap::Wrap,
         align_items: AlignItems::Center,
-        column_gap: Val::Px(14.0),
-        row_gap: Val::Px(6.0),
+        column_gap: Val::Rem(0.875),
+        row_gap: Val::Rem(0.375),
         width: Val::Percent(100.0),
         ..default()
     })
     .with_children(|row| {
         row.spawn(Node {
-            width: Val::Px(88.0),
+            width: Val::Rem(5.5),
             flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(1.0),
+            row_gap: Val::Rem(0.0625),
             ..default()
         })
         .with_children(|lbl| {
@@ -758,12 +823,12 @@ fn row_axis(
         });
         row.spawn(Node {
             flex_direction: FlexDirection::Row,
-            column_gap: Val::Px(7.0),
+            column_gap: Val::Rem(0.4375),
             flex_wrap: FlexWrap::Wrap,
             flex_grow: 1.0,
-            flex_basis: Val::Px(400.0),
+            flex_basis: Val::Rem(25.0),
             max_width: Val::Percent(100.0),
-            min_width: Val::Px(0.0),
+            min_width: Val::Rem(0.0),
             align_items: AlignItems::Stretch,
             ..default()
         })
@@ -775,19 +840,19 @@ fn row_axis(
                         Hovered::default(),
                         Node {
                             padding: UiRect {
-                                left: Val::Px(24.0),
-                                right: Val::Px(12.0),
-                                top: Val::Px(13.0),
-                                bottom: Val::Px(13.0),
+                                left: Val::Rem(1.5),
+                                right: Val::Rem(0.75),
+                                top: Val::Rem(0.8125),
+                                bottom: Val::Rem(0.8125),
                             },
                             flex_direction: FlexDirection::Column,
                             align_items: AlignItems::Start,
-                            row_gap: Val::Px(2.0),
-                            border: UiRect::all(Val::Px(1.0)),
+                            row_gap: Val::Rem(0.125),
+                            border: UiRect::all(Val::Rem(0.0625)),
                             border_radius: pill_radius(),
-                            width: Val::Px(210.0),
+                            width: Val::Rem(13.125),
                             max_width: Val::Percent(100.0),
-                            min_height: Val::Px(72.0),
+                            min_height: Val::Rem(4.5),
                             ..default()
                         },
                         BackgroundColor(BG_PILL),
@@ -810,8 +875,8 @@ fn action_card(root: &mut ChildSpawnerCommands) {
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::Wrap,
             align_items: AlignItems::Center,
-            column_gap: Val::Px(14.0),
-            row_gap: Val::Px(12.0),
+            column_gap: Val::Rem(0.875),
+            row_gap: Val::Rem(0.75),
             ..default()
         })
         .with_children(|r| {
@@ -819,14 +884,14 @@ fn action_card(root: &mut ChildSpawnerCommands) {
                 Button,
                 Hovered::default(),
                 Node {
-                    width: Val::Px(250.0),
+                    width: Val::Rem(15.625),
                     max_width: Val::Percent(100.0),
-                    height: Val::Px(64.0),
-                    padding: UiRect::left(Val::Px(20.0)),
+                    height: Val::Rem(4.0),
+                    padding: UiRect::left(Val::Rem(1.25)),
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
-                    column_gap: Val::Px(9.0),
-                    border: UiRect::all(Val::Px(1.0)),
+                    column_gap: Val::Rem(0.5625),
+                    border: UiRect::all(Val::Rem(0.0625)),
                     border_radius: BorderRadius::ZERO,
                     ..default()
                 },
@@ -842,11 +907,11 @@ fn action_card(root: &mut ChildSpawnerCommands) {
                 InteractionDisabled,
                 Pick::Download,
                 Node {
-                    width: Val::Px(190.0),
-                    height: Val::Px(52.0),
+                    width: Val::Rem(11.875),
+                    height: Val::Rem(3.25),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
-                    border: UiRect::all(Val::Px(1.0)),
+                    border: UiRect::all(Val::Rem(0.0625)),
                     ..default()
                 },
                 BackgroundColor(DISABLED_BG),
@@ -885,7 +950,7 @@ fn log_card(root: &mut ChildSpawnerCommands) {
     root.spawn((Node {
         width: Val::Percent(100.0),
         flex_direction: FlexDirection::Column,
-        row_gap: Val::Px(8.0),
+        row_gap: Val::Rem(0.5),
         ..default()
     },))
         .with_children(|c| {
@@ -893,12 +958,12 @@ fn log_card(root: &mut ChildSpawnerCommands) {
             c.spawn((
                 Node {
                     width: Val::Percent(100.0),
-                    min_height: Val::Px(120.0),
+                    min_height: Val::Rem(7.5),
                     flex_grow: 1.0,
                     flex_direction: FlexDirection::Column,
-                    padding: UiRect::all(Val::Px(13.0)),
-                    row_gap: Val::Px(3.0),
-                    border: UiRect::all(Val::Px(1.0)),
+                    padding: UiRect::all(Val::Rem(0.8125)),
+                    row_gap: Val::Rem(0.1875),
+                    border: UiRect::all(Val::Rem(0.0625)),
                     border_radius: field_radius(),
                     overflow: Overflow::scroll_y(),
                     ..default()
@@ -913,6 +978,15 @@ fn log_card(root: &mut ChildSpawnerCommands) {
 }
 
 // ------------------------------------------------------------------ systems
+
+fn scale_menu_text(windows: Query<&Window>, mut rem: ResMut<bevy::text::RemSize>) {
+    if let Ok(window) = windows.single() {
+        let size = (window.height() * crate::mainmenu::LABEL_FONT_FRACTION).max(16.0);
+        if rem.0 != size {
+            rem.0 = size;
+        }
+    }
+}
 
 /// Paints the active option in each axis, and the disabled one as disabled.
 fn colour_picks(
@@ -951,11 +1025,17 @@ fn colour_picks(
         if active {
             *bg = BG_PILL.into();
             *border = BorderColor::all(BORDER_STRONG);
-            node.border = UiRect::all(Val::Px(2.0));
+            let width = UiRect::all(Val::Rem(0.125));
+            if node.border != width {
+                node.border = width;
+            }
         } else {
             *bg = BG_PILL.into();
             *border = BorderColor::all(BORDER);
-            node.border = UiRect::all(Val::Px(1.0));
+            let width = UiRect::all(Val::Rem(0.0625));
+            if node.border != width {
+                node.border = width;
+            }
         }
         if let Some(mut image) = image {
             image.color = if active || interaction.is_some_and(Hovered::get) {
@@ -1220,6 +1300,40 @@ mod menu_tests {
     use super::*;
     use crate::mainmenu::{MENU, MenuButton};
     use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn cameras_clear_settings_and_only_run_the_visible_scene() {
+        use bevy::camera::ClearColorConfig;
+        let mut world = World::new();
+        let ui = world
+            .spawn((Camera::default(), bevy::ui::IsDefaultUiCamera))
+            .id();
+        let scene = world
+            .spawn((
+                Camera::default(),
+                crate::mainmenu_scene::MainMenuSceneCamera,
+            ))
+            .id();
+        world.run_system_once(show_menu_or_launcher).unwrap();
+        assert!(!world.get::<Camera>(scene).unwrap().is_active);
+        assert!(matches!(world.get::<Camera>(ui).unwrap().clear_color,
+            ClearColorConfig::Custom(color) if color == BG_APP));
+
+        let menu = world.spawn(MenuLayer).id();
+        world.run_system_once(show_menu_or_launcher).unwrap();
+        assert!(world.get::<Camera>(scene).unwrap().is_active);
+        assert!(matches!(
+            world.get::<Camera>(ui).unwrap().clear_color,
+            ClearColorConfig::None
+        ));
+
+        // An unavailable original scene must not leave the settings' old pixels.
+        world.despawn(scene);
+        world.run_system_once(show_menu_or_launcher).unwrap();
+        assert!(matches!(world.get::<Camera>(ui).unwrap().clear_color,
+            ClearColorConfig::Custom(color) if color == BG_APP));
+        world.despawn(menu);
+    }
 
     #[test]
     fn holding_stage_fires_once_until_the_button_is_released() {
