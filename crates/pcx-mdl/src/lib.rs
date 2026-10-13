@@ -2720,8 +2720,12 @@ impl Mdlx {
                     size,
                     left: p.len() - at,
                 })?;
-            let end = at + span;
-            if end > p.len() {
+            let end = at.checked_add(span).ok_or(Error::BoneRecordOverruns {
+                at,
+                size,
+                left: p.len() - at,
+            })?;
+            if size < BONE_FIXED || end > p.len() {
                 return Err(Error::BoneRecordOverruns {
                     at,
                     size,
@@ -2767,17 +2771,25 @@ impl Mdlx {
                             size: usize::MAX,
                             left: tracks_end.saturating_sub(cur),
                         })?;
-                let next =
-                    cur.checked_add(BONE_TRACK_HEAD + block)
+                let track_span =
+                    BONE_TRACK_HEAD
+                        .checked_add(block)
                         .ok_or(Error::BoneTrackOverruns {
                             at: cur,
                             size: usize::MAX,
                             left: tracks_end.saturating_sub(cur),
                         })?;
+                let next = cur
+                    .checked_add(track_span)
+                    .ok_or(Error::BoneTrackOverruns {
+                        at: cur,
+                        size: usize::MAX,
+                        left: tracks_end.saturating_sub(cur),
+                    })?;
                 if next > tracks_end {
                     return Err(Error::BoneTrackOverruns {
                         at: cur,
-                        size: BONE_TRACK_HEAD + block,
+                        size: track_span,
                         left: tracks_end - cur,
                     });
                 }

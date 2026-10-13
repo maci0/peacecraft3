@@ -193,6 +193,14 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
        "size excludes an 8-byte trailer" relation rather than a fixed stride;
        **decoded** — 35,257 records on 1.29b, 35,097 on 1.28c, walk lands exactly
        on every one
+- [x] `pcx-mdl`: malformed `BONE` records return typed errors before reading
+       node fields: declared node size must be at least 96 bytes, with a separate
+       8-byte trailer; record and track spans use checked arithmetic. Four
+       regressions cover every shorter size, the valid minimum, and record/track
+       overflow. The same tests pass in a 32-bit WebAssembly module; the previous
+       module trapped on all three malformed cases. Both local classic model
+       corpora still parse (3,234 and 3,249 models). This is checked import policy,
+       not a claim about the original renderer's malformed-input behavior.
 - [x] `pcx-mdl`: `GEOS` geoset envelope — self-inclusive sizes, exact walk
 - [x] `pcx-mdl`: `GEOS` sub-blocks — VRTX/NRMS f32x3, PVTX u16, UVBS f32x2, GNDX
 - [x] `pcx-mdl`: `GEOS` skinning — `MTGC`/`MATS`/`GNDX`, all three invariants verified
