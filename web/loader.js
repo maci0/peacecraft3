@@ -30,51 +30,18 @@ const GLUE = [
   ['menu/border.blp', './assets/border.blp'],
   ['menu/bg.blp', './assets/bg.blp'],
   ['menu.ttf', './assets/menu.ttf'],
-  // The texture `WarCraftIIILogo.mdx` names in its own TEXS chunk — 512x256,
-  // opaque, drawn on black. See `mainmenu::LOGO_TEXTURE`.
+  // `Textures\WarcraftIII-logo-alpha.blp`, 512x256. Four-component JPEG whose
+  // fourth component is alpha, so the artwork has a transparent field. It is
+  // the *Reign of Chaos* logo and the expansion FDF comments its model out, so
+  // a TFT menu should not draw it. See `mainmenu::LOGO_TEXTURE`.
   ['menu/logo.blp', './assets/logo.blp'],
 ];
 
-
-// The MainMenu3d background's own textures, one per entry in the model's
-// TEXS chunk. Served under `menu3d/<lowercased name>`; `mainmenu_scene
-// ::texture_served_name` is the same mapping on the Rust side.
-const SCENE_GLUE = [
-  'anyhandleredwrapped.blp',
-  'arrow_64.blp',
-  'axebladebluesteel.blp',
-  'banner_orc2.blp',
-  'catails.blp',
-  'clouds8x8.blp',
-  'cloudstile2.blp',
-  'critter_bird.blp',
-  'dandilion.blp',
-  'dirt1.blp',
-  'dirt2c.blp',
-  'dust3_thunder.blp',
-  'dust3x.blp',
-  'elwynnflower03a.blp',
-  'elwynnflower03b.blp',
-  'elwynnpoppy2skin.blp',
-  'elwynnrock1skin.blp',
-  'elwynnrock2skin.blp',
-  'fishblue.blp',
-  'fishgreen.blp',
-  'grad1a.blp',
-  'grasstuft.blp',
-  'horn1.blp',
-  'ladybug.blp',
-  'metal2.blp',
-  'pond_reflect2.blp',
-  'shieldwood.blp',
-  'shockwavewater1.blp',
-  'swordbladegoldtrim.blp',
-  'treebark.blp',
-  'wetrock1.blp',
-  'white32.blp',
-  'wood.blp',
-];
-
+// Hands the launcher the glue-screen art, then both main-menu scenes.
+//
+// The scenes are registered unconditionally rather than chosen by the page: the
+// page does not know which build the user is targeting, and the app does. Both
+// namespaces are cheap to register and an absent one is reported.
 async function loadGlueArt() {
   for (const [name, url] of GLUE) {
     try {
@@ -91,33 +58,160 @@ async function loadGlueArt() {
     }
   }
 
-  // The MainMenu3d background itself, then its textures. The scene fades in on
-  // the first frame that can decode them.
+  for (const scene of SCENES) {
+    await loadScene(scene);
+  }
+}
+
+// The two shipped main-menu scenes. They are **different scenes in different
+// archives** — see `docs/re-notes/main-menu-rendering.md` — so both are served
+// and the app chooses by its target: the expansion ("The Frozen Throne") scene
+// lives in `War3x.mpq` and is an iced scene, while the base ("Reign of Chaos")
+// one is an Orc camp.
+//
+// The served name is the contract with the Rust side: the model is
+// `<namespace>/<model file>` and each texture is `<namespace>/<lowercased
+// basename>`.
+const SCENES = [
+  {
+    label: 'menu3d (Reign of Chaos)',
+    dir: 'menu3d',
+    model: 'menu3d/mainmenu3d.mdx',
+    url: './assets/menu3d/mainmenu3d.mdx',
+    textures: [
+    'anyhandleredwrapped.blp',
+    'arrow_64.blp',
+    'axebladebluesteel.blp',
+    'banner_orc2.blp',
+    'catails.blp',
+    'clouds8x8.blp',
+    'cloudstile2.blp',
+    'critter_bird.blp',
+    'dandilion.blp',
+    'dirt1.blp',
+    'dirt2c.blp',
+    'dust3_thunder.blp',
+    'dust3x.blp',
+    'elwynnflower03a.blp',
+    'elwynnflower03b.blp',
+    'elwynnpoppy2skin.blp',
+    'elwynnrock1skin.blp',
+    'elwynnrock2skin.blp',
+    'fishblue.blp',
+    'fishgreen.blp',
+    'grad1a.blp',
+    'grasstuft.blp',
+    'horn1.blp',
+    'ladybug.blp',
+    'metal2.blp',
+    'pond_reflect2.blp',
+    'shieldwood.blp',
+    'shockwavewater1.blp',
+    'swordbladegoldtrim.blp',
+    'treebark.blp',
+    'wetrock1.blp',
+    'white32.blp',
+    'wood.blp',
+    ],
+  },
+  {
+    label: 'menu3d-exp (The Frozen Throne)',
+    dir: 'menu3d-exp',
+    model: 'menu3d-exp/mainmenu3d_exp.mdx',
+    url: './assets/menu3d-exp/mainmenu3d_exp.mdx',
+    textures: [
+    'albatross.blp',
+    'blue_glow2.blp',
+    'chains_silver.blp',
+    'clouds8x8.blp',
+    'clouds8x8fade.blp',
+    'dust5a.blp',
+    'frostwyrm.blp',
+    'grad1.blp',
+    'ice_ice.blp',
+    'ice_icedull.blp',
+    'ice_natural01.blp',
+    'iceberg_new.blp',
+    'lensflare1ax.blp',
+    'ocean_h.01.blp',
+    'ocean_h.02.blp',
+    'ocean_h.03.blp',
+    'ocean_h.04.blp',
+    'ocean_h.05.blp',
+    'ocean_h.06.blp',
+    'ocean_h.07.blp',
+    'ocean_h.08.blp',
+    'ocean_h.09.blp',
+    'ocean_h.10.blp',
+    'ocean_h.11.blp',
+    'ocean_h.12.blp',
+    'ocean_h.13.blp',
+    'ocean_h.14.blp',
+    'ocean_h.15.blp',
+    'ocean_h.16.blp',
+    'ocean_h.17.blp',
+    'ocean_h.18.blp',
+    'ocean_h.19.blp',
+    'ocean_h.20.blp',
+    'ocean_h.21.blp',
+    'ocean_h.22.blp',
+    'ocean_h.23.blp',
+    'ocean_h.24.blp',
+    'ocean_h.25.blp',
+    'ocean_h.26.blp',
+    'ocean_h.27.blp',
+    'ocean_h.28.blp',
+    'ocean_h.29.blp',
+    'ocean_h.30.blp',
+    'shockwavewater1.blp',
+    'sky2.blp',
+    'snowflake.blp',
+    'snowyrocksdull2.blp',
+    'star32.blp',
+    'white_64_foam1.blp',
+    ],
+  },
+];
+
+// Registers one scene's model and textures, and says plainly whether each was
+// there. A surface that is absent is reported as absent rather than silently
+// skipped: the app decides what to draw from what the store holds, so a missing
+// texture has to be visible here or it becomes a flat-shaded geoset with no
+// explanation.
+async function loadScene(scene) {
+  let modelOk = false;
   try {
-    const r = await fetch('./assets/menu3d/mainmenu3d.mdx');
+    const r = await fetch(scene.url);
     if (r.ok) {
       const bytes = new Uint8Array(await r.arrayBuffer());
-      const n = add_asset('menu3d/mainmenu3d.mdx', bytes);
-      say(`menu3d model: ${n} bytes -> ${stored_asset('menu3d/mainmenu3d.mdx') ? 'readable' : 'NOT readable'}`);
+      const n = add_asset(scene.model, bytes);
+      modelOk = stored_asset(scene.model) !== undefined;
+      say(`${scene.model}: ${n} bytes -> ${modelOk ? 'readable' : 'NOT readable'}`);
     } else {
-      say(`menu3d model: HTTP ${r.status}`, true);
+      say(`${scene.model}: absent (HTTP ${r.status})`, true);
     }
   } catch (err) {
-    fail('menu3d model', err);
+    fail(scene.model, err);
   }
 
   let got = 0;
-  for (const file of SCENE_GLUE) {
+  const missing = [];
+  for (const file of scene.textures) {
     try {
-      const r = await fetch(`./assets/menu3d/${file}`);
-      if (!r.ok) continue;
-      add_asset(`menu3d/${file}`, new Uint8Array(await r.arrayBuffer()));
+      const r = await fetch(`./assets/${scene.dir}/${file}`);
+      if (!r.ok) { missing.push(file); continue; }
+      add_asset(`${scene.dir}/${file}`, new Uint8Array(await r.arrayBuffer()));
       got += 1;
     } catch (err) {
-      fail(`menu3d ${file}`, err);
+      missing.push(file);
     }
   }
-  say(`menu3d background: ${got}/${SCENE_GLUE.length} textures registered`);
+  say(
+    `${scene.label}: model ${modelOk ? 'ok' : 'MISSING'}, ` +
+    `textures ${got}/${scene.textures.length}` +
+    (missing.length ? `, absent: ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ' …' : ''}` : ''),
+    !modelOk || missing.length > 0,
+  );
 }
 
 const log = document.getElementById('log');

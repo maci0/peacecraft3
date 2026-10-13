@@ -83,6 +83,19 @@ pub const MODEL_SERVED_NAME: &str = "menu3d/mainmenu3d.mdx";
 /// that mapping is defined, and `web/loader.js` mirrors it.
 pub const TEXTURE_DIR: &str = "menu3d";
 
+/// The expansion scene and its browser namespace, separate from RoC's textures.
+pub fn scene_source(expansion: bool) -> (&'static str, &'static str, &'static str) {
+    if expansion {
+        (
+            r"UI\Glues\MainMenu\MainMenu3D_Exp\MainMenu3D_Exp.mdx",
+            "menu3d-exp/mainmenu3d_exp.mdx",
+            "menu3d-exp",
+        )
+    } else {
+        (SCENE_ART, MODEL_SERVED_NAME, TEXTURE_DIR)
+    }
+}
+
 /// What one material layer's flags mean for a Bevy [`StandardMaterial`].
 ///
 /// Read from the layer's own words, whose positions are measured:
@@ -254,12 +267,16 @@ pub fn layer_static_alpha(mat: &pcx_mdl::Material) -> Option<f32> {
 /// places and `browser::normalize` preserves case.
 #[must_use]
 pub fn texture_served_name(wc3_path: &str) -> String {
+    texture_served_name_in(wc3_path, TEXTURE_DIR)
+}
+
+pub fn texture_served_name_in(wc3_path: &str, directory: &str) -> String {
     let file = wc3_path
         .rsplit(['\\', '/'])
         .next()
         .unwrap_or(wc3_path)
         .to_ascii_lowercase();
-    format!("{TEXTURE_DIR}/{file}")
+    format!("{directory}/{file}")
 }
 
 /// The texture paths the model names in its own `TEXS` chunk.
@@ -280,10 +297,14 @@ pub fn texture_paths(bytes: &[u8]) -> Result<Vec<String>, SceneError> {
 /// This is the exact list `web/loader.js` registers under `menu3d/`; keeping it
 /// derived from the model rather than hand-copied is what stops the two drifting.
 pub fn texture_served_names(bytes: &[u8]) -> Vec<String> {
+    texture_served_names_in(bytes, TEXTURE_DIR)
+}
+
+pub fn texture_served_names_in(bytes: &[u8], directory: &str) -> Vec<String> {
     texture_paths(bytes)
         .unwrap_or_default()
         .iter()
-        .map(|p| texture_served_name(p))
+        .map(|p| texture_served_name_in(p, directory))
         .collect()
 }
 
@@ -307,9 +328,17 @@ pub fn load_textures(
     desktop: Option<&std::path::Path>,
     bytes: &[u8],
 ) -> Vec<pcx_gfx::LoadedTexture> {
+    load_textures_in(desktop, bytes, TEXTURE_DIR)
+}
+
+pub fn load_textures_in(
+    desktop: Option<&std::path::Path>,
+    bytes: &[u8],
+    directory: &str,
+) -> Vec<pcx_gfx::LoadedTexture> {
     let mut out = Vec::new();
     for path in texture_paths(bytes).unwrap_or_default() {
-        let served = texture_served_name(&path);
+        let served = texture_served_name_in(&path, directory);
         let Some(raw) = crate::mainmenu::art_bytes_named(desktop, &path, &served) else {
             continue;
         };
@@ -401,12 +430,13 @@ pub fn spawn(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     images: &mut Assets<Image>,
+    source: &str,
     bytes: &[u8],
     textures: &[pcx_gfx::LoadedTexture],
 ) -> Result<SceneInfo, SceneError> {
     let m = pcx_mdl::Mdlx::parse(bytes).map_err(|e| SceneError::Decode(e.to_string()))?;
     let model =
-        pcx_gfx::load_model(bytes, SCENE_ART).map_err(|e| SceneError::Decode(e.to_string()))?;
+        pcx_gfx::load_model(bytes, source).map_err(|e| SceneError::Decode(e.to_string()))?;
     let bones = m
         .bones(bytes)
         .map_err(|e| SceneError::Decode(e.to_string()))?;
@@ -436,7 +466,7 @@ pub fn spawn(
 
     // One material per geoset, from that geoset's own `material_id`, and from
     // the flags the layer actually carries.
-    let paths = pcx_gfx::model_texture_paths(bytes, SCENE_ART).unwrap_or_default();
+    let paths = pcx_gfx::model_texture_paths(bytes, source).unwrap_or_default();
     let mdl_materials = m.materials(bytes).unwrap_or_default();
     let mut handles = Vec::with_capacity(model.meshes.len());
     for mesh in &model.meshes {
@@ -476,6 +506,7 @@ pub fn spawn(
         commands.spawn((
             Mesh3d(handles.last().unwrap().clone()),
             MeshMaterial3d(material),
+            MainMenuSceneEntity,
         ));
         info.geosets += 1;
     }
@@ -507,6 +538,7 @@ pub fn spawn(
                 ..default()
             },
             MainMenuSceneCamera,
+            MainMenuSceneEntity,
         ));
     }
 
@@ -534,6 +566,7 @@ pub fn spawn(
                     },
                     Transform::from_xyz(0.0, 0.0, 5000.0).looking_at(Vec3::ZERO, Vec3::Z),
                     Name::new(format!("menu3d-light-{i}")),
+                    MainMenuSceneEntity,
                 ));
                 info.lights += 1;
             }
@@ -566,6 +599,7 @@ pub fn spawn(
                     },
                     Transform::from_translation(Vec3::from(pos)),
                     Name::new(format!("menu3d-light-{i}")),
+                    MainMenuSceneEntity,
                 ));
                 info.lights += 1;
             }
@@ -603,6 +637,10 @@ pub fn spawn(
 /// Marker for the camera this module owns, so a caller can find and remove it.
 #[derive(Component)]
 pub struct MainMenuSceneCamera;
+
+/// All entities owned by a scene, so changing expansion removes the old scene.
+#[derive(Component)]
+pub struct MainMenuSceneEntity;
 
 /// Finds the loaded texture whose source path matches `path`.
 ///
@@ -762,6 +800,25 @@ pub fn advance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expansion_selects_its_shipped_scene_and_separate_texture_namespace() {
+        let (path, served, directory) = scene_source(true);
+        assert_eq!(path, r"UI\Glues\MainMenu\MainMenu3D_Exp\MainMenu3D_Exp.mdx");
+        assert_eq!(served, "menu3d-exp/mainmenu3d_exp.mdx");
+        assert_eq!(
+            texture_served_name_in(r"Textures\SKY2.blp", directory),
+            "menu3d-exp/sky2.blp"
+        );
+        assert_eq!(
+            scene_source(false),
+            (SCENE_ART, MODEL_SERVED_NAME, TEXTURE_DIR)
+        );
+        assert_ne!(
+            texture_served_name_in(r"Textures\SKY2.blp", directory),
+            texture_served_name(r"Textures\SKY2.blp")
+        );
+    }
 
     #[test]
     fn global_clock_keeps_fractional_milliseconds_across_frames() {

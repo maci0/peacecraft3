@@ -36,9 +36,9 @@
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-use bevy::asset::AssetApp;
 use bevy::asset::io::memory::{Dir, MemoryAssetReader};
 use bevy::asset::io::{AssetSourceBuilder, AssetSourceId, ErasedAssetReader};
+use bevy::asset::AssetApp;
 use bevy::prelude::*;
 use wasm_bindgen::prelude::*;
 
@@ -220,12 +220,29 @@ pub fn add_asset(path: String, bytes: Vec<u8>) -> usize {
     n
 }
 
-/// Opens an MPQ from the bytes it was given.
+/// Opens an MPQ from the bytes it was given, and reports what its tables say.
 ///
 /// This is the decode half of the browser path: `MpqArchive::from_bytes` is the
 /// same reader the desktop uses. The archive itself is not registered as an asset
 /// — these bytes are the whole archive, not something to load by path — and one
 /// that will not parse is reported and dropped rather than half-loaded.
+///
+/// # Limitation: an archive opened here exposes none of its files
+///
+/// This **opens and counts only**. It reads the header and block table, reports
+/// the live block count and whether a `(listfile)` is present, and stops. It does
+/// **not** extract or register any member, so after `add_archive("War3x.mpq", …)`
+/// a call to [`stored_asset`] for `menu3d-exp/mainmenu3d_exp.mdx` still returns
+/// `None`: the store holds only what [`add_asset`] put there by path.
+///
+/// The render path therefore does not depend on it. `web/loader.js` fetches the
+/// scene model and its textures as ordinary files from `web/assets/` and hands
+/// each one to [`add_asset`], which is why a browser can draw the original menu
+/// without any archive support at all. Extracting a *user-supplied* archive into
+/// the store would need a bounded extraction step here — walk the listfile,
+/// decrypt and decompress each member, cap the count and total bytes, report the
+/// refused ones — and that is deliberately not written yet, because nothing in
+/// the current flow needs it.
 #[wasm_bindgen]
 pub fn add_archive(name: String, bytes: Vec<u8>) -> String {
     let key = normalize(&name);

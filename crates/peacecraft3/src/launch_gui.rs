@@ -225,6 +225,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     app.add_systems(
         Update,
         crate::mainmenu_scene::advance
+            .after(show_menu_or_launcher)
             .run_if(resource_exists::<crate::mainmenu_scene::MainMenuScene>)
             .run_if(menu_is_visible),
     );
@@ -335,6 +336,7 @@ pub(crate) struct MenuLayer;
 #[derive(Resource, Default)]
 struct SceneLoad {
     finished: bool,
+    addon: Option<Addon>,
 }
 
 fn initialize_menu_scene(
@@ -343,16 +345,28 @@ fn initialize_menu_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    launcher: Res<Launcher>,
+    menu: Query<Entity, With<MenuLayer>>,
+    scene_entities: Query<Entity, With<crate::mainmenu_scene::MainMenuSceneEntity>>,
 ) {
+    if menu.is_empty() {
+        return;
+    }
+    if state.addon != Some(launcher.mode.addon) {
+        for entity in &scene_entities {
+            commands.entity(entity).despawn();
+        }
+        commands.remove_resource::<crate::mainmenu_scene::MainMenuScene>();
+        state.addon = Some(launcher.mode.addon);
+        state.finished = false;
+    }
     if state.finished {
         return;
     }
     let install = pcx_gfx::viewer::resolve_install(None);
-    let bytes = crate::mainmenu::art_bytes_named(
-        Some(&install),
-        crate::mainmenu_scene::SCENE_ART,
-        "menu3d/mainmenu3d.mdx",
-    );
+    let (source, served, directory) =
+        crate::mainmenu_scene::scene_source(launcher.mode.addon == Addon::Tft);
+    let bytes = crate::mainmenu::art_bytes_named(Some(&install), source, served);
     let Some(bytes) = bytes else {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -362,19 +376,20 @@ fn initialize_menu_scene(
         return;
     };
     #[cfg(target_arch = "wasm32")]
-    if crate::mainmenu_scene::texture_served_names(&bytes)
+    if crate::mainmenu_scene::texture_served_names_in(&bytes, directory)
         .iter()
         .any(|name| crate::browser::stored_bytes(name).is_none())
     {
         return;
     }
     state.finished = true;
-    let textures = crate::mainmenu_scene::load_textures(Some(&install), &bytes);
+    let textures = crate::mainmenu_scene::load_textures_in(Some(&install), &bytes, directory);
     match crate::mainmenu_scene::spawn(
         &mut commands,
         &mut meshes,
         &mut materials,
         &mut images,
+        source,
         &bytes,
         &textures,
     ) {
