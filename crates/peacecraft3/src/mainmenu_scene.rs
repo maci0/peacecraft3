@@ -25,9 +25,10 @@
 //! * **`PRE2` particle emitters are not drawn.** The chunk is decoded to its
 //!   properties by `pcx-mdl`, but their native rendering is not implemented.
 //!   No stand-in particle effect is created.
-//! * **`TXAN` texture animation and material/geoset alpha tracks are not applied.**
-//!   A material that animates its UVs or its alpha draws at its base state.
-//!   Joint tracks use the authored `GLBS` durations on a separate elapsed clock.
+//! * **`TXAN` texture animation is not applied.** Its three-component track to
+//!   UV-matrix mapping remains unproved; see `menu-texture-animation.md`.
+//!   GEOA/KMTA opacity is applied by authored geoset/layer IDs and clocks.
+//!   Joint tracks also use authored `GLBS` durations on a separate elapsed clock.
 //! * **One texture layer per material.** Each of the scene's 31 materials
 //!   carries exactly one `LAYS` layer, so this costs nothing here, but a model
 //!   with a multi-layer material (the format allows several, drawn over each
@@ -59,8 +60,8 @@
 //!   node tracks this module does not sample, so each light sits where its
 //!   record's default puts it.
 //! * Bevy's own camera is used rather than a hand-rolled matrix, so the
-//!   projection is Bevy's; the eye, target, vertical FOV and clip planes are
-//!   the model's own.
+//!   projection is Bevy's; the eye, target, stored FOV and clip planes come from
+//!   the model. Native FOV-axis/projection equivalence is not established here.
 
 use bevy::prelude::*;
 

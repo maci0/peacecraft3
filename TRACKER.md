@@ -858,6 +858,9 @@ Format: `date — subsystem — symptom — root cause — status`
   clock and actual ECS material/visibility regressions pass; both original menu
   imports and browser runtime pass. RGB animation, multilayer drawing and native
   clock/blend equivalence remain open.
+  The TFT sky's authored layer references a linear TXAN translation on an
+  independent 999,033 ms GLBS clock. The current scene does not apply it;
+  native track-to-UV mapping remains unproved. See `menu-texture-animation.md`.
 - World import retains original placements/ownership and metadata values.
   Human01 resolves 155 units while retaining six named unsupported `sloc` records;
   Human03 resolves two items. This is data import, not playable campaign proof.
