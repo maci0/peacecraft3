@@ -296,6 +296,14 @@ fn hydrate(
         Ok(())
     };
     let mut fdf = crate::fdf::Fdf::default();
+    let strings_path = crate::mainmenu::GLOBAL_STRINGS_FDF;
+    let strings = extract_unique(set, strings_path)?;
+    std::str::from_utf8(&strings).map_err(|e| format!("{strings_path}: {e}"))?;
+    put(
+        strings_path,
+        crate::mainmenu::served_name(strings_path),
+        strings,
+    )?;
     for path in [
         crate::mainmenu::STANDARD_TEMPLATES_FDF,
         crate::mainmenu::MAIN_MENU_FDF,

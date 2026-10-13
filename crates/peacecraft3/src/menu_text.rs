@@ -34,6 +34,14 @@ pub enum TextError {
         /// The record, e.g. `FontColor`.
         record: &'static str,
     },
+    /// A frame's own block defines the same record twice, so which one the engine
+    /// would use is not established. Reported rather than picked.
+    Duplicate {
+        /// The frame whose block repeats it.
+        frame: String,
+        /// The record, e.g. `FontColor`.
+        record: &'static str,
+    },
     /// A record is present but will not parse.
     Malformed {
         /// The frame carrying it.
@@ -42,6 +50,20 @@ pub enum TextError {
         record: &'static str,
         /// The text that would not parse.
         text: String,
+    },
+    /// A record parsed as a number, but the value cannot drive a UI — a
+    /// non-finite colour or offset, or a font height that is not positive.
+    ///
+    /// A malformed asset must be refused rather than handed to the renderer: a
+    /// `NaN` colour or a zero height produces invisible or degenerate text that
+    /// looks like a rendering bug rather than a bad asset.
+    Unusable {
+        /// The frame carrying it.
+        frame: String,
+        /// The record, e.g. `FontColor`.
+        record: &'static str,
+        /// The value that was rejected.
+        value: f32,
     },
 }
 
@@ -53,11 +75,19 @@ impl fmt::Display for TextError {
             Self::UnknownFrame(s) => write!(f, "no frame named {s:?}"),
             Self::UnterminatedFrame(s) => write!(f, "frame {s:?} is never closed"),
             Self::Missing { frame, record } => write!(f, "{frame:?} has no {record}"),
+            Self::Duplicate { frame, record } => {
+                write!(f, "{frame:?} defines {record} more than once")
+            }
             Self::Malformed {
                 frame,
                 record,
                 text,
             } => write!(f, "{frame:?}'s {record} will not parse: {text:?}"),
+            Self::Unusable {
+                frame,
+                record,
+                value,
+            } => write!(f, "{frame:?}'s {record} is unusable: {value}"),
         }
     }
 }
@@ -259,10 +289,41 @@ pub fn global_string(fdf: &str, key: &str) -> Option<String> {
 /// [`TextError::UnterminatedFrame`] when its block never closes, and
 /// [`TextError::Missing`]/[`TextError::Malformed`] for a record that is absent or
 /// unreadable. Nothing is defaulted.
+/// The style of `frame` in a single text. A convenience for the tests and for a
+/// caller with one file; the menu resolves across two, so it uses
+/// [`text_style_in`].
+#[cfg(test)]
 pub fn text_style(fdf: &str, frame: &str) -> Result<TextStyle, TextError> {
-    let body = frame_body(fdf, frame)?;
+    text_style_in(&[fdf], frame)
+}
+
+/// The style of `frame`, resolving `INHERITS` across `texts`.
+///
+/// The frame's own block wins; a record it does not carry comes from the nearest
+/// ancestor that does, which is how a per-entry text frame overrides one record of
+/// its template while inheriting the rest. A record defined **twice in the same
+/// block** is ambiguous and refused rather than picked.
+///
+/// # Errors
+///
+/// [`TextError`] as [`text_style`], plus [`TextError::Duplicate`].
+pub fn text_style_in(texts: &[&str], frame: &str) -> Result<TextStyle, TextError> {
+    let chain = frame_chain(texts, frame)?;
     let record = |name: &'static str| -> Result<&str, TextError> {
-        find_record(&body, name).ok_or_else(|| TextError::Missing {
+        for (owner, body) in &chain {
+            let hits: Vec<&str> = body.lines().filter_map(|l| record_value(l, name)).collect();
+            match hits.len() {
+                0 => continue,
+                1 => return Ok(hits[0]),
+                _ => {
+                    return Err(TextError::Duplicate {
+                        frame: owner.clone(),
+                        record: name,
+                    });
+                }
+            }
+        }
+        Err(TextError::Missing {
             frame: frame.to_string(),
             record: name,
         })
@@ -275,12 +336,26 @@ pub fn text_style(fdf: &str, frame: &str) -> Result<TextStyle, TextError> {
 
     let font_line = record("FrameFont")?;
     let (font, height) = parse_frame_font(font_line).ok_or_else(|| bad("FrameFont", font_line))?;
+    let unusable = |record: &'static str, value: f32| TextError::Unusable {
+        frame: frame.to_string(),
+        record,
+        value,
+    };
+    // A height that is not finite or not positive cannot drive text; refusing it
+    // is what stops a bad asset from rendering as an invisible label.
+    if !height.is_finite() || height <= 0.0 {
+        return Err(unusable("FrameFont", height));
+    }
 
     let colour = |name: &'static str| -> Result<[f32; 4], TextError> {
         let line = record(name)?;
-        floats(line, 4)
+        let v: [f32; 4] = floats(line, 4)
             .and_then(|v| <[f32; 4]>::try_from(v).ok())
-            .ok_or_else(|| bad(name, line))
+            .ok_or_else(|| bad(name, line))?;
+        match v.iter().copied().find(|c| !c.is_finite()) {
+            Some(bad_value) => Err(unusable(name, bad_value)),
+            None => Ok(v),
+        }
     };
 
     let justify_h = match record("FontJustificationH")?.trim() {
@@ -295,9 +370,14 @@ pub fn text_style(fdf: &str, frame: &str) -> Result<TextStyle, TextError> {
         "JUSTIFYBOTTOM" => JustifyV::Bottom,
         other => return Err(bad("FontJustificationV", other)),
     };
-    let offset = floats(record("FontShadowOffset")?, 2)
+    let offset_line = record("FontShadowOffset")?;
+    let offset: [f32; 2] = floats(offset_line, 2)
         .and_then(|v| <[f32; 2]>::try_from(v).ok())
-        .ok_or_else(|| bad("FontShadowOffset", "?"))?;
+        .ok_or_else(|| bad("FontShadowOffset", offset_line))?;
+    match offset.iter().copied().find(|c| !c.is_finite()) {
+        Some(bad_value) => return Err(unusable("FontShadowOffset", bad_value)),
+        None => {}
+    }
     let flags = record("FontFlags")?;
 
     Ok(TextStyle {
@@ -314,56 +394,96 @@ pub fn text_style(fdf: &str, frame: &str) -> Result<TextStyle, TextError> {
     })
 }
 
-/// The `{ … }` body of the `Frame "TEXT" "<frame>"` block, or the block whose
-/// header names `frame` with any type.
-fn frame_body(fdf: &str, frame: &str) -> Result<String, TextError> {
-    let needle = format!("\"{frame}\"");
-    let mut depth = 0usize;
-    let mut collecting = false;
-    let mut body = String::new();
-    for line in fdf.lines() {
-        let trimmed = line.trim();
-        if !collecting {
-            if trimmed.starts_with("Frame") && trimmed.contains(&needle) {
-                if trimmed.ends_with('{') {
+/// The `INHERITS` parent and `{ … }` body of the block naming `frame`, searched
+/// across every supplied text.
+fn frame_block(texts: &[&str], frame: &str) -> Result<(Option<String>, String), TextError> {
+    for text in texts {
+        let mut depth = 0usize;
+        let mut collecting = false;
+        let mut inherits = None;
+        let mut body = String::new();
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if !collecting {
+                // The frame's **own name** decides the match: a header whose
+                // `INHERITS` names this frame must not be mistaken for it.
+                if trimmed.starts_with("Frame") && header_name(trimmed).as_deref() == Some(frame) {
+                    inherits = inherit_of(trimmed);
                     collecting = true;
-                    depth = 1;
-                    continue;
+                    depth = usize::from(trimmed.ends_with('{'));
                 }
-                // Header without an opening brace on the same line.
-                collecting = true;
-                depth = 0;
                 continue;
             }
-            continue;
-        }
-        for ch in trimmed.chars() {
-            if ch == '{' {
-                depth += 1;
+            for ch in trimmed.chars() {
+                if ch == '{' {
+                    depth += 1;
+                }
             }
-        }
-        if trimmed == "}" {
-            depth = depth.saturating_sub(1);
-            if depth == 0 {
-                return Ok(body);
+            if trimmed == "}" {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Ok((inherits, body));
+                }
             }
+            body.push_str(trimmed);
+            body.push('\n');
         }
-        body.push_str(trimmed);
-        body.push('\n');
-    }
-    if collecting {
-        return Err(TextError::UnterminatedFrame(frame.to_string()));
+        if collecting {
+            return Err(TextError::UnterminatedFrame(frame.to_string()));
+        }
     }
     Err(TextError::UnknownFrame(frame.to_string()))
 }
 
-/// The first `<name> <value>` record in a body.
-fn find_record<'a>(body: &'a str, name: &str) -> Option<&'a str> {
-    body.lines().find_map(|l| {
-        let l = l.trim();
-        let (k, v) = l.split_once(char::is_whitespace)?;
-        (k == name).then(|| v.trim().trim_end_matches(',').trim())
-    })
+/// A frame header's own name: the **second** quoted token of
+/// `Frame "TYPE" "NAME" …`. The first is the kind, and any later one is an
+/// `INHERITS` template, which must not be mistaken for the name.
+fn header_name(header: &str) -> Option<String> {
+    let mut quotes: Vec<&str> = Vec::new();
+    let mut rest = header;
+    while let Some(start) = rest.find('"') {
+        let after = &rest[start + 1..];
+        let end = after.find('"')?;
+        quotes.push(&after[..end]);
+        rest = &after[end + 1..];
+    }
+    quotes.get(1).map(|s| (*s).to_string())
+}
+
+/// The template a frame header `INHERITS`, if it names one.
+fn inherit_of(header: &str) -> Option<String> {
+    let after = header.split_once("INHERITS")?.1;
+    let start = after.find('"')? + 1;
+    let end = after[start..].find('"')? + start;
+    Some(after[start..end].to_string())
+}
+
+/// The record-resolution chain for `frame`: itself, then each `INHERITS` ancestor.
+///
+/// A loop in the chain is refused rather than followed.
+fn frame_chain(texts: &[&str], frame: &str) -> Result<Vec<(String, String)>, TextError> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut current = frame.to_string();
+    loop {
+        if out.iter().any(|(n, _)| n == &current) {
+            return Err(TextError::UnterminatedFrame(current));
+        }
+        let (inherits, body) = frame_block(texts, &current)?;
+        out.push((current.clone(), body));
+        match inherits {
+            Some(parent) => current = parent,
+            None => break,
+        }
+    }
+    Ok(out)
+}
+
+/// The value of a `<name> <value>` record on one line, if that is the line's
+/// record.
+fn record_value<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    let line = line.trim();
+    let (k, v) = line.split_once(char::is_whitespace)?;
+    (k == name).then(|| v.trim().trim_end_matches(',').trim())
 }
 
 /// `"MasterFont", 0.013, ""` -> `("MasterFont", 0.013)`.
@@ -382,11 +502,18 @@ fn parse_frame_font(line: &str) -> Option<(String, f32)> {
 }
 
 /// `n` whitespace-separated floats, ignoring a trailing comma.
+///
+/// The FDF's optional `f` suffix is stripped only when the text does not parse
+/// as written, so `inf` stays `inf` rather than becoming `in` and failing for the
+/// wrong reason.
 fn floats(line: &str, n: usize) -> Option<Vec<f32>> {
     let v: Vec<f32> = line
         .trim_end_matches(',')
         .split_whitespace()
-        .map(|t| t.trim_end_matches('f').parse::<f32>())
+        .map(|t| {
+            t.parse::<f32>()
+                .or_else(|_| t.trim_end_matches('f').parse::<f32>())
+        })
         .collect::<Result<_, _>>()
         .ok()?;
     (v.len() == n).then_some(v)
@@ -480,6 +607,94 @@ Frame "TEXT" "StandardButtonTextTemplate" {
         assert!(s.fixed_size);
         assert_eq!(s.colour[0], 0.99);
         assert_eq!(s.shadow_offset, [0.001, -0.001]);
+    }
+
+    /// A malformed numeric record is refused rather than handed to the renderer:
+    /// a `NaN` colour or a non-positive height renders as invisible or degenerate
+    /// text, which reads as a rendering bug instead of a bad asset.
+    #[test]
+    fn a_malformed_numeric_record_is_refused() {
+        let style_text = |font: &str, colour: &str, offset: &str| {
+            format!(
+                "Frame \"TEXT\" \"T\" {{\n    FrameFont \"MasterFont\", {font}, \"\",\n    FontJustificationH JUSTIFYCENTER,\n    FontJustificationV JUSTIFYMIDDLE,\n    FontFlags \"FIXEDSIZE\",\n    FontColor {colour},\n    FontHighlightColor 1.0 1.0 1.0 1.0,\n    FontDisabledColor 0.5 0.5 0.5 1.0,\n    FontShadowColor 0.0 0.0 0.0 0.9,\n    FontShadowOffset {offset},\n}}\n"
+            )
+        };
+        // The well-formed case parses, so the refusals below are not vacuous.
+        assert!(
+            text_style(
+                &style_text("0.013", "0.99 0.827 0.0705 1.0", "0.001 -0.001"),
+                "T"
+            )
+            .is_ok()
+        );
+        for (font, colour, offset) in [
+            ("0.0", "0.99 0.827 0.0705 1.0", "0.001 -0.001"),
+            ("-0.013", "0.99 0.827 0.0705 1.0", "0.001 -0.001"),
+            ("NaN", "0.99 0.827 0.0705 1.0", "0.001 -0.001"),
+            ("0.013", "NaN 0.827 0.0705 1.0", "0.001 -0.001"),
+            ("0.013", "0.99 0.827 0.0705 1.0", "inf -0.001"),
+        ] {
+            assert!(
+                matches!(
+                    text_style(&style_text(font, colour, offset), "T"),
+                    Err(TextError::Unusable { .. })
+                ),
+                "accepted font={font} colour={colour} offset={offset}"
+            );
+        }
+    }
+
+    /// A text frame inherits its style from a **renamed** template, and a
+    /// per-entry frame overrides one record while inheriting the rest — the shape
+    /// the menu actually uses, where the template's name is not assumed.
+    #[test]
+    fn the_style_follows_inherits_and_a_per_entry_override_wins() {
+        let templates = r#"
+Frame "TEXT" "MenuButtonTextTemplate" {
+    FrameFont "MasterFont", 0.013, "",
+    FontJustificationH JUSTIFYCENTER,
+    FontJustificationV JUSTIFYMIDDLE,
+    FontFlags "FIXEDSIZE",
+    FontColor 0.99 0.827 0.0705 1.0,
+    FontHighlightColor 1.0 1.0 1.0 1.0,
+    FontDisabledColor 0.5 0.5 0.5 1.0,
+    FontShadowColor 0.0 0.0 0.0 0.9,
+    FontShadowOffset 0.001 -0.001,
+}
+"#;
+        let menu = r#"
+Frame "TEXT" "SinglePlayerButtonText" INHERITS "MenuButtonTextTemplate" {
+    Text "KEY_SINGLE_PLAYER",
+}
+Frame "TEXT" "ExitButtonText" INHERITS "MenuButtonTextTemplate" {
+    FontColor 1.0 0.0 0.0 1.0,
+    Text "KEY_EXIT",
+}
+"#;
+        let texts = [menu, templates];
+        // The frame's own block carries no font records: they come from whatever
+        // template it names, so nothing is tied to one template's name.
+        let s = text_style_in(&texts, "SinglePlayerButtonText").unwrap();
+        assert_eq!(s.font, "MasterFont");
+        assert_eq!(s.colour, [0.99, 0.827, 0.0705, 1.0]);
+        // The override wins for the record it names; the rest are still inherited.
+        let e = text_style_in(&texts, "ExitButtonText").unwrap();
+        assert_eq!(e.colour, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(e.height, 0.013);
+        assert_eq!(e.justify_h, JustifyH::Center);
+    }
+
+    /// A record repeated inside one block is ambiguous, not picked.
+    #[test]
+    fn a_duplicate_record_in_a_block_is_refused() {
+        let text = "Frame \"TEXT\" \"T\" {\n    FrameFont \"MasterFont\", 0.013, \"\",\n    FontColor 1.0 1.0 1.0 1.0,\n    FontColor 0.0 0.0 0.0 1.0,\n    FontJustificationH JUSTIFYCENTER,\n    FontJustificationV JUSTIFYMIDDLE,\n    FontFlags \"FIXEDSIZE\",\n    FontHighlightColor 1.0 1.0 1.0 1.0,\n    FontDisabledColor 0.5 0.5 0.5 1.0,\n    FontShadowColor 0.0 0.0 0.0 0.9,\n    FontShadowOffset 0.001 -0.001,\n}\n";
+        assert!(matches!(
+            text_style(text, "T"),
+            Err(TextError::Duplicate {
+                record: "FontColor",
+                ..
+            })
+        ));
     }
 
     /// A missing record is an error, never a default.

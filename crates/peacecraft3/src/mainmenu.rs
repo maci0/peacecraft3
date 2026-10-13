@@ -33,15 +33,13 @@ use std::collections::BTreeSet;
 
 use bevy::prelude::*;
 
-/// `StandardButtonTextTemplate`'s `FontColor`, from
-/// `UI\FrameDef\Glue\StandardTemplates.fdf` — the original's button-label gold.
+/// The launcher's own accent gold, for PeaceCraft's UI rather than the original
+/// menu.
+///
+/// The menu label's colour, highlight, size, alignment and shadow are **not**
+/// copied here: they are read from `StandardButtonTextTemplate` through
+/// [`crate::menu_text::text_style`], so they cannot drift from the asset.
 pub const LABEL: Color = Color::srgb(0.99, 0.827, 0.0705);
-/// `StandardButtonTextTemplate`'s `FontHighlightColor`, which is what
-/// `|Cffffffff` selects for the hotkey letter.
-pub const HOTKEY: Color = Color::srgb(1.0, 1.0, 1.0);
-/// `StandardButtonTextTemplate`'s font size, as a fraction of the screen
-/// height: `FrameFont "MasterFont", 0.013`.
-pub const LABEL_FONT_FRACTION: f32 = 0.013;
 
 /// The art path of the button frame, `StandardMenuButtonBaseBackdrop`'s
 /// `BackdropBackground`.
@@ -149,49 +147,117 @@ pub const FIRST_TOP: f32 = 0.110_625;
 
 /// One entry on the main menu, in the order the original stacks them.
 ///
-/// The label is the `GlobalStrings.fdf` value verbatim, hotkey colouring
-/// included, because that is what the game draws.
-pub const MENU: [(&str, &str); 6] = [
-    ("single_player", "|CffffffffS|Ringle Player"),
-    ("battle_net", "|CffffffffB|Rattle.net"),
-    ("local_area_network", "|CffffffffL|Rocal Area Network"),
-    ("options", "|CffffffffO|Rptions"),
-    ("credits", "|CffffffffC|Rredits"),
-    ("exit", "|CffffffffQ|Ruit"),
+/// Only the id is here: the label is **not** carried as text. The authored string
+/// lives in `GlobalStrings.fdf`, and which key belongs to which entry is read from
+/// the menu's own frame definitions — the button's `ButtonText` names its text
+/// frame, and that frame's `Text` record holds the key — so no key is duplicated
+/// here either.
+pub const MENU: [&str; 6] = [
+    "single_player",
+    "battle_net",
+    "local_area_network",
+    "options",
+    "credits",
+    "exit",
 ];
 
-/// A label split into the hotkey letter and the remainder, which is what the
-/// original's `|C…|R…` run means.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Label {
-    /// The accelerator letter, drawn white so it reads as the hotkey.
-    pub hotkey: char,
-    /// The rest of the label, drawn in the default button colour.
-    pub rest: &'static str,
+/// The `GlobalStrings.fdf` the labels come from.
+pub const GLOBAL_STRINGS_FDF: &str = r"UI\FrameDef\GlobalStrings.fdf";
+
+/// Why an entry's label could not be derived.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LabelProblem {
+    /// The menu's frame definitions could not be read.
+    Fdf(crate::fdf::FdfError),
+    /// The button frame names no `ButtonText`.
+    NoButtonText(String),
+    /// The text frame records no `Text`.
+    NoTextKey(String),
+    /// The strings text does not define the key.
+    NoString(String),
+    /// The authored markup will not parse.
+    Markup(crate::menu_text::TextError),
 }
 
-/// Split one of [`MENU`]'s `GlobalStrings.fdf` values.
-///
-/// The value is `|CffffffffX|Rest`: `|Cffffffff` selects white for one letter
-/// and `|R` restores the default, so everything after `|R` is the body. The
-/// parse only accepts that shape — an unexpected label is reported as an error
-/// rather than truncated to something that looks plausible, because a hotkey
-/// letter silently dropped changes which key activates the button.
-pub fn split_label(raw: &'static str) -> Result<Label, String> {
-    let body = raw
-        .strip_prefix("|Cffffffff")
-        .ok_or_else(|| format!("{raw:?}: no |Cffffffff run"))?;
-    let (hotkey, rest) = body
-        .split_once("|R")
-        .ok_or_else(|| format!("{raw:?}: no |R run"))?;
-    let mut chars = hotkey.chars();
-    let hotkey = chars
-        .next()
-        .ok_or_else(|| format!("{raw:?}: empty hotkey"))?;
-    if chars.next().is_some() {
-        return Err(format!("{raw:?}: hotkey run is longer than one letter"));
+impl std::fmt::Display for LabelProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Fdf(e) => write!(f, "the menu frames could not be read: {e}"),
+            Self::NoButtonText(b) => write!(f, "{b:?} names no ButtonText"),
+            Self::NoTextKey(t) => write!(f, "text frame {t:?} records no Text"),
+            Self::NoString(k) => write!(f, "GlobalStrings has no {k:?}"),
+            Self::Markup(e) => write!(f, "the label markup will not parse: {e}"),
+        }
     }
-    Ok(Label { hotkey, rest })
+}
+
+impl std::error::Error for LabelProblem {}
+
+impl From<crate::fdf::FdfError> for LabelProblem {
+    fn from(e: crate::fdf::FdfError) -> Self {
+        Self::Fdf(e)
+    }
+}
+
+/// The text frame entry `i`'s button names through its `ButtonText`.
+///
+/// This is the frame whose style the entry draws with, so a per-entry override of
+/// a font record is honoured instead of every entry sharing one template.
+///
+/// # Errors
+///
+/// [`LabelProblem::NoButtonText`] when the button names none.
+pub fn menu_text_frame(fdf: &crate::fdf::Fdf, i: usize) -> Result<String, LabelProblem> {
+    let button = MENU_FRAMES[i].0;
+    fdf.button_text(button)
+        .ok_or_else(|| LabelProblem::NoButtonText(button.to_string()))
+}
+
+/// The `GlobalStrings.fdf` key entry `i` declares.
+///
+/// Reached through the frame definitions rather than a table here: the button's
+/// `ButtonText` names its text frame, and that frame's `Text` record holds the key.
+///
+/// # Errors
+///
+/// [`LabelProblem::NoButtonText`] or [`LabelProblem::NoTextKey`] when either
+/// record is absent. Nothing is substituted.
+pub fn menu_label_key(fdf: &crate::fdf::Fdf, i: usize) -> Result<String, LabelProblem> {
+    let text_frame = menu_text_frame(fdf, i)?;
+    fdf.text_value(&text_frame)
+        .ok_or(LabelProblem::NoTextKey(text_frame))
+}
+
+/// The authored label for entry `i`, parsed from its `GlobalStrings` value.
+///
+/// # Errors
+///
+/// [`LabelProblem`] when the key, the string or its markup cannot be read.
+pub fn menu_label(
+    strings: &str,
+    fdf: &crate::fdf::Fdf,
+    i: usize,
+) -> Result<crate::menu_text::Label, LabelProblem> {
+    let key = menu_label_key(fdf, i)?;
+    let raw = crate::menu_text::global_string(strings, &key).ok_or(LabelProblem::NoString(key))?;
+    crate::menu_text::Label::parse(&raw).map_err(LabelProblem::Markup)
+}
+
+/// The style of the text frame named `frame`, resolved across `texts`.
+///
+/// The frame is the one entry's own `ButtonText` names, so the template it
+/// inherits from is whatever that frame says — not an assumed shared template —
+/// and a per-entry record override wins.
+///
+/// # Errors
+///
+/// [`crate::menu_text::TextError`] when the frame, its chain or one of the records
+/// is missing, ambiguous or unusable.
+pub fn menu_text_style(
+    texts: &[&str],
+    frame: &str,
+) -> Result<crate::menu_text::TextStyle, crate::menu_text::TextError> {
+    crate::menu_text::text_style_in(texts, frame)
 }
 
 /// Where a button frame sits, in fractions of the window.
@@ -359,6 +425,7 @@ pub fn served_name(wc3_path: &str) -> Option<&'static str> {
         MASTER_FONT => Some("menu.ttf"),
         LOGO_TEXTURE => Some("menu/logo.blp"),
         MAIN_MENU_FDF => Some("menu/mainmenu.fdf"),
+        GLOBAL_STRINGS_FDF => Some("menu/globalstrings.fdf"),
         STANDARD_TEMPLATES_FDF => Some("menu/standardtemplates.fdf"),
         _ => None,
     }
@@ -455,86 +522,96 @@ pub fn load_glue_art(install: Option<&std::path::Path>) -> GlueArt {
 mod tests {
     use super::*;
 
-    /// `hotkey + rest` is the string the original draws, so it must read as
-    /// English — not as the label with its first letter cut out. This is the
-    /// test that catches drawing only `rest`, which yields "attle.ne".
-    #[test]
-    fn the_visible_label_reads_as_english() {
-        let want = [
-            "Single Player",
-            "Battle.net",
-            "Local Area Network",
-            "Options",
-            "Credits",
-            "Quit",
-        ];
-        for ((id, raw), w) in MENU.iter().zip(want) {
-            let l = split_label(raw).unwrap_or_else(|e| panic!("{id}: {e}"));
-            assert_eq!(format!("{}{}", l.hotkey, l.rest), w, "{id}");
+    /// A menu tree and a strings file written with the **shipped markup shapes**,
+    /// including `KEY_EXIT`'s interior hotkey.
+    const FDF_LABELS: &str = r#"
+Frame "FRAME" "MainMenuFrame" {
+    Frame "GLUETEXTBUTTON" "SinglePlayerButton" {
+        ButtonText "SinglePlayerButtonText",
+        Frame "TEXT" "SinglePlayerButtonText" {
+            Text "KEY_SINGLE_PLAYER",
         }
     }
-
-    /// `StandardButtonTextTemplate`'s values are the authority for how the
-    /// label looks; the colour and the justification are pinned so they cannot
-    /// silently drift into something that merely resembles the original.
-    #[test]
-    fn the_label_colour_is_the_originals_own() {
-        // From `UI\FrameDef\Glue\StandardTemplates.fdf`: FontColor 0.99 0.827
-        // 0.0705 1.0 and FontHighlightColor 1.0 1.0 1.0 1.0.
-        assert_eq!(LABEL, Color::srgb(0.99, 0.827, 0.0705));
-        assert_eq!(HOTKEY, Color::srgb(1.0, 1.0, 1.0));
-    }
-
-    /// `FrameFont "MasterFont", 0.013`, so the label is a fraction of the
-    /// screen height rather than a fixed pixel size.
-    #[test]
-    fn the_label_size_is_the_originals_own() {
-        assert_eq!(LABEL_FONT_FRACTION, 0.013);
-    }
-
-    /// The labels are the original's own; if they drift the menu is no longer
-    /// the original's, so they are pinned byte for byte.
-    #[test]
-    fn the_labels_are_the_originals_verbatim() {
-        for (id, raw) in MENU {
-            let l = split_label(raw).unwrap_or_else(|e| panic!("{id}: {e}"));
-            assert_eq!(
-                l.rest,
-                raw.split_once("|R").unwrap().1,
-                "{id}: body drifted"
-            );
+    Frame "GLUETEXTBUTTON" "ExitButton" {
+        ButtonText "ExitButtonText",
+        Frame "TEXT" "ExitButtonText" {
+            Text "KEY_EXIT",
         }
     }
+}
+"#;
+    const STRINGS_LABELS: &str = r#"
+KEY_SINGLE_PLAYER        "|CffffffffS|Ringle Player",
+KEY_EXIT                 "E|Cffffffffx|Rit",
+"#;
 
+    /// The key is read from the menu's own frames — the button's `ButtonText`
+    /// names its text frame, and that frame's `Text` holds the key.
     #[test]
-    fn every_hotkey_is_the_first_letter_of_its_own_label() {
-        // The original's hotkey is the first letter of the *whole* label, so it
-        // reads as an accelerator that has been cut out of the text rather than
-        // as a separate character. `hotkey + rest` is the visible string.
-        for (id, raw) in MENU {
-            let l = split_label(raw).unwrap_or_else(|e| panic!("{id}: {e}"));
-            let full = format!("{}{}", l.hotkey, l.rest);
-            assert_eq!(
-                l.hotkey.to_ascii_uppercase(),
-                full.chars().next().unwrap().to_ascii_uppercase(),
-                "{id}: hotkey is not the label's first letter"
-            );
-        }
+    fn the_label_key_comes_from_the_menu_frames() {
+        let f = crate::fdf::Fdf::parse(FDF_LABELS).unwrap();
+        assert_eq!(menu_label_key(&f, 0).unwrap(), "KEY_SINGLE_PLAYER");
+        assert_eq!(menu_label_key(&f, 5).unwrap(), "KEY_EXIT");
+        // An entry whose button the frames do not define is reported.
+        assert!(menu_label_key(&f, 2).is_err());
     }
 
+    /// The labels come from the strings text, and every authored run is kept:
+    /// `KEY_EXIT` is `E` + hotkey `x` + `it`, so it reads "Exit" with the `E`.
     #[test]
-    fn a_label_without_the_colour_run_is_refused() {
-        assert!(split_label("Single Player").is_err());
+    fn the_labels_come_from_the_strings_including_the_interior_hotkey() {
+        let f = crate::fdf::Fdf::parse(FDF_LABELS).unwrap();
+        let single = menu_label(STRINGS_LABELS, &f, 0).unwrap();
+        assert_eq!(single.visible(), "Single Player");
+        assert_eq!(single.hotkey(), Some('S'));
+        let exit = menu_label(STRINGS_LABELS, &f, 5).unwrap();
+        assert_eq!(exit.visible(), "Exit");
+        assert_eq!(exit.hotkey(), Some('x'));
+        assert_eq!(
+            exit.spans.len(),
+            3,
+            "prefix, hotkey and suffix are all kept"
+        );
+        assert!(!exit.spans[0].hotkey && exit.spans[1].hotkey && !exit.spans[2].hotkey);
     }
 
+    /// A key the strings text does not define is reported, never substituted.
     #[test]
-    fn a_label_without_the_restore_run_is_refused() {
-        assert!(split_label("|CffffffffS").is_err());
+    fn a_missing_string_is_reported() {
+        let f = crate::fdf::Fdf::parse(FDF_LABELS).unwrap();
+        assert!(matches!(
+            menu_label("KEY_OTHER \"x\",\n", &f, 0),
+            Err(LabelProblem::NoString(_))
+        ));
     }
 
+    /// The label's style is the template's own, read from the asset — this is
+    /// what replaced the copied `LABEL_FONT_FRACTION` and `HOTKEY`.
     #[test]
-    fn a_multi_letter_hotkey_is_refused() {
-        assert!(split_label("|CffffffffSi|Rngle Player").is_err());
+    fn the_label_style_comes_from_the_template() {
+        let templates = r#"
+Frame "TEXT" "StandardButtonTextTemplate" {
+    FrameFont "MasterFont", 0.013, "",
+    FontJustificationH JUSTIFYCENTER,
+    FontJustificationV JUSTIFYMIDDLE,
+    FontFlags "FIXEDSIZE",
+    FontColor 0.99 0.827 0.0705 1.0,
+    FontHighlightColor 1.0 1.0 1.0 1.0,
+    FontDisabledColor 0.5 0.5 0.5 1.0,
+    FontShadowColor 0.0 0.0 0.0 0.9,
+    FontShadowOffset 0.001 -0.001,
+}
+"#;
+        let style = menu_text_style(&[templates], "StandardButtonTextTemplate").unwrap();
+        assert_eq!(style.font, "MasterFont");
+        assert_eq!(style.height, 0.013);
+        assert_eq!(style.colour, [0.99, 0.827, 0.0705, 1.0]);
+        assert_eq!(style.highlight, [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(style.disabled, [0.5, 0.5, 0.5, 1.0]);
+        assert_eq!(style.justify_h, crate::menu_text::JustifyH::Center);
+        assert_eq!(style.justify_v, crate::menu_text::JustifyV::Middle);
+        assert_eq!(style.shadow_offset, [0.001, -0.001]);
+        assert!(style.fixed_size);
     }
 
     /// The stacking relation, asserted against the FDF's own numbers: each

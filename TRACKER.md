@@ -5,7 +5,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 Last updated: 2026-10-14
 
 Current menu verification (2026-10-14): WASM release build succeeds; the app
-has 65 passing tests and three explicitly ignored local-fixture tests. PeaceCraft
+has 85 passing tests and five explicitly ignored local-fixture tests. PeaceCraft
 settings precede the skippable original cinematic and original menu. Edition is
 RoC on the left and TFT on the right, with TFT selected by default; 1.28 is absent
 from settings. Original font, logo alpha and parsed 500 ms logo entrance are
@@ -17,8 +17,12 @@ playback. UI-only resize/click cases pass at 320×240, 640×480, 1280×1024,
 1280×720, 1920×1080, 2560×1080, 3840×2160 and 430×932. Browser-native 2×
 DPI checks pass at 1280×720 and 430×932; DPR emulation alone reported an
 inconsistent physical pixel box and is not used as the DPI oracle. The TFT scene selects its original 18 geosets and 49 textures and
-honours authored wrapping. Full fidelity remains open: the grey hanging panel and blue inner button state art
-is located and being decoded but is not rendered, and lighting, particles,
+honours authored wrapping. The normal blue inner fill now uses decoded original
+texels and FDF-derived bounds; browser captures confirm the fill extent before
+and after resize. The largest edge discrepancy against continuous coordinates
+is 1.133 pixels, so exact pixel alignment is not certified.
+Full fidelity remains open: the grey hanging panel and inner button edges are
+not rendered, and lighting, particles,
 texture animation, material blending and original options/gameplay remain
 unfinished. Parser and screenshot success do not establish native behavior.
 
@@ -133,12 +137,15 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
 - [x] Recover the build config from `Data/config/3a/9d/…`: build-name `3.0.0.24268-retail`,
       build-uid `w3`, comment `RETAIL - RC 3.5 LAUNCH BUILD`, `root`, `encoding`, `vfs-root`
       EKeys, 110 VFS entries
-- [ ] `pcx-casc`: BLDR/encoding chain so an EKey actually yields bytes
-      *(measured: reading the first enumerated EKey returns 0 bytes — decoding is not wired)*
+- [~] `pcx-casc`: local EKey spans, BLTE N/Z chunks and ENCODING CKey joins
+      yield verified bytes. The original-install gate checks 74,500 index entries
+      and 112 configured manifest aliases; unsupported codecs/ESpec remain explicit.
 - [ ] `pcx-casc`: resolve a content **path** to an EKey (WC3 FDID/VFS mapping, not yet solved)
-- [ ] `pcx-assets`: layering vanilla MPQ | Reforged CASC | `override/`, with provenance
+- [~] `pcx-assets`: caller-ordered source layers and real `override/` resolution
+      retain provenance and produce deterministic indexes. MPQ/CASC app adapters
+      and exact-target archive priority remain unwired/unproven.
 - [ ] Asset modes: `vanilla` (default) / `reforged` / `reforged-hd` / `reforged-fixes`
-- [ ] `override/` drop-in tree + generated `index.json`
+- [x] Library `override/` drop-in tree + generated `index.json`; app wiring pending
 - [ ] Gate: Reforged Footman loads through the same `pcx-gfx` path as vanilla
 - [ ] `docs/reforged-fixes.md` fix ledger; rows default to `defer`
 
@@ -814,8 +821,10 @@ Format: `date — subsystem — symptom — root cause — status`
       RADV hardware capture passed (9 MB RGP); viewer analysis remains unverified.
 - [x] Movement performance gate measures deterministic allocations, bytes and
       state digest under concurrent CPU load. Timing is report-only.
-- [~] FDF-derived blue inner fill is implemented; original FDF text is registered
-      for browser loading. Integration render/resize proof remains pending.
+- [x] Normal blue inner fill uses original decoded texels and relative,
+      FDF-derived grid bounds. Actual browser import/resize captures show the
+      expected fill extents. The strict one-pixel edge diagnostic fails on two
+      edges (maximum 1.133 pixels); inner edges/state art remain unfinished.
 - [!] Original script execution fails closed on unsupported
       `GetPlayerNeutralPassive` during `common.j` initialization; original
       campaign completion and native behavior are not established.
@@ -836,7 +845,7 @@ Format: `date — subsystem — symptom — root cause — status`
   Human03 resolves two items. This is data import, not playable campaign proof.
 - ISO9660 discovery: six synthetic test groups pass with network APIs trapped.
   Transactional in-browser MPQ registration, runtime asset hydration, local audio
-  and cache refresh are implemented pending generated-WASM/browser verification.
+  and cache refresh pass actual generated-WASM/browser verification.
   Unsupported namespaces/installer payloads and conflicting archives fail closed.
 
 - Current release WASM build passed with compiler warnings denied. Generated glue
@@ -844,7 +853,14 @@ Format: `date — subsystem — symptom — root cause — status`
   visible pass on desktop/narrow browser views; hiding restores prior pixels.
 - Local ISO file-input discovery and 15 actual WASM archive assertions pass;
   Chromium audio replacement/reset passes with zero uploads/unexpected requests.
+  Running-app File-input import refreshes six authored labels and the scene;
+  click audio, resize and unequal-member rollback pass with zero uploads/sockets.
   Original installer ISO acceptance and full rendering parity remain open.
+
+- Checked CASC readers and asset-source layering belong to the strict workspace.
+  Seven CASC synthetic tests, one explicitly supplied Reforged install sweep,
+  19 asset-layer tests and one documentation test pass. CASC path resolution,
+  archive adapters and full Reforged rendering remain open.
 
 - [!] Latest four-target CI at `122ecd0` (run `38456169192`) did not start:
       GitHub reports failed account payments or an insufficient spending limit.

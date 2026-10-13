@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
     "crates/pcx-mpq",
+    "crates/pcx-casc",
+    "crates/pcx-assets",
     "crates/pcx-blp",
     "crates/pcx-tga",
     "crates/pcx-mdl",
@@ -29,6 +31,8 @@ warnings = "deny"
 
 [workspace.dependencies]
 pcx-mpq = { path = "crates/pcx-mpq" }
+pcx-casc = { path = "crates/pcx-casc" }
+pcx-assets = { path = "crates/pcx-assets" }
 pcx-blp = { path = "crates/pcx-blp" }
 pcx-tga = { path = "crates/pcx-tga" }
 pcx-mdl = { path = "crates/pcx-mdl" }

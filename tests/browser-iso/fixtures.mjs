@@ -63,6 +63,7 @@ export function menuMembers(musicPath) {
   model.set(text('MDLXVERS')); v.setUint32(8, 4, true); v.setUint32(12, 800, true);
   model.set(text('TEXS'), 16); v.setUint32(20, 268, true); model.set(text(texturePath), 28);
   const members = {
+    'UI\\FrameDef\\GlobalStrings.fdf': text('StringList {\n SYNTHETIC_LABEL "Synthetic label",\n}\n'),
     'UI\\FrameDef\\Glue\\StandardTemplates.fdf': text('Frame "BACKDROP" "SyntheticBackdrop" {\n BackdropBackground "Synthetic\\Texture.blp",\n}\n'),
     'UI\\FrameDef\\Glue\\MainMenu.fdf': text('Frame "FRAME" "MainMenuFrame" {\n}\n'),
     'Fonts\\FRIZQT__.TTF': text('synthetic font placeholder: API storage proof only'),

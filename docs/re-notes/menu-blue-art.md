@@ -75,16 +75,43 @@ That is per entry. The panel is a different object entirely — the
 `TopRightPanel-Expansion.mdx` model whose textures are the grey `GlueScreen-Panel-*`
 set (see `menu-sprite-rendering.md`).
 
-## The blue is not restored yet
+## Initial rendering gap
 
-This note measures art; it does **not** claim the menu shows blue. The current GUI
+At the initial measurement, the GUI
 renders only the **outer plate** art (`BUTTON_ART` →
 `GlueScreen-Button1-Border.blp`, the grey one) on main-menu entries. It does **not**
 yet render the inner fill (`BUTTON_BG_ART` →
 `GlueScreen-Button1-BackdropBackground.blp`) or the inner edge
 (`BUTTON_BORDER_ART` → `GlueScreen-Button1-BackdropBorder.blp`). So the blue fill
 and blue edge are **not** on screen; only the grey plate is. Do not read this note
-as evidence that blue has been restored.
+as evidence that blue had been restored.
+
+## Normal fill integration (2026-10-14)
+
+The normal fill now uses the original decoded texture, with bounds derived from
+the menu's FDF anchor chain and inherited backdrop insets. A relative three-track
+grid places it inside the grey outer plate. Bevy's default image mode retained
+the intrinsic texture size, producing a small square; `NodeImageMode::Stretch`
+fixes that sizing. Every decoded RGBA texel must match before this path draws:
+stretching and authored background tiling are pixel-equivalent for a uniform
+texture. Non-uniform backgrounds are reported and omitted until tiling is implemented.
+
+The real browser File-input import test uses locally repacked supplied menu
+members, not a retail installer ISO. Fresh labels, scene, click audio, resize and
+unequal-member rollback pass. Network capture records only two local Blob GETs
+after import, with no HTTP requests, uploads, sockets or page errors.
+
+At a 988×892 canvas, the Single Player fill's FDF-derived extent is
+174.135×34.193 pixels; the capture measures 174×34. At 988×796 it derives
+174.135×30.513 and measures 174×30. All six widths agree with raster extents.
+These dimensions are observations, not layout constants. The largest edge
+discrepancy is 1.133 pixels; the strict one-pixel diagnostic remains false.
+Continuous source coordinates and pixel extents do not certify exact native
+pixel alignment. Captures and full diagnostics remain local under
+`.scratch/browser-iso-app-import/after-blue-mode-fix/`.
+
+The blue inner edge, state overlays and hanging panel are still not rendered.
+The uniform fill fix does not establish their mapping or full menu fidelity.
 
 ## Caveats
 

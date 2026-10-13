@@ -33,6 +33,7 @@ function registerServedAsset(name, bytes) { return localImportActive ? 0 : add_a
 //
 // Each name here is the one `mainmenu::served_name` maps the game's own path to.
 const GLUE = [
+  ['menu/globalstrings.fdf', './assets/globalstrings.fdf'],
   ['menu/standardtemplates.fdf', './assets/standardtemplates.fdf'],
   ['menu/mainmenu.fdf', './assets/mainmenu.fdf'],
   ['menu/button.blp', './assets/button.blp'],

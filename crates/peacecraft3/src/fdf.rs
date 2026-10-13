@@ -143,6 +143,10 @@ pub struct Props {
     pub background_size: Option<f32>,
     /// `ControlBackdrop`, naming the frame drawn for the normal state.
     pub control_backdrop: Option<String>,
+    /// `ButtonText`, naming the frame that draws a button's label.
+    pub button_text: Option<String>,
+    /// `Text`, an authored label or the `GlobalStrings` key for one.
+    pub text: Option<String>,
 }
 
 /// One parsed `Frame` block.
@@ -366,6 +370,18 @@ impl Fdf {
         self.inherited(name, |p| p.control_backdrop.clone())
     }
 
+    /// A frame's `ButtonText`, naming the frame that draws its label.
+    #[must_use]
+    pub fn button_text(&self, name: &str) -> Option<String> {
+        self.inherited(name, |p| p.button_text.clone())
+    }
+
+    /// A frame's `Text`, which is an authored label or its `GlobalStrings` key.
+    #[must_use]
+    pub fn text_value(&self, name: &str) -> Option<String> {
+        self.inherited(name, |p| p.text.clone())
+    }
+
     /// The frame's first `SetPoint`, if it has one.
     #[must_use]
     pub fn set_point(&self, name: &str) -> Option<SetPoint> {
@@ -516,6 +532,8 @@ fn apply_property(frame: &mut Frame, line: &str) -> Result<(), FdfError> {
         "BackdropBackground" => frame.props.backdrop_background = Some(unquote(value)),
         "BackdropEdgeFile" => frame.props.backdrop_edge = Some(unquote(value)),
         "ControlBackdrop" => frame.props.control_backdrop = Some(unquote(value)),
+        "ButtonText" => frame.props.button_text = Some(unquote(value)),
+        "Text" => frame.props.text = Some(unquote(value)),
         "SetPoint" => frame.props.set_points.push(parse_set_point(value)?),
         _ => {}
     }
@@ -606,6 +624,10 @@ Frame "FRAME" "MainMenuFrame" {
         Frame "GLUETEXTBUTTON" "SinglePlayerButton" INHERITS WITHCHILDREN "StandardButtonTemplate" {
             Width 0.149,
             SetPoint TOPRIGHT, "EditionButton", TOPLEFT, 0.001, 0.0,
+            ButtonText "SinglePlayerButtonText",
+            Frame "TEXT" "SinglePlayerButtonText" INHERITS "StandardButtonTextTemplate" {
+                Text "KEY_SINGLE_PLAYER",
+            }
         }
     }
 }
@@ -690,6 +712,21 @@ Frame "FRAME" "MainMenuFrame" {
         assert!(f.frame("").is_none());
         assert!(f.frames().iter().all(|fr| !fr.name.is_empty()));
         assert_eq!(f.frame("A").unwrap().children.len(), 0);
+    }
+
+    /// The label key is reached through the button's `ButtonText`, which names
+    /// the text frame whose `Text` record holds it.
+    #[test]
+    fn the_label_key_is_reached_through_button_text() {
+        let f = fdf();
+        let text_frame = f.button_text("SinglePlayerButton").expect("ButtonText");
+        assert_eq!(text_frame, "SinglePlayerButtonText");
+        assert_eq!(
+            f.text_value(&text_frame).as_deref(),
+            Some("KEY_SINGLE_PLAYER")
+        );
+        // A button that declares neither is reported, not defaulted.
+        assert!(f.button_text("SinglePlayerBackdrop").is_none());
     }
 
     /// A missing property is reported, not defaulted.

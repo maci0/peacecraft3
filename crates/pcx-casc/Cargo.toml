@@ -1,0 +1,15 @@
+[package]
+name = "pcx-casc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Read-only local CASC indexes, BLTE and encoding manifests"
+
+[dependencies]
+flate2.workspace = true
+md5 = "0.8.1"
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -12,6 +12,7 @@ mod mainmenu;
 mod mainmenu_scene;
 mod menu_audio;
 mod menu_panel;
+mod menu_text;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
