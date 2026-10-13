@@ -1433,3 +1433,203 @@ for an automatic expansion. No `0x436fa0` or other delegate was inspected.
 Actual input basename, archive priority, selected native context and metadata
 meaning/defaults remain unproved. `GetPlayerNeutralPassive` stays unsupported;
 original campaign runtime remains blocked.
+
+
+## Module-handle buffer: named path origin, returned length and failure flow
+
+GNU objdump 2.47 inspected only **`0x4394a0..0x439570`**, half-open, 208 bytes,
+on exact Legacy executable SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+Original code-range SHA-256: `c3cf7e822a71208ff3370225c7c8d3627923527515649b7bd33816fd0a316bf7`.
+The complete body ends at `0x439554`. Padding and the isolated return at
+`0x439560` do not extend the target contract. Artifacts are local
+`.scratch/neutral-module-buffer-4394a0.objdump`,
+`.scratch/neutral-module-buffer-range.json` and
+`.scratch/neutral-module-filename-import.json`. The preceding 83,734 note bytes
+are unchanged, SHA-256
+`2bba4d35325c04fd4e8bf1e46bb24472a5c1c7a49367d942b836ea2d2b18c488`.
+Only the one essential origin import is resolved; no delegate or runtime ran.
+
+### Named module filename import
+
+IAT VA **`0xe661b0`**, RVA `0xa661b0`, is descriptor RVA `0xcd7170`,
+OriginalFirstThunk RVA `0xcd73c0`, FirstThunk RVA `0xa66160`, index **20**.
+Lookup thunk RVA `0xcd7410` identifies import-by-name RVA `0xcd840a`:
+**`KERNEL32.dll!GetModuleFileNameW`**, hint **532**, ordinal flag clear.
+Descriptor timestamp/forwarder-chain values are zero. This identity follows
+from selected PE metadata, not from a conventional three-argument call guess.
+
+| Selected metadata | RVA | Bytes | Original-byte SHA-256 |
+| --- | --- | ---: | --- |
+| descriptor | `0xcd7170` | 20 | `89d44d243eef4bfa6681ae1ebb313801672746ae1bfb8e0b9228e55a60186816` |
+| DLL | `0xcd8c7c` | 13 | `f8efc1f27ef6c525f7fd20dcb8d65e8197e97410eced20db4d323dfbf230a2a4` |
+| lookupThunk | `0xcd7410` | 4 | `09e8b3220b2c06a06ef082054a3d0aafedc2820b9b465550a0e6f5af30e0f7c3` |
+| iatThunk | `0xa661b0` | 4 | `09e8b3220b2c06a06ef082054a3d0aafedc2820b9b465550a0e6f5af30e0f7c3` |
+| importByName | `0xcd840a` | 21 | `dd812438952c5d7d84a83d661fb72c3202d83a36d04590e7046f6db6f2cf8d99` |
+
+### Origin and result contract from primary API documentation
+
+[Microsoft's GetModuleFileNameW reference](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulefilenamew)
+identifies the arguments as module handle, wide output buffer and capacity in
+WCHARs. It returns the module's qualified path on success, with character
+length excluding NUL; zero indicates failure. Insufficient capacity can return
+the capacity with truncation, and termination details differ on Windows XP.
+These documented cases are not an observation of this target's Windows host.
+
+At `0x4394e8`, this helper calls that API with its argument 1 module handle,
+a local buffer, and `0x104` capacity. The already proved caller obtains its
+handle with `GetModuleHandleA(NULL)`. Thus successful documented origin is the
+calling executable's module path; no basename is supplied by assumption.
+The API's return is saved in EBX immediately afterward. There is no zero,
+capacity-equality or extended-error check before the next operation.
+
+### Second operation, byte output and exact local return
+
+Unresolved import **`0xe661d4`** is called with eight recorded arguments:
+`(0xfde9, 0, local_wide_buffer, 0xffffffff, output_pointer, caller_capacity, 0, 0)`.
+This is a conversion-shaped call, but its identity/signature/output encoding
+are **not** proved in this single-import slice. The numeric UTF-8 code-page
+identifier does not itself name an unresolved API. No additional import was
+resolved to make that inference look like evidence.
+
+A zero return from the second call exits with EAX zero. A nonzero return starts
+a loop over the caller's output pointer up to `output + caller_capacity`,
+stopping at NUL; backslash bytes are directly replaced with slash bytes.
+Afterward `0x439545` restores **the first GetModuleFileNameW return** to EAX.
+Therefore this successful local path returns the saved module-path WCHAR count,
+not the second operation's result or an output byte count. Its outer builder
+ignores that returned value, as already observed.
+
+Null output pointer takes `0x43eca0(0x57)` and returns zero if reporting returns
+normally. The output is not cleared at entry. A failed first API still proceeds
+to the second call with the local buffer; if that call returns nonzero, the
+helper performs byte normalization but ultimately returns the saved first result
+zero. Neither the first API's failure nor the second call's zero return proves
+that the cached output was initialized to a safe empty/default path. No metadata
+`+4` field is written by this helper.
+
+### Closed origin and remaining encoding boundary
+
+The module-path **origin** and the complete helper's length/error/control flow
+are established. Actual emitted byte encoding is stopped at the unresolved
+single import **`0xe661d4`**, which needs a separately authorized PE entry
+resolution if that contract is required. No code continuation is missing here.
+The cached base's later search/literal mutation and final formatter remain
+separate contracts; none of the formatter IAT, transfer helper, predicate or
+opener was expanded. Runtime path bytes, source priority, selected context and
+neutral-player metadata semantics/defaults remain unproved.
+`GetPlayerNeutralPassive` stays unsupported and campaign runtime remains blocked.
+
+
+## Module byte conversion and conditional map-header correspondence
+
+This slice resolves **only PE IAT VA `0xe661d4`** on exact Legacy executable
+SHA-256 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+There are no additional executable-body, literal or delegate reads. The
+preceding 88,949 note bytes remain unchanged, SHA-256
+`bd49c7a54b7d5d487d49849b75020a19d3d6f5ba4bed23845d4230054cb9c56f`.
+The selected structural metadata is `.scratch/neutral-module-byte-import.json`;
+its temporary resolver is `.scratch/resolve-neutral-module-byte-import.py`.
+Repository header/evidence comparison below is read-only, not a new native or
+original-asset measurement. No provider, game, Host or build ran.
+
+### Conversion identity proved by PE metadata
+
+IAT RVA `0xa661d4` belongs to descriptor RVA `0xcd7170`, OriginalFirstThunk
+RVA `0xcd73c0`, FirstThunk RVA `0xa66160`, index **29**. Lookup thunk RVA
+`0xcd7434` contains import-by-name RVA `0xcd84ae`: DLL **`KERNEL32.dll`**,
+name **`WideCharToMultiByte`**, hint **1297**, ordinal flag clear. Descriptor
+timestamp and forwarder-chain fields are zero. The hint is not an ordinal.
+
+| Selected metadata | RVA | Bytes | Original-byte SHA-256 |
+| --- | --- | ---: | --- |
+| descriptor | `0xcd7170` | 20 | `89d44d243eef4bfa6681ae1ebb313801672746ae1bfb8e0b9228e55a60186816` |
+| DLL | `0xcd8c7c` | 13 | `f8efc1f27ef6c525f7fd20dcb8d65e8197e97410eced20db4d323dfbf230a2a4` |
+| lookupThunk | `0xcd7434` | 4 | `981193477686431d7c714c1873b433a6a74f9c0a9345cfc605d6851b2cb7ed13` |
+| iatThunk | `0xa661d4` | 4 | `981193477686431d7c714c1873b433a6a74f9c0a9345cfc605d6851b2cb7ed13` |
+| importByName | `0xcd84ae` | 22 | `1023021e390ebcf261e6fea309ae4725bef40d99ea5204f483836553d6f3f623` |
+
+### Primary SDK mapping and preserved native return distinction
+
+[Microsoft's WideCharToMultiByte reference](https://learn.microsoft.com/en-us/windows/win32/api/stringapiset/nf-stringapiset-widechartomultibyte)
+maps the eight parameters to code page, flags, UTF-16 input, input-character
+count, byte output, byte capacity, default character and default-used pointer.
+The already recorded call is `(65001, 0, wide_path, -1, output, capacity, NULL, NULL)`:
+UTF-8 output, zero flags, NUL included, byte-count capacity. Success returns
+bytes written including NUL for this input-length form; failure returns zero.
+This documented signature is connected to a metadata-proved name, not inferred
+from 65001 before resolving the import. It is not target execution evidence.
+
+The previously inspected helper still does not check the first
+`GetModuleFileNameW` result for zero or truncation before invoking conversion.
+A conversion-zero path returns zero. A nonzero conversion performs observed
+backslash-to-slash normalization, then returns the saved **GetModuleFileNameW
+WCHAR count**, not converted bytes. The caller ignores that value. No cached
+output clear or safe default is established on either failure; current-host
+encoding behavior and actual emitted path bytes were not measured.
+
+The later acceptance gate is a different direction (`MultiByteToWideChar`)
+and retains its separately proved unusual result: conversion zero yields one
+without querying attributes; attribute `0xffffffff` yields zero. Closing the
+module's output conversion does not erase that distinction.
+
+### Read-only physical comparison with `pcx-map/info.rs`
+
+The inspected source is `crates/pcx-map/src/info.rs`, SHA-256
+`08a0695b709fbe73f66f9fa925d01e55abf5c9fa79c6514dc2ac40b66323c623`.
+Its `Cursor::new` starts at zero and `u32` reads little-endian four-byte words,
+advancing by four on success. `MapInfo::parse` currently accepts **18 and 25**,
+reads version at offset zero and `constant_a` at offset four, then reads
+`constant_b` at **offset eight** because both accepted versions meet
+`VERSION_SECOND_CONSTANT = 0x10`. This is current source behavior, not a claim
+that only version 18 exists based on its older module prose.
+
+The exact Legacy instruction evidence already retained here independently
+shows an initial word accepted through `0x19`, leading metadata reads for
+initial words `0x10..0x19`, and successful four-byte reads into metadata `+0`
+and `+4` from a stream with initial cursor zero. Therefore, **if the same
+complete version-18/25 payload is supplied and these reads succeed**, the word
+represented by Rust `constant_b` is physically the word assigned to exact
+Legacy metadata `+4`: input offset eight. This correspondence does not need
+any compatibility DLL addresses transplanted into the Legacy image.
+
+For lower initial versions, the exact native parser skips the leading reads;
+for truncated/failed reads it leaves the destination untouched. Rust rejects
+unsupported versions or short data with a typed error. Accordingly the
+conditional matching does not extend to native default/failed-read state.
+
+### Historical labels and semantics are still different evidence classes
+
+The module prose labels the third word "B — build constant", cites writer
+`0x6f7267f0` and reader `0x6f738910` from older `game.dll`, and describes that
+artifact as "1.28c". Those are existing source claims, not new native proof
+of a field name in the exact Legacy executable. Its original-asset header test
+uses the extracted-tree input and skips when local requirements are absent;
+it illustrates a previously recorded word value, not exact Legacy active state.
+No test or new original-asset extraction was run in this slice.
+
+The already published identity evidence in
+[glue-coordinate-runtime.md](glue-coordinate-runtime.md) identifies
+`wc3/game/app/game.dll` SHA-256
+`6d21bd9a0f9fbc8446f455c9e89ac994fed68174426fe608fcb9baefd4dec53c`
+as VERSIONINFO **1.26.0.6401**, while the exact Legacy executable is
+**1.29.2.9231**. Individual PE identity does not identify adjacent archives.
+Consequently the source's "1.28c" label is not used here as an artifact-version
+fact, and neither its addresses nor reported example values are assigned to
+the Legacy image. The generic name `constant_b`/historical build label is not
+an editorVersion, engine-build, player-limit or lifetime proof.
+
+### Closed slice and semantic/context blocker
+
+Module output conversion identity is closed. Native path-helper expansion is
+held: no new formatter, basename predicate, opener or literal investigation
+follows this slice. Physical offset-eight correspondence is established only
+under the explicit same-payload/successful-read conditions above.
+
+Still missing are the semantic producer/name of that authored third word in
+the exact target, actual loaded input/map identity, and proof that the active
+getter context/cache record refers to the same metadata object at the relevant
+lifetime. Successful parsing or matching widths alone cannot close those gates.
+Failure/default paths remain independent. No implementation is inferred from
+compatibility DLL names or static branch results; `GetPlayerNeutralPassive`
+stays unsupported and original campaign runtime remains blocked.

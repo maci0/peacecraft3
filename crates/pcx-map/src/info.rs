@@ -12,9 +12,13 @@
 //!
 //! # Where the layout comes from
 //!
-//! Measured from the vanilla 1.28c binary, cross-checked against 1.29b and the
-//! shipped maps. `game.dll` reads and writes this file through one writer and
-//! one reader, both of which are version-gated field by field:
+//! Historical reader/writer evidence comes from `wc3/game/app/game.dll`, whose
+//! VERSIONINFO is 1.26.0.6401 and SHA-256 is
+//! `6d21bd9a0f9fbc8446f455c9e89ac994fed68174426fe608fcb9baefd4dec53c`.
+//! Those offsets do not identify adjacent archives or the separate Legacy
+//! 1.29.2.9231 executable. The field framing is cross-checked against supplied
+//! map bytes; historical field labels are not exact-Legacy semantic proof.
+//! This DLL reads and writes through version-gated routines:
 //!
 //! ```text
 //! writer  game.dll 0x6f7267f0   (called from 0x6f739412, the `.w3i` writer)
@@ -26,13 +30,13 @@
 //! exactly the size of each field they touch, so the on-disk width of every
 //! field is exactly the width of the read that produced it.
 //!
-//! # Layout (version 18 = 0x12, the only version that ships)
+//! # Historical version-18 layout (the parser also supports version 25)
 //!
 //! ```text
 //! offset  size  field
 //! 0x000   4     version word                          (= 18)
-//! 0x004   4     A — game version constant
-//! 0x008   4     B — build constant                    (4444 on 1.28c, 6030 on melee maps)
+//! 0x004   4     A — first leading word
+//! 0x008   4     B — second leading word; historical build label, semantics unproved
 //! 0x00c   str   map name           (w3s/TRIGSTR reference)
 //!         str   map description
 //!         str   recommended players string
