@@ -352,10 +352,15 @@ fn spawn_once(
 
     // Parsed once, so the clip choice and the per-frame skinning agree on the
     // same skeleton and pivots.
-    let parsed =
-        pcx_mdl::Mdlx::parse(&viewer.bytes).unwrap_or_else(|e| panic!("{}: {e}", viewer.model));
-    let bones = parsed.bones(&viewer.bytes).unwrap_or_default();
-    let pivots = parsed.pivots(&viewer.bytes).unwrap_or_default();
+    let joints = match crate::mdx_runtime::JointPlan::parse(&viewer.bytes) {
+        Ok(joints) => joints,
+        Err(error) => {
+            error!("{}: {error}", viewer.model);
+            return;
+        }
+    };
+    let bones = joints.joints().to_vec();
+    let pivots = joints.pivots().clone();
     let anims = model_anims(&viewer.bytes);
     info!(
         "{} geoset animations, {} bones, {} pivots",

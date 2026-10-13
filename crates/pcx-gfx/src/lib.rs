@@ -12,8 +12,8 @@
 
 use bevy::asset::RenderAssetUsages;
 
-pub mod performance;
 pub mod mdx_runtime;
+pub mod performance;
 pub mod viewer;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -115,10 +115,10 @@ pub fn load_image(bytes: &[u8], source: &str) -> Result<LoadedTexture, crate::Er
     }
 }
 
-/// A posed skeleton: world-space matrices for every bone.
+/// A posed skeleton: world-space matrices for every supplied BONE/HELP joint.
 #[derive(Debug, Clone)]
 pub struct Skeleton {
-    /// One 4x4 matrix per bone, in the model's bone order.
+    /// One 4x4 matrix per joint, in the supplied hierarchy's order.
     pub matrices: Vec<[f32; 16]>,
     /// Each bone's **node id**, parallel to `matrices`.
     ///
@@ -128,7 +128,7 @@ pub struct Skeleton {
     /// picks the wrong bone — with 374 bones and 417 nodes in `MainMenu3d` the
     /// error compounds down the chain. This is what makes the lookup correct.
     pub ids: Vec<u32>,
-    /// Bone names, parallel to `matrices`.
+    /// Joint names, parallel to `matrices`.
     pub names: Vec<String>,
 }
 
@@ -137,14 +137,13 @@ pub struct Skeleton {
 /// `parent` resolves a bone's parent node, which is what makes a bone that hangs
 /// from a helper resolve correctly rather than being treated as a root.
 pub fn pose_skeleton(
-    model: &LoadedModel,
+    _model: &LoadedModel,
     bones: &[pcx_mdl::Bone],
     pivots: &pcx_mdl::Pivots,
     frame: u32,
 ) -> Skeleton {
     // `parentId` addresses the whole node space, so resolve it against the
-    // model's own bone list: a bone whose parent is a helper would otherwise
-    // read as a root and the hierarchy would silently collapse.
+    // supplied BONE/HELP list, not LoadedModel's bones-only name table.
     let by_id: std::collections::HashMap<u32, usize> = bones
         .iter()
         .enumerate()
@@ -162,7 +161,7 @@ pub fn pose_skeleton(
     Skeleton {
         matrices,
         ids: bones.iter().map(|b| b.object_id).collect(),
-        names: model.bone_names.clone(),
+        names: bones.iter().map(|joint| joint.name.clone()).collect(),
     }
 }
 
@@ -177,7 +176,7 @@ pub fn pose_skeleton(
 ///
 /// `bones` and `poses` are parallel; `pivots` is the model's own pivot table.
 pub fn pose_from_poses(
-    model: &LoadedModel,
+    _model: &LoadedModel,
     bones: &[pcx_mdl::Bone],
     pivots: &pcx_mdl::Pivots,
     poses: &[pcx_mdl::Pose],
@@ -209,7 +208,7 @@ pub fn pose_from_poses(
     Skeleton {
         matrices,
         ids: bones.iter().map(|b| b.object_id).collect(),
-        names: model.bone_names.clone(),
+        names: bones.iter().map(|joint| joint.name.clone()).collect(),
     }
 }
 
@@ -809,6 +808,64 @@ mod skinning_tests {
             [0.0, 0.0, 0.0],
             "an unposed skeleton must not move a vertex"
         );
+    }
+
+    #[test]
+    fn a_mesh_inherits_its_animated_helper_and_keeps_parallel_joint_names() {
+        let helper = pcx_mdl::Node {
+            offset: 0,
+            size: 128,
+            name: "animated helper".into(),
+            object_id: 2,
+            parent_id: -1,
+            flags: 0,
+            tracks: vec![pcx_mdl::KeyTrack {
+                magic: *b"KGTR",
+                count: 1,
+                interpolation: pcx_mdl::Interpolation::None,
+                global_seq_id: pcx_mdl::NO_ID,
+                width: 3,
+                stride: 16,
+                raw: 0u32
+                    .to_le_bytes()
+                    .into_iter()
+                    .chain([4.0f32, 0.0, 0.0].into_iter().flat_map(f32::to_le_bytes))
+                    .collect(),
+            }],
+        };
+        let plan = mdx_runtime::JointPlan::checked(
+            &[bone(7, 2)],
+            &[helper],
+            &pcx_mdl::Pivots(vec![[0.0; 3]; 8]),
+        )
+        .unwrap();
+        // LoadedModel exposes bones only. HELP must still have a parallel name.
+        let model = LoadedModel {
+            name: "helper hierarchy".into(),
+            minimum_extent: [0.0; 3],
+            maximum_extent: [0.0; 3],
+            meshes: vec![],
+            bone_names: vec!["b7".into()],
+            bone_parents: vec![2],
+            sequences: vec![],
+        };
+        let poses = pcx_mdl::sample_skeleton(plan.joints(), 0);
+        let posed = pose_from_poses(&model, plan.joints(), plan.pivots(), &poses);
+        assert_eq!(posed.ids, [7, 2]);
+        assert_eq!(posed.names, ["b7", "animated helper"]);
+        assert_eq!(posed.names.len(), posed.matrices.len());
+        let mesh = LoadedMesh {
+            positions: vec![[1.0, 0.0, 0.0]],
+            normals: vec![[0.0, 0.0, 1.0]],
+            tex_coords: vec![[0.0; 2]],
+            indices: vec![0],
+            vertex_groups: vec![0],
+            bone_indices: vec![7],
+            group_counts: vec![1],
+            geoset: 0,
+            material_id: 0,
+        };
+        assert_eq!(skin_mesh(&mesh, &posed), [[5.0, 0.0, 0.0]]);
     }
 
     #[test]

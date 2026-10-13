@@ -61,6 +61,16 @@ pub struct JointMatrices {
 }
 
 impl JointPlan {
+    /// Decode and validate the full authored transform hierarchy once at import.
+    pub fn parse(bytes: &[u8]) -> Result<Self, PlanError> {
+        let model = Mdlx::parse(bytes)?;
+        Self::checked(
+            &model.bones(bytes)?,
+            &model.nodes(bytes, pcx_mdl::tag::HELP)?,
+            &model.pivots(bytes)?,
+        )
+    }
+
     pub fn checked(bones: &[Bone], helpers: &[Node], pivots: &Pivots) -> Result<Self, PlanError> {
         let mut joints = bones.to_vec();
         let mut kinds = vec![JointKind::Bone; bones.len()];
@@ -223,6 +233,10 @@ impl JointPlan {
 
     pub fn joints(&self) -> &[Bone] {
         &self.joints
+    }
+
+    pub fn pivots(&self) -> &Pivots {
+        &self.pivots
     }
     pub fn kinds(&self) -> &[JointKind] {
         &self.kinds

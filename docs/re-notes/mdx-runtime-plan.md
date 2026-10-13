@@ -63,9 +63,17 @@ Both original menu models passed:
 | UI/Glues/MainMenu/MainMenu3d_exp/MainMenu3d_exp.mdx | 163 | 10 | 13 | 11 | 18 | 8 | 14 | 1 |
 
 These are observations, not parser constants or corpus-wide acceptance claims.
-The checked plan module is declared in pcx-gfx, and its targeted Cargo tests
-pass. Full renderer integration of helpers, GEOA and multiple layers remains
-open. The targeted Cargo test is:
+The viewer and menu scene import now use `JointPlan::parse`, retaining the full
+BONE+HELP hierarchy for their existing pose samplers. Invalid hierarchies fail
+import instead of silently dropping a helper parent. Skeleton names and IDs
+come from that same joint order, including helpers. A skinning regression checks
+that a sparse-ID bone under an animated helper actually moves its mesh vertex;
+the bones-only name table cannot truncate the joint names.
+
+The menu retains its existing separate clip/global-sequence clocks. This wiring
+does not establish native quaternion, inheritance or billboard behavior, nor
+add GEOA application or multiple-layer drawing. Those remain open. The targeted
+typed-plan Cargo test is:
 
 ```sh
 cargo test --locked -p pcx-gfx --test mdx_runtime

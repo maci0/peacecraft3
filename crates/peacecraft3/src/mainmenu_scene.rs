@@ -23,11 +23,11 @@
 //! ## Known fidelity gaps, stated rather than papered over
 //!
 //! * **`PRE2` particle emitters are not drawn.** The chunk is decoded to its
-//!   framing by `pcx-mdl` (its 171-byte prelude is deliberately kept as raw
-//!   bytes because the field meanings are not proven), so there is nothing
-//!   correct to render from it. No stand-in particle effect is created.
-//! * **`TXAN` texture animation and `GLBS` global sequences are not applied.**
+//!   properties by `pcx-mdl`, but their native rendering is not implemented.
+//!   No stand-in particle effect is created.
+//! * **`TXAN` texture animation and material/geoset alpha tracks are not applied.**
 //!   A material that animates its UVs or its alpha draws at its base state.
+//!   Joint tracks use the authored `GLBS` durations on a separate elapsed clock.
 //! * **One texture layer per material.** Each of the scene's 31 materials
 //!   carries exactly one `LAYS` layer, so this costs nothing here, but a model
 //!   with a multi-layer material (the format allows several, drawn over each
@@ -341,6 +341,8 @@ pub struct SceneInfo {
     pub geosets: usize,
     /// Bones the skeleton is built from.
     pub bones: usize,
+    /// HELP nodes included in the checked transform hierarchy.
+    pub helpers: usize,
     /// Lights added from the model's `LITE` chunk.
     pub lights: usize,
     /// Cameras found in the model; the first is used.
@@ -373,7 +375,7 @@ pub enum SceneError {
 pub struct MainMenuScene {
     /// The decoded model, whose `meshes` are the rest positions.
     model: Option<pcx_gfx::LoadedModel>,
-    /// Bone records in model order.
+    /// Checked BONE records followed by HELP transforms, with authored IDs.
     bones: Vec<pcx_mdl::Bone>,
     /// The model's pivot table.
     pivots: Option<pcx_mdl::Pivots>,
@@ -412,10 +414,10 @@ pub fn spawn(
     let m = pcx_mdl::Mdlx::parse(bytes).map_err(|e| SceneError::Decode(e.to_string()))?;
     let model =
         pcx_gfx::load_model(bytes, source).map_err(|e| SceneError::Decode(e.to_string()))?;
-    let bones = m
-        .bones(bytes)
+    let joints = pcx_gfx::mdx_runtime::JointPlan::parse(bytes)
         .map_err(|e| SceneError::Decode(e.to_string()))?;
-    let pivots = m.pivots(bytes).ok();
+    let bones = joints.joints().to_vec();
+    let pivots = Some(joints.pivots().clone());
 
     // The entry clip: the *first* looping `Stand`, which is the 0..16667 one.
     let sequences = m
@@ -428,7 +430,16 @@ pub fn spawn(
         .or_else(|| sequences.first());
 
     let mut info = SceneInfo {
-        bones: bones.len(),
+        bones: joints
+            .kinds()
+            .iter()
+            .filter(|&&kind| kind == pcx_gfx::mdx_runtime::JointKind::Bone)
+            .count(),
+        helpers: joints
+            .kinds()
+            .iter()
+            .filter(|&&kind| kind == pcx_gfx::mdx_runtime::JointKind::Helper)
+            .count(),
         global_sequence_tracks: bones
             .iter()
             .flat_map(|b| b.tracks.iter())
@@ -629,7 +640,7 @@ pub fn spawn(
         elapsed: std::time::Duration::ZERO,
         global_durations: global_sequence_durations(bytes),
     });
-    info!(bones = info.bones, sequence = %info.sequence, global_sequence_tracks = info.global_sequence_tracks, "Original menu animation source");
+    info!(bones = info.bones, helpers = info.helpers, sequence = %info.sequence, global_sequence_tracks = info.global_sequence_tracks, "Original menu animation source");
     Ok(info)
 }
 
@@ -814,6 +825,62 @@ pub fn advance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires PEACECRAFT3_MDX_INSTALL with both original menu models"]
+    fn original_menu_import_keeps_authored_helper_parents() {
+        let install = std::path::PathBuf::from(
+            std::env::var_os("PEACECRAFT3_MDX_INSTALL")
+                .expect("explicit original install required"),
+        );
+        for expansion in [false, true] {
+            let source = scene_source(expansion).0;
+            let bytes = crate::mainmenu::art_bytes(Some(&install), source)
+                .unwrap_or_else(|| panic!("{}: missing {source}", install.display()));
+            let parsed = pcx_mdl::Mdlx::parse(&bytes).unwrap();
+            let authored_bones = parsed.bones(&bytes).unwrap();
+            let authored_helpers = parsed.nodes(&bytes, pcx_mdl::tag::HELP).unwrap();
+            assert!(!authored_helpers.is_empty(), "fixture must exercise HELP");
+            let mut world = World::new();
+            let mut meshes = Assets::<Mesh>::default();
+            let mut materials = Assets::<StandardMaterial>::default();
+            let mut images = Assets::<Image>::default();
+            let info = spawn(
+                &mut world.commands(),
+                &mut meshes,
+                &mut materials,
+                &mut images,
+                source,
+                &bytes,
+                &[],
+            )
+            .unwrap();
+            world.flush();
+            let scene = world.resource::<MainMenuScene>();
+            assert_eq!(info.bones, authored_bones.len());
+            assert_eq!(info.helpers, authored_helpers.len());
+            assert_eq!(scene.bones.len(), info.bones + info.helpers);
+            let helper_ids: std::collections::HashSet<_> = authored_helpers
+                .iter()
+                .map(|helper| helper.object_id)
+                .collect();
+            assert!(
+                authored_bones
+                    .iter()
+                    .any(|bone| helper_ids.contains(&(bone.parent_id as u32)))
+            );
+            for helper in &authored_helpers {
+                let retained = scene
+                    .bones
+                    .iter()
+                    .find(|joint| joint.object_id == helper.object_id)
+                    .expect("HELP must participate in the actual scene hierarchy");
+                assert_eq!(retained.parent_id, helper.parent_id);
+                assert_eq!(retained.name, helper.name);
+                assert_eq!(retained.tracks.len(), helper.tracks.len());
+            }
+        }
+    }
 
     #[test]
     fn expansion_selects_its_shipped_scene_and_separate_texture_namespace() {
