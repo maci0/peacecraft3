@@ -224,11 +224,84 @@ pub fn button_geometry(i: usize) -> ButtonGeometry {
     }
 }
 
+/// The FDF the menu's frame definitions live in.
+pub const MAIN_MENU_FDF: &str = r"UI\FrameDef\Glue\MainMenu.fdf";
+/// The shared template file `MainMenu.fdf` inherits from.
+pub const STANDARD_TEMPLATES_FDF: &str = r"UI\FrameDef\Glue\StandardTemplates.fdf";
+
+/// The `(button, plate)` frame each [`MENU`] entry is defined by, in the same
+/// order as [`MENU`].
+pub const MENU_FRAMES: [(&str, &str); 6] = [
+    ("SinglePlayerButton", "SinglePlayerBackdrop"),
+    ("BattleNetButton", "BattleNetBackdrop"),
+    ("LocalAreaNetworkButton", "LocalAreaNetworkBackdrop"),
+    ("OptionsButton", "OptionsBackdrop"),
+    ("CreditsButton", "CreditsBackdrop"),
+    ("ExitButton", "ExitBackdrop"),
+];
+
+/// The inner fill's rectangle for [`MENU`]'s `i`th entry, in **frame units**,
+/// derived from the parsed FDF: `(left, top, width, height)` relative to the
+/// entry's outer plate, with `top` measured downward as the UI draws it.
+///
+/// Every number comes from the frame definitions — the plate's size, the inner
+/// button's size and anchor chain, and the backdrop's insets. Nothing is a
+/// constant here, and a frame or property the FDF does not define is an error,
+/// not a default.
+///
+/// # Errors
+///
+/// [`crate::fdf::FdfError`] when a frame, its `ControlBackdrop`, its size or its
+/// insets are missing, or when the anchor chain does not terminate. Unequal
+/// insets are also refused: their written order is not established, so assuming
+/// one would be inventing an asset fact.
+pub fn button_fill(
+    fdf: &crate::fdf::Fdf,
+    i: usize,
+) -> Result<(f32, f32, f32, f32), crate::fdf::FdfError> {
+    use crate::fdf::FdfError;
+    let (button, plate) = MENU_FRAMES[i];
+    let viewport = (FRAME_W, FRAME_H);
+    let plate_rect = fdf.rect(plate, viewport)?;
+    let inner = fdf.rect(button, viewport)?;
+    let backdrop = fdf
+        .control_backdrop(button)
+        .ok_or_else(|| FdfError::Missing {
+            frame: button.to_string(),
+            property: "ControlBackdrop",
+        })?;
+    let [a, b, c, d] = fdf.insets(&backdrop)?;
+    if !(a == b && b == c && c == d) {
+        return Err(FdfError::Missing {
+            frame: backdrop,
+            property: "equal BackdropBackgroundInsets",
+        });
+    }
+    let inset = a;
+    let width = inner.width - 2.0 * inset;
+    let height = inner.height - 2.0 * inset;
+    Ok((
+        inner.left + inset - plate_rect.left,
+        plate_rect.top() - (inner.bottom + inset + height),
+        width,
+        height,
+    ))
+}
+
+/// The outer plate's `(width, height)` for [`MENU`]'s `i`th entry, from the FDF.
+///
+/// # Errors
+///
+/// [`crate::fdf::FdfError`] when the plate or its size is not defined.
+pub fn plate_size(fdf: &crate::fdf::Fdf, i: usize) -> Result<(f32, f32), crate::fdf::FdfError> {
+    let (_, plate) = MENU_FRAMES[i];
+    Ok((fdf.width(plate)?, fdf.height(plate)?))
+}
+
 /// Marker for a menu button, carrying its index in [`MENU`], so a click can be
 /// resolved to the entry it landed on.
 #[derive(Component, Debug)]
 pub struct MenuButton(pub usize);
-
 /// Which entry a click landed on, given the pointer position in window
 /// fractions. `None` means the pointer was on none of them.
 #[must_use]
@@ -276,6 +349,8 @@ pub fn served_name(wc3_path: &str) -> Option<&'static str> {
         BUTTON_BG_ART => Some("menu/bg.blp"),
         MASTER_FONT => Some("menu.ttf"),
         LOGO_TEXTURE => Some("menu/logo.blp"),
+        MAIN_MENU_FDF => Some("menu/mainmenu.fdf"),
+        STANDARD_TEMPLATES_FDF => Some("menu/standardtemplates.fdf"),
         _ => None,
     }
 }
@@ -473,6 +548,127 @@ mod tests {
     fn the_menu_fits_inside_the_window() {
         let last = button_geometry(MENU.len() - 1);
         assert!(last.top + last.height <= 1.0);
+    }
+
+    /// A minimal FDF standing in for the two shipped files: the templates the
+    /// menu's frames inherit, and one entry's chain.
+    const FDF_TEMPLATES: &str = r#"
+Frame "BACKDROP" "StandardMenuButtonBaseBackdrop" { Width 0.256, Height 0.064, }
+Frame "BACKDROP" "StandardButtonBackdropTemplate" {
+    BackdropBackgroundInsets 0.004 0.004 0.004 0.004,
+}
+Frame "GLUEBUTTON" "StandardIconicButtonTemplate" { Height 0.031, Width 0.031, }
+Frame "TEXTBUTTON" "StandardButtonTemplate" {
+    Height 0.031,
+    Width 0.179,
+    ControlBackdrop "ButtonBackdropTemplate",
+    Frame "BACKDROP" "ButtonBackdropTemplate" INHERITS "StandardButtonBackdropTemplate" {}
+}
+"#;
+    const FDF_MENU: &str = r#"
+Frame "FRAME" "MainMenuFrame" {
+    Frame "BACKDROP" "SinglePlayerBackdrop" INHERITS "StandardMenuButtonBaseBackdrop" {
+        SetPoint TOPRIGHT,"MainMenuFrame",TOPRIGHT, -0.015, -0.110625,
+        Frame "GLUEBUTTON" "EditionButton" INHERITS "StandardIconicButtonTemplate" {
+            SetPoint TOPRIGHT, "SinglePlayerBackdrop", TOPRIGHT, -0.012, -0.0165,
+        }
+        Frame "GLUETEXTBUTTON" "SinglePlayerButton" INHERITS WITHCHILDREN "StandardButtonTemplate" {
+            Width 0.149,
+            SetPoint TOPRIGHT, "EditionButton", TOPLEFT, 0.001, 0.0,
+        }
+    }
+}
+"#;
+
+    fn fixture_fdf() -> crate::fdf::Fdf {
+        let mut f = crate::fdf::Fdf::default();
+        f.parse_into(FDF_TEMPLATES).unwrap();
+        f.parse_into(FDF_MENU).unwrap();
+        f
+    }
+
+    /// The fill is derived from the FDF, and reproduces the authored box:
+    /// the chain `0.256 - 0.012 - 0.031 + 0.001 - 0.149` puts the inner button's
+    /// left at `0.065`, so with the `0.004` inset the fill's left is `0.069`.
+    #[test]
+    fn the_inner_fill_is_derived_from_the_fdf() {
+        let f = fixture_fdf();
+        let (left, top, width, height) = button_fill(&f, 0).unwrap();
+        assert!((left - 0.069).abs() < 1e-6, "left {left}");
+        assert!((top - 0.0205).abs() < 1e-6, "top {top}");
+        assert!((width - 0.141).abs() < 1e-6, "width {width}");
+        assert!((height - 0.023).abs() < 1e-6, "height {height}");
+    }
+
+    /// Against the **shipped** FDFs: the derivation reproduces the authored
+    /// fills. Ignored because it needs a local install; run with `--ignored` and
+    /// `PEACECRAFT3_LEGACY_DIR` set. It fails when the files are absent rather
+    /// than passing silently.
+    #[test]
+    #[ignore = "needs a local Warcraft III install; run with --ignored and PEACECRAFT3_LEGACY_DIR set"]
+    fn the_shipped_fdfs_derive_the_authored_fills() {
+        let install = std::env::var_os("PEACECRAFT3_LEGACY_DIR").map(std::path::PathBuf::from);
+        let mut f = crate::fdf::Fdf::default();
+        for path in [STANDARD_TEMPLATES_FDF, MAIN_MENU_FDF] {
+            let bytes = art_bytes(install.as_deref(), path)
+                .unwrap_or_else(|| panic!("{path} not found; set PEACECRAFT3_LEGACY_DIR"));
+            f.parse_into(std::str::from_utf8(&bytes).expect("FDF is text"))
+                .expect("FDF parses");
+        }
+        // Left is 0.069 for the five 0.256 plates and 0.064 for Quit's 0.24 one;
+        // widths are 0.141, 0.171 and 0.160; the vertical box is shared.
+        for i in 0..5 {
+            let (l, t, _, h) = button_fill(&f, i).expect("fill");
+            assert!((l - 0.069).abs() < 1e-4, "entry {i} left {l}");
+            assert!((t - 0.0205).abs() < 1e-4, "entry {i} top {t}");
+            assert!((h - 0.023).abs() < 1e-4, "entry {i} height {h}");
+        }
+        assert!((button_fill(&f, 0).unwrap().2 - 0.141).abs() < 1e-4);
+        assert!((button_fill(&f, 2).unwrap().2 - 0.171).abs() < 1e-4);
+        assert!((button_fill(&f, 5).unwrap().0 - 0.064).abs() < 1e-4);
+        assert!((button_fill(&f, 5).unwrap().2 - 0.160).abs() < 1e-4);
+        assert!((plate_size(&f, 5).unwrap().0 - 0.24).abs() < 1e-6);
+    }
+
+    /// A frame the FDF does not define is reported, never defaulted.
+    #[test]
+    fn a_missing_menu_frame_is_reported() {
+        let f = fixture_fdf();
+        // The fixture defines only entry 0.
+        assert!(button_fill(&f, 2).is_err());
+    }
+
+    /// The last entry's bottom, which is what decides whether the menu fits.
+    #[test]
+    fn the_menu_fits_inside_the_window() {
+        let last = button_geometry(MENU.len() - 1);
+        assert!(last.top + last.height <= 1.0);
+    }
+
+    /// The inner fill's authored rectangle, asserted against the FDF chain.
+    ///
+    /// The expected numerators are checked **independently** of the helper's own
+    /// arithmetic: the chain `0.256 - 0.012 - 0.031 + 0.001 - 0.149` puts Single
+    /// Player's inner left at `0.065`, so its fill left is `0.069`; Quit's plate
+    /// is `0.24` and its width `0.168`, so its fill left is `0.064`.
+    #[test]
+    fn the_inner_fill_matches_the_frame_definition() {
+        for i in 0..5 {
+            let (l, t, w, h) = button_fill(i);
+            assert!((l - 0.069).abs() < 1e-6, "entry {i} left {l}");
+            assert!((t - 0.0205).abs() < 1e-6, "entry {i} top {t}");
+            assert!((h - 0.023).abs() < 1e-6, "entry {i} height {h}");
+            assert!(l + w < 0.256, "entry {i} leaves the plate");
+        }
+        // Widths: 0.149 - 0.008, 0.179 - 0.008, 0.168 - 0.008.
+        assert!((button_fill(0).2 - 0.141).abs() < 1e-6);
+        assert!((button_fill(2).2 - 0.171).abs() < 1e-6);
+        assert!(
+            (button_fill(5).0 - 0.064).abs() < 1e-6,
+            "Quit's narrower plate"
+        );
+        assert!((button_fill(5).2 - 0.160).abs() < 1e-6);
+        assert!(button_fill(5).0 + button_fill(5).2 < 0.24);
     }
 
     #[test]

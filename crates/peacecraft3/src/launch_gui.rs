@@ -98,6 +98,17 @@ struct LauncherPanel;
 #[derive(Component)]
 struct ButtonArt;
 
+/// The original inner fill on a main-menu entry, as opposed to the launcher's
+/// own controls, which share `Button` but are not skinned with it.
+#[derive(Component)]
+struct ButtonFill;
+
+/// Set on a menu entry once its inner fill exists. The plate pass skips a button
+/// carrying `ButtonArt`, so without this a fill that could not be derived on the
+/// first pass — the frame definitions had not arrived yet — would never be added.
+#[derive(Component)]
+struct ButtonFilled;
+
 // ------------------------------------------------------------- spacing/type
 
 fn card_radius() -> BorderRadius {
@@ -638,9 +649,64 @@ struct MenuArtCache {
     button: Option<Handle<Image>>,
     panel: Option<Handle<Image>>,
     font: Option<Handle<Font>>,
+    /// The parsed frame definitions the button bounds come from. `None` until
+    /// **both** FDFs have been read and parsed, so a partially-arrived pair is
+    /// never cached as if it were complete.
+    fdf: Option<crate::fdf::Fdf>,
+    /// Set when an FDF that *is* present fails to read or parse. Retrying the same
+    /// bad bytes every frame would spin; the failure is reported once instead.
+    fdf_failed: bool,
     native_loaded: bool,
     install: Option<std::path::PathBuf>,
     selection: Option<String>,
+}
+
+/// Spawns one menu entry's inner fill, or `None` when the art or the frame
+/// definitions are not ready, or the entry's frames cannot be derived.
+///
+/// Every number is derived from the parsed FDF and laid out relatively: the fill
+/// is a grid item in the button's single cell, inset by `Vw`/`Vh` margins taken
+/// from the authored frame units. No pixel size and no absolute position.
+fn spawn_fill(
+    commands: &mut Commands,
+    cache: &MenuArtCache,
+    entry: &crate::mainmenu::MenuButton,
+) -> Option<Entity> {
+    let fill = cache.panel.as_ref()?;
+    let fdf = cache.fdf.as_ref()?;
+    let (left, top, width, height) = crate::mainmenu::button_fill(fdf, entry.0).ok()?;
+    let (plate_w, plate_h) = crate::mainmenu::plate_size(fdf, entry.0).ok()?;
+    // `Percent` margins resolve against the parent's *width* on both axes, so the
+    // vertical offsets are `Vh`: the authored Y divided by the frame height, as
+    // the original divides by 0.6.
+    Some(
+        commands
+            .spawn((
+                Node {
+                    grid_row: GridPlacement::start(1),
+                    grid_column: GridPlacement::start(1),
+                    margin: UiRect {
+                        left: Val::Vw(left / crate::mainmenu::FRAME_W * 100.0),
+                        right: Val::Vw((plate_w - left - width) / crate::mainmenu::FRAME_W * 100.0),
+                        top: Val::Vh(top / crate::mainmenu::FRAME_H * 100.0),
+                        bottom: Val::Vh(
+                            (plate_h - top - height) / crate::mainmenu::FRAME_H * 100.0,
+                        ),
+                        ..default()
+                    },
+                    ..default()
+                },
+                // The shared tile handle, drawn WHITE for the button; the settings
+                // panel keeps its own per-entity tint.
+                ImageNode {
+                    image: fill.clone(),
+                    color: Color::WHITE,
+                    ..default()
+                },
+                ButtonFill,
+            ))
+            .id(),
+    )
 }
 
 /// Puts the original's frame art on the menu buttons once it can be read.
@@ -657,8 +723,20 @@ fn apply_menu_art(
     mut fonts: ResMut<Assets<Font>>,
     mut cache: ResMut<MenuArtCache>,
     mut buttons: Query<
-        (Entity, &mut Node, &Children, Option<&InteractionDisabled>),
+        (
+            Entity,
+            &mut Node,
+            &Children,
+            Option<&InteractionDisabled>,
+            Option<&crate::mainmenu::MenuButton>,
+        ),
         (With<Button>, Without<ButtonArt>),
+    >,
+    // Entries that already wear their plate but not yet their fill, so a frame
+    // set arriving after the art still reaches them.
+    late: Query<
+        (Entity, &Children, &crate::mainmenu::MenuButton),
+        (With<ButtonArt>, Without<ButtonFilled>),
     >,
     panels: Query<Entity, (With<Wc3Panel>, Without<ImageNode>)>,
     mut text: Query<&mut TextFont>,
@@ -670,6 +748,8 @@ fn apply_menu_art(
             cache.button = None;
             cache.panel = None;
             cache.font = None;
+            cache.fdf = None;
+            cache.fdf_failed = false;
             cache.native_loaded = false;
             cache.install = install;
         }
@@ -698,17 +778,79 @@ fn apply_menu_art(
                 cache.font = Some(fonts.add(Font::from_bytes(bytes)));
             }
         }
+        // The frame definitions. **Both** must be read and parsed before the pair
+        // is cached: the page fetches them separately, so caching after the first
+        // one would freeze an incomplete frame set and every derivation against
+        // the menu's own frames would fail from then on. Templates are parsed
+        // first so a menu override wins.
+        if cache.fdf.is_none() && !cache.fdf_failed {
+            let mut fdf = crate::fdf::Fdf::default();
+            let mut parsed = 0usize;
+            let mut present = 0usize;
+            let mut errors: Vec<String> = Vec::new();
+            for path in [
+                crate::mainmenu::STANDARD_TEMPLATES_FDF,
+                crate::mainmenu::MAIN_MENU_FDF,
+            ] {
+                let Some(bytes) = crate::mainmenu::art_bytes(install.as_deref(), path) else {
+                    continue;
+                };
+                present += 1;
+                match std::str::from_utf8(&bytes) {
+                    Err(e) => errors.push(format!("{path}: not text ({e})")),
+                    Ok(text) => match fdf.parse_into(text) {
+                        Ok(()) => parsed += 1,
+                        Err(e) => errors.push(format!("{path}: {e}")),
+                    },
+                }
+            }
+            if parsed == 2 {
+                cache.fdf = Some(fdf);
+            } else if !errors.is_empty() {
+                // A file that is present but unreadable will not improve; say so
+                // and stop, rather than parsing it every frame.
+                for e in &errors {
+                    bevy::log::warn!("menu frame definitions unusable: {e}");
+                }
+                cache.fdf_failed = true;
+            } else {
+                // Not all present yet — a browser supplies them a moment apart.
+                let _ = present;
+            }
+        }
         cache.native_loaded = true;
     }
     if let Some(handle) = &cache.button {
-        for (entity, mut node, children, disabled) in &mut buttons {
+        for (entity, mut node, children, disabled, menu_button) in &mut buttons {
             let mut image = ImageNode::new(handle.clone()).with_mode(NodeImageMode::Stretch);
             if disabled.is_some() {
                 image.color = DISABLED_FG;
             }
+            // One grid cell carries both the inner fill and the label, so they
+            // overlay. Two ordinary flex children would stack and push the label.
+            let overlay = commands
+                .spawn(Node {
+                    display: Display::Grid,
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    grid_template_columns: vec![GridTrack::percent(100.0)],
+                    grid_template_rows: vec![GridTrack::percent(100.0)],
+                    ..default()
+                })
+                .id();
+            // The original inner fill, on menu entries only: the launcher's own
+            // controls are `Button`s too and must not be skinned with it.
+            if let Some(entry) = menu_button {
+                if let Some(fill_node) = spawn_fill(&mut commands, &cache, entry) {
+                    commands.entity(overlay).add_child(fill_node);
+                    commands.entity(entity).insert(ButtonFilled);
+                }
+            }
             // Keep the frame on the outer button and padding on its contents.
             let content = commands
                 .spawn(Node {
+                    grid_row: GridPlacement::start(1),
+                    grid_column: GridPlacement::start(1),
                     width: Val::Percent(100.0),
                     height: Val::Percent(100.0),
                     padding: node.padding,
@@ -727,7 +869,24 @@ fn apply_menu_art(
             commands
                 .entity(entity)
                 .insert((ButtonArt, image))
-                .add_child(content);
+                .add_child(overlay);
+            commands.entity(overlay).add_child(content);
+        }
+    }
+    // A frame set that arrives after the plate still gets its fill: the plate pass
+    // skips a button that already carries `ButtonArt`, so this pass is what makes
+    // a late `cache.fdf` reach the entries instead of freezing them fill-less.
+    if cache.fdf.is_some() && cache.panel.is_some() {
+        for (entity, children, entry) in &late {
+            // The plate pass gave each entry exactly one child: the overlay grid.
+            let Some(overlay) = children.first().copied() else {
+                continue;
+            };
+            if let Some(fill_node) = spawn_fill(&mut commands, &cache, entry) {
+                // First, so it draws behind the label in the shared grid cell.
+                commands.entity(overlay).insert_children(0, &[fill_node]);
+                commands.entity(entity).insert(ButtonFilled);
+            }
         }
     }
     if let Some(handle) = &cache.panel {
