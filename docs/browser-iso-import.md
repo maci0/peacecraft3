@@ -85,10 +85,16 @@ and scripting source-expression tests do not establish campaign outcomes.
 
 ## Browser integration verification
 
-The generated WASM API passed 15 synthetic archive/transaction assertions in a
+The generated WASM API passed 26 synthetic archive/transaction assertions in a
 Chromium worker. Chromium audio checks cover mute, intro pause/resume, click,
 content rejection and Blob URL replacement/reset. Network capture found zero
 uploads, unexpected requests or sockets. A separate rendered-app file-input check
 recognized a content-valid MPQ under a misleading filename without replacing
 active assets during discovery. These checks do not establish original installer
 ISO acceptance or rendered fidelity from the synthetic fixture art.
+
+Hydration validates canonical names and renderer aliases before publication.
+Two unequal files mapping to the same alias reject with `AMBIGUOUS_ASSET_ALIAS`;
+the previous visible store and revision survive. Identical content may share
+an alias. Checked memory accounting charges only newly stored names, and failed
+inserts do not partially populate the staging map.

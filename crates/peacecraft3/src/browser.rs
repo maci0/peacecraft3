@@ -319,27 +319,10 @@ pub fn menu_font_alias(path: String) -> Option<String> {
 fn hydrate(
     set: &mut [pcx_mpq::MpqArchive],
 ) -> Result<(BTreeMap<String, Vec<u8>>, Vec<String>), String> {
-    let mut assets = BTreeMap::new();
+    let mut assets = crate::import_assets::HydratedAssets::new(HYDRATION_LIMIT);
     let mut notes = Vec::new();
-    let mut total = 0usize;
     let mut put = |path: &str, alias: Option<&str>, bytes: Vec<u8>| -> Result<(), String> {
-        total = total
-            .checked_add(
-                bytes
-                    .len()
-                    .saturating_mul(if alias.is_some() { 2 } else { 1 }),
-            )
-            .ok_or("hydration size overflow")?;
-        if total > HYDRATION_LIMIT {
-            return Err(format!(
-                "runtime hydration exceeds {HYDRATION_LIMIT} byte budget"
-            ));
-        }
-        if let Some(alias) = alias {
-            assets.insert(normalize(alias), bytes.clone());
-        }
-        assets.insert(normalize(path), bytes);
-        Ok(())
+        assets.insert(path, normalize(path), alias.map(normalize), bytes)
     };
     let mut fdf = crate::fdf::Fdf::default();
     let mut frame_texts = Vec::new();
@@ -441,7 +424,7 @@ fn hydrate(
         }
     }
     notes.push("Edition/build and archive priority remain unverified; only unique or byte-identical members were resolved".into());
-    Ok((assets, notes))
+    Ok((assets.finish(), notes))
 }
 
 /// Hydrate renderer contracts and authored dependencies before replacing the

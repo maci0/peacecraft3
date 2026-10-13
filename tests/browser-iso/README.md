@@ -2,8 +2,8 @@
 
 The frozen integration source/API is in `web/loader.js`, `web/index.html`,
 `web/menu-audio.js`, `web/iso.js`, `web/iso/import.js`, `web/iso/audio.js`, and
-`crates/peacecraft3/src/browser.rs`. Root owns WASM generation and renderer cache
-invalidation. No manifest, lockfile, original assets or generated original
+`crates/peacecraft3/src/browser.rs`. Verification uses matching generated WASM
+and renderer cache invalidation. No manifest, lockfile, original assets or generated original
 content are part of these fixtures.
 
 Run the synthetic parser/import/metadata tests:
@@ -12,11 +12,11 @@ Run the synthetic parser/import/metadata tests:
 node --test tests/browser-iso/*.test.mjs
 ```
 
-Run actual generated WASM and browser audio/network verification after root
-builds WASM and regenerates `web/pkg`:
+Run actual generated WASM and browser audio/network verification after building
+WASM and regenerating `web/pkg`:
 
 ```sh
-node tests/browser-iso/browser-runtime.mjs
+PCX_APP_IMPORT_WASM_READY=1 node tests/browser-iso/browser-runtime.mjs
 ```
 
 The runner uses the existing `.scratch/browser-check` Playwright installation
@@ -33,13 +33,16 @@ The real WASM runs in a no-DOM Worker. The test verifies staged archives are
 invisible, commit increments revision once, named extraction works without a
 listfile, model-authored texture paths and FDF/font aliases are hydrated,
 unequal duplicate members fail closed with previous assets/revision intact,
-and equal duplicate members can commit. The main page exercises the actual
+and equal duplicate members can commit. Different canonical font paths that map
+to one renderer alias reject with `AMBIGUOUS_ASSET_ALIAS` when their bytes differ;
+the previous store and revision remain intact. Byte-identical aliases can share
+the name. The main page exercises the actual
 menu audio module: authored synthetic Volume is derived from SYLK cells;
 mute and intro state survive replacement; click playback remains available;
 unsupported content rejects; URL creation/revocation balances on reset.
 
-Recorded verification: Node suite **10 passed, 0 failed, 0 skipped**; real
-Chromium/WASM **15 checked assertions**, audio lifecycle assertions passed,
+Recorded verification: Node suite **12 passed, 0 failed, 0 skipped**; real
+Chromium/WASM **26 checked assertions**, audio lifecycle assertions passed,
 **0 uploads, 0 unexpected requests, 0 sockets**. The actual store self-check
 reports its assets are served by the default memory source, with no missing
 entries. Counts are observed synthetic results, not original-install gates.

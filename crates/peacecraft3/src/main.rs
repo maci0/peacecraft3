@@ -2,6 +2,8 @@
 // through here: wasm32 boots from `browser::start` instead.
 #[cfg(target_arch = "wasm32")]
 mod browser;
+#[cfg(any(test, target_arch = "wasm32"))]
+mod import_assets;
 
 mod button_actions;
 mod fdf;

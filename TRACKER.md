@@ -799,8 +799,8 @@ Format: `date — subsystem — symptom — root cause — status`
       destination to copy into → every source reported rejected), **install-level
       version detection** (one archive can be opened and counted, but not
       identified as 1.28c or 1.29b), **rendering without a canvas**.
-- [ ] `crates/peacecraft3/README.md` — `web/loader.js` points at it for the build
-      recipe and it does not exist yet.
+- [x] `crates/peacecraft3/README.md` provides the browser build recipe and earlier
+      artifact-size measurements. Current artifact measurements remain a separate gate.
 
 ## Desktop builds
 
@@ -866,7 +866,7 @@ Format: `date — subsystem — symptom — root cause — status`
 - Current release WASM build passed with compiler warnings denied. Generated glue
   uses matching wasm-bindgen 0.2.129. Rendered F8 toggle/resize and menu clicks while
   visible pass on desktop/narrow browser views; hiding restores prior pixels.
-- Local ISO file-input discovery and 15 actual WASM archive assertions pass;
+- Local ISO file-input discovery and 26 actual WASM archive assertions pass;
   Chromium audio replacement/reset passes with zero uploads/unexpected requests.
   Running-app File-input import refreshes six authored labels and the scene;
   click audio, resize and unequal-member rollback pass with zero uploads/sockets.
@@ -874,7 +874,8 @@ Format: `date — subsystem — symptom — root cause — status`
 
 - Menu font files derive from each entry's FDF face and the supplied skin table,
   with no production face-to-file constant. New browser verification passes
-  12 Node tests and 21 actual WASM assertions, including duplicate-face refusal;
+  12 Node tests and 26 actual WASM assertions, including duplicate-face refusal
+  and atomic rejection of unequal files mapping to the same renderer alias;
   running-app original font import/alias bytes, cache, audio, resize and rollback
   pass. Per-entry handles now apply to the label root and every authored run;
   a two-face ECS regression verifies unrelated launcher/F8 text is untouched.
@@ -908,6 +909,9 @@ Format: `date — subsystem — symptom — root cause — status`
   graphics-library and map all-target scoped Clippy also pass. Map cleanup keeps
   the stronger original version guards; the complete 284-source original fixture
   passes after correction, as does the WASM check.
+  The app's all-target scoped Clippy check still reports 51 diagnostics in
+  existing UI/scene systems and tests (30 in the production target). Compiler
+  checks remain clean with warnings denied; full app Clippy is not yet a passed gate.
 
 - [!] Latest four-target CI at `122ecd0` (run `38456169192`) did not start:
       GitHub reports failed account payments or an insufficient spending limit.

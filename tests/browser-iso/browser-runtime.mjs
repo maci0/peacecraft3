@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 import { wavFixture } from './fixtures.mjs';
-assert.equal(process.env.PCX_APP_IMPORT_WASM_READY, '1', 'WAIT for root READY4 generated WASM notification');
+assert.equal(process.env.PCX_APP_IMPORT_WASM_READY, '1', 'Generated WASM/glue readiness required');
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const playwrightPath = process.env.PCX_PLAYWRIGHT_MODULE ?? `${root}.scratch/browser-check/node_modules/playwright-core/index.mjs`;
 const { chromium } = await import(pathToFileURL(playwrightPath));

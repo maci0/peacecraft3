@@ -48,7 +48,26 @@ try {
   check(duplicateError?.includes('SelectedSyntheticFace'), 'duplicate face across sections did not fail with face context');
   check(api.asset_revision() === priorRevision, 'duplicate skin rejection changed revision');
   check(JSON.stringify(api.stored_assets()) === JSON.stringify(priorPaths), 'duplicate skin rejection changed committed paths');
+  const text = new TextEncoder(), decode = new TextDecoder();
+  const framePath = Object.keys(members).find(path => path.toLowerCase().endsWith('mainmenu.fdf'));
+  const secondFontPath = `OtherFonts\\${fontFiles[0].split(/[\\/]/).pop()}`;
+  const extraFrame = '\nFrame "BUTTON" "ExitButton" {\n ButtonText "SecondSyntheticText",\n Frame "TEXT" "SecondSyntheticText" INHERITS "SyntheticTextStyle" {\n FrameFont "SecondSyntheticFace", 0.017, "",\n Text "SYNTHETIC_LABEL",\n }\n}\n';
+  const aliasMembers = { ...members,
+    [skinPath]: text.encode(`${skin}\nSecondSyntheticFace=${secondFontPath}\n`),
+    [framePath]: text.encode(decode.decode(members[framePath]) + extraFrame),
+    [secondFontPath]: text.encode('different bytes for the same served basename'),
+  };
+  api.begin_archive_import(); api.stage_archive('alias-conflict', mpqFixture(aliasMembers));
+  let aliasError; try { api.commit_archive_import(); } catch (e) { aliasError = String(e); api.cancel_archive_import(); }
+  check(aliasError?.includes('AMBIGUOUS_ASSET_ALIAS'), 'different fonts sharing a served alias were not refused');
+  check(api.asset_revision() === priorRevision, 'alias rejection changed revision');
+  check(JSON.stringify(api.stored_assets()) === JSON.stringify(priorPaths), 'alias rejection exposed partial assets');
+  aliasMembers[secondFontPath] = members[fontFiles[0]];
+  api.begin_archive_import(); api.stage_archive('equal-alias', mpqFixture(aliasMembers)); api.commit_archive_import();
+  check(api.asset_revision() === priorRevision + 1, 'equal aliases should commit once');
+  check(api.menu_font_files().length === 2, 'equal aliases lost one canonical font binding');
+  const beforeEqualArchives = api.asset_revision();
   api.begin_archive_import(); api.stage_archive('equal-1', mpqFixture(members)); api.stage_archive('equal-2', mpqFixture(members));
-  api.commit_archive_import(); check(api.asset_revision() === priorRevision + 1, 'equal duplicates should commit once');
+  api.commit_archive_import(); check(api.asset_revision() === beforeEqualArchives + 1, 'equal duplicates should commit once');
   postMessage({ ok: true, result, checks, fonts: { files: fontFiles, aliases: fontFiles.map(path => api.menu_font_alias(path)) }, selftest: api.selftest(), audio: { click, musicPath, music: [...api.archive_member(musicPath)], clickBytes: [...api.archive_member(click.path)] } });
 } catch (error) { postMessage({ ok: false, error: String(error), stack: error?.stack }); }
