@@ -1161,3 +1161,90 @@ byte. Neither delegate was expanded beyond this authorized range.
 Actual loaded input identity, metadata field semantics/defaults and native
 context lifetime remain unproved. `GetPlayerNeutralPassive` remains unsupported;
 original campaign runtime remains blocked.
+
+
+## Path acceptance: named attribute import and exact failure result
+
+Only **`0x435660..0x4356d0`**, half-open, 112 bytes, was inspected with GNU
+objdump 2.47 against exact Legacy executable SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+Original range SHA-256:
+`5bba51ed588f5f0c80422cddde7906d86f239756c7794364d6928fd08ba25e6e`.
+The complete body ends at `0x4356ca`. The preceding 67,704 note bytes are
+unchanged, SHA-256
+`c2367bf6e61ea69b44a5f086501be4dcab922c8d655c61f1ecf4c90d94fa1606`.
+Raw evidence is `.scratch/neutral-acceptance-435660.objdump` and
+`.scratch/neutral-acceptance-import.json`. No builder, predicate, provider or
+native execution was expanded. Only one import slot was resolved by PE metadata.
+
+### Proved single-entry import binding
+
+IAT VA **`0xe661c0`**, RVA `0xa661c0`, is descriptor RVA `0xcd7170`,
+OriginalFirstThunk RVA `0xcd73c0`, FirstThunk RVA `0xa66160`, index **24**.
+Lookup thunk RVA `0xcd7420` refers to import-by-name RVA `0xcd8452`:
+**`KERNEL32.dll!GetFileAttributesW`**, hint **490**, ordinal flag clear.
+Descriptor timestamp/forwarder-chain values are zero. The hint is not an ordinal.
+The descriptor/thunk/name traversal was bounded by PE structure and terminators;
+there was no byte search or runtime import resolution.
+
+| Selected metadata | RVA | Bytes | Original-byte SHA-256 |
+| --- | --- | ---: | --- |
+| descriptor | `0xcd7170` | 20 | `89d44d243eef4bfa6681ae1ebb313801672746ae1bfb8e0b9228e55a60186816` |
+| DLL | `0xcd8c7c` | 13 | `f8efc1f27ef6c525f7fd20dcb8d65e8197e97410eced20db4d323dfbf230a2a4` |
+| lookupThunk | `0xcd7420` | 4 | `938fdfc4a639468cc461073ab30f9aba38d19ff6ba6ae9056d8c7b76b116923d` |
+| iatThunk | `0xa661c0` | 4 | `938fdfc4a639468cc461073ab30f9aba38d19ff6ba6ae9056d8c7b76b116923d` |
+| importByName | `0xcd8452` | 21 | `621cc8168ab700fe22bb4039387439b31927299f58019d145dc9de7b77b5b683` |
+
+### Call path and raw result contract
+
+For a nonnull path, `0x43569e` first calls the **unresolved** import slot
+`0xe661d0` with six arguments `(0xfde9, 0, path, 0xffffffff, local_buffer, 0x104)`.
+The argument pattern suggests a conversion operation, but no API name, encoding
+or full output contract is assigned from that shape. This second import was
+not resolved under the single-entry authorization.
+
+If that first import returns nonzero, `0x4356af` calls the named
+`GetFileAttributesW` import with the local buffer pointer. This establishes an
+actual static connection to the Windows path-attribute API for that path,
+stronger than an inferred generic source-category label. It does not establish
+the builder's exact path, successful runtime file access, later opener API or
+archive priority.
+
+The shared return sequence is exactly **`(~(EAX >> 4)) & 1`**, logical shift.
+Thus a returned word with mask `0x10` set produces zero; that mask clear
+produces one. A returned `0xffffffff` produces zero by the same bit test;
+there is no separate sentinel comparison or error-detail query here. No extra
+attribute-bit selection or source-category code is implemented in this gate.
+
+### Null and first-import failures are not the same sentinel path
+
+A null input calls `0x43eca0(0x57)`, then explicitly sets EAX to zero if that
+helper returns normally. A zero return from the first import also branches to
+that explicit EAX-zero instruction. **Both then execute the same shared
+inversion and return one**, not zero. Whether the reporting helper can terminate
+or raise before returning remains outside coverage; that qualification applies
+to the null-input path. The first-import-zero path itself has no reporting call.
+
+Consequently this gate must not be silently reconstructed as a conventional
+"conversion or path query failure returns false" check. On the observed normal
+return path it accepts the first-import-zero case and does not call
+`GetFileAttributesW` in that case. There is no output parameter and no metadata
+`+4` initialization in this routine. The caller can proceed with its previously
+built output path after such a nonzero gate result; that is distinct from proof
+that the path was valid or existed.
+
+### Established identity and remaining exact boundary
+
+The classifier's result-two path now has a named Windows path-attribute query
+connection and a fully observed local result formula, including its unusual
+pre-query failure path. This still does not prove the actual loaded source or
+identify the incoming basename/context. The named downstream `GetFileSize`
+import is separately proved; combining two named imports does not establish
+uninspected opener/loader semantics or archive ordering.
+
+The remaining import-contract boundary is **IAT `0xe661d0`**, requiring a
+separately authorized single-entry PE resolution if needed; no function address
+or API name is guessed for it. The builder's missing continuation beginning at
+instruction `0x4358ce` remains separate. Neither it nor `0x436fa0` was expanded.
+Field meaning/defaults, source lifetime and original campaign runtime remain
+unproved. `GetPlayerNeutralPassive` stays unsupported.
