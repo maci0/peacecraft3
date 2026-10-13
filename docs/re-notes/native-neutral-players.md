@@ -883,3 +883,106 @@ The unknown input basename, metadata field meaning/defaults, parser failure
 translation and native map-context lifetime remain separate. An executable
 campaign Host is not supplied by this bounded identity trace;
 `GetPlayerNeutralPassive` remains unsupported and campaign runtime remains blocked.
+
+
+## Source selector and one resolved PE import
+
+GNU objdump 2.47 inspected only **`0x439c20..0x439e20`**, half-open, 512 bytes,
+from exact Legacy executable SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+Original code-range SHA-256:
+`f40e4b38852856670e0eea21d019b9238a0597981f5005127b95be76bfaa7c6e`.
+The routine continues outside the window; its shared tail is not inspected.
+Raw disassembly is `.scratch/neutral-selection-439c20.objdump`.
+The preceding 51,377 note bytes are unchanged, SHA-256
+`54e1883579a7bf60e4ef541426db92337e93ab31c018a7155fd79a3b87497d81`.
+
+### Single-entry import identity: metadata, not a guessed API
+
+A bounded PE32 descriptor/thunk/name traversal resolved only IAT VA
+**`0xe66198`** (RVA `0xa66198`). Its descriptor is RVA `0xcd7170`,
+OriginalFirstThunk RVA `0xcd73c0`, FirstThunk RVA `0xa66160`, index **14**.
+The corresponding lookup thunk at RVA `0xcd73f8` contains RVA `0xcd83b0`;
+the ordinal flag is clear. The import-by-name record has hint **496** and name
+**`GetFileSize`**, with DLL **`KERNEL32.dll`**. Descriptor timestamp and
+forwarder-chain fields are zero. Hint 496 is not an ordinal import identity.
+This binds the earlier call slot to shipped PE metadata; it does not observe
+which runtime DLL address the operating system resolves or any file access.
+No other import entry was named or queried as a target.
+
+| Selected metadata | RVA | Bytes | Original-byte SHA-256 |
+| --- | --- | ---: | --- |
+| descriptor | `0xcd7170` | 20 | `89d44d243eef4bfa6681ae1ebb313801672746ae1bfb8e0b9228e55a60186816` |
+| DLL | `0xcd8c7c` | 13 | `f8efc1f27ef6c525f7fd20dcb8d65e8197e97410eced20db4d323dfbf230a2a4` |
+| lookupThunk | `0xcd73f8` | 4 | `c21f7891bb53edfb8d94a9e2bc50e56f6b9b4a1d1b476126b1a0197833041dc5` |
+| iatThunk | `0xa66198` | 4 | `c21f7891bb53edfb8d94a9e2bc50e56f6b9b4a1d1b476126b1a0197833041dc5` |
+| importByName | `0xcd83b0` | 14 | `599ea3886cf2daba46b74aee3a181bcc7195f09e0396a4f784346c1be0969ed8` |
+
+The structural resolver validates file/RVA bounds and the candidate thunk's
+terminator before its selected index. It does not perform an image byte search.
+Metadata provenance is `.scratch/neutral-single-import.json`; its temporary
+resolver is `.scratch/resolve-neutral-single-import.py`.
+
+### Supplied path and essential classification boundary
+
+The selector receives `(0, transformed_path, mode, &handle)` from the previously
+proved loading core. It clears the optional handle output, then tests that the
+path's first byte is nonzero and the output pointer exists. The visible invalid
+path reports with `0x43eca0(0x57)` and returns zero. It dereferences the path
+before that combined validity test, so a null path pointer is not visibly
+handled here; the preceding core already rejects null path arguments.
+
+Following an import-slot call and a conditional `0x435f20(0x100001)` call when
+global `0x112ed34` is zero, `0x439cb8` invokes **`0x435cb0`** with the first
+argument, supplied path, mode, two local output addresses and a local path
+buffer. For this caller the first argument is zero. The classifier's EAX
+selects branches: zero jumps to `0x439f5b`; two enters the following opener
+path; any other nonzero value enters the alternative path at `0x439d7f`.
+Those result meanings, path rewriting and selection policy are delegated;
+no archive-versus-filesystem category is inferred merely from the numbers.
+
+### Visible result-two opener and handle field connection
+
+The result-two branch passes the classifier's local path buffer and numeric
+arguments to **`0x4380c0`** at `0x439ceb`. That return is compared with
+`0xffffffff`; equality sets EBX to zero and jumps to the uninspected tail.
+On the other branch, when mode mask `0x4` is clear, a wrapper-producing call at
+`0x436bb0` is used. The original supplied path is passed to `0x433500` for
+wrapper `+8`; the classifier's path buffer is passed to `0x4335d0`, whose return
+is stored at `+0x10c`. The opener return is stored at **wrapper `+0x110`**,
+other words are assigned at `+0x144` and `+0x14c`, and the wrapper pointer is
+published through the handle output. EBX becomes two before jumping to the
+shared tail. Wrapper allocation, string helper, opener and final-return
+contracts were not inspected in this slice.
+
+This precisely connects the earlier loading core's `+0x110` word to an opener
+return, and its later import-slot call to the named `GetFileSize` import. It
+supports a file-handle role for that branch's word; it does **not** prove the
+opener implementation, classify all source modes, or establish actual runtime
+input. The loading core's `+0x110 == 0xffffffff` branch and a possible API result
+with that same numeric word must not be conflated: no explicit check of the
+`GetFileSize` return is visible in the earlier core.
+
+Mode mask `0x4` also has a direct-output path here, and an alternative branch
+calls the same opener using another local object's `+8` path before a distinct
+import-slot call. The retained `0x439570` mode derivation produces only low-two-bit
+values, so mask `0x4` is clear for this particular call chain. The applicable
+non-two branch reaches `0x439de3`, supplies colon/backslash/slash bytes to
+`0x433410`, and continues beyond `0x439e20`. Character-search semantics and
+archive input identity are not assigned from that partial path.
+
+### Stopped failure/selection boundary
+
+Shared cleanup/result tail **`0x439f5b`** lies outside coverage. No successful
+final return is proved for the visible publication branch solely from EBX's
+assigned value. Likewise a classification/opener failure's complete cleanup,
+reporting and returned code remain beyond this window. Visible output clears
+and sentinel comparisons are retained without inventing metadata defaults.
+
+Stop at **`0x435cb0`**, the essential source-classification delegate: it consumes
+the supplied path/mode and produces the result and local data selecting the
+opener branch. A next bounded entry window would be `0x435cb0..0x435eb0` if
+separately authorized. No delegate was expanded here. Archive/filesystem
+selection, actual input basename, metadata `+4` semantics/defaults and native
+map-context lifetime remain unproved. `GetPlayerNeutralPassive` remains
+unsupported and original campaign execution remains blocked.
