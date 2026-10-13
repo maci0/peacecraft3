@@ -1248,3 +1248,87 @@ or API name is guessed for it. The builder's missing continuation beginning at
 instruction `0x4358ce` remains separate. Neither it nor `0x436fa0` was expanded.
 Field meaning/defaults, source lifetime and original campaign runtime remain
 unproved. `GetPlayerNeutralPassive` stays unsupported.
+
+
+## Single conversion import: identity and recorded argument contract
+
+This slice performs only bounded PE descriptor/thunk/import-by-name traversal
+for **IAT VA `0xe661d0`** on the exact Legacy executable SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+No executable code range, builder, predicate, provider or native runtime is
+newly inspected. The preceding 72,745 note bytes are preserved, SHA-256
+`b7b909504bd3c1ced57eab099fe11ee55d6d39325e0d1b3a4f407e71a79f16b7`.
+The structural resolver and result stay local in
+`.scratch/resolve-neutral-conversion-import.py` and
+`.scratch/neutral-conversion-import.json`.
+
+### Named import proved by shipped metadata
+
+IAT RVA `0xa661d0` belongs to descriptor RVA `0xcd7170`, with
+OriginalFirstThunk RVA `0xcd73c0` and FirstThunk RVA `0xa66160`, index **28**.
+The selected lookup thunk at RVA `0xcd7430` contains import-by-name RVA
+`0xcd8498`. Its ordinal flag is clear; hint **871** and name
+**`MultiByteToWideChar`** belong to DLL **`KERNEL32.dll`**. Timestamp and
+forwarder-chain fields are zero. Hint 871 is not an ordinal import. This
+identity is derived from PE metadata, not guessed from the six-argument shape.
+No other entry is resolved in this step.
+
+| Selected metadata | RVA | Bytes | Original-byte SHA-256 |
+| --- | --- | ---: | --- |
+| descriptor | `0xcd7170` | 20 | `89d44d243eef4bfa6681ae1ebb313801672746ae1bfb8e0b9228e55a60186816` |
+| DLL | `0xcd8c7c` | 13 | `f8efc1f27ef6c525f7fd20dcb8d65e8197e97410eced20db4d323dfbf230a2a4` |
+| lookupThunk | `0xcd7430` | 4 | `5e2beaf23253fb051108e625f14896ae942c7355734a839f34b096e7f1993632` |
+| iatThunk | `0xa661d0` | 4 | `5e2beaf23253fb051108e625f14896ae942c7355734a839f34b096e7f1993632` |
+| importByName | `0xcd8498` | 22 | `154edd3bad225054efe8d8871ec8087b960200652d5c70a20f9bd60046ffd2b8` |
+
+### Primary SDK mapping, distinct from native instruction evidence
+
+[Microsoft's MultiByteToWideChar reference](https://learn.microsoft.com/en-us/windows/win32/api/stringapiset/nf-stringapiset-multibytetowidechar)
+identifies the parameters as code page, flags, input pointer, input byte count,
+output wide-string pointer and output character capacity. It documents UTF-16
+output, `-1` input length including NUL, capacity measured in wide characters,
+a successful converted-character count, and zero on failure.
+[Microsoft's code-page identifiers](https://learn.microsoft.com/en-us/windows/win32/intl/code-page-identifiers)
+identify **65001** as UTF-8. These are primary documented API contracts, not
+measurements of this executable running on a particular Windows version.
+
+Applying that signature to the **already inspected** six arguments at
+`0x43569e` yields:
+
+| Parameter | Recorded argument | Documented interpretation |
+| --- | --- | --- |
+| CodePage | `0xfde9` = 65001 | UTF-8 |
+| dwFlags | zero | Actual caller flags; no strict-error flag is supplied |
+| lpMultiByteStr | supplied path pointer | Input byte string |
+| cbMultiByte | `0xffffffff` = signed -1 | NUL-terminated input, including NUL |
+| lpWideCharStr | local buffer | UTF-16 destination |
+| cchWideChar | `0x104` = 260 | Destination capacity in wide characters |
+
+Thus conversion identity is closed: on documented success, the local wide path
+is passed to the separately proved `GetFileAttributesW` import. The recorded
+flags are not substituted with strict malformed-input behavior. Actual operating
+system behavior, path bytes and execution outcome remain unobserved.
+
+### Failure paths preserved without invented defaults
+
+The prior instruction trace still controls the **caller's** unusual outcome.
+When `MultiByteToWideChar` returns zero, it branches to explicit EAX-zero and
+then the shared formula `(~(EAX >> 4)) & 1`, producing **one without calling
+GetFileAttributesW**. No extended conversion-error query is visible; failure
+cause is unknown. This is not the documented API's own return value forwarded
+unchanged, and must not be reconstructed as automatic false on conversion error.
+
+On conversion success, an attribute-query return `0xffffffff` instead produces
+**zero** through that formula. Null-input reporting followed by normal return
+is the separately recorded EAX-zero/one path. These outcomes do not initialize
+metadata `+4` or establish its default. No Host implementation follows from the
+resolved conversion identity.
+
+### Closed slice and remaining source-identity boundary
+
+The conversion slot is fully identified within this metadata-only scope.
+Builder continuation from instruction `0x4358ce`, `0x436fa0`, and the actual
+opener implementation remain uninspected here. No source-category/priority,
+incoming basename, selected runtime context, field semantics or lifetime is
+inferred from the API identity. `GetPlayerNeutralPassive` remains unsupported;
+original campaign runtime remains blocked.
