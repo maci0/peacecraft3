@@ -1,18 +1,25 @@
 //! `mpqxtract` — list and extract files from MPQ archives.
 //!
 //! ```text
-//! mpqxtract list   <archive…>            one path per line, from (listfile)
-//! mpqxtract show   <archive…> <path>      size + FNV-1a of the decoded bytes
-//! mpqxtract get    <archive…> <path> <out>
+//! mpqxtract list   <archive…> [glob]     one path per line, from (listfile)
+//! mpqxtract show   <archive…> <path|glob> size + FNV-1a of decoded matches
+//! mpqxtract get    <archive…> <path|glob> <out>
 //! mpqxtract dump   <archive…>            header + table statistics
 //! ```
 //!
 //! Archives are searched in the order given, so pass them highest-priority first.
+//! Quote globs so the shell does not expand them. `*` and `?` stay within a
+//! segment; a whole `**` segment spans zero or more segments. Matching folds
+//! ASCII case and treats `/` and `\` alike. `get` with a glob writes every
+//! matched archive path beneath an output directory; a literal path writes one
+//! output file. Globs require each archive's `(listfile)`.
 
 use std::io::Write;
 use std::process::ExitCode;
 
-use pcx_mpq::{DEFAULT_PRIORITY, MpqArchive};
+use pcx_mpq::MpqArchive;
+
+mod glob;
 
 fn fnv1a(d: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -37,16 +44,55 @@ fn open(paths: &[String]) -> Result<Vec<MpqArchive>, String> {
     Ok(v)
 }
 
-/// The archive's own `(listfile)`, if it has one.
-fn listfile(arc: &mut MpqArchive) -> Option<Vec<String>> {
-    let raw = arc.extract("(listfile)").ok()?;
-    Some(
-        String::from_utf8_lossy(&raw)
-            .split(|c| c == '\r' || c == '\n')
-            .filter(|l| !l.is_empty())
-            .map(str::to_string)
-            .collect(),
-    )
+fn has_glob(path: &str) -> bool {
+    path.contains(['*', '?'])
+}
+
+/// A glob's matches use the first archive's spelling for each lookup key.
+fn select(arcs: &mut [MpqArchive], pattern: &str) -> Result<Vec<String>, String> {
+    let mut seen = std::collections::BTreeMap::new();
+    for arc in arcs {
+        let source = arc.path().display().to_string();
+        let raw = arc
+            .extract("(listfile)")
+            .map_err(|e| format!("{source}: cannot enumerate (listfile): {e}"))?;
+        let names = std::str::from_utf8(&raw)
+            .map_err(|e| format!("{source}: malformed UTF-8 (listfile): {e}"))?;
+        for path in names.split(['\r', '\n']).filter(|path| !path.is_empty()) {
+            if glob::matches(pattern, path) {
+                let key = path.replace('\\', "/").to_ascii_lowercase();
+                seen.entry(key).or_insert_with(|| path.to_owned());
+            }
+        }
+    }
+    Ok(seen.into_values().collect())
+}
+
+/// Archive names must remain relative beneath the selected output directory.
+fn output_path(root: &std::path::Path, name: &str) -> Result<std::path::PathBuf, String> {
+    let mut path = root.to_path_buf();
+    for part in name.split(['/', '\\']) {
+        if part.is_empty() || part == "." || part == ".." || part.contains(':') {
+            return Err(format!("unsafe archive output path: {name}"));
+        }
+        path.push(part);
+        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(format!(
+                "archive output path contains a symlink: {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(path)
+}
+
+fn trailing_operands(cmd: &str, args: &[String]) -> usize {
+    match cmd {
+        "show" => 1,
+        "get" => 2,
+        "list" if args.len() > 2 && args.last().is_some_and(|p| has_glob(p)) => 1,
+        _ => 0,
+    }
 }
 
 fn main() -> ExitCode {
@@ -56,12 +102,8 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     let cmd = args[0].clone();
-    // `show`/`get` take trailing operands; everything before them is an archive.
-    let extra = match cmd.as_str() {
-        "show" => 1,
-        "get" => 2,
-        _ => 0,
-    };
+    // A trailing wildcard on `list` is its optional pattern operand.
+    let extra = trailing_operands(&cmd, &args);
     let (archives, operands) = if extra == 0 {
         (&args[1..], &args[0..0])
     } else {
@@ -124,66 +166,102 @@ fn main() -> ExitCode {
 
     match cmd.as_str() {
         "list" => {
-            let mut seen = std::collections::BTreeSet::new();
-            for a in arcs.iter_mut() {
-                if let Some(names) = listfile(a) {
-                    seen.extend(names);
+            let pattern = operands.first().map_or("**", String::as_str);
+            let paths = match select(&mut arcs, pattern) {
+                Ok(paths) => paths,
+                Err(e) => {
+                    eprintln!("mpqxtract: {e}");
+                    return ExitCode::from(1);
                 }
-            }
+            };
             let out = std::io::stdout();
             let mut w = std::io::BufWriter::new(out.lock());
-            for p in &seen {
-                let _ = writeln!(w, "{p}");
+            for path in &paths {
+                if let Err(e) = writeln!(w, "{path}") {
+                    eprintln!("mpqxtract: {e}");
+                    return ExitCode::from(1);
+                }
             }
-            eprintln!("{} entries", seen.len());
+            if let Err(e) = w.flush() {
+                eprintln!("mpqxtract: {e}");
+                return ExitCode::from(1);
+            }
+            eprintln!("{} entries", paths.len());
         }
-        "show" => {
-            let path = operand(0);
-            if path.is_empty() {
-                eprintln!("mpqxtract show <archive…> <path>");
+        "show" | "get" => {
+            let pattern = operand(0);
+            let out = operand(1);
+            if pattern.is_empty() || (cmd == "get" && out.is_empty()) {
+                eprintln!("mpqxtract {cmd}: missing path/glob or output operand");
                 return ExitCode::from(2);
             }
-            for a in arcs.iter_mut() {
-                if !a.contains(&path) {
-                    continue;
-                }
-                match a.extract(&path) {
-                    Ok(b) => {
-                        println!("{}\t{}\t{:016x}", a.path().display(), b.len(), fnv1a(&b));
-                        return ExitCode::SUCCESS;
-                    }
+            let wildcard = has_glob(&pattern);
+            let paths = if wildcard {
+                match select(&mut arcs, &pattern) {
+                    Ok(paths) => paths,
                     Err(e) => {
-                        eprintln!("{path}: {e}");
+                        eprintln!("mpqxtract: {e}");
                         return ExitCode::from(1);
                     }
                 }
+            } else {
+                vec![pattern.clone()]
+            };
+            if paths.is_empty() {
+                eprintln!("not found: {pattern}");
+                return ExitCode::from(1);
             }
-            eprintln!("not found: {path}");
-            return ExitCode::from(1);
-        }
-        "get" => {
-            let (path, out) = (operand(0), operand(1));
-            if path.is_empty() || out.is_empty() {
-                eprintln!("mpqxtract get <archive…> <path> <out>");
-                return ExitCode::from(2);
-            }
-            for a in arcs.iter_mut() {
-                if !a.contains(&path) {
-                    continue;
-                }
-                match a
-                    .extract(&path)
-                    .and_then(|b| std::fs::write(&out, b).map_err(pcx_mpq::Error::Io))
+            // Validate all selected output paths before extracting any bytes.
+            let destinations = if cmd == "get" && wildcard {
+                match paths
+                    .iter()
+                    .map(|path| output_path(std::path::Path::new(&out), path))
+                    .collect::<Result<Vec<_>, _>>()
                 {
-                    Ok(()) => return ExitCode::SUCCESS,
+                    Ok(paths) => paths,
+                    Err(e) => {
+                        eprintln!("mpqxtract: {e}");
+                        return ExitCode::from(1);
+                    }
+                }
+            } else {
+                vec![std::path::PathBuf::from(&out); paths.len()]
+            };
+            for (path, destination) in paths.iter().zip(&destinations) {
+                let Some(arc) = arcs.iter_mut().find(|a| a.contains(path)) else {
+                    eprintln!("not found: {path}");
+                    return ExitCode::from(1);
+                };
+                let bytes = match arc.extract(path) {
+                    Ok(bytes) => bytes,
                     Err(e) => {
                         eprintln!("{path}: {e}");
                         return ExitCode::from(1);
                     }
+                };
+                if cmd == "show" {
+                    if wildcard {
+                        print!("{path}\t");
+                    }
+                    println!(
+                        "{}\t{}\t{:016x}",
+                        arc.path().display(),
+                        bytes.len(),
+                        fnv1a(&bytes)
+                    );
+                } else {
+                    let write = || -> std::io::Result<()> {
+                        if wildcard && let Some(parent) = destination.parent() {
+                            std::fs::create_dir_all(parent)?;
+                        }
+                        std::fs::write(destination, &bytes)
+                    };
+                    if let Err(e) = write() {
+                        eprintln!("{path}: {}: {e}", destination.display());
+                        return ExitCode::from(1);
+                    }
                 }
             }
-            eprintln!("not found: {path}");
-            return ExitCode::from(1);
         }
         "dump" => {
             for a in arcs.iter() {
@@ -207,6 +285,31 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     }
-    let _ = DEFAULT_PRIORITY;
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_pattern_is_not_opened_as_an_archive() {
+        let args = ["list", "first.mpq", "second.mpq", "**/*.BLP"].map(str::to_owned);
+        assert_eq!(trailing_operands("list", &args), 1);
+        assert_eq!(trailing_operands("list", &args[..3]), 0);
+        assert_eq!(trailing_operands("show", &args), 1);
+        assert_eq!(trailing_operands("get", &args), 2);
+    }
+
+    #[test]
+    fn archive_output_paths_cannot_escape_the_directory() {
+        let root = std::path::Path::new("output");
+        assert_eq!(
+            output_path(root, "Textures\\a.blp").unwrap(),
+            root.join("Textures/a.blp")
+        );
+        for name in ["../a", "a/../b", "/a", "\\a", "C:\\a", "a//b", "a/./b", ""] {
+            assert!(output_path(root, name).is_err(), "{name:?}");
+        }
+    }
 }

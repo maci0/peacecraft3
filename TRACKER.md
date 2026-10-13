@@ -78,16 +78,21 @@ issues*.
 - [x] `pcx-mpq`: name lookup with Storm's probe order, case-insensitive
 - [x] `pcx-mpq`: sector read + file-key derivation (basename, slice `0x300`, `FIX_KEY`)
 - [x] `pcx-mpq`: decompression — PKWARE implode + zlib working
-- [ ] `pcx-mpq`: decompression — ADPCM (`0x40`/`0x80`). Blocks all 2,685 `.wav` in `war3.mpq`;
-      the independent reference fails identically, so it is a format gap, not a reader bug.
-      Schedule + step table must come from Storm's decompressor before it ships — not guessed.
-- [ ] `pcx-mpq`: decompression — sparse, Huffman (explicit `Unsupported`, not guessed)
-- [x] `pcx-mpq`: archive priority resolution (`DEFAULT_PRIORITY`, still assumed — see M0 open)
-- [ ] `extract` subcommand, glob patterns
+- [x] `pcx-mpq`: ADPCM mono/stereo and Huffman decode, derived from the supplied
+      compatibility Storm.dll; synthetic sectors and original WAV bytes match
+      its native decoder. Huffman weights require a caller-supplied local PE
+      source; Legacy has no co-located DLL, and browser import wiring remains open.
+      This is not target-native 1.29b codec parity; see `format-mpq.md`.
+- [ ] `pcx-mpq`: sparse and other unsupported compression chains remain typed refusals
+- [~] `pcx-mpq`: archive priority resolution (`DEFAULT_PRIORITY` exists but is still assumed — see M0 open)
+- [x] `mpqxtract` list/show/get with glob patterns and bounded output paths
 - [x] Test: `(listfile)` decodes end to end — 529 298 bytes of imploded sectors → real paths
 - [x] Test: known-answer block entry for `war3.mpq` block 0
 - [x] Test: live hash entries cover every existing block, in all 4 archives
-- [ ] Golden test: byte-identical extraction vs Storm under Wine
+- [x] Golden test: byte-identical extraction vs supplied Storm under Wine;
+      10,679 compatibility archive files and 227 patch candidates match.
+      Patch coverage is candidate-based because it has no `(listfile)`;
+      unlisted blocks and target-native 1.29b parity remain open.
 - [x] **Gate:** list + extract works on all 4 archives
 
 ## M1b — Play-test harness skeleton (new)
@@ -821,8 +826,9 @@ Format: `date — subsystem — symptom — root cause — status`
   dependencies are at latest stable releases and compatible transitives refreshed.
   Rust stable is 1.99.0; native builders install the stable channel and deny warnings.
 - Refreshed CPU integration: 417 passing tests, 24 explicitly ignored original
-  fixtures. Original format checks are separate: unsupported MPQ Huffman/ADPCM
-  remains explicit, and single-unit/IMPLODE branches have synthetic coverage only.
+  fixtures. Original format checks are separate: later MPQ Huffman/ADPCM checks
+  match the supplied compatibility Storm oracle, while single-unit/IMPLODE
+  branches still have synthetic coverage only.
 - MDX checked layers retain authored layer counts, corrected alpha, filter/shading
   fields, alpha/texture tracks and PRE2 data. Full renderer wiring remains open.
 - World import retains original placements/ownership and metadata values.

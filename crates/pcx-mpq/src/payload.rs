@@ -30,16 +30,36 @@ const COMPRESSION_ADPCM_MONO: u8 = 0x40;
 const COMPRESSION_ADPCM_STEREO: u8 = 0x80;
 const COMPRESSION_LZMA: u8 = 0x12;
 
+// Storm.dll eecc42b0…1bf97d0a, VA 0x15042ad8 (89 LE dwords),
+// ev_44af6eaa20915be4d5dad55689e927b483599dab5bbe95f28653b900f5fa3b3e.
+const ADPCM_STEPS: [u32; 89] = [
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66,
+    73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449,
+    494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272,
+    2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493,
+    10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767,
+];
+// VA 0x15042a58, ev_105707040ec97e135125729304f99e50526576997387258cf586e90e020f5891.
+// Preserve the shipped schedule literally, including every even entry being -1.
+const ADPCM_INDEX_ADJUST: [i32; 32] = [
+    -1, 0, -1, 4, -1, 2, -1, 6, -1, 1, -1, 5, -1, 3, -1, 7, -1, 1, -1, 5, -1, 3, -1, 7, -1, 2, -1,
+    4, -1, 6, -1, 8,
+];
+
 #[derive(Debug, thiserror::Error)]
 pub enum PayloadError {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("unsupported compression mask 0x{mask:02x} in sector")]
     UnsupportedCompression { mask: u8 },
+    #[error(transparent)]
+    Huffman(#[from] crate::huffman::HuffmanError),
     #[error("zlib sector is corrupt")]
     Zlib,
     #[error("bzip2 sector is corrupt")]
     Bzip2,
+    #[error("ADPCM sector is truncated or exceeds its output buffer")]
+    Adpcm,
     #[error("PKWARE sector is corrupt")]
     Pkware,
     #[error("sector {index} of {count} lies outside the packed data")]
@@ -79,43 +99,159 @@ fn is_stored_verbatim(sector_len: usize, remaining_out: usize, sector_size: usiz
 
 /// Decompress one sector, which begins with its compression mask byte.
 pub fn decompress_sector(sector: &[u8], out: &mut [u8]) -> Result<usize, PayloadError> {
+    decompress_sector_with_huffman(sector, out, None)
+}
+
+/// Decode with Huffman weights imported from the caller's original Storm.dll.
+pub fn decompress_sector_with_huffman(
+    sector: &[u8],
+    out: &mut [u8],
+    table: Option<&crate::huffman::HuffmanTable>,
+) -> Result<usize, PayloadError> {
     let Some(&mask) = sector.first() else {
         return Ok(0);
     };
-    let body = &sector[1..];
-
-    // 0x12 (LZMA) is an exact mask, not a bit set: testing it bitwise also
-    // matches plain zlib (0x12 & 0x02), which is very common in these archives.
-    if mask == COMPRESSION_LZMA || mask & COMPRESSION_BZIP2 != 0 {
-        return Err(PayloadError::UnsupportedCompression { mask });
-    }
-    if mask == COMPRESSION_ZLIB {
-        let mut z = flate2::Decompress::new(true);
-        match z.decompress(body, out, flate2::FlushDecompress::Finish) {
-            Ok(flate2::Status::StreamEnd) if z.total_in() == body.len() as u64 => {}
-            _ => return Err(PayloadError::Zlib),
-        }
-        return Ok(z.total_out() as usize);
-    }
-    if mask == COMPRESSION_PKWARE {
-        return decompress_implode(body, out);
-    }
-    // Masks compose: 0x41/0x81 need Huffman followed by ADPCM.
-    // Refuse unsupported chains rather than silently decode only one stage.
-    if mask != 0
-        || mask
-            & (COMPRESSION_ADPCM_STEREO
-                | COMPRESSION_ADPCM_MONO
-                | COMPRESSION_SPARSE
-                | COMPRESSION_HUFFMAN)
-            != 0
+    let allowed = COMPRESSION_PKWARE
+        | COMPRESSION_ZLIB
+        | COMPRESSION_HUFFMAN
+        | COMPRESSION_ADPCM_MONO
+        | COMPRESSION_ADPCM_STEREO;
+    if mask == COMPRESSION_LZMA
+        || mask & (COMPRESSION_BZIP2 | COMPRESSION_SPARSE) != 0
+        || mask & !allowed != 0
+        || mask & COMPRESSION_HUFFMAN != 0 && table.is_none()
     {
         return Err(PayloadError::UnsupportedCompression { mask });
     }
+    let body = &sector[1..];
+    if mask == 0 {
+        if body.len() > out.len() {
+            return Err(PayloadError::SizeMismatch {
+                file_size: out.len(),
+                produced: body.len(),
+            });
+        }
+        out[..body.len()].copy_from_slice(body);
+        return Ok(body.len());
+    }
+    // FUN_1500dd30 visits the runtime dispatcher table backwards:
+    // ev_7be596f3cf153d1fe4da9a3529555c088e88377b6c47cf10ab20d521226f82e0.
+    let stages: Vec<_> = [
+        COMPRESSION_PKWARE,
+        COMPRESSION_ZLIB,
+        COMPRESSION_HUFFMAN,
+        COMPRESSION_ADPCM_STEREO,
+        COMPRESSION_ADPCM_MONO,
+    ]
+    .into_iter()
+    .filter(|stage| mask & stage != 0)
+    .collect();
+    let mut input = body.to_vec();
+    for (index, stage) in stages.iter().enumerate() {
+        if index + 1 == stages.len() {
+            return decompress_stage(*stage, &input, out, table);
+        }
+        let mut next = vec![0; out.len()];
+        let produced = decompress_stage(*stage, &input, &mut next, table)?;
+        next.truncate(produced);
+        input = next;
+    }
+    unreachable!("nonzero supported mask has a decoding stage")
+}
 
-    let take = body.len().min(out.len());
-    out[..take].copy_from_slice(&body[..take]);
-    Ok(take)
+fn decompress_stage(
+    mask: u8,
+    body: &[u8],
+    out: &mut [u8],
+    table: Option<&crate::huffman::HuffmanTable>,
+) -> Result<usize, PayloadError> {
+    match mask {
+        COMPRESSION_ZLIB => {
+            let mut z = flate2::Decompress::new(true);
+            match z.decompress(body, out, flate2::FlushDecompress::Finish) {
+                Ok(flate2::Status::StreamEnd) if z.total_in() == body.len() as u64 => {
+                    Ok(z.total_out() as usize)
+                }
+                _ => Err(PayloadError::Zlib),
+            }
+        }
+        COMPRESSION_PKWARE => decompress_implode(body, out),
+        COMPRESSION_HUFFMAN => Ok(crate::huffman::decompress(
+            body,
+            out,
+            table.ok_or(PayloadError::UnsupportedCompression { mask })?,
+        )?),
+        COMPRESSION_ADPCM_MONO => decompress_adpcm(body, out, 1),
+        COMPRESSION_ADPCM_STEREO => decompress_adpcm(body, out, 2),
+        _ => Err(PayloadError::UnsupportedCompression { mask }),
+    }
+}
+
+/// Storm FUN_1500d240, ev_5abf352abd1291d6df0c852c62634902616f2b08066b7ae35baf05e0173c3c6a
+/// (coordinator ev_5884eec95cd29ec921db15f15b27b0cab0bf6e7ccd8256db30061e5852272a21).
+/// Mono/stereo wrappers at 0x1500d960/0x1500d9f0 supply channel counts 1/2.
+fn decompress_adpcm(body: &[u8], out: &mut [u8], channels: usize) -> Result<usize, PayloadError> {
+    let header_size = 2 + channels * 2;
+    if body.len() < header_size {
+        return Err(PayloadError::Adpcm);
+    }
+    let shift = body[1] & 31; // x86 SHR masks the authored shift count.
+    let mut indices = [44i32; 2];
+    let mut samples = [0i32; 2];
+    let mut written = 0;
+    let emit = |value: i32, written: &mut usize, out: &mut [u8]| {
+        let target = out
+            .get_mut(*written..*written + 2)
+            .ok_or(PayloadError::Adpcm)?;
+        target.copy_from_slice(&(value as i16).to_le_bytes());
+        *written += 2;
+        Ok::<_, PayloadError>(())
+    };
+    for (channel, sample) in body[2..header_size].as_chunks::<2>().0.iter().enumerate() {
+        samples[channel] = i16::from_le_bytes(*sample) as i32;
+        emit(samples[channel], &mut written, out)?;
+    }
+    let mut channel = channels - 1;
+    for &byte in &body[header_size..] {
+        if channels == 2 {
+            channel ^= 1;
+        }
+        if byte & 0x80 != 0 {
+            match byte & 0x7f {
+                0 => {
+                    indices[channel] = (indices[channel] - 1).max(0);
+                    emit(samples[channel], &mut written, out)?;
+                }
+                1 | 2 => {
+                    let adjustment = if byte & 0x7f == 1 { 8 } else { -8 };
+                    indices[channel] =
+                        (indices[channel] + adjustment).clamp(0, ADPCM_STEPS.len() as i32 - 1);
+                    if channels == 2 {
+                        channel ^= 1;
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+        let step = ADPCM_STEPS[indices[channel] as usize];
+        let mut delta = step >> shift;
+        for bit in 0..6 {
+            if byte & (1 << bit) != 0 {
+                delta += step >> bit;
+            }
+        }
+        let delta = delta as i32;
+        samples[channel] = if byte & 0x40 == 0 {
+            (samples[channel] + delta).min(i16::MAX as i32)
+        } else {
+            (samples[channel] - delta).max(i16::MIN as i32)
+        };
+        emit(samples[channel], &mut written, out)?;
+        indices[channel] = (indices[channel] + ADPCM_INDEX_ADJUST[(byte & 0x1f) as usize])
+            .clamp(0, ADPCM_STEPS.len() as i32 - 1);
+    }
+    Ok(written)
 }
 
 /// Legacy IMPLODE blocks have no compression-mask prefix.
@@ -151,9 +287,10 @@ fn decompress_payload(
     data: &[u8],
     out: &mut [u8],
     block_flags: u32,
+    table: Option<&crate::huffman::HuffmanTable>,
 ) -> Result<usize, PayloadError> {
     if block_flags & flags::COMPRESS != 0 {
-        decompress_sector(data, out)
+        decompress_sector_with_huffman(data, out, table)
     } else {
         decompress_implode(data, out)
     }
@@ -169,6 +306,18 @@ pub fn decode_block(
     block_flags: u32,
     sector_size: u32,
 ) -> Result<Vec<u8>, PayloadError> {
+    decode_block_with_huffman(raw, key, file_size, block_flags, sector_size, None)
+}
+
+/// Reassemble with locally imported Huffman weights; the ordinary entry point refuses Huffman.
+pub fn decode_block_with_huffman(
+    raw: &[u8],
+    key: u32,
+    file_size: u32,
+    block_flags: u32,
+    sector_size: u32,
+    table: Option<&crate::huffman::HuffmanTable>,
+) -> Result<Vec<u8>, PayloadError> {
     let mut out = Vec::with_capacity(file_size as usize);
     let encrypted = block_flags & flags::ENCRYPTED != 0;
 
@@ -181,7 +330,7 @@ pub fn decode_block(
             && buf.len() != file_size as usize
         {
             let mut plain = vec![0u8; file_size as usize];
-            let n = decompress_payload(&buf, &mut plain, block_flags)?;
+            let n = decompress_payload(&buf, &mut plain, block_flags, table)?;
             if n != file_size as usize {
                 return Err(PayloadError::SizeMismatch {
                     file_size: file_size as usize,
@@ -220,8 +369,10 @@ pub fn decode_block(
             decrypt(&mut table, key.wrapping_sub(1), crate::crypt::table());
         }
         table
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
             .collect()
     } else {
         // The final synthetic offset must not run past the packed data: a
@@ -255,7 +406,7 @@ pub fn decode_block(
             && !is_stored_verbatim(sector.len(), remaining, sector_size as usize)
         {
             let mut buf = vec![0u8; remaining];
-            let n = decompress_payload(&sector, &mut buf, block_flags)?;
+            let n = decompress_payload(&sector, &mut buf, block_flags, table)?;
             if n != remaining {
                 return Err(PayloadError::SizeMismatch {
                     file_size: remaining,
@@ -296,6 +447,105 @@ mod tests {
         let mut packed = vec![COMPRESSION_ZLIB];
         packed.extend(encoder.finish().unwrap());
         packed
+    }
+
+    #[test]
+    fn adpcm_mono_controls_and_literal_schedule() {
+        let packed = [
+            COMPRESSION_ADPCM_MONO,
+            0,
+            1,
+            0xe8,
+            3,
+            0,
+            0x40,
+            0x80,
+            1,
+            0x81,
+            0,
+            0x82,
+            0,
+            0x83,
+        ];
+        let mut out = [0; 16];
+        let n = decompress_sector(&packed, &mut out).unwrap();
+        let samples: Vec<_> = out[..n]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|s| i16::from_le_bytes(*s))
+            .collect();
+        assert_eq!(samples, [1000, 1247, 1023, 1023, 1579, 1977, 2145]);
+    }
+
+    #[test]
+    fn adpcm_stereo_controls_preserve_channel_schedule() {
+        let packed = [
+            COMPRESSION_ADPCM_STEREO,
+            0,
+            1,
+            100,
+            0,
+            0x18,
+            0xfc,
+            0x80,
+            0x81,
+            0,
+            0x83,
+            0,
+            0x82,
+            0,
+        ];
+        let mut out = [0; 16];
+        let n = decompress_sector(&packed, &mut out).unwrap();
+        let samples: Vec<_> = out[..n]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|s| i16::from_le_bytes(*s))
+            .collect();
+        assert_eq!(samples, [100, -1000, 100, -470, 11, 204]);
+    }
+
+    #[test]
+    fn adpcm_saturates_samples_and_masks_shift_count() {
+        for (initial, byte, expected) in [(i16::MAX, 0x3f, i16::MAX), (i16::MIN, 0x7f, i16::MIN)] {
+            let mut body = vec![0, 33];
+            body.extend(initial.to_le_bytes());
+            body.push(byte);
+            let mut out = [0; 4];
+            assert_eq!(decompress_adpcm(&body, &mut out, 1).unwrap(), 4);
+            assert_eq!(i16::from_le_bytes(out[2..].try_into().unwrap()), expected);
+        }
+    }
+
+    #[test]
+    fn adpcm_truncation_overflow_and_huffman_chains_are_explicit() {
+        for (mask, header_size) in [(COMPRESSION_ADPCM_MONO, 4), (COMPRESSION_ADPCM_STEREO, 6)] {
+            for length in 0..header_size {
+                let mut packed = vec![mask];
+                packed.resize(length + 1, 0);
+                assert!(matches!(
+                    decompress_sector(&packed, &mut [0; 16]),
+                    Err(PayloadError::Adpcm)
+                ));
+            }
+            let mut packed = vec![mask];
+            packed.resize(header_size + 1, 0);
+            assert!(matches!(
+                decompress_sector(&packed, &mut []),
+                Err(PayloadError::Adpcm)
+            ));
+            packed[0] |= COMPRESSION_HUFFMAN;
+            assert!(
+                matches!(decompress_sector(&packed, &mut [0; 16]), Err(PayloadError::UnsupportedCompression { mask: m }) if m == mask | COMPRESSION_HUFFMAN)
+            );
+        }
+        for mask in [COMPRESSION_HUFFMAN, COMPRESSION_SPARSE] {
+            assert!(
+                matches!(decompress_sector(&[mask], &mut [0; 16]), Err(PayloadError::UnsupportedCompression { mask: m }) if m == mask)
+            );
+        }
     }
 
     #[test]

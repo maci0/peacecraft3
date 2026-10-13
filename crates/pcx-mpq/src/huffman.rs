@@ -1,0 +1,554 @@
+//! Storm Huffman decoding with weights imported from the user's PE image.
+//! Native algorithm evidence and source identity are recorded in format-mpq.md.
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, thiserror::Error)]
+pub enum HuffmanError {
+    #[error("Huffman source {source_path}: {reason}")]
+    Source { source_path: String, reason: String },
+    #[error("Huffman stream is truncated or its tree is invalid")]
+    Corrupt,
+}
+
+/// Runtime provenance; no original weights are compiled into this crate.
+#[derive(Debug, Clone)]
+pub struct HuffmanTable {
+    pub source: PathBuf,
+    pub table_va: u32,
+    pub row_stride: usize,
+    pub file_backed_bytes: usize,
+    pub zero_filled_bytes: usize,
+    rows: Vec<[u8; 256]>,
+}
+
+#[derive(Clone, Copy)]
+struct Section {
+    rva: usize,
+    virtual_size: usize,
+    raw: usize,
+    raw_size: usize,
+    code: bool,
+}
+
+fn word(bytes: &[u8], at: usize) -> Result<u16, HuffmanError> {
+    Ok(u16::from_le_bytes(
+        bytes
+            .get(at..at + 2)
+            .ok_or(HuffmanError::Corrupt)?
+            .try_into()
+            .unwrap(),
+    ))
+}
+fn dword(bytes: &[u8], at: usize) -> Result<u32, HuffmanError> {
+    Ok(u32::from_le_bytes(
+        bytes
+            .get(at..at + 4)
+            .ok_or(HuffmanError::Corrupt)?
+            .try_into()
+            .unwrap(),
+    ))
+}
+
+impl HuffmanTable {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, HuffmanError> {
+        let path = path.as_ref();
+        let bytes = std::fs::read(path).map_err(|e| HuffmanError::Source {
+            source_path: path.display().to_string(),
+            reason: e.to_string(),
+        })?;
+        Self::from_pe(&bytes, path)
+    }
+
+    /// Derive the table operands from the x86 consumer, then map through PE sections.
+    /// This input-derived instruction scan is a heuristic verified against the shipped
+    /// source build, not a general disassembler. Missing/ambiguous consumers are refused.
+    /// The documented fallback is an evidence-backed VA-to-section-offset probe of the
+    /// caller's DLL (format-mpq.md); no guessed pointer is substituted on failure.
+    /// The instruction formats are IMUL EAX,imm32; LEA ECX,[EAX+disp32], at
+    /// 0x1500e153 in the evidenced DLL. The immediate and displacement stay local.
+    pub fn from_pe(bytes: &[u8], source: impl AsRef<Path>) -> Result<Self, HuffmanError> {
+        Self::parse(bytes, source.as_ref()).map_err(|e| HuffmanError::Source {
+            source_path: source.as_ref().display().to_string(),
+            reason: e.to_string(),
+        })
+    }
+
+    fn parse(bytes: &[u8], source: &Path) -> Result<Self, HuffmanError> {
+        if bytes.get(..2) != Some(b"MZ") {
+            return Err(HuffmanError::Corrupt);
+        }
+        let pe = dword(bytes, 0x3c)? as usize;
+        pe.checked_add(24).ok_or(HuffmanError::Corrupt)?;
+        if bytes.get(pe..pe.checked_add(4).ok_or(HuffmanError::Corrupt)?) != Some(b"PE\0\0")
+            || word(bytes, pe + 4)? != 0x14c
+        {
+            return Err(HuffmanError::Corrupt);
+        }
+        let optional = pe.checked_add(24).ok_or(HuffmanError::Corrupt)?;
+        let optional_size = word(bytes, pe + 20)? as usize;
+        if optional_size < 32 || word(bytes, optional)? != 0x10b {
+            return Err(HuffmanError::Corrupt);
+        }
+        let image_base = dword(bytes, optional + 28)?;
+        let sections_at = optional
+            .checked_add(optional_size)
+            .ok_or(HuffmanError::Corrupt)?;
+        let sections_size = (word(bytes, pe + 6)? as usize) * 40;
+        let section_bytes = bytes
+            .get(
+                sections_at
+                    ..sections_at
+                        .checked_add(sections_size)
+                        .ok_or(HuffmanError::Corrupt)?,
+            )
+            .ok_or(HuffmanError::Corrupt)?;
+        let mut sections = Vec::new();
+        for header in section_bytes.as_chunks::<40>().0 {
+            let section = Section {
+                virtual_size: dword(header, 8)? as usize,
+                rva: dword(header, 12)? as usize,
+                raw_size: dword(header, 16)? as usize,
+                raw: dword(header, 20)? as usize,
+                code: dword(header, 36)? & 0x20 != 0,
+            };
+            bytes
+                .get(
+                    section.raw
+                        ..section
+                            .raw
+                            .checked_add(section.raw_size)
+                            .ok_or(HuffmanError::Corrupt)?,
+                )
+                .ok_or(HuffmanError::Corrupt)?;
+            section
+                .rva
+                .checked_add(section.virtual_size.max(section.raw_size))
+                .ok_or(HuffmanError::Corrupt)?;
+            sections.push(section);
+        }
+        let mut operands = Vec::new();
+        for section in sections.iter().filter(|s| s.code) {
+            for code in bytes[section.raw..section.raw + section.raw_size].windows(12) {
+                if code[..2] == [0x69, 0xc0] && code[6..8] == [0x8d, 0x88] {
+                    let stride = dword(code, 2)? as usize;
+                    let address = dword(code, 8)?;
+                    // The evidenced consumer has 256 byte weights and two control symbols.
+                    if stride == 256 + 2 && address >= image_base {
+                        operands.push((stride, address));
+                    }
+                }
+            }
+        }
+        if operands.len() != 1 {
+            return Err(HuffmanError::Source {
+                source_path: source.display().to_string(),
+                reason: "no unique supported x86 Huffman table consumer".into(),
+            });
+        }
+        let (row_stride, table_va) = operands[0];
+        let table_rva = (table_va - image_base) as usize;
+        let mut data = Vec::with_capacity(row_stride * 256);
+        let (mut file_backed_bytes, mut zero_filled_bytes) = (0, 0);
+        for offset in 0..row_stride * 256 {
+            let rva = table_rva.checked_add(offset).ok_or(HuffmanError::Corrupt)?;
+            let mut mapping = sections
+                .iter()
+                .filter(|s| rva >= s.rva && rva - s.rva < s.virtual_size.max(s.raw_size));
+            let section = mapping.next().ok_or(HuffmanError::Corrupt)?;
+            if mapping.next().is_some() {
+                return Err(HuffmanError::Corrupt);
+            }
+            let within = rva - section.rva;
+            if within < section.raw_size {
+                data.push(bytes[section.raw + within]);
+                file_backed_bytes += 1;
+            } else {
+                // PE VirtualSize > SizeOfRawData defines loader zero fill, not guessed weights.
+                data.push(0);
+                zero_filled_bytes += 1;
+            }
+        }
+        let rows = data
+            .chunks_exact(row_stride)
+            .map(|row| row[..256].try_into().unwrap())
+            .collect();
+        Ok(Self {
+            source: source.to_path_buf(),
+            table_va,
+            row_stride,
+            file_backed_bytes,
+            zero_filled_bytes,
+            rows,
+        })
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct Node {
+    next: usize,
+    prev: usize,
+    symbol: usize,
+    weight: u32,
+    parent: usize,
+    low: usize,
+}
+
+struct Tree {
+    // Index zero replaces Storm's intrusive-list sentinel. All links are indices.
+    nodes: Vec<Node>,
+    symbols: [usize; 258],
+}
+
+impl Tree {
+    fn new(weights: &[u8; 256]) -> Result<Self, HuffmanError> {
+        let mut tree = Self {
+            nodes: vec![Node::default()],
+            symbols: [0; 258],
+        };
+        let mut maximum = 0;
+        for (symbol, &weight) in weights.iter().enumerate().filter(|(_, w)| **w != 0) {
+            let node = tree.allocate(Some(symbol), weight as u32, 0)?;
+            tree.insert_after(0, node);
+            if (weight as u32) < maximum {
+                let place = tree.find_weight(tree.nodes[0].prev, weight as u32);
+                tree.remove(node);
+                tree.insert_after(place, node);
+            } else {
+                maximum = weight as u32;
+            }
+        }
+        for symbol in [0x100, 0x101] {
+            let node = tree.allocate(Some(symbol), 1, 0)?;
+            tree.insert_after(tree.nodes[0].prev, node);
+        }
+        let mut low = tree.nodes[0].prev;
+        while low != 0 && tree.nodes[low].prev != 0 {
+            let high = tree.nodes[low].prev;
+            let weight = tree.nodes[low].weight + tree.nodes[high].weight;
+            let parent = tree.allocate(None, weight, 0)?;
+            tree.nodes[parent].low = low;
+            tree.nodes[low].parent = parent;
+            tree.nodes[high].parent = parent;
+            tree.insert_after(0, parent);
+            if weight < maximum {
+                let place = tree.find_weight(tree.nodes[high].prev, weight);
+                tree.remove(parent);
+                tree.insert_after(place, parent);
+            } else {
+                maximum = weight;
+            }
+            low = tree.nodes[high].prev;
+        }
+        Ok(tree)
+    }
+
+    fn allocate(
+        &mut self,
+        symbol: Option<usize>,
+        weight: u32,
+        parent: usize,
+    ) -> Result<usize, HuffmanError> {
+        // FUN_1500e7d0 destroys exactly 0x203 nodes; two children per insertion.
+        if self.nodes.len() > 0x203 {
+            return Err(HuffmanError::Corrupt);
+        }
+        let id = self.nodes.len();
+        self.nodes.push(Node {
+            symbol: symbol.unwrap_or(0),
+            weight,
+            parent,
+            ..Node::default()
+        });
+        if let Some(symbol) = symbol {
+            self.symbols[symbol] = id;
+        }
+        Ok(id)
+    }
+    fn remove(&mut self, node: usize) {
+        let Node { next, prev, .. } = self.nodes[node];
+        self.nodes[prev].next = next;
+        self.nodes[next].prev = prev;
+    }
+    fn insert_after(&mut self, place: usize, node: usize) {
+        let next = self.nodes[place].next;
+        self.nodes[node].prev = place;
+        self.nodes[node].next = next;
+        self.nodes[next].prev = node;
+        self.nodes[place].next = node;
+    }
+    fn find_weight(&self, mut node: usize, weight: u32) -> usize {
+        while node != 0 && weight > self.nodes[node].weight {
+            node = self.nodes[node].prev;
+        }
+        node
+    }
+
+    // FUN_1500e4c0: increment ancestors, exchange list positions and parent links.
+    fn update(&mut self, mut node: usize) -> Result<(), HuffmanError> {
+        let mut steps = 0;
+        while node != 0 {
+            steps += 1;
+            if steps > self.nodes.len() {
+                return Err(HuffmanError::Corrupt);
+            }
+            self.nodes[node].weight = self.nodes[node]
+                .weight
+                .checked_add(1)
+                .ok_or(HuffmanError::Corrupt)?;
+            let mut leader = node;
+            let mut place = self.nodes[node].prev;
+            while place != 0 && self.nodes[node].weight > self.nodes[place].weight {
+                leader = place;
+                place = self.nodes[place].prev;
+            }
+            if leader != node {
+                let left_parent = self.nodes[node].parent;
+                let right_parent = self.nodes[leader].parent;
+                if left_parent == 0 || right_parent == 0 {
+                    return Err(HuffmanError::Corrupt);
+                }
+                self.remove(leader);
+                self.insert_after(node, leader);
+                self.remove(node);
+                self.insert_after(place, node);
+                let right_low = self.nodes[right_parent].low;
+                if self.nodes[left_parent].low == node {
+                    self.nodes[left_parent].low = leader;
+                }
+                if right_low == leader {
+                    self.nodes[right_parent].low = node;
+                }
+                self.nodes[node].parent = right_parent;
+                self.nodes[leader].parent = left_parent;
+            }
+            node = self.nodes[node].parent;
+        }
+        Ok(())
+    }
+
+    // FUN_1500e630: split the list's lightest leaf into its old symbol and the new one.
+    fn insert(&mut self, symbol: usize) -> Result<(), HuffmanError> {
+        if self.symbols[symbol] != 0 {
+            return Err(HuffmanError::Corrupt);
+        }
+        let parent = self.nodes[0].prev;
+        if parent == 0 || self.nodes[parent].low != 0 {
+            return Err(HuffmanError::Corrupt);
+        }
+        let old = self.nodes[parent];
+        let high = self.allocate(Some(old.symbol), old.weight, parent)?;
+        self.insert_after(self.nodes[0].prev, high);
+        let low = self.allocate(Some(symbol), 0, parent)?;
+        self.insert_after(self.nodes[0].prev, low);
+        self.nodes[parent].low = low;
+        self.update(low)
+    }
+
+    // FUN_1500df20 without its optional seven-bit decode cache.
+    fn symbol(&self, bits: &mut Bits<'_>) -> Result<usize, HuffmanError> {
+        let mut node = self.nodes[0].next;
+        for _ in 0..self.nodes.len() {
+            if node == 0 {
+                return Err(HuffmanError::Corrupt);
+            }
+            if self.nodes[node].low == 0 {
+                return Ok(self.nodes[node].symbol);
+            }
+            node = self.nodes[node].low;
+            if bits.take(1)? != 0 {
+                node = self.nodes[node].prev;
+            }
+        }
+        Err(HuffmanError::Corrupt)
+    }
+}
+
+struct Bits<'a> {
+    bytes: &'a [u8],
+    bit: usize,
+}
+impl Bits<'_> {
+    fn take(&mut self, count: usize) -> Result<usize, HuffmanError> {
+        let mut value = 0;
+        for shift in 0..count {
+            let byte = self.bytes.get(self.bit / 8).ok_or(HuffmanError::Corrupt)?;
+            value |= (((byte >> (self.bit % 8)) & 1) as usize) << shift;
+            self.bit += 1;
+        }
+        Ok(value)
+    }
+}
+
+/// FUN_1500e870; bounded LSB reader preserves output behavior without native overreads.
+pub fn decompress(
+    body: &[u8],
+    out: &mut [u8],
+    table: &HuffmanTable,
+) -> Result<usize, HuffmanError> {
+    if out.is_empty() {
+        return Ok(0);
+    }
+    let mut bits = Bits {
+        bytes: body,
+        bit: 0,
+    };
+    let row = bits.take(8)?;
+    let mut tree = Tree::new(&table.rows[row])?;
+    let adaptive = row == 0;
+    let mut written = 0;
+    while written < out.len() {
+        let mut symbol = tree.symbol(&mut bits)?;
+        if symbol == 0x101 {
+            symbol = bits.take(8)?;
+            tree.insert(symbol)?;
+            if !adaptive {
+                tree.update(tree.symbols[symbol])?;
+            }
+        }
+        if symbol == 0x100 {
+            break;
+        }
+        out[written] = symbol as u8;
+        written += 1;
+        if written < out.len() && adaptive {
+            tree.update(tree.symbols[symbol])?;
+        }
+    }
+    Ok(written)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn synthetic_table(row: usize, weights: [u8; 256]) -> HuffmanTable {
+        let mut rows = vec![[0; 256]; 256];
+        rows[row] = weights;
+        HuffmanTable {
+            source: "synthetic".into(),
+            table_va: 0,
+            row_stride: 258,
+            file_backed_bytes: 0,
+            zero_filled_bytes: 0,
+            rows,
+        }
+    }
+
+    fn synthetic_pe() -> Vec<u8> {
+        let mut bytes = vec![0; 0x220 + 258];
+        bytes[..2].copy_from_slice(b"MZ");
+        bytes[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+        bytes[0x84..0x86].copy_from_slice(&0x14cu16.to_le_bytes());
+        bytes[0x86..0x88].copy_from_slice(&2u16.to_le_bytes());
+        bytes[0x94..0x96].copy_from_slice(&0xe0u16.to_le_bytes());
+        bytes[0x98..0x9a].copy_from_slice(&0x10bu16.to_le_bytes());
+        bytes[0xb4..0xb8].copy_from_slice(&0x400000u32.to_le_bytes());
+        for (at, rva, raw, raw_size, virtual_size, flags) in [
+            (0x178, 0x1000u32, 0x200u32, 0x20u32, 0x20u32, 0x20u32),
+            (0x1a0, 0x2000, 0x220, 258, 258 * 256, 0),
+        ] {
+            for (offset, value) in [
+                (8, virtual_size),
+                (12, rva),
+                (16, raw_size),
+                (20, raw),
+                (36, flags),
+            ] {
+                bytes[at + offset..at + offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
+        }
+        bytes[0x200..0x202].copy_from_slice(&[0x69, 0xc0]);
+        bytes[0x202..0x206].copy_from_slice(&258u32.to_le_bytes());
+        bytes[0x206..0x208].copy_from_slice(&[0x8d, 0x88]);
+        bytes[0x208..0x20c].copy_from_slice(&0x402000u32.to_le_bytes());
+        bytes[0x220 + 65] = 4;
+        bytes
+    }
+
+    #[test]
+    fn pe_operands_and_sections_define_runtime_weights() {
+        let bytes = synthetic_pe();
+        let table = HuffmanTable::from_pe(&bytes, "fixture.dll").unwrap();
+        assert_eq!(table.table_va, 0x402000);
+        assert_eq!(table.row_stride, 258);
+        assert_eq!(table.file_backed_bytes, 258);
+        assert_eq!(table.zero_filled_bytes, 258 * 255);
+        assert_eq!(table.rows[0][65], 4);
+        assert_eq!(table.rows[1], [0; 256]);
+    }
+
+    #[test]
+    fn malformed_pe_and_unmapped_or_ambiguous_operands_are_refused() {
+        let bytes = synthetic_pe();
+        for length in [0, 64, 0x80, 0x200, bytes.len() - 1] {
+            assert!(matches!(
+                HuffmanTable::from_pe(&bytes[..length], "truncated.dll"),
+                Err(HuffmanError::Source { .. })
+            ));
+        }
+        let mut gap = bytes.clone();
+        gap[0x208..0x20c].copy_from_slice(&0x600000u32.to_le_bytes());
+        assert!(HuffmanTable::from_pe(&gap, "gap.dll").is_err());
+        let mut ambiguous = bytes;
+        ambiguous.copy_within(0x200..0x20c, 0x20c);
+        assert!(HuffmanTable::from_pe(&ambiguous, "ambiguous.dll").is_err());
+    }
+
+    #[test]
+    fn equal_weight_order_termination_and_output_limit() {
+        let mut weights = [0; 256];
+        weights[b'A' as usize] = 1;
+        weights[b'B' as usize] = 1;
+        let table = synthetic_table(1, weights);
+        // Native tie order yields A=bits 1,0; B=1,1; end=0,1 (LSB first).
+        let mut out = [0; 8];
+        assert_eq!(decompress(&[1, 0x2d], &mut out, &table).unwrap(), 2);
+        assert_eq!(&out[..2], b"AB");
+        assert_eq!(decompress(&[1, 0x2d], &mut out[..1], &table).unwrap(), 1);
+        assert!(decompress(&[1], &mut out, &table).is_err());
+    }
+
+    #[test]
+    fn adaptive_escape_insertion_and_weight_exchange() {
+        let table = synthetic_table(0, [0; 256]);
+        // Escape=0, literal A (8 bits), repeated A=0, then end=0,0 after exchanges.
+        let mut out = [0; 8];
+        assert_eq!(decompress(&[0, 0x82, 0], &mut out, &table).unwrap(), 2);
+        assert_eq!(&out[..2], b"AA");
+    }
+
+    #[test]
+    fn huffman_then_adpcm_composes_in_dispatch_order() {
+        let mut weights = [0; 256];
+        weights[0] = 1;
+        weights[1] = 1;
+        let table = synthetic_table(1, weights);
+        let mut body = vec![0, 1, 0, 0];
+        body.extend([0; 16]);
+        let mut bits = vec![1u8];
+        for (position, bit) in (8..).zip(body.iter().flat_map(|byte| [1, *byte]).chain([0, 1])) {
+            if position / 8 == bits.len() {
+                bits.push(0);
+            }
+            bits[position / 8] |= bit << (position % 8);
+        }
+        let mut packed = vec![0x41];
+        packed.extend(bits);
+        let mut expected = [0; 34];
+        let mut adpcm = vec![0x40];
+        adpcm.extend(body);
+        crate::payload::decompress_sector(&adpcm, &mut expected).unwrap();
+        let mut actual = [0; 34];
+        assert_eq!(
+            crate::payload::decompress_sector_with_huffman(&packed, &mut actual, Some(&table))
+                .unwrap(),
+            34
+        );
+        assert_eq!(actual, expected);
+        assert!(matches!(
+            crate::payload::decompress_sector(&packed, &mut actual),
+            Err(crate::payload::PayloadError::UnsupportedCompression { mask: 0x41 })
+        ));
+    }
+}

@@ -7,9 +7,16 @@ fn original_archive_payloads_have_declared_sizes() {
     let path = std::env::var_os("PEACECRAFT3_FORMAT_MPQ")
         .expect("set PEACECRAFT3_FORMAT_MPQ to the original archive to test");
     let mut archive = MpqArchive::open(&path).expect("open original archive");
-    let list = archive
-        .extract("(listfile)")
-        .expect("extract original listfile");
+    // A patch without (listfile) can be checked against names derived from other
+    // local archives; that is a candidate sweep, not proof of complete coverage.
+    let candidate_source = std::env::var_os("PEACECRAFT3_FORMAT_MPQ_NAMES");
+    let list = if let Some(source) = &candidate_source {
+        std::fs::read(source).expect("read explicit local candidate names")
+    } else {
+        archive
+            .extract("(listfile)")
+            .expect("extract original listfile")
+    };
     let mut supported = 0;
     let mut unsupported = 0;
     let mut single_compressed = 0;
@@ -41,6 +48,6 @@ fn original_archive_payloads_have_declared_sizes() {
     }
     assert!(supported > 0, "no successfully extracted original files");
     eprintln!(
-        "archive={path:?} supported={supported} unsupported={unsupported} compressed_single={single_compressed} legacy_imploded={legacy_imploded}"
+        "archive={path:?} names={candidate_source:?} supported={supported} unsupported={unsupported} compressed_single={single_compressed} legacy_imploded={legacy_imploded}"
     );
 }

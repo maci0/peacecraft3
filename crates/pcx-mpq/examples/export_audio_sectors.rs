@@ -24,8 +24,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         crypt::decrypt(&mut table, key.wrapping_sub(1), crypt::table());
     }
     let offsets: Vec<_> = table
-        .chunks_exact(4)
-        .map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| u32::from_le_bytes(*b) as usize)
         .collect();
     let directory = PathBuf::from(&args[2]);
     fs::create_dir_all(&directory)?;

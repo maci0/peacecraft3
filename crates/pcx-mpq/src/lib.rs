@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 pub mod crypt;
 pub mod hash;
 pub mod header;
+pub mod huffman;
 pub mod payload;
 
 pub use hash::HashResult;
@@ -372,6 +373,8 @@ pub struct MpqArchive {
     pub header: Header,
     hashes: Vec<HashEntry>,
     blocks: Vec<BlockEntry>,
+    huffman: Option<huffman::HuffmanTable>,
+    huffman_checked: bool,
 }
 
 impl MpqArchive {
@@ -385,9 +388,24 @@ impl MpqArchive {
             header,
             hashes: Vec::new(),
             blocks: Vec::new(),
+            huffman: None,
+            huffman_checked: false,
         };
         me.load_tables()?;
         Ok(me)
+    }
+
+    /// Import local Storm.dll bytes, including for memory archives and browser imports.
+    /// Malformed, truncated or unsupported PE input fails before replacing the table.
+    pub fn set_huffman_table(
+        &mut self,
+        bytes: &[u8],
+        source: impl AsRef<Path>,
+    ) -> Result<(), huffman::HuffmanError> {
+        let table = huffman::HuffmanTable::from_pe(bytes, source)?;
+        self.huffman = Some(table);
+        self.huffman_checked = true;
+        Ok(())
     }
 
     pub fn path(&self) -> &Path {
@@ -416,7 +434,9 @@ impl MpqArchive {
         r.read_exact(&mut raw)?;
         crypt::decrypt(&mut raw, hash::hash_table_key(), t);
         self.hashes = raw
-            .chunks_exact(16)
+            .as_chunks::<16>()
+            .0
+            .iter()
             .map(|e| HashEntry {
                 name1: u32::from_le_bytes(e[0..4].try_into().unwrap()),
                 name2: u32::from_le_bytes(e[4..8].try_into().unwrap()),
@@ -432,7 +452,9 @@ impl MpqArchive {
         r.read_exact(&mut raw)?;
         crypt::decrypt(&mut raw, hash::block_table_key(), t);
         self.blocks = raw
-            .chunks_exact(16)
+            .as_chunks::<16>()
+            .0
+            .iter()
             .map(|e| BlockEntry {
                 file_pos: u32::from_le_bytes(e[0..4].try_into().unwrap()),
                 compressed_size: u32::from_le_bytes(e[4..8].try_into().unwrap()),
@@ -511,10 +533,10 @@ impl MpqArchive {
             header: Header::default(),
             hashes: Vec::new(),
             blocks: Vec::new(),
+            huffman: None,
+            huffman_checked: false,
         };
-        let mut r = me.file.reader();
-        me.header = Header::parse(&mut r)?;
-        drop(r);
+        me.header = Header::parse(&mut me.file.reader())?;
         me.load_tables()?;
         Ok(me)
     }
@@ -542,13 +564,46 @@ impl MpqArchive {
             .ok_or_else(|| Error::NotFound(path.to_string()))?;
         let raw = self.read_block_raw(&block)?;
         let key = payload::file_key(path, block.file_pos, block.file_size, block.flags);
-        Ok(payload::decode_block(
-            &raw,
-            key,
-            block.file_size,
-            block.flags,
-            self.header.sector_size(),
-        )?)
+        let sector_size = self.header.sector_size();
+        let decode = |table: Option<&huffman::HuffmanTable>| {
+            payload::decode_block_with_huffman(
+                &raw,
+                key,
+                block.file_size,
+                block.flags,
+                sector_size,
+                table,
+            )
+        };
+        match decode(self.huffman.as_ref()) {
+            Err(payload::PayloadError::UnsupportedCompression { mask })
+                if mask & 1 != 0
+                    && self.huffman.is_none()
+                    && !self.huffman_checked
+                    && matches!(self.file, Source::File(_)) =>
+            {
+                self.huffman_checked = true;
+                let directory = self.path.parent().unwrap_or(Path::new("."));
+                let mut source = None;
+                for entry in std::fs::read_dir(directory)? {
+                    let candidate = entry?.path();
+                    if candidate.file_name().is_some_and(|name| {
+                        name.to_string_lossy().eq_ignore_ascii_case("Storm.dll")
+                    }) {
+                        source = Some(candidate);
+                        break;
+                    }
+                }
+                let Some(source) = source else {
+                    return Err(payload::PayloadError::UnsupportedCompression { mask }.into());
+                };
+                self.huffman = Some(
+                    huffman::HuffmanTable::open(source).map_err(payload::PayloadError::Huffman)?,
+                );
+                Ok(decode(self.huffman.as_ref())?)
+            }
+            result => Ok(result?),
+        }
     }
 }
 
@@ -672,11 +727,11 @@ impl Install {
         let known = known_digests();
         'outer: for path in INSTALL_FINGERPRINTS {
             for member in archives.members_mut() {
-                if let Ok(bytes) = member.extract(path) {
-                    if let Some(hit) = known.get(&fnv1a64(&bytes)) {
-                        version = *hit;
-                        break 'outer;
-                    }
+                if let Ok(bytes) = member.extract(path)
+                    && let Some(hit) = known.get(&fnv1a64(&bytes))
+                {
+                    version = *hit;
+                    break 'outer;
                 }
             }
         }
@@ -936,10 +991,10 @@ mod tests {
         let mut hits = std::collections::BTreeSet::new();
         for path in INSTALL_FINGERPRINTS {
             for m in set.members_mut() {
-                if let Ok(bytes) = m.extract(path) {
-                    if let Some(v) = known.get(&fnv1a64(&bytes)) {
-                        hits.insert(*v);
-                    }
+                if let Ok(bytes) = m.extract(path)
+                    && let Some(v) = known.get(&fnv1a64(&bytes))
+                {
+                    hits.insert(*v);
                 }
             }
         }
@@ -1058,10 +1113,7 @@ mod tests {
             text.starts_with("ReplaceableTextures\\Selection\\SelectionCircleLarge.blp\r\n"),
             "listfile must start with the shipped texture entry"
         );
-        let lines: Vec<&str> = text
-            .split(|c| c == '\r' || c == '\n')
-            .filter(|l| !l.is_empty())
-            .collect();
+        let lines: Vec<&str> = text.split(['\r', '\n']).filter(|l| !l.is_empty()).collect();
         assert!(lines.len() > 5_000, "only {} listfile entries", lines.len());
         assert!(lines.iter().all(|l| !l.contains('\u{0}')));
         assert!(
@@ -1116,6 +1168,53 @@ mod tests {
 #[cfg(test)]
 mod memory_tests {
     use super::*;
+
+    #[test]
+    fn missing_foreign_and_truncated_storm_sources_are_typed_refusals() {
+        let directory =
+            std::env::temp_dir().join(format!("pcx-mpq-codec-errors-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("synthetic.mpq");
+        std::fs::write(&path, [1u8, 0]).unwrap();
+        let (name1, name2) = hash::hash_string_both("fixture");
+        let make_archive = || MpqArchive {
+            file: Source::File(BufReader::new(File::open(&path).unwrap())),
+            path: path.clone(),
+            header: Header::default(),
+            hashes: vec![HashEntry {
+                name1,
+                name2,
+                block_index: 0,
+                ..HashEntry::default()
+            }],
+            blocks: vec![BlockEntry {
+                file_pos: 0,
+                file_size: 4,
+                compressed_size: 2,
+                flags: flags::EXISTING | flags::SINGLE_UNIT | flags::COMPRESS,
+            }],
+            huffman: None,
+            huffman_checked: false,
+        };
+        assert!(matches!(
+            make_archive().extract("fixture"),
+            Err(Error::Payload(
+                payload::PayloadError::UnsupportedCompression { mask: 1 }
+            ))
+        ));
+        std::fs::write(directory.join("Storm.dll"), b"foreign DLL").unwrap();
+        assert!(matches!(
+            make_archive().extract("fixture"),
+            Err(Error::Payload(payload::PayloadError::Huffman(
+                huffman::HuffmanError::Source { .. }
+            )))
+        ));
+        assert!(matches!(
+            make_archive().set_huffman_table(b"MZ", "truncated.dll"),
+            Err(huffman::HuffmanError::Source { .. })
+        ));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     /// An archive opened from memory must behave exactly like one opened from
     /// disk — same lookup, same bytes.

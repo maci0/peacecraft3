@@ -1,0 +1,3 @@
+LIBRARY Storm.dll
+EXPORTS
+    pcxStormOpenArchive@16 @266 NONAME

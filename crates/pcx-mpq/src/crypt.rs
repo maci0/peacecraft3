@@ -78,9 +78,9 @@ pub fn table() -> &'static [u32; TABLE_ENTRIES] {
 pub fn decrypt(data: &mut [u8], key: u32, table: &[u32; TABLE_ENTRIES]) {
     let mut seed1 = key;
     let mut seed2 = 0xEEEE_EEEEu32;
-    for chunk in data.chunks_exact_mut(4) {
+    for chunk in data.as_chunks_mut::<4>().0 {
         seed2 = seed2.wrapping_add(table[CIPHER_SLICE + (seed1 & 0xFF) as usize]);
-        let word = u32::from_le_bytes(chunk.try_into().unwrap());
+        let word = u32::from_le_bytes(*chunk);
         let value = word ^ seed1.wrapping_add(seed2);
         chunk.copy_from_slice(&value.to_le_bytes());
         seed1 = ((!seed1) << 0x15).wrapping_add(0x1111_1111) | (seed1 >> 0x0B);
@@ -96,7 +96,6 @@ pub fn decrypt(data: &mut [u8], key: u32, table: &[u32; TABLE_ENTRIES]) {
 /// Writing an archive needs the separate inverse schedule; reading one does not.
 /// The `fn decrypt_is_an_involution` test below pins that measured fact rather
 /// than asserting the tempting-but-false symmetry.
-
 #[cfg(test)]
 mod tests {
     use super::*;
