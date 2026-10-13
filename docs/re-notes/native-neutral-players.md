@@ -786,3 +786,100 @@ loaded source bytes is the next separate input-identity boundary if authorized.
 Leading-field defaults, overall parser failure translation and native context
 lifetime remain open. `GetPlayerNeutralPassive` stays unsupported and original
 campaign execution remains blocked.
+
+
+## Input-buffer core: transformed path, outputs and unresolved selection
+
+Only **`0x439570..0x439770`**, half-open, 512 bytes, was inspected with GNU
+objdump 2.47 against exact Legacy executable SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+Original range SHA-256:
+`119c99fd9a85d28df94d94f068601e52b6c3550577a48a94b6f7df4b6e879a65`.
+The complete wrapper ends at `0x4395c0`; the complete core `0x439600` ends at
+`0x43973d`. Adjacent alternate-wrapper/start-of-next-function bytes are not
+used to extend this call path. Scratch-only artifacts are
+`neutral-input-439570.objdump`, `neutral-input-range.json` and the preserved
+prefix. The preceding 45,713 note bytes are unchanged, SHA-256
+`85dc8ba9e183ae794b58fffd2a53db233cecd431d0b66d55d59b249c74ee77b9`.
+No outside delegate, import symbol, provider or live runtime was queried.
+
+### Path and mode connection
+
+`0x439570` computes a mode word from global `0x112ed28`: its low two bits,
+except that if signed global `0x10db4d8 <= 0` and `0x112ed28 == 0`, bit zero
+is forced on. These are instruction-level conditions; archive preference,
+edition, mount state and the semantic names of those globals are unproved.
+
+The wrapper passes eight arguments to `0x439600`: zero, its caller's path,
+buffer-output pointer, count-output pointer, extra-count argument, the computed
+mode, the caller's last argument, and zero. For the retained dispatcher call,
+these are `(0, transformed_path, &buffer, &count, 1, mode, 0, 0)`.
+Thus the verified `.w3i` path reaches this core without another visible path
+transformation in the wrapper.
+
+At `0x439635..0x439647`, the core initializes a local handle output to zero and
+calls **`0x439c20(0, transformed_path, mode, &handle)`**. The path pointer saved
+in ECX before the local stack-slot overwrite is explicitly passed. This is
+the unresolved selection boundary: its call shape suggests opening/resolving
+an input, but archive/filesystem policy and the resulting handle identity
+cannot be proved from this caller alone.
+
+### Buffer/count producer connection
+
+On a nonzero return from `0x439c20`, the core obtains a count via two visible
+branches. If handle `+0x110` differs from `0xffffffff`, it calls import slot
+`0xe66198` with that word and zero, using EAX as the count. Otherwise it loads
+handle `+0x118`, then that object's `+8`. Other import slots at `0xe6617c` and
+`0xe66180` bracket this selection; synchronization is an inference, not a
+resolved import-name proof. The branch shapes alone do not establish a
+filesystem-versus-archive classification.
+
+The count plus the extra-count argument is passed to `0x440610`. Its returned
+pointer is then passed, with handle and count, to **`0x43a1d0`**. For this
+caller the complete visible argument list is `(handle, buffer, count, 0, 0, 0, 0)`.
+Neither delegate's full contract is inspected here; in particular their byte
+source, allocation guarantees and transfer behavior are not replaced by names.
+
+On a nonzero return from this handle-to-buffer operation, the core requests
+`0xa5b900(buffer + count, 0, extra_count)` when extra count is nonzero, then
+stores the pointer through the caller's buffer output and the count through
+its optional count output. The dispatcher's extra count is one; that extra
+storage is **not** added to the returned count. This establishes exactly where
+the dispatcher stream wrapper's buffer `+4` and limit `+0x10` come from: the
+core's produced pointer and count, after the handle-to-buffer success gate.
+The fill helper's bytes were not inspected and are not assumed as new proof.
+
+### Actual result/default boundaries
+
+A missing buffer-output pointer enters the reporting-helper/zero-return path.
+With a nonnull output pointer, the core clears it before checking the path.
+A null path then reports and returns zero without reaching the optional
+count-output clear. For valid path/output arguments, the optional count output
+is cleared before the selection call. Accordingly not every invalid-argument
+path initializes every output.
+
+A zero selection return skips allocation/transfer. A zero handle-to-buffer
+return enters the cleanup path, which passes a nonnull allocated pointer to
+`0x440c70`; outputs remain zero. Successful transfer publishes outputs only
+at `0x4396e9..0x4396f5`. A nonnull handle is passed to `0x437fc0` before the
+final return. Exact allocation/cleanup contracts remain delegated.
+
+At `0x439707..0x439712`, EAX is zeroed and AL becomes one iff the caller's
+buffer output is nonzero. Thus the visible core's final result is **nonnull
+published buffer**, not an independently checked byte-count/parser-success
+code. No allocation-null guard is visible before the transfer delegate.
+All such outcomes concern loading outputs; this routine never initializes
+metadata `+4`. Its zero outputs are not a default for that metadata field.
+
+### Frozen blocker and next essential delegate
+
+The transformed `.w3i` path's connection to the dispatcher buffer/count outputs
+is established through the core's explicit gates and stores. Actual bytes and
+archive/filesystem selection remain unproved. Stop at **`0x439c20`**, whose
+role is selection/resolution of the path into the handle used here. A next
+bounded entry window would be `0x439c20..0x439e20`; it was not inspected in this
+slice. There is no image-wide search or automatic expansion to other delegates.
+The unknown input basename, metadata field meaning/defaults, parser failure
+translation and native map-context lifetime remain separate. An executable
+campaign Host is not supplied by this bounded identity trace;
+`GetPlayerNeutralPassive` remains unsupported and campaign runtime remains blocked.
