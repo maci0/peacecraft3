@@ -675,3 +675,114 @@ There is no expansion to `0x439570`. Even closing these string contracts would
 still leave archive/input-loader identity, leading metadata defaults, semantic
 field identity and runtime context unproved. `GetPlayerNeutralPassive` remains
 unsupported; original campaign execution remains blocked.
+
+
+## Length tails and transfer-entry branch coverage
+
+GNU objdump 2.47, exact Legacy SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+Only the following half-open ranges were inspected:
+
+- `0x433990..0x4339b0`: 32 bytes, SHA-256 `da9f3a11226fba520cd91fa5c46ed03b3f9700a833ca156b6838b75499db3d52`.
+- `0xa5ad40..0xa5ae40`: 256 bytes, SHA-256 `7194079879fccbeed2d8b506a146b6e5ed1fbf0a11b143a1e7f5901ee92c51e0`.
+
+The preceding 39,312 bytes remain unchanged, SHA-256
+`a006a12cdfd23be55e338ae1016443656ca2682efcf7970b6cb4928739774f26`.
+Raw ranges/disassembly remain in `.scratch/neutral-tail-transfer-*`,
+`.scratch/neutral-length-tails.objdump` and `.scratch/neutral-transfer-entry.objdump`.
+
+The formerly cut `0x433910` return tails now close its observed byte-length
+contract: the third-byte tail returns the already adjusted pointer distance;
+`0x433995` subtracts three from the advanced DWORD pointer and then the original
+pointer; `0x4339a1` restores the DWORD start for a first-byte zero; the alignment
+byte loop joins `0x4339a4`. Each returns the position of the NUL excluding it.
+No external delegate is needed for these nonnull string-counting paths.
+
+The transfer entry loads destination/source/count into EDI/ESI/ECX. If unsigned
+`destination > source` and `destination < source + count`, it branches to
+`0xa5aff4`, outside the window. Otherwise counts below `0x20` branch at
+`0xa5ad63` to **`0xa5b23b`**. The `.w3i` count is four and therefore takes this
+small-count branch under the separate non-overlap precondition. That branch's
+copy instructions were not yet inspected. A visible large-count conditional
+path uses `rep movsb` and returns destination, but it does not prove the
+four-byte case. No standard-library identity is assigned from its address or
+optimization style; these are original instruction facts, not symbol evidence.
+
+The stop boundary is `0xa5b23b`, not the large-count body continuation. Exact
+final suffix bytes remain unproved until that applicable branch is inspected.
+No loader/provider/runtime execution ran; metadata semantics and defaults remain
+independent. `GetPlayerNeutralPassive` remains unsupported.
+
+
+## Count-four transfer: extension output established statically
+
+GNU objdump 2.47 inspected only **`0xa5b23b..0xa5b33b`**, half-open, 256 bytes,
+from exact Legacy executable SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+The original range SHA-256 is
+`3ac23b1f476bc3711308a1a80ea35591404533c3a88b79c3b24ee91cf2517ec0`.
+Raw output/identity are `.scratch/neutral-count4-entry.objdump` and
+`.scratch/neutral-count4-range.json`. The preceding 41,481 note bytes are
+preserved, SHA-256
+`d8c1c3550e1e89bd252abc38007a6d76f444634b969ca6fa588195ae4eb1f74b`.
+No jump table, extra target block or external delegate inspection was necessary.
+No loader, provider retry, game execution or implementation change ran.
+
+### Exact applicable branch
+
+The prior transfer entry selects this branch for count four when its separate
+backward-overlap condition is false. At `0xa5b23b`, masking ECX with `0x1f`
+leaves four. EAX saves that count; shifting ECX right by two gives one.
+**`0xa5b247` loads exactly one DWORD from `[ESI]`; `0xa5b249` stores that DWORD
+at `[EDI]`.** Source and destination advance four bytes, ECX decrements to zero,
+and the loop exits. `0xa5b256..0xa5b25b` computes the saved count modulo four,
+which is zero, so the byte-tail loop is skipped. There are no calls on this
+count-four path.
+
+At `0xa5b270..0xa5b276`, EAX is restored from the original destination stack
+argument, saved ESI/EDI are popped, and the routine returns. Thus this specific
+branch copies exactly four bytes without conversion and returns the original
+destination pointer. The applicable terminal return is fully inside the window.
+Other routines/instructions after that return are not evidence for unrelated
+count cases. No general memcpy/memmove or named standard-library identity is
+claimed; the copy behavior follows directly from the observed load/store.
+
+### Composed path output and return convention
+
+For a valid, NUL-terminated path buffer with sufficient destination storage,
+under the non-overlap precondition, the already observed `0x4d28b0` operation
+is now established rather than merely a suffix-copy hypothesis:
+
+1. Compute the path's byte length and scan backward from its last character.
+2. Stop at the first slash/backslash, or replace the first dot encountered
+   before such a separator with NUL. This selects the last dot of the final
+   path component, not an earlier directory-component dot.
+3. Recompute the resulting byte length and transfer the four literal bytes
+   `.w3i` to that end position using the proved count-four branch.
+4. The complete `0x433570` wrapper writes the NUL byte immediately after those
+   four bytes.
+
+Consequently the final-component extension is **replaced by `.w3i`** when that
+component contains a dot; otherwise **`.w3i` is appended** to the existing
+buffer. No basename or directory is invented by this transformation. The
+copy wrapper returns source length four, overriding the transfer routine's
+pointer return; the path helper forwards that numeric result. The dispatcher
+ignores it. Four is a source byte count, not proof of a Boolean success contract.
+
+### Separate limitations and remaining campaign blocker
+
+The transfer entry's alternate overlap condition remains independently recorded:
+unsigned destination strictly above source and below source plus count branches
+to `0xa5aff4`. That path was not inspected. Neither large-count behavior nor
+invalid-pointer/buffer-capacity safety is proved by this small-count case.
+No live execution or symbol-based standard-library identification is implied.
+
+This closes the bounded string-contract question. It does **not** identify the
+actual incoming path's basename, establish archive-versus-filesystem lookup,
+prove which supplied map/context is selected at runtime, or name metadata `+4`.
+The zero-selector dispatcher's input-producing delegate **`0x439570`** remains
+uninspected, as requested. Its exact connection to the transformed path and
+loaded source bytes is the next separate input-identity boundary if authorized.
+Leading-field defaults, overall parser failure translation and native context
+lifetime remain open. `GetPlayerNeutralPassive` stays unsupported and original
+campaign execution remains blocked.
