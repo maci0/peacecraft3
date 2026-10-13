@@ -140,13 +140,18 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
 - [~] `pcx-casc`: local EKey spans, BLTE N/Z chunks and ENCODING CKey joins
       yield verified bytes. The original-install gate checks 74,500 index entries
       and 112 configured manifest aliases; unsupported codecs/ESpec remain explicit.
-- [ ] `pcx-casc`: resolve a content **path** to an EKey (WC3 FDID/VFS mapping, not yet solved)
+- [x] `pcx-casc`: resolve explicitly stored TVFS paths through configured mounts
+      to full EKey/CKey identities. Verified named Footman content and two manifest
+      links; no shorthand, module/HD/locale precedence or native lookup claim.
 - [~] `pcx-assets`: caller-ordered source layers and real `override/` resolution
       retain provenance and produce deterministic indexes. MPQ/CASC app adapters
       and exact-target archive priority remain unwired/unproven.
 - [ ] Asset modes: `vanilla` (default) / `reforged` / `reforged-hd` / `reforged-fixes`
 - [x] Library `override/` drop-in tree + generated `index.json`; app wiring pending
-- [ ] Gate: Reforged Footman loads through the same `pcx-gfx` path as vanilla
+- [!] Gate: Reforged Footman loads through the same `pcx-gfx` path as vanilla.
+      Verified CASC bytes reach the existing importer, which rejects GEOS 0 with
+      an unrecognized zero tag. Explicit original integration test preserves
+      this failure; newer MDX trailer/layout support is being investigated.
 - [ ] `docs/reforged-fixes.md` fix ledger; rows default to `defer`
 
 ## M2 — Asset decoders + first Bevy render — **render smoke passed; full material fidelity open**
@@ -682,7 +687,7 @@ See `PLAN.md` §3.5 for the harness design. Each chapter asserts specific outcom
 | RE-Q12 | `blizzard.ax` purpose | REA / string scan | open |
 | RE-Q14 | `game.dll` leaks its full build tree + class names | **closed** — `docs/re-notes/001-classic-symbols.md`; 254 paths, 25 subsystems, artifacts in `rea/` | **closed** |
 | RE-Q15 | Reforged PDBs + debug client console (2.0.1 leak) | recorded in §2.5; user-side acquisition only, nothing enters the repo | documented |
-| RE-Q17 | Reforged path → EKey resolution | `casc-storage` is FDID-oriented; WC3 needs the VFS/FDID mapping — solve before wiring `pcx-assets` | open, gates M1c |
+| RE-Q17 | Reforged path → EKey resolution | Checked configured TVFS mounts resolve the stored Footman path with complete manifest/EKey/CKey evidence; shorthand and client precedence remain unproved | explicit namespace implemented; native lookup open |
 | RE-Q16 | `war3_loader.dll` is Aegis-obfuscated (no CodeView symbol ref) | REA on the local 3.0.0.24268 build; deobfuscate before deep analysis | open, gates all Reforged code RE |
 | RE-Q13 | Name normalisation before hashing | **closed** — uppercased ASCII, `\`/`/` unified; pinned by `hashing_is_case_insensitive` and `separators_are_normalised` | |
 
@@ -872,6 +877,15 @@ Format: `date — subsystem — symptom — root cause — status`
   Seven CASC synthetic tests, one explicitly supplied Reforged install sweep,
   19 asset-layer tests and one documentation test pass. CASC path resolution,
   archive adapters and full Reforged rendering remain open.
+  TVFS adds checked explicit namespace traversal: 12 synthetic and two original
+  tests pass; 110 manifests contain 175,018 entries and retain one non-UTF8 path.
+  The named Footman verifies to 105,602 MDLX bytes, but graphics decoding currently
+  fails on its GEOS layout. This is a decoder blocker, not a path-resolution failure.
+
+- Rust 1.99 format cleanup preserves classic framing and output while adopting
+  typed array chunks, let chains and `is_multiple_of`. Scoped strict Clippy covers
+  MDL/BLP/SYLK libraries, tests and CLIs without dependency lint expansion;
+  graphics-library Clippy also passes. Map Clippy debt remains tracked separately.
 
 - [!] Latest four-target CI at `122ecd0` (run `38456169192`) did not start:
       GitHub reports failed account payments or an insufficient spending limit.

@@ -94,8 +94,8 @@ pub fn load_image(bytes: &[u8], source: &str) -> Result<LoadedTexture, crate::Er
                 (hh.width, hh.height, px)
             };
             Ok(LoadedTexture {
-                width: u32::from(w),
-                height: u32::from(hgt),
+                width: w,
+                height: hgt,
                 rgba,
                 source: source.to_string(),
             })
@@ -413,7 +413,9 @@ pub fn load_model(bytes: &[u8], source: &str) -> Result<LoadedModel, crate::Erro
             indices: mesh
                 .triangles
                 .raw
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect(),
             // `MTGC` says how many indices the groups actually use. The MATS

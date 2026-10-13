@@ -297,7 +297,7 @@ impl Drop for Temp {
 }
 
 #[test]
-fn synthetic_local_storage_roundtrip_has_verified_provenance_and_path_refusal() {
+fn synthetic_local_storage_roundtrip_has_verified_provenance_and_path_resolution() {
     static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
     let dir = Temp(std::env::temp_dir().join(format!(
         "pcx-casc-fixture-{}-{}",
@@ -305,15 +305,27 @@ fn synthetic_local_storage_roundtrip_has_verified_provenance_and_path_refusal() 
         SEQUENCE.fetch_add(1, Ordering::Relaxed)
     )));
     std::fs::create_dir_all(dir.0.join("Data/data")).unwrap();
-    let payload = b"TVFSsynthetic root";
+    let payload = b"synthetic item bytes";
     let (asset, asset_ekey) = multi_blte(&[(b'Z', payload)]);
     let asset_ckey = md5::compute(payload).0;
-    let en = encoding_bytes(&[(asset_ckey, asset_ekey, payload.len() as u32)]);
+    let root = crate::tvfs::tests::fixture(b"fixture/item.bin", asset_ekey, payload.len() as u32);
+    let root_ckey = md5::compute(&root).0;
+    let (encoded_root, root_ekey) = multi_blte(&[(b'N', &root)]);
+    let mut records = vec![
+        (asset_ckey, asset_ekey, payload.len() as u32),
+        (root_ckey, root_ekey, root.len() as u32),
+    ];
+    records.sort_by_key(|record| record.0);
+    let en = encoding_bytes(&records);
     let en_ckey = md5::compute(&en).0;
     let (encoded_en, en_ekey) = multi_blte(&[(b'N', &en)]);
     let mut parts = Vec::new();
     let mut entries = Vec::new();
-    for (data, key) in [(&asset, asset_ekey), (&encoded_en, en_ekey)] {
+    for (data, key) in [
+        (&asset, asset_ekey),
+        (&encoded_en, en_ekey),
+        (&encoded_root, root_ekey),
+    ] {
         let offset = parts.len() as u64;
         let mut reversed = key;
         reversed.reverse();
@@ -336,13 +348,15 @@ fn synthetic_local_storage_roundtrip_has_verified_provenance_and_path_refusal() 
         .unwrap();
     }
     let config = format!(
-        "encoding = {} {}\nencoding-size = {} {}\nvfs-root = {} {}\n",
+        "encoding = {} {}\nencoding-size = {} {}\nvfs-root = {} {}\nvfs-root-size = {} {}\n",
         hex(&en_ckey),
         hex(&en_ekey),
         en.len(),
         encoded_en.len(),
-        hex(&asset_ckey),
-        hex(&asset_ekey)
+        hex(&root_ckey),
+        hex(&root_ekey),
+        root.len(),
+        encoded_root.len()
     );
     let build_key = md5::compute(&config).0;
     let key = hex(&build_key);
@@ -366,21 +380,36 @@ fn synthetic_local_storage_roundtrip_has_verified_provenance_and_path_refusal() 
         result.span_fields_semantics().kind,
         Failure::Unsupported { .. }
     ));
-    assert!(matches!(
+    let resolver = storage.load_tvfs(&encoding).unwrap();
+    assert_eq!(
+        storage.path_to_ekey(&encoding, "fixture/item.bin").unwrap(),
+        asset_ekey
+    );
+    assert_eq!(
         storage
-            .path_to_ekey(&encoding, "fixture/path")
-            .unwrap_err()
-            .kind,
-        Failure::Unsupported {
-            feature: "path to EKey",
-            ..
-        }
-    ));
+            .read_path(&resolver, "fixture/item.bin")
+            .unwrap()
+            .file
+            .decoded
+            .bytes,
+        payload
+    );
     assert!(matches!(
         storage.read_ekey([0xff; 16]).unwrap_err().kind,
         Failure::NotFound(_)
     ));
     assert_eq!(storage.data_part_sizes.len(), 1);
+    let mut conflicting_alias = storage::Storage::open(&dir.0, limits()).unwrap();
+    let root_pair = conflicting_alias.build.config_values["vfs-root"].clone();
+    conflicting_alias
+        .build
+        .config_values
+        .insert("vfs-1".into(), root_pair);
+    conflicting_alias
+        .build
+        .config_values
+        .insert("vfs-1-size".into(), vec!["1".into(), "1".into()]);
+    assert!(conflicting_alias.load_tvfs(&encoding).is_err());
     let mut wrong_encoding = encoding;
     wrong_encoding.evidence.source.build_key = Some([0; 16]);
     assert!(storage.read_content(&wrong_encoding, asset_ckey).is_err());

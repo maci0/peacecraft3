@@ -33,36 +33,33 @@ fn main() -> ExitCode {
         }
     };
 
-    match cmd {
-        "hash" => {
-            let raw = args.get(2).map(String::as_str) == Some("raw");
-            let t = match Table::parse(&data) {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("{path}: {e}");
-                    return ExitCode::from(1);
-                }
-            };
-            if raw {
-                println!(
-                    "{} file bytes fnv1a64 {:016x}",
-                    data.len(),
-                    pcx_slq::fnv1a64(&data)
-                );
-                return ExitCode::SUCCESS;
+    if cmd == "hash" {
+        let raw = args.get(2).map(String::as_str) == Some("raw");
+        let t = match Table::parse(&data) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("{path}: {e}");
+                return ExitCode::from(1);
             }
-            let canon = t.canonical();
+        };
+        if raw {
             println!(
-                "{} cells={} canonical={} fnv1a64 {:016x}",
-                path,
-                t.cell_count(),
-                canon.len(),
-                pcx_slq::fnv1a64(&canon)
+                "{} file bytes fnv1a64 {:016x}",
+                data.len(),
+                pcx_slq::fnv1a64(&data)
             );
-            println!("  format: Y<row>;X<col>;K<value>\\n, rows then columns ascending");
             return ExitCode::SUCCESS;
         }
-        _ => {}
+        let canon = t.canonical();
+        println!(
+            "{} cells={} canonical={} fnv1a64 {:016x}",
+            path,
+            t.cell_count(),
+            canon.len(),
+            pcx_slq::fnv1a64(&canon)
+        );
+        println!("  format: Y<row>;X<col>;K<value>\\n, rows then columns ascending");
+        return ExitCode::SUCCESS;
     }
 
     let t = match Table::parse(&data) {

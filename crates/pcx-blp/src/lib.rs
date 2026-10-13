@@ -501,7 +501,7 @@ pub fn bytes_per_pixel(d: &[u8], h: &Header, index: usize) -> Result<Option<u32>
         return Ok(None);
     }
     let n = raw.len() as u64;
-    if n % px != 0 || n / px > u64::from(BPP_INDEX_ALPHA) {
+    if !n.is_multiple_of(px) || n / px > u64::from(BPP_INDEX_ALPHA) {
         return Err(Error::UnrecognisedMip {
             index,
             size: raw.len(),
@@ -770,7 +770,7 @@ impl Framing {
     /// The palette is a whole number of 4-byte entries and does not run past
     /// the payload.
     pub fn palette_is_whole_entries(&self) -> bool {
-        self.payload_start >= self.palette_base && self.payload_start % 4 == 0
+        self.payload_start >= self.palette_base && self.payload_start.is_multiple_of(4)
     }
 
     /// Every mip is exactly `width x height x bpp` for one `bpp` across the
@@ -1211,7 +1211,7 @@ mod tests {
             assert!(h.has_mipmaps, "{rel}");
 
             let n = h.mip_count();
-            assert!(n >= 1 && n <= MAX_MIPS, "{rel}: {n} mips");
+            assert!((1..=MAX_MIPS).contains(&n), "{rel}: {n} mips");
             for i in 0..n {
                 let off = h.mip_offsets[i] as usize;
                 let end = off + h.mip_sizes[i] as usize;
@@ -1808,12 +1808,11 @@ mod logo_alpha_tests {
             if !root.is_dir() {
                 continue;
             }
-            if let Ok(mut set) = pcx_mpq::MpqSet::open_wc3(&root) {
-                if let Ok(b) = set.extract(r"Textures\WarcraftIII-logo-alpha.blp") {
-                    if !b.is_empty() {
-                        return Some((b, root.display().to_string()));
-                    }
-                }
+            if let Ok(mut set) = pcx_mpq::MpqSet::open_wc3(&root)
+                && let Ok(b) = set.extract(r"Textures\WarcraftIII-logo-alpha.blp")
+                && !b.is_empty()
+            {
+                return Some((b, root.display().to_string()));
             }
         }
         None
@@ -1855,7 +1854,9 @@ mod logo_alpha_tests {
         );
 
         let partial = px
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| (1..255).contains(&p[3]))
             .count();
         let total = 512 * 256;

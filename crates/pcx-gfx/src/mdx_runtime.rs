@@ -178,8 +178,10 @@ impl JointPlan {
                     || !track.times_are_ordered()
                     || track.raw.chunks_exact(stride).any(|key| {
                         key[4..]
-                            .chunks_exact(4)
-                            .any(|value| !f32::from_le_bytes(value.try_into().unwrap()).is_finite())
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .any(|value| !f32::from_le_bytes(*value).is_finite())
                     })
                 {
                     return Err(PlanError::TrackShape {
@@ -355,8 +357,10 @@ impl RuntimePlan {
             textures: mdl.textures(bytes)?,
             texture_animations: mdl.texture_anims(bytes)?,
             global_sequences: globals
-                .chunks_exact(4)
-                .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|word| u32::from_le_bytes(*word))
                 .collect(),
         })
     }

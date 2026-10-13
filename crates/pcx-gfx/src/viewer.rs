@@ -49,7 +49,6 @@ pub fn spawn_model(
     images: &mut Assets<Image>,
     bytes: &[u8],
     source: &str,
-    _install: &Path,
     textures: &[LoadedTexture],
 ) -> Result<usize, crate::Error> {
     spawn_model_instance(commands, meshes, materials, images, bytes, source, textures)
@@ -118,7 +117,7 @@ fn spawn_model_instance(
 
         let material = match image {
             Some(tex) => {
-                let mut image = rgba_image(&tex);
+                let mut image = rgba_image(tex);
                 image.sampler = sampler_for_texture_flags(authored_flags);
                 let handle = images.add(image);
                 materials.add(StandardMaterial {

@@ -568,7 +568,7 @@ impl Table {
                 a.detail.push_str(" (a later record supplies the value)");
             }
         }
-        for (&(row, column), _) in self.cells.iter() {
+        for &(row, column) in self.cells.keys() {
             if row == 1 {
                 self.headers
                     .entry(column)
@@ -589,20 +589,20 @@ impl Table {
                 detail: format!("column {column} has cells but no row-1 header"),
             });
         }
-        if let Some(d) = self.declared.clone() {
-            if d.rows != self.max_row || d.columns != self.max_column {
-                self.push_anomaly(Anomaly {
-                    kind: AnomalyKind::DeclaredSizeMismatch,
-                    severity: Severity::Info,
-                    row: None,
-                    column: None,
-                    record: 0,
-                    detail: format!(
-                        "B record declares {}x{}, cells reach {}x{}",
-                        d.columns, d.rows, self.max_column, self.max_row
-                    ),
-                });
-            }
+        if let Some(d) = self.declared.clone()
+            && (d.rows != self.max_row || d.columns != self.max_column)
+        {
+            self.push_anomaly(Anomaly {
+                kind: AnomalyKind::DeclaredSizeMismatch,
+                severity: Severity::Info,
+                row: None,
+                column: None,
+                record: 0,
+                detail: format!(
+                    "B record declares {}x{}, cells reach {}x{}",
+                    d.columns, d.rows, self.max_column, self.max_row
+                ),
+            });
         }
     }
 
@@ -750,7 +750,7 @@ impl Table {
     pub fn canonical(&self) -> Vec<u8> {
         let mut out = String::with_capacity(self.cells.len() * 24);
         for (&(row, column), value) in &self.cells {
-            let _ = write!(out, "Y{row};X{column};K{value}\n");
+            let _ = writeln!(out, "Y{row};X{column};K{value}");
         }
         out.into_bytes()
     }
@@ -907,7 +907,7 @@ fn push_field(
     Ok(())
 }
 
-fn field<'a>(fields: &'a Fields, tag: char) -> Option<&'a str> {
+fn field(fields: &Fields, tag: char) -> Option<&str> {
     fields
         .iter()
         .find(|(t, _)| *t == tag)
@@ -1199,7 +1199,7 @@ mod tests {
         assert_eq!(t.by_name(341, "Volume"), Some("120"));
         // Row 512, deep past where a `C`-only reader loses the thread.
         assert_eq!(t.by_name(512, "SoundName"), Some("O01Cairne23"));
-        assert_eq!(t.by_name(2439, "FileNames").is_some(), true);
+        assert!(t.by_name(2439, "FileNames").is_some());
     }
 
     /// The `E` expression in 1.28c is Excel's recipe, not the value: 1.29b

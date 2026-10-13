@@ -4850,6 +4850,7 @@ dependencies = [
  "bevy",
  "image",
  "pcx-blp",
+ "pcx-casc",
  "pcx-mdl",
  "pcx-mpq",
  "pcx-slq",

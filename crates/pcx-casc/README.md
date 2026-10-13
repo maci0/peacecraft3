@@ -108,22 +108,104 @@ contain 5 N chunks and 146 Z chunks, all verified. The separately read content
 root decodes to 21,145,250 bytes with 81 verified Z chunks; its `War3` signature
 is identified, but its path records are not interpreted.
 
+## Checked TVFS path resolution
+
+The actual configured TVFS data is the primary evidence. The original-install
+sweep parses 110 unique manifests from 111 TVFS configuration aliases, retaining
+175,018 authored entries, zero unsupported span records, and one non-UTF8 byte
+path. The `vfs-root`/`vfs-1` pair is an alias, counted once in the parser catalog.
+Headers, table extents, trie scopes, span references and CFT key ranges are checked
+before indexing. Logical stored path bytes and active traversal prefixes are bounded
+by the caller's decoded-byte budget. Traversal uses an explicit stack.
+
+The supplied root has a 46-byte v1 header, 9-byte encoding/patch keys, big-endian
+flags `0x0f`, and maximum depth 13. Its declared table ranges are:
+
+| Table | Byte range |
+|---|---|
+| Path | 46..7503 |
+| Encoding specifier | 7503..7513 |
+| Container file | 7513..15621 |
+| VFS spans | 15621..18822 |
+
+Those ranges and widths are read from the input; none is a runtime default.
+The flags word is big-endian in these shipped bytes. CascLib's little-endian
+conversion disagrees with this corpus; TACTLib's big-endian header agrees.
+
+Names are assembled from authored byte fragments, optional separators and
+explicit directory extents. Valued nodes restore their scope's saved prefix;
+unvalued fragments accumulate. The high folder bit and low extent field control
+child scopes. The VFS table supplies span counts, referenced-file offsets, lengths
+and CFT references. CFT-reference width derives from the declared table size.
+
+The parser retains CFT suffix and ESpec bytes without executing their patch/write
+controls. It uses the bounded authored key prefix and the checked ENCODING table
+to obtain a unique full EKey/CKey/size. Ambiguous or absent prefixes are refused.
+Only a single whole-file span can be read; partial/multiple spans remain unsupported.
+
+Nested mounts are recognized through **configured EKeys**, never through `.w3mod`
+names or a guessed directory convention. `:` explicitly enters such a mount.
+ASCII folding follows the manifest's lowercase flag. There is no inferred module,
+HD, locale or override precedence. Non-UTF8 names retain their original bytes;
+`resolve_bytes` and `read_path_bytes` avoid a guessed code page. Unicode casing,
+filesystem separator rewriting and basename aliases are not added.
+
+Consumer API:
+
+```rust,ignore
+let encoding = storage.load_encoding()?;
+let resolver = storage.load_tvfs(&encoding)?; // reuse for subsequent lookups
+let identity = resolver.resolve(path)?;      // full keys + config/manifest chain
+let asset = storage.read_path(&resolver, path)?; // checked decoded bytes + identity
+```
+
+`Storage::path_to_ekey(&encoding, path)` remains a convenience wrapper.
+`ResolvedPath` retains build-config and ENCODING evidence, each manifest's
+configured field names, full EKey/CKey, node/VFS/CFT offsets and authored span.
+`read_path` verifies installation/config identity, full BLTE EKey, chunk checksums,
+ENCODING/span size and the decoded CKey. It performs no asset writes.
+
+### Named original asset proof
+
+On the source/build identified above:
+
+| Measurement | Observed value |
+|---|---|
+| Qualified authored path | `war3.w3mod:units/human/footman/footman.mdx` |
+| EKey | `50f7f9185775e0e6f3b1cf18646e2882` |
+| CKey / decoded MD5 | `3bd0831fad186c0c08767f15a9663e4b` |
+| Decoded length | 105,602 bytes |
+| Format identifier | `MDLX` |
+
+The first link comes from `vfs-root`/`vfs-1` (EKey
+`132daa60e6ad302091b3b3fb6d6c2927`, CKey
+`3ab870666612150386f64ecfa5687094`) at path node 62. Its `war3.w3mod`
+span references `vfs-2` (EKey `ec9836ae111b50f13e01c5967c2f4c28`,
+CKey `dec901636e6c0460e1eda61bb7fa11fa`). The leaf comes from node 308,815,
+VFS offset 1,337,921, CFT-relative offset 229,349, referenced-file offset zero.
+Its declared span length matches ENCODING and the decoded bytes. A separate
+`read_content` of the resolved CKey returns the same bytes. No asset bytes are
+stored in source, documentation or generated files; this table records identities
+and measurements only.
+
+This proves the checked authored namespace and stored base representation. It
+does not prove the original client's shorthand lookup, module/locale selection,
+patch execution, model rendering or runtime behavior.
+
 ## Open gates and next probes
 
-- **Path to EKey is unsupported.** A real VFS root is decoded and identified
-  before `path_to_ekey` reports the refusal. Next: establish this build's TVFS
-  path-table, span/VFS-table and nested manifest joins, then verify a named path
-  against the original client. No FDID/path mapping is invented.
-- **Full BLDR/encoding chain is not established for arbitrary store contents.**
-  Supported N/Z and CKey joins are a verified subset. Next: census actual codec
-  tags and inspect each unsupported mode/key carrier before extending decoding.
-- **Local span controls, partial envelope-key writing and the index maximum word
-  remain unknown.** Their bytes are retained and semantic access is refused.
-  Next: trace their consumers/writers in this build's original storage reader.
-- ESpec/EKey-page interpretation, encrypted/nested codecs, paged/older index
-  revisions, remote-only content, loose overrides and native behavior remain open.
-- Native REA evidence was unavailable in this session. Static format source and
-  shipped-byte integrity checks do not prove original-client execution behavior.
+- Native module/HD/locale/loose-override precedence remains unverified. The
+  exact next probe is the local client routine that selects a module stack for
+  an unqualified path; compare its selected full EKey with this explicit graph.
+- Multi-span assembly and partial slicing remain typed `Unsupported`. Next:
+  measure a real such record and trace its referenced-file offset consumer.
+- Ambiguous EKey prefixes, unconfigured mounts, link cycles, unsupported header
+  extensions/flags and deleted/other-file span states are explicit refusals.
+- CFT patch/write controls and ESpec execution remain refused, with their source
+  bytes retained. Next: trace native patch/spec selection for that exact record.
+- Full-store codec coverage remains unproven; encryption/recursive modes, other
+  index layouts, remote-only content and original-client execution remain open.
+- Existing local-envelope, maximum-offset and ENCODING ESpec refusals are preserved.
 
 ## Primary format and dependency references
 
@@ -134,20 +216,23 @@ Format references are pinned to CascLib commit
 - [Jenkins lookup3 algorithm](https://github.com/ladislav-zezula/CascLib/blob/38a34665624b8775bb875274b36191b21c38d97b/src/jenkins/lookup3.c)
 - [BLTE framing and local-envelope caveats](https://github.com/ladislav-zezula/CascLib/blob/38a34665624b8775bb875274b36191b21c38d97b/src/CascReadFile.cpp)
 - [ENCODING structures](https://github.com/ladislav-zezula/CascLib/blob/38a34665624b8775bb875274b36191b21c38d97b/src/CascStructs.h)
+- [TVFS trie/span/mount framing](https://github.com/ladislav-zezula/CascLib/blob/38a34665624b8775bb875274b36191b21c38d97b/src/CascRootFile_TVFS.cpp)
+- [Big-endian TVFS header and byte trie corroboration](https://github.com/overtools/TACTLib/blob/129f977b604b2576bfd048e0f2be8b44ee983f39/TACTLib/Core/VFS/VFSManifestReader.cs)
 - [ENCODING CKey page walk](https://github.com/ladislav-zezula/CascLib/blob/38a34665624b8775bb875274b36191b21c38d97b/src/CascOpenStorage.cpp)
 
 Current stable versions were verified against the crates.io primary registry on
 2026-10-14: [flate2 1.1.10](https://crates.io/api/v1/crates/flate2),
 [md5 0.8.1](https://crates.io/api/v1/crates/md5), and
 [thiserror 2.0.21](https://crates.io/api/v1/crates/thiserror).
-The crate owns its lockfile; root manifests/lockfile remain untouched.
+The shared workspace owns dependency resolution; no manifests or lockfiles were changed by this TVFS implementation.
 
 ## Reproduce
 
 ```sh
-CARGO_TARGET_DIR=/tmp/pcx-casc-target cargo test --locked -p pcx-casc
+CARGO_TARGET_DIR=/tmp/pcx-casc-tvfs-target cargo test --locked -p pcx-casc
 PEACECRAFT3_REFORGED_DIR='/home/maci/Faugus/battle-net/drive_c/Program Files (x86)/Warcraft III' \
-CARGO_TARGET_DIR=/tmp/pcx-casc-target cargo test --locked -p pcx-casc -- --ignored --nocapture
+PEACECRAFT3_REFORGED_ASSET='war3.w3mod:units/human/footman/footman.mdx' \
+CARGO_TARGET_DIR=/tmp/pcx-casc-tvfs-target cargo test --locked -p pcx-casc -- --ignored --nocapture
 ```
 
 The ignored original-fixture test fails without its explicitly supplied install.

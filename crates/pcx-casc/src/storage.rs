@@ -45,6 +45,12 @@ pub struct FileBytes {
     pub decoded: Decoded,
 }
 
+#[derive(Debug)]
+pub struct PathBytes {
+    pub resolved: crate::tvfs::ResolvedPath,
+    pub file: FileBytes,
+}
+
 impl FileBytes {
     pub fn envelope_key_semantics(&self) -> Result<Key, Error> {
         match self.local_envelope.ekey_claim {
@@ -396,39 +402,72 @@ impl Storage {
         Err(last_error.unwrap_or_else(|| error("ENCODING", 0, Failure::NotFound(hex(&ckey)))))
     }
 
-    /// A real decoded VFS root is required before reporting its mapping unknown.
+    /// Load checked configured TVFS manifests once for repeated path lookups.
+    pub fn load_tvfs(&self, encoding: &Encoding) -> Result<crate::tvfs::Resolver, Error> {
+        crate::tvfs::Resolver::load(self, encoding)
+    }
+
+    /// Convenience lookup; consumers doing repeated reads should reuse load_tvfs.
     pub fn path_to_ekey(&self, encoding: &Encoding, path: &str) -> Result<Key, Error> {
-        let values = self
-            .build
-            .config_values
-            .get("vfs-root")
-            .filter(|values| values.len() == 2)
-            .ok_or_else(|| {
-                error(
-                    &self.build.config.source.member,
-                    0,
-                    Failure::Malformed("missing VFS root key pair".into()),
-                )
-            })?;
-        let ckey = parse_key(&values[0], &self.build.config.source.member)?;
-        let file = self.read_content(encoding, ckey)?;
-        Err(error(
+        Ok(self.load_tvfs(encoding)?.resolve(path)?.ekey)
+    }
+
+    /// Preserve path/config/manifest evidence beside the fully checked content.
+    pub fn read_path(
+        &self,
+        resolver: &crate::tvfs::Resolver,
+        path: &str,
+    ) -> Result<PathBytes, Error> {
+        self.read_path_bytes(resolver, path.as_bytes())
+    }
+
+    /// Preserve opaque byte paths; no guessed filesystem encoding conversion.
+    pub fn read_path_bytes(
+        &self,
+        resolver: &crate::tvfs::Resolver,
+        path: &[u8],
+    ) -> Result<PathBytes, Error> {
+        let resolved = resolver.resolve_bytes(path)?;
+        if resolved.build_config != self.build.config {
+            return Err(error(
+                "TVFS",
+                0,
+                Failure::Malformed(
+                    "resolver belongs to a different install/build configuration".into(),
+                ),
+            ));
+        }
+        let file = self.read_ekey(resolved.ekey)?;
+        if file.decoded.bytes.len() as u64 != resolved.decoded_size {
+            return Err(error(
+                &file.decoded.evidence.source.member,
+                0,
+                Failure::Malformed("path/span/ENCODING content size disagreement".into()),
+            ));
+        }
+        verify_md5(
+            &file.decoded.bytes,
+            resolved.ckey,
             &file.decoded.evidence.source.member,
             0,
-            Failure::Unsupported {
-                feature: "path to EKey",
-                evidence: format!(
-                    "requested {path:?}; verified root CKey {}, {} decoded bytes, signature {}",
-                    hex(&ckey),
-                    file.decoded.bytes.len(),
-                    hex(file.decoded.bytes.get(..4).unwrap_or(&file.decoded.bytes))
-                ),
-                next_probe: "parse this build's TVFS path table, span/VFS table and nested manifest links; prove one named path against the local client",
-            },
-        ))
+        )?;
+        Ok(PathBytes { resolved, file })
     }
 
     pub fn verify_config_size(&self, field: &str, file: &FileBytes) -> Result<(), Error> {
+        self.verify_config_lengths(
+            field,
+            file.decoded.bytes.len() as u64,
+            file.decoded.evidence.size,
+        )
+    }
+
+    pub(crate) fn verify_config_lengths(
+        &self,
+        field: &str,
+        decoded: u64,
+        encoded: u64,
+    ) -> Result<(), Error> {
         let values = self
             .build
             .config_values
@@ -453,7 +492,7 @@ impl Storage {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        if parsed[0] != file.decoded.bytes.len() as u64 || parsed[1] != file.decoded.evidence.size {
+        if parsed[0] != decoded || parsed[1] != encoded {
             return Err(error(
                 &self.build.config.source.member,
                 0,

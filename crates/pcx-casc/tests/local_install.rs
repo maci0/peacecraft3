@@ -154,19 +154,119 @@ fn all_local_indexes_and_configured_manifests() {
         hex(&root.decoded.content_key),
         hex(root.decoded.bytes.get(..4).unwrap_or(&root.decoded.bytes))
     );
-    let refusal = store
+    let missing = store
         .path_to_ekey(&encoding, "synthetic/path-probe")
         .unwrap_err();
-    assert!(matches!(
-        refusal.kind,
-        Failure::Unsupported {
-            feature: "path to EKey",
-            ..
-        }
-    ));
-    println!("path_refusal={refusal}");
+    assert!(matches!(missing.kind, Failure::NotFound(_)));
+    println!("missing_path={missing}");
     println!(
-        "verified_configured_manifests={decoded_files} unique_manifest_ekeys={} decoded_manifest_bytes={decoded_bytes} chunk_modes={chunks:?} root_content_verified=true path_mapping=unsupported espec_execution=unsupported full_store_codec_coverage=unproven",
+        "verified_configured_manifests={decoded_files} unique_manifest_ekeys={} decoded_manifest_bytes={decoded_bytes} chunk_modes={chunks:?} root_content_verified=true path_mapping=checked_explicit_mounts espec_execution=unsupported full_store_codec_coverage=unproven",
         manifest_keys.len()
     );
+}
+
+#[test]
+#[ignore = "requires PEACECRAFT3_REFORGED_DIR and PEACECRAFT3_REFORGED_ASSET from the actual TVFS byte namespace"]
+fn named_asset_resolves_through_tvfs_encoding_and_content() {
+    let install = PathBuf::from(
+        std::env::var_os("PEACECRAFT3_REFORGED_DIR").expect("explicit original install"),
+    );
+    let path = std::env::var("PEACECRAFT3_REFORGED_ASSET")
+        .expect("explicit authored qualified asset path");
+    let store = Storage::open(
+        &install,
+        Limits {
+            encoded_bytes: 64 * 1024 * 1024,
+            decoded_bytes: 256 * 1024 * 1024,
+        },
+    )
+    .unwrap();
+    let encoding = store.load_encoding().unwrap();
+    let resolver = store.load_tvfs(&encoding).unwrap();
+    let mut entries = 0;
+    let mut unsupported_entries = 0;
+    let mut non_utf8_paths = 0;
+    for configured in resolver.manifests().values() {
+        let manifest = &configured.manifest;
+        entries += manifest.entries.len();
+        for (path, entry) in &manifest.entries {
+            non_utf8_paths += usize::from(std::str::from_utf8(path).is_err());
+            match &entry.record {
+                pcx_casc::tvfs::FileRecord::Unsupported(_) => unsupported_entries += 1,
+                pcx_casc::tvfs::FileRecord::Spans(spans) => {
+                    for span in spans {
+                        assert!(
+                            manifest
+                                .cft_record(span)
+                                .unwrap()
+                                .starts_with(&span.key_prefix)
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(manifest.evidence.md5, configured.ckey);
+        assert!(matches!(
+            manifest.control_semantics().kind,
+            Failure::Unsupported { .. }
+        ));
+    }
+    println!(
+        "tvfs_manifests={} authored_entries={entries} unsupported_entries={unsupported_entries} non_utf8_byte_paths={non_utf8_paths}",
+        resolver.manifests().len()
+    );
+    let resolved = resolver.resolve(&path).unwrap();
+    let result = store.read_path(&resolver, &path).unwrap();
+    assert_eq!(store.path_to_ekey(&encoding, &path).unwrap(), resolved.ekey);
+    assert_eq!(
+        result.file.decoded.bytes,
+        store
+            .read_content(&encoding, resolved.ckey)
+            .unwrap()
+            .decoded
+            .bytes
+    );
+    assert_eq!(result.file.decoded.content_key, resolved.ckey);
+    assert_eq!(md5::compute(&result.file.decoded.bytes).0, resolved.ckey);
+    assert_eq!(
+        result.file.decoded.bytes.len() as u64,
+        resolved.decoded_size
+    );
+    println!(
+        "named_asset path={path:?} ekey={} ckey={} size={} md5={} signature={} version={} config_md5={} links={}",
+        hex(&resolved.ekey),
+        hex(&resolved.ckey),
+        resolved.decoded_size,
+        hex(&result.file.decoded.content_key),
+        hex(result
+            .file
+            .decoded
+            .bytes
+            .get(..4)
+            .unwrap_or(&result.file.decoded.bytes)),
+        store.build.info.source.version,
+        hex(&resolved.build_config.md5),
+        resolved.links.len()
+    );
+    for link in &resolved.links {
+        println!(
+            "path_link config_fields={:?} manifest_ekey={} manifest_ckey={} node_offset={} vfs_offset={} cft_offset={} span_offset={} span_size={} path_bytes={}",
+            link.config_fields,
+            hex(&link.ekey),
+            hex(&link.ckey),
+            link.node_offset,
+            link.span.vfs_offset,
+            link.span.cft_offset,
+            link.span.file_offset,
+            link.span.size,
+            hex(&link.path)
+        );
+    }
+    assert!(matches!(
+        store
+            .read_path(&resolver, "synthetic/not-authored")
+            .unwrap_err()
+            .kind,
+        Failure::NotFound(_)
+    ));
 }

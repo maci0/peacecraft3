@@ -1101,7 +1101,7 @@ pub struct Pivots(pub Vec<[f32; 3]>);
 
 impl Pivots {
     pub fn parse(data: &[u8]) -> Result<Self, Error> {
-        if data.len() % 12 != 0 {
+        if !data.len().is_multiple_of(12) {
             return Err(Error::RaggedRecords {
                 chunk: "PIVT",
                 size: data.len(),
@@ -1109,7 +1109,9 @@ impl Pivots {
             });
         }
         Ok(Self(
-            data.chunks_exact(12)
+            data.as_chunks::<12>()
+                .0
+                .iter()
                 .map(|c| {
                     [
                         f32::from_le_bytes(c[0..4].try_into().unwrap()),
@@ -1201,7 +1203,7 @@ impl AnimTrack {
     /// difference is four bytes per key, which is enough to make a colour track
     /// overrun its record while a scalar one still fits.
     pub fn key_len(&self) -> usize {
-        let comp = self.components() as usize;
+        let comp = self.components();
         if self.interpolation.has_tangents() {
             4 + comp * 4 * 3
         } else {
@@ -2462,7 +2464,7 @@ pub struct Mesh {
 }
 
 /// Reads a `tag[4] + u32 count + body` sub-block starting at `p[at]`.
-fn read_subblock<'a>(p: &'a [u8], at: usize) -> Result<(&'a [u8; 4], u32, &'a [u8]), Error> {
+fn read_subblock(p: &[u8], at: usize) -> Result<(&[u8; 4], u32, &[u8]), Error> {
     let tag: &[u8; 4] = p
         .get(at..at + 4)
         .ok_or(Error::Truncated {
@@ -2777,7 +2779,7 @@ impl Mdlx {
             });
         }
         let mut out = Vec::with_capacity(p.len() / SEQUENCE_SIZE);
-        for r in p.chunks_exact(SEQUENCE_SIZE) {
+        for r in p.as_chunks::<SEQUENCE_SIZE>().0 {
             let start = read_u32(r, SEQ_INTERVAL)?;
             let end = read_u32(r, SEQ_INTERVAL + 4)?;
             let mut trailing = [0u32; 7];
@@ -2865,8 +2867,10 @@ impl Mdlx {
                 // guard that keeps whatever the groups do not reach out of the
                 // skinning table, and the span reports the width it trimmed.
                 let node_indices: Vec<u32> = g.data[body_start..body_end]
-                    .chunks_exact(4)
-                    .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| u32::from_le_bytes(*c))
                     .collect();
                 let want: usize = mesh.matrix_groups.iter().map(|&c| c as usize).sum();
                 mesh.matrix_span_u32s = node_indices.len();
@@ -2898,7 +2902,9 @@ impl Mdlx {
                     });
                 }
                 mesh.seq_bounds = g.data[seq_start..seq_end]
-                    .chunks_exact(SEQ_BOUNDS_STRIDE)
+                    .as_chunks::<SEQ_BOUNDS_STRIDE>()
+                    .0
+                    .iter()
                     .map(|c| {
                         let mut out = [0.0f32; 7];
                         for (i, slot) in out.iter_mut().enumerate() {
@@ -2935,8 +2941,10 @@ impl Mdlx {
                 b"GNDX" => mesh.vertex_groups = body.to_vec(),
                 b"MTGC" => {
                     mesh.matrix_groups = body
-                        .chunks_exact(4)
-                        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| u32::from_le_bytes(*c))
                         .collect();
                 }
                 // Primitive type and index count are read for their counts and
@@ -3171,8 +3179,10 @@ impl Mdlx {
                     });
                 }
                 node.frames = p[rest + 12..end]
-                    .chunks_exact(4)
-                    .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| u32::from_le_bytes(*c))
                     .collect();
                 at = end;
             } else {
@@ -3380,7 +3390,7 @@ impl Mdlx {
             });
         }
         let mut out = Vec::with_capacity(p.len() / TEXTURE_SIZE);
-        for r in p.chunks_exact(TEXTURE_SIZE) {
+        for r in p.as_chunks::<TEXTURE_SIZE>().0 {
             out.push(Texture {
                 slot: read_u32(r, 0)?,
                 path: read_cstr_bounded(r, 4, 260),
@@ -4365,7 +4375,7 @@ mod tests {
         let Some(d) = shipped(FOOTMAN) else { return };
         let m = Mdlx::parse(&d).unwrap_or_else(|e| panic!("{FOOTMAN}: {e}"));
         for tag in [tag::TXAN, tag::RIBB, tag::PREM, tag::CAMS, tag::LITE] {
-            assert!(!m.has(&tag), "unexpected {}", String::from_utf8_lossy(tag));
+            assert!(!m.has(tag), "unexpected {}", String::from_utf8_lossy(tag));
         }
         assert!(m.texture_anims(&d).unwrap().is_empty());
         assert!(m.ribbons(&d).unwrap().is_empty());
@@ -4963,35 +4973,33 @@ mod tests {
                                             ));
                                         }
                                         let nb = m.bones(&d).map(|b| b.len()).unwrap_or(0);
-                                        if nb > 0 {
-                                            if let Some(bad) = msh
+                                        if nb > 0
+                                            && let Some(bad) = msh
                                                 .matrix_indices
                                                 .iter()
                                                 .find(|&&b| b as usize >= nb)
-                                            {
-                                                failed.push(format!(
-                                                    "{rel}: MATS references bone {bad} of {nb}"
-                                                ));
-                                            }
+                                        {
+                                            failed.push(format!(
+                                                "{rel}: MATS references bone {bad} of {nb}"
+                                            ));
                                         }
                                         let groups = msh.matrix_groups.len();
-                                        if groups > 0 {
-                                            if let Some(bad) = msh
+                                        if groups > 0
+                                            && let Some(bad) = msh
                                                 .vertex_groups
                                                 .iter()
                                                 .find(|&&g| g as usize >= groups)
-                                            {
-                                                failed.push(format!(
-                                                    "{rel}: GNDX references group {bad} of {groups}"
-                                                ));
-                                            }
+                                        {
+                                            failed.push(format!(
+                                                "{rel}: GNDX references group {bad} of {groups}"
+                                            ));
                                         }
 
                                         // Every triangle index must be in range.
-                                        let bad = msh.triangles.raw.chunks_exact(2).any(|c| {
-                                            u16::from_le_bytes([c[0], c[1]]) as u32
-                                                >= msh.vertices.count
-                                        });
+                                        let bad =
+                                            msh.triangles.raw.as_chunks::<2>().0.iter().any(|c| {
+                                                u16::from_le_bytes(*c) as u32 >= msh.vertices.count
+                                            });
                                         if bad {
                                             failed.push(format!(
                                                 "{rel}: triangle index out of range"
@@ -5067,9 +5075,6 @@ mod tests {
                     match m.pivots(&d) {
                         Ok(pv) => {
                             pivots += pv.0.len();
-                            if pv.0.len() != 0 && pv.0.len() % 1 != 0 {
-                                failed.push(format!("{rel}: PIVT is not a whole number of points"));
-                            }
                             if pv.0.iter().any(|p| p.iter().any(|v| !v.is_finite())) {
                                 failed.push(format!("{rel}: a pivot point is not finite"));
                             }
@@ -5079,7 +5084,7 @@ mod tests {
 
                     // Event objects and collision shapes, framed differently.
                     for tag in [tag::EVTS, tag::CLID] {
-                        match m.event_nodes(&d, &tag) {
+                        match m.event_nodes(&d, tag) {
                             Ok(ns) => {
                                 events += ns.len();
                                 for n in &ns {
@@ -5105,7 +5110,7 @@ mod tests {
                     // through their own readers below rather than being counted
                     // twice through a framing that does not describe them.
                     for tag in [tag::HELP, tag::ATCH] {
-                        match m.nodes(&d, &tag) {
+                        match m.nodes(&d, tag) {
                             Ok(ns) => {
                                 nodes += ns.len();
                                 for n in &ns {
@@ -5587,7 +5592,7 @@ mod clid {
 
     /// Asserts the framing relation on one chunk, naming the model if it fails.
     fn assert_framing(rel: &str, m: &Mdlx, d: &[u8], shapes: &[CollisionShape]) {
-        let payload = m.payload(d, &tag::CLID).map(<[u8]>::len).unwrap_or(0);
+        let payload = m.payload(d, tag::CLID).map(<[u8]>::len).unwrap_or(0);
         let n = shapes.len();
         let walked: usize = shapes.iter().map(|s| s.size()).sum();
         assert_eq!(
@@ -5626,7 +5631,7 @@ mod clid {
         };
         assert_framing("Footman", &m, &d, &s);
         assert_eq!(s.len(), 2, "the Footman ships two collision spheres");
-        assert_eq!(m.payload(&d, &tag::CLID).map(<[u8]>::len).unwrap_or(0), 232);
+        assert_eq!(m.payload(&d, tag::CLID).map(<[u8]>::len).unwrap_or(0), 232);
 
         for (i, x) in s.iter().enumerate() {
             assert_eq!(x.name, format!("Collision Sphere0{}", i + 1));
@@ -5646,14 +5651,14 @@ mod clid {
         let a = &s[0].vertices[0];
         assert!((a[0] - 5.257_449).abs() < 1e-4, "centre x {}", a[0]);
         assert_eq!(a[1], 0.0, "both spheres sit on y 0");
-        assert!((a[2] - 63.221_001).abs() < 1e-4, "centre z {}", a[2]);
+        assert!((a[2] - 63.221).abs() < 1e-4, "centre z {}", a[2]);
         assert!((s[0].radius.unwrap() - 38.076).abs() < 1e-3);
 
         // Hand-read: `a8 52 4f 40 | 00 00 00 00 | 7a c7 b6 41 | d3 4d 18 42`.
         let b = &s[1].vertices[0];
         assert!((b[0] - 3.239_421).abs() < 1e-4, "centre x {}", b[0]);
         assert_eq!(b[1], 0.0);
-        assert!((b[2] - 22.847_401).abs() < 1e-4, "centre z {}", b[2]);
+        assert!((b[2] - 22.847_4).abs() < 1e-4, "centre z {}", b[2]);
         // The two spheres share their last float, which is the corpus evidence
         // that it is a radius and not a height: a body swept by two equal
         // spheres. Asserted because it is the observation, not the conclusion.
@@ -5739,10 +5744,10 @@ mod clid {
         // +0xac — exactly where 152 + 4 + 16 puts it.
         assert_eq!(x.kind, CollisionShapeKind::Sphere);
         let c = x.vertices[0];
-        assert!((c[0] - -7.980_060).abs() < 1e-5, "{c:?}");
+        assert!((c[0] - -7.980_06).abs() < 1e-5, "{c:?}");
         assert_eq!(c[1], 0.0);
         assert!((c[2] - 84.288_2).abs() < 1e-4, "{c:?}");
-        assert!((x.radius.unwrap() - 37.217_999).abs() < 1e-4);
+        assert!((x.radius.unwrap() - 37.218).abs() < 1e-4);
 
         // The second record's header is the bare node header, so the same model
         // carries both framings and the reader has to tell them apart.
@@ -5847,7 +5852,7 @@ mod clid {
 
             // The framing relation: the records tile the chunk exactly. A width
             // one word wrong would still parse, and would leave this sum short.
-            let payload = m.payload(&d, &tag::CLID).map(<[u8]>::len).unwrap_or(0);
+            let payload = m.payload(&d, tag::CLID).map(<[u8]>::len).unwrap_or(0);
             let walked: usize = shapes.iter().map(|x| x.size()).sum();
             if walked != payload {
                 failed.push(format!(
@@ -6650,7 +6655,7 @@ mod pre2_tests {
         assert_eq!(e[0].measured_size(), e[0].total_size as usize);
 
         for (tag, what) in [(b"KP2H", "unknown tag"), (b"KRZZ", "not a sub-chunk")] {
-            let v = container(&record_with(&tag, 1));
+            let v = container(&record_with(tag, 1));
             let m = Mdlx::parse(&v).expect("a walkable container");
             match m.particles2(&v) {
                 Err(Error::UnknownTrackMagic {

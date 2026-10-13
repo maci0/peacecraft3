@@ -7,6 +7,7 @@ pub mod encoding;
 pub mod index;
 mod jenkins;
 pub mod storage;
+pub mod tvfs;
 
 pub type Key = [u8; 16];
 

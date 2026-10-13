@@ -137,7 +137,9 @@ impl Material {
                         });
                     } else {
                         let keys = raw
-                            .chunks_exact(8)
+                            .as_chunks::<8>()
+                            .0
+                            .iter()
                             .map(|key| {
                                 (
                                     i32::from_le_bytes(key[..4].try_into().unwrap()),

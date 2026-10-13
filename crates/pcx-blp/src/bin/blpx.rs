@@ -95,8 +95,8 @@ fn census(dir: &std::path::Path) -> Result<(), String> {
     println!("{}", dir.display());
     println!("  .blp entries in (listfile) union   {}", blps.len());
     println!(
-        "  {:<6} {:<8} {:>7} {:>9} {:>9}  {}",
-        "magic", "content", "files", "handled", "refused", "bytes/pixel"
+        "  {:<6} {:<8} {:>7} {:>9} {:>9}  bytes/pixel",
+        "magic", "content", "files", "handled", "refused"
     );
     for row in census.buckets() {
         let refused: usize = row.refused.values().sum();
