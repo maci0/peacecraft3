@@ -832,3 +832,8 @@ Format: `date — subsystem — symptom — root cause — status`
 - Local ISO file-input discovery and 15 actual WASM archive assertions pass;
   Chromium audio replacement/reset passes with zero uploads/unexpected requests.
   Original installer ISO acceptance and full rendering parity remain open.
+
+- [!] Latest four-target CI at `122ecd0` (run `38456169192`) did not start:
+      GitHub reports failed account payments or an insufficient spending limit.
+      Local strict/native/WASM checks are distinct from this runner blocker;
+      verified Windows/macOS artifacts remain at `d31dc67`. No repeated retries.

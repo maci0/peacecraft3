@@ -101,3 +101,9 @@ still requires running the game with a real GPU and the user's installation.
 These are unsigned executables, without installers, notarization, or signing.
 The workflow runs on macOS 15; compatibility with older macOS versions has not
 been verified.
+
+The [strict latest-source run](https://github.com/maci0/peacecraft3/actions/runs/38456169192)
+at `122ecd0` was blocked before any job steps started. GitHub's check annotations
+report failed account payments or an insufficient spending limit. No build/test
+failure is inferred from those empty jobs, and no retry or billing change was
+made. The last independently verified four-target artifacts remain `d31dc67`.
