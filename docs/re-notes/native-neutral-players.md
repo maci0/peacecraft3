@@ -1,0 +1,340 @@
+# Neutral-player getter: exact Legacy target
+
+This is a bounded static native investigation. `GetPlayerNeutralPassive` remains
+unsupported in the game Host. No MapInfo value, source corpus observation or
+familiar player limit is substituted for the missing context initialization.
+
+## Binding and retained evidence
+
+The target is the locally supplied Legacy `Warcraft III.exe`, PE x86, version
+1.29.2.9231, SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+Adjacent archives and the older extracted Game.dll are not identified by this
+executable version. REA 6.4.0 reopened
+`/tmp/peacecraft3-script-native-handoff-20261014.snap` with Ghidra 12.1.3 and
+analysis profile
+`c95018f497b511226b067817a25ac96a08e093e61362ab933904e15985ed51ee`.
+The snapshot retains 12 Evidence records. No original asset contents are added
+here, and no executable is run by this static probe.
+
+The registration evidence connects `GetPlayerNeutralPassive` at `0xe78300`,
+signature `()I` at `0xe6f674`, and getter `0x4946b0`:
+
+- Name seed: `ev_0d20d0485b960faa0a19fa0cde970dfce38c61b7f05a3a60061b095af11b3555`.
+- Name xrefs: `ev_ef894844e342bd5896ee7fd895d252116d8fafae60a4c2de57c4769c8f9ff972`.
+- Registration bytes: `ev_691bd4ee1ce864c26cb7fbfb72c8e0d8083c39b36439207f42dae42e84b63a8e`.
+- Signature bytes: `ev_bbf073840c0e36a891774ab89386df4c9e6afeee77ad7f003e30a41a25e55984`.
+
+## Getter data path and return convention
+
+The complete getter bytes are retained in
+`ev_dc4963e439464554962db5b149b7f5445e4c0c4da9a17125a4673216e5a8feef`.
+Exact instruction evidence separately covers its global read and calls:
+`ev_0993c0e7ed788f6630e2209267b500e50afdd49f209776eed7526e14b7acd4c6`,
+`ev_36261d85956dc96c306442c86d3af9dc702dca10fa7bfeceb1c1cac893a20603`,
+and `ev_d9078d97fdf4794cd432e8779353fef65af4676030724efc4557120d8449e37f`.
+Address-bounded `objdump` against the same executable corroborates the decoded
+instructions through the return at `0x4946d6`.
+
+The getter reads global pointer `0x113b6f4`, reads its `+0x30` pointer, and passes
+the address of that object's `+0x24` subobject in ECX to `0x469010`. That helper
+returns the pointer at `subobject->+0x8->+0x1c`, or zero when the intermediate
+`+0x8` pointer is zero. It does not return an arithmetic player count.
+Evidence: `ev_6bdba903f8ca3f04f97418ae6aa98ef583377959c57ab6cee0c4075a18a41ea9`.
+The previously mistaken callee `0x468010` is excluded from this data path.
+
+The returned pointer is pushed as one stack argument to `0x704330`; the getter
+cleans four stack bytes. It compares helper EAX **unsigned** against `0x17ac`,
+then executes `SBB EAX,EAX`, `AND EAX,0xfffffff4` (sign-extended immediate), and
+`ADD EAX,0x1b`, followed by `RET`. Therefore the getter returns integer **15**
+when the helper result is below `0x17ac`, and **27** at or above it. This is a
+static instruction-derived branch result, not an observed live value or an
+implementation constant. Failure sentinel `0xffffffff` takes the unsigned
+at-or-above branch; it must not be confused with a successful context read.
+The getter has no null guard before its first context dereferences.
+
+## Helper and fallback source
+
+Retained `0x704330` assembly is in
+`ev_8a8f0935262b16243edf305ba8640bcf763a8902026df872716eca4f22af6514`.
+Its cached pseudocode incorrectly presents the function as `void`; assembly
+shows EAX return values, so that inferred type is not accepted as the ABI.
+
+- A zero input calls `0x707650` and returns the DWORD at its result `+0x13c`.
+- A nonzero input initializes a local buffer through `0x4728a0`, passes the
+  pointer and buffer to `0x703ff0`, and returns the buffer's DWORD at `+4` on
+  success or `0xffffffff` on failure.
+- Security-cookie checking occurs before return. The caller's subsequent EAX
+  comparison and the assembly return path are stronger evidence than the
+  decompiler's `void` label.
+
+An exact bounded disassembly of `0x707650..0x707655` shows it returns address
+`0x113f858`. Thus the null-input field is at **`0x113f994`**. The owning object's
+name, that field's semantic meaning, its initializer and its valid lifetime are
+not established by this pointer arithmetic. The first portion of `0x703ff0`
+selects its nonzero input or the same fallback object's `+0x38` address and
+copies into a bounded local buffer. This alone does not identify a build number,
+player-count record or map metadata field.
+
+## Investigation boundary
+
+The first new live query is `xrefs(0x113b6f4)`, to find the context global's
+initializer/setter. Cached snapshot operations can answer without a live
+Program, but a new address requires Ghidra's immutable import/default analysis
+startup. No broad symbol searches or timeout retries are used. Follow-up work
+must distinguish typed read/write references, exact source procedures, runtime
+pointer chains and unknown semantic fields.
+
+The context writer/setter-input chain is established below; metadata field
+meaning and fallback initialization remain open. The native stays fail-closed
+and original campaign gates remain blocked.
+
+## Final probe ledger
+
+The live query completed once, without a timeout retry. Global xrefs returned
+1837 analyzed source addresses:
+`ev_8383999c07a01ff88709dbcf2a08b75adc9c5179382de32e2184c538c2543a62`.
+This is address-reference coverage, not a claim that all context users or
+indirect writes were inspected. A bounded raw literal scan was used only to
+prioritize candidate direct writers; it was not accepted as typed xref proof.
+
+### Context installation and setter input: source established
+
+The typed write instruction at **`0x4791bc`** belongs to procedure **`0x4790d0`**
+and stores ESI into `0x113b6f4`:
+`ev_12f6506c1379a9be5986b0b4017bf7a36e42dc67682506f2246275ef951ae239`.
+Its complete procedure dossier is
+`ev_00d7e940c0dc8323b7360bbbd53ebdc10bf1bf7247dcf35cf5837ff4a163a0ef`,
+body `0x4790d0..0x4796ff` (inclusive). Assembly and typed references establish:
+
+1. The procedure clears a previous context pointer at `0x479172` after its
+   cleanup path. If the global is still zero at `0x4791ab`, it calls
+   **`0x471860`** with stack arguments `(6, 0)`, takes its EAX result into ESI,
+   and installs it at `0x4791bc`. A zero result takes the error path. The numeric
+   factory selector's type/class meaning is not inferred from its value.
+2. The procedure reads context `+0x30` at `0x4791e7`. When its input object EDI
+   has `+0x4a8 == 0`, EBX is zero. Otherwise it calls **`0x468850`** with ECX
+   pointing at input `+0x4c0` and uses returned EAX as EBX.
+3. It sets ECX to `context->+0x30 + 0x24`, pushes EBX, and calls
+   **`0x468d70`** at **`0x47921e`**. Exact call evidence:
+   `ev_7827893cef4f6d70a0b7fa577b1723c36592ed000fc4772538e994b595f259b9`.
+   This is the setter call on the same subobject later read by `0x469010` in
+   the native getter. The setter body and input accessor body are not inspected
+   in this slice, so their ownership/copy/lifetime behavior remains unverified.
+4. The same procedure passes that selected EBX-derived value into metadata
+   routines and references the literal `war3map` at `0x479419` (`0xe68bc0`).
+   This establishes a map-loading connection. It does not by itself identify
+   input `+0x4c0` or a metadata DWORD as a named MapInfo field.
+
+The dossier's inferred `void` return type and implicit ECX calls are not used
+as source-level contracts. Exact assembly gives the explicit stack/register
+input chain. Context `+0x24` itself is separately assigned at `0x4791de`; it is
+**not** the same location as `context->+0x30 + 0x24` used by this getter.
+
+### Metadata return source: structural connection established, meaning open
+
+Outgoing references for **`0x703ff0`** are retained as
+`ev_3b0e12997b305932ea6752e5b8c4cefc79fcab08ac52fe8817dd784b42679b13`.
+They include exact calls to `0x708ea0` (`0x704109`), `0x71cf40` (`0x704116`),
+and `0x6fa990` (`0x704155` and `0x7041e3`). There are no unresolved call edges in
+this procedure's retained reference result; this does not establish callee
+semantics. The original-byte bounded disassembly corroborates that:
+
+- The metadata/cache record is held in ESI. When an output buffer is requested,
+  `0x7041dd` points at record `+0x18` and `0x7041e3` calls `0x6fa990` with that
+  pointer and the caller's output object.
+- `0x704330` subsequently reads output `+4`. Without inspecting `0x6fa990` and
+  the decoder feeding the record, that structural connection is insufficient
+  to name output `+4` as editor version, game build, player count, or a limit.
+- The zero-input getter-helper branch instead reads fallback object `+0x13c`,
+  absolute `0x113f994`. No initializer/write to that field was established.
+  A bounded exact-address literal scan found no direct `.text` literal for
+  that absolute field address; indirect object-relative writes were outside
+  that scan and remain open. This negative result does not imply zero/default
+  behavior, immutability, or absence of a setter.
+
+### Diagnosed blocker and concrete next probe
+
+**The native remains unsupported.** Its static integer-return convention and
+context writer/setter-input chain are established, but the compared metadata
+field's semantic identity, fallback initializer, and runtime selection/lifetime
+are still unverified. Choosing a branch from map/corpus values would conceal
+these gaps. No actual invocation or original game outcome was observed.
+
+The next bounded probe should begin with **`0x6fa990`**, specifically the transfer
+into output `+4`, then follow the corresponding writer in **`0x708ea0`** or
+**`0x71cf40`**. Separately inspect **`0x468d70`** and **`0x468850`** for the exact
+stored pointer/copy contract, and **`0x471860`** for the factory's `+0x30` owner.
+For the fallback field, start from callers/xrefs of the exact singleton accessor
+**`0x707650`** and track object-relative `+0x13c` writes; direct references to
+`0x113f994` alone will miss them.
+
+A later narrowly scoped live probe can break at **`0x47921e`** and
+**`0x4946c6`**, recording the setter's ECX/stack input, context pointer chain,
+helper EAX and getter return for one declared map/configuration. The first is
+input/state evidence and the second confirms branch input. That live result
+would still need map/input provenance and could not establish all editions or
+map/campaign cases from one run. No game execution was undertaken here.
+
+REA was closed cleanly with an additional local retained snapshot:
+`/tmp/peacecraft3-neutral-context-20261014.snap` (10547316 bytes, 4 primitive
+entries, 18 Evidence records). This file retains complete large responses that
+were abbreviated by the command transport; no dossier query was rerun merely
+to obtain its truncated text. The original 12-record snapshot is unchanged.
+Only this new document is part of the repository slice. No implementation,
+shared build, manifest, lockfile, frozen file or git operation changed.
+
+
+## Follow-up: exact output-word transfer and narrower writer boundary
+
+This follow-up reopened the 18-record extended snapshot with the
+same exact executable SHA-256, REA 6.4.0 and Ghidra analysis profile recorded
+above. No game Host implementation or previous frozen code was changed.
+
+### Exact transfer: native-byte observation
+
+A bounded GNU objdump 2.47 disassembly of the same original executable, beginning
+at the retained function entry **`0x6fa990`**, establishes:
+
+- `0x6fa994`: EBX receives the source pointer from the one stack argument.
+- `0x6fa999`: EDI receives the destination pointer from ECX.
+- **`0x6fa9ab`**: EAX receives the DWORD at source **`+4`**.
+- **`0x6fa9ae`**: that EAX is written to destination **`+4`**.
+- The function returns the destination pointer in EAX and uses `RET 4` at
+  `0x6fab5e`. The retained body ends at `0x6fab60` inclusive.
+
+Combining this exact transfer with the already retained caller edge at
+`0x7041e3` proves the physical data path:
+
+`cache record +0x18 -> source +4 -> output +4`, hence the word read by
+`0x704330` comes from **cache record `+0x1c`**. The transfer itself is a four-byte
+bit copy; it does not parse, clamp, sign-extend, or convert that scalar. This
+establishes storage width and source offset, **not** the field's logical signed
+type, domain, editor-version/build identity or player-limit meaning. It also
+does not establish initialization, validity, aliasing guarantees, or lifetime.
+
+The copy function performs additional array/member copying beyond this word;
+those operations are not taken as proof of the owning record's semantic type.
+The unsigned getter predicate and failure sentinel described above remain
+separate facts. This observation does not authorize treating a failed metadata
+read as a successful field value or implementing the 15/27 branches as constants.
+
+### Why the two proposed writer edges do not close the numeric-field proof
+
+The exact bounded bodies were inspected from original bytes using the retained
+procedure ranges, rather than an image-wide disassembly:
+
+- **`0x708ea0..0x7091cb`**, 812 bytes: it uses literal **`.wts`** at `0xea8610`,
+  **`STRING`** at `0xea8608`, and **`//`** at `0xea8604`. Its instructions scan
+  numbered text entries/braces and populate a string-entry object. This is
+  native WTS/localization work; its observed writes do not establish a writer
+  for the metadata scalar at output `+4`.
+- **`0x71cf40..0x71d067`**, 296 bytes: it passes authored metadata text buffers,
+  starting at metadata **`+8`** and later offsets, to **`0x708a90`**, with the
+  string-entry object as ECX. It has no direct write to metadata `+4`, and no
+  visible call argument points at that word. That is a bounded instruction
+  observation; callee memory safety and arbitrary alias side effects are not
+  independently proven here.
+
+Thus these two edges cannot be accepted as the numeric field's decoder merely
+because they are callees of the surrounding metadata routine. The previous
+candidate-writer list is narrowed by actual code; no MapInfo/corpus correlation
+was used to name the word.
+
+### REA outcome and precise remaining blocker
+
+The first new live operation was only
+`read_bytes(address="0x6fa990", length=48)`. REA returned
+**`provider_timeout`**, operation `read_bytes`, **`timeout_ms=330000`**, while
+initializing its immutable/default-analyzed Program. It did not return a
+successful native Evidence record. The already queued exact instruction/byte
+follow-ups were stopped, the helper/server exited, and a process check found no
+remaining owned REA Ghidra/helper process. No query was retried and no larger
+function dossier or image-wide search was requested. The retained 18-record
+snapshot remains unchanged; no new successful REA snapshot is claimed.
+
+Consequently the new observations above are explicitly **original-byte bounded
+objdump evidence**, independently bound to the executable identity that REA
+validated on reopening. They are not mislabeled as newly completed REA Evidence
+or runtime observations. The prior Evidence IDs remain valid for the caller
+edges and function bounds; they do not stand in for the failed new byte query.
+
+**Narrower blocker:** the physical word at cache record `+0x1c` is now located,
+but its parser/initializer and semantic identity remain unproven. The localization
+edges are insufficient. The fallback object's `+0x13c` initializer and context
+lifetime/selection remain separate unresolved gates. `GetPlayerNeutralPassive`
+continues to fail closed in the Host.
+
+**Concrete next address:** inspect **`0x71d4e0..0x71d55a`** (123 bytes), the
+**earlier** call at **`0x7040c7`** that receives the initialized metadata output
+object before WTS/localization processing. The exact call and body bounds are
+already retained in
+`ev_3b0e12997b305932ea6752e5b8c4cefc79fcab08ac52fe8817dd784b42679b13`.
+Trace only the callee that writes destination `+4`; do not assume that a wrapper
+or a filename proves its meaning. Also retain **`0x6f9310..0x6f9415`** as the
+initialization boundary at **`0x7040af`**, to distinguish initialized/default
+state from parser success/failure. Neither additional function was queried in
+this follow-up. This is the next bounded probe, not a measured decoder claim.
+
+
+## Static fallback: two exact wrapper/initialization ranges
+
+This is a fresh, bounded static
+inspection with GNU objdump 2.47, **not** a REA retry. `sha256sum` again matched
+the exact executable digest recorded above. The only disassembled ranges in
+this step were `0x71d4e0..0x71d55a` and `0x6f9310..0x6f9415`, inclusive.
+No REA session, original game execution, shared build or image-wide search ran.
+All preceding reviewed/provider sections remain byte-for-byte unchanged.
+
+### Wrapper argument flow
+
+The complete 123-byte **`0x71d4e0`** body reads its second stack argument into
+ESI at `0x71d4eb`; in the previously retained caller, this is the initialized
+metadata object. When its fourth stack argument is nonzero, it calls
+`0x71d180` with that object, then `0x71d340` with object `+0x3880`, and
+`0x71d0c0` with object `+0x3890`. It explicitly writes zero at object `+0x38a0`
+and `+0x38b0`, and calls `0x71e6b0` on object `+0x38c0`. The called helpers'
+resource/ownership effects are not established here.
+
+At the tail, the wrapper builds a local stack record:
+
+- `0x71d537`: the third stack argument goes into local record **`+8`**.
+- `0x71d54b`: the metadata object pointer goes into local record **`+0`**.
+- `0x71d53e`: address **`0x71fb90`** is pushed as an argument.
+- `0x71d543`: literal address `0xea9c90` is also pushed; its contents were not
+  inspected in this two-range scope.
+- `0x71d54e`: it calls **`0x70e320`**, with the caller's first stack argument,
+  those two addresses, the local record pointer, and zero as stack arguments.
+  It cleans 20 bytes and returns without a subsequent EAX assignment.
+
+There is **no direct write to metadata `+4`** in this wrapper. Address
+`0x71fb90` is supplied to another routine, not directly called by the visible
+instructions. A callback/decoder role is a concrete next hypothesis, not an
+established dispatch contract. The dispatcher must be inspected if its argument
+use or success convention is needed; preserving EAX at this wrapper's return
+does not alone establish what that return value means.
+
+### Initialization boundary
+
+The complete **`0x6f9310..0x6f9415`** body preserves input ECX in ESI and calls
+**`0x4728a0`** at **`0x6f931a`** with that same object. It then directly clears
+the DWORDs at object **`+0x3880` through `+0x38dc`**, in four-byte increments,
+and returns the object pointer in EAX. These explicit high-offset clears do
+**not** establish that object `+4` is zero or otherwise defaulted: the leading
+region's initialization is delegated to the uninspected `0x4728a0` callee.
+The high-offset words' semantic types are also unverified.
+
+### Frozen result and next exact boundary
+
+Raw transfer/initialization facts are now tighter, but the compared field still
+has no proven semantic identity. The next candidate is **`0x71fb90`**, specifically
+whether the address passed to `0x70e320` writes metadata `+4` through local-record
+`+0`. **`0x4728a0`** is the separate initialization/default boundary. Inspect
+**`0x70e320`** only if establishing the callback ABI or success/failure contract
+requires it. None of these three additional functions was inspected in this
+step, and no meaning was assigned from the unresolved literal's name/address.
+
+`GetPlayerNeutralPassive` remains unsupported. A raw 32-bit copy, a delegated
+initializer and an unverified dispatch address do not identify an editor/build
+field, prove fallback state/lifetime, or justify hard-coded branch results.
+The old unsigned failure-path observation remains independent of those gaps.
