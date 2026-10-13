@@ -765,6 +765,9 @@ struct MenuArtCache {
     fonts: std::collections::HashMap<String, Handle<Font>>,
     /// `UI\war3skins.txt`, the face -> file binding's source.
     skin: Option<String>,
+    /// Faces whose binding has already been reported, so a broken table does not
+    /// log every frame.
+    font_problems: std::collections::HashSet<String>,
     /// The parsed frame definitions the button bounds come from. `None` until
     /// **both** FDFs have been read and parsed, so a partially-arrived pair is
     /// never cached as if it were complete.
@@ -913,7 +916,6 @@ fn apply_menu_art(
     mut dressed: Query<&mut ImageNode, (With<ButtonArt>, Without<ButtonFill>)>,
     mut fills: Query<&mut ImageNode, (With<ButtonFill>, Without<ButtonArt>)>,
     panels: Query<Entity, (With<Wc3Panel>, Without<ImageNode>)>,
-    mut text: Query<&mut TextFont>,
 ) {
     let selection = format!("{}:{:?}", launcher.source, launcher.mode.assets);
     if cache.selection.as_ref() != Some(&selection) {
@@ -924,6 +926,7 @@ fn apply_menu_art(
             cache.panel_uniform = None;
             cache.fonts.clear();
             cache.skin = None;
+            cache.font_problems.clear();
             cache.fdf = None;
             cache.fdf_failed = false;
             cache.strings = None;
@@ -1042,8 +1045,16 @@ fn apply_menu_art(
                 if cache.fonts.contains_key(&style.font) {
                     continue;
                 }
-                let Ok(binding) = crate::mainmenu::menu_font_file(&skin, &style.font) else {
-                    continue;
+                let binding = match crate::mainmenu::menu_font_file(&skin, &style.font) {
+                    Ok(binding) => binding,
+                    Err(error) => {
+                        // A table that does not bind the face is a real problem, not
+                        // a timing one: report it once rather than every frame.
+                        if cache.font_problems.insert(style.font.clone()) {
+                            warn!("Menu font {:?}: {error}", style.font);
+                        }
+                        continue;
+                    }
                 };
                 let Some(served) = crate::mainmenu::served_font_name(&binding.file) else {
                     continue;
@@ -1159,14 +1170,6 @@ fn apply_menu_art(
             commands.entity(entity).insert(image);
         }
     }
-    if let Some(handle) = cache.fonts.values().next() {
-        for mut style in &mut text {
-            let font = bevy::text::FontSource::Handle(handle.clone());
-            if style.font != font {
-                style.font = font;
-            }
-        }
-    }
 }
 
 /// The style the entry's **own** text frame declares, resolved across the two
@@ -1237,8 +1240,16 @@ fn apply_menu_text(
         // established for a text shadow. A zero-offset shadow would be a stand-in
         // for a feature that is not implemented, so the component is omitted until
         // that mapping exists. The parsed shadow facts are reported above.
+        // The entry's own face, resolved from its style. A face whose file has
+        // not been read yet defers the fill — the label is left for a later frame
+        // rather than given another face or a builtin.
+        let Some(handle) = cache.fonts.get(&style.font) else {
+            continue;
+        };
+        let font = bevy::text::FontSource::Handle(handle.clone());
         commands.entity(entity).insert((
             TextFont {
+                font: font.clone(),
                 font_size: size,
                 ..default()
             },
@@ -1250,6 +1261,7 @@ fn apply_menu_text(
                 .spawn((
                     TextSpan::new(run.text.clone()),
                     TextFont {
+                        font: font.clone(),
                         font_size: size,
                         ..default()
                     },
@@ -2394,6 +2406,176 @@ Frame "FRAME" "MainMenuFrame" {
         assert!(uniform_rgba(&[0, 0, 58, 255, 0, 0, 58, 255]));
         assert!(!uniform_rgba(&[0, 0, 58, 255, 0, 0, 59, 255]));
         assert!(!uniform_rgba(&[]));
+    }
+
+    /// Six buttons and six text frames; entry 0 names `FaceA`, entry 5 names
+    /// `FaceB`, and the rest inherit the template's face.
+    const FDF_FACES: &str = r#"
+Frame "TEXT" "MenuTextTemplate" {
+    FrameFont "FaceCommon", 0.013, "",
+    FontJustificationH JUSTIFYCENTER,
+    FontJustificationV JUSTIFYMIDDLE,
+    FontFlags "FIXEDSIZE",
+    FontColor 0.99 0.827 0.0705 1.0,
+    FontHighlightColor 1.0 1.0 1.0 1.0,
+    FontDisabledColor 0.5 0.5 0.5 1.0,
+    FontShadowColor 0.0 0.0 0.0 0.9,
+    FontShadowOffset 0.001 -0.001,
+}
+Frame "FRAME" "MainMenuFrame" {
+    Frame "GLUETEXTBUTTON" "SinglePlayerButton" {
+        ButtonText "SinglePlayerButtonText",
+        Frame "TEXT" "SinglePlayerButtonText" INHERITS "MenuTextTemplate" {
+            FrameFont "FaceA", 0.013, "",
+            Text "KEY_SINGLE_PLAYER",
+        }
+    }
+    Frame "GLUETEXTBUTTON" "BattleNetButton" {
+        ButtonText "BattleNetButtonText",
+        Frame "TEXT" "BattleNetButtonText" INHERITS "MenuTextTemplate" {
+            Text "KEY_BATTLE_NET",
+        }
+    }
+    Frame "GLUETEXTBUTTON" "LocalAreaNetworkButton" {
+        ButtonText "LocalAreaNetworkButtonText",
+        Frame "TEXT" "LocalAreaNetworkButtonText" INHERITS "MenuTextTemplate" {
+            Text "KEY_LOCAL_AREA_NETWORK",
+        }
+    }
+    Frame "GLUETEXTBUTTON" "OptionsButton" {
+        ButtonText "OptionsButtonText",
+        Frame "TEXT" "OptionsButtonText" INHERITS "MenuTextTemplate" {
+            Text "KEY_OPTIONS",
+        }
+    }
+    Frame "GLUETEXTBUTTON" "CreditsButton" {
+        ButtonText "CreditsButtonText",
+        Frame "TEXT" "CreditsButtonText" INHERITS "MenuTextTemplate" {
+            Text "KEY_CREDITS",
+        }
+    }
+    Frame "GLUETEXTBUTTON" "ExitButton" {
+        ButtonText "ExitButtonText",
+        Frame "TEXT" "ExitButtonText" INHERITS "MenuTextTemplate" {
+            FrameFont "FaceB", 0.013, "",
+            Text "KEY_EXIT",
+        }
+    }
+}
+"#;
+    const STRINGS_FACES: &str = r#"
+KEY_SINGLE_PLAYER        "|CffffffffS|Ringle Player",
+KEY_BATTLE_NET           "|CffffffffB|Rattle.net",
+KEY_LOCAL_AREA_NETWORK   "|CffffffffL|Rocal Area Network",
+KEY_OPTIONS              "|CffffffffO|Rptions",
+KEY_CREDITS              "|CffffffffC|Rredits",
+KEY_EXIT                 "E|Cffffffffx|Rit",
+"#;
+
+    /// Each label takes **its own** entry's face, on the root and on every run,
+    /// and unrelated text is left alone.
+    ///
+    /// Two entries name different faces, so a first-font-wins assignment would be
+    /// caught: it would give both the same handle.
+    #[test]
+    fn each_label_takes_its_own_face_and_leaves_other_text_alone() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut faces = Assets::<Font>::default();
+        let face_a = faces.add(Font::from_bytes(Vec::new()));
+        let face_b = faces.add(Font::from_bytes(Vec::new()));
+
+        let mut world = World::new();
+        let mut fonts = std::collections::HashMap::new();
+        fonts.insert("FaceA".to_string(), face_a.clone());
+        fonts.insert("FaceB".to_string(), face_b.clone());
+        world.insert_resource(MenuArtCache {
+            fdf: Some(crate::fdf::Fdf::parse(FDF_FACES).expect("fixture")),
+            main_menu: Some(FDF_FACES.to_string()),
+            strings: Some(STRINGS_FACES.to_string()),
+            fonts,
+            ..Default::default()
+        });
+        // Two entries, and a launcher/F8 text node that must not be touched.
+        let single = world.spawn((Text::new(""), MenuText(0))).id();
+        let exit = world.spawn((Text::new(""), MenuText(5))).id();
+        let unrelated = world
+            .spawn(TextFont {
+                font: bevy::text::FontSource::default(),
+                font_size: bevy::text::FontSize::Px(12.0),
+                ..default()
+            })
+            .id();
+
+        world.run_system_once(apply_menu_text).expect("runs");
+
+        // The root and every run carry the entry's own handle.
+        assert_eq!(
+            world.get::<TextFont>(single).unwrap().font,
+            bevy::text::FontSource::Handle(face_a.clone()),
+            "entry 0's root took the wrong face"
+        );
+        assert_eq!(
+            world.get::<TextFont>(exit).unwrap().font,
+            bevy::text::FontSource::Handle(face_b.clone()),
+            "entry 5's root took the wrong face"
+        );
+        for (root, want, visible) in [(single, &face_a, "Single Player"), (exit, &face_b, "Exit")] {
+            let children: Vec<Entity> = world.get::<Children>(root).unwrap().iter().collect();
+            assert!(!children.is_empty(), "the label spawned no runs");
+            // The runs are the authored spans; concatenated they spell the label.
+            let joined: String = children
+                .iter()
+                .map(|c| world.get::<TextSpan>(*c).unwrap().0.clone())
+                .collect();
+            assert_eq!(joined, visible, "the runs do not spell the label");
+            for child in children {
+                assert_eq!(
+                    world.get::<TextFont>(child).unwrap().font,
+                    bevy::text::FontSource::Handle(want.clone()),
+                    "a run took the wrong face"
+                );
+            }
+        }
+        // The unrelated text keeps its own font.
+        assert_eq!(
+            world.get::<TextFont>(unrelated).unwrap().font,
+            bevy::text::FontSource::default(),
+            "unrelated text was overwritten"
+        );
+    }
+
+    /// An entry whose face has no loaded handle defers its fill rather than
+    /// borrowing another face.
+    #[test]
+    fn a_missing_face_defers_the_label() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        let mut fonts = std::collections::HashMap::new();
+        // Only entry 0's face is loaded; entry 5's `FaceB` is not.
+        fonts.insert(
+            "FaceA".to_string(),
+            Assets::<Font>::default().add(Font::from_bytes(Vec::new())),
+        );
+        world.insert_resource(MenuArtCache {
+            fdf: Some(crate::fdf::Fdf::parse(FDF_FACES).expect("fixture")),
+            main_menu: Some(FDF_FACES.to_string()),
+            strings: Some(STRINGS_FACES.to_string()),
+            fonts,
+            ..Default::default()
+        });
+        let exit = world.spawn((Text::new(""), MenuText(5))).id();
+        world.run_system_once(apply_menu_text).expect("runs");
+
+        assert!(
+            world.get::<MenuTextFilled>(exit).is_none(),
+            "a deferred label must stay unfilled"
+        );
+        assert!(
+            world.get::<Children>(exit).is_none_or(|c| c.is_empty()),
+            "no run may be spawned without the entry's own face"
+        );
     }
 
     /// A second revision with the *same* value clears nothing, so an import that

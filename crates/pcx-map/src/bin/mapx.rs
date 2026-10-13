@@ -542,46 +542,46 @@ fn main() -> ExitCode {
                 "  content   doo={} shd={} mmp={} image={:?} unproven={:?}",
                 c.doodads, c.shadows, c.minimap_markers, c.minimap_image, c.unproven_minimap
             );
-            if c.doodads {
-                if let Ok(d) = m.doodads() {
-                    println!(
-                        "  doo       {} instances, {} terrain doodads, hash {:016x}",
-                        d.instances().len(),
-                        d.terrain_doodads().len(),
-                        d.canonical_hash()
-                    );
-                }
+            if c.doodads
+                && let Ok(d) = m.doodads()
+            {
+                println!(
+                    "  doo       {} instances, {} terrain doodads, hash {:016x}",
+                    d.instances().len(),
+                    d.terrain_doodads().len(),
+                    d.canonical_hash()
+                );
             }
-            if c.shadows {
-                if let Ok(s) = m.shadows() {
-                    println!(
-                        "  shd       {} x {} cells, hash {:016x}",
-                        s.columns(),
-                        s.rows(),
-                        s.canonical_hash()
-                    );
-                }
+            if c.shadows
+                && let Ok(s) = m.shadows()
+            {
+                println!(
+                    "  shd       {} x {} cells, hash {:016x}",
+                    s.columns(),
+                    s.rows(),
+                    s.canonical_hash()
+                );
             }
-            if c.minimap_markers {
-                if let Ok(mm) = m.minimap_markers() {
-                    println!(
-                        "  mmp       {} markers, hash {:016x}",
-                        mm.markers().len(),
-                        mm.canonical_hash()
-                    );
-                }
+            if c.minimap_markers
+                && let Ok(mm) = m.minimap_markers()
+            {
+                println!(
+                    "  mmp       {} markers, hash {:016x}",
+                    mm.markers().len(),
+                    mm.canonical_hash()
+                );
             }
-            if c.minimap_image.is_some() {
-                if let Ok(img) = m.minimap_image() {
-                    println!(
-                        "  minimap   {} {}x{}, framed={}, hash {:016x}",
-                        img.name,
-                        img.dimensions().0,
-                        img.dimensions().1,
-                        img.framing_holds(),
-                        img.canonical_hash()
-                    );
-                }
+            if c.minimap_image.is_some()
+                && let Ok(img) = m.minimap_image()
+            {
+                println!(
+                    "  minimap   {} {}x{}, framed={}, hash {:016x}",
+                    img.name,
+                    img.dimensions().0,
+                    img.dimensions().1,
+                    img.framing_holds(),
+                    img.canonical_hash()
+                );
             }
         }
 

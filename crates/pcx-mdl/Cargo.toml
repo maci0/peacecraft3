@@ -10,5 +10,8 @@ description = "Warcraft III MDL/MDX model parser"
 pcx-mpq.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+pcx-casc.workspace = true
+
 [lints]
 workspace = true

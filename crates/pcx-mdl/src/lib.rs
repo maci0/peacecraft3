@@ -144,6 +144,14 @@ pub enum Error {
     NoVRTX,
     #[error("unsupported MDX version {0}")]
     UnsupportedVersion(u32),
+    #[error("MDX version {version} {chunk} layout is not supported")]
+    UnsupportedVersionedChunk { version: u32, chunk: &'static str },
+    #[error("MDX version {version} geoset feature {tag:?} at +{at} is not supported")]
+    UnsupportedGeosetFeature {
+        version: u32,
+        at: usize,
+        tag: [u8; 4],
+    },
     #[error("chunk {chunk} is {size} bytes, not a whole number of {stride}-byte records")]
     RaggedRecords {
         chunk: &'static str,
@@ -2375,6 +2383,10 @@ pub mod geoset_tag {
 /// writes first (`+0x94`).
 const MATS_TRAILER_FIXED: usize = 4 + 4 + 4 + 4 + 12 + 12 + 4;
 
+/// Version-1800 LoD field width, corroborated by the versioned primary parser.
+const GEOS_LOD_NAME: usize = 80;
+const GEOS_LOD_SIZE: usize = 4 + GEOS_LOD_NAME;
+
 /// One per-sequence bounds record: an extent radius then both extents.
 const SEQ_BOUNDS_STRIDE: usize = 28;
 
@@ -2403,7 +2415,18 @@ fn sub_block_width(tag: &[u8; 4], count: u32) -> Option<usize> {
     }
 }
 
-/// A fully decoded geoset.
+/// Authored version-1800 LoD fields, without selecting or interpreting a level.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeosetLod {
+    pub version: u32,
+    /// Offset of the signed level word within Geoset.data.
+    pub offset: usize,
+    pub level: i32,
+    /// Exact inline name bytes, including any NULs or bytes after them.
+    pub name: [u8; GEOS_LOD_NAME],
+}
+
+/// A decoded geoset without HD tangent/weighted-skin support.
 ///
 /// The sub-block walk is `VRTX NRMS PTYP PCNT PVTX GNDX MTGC MATS UVAS UVBS`,
 /// and after the `MATS` node indices comes a trailer of the geoset's own
@@ -2449,6 +2472,8 @@ pub struct Mesh {
     pub selection_group: u32,
     /// 0, or 4 when the geoset cannot be selected.
     pub unselectable: u32,
+    /// Absent in v800; preserved with source offsets in v1800.
+    pub lod: Option<GeosetLod>,
     pub bounds_radius: f32,
     pub minimum_extent: [f32; 3],
     pub maximum_extent: [f32; 3],
@@ -2812,6 +2837,11 @@ impl Mdlx {
     /// A missing block is an error rather than a default, because a silently
     /// empty position array renders a model that looks plausible and is wrong.
     pub fn mesh(&self, _data: &[u8], g: &Geoset) -> Result<Mesh, Error> {
+        let has_lod = match self.version {
+            800 => false,
+            1800 => true,
+            version => return Err(Error::UnsupportedVersion(version)),
+        };
         let mut mesh = Mesh {
             vertices: Vec3Array::empty(b"VRTX"),
             normals: Vec3Array::empty(b"NRMS"),
@@ -2824,6 +2854,7 @@ impl Mdlx {
             material_id: 0,
             selection_group: 0,
             unselectable: 0,
+            lod: None,
             bounds_radius: 0.0,
             minimum_extent: [0.0; 3],
             maximum_extent: [0.0; 3],
@@ -2832,6 +2863,13 @@ impl Mdlx {
         let mut at = 0usize;
         while at + 8 <= g.data.len() {
             let (tag, count, _) = read_subblock(&g.data, at)?;
+            if has_lod && (tag == b"TANG" || tag == b"SKIN") {
+                return Err(Error::UnsupportedGeosetFeature {
+                    version: self.version,
+                    at,
+                    tag: *tag,
+                });
+            }
 
             // `MATS` is the one block whose body is not read by a width alone:
             // after the `count` node indices comes a trailer of the geoset's
@@ -2876,23 +2914,63 @@ impl Mdlx {
                 mesh.matrix_span_u32s = node_indices.len();
                 mesh.matrix_indices = node_indices.into_iter().take(want).collect();
 
+                // Shipped v1800 and the primary versioned geoset parser agree:
+                // a signed LoD word and 80 name bytes precede the extent.
+                // See REFORGED_GEOS.md; v800 retains its native-proven offsets.
+                let lod_size = if has_lod { GEOS_LOD_SIZE } else { 0 };
+                if has_lod {
+                    let tail = &g.data[body_end..];
+                    let raw = tail.get(12..12 + GEOS_LOD_SIZE).ok_or(Error::Truncated {
+                        what: "MATS LoD",
+                        at: body_end + 12,
+                        need: GEOS_LOD_SIZE,
+                        have: tail.len().saturating_sub(12),
+                    })?;
+                    mesh.lod = Some(GeosetLod {
+                        version: self.version,
+                        offset: body_end + 12,
+                        level: i32::from_le_bytes(raw[..4].try_into().unwrap()),
+                        name: raw[4..].try_into().unwrap(),
+                    });
+                }
+                let bounds_base = body_end + lod_size;
                 let ext = |o: usize| -> Result<[f32; 3], Error> {
                     Ok([
-                        read_f32(&g.data, body_end + o)?,
-                        read_f32(&g.data, body_end + o + 4)?,
-                        read_f32(&g.data, body_end + o + 8)?,
+                        read_f32(&g.data, bounds_base + o)?,
+                        read_f32(&g.data, bounds_base + o + 4)?,
+                        read_f32(&g.data, bounds_base + o + 8)?,
                     ])
                 };
                 mesh.material_id = read_u32(&g.data, body_end)?;
                 mesh.selection_group = read_u32(&g.data, body_end + 4)?;
                 mesh.unselectable = read_u32(&g.data, body_end + 8)?;
-                mesh.bounds_radius = read_f32(&g.data, body_end + 12)?;
+                mesh.bounds_radius = read_f32(&g.data, bounds_base + 12)?;
                 mesh.minimum_extent = ext(16)?;
                 mesh.maximum_extent = ext(28)?;
-                let seq_count = read_u32(&g.data, body_end + 40)? as usize;
-                let seq_start = body_end + MATS_TRAILER_FIXED;
-                let seq_len = seq_count * SEQ_BOUNDS_STRIDE;
-                let seq_end = seq_start + seq_len;
+                let seq_count = read_u32(&g.data, bounds_base + 40)? as usize;
+                let seq_start = bounds_base + MATS_TRAILER_FIXED;
+                let seq_len = if has_lod {
+                    seq_count
+                        .checked_mul(SEQ_BOUNDS_STRIDE)
+                        .ok_or(Error::Truncated {
+                            what: "MATS seqBounds",
+                            at: seq_start,
+                            need: usize::MAX,
+                            have: g.data.len().saturating_sub(seq_start),
+                        })?
+                } else {
+                    seq_count * SEQ_BOUNDS_STRIDE
+                };
+                let seq_end = if has_lod {
+                    seq_start.checked_add(seq_len).ok_or(Error::Truncated {
+                        what: "MATS seqBounds",
+                        at: seq_start,
+                        need: seq_len,
+                        have: g.data.len().saturating_sub(seq_start),
+                    })?
+                } else {
+                    seq_start + seq_len
+                };
                 if seq_end > g.data.len() {
                     return Err(Error::Truncated {
                         what: "MATS seqBounds",
@@ -3310,6 +3388,12 @@ impl Mdlx {
         let Some(p) = self.payload(data, tag::MTLS) else {
             return Ok(Vec::new());
         };
+        if self.version != 800 {
+            return Err(Error::UnsupportedVersionedChunk {
+                version: self.version,
+                chunk: "MTLS",
+            });
+        }
         let mut out = Vec::new();
         let mut at = 0usize;
         while at + 4 <= p.len() {

@@ -206,7 +206,7 @@ impl MinimapMarkers {
 pub enum MinimapImageKind {
     /// `war3mapMap.blp`: parsed and framed by [`pcx_blp`].
     Blp {
-        header: pcx_blp::Header,
+        header: Box<pcx_blp::Header>,
         framing: pcx_blp::Framing,
     },
     /// `war3mapMap.tga`: parsed by [`pcx_tga`]. No shipped map uses it.
@@ -235,7 +235,10 @@ impl MinimapImage {
         {
             let header = pcx_blp::Header::parse(&bytes)?;
             let framing = pcx_blp::Framing::of(&bytes, &header);
-            MinimapImageKind::Blp { header, framing }
+            MinimapImageKind::Blp {
+                header: Box::new(header),
+                framing,
+            }
         } else if bytes.len() >= 18 {
             let header = pcx_tga::Header::parse(&bytes)?;
             MinimapImageKind::Tga { header }

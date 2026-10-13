@@ -605,7 +605,7 @@ impl TerrainParsed {
             .ok_or(Error::TerrainTruncated { have: 0, need: 4 })?
             .try_into()
             .unwrap();
-        if &magic != &TERRAIN_MAGIC {
+        if magic != TERRAIN_MAGIC {
             return Err(Error::BadTerrainMagic(magic));
         }
         let version = u32_at(bytes, 4)?;
@@ -663,7 +663,7 @@ impl TerrainParsed {
         }
         let body = &bytes[at..need];
         let mut corners = Vec::with_capacity(count);
-        for rec in body.chunks_exact(CORNER_RECORD) {
+        for rec in body.as_chunks::<CORNER_RECORD>().0 {
             let h = u16::from_le_bytes(rec[0..2].try_into().unwrap());
             let p = u16::from_le_bytes(rec[2..4].try_into().unwrap());
             corners.push(Corner {
@@ -1080,7 +1080,7 @@ mod tests {
         let c = t.corners()[0];
         assert_eq!(c.height_index, 0x2000);
         assert_eq!(c.position_word, 0x6000);
-        assert_eq!(c.position_flag(), true);
+        assert!(c.position_flag());
         assert_eq!(
             (c.slot_nibble, c.corner_flags, c.byte5, c.byte6),
             (1, 0, 0x04, 0xf2)

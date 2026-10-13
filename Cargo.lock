@@ -4872,6 +4872,7 @@ dependencies = [
 name = "pcx-mdl"
 version = "0.1.0"
 dependencies = [
+ "pcx-casc",
  "pcx-mpq",
  "thiserror 2.0.21",
 ]

@@ -591,9 +591,7 @@ impl MapInfo {
         // writer puts at `first_string` is written into its real field only
         // from VERSION_FIRST_STRING; between 0x12 and 0x14 it is absent from
         // the file entirely, which is a byte-level fact, not a skip.
-        let extra_u32 = (version >= VERSION_EXTRA_U32 && version >= 0x11)
-            .then(|| c.u32())
-            .transpose()?;
+        let extra_u32 = (version >= 0x11).then(|| c.u32()).transpose()?;
         let first_string = (version >= VERSION_FIRST_STRING)
             .then(|| c.string())
             .transpose()?;
@@ -608,12 +606,8 @@ impl MapInfo {
 
         // The three loading strings, plus a u32 the game discards for
         // VERSION_LOADING_STRINGS >= 0x11.
-        let loading_id = (version >= VERSION_LOADING_STRINGS && version >= 0x11)
-            .then(|| c.u32())
-            .transpose()?;
-        let loading_path = (version >= VERSION_LOADING_STRINGS && version >= 0x14)
-            .then(|| c.string())
-            .transpose()?;
+        let loading_id = (version >= 0x11).then(|| c.u32()).transpose()?;
+        let loading_path = (version >= 0x14).then(|| c.string()).transpose()?;
         let loading_strings = if version >= VERSION_LOADING_STRINGS {
             Some([c.string()?, c.string()?, c.string()?])
         } else {

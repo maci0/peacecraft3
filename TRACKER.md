@@ -148,10 +148,10 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
       and exact-target archive priority remain unwired/unproven.
 - [ ] Asset modes: `vanilla` (default) / `reforged` / `reforged-hd` / `reforged-fixes`
 - [x] Library `override/` drop-in tree + generated `index.json`; app wiring pending
-- [!] Gate: Reforged Footman loads through the same `pcx-gfx` path as vanilla.
-      Verified CASC bytes reach the existing importer, which rejects GEOS 0 with
-      an unrecognized zero tag. Explicit original integration test preserves
-      this failure; newer MDX trailer/layout support is being investigated.
+- [~] Gate: Reforged Footman geometry loads through the same `pcx-gfx` path as vanilla.
+      The checked version-1800 LoD trailer yields five geosets and 582 vertices
+      from the verified 105,602-byte CASC asset. Bevy mesh construction passes;
+      newer materials, TANG/SKIN and actual rendering remain unsupported/unverified.
 - [ ] `docs/reforged-fixes.md` fix ledger; rows default to `defer`
 
 ## M2 — Asset decoders + first Bevy render — **render smoke passed; full material fidelity open**
@@ -303,9 +303,9 @@ viewer's terrain tile and the asset-cache plugins — neither is a format gap.
   rounding between `jpeg-decoder` and libjpeg, not a format mismatch. Chasing
   bit-exactness would mean porting libjpeg's IDCT, so it is documented rather
   than fixed.
-- `cargo clippy` cannot run in this environment: the installed clippy bundles
-  rustc 1.98 while the workspace targets 1.99, so every crate is rejected.
-  `cargo test` and `cargo fmt` both work.
+- Rust 1.99 Clippy passes scoped strict checks for MDL/BLP/SYLK/map libraries,
+  tests and CLIs, and the graphics library. Dependency lint expansion and other
+  workspace targets have not been claimed clean.
 - `nodes()` must not be pointed at `CAMS` or `LITE`. Both are read through their
   own readers, and the shared one is *kept* as a pinned misread rather than
   deleted: 30 of 656 camera records on 1.29b yield a `parent_id` in `0..100000`
@@ -871,21 +871,27 @@ Format: `date — subsystem — symptom — root cause — status`
   with no production face-to-file constant. New browser verification passes
   12 Node tests and 21 actual WASM assertions, including duplicate-face refusal;
   running-app original font import/alias bytes, cache, audio, resize and rollback
-  pass. Shadow offset, FIXEDSIZE and accelerator dispatch remain unresolved.
+  pass. Per-entry handles now apply to the label root and every authored run;
+  a two-face ECS regression verifies unrelated launcher/F8 text is untouched.
+  Six browser F8 visibility checks pass before/after import and after resize.
+  Shadow offset, FIXEDSIZE and accelerator dispatch remain unresolved.
 
 - Checked CASC readers and asset-source layering belong to the strict workspace.
   Seven CASC synthetic tests, one explicitly supplied Reforged install sweep,
-  19 asset-layer tests and one documentation test pass. CASC path resolution,
-  archive adapters and full Reforged rendering remain open.
+  19 asset-layer tests and one documentation test pass. Archive adapters and full
+  Reforged rendering remain open.
   TVFS adds checked explicit namespace traversal: 12 synthetic and two original
   tests pass; 110 manifests contain 175,018 entries and retain one non-UTF8 path.
-  The named Footman verifies to 105,602 MDLX bytes, but graphics decoding currently
-  fails on its GEOS layout. This is a decoder blocker, not a path-resolution failure.
+  The named Footman verifies to 105,602 MDLX bytes. Version-1800 geometry now
+  decodes into five geosets and 582 Bevy mesh vertices. Authored LoD metadata is
+  preserved; no LoD selection or newer material/rendering behavior is inferred.
 
 - Rust 1.99 format cleanup preserves classic framing and output while adopting
   typed array chunks, let chains and `is_multiple_of`. Scoped strict Clippy covers
   MDL/BLP/SYLK libraries, tests and CLIs without dependency lint expansion;
-  graphics-library Clippy also passes. Map Clippy debt remains tracked separately.
+  graphics-library and map all-target scoped Clippy also pass. Map cleanup keeps
+  the stronger original version guards; the complete 284-source original fixture
+  passes after correction, as does the WASM check.
 
 - [!] Latest four-target CI at `122ecd0` (run `38456169192`) did not start:
       GitHub reports failed account payments or an insufficient spending limit.
