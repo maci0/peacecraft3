@@ -145,6 +145,7 @@ struct Record<'a> {
     rawcode: String,
     custom: bool,
     overrides: BTreeMap<Fourcc, Value>,
+    indexed_overrides: BTreeMap<(Fourcc, [u32; 2]), Value>,
 }
 
 impl<'a> Record<'a> {
@@ -154,6 +155,7 @@ impl<'a> Record<'a> {
             rawcode: rawcode.to_string(),
             custom: false,
             overrides: BTreeMap::new(),
+            indexed_overrides: BTreeMap::new(),
         }
     }
 
@@ -180,6 +182,13 @@ impl<'a> Record<'a> {
     /// has no cell there. All three are reportable (see
     /// [`super::report::Refusal`]).
     fn base_value(&self, fourcc: Fourcc) -> Option<StatValue<'a>> {
+        if self
+            .indexed_overrides
+            .keys()
+            .any(|(field, _)| *field == fourcc)
+        {
+            return None;
+        }
         let def = self.editor.field(fourcc)?;
         if !def.measured {
             return None;
@@ -224,7 +233,12 @@ impl<'a> Record<'a> {
     }
 
     fn put(&mut self, m: &crate::Mod) {
-        self.overrides.insert(m.field, m.value.clone());
+        if let Some(selectors) = m.selectors {
+            self.indexed_overrides
+                .insert((m.field, selectors), m.value.clone());
+        } else {
+            self.overrides.insert(m.field, m.value.clone());
+        }
     }
 
     fn mark_custom(&mut self) {

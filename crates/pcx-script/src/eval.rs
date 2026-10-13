@@ -56,6 +56,12 @@ pub trait Host {
         None
     }
 
+    /// Resolve a table entry while preserving an encoding or container failure.
+    /// Existing hosts can continue implementing `table_string`.
+    fn resolve_table_string(&self, id: u32) -> Result<Option<String>, String> {
+        Ok(self.table_string(id))
+    }
+
     /// What a paired `^^tag^^` in a string substitutes to.
     fn code_tag(&self, tag: &str) -> Option<String> {
         let _ = tag;
@@ -101,6 +107,8 @@ pub struct Vm<'a, H: Host> {
     /// them; the release JASS the game ships has them stripped.
     run_debug: bool,
     ready: bool,
+    init_error: Option<crate::Error>,
+    error_source: Option<String>,
 }
 
 impl<'a, H: Host> Vm<'a, H> {
@@ -113,6 +121,8 @@ impl<'a, H: Host> Vm<'a, H> {
             depth: 0,
             run_debug: true,
             ready: false,
+            init_error: None,
+            error_source: None,
         }
     }
 
@@ -129,27 +139,45 @@ impl<'a, H: Host> Vm<'a, H> {
         &mut self.host
     }
 
+    /// Source owning the most recent execution error, including prelude errors.
+    pub fn error_source(&self) -> Option<&str> {
+        self.error_source.as_deref()
+    }
+
     /// Run every global initialiser, in declaration order.
     pub fn init_globals(&mut self) -> Result<(), crate::Error> {
+        if let Some(error) = &self.init_error {
+            return Err(error.clone());
+        }
         if self.ready {
             return Ok(());
         }
-        self.ready = true;
+        self.error_source = None;
         let inits = self
             .program
             .globals()
             .iter()
-            .map(|g| (g.name.clone(), g.init.clone(), g.array))
+            .map(|g| (g.name.clone(), g.init.clone(), g.array, g.source.clone()))
             .collect::<Vec<_>>();
         let mut frame = Frame::new();
-        for (name, init, array) in inits {
+        for (name, init, array, source) in inits {
             let slot = match init {
-                Some(e) => Slot::Scalar(self.eval(&e, &mut frame)?),
+                Some(e) => match self.eval(&e, &mut frame) {
+                    Ok(value) => Slot::Scalar(value),
+                    Err(error) => {
+                        if self.error_source.is_none() {
+                            self.error_source = Some(source);
+                        }
+                        self.init_error = Some(error.clone());
+                        return Err(error);
+                    }
+                },
                 None if array => Slot::Array(BTreeMap::new()),
                 None => Slot::Scalar(Value::Null),
             };
             self.globals.insert(name, slot);
         }
+        self.ready = true;
         Ok(())
     }
 
@@ -173,6 +201,7 @@ impl<'a, H: Host> Vm<'a, H> {
     /// positionally, which is all JASS has.
     pub fn call(&mut self, name: &str, args: &[Value]) -> Result<Value, crate::Error> {
         self.init_globals()?;
+        self.error_source = None;
         self.enter(name, args.to_vec(), Span::EMPTY)
     }
 
@@ -213,6 +242,9 @@ impl<'a, H: Host> Vm<'a, H> {
             Err(e) => Err(e),
         };
         self.depth -= 1;
+        if out.is_err() && self.error_source.is_none() {
+            self.error_source = Some(f.source.clone());
+        }
         out
     }
 
@@ -560,6 +592,18 @@ impl<'a, H: Host> Vm<'a, H> {
                 self.run_native(which, &argv, span)
             }
             Some(NativeCall::Unimplemented(n)) => {
+                if n.params.len() != argv.len() {
+                    return Err(crate::Error::run(
+                        span,
+                        format!(
+                            "native `{}` takes {} argument{}, {} given",
+                            name.as_str(),
+                            n.params.len(),
+                            plural(n.params.len()),
+                            argv.len()
+                        ),
+                    ));
+                }
                 // The host owns every native the table cannot run. When it
                 // has none, the error names the native, its declaration and
                 // the span of the call, which is what PLAN.md requires.
@@ -581,9 +625,13 @@ impl<'a, H: Host> Vm<'a, H> {
                 if self.program.function(name.as_str()).is_some() {
                     return self.enter(name.as_str(), argv, span);
                 }
-                self.host
-                    .native(name.as_str(), &argv)
-                    .map_err(|m| crate::Error::run(span, m))
+                Err(crate::Error::run(
+                    span,
+                    format!(
+                        "`{}` is not declared as a function or native in the loaded script sources",
+                        name.as_str()
+                    ),
+                ))
             }
         }
     }
@@ -615,12 +663,16 @@ impl<'a, H: Host> Vm<'a, H> {
     }
 
     fn table_string(&mut self, id: u32, span: Span) -> Result<Value, crate::Error> {
-        let body = self.host.table_string(id).ok_or_else(|| {
-            crate::Error::run(
-                span,
-                format!("TRIGSTR_{id} is not in this map's war3map.wts"),
-            )
-        })?;
+        let body = self
+            .host
+            .resolve_table_string(id)
+            .map_err(|why| crate::Error::run(span, format!("TRIGSTR_{id}: {why}")))?
+            .ok_or_else(|| {
+                crate::Error::run(
+                    span,
+                    format!("TRIGSTR_{id} is not in this map's war3map.wts"),
+                )
+            })?;
         Ok(Value::Str(self.expand_tags(body, span)?))
     }
 
@@ -677,12 +729,16 @@ impl<'a, H: Host> Vm<'a, H> {
         let has_tag = s.parts.iter().any(|p| matches!(p, StrPart::CodeTag { .. }));
         let decoded = s.decoded();
         if let Some(id) = trigstr_id(&decoded) {
-            let body = self.host.table_string(id).ok_or_else(|| {
-                crate::Error::run(
-                    span,
-                    format!("TRIGSTR_{id} is not in this map's war3map.wts"),
-                )
-            })?;
+            let body = self
+                .host
+                .resolve_table_string(id)
+                .map_err(|why| crate::Error::run(span, format!("TRIGSTR_{id}: {why}")))?
+                .ok_or_else(|| {
+                    crate::Error::run(
+                        span,
+                        format!("TRIGSTR_{id} is not in this map's war3map.wts"),
+                    )
+                })?;
             return Ok(Value::Str(self.expand_tags(body, span)?));
         }
         if has_tag {

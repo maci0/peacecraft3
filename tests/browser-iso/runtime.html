@@ -1,0 +1,9 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Synthetic local ISO runtime test</title>
+<button id="sound" aria-pressed="false">Mute sound</button>
+<script type="module" src="/web/menu-audio.js"></script>
+<script type="module">
+// Initialize real WASM in a worker: its no-DOM path exercises archive APIs
+// without claiming rendered behavior from synthetic placeholder art/font bytes.
+const worker = new Worker('./runtime-worker.mjs', { type: 'module' });
+window.isoRuntimeResult = new Promise(resolve => { worker.onmessage = e => { resolve(e.data); worker.terminate(); }; worker.onerror = e => resolve({ ok: false, error: e.message }); });
+</script></html>

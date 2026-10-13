@@ -232,11 +232,9 @@ pub fn layer_flags(materials: &[pcx_mdl::Material], material_id: usize) -> Layer
             ..default()
         };
     };
-    // `shader_id` is the format's `filterMode`; `blend_mode` is its
-    // `shadingFlags`. See `LayerFlags`' doc comment for why the values settle it.
-    let (alpha_mode, blend_gap) = alpha_mode_of(layer.shader_id);
+    let (alpha_mode, blend_gap) = alpha_mode_of(layer.filter_mode);
     LayerFlags {
-        unshaded: layer.blend_mode & 0x01 != 0,
+        unshaded: layer.shading_flags & 0x01 != 0,
         alpha_mode,
         alpha: layer_static_alpha(mat).unwrap_or(1.0),
         blend_gap,
@@ -245,19 +243,12 @@ pub fn layer_flags(materials: &[pcx_mdl::Material], material_id: usize) -> Layer
 
 /// The layer's static alpha, read at its true offset.
 ///
-/// `pcx_mdl::TexLayer::static_alpha` reads `LAYS+28`, which is the layer's
-/// `coordId` word — the format has a `coordId` between `textureAnimId` and the
-/// alpha, and this workspace's record omits it — so the crate's field reads `0`
-/// for every shipped layer. The real value is at `LAYS+32`.
-///
-/// Measured for `MainMenu3d`, the 31 layers carry `0.3`, `0.55` or `1.0`, so
-/// taking the crate's field would have faded eight materials to invisible. The
-/// logo's single layer reads `1.0` here and `0` there.
+/// The checked decoder reads the alpha after the coordinate-id word in each
+/// inclusive layer record. This renderer currently uses the first layer only;
+/// additional authored layers and animated alpha still need rendering support.
 #[must_use]
 pub fn layer_static_alpha(mat: &pcx_mdl::Material) -> Option<f32> {
-    let at = *mat.layers().first()?;
-    let b = mat.data.get(at + 32..at + 36)?;
-    Some(f32::from_le_bytes(b.try_into().ok()?))
+    Some(mat.checked_layers().ok()?.first()?.properties.static_alpha)
 }
 
 /// The served name for one of the scene's own texture paths.
@@ -266,6 +257,7 @@ pub fn layer_static_alpha(mat: &pcx_mdl::Material) -> Option<f32> {
 /// archives spell the same file `Wetrock1.blp` and `wetrock1.blp` in different
 /// places and `browser::normalize` preserves case.
 #[must_use]
+#[cfg(test)]
 pub fn texture_served_name(wc3_path: &str) -> String {
     texture_served_name_in(wc3_path, TEXTURE_DIR)
 }
@@ -296,10 +288,12 @@ pub fn texture_paths(bytes: &[u8]) -> Result<Vec<String>, SceneError> {
 ///
 /// This is the exact list `web/loader.js` registers under `menu3d/`; keeping it
 /// derived from the model rather than hand-copied is what stops the two drifting.
+#[cfg(test)]
 pub fn texture_served_names(bytes: &[u8]) -> Vec<String> {
     texture_served_names_in(bytes, TEXTURE_DIR)
 }
 
+#[cfg(any(test, target_arch = "wasm32"))]
 pub fn texture_served_names_in(bytes: &[u8], directory: &str) -> Vec<String> {
     texture_paths(bytes)
         .unwrap_or_default()
@@ -308,22 +302,13 @@ pub fn texture_served_names_in(bytes: &[u8], directory: &str) -> Vec<String> {
         .collect()
 }
 
-/// The scene model's own bytes, from the install or the browser store.
-///
-/// This is the one call the launcher needs to get the background's geometry; it
-/// resolves the desktop archive first and the page's registered copy second,
-/// exactly like the rest of the menu art.
-#[must_use]
-pub fn load_model_bytes(desktop: Option<&std::path::Path>) -> Option<Vec<u8>> {
-    crate::mainmenu::art_bytes_named(desktop, SCENE_ART, MODEL_SERVED_NAME)
-}
-
 /// Loads and decodes every texture the model names.
 ///
 /// Desktop first, browser store second — the same two sources the rest of the
 /// menu art uses. A texture that cannot be read or decoded is skipped and its
 /// path is reported by [`spawn`] as a missing texture, so a gap shows up as a
 /// flat-shaded geoset and a name in the list rather than as silence.
+#[cfg(test)]
 pub fn load_textures(
     desktop: Option<&std::path::Path>,
     bytes: &[u8],
@@ -404,16 +389,6 @@ pub struct MainMenuScene {
     elapsed: std::time::Duration,
     /// `GLBS` durations, indexed by global-sequence id.
     global_durations: Vec<u32>,
-    /// What was built, for the caller to report.
-    pub info: SceneInfo,
-}
-
-impl MainMenuScene {
-    /// The clip clock, in milliseconds into the `Stand` sequence.
-    #[must_use]
-    pub fn time_ms(&self) -> f32 {
-        self.time_ms
-    }
 }
 
 /// Build the background from the model's bytes.
@@ -482,6 +457,11 @@ pub fn spawn(
         let path = paths.get(id).cloned().unwrap_or_default();
         let flags = layer_flags(&mdl_materials, id);
         if let Some(gap) = flags.blend_gap {
+            warn!(
+                material_id = id,
+                reason = gap.reason(),
+                "Original menu material rendering gap"
+            );
             info.blend_gaps.push(gap);
         }
         let texture = pick(textures, &path);
@@ -648,8 +628,8 @@ pub fn spawn(
         time_ms: 0.0,
         elapsed: std::time::Duration::ZERO,
         global_durations: global_sequence_durations(bytes),
-        info: info.clone(),
     });
+    info!(bones = info.bones, sequence = %info.sequence, global_sequence_tracks = info.global_sequence_tracks, "Original menu animation source");
     Ok(info)
 }
 
@@ -1062,28 +1042,17 @@ mod tests {
         );
     }
 
-    /// The offset the crate reads is not the alpha, and this pins the
-    /// difference so the workaround is not quietly dropped as redundant.
+    /// The scene uses the checked decoder's alpha, not the coordinate-id word.
     #[test]
-    fn the_crates_layer_alpha_is_the_coord_word_not_the_alpha() {
+    fn checked_layer_alpha_reaches_scene_materials() {
         let Some(bytes) = scene_bytes() else { return };
         let m = pcx_mdl::Mdlx::parse(&bytes).expect("parses");
         let materials = m.materials(&bytes).expect("materials");
-        let mut differences = 0;
         for mat in &materials {
-            let layer = mat.tex_layers().into_iter().next().expect("a layer");
-            let crate_field = layer.static_alpha;
-            let real = layer_static_alpha(mat).expect("a static alpha");
-            // `coordId` is 0 in every layer here, so the crate reads 0 and the
-            // real value is 0.3, 0.55 or 1.0.
-            assert_eq!(crate_field, 0.0, "the crate reads the coord word");
-            assert!(real > 0.0, "the real alpha is non-zero");
-            differences += 1;
+            let layer = mat.checked_layers().expect("valid layers").remove(0);
+            assert_eq!(layer_static_alpha(mat), Some(layer.properties.static_alpha));
+            assert!(layer.properties.static_alpha > 0.0);
         }
-        assert_eq!(
-            differences, 31,
-            "every layer differs, so the workaround matters"
-        );
     }
 
     /// Every `filterMode` word's mapping, pinned. The three gaps are asserted
@@ -1121,23 +1090,6 @@ mod tests {
         let lights = m.lights(&bytes).expect("lights");
         assert!(!lights.is_empty(), "the model carries its own lights");
     }
-}
-
-/// The change the UI camera needs so the background is visible behind it.
-///
-/// Bevy draws cameras in `order`; this module's camera is `-1`, so the launcher's
-/// `Camera2d` draws on top. For the background to show through, that camera must
-/// **not** clear the colour buffer:
-///
-/// ```ignore
-/// Camera { order: 0, clear_color: ClearColorConfig::None, ..default() }
-/// ```
-///
-/// [`layer_ui_camera`] applies exactly that to a camera a caller hands it, so
-/// the change is one call rather than something to remember.
-pub fn layer_ui_camera(camera: &mut Camera) {
-    camera.order = 0;
-    camera.clear_color = ClearColorConfig::None;
 }
 
 #[cfg(test)]

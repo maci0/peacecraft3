@@ -203,6 +203,7 @@
 //!   garbage** the game would atoi. Strict text, typed errors.
 
 //! `war3map.wts`, decoded in its own module: [`wts`].
+pub mod catalog;
 pub mod wct;
 pub mod wtg;
 pub mod wts;

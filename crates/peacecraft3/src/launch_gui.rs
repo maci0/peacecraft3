@@ -11,7 +11,7 @@ use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::widget::{ImageNode, NodeImageMode};
 
-use bevy::ui::{InteractionDisabled, Pressed};
+use bevy::ui::InteractionDisabled;
 // The 0.20 button: `bevy::ui::Button` is a deprecated alias for a
 // crate-private marker that cannot be spawned. `ui_widgets::Button` is its
 // replacement; its held-down state is the `Pressed` component, which is what
@@ -26,10 +26,6 @@ pub struct Launcher {
     mode: GameMode,
     log: Vec<String>,
     staging: bool,
-    /// Latest released build, once the downloader exists. Until then the
-    /// download control stays present and inert rather than absent, so the
-    /// shape of the UI is decided now and does not get redesigned later.
-    latest_release: Option<String>,
 }
 
 impl Default for Launcher {
@@ -39,7 +35,6 @@ impl Default for Launcher {
             mode: GameMode::default_for(pcx_mpq::Version::V1_29),
             log: Vec::new(),
             staging: false,
-            latest_release: None,
         }
     }
 }
@@ -203,10 +198,6 @@ pub(crate) fn window_plugin(canvas: Option<&str>) -> WindowPlugin {
     }
 }
 
-pub fn run() {
-    app(window_plugin(None), |_| {}).run();
-}
-
 /// Builds the launcher, with `configure` applied *before* the plugins.
 ///
 /// That ordering is the point: Bevy builds an app's asset sources while
@@ -230,6 +221,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
                 apply_clicks.in_set(LauncherInput),
                 finish_intro,
                 apply_menu_clicks,
+                invalidate_on_asset_revision,
                 apply_menu_art,
                 initialize_menu_logo,
                 initialize_menu_scene,
@@ -413,6 +405,63 @@ struct LogoLayer;
 struct SceneLoad {
     finished: bool,
     addon: Option<Addon>,
+}
+
+/// The page's asset-store generation, or `0` when there is no store to ask.
+///
+/// A browser replaces its served assets when the user imports a local ISO, so the
+/// caches have to notice. Native reads a staged install that does not change under
+/// it, hence the constant.
+#[cfg(target_arch = "wasm32")]
+fn asset_revision() -> u32 {
+    crate::browser::asset_revision()
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn asset_revision() -> u32 {
+    0
+}
+
+/// Drops everything decoded from the page's asset store when that store is
+/// replaced, so an imported local ISO is not masked by whatever was served first.
+///
+/// The art and frame caches are cleared here; the logo and the 3D scene rebuild
+/// themselves because their own systems re-run once their entity and resource are
+/// gone, which is why this only marks them stale rather than reconstructing them.
+/// Nothing restarts the app: the F8 overlay, the settings, the input state and the
+/// Edition selection are all untouched.
+fn invalidate_on_asset_revision(
+    mut commands: Commands,
+    mut cache: ResMut<MenuArtCache>,
+    mut scene: ResMut<SceneLoad>,
+    logos: Query<Entity, With<crate::menu_panel::MenuLogo>>,
+    scene_entities: Query<Entity, With<crate::mainmenu_scene::MainMenuSceneEntity>>,
+) {
+    let revision = asset_revision();
+    if cache.revision == revision {
+        return;
+    }
+    cache.revision = revision;
+    cache.button = None;
+    cache.panel = None;
+    cache.font = None;
+    cache.fdf = None;
+    cache.fdf_failed = false;
+    cache.native_loaded = false;
+    // The logo rebuilds once its entity is gone: `initialize_menu_logo` re-runs
+    // on an empty set.
+    for entity in &logos {
+        commands.entity(entity).despawn();
+    }
+    // The scene owns both entities and a resource, so clear them here rather than
+    // leaving it to a later system's own staleness rule. `addon` is deliberately
+    // left alone so `initialize_menu_scene` does not despawn them a second time;
+    // clearing `finished` is what makes it rebuild.
+    for entity in &scene_entities {
+        commands.entity(entity).despawn();
+    }
+    commands.remove_resource::<crate::mainmenu_scene::MainMenuScene>();
+    scene.finished = false;
+    info!("Asset store changed (revision {revision}): re-reading the menu art");
 }
 
 /// The original default CSpriteFrame projection adds vertices to LEFT/BOTTOM.
@@ -656,6 +705,10 @@ struct MenuArtCache {
     /// Set when an FDF that *is* present fails to read or parse. Retrying the same
     /// bad bytes every frame would spin; the failure is reported once instead.
     fdf_failed: bool,
+    /// The asset-store generation this cache was filled from. The page replaces
+    /// its store when the user imports a local ISO, and everything decoded from
+    /// the old one has to be dropped when that happens.
+    revision: u32,
     native_loaded: bool,
     install: Option<std::path::PathBuf>,
     selection: Option<String>,
@@ -664,9 +717,13 @@ struct MenuArtCache {
 /// Spawns one menu entry's inner fill, or `None` when the art or the frame
 /// definitions are not ready, or the entry's frames cannot be derived.
 ///
-/// Every number is derived from the parsed FDF and laid out relatively: the fill
-/// is a grid item in the button's single cell, inset by `Vw`/`Vh` margins taken
-/// from the authored frame units. No pixel size and no absolute position.
+/// The fill is a **3×3 grid wrapper**: the image occupies the middle cell, and the
+/// surrounding tracks carry the authored left/width/right and top/height/bottom
+/// as percentages of the plate. A grid track's percentage resolves against its
+/// container's width for columns and height for rows, so both axes are right
+/// without the full-window `Vw`/`Vh` mismatch a centred 4:3 or portrait menu would
+/// otherwise introduce. The wrapper fills its cell and shares it with the label,
+/// so nothing is absolute and nothing is pixel-sized.
 fn spawn_fill(
     commands: &mut Commands,
     cache: &MenuArtCache,
@@ -676,37 +733,43 @@ fn spawn_fill(
     let fdf = cache.fdf.as_ref()?;
     let (left, top, width, height) = crate::mainmenu::button_fill(fdf, entry.0).ok()?;
     let (plate_w, plate_h) = crate::mainmenu::plate_size(fdf, entry.0).ok()?;
-    // `Percent` margins resolve against the parent's *width* on both axes, so the
-    // vertical offsets are `Vh`: the authored Y divided by the frame height, as
-    // the original divides by 0.6.
-    Some(
-        commands
-            .spawn((
-                Node {
-                    grid_row: GridPlacement::start(1),
-                    grid_column: GridPlacement::start(1),
-                    margin: UiRect {
-                        left: Val::Vw(left / crate::mainmenu::FRAME_W * 100.0),
-                        right: Val::Vw((plate_w - left - width) / crate::mainmenu::FRAME_W * 100.0),
-                        top: Val::Vh(top / crate::mainmenu::FRAME_H * 100.0),
-                        bottom: Val::Vh(
-                            (plate_h - top - height) / crate::mainmenu::FRAME_H * 100.0,
-                        ),
-                        ..default()
-                    },
-                    ..default()
-                },
-                // The shared tile handle, drawn WHITE for the button; the settings
-                // panel keeps its own per-entity tint.
-                ImageNode {
-                    image: fill.clone(),
-                    color: Color::WHITE,
-                    ..default()
-                },
-                ButtonFill,
-            ))
-            .id(),
-    )
+    let column = |v: f32| GridTrack::percent(v / plate_w * 100.0);
+    let row = |v: f32| GridTrack::percent(v / plate_h * 100.0);
+    let wrapper = commands
+        .spawn(Node {
+            grid_row: GridPlacement::start(1),
+            grid_column: GridPlacement::start(1),
+            display: Display::Grid,
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            grid_template_columns: vec![
+                column(left),
+                column(width),
+                column(plate_w - left - width),
+            ],
+            grid_template_rows: vec![row(top), row(height), row(plate_h - top - height)],
+            ..default()
+        })
+        .id();
+    let image = commands
+        .spawn((
+            Node {
+                grid_row: GridPlacement::start(2),
+                grid_column: GridPlacement::start(2),
+                ..default()
+            },
+            // The shared tile handle, drawn WHITE for the button; the settings
+            // panel keeps its own per-entity tint.
+            ImageNode {
+                image: fill.clone(),
+                color: Color::WHITE,
+                ..default()
+            },
+            ButtonFill,
+        ))
+        .id();
+    commands.entity(wrapper).add_child(image);
+    Some(wrapper)
 }
 
 /// Puts the original's frame art on the menu buttons once it can be read.
@@ -738,6 +801,11 @@ fn apply_menu_art(
         (Entity, &Children, &crate::mainmenu::MenuButton),
         (With<ButtonArt>, Without<ButtonFilled>),
     >,
+    // Buttons already wearing their art: after a store change the geometry is
+    // unchanged but the texture handle is not, so the handle is swapped in place
+    // rather than re-dressing the button and re-wrapping its label.
+    mut dressed: Query<&mut ImageNode, (With<ButtonArt>, Without<ButtonFill>)>,
+    mut fills: Query<&mut ImageNode, (With<ButtonFill>, Without<ButtonArt>)>,
     panels: Query<Entity, (With<Wc3Panel>, Without<ImageNode>)>,
     mut text: Query<&mut TextFont>,
 ) {
@@ -781,46 +849,46 @@ fn apply_menu_art(
         // The frame definitions. **Both** must be read and parsed before the pair
         // is cached: the page fetches them separately, so caching after the first
         // one would freeze an incomplete frame set and every derivation against
-        // the menu's own frames would fail from then on. Templates are parsed
-        // first so a menu override wins.
+        // the menu's own frames would fail from then on.
         if cache.fdf.is_none() && !cache.fdf_failed {
-            let mut fdf = crate::fdf::Fdf::default();
-            let mut parsed = 0usize;
-            let mut present = 0usize;
-            let mut errors: Vec<String> = Vec::new();
-            for path in [
+            let templates = crate::mainmenu::art_bytes(
+                install.as_deref(),
                 crate::mainmenu::STANDARD_TEMPLATES_FDF,
-                crate::mainmenu::MAIN_MENU_FDF,
-            ] {
-                let Some(bytes) = crate::mainmenu::art_bytes(install.as_deref(), path) else {
-                    continue;
-                };
-                present += 1;
-                match std::str::from_utf8(&bytes) {
-                    Err(e) => errors.push(format!("{path}: not text ({e})")),
-                    Ok(text) => match fdf.parse_into(text) {
-                        Ok(()) => parsed += 1,
-                        Err(e) => errors.push(format!("{path}: {e}")),
-                    },
+            );
+            let menu =
+                crate::mainmenu::art_bytes(install.as_deref(), crate::mainmenu::MAIN_MENU_FDF);
+            if let (Some(templates), Some(menu)) = (templates.as_deref(), menu.as_deref()) {
+                match (std::str::from_utf8(templates), std::str::from_utf8(menu)) {
+                    // Templates first, so a menu override wins.
+                    (Ok(templates), Ok(menu)) => {
+                        match crate::fdf::Fdf::parse(templates).and_then(|mut f| {
+                            f.parse_into(menu)?;
+                            Ok(f)
+                        }) {
+                            Ok(fdf) => cache.fdf = Some(fdf),
+                            Err(e) => {
+                                bevy::log::warn!("menu frame definitions unusable: {e}");
+                                cache.fdf_failed = true;
+                            }
+                        }
+                    }
+                    _ => {
+                        bevy::log::warn!("menu frame definitions are not UTF-8 text");
+                        cache.fdf_failed = true;
+                    }
                 }
             }
-            if parsed == 2 {
-                cache.fdf = Some(fdf);
-            } else if !errors.is_empty() {
-                // A file that is present but unreadable will not improve; say so
-                // and stop, rather than parsing it every frame.
-                for e in &errors {
-                    bevy::log::warn!("menu frame definitions unusable: {e}");
-                }
-                cache.fdf_failed = true;
-            } else {
-                // Not all present yet — a browser supplies them a moment apart.
-                let _ = present;
-            }
+            // Not both present yet: a browser supplies them a moment apart, so
+            // leave the cache empty and try again next frame.
         }
         cache.native_loaded = true;
     }
     if let Some(handle) = &cache.button {
+        for mut image in &mut dressed {
+            if image.image != *handle {
+                image.image = handle.clone();
+            }
+        }
         for (entity, mut node, children, disabled, menu_button) in &mut buttons {
             let mut image = ImageNode::new(handle.clone()).with_mode(NodeImageMode::Stretch);
             if disabled.is_some() {
@@ -890,6 +958,11 @@ fn apply_menu_art(
         }
     }
     if let Some(handle) = &cache.panel {
+        for mut image in &mut fills {
+            if image.image != *handle {
+                image.image = handle.clone();
+            }
+        }
         for entity in &panels {
             let mut image = ImageNode::new(handle.clone()).with_mode(NodeImageMode::Tiled {
                 tile_x: true,
@@ -1505,11 +1578,14 @@ pub(crate) fn apply_menu_clicks(
                 }
             }
             _ => {
-                info!(
-                    "{}: {}",
-                    raw.split_once("|R").map(|(_, r)| r).unwrap_or(raw),
-                    mainmenu::split_label(raw).map(|l| l.rest).unwrap_or(raw)
-                );
+                // The visible label is `hotkey + rest` — the two spans the UI
+                // actually draws. Logging `rest` alone drops the hotkey letter and
+                // reads as "ingle Player", so build the full string here, and name
+                // the action by its key rather than by the label text.
+                let visible = mainmenu::split_label(raw)
+                    .map(|l| format!("{}{}", l.hotkey, l.rest))
+                    .unwrap_or_else(|_| raw.to_string());
+                info!("{id}: {visible}");
             }
         }
     }
@@ -1701,10 +1777,7 @@ mod tests {
         // It is inert both visually (greyed) and functionally (the click
         // handler drops it), so a stray pointer event cannot fire it.
         let l = Launcher::default();
-        assert!(
-            l.latest_release.is_none(),
-            "the download control must stay inert until a downloader exists"
-        );
+        assert!(l.log.is_empty(), "a fresh launcher has nothing logged");
     }
 
     #[test]
@@ -1720,8 +1793,11 @@ mod tests {
 #[cfg(test)]
 mod menu_tests {
     use super::*;
+    // The click tests spawn `Pressed` buttons; nothing else in the crate needs
+    // the marker, so it is imported here rather than at module scope.
     use crate::mainmenu::{MENU, MenuButton};
     use bevy::ecs::system::RunSystemOnce;
+    use bevy::ui::Pressed;
 
     #[test]
     fn cameras_clear_settings_and_only_run_the_visible_scene() {

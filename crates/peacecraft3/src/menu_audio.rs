@@ -1,7 +1,11 @@
 //! Original TFT menu music and GlueScreenClick feedback.
 use bevy::prelude::*;
-use bevy::ui::{InteractionDisabled, Pressed};
+use bevy::ui::InteractionDisabled;
+#[cfg(test)]
+use bevy::ui::Pressed;
 use bevy::ui_widgets::Button;
+
+pub(crate) const MENU_MUSIC_PATH: &str = r"Sound\Music\mp3Music\War3XMainScreen.mp3";
 
 pub fn install(app: &mut App) {
     #[cfg(not(target_arch = "wasm32"))]
@@ -87,7 +91,7 @@ fn load(
         let install = pcx_gfx::viewer::resolve_install(None);
         pcx_mpq::MpqSet::open_wc3(&install)
             .ok()?
-            .extract(r"Sound\Music\mp3Music\War3XMainScreen.mp3")
+            .extract(MENU_MUSIC_PATH)
             .ok()
     });
     if let Some(bytes) = music {

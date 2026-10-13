@@ -40,6 +40,8 @@ pub struct WireMismatch {
 /// Why a field mapping could not be proven.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
+    /// Scalar field lookup cannot interpret the two authored selectors.
+    IndexedField { fourcc: Fourcc, selectors: [u32; 2] },
     /// The fourcc is not in any `*MetaData.slk` this build ships.
     UnknownFourcc { fourcc: Fourcc },
     /// The fourcc is a `Profile` field, but **no shipped `.txt` section
@@ -59,6 +61,11 @@ pub enum Refusal {
 impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::IndexedField { fourcc, selectors } => write!(
+                f,
+                "{}: authored selectors {selectors:?} require indexed lookup",
+                fourcc_text(*fourcc)
+            ),
             Self::UnknownFourcc { fourcc } => {
                 write!(
                     f,
@@ -174,6 +181,24 @@ impl Overlay {
                 .extend(record.mods.iter().cloned());
         }
         me
+    }
+
+    /// Exact authored value for a field and selector pair, without flattening.
+    /// Last authored override wins only within this exact key.
+    pub fn indexed_value(
+        &self,
+        rawcode: &str,
+        field: Fourcc,
+        selectors: [u32; 2],
+    ) -> Option<&Value> {
+        let mods = self
+            .new_object(rawcode)
+            .map(|(_, mods)| mods)
+            .unwrap_or_else(|| self.on(rawcode));
+        mods.iter()
+            .rev()
+            .find(|m| m.field == field && m.selectors == Some(selectors))
+            .map(|m| &m.value)
     }
 
     /// The unit `rawcode` becomes with this map's modifications on top.
@@ -376,6 +401,12 @@ impl Applied {
                 }
 
                 for m in &record.mods {
+                    if let Some(selectors) = m.selectors {
+                        report.refusals.push(Refusal::IndexedField {
+                            fourcc: m.field,
+                            selectors,
+                        });
+                    }
                     self.fourcc_words.insert(m.field, m.value_type.word());
                     let Some(def) = editor.field(m.field) else {
                         report
@@ -616,4 +647,37 @@ pub fn override_value<'a>(
 /// Which editor table a rawcode belongs to, for a diagnostic.
 pub fn kind_of(editor: &Editor, rawcode: &str) -> Option<ObjectKind> {
     editor.resolve(rawcode)
+}
+
+#[cfg(test)]
+mod indexed_regressions {
+    use super::*;
+    #[test]
+    fn distinct_authored_selector_pairs_never_collapse() {
+        let mut data = Vec::new();
+        for word in [2u32, 1] {
+            data.extend(word.to_le_bytes());
+        }
+        data.extend(b"ABCD");
+        data.extend([0; 4]);
+        data.extend(2u32.to_le_bytes());
+        for (selector, value) in [(1u32, 10u32), (2, 20)] {
+            data.extend(b"data");
+            for word in [0u32, selector, 0, value, 0] {
+                data.extend(word.to_le_bytes());
+            }
+        }
+        data.extend(0u32.to_le_bytes());
+        let file = ObjectFile::parse("war3map.w3a", &data).unwrap();
+        let overlay = Overlay::of(&file);
+        assert_eq!(
+            overlay.indexed_value("ABCD", *b"data", [1, 0]),
+            Some(&Value::Int(10))
+        );
+        assert_eq!(
+            overlay.indexed_value("ABCD", *b"data", [2, 0]),
+            Some(&Value::Int(20))
+        );
+        assert_eq!(overlay.indexed_value("ABCD", *b"data", [3, 0]), None);
+    }
 }

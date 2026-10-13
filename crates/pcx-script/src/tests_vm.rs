@@ -932,3 +932,60 @@ fn every_map_script_resolves_against_its_install() {
         "map scripts that failed to resolve are listed above"
     );
 }
+
+#[test]
+fn failed_global_initialization_remains_failed_without_repeating_side_effects() {
+    struct Failing {
+        calls: usize,
+    }
+    impl crate::Host for Failing {
+        fn native(&mut self, _: &str, _: &[Value]) -> Result<Value, String> {
+            self.calls += 1;
+            Err("unsupported".into())
+        }
+    }
+    let source = "native Missing takes nothing returns integer\nglobals\ninteger partial = 4\ninteger bad = Missing()\nendglobals\nfunction main takes nothing returns nothing\nset partial = 99\nendfunction\n";
+    let program = program_of(source);
+    let mut vm = Vm::new(&program, Failing { calls: 0 });
+    let first = vm.call("main", &[]).unwrap_err();
+    assert_eq!(vm.call("main", &[]).unwrap_err(), first);
+    assert_eq!(vm.host().calls, 1);
+    assert_eq!(vm.global("partial"), Value::Int(4));
+    assert_eq!(vm.error_source(), Some("the map script"));
+}
+
+#[test]
+fn runtime_error_retains_deepest_prelude_source() {
+    let prelude = parse("native Missing takes nothing returns nothing\nfunction Inner takes nothing returns nothing\ncall Missing()\nendfunction\n").unwrap();
+    let map =
+        parse("function main takes nothing returns nothing\ncall Inner()\nendfunction\n").unwrap();
+    let program = resolve_with(&map, &[Prelude::new("shipped/Blizzard.j", &prelude)]).unwrap();
+    let mut vm = Vm::new(&program, NullHost);
+    let error = vm.call("main", &[]).unwrap_err();
+    assert!(error.message.contains("Missing"));
+    assert_eq!(vm.error_source(), Some("shipped/Blizzard.j"));
+}
+
+#[test]
+fn undeclared_prelude_calls_do_not_bypass_asset_defined_native_signatures() {
+    struct Permissive {
+        calls: usize,
+    }
+    impl crate::Host for Permissive {
+        fn native(&mut self, _: &str, _: &[Value]) -> Result<Value, String> {
+            self.calls += 1;
+            Ok(Value::Null)
+        }
+    }
+    let prelude =
+        parse("function BJ takes nothing returns nothing\ncall NotDeclared()\nendfunction\n")
+            .unwrap();
+    let map =
+        parse("function main takes nothing returns nothing\ncall BJ()\nendfunction\n").unwrap();
+    let program = resolve_with(&map, &[Prelude::new("actual/Blizzard.j", &prelude)]).unwrap();
+    let mut vm = Vm::new(&program, Permissive { calls: 0 });
+    let error = vm.call("main", &[]).unwrap_err();
+    assert!(error.message.contains("NotDeclared") && error.message.contains("not declared"));
+    assert_eq!(vm.error_source(), Some("actual/Blizzard.j"));
+    assert_eq!(vm.host().calls, 0);
+}

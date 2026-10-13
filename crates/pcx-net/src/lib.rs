@@ -1220,7 +1220,7 @@ mod tests {
             history_ticks: 4,
             max_resim_ticks: 30,
         };
-        let (mut server, mut client) = delayed_input_scenario(limits);
+        let (server, mut client) = delayed_input_scenario(limits);
         client.acknowledge(server.last_ack());
         // Predict far enough that tick 5 has aged out of a four-tick ring, so the
         // window alone is what refuses the replay.
@@ -1269,7 +1269,7 @@ mod tests {
             history_ticks: 32,
             max_resim_ticks: 2,
         };
-        let (mut server, mut client) = delayed_input_scenario(limits);
+        let (server, mut client) = delayed_input_scenario(limits);
         client.acknowledge(server.last_ack());
         let authoritative = server
             .snapshot(5)
@@ -1294,7 +1294,7 @@ mod tests {
 
     #[test]
     fn a_correction_nobody_acknowledged_falls_back_to_a_snap() {
-        let (mut server, mut client) = delayed_input_scenario(rollback::RollbackLimits::default());
+        let (server, mut client) = delayed_input_scenario(rollback::RollbackLimits::default());
         assert_eq!(client.acked_tick(), None);
         let authoritative = server
             .snapshot(5)
@@ -1326,7 +1326,7 @@ mod tests {
 
     #[test]
     fn a_late_correction_never_rewinds_the_client() {
-        let (mut server, mut client) = delayed_input_scenario(rollback::RollbackLimits::default());
+        let (server, mut client) = delayed_input_scenario(rollback::RollbackLimits::default());
         client.acknowledge(server.last_ack());
         let fresh = server.snapshot(5).expect("tick 5 is retained").clone();
         client.reconcile_detailed(fresh.clone());
@@ -1351,7 +1351,7 @@ mod tests {
 
     #[test]
     fn a_snapshot_behind_the_acknowledged_clock_is_ignored() {
-        let (mut server, mut client) = delayed_input_scenario(rollback::RollbackLimits::default());
+        let (server, mut client) = delayed_input_scenario(rollback::RollbackLimits::default());
         // The server is heard from about its input stream before its world: by the
         // time a snapshot for tick 5 arrives, it has confirmed running through 7,
         // so replaying ticks 5..=7 would apply consumed inputs a second time.
@@ -1413,7 +1413,7 @@ mod tests {
             history_ticks: 0,
             max_resim_ticks: 30,
         };
-        let (mut server, mut client) = delayed_input_scenario(limits);
+        let (server, mut client) = delayed_input_scenario(limits);
         client.acknowledge(server.last_ack());
         let authoritative = server
             .snapshot(5)

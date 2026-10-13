@@ -8,3 +8,11 @@ description = "Deterministic fixed-tick game simulation (no bevy dependency)"
 
 [dependencies]
 thiserror.workspace = true
+pcx-map.workspace = true
+pcx-objects.workspace = true
+
+[dev-dependencies]
+pcx-mpq.workspace = true
+
+[lints]
+workspace = true

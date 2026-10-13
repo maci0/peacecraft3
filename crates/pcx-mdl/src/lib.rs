@@ -52,6 +52,11 @@
 //! plausible-but-wrong collision shape lets units walk through walls, which is
 //! the worst failure mode available here. See [`CollisionShape`].
 
+mod material;
+mod particle2;
+pub use material::{MaterialLayer, TextureFrameTrack};
+pub use particle2::Particle2Properties;
+
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -515,7 +520,7 @@ impl CollisionShape {
 ///
 /// `HELP`, `ATCH`, `CAMS` and `LITE` all use the same framing, so one type serves
 /// them rather than four near-identical ones.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     pub offset: usize,
     pub size: u32,
@@ -524,6 +529,9 @@ pub struct Node {
     /// Parent node index, or `-1` for a root.
     pub parent_id: i32,
     pub flags: u32,
+    /// HELP transforms inside the inclusive node size, in file order.
+    /// Other node families use their typed track readers.
+    pub tracks: Vec<KeyTrack>,
 }
 
 impl Node {
@@ -536,8 +544,7 @@ impl Node {
 
 /// Bytes of fixed node header at the front of a `GEOA` record.
 ///
-/// `objectId`, `parentId`, `flags`, a static alpha and a static colour — then
-/// the animation tracks begin at offset 20.
+/// Static alpha, flags, colour and geoset id; tracks begin at body offset 24.
 const GEOA_FIXED: usize = 24;
 
 /// Bytes of track header at the front of a `GEOA` track.
@@ -1121,8 +1128,8 @@ impl Pivots {
 
 /// One `GEOA` entry: a geoset's animated tint.
 ///
-/// The record is a 24-byte header — a static alpha, node flags and three colour
-/// floats — followed by up to three animation tracks: `KGAA` (alpha), `KGAC`
+/// The record is a 24-byte header — static alpha, flags, three colour
+/// floats and a geoset id — followed by up to three animation tracks: `KGAA` (alpha), `KGAC`
 /// (colour), `KGAO` (opacity).
 ///
 /// `len` is **self-inclusive**: it counts its own four-byte length field, so the
@@ -1137,6 +1144,8 @@ pub struct GeosetAnim {
     pub offset: usize,
     pub len: u32,
     pub flags: u32,
+    /// Index of the geoset this record animates, or `NO_ID`.
+    pub geoset_id: u32,
     /// Static alpha, before any `KGAA` track.
     pub static_alpha: f32,
     /// Static colour, before any `KGAC` track.
@@ -1338,7 +1347,7 @@ fn sample_vec3(track: &BoneTrack, frame: u32, component: usize) -> f32 {
             } else {
                 ((frame - t0) as f32 / (t1 - t0) as f32).clamp(0.0, 1.0)
             };
-            hermite(v0, v1, m0, m1, t)
+            cubic(track.interpolation, v0, v1, m0, m1, t)
         }
     }
 }
@@ -1533,8 +1542,25 @@ pub fn sample_scalar(track: &AnimTrack, frame: u32) -> f32 {
                 return v0;
             }
             let t = ((frame - f0) as f32 / (f1 - f0) as f32).clamp(0.0, 1.0);
-            hermite(v0, v1, track.out_tangent(lo), track.in_tangent(hi), t)
+            cubic(
+                track.interpolation,
+                v0,
+                v1,
+                track.out_tangent(lo),
+                track.in_tangent(hi),
+                t,
+            )
         }
+    }
+}
+
+/// Bezier tangents are control points; Hermite tangents are derivatives.
+fn cubic(kind: Interpolation, p0: f32, p1: f32, out: f32, incoming: f32, t: f32) -> f32 {
+    if kind == Interpolation::Bezier {
+        let u = 1.0 - t;
+        u * u * u * p0 + 3.0 * u * u * t * out + 3.0 * u * t * t * incoming + t * t * t * p1
+    } else {
+        hermite(p0, p1, out, incoming, t)
     }
 }
 
@@ -1737,7 +1763,12 @@ fn read_tracks(
                 size: usize::MAX,
                 left: to - cur,
             })?;
-        let next = cur + size;
+        let next = cur.checked_add(size).ok_or(Error::TrackOverruns {
+            chunk,
+            at: at(cur),
+            size,
+            left: to - cur,
+        })?;
         if next > to {
             return Err(Error::TrackOverruns {
                 chunk,
@@ -2243,12 +2274,11 @@ impl Material {
     /// A material usually carries one or two; a record with none is legal for
     /// an unlit material.
     pub fn layers(&self) -> Vec<usize> {
-        self.data
-            .windows(4)
-            .enumerate()
-            .filter(|(_, w)| w == b"LAYS")
-            .map(|(i, _)| i)
-            .collect()
+        if self.data.get(8..12) == Some(b"LAYS") {
+            vec![8]
+        } else {
+            Vec::new()
+        }
     }
 
     /// The layer index and declared length of each `LAYS` block.
@@ -2259,21 +2289,20 @@ impl Material {
     /// the layer carries), and reading that as a texture index is why the first
     /// attempt produced layer 0 pointing at texture 28.
     pub fn layer_lengths(&self) -> Vec<(u32, u32)> {
-        self.layers()
+        self.checked_layers()
+            .expect("invalid material layer framing")
             .into_iter()
-            .filter_map(|at| {
-                let idx = u32::from_le_bytes(self.data.get(at + 4..at + 8)?.try_into().ok()?);
-                let len = u32::from_le_bytes(self.data.get(at + 8..at + 12)?.try_into().ok()?);
-                Some((idx, len))
-            })
+            .map(|layer| (layer.properties.index, layer.size))
             .collect()
     }
 
-    /// Decoded texture layers.
+    /// Compatibility accessor for materials validated by Mdlx::materials.
+    /// Use checked_layers when constructing Material directly from bytes.
     pub fn tex_layers(&self) -> Vec<TexLayer> {
-        self.layers()
+        self.checked_layers()
+            .expect("invalid material layer framing")
             .into_iter()
-            .filter_map(|at| TexLayer::parse(&self.data, at))
+            .map(|layer| layer.properties)
             .collect()
     }
 }
@@ -2289,10 +2318,14 @@ impl Material {
 pub struct TexLayer {
     /// Layer index as declared by the record.
     pub index: u32,
-    /// Shader the layer draws with.
+    /// Legacy field name for filter_mode.
     pub shader_id: u32,
-    /// Blending mode applied to the layer.
+    /// Legacy field name for shading_flags.
     pub blend_mode: u32,
+    pub filter_mode: u32,
+    pub shading_flags: u32,
+    /// Authored texture coordinate set.
+    pub coord_id: u32,
     /// Index into the model's `TEXS` table.
     pub texture_id: u32,
     /// Texture animation, or `NO_ID` when the layer has none.
@@ -2305,38 +2338,6 @@ pub struct TexLayer {
 pub const NO_ID: u32 = 0xffff_ffff;
 
 impl TexLayer {
-    /// Parses the layer at `at` inside a material record.
-    ///
-    /// Offsets are measured from the shipped bytes, not assumed. For the Footman
-    /// the three materials read `(shader 1, blend 0, texture 0)`, `(0, 1, 1)`
-    /// and `(1, 0, 2)` — and the texture paths are exactly
-    /// `Footman.blp` / empty / `gutz.blp`, which is what pins `textureId` to
-    /// body+20 rather than body+8.
-    fn parse(data: &[u8], at: usize) -> Option<Self> {
-        // Everything is read relative to the `LAYS` tag. The measured layout is
-        //
-        //   +0  "LAYS"
-        //   +4  layer index
-        //   +8  declared length (28, or 100 when the layer animates)
-        //   +12 shader id
-        //   +16 blend mode
-        //   +20 texture id          <- the one that matters
-        //   +24 texture animation id
-        //   +28 static alpha (f32)
-        let u = |off: usize| -> Option<u32> {
-            let b = data.get(at + off..at + off + 4)?;
-            Some(u32::from_le_bytes(b.try_into().ok()?))
-        };
-        Some(Self {
-            index: u(4)?,
-            shader_id: u(12)?,
-            blend_mode: u(16)?,
-            texture_id: u(20)?,
-            texture_anim_id: u(24)?,
-            static_alpha: f32::from_bits(u(28)?),
-        })
-    }
-
     /// True when the layer has no texture animation of its own.
     pub fn has_no_texture_anim(&self) -> bool {
         self.texture_anim_id == NO_ID
@@ -2984,6 +2985,7 @@ impl Mdlx {
                 // tracks start at +24. Reading them as objectId/parentId at +0
                 // and +4 desynchronises every track after them.
                 flags: read_u32(rec, 4)?,
+                geoset_id: read_u32(rec, 20)?,
                 static_alpha: f32::from_bits(read_u32(rec, 0)?),
                 static_colour: [
                     f32::from_bits(read_u32(rec, 8)?),
@@ -2994,19 +2996,31 @@ impl Mdlx {
                 trailing: 0,
             };
             let mut cur = GEOA_FIXED;
-            while cur + TRACK_HEADER <= rec.len() {
-                let magic: [u8; 4] = rec[cur..cur + 4].try_into().unwrap();
+            while cur < rec.len() {
+                let magic: [u8; 4] = rec
+                    .get(cur..cur + 4)
+                    .ok_or(Error::TrackOverruns {
+                        chunk: "GEOA",
+                        at: at + 4 + cur,
+                        size: 4,
+                        left: rec.len() - cur,
+                    })?
+                    .try_into()
+                    .unwrap();
                 if !matches!(&magic[..], b"KGAA" | b"KGAC" | b"KGAO") {
-                    // A record can carry no tracks and still pad to a fixed
-                    // width, so trailing bytes that are not a magic end the walk
-                    // rather than failing it.
-                    break;
+                    return Err(Error::UnknownTrackMagic {
+                        chunk: "GEOA",
+                        at: at + 4 + cur,
+                        tag: magic,
+                    });
                 }
-                let Some(interpolation) = Interpolation::from_u32(read_u32(rec, cur + 8)?) else {
-                    // Not a type whose key size we know, so stop rather than
-                    // guess: the stride depends on it.
-                    break;
-                };
+                let kind = read_u32(rec, cur + 8)?;
+                let interpolation =
+                    Interpolation::from_u32(kind).ok_or(Error::UnknownTrackInterpolation {
+                        chunk: "GEOA",
+                        at: at + 4 + cur,
+                        kind,
+                    })?;
                 let count = read_u32(rec, cur + 4)?;
                 let global_seq_id = read_u32(rec, cur + 12)?;
                 let mut t = AnimTrack {
@@ -3017,7 +3031,15 @@ impl Mdlx {
                     raw: Vec::new(),
                 };
                 let body = cur + TRACK_HEADER;
-                let end = body + count as usize * t.key_len();
+                let end = (count as usize)
+                    .checked_mul(t.key_len())
+                    .and_then(|size| body.checked_add(size))
+                    .ok_or(Error::TrackOverruns {
+                        chunk: "GEOA",
+                        at: at + 4 + cur,
+                        size: usize::MAX,
+                        left: rec.len() - cur,
+                    })?;
                 if end > rec.len() {
                     return Err(Error::Truncated {
                         what: "GEOA track body",
@@ -3074,6 +3096,12 @@ impl Mdlx {
                     stride: size,
                 });
             }
+            let mut tracks = Vec::new();
+            // HELP measures its node and keyed transforms. ATCH may append
+            // attachment fields outside that node size; its own reader owns those.
+            if tag == tag::HELP {
+                read_tracks("HELP", p, at + NODE_FIXED, at + size, 0, &mut tracks)?;
+            }
             out.push(Node {
                 offset: at,
                 size: size as u32,
@@ -3081,6 +3109,7 @@ impl Mdlx {
                 object_id: read_u32(p, at + 4 + NODE_NAME)?,
                 parent_id: read_i32(p, at + 4 + NODE_NAME + 4)?,
                 flags: read_u32(p, at + 4 + NODE_NAME + 8)?,
+                tracks,
             });
             at += size;
         }
@@ -3282,11 +3311,13 @@ impl Mdlx {
                     stride: len,
                 });
             }
-            out.push(Material {
+            let material = Material {
                 offset: at,
                 len: len as u32,
                 data: p[at + 4..at + len].to_vec(),
-            });
+            };
+            material.checked_layers()?;
+            out.push(material);
             at += len;
         }
         if at != p.len() {
@@ -3930,7 +3961,7 @@ mod tests {
         for mat in &mats {
             for l in mat.tex_layers() {
                 assert!(l.has_no_texture_anim(), "the footman's layers are static");
-                assert_eq!(l.static_alpha, 0.0, "static alpha is unset for these");
+                assert!(l.static_alpha.is_finite(), "authored static alpha");
             }
         }
     }
@@ -4728,9 +4759,6 @@ mod tests {
         let mut tag_sets: std::collections::BTreeMap<String, usize> = Default::default();
         let mut total_bytes = 0usize;
         let mut geosets = 0usize;
-        let mut sequences = 0usize;
-        let mut textures = 0usize;
-        let mut geoset_total = 0usize;
         let mut meshes = 0usize;
         let mut vertices = 0usize;
         let mut triangles = 0usize;
@@ -4784,7 +4812,6 @@ mod tests {
                     // to be coherent, or the renderer silently loses clips.
                     match m.sequences(&d) {
                         Ok(seqs) => {
-                            sequences += seqs.len();
                             for s in &seqs {
                                 if s.name.is_empty() {
                                     anomalies.insert(format!("{rel}: unnamed sequence"));
@@ -4805,7 +4832,6 @@ mod tests {
                     }
                     match m.geosets(&d) {
                         Ok(g) => {
-                            geoset_total += g.len();
                             for x in &g {
                                 if x.data.len() < 4 || &x.data[..4] != geoset_tag::VRTX {
                                     anomalies.insert(format!(
@@ -5460,7 +5486,6 @@ mod tests {
                     }
                     match m.textures(&d) {
                         Ok(t) => {
-                            textures += t.len();
                             for x in &t {
                                 if !x.path.is_empty()
                                     && !x.path.to_ascii_lowercase().ends_with(".blp")
@@ -5982,6 +6007,10 @@ pub enum Particle2TrackKind {
     N,
     /// `"KP2W"`.
     W,
+    /// Variation, native KP2R.
+    R,
+    /// Gravity, native KP2G.
+    G,
 }
 
 impl Particle2TrackKind {
@@ -5994,6 +6023,8 @@ impl Particle2TrackKind {
             Self::V => *b"KP2V",
             Self::N => *b"KP2N",
             Self::W => *b"KP2W",
+            Self::R => *b"KP2R",
+            Self::G => *b"KP2G",
         }
     }
 
@@ -6010,6 +6041,8 @@ impl Particle2TrackKind {
             b"KP2V" => Some(Self::V),
             b"KP2N" => Some(Self::N),
             b"KP2W" => Some(Self::W),
+            b"KP2R" => Some(Self::R),
+            b"KP2G" => Some(Self::G),
             _ => None,
         }
     }
@@ -6030,9 +6063,8 @@ impl Particle2TrackKind {
 /// key stride, so reusing the type keeps one rule — "tangent interpolation
 /// means two extra floats" — in one place.
 ///
-/// The prelude is **not** decoded. Its width is fixed and every shipped record
-/// agrees on it, but which word is which float has no evidence in the bytes and
-/// none is claimed here.
+/// The fixed state is retained verbatim and decoded by Particle2::properties,
+/// using native binary/keyword reader field bindings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Particle2 {
     /// Offset of this record's total-size field within the chunk payload.
@@ -6047,7 +6079,7 @@ pub struct Particle2 {
     pub flags: u32,
     /// `KGTR`/`KGRT`/`KGSC` tracks inside the node header.
     pub node_tracks: Vec<KeyTrack>,
-    /// The 171-byte prelude, kept raw.
+    /// Original fixed-state bytes; properties() exposes native-proven fields.
     pub state: [u8; PARTICLE2_FIXED],
     /// The `KP2*` sub-chunks, in file order, each a scalar key track.
     pub tracks: Vec<KeyTrack>,
@@ -6997,5 +7029,158 @@ mod texture_flag_tests {
         assert!(get(0x3).wraps_width() && get(0x3).wraps_height());
         // A word with unrelated high bits set must not turn either wrap on.
         assert!(!get(0xfffc).wraps_width() && !get(0xfffc).wraps_height());
+    }
+}
+
+#[cfg(test)]
+mod binding_regressions {
+    use super::*;
+
+    fn model(tag: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut data = b"MDLXVERS".to_vec();
+        data.extend(4u32.to_le_bytes());
+        data.extend(800u32.to_le_bytes());
+        data.extend(tag);
+        data.extend((body.len() as u32).to_le_bytes());
+        data.extend(body);
+        data
+    }
+
+    #[test]
+    fn geoset_animation_preserves_authored_binding_not_record_order() {
+        let mut body = Vec::new();
+        for id in [7u32, 2, NO_ID] {
+            body.extend(28u32.to_le_bytes());
+            body.extend(0.75f32.to_le_bytes());
+            body.extend(2u32.to_le_bytes());
+            for colour in [0.25f32, 0.5, 0.875] {
+                body.extend(colour.to_le_bytes());
+            }
+            body.extend(id.to_le_bytes());
+        }
+        let data = model(tag::GEOA, &body);
+        let parsed = Mdlx::parse(&data).unwrap().geoset_anims(&data).unwrap();
+        assert_eq!(
+            parsed.iter().map(|anim| anim.geoset_id).collect::<Vec<_>>(),
+            [7, 2, NO_ID]
+        );
+        assert_eq!(parsed[0].static_alpha, 0.75);
+        assert_eq!(parsed[0].static_colour, [0.25, 0.5, 0.875]);
+    }
+
+    #[test]
+    fn unknown_geoset_animation_tracks_are_explicit_errors() {
+        let mut body = vec![0; 44];
+        body[..4].copy_from_slice(&44u32.to_le_bytes());
+        body[28..32].copy_from_slice(b"KGAA");
+        body[36..40].copy_from_slice(&9u32.to_le_bytes());
+        let data = model(tag::GEOA, &body);
+        assert!(matches!(
+            Mdlx::parse(&data).unwrap().geoset_anims(&data),
+            Err(Error::UnknownTrackInterpolation { kind: 9, .. })
+        ));
+        body[28..32].copy_from_slice(b"????");
+        let data = model(tag::GEOA, &body);
+        assert!(matches!(
+            Mdlx::parse(&data).unwrap().geoset_anims(&data),
+            Err(Error::UnknownTrackMagic { .. })
+        ));
+    }
+
+    #[test]
+    fn helper_retains_keyed_transforms_and_global_sequence_reference() {
+        let mut body = vec![0; NODE_FIXED];
+        body[0..4].copy_from_slice(&((NODE_FIXED + 32) as u32).to_le_bytes());
+        body[4..10].copy_from_slice(b"helper");
+        body[84..88].copy_from_slice(&19u32.to_le_bytes());
+        body[88..92].copy_from_slice(&3i32.to_le_bytes());
+        body.extend(b"KGTR");
+        body.extend(1u32.to_le_bytes());
+        body.extend(1u32.to_le_bytes());
+        body.extend(5u32.to_le_bytes());
+        body.extend(123u32.to_le_bytes());
+        for value in [4f32, -2., 8.] {
+            body.extend(value.to_le_bytes());
+        }
+        let data = model(tag::HELP, &body);
+        let nodes = Mdlx::parse(&data).unwrap().nodes(&data, tag::HELP).unwrap();
+        assert_eq!(nodes[0].object_id, 19);
+        assert_eq!(nodes[0].parent_id, 3);
+        assert_eq!(nodes[0].tracks.len(), 1);
+        assert_eq!(nodes[0].tracks[0].global_seq_id, 5);
+        assert_eq!(nodes[0].tracks[0].count, 1);
+        assert_eq!(&nodes[0].tracks[0].raw[..4], &123u32.to_le_bytes());
+    }
+
+    #[test]
+    fn malformed_helper_track_is_refused() {
+        let mut body = vec![0; NODE_FIXED + 16];
+        let len = body.len() as u32;
+        body[..4].copy_from_slice(&len.to_le_bytes());
+        body[NODE_FIXED..NODE_FIXED + 4].copy_from_slice(b"KGTR");
+        body[NODE_FIXED + 4..NODE_FIXED + 8].copy_from_slice(&1u32.to_le_bytes());
+        let data = model(tag::HELP, &body);
+        assert!(matches!(
+            Mdlx::parse(&data).unwrap().nodes(&data, tag::HELP),
+            Err(Error::TrackOverruns { .. })
+        ));
+    }
+}
+
+#[cfg(test)]
+mod cubic_regressions {
+    use super::*;
+
+    #[test]
+    fn vector_bezier_uses_control_points() {
+        let mut raw = Vec::new();
+        for frame in [0u32, 100] {
+            raw.extend(frame.to_le_bytes());
+            for value in [0f32, 0., 0., 4., 8., 12., 4., 8., 12.] {
+                raw.extend(value.to_le_bytes());
+            }
+        }
+        let track = BoneTrack {
+            kind: TrackKind::Translation,
+            count: 2,
+            interpolation: Interpolation::Bezier,
+            global_sequence_id: -1,
+            offset: 0,
+            stride: 40,
+            raw,
+        };
+        assert_eq!(sample_vec3(&track, 50, 0), 3.);
+        assert_eq!(sample_vec3(&track, 50, 1), 6.);
+        assert_eq!(sample_vec3(&track, 50, 2), 9.);
+    }
+
+    #[test]
+    fn bezier_control_points_are_distinct_from_hermite_derivatives() {
+        for kind in [Interpolation::Bezier, Interpolation::Hermite] {
+            let mut raw = Vec::new();
+            for frame in [0u32, 100] {
+                raw.extend(frame.to_le_bytes());
+                for value in [0f32, 4., 4.] {
+                    raw.extend(value.to_le_bytes());
+                }
+            }
+            let track = AnimTrack {
+                magic: *b"KGAA",
+                count: 2,
+                interpolation: kind,
+                global_seq_id: NO_ID,
+                raw,
+            };
+            assert_eq!(
+                sample_scalar(&track, 50),
+                if kind == Interpolation::Bezier {
+                    3.
+                } else {
+                    0.
+                }
+            );
+            assert_eq!(sample_scalar(&track, 0), 0.);
+            assert_eq!(sample_scalar(&track, 100), 0.);
+        }
     }
 }

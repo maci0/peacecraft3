@@ -76,15 +76,22 @@ def self_test():
 def build(target):
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
-    toolchain = "1.99.0-" + target
+    toolchain = "stable-" + target
     version = subprocess.check_output(["rustup", "run", toolchain, "rustc", "-Vv"], text=True)
     if "host: " + target not in version.splitlines():
         raise RuntimeError("build on the target OS with its native Rust toolchain")
     print(version, flush=True)
     cargo = ["rustup", "run", toolchain, "cargo"]
     args = ["--locked", "-p", "peacecraft3", "--bin", "peacecraft3", "--target", target]
-    subprocess.run(cargo + ["build", "--release"] + args, check=True)
-    subprocess.run(cargo + ["test", "--release"] + args, check=True)
+    environment = os.environ.copy()
+    encoded = environment.get("CARGO_ENCODED_RUSTFLAGS")
+    if encoded is not None:
+        environment["CARGO_ENCODED_RUSTFLAGS"] = encoded + "\x1f-Dwarnings"
+    else:
+        environment["RUSTFLAGS"] = environment.get("RUSTFLAGS", "") + " -Dwarnings"
+    environment["RUSTDOCFLAGS"] = environment.get("RUSTDOCFLAGS", "") + " -Dwarnings"
+    subprocess.run(cargo + ["build", "--release"] + args, check=True, env=environment)
+    subprocess.run(cargo + ["test", "--release"] + args, check=True, env=environment)
     binary_name = "peacecraft3.exe" if "windows" in target else "peacecraft3"
     binary = Path(os.environ.get("CARGO_TARGET_DIR", "target")) / target / "release" / binary_name
     verify_header(binary.read_bytes(), target)

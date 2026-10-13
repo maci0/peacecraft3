@@ -335,6 +335,9 @@ pub struct MapInfo {
     pub third_string: Option<String>,
     /// Three strings written from `VERSION_LOADING_STRINGS`.
     pub loading_strings: Option<[String; 3]>,
+    pub loading_id: Option<u32>,
+    pub loading_path: Option<String>,
+    pub fog_style: Option<u32>,
     /// Three floats plus a u32 written from `VERSION_FLOAT_TRIPLE`.
     pub float_triple: Option<[f32; 3]>,
     pub float_triple_tail: Option<u32>,
@@ -356,6 +359,7 @@ pub struct MapInfo {
     pub pairs: Vec<[u32; 2]>,
     /// Section C: table lists (from `VERSION_TABLE_LIST_12`).
     pub table_lists: Vec<TableList>,
+    pub item_tables: Vec<ItemTable>,
     raw: Vec<u8>,
 }
 
@@ -497,6 +501,14 @@ impl<'a> Cursor<'a> {
     }
 }
 
+/// Version-25 trailing table: named id, then sets of authored word pairs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemTable {
+    pub id: u32,
+    pub name: String,
+    pub sets: Vec<Vec<[u32; 2]>>,
+}
+
 impl MapInfo {
     /// Parse a `.w3i`, walking every field the file's version declares and
     /// proving the payload is consumed exactly.
@@ -511,7 +523,7 @@ impl MapInfo {
     pub fn parse(bytes: &[u8]) -> Result<Self, Error> {
         let mut c = Cursor::new(bytes);
         let version = c.u32()?;
-        if version != VERSION {
+        if version != VERSION && version != 25 {
             return Err(Error::UnsupportedInfoVersion(version));
         }
         let constant_a = c.u32()?;
@@ -596,14 +608,21 @@ impl MapInfo {
 
         // The three loading strings, plus a u32 the game discards for
         // VERSION_LOADING_STRINGS >= 0x11.
+        let loading_id = (version >= VERSION_LOADING_STRINGS && version >= 0x11)
+            .then(|| c.u32())
+            .transpose()?;
+        let loading_path = (version >= VERSION_LOADING_STRINGS && version >= 0x14)
+            .then(|| c.string())
+            .transpose()?;
         let loading_strings = if version >= VERSION_LOADING_STRINGS {
-            if version >= 0x11 {
-                let _ = c.u32()?;
-            }
             Some([c.string()?, c.string()?, c.string()?])
         } else {
             None
         };
+
+        let fog_style = (version >= VERSION_FLOAT_TRIPLE)
+            .then(|| c.u32())
+            .transpose()?;
 
         let (float_triple, float_triple_tail) = if version >= VERSION_FLOAT_TRIPLE {
             (Some([c.f32()?, c.f32()?, c.f32()?]), Some(c.u32()?))
@@ -617,7 +636,7 @@ impl MapInfo {
         let extra_u32_19 = (version >= VERSION_19).then(|| c.u32()).transpose()?;
 
         let player_count = c.u32()? as usize;
-        let mut players = Vec::with_capacity(player_count);
+        let mut players = Vec::new();
         for _i in 0..player_count {
             players.push(Player {
                 controller: c.u32()?,
@@ -675,17 +694,17 @@ impl MapInfo {
                 let id = c.u32()?;
                 let name = c.string()?;
                 let m = c.u32()? as usize;
-                let mut first = Vec::with_capacity(m);
+                let mut first = Vec::new();
                 for _ in 0..m {
                     first.push(c.u32()?);
                 }
                 let k = c.u32()? as usize;
-                let mut second = Vec::with_capacity(k);
+                let mut second = Vec::new();
                 for _ in 0..k {
                     second.push(TableEntry {
                         id: c.u32()?,
                         tables: {
-                            let mut v = Vec::with_capacity(m);
+                            let mut v = Vec::new();
                             for _ in 0..m {
                                 v.push(c.u32()?);
                             }
@@ -699,6 +718,26 @@ impl MapInfo {
                     first,
                     second,
                 });
+            }
+        }
+
+        let mut item_tables = Vec::new();
+        if version >= 0x18 {
+            let count = c.u32()?;
+            for _ in 0..count {
+                let id = c.u32()?;
+                let name = c.string()?;
+                let set_count = c.u32()?;
+                let mut sets = Vec::new();
+                for _ in 0..set_count {
+                    let item_count = c.u32()?;
+                    let mut items = Vec::new();
+                    for _ in 0..item_count {
+                        items.push([c.u32()?, c.u32()?]);
+                    }
+                    sets.push(items);
+                }
+                item_tables.push(ItemTable { id, name, sets });
             }
         }
 
@@ -731,6 +770,9 @@ impl MapInfo {
             second_string,
             third_string,
             loading_strings,
+            loading_id,
+            loading_path,
+            fog_style,
             float_triple,
             float_triple_tail,
             extra_u32_16,
@@ -742,7 +784,8 @@ impl MapInfo {
             start_locations,
             pairs,
             table_lists,
-            raw: Vec::new(),
+            item_tables,
+            raw: bytes.to_vec(),
         })
     }
 
@@ -1247,10 +1290,10 @@ mod tests {
             return;
         };
         let mut raw = i.raw().to_vec();
-        raw[0] = 25;
+        raw[0] = 26;
         assert!(matches!(
             MapInfo::from_bytes(raw),
-            Err(Error::UnsupportedInfoVersion(25))
+            Err(Error::UnsupportedInfoVersion(26))
         ));
     }
 
@@ -1432,5 +1475,62 @@ mod tests {
             failures.len()
         );
         assert!(grand > 0, "no install was opened");
+    }
+}
+
+#[cfg(test)]
+mod version25_regressions {
+    use super::*;
+    #[test]
+    fn tft_fields_and_nested_item_tables_are_authored() {
+        let mut data = Vec::new();
+        for word in [25u32, 11, 12] {
+            data.extend(word.to_le_bytes());
+        }
+        for string in [b"map".as_slice(), b"author", b"description", b"recommended"] {
+            data.extend(string);
+            data.push(0);
+        }
+        for value in 0..8 {
+            data.extend((value as f32).to_le_bytes());
+        }
+        for word in [1u32, 2, 3, 4, 32, 64, 7] {
+            data.extend(word.to_le_bytes());
+        }
+        data.push(b'L');
+        data.extend(9u32.to_le_bytes());
+        for string in ["loadpath", "loadtext", "loadtitle", "loadsubtitle"] {
+            data.extend(string.as_bytes());
+            data.push(0);
+        }
+        data.extend(10u32.to_le_bytes());
+        for string in ["intropath", "introtext", "introtitle", "introsubtitle"] {
+            data.extend(string.as_bytes());
+            data.push(0);
+        }
+        data.extend(2u32.to_le_bytes());
+        for value in [1f32, 2., 3.] {
+            data.extend(value.to_le_bytes());
+        }
+        data.extend(0x11223344u32.to_le_bytes());
+        data.extend(0x55667788u32.to_le_bytes());
+        data.extend(b"authoredsound\0");
+        data.push(b'A');
+        data.extend(0x99aabbccu32.to_le_bytes());
+        for _ in 0..5 {
+            data.extend(0u32.to_le_bytes());
+        }
+        data.extend(1u32.to_le_bytes());
+        data.extend(42u32.to_le_bytes());
+        data.extend(b"items\0");
+        for word in [2u32, 1, 33, 0x41424344, 0] {
+            data.extend(word.to_le_bytes());
+        }
+        let info = MapInfo::from_bytes(data).unwrap();
+        assert_eq!(info.loading_path.as_deref(), Some("intropath"));
+        assert_eq!(info.loading_id, Some(10));
+        assert_eq!(info.fog_style, Some(2));
+        assert_eq!(info.extra_u32_19, Some(0x99aabbcc));
+        assert_eq!(info.item_tables[0].sets, [vec![[33, 0x41424344]], vec![]]);
     }
 }

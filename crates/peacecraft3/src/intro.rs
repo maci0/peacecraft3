@@ -17,6 +17,7 @@ pub struct Intro {
 }
 
 impl Intro {
+    #[cfg(test)]
     pub fn request(&mut self, expansion: bool) -> bool {
         self.request_with_install(expansion, None)
     }

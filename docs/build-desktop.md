@@ -1,7 +1,9 @@
 # Windows and macOS builds
 
 The desktop matrix builds the actual `peacecraft3` game executable with the
-workspace's pinned Rust 1.99.0 compiler and Cargo.lock. Each job compiles and
+latest stable Rust compiler and committed Cargo.lock. Compiler warnings are errors for build and test, including when existing Rust
+flags are supplied. Workspace crates inherit the same warning policy for local
+Cargo commands. Each job compiles and
 executes the binary's unit tests on the target OS and CPU, then verifies the
 executable header before uploading an archive and SHA-256 checksum.
 
@@ -30,14 +32,14 @@ rustup and the platform compiler (Visual Studio C++ build tools on Windows;
 `xcode-select --install` on macOS). Substitute the target from the table:
 
 ```sh
-rustup toolchain install 1.99.0-aarch64-apple-darwin --profile minimal
+rustup toolchain install stable-aarch64-apple-darwin --profile minimal
 python3 tools/build-desktop.py aarch64-apple-darwin
 ```
 
 On Windows use `python` instead of `python3`, for example:
 
 ```powershell
-rustup toolchain install 1.99.0-aarch64-pc-windows-msvc --profile minimal
+rustup toolchain install stable-aarch64-pc-windows-msvc --profile minimal
 python tools/build-desktop.py aarch64-pc-windows-msvc
 ```
 
@@ -73,7 +75,7 @@ Source is in the private [maci0/peacecraft3 repository](https://github.com/maci0
 The [first native four-target run](https://github.com/maci0/peacecraft3/actions/runs/38409132391)
 compiled Windows ARM64 and macOS ARM64. Their test phase failed because a
 local-install integration test assumed developer folders existed on the runner;
-that test is now explicitly ignored by default. The [corrected four-target run](https://github.com/maci0/peacecraft3/actions/runs/38419274743) passed compilation, native unit tests, executable-header checks and artifact upload on **all four OS/CPU combinations** at commit `3055771d80a8b4f28fb06162c52652051757ca5d`. All four downloaded archives passed independent checksum and executable-header checks; both macOS tar archives preserve executable permissions. These artifacts predate the later TFT selection, startup movie and coordinate-layout changes; subsequent source pushes trigger a new matrix run. Native GPU/audio behavior on Windows/macOS is not established by build and unit-test success. The native Windows runners include the actual CRT headers and SDK missing from the Linux cross-check environment.
+that test is now explicitly ignored by default. The [corrected four-target run](https://github.com/maci0/peacecraft3/actions/runs/38419274743) passed compilation, native unit tests, executable-header checks and artifact upload on **all four OS/CPU combinations** at commit `3055771d80a8b4f28fb06162c52652051757ca5d`. All four downloaded archives passed independent checksum and executable-header checks; both macOS tar archives preserve executable permissions. The [later four-target run](https://github.com/maci0/peacecraft3/actions/runs/38439725394) at `d31dc67a262fbe4a87af7309c88cafbd22d35698` also passed all four jobs. Its downloaded artifacts passed independent SHA-256 and PE/Mach-O CPU-header checks, with executable permissions preserved on macOS. This revision includes startup movie and relative layout changes; the new FDF/FPS/format integration needs a subsequent matrix run. Native GPU/audio behavior on Windows/macOS is not established by build and unit-test success. The native Windows runners include the actual CRT headers and SDK missing from the Linux cross-check environment.
 
 Archives contain only the executable; players supply their own Warcraft III
 assets. Point `PEACECRAFT3_INSTALL` at a directory containing the original MPQs:

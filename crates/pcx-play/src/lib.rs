@@ -53,9 +53,14 @@
 //! clock, and takes every random draw from one `pcx_sim::Rng`. Trace rows are
 //! emitted in sorted order with no map iteration anywhere near the output.
 
+pub mod campaign;
 pub mod diff;
+pub mod rpl;
 pub mod runner;
+pub use rpl::{Expectation, Rpl, RplError};
 pub mod scenario;
+pub mod script_trace;
+pub mod scripts;
 pub mod trace;
 
 pub use diff::{Divergence, first_divergence};

@@ -89,52 +89,26 @@ pub fn decompress_sector(sector: &[u8], out: &mut [u8]) -> Result<usize, Payload
     if mask == COMPRESSION_LZMA || mask & COMPRESSION_BZIP2 != 0 {
         return Err(PayloadError::UnsupportedCompression { mask });
     }
-    if mask & COMPRESSION_ZLIB != 0 {
+    if mask == COMPRESSION_ZLIB {
         let mut z = flate2::Decompress::new(true);
-        // A sector may stop short of the output buffer; take whatever the
-        // decompressor produced rather than treating a partial flush as fatal.
-        match z.decompress(body, out, flate2::FlushDecompress::None) {
-            Ok(flate2::Status::StreamEnd) => {}
-            Ok(_) => {
-                // Ran out of output room; the sector decodes fine, it just does
-                // not fill the whole remaining buffer.
-            }
-            // A short output buffer surfaces as a general error; the bytes
-            // already produced are still valid, so accept whatever landed.
-            Err(_) if z.total_out() > 0 => {}
-            Err(_) => return Err(PayloadError::Zlib),
+        match z.decompress(body, out, flate2::FlushDecompress::Finish) {
+            Ok(flate2::Status::StreamEnd) if z.total_in() == body.len() as u64 => {}
+            _ => return Err(PayloadError::Zlib),
         }
         return Ok(z.total_out() as usize);
     }
-    if mask & COMPRESSION_PKWARE != 0 {
-        use implode::exploder::Exploder;
-        use implode::symbol::DEFAULT_CODE_TABLE;
-        let mut ex = Exploder::new(&DEFAULT_CODE_TABLE);
-        let mut read = 0usize;
-        let mut written = 0usize;
-        while !ex.ended && read < body.len() && written < out.len() {
-            let (consumed, block) = ex
-                .explode_block(&body[read..])
-                .map_err(|_| PayloadError::Pkware)?;
-            if consumed == 0 && block.is_empty() {
-                return Err(PayloadError::Pkware);
-            }
-            read += consumed;
-            let take = block.len().min(out.len() - written);
-            out[written..written + take].copy_from_slice(&block[..take]);
-            written += take;
-        }
-        return Ok(written);
+    if mask == COMPRESSION_PKWARE {
+        return decompress_implode(body, out);
     }
-    // WC3 writes `0x41` / `0x81` for ADPCM: the low bit belongs to the ADPCM
-    // block header, it is not a separate Huffman stream. Mask 0x40/0x80 remains
-    // unsupported (RE-Q10) — see docs/re-notes/000-mpq.md.
-    if mask
-        & (COMPRESSION_ADPCM_STEREO
-            | COMPRESSION_ADPCM_MONO
-            | COMPRESSION_SPARSE
-            | COMPRESSION_HUFFMAN)
-        != 0
+    // Masks compose: 0x41/0x81 need Huffman followed by ADPCM.
+    // Refuse unsupported chains rather than silently decode only one stage.
+    if mask != 0
+        || mask
+            & (COMPRESSION_ADPCM_STEREO
+                | COMPRESSION_ADPCM_MONO
+                | COMPRESSION_SPARSE
+                | COMPRESSION_HUFFMAN)
+            != 0
     {
         return Err(PayloadError::UnsupportedCompression { mask });
     }
@@ -142,6 +116,47 @@ pub fn decompress_sector(sector: &[u8], out: &mut [u8]) -> Result<usize, Payload
     let take = body.len().min(out.len());
     out[..take].copy_from_slice(&body[..take]);
     Ok(take)
+}
+
+/// Legacy IMPLODE blocks have no compression-mask prefix.
+fn decompress_implode(body: &[u8], out: &mut [u8]) -> Result<usize, PayloadError> {
+    use implode::exploder::Exploder;
+    use implode::symbol::DEFAULT_CODE_TABLE;
+    // The dependency supports binary literals and dictionary widths 4..=6.
+    if body.len() < 2 || body[0] != 0 || !(4..=6).contains(&body[1]) {
+        return Err(PayloadError::Pkware);
+    }
+    let mut ex = Exploder::new(&DEFAULT_CODE_TABLE);
+    let mut read = 0;
+    let mut written = 0;
+    while !ex.ended {
+        let (consumed, block) = ex
+            .explode_block(&body[read..])
+            .map_err(|_| PayloadError::Pkware)?;
+        let stalled = consumed == 0 && block.is_empty();
+        read += consumed;
+        if block.len() > out.len() - written {
+            return Err(PayloadError::Pkware);
+        }
+        out[written..written + block.len()].copy_from_slice(block);
+        written += block.len();
+        if stalled && !ex.ended {
+            return Err(PayloadError::Pkware);
+        }
+    }
+    Ok(written)
+}
+
+fn decompress_payload(
+    data: &[u8],
+    out: &mut [u8],
+    block_flags: u32,
+) -> Result<usize, PayloadError> {
+    if block_flags & flags::COMPRESS != 0 {
+        decompress_sector(data, out)
+    } else {
+        decompress_implode(data, out)
+    }
 }
 
 /// Reassemble a block from its raw packed bytes.
@@ -163,24 +178,35 @@ pub fn decode_block(
             decrypt(&mut buf, key, crate::crypt::table());
         }
         if (block_flags & flags::COMPRESS != 0 || block_flags & flags::IMPLODE != 0)
-            && !is_stored_verbatim(buf.len(), file_size as usize, buf.len())
+            && buf.len() != file_size as usize
         {
             let mut plain = vec![0u8; file_size as usize];
-            let n = decompress_sector(&buf, &mut plain)?;
+            let n = decompress_payload(&buf, &mut plain, block_flags)?;
+            if n != file_size as usize {
+                return Err(PayloadError::SizeMismatch {
+                    file_size: file_size as usize,
+                    produced: n,
+                });
+            }
             plain.truncate(n);
             return Ok(plain);
         }
-        buf.truncate(file_size as usize);
+        if buf.len() != file_size as usize {
+            return Err(PayloadError::SizeMismatch {
+                file_size: file_size as usize,
+                produced: buf.len(),
+            });
+        }
         return Ok(buf);
     }
 
     let nsec = sector_count(file_size, sector_size);
 
-    // A sector offset table exists only when the block is compressed or
-    // encrypted. A plain, stored block is just consecutive fixed-size sectors —
+    // Compression (including legacy IMPLODE) needs an offset table.
+    // Stored blocks, even encrypted ones, use fixed-size sectors —
     // reading a table where there is none yields offsets that point past the end
     // of the packed data, which is how most of `war3.mpq` fails.
-    let has_offset_table = block_flags & (flags::COMPRESS | flags::ENCRYPTED) != 0;
+    let has_offset_table = block_flags & (flags::COMPRESS | flags::IMPLODE) != 0;
     let offsets: Vec<u32> = if has_offset_table {
         let table_bytes = (nsec + 1) * 4;
         if raw.len() < table_bytes {
@@ -208,9 +234,9 @@ pub fn decode_block(
 
     out.reserve(file_size as usize);
     for i in 0..nsec {
-        let start = (offsets[i] as usize).min(raw.len());
-        let end = (offsets[i + 1] as usize).min(raw.len());
-        if start > end {
+        let start = offsets[i] as usize;
+        let end = offsets[i + 1] as usize;
+        if start > end || end > raw.len() || (has_offset_table && start < (nsec + 1) * 4) {
             return Err(PayloadError::SectorOutOfRange {
                 index: i,
                 count: nsec,
@@ -224,20 +250,31 @@ pub fn decode_block(
                 crate::crypt::table(),
             );
         }
-        let remaining = (file_size as usize).saturating_sub(out.len());
+        let remaining = ((file_size as usize).saturating_sub(out.len())).min(sector_size as usize);
         if (block_flags & (flags::COMPRESS | flags::IMPLODE) != 0)
             && !is_stored_verbatim(sector.len(), remaining, sector_size as usize)
         {
             let mut buf = vec![0u8; remaining];
-            let n = decompress_sector(&sector, &mut buf)?;
-            buf.truncate(n);
+            let n = decompress_payload(&sector, &mut buf, block_flags)?;
+            if n != remaining {
+                return Err(PayloadError::SizeMismatch {
+                    file_size: remaining,
+                    produced: n,
+                });
+            }
             out.extend_from_slice(&buf);
         } else {
+            if sector.len() != remaining {
+                return Err(PayloadError::SizeMismatch {
+                    file_size: remaining,
+                    produced: sector.len(),
+                });
+            }
             out.extend_from_slice(&sector);
         }
     }
 
-    if out.len() < file_size as usize {
+    if out.len() != file_size as usize {
         return Err(PayloadError::SizeMismatch {
             file_size: file_size as usize,
             produced: out.len(),
@@ -245,4 +282,119 @@ pub fn decode_block(
     }
     out.truncate(file_size as usize);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn zlib(data: &[u8]) -> Vec<u8> {
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(data).unwrap();
+        let mut packed = vec![COMPRESSION_ZLIB];
+        packed.extend(encoder.finish().unwrap());
+        packed
+    }
+
+    #[test]
+    fn compressed_single_unit_is_decoded() {
+        let plain = vec![b'Q'; 256];
+        let packed = zlib(&plain);
+        assert!(packed.len() < plain.len());
+        assert_eq!(
+            decode_block(
+                &packed,
+                0,
+                plain.len() as u32,
+                flags::SINGLE_UNIT | flags::COMPRESS,
+                4096
+            )
+            .unwrap(),
+            plain
+        );
+    }
+
+    #[test]
+    fn legacy_implode_has_no_mask_byte() {
+        // Synthetic PKWARE stream: binary literals, 1 KiB dictionary,
+        // two literals, a back-reference and the end marker.
+        let packed = [0, 4, 0x82, 0x24, 0x25, 0x8f, 0x80, 0x7f];
+        let plain = b"AIAIAIAIAIAIA";
+        assert_eq!(
+            decode_block(
+                &packed,
+                0,
+                plain.len() as u32,
+                flags::SINGLE_UNIT | flags::IMPLODE,
+                4096
+            )
+            .unwrap(),
+            plain
+        );
+        let mut sectors = Vec::new();
+        sectors.extend(8u32.to_le_bytes());
+        sectors.extend((8u32 + packed.len() as u32).to_le_bytes());
+        sectors.extend(packed);
+        assert_eq!(
+            decode_block(&sectors, 0, plain.len() as u32, flags::IMPLODE, 4096).unwrap(),
+            plain
+        );
+    }
+
+    #[test]
+    fn sector_offsets_are_rejected_before_slicing() {
+        for offsets in [[8u32, 99], [4, 9], [9, 8]] {
+            let mut packed = Vec::new();
+            for offset in offsets {
+                packed.extend(offset.to_le_bytes());
+            }
+            packed.push(b'x');
+            assert!(matches!(
+                decode_block(&packed, 0, 1, flags::COMPRESS, 4096),
+                Err(PayloadError::SectorOutOfRange { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn single_unit_short_output_is_an_error() {
+        assert!(matches!(
+            decode_block(b"short", 0, 7, flags::SINGLE_UNIT, 4096),
+            Err(PayloadError::SizeMismatch { .. })
+        ));
+        assert!(matches!(
+            decode_block(
+                &zlib(b"short"),
+                0,
+                30,
+                flags::SINGLE_UNIT | flags::COMPRESS,
+                4096
+            ),
+            Err(PayloadError::SizeMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn unsupported_compression_chain_is_not_partially_decoded() {
+        let mut packed = zlib(&[1; 128]);
+        packed[0] |= COMPRESSION_HUFFMAN;
+        assert!(matches!(
+            decompress_sector(&packed, &mut [0; 128]),
+            Err(PayloadError::UnsupportedCompression { mask: 3 })
+        ));
+    }
+
+    #[test]
+    fn compressed_sector_cannot_borrow_next_sectors_output_space() {
+        let packed = zlib(&[1; 80]);
+        let mut raw = Vec::new();
+        raw.extend(12u32.to_le_bytes());
+        raw.extend((12u32 + packed.len() as u32).to_le_bytes());
+        raw.extend((13u32 + packed.len() as u32).to_le_bytes());
+        raw.extend(packed);
+        raw.push(2);
+        assert!(decode_block(&raw, 0, 65, flags::COMPRESS, 64).is_err());
+    }
 }

@@ -1128,7 +1128,6 @@ fn sweep_every_real_script() {
     let mut resolved = 0usize;
     let mut resolved_uses = 0usize;
     let mut natives_called = 0usize;
-    let mut natives_implemented = 0usize;
     // Natives a script calls that the install it came from does not declare:
     // the M7 number for which Blizzard scripts a map actually needs.
     let mut version_skew_names: BTreeMap<String, usize> = BTreeMap::new();
@@ -1196,7 +1195,6 @@ fn sweep_every_real_script() {
                 let st = program.stats;
                 resolved_uses += st.uses;
                 natives_called += st.natives_called;
-                natives_implemented += st.natives_implemented;
                 // What the map calls that the install it came from does not
                 // declare: the M7 number for "which Blizzard scripts does this
                 // map actually need".

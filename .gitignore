@@ -7,6 +7,8 @@ Cargo.lock.orig
 /.rea
 /rea/*.json
 /.tools/ghidra
+/.tools/profiling/
+/.tools/wasm-bindgen/
 
 # The user's own game install and extracted assets.
 # Nothing Blizzard ships belongs in this repository; we read the install at

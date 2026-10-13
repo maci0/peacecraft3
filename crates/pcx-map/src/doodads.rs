@@ -117,6 +117,13 @@ pub struct TerrainDoodad {
     pub grid_y: u32,
 }
 
+/// Version-8 authored item-table selector and sets of stored word pairs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemDropData {
+    pub table_id: i32,
+    pub sets: Vec<Vec<[u32; 2]>>,
+}
+
 /// A decoded `war3map.doo`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Doodads {
@@ -124,6 +131,7 @@ pub struct Doodads {
     subversion: u32,
     terrain_section_version: u32,
     instances: Vec<Doodad>,
+    item_drops: Vec<Option<ItemDropData>>,
     terrain: Vec<TerrainDoodad>,
     raw: Vec<u8>,
 }
@@ -156,36 +164,45 @@ impl Doodads {
             return Err(Error::BadDoodadMagic(magic));
         }
         let version = u32_at(&bytes, 4)?;
-        if version != DOO_VERSION {
+        if version != DOO_VERSION && version != 8 {
             return Err(Error::UnsupportedDoodadVersion(version));
         }
         let subversion = u32_at(&bytes, 8)?;
         let n = u32_at(&bytes, 12)? as usize;
 
-        let instances_end = DOO_HEADER + n * DOO_RECORD;
-        let terrain_head = instances_end + DOO_TERRAIN_HEAD;
-        if bytes.len() < terrain_head {
-            return Err(Error::DoodadTruncated {
-                have: bytes.len(),
-                need: terrain_head,
-            });
-        }
-        let terrain_section_version = u32_at(&bytes, instances_end)?;
-        let m = u32_at(&bytes, instances_end + 4)? as usize;
-        let need = terrain_head + m * DOO_TERRAIN_RECORD;
-        if need != bytes.len() {
-            return Err(Error::DoodadSize {
-                instances: n,
-                terrain_doodads: m,
-                have: bytes.len(),
-                need,
-            });
-        }
-
-        let mut instances = Vec::with_capacity(n);
-        for i in 0..n {
-            let at = DOO_HEADER + i * DOO_RECORD;
-            let r = &bytes[at..at + DOO_RECORD];
+        let mut cursor = DOO_HEADER;
+        let mut instances = Vec::new();
+        let mut item_drops = Vec::new();
+        for _ in 0..n {
+            let r = bytes
+                .get(cursor..cursor + 38)
+                .ok_or(Error::DoodadTruncated {
+                    have: bytes.len(),
+                    need: cursor + 38,
+                })?;
+            cursor += 38;
+            let drops = if version == 8 {
+                let table_id = u32_at(&bytes, cursor)? as i32;
+                cursor += 4;
+                let count = u32_at(&bytes, cursor)?;
+                cursor += 4;
+                let mut sets = Vec::new();
+                for _ in 0..count {
+                    let item_count = u32_at(&bytes, cursor)?;
+                    cursor += 4;
+                    let mut items = Vec::new();
+                    for _ in 0..item_count {
+                        items.push([u32_at(&bytes, cursor)?, u32_at(&bytes, cursor + 4)?]);
+                        cursor += 8;
+                    }
+                    sets.push(items);
+                }
+                Some(ItemDropData { table_id, sets })
+            } else {
+                None
+            };
+            let creation_number = u32_at(&bytes, cursor)?;
+            cursor += 4;
             instances.push(Doodad {
                 type_id: r[0..4].try_into().unwrap(),
                 variation: u32::from_le_bytes(r[4..8].try_into().unwrap()),
@@ -202,7 +219,30 @@ impl Doodads {
                 ],
                 flags: r[36],
                 life: r[37],
-                creation_number: u32::from_le_bytes(r[38..42].try_into().unwrap()),
+                creation_number,
+            });
+            item_drops.push(drops);
+        }
+        let terrain_section_version = u32_at(&bytes, cursor)?;
+        cursor += 4;
+        let m = u32_at(&bytes, cursor)? as usize;
+        cursor += 4;
+        let terrain_head = cursor;
+        let need = m
+            .checked_mul(DOO_TERRAIN_RECORD)
+            .and_then(|size| cursor.checked_add(size))
+            .ok_or(Error::DoodadSize {
+                instances: n,
+                terrain_doodads: m,
+                have: bytes.len(),
+                need: usize::MAX,
+            })?;
+        if need != bytes.len() {
+            return Err(Error::DoodadSize {
+                instances: n,
+                terrain_doodads: m,
+                have: bytes.len(),
+                need,
             });
         }
 
@@ -223,6 +263,7 @@ impl Doodads {
             subversion,
             terrain_section_version,
             instances,
+            item_drops,
             terrain,
             raw: bytes,
         })
@@ -253,6 +294,12 @@ impl Doodads {
     /// Every placed instance, in file order.
     pub fn instances(&self) -> &[Doodad] {
         &self.instances
+    }
+
+    /// Version-8 item-table data, aligned with the authored instance index.
+    /// Version 7 has no item-table fields and returns None.
+    pub fn item_drops(&self, instance: usize) -> Option<&ItemDropData> {
+        self.item_drops.get(instance)?.as_ref()
     }
 
     /// Every terrain (palette) doodad, in file order.
@@ -297,7 +344,7 @@ impl Doodads {
         out.extend_from_slice(&self.version.to_le_bytes());
         out.extend_from_slice(&self.subversion.to_le_bytes());
         out.extend_from_slice(&(self.instances.len() as u32).to_le_bytes());
-        for d in &self.instances {
+        for (d, drops) in self.instances.iter().zip(&self.item_drops) {
             out.extend_from_slice(&d.type_id);
             out.extend_from_slice(&d.variation.to_le_bytes());
             for v in d.position {
@@ -309,6 +356,18 @@ impl Doodads {
             }
             out.push(d.flags);
             out.push(d.life);
+            if let Some(drops) = drops {
+                out.extend(drops.table_id.to_le_bytes());
+                out.extend((drops.sets.len() as u32).to_le_bytes());
+                for set in &drops.sets {
+                    out.extend((set.len() as u32).to_le_bytes());
+                    for pair in set {
+                        for word in pair {
+                            out.extend(word.to_le_bytes());
+                        }
+                    }
+                }
+            }
             out.extend_from_slice(&d.creation_number.to_le_bytes());
         }
         out.extend_from_slice(&self.terrain_section_version.to_le_bytes());
@@ -325,5 +384,38 @@ impl Doodads {
     /// FNV-1a 64 over [`Self::canonical_bytes`].
     pub fn canonical_hash(&self) -> u64 {
         pcx_mpq::fnv1a64(&self.canonical_bytes())
+    }
+}
+
+#[cfg(test)]
+mod version8_regressions {
+    use super::*;
+    #[test]
+    fn item_sets_do_not_displace_the_creation_number_or_terrain_section() {
+        let mut data = DOO_MAGIC.to_vec();
+        for word in [8u32, 11, 1] {
+            data.extend(word.to_le_bytes());
+        }
+        let mut core = vec![0; 38];
+        core[..4].copy_from_slice(b"TEST");
+        core[36] = 3;
+        core[37] = 128;
+        data.extend(core);
+        data.extend((-1i32).to_le_bytes());
+        for word in [1u32, 2, 25, 0x41424344, 75, 0x45464748, 123, 0, 0] {
+            data.extend(word.to_le_bytes());
+        }
+        let parsed = Doodads::from_bytes(data.clone()).unwrap();
+        assert_eq!(parsed.instances()[0].creation_number, 123);
+        assert_eq!(parsed.instances()[0].life, 128);
+        assert_eq!(parsed.item_drops(0).unwrap().table_id, -1);
+        assert_eq!(
+            parsed.item_drops(0).unwrap().sets,
+            [vec![[25, 0x41424344], [75, 0x45464748]]]
+        );
+        assert_eq!(parsed.canonical_bytes(), data);
+        for length in 0..data.len() {
+            assert!(Doodads::from_bytes(data[..length].to_vec()).is_err());
+        }
     }
 }

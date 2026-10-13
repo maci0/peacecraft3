@@ -12,7 +12,6 @@ mod mainmenu;
 mod mainmenu_scene;
 mod menu_audio;
 mod menu_panel;
-mod menu_sprites;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -40,6 +39,10 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        _ => launch_gui::run(),
+        _ => {
+            launch_gui::app(launch_gui::window_plugin(None), |_| {})
+                .add_plugins(pcx_gfx::performance::PerformanceOverlayPlugin)
+                .run();
+        }
     }
 }

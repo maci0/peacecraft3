@@ -55,8 +55,8 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Install native Rust 1.99
-        run: rustup toolchain install '1.99.0-${{ matrix.target }}' --profile minimal
+      - name: Install latest stable native Rust
+        run: rustup toolchain install 'stable-${{ matrix.target }}' --profile minimal
       - name: Cache Rust dependencies
         uses: actions/cache@v5
         with:
@@ -64,8 +64,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: desktop-${{ matrix.target }}-rust-1.99-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: desktop-${{ matrix.target }}-rust-1.99-
+          key: desktop-${{ matrix.target }}-rust-stable-strict-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: desktop-${{ matrix.target }}-rust-stable-strict-
       - name: Check packaging helper
         run: ${{ matrix.python }} tools/build-desktop.py --self-test
       - name: Build, test, and package

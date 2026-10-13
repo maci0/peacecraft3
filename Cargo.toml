@@ -24,6 +24,9 @@ edition = "2024"
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
 
+[workspace.lints.rust]
+warnings = "deny"
+
 [workspace.dependencies]
 pcx-mpq = { path = "crates/pcx-mpq" }
 pcx-blp = { path = "crates/pcx-blp" }
@@ -56,9 +59,7 @@ panic = "abort"
 [profile.dev]
 opt-level = 1
 
-# naga 26.0.0 emits relaxed atomics with a UniformMemory/WorkgroupMemory
-# bit. Current Vulkan validation rejects that
-# (VUID-StandaloneSpirv-MemorySemantics-10871). vendor/naga is that crate
-# with the wgpu#8391 semantics change, nothing else.
-[patch.crates-io]
-naga = { path = "vendor/naga" }
+[profile.profiling]
+inherits = "release"
+debug = 1
+strip = false

@@ -457,10 +457,6 @@ fn is_casc_install(dir: &Path) -> bool {
 ///   peacecraft3 launch sources [paths...]        classify what it was given
 ///   peacecraft3 launch plan    <mode>            show what a mode would stage
 ///   peacecraft3 launch stage   <mode> <src> <dst>  copy and verify
-pub fn main() -> i32 {
-    main_with(&std::env::args().skip(1).collect::<Vec<_>>())
-}
-
 /// The launcher's argument handling, split out so the GUI and any caller can
 /// run it against an explicit argument list.
 pub fn main_with(args: &[String]) -> i32 {
@@ -528,7 +524,7 @@ pub fn main_with(args: &[String]) -> i32 {
             };
             match stage(&mode, &source, dst) {
                 Ok(st) => {
-                    println!("staged {} -> {}", mode, st.dir.display());
+                    println!("staged {} -> {}", st.mode, st.dir.display());
                     println!("  {} archives, {} bytes", st.archives.len(), st.bytes);
                     for a in &st.archives {
                         println!("    {a}");

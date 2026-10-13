@@ -17,7 +17,7 @@ playback. UI-only resize/click cases pass at 320×240, 640×480, 1280×1024,
 1280×720, 1920×1080, 2560×1080, 3840×2160 and 430×932. Browser-native 2×
 DPI checks pass at 1280×720 and 430×932; DPR emulation alone reported an
 inconsistent physical pixel box and is not used as the DPI oracle. The TFT scene selects its original 18 geosets and 49 textures and
-honours authored wrapping. Full fidelity remains open: the hanging blue panel
+honours authored wrapping. Full fidelity remains open: the grey hanging panel and blue inner button state art
 is located and being decoded but is not rendered, and lighting, particles,
 texture animation, material blending and original options/gameplay remain
 unfinished. Parser and screenshot success do not establish native behavior.
@@ -137,7 +137,7 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
 - [ ] Gate: Reforged Footman loads through the same `pcx-gfx` path as vanilla
 - [ ] `docs/reforged-fixes.md` fix ledger; rows default to `defer`
 
-## M2 — Asset decoders + first Bevy render — **rendering/material gate closed**
+## M2 — Asset decoders + first Bevy render — **render smoke passed; full material fidelity open**
 
 - [x] `pcx-blp`: BLP1 header, 16-entry mip offset/size tables, palette
 - [x] `pcx-blp`: BLP1 direct/palettised mips — planar index + planar alpha
@@ -334,19 +334,13 @@ viewer's terrain tile and the asset-cache plugins — neither is a format gap.
       menu layer and reveals the staging panel. Before/after screenshots
       (`/tmp/opencode/menu-before.png` vs `menu-after.png`) show all six entries
       gone, which can only be produced by a click landing on a menu frame.
-- [ ] **The button's `GlueScreen-Button1-Border.blp` art is NOT shown in the
-      browser.** `load_glue_art` reads a desktop install path, and a browser
-      cannot see those paths, so the frames render without their 9-slice art.
-      The upload path in `web/loader.js` (`add_archive`) opens memory archives
-      but the glue art is never routed through it. Closing this means either
-      serving the archives over HTTP from the page, or wiring
-      `add_archive`/`add_asset` into `load_glue_art`.
-- [ ] **The 3D backdrop (`MainMenu3d.mdx`) and logo (`WarCraftIIILogo.mdx`) are
-      decoded and their bytes carried in `GlueArt`, but not rendered.** They are
-      recorded as booleans only. Honest status: unfinished.
-- [ ] Labels are drawn centred in the frame, per `StandardButtonTextTemplate`'s
-      `JUSTIFYCENTER`/`JUSTIFYMIDDLE`. The frame itself is right-anchored at
-      `1 - 0.015`, which on an 880-wide canvas leaves a 13 px right margin.
+- [x] Original grey outer button plate, TFT scene and transparent TFT logo render
+      from locally served original assets. Parsed authored logo Birth is integrated.
+- [~] Blue inner fill geometry is now parsed from FDF; browser integration proof
+      and authored hover/pushed/disabled state rendering remain open.
+- [~] Labels use centered relative text layout and native frame normalization;
+      full FDF-driven style/text/anchor migration and fidelity remain open.
+- [ ] Hanging panel sprite animation and native composited tint/render behavior.
 
 ## M3 — World: maps, terrain, camera, doodads
 
@@ -389,9 +383,9 @@ The list below is the measured part; the rest of the container surface is tracke
        `war3map.mmp`/`war3mapMap.blp`/`.shd`/`.doo`). A map really carrying one is
        **refused** (`UnprovenContent`) — there is no layout to read it with
 - [ ] `pcx-map`: regions (rects / circles / polygons)
-- [ ] `pcx-map`: `war3map.w3i` map info — player slots, flags, declared object tables
+- [~] `pcx-map`: `war3map.w3i` MapInfo parser exists; complete slot/object semantics and runtime integration remain open
 - [ ] `pcx-map`: preplaced units, item sets, random tables
-- [ ] `pcx-tera`: terrain mesh generation from per-corner indices + slot texture blending
+- [~] `pcx-tera`: corner terrain meshes exist; slot texture blending and world runtime integration remain open
 - [ ] `pcx-tera`: cliff walls, water rendering
 - [ ] Camera: bounds, pitch, pan speed, zoom steps — values from RE
 - [ ] **Gate:** Human campaign mission 1 loads and pans identically
@@ -480,8 +474,8 @@ ship custom objects, and a map whose rawcodes do not resolve is unplayable.
 
 ## M5 — Simulation core
 
-- [ ] `pcx-sim`: deterministic fixed-tick harness (headless, Bevy-free)
-- [ ] Entity store, handles, deterministic iteration order
+- [x] `pcx-sim`: deterministic project fixed-tick movement harness (headless, Bevy-free); original tick/RNG parity remains M6
+- [~] Entity store and deterministic movement iteration exist; original game handles and full gameplay store remain open
 - [ ] Stats model: HP/mana/attack/armour/resistances/regen
 - [ ] Damage pipeline: attack types, mitigation, crit, dodge, block, invuln
 - [ ] Combat abilities, spells, channeling, stacking buffs/debuffs
@@ -508,7 +502,7 @@ different ways and both must work: raw JASS (`war3map.j`, DotA's path) and the e
 trigger graph (`WTG`/`WCT`, Athena's path). The community also spans pre-1.20 and
 post-1.24 APIs in active use simultaneously.
 
-#### `pcx-script` — the raw-JASS front end (done, and it stops at syntax)
+#### `pcx-script` — raw-JASS syntax, resolution and interpreter foundation
 
 - [x] JASS lexer + parser — **46 passing tests** plus the `#[ignore]`d corpus sweep, and
        it parses **1,326 real scripts with round-trip proven on every one**. Corpus:
@@ -592,7 +586,7 @@ post-1.24 APIs in active use simultaneously.
 The two front ends exist and are measured; what remains is the engine. Nothing below is
 closed by the work above:
 
-- [ ] JASS VM: value model, handles, handle casting/wrapping
+- [~] JASS resolver, typed values, interpreter and caller-owned Host exist. Native handle behavior/casts and the game Host remain incomplete.
 - [ ] `WTG` trigger graph → JASS desugar with the original's exact semantics (incl.
        generated-code naming so `GetTriggerName` returns the right string)
 - [ ] `WCT` custom-text script compilation
@@ -624,7 +618,7 @@ milestone, regardless of unit-test count.
 - [ ] Netcode surface (loopback first)
 - [ ] UI parity (HUD, minimap, command card, tooltips, chat)
 - [ ] Audio parity (`.slk` sound-list channels, 3D positioning)
-- [ ] Performance pass (target 60 fps on 4v4 1080p)
+- [~] Deterministic movement work/allocation/state gate exists; extend fixed-work gates to gameplay/rendering as implemented. Report 4v4 1080p FPS observationally, never as a load-dependent pass/fail test.
 
 ---
 
@@ -788,8 +782,53 @@ Format: `date — subsystem — symptom — root cause — status`
 - [x] macOS Intel x86-64 compiled, tested and artifact verified.
 - [x] macOS Apple Silicon ARM64 compiled, tested and artifact verified.
 - [ ] Menu GPU rendering and audio verified on both desktop operating systems.
-      Corrected run `38419274743` at `3055771` succeeded on all four targets.
+      Run `38439725394` at `d31dc67` succeeded on all four targets.
       Downloaded artifact checksums and PE/Mach-O architectures were independently
-      verified. Those artifacts predate the later menu/movie/layout changes;
-      the next push requires a new matrix build.
+      verified, including executable permissions on macOS. These artifacts include
+      movie/layout changes but predate the new FDF/FPS/parser integration.
       Commands and limitations are recorded in `docs/build-desktop.md`.
+
+## Integration audit and performance
+
+- [x] Full milestone/source audit: `docs/implementation-audit.md` records the
+      remaining format, world, gameplay, scripting, campaign, multiplayer and
+      browser dependencies. Historical sweep counts are not completion gates.
+- [x] `AGENTS.md` requires deriving authored data from original assets at build
+      time or runtime; measured constants are still hard-coding.
+- [x] F8 top-right full-window FPS/frame-time overlay: strict toggle test, profiling
+      feature checks and rendered wide/portrait browser placement/resize proof pass.
+- [x] Local profiling helper and doctor: self-process `perf` capture succeeds;
+      ROCm HIP/HSA tools and RADV graphics routes are documented separately.
+      RADV hardware capture passed (9 MB RGP); viewer analysis remains unverified.
+- [x] Movement performance gate measures deterministic allocations, bytes and
+      state digest under concurrent CPU load. Timing is report-only.
+- [~] FDF-derived blue inner fill is implemented; original FDF text is registered
+      for browser loading. Integration render/resize proof remains pending.
+- [!] Original script execution fails closed on unsupported
+      `GetPlayerNeutralPassive` during `common.j` initialization; original
+      campaign completion and native behavior are not established.
+
+### Current implemented slices (2026-10-14)
+
+- Strict workspace check across all targets/features passed; direct registry
+  dependencies are at latest stable releases and compatible transitives refreshed.
+  Rust stable is 1.99.0; native builders install the stable channel and deny warnings.
+- Refreshed CPU integration: 417 passing tests, 24 explicitly ignored original
+  fixtures. Original format checks are separate: unsupported MPQ Huffman/ADPCM
+  remains explicit, and single-unit/IMPLODE branches have synthetic coverage only.
+- MDX checked layers retain authored layer counts, corrected alpha, filter/shading
+  fields, alpha/texture tracks and PRE2 data. Full renderer wiring remains open.
+- World import retains original placements/ownership and metadata values.
+  Human01 resolves 155 units while retaining six named unsupported `sloc` records;
+  Human03 resolves two items. This is data import, not playable campaign proof.
+- ISO9660 discovery: six synthetic test groups pass with network APIs trapped.
+  Transactional in-browser MPQ registration, runtime asset hydration, local audio
+  and cache refresh are implemented pending generated-WASM/browser verification.
+  Unsupported namespaces/installer payloads and conflicting archives fail closed.
+
+- Current release WASM build passed with compiler warnings denied. Generated glue
+  uses matching wasm-bindgen 0.2.129. Rendered F8 toggle/resize and menu clicks while
+  visible pass on desktop/narrow browser views; hiding restores prior pixels.
+- Local ISO file-input discovery and 15 actual WASM archive assertions pass;
+  Chromium audio replacement/reset passes with zero uploads/unexpected requests.
+  Original installer ISO acceptance and full rendering parity remain open.

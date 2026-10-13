@@ -13,3 +13,6 @@ thiserror.workspace = true
 
 [dev-dependencies]
 pcx-mpq.workspace = true
+
+[lints]
+workspace = true

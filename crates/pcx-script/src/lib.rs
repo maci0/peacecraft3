@@ -82,8 +82,9 @@
 //!   errors with the native's name, its declaration and the span of the call,
 //!   which is what `PLAN.md` requires of a missing native. The formatting
 //!   natives are refused because their exact output is not derivable here.
-//! - **Handles.** Only `null` exists, because only a native can mint a handle
-//!   and the host owns them. Handle identity belongs with the host.
+//! - **Handles.** Opaque non-null identity tokens can be supplied by the host.
+//!   Allocation, lifetime, recycling and native numeric IDs belong to the host;
+//!   the interpreter does not invent them.
 //! - **vJass lowering.** `struct` / `library` *rewriting* is JASSHelper's pass.
 //!   An allocate call `T.create()` reaches resolution as a call to the type's
 //!   own name and is refused naming the rewrite; `method`, `cast`, `delegate`
@@ -129,7 +130,7 @@ pub use parser::parse;
 pub use print::{CommentPolicy, PrintOptions};
 pub use resolve::{Prelude, Program, resolve, resolve_with};
 pub use span::{SourceMap, Span};
-pub use value::Value;
+pub use value::{HandleId, Value};
 
 /// Counts a caller can print without walking the tree by hand.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

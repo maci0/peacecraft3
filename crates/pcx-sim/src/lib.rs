@@ -18,6 +18,8 @@
 //! - **Input is data, not behaviour.** The server decides; the client sends
 //!   intent.
 
+pub mod world;
+
 /// Simulation tick duration in milliseconds.
 ///
 /// 1.28c's real sim runs at a fixed step; this is the project's chosen step and

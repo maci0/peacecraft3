@@ -140,7 +140,7 @@ pub const EXTENSIONS: [&str; 7] = ["w3u", "w3t", "w3a", "w3b", "w3d", "w3h", "w3
 
 /// Extensions whose record layout is measured by this crate. The other five
 /// never occur in a shipped map and are refused by [`parse`].
-pub const MEASURED_EXTENSIONS: [&str; 2] = ["w3u", "w3t"];
+pub const MEASURED_EXTENSIONS: [&str; 7] = EXTENSIONS;
 
 /// Byte offset of a map's embedded MPQ archive. `pcx-map` measured this on
 /// all 133 shipped maps; the same opening approach is used here.
@@ -285,6 +285,9 @@ pub struct Mod {
     pub field: Fourcc,
     /// The type word's meaning.
     pub value_type: ValueType,
+    /// The two extra authored selector words in W3A/W3D/W3Q records.
+    /// Their field semantics are not collapsed into a guessed level or index.
+    pub selectors: Option<[u32; 2]>,
     /// The value, wire-decoded.
     pub value: Value,
     /// The four bytes that close the entry. Measured, kept raw; see the
@@ -295,7 +298,7 @@ pub struct Mod {
 impl Mod {
     /// Bytes this entry occupies in the file.
     pub fn wire_len(&self) -> usize {
-        8 + self.value_len() + 4
+        8 + self.selectors.map_or(0, |_| 8) + self.value_len() + 4
     }
 
     fn value_len(&self) -> usize {
@@ -308,6 +311,11 @@ impl Mod {
     fn write(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.field);
         out.extend_from_slice(&self.value_type.word().to_le_bytes());
+        if let Some(selectors) = self.selectors {
+            for word in selectors {
+                out.extend(word.to_le_bytes());
+            }
+        }
         match &self.value {
             Value::Int(w) => out.extend_from_slice(&w.to_le_bytes()),
             Value::Real(f) => out.extend_from_slice(&f.to_bits().to_le_bytes()),
@@ -376,8 +384,10 @@ impl<'a> ObjectFile<'a> {
         if version != VERSION_ONE && version != VERSION_TWO {
             return Err(Error::UnsupportedVersion(version));
         }
-        let base = read_table(data, &mut p)?;
-        let custom = read_table(data, &mut p)?;
+        let indexed =
+            matches!(ext.as_str(), "w3a" | "w3q") || (ext == "w3d" && version >= VERSION_TWO);
+        let base = read_table(data, &mut p, indexed)?;
+        let custom = read_table(data, &mut p, indexed)?;
         if p != data.len() {
             return Err(Error::TrailingBytes {
                 end: p,
@@ -489,7 +499,7 @@ fn read_fourcc(data: &[u8], p: &mut usize, what: &'static str) -> Result<Fourcc,
     Ok(v)
 }
 
-fn read_table(data: &[u8], p: &mut usize) -> Result<Vec<Record>, Error> {
+fn read_table(data: &[u8], p: &mut usize, indexed: bool) -> Result<Vec<Record>, Error> {
     let count = read_u32(data, p, "object count")? as usize;
     let mut out = Vec::with_capacity(count.min(1 << 16));
     for _ in 0..count {
@@ -505,6 +515,14 @@ fn read_table(data: &[u8], p: &mut usize) -> Result<Vec<Record>, Error> {
                 type_word,
                 at: type_at,
             })?;
+            let selectors = if indexed {
+                Some([
+                    read_u32(data, p, "first selector")?,
+                    read_u32(data, p, "second selector")?,
+                ])
+            } else {
+                None
+            };
             let value = match value_type {
                 ValueType::Int => Value::Int(read_u32(data, p, "int value")?),
                 ValueType::Real => Value::Real(f32::from_bits(read_u32(data, p, "real value")?)),
@@ -528,6 +546,7 @@ fn read_table(data: &[u8], p: &mut usize) -> Result<Vec<Record>, Error> {
             mods.push(Mod {
                 field,
                 value_type,
+                selectors,
                 value,
                 end_word,
             });
@@ -1012,18 +1031,28 @@ mod tests {
 
     #[test]
     fn unmeasured_extensions_are_refused() {
-        let bytes = minimal();
-        for name in [
-            "war3map.w3a",
-            "war3map.w3b",
-            "war3map.w3d",
-            "war3map.w3h",
-            "war3map.w3q",
-        ] {
-            match ObjectFile::parse(name, &bytes) {
-                Err(Error::UnmeasuredExtension(e)) => assert_eq!(e, &name[8..]),
-                other => panic!("{name}: expected a refusal, got {other:?}"),
+        assert!(matches!(
+            ObjectFile::parse("war3map.w3z", &minimal()),
+            Err(Error::UnmeasuredExtension(_))
+        ));
+    }
+
+    #[test]
+    fn every_object_family_preserves_its_own_record_width() {
+        for extension in EXTENSIONS {
+            let mut bytes = minimal();
+            let indexed = matches!(extension, "w3a" | "w3q");
+            if indexed {
+                let selectors = [3u32.to_le_bytes(), 7u32.to_le_bytes()].concat();
+                bytes.splice(28..28, selectors);
             }
+            let name = format!("war3map.{extension}");
+            let parsed = ObjectFile::parse(&name, &bytes).unwrap();
+            assert_eq!(
+                parsed.base()[0].mods[0].selectors,
+                indexed.then_some([3, 7])
+            );
+            assert_eq!(parsed.canonical_bytes(), bytes);
         }
     }
 

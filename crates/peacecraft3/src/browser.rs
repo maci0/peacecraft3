@@ -33,12 +33,16 @@
 //! decoding archives from memory. The crate's README is the build and run
 //! recipe.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 use bevy::asset::AssetApp;
 use bevy::asset::io::memory::{Dir, MemoryAssetReader};
-use bevy::asset::io::{AssetSourceBuilder, AssetSourceId, ErasedAssetReader};
+use bevy::asset::io::{
+    AssetReader, AssetReaderError, AssetSourceBuilder, AssetSourceId, ErasedAssetReader,
+    PathStream, Reader,
+};
 use bevy::prelude::*;
 use wasm_bindgen::prelude::*;
 
@@ -125,6 +129,284 @@ fn short_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
+// Resource limits, independent of any shipped asset's size.
+const MEMBER_LIMIT: u32 = 64 * 1024 * 1024;
+const HYDRATION_LIMIT: usize = 256 * 1024 * 1024;
+static ARCHIVES: OnceLock<Mutex<Vec<pcx_mpq::MpqArchive>>> = OnceLock::new();
+static PENDING: OnceLock<Mutex<Option<Vec<pcx_mpq::MpqArchive>>>> = OnceLock::new();
+static REVISION: OnceLock<Mutex<u32>> = OnceLock::new();
+
+fn archives() -> std::sync::MutexGuard<'static, Vec<pcx_mpq::MpqArchive>> {
+    ARCHIVES
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+}
+fn pending() -> std::sync::MutexGuard<'static, Option<Vec<pcx_mpq::MpqArchive>>> {
+    PENDING
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+}
+fn revision() -> std::sync::MutexGuard<'static, u32> {
+    REVISION
+        .get_or_init(|| Mutex::new(0))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+}
+
+/// No priority is inferred from arrival order or filenames. Equal duplicates
+/// are safe; distinct bytes at one member path require installation evidence.
+fn extract_unique(set: &mut [pcx_mpq::MpqArchive], path: &str) -> Result<Vec<u8>, String> {
+    let mut found: Option<(Vec<u8>, String)> = None;
+    for archive in set {
+        let Some(block) = archive.find_block(path) else {
+            continue;
+        };
+        if block.file_size > MEMBER_LIMIT {
+            return Err(format!(
+                "{}: {path}: member exceeds {MEMBER_LIMIT} byte budget",
+                archive.path().display()
+            ));
+        }
+        let source = archive.path().display().to_string();
+        let bytes = archive
+            .extract(path)
+            .map_err(|e| format!("{source}: {path}: {e}"))?;
+        if let Some((prior, prior_source)) = &found {
+            if *prior != bytes {
+                return Err(format!(
+                    "AMBIGUOUS_MEMBER: {path}: unequal bytes in {prior_source} and {source}; archive priority/edition unproven"
+                ));
+            }
+        } else {
+            found = Some((bytes, source));
+        }
+    }
+    found
+        .map(|(bytes, _)| bytes)
+        .ok_or_else(|| format!("MISSING_MEMBER: {path}"))
+}
+
+struct ArchiveAssetReader {
+    memory: MemoryAssetReader,
+}
+impl AssetReader for ArchiveAssetReader {
+    async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
+        if self.memory.root.get_asset(path).is_none() {
+            let name = path.to_string_lossy();
+            let bytes = extract_unique(&mut archives(), &name.replace('/', "\\"))
+                .map_err(|e| AssetReaderError::from(std::io::Error::other(e)))?;
+            add_asset(name.into_owned(), bytes);
+        }
+        AssetReader::read(&self.memory, path).await
+    }
+    async fn read_meta<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
+        AssetReader::read_meta(&self.memory, path).await
+    }
+    async fn read_directory<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Result<Box<PathStream>, AssetReaderError> {
+        AssetReader::read_directory(&self.memory, path).await
+    }
+    async fn is_directory<'a>(&'a self, path: &'a Path) -> Result<bool, AssetReaderError> {
+        AssetReader::is_directory(&self.memory, path).await
+    }
+}
+
+/// Existing native/browser music binding; this does not establish an edition.
+#[wasm_bindgen]
+pub fn menu_music_path() -> String {
+    crate::menu_audio::MENU_MUSIC_PATH.to_owned()
+}
+
+/// Changes once per committed import/clear, never while staging archives.
+#[wasm_bindgen]
+pub fn asset_revision() -> u32 {
+    *revision()
+}
+
+/// Starts a transaction without altering visible archives/assets.
+#[wasm_bindgen]
+pub fn begin_archive_import() {
+    *pending() = Some(Vec::new());
+}
+
+#[wasm_bindgen]
+pub fn cancel_archive_import() {
+    *pending() = None;
+}
+
+/// Validate an archive into the pending transaction; no members become visible.
+#[wasm_bindgen]
+pub fn stage_archive(name: String, bytes: Vec<u8>) -> Result<String, JsValue> {
+    let archive = pcx_mpq::MpqArchive::from_bytes(bytes, &name)
+        .map_err(|e| JsValue::from_str(&format!("{name}: {e}")))?;
+    let mut archive = archive;
+    let summary = describe(&name, &mut archive);
+    pending()
+        .as_mut()
+        .ok_or_else(|| JsValue::from_str("no active archive import"))?
+        .push(archive);
+    Ok(summary)
+}
+
+/// Named extraction from the staged set, including codec and conflict errors.
+#[wasm_bindgen]
+pub fn pending_archive_member(path: String) -> Result<Vec<u8>, JsValue> {
+    let mut guard = pending();
+    let set = guard
+        .as_mut()
+        .ok_or_else(|| JsValue::from_str("no active archive import"))?;
+    extract_unique(set, &path).map_err(|e| JsValue::from_str(&e))
+}
+
+/// Named extraction from committed archives; cached under the original path.
+#[wasm_bindgen]
+pub fn archive_member(path: String) -> Result<Vec<u8>, JsValue> {
+    let bytes = extract_unique(&mut archives(), &path).map_err(|e| JsValue::from_str(&e))?;
+    add_asset(path, bytes.clone());
+    Ok(bytes)
+}
+
+fn hydrate(
+    set: &mut [pcx_mpq::MpqArchive],
+) -> Result<(BTreeMap<String, Vec<u8>>, Vec<String>), String> {
+    let mut assets = BTreeMap::new();
+    let mut notes = Vec::new();
+    let mut total = 0usize;
+    let mut put = |path: &str, alias: Option<&str>, bytes: Vec<u8>| -> Result<(), String> {
+        total = total
+            .checked_add(
+                bytes
+                    .len()
+                    .saturating_mul(if alias.is_some() { 2 } else { 1 }),
+            )
+            .ok_or("hydration size overflow")?;
+        if total > HYDRATION_LIMIT {
+            return Err(format!(
+                "runtime hydration exceeds {HYDRATION_LIMIT} byte budget"
+            ));
+        }
+        if let Some(alias) = alias {
+            assets.insert(normalize(alias), bytes.clone());
+        }
+        assets.insert(normalize(path), bytes);
+        Ok(())
+    };
+    let mut fdf = crate::fdf::Fdf::default();
+    for path in [
+        crate::mainmenu::STANDARD_TEMPLATES_FDF,
+        crate::mainmenu::MAIN_MENU_FDF,
+    ] {
+        let bytes = extract_unique(set, path)?;
+        let text = std::str::from_utf8(&bytes).map_err(|e| format!("{path}: {e}"))?;
+        fdf.parse_into(text).map_err(|e| format!("{path}: {e}"))?;
+        put(path, crate::mainmenu::served_name(path), bytes)?;
+    }
+    let font = crate::mainmenu::MASTER_FONT;
+    put(
+        font,
+        crate::mainmenu::served_name(font),
+        extract_unique(set, font)?,
+    )?;
+    // Backdrop paths come from the selected frame definitions, not a JS list.
+    for frame in fdf.frames() {
+        for path in [
+            frame.props.backdrop_background.as_deref(),
+            frame.props.backdrop_edge.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            match extract_unique(set, path) {
+                Ok(bytes) => put(path, crate::mainmenu::served_name(path), bytes)?,
+                Err(e) if e.starts_with("MISSING_MEMBER:") => notes.push(e),
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    let mut models = 0;
+    for expansion in [false, true] {
+        let (path, alias, directory) = crate::mainmenu_scene::scene_source(expansion);
+        match extract_unique(set, path) {
+            Ok(bytes) => {
+                for texture in crate::mainmenu_scene::texture_paths(&bytes)
+                    .map_err(|e| format!("{path}: {e}"))?
+                {
+                    let raw = extract_unique(set, &texture)?;
+                    let alias = crate::mainmenu_scene::texture_served_name_in(&texture, directory);
+                    put(&texture, Some(&alias), raw)?;
+                }
+                put(path, Some(alias), bytes)?;
+                models += 1;
+            }
+            Err(e) if e.starts_with("MISSING_MEMBER:") => notes.push(e),
+            Err(e) => return Err(e),
+        }
+    }
+    if models == 0 {
+        return Err(
+            "MISSING_MENU_MODEL: neither existing renderer model contract is present".into(),
+        );
+    }
+    let path = crate::menu_panel::LOGO_MODEL;
+    match extract_unique(set, path) {
+        Ok(bytes) => {
+            for texture in
+                crate::mainmenu_scene::texture_paths(&bytes).map_err(|e| format!("{path}: {e}"))?
+            {
+                let alias = (texture.eq_ignore_ascii_case(crate::menu_panel::LOGO_TEXTURE))
+                    .then_some(crate::menu_panel::LOGO_TEXTURE_SERVED);
+                put(&texture, alias, extract_unique(set, &texture)?)?;
+            }
+            put(path, Some(crate::menu_panel::LOGO_MODEL_SERVED), bytes)?;
+        }
+        Err(e) if e.starts_with("MISSING_MEMBER:") => notes.push(e),
+        Err(e) => return Err(e),
+    }
+    for path in [
+        crate::menu_audio::MENU_MUSIC_PATH,
+        r"UI\SoundInfo\UISounds.slk",
+    ] {
+        match extract_unique(set, path) {
+            Ok(bytes) => put(path, None, bytes)?,
+            Err(e) if e.starts_with("AMBIGUOUS_MEMBER:") => return Err(e),
+            Err(e) => notes.push(e),
+        }
+    }
+    notes.push("Edition/build and archive priority remain unverified; only unique or byte-identical members were resolved".into());
+    Ok((assets, notes))
+}
+
+/// Hydrate renderer contracts and authored dependencies before replacing the
+/// visible store. A failure retains the previous store and revision unchanged.
+#[wasm_bindgen]
+pub fn commit_archive_import() -> Result<Vec<String>, JsValue> {
+    let mut guard = pending();
+    let set = guard
+        .as_mut()
+        .ok_or_else(|| JsValue::from_str("no active archive import"))?;
+    let (assets, notes) = hydrate(set).map_err(|e| JsValue::from_str(&e))?;
+    let mut rev = revision();
+    let next = rev
+        .checked_add(1)
+        .ok_or_else(|| JsValue::from_str("asset revision exhausted"))?;
+    clear_store();
+    *archives() = guard
+        .take()
+        .ok_or_else(|| JsValue::from_str("import transaction disappeared"))?;
+    for (path, bytes) in assets {
+        add_asset(path, bytes);
+    }
+    *rev = next;
+    for line in &notes {
+        note(line);
+    }
+    Ok(notes)
+}
+
 // --------------------------------------------------------- launcher wiring ---
 
 /// Replaces the platform default asset source with the in-memory one and starts
@@ -139,7 +421,9 @@ fn configure(app: &mut App) {
         // 0.20: `AssetSourceBuilder::new` takes the reader directly;
         // `default().with_reader(..)` is gone.
         AssetSourceBuilder::new(|| {
-            Box::new(MemoryAssetReader { root: store() }) as Box<dyn ErasedAssetReader>
+            Box::new(ArchiveAssetReader {
+                memory: MemoryAssetReader { root: store() },
+            }) as Box<dyn ErasedAssetReader>
         }),
     );
     app.add_systems(Startup, pump_notes)
@@ -157,9 +441,8 @@ fn pump_notes(mut l: ResMut<launch_gui::Launcher>) {
 /// One-line summary of an archive, as the launcher's log would state it.
 ///
 /// Deliberately counts what the *tables* say and reports the `(listfile)`
-/// outcome rather than claiming a file list: payload decryption and
-/// decompression are still open in `pcx-mpq`, so an archive opened here is not
-/// an archive whose files can be read.
+/// outcome rather than claiming every member can decode: unsupported payload
+/// codecs are reported by named extraction, independently of table parsing.
 fn describe(name: &str, archive: &mut pcx_mpq::MpqArchive) -> String {
     let blocks = archive.block_entries();
     let live = blocks.iter().filter(|b| b.exists()).count();
@@ -187,7 +470,9 @@ fn describe(name: &str, archive: &mut pcx_mpq::MpqArchive) -> String {
 pub fn start() {
     match web_sys::window() {
         Some(_) => {
-            launch_gui::app(launch_gui::window_plugin(Some(CANVAS)), configure).run();
+            launch_gui::app(launch_gui::window_plugin(Some(CANVAS)), configure)
+                .add_plugins(pcx_gfx::performance::PerformanceOverlayPlugin)
+                .run();
         }
         None => note(
             "no DOM here, so there is nothing to render to; \
@@ -220,38 +505,20 @@ pub fn add_asset(path: String, bytes: Vec<u8>) -> usize {
     n
 }
 
-/// Opens an MPQ from the bytes it was given, and reports what its tables say.
-///
-/// This is the decode half of the browser path: `MpqArchive::from_bytes` is the
-/// same reader the desktop uses. The archive itself is not registered as an asset
-/// — these bytes are the whole archive, not something to load by path — and one
-/// that will not parse is reported and dropped rather than half-loaded.
-///
-/// # Limitation: an archive opened here exposes none of its files
-///
-/// This **opens and counts only**. It reads the header and block table, reports
-/// the live block count and whether a `(listfile)` is present, and stops. It does
-/// **not** extract or register any member, so after `add_archive("War3x.mpq", …)`
-/// a call to [`stored_asset`] for `menu3d-exp/mainmenu3d_exp.mdx` still returns
-/// `None`: the store holds only what [`add_asset`] put there by path.
-///
-/// The render path therefore does not depend on it. `web/loader.js` fetches the
-/// scene model and its textures as ordinary files from `web/assets/` and hands
-/// each one to [`add_asset`], which is why a browser can draw the original menu
-/// without any archive support at all. Extracting a *user-supplied* archive into
-/// the store would need a bounded extraction step here — walk the listfile,
-/// decrypt and decompress each member, cap the count and total bytes, report the
-/// refused ones — and that is deliberately not written yet, because nothing in
-/// the current flow needs it.
+/// Opens and retains one archive for explicit named extraction. File order does
+/// not establish priority. ISO imports use the transactional staging API.
 #[wasm_bindgen]
 pub fn add_archive(name: String, bytes: Vec<u8>) -> String {
     let key = normalize(&name);
     if key.is_empty() {
-        note(format!("✕ {name:?} is not a path anything can open"));
         return format!("rejected: {name:?} is not a path");
     }
     let line = match pcx_mpq::MpqArchive::from_bytes(bytes, &key) {
-        Ok(mut archive) => describe(&key, &mut archive),
+        Ok(mut archive) => {
+            let line = describe(&key, &mut archive);
+            archives().push(archive);
+            line
+        }
         Err(e) => format!("✕ {} would not open as an MPQ: {e}", short_name(&key)),
     };
     note(&line);
@@ -288,14 +555,33 @@ pub(crate) fn stored_bytes(path: &str) -> Option<Vec<u8>> {
     if key.is_empty() {
         return None;
     }
-    store()
-        .get_asset(Path::new(&key))
-        .map(|b| b.value().to_vec())
+    if let Some(bytes) = store().get_asset(Path::new(&key)) {
+        return Some(bytes.value().to_vec());
+    }
+    match extract_unique(&mut archives(), &path.replace('/', "\\")) {
+        Ok(bytes) => {
+            add_asset(path.to_owned(), bytes.clone());
+            Some(bytes)
+        }
+        Err(e) => {
+            note(e);
+            None
+        }
+    }
 }
 
 /// Drops everything in memory and reports how many entries went.
 #[wasm_bindgen]
 pub fn drop_assets() -> usize {
+    archives().clear();
+    *pending() = None;
+    let count = clear_store();
+    let mut rev = revision();
+    *rev = rev.checked_add(1).expect("asset revision exhausted");
+    count
+}
+
+fn clear_store() -> usize {
     let gone = std::mem::take(&mut *held());
     for entry in &gone {
         store().remove_asset(Path::new(&entry.path));
@@ -373,8 +659,11 @@ mod tests {
         assert!(selftest().contains("still served by the default asset source: true"));
         // The same bytes spelled the MPQ way: one entry, not two.
         assert_eq!(add_asset("WAR3.MPQ".into(), bytes), 12);
-        assert_eq!(stored_assets(), vec!["war3.mpq".to_string()]);
-        assert_eq!(drop_assets(), 1);
+        assert_eq!(
+            stored_assets(),
+            vec!["war3.mpq".to_string(), "WAR3.MPQ".to_string()]
+        );
+        assert_eq!(drop_assets(), 2);
         assert!(stored_assets().is_empty());
     }
 

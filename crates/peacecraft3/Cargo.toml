@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 description = "Faithful Warcraft III reimplementation on the Bevy engine"
 
+[features]
+profile-cpu = ["bevy/trace_chrome"]
+profile-gpu = ["pcx-gfx/profile-gpu"]
+
 [dependencies]
 pcx-mpq.workspace = true
 pcx-sim.workspace = true
@@ -28,3 +32,6 @@ wasm-bindgen = "0.2"
 # `Window`, for the one capability question the browser entry point asks: is
 # there a DOM to attach a canvas to?
 web-sys = { version = "0.3", features = ["Window"] }
+
+[lints]
+workspace = true

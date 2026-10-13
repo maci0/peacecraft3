@@ -23,3 +23,6 @@ jpeg-decoder = "0.3"
 pcx-mdl.workspace = true
 pcx-sim.workspace = true
 pcx-tga.workspace = true
+
+[lints]
+workspace = true

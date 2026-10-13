@@ -261,6 +261,7 @@ pub fn run(install: &Path, model: &str) -> Result<(), crate::Error> {
             }),
             ..default()
         }))
+        .add_plugins(crate::performance::PerformanceOverlayPlugin)
         .insert_resource(Viewer {
             install,
             model,
@@ -319,7 +320,7 @@ fn spawn_once(
         pcx_mdl::Mdlx::parse(&viewer.bytes).unwrap_or_else(|e| panic!("{}: {e}", viewer.model));
     let bones = parsed.bones(&viewer.bytes).unwrap_or_default();
     let pivots = parsed.pivots(&viewer.bytes).unwrap_or_default();
-    let anims = model_anims(&viewer.bytes, &viewer.model);
+    let anims = model_anims(&viewer.bytes);
     let rest_by_vertex_count: std::collections::HashMap<usize, crate::LoadedMesh> = model
         .meshes
         .iter()
@@ -412,7 +413,6 @@ fn spawn_once(
 
     commands.insert_resource(ViewerCache {
         model: Some(model),
-        anims,
         bones,
         pivots,
         rest_by_vertex_count,
@@ -763,7 +763,6 @@ fn build_clip(
 #[derive(Resource, Default)]
 struct ViewerCache {
     model: Option<crate::LoadedModel>,
-    anims: Vec<pcx_mdl::GeosetAnim>,
     bones: Vec<pcx_mdl::Bone>,
     pivots: pcx_mdl::Pivots,
     /// Rest-pose meshes keyed by vertex count, so a spawned mesh asset can be
@@ -774,7 +773,7 @@ struct ViewerCache {
 }
 
 /// Cached animation records for the shown model.
-fn model_anims(bytes: &[u8], source: &str) -> Vec<pcx_mdl::GeosetAnim> {
+fn model_anims(bytes: &[u8]) -> Vec<pcx_mdl::GeosetAnim> {
     pcx_mdl::Mdlx::parse(bytes)
         .and_then(|m| m.geoset_anims(bytes))
         .unwrap_or_default()

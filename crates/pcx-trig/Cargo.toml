@@ -10,3 +10,6 @@ description = "war3map.wts / war3map.wtg / war3map.wct scripting-side map files"
 pcx-mpq.workspace = true
 pcx-map.workspace = true
 thiserror.workspace = true
+
+[lints]
+workspace = true

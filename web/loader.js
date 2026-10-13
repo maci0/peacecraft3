@@ -17,7 +17,14 @@ import init, {
   selftest,
   stored_asset,
   stored_assets,
+  begin_archive_import, cancel_archive_import, stage_archive,
+  pending_archive_member, commit_archive_import, archive_member,
+  asset_revision, menu_music_path,
 } from './pkg/peacecraft3.js';
+import { discoverIso, importIsoCandidates } from './iso/import.js';
+import { clickDescriptor } from './iso/audio.js';
+let localImportActive = new URLSearchParams(location.search).has('local');
+function registerServedAsset(name, bytes) { return localImportActive ? 0 : add_asset(name, bytes); }
 
 // The original glue-screen frames, extracted from the shipped archives into
 // `assets/` next to this page. A browser cannot read an install directory, so
@@ -26,6 +33,8 @@ import init, {
 //
 // Each name here is the one `mainmenu::served_name` maps the game's own path to.
 const GLUE = [
+  ['menu/standardtemplates.fdf', './assets/standardtemplates.fdf'],
+  ['menu/mainmenu.fdf', './assets/mainmenu.fdf'],
   ['menu/button.blp', './assets/button.blp'],
   ['menu/border.blp', './assets/border.blp'],
   ['menu/bg.blp', './assets/bg.blp'],
@@ -51,7 +60,7 @@ async function loadGlueArt() {
         continue;
       }
       const bytes = new Uint8Array(await r.arrayBuffer());
-      const n = add_asset(name, bytes);
+      const n = registerServedAsset(name, bytes);
       say(`glue art ${name}: ${n} bytes -> ${stored_asset(name) ? 'readable' : 'NOT readable'}`);
     } catch (err) {
       fail(`glue art ${url}`, err);
@@ -65,7 +74,7 @@ async function loadGlueArt() {
     try {
       const r = await fetch(url);
       if (!r.ok) { panelMissing.push(name); continue; }
-      add_asset(name, new Uint8Array(await r.arrayBuffer()));
+      registerServedAsset(name, new Uint8Array(await r.arrayBuffer()));
       panelOk += 1;
     } catch (err) {
       panelMissing.push(name);
@@ -212,7 +221,7 @@ async function loadScene(scene) {
     const r = await fetch(scene.url);
     if (r.ok) {
       const bytes = new Uint8Array(await r.arrayBuffer());
-      const n = add_asset(scene.model, bytes);
+      const n = registerServedAsset(scene.model, bytes);
       modelOk = stored_asset(scene.model) !== undefined;
       say(`${scene.model}: ${n} bytes -> ${modelOk ? 'readable' : 'NOT readable'}`);
     } else {
@@ -228,7 +237,7 @@ async function loadScene(scene) {
     try {
       const r = await fetch(`./assets/${scene.dir}/${file}`);
       if (!r.ok) { missing.push(file); continue; }
-      add_asset(`${scene.dir}/${file}`, new Uint8Array(await r.arrayBuffer()));
+      registerServedAsset(`${scene.dir}/${file}`, new Uint8Array(await r.arrayBuffer()));
       got += 1;
     } catch (err) {
       missing.push(file);
@@ -265,7 +274,7 @@ try {
   await init();
 } catch (error) {
   fail('wasm module', error);
-  for (const id of ['archives', 'self', 'drop']) document.getElementById(id).disabled = true;
+  for (const id of ['archives', 'self', 'drop', 'iso', 'iso-import', 'iso-cancel']) document.getElementById(id).disabled = true;
   throw error;
 }
 say('wasm module loaded');
@@ -280,6 +289,7 @@ for (const el of [document.getElementById('self'), document.getElementById('drop
         say(`in memory: ${stored_assets().join(', ') || '(nothing)'}`);
       } else {
         say(`dropped ${drop_assets()} entries`);
+        globalThis.peacecraft3Audio?.resetLocalAssets();
       }
     } catch (err) {
       fail(el.id, err);
@@ -309,9 +319,94 @@ window.peacecraft3 = {
   drop_assets,
   selftest,
   stored_asset,
-  stored_assets,
+  stored_assets, begin_archive_import, cancel_archive_import, stage_archive,
+  pending_archive_member, commit_archive_import, archive_member,
+  asset_revision, menu_music_path, discoverIso, importIsoCandidates,
 };
+
+const isoInput = document.getElementById('iso');
+const isoImport = document.getElementById('iso-import');
+const isoCancel = document.getElementById('iso-cancel');
+const isoProgress = document.getElementById('iso-progress');
+const isoCandidates = document.getElementById('iso-candidates');
+const isoProvenance = document.getElementById('iso-provenance');
+let isoFile, isoDiscovery, isoController, isoBusy = false;
+function isoState(busy) {
+  isoBusy = busy; isoInput.disabled = busy;
+  document.getElementById('archives').disabled = busy;
+  document.getElementById('drop').disabled = busy;
+  isoCancel.disabled = !busy;
+  isoImport.disabled = busy || !isoDiscovery?.candidates.length;
+  for (const input of isoCandidates.querySelectorAll('input')) input.disabled = busy;
+}
+isoCancel.addEventListener('click', () => isoController?.abort());
+isoInput.addEventListener('change', async () => {
+  const file = isoInput.files[0];
+  if (!file || isoBusy) return;
+  isoFile = file; isoDiscovery = null; isoCandidates.replaceChildren();
+  isoController = new AbortController(); isoState(true);
+  let lastProgress = 0;
+  try {
+    isoDiscovery = await discoverIso(file, { signal: isoController.signal, onProgress(work) {
+      if (performance.now() - lastProgress > 100) {
+        isoProgress.textContent = `Inspecting locally: ${work.bytesRead.toLocaleString()} bytes in ${work.reads} bounded reads`;
+        lastProgress = performance.now();
+      }
+    } });
+    isoProvenance.textContent = JSON.stringify({ provenance: isoDiscovery.provenance, diagnostics: isoDiscovery.diagnostics }, null, 2);
+    isoDiscovery.candidates.forEach((candidate, index) => {
+      const label = document.createElement('label'), input = document.createElement('input');
+      input.type = 'checkbox'; input.value = String(index); input.checked = isoDiscovery.candidates.length === 1;
+      label.append(input, document.createTextNode(` ${candidate.path} — ${candidate.archiveSize.toLocaleString()} bytes at ${candidate.offset}`));
+      isoCandidates.append(label);
+    });
+    isoProgress.textContent = `${isoDiscovery.candidates.length} content-validated MPQ candidates; edition/build not established`;
+    if (!isoDiscovery.candidates.length) say('No directly supported MPQ payload. See source diagnostics for the local decoder blocker.', true);
+  } catch (error) {
+    isoProgress.textContent = error.name === 'AbortError' ? 'Inspection cancelled; current assets retained' : String(error);
+    fail('local ISO discovery', error);
+  } finally { isoState(false); }
+});
+async function applyLocalAudio(provenance) {
+  const sources = {};
+  try {
+    const metadataPath = 'UI\\SoundInfo\\UISounds.slk';
+    const descriptor = clickDescriptor(archive_member(metadataPath), metadataPath);
+    sources.click = { ...descriptor, blob: new Blob([archive_member(descriptor.path)]), provenance: { ...descriptor.provenance, source: provenance } };
+  } catch (error) { fail('local click audio', error); }
+  try {
+    const path = menu_music_path();
+    sources.music = { path, blob: new Blob([archive_member(path)]), provenance: { source: provenance, binding: 'existing native menu music contract', volume: 'original user setting unverified' } };
+  } catch (error) { fail('local music', error); }
+  if (!globalThis.peacecraft3Audio?.setLocalAssets) throw new Error('Local audio setter unavailable');
+  globalThis.peacecraft3Audio.resetLocalAssets();
+  try { await globalThis.peacecraft3Audio.setLocalAssets(sources); }
+  catch (error) { fail('local audio format/codec', error); }
+  say('Local music retains browser loop/volume policy; original user music-volume setting is unverified');
+}
+isoImport.addEventListener('click', async () => {
+  if (isoBusy || !isoDiscovery) return;
+  const selected = [...isoCandidates.querySelectorAll('input:checked')].map(input => isoDiscovery.candidates[Number(input.value)]);
+  isoController = new AbortController(); isoState(true);
+  const priorLocalMode = localImportActive; localImportActive = true;
+  try {
+    const result = await importIsoCandidates(isoFile, isoDiscovery, selected, window.peacecraft3, { signal: isoController.signal, onProgress(work) {
+      isoProgress.textContent = work.phase === 'hydrate' ? 'Validating authored model dependencies locally…' : `Reading MPQs locally: ${work.imported.toLocaleString()} / ${work.total.toLocaleString()} bytes`;
+    } });
+    localImportActive = true;
+    isoProvenance.textContent = JSON.stringify(result, null, 2);
+    for (const line of result.diagnostics) say(line, true);
+    await applyLocalAudio(result.provenance);
+    isoProgress.textContent = `Committed local assets at revision ${result.revision}; ${result.canonicalPaths.length} runtime paths. Edition/build unverified.`;
+    window.dispatchEvent(new CustomEvent('peacecraft3-local-import', { detail: result }));
+  } catch (error) {
+    isoProgress.textContent = error.name === 'AbortError' ? 'Import cancelled; current assets retained' : String(error);
+    localImportActive = priorLocalMode;
+    fail('local ISO import', error);
+  } finally { isoState(false); }
+});
 
 // Expose initialized APIs and attach controls before the larger scene assets
 // arrive. Each renderer waits for its own required bytes in the memory store.
-await loadGlueArt();
+if (!localImportActive) await loadGlueArt();
+else say('Local-only asset mode: waiting for an ISO or archive selection');

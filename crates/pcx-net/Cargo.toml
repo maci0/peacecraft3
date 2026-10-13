@@ -21,4 +21,7 @@ thiserror.workspace = true
 pcx-mpq.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tungstenite = { version = "0.28", optional = true, default-features = false, features = ["handshake"] }
+tungstenite = { version = "0.30", optional = true, default-features = false, features = ["handshake"] }
+
+[lints]
+workspace = true

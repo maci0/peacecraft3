@@ -41,3 +41,22 @@ machine load; report live timing and FPS separately.
 
 Do not add attribution to generated tools or agents in source, documentation,
 commit messages or pull requests.
+
+## Rust and build policy
+
+Use the current stable Rust release and Rust 2024 edition. Keep direct dependencies
+at their latest stable releases and refresh compatible transitive dependencies in
+the lockfiles; verify API changes with the affected targets and features.
+
+Compiler warnings are build errors. Fix the underlying issue, keep test-only
+helpers out of production builds, and avoid blanket lint suppression. Preserve
+useful format and runtime APIs rather than deleting needed behavior to silence a
+diagnostic. Use stable standard-library APIs when they improve ownership, error
+handling or clarity; keep unsafe operations narrowly scoped with explicit safety
+contracts. Validate asset sizes and offsets before allocation or indexing, and
+propagate errors with asset/source context.
+
+Evaluate newly stabilized Rust features against the actual code. Apply relevant
+improvements without introducing unnecessary unsafe code or changing original
+game semantics. Run targeted tests, strict compile checks and affected native/WASM
+builds before recording a change as complete.

@@ -1,0 +1,21 @@
+pcx-rpl 1
+# Synthetic only: this verifies scheduler ordering, not original gameplay.
+scenario same-tick-ordering
+map synthetic.ordering
+ticks 3
+seed 7
+asset-mode vanilla
+spawn 0 0 0
+spawn 1 65536 0
+at 0 first 0 move 65536 0
+at 0 second 0 stop
+at 0 probe rng
+at 1 move-again 0 move 1 0
+expect 0 units 2
+expect 0 unit 1 0 0 0 idle
+expect 0 timer 0 first
+expect 0 timer 1 second
+expect 0 rng-draws 1
+expect 1 unit 1 0 1 0 target 1 0
+expect 2 unit 1 0 1 0 idle
+expect 2 unit 2 1 65536 0 idle

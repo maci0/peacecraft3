@@ -2,13 +2,10 @@
 //!
 //! # What a value is
 //!
-//! `null`, `boolean`, `integer`, `real`, `string` and a `code` reference.
-//! There is no handle variant: only a native can mint a handle, every native
-//! this stage can run returns one of the five above, and every host that
-//! implements `Host::native` ([`crate::eval`]) decides how its own handle
-//! values are identified. A null handle is [`Value::Null`], and handle
-//! identity therefore reduces to null-versus-null here, which is the only
-//! comparison this stage can honestly make.
+//! `null`, `boolean`, `integer`, `real`, `string`, `code` and opaque host handles.
+//! [`HandleId`] is an identity token supplied by the host, not an engine pointer
+//! or a guessed `GetHandleId` result. The host owns allocation, lifetime and
+//! recycling semantics. No native in this crate mints a handle.
 //!
 //! # Where each rule comes from
 //!
@@ -43,6 +40,19 @@ impl FunctionId {
     }
 }
 
+/// An opaque non-null host identity. This token has no prescribed mapping to
+/// native engine handle numbers; absent handles are represented by `Value::Null`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct HandleId(std::num::NonZeroU64);
+impl HandleId {
+    pub fn new(token: std::num::NonZeroU64) -> Self {
+        Self(token)
+    }
+    pub fn token(self) -> u64 {
+        self.0.get()
+    }
+}
+
 /// A JASS value. `String` is owned rather than interned: the engine's string
 /// table is a handle table owned by the host, and copying bytes loses nothing
 /// a handle comparison would decide.
@@ -55,6 +65,7 @@ pub enum Value {
     Real(f32),
     Str(String),
     Code(FunctionId),
+    Handle(HandleId),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -65,6 +76,7 @@ pub enum Class {
     Real,
     Str,
     Code,
+    Handle,
 }
 
 impl Class {
@@ -77,6 +89,7 @@ impl Class {
             Class::Real => "real",
             Class::Str => "string",
             Class::Code => "code",
+            Class::Handle => "handle",
         }
     }
 }
@@ -90,6 +103,7 @@ impl Value {
             Value::Real(_) => Class::Real,
             Value::Str(_) => Class::Str,
             Value::Code(_) => Class::Code,
+            Value::Handle(_) => Class::Handle,
         }
     }
 
@@ -140,6 +154,7 @@ impl std::fmt::Display for Value {
             Value::Real(r) => write!(f, "{r}"),
             Value::Str(s) => f.write_str(s),
             Value::Code(id) => write!(f, "function#{}", id.0),
+            Value::Handle(id) => write!(f, "host-handle#{}", id.token()),
         }
     }
 }
@@ -150,8 +165,8 @@ impl std::fmt::Display for Value {
 pub enum OpError {
     /// `>` and friends on a value that is not a number.
     Ordered(Class, Class),
-    /// `==` / `!=` between two different classes. JASS has no cross-class
-    /// equality, not even against `null`.
+    /// `==` / `!=` between incompatible classes after supported numeric
+    /// promotion and nullable comparisons have been handled.
     EqualityMismatch(Class, Class),
     /// One operand is a string and the other is not.
     Concat(Class, Class),
@@ -174,11 +189,9 @@ impl OpError {
                 a.name(),
                 b.name()
             ),
-            OpError::EqualityMismatch(a, b) => format!(
-                "`==` and `!=` need two values of the same type, got {} and {}",
-                a.name(),
-                b.name()
-            ),
+            OpError::EqualityMismatch(a, b) => {
+                format!("`==` and `!=` cannot compare {} and {}", a.name(), b.name())
+            }
             OpError::Concat(a, b) => format!(
                 "`+` concatenates two strings; got {} and {}. Vanilla has no \
                  implicit conversion to string, so the operand needs its own \
@@ -335,7 +348,7 @@ fn order(lhs: &Value, rhs: &Value) -> Result<std::cmp::Ordering, OpError> {
     }
 }
 
-/// Same-class equality, with the integer/real pair promoted the way
+/// Same-class equality and nullable string/handle checks, with the integer/real pair promoted the way
 /// arithmetic promotes it. Two integers compare exactly.
 fn equal_classes(lhs: &Value, rhs: &Value) -> Result<bool, OpError> {
     match (lhs, rhs) {
@@ -346,6 +359,11 @@ fn equal_classes(lhs: &Value, rhs: &Value) -> Result<bool, OpError> {
         (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
         (Value::Str(a), Value::Str(b)) => Ok(a == b),
         (Value::Code(a), Value::Code(b)) => Ok(a == b),
+        (Value::Handle(a), Value::Handle(b)) => Ok(a == b),
+        (Value::Handle(_), Value::Null)
+        | (Value::Null, Value::Handle(_))
+        | (Value::Str(_), Value::Null)
+        | (Value::Null, Value::Str(_)) => Ok(false),
         (Value::Null, Value::Null) => Ok(true),
         _ => Err(OpError::EqualityMismatch(lhs.class(), rhs.class())),
     }
@@ -366,5 +384,103 @@ fn add(lhs: &Value, rhs: &Value) -> Result<Value, OpError> {
             Pair::Reals(a, b) => Ok(Value::Real(a + b)),
             Pair::Bad(e) => Err(e),
         },
+    }
+}
+
+#[cfg(test)]
+mod handle_tests {
+    use super::*;
+    use crate::{Host, Vm, parse, resolve};
+    fn handle(token: u64) -> Value {
+        Value::Handle(HandleId::new(std::num::NonZeroU64::new(token).unwrap()))
+    }
+    #[test]
+    fn opaque_handles_have_identity_and_null_equality_without_integer_conversion() {
+        for (lhs, rhs, same) in [
+            (handle(1), handle(1), true),
+            (handle(1), handle(2), false),
+            (handle(1), Value::Null, false),
+            (Value::Null, handle(1), false),
+        ] {
+            assert_eq!(binary(BinOp::Eq, &lhs, &rhs).unwrap(), Value::Bool(same));
+            assert_eq!(binary(BinOp::Ne, &lhs, &rhs).unwrap(), Value::Bool(!same));
+        }
+        assert_eq!(handle(1).as_int(), None);
+        assert!(binary(BinOp::Eq, &handle(1), &Value::Int(1)).is_err());
+        assert!(binary(BinOp::Add, &handle(1), &handle(1)).is_err());
+    }
+    #[test]
+    fn native_supplied_handle_survives_globals_arrays_arguments_and_null_checks() {
+        let source = "type timer extends handle\nnative Make takes nothing returns timer\nnative Inspect takes timer t returns boolean\nglobals\ntimer retained = null\ntimer array timers\nendglobals\nfunction main takes nothing returns boolean\nlocal timer t = Make()\nset retained = t\nset timers[3] = retained\nreturn timers[3] == t and t != null and Inspect(t)\nendfunction\n";
+        let program = resolve(&parse(source).unwrap()).unwrap();
+        struct Fixture;
+        impl Host for Fixture {
+            fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+                match (name, args) {
+                    ("Make", []) => Ok(handle(31)),
+                    ("Inspect", [value]) => Ok(Value::Bool(*value == handle(31))),
+                    _ => Err(format!("unsupported {name}")),
+                }
+            }
+        }
+        let mut vm = Vm::new(&program, Fixture);
+        assert_eq!(vm.call("main", &[]).unwrap(), Value::Bool(true));
+        assert_eq!(vm.global("retained"), handle(31));
+        assert_eq!(vm.global_at("timers", 3), handle(31));
+    }
+}
+
+#[cfg(test)]
+mod nullable_string_tests {
+    use super::*;
+    use crate::{NullHost, Vm, parse, resolve};
+    #[test]
+    fn equality_and_inequality_cover_both_orders_and_null_null() {
+        for text in ["present", ""] {
+            let present = Value::Str(text.into());
+            for (left, right) in [(&present, &Value::Null), (&Value::Null, &present)] {
+                assert_eq!(binary(BinOp::Eq, left, right).unwrap(), Value::Bool(false));
+                assert_eq!(binary(BinOp::Ne, left, right).unwrap(), Value::Bool(true));
+            }
+        }
+        assert_eq!(
+            binary(BinOp::Eq, &Value::Null, &Value::Null).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            binary(BinOp::Ne, &Value::Null, &Value::Null).unwrap(),
+            Value::Bool(false)
+        );
+        for numeric in [Value::Int(0), Value::Real(0.0)] {
+            for other in [Value::Null, Value::Str(String::new())] {
+                for (left, right) in [(&numeric, &other), (&other, &numeric)] {
+                    for op in [BinOp::Eq, BinOp::Ne] {
+                        assert_eq!(
+                            binary(op, left, right),
+                            Err(OpError::EqualityMismatch(left.class(), right.class()))
+                        );
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn nullable_string_checks_accept_present_and_absent_values_without_numeric_coercion() {
+        let source = "function Checked takes string text returns string\nif text == null then\nreturn \"absent\"\nendif\nreturn text\nendfunction\n";
+        let program = resolve(&parse(source).unwrap()).unwrap();
+        let mut vm = Vm::new(&program, NullHost);
+        assert_eq!(
+            vm.call("Checked", &[Value::Null]).unwrap(),
+            Value::Str("absent".into())
+        );
+        assert_eq!(
+            vm.call("Checked", &[Value::Str("present".into())]).unwrap(),
+            Value::Str("present".into())
+        );
+        assert_eq!(
+            binary(BinOp::Ne, &Value::Null, &Value::Str(String::new())).unwrap(),
+            Value::Bool(true)
+        );
+        assert!(binary(BinOp::Eq, &Value::Null, &Value::Int(0)).is_err());
     }
 }

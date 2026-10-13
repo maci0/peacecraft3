@@ -56,6 +56,15 @@
           <button id="sound" type="button" aria-pressed="false">Mute sound</button>
           <button id="fullscreen" type="button">Fullscreen</button>
         </div>
+        <div class="row" style="margin-top:1em">
+          <label>Local ISO <input id="iso" type="file" accept=".iso,application/x-iso9660-image" /></label>
+          <button id="iso-import" type="button" disabled>Import selected MPQs</button>
+          <button id="iso-cancel" type="button" disabled>Cancel import</button>
+        </div>
+        <p class="hint">ISO contents stay on this device. Unsupported installers are diagnosed locally. Archive order and edition are never inferred from filenames.</p>
+        <output id="iso-progress" role="status" aria-live="polite"></output>
+        <div id="iso-candidates" class="row"></div>
+        <details><summary>Local source provenance and diagnostics</summary><pre id="iso-provenance" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:16em;overflow:auto"></pre></details>
         <ul id="log" role="status" aria-live="polite"></ul>
       </fieldset>
 

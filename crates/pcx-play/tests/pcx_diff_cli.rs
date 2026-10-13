@@ -55,3 +55,50 @@ fn the_cli_reports_unchanged_and_the_first_divergence() {
     assert_eq!(code, 0);
     assert_eq!(stdout, "unchanged\n");
 }
+
+#[test]
+fn script_traces_compare_and_incompatible_schemas_are_refused() {
+    use pcx_play::campaign::{ChapterTrace, NativeRecord};
+    use pcx_play::scripts::AssetIdentity;
+    use pcx_script::Value;
+    let a = ChapterTrace {
+        chapter: "synthetic".into(),
+        identity: AssetIdentity {
+            edition: "synthetic".into(),
+            version: "fixture".into(),
+            source: "memory".into(),
+        },
+        sources: Vec::new(),
+        ticks: 1,
+        calls: Vec::new(),
+        natives: vec![NativeRecord {
+            sequence: 0,
+            tick: Some(0),
+            name: "Observed".into(),
+            args: Vec::new(),
+            result: Value::Bool(true),
+        }],
+        gates: Vec::new(),
+    };
+    let mut b = a.clone();
+    b.natives[0].result = Value::Bool(false);
+    let a_path = write_trace("script-a.trace", &a.encode());
+    let b_path = write_trace("script-b.trace", &b.encode());
+    assert_eq!(diff(&a_path, &a_path), ("unchanged\n".into(), "".into(), 0));
+    let (stdout, stderr, code) = diff(&a_path, &b_path);
+    assert_eq!(code, 1);
+    assert_eq!(stderr, "");
+    assert!(
+        stdout.contains("tick=0 field=script.event[0].native:Observed"),
+        "{stdout}"
+    );
+    let unit = write_trace(
+        "unit-for-schema.trace",
+        &run(&smoke(), &smoke_config()).unwrap().encode(),
+    );
+    let (_, stderr, code) = diff(&a_path, &unit);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("trace schemas"));
+    let malformed = write_trace("invalid-script.trace", b"pcx-script-trace 2\n");
+    assert_eq!(diff(&a_path, &malformed).2, 2);
+}

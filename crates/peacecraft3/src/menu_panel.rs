@@ -63,11 +63,13 @@ pub const LOGO_ANCHOR_UNITS: (f32, f32) = (0.13, 0.04);
 ///
 /// Expected values for the fixture test only. The renderer uses
 /// [`LogoData::quad`], which is parsed.
+#[cfg(test)]
 pub const LOGO_QUAD_MEASURED: (f32, f32, f32, f32) =
     (-0.112_089_999, -0.058_200_001, 0.111_460_000, 0.053_300_000);
 
 /// The textures and sequences the model is expected to carry, for the fixture
 /// test.
+#[cfg(test)]
 pub const LOGO_BIRTH_MS_EXPECTED: f64 = 500.0;
 
 /// One cubic-Bézier key, as the model stores it.
@@ -151,6 +153,7 @@ pub struct LogoSequence {
 impl LogoSequence {
     /// Length in milliseconds.
     #[must_use]
+    #[cfg(test)]
     pub fn duration(&self) -> u32 {
         self.end.saturating_sub(self.start)
     }
@@ -273,6 +276,7 @@ impl LogoData {
 
     /// The artwork's aspect ratio.
     #[must_use]
+    #[cfg(test)]
     pub fn quad_aspect(&self) -> f32 {
         if self.quad_height() == 0.0 {
             1.0
@@ -489,9 +493,6 @@ pub fn load_logo(desktop: Option<&std::path::Path>) -> LogoAssets {
 
 /// The paths a browser must serve for the logo.
 #[must_use]
-pub fn served_names() -> [&'static str; 2] {
-    [LOGO_MODEL_SERVED, LOGO_TEXTURE_SERVED]
-}
 
 /// Marker for the logo sprite.
 #[derive(Component, Debug)]

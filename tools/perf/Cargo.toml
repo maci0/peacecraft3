@@ -1,0 +1,20 @@
+[package]
+name = "peacecraft-perf"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+
+[workspace]
+
+[dependencies]
+pcx-sim = { path = "../../crates/pcx-sim" }
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = false
+debug = true
+
+[lints.rust]
+warnings = "deny"

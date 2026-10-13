@@ -12,6 +12,8 @@
 
 use bevy::asset::RenderAssetUsages;
 
+pub mod performance;
+pub mod mdx_runtime;
 pub mod viewer;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;

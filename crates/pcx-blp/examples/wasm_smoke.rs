@@ -9,7 +9,7 @@
 
 use pcx_blp::Header;
 use pcx_mdl::Mdlx;
-use pcx_sim::{Command, FX_ONE, Fx, Input, Rng, World, step};
+use pcx_sim::{Command, FX_ONE, Input, Rng, World, step};
 
 /// Exit 1: a BLP decodes from memory and produces the right shape.
 fn check_blp() -> i32 {

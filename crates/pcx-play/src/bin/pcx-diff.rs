@@ -20,10 +20,20 @@ fn run() {
     }
     let left = load(&args[1]);
     let right = load(&args[2]);
-    match pcx_play::first_divergence(&left, &right) {
-        None => {
-            println!("unchanged");
+    let divergence = match (&left, &right) {
+        (Loaded::Units(left), Loaded::Units(right)) => {
+            pcx_play::first_divergence(left, right).map(|d| d.to_string())
         }
+        (Loaded::Script(left), Loaded::Script(right)) => {
+            pcx_play::script_trace::first_script_divergence(left, right).map(|d| d.to_string())
+        }
+        _ => {
+            eprintln!("pcx-diff: cannot compare unit-state and script-execution trace schemas");
+            std::process::exit(2);
+        }
+    };
+    match divergence {
+        None => println!("unchanged"),
         Some(divergence) => {
             println!("{divergence}");
             std::process::exit(1);
@@ -32,7 +42,13 @@ fn run() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn load(path: &str) -> pcx_play::Trace {
+enum Loaded {
+    Units(pcx_play::Trace),
+    Script(pcx_play::campaign::ChapterTrace),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load(path: &str) -> Loaded {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -40,7 +56,14 @@ fn load(path: &str) -> pcx_play::Trace {
             std::process::exit(2);
         }
     };
-    match pcx_play::Trace::decode(&bytes) {
+    let decoded = if bytes.starts_with(b"pcx-script-trace ") {
+        pcx_play::campaign::ChapterTrace::decode(&bytes).map(Loaded::Script)
+    } else {
+        pcx_play::Trace::decode(&bytes)
+            .map(Loaded::Units)
+            .map_err(|e| e.to_string())
+    };
+    match decoded {
         Ok(trace) => trace,
         Err(error) => {
             eprintln!("pcx-diff: {path} is not a canonical trace: {error}");

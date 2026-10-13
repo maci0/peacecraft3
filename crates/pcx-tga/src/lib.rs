@@ -61,8 +61,8 @@
 //!   correct output, not a failure. Only 2 more 32bpp files are uniformly
 //!   opaque; the remaining 142 use alpha for real.
 //! * **Nothing exercises colour-mapped images, 8/16-bit depths or
-//!   right-to-left rows.** Those are refused with a typed
-//!   [`Error::Unsupported`] rather than guessed at. 16-bit packing is
+//!   right-to-left rows.** Colour maps and unsupported depths are refused.
+//!   Right-to-left ordering follows the Truevision specification. 16-bit packing is
 //!   implemented because it is unambiguous in the public spec, but no shipped
 //!   file reaches that branch.
 //!
@@ -420,9 +420,6 @@ fn resolve(h: &Header) -> Result<(usize, usize, Packing), Unsupported> {
     if h.colour_map_bytes().is_none() {
         return Err(Unsupported::ColourMapType(h.colour_map_type));
     }
-    if h.is_right_to_left() {
-        return Err(Unsupported::RightToLeft);
-    }
     let packing = match h.pixel_depth {
         24 => Packing::Bgr,
         32 => Packing::Bgra,
@@ -517,11 +514,20 @@ pub fn decode_with(d: &[u8], h: &Header) -> Result<Vec<u8>, Error> {
         }
     }
 
-    Ok(if h.origin() == Origin::BottomLeft {
-        flip_vertically(&raw, h.width as usize, h.height as usize)
-    } else {
-        raw
-    })
+    if h.origin() == Origin::BottomLeft {
+        raw = flip_vertically(&raw, h.width as usize, h.height as usize);
+    }
+    if h.is_right_to_left() && h.width != 0 {
+        for row in raw.chunks_exact_mut(h.width as usize * 4) {
+            for x in 0..h.width as usize / 2 {
+                let opposite = h.width as usize - 1 - x;
+                for channel in 0..4 {
+                    row.swap(x * 4 + channel, opposite * 4 + channel);
+                }
+            }
+        }
+    }
+    Ok(raw)
 }
 
 /// Borrow pixel `i` of an RGBA8 buffer as a fixed-size array.
@@ -1017,10 +1023,7 @@ mod tests {
         rtl[17] = 0x10;
         let hdr = Header::parse(&rtl).unwrap();
         assert!(hdr.is_right_to_left());
-        assert!(matches!(
-            decode_with(&rtl, &hdr),
-            Err(Error::Unsupported(Unsupported::RightToLeft))
-        ));
+        assert_eq!(decode_with(&rtl, &hdr).unwrap(), [0, 0, 0, 255]);
     }
 
     #[test]
@@ -1206,5 +1209,53 @@ mod tests {
             "footer split changed on {build}"
         );
         assert_eq!(fully_transparent, 39, "all-zero-alpha count changed");
+    }
+}
+
+#[cfg(test)]
+mod orientation_regressions {
+    use super::*;
+
+    #[test]
+    fn raw_and_rle_honor_all_four_authored_origins() {
+        // Four asymmetric synthetic pixels, arranged in top-left output order.
+        let pixels = [[3u8, 2, 1], [6, 5, 4], [9, 8, 7], [12, 11, 10]];
+        let expected = [1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255];
+        for (descriptor, order) in [
+            (0x20, [0, 1, 2, 3]),
+            (0x30, [1, 0, 3, 2]),
+            (0x00, [2, 3, 0, 1]),
+            (0x10, [3, 2, 1, 0]),
+        ] {
+            for image_type in [2, 10] {
+                let mut data = vec![0; HEADER_LEN];
+                data[2] = image_type;
+                data[12..14].copy_from_slice(&2u16.to_le_bytes());
+                data[14..16].copy_from_slice(&2u16.to_le_bytes());
+                data[16] = 24;
+                data[17] = descriptor;
+                // One four-pixel literal RLE packet crosses the row boundary.
+                if image_type == 10 {
+                    data.push(3);
+                }
+                for index in order {
+                    data.extend(pixels[index]);
+                }
+                assert_eq!(
+                    decode(&data).unwrap().1,
+                    expected,
+                    "type={image_type} descriptor={descriptor}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_right_origin_image_does_not_panic() {
+        let mut data = vec![0; HEADER_LEN];
+        data[2] = 2;
+        data[16] = 24;
+        data[17] = 0x10;
+        assert!(decode(&data).unwrap().1.is_empty());
     }
 }

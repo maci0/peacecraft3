@@ -11,3 +11,6 @@ pcx-mpq.workspace = true
 pcx-blp.workspace = true
 pcx-tga.workspace = true
 thiserror.workspace = true
+
+[lints]
+workspace = true

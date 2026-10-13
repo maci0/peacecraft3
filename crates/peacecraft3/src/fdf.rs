@@ -12,6 +12,13 @@
 //! Scope: `Frame "TYPE" "NAME" [INHERITS [WITHCHILDREN] "TEMPLATE"] { … }` blocks
 //! and the handful of properties listed in [`Props`]. Comments (`//`) are
 //! stripped; everything else is ignored, not guessed at.
+//!
+//! **One line, one record.** A frame's `{` and `}` are expected on their own
+//! lines with each property on its own line, which is how both shipped files are
+//! written (265 frames parse from them). A property sharing the header's line, or
+//! a `}` sharing a property's line, is not read — so the parser would silently
+//! drop it. `{}` on one line therefore leaves the block open and is reported as
+//! [`FdfError::Unterminated`] rather than accepted.
 
 use std::collections::HashMap;
 
@@ -275,6 +282,11 @@ impl Fdf {
     }
 
     /// Every frame, in definition order.
+    ///
+    /// Needed in production on wasm, where the ISO hydration path walks the parsed
+    /// frames, and by the parser's own tests on every target. On native it has no
+    /// production caller, so it is not compiled there and cannot warn.
+    #[cfg(any(test, target_arch = "wasm32"))]
     #[must_use]
     pub fn frames(&self) -> &[Frame] {
         &self.frames

@@ -341,7 +341,7 @@ pub struct LanHost {
 impl LanHost {
     /// Binds and starts advertising `name`.
     pub fn bind(name: &str, map: &str, max_players: u8) -> Result<Self, TransportError> {
-        let mut transport = UdpTransport::bind(&format!("0.0.0.0:{LAN_PORT}"))?;
+        let transport = UdpTransport::bind(&format!("0.0.0.0:{LAN_PORT}"))?;
         let game_port = transport
             .socket
             .as_ref()

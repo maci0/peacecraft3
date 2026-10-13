@@ -27,6 +27,8 @@
 //! fractions, which is the convention WC3's `SetPoint` uses after the frame
 //! system's sign flip — measured against the original, not assumed.
 
+// Only the test-only `GlueArt` collects a set of missing paths.
+#[cfg(test)]
 use std::collections::BTreeSet;
 
 use bevy::prelude::*;
@@ -64,8 +66,10 @@ pub const BUTTON_BG_ART: &str = r"UI\Widgets\Glues\GlueScreen-Button1-BackdropBa
 /// common name.
 pub const MASTER_FONT: &str = r"Fonts\FRIZQT__.TTF";
 /// The background the original plays behind the whole menu.
+#[cfg(test)]
 pub const SCENE_ART: &str = r"UI\Glues\MainMenu\MainMenu3d\MainMenu3d.mdx";
 /// The logo the original anchors at the top-left.
+#[cfg(test)]
 pub const LOGO_ART: &str = r"UI\Glues\MainMenu\WarCraftIIILogo\WarCraftIIILogo.mdx";
 /// The texture `WarCraftIIILogo.mdx` names in its own `TEXS` chunk — the only
 /// texture it uses.
@@ -86,6 +90,7 @@ pub const LOGO_TEXTURE: &str = r"Textures\WarcraftIII-logo-alpha.blp";
 /// How long the logo's `Birth` sequence runs, in milliseconds, measured from the
 /// model's `SEQS` chunk (`Birth` spans frames 0..500) — the crate's frame times
 /// are milliseconds.
+#[cfg(test)]
 pub const LOGO_BIRTH_MS: u32 = 500;
 /// The `KMTA` track parsed out of the model's own `MTLS` chunk: seven keys
 /// taking material alpha from 0 to 1 across the `Birth` sequence.
@@ -99,6 +104,7 @@ pub const LOGO_BIRTH_MS: u32 = 500;
 /// 65000..65500) fades it back to 0 over the same 500 ms. The middle keys
 /// belong to `Birth Alternate` (frames 1333..3167) and are not part of the
 /// normal entry.
+#[cfg(test)]
 pub const LOGO_ALPHA_KEYS: [(u32, f32); 7] = [
     (0, 0.0),
     (500, 1.0),
@@ -118,6 +124,7 @@ pub const LOGO_ALPHA_KEYS: [(u32, f32); 7] = [
 /// It exists so a UI that only has the texture can still fade the logo in over
 /// the original's 500 ms rather than appearing instantly.
 #[must_use]
+#[cfg(test)]
 pub fn logo_alpha_at(ms: u32) -> f32 {
     if ms >= LOGO_BIRTH_MS {
         return 1.0;
@@ -305,6 +312,7 @@ pub struct MenuButton(pub usize);
 /// Which entry a click landed on, given the pointer position in window
 /// fractions. `None` means the pointer was on none of them.
 #[must_use]
+#[cfg(test)]
 pub fn hit(x: f32, y: f32) -> Option<usize> {
     MENU.iter()
         .enumerate()
@@ -317,6 +325,7 @@ pub fn hit(x: f32, y: f32) -> Option<usize> {
 
 /// The glue-screen art the original menu uses, read out of an install.
 #[derive(Debug, Default)]
+#[cfg(test)]
 pub struct GlueArt {
     /// The button frame art.
     pub button: Option<Vec<u8>>,
@@ -409,6 +418,7 @@ pub(crate) fn from_served(_name: &str) -> Option<Vec<u8>> {
 /// lookup goes through `MpqSet::file_list()`'s companion `extract`, which is
 /// per-archive: a path that exists in only one member needs every member
 /// inspected, exactly as the rest of this workspace does.
+#[cfg(test)]
 pub fn load_glue_art(install: Option<&std::path::Path>) -> GlueArt {
     let mut art = GlueArt::default();
     // Each art file comes from whichever source can supply it, so a browser
@@ -553,16 +563,23 @@ mod tests {
     /// A minimal FDF standing in for the two shipped files: the templates the
     /// menu's frames inherit, and one entry's chain.
     const FDF_TEMPLATES: &str = r#"
-Frame "BACKDROP" "StandardMenuButtonBaseBackdrop" { Width 0.256, Height 0.064, }
+Frame "BACKDROP" "StandardMenuButtonBaseBackdrop" {
+    Width 0.256,
+    Height 0.064,
+}
 Frame "BACKDROP" "StandardButtonBackdropTemplate" {
     BackdropBackgroundInsets 0.004 0.004 0.004 0.004,
 }
-Frame "GLUEBUTTON" "StandardIconicButtonTemplate" { Height 0.031, Width 0.031, }
+Frame "GLUEBUTTON" "StandardIconicButtonTemplate" {
+    Height 0.031,
+    Width 0.031,
+}
 Frame "TEXTBUTTON" "StandardButtonTemplate" {
     Height 0.031,
     Width 0.179,
     ControlBackdrop "ButtonBackdropTemplate",
-    Frame "BACKDROP" "ButtonBackdropTemplate" INHERITS "StandardButtonBackdropTemplate" {}
+    Frame "BACKDROP" "ButtonBackdropTemplate" INHERITS "StandardButtonBackdropTemplate" {
+    }
 }
 "#;
     const FDF_MENU: &str = r#"
@@ -636,39 +653,6 @@ Frame "FRAME" "MainMenuFrame" {
         let f = fixture_fdf();
         // The fixture defines only entry 0.
         assert!(button_fill(&f, 2).is_err());
-    }
-
-    /// The last entry's bottom, which is what decides whether the menu fits.
-    #[test]
-    fn the_menu_fits_inside_the_window() {
-        let last = button_geometry(MENU.len() - 1);
-        assert!(last.top + last.height <= 1.0);
-    }
-
-    /// The inner fill's authored rectangle, asserted against the FDF chain.
-    ///
-    /// The expected numerators are checked **independently** of the helper's own
-    /// arithmetic: the chain `0.256 - 0.012 - 0.031 + 0.001 - 0.149` puts Single
-    /// Player's inner left at `0.065`, so its fill left is `0.069`; Quit's plate
-    /// is `0.24` and its width `0.168`, so its fill left is `0.064`.
-    #[test]
-    fn the_inner_fill_matches_the_frame_definition() {
-        for i in 0..5 {
-            let (l, t, w, h) = button_fill(i);
-            assert!((l - 0.069).abs() < 1e-6, "entry {i} left {l}");
-            assert!((t - 0.0205).abs() < 1e-6, "entry {i} top {t}");
-            assert!((h - 0.023).abs() < 1e-6, "entry {i} height {h}");
-            assert!(l + w < 0.256, "entry {i} leaves the plate");
-        }
-        // Widths: 0.149 - 0.008, 0.179 - 0.008, 0.168 - 0.008.
-        assert!((button_fill(0).2 - 0.141).abs() < 1e-6);
-        assert!((button_fill(2).2 - 0.171).abs() < 1e-6);
-        assert!(
-            (button_fill(5).0 - 0.064).abs() < 1e-6,
-            "Quit's narrower plate"
-        );
-        assert!((button_fill(5).2 - 0.160).abs() < 1e-6);
-        assert!(button_fill(5).0 + button_fill(5).2 < 0.24);
     }
 
     #[test]

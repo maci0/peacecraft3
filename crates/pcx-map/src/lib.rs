@@ -131,7 +131,14 @@ pub mod info;
 pub mod minimap;
 pub mod shadows;
 
-pub use doodads::{Doodad, Doodads, TerrainDoodad};
+pub mod pathing;
+pub mod regions;
+pub mod units;
+pub use pathing::{Pathing, PathingError};
+pub use regions::{Region, RegionBounds, RegionError, Regions};
+pub use units::{RandomUnit, UnitPlacement, UnitPlacementError, Units};
+
+pub use doodads::{Doodad, Doodads, ItemDropData, TerrainDoodad};
 pub use info::{Force, MapInfo, Player};
 pub use minimap::{Marker, MinimapImage, MinimapImageKind, MinimapMarkers};
 pub use shadows::Shadows;
@@ -177,6 +184,14 @@ pub mod magic {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("map extraction: {0}")]
+    Extraction(#[from] pcx_mpq::Error),
+    #[error("map pathing: {0}")]
+    Pathing(#[from] pathing::PathingError),
+    #[error("map regions: {0}")]
+    Regions(#[from] regions::RegionError),
+    #[error("unit placements: {0}")]
+    Units(#[from] units::UnitPlacementError),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("bad magic {0:?}, expected HM3W")]
@@ -207,13 +222,13 @@ pub enum Error {
         have_after_header: usize,
         need: usize,
     },
-    #[error("unsupported map-info version {0}; 1.28c and 1.29b both write 18")]
+    #[error("unsupported map-info version {0}; supported versions are 18 and 25")]
     UnsupportedInfoVersion(u32),
     #[error("map info: {0}")]
     InfoFraming(#[from] info::FramingViolation),
     #[error("bad doodad magic {0:?}, expected W3do")]
     BadDoodadMagic([u8; 4]),
-    #[error("unsupported doodad version {0}; only 7 ships, and 8+ adds unproved item-drop fields")]
+    #[error("unsupported doodad version {0}; supported versions are 7 and 8")]
     UnsupportedDoodadVersion(u32),
     #[error("doodad file is {have} bytes; the declared counts need {need}")]
     DoodadTruncated { have: usize, need: usize },
@@ -1300,10 +1315,10 @@ mod tests {
             return;
         };
         let mut raw = m.extract("war3map.doo").unwrap();
-        raw[4..8].copy_from_slice(&8u32.to_le_bytes());
+        raw[4..8].copy_from_slice(&9u32.to_le_bytes());
         assert!(matches!(
             Doodads::from_bytes(raw),
-            Err(Error::UnsupportedDoodadVersion(8))
+            Err(Error::UnsupportedDoodadVersion(9))
         ));
     }
 

@@ -1,0 +1,40 @@
+import init, * as api from '/web/pkg/peacecraft3.js';
+import { discoverIso, importIsoCandidates } from '/web/iso/import.js';
+import { clickDescriptor } from '/web/iso/audio.js';
+import { isoFixture, mpqFixture, menuMembers } from './fixtures.mjs';
+let checks = 0;
+const check = (condition, message) => { if (!condition) throw Error(message); checks++; };
+try {
+  await init();
+  const musicPath = api.menu_music_path();
+  const members = menuMembers(musicPath);
+  const file = new File([isoFixture([{ name: 'NOT-NAMED.MPQ;1', bytes: mpqFixture(members) }])], 'synthetic-local.iso');
+  const discovery = await discoverIso(file), before = api.asset_revision();
+  api.begin_archive_import(); api.stage_archive('staging-proof', mpqFixture(members));
+  check(api.asset_revision() === before, 'staging changed revision');
+  check(api.stored_assets().length === 0, 'staging exposed partial assets'); api.cancel_archive_import();
+  const result = await importIsoCandidates(file, discovery, discovery.candidates, api);
+  check(result.revision === before + 1, 'commit must increment revision exactly once');
+  const namedPath = 'Synthetic\\NamedOnly.txt';
+  const named = api.archive_member(namedPath);
+  check(new TextDecoder().decode(named) === 'named extraction without a listfile', 'actual Rust named extraction failed');
+  check(api.stored_asset('menu3d/mainmenu3d.mdx')?.length > 0, 'model alias hydration missing');
+  check(api.stored_asset('menu3d/texture.blp')?.length === 4, 'authored model texture hydration missing');
+  check(api.stored_asset('menu/standardtemplates.fdf')?.length > 0, 'FDF alias hydration missing');
+  check(api.stored_asset('menu.ttf')?.length > 0, 'font alias hydration missing');
+  const click = clickDescriptor(api.archive_member('UI\\SoundInfo\\UISounds.slk'), 'UI\\SoundInfo\\UISounds.slk');
+  check(click.settings.volume === 37 / 127, 'audio volume was not derived');
+  check(api.archive_member(click.path).length === 60, 'actual Rust click extraction failed');
+  check(api.archive_member(musicPath).length === 60, 'music contract extraction failed');
+  const priorPaths = api.stored_assets(), priorRevision = api.asset_revision();
+  const conflict = { ...members, 'Fonts\\FRIZQT__.TTF': new TextEncoder().encode('unequal synthetic font') };
+  const conflictingFile = new File([isoFixture([{ name: 'A.BIN;1', bytes: mpqFixture(members) }, { name: 'B.BIN;1', bytes: mpqFixture(conflict) }])], 'synthetic-conflict.iso');
+  const conflicts = await discoverIso(conflictingFile); let error;
+  try { await importIsoCandidates(conflictingFile, conflicts, conflicts.candidates, api); } catch (e) { error = String(e); }
+  check(error?.includes('AMBIGUOUS_MEMBER'), 'unequal archive bytes did not fail closed');
+  check(api.asset_revision() === priorRevision, 'failed commit changed revision');
+  check(JSON.stringify(api.stored_assets()) === JSON.stringify(priorPaths), 'failed commit exposed partial assets');
+  api.begin_archive_import(); api.stage_archive('equal-1', mpqFixture(members)); api.stage_archive('equal-2', mpqFixture(members));
+  api.commit_archive_import(); check(api.asset_revision() === priorRevision + 1, 'equal duplicates should commit once');
+  postMessage({ ok: true, result, checks, selftest: api.selftest(), audio: { click, musicPath, music: [...api.archive_member(musicPath)], clickBytes: [...api.archive_member(click.path)] } });
+} catch (error) { postMessage({ ok: false, error: String(error), stack: error?.stack }); }
