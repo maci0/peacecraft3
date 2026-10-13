@@ -52,9 +52,13 @@
 //! plausible-but-wrong collision shape lets units walk through walls, which is
 //! the worst failure mode available here. See [`CollisionShape`].
 
+mod geoset1800;
 mod material;
 mod material1800;
 mod particle2;
+pub use geoset1800::{
+    GeosetStreams1800, SkinRecord1800, SkinStream1800, StoredGeosetBlock, TangentStream1800,
+};
 pub use material::{MaterialLayer, TextureFrameTrack};
 pub use material1800::{MaterialLayer1800, MaterialTrack1800, SubTexture1800};
 pub use particle2::Particle2Properties;
@@ -154,6 +158,8 @@ pub enum Error {
         at: usize,
         tag: [u8; 4],
     },
+    #[error("duplicate geoset sub-block {tag:?} at +{at}")]
+    DuplicateGeosetTag { at: usize, tag: [u8; 4] },
     #[error("chunk {chunk} is {size} bytes, not a whole number of {stride}-byte records")]
     RaggedRecords {
         chunk: &'static str,

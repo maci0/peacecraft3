@@ -154,6 +154,9 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
       from the verified 105,602-byte CASC asset. Bevy mesh construction passes;
       explicit stored material parsing also passes. Shader semantics, TANG/SKIN
       and actual rendering remain unsupported/unverified.
+      Stored-only v1800 TANG/SKIN readers now retain the HD Footman's 40,142
+      records and wide joint/weight words; strict mesh import still refuses
+      weighted HD. Joint lookup, BPOS, conversion and GPU behavior remain open.
 - [ ] `docs/reforged-fixes.md` fix ledger; rows default to `defer`
 
 ## M2 — Asset decoders + first Bevy render — **render smoke passed; full material fidelity open**
