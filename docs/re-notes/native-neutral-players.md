@@ -338,3 +338,95 @@ step, and no meaning was assigned from the unresolved literal's name/address.
 initializer and an unverified dispatch address do not identify an editor/build
 field, prove fallback state/lifetime, or justify hard-coded branch results.
 The old unsigned failure-path observation remains independent of those gaps.
+
+
+## Callback producer and leading-field failure boundary
+
+This follow-up uses GNU objdump 2.47 against the exact Legacy executable SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+It does not reopen/retry REA, execute the game, or add new provider Evidence IDs.
+The retained snapshot/profile and prior Evidence remain those recorded above.
+The reviewed preceding 19,612 bytes are preserved, SHA-256
+`e42117bf223b4a34be01127ec487c6dd0110da3a3ae12e441b53d2158d842f83`.
+Raw executable bytes stay local.
+
+### Bounded coverage and identities
+
+All intervals below are half-open. The initial callback/initializer windows
+include adjacent padding/functions; only the bodies ending at `0x71fbc0` and
+`0x472942` establish the callback/initializer findings. Following calls was
+restricted to the metadata-leading-field reader path. The parser window is
+partial, not its entire body; trailing partial instructions are not interpreted.
+
+| Inspected VA range | Bytes | SHA-256 of supplied executable range |
+| --- | ---: | --- |
+| `0x71fb90..0x71fd10` | 384 | `e95a73514af02fde310e8dc9f865eb961eae2dde04648db45d49813f8ad3e185` |
+| `0x4728a0..0x4729c0` | 288 | `f186c82ce7fb5972a4aa917b9c6554dd3f2759da97dbc431e4e0f0849ab61ecd` |
+| `0x71e8d0..0x71ead0` | 512 | `cd73df88d2bf5e468d9857ee2dd6215e0bc1e1b0837fa5fbe7657605bdc34c08` |
+| `0x45c280..0x45c340` | 192 | `1b8e46279fafb4d99ccd94b84dd2b9731aebd4f3980a77dce00f52cc4ca4d507` |
+| `0x45c130..0x45c1b0` | 128 | `199a43d070f5f3f75381504ea47f7c267e69fc2d4a54d1a6423c98209a1d9fd1` |
+| `0xea9c90..0xea9cb0` | 32 | `1157bc2546646569c749253211a42cf48f8adced724e68fac6fa22ac693118cb` |
+
+### Producer path: physical field, not semantic substitution
+
+`0x71fb90` reads its third stack argument as a record pointer. When its second
+argument is zero, `0x71fbaf..0x71fbbc` forwards the first argument, record `+0`
+and record `+8` to `0x71e8d0`. The prior wrapper supplies the metadata pointer
+at record `+0`. Its nonzero branch instead forwards record `+4` and `+0xc` to
+`0x71f590`; that separate path was not inspected. The dispatcher has not yet
+proved which branch is selected for the retained getter's input.
+
+In the selected parser window, ESI receives the first argument and EBX the
+second (the metadata destination). At `0x71e913`, `0x45c280` reads an initial
+word into a local. An unsigned comparison rejects values above `0x19` by
+setting EAX to zero and jumping outside this window to `0x71f570`. Values
+below `0x10` skip the two leading destination reads. For initial values
+`0x10..0x19`, `0x71e92f..0x71e93d` calls `0x45c2b0` on metadata `+0`, then
+metadata **`+4`**. This locates a concrete producer, conditional on that tag and
+branch. Calling the initial word a format/version tag is inference from its
+control role; no authored field name is assigned here.
+
+The directly called `0x45c2b0` requests four bytes through `0x45c130`. On success,
+it reads a DWORD at `(source +4) - (source +8) + (source +0x14)`, writes that
+DWORD to its destination and advances source `+0x14` by four. Thus the physical
+representation is a four-byte x86 little-endian word, with no visible numeric
+conversion. Signedness, units and editor/build semantics do not follow from
+this copy. `0x45c280` has the same visible four-byte read behavior.
+
+### Defaults and failures remain distinct
+
+The complete `0x4728a0..0x472942` initializer zeros DWORDs at object
+`+0x408..+0x43c` (four-byte increments), `+0x3850`, and the unaligned `+0x3879`,
+then returns the object. It has no calls and **does not write object `+4`**.
+Combined with the previously inspected `0x6f9310`, neither initializer supplies
+an established leading-field default. The caller's allocation/previous contents
+remain relevant, especially when the initial parser tag is below `0x10`.
+
+`0x45c130` returns zero if its unsigned end position exceeds source `+0x10`,
+or if the directly dispatched refill at source vtable `+8` fails. Those failure
+paths set source cursor `+0x14` to source `+0x10` plus one (32-bit arithmetic).
+The four-byte reader then **leaves its destination untouched** and returns the
+source pointer, not a per-read Boolean. The parser does not test a Boolean
+between its two leading reads. Its later overall completion/error propagation
+is outside this window; the earlier getter unsigned sentinel branch does not
+prove how this parser failure is translated.
+
+The wrapper's directly referenced literal at `0xea9c90` contains `.w3i` followed
+by a terminator. This is shipped-byte evidence of a W3I-associated wrapper;
+it is not proof of the dispatcher ABI, exact archive member/input stream,
+field name, or actual map context selected at runtime.
+
+### Frozen blocker and one next action
+
+The conditional physical writer is identified; semantic identity and default
+are not. `GetPlayerNeutralPassive` remains unsupported, and original campaign
+execution remains blocked. No Host constants or behavior are inferred from the
+getter's static branch results.
+
+The next specific action is a bounded entry inspection of **`0x70e320`** to
+establish how the known `.w3i` literal and `0x71fb90` callback are used, which
+callback branch it selects, and whether it initializes/preserves the leading
+metadata destination on missing input. Start with `0x70e320..0x70e520` only;
+follow a directly evidenced producer/error edge only if needed. This function
+was not inspected here. Runtime applicability, context lifetime and field-name
+corroboration remain separate gates even if that dispatch connection closes.

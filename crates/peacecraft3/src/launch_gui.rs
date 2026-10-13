@@ -82,7 +82,6 @@ const DISABLED_BG: Color = Color::srgb(0.086, 0.098, 0.125);
 const DISABLED_FG: Color = Color::srgb(0.36, 0.35, 0.32);
 const WARN: Color = crate::mainmenu::LABEL;
 const PANEL_ART: &str = crate::mainmenu::BUTTON_BG_ART;
-const FONT_ART: &str = crate::mainmenu::MASTER_FONT;
 
 #[derive(Component)]
 struct Wc3Panel;
@@ -477,7 +476,8 @@ fn invalidate_on_asset_revision(
     cache.button = None;
     cache.panel = None;
     cache.panel_uniform = None;
-    cache.font = None;
+    cache.fonts.clear();
+    cache.skin = None;
     cache.fdf = None;
     cache.fdf_failed = false;
     cache.strings = None;
@@ -760,7 +760,11 @@ struct MenuArtCache {
     /// `GlueScreen-Button1-Border.blp`, the button frame.
     button: Option<Handle<Image>>,
     panel: Option<Handle<Image>>,
-    font: Option<Handle<Font>>,
+    /// One handle per authored face, so an entry's own face is honoured instead of
+    /// every label sharing one hardcoded file.
+    fonts: std::collections::HashMap<String, Handle<Font>>,
+    /// `UI\war3skins.txt`, the face -> file binding's source.
+    skin: Option<String>,
     /// The parsed frame definitions the button bounds come from. `None` until
     /// **both** FDFs have been read and parsed, so a partially-arrived pair is
     /// never cached as if it were complete.
@@ -918,7 +922,8 @@ fn apply_menu_art(
             cache.button = None;
             cache.panel = None;
             cache.panel_uniform = None;
-            cache.font = None;
+            cache.fonts.clear();
+            cache.skin = None;
             cache.fdf = None;
             cache.fdf_failed = false;
             cache.strings = None;
@@ -956,9 +961,12 @@ fn apply_menu_art(
                 }
             }
         }
-        if cache.font.is_none() {
-            if let Some(bytes) = crate::mainmenu::art_bytes(install.as_deref(), FONT_ART) {
-                cache.font = Some(fonts.add(Font::from_bytes(bytes)));
+        // The skin table, which binds each face to its file.
+        if cache.skin.is_none() {
+            if let Some(bytes) =
+                crate::mainmenu::art_bytes(install.as_deref(), crate::mainmenu::SKIN_TABLE)
+            {
+                cache.skin = std::str::from_utf8(&bytes).ok().map(str::to_string);
             }
         }
         // The frame definitions. **Both** must be read and parsed before the pair
@@ -1021,6 +1029,32 @@ fn apply_menu_art(
                 crate::mainmenu::STANDARD_TEMPLATES_FDF,
             ) {
                 cache.templates = std::str::from_utf8(&bytes).ok().map(str::to_string);
+            }
+        }
+        // Each entry's font, from its own face and the shipped skin table. No
+        // fallback: a face the table does not bind, or a file the store does not
+        // carry, leaves that entry without a font rather than substituting one.
+        if let Some(skin) = cache.skin.clone() {
+            for i in 0..crate::mainmenu::MENU.len() {
+                let Some(style) = entry_style(&cache, i) else {
+                    continue;
+                };
+                if cache.fonts.contains_key(&style.font) {
+                    continue;
+                }
+                let Ok(binding) = crate::mainmenu::menu_font_file(&skin, &style.font) else {
+                    continue;
+                };
+                let Some(served) = crate::mainmenu::served_font_name(&binding.file) else {
+                    continue;
+                };
+                if let Some(bytes) =
+                    crate::mainmenu::art_bytes_named(install.as_deref(), &binding.file, &served)
+                {
+                    cache
+                        .fonts
+                        .insert(style.font.clone(), fonts.add(Font::from_bytes(bytes)));
+                }
             }
         }
         cache.native_loaded = true;
@@ -1125,7 +1159,7 @@ fn apply_menu_art(
             commands.entity(entity).insert(image);
         }
     }
-    if let Some(handle) = &cache.font {
+    if let Some(handle) = cache.fonts.values().next() {
         for mut style in &mut text {
             let font = bevy::text::FontSource::Handle(handle.clone());
             if style.font != font {
@@ -1184,7 +1218,7 @@ fn apply_menu_text(
         };
         let size = bevy::text::FontSize::Vh(style.height / crate::mainmenu::FRAME_H * 100.0);
         info!(
-            "Menu label {id}: {} (hotkey {:?}); face {:?}, shadow {:?} at {:?}, FIXEDSIZE {} — parsed, not applied",
+            "Menu label {id}: {} (hotkey {:?}); bound face {:?}; shadow {:?} at {:?}, FIXEDSIZE {} — shadow and FIXEDSIZE parsed, not applied",
             label.visible(),
             label.hotkey(),
             style.font,
@@ -2243,7 +2277,7 @@ mod menu_tests {
         );
         // Every source is cleared, so the next frame reads the new store.
         let cache = world.resource::<MenuArtCache>();
-        assert!(cache.button.is_none() && cache.panel.is_none() && cache.font.is_none());
+        assert!(cache.button.is_none() && cache.panel.is_none() && cache.fonts.is_empty());
         assert!(cache.fdf.is_none() && cache.strings.is_none() && cache.templates.is_none());
         assert!(cache.main_menu.is_none() && !cache.native_loaded);
     }

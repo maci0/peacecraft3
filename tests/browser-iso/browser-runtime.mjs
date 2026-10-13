@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 import { wavFixture } from './fixtures.mjs';
+assert.equal(process.env.PCX_APP_IMPORT_WASM_READY, '1', 'WAIT for root READY4 generated WASM notification');
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const playwrightPath = process.env.PCX_PLAYWRIGHT_MODULE ?? `${root}.scratch/browser-check/node_modules/playwright-core/index.mjs`;
 const { chromium } = await import(pathToFileURL(playwrightPath));
@@ -72,7 +73,7 @@ try {
   const unexpected = requests.filter(r => !r.url.startsWith('blob:') && (!r.url.startsWith(origin) || !allowed.has(new URL(r.url).pathname) || r.method !== 'GET' || r.hasBody));
   assert.deepEqual(unexpected, []); assert.deepEqual(sockets, []);
   assert.ok(received.every(r => r.method === 'GET' && allowed.has(r.path)));
-  console.log(JSON.stringify({ ok: true, actualWasmChecks: result.checks, selftest: result.selftest, revision: result.result.revision,
+  console.log(JSON.stringify({ ok: true, actualWasmChecks: result.checks, fonts: result.fonts, selftest: result.selftest, revision: result.result.revision,
     audioLifecycle: 'mute/intro/click/content rejection/reset passed', network: { requests, serverRequests: received, uploads: 0, unexpected: 0, sockets: 0 },
     limitation: 'Synthetic API/storage/audio proof; placeholder font/texture/model do not prove rendering or original fidelity' }, null, 2));
 } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }

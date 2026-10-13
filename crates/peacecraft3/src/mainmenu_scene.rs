@@ -245,7 +245,8 @@ pub fn layer_flags(materials: &[pcx_mdl::Material], material_id: usize) -> Layer
 ///
 /// The checked decoder reads the alpha after the coordinate-id word in each
 /// inclusive layer record. This renderer currently uses the first layer only;
-/// additional authored layers and animated alpha still need rendering support.
+/// Additional layers still need drawing support. First-layer and GEOA alpha
+/// tracks are sampled by the scene's checked opacity plan.
 #[must_use]
 pub fn layer_static_alpha(mat: &pcx_mdl::Material) -> Option<f32> {
     Some(mat.checked_layers().ok()?.first()?.properties.static_alpha)
@@ -381,6 +382,8 @@ pub struct MainMenuScene {
     pivots: Option<pcx_mdl::Pivots>,
     /// One Bevy mesh per geoset, parallel to `model.meshes`.
     handles: Vec<Handle<Mesh>>,
+    opacity: Option<pcx_gfx::mdx_opacity::OpacityPlan>,
+    opacity_materials: Vec<(usize, Entity, Handle<StandardMaterial>)>,
     /// The clip's first frame.
     interval_start: u32,
     /// The clip's length in milliseconds.
@@ -414,8 +417,9 @@ pub fn spawn(
     let m = pcx_mdl::Mdlx::parse(bytes).map_err(|e| SceneError::Decode(e.to_string()))?;
     let model =
         pcx_gfx::load_model(bytes, source).map_err(|e| SceneError::Decode(e.to_string()))?;
-    let joints = pcx_gfx::mdx_runtime::JointPlan::parse(bytes)
+    let runtime = pcx_gfx::mdx_runtime::RuntimePlan::parse(bytes)
         .map_err(|e| SceneError::Decode(e.to_string()))?;
+    let joints = &runtime.joints;
     let bones = joints.joints().to_vec();
     let pivots = Some(joints.pivots().clone());
 
@@ -428,6 +432,9 @@ pub fn spawn(
         .find(|s| s.name == "Stand" && !s.non_looping)
         .or_else(|| sequences.iter().find(|s| s.name == "Stand"))
         .or_else(|| sequences.first());
+    let interval = clip.map_or([0, 0], |clip| [clip.interval_start, clip.interval_end]);
+    let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&runtime, interval)
+        .map_err(|e| SceneError::Decode(e.to_string()))?;
 
     let mut info = SceneInfo {
         bones: joints
@@ -463,6 +470,7 @@ pub fn spawn(
         .map(|t| (t.path, t.flags))
         .collect();
     let mut handles = Vec::with_capacity(model.meshes.len());
+    let mut opacity_materials = Vec::with_capacity(model.meshes.len());
     for mesh in &model.meshes {
         let id = mesh.material_id as usize;
         let path = paths.get(id).cloned().unwrap_or_default();
@@ -491,8 +499,16 @@ pub fn spawn(
         if texture.is_none() && !path.is_empty() {
             info.missing_textures.push(path.clone());
         }
+        let alpha = opacity
+            .sample(mesh.geoset as usize, interval[0], 0)
+            .ok_or_else(|| {
+                SceneError::Decode(format!(
+                    "missing opacity binding for geoset {}",
+                    mesh.geoset
+                ))
+            })?;
         let material = materials.add(StandardMaterial {
-            base_color: flags.base_color(texture.is_some()),
+            base_color: flags.base_color(texture.is_some()).with_alpha(alpha),
             base_color_texture: handle,
             // The glue scene is scenery, not a lit character, so a high
             // roughness keeps it from picking up a sheen the original has not
@@ -513,11 +529,19 @@ pub fn spawn(
             ..default()
         });
         handles.push(meshes.add(pcx_gfx::to_bevy_mesh(mesh)));
-        commands.spawn((
-            Mesh3d(handles.last().unwrap().clone()),
-            MeshMaterial3d(material),
-            MainMenuSceneEntity,
-        ));
+        let entity = commands
+            .spawn((
+                Mesh3d(handles.last().unwrap().clone()),
+                MeshMaterial3d(material.clone()),
+                if alpha <= 0.0 {
+                    Visibility::Hidden
+                } else {
+                    Visibility::Inherited
+                },
+                MainMenuSceneEntity,
+            ))
+            .id();
+        opacity_materials.push((mesh.geoset as usize, entity, material));
         info.geosets += 1;
     }
 
@@ -634,6 +658,8 @@ pub fn spawn(
         bones,
         pivots,
         handles,
+        opacity: Some(opacity),
+        opacity_materials,
         interval_start: clip.map(|s| s.interval_start).unwrap_or(0),
         duration_ms: clip.map(|s| s.duration()).unwrap_or(0),
         time_ms: 0.0,
@@ -779,6 +805,8 @@ pub fn advance(
     time: Res<Time>,
     mut scene: ResMut<MainMenuScene>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut visibility: Query<&mut Visibility, With<MainMenuSceneEntity>>,
 ) {
     if scene.duration_ms == 0 || scene.model.is_none() {
         return;
@@ -790,6 +818,22 @@ pub fn advance(
     // running across a clip wrap, which is the whole point of it being global.
     scene.elapsed += time.delta();
     let frame = scene.interval_start + scene.time_ms as u32;
+    if let Some(opacity) = &scene.opacity {
+        for (geoset, entity, handle) in &scene.opacity_materials {
+            if let Some(alpha) = opacity.sample(*geoset, frame, scene.elapsed.as_millis() as u64) {
+                if let Some(mut material) = materials.get_mut(handle) {
+                    material.base_color = material.base_color.with_alpha(alpha);
+                }
+                if let Ok(mut visibility) = visibility.get_mut(*entity) {
+                    *visibility = if alpha <= 0.0 {
+                        Visibility::Hidden
+                    } else {
+                        Visibility::Inherited
+                    };
+                }
+            }
+        }
+    }
 
     let Some(model) = scene.model.as_ref() else {
         return;
@@ -825,6 +869,123 @@ pub fn advance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alpha_update_follows_geoset_id_and_hides_zero_opacity_without_touching_other_materials() {
+        use bevy::ecs::system::RunSystemOnce;
+        use pcx_gfx::mdx_runtime::{GeosetInput, RuntimeInput, RuntimePlan};
+        let mut data = Vec::new();
+        for word in [
+            0u32,
+            0,
+            u32::from_le_bytes(*b"LAYS"),
+            1,
+            28,
+            2,
+            0,
+            0,
+            pcx_mdl::NO_ID,
+            0,
+            1f32.to_bits(),
+        ] {
+            data.extend(word.to_le_bytes());
+        }
+        let track = pcx_mdl::AnimTrack {
+            magic: *b"KGAO",
+            count: 2,
+            interpolation: pcx_mdl::Interpolation::Linear,
+            global_seq_id: pcx_mdl::NO_ID,
+            raw: [(0u32, 0f32), (100, 1f32)]
+                .into_iter()
+                .flat_map(|(frame, alpha)| {
+                    frame.to_le_bytes().into_iter().chain(alpha.to_le_bytes())
+                })
+                .collect(),
+        };
+        let plan = RuntimePlan::checked(RuntimeInput {
+            bones: vec![],
+            helpers: vec![],
+            pivots: pcx_mdl::Pivots(vec![]),
+            geosets: (0..2)
+                .map(|_| GeosetInput {
+                    vertex_count: 0,
+                    material_id: 0,
+                    matrix_joint_ids: vec![],
+                })
+                .collect(),
+            geoset_animations: vec![pcx_mdl::GeosetAnim {
+                offset: 0,
+                len: 60,
+                flags: 0,
+                geoset_id: 1,
+                static_alpha: 0.25,
+                static_colour: [1.; 3],
+                tracks: vec![track],
+                trailing: 0,
+            }],
+            materials: vec![pcx_mdl::Material {
+                offset: 0,
+                len: data.len() as u32 + 4,
+                data,
+            }],
+            textures: vec![pcx_mdl::Texture {
+                slot: 0,
+                path: "synthetic".into(),
+                flags: 0,
+            }],
+            texture_animations: vec![],
+            global_sequences: vec![],
+        })
+        .unwrap();
+        let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&plan, [0, 100]).unwrap();
+        let mut world = World::new();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let unaffected = materials.add(StandardMaterial::default());
+        let animated = materials.add(StandardMaterial::default());
+        let unrelated = materials.add(StandardMaterial {
+            base_color: Color::WHITE.with_alpha(0.7),
+            ..default()
+        });
+        let first = world
+            .spawn((MainMenuSceneEntity, Visibility::Inherited))
+            .id();
+        let second = world.spawn((MainMenuSceneEntity, Visibility::Hidden)).id();
+        world.insert_resource(materials);
+        world.insert_resource(Assets::<Mesh>::default());
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_millis(50));
+        world.insert_resource(time);
+        world.insert_resource(MainMenuScene {
+            model: Some(pcx_gfx::LoadedModel {
+                name: String::new(),
+                minimum_extent: [0.; 3],
+                maximum_extent: [0.; 3],
+                meshes: vec![],
+                bone_names: vec![],
+                bone_parents: vec![],
+                sequences: vec![],
+            }),
+            opacity: Some(opacity),
+            opacity_materials: vec![
+                (0, first, unaffected.clone()),
+                (1, second, animated.clone()),
+            ],
+            duration_ms: 100,
+            ..default()
+        });
+        world.run_system_once(advance).unwrap();
+        let materials = world.resource::<Assets<StandardMaterial>>();
+        assert_eq!(materials.get(&unaffected).unwrap().base_color.alpha(), 1.0);
+        assert_eq!(materials.get(&animated).unwrap().base_color.alpha(), 0.5);
+        assert_eq!(materials.get(&unrelated).unwrap().base_color.alpha(), 0.7);
+        assert_eq!(
+            world.get::<Visibility>(second),
+            Some(&Visibility::Inherited)
+        );
+        world.run_system_once(advance).unwrap();
+        assert_eq!(world.get::<Visibility>(second), Some(&Visibility::Hidden));
+        assert_eq!(world.get::<Visibility>(first), Some(&Visibility::Inherited));
+    }
 
     #[test]
     #[ignore = "requires PEACECRAFT3_MDX_INSTALL with both original menu models"]
@@ -909,6 +1070,7 @@ mod tests {
         time.advance_by(std::time::Duration::from_nanos(16_666_667));
         world.insert_resource(time);
         world.insert_resource(Assets::<Mesh>::default());
+        world.insert_resource(Assets::<StandardMaterial>::default());
         world.insert_resource(MainMenuScene {
             model: Some(pcx_gfx::LoadedModel {
                 name: String::new(),

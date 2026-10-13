@@ -19,7 +19,7 @@ import init, {
   stored_assets,
   begin_archive_import, cancel_archive_import, stage_archive,
   pending_archive_member, commit_archive_import, archive_member,
-  asset_revision, menu_music_path,
+  asset_revision, menu_music_path, menu_font_files, menu_font_alias,
 } from './pkg/peacecraft3.js';
 import { discoverIso, importIsoCandidates } from './iso/import.js';
 import { clickDescriptor } from './iso/audio.js';
@@ -34,12 +34,12 @@ function registerServedAsset(name, bytes) { return localImportActive ? 0 : add_a
 // Each name here is the one `mainmenu::served_name` maps the game's own path to.
 const GLUE = [
   ['menu/globalstrings.fdf', './assets/globalstrings.fdf'],
+  ['menu/war3skins.txt', './assets/war3skins.txt'],
   ['menu/standardtemplates.fdf', './assets/standardtemplates.fdf'],
   ['menu/mainmenu.fdf', './assets/mainmenu.fdf'],
   ['menu/button.blp', './assets/button.blp'],
   ['menu/border.blp', './assets/border.blp'],
   ['menu/bg.blp', './assets/bg.blp'],
-  ['menu.ttf', './assets/menu.ttf'],
   // `Textures\WarcraftIII-logo-alpha.blp`, 512x256. Four-component JPEG whose
   // fourth component is alpha, so the artwork has a transparent field. It is
   // the *Reign of Chaos* logo and the expansion FDF comments its model out, so
@@ -67,6 +67,17 @@ async function loadGlueArt() {
       fail(`glue art ${url}`, err);
     }
   }
+
+  try {
+    for (const path of menu_font_files()) {
+      const alias = menu_font_alias(path);
+      if (!alias) throw Error(`invalid derived font path ${path}`);
+      const response = await fetch(`./assets/fonts/${encodeURIComponent(alias.split('/').at(-1))}`);
+      if (!response.ok) throw Error(`${path}: HTTP ${response.status}`);
+      registerServedAsset(alias, new Uint8Array(await response.arrayBuffer()));
+      say(`menu font ${path}: derived from FDF and skin table`);
+    }
+  } catch (error) { fail('menu font binding', error); }
 
   // The logo model and its texture, for the expansion menu's entrance.
   let panelOk = 0;
@@ -322,7 +333,7 @@ window.peacecraft3 = {
   stored_asset,
   stored_assets, begin_archive_import, cancel_archive_import, stage_archive,
   pending_archive_member, commit_archive_import, archive_member,
-  asset_revision, menu_music_path, discoverIso, importIsoCandidates,
+  asset_revision, menu_music_path, menu_font_files, menu_font_alias, discoverIso, importIsoCandidates,
 };
 
 const isoInput = document.getElementById('iso');

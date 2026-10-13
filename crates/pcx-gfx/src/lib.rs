@@ -12,6 +12,7 @@
 
 use bevy::asset::RenderAssetUsages;
 
+pub mod mdx_opacity;
 pub mod mdx_runtime;
 pub mod performance;
 pub mod viewer;

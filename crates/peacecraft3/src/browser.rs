@@ -33,7 +33,7 @@
 //! decoding archives from memory. The crate's README is the build and run
 //! recipe.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
@@ -270,6 +270,52 @@ pub fn archive_member(path: String) -> Result<Vec<u8>, JsValue> {
     Ok(bytes)
 }
 
+fn derived_menu_fonts(
+    fdf: &crate::fdf::Fdf,
+    texts: &[&str],
+    skin: &str,
+) -> Result<Vec<String>, String> {
+    let mut paths = BTreeSet::new();
+    for (index, frames) in crate::mainmenu::MENU_FRAMES.iter().enumerate() {
+        if fdf.frame(frames.0).is_none() {
+            continue;
+        }
+        let frame = crate::mainmenu::menu_text_frame(fdf, index).map_err(|e| e.to_string())?;
+        let style = crate::mainmenu::menu_text_style(texts, &frame).map_err(|e| e.to_string())?;
+        paths.insert(
+            crate::mainmenu::menu_font_file(skin, &style.font)
+                .map_err(|e| e.to_string())?
+                .file,
+        );
+    }
+    Ok(paths.into_iter().collect())
+}
+
+/// Font paths derived from the currently supplied FDF and skin table.
+#[wasm_bindgen]
+pub fn menu_font_files() -> Result<Vec<String>, JsValue> {
+    let text = |path: &str| -> Result<String, JsValue> {
+        let alias = crate::mainmenu::served_name(path).unwrap_or(path);
+        let bytes =
+            stored_bytes(alias).ok_or_else(|| JsValue::from_str(&format!("missing {path}")))?;
+        String::from_utf8(bytes).map_err(|e| JsValue::from_str(&format!("{path}: {e}")))
+    };
+    let templates = text(crate::mainmenu::STANDARD_TEMPLATES_FDF)?;
+    let menu = text(crate::mainmenu::MAIN_MENU_FDF)?;
+    let skin = text(crate::mainmenu::SKIN_TABLE)?;
+    let mut fdf = crate::fdf::Fdf::default();
+    for source in [&templates, &menu] {
+        fdf.parse_into(source)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    }
+    derived_menu_fonts(&fdf, &[&templates, &menu], &skin).map_err(|e| JsValue::from_str(&e))
+}
+
+#[wasm_bindgen]
+pub fn menu_font_alias(path: String) -> Option<String> {
+    crate::mainmenu::served_font_name(&path)
+}
+
 fn hydrate(
     set: &mut [pcx_mpq::MpqArchive],
 ) -> Result<(BTreeMap<String, Vec<u8>>, Vec<String>), String> {
@@ -296,6 +342,7 @@ fn hydrate(
         Ok(())
     };
     let mut fdf = crate::fdf::Fdf::default();
+    let mut frame_texts = Vec::new();
     let strings_path = crate::mainmenu::GLOBAL_STRINGS_FDF;
     let strings = extract_unique(set, strings_path)?;
     std::str::from_utf8(&strings).map_err(|e| format!("{strings_path}: {e}"))?;
@@ -311,13 +358,22 @@ fn hydrate(
         let bytes = extract_unique(set, path)?;
         let text = std::str::from_utf8(&bytes).map_err(|e| format!("{path}: {e}"))?;
         fdf.parse_into(text).map_err(|e| format!("{path}: {e}"))?;
+        frame_texts.push(text.to_owned());
         put(path, crate::mainmenu::served_name(path), bytes)?;
     }
-    let font = crate::mainmenu::MASTER_FONT;
+    let skin_path = crate::mainmenu::SKIN_TABLE;
+    let skin_bytes = extract_unique(set, skin_path)?;
+    let skin = std::str::from_utf8(&skin_bytes).map_err(|e| format!("{skin_path}: {e}"))?;
+    let texts: Vec<_> = frame_texts.iter().map(String::as_str).collect();
+    for path in derived_menu_fonts(&fdf, &texts, skin)? {
+        let alias = crate::mainmenu::served_font_name(&path)
+            .ok_or_else(|| format!("invalid font path {path}"))?;
+        put(&path, Some(&alias), extract_unique(set, &path)?)?;
+    }
     put(
-        font,
-        crate::mainmenu::served_name(font),
-        extract_unique(set, font)?,
+        skin_path,
+        crate::mainmenu::served_name(skin_path),
+        skin_bytes,
     )?;
     // Backdrop paths come from the selected frame definitions, not a JS list.
     for frame in fdf.frames() {

@@ -55,13 +55,13 @@ pub const BUTTON_BORDER_ART: &str = r"UI\Widgets\Glues\GlueScreen-Button1-Backdr
 /// stretched or sliced image. The original repeats it at
 /// `BackdropBackgroundSize 0.032` in frame coordinates.
 pub const BUTTON_BG_ART: &str = r"UI\Widgets\Glues\GlueScreen-Button1-BackdropBackground.blp";
-/// The font `MasterFont` resolves to.
+/// The file the shipped `MasterFont` face resolves to, as a **test fixture**.
 ///
-/// Both binaries name it: `game.dll` (1.28c) and `Warcraft III.exe` (1.29b)
-/// each carry the adjacent literals `MasterFont` and `FRIZQT__.TTF`, and the
-/// file ships in `War3.mpq`. No FDF defines `MasterFont`, so the engine is
-/// where the name is bound — this is the measured target, not a guess from the
-/// common name.
+/// Production no longer carries this binding: the face comes from the FDF and the
+/// file from the skin table, through [`menu_font_file`]. This constant exists only
+/// so `load_glue_art`'s tests can assert the shipped file is present, and it is
+/// not a fallback — nothing in production reads it.
+#[cfg(test)]
 pub const MASTER_FONT: &str = r"Fonts\FRIZQT__.TTF";
 /// The background the original plays behind the whole menu.
 #[cfg(test)]
@@ -163,6 +163,45 @@ pub const MENU: [&str; 6] = [
 
 /// The `GlobalStrings.fdf` the labels come from.
 pub const GLOBAL_STRINGS_FDF: &str = r"UI\FrameDef\GlobalStrings.fdf";
+
+/// The shipped skin table, the face → font-file binding's source.
+///
+/// A `FrameFont` record names a **face**; this table names its file. Read at
+/// runtime rather than mapped by a constant here, so the binding stays the
+/// asset's.
+pub const SKIN_TABLE: &str = r"UI\war3skins.txt";
+
+/// The font file `face` names, from the supplied skin table.
+///
+/// Resolution is **unambiguous across the whole table**: the engine's section
+/// precedence is not established, so a face defined more than once — in one block
+/// or across sections — is refused rather than guessed at. No fallback face or
+/// file is substituted when the table is missing or the face is absent.
+///
+/// # Errors
+///
+/// [`crate::menu_skin::SkinError`] for a malformed table, an unknown face, a
+/// duplicated face or an empty binding.
+pub fn menu_font_file(
+    skin: &str,
+    face: &str,
+) -> Result<crate::menu_skin::FontBinding, crate::menu_skin::SkinError> {
+    crate::menu_skin::SkinTable::parse(skin)?.font_file_unique(face)
+}
+
+/// The served name for a derived font file, so a browser can supply it.
+///
+/// The font path is derived from the skin table and so cannot appear in
+/// [`served_name`]'s fixed list; this maps any derived path to its served name,
+/// the file's own name under `menu/fonts/`.
+#[must_use]
+pub fn served_font_name(font_path: &str) -> Option<String> {
+    let base = font_path
+        .rsplit(['\\', '/'])
+        .next()
+        .filter(|b| !b.is_empty())?;
+    Some(format!("menu/fonts/{base}"))
+}
 
 /// Why an entry's label could not be derived.
 #[derive(Debug, Clone, PartialEq)]
@@ -422,7 +461,7 @@ pub fn served_name(wc3_path: &str) -> Option<&'static str> {
         BUTTON_ART => Some("menu/button.blp"),
         BUTTON_BORDER_ART => Some("menu/border.blp"),
         BUTTON_BG_ART => Some("menu/bg.blp"),
-        MASTER_FONT => Some("menu.ttf"),
+        SKIN_TABLE => Some("menu/war3skins.txt"),
         LOGO_TEXTURE => Some("menu/logo.blp"),
         MAIN_MENU_FDF => Some("menu/mainmenu.fdf"),
         GLOBAL_STRINGS_FDF => Some("menu/globalstrings.fdf"),

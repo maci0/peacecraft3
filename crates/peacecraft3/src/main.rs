@@ -12,6 +12,7 @@ mod mainmenu;
 mod mainmenu_scene;
 mod menu_audio;
 mod menu_panel;
+mod menu_skin;
 mod menu_text;
 
 fn main() {

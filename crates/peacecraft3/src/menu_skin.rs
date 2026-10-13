@@ -84,6 +84,10 @@ pub struct Section {
 
 /// The table's fallback section, consulted after the caller-selected section.
 /// This lookup policy is not proof of native engine precedence.
+///
+/// Named for the caller-policy resolver and the tests; the production
+/// [`SkinTable::font_file_unique`] assumes no section order and so does not use it.
+#[cfg(test)]
 pub const DEFAULT_SECTION: &str = "Default";
 
 /// A parsed `war3skins.txt`.
@@ -154,9 +158,58 @@ impl SkinTable {
     }
 
     /// The entries a named section defines, or `None` when it is absent.
+    #[cfg(test)]
     #[must_use]
     pub fn section(&self, name: &str) -> Option<&Section> {
         self.sections.iter().find(|s| s.name == name)
+    }
+
+    /// Resolves a face to its file **without assuming any section precedence**.
+    ///
+    /// The engine's lookup order is **not established**, so no section is
+    /// preferred and none is guessed: the face must be defined **exactly once
+    /// across the whole table**. Two definitions — in one block or across
+    /// sections, and even when the values agree — are refused, because which one
+    /// the game would use is unknown. This is what the shipped data supports:
+    /// `MasterFont` and the other font keys appear exactly once, in `[Default]`.
+    ///
+    /// This is the production entry point; [`SkinTable::font_file`] keeps the
+    /// caller-supplied-section policy and is test-only, since that policy is an
+    /// inference rather than the verified engine order.
+    ///
+    /// # Errors
+    ///
+    /// [`SkinError::UnknownFace`] when the table does not define it,
+    /// [`SkinError::Duplicate`] when it defines it more than once, and
+    /// [`SkinError::EmptyValue`] when it resolves to nothing. No default face or
+    /// file is substituted.
+    pub fn font_file_unique(&self, face: &str) -> Result<FontBinding, SkinError> {
+        let mut found: Vec<(String, String)> = Vec::new();
+        for section in self.sections() {
+            for (key, value) in &section.entries {
+                if key == face {
+                    found.push((section.name.clone(), value.clone()));
+                }
+            }
+        }
+        match found.len() {
+            0 => Err(SkinError::UnknownFace(face.to_string())),
+            1 => {
+                let (section, file) = found.into_iter().next().unwrap_or_default();
+                if file.is_empty() {
+                    return Err(SkinError::EmptyValue {
+                        section,
+                        face: face.to_string(),
+                    });
+                }
+                Ok(FontBinding { file, section })
+            }
+            _ => Err(SkinError::Duplicate {
+                section: found.first().map(|(s, _)| s.clone()).unwrap_or_default(),
+                face: face.to_string(),
+                values: found.into_iter().map(|(_, v)| v).collect(),
+            }),
+        }
     }
 
     /// Resolves a face to its font file.
@@ -166,7 +219,7 @@ impl SkinTable {
     /// observation of the game's font lookup has been made, so a race section
     /// overriding `[Default]` is an inference from the table's shape, not a proven
     /// behaviour. What is proven is the data: the keys, their sections and the file
-    /// they name.
+    /// they name. Production uses [`SkinTable::font_file_unique`] instead.
     ///
     /// **Every** block with the consulted section name is aggregated, not just the
     /// first, so a repeated `[Default]` cannot hide a second definition. Within the
@@ -180,6 +233,7 @@ impl SkinTable {
     /// [`SkinError::Duplicate`] when the winning section defines it more than once,
     /// and [`SkinError::EmptyValue`] when it resolves to nothing. No default face or
     /// file is substituted.
+    #[cfg(test)]
     pub fn font_file(&self, face: &str, section: &str) -> Result<FontBinding, SkinError> {
         for candidate in [section, DEFAULT_SECTION] {
             let values = self.values_in(candidate, face);
@@ -213,6 +267,7 @@ impl SkinTable {
     /// Every value `face` takes across **all** blocks named `section`, in file
     /// order. Aggregating is the point: reading only the first block would let a
     /// repeated section hide a conflicting definition.
+    #[cfg(test)]
     fn values_in(&self, section: &str, face: &str) -> Vec<String> {
         self.sections
             .iter()
@@ -314,6 +369,60 @@ UndeadUITile01=UI\Widgets\Console\Undead\UndeadUITile01.blp
             SkinTable::parse("[Default]\nok=1\nbroken line\n"),
             Err(SkinError::Malformed(_))
         ));
+    }
+
+    /// The production resolution assumes **no** section order: a face defined once
+    /// anywhere resolves, and the section it came from is reported.
+    #[test]
+    fn a_unique_face_resolves_wherever_it_is() {
+        let t = SkinTable::parse(TABLE).unwrap();
+        let b = t.font_file_unique("MasterFont").unwrap();
+        assert_eq!(b.file, r"Fonts\FRIZQT__.TTF");
+        assert_eq!(b.section, DEFAULT_SECTION);
+    }
+
+    /// A face defined in two sections is refused, because the engine's precedence
+    /// between them is unverified — even when the two values agree.
+    #[test]
+    fn a_face_defined_in_two_sections_is_refused() {
+        let text = "[Default]\nMasterFont=Fonts\\A.TTF\n[Human]\nMasterFont=Fonts\\B.TTF\n";
+        let t = SkinTable::parse(text).unwrap();
+        assert!(matches!(
+            t.font_file_unique("MasterFont"),
+            Err(SkinError::Duplicate { values, .. }) if values.len() == 2
+        ));
+        let same = "[Default]\nMasterFont=Fonts\\A.TTF\n[Human]\nMasterFont=Fonts\\A.TTF\n";
+        let t = SkinTable::parse(same).unwrap();
+        assert!(
+            matches!(
+                t.font_file_unique("MasterFont"),
+                Err(SkinError::Duplicate { .. })
+            ),
+            "equal values are still two definitions"
+        );
+    }
+
+    /// The unique resolution refuses the same things the caller-policy one does.
+    #[test]
+    fn the_unique_resolution_refuses_missing_and_empty() {
+        let t = SkinTable::parse(TABLE).unwrap();
+        assert_eq!(
+            t.font_file_unique("NoSuchFont"),
+            Err(SkinError::UnknownFace("NoSuchFont".to_string()))
+        );
+        let empty = SkinTable::parse("[Default]\nMasterFont=\n").unwrap();
+        assert_eq!(
+            font_file_error(&empty),
+            Err(SkinError::EmptyValue {
+                section: DEFAULT_SECTION.to_string(),
+                face: "MasterFont".to_string(),
+            })
+        );
+    }
+
+    /// The empty-value refusal, named so the assertion above stays readable.
+    fn font_file_error(t: &SkinTable) -> Result<FontBinding, SkinError> {
+        t.font_file_unique("MasterFont")
     }
 
     /// A repeated section name must not hide a second definition: every block with

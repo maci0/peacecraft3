@@ -1,4 +1,6 @@
 //! Leaf tests can run without Bevy by compiling this test file directly.
+#[path = "../src/mdx_opacity.rs"]
+pub mod mdx_opacity;
 #[path = "../src/mdx_runtime.rs"]
 pub mod mdx_runtime;
 use mdx_runtime::{GeosetInput, JointKind, JointPlan, PlanError, RuntimeInput, RuntimePlan};
@@ -208,6 +210,61 @@ fn sparse_geoa_uses_actual_geoset_id_and_all_material_layers_survive() {
     assert_eq!(layers[1].texture_tracks[0].keys, [(30, 1)]);
     assert_eq!(layers[1].properties.texture_anim_id, 0);
     assert_eq!(plan.duplicate_vertex_counts().get(&4).unwrap(), &[0, 1]);
+}
+
+#[test]
+fn geoset_opacity_uses_sparse_ids_and_preserves_unbound_records() {
+    let plan = RuntimePlan::checked(input()).unwrap();
+    let opacity = mdx_opacity::OpacityPlan::checked(&plan, [0, 100]).unwrap();
+    assert_eq!(opacity.sample(0, 50, 50), Some(0.25));
+    assert_eq!(opacity.sample(1, 50, 50), Some(0.25));
+    assert_eq!(opacity.sample(2, 50, 50), Some(0.0625));
+    assert_eq!(opacity.sample(3, 50, 50), None);
+}
+
+fn alpha_track(keys: &[(u32, f32)], global_seq_id: u32) -> pcx_mdl::AnimTrack {
+    let raw = keys
+        .iter()
+        .flat_map(|&(frame, alpha)| frame.to_le_bytes().into_iter().chain(alpha.to_le_bytes()))
+        .collect();
+    pcx_mdl::AnimTrack {
+        magic: *b"KGAO",
+        count: keys.len() as u32,
+        interpolation: Interpolation::Linear,
+        global_seq_id,
+        raw,
+    }
+}
+
+#[test]
+fn local_alpha_keys_do_not_leak_from_another_sequence() {
+    let mut data = input();
+    data.geoset_animations[0].tracks = vec![alpha_track(&[(0, 0.1), (100, 0.9)], NO_ID)];
+    let plan = RuntimePlan::checked(data).unwrap();
+    let opacity = mdx_opacity::OpacityPlan::checked(&plan, [1000, 2000]).unwrap();
+    assert_eq!(
+        opacity.sample(2, 1500, 50),
+        Some(0.0625),
+        "no local keys means authored static alpha"
+    );
+}
+
+#[test]
+fn global_alpha_uses_its_own_clock_and_rejects_ambiguous_or_invalid_data() {
+    let mut data = input();
+    data.global_sequences = vec![1000];
+    data.geoset_animations[0].tracks = vec![alpha_track(&[(0, 0.0), (1000, 1.0)], 0)];
+    let mut plan = RuntimePlan::checked(data).unwrap();
+    let opacity = mdx_opacity::OpacityPlan::checked(&plan, [2000, 3000]).unwrap();
+    assert_eq!(opacity.sample(2, 2500, 1250), Some(0.0625));
+    plan.global_sequences[0] = 0;
+    assert!(mdx_opacity::OpacityPlan::checked(&plan, [2000, 3000]).is_err());
+    plan.global_sequences[0] = 1000;
+    plan.geosets[2].animation_records.push(0);
+    assert!(mdx_opacity::OpacityPlan::checked(&plan, [2000, 3000]).is_err());
+    plan.geosets[2].animation_records.pop();
+    plan.geoset_animations[0].tracks[0].raw.pop();
+    assert!(mdx_opacity::OpacityPlan::checked(&plan, [2000, 3000]).is_err());
 }
 #[test]
 fn missing_matrix_material_texture_and_geoa_references_are_errors() {

@@ -5,7 +5,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 Last updated: 2026-10-14
 
 Current menu verification (2026-10-14): WASM release build succeeds; the app
-has 85 passing tests and five explicitly ignored local-fixture tests. PeaceCraft
+has 99 passing tests and five explicitly ignored local-fixture tests. PeaceCraft
 settings precede the skippable original cinematic and original menu. Edition is
 RoC on the left and TFT on the right, with TFT selected by default; 1.28 is absent
 from settings. Original font, logo alpha and parsed 500 ms logo entrance are
@@ -840,6 +840,11 @@ Format: `date — subsystem — symptom — root cause — status`
   branches still have synthetic coverage only.
 - MDX checked layers retain authored layer counts, corrected alpha, filter/shading
   fields, alpha/texture tracks and PRE2 data. Full renderer wiring remains open.
+  The menu now binds GEOA opacity by geoset ID and samples first-layer KMTA and
+  KGAO/static alpha using selected sequence/global clocks. Sparse-ID, independent
+  clock and actual ECS material/visibility regressions pass; both original menu
+  imports and browser runtime pass. RGB animation, multilayer drawing and native
+  clock/blend equivalence remain open.
 - World import retains original placements/ownership and metadata values.
   Human01 resolves 155 units while retaining six named unsupported `sloc` records;
   Human03 resolves two items. This is data import, not playable campaign proof.
@@ -856,6 +861,12 @@ Format: `date — subsystem — symptom — root cause — status`
   Running-app File-input import refreshes six authored labels and the scene;
   click audio, resize and unequal-member rollback pass with zero uploads/sockets.
   Original installer ISO acceptance and full rendering parity remain open.
+
+- Menu font files derive from each entry's FDF face and the supplied skin table,
+  with no production face-to-file constant. New browser verification passes
+  12 Node tests and 21 actual WASM assertions, including duplicate-face refusal;
+  running-app original font import/alias bytes, cache, audio, resize and rollback
+  pass. Shadow offset, FIXEDSIZE and accelerator dispatch remain unresolved.
 
 - Checked CASC readers and asset-source layering belong to the strict workspace.
   Seven CASC synthetic tests, one explicitly supplied Reforged install sweep,

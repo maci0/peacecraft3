@@ -42,6 +42,19 @@ function frames(text) {
   return { map, prop };
 }
 const quoted = raw => { const m = raw?.match(/"((?:\\.|[^"\\])*)"/); assert(m, `Expected quoted record: ${raw}`); return m[1].replaceAll('\\\\', '\\').replaceAll('\\"', '"'); };
+export function uniqueSkinFont(skin, face) {
+  let section; const matches = [];
+  for (const raw of skin.split(/\r?\n/)) {
+    const line = raw.split('//')[0].trim(); if (!line) continue;
+    const header = line.match(/^\[([^\]]+)\]$/);
+    if (header) { section = header[1].trim(); assert(section, 'Empty skin section'); continue; }
+    const equal = line.indexOf('='); assert(section && equal > 0, `Malformed skin line ${line}`);
+    const key = line.slice(0, equal).trim(), value = line.slice(equal + 1).trim();
+    if (key === face) matches.push({ face, section, file: value });
+  }
+  assert.equal(matches.length, 1, `Skin face ${face} requires exactly one definition across sections: ${JSON.stringify(matches)}`);
+  assert(matches[0].file, `Empty skin font file for ${face}`); return matches[0];
+}
 function mdl(bytes) {
   assert.equal(String.fromCharCode(...bytes.subarray(0, 4)), 'MDLX');
   const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), chunks = new Map();
@@ -70,11 +83,13 @@ async function prepare() {
   const expansion = scene.match(/if expansion\s*\{([\s\S]*?)\}\s*else/); assert(expansion);
   const [modelPath, modelAlias] = strings(expansion[1]); assert(modelPath && modelAlias);
   const mainPath = constant(main, 'MAIN_MENU_FDF'), templatePath = constant(main, 'STANDARD_TEMPLATES_FDF'), stringsPath = constant(main, 'GLOBAL_STRINGS_FDF');
+  const skinPath = constant(main, 'SKIN_TABLE');
   const sourceRules = JSON.parse(process.env.PCX_APP_IMPORT_MEMBER_SOURCES ?? '{}');
   // Explicit TFT fixture choices supported by the existing rendering evidence;
   // this is not an MPQ priority policy or an archive release identity claim.
   sourceRules[mainPath] ??= { alias: 'expansion', evidence: 'docs/re-notes/main-menu-rendering.md: TFT MainMenu.fdf in War3x' };
   sourceRules[modelPath] ??= { alias: 'expansion', evidence: 'existing scene_source(true) contract and docs/re-notes/main-menu-rendering.md' };
+  sourceRules[skinPath] ??= { alias: 'expansion', evidence: 'Explicit coordinator-approved local fixture variant consistent with static browser staging; not native archive priority proof' };
   const decodedRules = JSON.parse(process.env.PCX_APP_IMPORT_DECODED_MEMBERS ?? '{}');
   const members = {}, provenance = [], cache = new Map();
   async function extract(alias, member) {
@@ -119,7 +134,14 @@ async function prepare() {
   const labels = ids.map((id, i) => { const textFrame = quoted(fdf.prop(frameNames[i * 2], 'ButtonText')), key = quoted(fdf.prop(textFrame, 'Text'));
     const value = global.split(/\r?\n/).map(l => l.trim()).find(l => l.startsWith(`${key} `) || l.startsWith(`${key}\t`)); assert(value, `Missing authored GlobalStrings key ${key}`);
     return { id, button: frameNames[i * 2], plate: frameNames[i * 2 + 1], key, raw: quoted(value), visible: quoted(value).replace(/\|C[0-9a-f]{8}|\|R/gi, '').replaceAll('||', '|') }; });
-  await add(constant(main, 'MASTER_FONT'));
+  const skin = decode(await add(skinPath));
+  const fonts = labels.map(label => {
+    const textFrame = quoted(fdf.prop(label.button, 'ButtonText'));
+    const face = quoted(fdf.prop(textFrame, 'FrameFont'));
+    return { id: label.id, textFrame, ...uniqueSkinFont(skin, face) };
+  });
+  const fontFiles = [...new Set(fonts.map(font => font.file))].sort();
+  await addAll(fontFiles);
   const requiredFrames = new Set();
   function visitFrame(name) {
     if (requiredFrames.has(name)) return; requiredFrames.add(name);
@@ -147,11 +169,11 @@ async function prepare() {
   const isoPath = `${output}/local-repacked-menu.iso`;
   await writeFile(isoPath, isoFixture([{ name: 'SELECTED.BIN;1', bytes: mpqFixture(members) }]));
   // A second, unequal authored test member verifies rejection without inventing priority.
-  const conflict = { [constant(main, 'MASTER_FONT')]: new Uint8Array([1, 2, 3]) };
+  const conflict = { [fontFiles[0]]: new Uint8Array([1, 2, 3]) };
   const conflictPath = `${output}/unequal-members.iso`;
   await writeFile(conflictPath, isoFixture([{ name: 'A.BIN;1', bytes: mpqFixture(members) }, { name: 'B.BIN;1', bytes: mpqFixture(conflict) }]));
   const numeric = name => { const m = main.match(new RegExp(`const\\s+${name}\\s*:\\s*f32\\s*=\\s*([0-9._]+)`)); assert(m); return Number(m[1].replaceAll('_', '')); };
-  const result = { install, executableSha256: expectedExe, archiveAliases: aliases, provenance, sourceRules, optionalFrameDiagnostics, modelPath, modelAlias, expectedScene, labels, click, musicPath,
+  const result = { install, executableSha256: expectedExe, archiveAliases: aliases, provenance, sourceRules, optionalFrameDiagnostics, modelPath, modelAlias, expectedScene, labels, fonts, fontFiles, skinPath, click, musicPath,
     frameUnits: [numeric('FRAME_W'), numeric('FRAME_H')], frameText: `${templates}\n${menu}`, isoPath, conflictPath,
     limitation: 'Locally repacked ISO/MPQ fixture from supplied original menu members; not retail ISO/installer acceptance or proven original archive priority' };
   await writeFile(`${output}/prepared.json`, JSON.stringify(result, null, 2));
@@ -177,7 +199,10 @@ async function run() {
     page.on('pageerror', e => errors.push(e.message)); page.on('console', m => logs.push({ type: m.type(), text: m.text() })); page.on('websocket', s => sockets.push(s.url()));
     await page.addInitScript(() => { window.localImportEvents = []; window.addEventListener('peacecraft3-local-import', e => localImportEvents.push(e.detail)); });
     await page.goto(`${origin}/index.html`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => globalThis.peacecraft3?.stored_asset('menu.ttf') && globalThis.peacecraft3?.stored_asset('menu/globalstrings.fdf'));
+    await page.waitForFunction(() => globalThis.peacecraft3?.stored_asset('menu/war3skins.txt') && globalThis.peacecraft3?.stored_asset('menu/globalstrings.fdf') && globalThis.peacecraft3?.stored_asset('menu/standardtemplates.fdf') && globalThis.peacecraft3?.stored_asset('menu/mainmenu.fdf'));
+    const initialFonts = await page.evaluate(() => peacecraft3.menu_font_files().map(path => ({ path, alias: peacecraft3.menu_font_alias(path) })));
+    assert(initialFonts.length > 0);
+    for (const font of initialFonts) await page.waitForFunction(alias => peacecraft3.stored_asset(alias)?.length > 0, font.alias);
     // Find the rendered launcher control through screenshot OCR, not canvas DOM text.
     const settingsCapture = `${output}/settings.png`; await page.screenshot({ path: settingsCapture });
     const { stdout } = await exec('/usr/bin/tesseract', [settingsCapture, 'stdout', '--psm', '11', 'tsv'], { maxBuffer: 4 * 1024 * 1024 });
@@ -199,10 +224,16 @@ async function run() {
     await page.locator('#iso-candidates input').check(); await page.locator('#iso-import').click();
     await page.waitForFunction(() => localImportEvents.length === 1);
     const committed = await page.evaluate(() => ({ result: localImportEvents[0], revision: peacecraft3.asset_revision(), audio: peacecraft3Audio.status(), selftest: peacecraft3.selftest() }));
+    const importedFonts = await page.evaluate(() => peacecraft3.menu_font_files().map(path => ({ path, alias: peacecraft3.menu_font_alias(path), size: peacecraft3.stored_asset(peacecraft3.menu_font_alias(path))?.length })));
+    assert.deepEqual(importedFonts.map(font => font.path).sort(), fixture.fontFiles);
+    assert(importedFonts.every(font => font.alias && font.size > 0));
     assert.equal(committed.revision, initialRevision + 1); assert.match(committed.selftest, /still served by the default asset source: true/);
     await poll(() => logs.slice(logStart).some(l => l.text.includes(`Asset store changed (revision ${committed.revision})`)), 'Running-app revision cache invalidation missing');
     await poll(() => logs.slice(logStart).some(l => l.text.includes(scenePattern)), 'Imported scene must rebuild in running app');
-    for (const label of fixture.labels) await poll(() => logs.slice(logStart).some(l => l.text.includes(`Menu label ${label.id}: ${label.visible} (hotkey `)), `Imported authored label ${label.id} must rebuild`);
+    for (const label of fixture.labels) {
+      const font = fixture.fonts.find(font => font.id === label.id); assert(font);
+      await poll(() => logs.slice(logStart).some(l => l.text.includes(`Menu label ${label.id}: ${label.visible} (hotkey `) && l.text.includes(`face ${JSON.stringify(font.face)}`)), `Imported authored label/font ${label.id} must rebuild`);
+    }
     await page.screenshot({ path: `${output}/after-import-menu.png` });
     await page.locator('#launcher-canvas').screenshot({ path: `${output}/after-import-canvas.png` });
     const canvasGeometry = await page.locator('#launcher-canvas').evaluate(c => ({ width: c.width, height: c.height, bounds: c.getBoundingClientRect().toJSON() }));
@@ -232,7 +263,7 @@ async function run() {
     assert.equal(await page.evaluate(() => peacecraft3.asset_revision()), stableRevision); await page.screenshot({ path: `${output}/unequal-refused-menu-retained.png` });
     const unexpected = requests.filter(r => !r.url.startsWith('blob:') && (!r.url.startsWith(`${origin}/`) || r.method !== 'GET' || r.body || /\.(iso|mpq)(?:[?#]|$)/i.test(r.url)));
     assert.deepEqual(unexpected, []); assert.deepEqual(sockets, []); assert.deepEqual(errors, []);
-    const proof = { ok: true, automaticLabelProof, visualAcceptance: 'pending independent capture review', fixture: `${output}/prepared.json`, committed, logs, network: { requests, requestsDuringLocalImport: requests.slice(importRequestStart), uploads: 0, unexpected: 0, sockets: 0 },
+    const proof = { ok: true, automaticLabelProof, visualAcceptance: 'pending independent capture review', fixture: `${output}/prepared.json`, importedFonts, committed, logs, network: { requests, requestsDuringLocalImport: requests.slice(importRequestStart), uploads: 0, unexpected: 0, sockets: 0 },
       captures: ['settings.png', 'before-import.png', 'after-import-menu.png', 'after-import-canvas.png', 'resized-menu.png', 'resized-canvas.png', 'unequal-refused-menu-retained.png'].map(p => `${output}/${p}`),
       visualReview: 'Root must inspect captures for actual visible authored labels/menu; console and DOM canvas alone are insufficient', limitation: fixture.limitation };
     await writeFile(`${output}/proof.json`, JSON.stringify(proof, null, 2)); console.log(JSON.stringify({ ok: true, proof: `${output}/proof.json`, visualReview: proof.visualReview, limitation: proof.limitation }));
@@ -260,7 +291,7 @@ async function clickAuthoredEntry(page, fixture) {
   const y = box.y + (top + (vh - r[1] - r[3] / 2) / vh * height) / physical.height * box.height;
   await page.mouse.move(x, y); await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))); await page.mouse.down(); await page.waitForTimeout(100); await page.mouse.up();
 }
-try {
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) try {
   if (process.argv.includes('--run')) await run();
   else { const f = await prepare(); console.log(JSON.stringify({ prepared: `${output}/prepared.json`, members: f.provenance.length, expectedScene: f.expectedScene, labels: f.labels.map(l => ({ id: l.id, visible: l.visible })), limitation: f.limitation })); }
 } catch (error) { await mkdir(output, { recursive: true }); await writeFile(`${output}/blocker.json`, JSON.stringify({ error: String(error), stack: error.stack }, null, 2)); console.error(String(error)); process.exitCode = 1; }

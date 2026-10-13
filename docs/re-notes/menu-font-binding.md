@@ -72,15 +72,15 @@ data: the keys, their sections, and the file they name.
 
 ```rust
 let table = menu_skin::SkinTable::parse(&text)?;         // SkinError::Malformed
-let b = table.font_file(face, active_section)?;          // SkinError::UnknownFace / ::Duplicate
+let b = table.font_file_unique(face)?;                  // SkinError::UnknownFace / ::Duplicate
 b.file      // "Fonts\FRIZQT__.TTF"
 b.section   // "Default" — where the winning entry came from
 ```
 
 * `face` is the caller's `TextStyle::font`; the module has **no** `MasterFont`
   mapping of its own.
-* The requested section is consulted first, then `DEFAULT_SECTION` (`"Default"`) —
-  **caller policy, not the verified engine order**.
+* Production lookup requires exactly one definition across the complete table.
+  It chooses no section order. The section-first helper remains test-only policy.
 * **All** blocks with the consulted name are aggregated, so a repeated section
   cannot hide a duplicate.
 * A face the table does not define is `UnknownFace`; two entries in the winning
@@ -108,7 +108,25 @@ and `Default` alike; each face appears **1×** across the table.
   their sections, and the file they name.
 * **The shadow offset** remains unapplied (see `menu-sprite-rendering.md`); this
   note does not change that.
-* No font file is staged, and no shadow mapping is added, pending review.
+* Shadow mapping remains unapplied.
+
+## Runtime integration (2026-10-14)
+
+Each menu entry supplies its own parsed `TextStyle.font`. The GUI caches decoded
+fonts by face and clears both the skin and font cache on asset revisions. Browser
+hydration parses the same FDF/skin inputs and registers each derived file under
+its canonical path and derived served alias. The static loader calls the Rust
+`menu_font_files` and `menu_font_alias` exports, avoiding a copied face-to-file list.
+Missing, duplicate and empty bindings are errors, with no substitute font path.
+
+Twelve Node tests and 21 actual WASM assertions pass, including an alternate
+synthetic face/file and duplicate definitions across skin sections. The actual
+running-app import resolves all six original labels' font paths from the supplied
+FDF and selected skin table, verifies alias bytes, and preserves label/scene
+refresh, click audio, resize and transaction rollback. The final captures are
+under `.scratch/browser-iso-app-import/after-font-opacity/attempt-3-ordered-fonts/`.
+Only local Blob reads occur after import; no HTTP requests, uploads or sockets.
+The locally repacked source fixture is not a retail installer ISO acceptance gate.
 
 ## Next, if the native order must be proven
 
