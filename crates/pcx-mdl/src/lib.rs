@@ -52,10 +52,12 @@
 //! plausible-but-wrong collision shape lets units walk through walls, which is
 //! the worst failure mode available here. See [`CollisionShape`].
 
+mod fafx1800;
 mod geoset1800;
 mod material;
 mod material1800;
 mod particle2;
+pub use fafx1800::{FafxRecord1800, FafxStream1800};
 pub use geoset1800::{
     GeosetStreams1800, SkinRecord1800, SkinStream1800, StoredGeosetBlock, TangentStream1800,
 };

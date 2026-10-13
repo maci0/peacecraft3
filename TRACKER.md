@@ -157,6 +157,9 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
       Stored-only v1800 TANG/SKIN readers now retain the HD Footman's 40,142
       records and wide joint/weight words; strict mesh import still refuses
       weighted HD. Joint lookup, BPOS, conversion and GPU behavior remain open.
+      Raw FAFX records now expose borrowed 80-byte names and 260-byte paths with
+      exact 340-byte tiling and source offsets. Eight synthetic tests, the keyed
+      HD Footman fixture and WASM check pass; FaceFX behavior is not implemented.
 - [ ] `docs/reforged-fixes.md` fix ledger; rows default to `defer`
 
 ## M2 — Asset decoders + first Bevy render — **render smoke passed; full material fidelity open**
