@@ -524,3 +524,154 @@ pointer does to the local buffer. This delegate was not queried here. After
 that, the directly evidenced zero-selector loader boundary is `0x439570`, not
 an image-wide search; inspecting it would require a separately authorized
 bounded step. No Host implementation follows from this dispatcher inspection.
+
+
+## Path helper: dot truncation and suffix delegate boundary
+
+The only inspected half-open interval is **`0x4d28b0..0x4d29b0`**, 256 bytes,
+GNU objdump 2.47 against exact Legacy executable SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+The range's original-byte SHA-256 is
+`f351f5a2cf5ce7907153d68db6f01858d40caaa2d92b2dcbdefcab2cc12131bc`.
+The target helper ends at `0x4d28fb`. Adjacent padding and the separate routine
+starting `0x4d2900` lie inside the authorized window but do not establish this
+helper's behavior. Raw output/identity remain local in
+`.scratch/neutral-path-4d28b0.objdump` and `.scratch/neutral-path-range.json`.
+No REA/provider retry, delegate expansion, input-loader inspection, game
+execution, Host change or build ran. The preceding 30,504 bytes are preserved,
+SHA-256 `b651632673f76fd875e547acde828f738e47a042966ad0f9ea0931b39947f7d1`.
+
+### Directly verified mutations and argument flow
+
+The first argument, the dispatcher's local path buffer, is held in ESI.
+`0x4d28b8` calls **`0x433910(buffer)`** and subtracts one from its EAX result.
+If that index is negative, it skips scanning. Otherwise it examines bytes at
+`buffer + index` while decrementing the index:
+
+- Byte `0x2e` (dot): `0x4d28de` writes zero at that byte, then exits the scan.
+- Byte `0x5c` or `0x2f` (backslash or slash): exits without that write.
+- Other bytes: decrement and continue while the index is nonnegative.
+
+Thus, for the scanned region, a dot encountered before a separator truncates
+the buffer at that dot. It does not walk past a separator to remove an earlier
+directory-component dot. The relationship of the initial index to the true
+string end depends on the uninspected `0x433910` contract.
+
+The second argument is pushed at `0x4d28e2`. The helper calls `0x433910(buffer)`
+again, then adds the buffer pointer to the returned value. That computed pointer
+is pushed as argument 1 to **`0x433570(computed_pointer, second_argument)`**.
+The retained dispatcher supplies the `.w3i` literal as this second argument.
+This proves how the literal reaches the final operation and where its target
+pointer comes from. It does not, without inspecting the callee, prove that the
+operation copies the literal or terminates the resulting string.
+
+**Inference, explicitly bounded:** the backward dot/separator scan, truncation,
+second length-like call and suffix-like final call strongly support replacing
+a final-component extension, or appending the supplied suffix when no dot was
+found. Treating `0x433910` as strlen and `0x433570` as a string copy is still a
+contract inference, not a new semantic proof. Consequently no exact resulting
+filename or archive member identity is assigned here.
+
+### Return and failure coverage
+
+There is no visible Boolean check after either `0x433910` call or the final
+`0x433570` call, and no separate failure return branch in this complete helper.
+It returns with EAX left by `0x433570`. The previously inspected dispatcher
+ignores that result and continues into its input delegates with the same local
+buffer. Negative scan-index handling is not proof of a reported error.
+
+No destination-capacity argument is passed in the visible call to `0x433570`;
+its handling of nulls, truncation, termination or capacity cannot be inferred
+from this caller. The dispatcher has a `0x104`-capacity preparation call, but
+that alone does not establish the later delegate's bounds behavior. Missing
+input and metadata defaults remain at the previously recorded loader/parser
+boundaries. This routine itself does not access metadata `+4`.
+
+### Frozen next boundary
+
+The local dot-truncation behavior and `.w3i` argument connection are established.
+Exact suffix-copy semantics and therefore the final input name remain blocked
+on essential delegated contracts. Stop without expansion: next inspect
+**`0x433910`**, starting with the bounded `0x433910..0x433990` interval, to verify
+the scan index/end-position contract. The subsequent separate boundary is
+**`0x433570`** for the final operation; neither delegate was inspected here.
+`0x439570` was not queried. Field-name identity, runtime context and original
+campaign execution remain unproved; `GetPlayerNeutralPassive` stays unsupported.
+
+
+## String contracts: bounded length window and complete copy wrapper
+
+GNU objdump 2.47 inspected only these half-open ranges from the exact Legacy
+executable SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`:
+
+| Range | Bytes | SHA-256 of original range |
+| --- | ---: | --- |
+| `0x433910..0x433990` | 128 | `78c1d8971115401f6af98a40a1d792be7185a32e6a8a8b41705124cd9dc502b1` |
+| `0x433570..0x433670` | 256 | `7b379852da691ad432d510e6eb31457599f0d1465f85ce3e03b6c67f427aac48` |
+
+Raw output and hashes are local `.scratch/neutral-string-*` artifacts.
+The preceding 34,741 note bytes are preserved, SHA-256
+`8d4a184de0a422c3404e8f29470899514f2a37b067e89b6008ada4940a456084`.
+No out-of-range delegate, loader, provider or runtime execution was inspected.
+
+### Length behavior proved within the window
+
+`0x433910` checks its pointer. A null pointer calls `0x43eca0(0x57)` and returns
+zero; the reporting helper's wider contract remains unknown. For a nonnull
+pointer it scans initial unaligned bytes for NUL, then reads aligned DWORDs
+and tests their individual bytes when its candidate-zero expression fires.
+The complete return path for a zero fourth byte (`0x43397f..0x433988`) returns
+the byte pointer distance from the original argument, excluding the NUL.
+This establishes byte-string-length behavior for that visible termination case.
+The candidate expression can also resume scanning and write a global word at
+`0x112e58c`; this window does not prove a side-effect-free implementation.
+
+Coverage is incomplete: the first-byte and alignment-byte exits branch to
+`0x4339a1`/`0x4339a4`, and the second-byte exit to `0x433995`, beyond the authorized
+stop address. The third-byte return sequence begins at `0x433989` but is cut at
+`0x433990`. These tails were not read. Therefore the entire strlen-like contract
+for every termination alignment is not silently promoted to complete proof.
+
+### Copy wrapper: exact source count and terminator
+
+The complete `0x433570..0x4335c8` body checks both destination (argument 1) and
+source (argument 2). Either null calls `0x43eca0(0x57)` and returns zero without
+the visible copy/terminator path. For nonnull pointers, its own byte-by-byte
+loop counts source bytes up to but excluding NUL; this counting loop does not
+use the incomplete length helper.
+
+It selects `min(source_length, 0x7ffffffe)` with an unsigned comparison, then
+calls **`0xa5ad40(destination, source, selected_count)`** at `0x4335b6`. After
+that call it explicitly writes a zero byte at destination plus selected count
+(`0x4335be`) and returns the original source length (`0x4335c2`). Thus the
+wrapper's count, terminator placement and return convention are established;
+the count limit is not a destination-capacity check. The result is not a
+Boolean success code. The adjacent routines in the inspected window are not
+used as substitutes for the uninspected delegate.
+
+For the already identified `.w3i` literal, this source scan produces count four
+and places the final terminator four bytes after the computed destination on
+normal return. The instructions that transfer those four nonzero bytes are
+inside **`0xa5ad40`**, outside both authorized ranges. Its memcpy-like argument
+shape is evidence of a candidate contract, not proof of the copied bytes.
+
+### Output interpretation and stopped boundary
+
+Combining the prior helper with these observations yields a specific conditional
+transformation: the last dot found before a slash/backslash is replaced by NUL;
+a length-like result selects the end of the truncated buffer; a four-byte
+transfer is requested from the `.w3i` literal there; an explicit NUL follows.
+**If** the outstanding length tails return the same byte count and `0xa5ad40`
+performs the requested transfer, the output is the original path prefix with
+its final-component extension replaced by `.w3i`, or that suffix appended when
+no dot was found. This conditional output is substantially narrower than an
+unexplained call list, but is not yet claimed as fully proved native output.
+
+Stop at the essential transfer boundary **`0xa5ad40`**; a next bounded entry
+window would be `0xa5ad40..0xa5ae40`. The other exact coverage gap is the short
+**`0x433990..0x4339b0`** termination-tail window. Neither was inspected here.
+There is no expansion to `0x439570`. Even closing these string contracts would
+still leave archive/input-loader identity, leading metadata defaults, semantic
+field identity and runtime context unproved. `GetPlayerNeutralPassive` remains
+unsupported; original campaign execution remains blocked.
