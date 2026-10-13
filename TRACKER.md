@@ -837,3 +837,8 @@ Format: `date — subsystem — symptom — root cause — status`
       GitHub reports failed account payments or an insufficient spending limit.
       Local strict/native/WASM checks are distinct from this runner blocker;
       verified Windows/macOS artifacts remain at `d31dc67`. No repeated retries.
+
+- [x] Viewer skinning now binds each mesh to its model-instance entity and authored
+      GEOS ordinal. Equal vertex counts no longer select another geoset's rest
+      positions/bindings. A synthetic ECS regression also preserves unrelated
+      model instances; strict package tests and WASM compile check pass.

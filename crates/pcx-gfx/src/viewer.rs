@@ -52,14 +52,45 @@ pub fn spawn_model(
     _install: &Path,
     textures: &[LoadedTexture],
 ) -> Result<usize, crate::Error> {
+    spawn_model_instance(commands, meshes, materials, images, bytes, source, textures)
+        .map(|(_, count)| count)
+}
+
+#[derive(Component)]
+struct SpawnedGeoset {
+    instance: Entity,
+    geoset: usize,
+}
+
+fn spawn_model_instance(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bytes: &[u8],
+    source: &str,
+    textures: &[LoadedTexture],
+) -> Result<(Entity, usize), crate::Error> {
     let parts = to_bevy(bytes, source)?;
+    let instance = commands
+        .spawn((
+            Transform::default(),
+            Visibility::Inherited,
+            Name::new(source.to_owned()),
+        ))
+        .id();
     if parts.is_empty() {
-        return Ok(0);
+        return Ok((instance, 0));
     }
 
     // The model's own extents give the camera something sensible to frame,
     // rather than a hard-coded distance that only suits one unit.
     let model = crate::load_model(bytes, source)?;
+    if parts.len() != model.meshes.len() {
+        return Err(crate::Error::Decode(format!(
+            "{source}: mesh/geoset count mismatch"
+        )));
+    }
     let centre = [
         (model.minimum_extent[0] + model.maximum_extent[0]) * 0.5,
         (model.minimum_extent[1] + model.maximum_extent[1]) * 0.5,
@@ -71,7 +102,7 @@ pub fn spawn_model(
         .unwrap_or_default();
 
     let mut spawned = 0;
-    for (mesh, path) in &parts {
+    for ((mesh, path), rest) in parts.iter().zip(&model.meshes) {
         let mesh_handle = meshes.add(mesh.clone());
 
         // A geoset whose material points at no texture draws flat-shaded rather
@@ -107,6 +138,11 @@ pub fn spawn_model(
             MeshMaterial3d(material),
             Mesh3d(mesh_handle),
             Transform::from_translation(Vec3::new(centre[0], centre[1], centre[2])),
+            SpawnedGeoset {
+                instance,
+                geoset: rest.geoset,
+            },
+            ChildOf(instance),
         ));
         spawned += 1;
     }
@@ -134,7 +170,7 @@ pub fn spawn_model(
         affects_lightmapped_meshes: true,
     });
 
-    Ok(spawned)
+    Ok((instance, spawned))
 }
 
 /// The authored `TEXS` flags for `path`, or `0` for an unnamed texture.
@@ -321,11 +357,6 @@ fn spawn_once(
     let bones = parsed.bones(&viewer.bytes).unwrap_or_default();
     let pivots = parsed.pivots(&viewer.bytes).unwrap_or_default();
     let anims = model_anims(&viewer.bytes);
-    let rest_by_vertex_count: std::collections::HashMap<usize, crate::LoadedMesh> = model
-        .meshes
-        .iter()
-        .map(|mesh| (mesh.positions.len(), mesh.clone()))
-        .collect();
     info!(
         "{} geoset animations, {} bones, {} pivots",
         anims.len(),
@@ -411,25 +442,25 @@ fn spawn_once(
         player,
     });
 
-    commands.insert_resource(ViewerCache {
-        model: Some(model),
-        bones,
-        pivots,
-        rest_by_vertex_count,
-        bone_entities,
-    });
-
-    match spawn_model(
+    match spawn_model_instance(
         &mut commands,
         &mut meshes,
         &mut materials,
         &mut images,
         &viewer.bytes,
         &viewer.model,
-        &viewer.install,
         &viewer.textures,
     ) {
-        Ok(n) => info!("spawned {n} geosets"),
+        Ok((instance, n)) => {
+            info!("spawned {n} geosets");
+            commands.insert_resource(ViewerCache {
+                model: Some(model),
+                instance: Some(instance),
+                bones,
+                pivots,
+                bone_entities,
+            });
+        }
         Err(e) => error!("cannot show {}: {e}", viewer.model),
     }
 
@@ -575,7 +606,7 @@ fn skin_from_animation(
     mut meshes: ResMut<Assets<Mesh>>,
     cache: Res<ViewerCache>,
     posed: Query<&Transform>,
-    spawned: Query<&Mesh3d>,
+    spawned: Query<(&Mesh3d, &SpawnedGeoset)>,
 ) {
     let Some(model) = cache.model.as_ref() else {
         return;
@@ -586,13 +617,15 @@ fn skin_from_animation(
         .map(|&e| posed.get(e).map(pose_of).unwrap_or_default())
         .collect();
     let skeleton = pose_from_poses(model, &cache.bones, &cache.pivots, &poses);
-    for handle in &spawned {
+    for (handle, binding) in &spawned {
+        if Some(binding.instance) != cache.instance {
+            continue;
+        }
         let Some(mut mesh) = meshes.get_mut(&handle.0) else {
             continue;
         };
-        // The mesh asset was built from a geoset; find which one by its vertex
-        // count, which is enough to pick the right rest positions.
-        let Some(rest) = cache.rest_by_vertex_count.get(&mesh.count_vertices()) else {
+        // load_model retains GEOS records in authored ordinal order.
+        let Some(rest) = model.meshes.get(binding.geoset) else {
             continue;
         };
         let skinned = skin_mesh(rest, &skeleton);
@@ -763,11 +796,9 @@ fn build_clip(
 #[derive(Resource, Default)]
 struct ViewerCache {
     model: Option<crate::LoadedModel>,
+    instance: Option<Entity>,
     bones: Vec<pcx_mdl::Bone>,
     pivots: pcx_mdl::Pivots,
-    /// Rest-pose meshes keyed by vertex count, so a spawned mesh asset can be
-    /// matched back to the geoset it was built from.
-    rest_by_vertex_count: std::collections::HashMap<usize, crate::LoadedMesh>,
     /// The bone entities Bevy's animation system poses, in bone order.
     bone_entities: Vec<Entity>,
 }
@@ -782,6 +813,75 @@ fn model_anims(bytes: &[u8]) -> Vec<pcx_mdl::GeosetAnim> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn equal_vertex_counts_keep_geoset_identity_and_other_instances_untouched() {
+        let rest = |geoset, position| crate::LoadedMesh {
+            positions: vec![position],
+            normals: vec![[0.0, 0.0, 1.0]],
+            tex_coords: vec![[0.0, 0.0]],
+            indices: vec![],
+            vertex_groups: vec![],
+            bone_indices: vec![],
+            group_counts: vec![],
+            geoset,
+            material_id: 0,
+        };
+        let model = crate::LoadedModel {
+            name: "synthetic equal-sized geosets".into(),
+            minimum_extent: [0.0; 3],
+            maximum_extent: [10.0; 3],
+            meshes: vec![rest(0, [1.0, 2.0, 3.0]), rest(1, [7.0, 8.0, 9.0])],
+            bone_names: vec![],
+            bone_parents: vec![],
+            sequences: vec![],
+        };
+        let mut world = World::new();
+        let instance = world.spawn_empty().id();
+        let other_instance = world.spawn_empty().id();
+        let mut meshes = Assets::<Mesh>::default();
+        let handles: Vec<_> = (0..3)
+            .map(|_| meshes.add(crate::to_bevy_mesh(&rest(0, [99.0; 3]))))
+            .collect();
+        for (handle, binding) in handles.iter().zip([
+            SpawnedGeoset {
+                instance,
+                geoset: 0,
+            },
+            SpawnedGeoset {
+                instance,
+                geoset: 1,
+            },
+            SpawnedGeoset {
+                instance: other_instance,
+                geoset: 0,
+            },
+        ]) {
+            world.spawn((Mesh3d(handle.clone()), binding));
+        }
+        world.insert_resource(meshes);
+        world.insert_resource(ViewerCache {
+            model: Some(model),
+            instance: Some(instance),
+            ..default()
+        });
+        world.run_system_once(skin_from_animation).unwrap();
+        let meshes = world.resource::<Assets<Mesh>>();
+        for (handle, expected) in handles.iter().zip([
+            vec![[1.0, 2.0, 3.0]],
+            vec![[7.0, 8.0, 9.0]],
+            vec![[99.0; 3]],
+        ]) {
+            assert_eq!(
+                meshes
+                    .get(handle)
+                    .unwrap()
+                    .attribute(Mesh::ATTRIBUTE_POSITION),
+                Some(&bevy::mesh::VertexAttributeValues::Float32x3(expected)),
+            );
+        }
+    }
 
     fn shipped_model(rel: &str) -> Option<Vec<u8>> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

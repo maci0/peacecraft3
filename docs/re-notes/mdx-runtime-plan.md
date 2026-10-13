@@ -63,9 +63,9 @@ Both original menu models passed:
 | UI/Glues/MainMenu/MainMenu3d_exp/MainMenu3d_exp.mdx | 163 | 10 | 13 | 11 | 18 | 8 | 14 | 1 |
 
 These are observations, not parser constants or corpus-wide acceptance claims.
-The existing pcx-gfx library/viewer and full native/WASM integration were not
-built or changed by this slice. Root owns module declaration and integration.
-After that wiring, the targeted Cargo test is:
+The checked plan module is declared in pcx-gfx, and its targeted Cargo tests
+pass. Full renderer integration of helpers, GEOA and multiple layers remains
+open. The targeted Cargo test is:
 
 ```sh
 cargo test --locked -p pcx-gfx --test mdx_runtime
@@ -78,8 +78,8 @@ cargo test --locked -p pcx-gfx --test mdx_runtime -- --ignored --nocapture
 
 ## Viewer vertex-count binding defect
 
-The current viewer constructs `rest_by_vertex_count` by collecting all loaded
-meshes into a HashMap keyed by position count. Later skinning chooses rest data
+The previous viewer constructed `rest_by_vertex_count` by collecting all loaded
+meshes into a HashMap keyed by position count. Skinning then chose rest data
 by the spawned mesh's vertex count. Distinct geosets with the same count overwrite
 one another. The original models demonstrate actual data differences:
 
@@ -91,8 +91,10 @@ one another. The original models demonstrate actual data differences:
 
 `RuntimePlan::duplicate_vertex_counts()` reports those collisions from the
 current asset, with no baked-in measured counts. Existing `LoadedMesh.geoset`
-already retains the source ordinal. The next caller fix must carry that geoset
-identity on each spawned mesh/entity together with its model instance, retain
-rest meshes by geoset ordinal, and select rest data through that marker during
-skinning. Root owns that viewer/scene change; this primitive does not claim it
-has already repaired the current rendering path.
+already retains the source ordinal. The viewer now attaches that ordinal and its
+model-instance entity to every spawned mesh. The animation system selects rest
+positions and skin bindings from the active instance's model by authored ordinal;
+equal vertex counts no longer collapse identities, and other instances are left
+untouched. A synthetic ECS regression exercises different rest positions for two
+equal-sized geosets plus an unrelated instance. This closes the identity defect,
+not helper/material/native rendering fidelity.
