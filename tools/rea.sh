@@ -47,51 +47,51 @@ case "$cmd" in
     ;;
 
   inspect)
-    require_target "$1"
-    snap="$(snap_for "$1")"
+    target="$1"; require_target "$target"; shift
+    snap="$(snap_for "$target")"
     if [ ! -f "$snap" ]; then
-      echo "→ cold analysis of $1 (this takes minutes)" >&2
-      "${BUNX[@]}" inspect "$1" --snapshot "$snap" --json >/dev/null
+      echo "→ cold analysis of $target (this takes minutes)" >&2
+      "${BUNX[@]}" inspect "$target" --snapshot "$snap" --json >/dev/null
     fi
-    "${BUNX[@]}" inspect "$1" --snapshot "$snap" "$@"
+    "${BUNX[@]}" inspect "$target" --snapshot "$snap" "$@"
     ;;
 
   search)
-    require_target "$1"; pattern="$2"; shift 2
-    snap="$(snap_for "$1")"
+    target="$1"; require_target "$target"; pattern="$2"; shift 2
+    snap="$(snap_for "$target")"
     if [ ! -f "$snap" ]; then
-      echo "→ cold analysis of $1" >&2
-      "${BUNX[@]}" inspect "$1" --snapshot "$snap" --json >/dev/null
+      echo "→ cold analysis of $target" >&2
+      "${BUNX[@]}" inspect "$target" --snapshot "$snap" --json >/dev/null
     fi
-    "${BUNX[@]}" search "$1" "$pattern" --snapshot "$snap" "$@"
+    "${BUNX[@]}" search "$target" "$pattern" --snapshot "$snap" "$@"
     ;;
 
   function)
-    require_target "$1"; sym="$2"; shift 2
-    snap="$(snap_for "$1")"
+    target="$1"; require_target "$target"; sym="$2"; shift 2
+    snap="$(snap_for "$target")"
     if [ ! -f "$snap" ]; then
-      echo "→ cold analysis of $1" >&2
-      "${BUNX[@]}" inspect "$1" --snapshot "$snap" --json >/dev/null
+      echo "→ cold analysis of $target" >&2
+      "${BUNX[@]}" inspect "$target" --snapshot "$snap" --json >/dev/null
     fi
-    "${BUNX[@]}" function "$1" "$sym" --snapshot "$snap" "$@"
+    "${BUNX[@]}" function "$target" "$sym" --snapshot "$snap" "$@"
     ;;
 
   trace)
-    require_target "$1"; query="$2"; shift 2
-    snap="$(snap_for "$1")"
+    target="$1"; require_target "$target"; query="$2"; shift 2
+    snap="$(snap_for "$target")"
     if [ ! -f "$snap" ]; then
-      "${BUNX[@]}" inspect "$1" --snapshot "$snap" --json >/dev/null
+      "${BUNX[@]}" inspect "$target" --snapshot "$snap" --json >/dev/null
     fi
-    "${BUNX[@]}" trace "$1" "$query" --snapshot "$snap" "$@"
+    "${BUNX[@]}" trace "$target" "$query" --snapshot "$snap" "$@"
     ;;
 
   xrefs)
-    require_target "$1"; addr="$2"; shift 2
-    snap="$(snap_for "$1")"
+    target="$1"; require_target "$target"; addr="$2"; shift 2
+    snap="$(snap_for "$target")"
     if [ ! -f "$snap" ]; then
-      "${BUNX[@]}" inspect "$1" --snapshot "$snap" --json >/dev/null
+      "${BUNX[@]}" inspect "$target" --snapshot "$snap" --json >/dev/null
     fi
-    "${BUNX[@]}" xrefs "$1" "$addr" --snapshot "$snap" "$@"
+    "${BUNX[@]}" xrefs "$target" "$addr" --snapshot "$snap" "$@"
     ;;
 
   snapshot)
