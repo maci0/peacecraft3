@@ -13,8 +13,10 @@ tests. Original JPEG logo alpha is decoded; no-alpha decoding is preserved.
 Desktop and narrow browser checks verify menu entry, clean screen clearing,
 resize hit-testing and original click/music playback without JavaScript errors.
 Those checks isolate UI from the unfinished 3D scene.
-Full scene fidelity remains open: red planes, helper inheritance, particles,
-texture animation and exact blend/lighting behavior still need evidence.
+Full browser scene captures now show coherent Orc camp geometry; the previous
+large red planes no longer reproduce. Full fidelity remains open: exact TFT
+scene/logo selection, grey sky, helper inheritance, particles, texture animation
+and blend/lighting behavior still need evidence.
 
 Earlier format-sweep baseline: **15 crates / 336 tests passing, 0 failing**, `cargo fmt`
 clean — expect the number to move, because `pcx-trig` is still being edited
