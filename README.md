@@ -1,6 +1,14 @@
-# PeaceCraft3
+<p align="center">
+  <img src="docs/branding/peacecraft3-logo.png" alt="PeaceCraft III" width="100%" />
+</p>
 
-A faithful reimplementation of **Warcraft III: Complete Edition 1.28c** in Rust on the
+<p align="center">
+  <a href="https://github.com/maci0/peacecraft3/actions/workflows/desktop-builds.yml"><img src="https://github.com/maci0/peacecraft3/actions/workflows/desktop-builds.yml/badge.svg" alt="Desktop builds" /></a>
+</p>
+
+# PeaceCraft III
+
+A faithful reimplementation of **Warcraft III: The Frozen Throne 1.29b** in Rust on the
 Bevy engine, reading the **original game assets directly from the shipped MPQ archives**.
 
 - **[PLAN.md](PLAN.md)** — technical plan, milestones, risks, definition of faithful
@@ -23,7 +31,7 @@ wc3/game/app/Storm.dll    1 341 procedures /   736 strings
 ## Quick start
 
 ```sh
-export PEACECRAFT3_INSTALL="$PWD/wc3/game/app"
+export PEACECRAFT3_INSTALL="/path/to/Warcraft III (Legacy)"
 
 cargo test -p pcx-mpq          # header assertions against the four real archives
 tools/rea.sh doctor            # REA + Ghidra readiness
@@ -34,8 +42,12 @@ cargo run -p peacecraft3
 PeaceCraft settings open first. Use **Main menu** to enter the original game
 menu. Original menu rendering and audio are being verified; full gameplay and
 exact visual fidelity are still in progress.
+The target is 1.29b (`1.29.2.9232-legacy-tft`). The older 1.28c asset tree is an
+incidental compatibility cross-check, not the main target.
 
 [Windows and macOS builds](docs/build-desktop.md) cover Intel/x64 and ARM64.
+The [native build workflow](https://github.com/maci0/peacecraft3/actions/workflows/desktop-builds.yml)
+compiles, tests and packages each target separately.
 Browser-only ISO asset discovery, without uploading the ISO to a server, is
 planned in [PLAN.md](PLAN.md).
 
