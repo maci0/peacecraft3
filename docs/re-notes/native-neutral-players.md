@@ -986,3 +986,99 @@ separately authorized. No delegate was expanded here. Archive/filesystem
 selection, actual input basename, metadata `+4` semantics/defaults and native
 map-context lifetime remain unproved. `GetPlayerNeutralPassive` remains
 unsupported and original campaign execution remains blocked.
+
+
+## Classifier: path candidate versus indexed-record outputs
+
+GNU objdump 2.47 inspected only **`0x435cb0..0x435eb0`**, half-open, 512 bytes,
+from exact Legacy executable SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+Original range SHA-256:
+`82ecd00be1b7d6fadae7b9b89c98959de94849657a9d573baefe63c438b177af`.
+Artifacts remain local: `.scratch/neutral-classifier-435cb0.objdump` and
+`.scratch/neutral-classifier-range.json`. The prior published note prefix is
+57,627 bytes, unchanged SHA-256
+`0608fd92d34e9f86ebbdce982b14b697cbd55ddf194b9fff67a9379caa600560`.
+No delegate, literal contents, provider or runtime was queried outside this
+window. The indexed-success epilogue extends beyond its stop address.
+
+### Actual arguments, initial outputs and candidates
+
+The previously proved selector passes `(0, supplied_path, mode, &A, &B, path_out)`.
+At entry this classifier clears A and B if their pointers exist, but does not
+initialize `path_out`. It uses global `0x10db4d8` only when its signed value is
+positive; otherwise it treats that value as zero. A nonzero first argument
+restricts processing to an equal current value. Current `+0x258 > 0` skips its
+normal processing. Following a failed candidate, current `+4` supplies the next
+value, with signed nonpositive values ending traversal. These are list-shaped
+instruction relationships, not a proved mount order or source-priority policy.
+
+For a nonnull current value, a nonzero current `+0x150` redirects the owner
+pointer used by subsequent lookup; otherwise the owner is current itself.
+If the string-like area at current `+0x154` begins with a nonzero byte, three
+`0x4334d0` calls receive that area, uninspected literal `0xe6a10c`, and the
+original path, using one local buffer and a remaining-size word initialized
+to `0x104`. The resulting local buffer becomes the candidate path. Otherwise
+the supplied path remains the candidate. Concatenation/prefix and separator
+semantics of that delegate/literal are not established here.
+
+### Complete result-two branch and its input producer
+
+When `mode & 3` is nonzero, the classifier considers **`0x4356d0`** only if
+owner is null or owner `+0x114` equals zero. At `0x435dbe`, it passes
+**`(candidate_path, mode, &temporary_path)`** to that delegate. A nonzero return
+branches to `0x435e29`. There it passes the temporary path, caller `path_out`
+and capacity `0x104` to `0x433500` if that output pointer exists, then sets EAX
+to **two** and returns through the fully observed `0x435e5d` return.
+
+This establishes the producer and forwarding connection for the selector's
+result-two opener branch: its local path buffer comes from `0x4356d0` through
+that forwarding helper. It does not establish whether the producer checks a
+filesystem file, resolves another virtual source, or synthesizes the path.
+The number two is not a source-category proof.
+
+### Indexed-record branch and bounded return coverage
+
+If the result-two producer is skipped or returns zero, a nonnull current
+value allows **`0x437040(owner, candidate_path, global_word, global_byte)`**,
+using the word at `0x112ed3c` and byte at `0x112ed3e`. Return `0xffffffff`
+continues traversal. Any other return enters the record path at `0x435e5e`.
+
+The instructions compute a record from owner `+0x140`, using a 16-byte
+lookup stride and the lookup record's `+0xc` word as an index with a
+`0x2c`-byte stride into owner `+0x13c`. This is physical indexed-table evidence;
+hash/archive/member identity and field types remain unproved. A signed
+nonnegative word at the computed record `+0xc` reports `0x3ee` and joins the
+zero-return path. With `mode & 4` set, an additional `0x1ff00` mask test can
+join the same error path. The retained caller's low-two-bit mode keeps that
+additional mode mask clear.
+
+On the remaining path, owner is stored through A and the computed record
+pointer through B when those output pointers exist. At `0x435ea8`, EAX is set
+to **one**. The window stops during its epilogue at `0x435eaf`; a complete final
+return for this branch is not yet observed. The output stores and assigned
+one are proved independently of that missing tail.
+
+### Failure, source identity and essential stop boundary
+
+When traversal has no further positive current value, the complete observed
+failure path calls `0x43eca0(2)` and returns zero. The invalid-record path uses
+reporting value `0x3ee` before joining that return. Reporting values are not
+assigned platform error names. A/B begin as zero and only the indexed-success
+path publishes them in this window; path output is separate and is only
+forwarded on result two. None of these clears/defaults target metadata `+4`.
+
+The earlier PE metadata binding **`KERNEL32.dll!GetFileSize`** remains a proved
+named import for the downstream handle `+0x110` branch. It does not turn this
+classifier's numeric returns, table shapes or globals into proved filesystem,
+archive, edition or priority categories.
+
+Stop at **`0x4356d0`**, the essential producer for the complete result-two
+path: candidate path and mode go in, a temporary path and nonzero/zero result
+control the downstream opener path. A next bounded window would be
+`0x4356d0..0x4358d0` if separately authorized. The separate indexed producer is
+`0x437040`, and the short epilogue boundary is `0x435eb0`; neither is expanded.
+Actual input source identity remains blocked on these contracts, not on a
+missing call-address inventory. Original path basename, metadata semantics,
+defaults and native context lifetime remain unproved. `GetPlayerNeutralPassive`
+stays unsupported; original campaign execution remains blocked.
