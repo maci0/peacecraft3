@@ -1082,3 +1082,82 @@ Actual input source identity remains blocked on these contracts, not on a
 missing call-address inventory. Original path basename, metadata semantics,
 defaults and native context lifetime remain unproved. `GetPlayerNeutralPassive`
 stays unsupported; original campaign execution remains blocked.
+
+
+## Result-two path producer: output builder and acceptance gate
+
+Only **`0x4356d0..0x4358d0`**, half-open, 512 bytes, was inspected with GNU
+objdump 2.47 against exact Legacy executable SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+Original range SHA-256:
+`70a23e83452205130d27a21063ca6b19f28c8820c8d2b7bf2066646987a05e10`.
+The complete producer ends at `0x435749`. The unrelated routine at `0x435750`
+and partial builder at `0x435850` fall within the authorized window; the former
+is not used to infer this producer's semantics. Artifacts are local
+`.scratch/neutral-path-producer-4356d0.objdump` and
+`.scratch/neutral-path-producer-range.json`. The preceding 63,248 note bytes
+remain unchanged, SHA-256
+`fcd464575c545b356ee8d8529c6d60f1729bc5df37c3f349d15cef27814edeb1`.
+No external delegate/import identity, provider or runtime was queried.
+
+### Complete producer contract visible at its caller
+
+Arguments are candidate path, mode, and output path pointer. If `mode & 3` is
+zero, EAX remains zero and the routine returns without visible output writes.
+The producer does not clear its output at entry.
+
+When `mode & 2` is set, `0x4356ef` calls
+**`0x435850(candidate_path, output_path, 1)`**. The returned EAX is not used as
+an acceptance result: immediately afterward it calls **`0x435660(output_path)`**.
+A nonzero result exits with that result unchanged. A zero result permits the
+next branch only if `mode & 1` is set; otherwise zero is returned.
+
+The `mode & 1` branch first calls **`0x436fa0(candidate_path)`**. On a nonzero
+return it calls `0x435850(candidate_path, output_path, 0)`, then
+`0x435660(output_path)` and returns the latter's result unchanged. On a zero
+return it passes output path, candidate path and capacity `0x104` to `0x433500`,
+then calls `0x435660(output_path)` and returns that result unchanged.
+
+Thus the classifier's complete result-two path is now tied to a concrete
+acceptance gate: **a nonzero `0x435660(output_path)` result**, following one
+of the specified builder/forwarding branches. It is not a direct success
+result from the builder, and the producer itself does not return category two;
+its caller converts any nonzero producer result into two. These instruction
+branches do not prove numeric source priority, edition policy or a file/archive
+category for either mode mask.
+
+### Partial builder coverage and actual output limit
+
+The authorized window also contains the beginning of `0x435850`. It uses a
+cached global buffer at `0x112ec10`. If its first byte is zero, an **unresolved**
+import slot `0xe66160` receives `(0, global_buffer, 0x104)`; its EAX is passed
+to `0x4394a0`. Further visible calls supply the global buffer and slash byte to
+`0x4333d0`, optionally write a zero byte at that return pointer, and pass the
+buffer, literal address `0xe695c4`, and `0x104` to `0x433140`.
+
+At `0x4358b9` the builder tests its third argument. The nonzero branch supplies
+the candidate and a slash byte to `0x433410`; coverage ends during the instruction
+at **`0x4358ce`**. This does not establish the final output path, basename
+handling, global-buffer origin or imported API name. The actual builder return
+and output mutation contract remain incomplete. The previously proved
+`KERNEL32.dll!GetFileSize` binding is a different slot (`0xe66198`) and is not
+reused to name this unresolved import.
+
+### Failure and essential boundary
+
+The complete producer contains no separate reporting/error-code helper and no
+validation result check on its builder/forwarding calls. A failed first gate
+may still have changed output before another branch runs; a final zero return
+does not prove that output was cleared or untouched. Only its zero/nonzero
+acceptance behavior is established. These path outputs are not defaults for
+metadata `+4`.
+
+Stop at **`0x435660`**, the essential acceptance delegate: it consumes the
+constructed output path and supplies the result that determines the classifier's
+result-two branch. A bounded next entry window would be `0x435660..0x4356d0`.
+The separate builder coverage gap starts at `0x4358ce`; any continuation must
+start there or earlier at an instruction boundary, not at an arbitrary split
+byte. Neither delegate was expanded beyond this authorized range.
+Actual loaded input identity, metadata field semantics/defaults and native
+context lifetime remain unproved. `GetPlayerNeutralPassive` remains unsupported;
+original campaign runtime remains blocked.
