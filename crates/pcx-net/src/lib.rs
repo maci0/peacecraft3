@@ -28,6 +28,7 @@ pub mod transport;
 
 pub mod bnet;
 pub mod rollback;
+pub mod session;
 
 /// How a transport delivers commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
