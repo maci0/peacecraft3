@@ -280,10 +280,10 @@ fn format_info(m: &Map<'_>, what: &Format) {
                 println!(
                     "  framing   head {} + {} players + {} forces + {} xrefs + {} table lists + 8 == {}",
                     fr.head_bytes,
-                    fr.players,
-                    fr.forces,
+                    fr.player_bytes,
+                    fr.force_bytes,
                     fr.xref_bytes,
-                    fr.table_lists,
+                    fr.table_list_bytes,
                     fr.file_len
                 );
                 println!("  hash      {:016x}", i.canonical_hash());

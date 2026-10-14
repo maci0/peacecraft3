@@ -200,13 +200,6 @@ pub struct Player {
     pub ally_mask: u32,
 }
 
-impl Player {
-    fn wire_len(&self) -> usize {
-        // 4 controller + 4 race + 4 start + 4 colour + name + 4 + 4
-        16 + self.name.len() + 1 + 8 + 8
-    }
-}
-
 /// One force (team/alliance) row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Force {
@@ -216,12 +209,6 @@ pub struct Force {
     pub mask: u32,
     /// Force name, usually a `TRIGSTR_` reference.
     pub name: String,
-}
-
-impl Force {
-    fn wire_len(&self) -> usize {
-        8 + self.name.len() + 1
-    }
 }
 
 /// The camera bounds, eight floats: a primary rectangle and a second one.
@@ -281,7 +268,8 @@ pub struct TableList {
 }
 
 impl TableList {
-    /// Bytes this list occupies in the file.
+    /// Byte length implied by the current decoded fields and record grammar.
+    /// Lossy name decoding or caller mutation can differ from the authored span.
     pub fn wire_len(&self) -> usize {
         4 + self.name.len()
             + 1
@@ -355,14 +343,20 @@ pub struct MapInfo {
     pub extra_u32_19: Option<u32>,
     /// The player slots.
     pub players: Vec<Player>,
+    /// Authored player-record span, excluding the count and lossy string expansion.
+    player_record_bytes: usize,
     /// The forces.
     pub forces: Vec<Force>,
+    /// Authored force-record span, excluding its count.
+    force_record_bytes: usize,
     /// Section A: a list of four-word rows (from `VERSION_TABLE_LIST`).
     pub start_locations: Vec<[u32; 4]>,
     /// Section B: a list of two-word rows (from `VERSION_TABLE_LIST_7`).
     pub pairs: Vec<[u32; 2]>,
     /// Section C: table lists (from `VERSION_TABLE_LIST_12`).
     pub table_lists: Vec<TableList>,
+    /// Authored table-list record span, excluding its count.
+    table_list_record_bytes: usize,
     pub item_tables: Vec<ItemTable>,
     raw: Vec<u8>,
 }
@@ -634,6 +628,7 @@ impl MapInfo {
         let extra_u32_19 = (version >= VERSION_19).then(|| c.u32()).transpose()?;
 
         let player_count = c.u32()? as usize;
+        let player_records_at = c.at;
         let mut players = Vec::new();
         for _i in 0..player_count {
             players.push(Player {
@@ -657,9 +652,12 @@ impl MapInfo {
             });
         }
 
+        let player_record_bytes = c.at - player_records_at;
+
         let mut forces = Vec::new();
-        if version >= VERSION_FORCES {
+        let force_record_bytes = if version >= VERSION_FORCES {
             let n = c.u32()? as usize;
+            let records_at = c.at;
             for _ in 0..n {
                 forces.push(Force {
                     flags: c.u32()?,
@@ -667,7 +665,10 @@ impl MapInfo {
                     name: c.string()?,
                 });
             }
-        }
+            c.at - records_at
+        } else {
+            0
+        };
 
         let mut start_locations = Vec::new();
         if version >= VERSION_TABLE_LIST {
@@ -686,8 +687,9 @@ impl MapInfo {
         }
 
         let mut table_lists = Vec::new();
-        if version >= VERSION_TABLE_LIST_12 {
+        let table_list_record_bytes = if version >= VERSION_TABLE_LIST_12 {
             let n = c.u32()? as usize;
+            let records_at = c.at;
             for _ in 0..n {
                 let id = c.u32()?;
                 let name = c.string()?;
@@ -717,7 +719,10 @@ impl MapInfo {
                     second,
                 });
             }
-        }
+            c.at - records_at
+        } else {
+            0
+        };
 
         let mut item_tables = Vec::new();
         if version >= 0x18 {
@@ -778,10 +783,13 @@ impl MapInfo {
             extra_byte_18,
             extra_u32_19,
             players,
+            player_record_bytes,
             forces,
+            force_record_bytes,
             start_locations,
             pairs,
             table_lists,
+            table_list_record_bytes,
             item_tables,
             raw: bytes.to_vec(),
         })
@@ -859,38 +867,38 @@ pub struct MapInfoFraming {
     pub file_len: usize,
     /// The version word.
     pub version: u32,
-    /// Player slot count.
+    /// Current decoded player count; caller mutation does not rewrite raw bytes.
     pub players: usize,
-    /// Force count.
+    /// Current decoded force count; not necessarily the authored count after mutation.
     pub forces: usize,
-    /// Table-list count.
+    /// Current decoded table-list count; not necessarily the authored count after mutation.
     pub table_lists: usize,
-    /// Bytes the player records occupy, summed from their own widths.
+    /// Authored player-record bytes captured by the parser, excluding the count.
     pub player_bytes: usize,
-    /// Bytes the force records occupy.
+    /// Authored force-record bytes captured by the parser, excluding the count.
     pub force_bytes: usize,
     /// Bytes the three start-location cross-reference sections occupy.
     pub xref_bytes: usize,
-    /// Bytes the table lists occupy.
+    /// Authored table-list record bytes captured by the parser, excluding the count.
     pub table_list_bytes: usize,
-    /// Bytes the variable head occupies.
+    /// Residual bytes not separately itemized, including the version-25 item-table tail.
     pub head_bytes: usize,
-    /// Whether the walk consumed the file exactly.
+    /// Whether the original parse consumed the input, not validation of later mutations.
     pub exact: bool,
 }
 
 impl MapInfoFraming {
     /// Read the framing of a parsed file.
     ///
-    /// The per-record widths are computed from the decoded structures, so this
-    /// is an arithmetic identity over the parse rather than a re-read of the
-    /// bytes. `exact` is set by the parser, which is where the cursor actually
-    /// runs out or lands.
+    /// Player, force and table-list bytes are authored cursor spans, unchanged
+    /// by lossy name decoding or later caller mutation. Counts and xref lengths
+    /// describe current decoded fields. This view is not a serializer or a
+    /// validator of mutations; `exact` records the original successful parse.
     pub fn of(info: &MapInfo) -> Self {
-        let player_bytes: usize = info.players.iter().map(Player::wire_len).sum();
-        let force_bytes: usize = info.forces.iter().map(Force::wire_len).sum();
+        let player_bytes = info.player_record_bytes;
+        let force_bytes = info.force_record_bytes;
         let xref_bytes: usize = 4 + info.start_locations.len() * 16 + 4 + info.pairs.len() * 8;
-        let table_list_bytes: usize = info.table_lists.iter().map(TableList::wire_len).sum();
+        let table_list_bytes = info.table_list_record_bytes;
         Self {
             file_len: info.raw.len(),
             version: info.version,
@@ -909,9 +917,8 @@ impl MapInfoFraming {
         }
     }
 
-    /// The full arithmetic identity the decoder relies on, as a single sum:
-    /// the fixed head, every player, every force, the three cross-reference
-    /// sections and the table lists add up to the file length exactly.
+    /// Whether the separately reported byte totals add up to the raw input.
+    /// This does not prove that subsequently mutated decoded records match it.
     pub fn sums(&self) -> bool {
         self.head_bytes
             + self.player_bytes
