@@ -54,6 +54,7 @@
 //! emitted in sorted order with no map iteration anywhere near the output.
 
 pub mod campaign;
+pub mod cinematics;
 pub mod diff;
 pub mod generator;
 pub mod map_scripts_import;

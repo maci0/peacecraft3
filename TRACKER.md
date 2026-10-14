@@ -692,6 +692,12 @@ milestone, regardless of unit-test count.
 
 - [ ] Campaign AI behaviour parity
 - [ ] Cinematic playback
+- [x] Cinematic/dialog FDF declaration ingestion preserves source identity,
+      local records, template edges and every authored anchor with explicit
+      caller bindings and limits. Seven synthetic tests, explicit local FDF gate,
+      public crate integration and native/WASM checks pass. Native playback,
+      dialog handles/events and rendered layouts remain open; see
+      `docs/re-notes/ingame-cinematics-dialogs.md`.
 - [ ] Netcode surface (loopback first)
 - [ ] UI parity (HUD, minimap, command card, tooltips, chat)
 - [ ] Audio parity (`.slk` sound-list channels, 3D positioning)
