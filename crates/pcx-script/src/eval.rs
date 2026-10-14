@@ -157,10 +157,27 @@ impl<'a, H: Host> Vm<'a, H> {
             .program
             .globals()
             .iter()
-            .map(|g| (g.name.clone(), g.init.clone(), g.array, g.source.clone()))
+            .map(|g| {
+                (
+                    g.name.clone(),
+                    g.init.clone(),
+                    g.array,
+                    g.source.clone(),
+                    g.span,
+                )
+            })
             .collect::<Vec<_>>();
         let mut frame = Frame::new();
-        for (name, init, array, source) in inits {
+        for (name, init, array, source, span) in inits {
+            if array && init.is_some() {
+                let error = crate::Error::run(
+                    span,
+                    format!("`{name}` is declared `array`, and an array has no initialiser"),
+                );
+                self.error_source = Some(source);
+                self.init_error = Some(error.clone());
+                return Err(error);
+            }
             let slot = match init {
                 Some(e) => match self.eval(&e, &mut frame) {
                     Ok(value) => Slot::Scalar(value),

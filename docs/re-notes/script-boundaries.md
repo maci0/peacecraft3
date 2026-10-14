@@ -14,6 +14,14 @@ the existing array-needs-index error rather than returning the global value.
 Indexed operations, scalar shadowing and source spans retain their existing
 behavior.
 
+A global declared as an array cannot carry a scalar initializer under the existing
+VM array contract. Initialization now refuses that declaration before evaluating
+its expression, matching the existing local-array refusal. The error retains its
+declaration span/source and remains cached, so retries cannot repeat earlier Host
+calls. Valid uninitialized arrays and scalar initializers retain their existing
+paths. This is project validation; native initializer admission and ordering are
+not established by these tests.
+
 Only a literal without authored code-tag parts enters trigger-string lookup.
 The decoded text representation omits those parts, so using it as a WTS identity
 could previously fetch an unrelated entry and bypass missing-tag errors. Tagged
