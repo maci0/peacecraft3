@@ -64,8 +64,7 @@ pub const LOGO_ANCHOR_UNITS: (f32, f32) = (0.13, 0.04);
 /// Expected values for the fixture test only. The renderer uses
 /// [`LogoData::quad`], which is parsed.
 #[cfg(test)]
-pub const LOGO_QUAD_MEASURED: (f32, f32, f32, f32) =
-    (-0.112_089_999, -0.058_200_001, 0.111_460_000, 0.053_300_000);
+pub const LOGO_QUAD_MEASURED: (f32, f32, f32, f32) = (-0.112_09, -0.058_2, 0.111_46, 0.053_3);
 
 /// The textures and sequences the model is expected to carry, for the fixture
 /// test.
@@ -440,10 +439,10 @@ fn alpha_curve_of(data: &[u8]) -> Option<AlphaCurve> {
         if !value.is_finite() || !in_tan.is_finite() || !out_tan.is_finite() {
             return unsupported(format!("KMTA key at frame {frame} is not finite"));
         }
-        if let Some(prev) = keys.last().map(|k: &BezierKey| k.frame) {
-            if frame <= prev {
-                return unsupported(format!("KMTA frames out of order: {prev} then {frame}"));
-            }
+        if let Some(prev) = keys.last().map(|k: &BezierKey| k.frame)
+            && frame <= prev
+        {
+            return unsupported(format!("KMTA frames out of order: {prev} then {frame}"));
         }
         keys.push(BezierKey {
             frame,
@@ -479,21 +478,21 @@ impl LogoAssets {
 /// Loads the logo's model and texture from an install, or from a browser store.
 #[must_use]
 pub fn load_logo(desktop: Option<&std::path::Path>) -> LogoAssets {
-    let mut out = LogoAssets::default();
-    out.model = crate::mainmenu::art_bytes_named(desktop, LOGO_MODEL, LOGO_MODEL_SERVED);
+    let mut out = LogoAssets {
+        model: crate::mainmenu::art_bytes_named(desktop, LOGO_MODEL, LOGO_MODEL_SERVED),
+        texture: crate::mainmenu::art_bytes_named(desktop, LOGO_TEXTURE, LOGO_TEXTURE_SERVED),
+        missing: Vec::new(),
+    };
     if out.model.is_none() {
         out.missing.push(LOGO_MODEL);
     }
-    out.texture = crate::mainmenu::art_bytes_named(desktop, LOGO_TEXTURE, LOGO_TEXTURE_SERVED);
     if out.texture.is_none() {
         out.missing.push(LOGO_TEXTURE);
     }
     out
 }
 
-/// The paths a browser must serve for the logo.
 #[must_use]
-
 /// Marker for the logo sprite.
 #[derive(Component, Debug)]
 pub struct MenuLogo;
@@ -557,13 +556,13 @@ mod tests {
                 frame: 0,
                 value: 0.0,
                 in_tan: 0.0,
-                out_tan: 0.533_333_003_5,
+                out_tan: 0.533_333,
             },
             BezierKey {
                 frame: 500,
                 value: 1.0,
-                in_tan: 0.866_666_972_6,
-                out_tan: 1.222_219_944,
+                in_tan: 0.866_667,
+                out_tan: 1.222_22,
             },
         ]
     }
@@ -715,16 +714,16 @@ mod tests {
     #[test]
     fn bounds_are_min_and_max_not_first_and_last() {
         let v = vec![
-            [-0.112_089_999, 0.053_300_000, 0.0],
-            [-0.112_089_999, -0.058_200_001, 0.0],
-            [0.111_460_000, 0.053_300_000, 0.0],
-            [0.111_460_000, -0.058_200_001, 0.0],
+            [-0.112_09, 0.053_3, 0.0],
+            [-0.112_09, -0.058_2, 0.0],
+            [0.111_46, 0.053_3, 0.0],
+            [0.111_46, -0.058_2, 0.0],
         ];
         let b = bounds_of(&v);
-        assert!((b.0 - -0.112_089_999).abs() < 1e-6);
-        assert!((b.1 - -0.058_200_001).abs() < 1e-6);
-        assert!((b.2 - 0.111_460_000).abs() < 1e-6);
-        assert!((b.3 - 0.053_300_000).abs() < 1e-6);
+        assert!((b.0 - -0.112_09).abs() < 1e-6);
+        assert!((b.1 - -0.058_2).abs() < 1e-6);
+        assert!((b.2 - 0.111_46).abs() < 1e-6);
+        assert!((b.3 - 0.053_3).abs() < 1e-6);
     }
 
     /// Against the real model: the quad, the sequences and the texture this

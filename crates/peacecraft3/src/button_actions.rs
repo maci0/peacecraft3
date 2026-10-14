@@ -34,16 +34,15 @@ fn collect(
 // that release behavior even when the widget's transient Pressed insertion and
 // removal share one command flush. Keyboard Activate and pointer Click can both
 // arrive for the same button; retain one action per button in a frame.
+type ClickButtonFilter = (
+    With<Button>,
+    Without<InteractionDisabled>,
+    Without<ActivateOnPress>,
+);
+
 fn collect_click(
     event: On<PointerClick>,
-    enabled: Query<
-        (),
-        (
-            With<Button>,
-            Without<InteractionDisabled>,
-            Without<ActivateOnPress>,
-        ),
-    >,
+    enabled: Query<(), ClickButtonFilter>,
     mut actions: ResMut<ButtonActions>,
 ) {
     if enabled.contains(event.entity) && !actions.entities.contains(&event.entity) {

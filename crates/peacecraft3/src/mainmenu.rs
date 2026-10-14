@@ -526,11 +526,13 @@ pub(crate) fn from_served(_name: &str) -> Option<Vec<u8>> {
 /// inspected, exactly as the rest of this workspace does.
 #[cfg(test)]
 pub fn load_glue_art(install: Option<&std::path::Path>) -> GlueArt {
-    let mut art = GlueArt::default();
+    let mut art = GlueArt {
+        button: art_bytes(install, BUTTON_ART),
+        ..Default::default()
+    };
     // Each art file comes from whichever source can supply it, so a browser
     // (no filesystem, but a store the page filled) and a desktop (a staged
     // install) both end up with the originals where they exist.
-    art.button = art_bytes(install, BUTTON_ART);
     if art.button.is_none() {
         art.missing.insert(BUTTON_ART);
     }
