@@ -1,4 +1,5 @@
 //! Local session host: cargo run -p pcx-net --features session-server --example session_server
+#[cfg(not(target_arch = "wasm32"))]
 use std::{
     collections::BTreeMap,
     io,
@@ -6,23 +7,29 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(not(target_arch = "wasm32"))]
 use pcx_net::{
     Peer,
     session::{MAX_PACKET_BYTES, MAX_PLAYERS, Session},
 };
+#[cfg(not(target_arch = "wasm32"))]
 use pcx_sim::{FX_ONE, TICK_MS, World};
+#[cfg(not(target_arch = "wasm32"))]
 use tungstenite::{Message, WebSocket, protocol::WebSocketConfig};
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Connection {
     socket: WebSocket<TcpStream>,
     player: Option<u8>,
     deadline: Instant,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn blocked(error: &tungstenite::Error) -> bool {
     matches!(error, tungstenite::Error::Io(e) if e.kind() == io::ErrorKind::WouldBlock)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn send(connection: &mut Connection, message: Message) -> bool {
     match connection.socket.send(message) {
         Ok(()) => true,
@@ -31,6 +38,7 @@ fn send(connection: &mut Connection, message: Message) -> bool {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address = std::env::args()
         .nth(1)
@@ -181,4 +189,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         std::thread::sleep(Duration::from_millis(1));
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "the TCP/WebSocket session server requires a native target",
+    )
+    .into())
 }

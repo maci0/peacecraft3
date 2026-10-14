@@ -306,7 +306,8 @@ pub fn text_style(fdf: &str, frame: &str) -> Result<TextStyle, TextError> {
 ///
 /// # Errors
 ///
-/// [`TextError`] as [`text_style`], plus [`TextError::Duplicate`].
+/// [`TextError`] for malformed or missing style records, including
+/// [`TextError::Duplicate`] for ambiguous records.
 pub fn text_style_in(texts: &[&str], frame: &str) -> Result<TextStyle, TextError> {
     let chain = frame_chain(texts, frame)?;
     let record = |name: &'static str| -> Result<&str, TextError> {

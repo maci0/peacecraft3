@@ -8,6 +8,8 @@ mod import_assets;
 mod button_actions;
 mod fdf;
 mod glue_menu;
+#[cfg(test)]
+mod hud;
 mod intro;
 mod launch;
 mod launch_gui;
@@ -19,8 +21,6 @@ mod menu_panel;
 mod menu_skin;
 mod menu_sprites;
 mod menu_text;
-#[cfg(test)]
-mod hud;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

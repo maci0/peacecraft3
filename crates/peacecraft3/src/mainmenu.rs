@@ -38,7 +38,7 @@ use bevy::prelude::*;
 ///
 /// The menu label's colour, highlight, size, alignment and shadow are **not**
 /// copied here: they are read from `StandardButtonTextTemplate` through
-/// [`crate::menu_text::text_style`], so they cannot drift from the asset.
+/// [`crate::menu_text::text_style_in`], so they cannot drift from the asset.
 pub const LABEL: Color = Color::srgb(0.99, 0.827, 0.0705);
 
 /// The art path of the button frame, `StandardMenuButtonBaseBackdrop`'s
@@ -174,10 +174,9 @@ pub struct GlueArt {
 
 /// The short name each original art path is served under in a browser.
 ///
-/// A browser has no filesystem, so the originals the page is allowed to show
-/// are the ones extracted next to it and fetched over HTTP: `web/assets/` holds
-/// them, `loader.js` hands them to [`crate::browser::add_asset`] under these
-/// names, and this is the mapping from the game's own path to that name.
+/// The browser loader hands locally imported originals to
+/// `crate::browser::add_asset` under these aliases. This maps the game's own path
+/// to an alias; the published demo contains no original game assets.
 #[must_use]
 pub fn served_name(wc3_path: &str) -> Option<&'static str> {
     match wc3_path {

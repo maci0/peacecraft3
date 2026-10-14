@@ -67,7 +67,7 @@
 //!   file reaches that branch.
 //!
 //! All output is straight (non-premultiplied) RGBA8, row-major, top-left
-//! origin, matching [`pcx_blp`]. The decoded output of all 383 files was
+//! origin, matching `pcx-blp`. The decoded output of all 383 files was
 //! compared byte for byte against an independent decoder (Pillow's TGA plugin)
 //! via [`fnv1a64`]; all 383 agree.
 

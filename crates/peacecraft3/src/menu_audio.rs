@@ -1,7 +1,7 @@
 //! Original TFT menu music and GlueScreenClick feedback.
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 use bevy::ui::Pressed;
 use bevy::ui_widgets::Button;
 

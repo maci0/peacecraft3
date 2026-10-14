@@ -126,7 +126,7 @@
 //! * **Unsupported versions.** Only version 18 (0x12) ships. Other version
 //!   words have their walk implemented — the reader has them — but none of them
 //!   occurs in a shipped file, so the sweep asserts only 18 and the crate
-//!   returns [`Error::UnsupportedVersion`] for the rest rather than claiming
+//!   returns [`Error::UnsupportedInfoVersion`] for the rest rather than claiming
 //!   they were measured.
 
 use crate::Error;

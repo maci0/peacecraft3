@@ -1,9 +1,8 @@
 use pcx_net::{
-    encode, encode_input_payload,
-    session::{Session, MAX_COMMANDS_PER_TICK, MAX_PACKET_BYTES},
-    Datagram, Peer,
+    Datagram, Peer, encode, encode_input_payload,
+    session::{MAX_COMMANDS_PER_TICK, MAX_PACKET_BYTES, Session},
 };
-use pcx_sim::{Command, World, FX_ONE, MAX_INPUT_LEAD};
+use pcx_sim::{Command, FX_ONE, MAX_INPUT_LEAD, World};
 
 fn order(tick: u64, player: u8, x: i32) -> Vec<u8> {
     encode(&Datagram::Input {

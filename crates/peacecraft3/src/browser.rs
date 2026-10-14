@@ -367,12 +367,11 @@ fn derived_menu_fonts(
         );
     }
     for frame in fdf.frames() {
-        if let Some(target) = &frame.props.button_text {
-            if let Ok(style) = crate::mainmenu::menu_text_style(texts, target) {
-                if let Ok(binding) = crate::mainmenu::menu_font_file(skin, &style.font) {
-                    paths.insert(binding.file);
-                }
-            }
+        if let Some(target) = &frame.props.button_text
+            && let Ok(style) = crate::mainmenu::menu_text_style(texts, target)
+            && let Ok(binding) = crate::mainmenu::menu_font_file(skin, &style.font)
+        {
+            paths.insert(binding.file);
         }
     }
     Ok(paths.into_iter().collect())
@@ -403,9 +402,9 @@ pub fn menu_font_alias(path: String) -> Option<String> {
     crate::mainmenu::served_font_name(&path)
 }
 
-fn hydrate(
-    set: &mut [pcx_mpq::MpqArchive],
-) -> Result<(BTreeMap<String, Vec<u8>>, Vec<String>), String> {
+type HydratedMenuAssets = (BTreeMap<String, Vec<u8>>, Vec<String>);
+
+fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String> {
     let mut assets = crate::import_assets::HydratedAssets::new(HYDRATION_LIMIT);
     let mut notes = Vec::new();
     let mut put = |path: &str, alias: Option<&str>, bytes: Vec<u8>| -> Result<(), String> {

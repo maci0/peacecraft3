@@ -95,7 +95,10 @@ fn inheritance_ambiguity_cycles_and_self_edges_are_refused() {
         "Frame \"TEXT\" \"a\" INHERITS \"a\" {\n}\n",
         "Frame \"TEXT\" \"a\" INHERITS \"b\" {\n}\nFrame \"TEXT\" \"b\" INHERITS \"c\" {\n}\nFrame \"TEXT\" \"c\" INHERITS \"a\" {\n}\n",
     ] {
-        assert!(matches!(parse(text).unwrap_err().kind, FdfErrorKind::InheritanceCycle(_)));
+        assert!(matches!(
+            parse(text).unwrap_err().kind,
+            FdfErrorKind::InheritanceCycle(_)
+        ));
     }
     assert!(matches!(
         parse("Frame \"TEXT\" \"a\" INHERITS \"missing\" {\n}\n")

@@ -174,7 +174,7 @@ impl SkinTable {
     /// the game would use is unknown. This is what the shipped data supports:
     /// `MasterFont` and the other font keys appear exactly once, in `[Default]`.
     ///
-    /// This is the production entry point; [`SkinTable::font_file`] keeps the
+    /// This is the production entry point; `SkinTable::font_file` keeps the
     /// caller-supplied-section policy and is test-only, since that policy is an
     /// inference rather than the verified engine order.
     ///

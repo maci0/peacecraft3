@@ -10,8 +10,8 @@
 //!
 //! | layer | module | stops at |
 //! |---|---|---|
-//! | syntax | [`lexer`], [`parser`], [`ast`], [`print`], [`canon`] | an exact tree, every node spanned |
-//! | resolution | [`resolve`] | one flat environment, three checks |
+//! | syntax | [`lexer`], [`parser`], [`ast`], [`mod@print`], [`canon`] | an exact tree, every node spanned |
+//! | resolution | [`mod@resolve`] | one flat environment, three checks |
 //! | values | [`value`] | `null`, boolean, integer, real, string, `code` |
 //! | execution | [`eval`] | statements and expressions, no natives but two |
 //! | text seams | [`text`], [`eval::Host`] | the caller supplies `war3map.wts` |
@@ -330,7 +330,7 @@ pub struct Error {
 pub enum Stage {
     Lex,
     Parse,
-    /// Name resolution: the checks in [`resolve`].
+    /// Name resolution: the checks in [`mod@resolve`].
     Resolve,
     /// Evaluation: the interpreter in [`eval`].
     Run,

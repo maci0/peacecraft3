@@ -73,10 +73,10 @@ extern "C" {
 
 #[cfg(target_arch = "wasm32")]
 fn browser_update(mut intro: ResMut<Intro>) {
-    if let Some(expansion) = intro.requested.take() {
-        if !matches!(browser_play(expansion), Ok(true)) {
-            intro.finish();
-        }
+    if let Some(expansion) = intro.requested.take()
+        && !matches!(browser_play(expansion), Ok(true))
+    {
+        intro.finish();
     }
     if intro.playing && !matches!(browser_finished(), Ok(false)) {
         intro.finish();

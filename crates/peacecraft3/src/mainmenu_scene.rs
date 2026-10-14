@@ -80,7 +80,7 @@ pub const MODEL_SERVED_NAME: &str = "menu3d/mainmenu3d.mdx";
 ///
 /// A browser cannot read the install, so the 33 textures the model names are
 /// extracted next to the page and registered under
-/// `menu3d/<lowercased file name>`. [`texture_served_name`] is the single place
+/// `menu3d/<lowercased file name>`. [`texture_served_name_in`] is the single place
 /// that mapping is defined, and `web/loader.js` mirrors it.
 pub const TEXTURE_DIR: &str = "menu3d";
 
@@ -404,8 +404,8 @@ pub struct MainMenuScene {
 /// [`SceneInfo::missing_textures`].
 ///
 /// The camera and lights come from the model. The camera is given `order: -1`
-/// so it draws **before** the UI camera; see the module docs and [`layer`] for
-/// what the caller has to change on the UI side.
+/// so it draws **before** the UI camera; see the module docs for the caller's
+/// UI camera configuration.
 pub fn spawn(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,

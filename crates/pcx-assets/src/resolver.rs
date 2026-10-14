@@ -329,17 +329,19 @@ impl Resolver {
             location: location.clone(),
             source,
         };
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary_path)
-            .map_err(|source| io_error(&temporary_path, source))?;
-        let temporary = TempIndex(temporary_path);
-        file.write_all(json.as_bytes())
-            .map_err(|source| io_error(&temporary.0, source))?;
-        file.sync_all()
-            .map_err(|source| io_error(&temporary.0, source))?;
-        drop(file);
+        let temporary = {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary_path)
+                .map_err(|source| io_error(&temporary_path, source))?;
+            let temporary = TempIndex(temporary_path);
+            file.write_all(json.as_bytes())
+                .map_err(|source| io_error(&temporary.0, source))?;
+            file.sync_all()
+                .map_err(|source| io_error(&temporary.0, source))?;
+            temporary
+        };
         fs::rename(&temporary.0, &destination).map_err(|source| io_error(&destination, source))?;
         Ok(destination)
     }

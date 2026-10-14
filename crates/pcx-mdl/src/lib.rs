@@ -6200,7 +6200,7 @@ impl Particle2TrackKind {
 /// particle systems. [`Particle`] is the older `PREM` set; the two coexist in
 /// the shipped models and a model may carry both.
 ///
-/// The node header is [`effect_nodes`]'s, so it is identical to a ribbon's. The
+/// The node header is `effect_nodes`'s, so it is identical to a ribbon's. The
 /// body is the 171-byte prelude followed by a sorted chain of `KP2*` sub-chunks
 /// — see the block comment at the end of this file for the full layout and the
 /// relations the sweep asserts.

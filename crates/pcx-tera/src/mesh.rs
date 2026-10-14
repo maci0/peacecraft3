@@ -15,7 +15,7 @@ use crate::world::{TILE_XY, Z_PER_INDEX, Z_REFERENCE_INDEX};
 /// Each `width * height` tile is two triangles, `(a, b, d)` and `(a, d, c)`
 /// where `a = (cx, cy)`, `b = (cx + 1, cy)`, `c = (cx, cy + 1)`,
 /// `d = (cx + 1, cy + 1)`. Both wind so their face normal points along `+z`
-/// (`+y` in Bevy's frame, after [`pcx_gfx`] lifts the mesh): with the row *not*
+/// (`+y` in Bevy's frame, after `pcx-gfx` lifts the mesh): with the row *not*
 /// flipped, `+x` is east, `+y` is north and `+z` is up.
 ///
 /// Nothing here is engine state, and nothing here iterates a hash map: the

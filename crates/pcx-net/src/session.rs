@@ -2,9 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use pcx_sim::{Command, Input, PlayerInput, World, FX_ONE};
+use pcx_sim::{Command, FX_ONE, Input, PlayerInput, World};
 
-use crate::{decode, decode_input_payload, encode, encode_world_payload, Datagram, Peer, Server};
+use crate::{Datagram, Peer, Server, decode, decode_input_payload, encode, encode_world_payload};
 
 pub const MAX_PLAYERS: u8 = 16;
 pub const MAX_PACKET_BYTES: usize = 1024;
@@ -209,7 +209,10 @@ mod tests {
         s.receive(Peer(11), &order(5, 1, FX_ONE)).unwrap();
         assert!(s.inputs.contains_key(&5));
         s.leave(Peer(11));
-        assert!(!s.inputs.contains_key(&5), "leave must prune emptied future buckets");
+        assert!(
+            !s.inputs.contains_key(&5),
+            "leave must prune emptied future buckets"
+        );
     }
 
     #[test]

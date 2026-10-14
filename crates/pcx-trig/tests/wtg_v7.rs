@@ -20,7 +20,7 @@ fn base() -> Vec<u8> {
     v.extend_from_slice(&0u32.to_le_bytes()); // is_comment
     v.extend_from_slice(&1u32.to_le_bytes()); // is_expandable
     v.extend_from_slice(&0u32.to_le_bytes()); // parent
-                                              // unknown root
+    // unknown root
     v.extend_from_slice(&1u32.to_le_bytes());
     // one variable
     v.extend_from_slice(&1u32.to_le_bytes());
@@ -31,7 +31,7 @@ fn base() -> Vec<u8> {
     v.extend_from_slice(&3u32.to_le_bytes()); // array_size
     v.extend_from_slice(&0u32.to_le_bytes()); // is_initialized
     v.extend_from_slice(b"\0"); // initial value
-                                // one trigger
+    // one trigger
     v.extend_from_slice(&1u32.to_le_bytes());
     v.extend_from_slice(b"T\0");
     v.extend_from_slice(b"\0"); // description
@@ -43,7 +43,7 @@ fn base() -> Vec<u8> {
     v.extend_from_slice(&0u32.to_le_bytes()); // run on init
     v.extend_from_slice(&5u32.to_le_bytes()); // parent id
     v.extend_from_slice(&1u32.to_le_bytes()); // eca count
-                                              // one ECA (action, top-level: no group)
+    // one ECA (action, top-level: no group)
     v.extend_from_slice(&2u32.to_le_bytes()); // kind action
     v.extend_from_slice(b"DoNothing\0");
     v.extend_from_slice(&1u32.to_le_bytes()); // enabled
@@ -88,7 +88,7 @@ fn preserves_child_eca() {
     b.extend_from_slice(&1u32.to_le_bytes()); // enabled
     b.extend_from_slice(&0u32.to_le_bytes()); // branch
     b.extend_from_slice(&0u32.to_le_bytes()); // child count
-                                              // fix original parent child_count already set to 1 above; trailing root still has trigger. Parse:
+    // fix original parent child_count already set to 1 above; trailing root still has trigger. Parse:
     let w = wtg_v7::WtgV7::parse(&b, &arity()).unwrap();
     assert_eq!(w.triggers()[0].ecas[0].child_ecas.len(), 1);
     assert_eq!(w.triggers()[0].ecas[0].child_ecas[0].group, Some(1));

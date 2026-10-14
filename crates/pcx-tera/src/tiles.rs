@@ -11,7 +11,7 @@
 //!
 //! The rest of the columns are **not** interpreted. `walkable` in particular is
 //! a per-*tile-type* flag, and the game's pathing is its own; see
-//! [`Unsupported::Walkability`].
+//! [`crate::Unsupported::Walkability`].
 
 use crate::Error;
 

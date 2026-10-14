@@ -85,7 +85,7 @@ pub enum Behaviour {
     Vanilla,
     /// Reforged behaviour. An opt-in deviation.
     Reforged,
-    /// Only the fixes marked `adopt` in [`crate::fixes`] applied.
+    /// Selective Reforged fixes. The per-fix adoption registry is not implemented.
     ReforgedFixes,
 }
 
@@ -454,9 +454,12 @@ fn is_casc_install(dir: &Path) -> bool {
 
 /// CLI front-end.
 ///
-///   peacecraft3 launch sources [paths...]        classify what it was given
-///   peacecraft3 launch plan    <mode>            show what a mode would stage
-///   peacecraft3 launch stage   <mode> <src> <dst>  copy and verify
+/// ```text
+/// peacecraft3 launch sources [paths...]        classify what it was given
+/// peacecraft3 launch plan    <mode>            show what a mode would stage
+/// peacecraft3 launch stage   <mode> <src> <dst>  copy and verify
+/// ```
+///
 /// The launcher's argument handling, split out so the GUI and any caller can
 /// run it against an explicit argument list.
 pub fn main_with(args: &[String]) -> i32 {

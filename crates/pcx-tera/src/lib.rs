@@ -107,7 +107,7 @@
 //! shipped byte this crate measured. The measured primitives are handed out
 //! ([`TileProfile`]) and the decision is refused (see [`cliff`]).
 //!
-//! [`cliff_wall`] constructs optional wall quads from caller-supplied geometry
+//! [`mod@cliff_wall`] constructs optional wall quads from caller-supplied geometry
 //! and a caller-supplied threshold; it does not answer the refused cliff rule.
 //! [`WaterData`] preserves original corner records with explicit provenance and
 //! refuses water-level decoding and water meshes. Authored water settings exist

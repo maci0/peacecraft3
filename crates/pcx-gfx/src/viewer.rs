@@ -19,7 +19,7 @@ use bevy::app::AnimationSystems;
 use bevy::curve::{Curve, Interval};
 use bevy::prelude::*;
 
-use crate::{load_image, pose_from_poses, skin_mesh, to_bevy, LoadedTexture};
+use crate::{LoadedTexture, load_image, pose_from_poses, skin_mesh, to_bevy};
 
 /// Where to find the archives.
 pub fn resolve_install(explicit: Option<&str>) -> PathBuf {
