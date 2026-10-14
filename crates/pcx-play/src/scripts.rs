@@ -151,6 +151,15 @@ pub struct LocalizedHost<'a, H> {
     table: Option<&'a Table>,
     label: Option<&'a str>,
 }
+impl<'a, H> LocalizedHost<'a, H> {
+    pub(crate) fn new(inner: H, table: Option<&'a Table>, label: Option<&'a str>) -> Self {
+        Self {
+            inner,
+            table,
+            label,
+        }
+    }
+}
 impl<H: Host> Host for LocalizedHost<'_, H> {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         self.inner.native(name, args)

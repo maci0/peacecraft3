@@ -128,7 +128,9 @@ pub use lexer::{
 };
 pub use parser::parse;
 pub use print::{CommentPolicy, PrintOptions};
-pub use resolve::{Prelude, Program, resolve, resolve_with};
+pub use resolve::{
+    Prelude, Program, ResolveDiagnostic, resolve, resolve_with, resolve_with_diagnostics,
+};
 pub use span::{SourceMap, Span};
 pub use value::{HandleId, Value};
 

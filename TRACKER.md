@@ -674,7 +674,12 @@ closed by the work above:
 - [~] JASS resolver, typed values, interpreter and caller-owned Host exist. Native handle behavior/casts and the game Host remain incomplete.
 - [ ] `WTG` trigger graph → JASS desugar with the original's exact semantics (incl.
        generated-code naming so `GetTriggerName` returns the right string)
-- [ ] `WCT` custom-text script compilation
+- [~] `WCT` custom-text compilation: the public bounded adapter joins checked
+       zero-header WCT/v4 WTG bodies with caller-supplied context and preludes,
+       preserves cross-block state, source diagnostics and WTS lookup. Synthetic
+       VM tests and the identified local Human06 compilation gate pass. Native
+       source/load/initializer ordering, GUI lowering and campaign execution are
+       still open; see `docs/re-notes/wct-compilation.md`.
 - [ ] Native function table (exact signatures, return conventions and **side-effect
        ordering** from `game.dll`)
 - [ ] `BJ` / `Blz` library surface, including the `Blz` extensions

@@ -1,309 +1,540 @@
-//! Adapter for compiling authored WC3 WCT custom-text trigger bodies.
-//!
-//! Each non-empty WCT block is JASS in trigger order. This module compiles those
-//! bodies against caller-supplied preludes and preserves their WCT/WTG association
-//! for diagnostics. It does not synthesize JASS prelude text or lower WTG ECAs.
+//! Compile ordered WCT bodies into one caller-supplied JASS environment.
+//! WTG association is checked, but GUI ECAs are not lowered and no trigger is run.
 
-use pcx_play::scripts::{AssetIdentity, ScriptAsset};
-use pcx_script::{parse as parse_script, resolve_with, Host, Prelude, Program};
-use pcx_trig::{wct_wtg_violations, Wct, Wtg};
+use crate::scripts::{AssetIdentity, LocalizedHost, ScriptAsset, SourceDigest};
+use pcx_script::{Host, Prelude, Program, Script, Stage, Vm};
+use pcx_trig::{Wct, Wtg, wct_wtg_violations};
+use std::{alloc::Layout, collections::BTreeMap, ops::Range};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Input-byte policy, not native limits or a bound on compiler/VM memory.
+#[derive(Debug, Clone, Copy)]
 pub struct CustomScriptBudget {
     pub max_wct_bytes: usize,
+    pub max_wtg_bytes: usize,
     pub max_block_bytes: usize,
     pub max_custom_blocks: usize,
     pub max_prelude_bytes: usize,
+    pub max_context_bytes: usize,
+    pub max_wts_bytes: usize,
     pub max_aggregate_input_bytes: usize,
 }
-
-impl CustomScriptBudget {
-    pub const DEFAULT: Self = Self {
-        max_wct_bytes: 4 * 1024 * 1024,
-        max_block_bytes: 1024 * 1024,
-        max_custom_blocks: 65_536,
-        max_prelude_bytes: 8 * 1024 * 1024,
-        max_aggregate_input_bytes: 128 * 1024 * 1024,
-    };
-}
-
 impl Default for CustomScriptBudget {
     fn default() -> Self {
-        Self::DEFAULT
+        Self {
+            max_wct_bytes: 4 * 1024 * 1024,
+            max_wtg_bytes: 8 * 1024 * 1024,
+            max_block_bytes: 1024 * 1024,
+            max_custom_blocks: 65_536,
+            max_prelude_bytes: 8 * 1024 * 1024,
+            max_context_bytes: 16 * 1024 * 1024,
+            max_wts_bytes: 4 * 1024 * 1024,
+            max_aggregate_input_bytes: 128 * 1024 * 1024,
+        }
     }
+}
+
+pub struct CustomScriptInputs<'a, 'data> {
+    pub common: ScriptAsset<'a>,
+    pub blizzard: ScriptAsset<'a>,
+    /// Authored declarations supplied by the caller, before the ordered blocks.
+    /// This does not generate missing GUI globals or initialization functions.
+    pub context: Option<ScriptAsset<'a>>,
+    pub wct_label: &'a str,
+    pub wct: &'a Wct<'data>,
+    pub wtg_label: &'a str,
+    pub wtg: &'a Wtg<'data>,
+    pub wts: Option<ScriptAsset<'a>>,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum CustomScriptError {
-    #[error("asset identity field {field:?} must not be empty")]
-    InvalidIdentity { field: &'static str },
-    #[error("input {region:?} exceeds size budget: declared {declared_bytes} bytes, limit is {max_bytes} bytes")]
-    BudgetExceeded {
+    #[error("missing or duplicate input identity {label:?}")]
+    Identity { label: String },
+    #[error("{label}: {region} size {size} exceeds input policy {limit}")]
+    Budget {
+        label: String,
         region: &'static str,
-        declared_bytes: usize,
-        max_bytes: usize,
+        size: usize,
+        limit: usize,
     },
-    #[error("authored WCT/WTG association failed: {reason}")]
-    Association { reason: String },
-    #[error("WCT block {index} for trigger {trigger:?} is not UTF-8 at byte {at}")]
-    InvalidUtf8 {
-        index: usize,
-        trigger: String,
-        at: usize,
-    },
-    #[error("WCT block {index} for trigger {trigger:?} parse failed: {reason}")]
-    ParseFailed {
-        index: usize,
-        trigger: String,
+    #[error("input size arithmetic overflow in {region}")]
+    Overflow { region: &'static str },
+    #[error("{region}: allocation/span layout is unsupported for {size} bytes")]
+    Platform { region: &'static str, size: usize },
+    #[error("{region}: allocation failed: {reason}")]
+    Allocation {
+        region: &'static str,
         reason: String,
     },
-    #[error("trigger {trigger:?} WCT block {index} compilation failed: {reason}")]
-    CompileFailed {
-        index: usize,
-        trigger: String,
+    #[error("{label}: unsupported WCT header word {word}")]
+    Header { label: String, word: u32 },
+    #[error("{wct} / {wtg}: {reason}")]
+    Association {
+        wct: String,
+        wtg: String,
         reason: String,
     },
-    #[error("aggregate input bytes {declared_bytes} exceed budget {max_bytes}")]
-    AggregateExceeded {
-        declared_bytes: usize,
-        max_bytes: usize,
+    #[error("{label}: text is not UTF-8 at byte {at}")]
+    Utf8 { label: String, at: usize },
+    #[error("{label}: block {index} is not exactly one NUL-terminated text")]
+    Terminator { label: String, index: usize },
+    #[error("{label}: {reason}")]
+    Script {
+        label: String,
+        stage: Stage,
+        reason: String,
     },
-    #[error("{}", .0)]
-    Prelude(String),
+    #[error("{label}: {reason}")]
+    Wts { label: String, reason: String },
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct CustomScript {
+    /// Slot in the WCT/WTG pair; empty GUI slots do not renumber later blocks.
     pub index: usize,
-    pub trigger: String,
+    pub trigger: Vec<u8>,
     pub label: String,
-    pub source: String,
+    /// Fingerprint of the complete stored text, including its final NUL.
     pub digest: u64,
-    pub program: Program,
+    pub range: Range<usize>,
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct CustomScripts {
     pub identity: AssetIdentity,
-    pub items: Vec<CustomScript>,
+    items: Vec<CustomScript>,
+    pub digests: Vec<SourceDigest>,
+    program: Program,
+    source: String,
+    context: Option<(String, Range<usize>)>,
+    prelude_sources: BTreeMap<String, String>,
+    wct_label: String,
+    wts: Option<pcx_trig::wts::Table>,
+    wts_label: Option<String>,
+}
+
+fn sum(a: usize, b: usize, region: &'static str) -> Result<usize, CustomScriptError> {
+    a.checked_add(b)
+        .ok_or(CustomScriptError::Overflow { region })
+}
+fn limit(
+    label: &str,
+    region: &'static str,
+    size: usize,
+    cap: usize,
+) -> Result<(), CustomScriptError> {
+    if size > cap {
+        return Err(CustomScriptError::Budget {
+            label: label.into(),
+            region,
+            size,
+            limit: cap,
+        });
+    }
+    Ok(())
+}
+fn text<'a>(label: &str, bytes: &'a [u8]) -> Result<&'a str, CustomScriptError> {
+    std::str::from_utf8(bytes).map_err(|error| CustomScriptError::Utf8 {
+        label: label.into(),
+        at: error.valid_up_to(),
+    })
+}
+fn parse(label: &str, source: &str) -> Result<Script, CustomScriptError> {
+    pcx_script::parse(source).map_err(|error| CustomScriptError::Script {
+        label: label.into(),
+        stage: error.stage,
+        reason: error.render(source),
+    })
 }
 
 impl CustomScripts {
-    #[allow(clippy::too_many_arguments)]
-    pub fn compile<'a>(
+    pub fn compile(
         identity: AssetIdentity,
-        common: ScriptAsset<'_>,
-        blizzard: ScriptAsset<'_>,
-        map: Option<ScriptAsset<'_>>,
-        wct: &Wct<'a>,
-        wtg: &Wtg<'a>,
-        wts: Option<ScriptAsset<'_>>,
+        input: CustomScriptInputs<'_, '_>,
         budget: CustomScriptBudget,
     ) -> Result<Self, CustomScriptError> {
-        if identity.edition.is_empty() {
-            return Err(CustomScriptError::InvalidIdentity { field: "edition" });
+        for (label, value) in [
+            ("edition", &identity.edition),
+            ("version", &identity.version),
+            ("source", &identity.source),
+        ] {
+            if value.trim().is_empty() {
+                return Err(CustomScriptError::Identity {
+                    label: label.into(),
+                });
+            }
         }
-        if identity.version.is_empty() {
-            return Err(CustomScriptError::InvalidIdentity { field: "version" });
+        let mut labels = vec![
+            input.common.label,
+            input.blizzard.label,
+            input.wct_label,
+            input.wtg_label,
+        ];
+        labels.extend(input.context.map(|asset| asset.label));
+        labels.extend(input.wts.map(|asset| asset.label));
+        for asset in [input.common, input.blizzard] {
+            if asset.label == "the map script" {
+                return Err(CustomScriptError::Identity {
+                    label: asset.label.into(),
+                });
+            }
         }
-        if identity.source.is_empty() {
-            return Err(CustomScriptError::InvalidIdentity { field: "source" });
+        for (i, label) in labels.iter().enumerate() {
+            if label.trim().is_empty() || labels[..i].contains(label) {
+                return Err(CustomScriptError::Identity {
+                    label: (*label).into(),
+                });
+            }
         }
-
-        let mut input_bytes = 0usize;
-        let wct_bytes = wct.canonical_bytes().len();
-        if wct_bytes > budget.max_wct_bytes {
-            return Err(CustomScriptError::BudgetExceeded {
-                region: "wct",
-                declared_bytes: wct_bytes,
-                max_bytes: budget.max_wct_bytes,
+        limit(
+            input.wct_label,
+            "WCT",
+            input.wct.raw().len(),
+            budget.max_wct_bytes,
+        )?;
+        limit(
+            input.wtg_label,
+            "WTG",
+            input.wtg.raw().len(),
+            budget.max_wtg_bytes,
+        )?;
+        limit(
+            input.wct_label,
+            "slots",
+            input.wct.blocks().len(),
+            budget.max_custom_blocks,
+        )?;
+        let prelude_bytes = sum(
+            input.common.bytes.len(),
+            input.blizzard.bytes.len(),
+            "preludes",
+        )?;
+        limit(
+            input.common.label,
+            "preludes",
+            prelude_bytes,
+            budget.max_prelude_bytes,
+        )?;
+        let mut aggregate = sum(input.wct.raw().len(), input.wtg.raw().len(), "containers")?;
+        aggregate = sum(aggregate, prelude_bytes, "aggregate input")?;
+        let mut joined_size = 0;
+        if let Some(context) = input.context {
+            limit(
+                context.label,
+                "context",
+                context.bytes.len(),
+                budget.max_context_bytes,
+            )?;
+            aggregate = sum(aggregate, context.bytes.len(), "aggregate input")?;
+            joined_size = sum(context.bytes.len(), 1, "joined source")?;
+        }
+        if let Some(wts) = input.wts {
+            limit(wts.label, "WTS", wts.bytes.len(), budget.max_wts_bytes)?;
+            aggregate = sum(aggregate, wts.bytes.len(), "aggregate input")?;
+        }
+        for block in input.wct.blocks() {
+            limit(
+                input.wct_label,
+                "block",
+                block.text.len(),
+                budget.max_block_bytes,
+            )?;
+            // Each stored NUL is replaced with a separating newline after validation.
+            joined_size = sum(joined_size, block.text.len(), "joined source")?;
+        }
+        limit(
+            input.wct_label,
+            "aggregate input",
+            aggregate,
+            budget.max_aggregate_input_bytes,
+        )?;
+        if joined_size > u32::MAX as usize || Layout::array::<u8>(joined_size).is_err() {
+            return Err(CustomScriptError::Platform {
+                region: "joined source",
+                size: joined_size,
             });
         }
-        input_bytes = input_bytes.saturating_add(wct_bytes);
-
-        let violations = wct_wtg_violations(wct, wtg);
+        if input.wct.unknown0() != 0 {
+            return Err(CustomScriptError::Header {
+                label: input.wct_label.into(),
+                word: input.wct.unknown0(),
+            });
+        }
+        let violations = wct_wtg_violations(input.wct, input.wtg);
         if !violations.is_empty() {
             return Err(CustomScriptError::Association {
+                wct: input.wct_label.into(),
+                wtg: input.wtg_label.into(),
                 reason: violations.join("; "),
             });
         }
-        if wct.blocks().len() > budget.max_custom_blocks {
-            return Err(CustomScriptError::BudgetExceeded {
-                region: "custom blocks",
-                declared_bytes: wct.blocks().len(),
-                max_bytes: budget.max_custom_blocks,
-            });
-        }
-
-        let preludes: &[(&str, &[u8])] = &[];
-        let _ = preludes;
-        let common_source = std::str::from_utf8(common.bytes).map_err(|e| {
-            CustomScriptError::Prelude(format!(
-                "{}: not UTF-8 at byte {}",
-                common.label,
-                e.valid_up_to()
-            ))
-        })?;
-        let blizzard_source = std::str::from_utf8(blizzard.bytes).map_err(|e| {
-            CustomScriptError::Prelude(format!(
-                "{}: not UTF-8 at byte {}",
-                blizzard.label,
-                e.valid_up_to()
-            ))
-        })?;
-        let common_tree = pcx_script::parse(common_source).map_err(|e| {
-            CustomScriptError::Prelude(format!("{}:{}", common.label, e.render(common_source)))
-        })?;
-        let blizzard_tree = pcx_script::parse(blizzard_source).map_err(|e| {
-            CustomScriptError::Prelude(format!("{}:{}", blizzard.label, e.render(blizzard_source)))
-        })?;
-
-        let common_len = common.bytes.len();
-        let blizzard_len = blizzard.bytes.len();
-        if common_len > budget.max_prelude_bytes.saturating_sub(blizzard_len) {
-            return Err(CustomScriptError::BudgetExceeded {
-                region: "prelude",
-                declared_bytes: common_len + blizzard_len,
-                max_bytes: budget.max_prelude_bytes,
-            });
-        }
-        input_bytes = input_bytes.saturating_add(common_len + blizzard_len);
-
-        let map_tree = match map {
-            Some(asset) => {
-                let source = std::str::from_utf8(asset.bytes).map_err(|e| {
-                    CustomScriptError::Prelude(format!(
-                        "{}: not UTF-8 at byte {}",
-                        asset.label,
-                        e.valid_up_to()
-                    ))
-                })?;
-                let tree = parse_script(source).map_err(|e| {
-                    CustomScriptError::Prelude(format!("{}:{}", asset.label, e.render(source)))
-                })?;
-                input_bytes = input_bytes.saturating_add(asset.bytes.len());
-                Some((asset.label.to_string(), tree))
+        for asset in [input.common, input.blizzard] {
+            if asset.bytes.is_empty() {
+                return Err(CustomScriptError::Identity {
+                    label: asset.label.into(),
+                });
             }
-            None => None,
-        };
-
-        let wts_table = wts
+            limit(
+                asset.label,
+                "script spans",
+                asset.bytes.len(),
+                u32::MAX as usize,
+            )?;
+        }
+        let common_source = text(input.common.label, input.common.bytes)?;
+        let blizzard_source = text(input.blizzard.label, input.blizzard.bytes)?;
+        let common = parse(input.common.label, common_source)?;
+        let blizzard = parse(input.blizzard.label, blizzard_source)?;
+        let mut source = String::new();
+        source
+            .try_reserve_exact(joined_size)
+            .map_err(|error| CustomScriptError::Allocation {
+                region: "joined source",
+                reason: error.to_string(),
+            })?;
+        let context = input
+            .context
             .map(|asset| {
-                input_bytes = input_bytes.saturating_add(asset.bytes.len());
-                let table = pcx_trig::wts::Table::parse(asset.bytes)
-                    .map_err(|e| CustomScriptError::Prelude(format!("{}: {e}", asset.label)))?;
+                let body = text(asset.label, asset.bytes)?;
+                parse(asset.label, body)?;
+                let range = 0..body.len();
+                source.push_str(body);
+                source.push('\n');
+                Ok((asset.label.to_owned(), range))
+            })
+            .transpose()?;
+        let mut items = Vec::new();
+        items
+            .try_reserve_exact(input.wct.blocks().len())
+            .map_err(|error| CustomScriptError::Allocation {
+                region: "block metadata",
+                reason: error.to_string(),
+            })?;
+        for (index, (block, trigger)) in input
+            .wct
+            .blocks()
+            .iter()
+            .zip(input.wtg.triggers())
+            .enumerate()
+        {
+            if block.text.is_empty() {
+                continue;
+            }
+            let label = format!("{}:trigger[{index}]", input.wct_label);
+            let body = block
+                .text
+                .strip_suffix(&[0])
+                .filter(|body| !body.contains(&0))
+                .ok_or_else(|| CustomScriptError::Terminator {
+                    label: input.wct_label.into(),
+                    index,
+                })?;
+            let body = text(&label, body)?;
+            parse(&label, body)?;
+            let start = source.len();
+            source.push_str(body);
+            let range = start..source.len();
+            source.push('\n');
+            items.push(CustomScript {
+                index,
+                trigger: trigger.name.clone(),
+                label,
+                digest: pcx_script::fnv1a64(&block.text),
+                range,
+            });
+        }
+        let tree = pcx_script::parse(&source).map_err(|error| {
+            source_error(&source, context.as_ref(), &items, input.wct_label, error)
+        })?;
+        // A full compiled map passed as context would duplicate the WCT bodies.
+        // Refuse collisions rather than selecting one declaration implicitly.
+        check_declarations(&tree).map_err(|error| {
+            source_error(&source, context.as_ref(), &items, input.wct_label, error)
+        })?;
+        let program = pcx_script::resolve_with_diagnostics(
+            &tree,
+            &[
+                Prelude::new(input.common.label, &common),
+                Prelude::new(input.blizzard.label, &blizzard),
+            ],
+        )
+        .map_err(|diagnostic| match diagnostic.source_label {
+            Some(label) => {
+                let original = if label == input.common.label {
+                    common_source
+                } else {
+                    blizzard_source
+                };
+                CustomScriptError::Script {
+                    label,
+                    stage: diagnostic.error.stage,
+                    reason: diagnostic.error.render(original),
+                }
+            }
+            None => source_error(
+                &source,
+                context.as_ref(),
+                &items,
+                input.wct_label,
+                diagnostic.error,
+            ),
+        })?;
+        let wts = input
+            .wts
+            .map(|asset| {
+                let table = pcx_trig::wts::Table::parse(asset.bytes).map_err(|error| {
+                    CustomScriptError::Wts {
+                        label: asset.label.into(),
+                        reason: error.to_string(),
+                    }
+                })?;
                 if !table.ids_are_unique() {
-                    return Err(CustomScriptError::Prelude(format!(
-                        "{}: duplicate WTS ids",
-                        asset.label
-                    )));
+                    return Err(CustomScriptError::Wts {
+                        label: asset.label.into(),
+                        reason: "duplicate WTS ids".into(),
+                    });
                 }
                 Ok(table)
             })
             .transpose()?;
-
-        let prelude_list_base = {
-            let mut v = vec![
-                Prelude::new(common.label, &common_tree),
-                Prelude::new(blizzard.label, &blizzard_tree),
-            ];
-            if let Some((label, tree)) = &map_tree {
-                v.push(Prelude::new(label, tree));
-            }
-            v
-        };
-        let wct_label = "war3map.wct";
-
-        if input_bytes > budget.max_aggregate_input_bytes {
-            return Err(CustomScriptError::AggregateExceeded {
-                declared_bytes: input_bytes,
-                max_bytes: budget.max_aggregate_input_bytes,
-            });
-        }
-
-        let mut items = Vec::new();
-        for (index, block) in wct.blocks().iter().enumerate() {
-            if block.text.is_empty() {
-                continue;
-            }
-            let trigger = String::from_utf8_lossy(&wtg.triggers()[index].name).to_string();
-            if block.text.len() > budget.max_block_bytes {
-                return Err(CustomScriptError::BudgetExceeded {
-                    region: "wct block",
-                    declared_bytes: block.text.len(),
-                    max_bytes: budget.max_block_bytes,
-                });
-            }
-
-            let block_len = block.text.len();
-            let source_text = if block.text.last() == Some(&0) {
-                &block.text[..block_len - 1]
-            } else {
-                &block.text[..]
-            };
-            let source =
-                std::str::from_utf8(source_text).map_err(|e| CustomScriptError::InvalidUtf8 {
-                    index,
-                    trigger: trigger.clone(),
-                    at: e.valid_up_to(),
-                })?;
-
-            let tree = parse_script(source).map_err(|e| CustomScriptError::ParseFailed {
-                index,
-                trigger: trigger.clone(),
-                reason: format!(
-                    "{}:{}",
-                    label_for(wct_label, index, &trigger),
-                    e.render(source)
-                ),
-            })?;
-
-            let label = label_for(wct_label, index, &trigger);
-            let mut prelude_list = prelude_list_base.clone();
-            // prelude lifetime requires re-borrow; build dynamically instead
-            let _ = &mut prelude_list;
-            let program = resolve_with(&tree, &prelude_list_base).map_err(|e| {
-                CustomScriptError::CompileFailed {
-                    index,
-                    trigger: trigger.clone(),
-                    reason: format!("{}:{}", label, e.render(source)),
-                }
-            })?;
-
-            items.push(CustomScript {
-                index,
-                trigger,
-                label,
-                source: source.to_string(),
-                digest: pcx_script::fnv1a64(&block.text),
-                program,
-            });
-        }
-        let _ = common_tree;
-        let _ = wts_table;
-
-        Ok(CustomScripts { identity, items })
+        let digests = [
+            Some(input.common),
+            Some(input.blizzard),
+            input.context,
+            Some(ScriptAsset {
+                label: input.wct_label,
+                bytes: input.wct.raw(),
+            }),
+            Some(ScriptAsset {
+                label: input.wtg_label,
+                bytes: input.wtg.raw(),
+            }),
+            input.wts,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|asset| SourceDigest {
+            label: asset.label.into(),
+            hash: pcx_script::fnv1a64(asset.bytes),
+        })
+        .collect();
+        Ok(Self {
+            identity,
+            items,
+            digests,
+            program,
+            source,
+            context,
+            prelude_sources: BTreeMap::from([
+                (input.common.label.into(), common_source.into()),
+                (input.blizzard.label.into(), blizzard_source.into()),
+            ]),
+            wct_label: input.wct_label.into(),
+            wts,
+            wts_label: input.wts.map(|asset| asset.label.into()),
+        })
     }
-
-    #[allow(dead_code)]
-    pub fn diagnostic<H: Host>(
-        &self,
-        item: usize,
-        vm: &pcx_script::Vm<'_, H>,
-        error: &pcx_script::Error,
-    ) -> String {
-        match self.items.get(item) {
-            Some(s) => match vm.error_source() {
-                Some(src) if src != s.label && src != "the map script" => format!("{src}:{error}"),
-                _ => format!("{}:{}", s.label, error.render(&s.source)),
+    pub fn program(&self) -> &Program {
+        &self.program
+    }
+    pub fn items(&self) -> &[CustomScript] {
+        &self.items
+    }
+    pub fn source(&self, item: &CustomScript) -> Option<&str> {
+        self.source.get(item.range.clone())
+    }
+    pub fn vm<H: Host>(&self, host: H) -> Vm<'_, LocalizedHost<'_, H>> {
+        Vm::new(
+            &self.program,
+            LocalizedHost::new(host, self.wts.as_ref(), self.wts_label.as_deref()),
+        )
+    }
+    pub fn diagnostic<H: Host>(&self, vm: &Vm<'_, H>, error: &pcx_script::Error) -> String {
+        match vm.error_source() {
+            None | Some("the map script") => {
+                let error = source_error(
+                    &self.source,
+                    self.context.as_ref(),
+                    &self.items,
+                    &self.wct_label,
+                    error.clone(),
+                );
+                match error {
+                    CustomScriptError::Script { label, reason, .. } => format!("{label}:{reason}"),
+                    _ => error.to_string(),
+                }
+            }
+            Some(label) => match self.prelude_sources.get(label) {
+                Some(source) => format!("{label}:{}", error.render(source)),
+                None => format!("{label}:{error}"),
             },
-            None => format!("custom script {item}: {error}"),
         }
     }
 }
 
-fn label_for(wct_label: &str, index: usize, trigger: &str) -> String {
-    format!("{wct_label}:trigger[{index}]:{trigger}")
+fn check_declarations(tree: &Script) -> Result<(), pcx_script::Error> {
+    let mut declarations = BTreeMap::new();
+    let mut add = |namespace, name: &pcx_script::Ident, span| {
+        if declarations
+            .insert((namespace, name.as_str().to_owned()), span)
+            .is_some()
+        {
+            return Err(pcx_script::Error {
+                stage: Stage::Resolve,
+                span,
+                message: format!(
+                    "duplicate {namespace} declaration `{}` in custom-script inputs",
+                    name.as_str()
+                ),
+            });
+        }
+        Ok(())
+    };
+    for global in tree.globals() {
+        add("global", &global.name, global.span)?;
+    }
+    for function in tree.all_functions() {
+        add("function", &function.name, function.span)?;
+    }
+    for native in tree.natives() {
+        add("function", &native.name, native.span)?;
+    }
+    for item in &tree.items {
+        if let pcx_script::Item::Type(definition) = item {
+            add("type", &definition.name, definition.span)?;
+        }
+    }
+    Ok(())
+}
+
+fn source_error(
+    source: &str,
+    context: Option<&(String, Range<usize>)>,
+    items: &[CustomScript],
+    fallback: &str,
+    mut error: pcx_script::Error,
+) -> CustomScriptError {
+    let at = error.span.start as usize;
+    let location = context
+        .map(|(label, range)| (label.as_str(), range))
+        .into_iter()
+        .chain(items.iter().map(|item| (item.label.as_str(), &item.range)))
+        .find(|(_, range)| range.start <= at && at <= range.end);
+    let (label, body) = match location {
+        Some((label, range)) => {
+            error.span.start = error.span.start.saturating_sub(range.start as u32);
+            error.span.end = error
+                .span
+                .end
+                .saturating_sub(range.start as u32)
+                .min(range.len() as u32);
+            (label, &source[range.clone()])
+        }
+        None => (fallback, source),
+    };
+    CustomScriptError::Script {
+        label: label.into(),
+        stage: error.stage,
+        reason: error.render(body),
+    }
 }

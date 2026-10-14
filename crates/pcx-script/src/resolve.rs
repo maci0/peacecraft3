@@ -141,6 +141,7 @@ pub struct ResolveStats {
 struct Container {
     kind: &'static str,
     span: Span,
+    source_label: Option<String>,
 }
 
 /// A resolved script: everything the interpreter needs, and nothing the map did
@@ -231,6 +232,33 @@ pub fn resolve(script: &Script) -> Result<Program, crate::Error> {
 
 /// Resolve `script` as the last source in a load list.
 pub fn resolve_with(script: &Script, prelude: &[Prelude<'_>]) -> Result<Program, crate::Error> {
+    resolve_with_diagnostics(script, prelude).map_err(|diagnostic| diagnostic.error)
+}
+
+/// Resolution failure with an explicit source identity.
+/// `None` identifies the main script; `Some` retains the caller's prelude label.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[error("{error}")]
+pub struct ResolveDiagnostic {
+    pub source_label: Option<String>,
+    #[source]
+    pub error: crate::Error,
+}
+
+impl From<crate::Error> for ResolveDiagnostic {
+    fn from(error: crate::Error) -> Self {
+        Self {
+            source_label: None,
+            error,
+        }
+    }
+}
+
+/// Resolve as [`resolve_with`], retaining the source of declaration/graph errors.
+pub fn resolve_with_diagnostics(
+    script: &Script,
+    prelude: &[Prelude<'_>],
+) -> Result<Program, ResolveDiagnostic> {
     Resolver::new(script, prelude).run()
 }
 
@@ -244,6 +272,7 @@ struct Resolver<'a> {
     globals: Vec<Global>,
     globals_by_name: BTreeMap<String, usize>,
     types: BTreeMap<String, TypeInfo>,
+    main_types: BTreeSet<String>,
     containers: BTreeMap<String, Container>,
     libraries: BTreeMap<String, LibrarySite>,
     /// Declaration order of every container, for a deterministic load order.
@@ -252,7 +281,7 @@ struct Resolver<'a> {
     uses: usize,
     /// Errors found while collecting declarations, reported before the body
     /// walk so they are the first thing a caller sees.
-    pending: Vec<crate::Error>,
+    pending: Vec<ResolveDiagnostic>,
 }
 
 struct LibrarySite {
@@ -263,6 +292,7 @@ struct LibRef {
     name: String,
     optional: bool,
     span: Span,
+    source_label: Option<String>,
 }
 
 impl<'a> Resolver<'a> {
@@ -277,6 +307,7 @@ impl<'a> Resolver<'a> {
             globals: Vec::new(),
             globals_by_name: BTreeMap::new(),
             types: BTreeMap::new(),
+            main_types: BTreeSet::new(),
             containers: BTreeMap::new(),
             libraries: BTreeMap::new(),
             container_order: Vec::new(),
@@ -286,7 +317,7 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn run(mut self) -> Result<Program, crate::Error> {
+    fn run(mut self) -> Result<Program, ResolveDiagnostic> {
         // Phase 1: declarations. The Blizzard scripts come first, the map's
         // script last, which is why a map declaration of the same name wins.
         for p in self.prelude {
@@ -364,32 +395,43 @@ impl<'a> Resolver<'a> {
                     }
                 }
                 Item::Library(l) => {
-                    self.declare_container(l.name.as_str(), "library", l.span);
-                    self.declare_library(l);
+                    self.declare_container(l.name.as_str(), "library", l.span, &source, main);
+                    self.declare_library(l, &source, main);
                     self.collect_declarations(&l.body, &source, main);
                 }
                 Item::Scope(s) => {
-                    self.declare_container(s.name.as_str(), "scope", s.span);
+                    self.declare_container(s.name.as_str(), "scope", s.span, &source, main);
                     self.collect_declarations(&s.body, &source, main);
                 }
                 Item::Struct(s) => {
-                    self.declare_container(s.name.as_str(), "struct", s.span);
+                    self.declare_container(s.name.as_str(), "struct", s.span, &source, main);
                     self.collect_declarations(&s.body, &source, main);
                 }
             }
         }
     }
 
-    fn declare_container(&mut self, name: &str, kind: &'static str, span: Span) {
+    fn declare_container(
+        &mut self,
+        name: &str,
+        kind: &'static str,
+        span: Span,
+        source: &str,
+        main: bool,
+    ) {
         if !self.container_order.iter().any(|n| n == name) {
             self.container_order.push(name.to_string());
         }
         self.containers
             .entry(name.to_string())
-            .or_insert(Container { kind, span });
+            .or_insert(Container {
+                kind,
+                span,
+                source_label: (!main).then(|| source.to_owned()),
+            });
     }
 
-    fn declare_library(&mut self, l: &LibraryDecl) {
+    fn declare_library(&mut self, l: &LibraryDecl, source: &str, main: bool) {
         let entry = self
             .libraries
             .entry(l.name.as_str().to_string())
@@ -402,6 +444,7 @@ impl<'a> Resolver<'a> {
                 name: r.name.as_str().to_string(),
                 optional: r.optional,
                 span: l.span,
+                source_label: (!main).then(|| source.to_owned()),
             });
         }
         entry.requires = requires;
@@ -432,6 +475,7 @@ impl<'a> Resolver<'a> {
     fn declare_type(&mut self, t: &'a TypeDecl, source: &str, main: bool) {
         if main {
             self.types.remove(t.name.as_str());
+            self.main_types.insert(t.name.as_str().to_owned());
         }
         self.types
             .entry(t.name.as_str().to_string())
@@ -452,13 +496,16 @@ impl<'a> Resolver<'a> {
             Some(ref body) => {
                 if let Some((i, fspan)) = self.forward.remove(f.name.as_str()) {
                     if !same_call_shape(&self.functions[i], f) {
-                        self.pending.push(crate::Error::resolve(
-                            f.span,
-                            format!(
-                                "`{}` is declared twice with different signatures: once at the map's bytes {}..{} and once here",
-                                f.name.as_str(), fspan.start, fspan.end
+                        self.pending.push(ResolveDiagnostic {
+                            source_label: (!main).then(|| source.to_owned()),
+                            error: crate::Error::resolve(
+                                f.span,
+                                format!(
+                                    "`{}` is declared twice with different signatures: once at the map's bytes {}..{} and once here",
+                                    f.name.as_str(), fspan.start, fspan.end
+                                ),
                             ),
-                        ));
+                        });
                         return;
                     }
                     self.functions[i].body = Some(body.clone());
@@ -511,9 +558,13 @@ impl<'a> Resolver<'a> {
 
     // ----- phase 2: the type graph and the library order ------------------
 
-    fn check_type_graph(&self) -> Result<(), crate::Error> {
+    fn check_type_graph(&self) -> Result<(), ResolveDiagnostic> {
         for name in self.types.keys() {
-            self.type_root(name)?;
+            self.type_root(name).map_err(|error| ResolveDiagnostic {
+                source_label: (!self.main_types.contains(name))
+                    .then(|| self.types[name].source.clone()),
+                error,
+            })?;
         }
         Ok(())
     }
@@ -561,7 +612,7 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn order_libraries(&self) -> Result<Vec<String>, crate::Error> {
+    fn order_libraries(&self) -> Result<Vec<String>, ResolveDiagnostic> {
         // Every reference must name a declared library. An `optional` one may
         // be absent, which is what the keyword is for.
         for name in &self.container_order {
@@ -573,13 +624,16 @@ impl<'a> Resolver<'a> {
                     continue;
                 }
                 if !self.libraries.contains_key(&r.name) && !self.containers.contains_key(&r.name) {
-                    return Err(crate::Error::resolve(
-                        r.span,
-                        format!(
-                            "library `{name}` requires `{}`, which no source declares",
-                            r.name
+                    return Err(ResolveDiagnostic {
+                        source_label: r.source_label.clone(),
+                        error: crate::Error::resolve(
+                            r.span,
+                            format!(
+                                "library `{name}` requires `{}`, which no source declares",
+                                r.name
+                            ),
                         ),
-                    ));
+                    });
                 }
             }
         }
@@ -605,7 +659,7 @@ impl<'a> Resolver<'a> {
         done: &mut BTreeSet<String>,
         stack: &mut BTreeSet<String>,
         name: &str,
-    ) -> Result<(), crate::Error> {
+    ) -> Result<(), ResolveDiagnostic> {
         if done.contains(name) {
             return Ok(());
         }
@@ -621,10 +675,16 @@ impl<'a> Resolver<'a> {
                 .get(name)
                 .map(|c| c.span)
                 .unwrap_or(Span::EMPTY);
-            return Err(crate::Error::resolve(
-                span,
-                format!("library `{start}` requires itself through `{name}`"),
-            ));
+            return Err(ResolveDiagnostic {
+                source_label: self
+                    .containers
+                    .get(name)
+                    .and_then(|site| site.source_label.clone()),
+                error: crate::Error::resolve(
+                    span,
+                    format!("library `{start}` requires itself through `{name}`"),
+                ),
+            });
         }
         for r in &site.requires {
             self.visit_library(start, out, done, stack, &r.name)?;
