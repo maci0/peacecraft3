@@ -166,6 +166,13 @@ pub fn fourcc_text(f: Fourcc) -> String {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("{source_label}: supplied object-editor member {member}: {source}")]
+    EditorAsset {
+        source_label: String,
+        member: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("mpq: {0}")]

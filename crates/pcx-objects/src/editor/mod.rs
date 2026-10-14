@@ -211,6 +211,14 @@ pub struct EditorCensus {
     pub working_copy_paths: Vec<String>,
 }
 
+/// Supplied byte limits apply before table/profile parsing.
+/// The reader must bound its own extraction and allocation.
+#[derive(Clone, Copy, Debug)]
+pub struct EditorReadLimits {
+    pub max_listed_paths: usize,
+    pub max_asset_bytes: usize,
+    pub max_aggregate_input_bytes: usize,
+}
 /// The base object data of one install, decoded.
 #[derive(Debug)]
 pub struct Editor {
@@ -248,8 +256,69 @@ impl Editor {
     /// Open from an archive set already opened against `install`.
     pub fn open_in(set: &mut MpqSet, install: &Path) -> Result<Self, Error> {
         let listed = set.file_list()?;
+        // Missing optional assets remain absent; present extraction failures propagate.
+        Self::from_reader(
+            install,
+            &listed,
+            EditorReadLimits {
+                max_listed_paths: usize::MAX,
+                max_asset_bytes: usize::MAX,
+                max_aggregate_input_bytes: usize::MAX,
+            },
+            |member| match set.extract(member) {
+                Ok(bytes) => Ok(Some(bytes)),
+                Err(pcx_mpq::Error::NotFound(_)) => Ok(None),
+                Err(source) => Err(source),
+            },
+        )
+    }
+
+    /// Decode caller-selected supplied assets. None means absent; errors stop decoding.
+    /// The reader owns extraction budgets and source/priority policy.
+    pub fn from_reader<E: std::error::Error + Send + Sync + 'static>(
+        install: &Path,
+        listed: &[String],
+        limits: EditorReadLimits,
+        mut reader: impl FnMut(&str) -> Result<Option<Vec<u8>>, E>,
+    ) -> Result<Self, Error> {
+        if listed.len() > limits.max_listed_paths {
+            return Err(Error::Unsupported {
+                what: "editor listed path budget",
+                detail: Some(format!(
+                    "{}: {} > {}",
+                    install.display(),
+                    listed.len(),
+                    limits.max_listed_paths
+                )),
+            });
+        }
+        let mut total = 0usize;
+        let mut read = |member: &str| -> Result<Option<Vec<u8>>, Error> {
+            let result = reader(member).map_err(|source| Error::EditorAsset {
+                source_label: install.display().to_string(),
+                member: member.to_owned(),
+                source: Box::new(source),
+            })?;
+            if let Some(bytes) = &result {
+                let sum = total.checked_add(bytes.len());
+                if bytes.len() > limits.max_asset_bytes
+                    || sum.is_none_or(|sum| sum > limits.max_aggregate_input_bytes)
+                {
+                    return Err(Error::Unsupported {
+                        what: "editor supplied input budget",
+                        detail: Some(format!(
+                            "{}: {member}: bytes={}, aggregate={sum:?}",
+                            install.display(),
+                            bytes.len()
+                        )),
+                    });
+                }
+                total = sum.expect("validated aggregate");
+            }
+            Ok(result)
+        };
         let mut census = EditorCensus::default();
-        for p in &listed {
+        for p in listed {
             let low = p.to_ascii_lowercase();
             let is_slk = low.ends_with(".slk");
             let is_txt = low.ends_with(".txt");
@@ -276,13 +345,14 @@ impl Editor {
         let mut tables = BTreeMap::new();
         let mut absent = Vec::new();
         for id in SlkId::ALL {
-            let Ok(bytes) = set.extract(id.path()) else {
+            let Some(bytes) = read(id.path())? else {
                 absent.push(*id);
                 continue;
             };
-            let table = pcx_slq::Table::parse(&bytes).map_err(|e| Error::Unsupported {
-                what: "object-editor table",
-                detail: Some(format!("{}: {e}", id.path())),
+            let table = pcx_slq::Table::parse(&bytes).map_err(|source| Error::EditorAsset {
+                source_label: install.display().to_string(),
+                member: id.path().to_owned(),
+                source: Box::new(source),
             })?;
             census.rows_by_slk.insert(*id, table.row_count() as usize);
             tables.insert(*id, table);
@@ -335,7 +405,7 @@ impl Editor {
         for role in TxtRole::ALL {
             let mut loaded = 0usize;
             for file in role.files() {
-                let Ok(bytes) = set.extract(file) else {
+                let Some(bytes) = read(file)? else {
                     continue;
                 };
                 let text = String::from_utf8_lossy(&bytes).into_owned();
