@@ -4,9 +4,9 @@
 //! is unplayable.** Every record of every shipped `.w3u` / `.w3t` is walked
 //! here, and the answer is one of
 //!
-//! * [`Resolution::Existing`] — the record's original rawcode names an object
+//! * An existing-object [`Resolution`] — the record's original rawcode names an object
 //!   the base data has, so the modifications land on it;
-//! * [`Resolution::New`] — a second-table record whose modified rawcode is
+//! * A custom-object [`Resolution`] — a second-table record whose modified rawcode is
 //!   new, so the record is a new object derived from its original;
 //! * [`Unresolved`] — the original rawcode names nothing, and the record is
 //!   reported rather than silently dropped.

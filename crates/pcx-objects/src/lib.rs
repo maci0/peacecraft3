@@ -35,7 +35,7 @@
 //! `2` in one).
 //! The other five extensions never ship in either build, so their record
 //! shape is unmeasured — in particular whether ability records carry the
-//! level/variation columns the community format notes describe. [`parse`]
+//! level/variation columns the community format notes describe. [`ObjectFile::parse`]
 //! refuses those extensions rather than running a w3u-shaped walk over them.
 //!
 //! # Container layout (measured on all 92 files)
@@ -101,7 +101,7 @@
 //! # What is refused, and why
 //!
 //! * **The other five extensions.** No shipped byte is a `.w3a/.w3b/.w3d/
-//!   .w3h/.w3q`, so nothing proves their record shape. [`parse`] returns
+//!   .w3h/.w3q`, so nothing proves their record shape. [`ObjectFile::parse`] returns
 //!   [`Error::UnmeasuredExtension`] instead of guessing level/variation
 //!   columns.
 //! * **Per-fourcc semantics.** The wire encoding of every one of the 135
@@ -127,6 +127,7 @@
 use std::path::{Path, PathBuf};
 
 pub mod editor;
+pub mod requirements;
 
 /// The version word's value in 91 of the 92 shipped files.
 pub const VERSION_ONE: u32 = 1;
@@ -139,7 +140,7 @@ pub const VERSION_TWO: u32 = 2;
 pub const EXTENSIONS: [&str; 7] = ["w3u", "w3t", "w3a", "w3b", "w3d", "w3h", "w3q"];
 
 /// Extensions whose record layout is measured by this crate. The other five
-/// never occur in a shipped map and are refused by [`parse`].
+/// never occur in a shipped map and are refused by [`ObjectFile::parse`].
 pub const MEASURED_EXTENSIONS: [&str; 7] = EXTENSIONS;
 
 /// Byte offset of a map's embedded MPQ archive. `pcx-map` measured this on

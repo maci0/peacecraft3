@@ -1,6 +1,9 @@
 use super::*;
 use std::collections::BTreeSet;
 
+#[path = "../../requirements_tests.rs"]
+mod requirements_catalog;
+
 fn table(headers: &[&str], rows: &[&[&str]]) -> pcx_slq::Table {
     let mut text = String::from("ID;PWXL;N;E\n");
     for (y, row) in std::iter::once(headers)

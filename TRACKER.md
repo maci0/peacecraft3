@@ -539,6 +539,10 @@ ship custom objects, and a map whose rawcodes do not resolve is unplayable.
 - [ ] Ability table + ability levels/objects
 - [ ] Item table, upgrade table, buff table, destructable table
 - [ ] Tech tree, availability, random item/unit tables
+      Caller-selected field catalog is checked separately: unknown metadata
+      identifiers return an error; raw joins retain provenance and refusals.
+      Synthetic tests and an explicit local archive gate cover collection,
+      not native prerequisite evaluation or availability.
 - [ ] **Gate:** stock unit stats diff-clean against in-game editor
 - [x] **Gate:** a map with custom objects resolves every rawcode it declares —
       1.28c **888 first-table records (887 resolved) + 282 custom (282 new, 0

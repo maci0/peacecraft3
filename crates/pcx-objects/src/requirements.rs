@@ -1,30 +1,36 @@
-//! Raw authored technology-requirement entries from `DefaultTables`.
+//! Batched caller-selected authored fields from [`DefaultTables`].
 //!
-//! This helper does not evaluate a technology tree. It exposes the authored
-//! SLK/profile fields whose editor category is `tech` exactly as they are
-//! joined by [`pcx_objects::editor::defaults::DefaultTables`]: every source
-//! remains identifiable, and missing, malformed or ambiguous joins stay as
-//! [`pcx_objects::editor::report::Refusal`] values instead of being replaced
-//! with defaults or simulated native behavior.
+//! The caller chooses the field identifiers and their intended role. Neither
+//! the identifiers nor an editor category establish native prerequisite rules.
+//! Successful SLK/profile joins retain provenance; failed joins retain [`Refusal`].
+//! Source-loading issues remain available through [`DefaultTables::unresolved`].
 
-use pcx_objects::editor::defaults::Refusal;
-use pcx_objects::editor::defaults::{DefaultTables, Family, MappedField};
-use pcx_objects::editor::FieldDef;
+use crate::Fourcc;
+use crate::editor::FieldDef;
+use crate::editor::defaults::{DefaultTables, Family, MappedField, Refusal, Unresolved};
 
-/// One authored technology-requirement lookup for one object.
+#[derive(Debug, thiserror::Error)]
+pub enum CatalogError {
+    #[error("no supplied metadata definition for requested field {fourcc:?}")]
+    UnknownField { fourcc: Fourcc },
+    #[error(transparent)]
+    Object(#[from] Unresolved),
+}
+
+/// One caller-selected field lookup for one object.
 #[derive(Debug)]
 pub struct RequirementEntry<'a> {
     /// Object family that carries the field.
     pub family: Family,
     /// Authored object rawcode, with its original spelling preserved.
     pub rawcode: &'a str,
-    /// Metadata definition for the tech-category field.
+    /// Authored metadata definition for the selected field.
     pub field: &'a FieldDef,
     /// Result of joining and typing the field, including refusal states.
     pub outcome: Result<MappedField<'a>, Refusal>,
 }
 
-/// Collection of all authored technology-requirement entries from one table set.
+/// Selected field outcomes from one table set, without dependency evaluation.
 #[derive(Debug)]
 pub struct RequirementsCatalog<'a> {
     tables: &'a DefaultTables,
@@ -32,44 +38,38 @@ pub struct RequirementsCatalog<'a> {
 }
 
 impl<'a> RequirementsCatalog<'a> {
-    /// Build the catalog. Missing or unresolved objects are skipped; their
-    /// absence is reported by the underlying [`DefaultTables`], not hidden here.
-    pub fn new(tables: &'a DefaultTables, fields: &[[u8; 4]]) -> Self {
+    /// Validate every selected identifier before collecting outcomes. For each
+    /// object, only definitions from its family's metadata are queried. Selection
+    /// order and duplicates are preserved; absent source rows remain in
+    /// [`DefaultTables::unresolved`], rather than receiving invented objects.
+    pub fn new(tables: &'a DefaultTables, fields: &[Fourcc]) -> Result<Self, CatalogError> {
+        let definitions = fields
+            .iter()
+            .map(|&fourcc| {
+                tables
+                    .editor()
+                    .field(fourcc)
+                    .ok_or(CatalogError::UnknownField { fourcc })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let mut entries = Vec::new();
         for &family in Family::ALL {
             for rawcode in tables.rawcodes(family) {
-                let Ok(object) = tables.object(family, rawcode) else {
-                    continue;
-                };
-                for &fourcc in fields {
-                    if let Ok(mapped) = object.field(fourcc) {
-                        entries.push(RequirementEntry {
-                            family,
-                            rawcode,
-                            field: mapped.definition,
-                            outcome: Ok(mapped),
-                        });
-                    } else {
-                        // Keep a refused entry only when the family actually owns
-                        // the metadata field; otherwise it is unrelated to this object.
-                        if tables
-                            .editor()
-                            .field(fourcc)
-                            .map(|def| def.from == family.metadata())
-                            .unwrap_or(false)
-                        {
-                            entries.push(RequirementEntry {
-                                family,
-                                rawcode,
-                                field: tables.editor().field(fourcc).unwrap(),
-                                outcome: Err(object.field(fourcc).unwrap_err()),
-                            });
-                        }
-                    }
+                let object = tables.object(family, rawcode)?;
+                for &field in definitions
+                    .iter()
+                    .filter(|def| def.from == family.metadata())
+                {
+                    entries.push(RequirementEntry {
+                        family,
+                        rawcode,
+                        field,
+                        outcome: object.field(field.fourcc),
+                    });
                 }
             }
         }
-        Self { tables, entries }
+        Ok(Self { tables, entries })
     }
 
     /// The table set this catalog was derived from.
@@ -77,12 +77,12 @@ impl<'a> RequirementsCatalog<'a> {
         self.tables
     }
 
-    /// Every entry, in family/source order.
+    /// Every entry, in family/rawcode order, then caller selection order.
     pub fn entries(&self) -> &[RequirementEntry<'a>] {
         &self.entries
     }
 
-    /// Number of entries. A zero value means no tech category was joined.
+    /// Number of lookup outcomes, including refusals.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -100,7 +100,7 @@ impl<'a> RequirementsCatalog<'a> {
             .collect()
     }
 
-    /// Entries for one object rawcode within an optional family filter.
+    /// Entries for one exact authored rawcode within a family.
     pub fn for_rawcode(&self, family: Family, rawcode: &str) -> Vec<&RequirementEntry<'a>> {
         self.entries
             .iter()
@@ -108,6 +108,3 @@ impl<'a> RequirementsCatalog<'a> {
             .collect()
     }
 }
-
-/// Compatibility alias for callers that name this lookup by its source concept.
-pub type TechnologyRequirements<'a> = RequirementsCatalog<'a>;
