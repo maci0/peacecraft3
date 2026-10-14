@@ -117,12 +117,16 @@ export async function deriveCipher(method, password, options = {}) {
   if (!(password instanceof Uint8Array) || !password.length || password.length > 4096) fail('ARC_PASSWORD', 'missing or oversized installer password argument');
   const key = await crypto.subtle.importKey('raw', password, 'PBKDF2', false, ['deriveBits']);
   const derived = new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-512', salt: params.salt, iterations: params.iterations }, key, (32 + params.check.length) * 8));
-  options.signal?.throwIfAborted();
-  let mismatch = 0;
-  for (let i = 0; i < params.check.length; i++) mismatch |= params.check[i] ^ derived[32 + i];
-  if (mismatch) fail('ARC_PASSWORD', 'installer argument does not match archive password check');
-  const cipherKey = derived.slice(0, 32); derived.fill(0);
-  return { key: params.fixed ? cipherKey : legacyHex(cipherKey), iv: params.fixed ? params.iv : legacyHex(params.iv) };
+  try {
+    options.signal?.throwIfAborted();
+    let mismatch = 0;
+    for (let i = 0; i < params.check.length; i++) mismatch |= params.check[i] ^ derived[32 + i];
+    if (mismatch) fail('ARC_PASSWORD', 'installer argument does not match archive password check');
+    const cipherKey = derived.slice(0, 32);
+    if (params.fixed) return { key: cipherKey, iv: params.iv };
+    try { return { key: legacyHex(cipherKey), iv: legacyHex(params.iv) }; }
+    finally { cipherKey.fill(0); }
+  } finally { derived.fill(0); }
 }
 export function lzmaParameters(method, limits = checkedLimits()) {
   const [name, ...parts] = method.split(':');
