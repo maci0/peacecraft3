@@ -188,6 +188,31 @@ pub mod magic {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("terrain {what} overflows at byte {at}")]
+    TerrainOverflow { what: &'static str, at: usize },
+    #[error(
+        "terrain corner dimensions at byte {at} cannot represent tiles: {corners_x}x{corners_y}"
+    )]
+    TerrainCornerDimensions {
+        at: usize,
+        corners_x: u32,
+        corners_y: u32,
+    },
+    #[error(
+        "terrain {what} at byte {at}: {count} records cannot fit the decoded allocation layout"
+    )]
+    TerrainLayout {
+        what: &'static str,
+        at: usize,
+        count: usize,
+    },
+    #[error("terrain {what} allocation at byte {at}: {error}")]
+    TerrainAllocation {
+        what: &'static str,
+        at: usize,
+        #[source]
+        error: std::collections::TryReserveError,
+    },
     #[error("map extraction: {0}")]
     Extraction(#[from] pcx_mpq::Error),
     #[error("map pathing: {0}")]
@@ -420,9 +445,7 @@ impl<'a> Map<'a> {
 
     /// Decode the terrain file.
     pub fn terrain(&self) -> Result<Terrain, Error> {
-        let bytes = self
-            .extract("war3map.w3e")
-            .map_err(|_| Error::TerrainTruncated { have: 0, need: 0 })?;
+        let bytes = self.extract("war3map.w3e")?;
         Terrain::from_bytes(bytes)
     }
 
@@ -606,7 +629,10 @@ impl TerrainParsed {
     fn parse(bytes: &[u8]) -> Result<Self, Error> {
         let magic: [u8; 4] = bytes
             .get(..4)
-            .ok_or(Error::TerrainTruncated { have: 0, need: 4 })?
+            .ok_or(Error::TerrainTruncated {
+                have: bytes.len(),
+                need: 4,
+            })?
             .try_into()
             .unwrap();
         if magic != TERRAIN_MAGIC {
@@ -623,51 +649,91 @@ impl TerrainParsed {
         let slot_flag_word = u32_at(bytes, 9)?;
         let n = u32_at(bytes, 13)? as usize;
         let mut at = 17usize;
-        let mut slots = Vec::with_capacity(n);
-        for _ in 0..n {
-            let s = fourcc(bytes, at)?;
-            slots.push(s);
-            at += 4;
-        }
-        let m = u32_at(bytes, at)? as usize;
-        at += 4;
-        let mut secondary = Vec::with_capacity(m);
-        for _ in 0..m {
-            let s = fourcc(bytes, at)?;
-            secondary.push(s);
-            at += 4;
-        }
-        let corners_x = u32_at(bytes, at)? as usize;
-        let corners_y = u32_at(bytes, at + 4)? as usize;
-        at += 8;
+        let slots_at = at;
+        let slots_size =
+            n.checked_mul(std::mem::size_of::<[u8; 4]>())
+                .ok_or(Error::TerrainOverflow {
+                    what: "primary slots",
+                    at,
+                })?;
+        let slots_raw = terrain_take(bytes, &mut at, slots_size, "primary slots")?;
+        let secondary_count = terrain_take(
+            bytes,
+            &mut at,
+            std::mem::size_of::<u32>(),
+            "secondary count",
+        )?;
+        let m = u32::from_le_bytes(secondary_count.try_into().unwrap()) as usize;
+        let secondary_at = at;
+        let secondary_size =
+            m.checked_mul(std::mem::size_of::<[u8; 4]>())
+                .ok_or(Error::TerrainOverflow {
+                    what: "secondary slots",
+                    at,
+                })?;
+        let secondary_raw = terrain_take(bytes, &mut at, secondary_size, "secondary slots")?;
+        let dimensions_at = at;
+        let dimensions = terrain_take(
+            bytes,
+            &mut at,
+            2 * std::mem::size_of::<u32>(),
+            "corner dimensions",
+        )?;
+        let corners_x = u32::from_le_bytes(dimensions[..4].try_into().unwrap());
+        let corners_y = u32::from_le_bytes(dimensions[4..].try_into().unwrap());
+        let (width, height) = corners_x
+            .checked_sub(1)
+            .zip(corners_y.checked_sub(1))
+            .ok_or(Error::TerrainCornerDimensions {
+                at: dimensions_at,
+                corners_x,
+                corners_y,
+            })?;
         let (origin_x, origin_y) = if version >= TERRAIN_ORIGIN_VERSION {
-            let ox = f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
-            let oy = f32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap());
-            at += 8;
-            (ox, oy)
+            let origin = terrain_take(bytes, &mut at, 2 * std::mem::size_of::<f32>(), "origin")?;
+            (
+                f32::from_le_bytes(origin[..4].try_into().unwrap()),
+                f32::from_le_bytes(origin[4..].try_into().unwrap()),
+            )
         } else {
             (0.0, 0.0)
         };
-
-        let count = corners_x
-            .checked_mul(corners_y)
-            .ok_or(Error::TerrainTruncated {
-                have: bytes.len(),
-                need: at,
+        let count =
+            (corners_x as usize)
+                .checked_mul(corners_y as usize)
+                .ok_or(Error::TerrainOverflow {
+                    what: "corner count",
+                    at: dimensions_at,
+                })?;
+        let corner_bytes = count
+            .checked_mul(CORNER_RECORD)
+            .ok_or(Error::TerrainOverflow {
+                what: "corner bytes",
+                at,
             })?;
-        let need = at + count * CORNER_RECORD;
+        let need = at.checked_add(corner_bytes).ok_or(Error::TerrainOverflow {
+            what: "corner end",
+            at,
+        })?;
         if need != bytes.len() {
             return Err(Error::TerrainSize {
-                width: corners_x as u32 - 1,
-                height: corners_y as u32 - 1,
+                width,
+                height,
                 have: bytes.len(),
                 have_after_header: bytes.len() - at,
                 need,
             });
         }
-        let body = &bytes[at..need];
-        let mut corners = Vec::with_capacity(count);
-        for rec in body.as_chunks::<CORNER_RECORD>().0 {
+        // Validate every decoded layout before reserving any array.
+        terrain_layout::<[u8; 4]>(n, slots_at, "primary slots")?;
+        terrain_layout::<[u8; 4]>(m, secondary_at, "secondary slots")?;
+        terrain_layout::<Corner>(count, at, "corners")?;
+        let mut slots = terrain_reserve(n, slots_at, "primary slots")?;
+        slots.extend(slots_raw.as_chunks::<4>().0.iter().copied());
+        let mut secondary = terrain_reserve(m, secondary_at, "secondary slots")?;
+        secondary.extend(secondary_raw.as_chunks::<4>().0.iter().copied());
+        let mut corners = terrain_reserve(count, at, "corners")?;
+        for rec in bytes[at..].as_chunks::<CORNER_RECORD>().0 {
             let h = u16::from_le_bytes(rec[0..2].try_into().unwrap());
             let p = u16::from_le_bytes(rec[2..4].try_into().unwrap());
             corners.push(Corner {
@@ -679,15 +745,14 @@ impl TerrainParsed {
                 byte6: rec[6],
             });
         }
-
         Ok(Self {
             version,
             default_slot,
             slot_flag_word,
             slots,
             secondary_slots: secondary,
-            width: corners_x as u32 - 1,
-            height: corners_y as u32 - 1,
+            width,
+            height,
             origin_x,
             origin_y,
             corners,
@@ -695,14 +760,35 @@ impl TerrainParsed {
     }
 }
 
-fn fourcc(bytes: &[u8], at: usize) -> Result<[u8; 4], Error> {
-    bytes
-        .get(at..at + 4)
-        .map(|b| <[u8; 4]>::try_from(b).unwrap())
-        .ok_or(Error::TerrainTruncated {
-            have: bytes.len(),
-            need: at + 4,
-        })
+fn terrain_take<'a>(
+    bytes: &'a [u8],
+    at: &mut usize,
+    size: usize,
+    what: &'static str,
+) -> Result<&'a [u8], Error> {
+    let end = at
+        .checked_add(size)
+        .ok_or(Error::TerrainOverflow { what, at: *at })?;
+    let raw = bytes.get(*at..end).ok_or(Error::TerrainTruncated {
+        have: bytes.len(),
+        need: end,
+    })?;
+    *at = end;
+    Ok(raw)
+}
+
+fn terrain_layout<T>(count: usize, at: usize, what: &'static str) -> Result<(), Error> {
+    std::alloc::Layout::array::<T>(count)
+        .map(|_| ())
+        .map_err(|_| Error::TerrainLayout { what, at, count })
+}
+
+fn terrain_reserve<T>(count: usize, at: usize, what: &'static str) -> Result<Vec<T>, Error> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(count)
+        .map_err(|error| Error::TerrainAllocation { what, at, error })?;
+    Ok(values)
 }
 
 impl Terrain {
@@ -857,7 +943,11 @@ pub fn shipped_maps(set: &mut pcx_mpq::MpqSet) -> Result<Vec<String>, pcx_mpq::E
 
 /// Decode a terrain file directly, for fixtures and for the inspector.
 pub fn parse_terrain(bytes: &[u8]) -> Result<Terrain, Error> {
-    Terrain::from_bytes(bytes.to_vec())
+    let parsed = TerrainParsed::parse(bytes)?;
+    terrain_layout::<u8>(bytes.len(), 0, "raw bytes")?;
+    let mut raw = terrain_reserve(bytes.len(), 0, "raw bytes")?;
+    raw.extend_from_slice(bytes);
+    Ok(Terrain { parsed, raw })
 }
 
 #[cfg(test)]
