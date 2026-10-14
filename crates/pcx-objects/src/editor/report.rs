@@ -91,7 +91,7 @@ impl std::fmt::Display for Refusal {
 /// Why one record could not be resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unresolved {
-    /// The base table modifies a rawcode the base data has no object for.
+    /// A record modifies or derives from a rawcode absent from the base data.
     UnknownOriginal {
         /// The rawcode the record modifies.
         rawcode: Fourcc,
@@ -113,12 +113,22 @@ pub enum Unresolved {
 impl std::fmt::Display for Unresolved {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownOriginal { rawcode, map, .. } => write!(
-                f,
-                "{map}: base record modifies {}, which no shipped editor \
-                 table carries",
-                fourcc_text(*rawcode)
-            ),
+            Self::UnknownOriginal {
+                rawcode,
+                table,
+                map,
+            } => {
+                let action = if *table == 1 {
+                    "custom record derives from"
+                } else {
+                    "base record modifies"
+                };
+                write!(
+                    f,
+                    "{map}: {action} {}, which no shipped editor table carries",
+                    fourcc_text(*rawcode)
+                )
+            }
             Self::ModifiedCollides { rawcode, kind } => write!(
                 f,
                 "custom rawcode {} already names a shipped {}",
@@ -393,6 +403,14 @@ impl Applied {
                             report.unresolved.push(Unresolved::ModifiedCollides {
                                 rawcode: record.modified,
                                 kind: k,
+                            });
+                            continue;
+                        }
+                        if kind.is_none() {
+                            report.unresolved.push(Unresolved::UnknownOriginal {
+                                rawcode: record.original,
+                                table: table_index,
+                                map: map.to_string(),
                             });
                             continue;
                         }
