@@ -949,8 +949,10 @@ Format: `date — subsystem — symptom — root cause — status`
   Human03 resolves two items. This is data import, not playable campaign proof.
 - ISO9660 primary/Joliet discovery: synthetic namespace, bounds and refusal
   tests pass with network APIs trapped. The supplied installer ISO discovers
-  ten files via its actual Joliet directory; six FreeArc payloads remain refused
-  pending encrypted-directory/password/codec support. WASM download and local
+  ten files via its actual Joliet directory; six FreeArc payloads remain refused.
+  Offline script-derived password arguments and control directories validate;
+  browser REP/Tornado and unverified language-patch decoding remain open.
+  See `docs/re-notes/original-iso-installers.md`. WASM download and local
   import progress use measured work or explicit indeterminate phases.
   Transactional in-browser MPQ registration, runtime asset hydration, local audio
   and cache refresh pass actual generated-WASM/browser verification.

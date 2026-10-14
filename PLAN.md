@@ -61,7 +61,7 @@ Archive opening and parser checks in §5.1 do not prove end-to-end game fidelity
 | Battle.net legacy | **1.29b** | `~/Faugus/battle-net/drive_c/Program Files (x86)/Warcraft III (Legacy)` |
 | Extracted install | Game.dll `1.26.0.6401`; archive identity unresolved | `wc3/game/` |
 | Inno installer | 1.27b | `wc3/warcraft-3-expansion/…/War3TFT_127b_English.exe` |
-| ISO (GOG Complete Edition) | 1.27b | `wc3/WarCraft III Complete Edition.iso` |
+| ISO (ElAmigos installer repack, measured payload) | Game release unresolved; filename does not establish 1.27b or GOG provenance | `wc3/WarCraft III Complete Edition.iso` |
 | Reforged | 2.0.1 | `~/Faugus/battle-net/drive_c/Program Files (x86)/Warcraft III` |
 
 ---
@@ -499,10 +499,14 @@ Two honest limits, reported rather than papered over:
 
 - **Reforged is CASC, not MPQs**, so `assets: reforged` cannot stage by copying. The
   launcher says so and names RE-Q17 instead of failing with "no archives found".
-- **ISO extraction does not work for the sources present here.** The GOG
-  `Complete Edition.iso` is a repack with its payload in `ELAMIGOS*.bin`, and
-  `War3TFT_127b_English.exe` carries no Inno Setup signature; both make `innoextract`
-  exit 2. The two sources a 1.29b run actually uses both work.
+- **Installer ISO extraction remains incomplete.** The measured
+  `Complete Edition.iso` has valid ISO9660/Joliet directories and six FreeArc
+  payloads with encrypted file lists. Its embedded Inno Setup executable can be
+  listed with `innoextract`, but contains no MPQ. Archive password arguments
+  now derive from the compiled script, and control directories validate
+  offline. Browser REP/Tornado decoding and the language-patch format remain
+  unresolved; directory discovery is not installed-game extraction.
+  See [the original ISO evidence](docs/re-notes/original-iso-installers.md).
 
 The launcher also carries a greyed-out **Check for updates** control. It is present
 and inert on purpose, so the shape of the UI is settled before the downloader exists
