@@ -1,0 +1,24 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "openrouter/thinkingmachines/inkling:free",
+  "small_model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+  "agent": {
+    "build": {
+      "model": "openrouter/thinkingmachines/inkling:free",
+      "tools": {
+        "rea_*": false
+      }
+    },
+    "compaction": {
+      "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+    },
+    "summary": {
+      "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+    }
+  },
+  "mcp": {
+    "rea": {
+      "enabled": false
+    }
+  }
+}

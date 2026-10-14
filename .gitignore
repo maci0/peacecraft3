@@ -5,7 +5,7 @@ Cargo.lock.orig
 
 # Reverse-engineering caches and vendored assets
 /.rea
-/rea/*.json
+/rea/
 /.tools/ghidra
 /.tools/profiling/
 /.tools/wasm-bindgen/
