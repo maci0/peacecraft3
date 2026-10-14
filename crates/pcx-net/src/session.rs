@@ -2,9 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use pcx_sim::{Command, FX_ONE, Input, PlayerInput, World};
+use pcx_sim::{Command, Input, PlayerInput, World, FX_ONE};
 
-use crate::{Datagram, Peer, Server, decode, decode_input_payload, encode, encode_world_payload};
+use crate::{decode, decode_input_payload, encode, encode_world_payload, Datagram, Peer, Server};
 
 pub const MAX_PLAYERS: u8 = 16;
 pub const MAX_PACKET_BYTES: usize = 1024;
@@ -59,6 +59,9 @@ impl Session {
             for commands in self.inputs.values_mut() {
                 commands.remove(&player);
             }
+            // Drop buckets emptied by the removal above so a closed peer cannot
+            // leave stale slots for later ticks.
+            self.inputs.retain(|_, players| !players.is_empty());
             self.inputs
                 .entry(self.world().tick)
                 .or_default()
@@ -108,11 +111,17 @@ impl Session {
                     },
                 )
                 .map_err(|e| SessionError::Tick(e.to_string()))?;
-                let players = self.inputs.entry(tick).or_default();
-                if players.contains_key(&player) {
+                if self
+                    .inputs
+                    .get(&tick)
+                    .is_some_and(|players| players.contains_key(&player))
+                {
                     return Err(SessionError::Duplicate);
                 }
-                players.insert(player, commands);
+                self.inputs
+                    .entry(tick)
+                    .or_default()
+                    .insert(player, commands);
                 Ok(None)
             }
             Datagram::Resync { .. } => Ok(Some(self.snapshot())),
@@ -192,6 +201,15 @@ mod tests {
             s.receive(Peer(10), &order(0, 0, -FX_ONE)),
             Err(SessionError::Duplicate)
         ));
+    }
+
+    #[test]
+    fn leave_prunes_empty_future_input_buckets() {
+        let mut s = session();
+        s.receive(Peer(11), &order(5, 1, FX_ONE)).unwrap();
+        assert!(s.inputs.contains_key(&5));
+        s.leave(Peer(11));
+        assert!(!s.inputs.contains_key(&5), "leave must prune emptied future buckets");
     }
 
     #[test]

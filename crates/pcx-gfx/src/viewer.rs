@@ -19,7 +19,7 @@ use bevy::app::AnimationSystems;
 use bevy::curve::{Curve, Interval};
 use bevy::prelude::*;
 
-use crate::{LoadedTexture, load_image, pose_from_poses, skin_mesh, to_bevy};
+use crate::{load_image, pose_from_poses, skin_mesh, to_bevy, LoadedTexture};
 
 /// Where to find the archives.
 pub fn resolve_install(explicit: Option<&str>) -> PathBuf {
@@ -323,9 +323,8 @@ struct Viewer {
 
 /// The terrain tile drawn under a model, and where the viewer looks for it.
 ///
-/// 1.29b ships 161 terrain tilesets; Ashenvale is the one the campaign opens on,
-/// so it is the default rather than a hard-coded arbitrary choice.
-const TERRAIN_TILE: &str = "TerrainArt\\Ashenvale\\Ashen_DirtGrass.blp";
+/// The shipped table that maps a ground slot fourcc to its texture path.
+const TERRAIN_SLK: &str = "TerrainArt\\Terrain.slk";
 
 fn spawn_once(
     mut commands: Commands,
@@ -480,7 +479,7 @@ fn spawn_once(
     );
 }
 
-/// Spawns a ground plane textured with a terrain tile.
+/// Spawns a ground plane textured with an asset-derived terrain tile.
 fn spawn_terrain(
     commands: &mut Commands,
     images: &mut Assets<Image>,
@@ -488,10 +487,19 @@ fn spawn_terrain(
     materials: &mut Assets<StandardMaterial>,
     install: &Path,
 ) {
-    let texture = pcx_mpq::MpqSet::open_wc3(install)
-        .ok()
-        .and_then(|mut s| s.extract(TERRAIN_TILE).ok())
-        .and_then(|b| load_image(&b, TERRAIN_TILE).ok());
+    let (texture, tile_path) = match pcx_mpq::MpqSet::open_wc3(install).ok() {
+        Some(mut set) => {
+            let path = set
+                .extract(TERRAIN_SLK)
+                .ok()
+                .and_then(|b| terrain_tile_path_from_slk(&b).ok());
+            let texture = path
+                .as_ref()
+                .and_then(|p| set.extract(p).ok().and_then(|b| load_image(&b, p).ok()));
+            (texture, path)
+        }
+        None => (None, None),
+    };
 
     let material = match texture {
         Some(tex) => {
@@ -507,10 +515,15 @@ fn spawn_terrain(
         }
         None => {
             // A missing tile must not take the scene down with it.
-            error!("cannot stage terrain tile {TERRAIN_TILE}");
+            if let Some(path) = tile_path {
+                error!("cannot stage terrain tile {path}");
+            } else {
+                error!("cannot resolve terrain tile from {TERRAIN_SLK}");
+            }
             materials.add(StandardMaterial {
                 base_color: Color::srgb(0.25, 0.30, 0.22),
                 unlit: true,
+                perceptual_roughness: 1.0,
                 ..default()
             })
         }
@@ -518,13 +531,61 @@ fn spawn_terrain(
 
     commands.spawn((
         MeshMaterial3d(material),
-        Mesh3d(meshes.add(plane_mesh())),
+        Mesh3d(meshes.add(terrain_plane_mesh())),
         Transform::from_xyz(0.0, 0.0, 0.0),
     ));
 }
 
+/// Asset-derived terrain tile path from `TerrainArt\\Terrain.slk`.
+pub fn terrain_tile_path_from_slk(bytes: &[u8]) -> Result<String, crate::Error> {
+    let table = pcx_slq::Table::parse(bytes)
+        .map_err(|e| crate::Error::Decode(format!("{TERRAIN_SLK}: {e}")))?;
+    if table.column_of("tileID").is_none()
+        || table.column_of("dir").is_none()
+        || table.column_of("file").is_none()
+    {
+        return Err(crate::Error::Decode(format!(
+            "{TERRAIN_SLK}: missing column"
+        )));
+    }
+    let mut entries: Vec<([u8; 4], String)> = Vec::new();
+    for row in table.data_rows() {
+        let tile_id = row.by_name("tileID").unwrap_or("");
+        if tile_id.len() != 4 {
+            continue;
+        }
+        let dir = row.by_name("dir").unwrap_or("");
+        let file = row.by_name("file").unwrap_or("");
+        if file.is_empty() {
+            continue;
+        }
+        let four = [
+            tile_id.as_bytes()[0],
+            tile_id.as_bytes()[1],
+            tile_id.as_bytes()[2],
+            tile_id.as_bytes()[3],
+        ];
+        entries.push((four, format!("{dir}\\{file}.blp")));
+    }
+    if entries.is_empty() {
+        return Err(crate::Error::Decode(format!("{TERRAIN_SLK}: no tile rows")));
+    }
+    entries.sort_by_key(|(four, _)| *four);
+    Ok(entries[0].1.clone())
+}
+
+/// Asset-derived terrain tile path using the supplied install.
+pub fn terrain_tile_path(install: &Path) -> Result<String, crate::Error> {
+    let mut set = pcx_mpq::MpqSet::open_wc3(install)
+        .map_err(|e| crate::Error::Decode(format!("{}: {e}", install.display())))?;
+    let bytes = set
+        .extract(TERRAIN_SLK)
+        .map_err(|e| crate::Error::Decode(format!("{TERRAIN_SLK}: {e}")))?;
+    terrain_tile_path_from_slk(&bytes)
+}
+
 /// A single quad, tiled a few times so the texture reads as terrain.
-fn plane_mesh() -> Mesh {
+pub fn terrain_plane_mesh() -> Mesh {
     use bevy::mesh::{Indices, PrimitiveTopology};
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,

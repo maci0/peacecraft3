@@ -949,9 +949,13 @@ Format: `date — subsystem — symptom — root cause — status`
   Human03 resolves two items. This is data import, not playable campaign proof.
 - ISO9660 primary/Joliet discovery: synthetic namespace, bounds and refusal
   tests pass with network APIs trapped. The supplied installer ISO discovers
-  ten files via its actual Joliet directory; six FreeArc payloads remain refused.
-  Offline script-derived password arguments and control directories validate;
-  browser REP/Tornado and unverified language-patch decoding remain open.
+  ten files via its actual Joliet directory. The bounded Inno/FreeArc browser
+  decoder derives bindings from the local installer script and validates control
+  directories, then streams REP/4x4/Tornado with all member CRCs checked.
+  The supplied stored base MPQ imports and renders its RoC menu in Chromium;
+  cancellation retains the prior revision and temporary files are removed.
+  MPQ-named AVI payloads cannot be staged. Language-patch decoding/application,
+  other installer/codec profiles and full installed-game equivalence remain open.
   See `docs/re-notes/original-iso-installers.md`. WASM download and local
   import progress use measured work or explicit indeterminate phases.
   Transactional in-browser MPQ registration, runtime asset hydration, local audio
@@ -966,7 +970,8 @@ Format: `date — subsystem — symptom — root cause — status`
   Chromium audio replacement/reset passes with zero uploads/unexpected requests.
   Running-app File-input import refreshes six authored labels and the scene;
   click audio, resize and unequal-member rollback pass with zero uploads/sockets.
-  Original installer ISO acceptance and full rendering parity remain open.
+  Bounded stored-base import from the supplied installer ISO passes separately;
+  patched installer/retail-disc acceptance and full rendering parity remain open.
 
 - Menu font files derive from each entry's FDF face and the supplied skin table,
   with no production face-to-file constant. New browser verification passes

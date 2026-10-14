@@ -25,6 +25,7 @@ import init, {
 import { discoverIso, importIsoCandidates } from './iso/import.js';
 import { clickDescriptor } from './iso/audio.js';
 import { createLoadingProgress, monitorWasmDownload } from './loading.js';
+import { createInstallerDecoder } from './iso/installer-import.js';
 const demoOnly = document.documentElement.dataset.localAssets === 'true';
 const wasmLoading = createLoadingProgress({ progressId: 'wasm-progress', statusId: 'wasm-status' });
 const isoLoading = createLoadingProgress({ progressId: 'iso-byte-progress', statusId: 'iso-progress' });
@@ -423,7 +424,7 @@ const isoCancel = document.getElementById('iso-cancel');
 const isoProgress = document.getElementById('iso-progress');
 const isoCandidates = document.getElementById('iso-candidates');
 const isoProvenance = document.getElementById('iso-provenance');
-let isoFile, isoDiscovery, isoController, isoBusy = false;
+let isoFile, isoDiscovery, isoController, isoBusy = false, installerDecoder, installerNeedsRestart = false;
 if (demoOnly) refreshDemoControls();
 function isoState(busy) {
   isoBusy = busy; isoInput.disabled = busy;
@@ -435,10 +436,16 @@ function isoState(busy) {
   if (demoOnly) refreshDemoControls();
 }
 isoCancel.addEventListener('click', () => isoController?.abort());
+function installerProgress(work) {
+  isoLoading.update(work.phase === 'decode'
+    ? { phase: 'Unpacking installer files locally', loadedBytes: work.decodedBytes, totalBytes: work.decodedTotal, totalReliable: true }
+    : { phase: work.phase });
+}
 isoInput.addEventListener('change', async () => {
   const file = isoInput.files[0];
   if (!file || isoBusy) return;
   isoFile = file; isoDiscovery = null; isoCandidates.replaceChildren();
+  installerDecoder?.close(); installerDecoder = undefined; installerNeedsRestart = false;
   isoController = new AbortController(); isoState(true);
   isoLoading.update({ phase: 'Inspecting ISO locally' });
   let lastProgress = 0;
@@ -449,20 +456,28 @@ isoInput.addEventListener('change', async () => {
         lastProgress = performance.now();
       }
     } });
-    isoProvenance.textContent = JSON.stringify({ provenance: isoDiscovery.provenance, diagnostics: isoDiscovery.diagnostics }, null, 2);
+    if (!isoDiscovery.candidates.length && isoDiscovery.diagnostics.some(d => d.code === 'UNSUPPORTED_FREEARC')) {
+      installerDecoder = createInstallerDecoder({ onProgress: installerProgress });
+      const inspected = await installerDecoder.inspect(file, isoDiscovery, isoController.signal);
+      isoDiscovery = { ...isoDiscovery, candidates: inspected.candidates, installer: inspected.diagnostic };
+    }
+    isoProvenance.textContent = JSON.stringify({ provenance: isoDiscovery.provenance, diagnostics: isoDiscovery.diagnostics, installer: isoDiscovery.installer }, null, 2);
     isoDiscovery.candidates.forEach((candidate, index) => {
       const label = document.createElement('label'), input = document.createElement('input');
       input.type = 'checkbox'; input.value = String(index); input.checked = isoDiscovery.candidates.length === 1;
-      label.append(input, document.createTextNode(` ${candidate.path} — ${candidate.archiveSize.toLocaleString()} bytes at ${candidate.offset}`));
+      label.append(input, document.createTextNode(` ${candidate.path} — ${candidate.archiveSize.toLocaleString()} bytes${candidate.validation === 'directory-only' ? ' (installer file; header checked during extraction)' : ` at ${candidate.offset}`}`));
       isoCandidates.append(label);
     });
-    isoLoading.complete(`${isoDiscovery.candidates.length} readable MPQ archives found; edition/build not established`);
+    isoLoading.complete(isoDiscovery.installer
+      ? `${isoDiscovery.candidates.length} MPQ-named installer files found. Imports use stored base files; language patches are not applied. Select an archive to preview its supplied menu.`
+      : `${isoDiscovery.candidates.length} readable MPQ archives found; edition/build not established`);
     if (!isoDiscovery.candidates.length) {
       const codes = [...new Set(isoDiscovery.diagnostics.filter(d => d.code.startsWith('UNSUPPORTED_')).map(d => d.code))];
       isoLoading.error(`No readable MPQ archives found. ${codes.join(', ') || 'No supported payload signature'}. Import details show the local decoder blocker.`);
     }
     if (!isoDiscovery.candidates.length) say('No directly supported MPQ payload. See source diagnostics for the local decoder blocker.', true);
   } catch (error) {
+    installerDecoder?.close(); installerDecoder = undefined;
     isoLoading.error(error.name === 'AbortError' ? 'Inspection cancelled; current assets retained' : String(error));
     fail('local ISO discovery', error);
   } finally { isoState(false); }
@@ -491,7 +506,30 @@ isoImport.addEventListener('click', async () => {
   isoLoading.update({ phase: 'Reading selected MPQs locally', loadedBytes: 0 });
   const priorLocalMode = localImportActive; localImportActive = true;
   try {
-    const result = await importIsoCandidates(isoFile, isoDiscovery, selected, window.peacecraft3, { signal: isoController.signal, onProgress(work) {
+    let result;
+    if (isoDiscovery.installer) {
+      if (!selected.length) throw new Error('Select at least one installer archive file');
+      if (selected.some(c => c.archiveSize > 512 * 1024 * 1024) || selected.reduce((sum, c) => sum + c.archiveSize, 0) > 1024 * 1024 * 1024)
+        throw new Error('Selected installer archives exceed the local memory budget');
+      if (installerNeedsRestart) {
+        installerDecoder?.close(); installerDecoder = createInstallerDecoder({ onProgress: installerProgress });
+        await installerDecoder.inspect(isoFile, isoDiscovery, isoController.signal); installerNeedsRestart = false;
+      }
+      const extracted = await installerDecoder.extract(selected.map(c => c.id), isoController.signal);
+      begin_archive_import();
+      for (const entry of extracted.files) {
+        isoController.signal.throwIfAborted();
+        isoLoading.update({ phase: `Validating extracted archive ${entry.path}` });
+        stage_archive(`${isoDiscovery.provenance.sourceName}:${entry.path} (stored, unpatched)`, new Uint8Array(await entry.file.arrayBuffer()));
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      isoController.signal.throwIfAborted();
+      isoLoading.update({ phase: 'Validating authored model dependencies locally' });
+      await new Promise(resolve => setTimeout(resolve, 0)); isoController.signal.throwIfAborted();
+      const diagnostics = commit_archive_import();
+      result = { provenance: { ...isoDiscovery.provenance, variant: extracted.variant, languagePatchesApplied: false },
+        canonicalPaths: stored_assets(), revision: asset_revision(), diagnostics };
+    } else result = await importIsoCandidates(isoFile, isoDiscovery, selected, window.peacecraft3, { signal: isoController.signal, onProgress(work) {
       isoLoading.update(work.phase === 'hydrate' ? { phase: 'Validating authored model dependencies locally' } : { phase: 'Reading MPQs locally', loadedBytes: work.imported, totalBytes: work.total, totalReliable: true });
     } });
     localImportActive = true;
@@ -502,10 +540,15 @@ isoImport.addEventListener('click', async () => {
     isoLoading.complete(`Committed local assets at revision ${result.revision}; ${result.canonicalPaths.length} runtime paths. Edition/build unverified.`);
     window.dispatchEvent(new CustomEvent('peacecraft3-local-import', { detail: result }));
   } catch (error) {
+    cancel_archive_import();
+    if (isoDiscovery.installer) installerNeedsRestart = true;
     isoLoading.error(error.name === 'AbortError' ? 'Import cancelled; current assets retained' : String(error));
     localImportActive = priorLocalMode;
     fail('local ISO import', error);
-  } finally { isoState(false); }
+  } finally {
+    if (isoDiscovery.installer) await installerDecoder?.cleanup().catch(error => fail('temporary local files', error));
+    isoState(false);
+  }
 });
 
 // Expose initialized APIs and attach controls before the larger scene assets

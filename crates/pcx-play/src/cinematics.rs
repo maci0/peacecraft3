@@ -638,8 +638,14 @@ impl FdfCatalog {
                 source: asset.source.into(),
                 fnv1a64: digest(asset.text.as_bytes()),
             });
-            let tokens = lex(*asset, limits.tokens - tokens_used)?;
-            tokens_used += tokens.len();
+            let remaining_tokens = limits
+                .tokens
+                .checked_sub(tokens_used)
+                .ok_or_else(|| error(asset.label, 0, FdfErrorKind::Budget("tokens")))?;
+            let tokens = lex(*asset, remaining_tokens)?;
+            tokens_used = tokens_used
+                .checked_add(tokens.len())
+                .ok_or_else(|| error(asset.label, 0, FdfErrorKind::Budget("tokens")))?;
             let mut reader = Reader {
                 source: asset.label,
                 tokens: &tokens,
@@ -925,6 +931,10 @@ impl FdfCatalog {
 
     pub fn frame_id(&self, name: &str) -> Option<FrameId> {
         self.names.get(name).copied()
+    }
+    /// Bounds-checked access by catalog index; invalid FrameId values return None.
+    pub fn frame(&self, id: FrameId) -> Option<&Frame> {
+        self.frames.get(id.0)
     }
 
     /// Bind every local authored anchor. Inherited records/children remain graph edges.

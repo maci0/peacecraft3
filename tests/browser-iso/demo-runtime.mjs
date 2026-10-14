@@ -13,7 +13,7 @@ const { chromium } = await import(pathToFileURL(process.env.PCX_PLAYWRIGHT_MODUL
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ executablePath: '/usr/bin/chromium', args: ['--no-sandbox', '--enable-unsafe-swiftshader'] });
 const requests = [], errors = [], logs = [], sockets = [];
-let proof;
+let proof, installerImport;
 try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 1000 } });
   page.setDefaultTimeout(120000);
@@ -60,11 +60,64 @@ try {
     const details = JSON.parse(discovery);
     assert.equal(details.provenance.filesystem, 'ISO9660-Joliet');
     assert.equal(details.diagnostics.filter(d => d.code === 'UNSUPPORTED_FREEARC').length, 6);
-    assert.equal(await page.locator('#iso-progress').getAttribute('data-state'), 'error');
-    assert.match(await page.locator('#iso-progress').textContent(), /UNSUPPORTED_FREEARC/);
-    assert(await page.locator('#iso-import').isDisabled());
+    assert.equal(details.installer.languagePatchesApplied, false);
+    assert.match(details.installer.variant, /stored base files/);
+    assert.equal(await page.locator('#iso-byte-progress').getAttribute('data-state'), 'complete');
+    assert(await page.locator('#iso-candidates input').count() > 0);
     assert.deepEqual(await page.evaluate(() => peacecraft3.local_menu_editions()), []);
-    await page.screenshot({ path: `${output}/original-installer-blocker.png`, fullPage: true });
+    await page.screenshot({ path: `${output}/original-installer-directory.png`, fullPage: true });
+    if (process.env.PCX_DEMO_INSTALLER_MEMBER) {
+      page.setDefaultTimeout(300000);
+      const selection = await page.locator('#iso-candidates label').evaluateAll((labels, member) => labels.findIndex(label => label.textContent.trim().startsWith(member + ' —')), process.env.PCX_DEMO_INSTALLER_MEMBER);
+      assert(selection >= 0, 'caller-selected installer member was not discovered');
+      const revision = await page.evaluate(() => peacecraft3.asset_revision());
+      if (process.env.PCX_DEMO_INSTALLER_REFUSED_MEMBER) {
+        const refused = await page.locator('#iso-candidates label').evaluateAll((labels, member) => labels.findIndex(label => label.textContent.trim().startsWith(member + ' —')), process.env.PCX_DEMO_INSTALLER_REFUSED_MEMBER);
+        assert(refused >= 0);
+        await page.locator('#iso-candidates input').nth(refused).check();
+        await page.locator('#iso-import').click();
+        await page.waitForFunction(() => !document.querySelector('#iso').disabled);
+        assert.match(await page.locator('#iso-progress').textContent(), /ARC_MEMBER_FORMAT/);
+        assert.equal(await page.evaluate(() => peacecraft3.asset_revision()), revision);
+        await page.locator('#iso-candidates input').nth(refused).uncheck();
+        await page.screenshot({ path: `${output}/installer-non-mpq-refusal.png`, fullPage: true });
+      }
+      await page.locator('#iso-candidates input').nth(selection).check();
+      if (process.env.PCX_DEMO_INSTALLER_CANCEL) {
+        await page.locator('#iso-import').click();
+        await page.waitForFunction(() => document.querySelector('#iso-byte-progress').value > 0 && document.querySelector('#iso').disabled);
+        await page.screenshot({ path: `${output}/installer-decode-progress.png`, fullPage: true });
+        await page.locator('#iso-cancel').click();
+        await page.waitForFunction(() => !document.querySelector('#iso').disabled);
+        assert.match(await page.locator('#iso-progress').textContent(), /cancelled/i);
+        assert.equal(await page.evaluate(() => peacecraft3.asset_revision()), revision);
+      }
+      await page.locator('#iso-import').click();
+      await page.waitForFunction(() => !document.querySelector('#iso').disabled);
+      assert.equal(await page.evaluate(() => peacecraft3.asset_revision()), revision + 1, await page.locator('#iso-progress').textContent());
+      const imported = JSON.parse(await page.locator('#iso-provenance').textContent());
+      assert.equal(imported.provenance.languagePatchesApplied, false);
+      assert(imported.canonicalPaths.length > 0);
+      const expectedEdition = process.env.PCX_DEMO_INSTALLER_EDITION;
+      if (expectedEdition) assert.deepEqual(await page.evaluate(() => peacecraft3.local_menu_editions()), [expectedEdition]);
+      await page.locator('#demo-start').click();
+      await page.waitForFunction(() => peacecraft3.active_local_menu_edition() !== undefined && document.querySelector('#launcher-canvas').width > 0);
+      await page.waitForFunction(() => document.querySelector('#launcher-canvas').width > 0);
+      await page.waitForTimeout(1000);
+      assert(logs.some(line => line.includes('Original menu background:')), 'authored menu scene did not load');
+      await page.locator('#launcher-canvas').screenshot({ path: `${output}/installer-base-menu.png` });
+      const temporaryFiles = await page.evaluate(async () => {
+        const directory = await navigator.storage.getDirectory(), names = [];
+        for await (const name of directory.keys()) if (name.startsWith('peacecraft3-import-')) names.push(name);
+        return names;
+      });
+      assert.deepEqual(temporaryFiles, [], 'temporary decoded archive was retained');
+      installerImport = { member: process.env.PCX_DEMO_INSTALLER_MEMBER, provenance: imported.provenance,
+        canonicalPathCount: imported.canonicalPaths.length, revision: imported.revision,
+        editions: await page.evaluate(() => peacecraft3.local_menu_editions()),
+        temporaryFiles, cancellationChecked: Boolean(process.env.PCX_DEMO_INSTALLER_CANCEL),
+        nonMpqRefusalChecked: Boolean(process.env.PCX_DEMO_INSTALLER_REFUSED_MEMBER) };
+    }
   }
 
   async function commit(input) {
@@ -153,6 +206,7 @@ try {
   proof = { ok: true, requests, errors, sockets, baseOnlyRejectsTft: rejected, overlappingImportRefused: true,
     loadingPhases: await page.evaluate(() => window.loadingPhases),
     originalJolietInstallerChecked: Boolean(process.env.PCX_DEMO_INSTALLER_ISO),
+    installerImport,
     originalMenuChecked: Boolean(process.env.PCX_DEMO_PREPARED),
     limitation: 'Synthetic base edition-policy proof and optional locally repacked original menu; not retail installer ISO or native/full-game fidelity' };
   await writeFile(`${output}/proof.json`, JSON.stringify(proof, null, 2));

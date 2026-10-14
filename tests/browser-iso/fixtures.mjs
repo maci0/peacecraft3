@@ -67,7 +67,7 @@ export function menuMembers(musicPath) {
   const members = {
     'UI\\FrameDef\\GlobalStrings.fdf': text('StringList {\n SYNTHETIC_LABEL "Synthetic label",\n}\n'),
     'UI\\FrameDef\\Glue\\StandardTemplates.fdf': text(style + 'Frame "BACKDROP" "SyntheticBackdrop" {\n BackdropBackground "Synthetic\\Texture.blp",\n}\n'),
-    'UI\\FrameDef\\Glue\\MainMenu.fdf': text('Frame "FRAME" "MainMenuFrame" {\n Frame "BUTTON" "SinglePlayerButton" {\n ButtonText "SyntheticSelectedText",\n Frame "TEXT" "SyntheticSelectedText" INHERITS "SyntheticTextStyle" {\n Text "SYNTHETIC_LABEL",\n }\n }\n}\n'),
+    'UI\\FrameDef\\Glue\\MainMenu.fdf': text('Frame "FRAME" "MainMenuFrame" {\n Frame "FRAME" "ControlLayer" {\n Frame "BUTTON" "SinglePlayerButton" {\n ButtonText "SyntheticSelectedText",\n Frame "TEXT" "SyntheticSelectedText" INHERITS "SyntheticTextStyle" {\n Text "SYNTHETIC_LABEL",\n }\n }\n }\n}\n'),
     'UI\\war3skins.txt': text(`[SyntheticSection]\nSelectedSyntheticFace=${fontPath}\n`),
     [fontPath]: text('synthetic font placeholder: API storage proof only'),
     'UI\\Glues\\MainMenu\\MainMenu3d\\MainMenu3d.mdx': model,

@@ -4838,7 +4838,7 @@ checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
 
 [[package]]
 name = "pcx-assets"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-casc",
  "pcx-mpq",
@@ -4849,7 +4849,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-blp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "jpeg-decoder",
@@ -4862,7 +4862,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-casc"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "md5",
@@ -4871,7 +4871,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-gfx"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bevy",
  "image",
@@ -4886,7 +4886,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-map"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-blp",
  "pcx-mpq",
@@ -4896,7 +4896,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-mdl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-casc",
  "pcx-mpq",
@@ -4905,7 +4905,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-mpq"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "flate2",
@@ -4916,7 +4916,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-net"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-mpq",
  "pcx-sim",
@@ -4926,7 +4926,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-objects"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-mpq",
  "pcx-slq",
@@ -4935,7 +4935,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-play"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-map",
  "pcx-mpq",
@@ -4947,7 +4947,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-script"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-mpq",
  "thiserror 2.0.21",
@@ -4955,7 +4955,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-sim"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-map",
  "pcx-mpq",
@@ -4965,7 +4965,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-slq"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-mpq",
  "thiserror 2.0.21",
@@ -4973,7 +4973,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-tera"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-map",
  "pcx-mpq",
@@ -4983,7 +4983,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-tga"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-mpq",
  "thiserror 2.0.21",
@@ -4991,7 +4991,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-trig"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-map",
  "pcx-mpq",
@@ -5000,7 +5000,7 @@ dependencies = [
 
 [[package]]
 name = "peacecraft3"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bevy",

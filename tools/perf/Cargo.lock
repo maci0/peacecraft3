@@ -124,7 +124,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "pcx-blp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "jpeg-decoder",
@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-map"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-blp",
  "pcx-mpq",
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-mpq"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "flate2",
@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-objects"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-mpq",
  "pcx-slq",
@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-sim"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-map",
  "pcx-objects",
@@ -173,7 +173,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-slq"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-mpq",
  "thiserror",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-tga"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-mpq",
  "thiserror",
@@ -189,7 +189,7 @@ dependencies = [
 
 [[package]]
 name = "peacecraft-perf"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcx-sim",
 ]

@@ -366,6 +366,15 @@ fn derived_menu_fonts(
                 .file,
         );
     }
+    for frame in fdf.frames() {
+        if let Some(target) = &frame.props.button_text {
+            if let Ok(style) = crate::mainmenu::menu_text_style(texts, target) {
+                if let Ok(binding) = crate::mainmenu::menu_font_file(skin, &style.font) {
+                    paths.insert(binding.file);
+                }
+            }
+        }
+    }
     Ok(paths.into_iter().collect())
 }
 
