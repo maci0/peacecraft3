@@ -460,3 +460,114 @@ fn assert_catalog_values(editor: &Editor, definition: &Definition) {
         }
     }
 }
+
+struct ForcedCatalog {
+    result: Result<Definition, ResolutionProblem>,
+    calls: std::cell::Cell<usize>,
+}
+impl ObjectCatalog for ForcedCatalog {
+    fn resolve(&self, _: Fourcc) -> Result<Definition, ResolutionProblem> {
+        self.calls.set(self.calls.get() + 1);
+        self.result.clone()
+    }
+}
+fn import_forced(
+    ids: &[Fourcc],
+    result: Result<Definition, ResolutionProblem>,
+) -> (ImportedWorld, usize) {
+    let catalog = ForcedCatalog {
+        result,
+        calls: std::cell::Cell::new(0),
+    };
+    let units = Units {
+        version: 8,
+        subversion: 11,
+        instances: ids.iter().copied().map(placement).collect(),
+    };
+    let world =
+        ImportedWorld::from_authored(source(), info(), pathing(), &units, &catalog, &[]).unwrap();
+    for (ordinal, record) in world.records.iter().enumerate() {
+        assert_eq!(record.ordinal, ordinal);
+        assert_eq!(record.placement, units.instances[ordinal]);
+    }
+    assert_eq!(world.source, source());
+    (world, catalog.calls.get())
+}
+#[test]
+fn mismatched_definition_is_not_interned_or_used_for_owner() {
+    let (world, calls) = import_forced(
+        &[*b"ASK0", *b"ASK0"],
+        Ok(definition(*b"GOT0", ObjectKind::Unit)),
+    );
+    assert!(
+        world.definitions.is_empty(),
+        "unrelated definition was admitted"
+    );
+    assert_eq!(calls, 1, "cache refusal without merging placements");
+    for record in &world.records {
+        let error = record.definition.as_ref().unwrap_err();
+        assert_eq!(record.problems, [RecordProblem::Definition(error.clone())]);
+        assert_eq!(record.owner, None);
+        assert_eq!(
+            *error,
+            ResolutionProblem::RawcodeMismatch {
+                requested: *b"ASK0",
+                resolved: *b"GOT0"
+            }
+        );
+    }
+    assert_eq!(world.records.len(), 2);
+    assert_eq!(
+        world.records[0].placement.creation_number,
+        world.records[1].placement.creation_number
+    );
+}
+#[test]
+fn catalog_must_preserve_requested_raw_bits_even_when_base_rows_fold_case() {
+    let (world, _) = import_forced(&[*b"Unit"], Ok(definition(*b"unit", ObjectKind::Item)));
+    assert!(
+        world.records[0].definition.is_err(),
+        "normalized raw ID was admitted"
+    );
+    assert!(world.definitions.is_empty());
+    assert_eq!(world.records[0].placement.type_id, *b"Unit");
+}
+#[test]
+fn matching_custom_identity_keeps_distinct_base_and_item_family() {
+    let mut custom = definition(*b"CSTM", ObjectKind::Item);
+    custom.base_rawcode = "BASE".into();
+    let (world, calls) = import_forced(&[*b"CSTM", *b"CSTM"], Ok(custom.clone()));
+    assert_eq!(calls, 1);
+    assert_eq!(world.definitions, [custom]);
+    assert_eq!(world.records[0].definition, Ok(0));
+    assert_eq!(world.records[1].definition, Ok(0));
+    assert!(
+        world
+            .records
+            .iter()
+            .all(|record| record.owner.is_none() && record.problems.is_empty())
+    );
+}
+#[test]
+fn supplied_unknown_ambiguous_and_wrong_family_refusals_remain_typed() {
+    for problem in [
+        ResolutionProblem::MissingRawcode("CSTM".into()),
+        ResolutionProblem::AmbiguousCustomRawcode,
+        ResolutionProblem::WrongFamily {
+            expected: ObjectKind::Item,
+            actual: ObjectKind::Unit,
+        },
+    ] {
+        let (world, calls) = import_forced(&[*b"CSTM", *b"CSTM"], Err(problem.clone()));
+        assert_eq!(calls, 1);
+        assert!(world.definitions.is_empty());
+        for record in world.records {
+            assert_eq!(record.definition, Err(problem.clone()));
+            assert_eq!(
+                record.problems,
+                [RecordProblem::Definition(problem.clone())]
+            );
+            assert_eq!(record.owner, None);
+        }
+    }
+}

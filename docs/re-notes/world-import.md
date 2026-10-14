@@ -30,6 +30,12 @@ budget is added, so the operation is not a bounded-memory import guarantee.
 
 `MetadataCatalog` keeps unit and item overlays separate and resolves their bases
 against the supplied Editor tables. Definitions are interned once per rawcode.
+The importer requires a caller catalog's returned rawcode to match the requested
+placement bytes exactly. A mismatch retains both IDs in `RawcodeMismatch`, keeps
+the placement and caches the refusal, without interning unrelated fields or
+deriving an owner from the unrelated definition. Matching custom IDs can still
+refer to a distinct base row. This is an import identity check, not a native
+case-folding or gameplay rule.
 The runtime metadata determines field identity, declared type and source
 SLK/profile column. Base cells remain verbatim text; map overrides retain their
 wire-decoded values. No integer signedness, combat scale, damage formula or life

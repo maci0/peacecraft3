@@ -73,6 +73,10 @@ pub struct Definition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolutionProblem {
     InvalidRawcode,
+    RawcodeMismatch {
+        requested: Fourcc,
+        resolved: Fourcc,
+    },
     MissingMetadata(String),
     MissingRawcode(String),
     UnsupportedKind(ObjectKind),
@@ -365,10 +369,16 @@ impl ImportedWorld {
             let definition = by_rawcode
                 .entry(placement.type_id)
                 .or_insert_with(|| {
-                    catalog.resolve(placement.type_id).map(|definition| {
+                    catalog.resolve(placement.type_id).and_then(|definition| {
+                        if definition.rawcode != placement.type_id {
+                            return Err(ResolutionProblem::RawcodeMismatch {
+                                requested: placement.type_id,
+                                resolved: definition.rawcode,
+                            });
+                        }
                         let index = definitions.len();
                         definitions.push(definition);
-                        index
+                        Ok(index)
                     })
                 })
                 .clone();
