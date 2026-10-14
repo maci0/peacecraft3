@@ -102,3 +102,95 @@ fn script_traces_compare_and_incompatible_schemas_are_refused() {
     let malformed = write_trace("invalid-script.trace", b"pcx-script-trace 2\n");
     assert_eq!(diff(&a_path, &malformed).2, 2);
 }
+
+fn minimize_files(prefix: &str, right_map: &str, expectation: &str) -> (PathBuf, PathBuf) {
+    let scenario = |map: &str, x: i32, expectation: &str| {
+        format!(
+            "pcx-rpl 1\nscenario minimize-case\nmap {map}\nticks 2\nseed 99\nasset-mode vanilla\nspawn 0 0 0\nat 0 move 0 move {x} 0\nexpect 0 units 1\n{expectation}"
+        )
+    };
+    let left = write_trace(
+        &format!("{prefix}-left.rpl"),
+        scenario("synthetic.map", 1, "").as_bytes(),
+    );
+    let right = write_trace(
+        &format!("{prefix}-right.rpl"),
+        scenario(right_map, 2, expectation).as_bytes(),
+    );
+    (left, right)
+}
+
+fn minimize_command(
+    left: &std::path::Path,
+    right: &std::path::Path,
+    args: &[&str],
+) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_pcx-diff"))
+        .arg("minimize")
+        .arg(left)
+        .arg(right)
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn minimize_cli_runs_fresh_pairs_and_reports_corpus_minimum() {
+    let (left, right) = minimize_files("minimize-positive", "synthetic.map", "");
+    let output = minimize_command(&left, &right, &["8", "20", "20", "6", "3", "6", "8", "1"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("minimum-seed=1 original-seed=8 oracle-evaluations=4 inspections=6 status=CorpusExhausted\n"), "{stdout}");
+    assert!(stdout.contains("field=unit[0].x"), "{stdout}");
+    assert!(output.stderr.is_empty());
+
+    let output = minimize_command(&left, &right, &["8", "1", "20", "1"]);
+    assert!(output.status.success());
+    assert!(String::from_utf8(output.stdout).unwrap().contains(
+        "minimum-seed=8 original-seed=8 oracle-evaluations=1 inspections=1 status=BudgetExhausted"
+    ));
+}
+
+#[test]
+fn minimize_cli_refuses_nonreproduction_and_incompatible_headers() {
+    let (left, right) = minimize_files("minimize-incompatible", "different.map", "");
+    let output = minimize_command(&left, &right, &["8", "10", "10", "1"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("map identity")
+    );
+    assert!(output.stdout.is_empty());
+
+    let output = minimize_command(&left, &left, &["8", "10", "10", "1"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("did not reproduce")
+    );
+}
+
+#[test]
+fn minimize_cli_preserves_oracle_errors_and_rejects_bad_budgets() {
+    let (left, right) = minimize_files("minimize-errors", "synthetic.map", "expect 0 units 99\n");
+    let output = minimize_command(&left, &right, &["8", "10", "10", "1"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("expectation")
+    );
+    assert!(output.stdout.is_empty());
+
+    for args in [["8", "0", "10"], ["8", "10", "0"], ["bad-seed", "10", "10"]] {
+        let output = minimize_command(&left, &right, &args);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+    }
+}

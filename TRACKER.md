@@ -122,7 +122,11 @@ byte-stable), and its decoder refuses anything that is not already canonical so
 - [~] `pcx-play`: declaration-ordered actions enter existing simulation steps;
        move/select/stop/nop and harness RNG are supported. Attack/build/cast/train
        and native event-order parity remain open.
-- [ ] `pcx-diff`: seed minimiser for failing Tier C scenarios
+- [x] `pcx-diff`: bounded seed minimiser with fresh paired RPL executions,
+       independent inspection/oracle ceilings, canonical trace/identity refusal
+       and checked-corpus minimum. Library and CLI regressions, strict Clippy and
+       native/WASM builds pass. Native baseline capture and Tier C corpus/fidelity
+       gates remain open; see `docs/playtest-minimization.md`.
 - [x] `playrun` CLI and `tools/playrun.sh`: assertions, repeats, explicit work
        limit and optional baseline comparison. Supplied baselines are not
        automatically original-runtime evidence.

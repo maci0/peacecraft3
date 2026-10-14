@@ -55,6 +55,7 @@
 
 pub mod campaign;
 pub mod diff;
+pub mod minimize;
 pub mod rpl;
 pub mod runner;
 pub use rpl::{Expectation, Rpl, RplError};
