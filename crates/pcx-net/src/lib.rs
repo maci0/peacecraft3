@@ -66,7 +66,7 @@ pub trait Transport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Peer(pub u32);
 
-/// Wire-format errors, all of which are about framing rather than about the game.
+/// Wire-format errors, including ambiguous unit identity in a snapshot.
 #[derive(Debug, thiserror::Error)]
 pub enum CodecError {
     #[error("datagram is {len} bytes, shorter than the {need}-byte header")]
@@ -77,6 +77,17 @@ pub enum CodecError {
     PayloadTooShort { kind: u8, need: usize, got: usize },
     #[error("trailing bytes after a well-formed datagram: {remaining}")]
     TrailingBytes { remaining: usize },
+    #[error("snapshot span at byte {at} with length {len} exceeds the address space")]
+    PayloadSpanOverflow { at: usize, len: usize },
+    #[error(
+        "snapshot at tick {tick} repeats unit ID {id} at record {record}; first seen at record {first_record}"
+    )]
+    DuplicateUnitId {
+        tick: u64,
+        id: u32,
+        first_record: u32,
+        record: u32,
+    },
 }
 
 /// What a datagram means.
@@ -334,65 +345,80 @@ pub fn encode_world_payload(world: &pcx_sim::World) -> Vec<u8> {
     out
 }
 
-/// Decodes a world, refusing anything that does not fit.
+fn world_payload_span(bytes: &[u8], at: usize, len: usize) -> Result<(&[u8], usize), CodecError> {
+    let end = at
+        .checked_add(len)
+        .ok_or(CodecError::PayloadSpanOverflow { at, len })?;
+    let chunk = bytes.get(at..end).ok_or(CodecError::PayloadTooShort {
+        kind: 3,
+        need: end,
+        got: bytes.len(),
+    })?;
+    Ok((chunk, end))
+}
+
+/// Decodes a world, refusing malformed framing and repeated unit IDs.
+///
+/// IDs identify one unit during correction; duplicate records cannot be chosen
+/// by wire order. Unique records and the raw counter retain their supplied order
+/// and values. Counter exhaustion and consistency are separate admission policy.
 pub fn decode_world_payload(tick: u64, bytes: &[u8]) -> Result<pcx_sim::World, CodecError> {
-    let take_u32 = |b: &[u8], at: usize| -> Result<u32, CodecError> {
-        b.get(at..at + 4)
-            .map(|s| u32::from_le_bytes(s.try_into().unwrap()))
-            .ok_or(CodecError::PayloadTooShort {
-                kind: 3,
-                need: at + 4,
-                got: b.len(),
-            })
+    let take_u32 = |at: usize| -> Result<u32, CodecError> {
+        let (chunk, _) = world_payload_span(bytes, at, std::mem::size_of::<u32>())?;
+        Ok(u32::from_le_bytes(chunk.try_into().unwrap()))
     };
-    let next_unit_id = take_u32(bytes, 0)?;
-    let count = take_u32(bytes, 4)?;
-    let mut at = 8usize;
-    let mut units = Vec::with_capacity(count.min(4096) as usize);
-    for _ in 0..count {
-        // A unit's length depends on whether it has a target, so the head is
-        // read first and the target is read only when the flag says to. Sizing
-        // every unit the same would over-read an idle unit and under-read a
-        // moving one.
-        let head = at + UNIT_HEAD_BYTES;
-        let chunk = bytes.get(at..head).ok_or(CodecError::PayloadTooShort {
-            kind: 3,
-            need: head,
-            got: bytes.len(),
-        })?;
+    let next_unit_id = take_u32(0)?;
+    let count = take_u32(4)?;
+    let take_unit = |at: &mut usize| -> Result<pcx_sim::Unit, CodecError> {
+        let (chunk, head) = world_payload_span(bytes, *at, UNIT_HEAD_BYTES)?;
         let id = u32::from_le_bytes(chunk[0..4].try_into().unwrap());
         let owner = chunk[4];
         let x = i32::from_le_bytes(chunk[5..9].try_into().unwrap());
         let y = i32::from_le_bytes(chunk[9..13].try_into().unwrap());
         let has_target = chunk[13] != 0;
-        at = head;
+        *at = head;
         let move_target = if has_target {
-            let end = at + UNIT_TARGET_BYTES;
-            let t = bytes.get(at..end).ok_or(CodecError::PayloadTooShort {
-                kind: 3,
-                need: end,
-                got: bytes.len(),
-            })?;
-            at = end;
+            let (target, end) = world_payload_span(bytes, *at, UNIT_TARGET_BYTES)?;
+            *at = end;
             Some((
-                i32::from_le_bytes(t[0..4].try_into().unwrap()),
-                i32::from_le_bytes(t[4..8].try_into().unwrap()),
+                i32::from_le_bytes(target[0..4].try_into().unwrap()),
+                i32::from_le_bytes(target[4..8].try_into().unwrap()),
             ))
         } else {
             None
         };
-        units.push(pcx_sim::Unit {
+        Ok(pcx_sim::Unit {
             id,
             owner,
             x,
             y,
             move_target,
-        });
+        })
+    };
+    // Check the complete immutable frame before allocating unit metadata.
+    let mut at = 8usize;
+    for _ in 0..count {
+        take_unit(&mut at)?;
     }
     if at != bytes.len() {
         return Err(CodecError::TrailingBytes {
             remaining: bytes.len() - at,
         });
+    }
+    let mut units = Vec::with_capacity(count.min(4096) as usize);
+    let mut unit_ids = BTreeMap::new();
+    at = 8;
+    for record in 0..count {
+        let unit = take_unit(&mut at)?;
+        if let Some(first_record) = unit_ids.insert(unit.id, record) {
+            return Err(CodecError::DuplicateUnitId {
+                tick,
+                id: unit.id,
+                first_record,
+                record,
+            });
+        }
+        units.push(unit);
     }
     Ok(pcx_sim::World {
         tick,
@@ -800,6 +826,15 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn snapshot_span_endpoint_overflow_is_typed_before_indexing() {
+        assert!(matches!(
+            super::world_payload_span(&[], usize::MAX - 5, super::UNIT_HEAD_BYTES),
+            Err(super::CodecError::PayloadSpanOverflow { at, len })
+                if at == usize::MAX - 5 && len == super::UNIT_HEAD_BYTES
+        ));
+    }
+
     use super::*;
     use pcx_sim::{Command, FX_ONE, MAX_INPUT_LEAD, Rng};
 
