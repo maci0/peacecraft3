@@ -418,4 +418,35 @@ fn synthetic_local_storage_roundtrip_has_verified_provenance_and_path_resolution
         2
     );
     assert_ne!(storage.build.config_values, BTreeMap::new());
+
+    // Caller ceilings narrow the existing verified read, not its mount policy.
+    let size = payload.len() as u64;
+    assert_eq!(
+        storage
+            .read_path_bounded(&resolver, "fixture/item.bin", size)
+            .unwrap()
+            .file
+            .decoded
+            .bytes,
+        payload
+    );
+    assert_eq!(
+        storage
+            .read_ekey_bounded(asset_ekey, size)
+            .unwrap()
+            .decoded
+            .bytes,
+        payload
+    );
+    assert!(matches!(
+        storage.read_ekey_bounded(asset_ekey, size - 1),
+        Err(error) if error.kind == Failure::Limit { needed: size, limit: size - 1 }
+    ));
+    // Missing backing bytes discriminate metadata preflight from a post-read cap.
+    std::fs::remove_file(dir.0.join("Data/data/data.000")).unwrap();
+    assert!(matches!(
+        storage.read_path_bytes_bounded(&resolver, b"fixture/item.bin", size - 1),
+        Err(error) if error.kind == Failure::Limit { needed: size, limit: size - 1 }
+    ));
+    assert!(storage.read_path(&resolver, "fixture/item.bin").is_err());
 }

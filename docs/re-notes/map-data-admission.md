@@ -41,6 +41,11 @@ selected sources refuse without trying another layer or legacy reads. The legacy
 MPQ sources retain independent packed/decoded admission limits and optional
 caller-provided Huffman tables; archive mounting and table ownership precede
 these per-member checks. Override files check length before reserve/read.
+Configured CASC adapters now propagate the caller ceiling through verified
+TVFS/ENCODING resolution and BLTE decoding. Declared oversize refuses before
+encoded payload I/O; the decoder ceiling is also no larger than the resolved
+declared size. Mounted encoded limits and existing integrity checks remain.
+This adds no default namespace, member inventory or source priority.
 
 Limits cover specified input byte/count admission, not combined memory use.
 Table/profile/AST storage, receipts, queued messages, decoder working memory and

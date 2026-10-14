@@ -108,6 +108,27 @@ contain 5 N chunks and 146 Z chunks, all verified. The separately read content
 root decodes to 21,145,250 bytes with 81 verified Z chunks; its `War3` signature
 is identified, but its path records are not interpreted.
 
+## Per-read decoded ceilings
+
+`Storage::read_ekey_bounded(ekey, decoded_byte_limit)` narrows the mounted decoded
+limit before existing BLTE decode. Mounted encoded limits and codec working-buffer
+behavior are retained. `read_path_bounded` and `read_path_bytes_bounded` resolve
+through the same checked TVFS path and first validate its declared decoded size
+against the caller/mounted ceiling, before encoded payload I/O. The decoder is
+also capped by that resolved declared size, then exact length and CKey checks
+remain. Opaque paths are retained; policy errors identify metadata member and raw
+path bytes. No new limit family, default, source order or native mount policy is
+introduced. Existing read methods keep their prior behavior.
+
+The ceiling guards decoded Vec growth using existing BLTE checks. An unframed
+zlib stream may produce data into existing scratch/codec state before its output
+size is known; a framed multi-chunk stream may allocate earlier chunks within the
+ceiling before refusing a later chunk. This is not a promise of zero decoder
+workspace or total-process allocation. Known oversized resolved metadata refuses
+before payload reads/decode; malformed or forged payload facts are checked by the
+bounded decoder. Archive metadata/cache ownership, mount parsing and concurrent
+filesystem mutation are outside this per-read output guarantee.
+
 ## Checked TVFS path resolution
 
 The actual configured TVFS data is the primary evidence. The original-install

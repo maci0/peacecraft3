@@ -86,8 +86,7 @@ current file sizes and refuses an oversized file before its payload reserve or
 read. It retains the existing one-byte growth probe, so this is a decoded-content
 ceiling, not an exact allocator or process-memory ceiling. Mount inventory,
 metadata checks and error allocations are outside this per-read contract.
-Legacy-constructed MPQ adapters and current CASC adapters inherit the typed
-unsupported-budget response;
+Legacy-constructed MPQ adapters inherit the typed unsupported-budget response;
 their existing `read` methods and mount-time decoder limits remain available.
 There is no fallback to another layer or to unbounded `read`. Existing `resolve`,
 `index` and `write_index` keep their existing behavior.
@@ -176,6 +175,21 @@ claimed. Existing `extract` and its legacy discovery behavior remain unchanged.
 configuration and resolves every selected exact namespace. Its version comes
 from `.build.info`. Reads verify EKey/chunk checksums, decoded size and CKey
 through `Storage::read_path`; unsupported layouts/codecs remain errors.
+`CascSource::read_bounded(asset, decoded_byte_limit)` reuses that verified path.
+It checks resolved TVFS/ENCODING decoded size against both the caller ceiling and
+mounted decoded policy before encoded payload reads. The existing BLTE decoder
+receives the narrowed ceiling (also no larger than the resolved declared size),
+retaining mounted encoded limits and all EKey/chunk/CKey/length checks. Typed CASC
+failures remain under `SourceError::CascRead`; legacy `read` remains compatible.
+This is a decoded payload ceiling, not a bound on mount, encoded, codec workspace,
+parsed metadata or total process allocations. Exact selected receipts are unchanged.
+
+Public synthetic mounted-source regressions cover exact N/Z reads, missing-file
+metadata preflight, no lower-source fallback, checksum failures and forged small
+decoded sizes. The explicitly supplied original TVFS member gate compares bounded
+and legacy bytes/receipts, and checks a one-byte-smaller caller ceiling. These are
+native file-backed checks; WASM compile checks do not establish browser CASC I/O.
+
 `identity(asset)` exposes the complete configuration/encoding/manifest chain.
 The returned locator also records keys, manifest links/spans and archive offset.
 

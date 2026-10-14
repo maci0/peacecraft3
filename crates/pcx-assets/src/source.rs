@@ -80,6 +80,8 @@ pub enum SourceError {
     #[error(transparent)]
     MpqExtraction(Box<pcx_mpq::ExtractionError>),
     #[error(transparent)]
+    CascRead(Box<pcx_casc::Error>),
+    #[error(transparent)]
     Io(#[from] std::io::Error),
 }
 

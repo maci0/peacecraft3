@@ -226,6 +226,25 @@ impl Storage {
     }
 
     pub fn read_ekey(&self, ekey: Key) -> Result<FileBytes, Error> {
+        self.read_ekey_with_limits(ekey, self.limits)
+    }
+
+    /// Keep mounted encoded policy; narrow decoded output before BLTE allocation.
+    pub fn read_ekey_bounded(
+        &self,
+        ekey: Key,
+        decoded_byte_limit: u64,
+    ) -> Result<FileBytes, Error> {
+        self.read_ekey_with_limits(
+            ekey,
+            Limits {
+                encoded_bytes: self.limits.encoded_bytes,
+                decoded_bytes: self.limits.decoded_bytes.min(decoded_byte_limit),
+            },
+        )
+    }
+
+    fn read_ekey_with_limits(&self, ekey: Key, limits: Limits) -> Result<FileBytes, Error> {
         let mut last_error = None;
         for index in &self.indexes {
             for entry in index
@@ -240,7 +259,7 @@ impl Storage {
                 let name = archive.to_string_lossy();
                 enforce_limit(
                     entry.encoded_size,
-                    self.limits.encoded_bytes,
+                    limits.encoded_bytes,
                     &name,
                     entry.offset as usize,
                 )?;
@@ -309,7 +328,7 @@ impl Storage {
                 let mut source = index.evidence.source.clone();
                 source.member =
                     format!("Data/data/data.{:03}@{:#x}+30", entry.segment, entry.offset);
-                let decoded = match crate::blte::decode(&data[30..], ekey, source, self.limits) {
+                let decoded = match crate::blte::decode(&data[30..], ekey, source, limits) {
                     Ok(decoded) => decoded,
                     Err(err) => {
                         last_error = Some(err);
@@ -427,6 +446,34 @@ impl Storage {
         resolver: &crate::tvfs::Resolver,
         path: &[u8],
     ) -> Result<PathBytes, Error> {
+        self.read_path_bytes_with_limit(resolver, path, None)
+    }
+
+    pub fn read_path_bounded(
+        &self,
+        resolver: &crate::tvfs::Resolver,
+        path: &str,
+        decoded_byte_limit: u64,
+    ) -> Result<PathBytes, Error> {
+        self.read_path_bytes_bounded(resolver, path.as_bytes(), decoded_byte_limit)
+    }
+
+    /// Known decoded size refuses before encoded read; opaque path bytes are retained.
+    pub fn read_path_bytes_bounded(
+        &self,
+        resolver: &crate::tvfs::Resolver,
+        path: &[u8],
+        decoded_byte_limit: u64,
+    ) -> Result<PathBytes, Error> {
+        self.read_path_bytes_with_limit(resolver, path, Some(decoded_byte_limit))
+    }
+
+    fn read_path_bytes_with_limit(
+        &self,
+        resolver: &crate::tvfs::Resolver,
+        path: &[u8],
+        decoded_byte_limit: Option<u64>,
+    ) -> Result<PathBytes, Error> {
         let resolved = resolver.resolve_bytes(path)?;
         if resolved.build_config != self.build.config {
             return Err(error(
@@ -437,7 +484,22 @@ impl Storage {
                 ),
             ));
         }
-        let file = self.read_ekey(resolved.ekey)?;
+        let file = if let Some(limit) = decoded_byte_limit {
+            let limit = limit.min(self.limits.decoded_bytes);
+            enforce_limit(
+                resolved.decoded_size,
+                limit,
+                &format!(
+                    "{}; TVFS byte path {}",
+                    resolved.encoding.source.member,
+                    hex(path)
+                ),
+                0,
+            )?;
+            self.read_ekey_bounded(resolved.ekey, limit.min(resolved.decoded_size))?
+        } else {
+            self.read_ekey(resolved.ekey)?
+        };
         if file.decoded.bytes.len() as u64 != resolved.decoded_size {
             return Err(error(
                 &file.decoded.evidence.source.member,

@@ -256,14 +256,33 @@ impl ContentSource for CascSource {
         Ok(self.members.values().map(|m| m.asset.clone()).collect())
     }
     fn read(&self, asset: &str) -> Result<Option<SourceContent>, SourceError> {
+        self.read_with_limit(asset, None)
+    }
+    fn read_bounded(&self, asset: &str, limit: u64) -> Result<Option<SourceContent>, SourceError> {
+        self.read_with_limit(asset, Some(limit))
+    }
+}
+
+impl CascSource {
+    fn read_with_limit(
+        &self,
+        asset: &str,
+        limit: Option<u64>,
+    ) -> Result<Option<SourceContent>, SourceError> {
         let path = AssetPath::new(asset).map_err(invalid)?;
         let Some(mapping) = self.members.get(&path) else {
             return Ok(None);
         };
-        let file = self
-            .storage
-            .read_path(&self.resolver, &mapping.member)
-            .map_err(invalid)?;
+        let file = match limit {
+            Some(limit) => self
+                .storage
+                .read_path_bounded(&self.resolver, &mapping.member, limit)
+                .map_err(|source| SourceError::CascRead(Box::new(source)))?,
+            None => self
+                .storage
+                .read_path(&self.resolver, &mapping.member)
+                .map_err(invalid)?,
+        };
         let manifests = file
             .resolved
             .links

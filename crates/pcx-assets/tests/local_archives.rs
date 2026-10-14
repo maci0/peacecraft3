@@ -92,6 +92,22 @@ fn an_explicit_tvfs_member_retains_verified_keys_and_content_through_layering() 
     .unwrap();
     let actual = resolver.resolve("selected/asset.bin").unwrap();
     assert_eq!(actual.bytes, expected.file.decoded.bytes);
+    let bounded = resolver
+        .resolve_bounded("selected/asset.bin", expected.resolved.decoded_size)
+        .unwrap();
+    assert_eq!(bounded, actual);
+    if let Some(limit) = expected.resolved.decoded_size.checked_sub(1) {
+        assert!(matches!(
+            resolver.resolve_bounded("selected/asset.bin", limit),
+            Err(pcx_assets::Error::Source {
+                source: pcx_assets::SourceError::CascRead(error),
+                ..
+            }) if error.kind == pcx_casc::Failure::Limit {
+                needed: expected.resolved.decoded_size,
+                limit,
+            }
+        ));
+    }
     assert_eq!(
         actual.provenance.byte_length,
         expected.resolved.decoded_size

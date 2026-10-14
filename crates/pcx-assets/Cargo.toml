@@ -13,5 +13,9 @@ thiserror.workspace = true
 pcx-mpq.workspace = true
 pcx-casc.workspace = true
 
+[dev-dependencies]
+flate2.workspace = true
+md5 = "0.8.1"
+
 [lints]
 workspace = true
