@@ -251,13 +251,21 @@ pub fn strict_selection_is_shared_and_legacy_lookup_retained() {
 #[cfg_attr(test, test)]
 pub fn malformed_codecs_and_dictionary_boundaries_stay_typed() {
     let member = "Bad\\codec.bin";
-    for mask in [0x20, 0x10, 0x12, 1] {
+    for mask in [0x21, 0x10, 0x12, 1] {
         let mut a = archive(member, &[mask, 0], 9, flags::SINGLE_UNIT | flags::COMPRESS);
         let e = a.extract_bounded(member, budget(2, 9), None).unwrap_err();
         assert!(
             matches!(e.cause.as_ref(),ExtractionCause::Mpq(Error::Payload(PayloadError::UnsupportedCompression{mask:m})) if *m==mask)
         );
     }
+    let mut a = archive(member, &[0x20, 0], 9, flags::SINGLE_UNIT | flags::COMPRESS);
+    let e = a.extract_bounded(member, budget(2, 9), None).unwrap_err();
+    assert!(matches!(
+        e.cause.as_ref(),
+        ExtractionCause::Mpq(Error::Payload(PayloadError::Sparse(
+            pcx_mpq::sparse::SparseError::Truncated { need: 4, have: 1 }
+        )))
+    ));
     let packed = [0, 4, 0x82, 0x24, 0x25, 0x8f, 0x80, 0x7f];
     let mut a = archive(member, &packed, 13, flags::SINGLE_UNIT | flags::IMPLODE);
     assert_eq!(
