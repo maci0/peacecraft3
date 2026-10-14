@@ -49,11 +49,22 @@ pub enum FdfError {
         /// The text that would not parse.
         text: String,
     },
+    /// An authored value has no supported rendering interpretation.
+    Unsupported {
+        frame: String,
+        property: &'static str,
+        value: String,
+    },
 }
 
 impl std::fmt::Display for FdfError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Unsupported {
+                frame,
+                property,
+                value,
+            } => write!(f, "{frame:?}'s {property} value {value:?} is unsupported"),
             Self::Header(s) => write!(f, "unreadable Frame header: {s}"),
             Self::Unterminated(s) => write!(f, "frame {s:?} is never closed"),
             Self::UnknownFrame(s) => write!(f, "no frame named {s:?}"),

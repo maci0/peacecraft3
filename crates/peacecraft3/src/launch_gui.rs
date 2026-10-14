@@ -345,7 +345,6 @@ fn setup(mut commands: Commands, l: Res<Launcher>) {
 /// does not, that is reported in the log rather than drawn as a rectangle that
 /// merely resembles the original.
 fn spawn_main_menu(commands: &mut Commands) {
-
     // The frames are spawned here; their art is applied by [`apply_menu_art`]
     // afterwards. It has to be deferred because a browser cannot read the
     // install paths at startup — the page fetches the originals and hands them
@@ -873,8 +872,16 @@ fn apply_menu_art(
             }
         }
         cached_text(&mut cache.skin, install, crate::mainmenu::SKIN_TABLE);
-        cached_text(&mut cache.main_menu, install, crate::mainmenu::MAIN_MENU_FDF);
-        cached_text(&mut cache.strings, install, crate::mainmenu::GLOBAL_STRINGS_FDF);
+        cached_text(
+            &mut cache.main_menu,
+            install,
+            crate::mainmenu::MAIN_MENU_FDF,
+        );
+        cached_text(
+            &mut cache.strings,
+            install,
+            crate::mainmenu::GLOBAL_STRINGS_FDF,
+        );
         cached_text(
             &mut cache.templates,
             install,
@@ -952,7 +959,10 @@ fn build_control_layer(
             if !unsupported.is_empty() {
                 warn!("Main menu frames not drawn: {unsupported:?}");
             }
-            info!("Main menu: {} frames from the FDF control layer", items.len());
+            info!(
+                "Main menu: {} frames from the FDF control layer",
+                items.len()
+            );
             for root in empty {
                 crate::glue_menu::spawn(&mut commands, root, &items);
             }
@@ -975,7 +985,11 @@ fn text_style(
     crate::mainmenu::menu_text_style(&texts, frame)
 }
 
-type LabelData = (Entity, &'static crate::glue_menu::GlueLabel, &'static ChildOf);
+type LabelData = (
+    Entity,
+    &'static crate::glue_menu::GlueLabel,
+    &'static ChildOf,
+);
 
 /// Fills each label from its text frame: the authored string, its face, size,
 /// colours, justification and shadow.
@@ -1923,7 +1937,7 @@ mod menu_tests {
                 crate::glue_menu::GlueButton {
                     frame: frame.to_string(),
                     shortcut: None,
-                    pushed_text_offset: Vec2::ZERO,
+                    pushed_text_offset: Some(Vec2::ZERO),
                 },
                 Pressed,
             ))
@@ -1943,7 +1957,10 @@ mod menu_tests {
         let layer = world.spawn(MenuLayer).id();
         let entry = press(&mut world, "OptionsButton");
         world.run_system_once(apply_menu_clicks).unwrap();
-        assert!(world.get_entity(layer).is_err(), "the menu layer is despawned");
+        assert!(
+            world.get_entity(layer).is_err(),
+            "the menu layer is despawned"
+        );
         assert!(world.get_entity(entry).is_ok(), "only the layer goes");
     }
 
@@ -2004,7 +2021,10 @@ mod menu_tests {
         let (mut world, root, built) = invalidation_world(0, 1);
         world.run_system_once(invalidate_on_asset_revision).unwrap();
         assert!(world.get_entity(built).is_err(), "the old layer survived");
-        assert!(world.get_entity(root).is_ok(), "the root is kept for the rebuild");
+        assert!(
+            world.get_entity(root).is_ok(),
+            "the root is kept for the rebuild"
+        );
         let cache = world.resource::<MenuArtCache>();
         assert!(cache.button.is_none() && cache.fonts.is_empty());
         assert!(cache.fdf.is_none() && cache.strings.is_none() && cache.templates.is_none());
@@ -2120,7 +2140,6 @@ KEY_OPTIONS              "|CffffffffO|Rptions",
 KEY_CREDITS              "|CffffffffC|Rredits",
 KEY_EXIT                 "E|Cffffffffx|Rit",
 "#;
-
 
     fn label(world: &mut World, frame: &str) -> Entity {
         let button = world.spawn_empty().id();

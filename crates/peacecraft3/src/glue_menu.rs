@@ -15,14 +15,8 @@ use crate::fdf::{Fdf, FdfError, Rect};
 /// The frame holding the main menu's buttons.
 pub const CONTROL_LAYER: &str = "ControlLayer";
 
-/// One of the eight pieces of a `BackdropEdgeFile`, in atlas slot order.
-///
-/// The order is read from the shipped edge files' pixels
-/// (`GlueScreen-Button1-BackdropBorder.blp`, `GlueScreen-Button2-…`): eight
-/// square slots, left to right, whose chamfers and outer borders sit on these
-/// sides. The top and bottom slots are stored as vertical strips with their outer
-/// border on the left and right, so they are drawn turned a quarter turn
-/// clockwise. See `docs/re-notes/menu-border-atlas.md`.
+/// Authored backdrop flag names, without a native atlas slot or rotation claim.
+/// See `docs/re-notes/menu-border-atlas.md`: their pixel mapping is unproved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EdgePiece {
     Left,
@@ -47,18 +41,6 @@ impl EdgePiece {
         Self::BottomRight,
     ];
 
-    /// The atlas slot this piece occupies.
-    #[must_use]
-    pub fn slot(self) -> usize {
-        self as usize
-    }
-
-    /// Whether the slot is stored as a vertical strip and drawn turned.
-    #[must_use]
-    pub fn turned(self) -> bool {
-        matches!(self, Self::Top | Self::Bottom)
-    }
-
     /// The `BackdropCornerFlags` token that enables this piece.
     fn flag(self) -> &'static str {
         match self {
@@ -80,7 +62,7 @@ pub struct Edge {
     pub file: String,
     /// `BackdropCornerSize`: the corner square and the edge thickness.
     pub corner_size: f32,
-    /// The pieces `BackdropCornerFlags` enables, in atlas slot order.
+    /// The pieces `BackdropCornerFlags` enables; no slot mapping is attached.
     pub pieces: Vec<EdgePiece>,
 }
 
@@ -90,10 +72,10 @@ pub struct Backdrop {
     pub background: Option<String>,
     /// `BackdropTileBackground`.
     pub tile: bool,
-    /// `BackdropMirrored`: drawn flipped left to right.
+    /// Authored `BackdropMirrored`; its native operation remains unproved.
     pub mirrored: bool,
     /// `BackdropBackgroundInsets`, which the shipped menu always writes equal.
-    pub inset: f32,
+    pub inset: Option<f32>,
     pub edge: Option<Edge>,
 }
 
@@ -115,7 +97,7 @@ pub struct Button {
     /// The `ButtonText` frame.
     pub text: Option<String>,
     /// `ButtonPushedTextOffset`, frame units, Y up.
-    pub pushed_text_offset: [f32; 2],
+    pub pushed_text_offset: Option<[f32; 2]>,
     /// `ControlShortcutKey`.
     pub shortcut: Option<char>,
 }
@@ -123,7 +105,7 @@ pub struct Button {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Kind {
     Backdrop(Backdrop),
-    Button(Button),
+    Button(Box<Button>),
 }
 
 /// One drawable frame and where it sits, in the engine's Y-up frame units.
@@ -191,8 +173,8 @@ pub fn backdrop(fdf: &Fdf, frame: &str) -> Result<Option<Backdrop>, FdfError> {
         return Ok(None);
     }
     let inset = match fdf.numbers(frame, "BackdropBackgroundInsets")?.as_deref() {
-        None => 0.0,
-        Some([a, b, c, d]) if a == b && b == c && c == d => *a,
+        None => None,
+        Some([a, b, c, d]) if a == b && b == c && c == d => Some(*a),
         Some(_) => return Err(missing(frame, "equal BackdropBackgroundInsets")),
     };
     Ok(Some(Backdrop {
@@ -229,14 +211,25 @@ pub fn button(fdf: &Fdf, frame: &str) -> Result<Button, FdfError> {
                 file: fdf
                     .string(&name, "HighlightAlphaFile")
                     .ok_or_else(|| missing(&name, "HighlightAlphaFile"))?,
-                additive: fdf.string(&name, "HighlightAlphaMode").as_deref() == Some("ADD"),
+                additive: match fdf.string(&name, "HighlightAlphaMode").as_deref() {
+                    Some("ADD") => true,
+                    Some("BLEND") => false,
+                    None => return Err(missing(&name, "HighlightAlphaMode")),
+                    Some(mode) => {
+                        return Err(FdfError::Unsupported {
+                            frame: name.clone(),
+                            property: "HighlightAlphaMode",
+                            value: mode.into(),
+                        });
+                    }
+                },
             }),
             _ => return Err(missing(&name, "HighlightType \"FILETEXTURE\"")),
         },
     };
     let pushed_text_offset = match fdf.numbers(frame, "ButtonPushedTextOffset")?.as_deref() {
-        None => [0.0, 0.0],
-        Some([x, y]) => [*x, *y],
+        None => None,
+        Some([x, y]) => Some([*x, *y]),
         Some(_) => return Err(missing(frame, "ButtonPushedTextOffset x y")),
     };
     Ok(Button {
@@ -254,7 +247,10 @@ pub fn button(fdf: &Fdf, frame: &str) -> Result<Button, FdfError> {
 
 /// Whether a frame type is a clickable control.
 fn is_button(kind: &str) -> bool {
-    matches!(kind, "GLUETEXTBUTTON" | "GLUEBUTTON" | "TEXTBUTTON" | "BUTTON")
+    matches!(
+        kind,
+        "GLUETEXTBUTTON" | "GLUEBUTTON" | "TEXTBUTTON" | "BUTTON"
+    )
 }
 
 /// Every drawable frame under `root`, parents before children, in file order,
@@ -284,7 +280,7 @@ pub fn control_items(
         if is_button(kind) {
             items.push(Item {
                 rect: fdf.rect(&name, viewport)?,
-                kind: Kind::Button(button(fdf, &name)?),
+                kind: Kind::Button(Box::new(button(fdf, &name)?)),
                 frame: name,
             });
             continue;
@@ -329,10 +325,7 @@ pub fn install(app: &mut App) {
     bevy::asset::embedded_asset!(app, "glue_additive.wgsl");
     app.add_plugins(UiMaterialPlugin::<AdditiveImage>::default())
         .init_resource::<GlueImages>()
-        .add_systems(
-            PreUpdate,
-            shortcut_keys.after(bevy::input::InputSystems),
-        )
+        .add_systems(PreUpdate, shortcut_keys.after(bevy::input::InputSystems))
         .add_systems(Update, (load_art, show_states, place_shadows));
 }
 
@@ -379,7 +372,7 @@ pub struct GlueButton {
     pub shortcut: Option<char>,
     /// `ButtonPushedTextOffset` as a percentage of the button's width and
     /// height, Y down.
-    pub pushed_text_offset: Vec2,
+    pub pushed_text_offset: Option<Vec2>,
 }
 
 /// Which button state a layer draws.
@@ -421,10 +414,11 @@ struct PendingArt {
     additive: bool,
 }
 
-/// Decoded art by path and edge piece, shared by every frame that names it.
+/// Decoded art by path, edge request and tile policy. Untiled art cannot bypass
+/// a subsequent tiled request's measured-uniformity check.
 #[derive(Resource, Default)]
 pub struct GlueImages {
-    images: std::collections::HashMap<(String, Option<EdgePiece>), Handle<Image>>,
+    images: std::collections::HashMap<(String, Option<EdgePiece>, bool), Handle<Image>>,
     /// Reported once; a browser keeps retrying because its store fills late.
     failed: std::collections::HashSet<String>,
     pub install: Option<std::path::PathBuf>,
@@ -469,12 +463,14 @@ fn spawn_backdrop(commands: &mut Commands, parent: Entity, art: &Backdrop, size:
         width: size.x,
         height: size.y,
     };
-    if let Some(path) = &art.background {
+    if let Some(path) = &art.background
+        && let Some(inset) = art.inset
+    {
         let inner = Rect {
-            left: art.inset,
-            bottom: art.inset,
-            width: size.x - 2.0 * art.inset,
-            height: size.y - 2.0 * art.inset,
+            left: inset,
+            bottom: inset,
+            width: size.x - 2.0 * inset,
+            height: size.y - 2.0 * inset,
         };
         let child = commands
             .spawn((
@@ -490,43 +486,23 @@ fn spawn_backdrop(commands: &mut Commands, parent: Entity, art: &Backdrop, size:
             ))
             .id();
         commands.entity(parent).add_child(child);
+    } else if let Some(path) = &art.background {
+        warn!(
+            "Menu art {path}: absent BackdropBackgroundInsets has no verified default; background omitted"
+        );
     }
-    let Some(edge) = &art.edge else {
-        return;
-    };
-    let c = edge.corner_size;
-    let (w, h) = (size.x, size.y);
-    for &piece in &edge.pieces {
-        let (left, bottom, width, height) = match piece {
-            EdgePiece::UpperLeft => (0.0, h - c, c, c),
-            EdgePiece::UpperRight => (w - c, h - c, c, c),
-            EdgePiece::BottomLeft => (0.0, 0.0, c, c),
-            EdgePiece::BottomRight => (w - c, 0.0, c, c),
-            EdgePiece::Left => (0.0, c, c, h - 2.0 * c),
-            EdgePiece::Right => (w - c, c, c, h - 2.0 * c),
-            EdgePiece::Top => (c, h - c, w - 2.0 * c, c),
-            EdgePiece::Bottom => (c, 0.0, w - 2.0 * c, c),
-        };
-        let rect = Rect {
-            left,
-            bottom,
-            width,
-            height,
-        };
-        let child = commands
-            .spawn((
-                placed(&rect, &local),
-                PendingArt {
-                    path: edge.file.clone(),
-                    piece: Some(piece),
-                    mirrored: false,
-                    tile: false,
-                    additive: false,
-                },
-                Pickable::IGNORE,
-            ))
-            .id();
-        commands.entity(parent).add_child(child);
+    if let Some(edge) = &art.edge
+        && let Some(&piece) = edge.pieces.first()
+    {
+        // Retain one pending diagnostic for the whole unsupported edge file;
+        // no geometry or pixel slot is inferred from its flag names.
+        commands.entity(parent).insert(PendingArt {
+            path: edge.file.clone(),
+            piece: Some(piece),
+            mirrored: false,
+            tile: false,
+            additive: false,
+        });
     }
 }
 
@@ -541,10 +517,7 @@ pub fn spawn(commands: &mut Commands, root: Entity, items: &[Item]) {
     for item in items {
         let size = Vec2::new(item.rect.width, item.rect.height);
         let node = commands
-            .spawn((
-                placed(&item.rect, &frame),
-                Name::new(item.frame.clone()),
-            ))
+            .spawn((placed(&item.rect, &frame), Name::new(item.frame.clone())))
             .id();
         commands.entity(root).add_child(node);
         match &item.kind {
@@ -559,12 +532,17 @@ pub fn spawn(commands: &mut Commands, root: Entity, items: &[Item]) {
                     GlueButton {
                         frame: item.frame.clone(),
                         shortcut: button.shortcut,
-                        pushed_text_offset: Vec2::new(
-                            button.pushed_text_offset[0] / size.x * 100.0,
-                            -button.pushed_text_offset[1] / size.y * 100.0,
-                        ),
+                        pushed_text_offset: button.pushed_text_offset.map(|offset| {
+                            Vec2::new(offset[0] / size.x * 100.0, -offset[1] / size.y * 100.0)
+                        }),
                     },
                 ));
+                if button.text.is_some() && button.pushed_text_offset.is_none() {
+                    warn!(
+                        "Menu label {}: absent ButtonPushedTextOffset has no verified default; pressed-label displacement omitted",
+                        item.frame
+                    );
+                }
                 let has = [
                     button.normal.is_some(),
                     button.pushed.is_some(),
@@ -643,40 +621,36 @@ fn art_bytes(install: Option<&std::path::Path>, path: &str) -> Option<Vec<u8>> {
     crate::mainmenu::art_bytes(install, path).or_else(|| crate::mainmenu::from_served(path))
 }
 
-/// Cuts one piece out of a `BackdropEdgeFile`, turning the top and bottom
-/// strips a quarter turn clockwise.
-fn edge_piece(texture: &pcx_gfx::LoadedTexture, piece: EdgePiece) -> Result<Image, String> {
-    let (w, h) = (texture.width as usize, texture.height as usize);
-    let slots = EdgePiece::ALL.len();
-    if w != h * slots {
-        return Err(format!(
-            "{}: {w}x{h} is not {slots} square slots",
-            texture.source
-        ));
+#[derive(Debug, thiserror::Error)]
+enum ArtError {
+    #[error("{path}: BackdropEdgeFile {piece:?} mapping/rotation is unproved; edge is not drawn")]
+    UnverifiedEdge { path: String, piece: EdgePiece },
+    #[error("{path}: BackdropMirrored behavior is unproved; image is not drawn")]
+    UnverifiedMirror { path: String },
+}
+
+fn supported_art(art: &PendingArt) -> Result<(), ArtError> {
+    if let Some(piece) = art.piece {
+        return Err(ArtError::UnverifiedEdge {
+            path: art.path.clone(),
+            piece,
+        });
     }
-    let x0 = piece.slot() * h;
-    let mut rgba = Vec::with_capacity(h * h * 4);
-    for y in 0..h {
-        for x in 0..h {
-            // Clockwise: the output's (x, y) reads the source's (y, h-1-x).
-            let (sx, sy) = if piece.turned() { (y, h - 1 - x) } else { (x, y) };
-            let at = ((sy * w) + x0 + sx) * 4;
-            rgba.extend_from_slice(&texture.rgba[at..at + 4]);
-        }
+    if art.mirrored {
+        return Err(ArtError::UnverifiedMirror {
+            path: art.path.clone(),
+        });
     }
-    let side = h as u32;
-    Ok(pcx_gfx::viewer::rgba_image(&pcx_gfx::LoadedTexture {
-        width: side,
-        height: side,
-        rgba,
-        ..texture.clone()
-    }))
+    Ok(())
 }
 
 /// Whether every texel of an RGBA8 buffer is the same colour.
 fn uniform(rgba: &[u8]) -> bool {
     match rgba.get(..4) {
-        Some(first) => rgba.as_chunks::<4>().0.iter().all(|p| p == first),
+        Some(first) => {
+            let (pixels, remainder) = rgba.as_chunks::<4>();
+            remainder.is_empty() && pixels.iter().all(|p| p == first)
+        }
         None => false,
     }
 }
@@ -690,7 +664,15 @@ fn load_art(
     pending: Query<(Entity, &PendingArt)>,
 ) {
     for (entity, art) in &pending {
-        let key = (art.path.clone(), art.piece);
+        // Validate even cached requests: no handle can establish a native edge map.
+        if let Err(error) = supported_art(art) {
+            if cache.failed.insert(art.path.clone()) {
+                warn!("Menu art: {error}");
+            }
+            commands.entity(entity).remove::<PendingArt>();
+            continue;
+        }
+        let key = (art.path.clone(), art.piece, art.tile);
         let handle = match cache.images.get(&key) {
             Some(handle) => handle.clone(),
             None => {
@@ -700,16 +682,13 @@ fn load_art(
                     .and_then(|bytes| {
                         pcx_gfx::load_image(&bytes, &art.path).map_err(|e| e.to_string())
                     })
-                    .and_then(|texture| match art.piece {
-                        Some(piece) => edge_piece(&texture, piece),
-                        // ponytail: tiling is drawn as a stretch, which is the
-                        // same image only for a one-colour texture; the menu's
-                        // tiled fills all are. A patterned tile is refused.
-                        None if art.tile && !uniform(&texture.rgba) => Err(format!(
+                    .and_then(|texture| match art.tile {
+                        // Stretch is equivalent to tiling only for measured uniform art.
+                        true if !uniform(&texture.rgba) => Err(format!(
                             "{}: patterned BackdropTileBackground is not drawn",
                             art.path
                         )),
-                        None => Ok(pcx_gfx::viewer::rgba_image(&texture)),
+                        _ => Ok(pcx_gfx::viewer::rgba_image(&texture)),
                     });
                 match decoded {
                     Ok(image) => {
@@ -732,10 +711,11 @@ fn load_art(
         let mut entity = commands.entity(entity);
         entity.remove::<PendingArt>();
         if art.additive {
-            entity.insert(MaterialNode(additive.add(AdditiveImage { texture: handle })));
+            entity.insert(MaterialNode(
+                additive.add(AdditiveImage { texture: handle }),
+            ));
         } else {
-            let mut image = ImageNode::new(handle).with_mode(NodeImageMode::Stretch);
-            image.flip_x = art.mirrored;
+            let image = ImageNode::new(handle).with_mode(NodeImageMode::Stretch);
             entity.insert(image);
         }
     }
@@ -744,7 +724,12 @@ fn load_art(
 /// Shows each button's normal, pushed, disabled and mouse-over art for its
 /// state, and moves its label by `ButtonPushedTextOffset` while pressed.
 fn show_states(
-    buttons: Query<(&GlueButton, &Hovered, Has<Pressed>, Has<InteractionDisabled>)>,
+    buttons: Query<(
+        &GlueButton,
+        &Hovered,
+        Has<Pressed>,
+        Has<InteractionDisabled>,
+    )>,
     mut layers: Query<(&StateLayer, &mut Visibility)>,
     mut labels: Query<(&GlueLabel, &ChildOf)>,
     mut nodes: Query<&mut Node>,
@@ -777,7 +762,10 @@ fn show_states(
             continue;
         };
         let offset = if pressed && !disabled {
-            button.pushed_text_offset
+            let Some(offset) = button.pushed_text_offset else {
+                continue;
+            };
+            offset
         } else {
             Vec2::ZERO
         };
@@ -804,9 +792,9 @@ fn shortcut_keys(
             continue;
         }
         for (entity, button) in &buttons {
-            let hit = button
-                .shortcut
-                .is_some_and(|c| text.chars().eq(c.to_lowercase()) || text.chars().eq(c.to_uppercase()));
+            let hit = button.shortcut.is_some_and(|c| {
+                text.chars().eq(c.to_lowercase()) || text.chars().eq(c.to_uppercase())
+            });
             if hit && !actions.entities.contains(&entity) {
                 actions.entities.push(entity);
             }
@@ -943,7 +931,7 @@ Frame "FRAME" "MainMenuFrame" {
         let normal = b.normal.as_ref().unwrap();
         assert_eq!(normal.background.as_deref(), Some("fill.blp"));
         assert!(normal.tile);
-        assert_eq!(normal.inset, 0.004);
+        assert_eq!(normal.inset, Some(0.004));
         let edge = normal.edge.as_ref().unwrap();
         assert_eq!(edge.file, "edge.blp");
         assert_eq!(edge.corner_size, 0.016);
@@ -961,7 +949,7 @@ Frame "FRAME" "MainMenuFrame" {
             })
         );
         assert_eq!(b.text.as_deref(), Some("OneText"));
-        assert_eq!(b.pushed_text_offset, [-0.002, -0.003]);
+        assert_eq!(b.pushed_text_offset, Some([-0.002, -0.003]));
         assert_eq!(b.shortcut, Some('S'));
     }
 
@@ -978,13 +966,14 @@ Frame "FRAME" "MainMenuFrame" {
                 .unwrap()
         };
         let mut fdf = Fdf::parse(&text(crate::mainmenu::STANDARD_TEMPLATES_FDF)).unwrap();
-        fdf.parse_into(&text(crate::mainmenu::MAIN_MENU_FDF)).unwrap();
+        fdf.parse_into(&text(crate::mainmenu::MAIN_MENU_FDF))
+            .unwrap();
         let (items, unsupported) = control_items(&fdf, CONTROL_LAYER, (0.8, 0.6)).unwrap();
         assert!(unsupported.is_empty(), "{unsupported:?}");
         let buttons: Vec<(&str, &Button)> = items
             .iter()
             .filter_map(|i| match &i.kind {
-                Kind::Button(b) => Some((i.frame.as_str(), b)),
+                Kind::Button(b) => Some((i.frame.as_str(), b.as_ref())),
                 Kind::Backdrop(_) => None,
             })
             .collect();
@@ -1006,7 +995,10 @@ Frame "FRAME" "MainMenuFrame" {
             assert!(button.normal.is_some(), "{name}");
             assert!(button.pushed.is_some(), "{name}");
             assert!(button.disabled.is_some(), "{name}");
-            assert!(button.mouse_over.as_ref().is_some_and(|h| h.additive), "{name}");
+            assert!(
+                button.mouse_over.as_ref().is_some_and(|h| h.additive),
+                "{name}"
+            );
         }
         let plates = items
             .iter()
@@ -1028,5 +1020,128 @@ Frame "FRAME" "MainMenuFrame" {
         );
         assert!(backdrop(&fdf, "B").is_err());
         assert!(backdrop(&fdf, "C").is_err());
+    }
+
+    #[test]
+    fn absent_geometry_fields_remain_absent_and_unknown_blends_refuse() {
+        let source = "Frame \"BACKDROP\" \"Background\" {\n BackdropBackground \"fixture.blp\",\n}\nFrame \"HIGHLIGHT\" \"Glow\" {\n HighlightType \"FILETEXTURE\",\n HighlightAlphaFile \"fixture.blp\",\n HighlightAlphaMode \"BLEND\",\n}\nFrame \"TEXTBUTTON\" \"Button\" {\n ControlMouseOverHighlight \"Glow\",\n}\n";
+        let fdf = Fdf::parse(source).unwrap();
+        assert_eq!(backdrop(&fdf, "Background").unwrap().unwrap().inset, None);
+        let button = button(&fdf, "Button").unwrap();
+        assert_eq!(button.pushed_text_offset, None);
+        assert!(!button.mouse_over.unwrap().additive);
+        let unknown = Fdf::parse(&source.replace("\"BLEND\"", "\"UNPROVED\"")).unwrap();
+        assert!(matches!(
+            super::button(&unknown, "Button"),
+            Err(FdfError::Unsupported {
+                property: "HighlightAlphaMode",
+                ..
+            })
+        ));
+        let missing = Fdf::parse(&source.replace(" HighlightAlphaMode \"BLEND\",\n", "")).unwrap();
+        assert!(matches!(
+            super::button(&missing, "Button"),
+            Err(FdfError::Missing {
+                property: "HighlightAlphaMode",
+                ..
+            })
+        ));
+    }
+
+    fn image_world() -> World {
+        let mut world = World::new();
+        world.init_resource::<GlueImages>();
+        world.init_resource::<Assets<Image>>();
+        world.init_resource::<Assets<AdditiveImage>>();
+        world
+    }
+
+    #[test]
+    fn cached_untiled_pattern_cannot_bypass_tiled_request_validation() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = image_world();
+        let texture = pcx_gfx::LoadedTexture {
+            source: "synthetic-pattern.blp".into(),
+            width: 2,
+            height: 1,
+            rgba: vec![10, 20, 30, 255, 40, 50, 60, 255],
+        };
+        assert!(!uniform(&texture.rgba));
+        let image = pcx_gfx::viewer::rgba_image(&texture);
+        let handle = world.resource_mut::<Assets<Image>>().add(image);
+        world
+            .resource_mut::<GlueImages>()
+            .images
+            .insert((texture.source.clone(), None, false), handle);
+        let entity = world
+            .spawn(PendingArt {
+                path: texture.source.clone(),
+                piece: None,
+                mirrored: false,
+                tile: true,
+                additive: false,
+            })
+            .id();
+        world.run_system_once(load_art).unwrap();
+        assert!(world.get::<ImageNode>(entity).is_none());
+        assert!(
+            world
+                .resource::<GlueImages>()
+                .failed
+                .contains(&texture.source)
+        );
+    }
+
+    #[test]
+    fn every_edge_request_refuses_before_even_a_cached_image_is_used() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = image_world();
+        let handle = world.resource_mut::<Assets<Image>>().add(Image::default());
+        let mut entities = Vec::new();
+        for piece in EdgePiece::ALL {
+            let art = PendingArt {
+                path: "synthetic-edge.blp".into(),
+                piece: Some(piece),
+                mirrored: false,
+                tile: false,
+                additive: false,
+            };
+            assert!(
+                matches!(supported_art(&art), Err(ArtError::UnverifiedEdge { piece: actual, .. }) if actual == piece)
+            );
+            world
+                .resource_mut::<GlueImages>()
+                .images
+                .insert((art.path.clone(), art.piece, art.tile), handle.clone());
+            entities.push(world.spawn(art).id());
+        }
+        world.run_system_once(load_art).unwrap();
+        for entity in entities {
+            assert!(world.get::<ImageNode>(entity).is_none());
+            assert!(world.get::<PendingArt>(entity).is_none());
+        }
+    }
+
+    #[test]
+    fn authored_mirroring_is_preserved_but_not_guessed_as_a_horizontal_flip() {
+        let art = PendingArt {
+            path: "synthetic-mirror.blp".into(),
+            piece: None,
+            mirrored: true,
+            tile: false,
+            additive: false,
+        };
+        assert!(matches!(
+            supported_art(&art),
+            Err(ArtError::UnverifiedMirror { .. })
+        ));
+    }
+
+    #[test]
+    fn uniformity_requires_complete_nonempty_rgba_texels() {
+        assert!(uniform(&[1, 2, 3, 4, 1, 2, 3, 4]));
+        assert!(!uniform(&[1, 2, 3, 4, 9, 2, 3, 4]));
+        assert!(!uniform(&[1, 2, 3, 4, 1]));
+        assert!(!uniform(&[]));
     }
 }

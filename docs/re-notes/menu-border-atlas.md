@@ -56,6 +56,29 @@ authored, never converted to pixels.
   **refuses** `slot_for(flag)`, returning `None` for every flag, with a test pinning
   that it never becomes a silent identity. **The API is not ready for rendering.**
 
+## Production boundary
+
+The control-layer renderer retains authored flag names and corner-size records,
+but refuses edge rendering before decoding or consulting an image cache. It does
+not assign flags to numeric slots, impose eight square slices, rotate top/bottom
+pieces or choose pixel geometry. An earlier renderer independently made those
+assumptions; that path has been removed. The candidate helper remains undeclared.
+`BackdropMirrored` is also retained as authored metadata and refused for rendering;
+its name is not evidence that the complete background should be flipped horizontally.
+
+Background tiling currently supports measured uniform RGBA only: stretching is
+equivalent for that restricted input. Cache identity includes tile policy, so a
+prior untiled patterned image cannot bypass a later tiled request's check.
+Missing background insets and pressed-label offsets stay absent, are reported,
+and their rendering/displacement is omitted rather than using a zero default.
+Highlight modes require an explicit supported ADD or BLEND value; absent and
+unknown modes are errors. These restrictions do not prove native rendering.
+
+Synthetic ECS regressions check cached-untiled then tiled requests, every edge
+request with a preseeded cache handle, unproved mirroring, absent layout fields,
+unsupported highlight modes and complete nonempty RGBA uniformity. Native slot,
+mirroring and constructor-default probes remain necessary for full menu fidelity.
+
 ## Retained native evidence
 
 Two distinct regions, both bounded static reads of the pinned executable:
