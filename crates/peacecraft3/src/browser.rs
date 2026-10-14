@@ -181,17 +181,7 @@ pub(crate) fn publish_demo_edition(addon: crate::launch::Addon) {
 /// must land on one entry. `.` and `..` are dropped: a memory map has no parent
 /// to name, and Bevy's `UnapprovedPathMode::Forbid` rejects them anyway.
 fn normalize(path: &str) -> String {
-    let mut out = String::with_capacity(path.len());
-    for part in path.replace('\\', "/").split('/') {
-        if part.is_empty() || part == "." || part == ".." {
-            continue;
-        }
-        if !out.is_empty() {
-            out.push('/');
-        }
-        out.push_str(part);
-    }
-    out
+    crate::browser_read::normalize(path)
 }
 
 /// The last component, for log lines where the whole path is noise.
@@ -228,33 +218,9 @@ fn revision() -> std::sync::MutexGuard<'static, u32> {
 /// No priority is inferred from arrival order or filenames. Equal duplicates
 /// are safe; distinct bytes at one member path require installation evidence.
 fn extract_unique(set: &mut [pcx_mpq::MpqArchive], path: &str) -> Result<Vec<u8>, String> {
-    let mut found: Option<(Vec<u8>, String)> = None;
-    for archive in set {
-        let Some(block) = archive.find_block(path) else {
-            continue;
-        };
-        if block.file_size > MEMBER_LIMIT {
-            return Err(format!(
-                "{}: {path}: member exceeds {MEMBER_LIMIT} byte budget",
-                archive.path().display()
-            ));
-        }
-        let source = archive.path().display().to_string();
-        let bytes = archive
-            .extract(path)
-            .map_err(|e| format!("{source}: {path}: {e}"))?;
-        if let Some((prior, prior_source)) = &found {
-            if *prior != bytes {
-                return Err(format!(
-                    "AMBIGUOUS_MEMBER: {path}: unequal bytes in {prior_source} and {source}; archive priority/edition unproven"
-                ));
-            }
-        } else {
-            found = Some((bytes, source));
-        }
-    }
-    found
-        .map(|(bytes, _)| bytes)
+    crate::browser_read::extract_fallible(set, *revision(), path, MEMBER_LIMIT as usize)
+        .map_err(|error| error.to_string())?
+        .map(|asset| asset.bytes)
         .ok_or_else(|| format!("MISSING_MEMBER: {path}"))
 }
 
@@ -382,8 +348,10 @@ fn derived_menu_fonts(
 pub fn menu_font_files() -> Result<Vec<String>, JsValue> {
     let text = |path: &str| -> Result<String, JsValue> {
         let alias = crate::mainmenu::served_name(path).unwrap_or(path);
-        let bytes =
-            stored_bytes(alias).ok_or_else(|| JsValue::from_str(&format!("missing {path}")))?;
+        let bytes = stored_bytes_fallible(alias)
+            .map_err(|error| JsError::new(&error.to_string()))?
+            .ok_or_else(|| JsError::new(&format!("missing {path}")))?
+            .bytes;
         String::from_utf8(bytes).map_err(|e| JsValue::from_str(&format!("{path}: {e}")))
     };
     let templates = text(crate::mainmenu::STANDARD_TEMPLATES_FDF)?;
@@ -692,23 +660,166 @@ pub fn stored_asset(path: String) -> Option<Vec<u8>> {
         .map(|b| b.value().to_vec())
 }
 
-/// Non-exported form of [`stored_asset`], for Rust callers inside this crate.
-/// The launcher's menu uses this; JavaScript uses the exported one.
+/// A bounded copy from the browser's Rust memory store, with its exact key and
+/// current committed revision. Hydrated source origins are unavailable.
+#[wasm_bindgen]
+pub struct StoredAssetRead {
+    asset: crate::browser_read::AssetRead,
+}
+#[wasm_bindgen]
+impl StoredAssetRead {
+    #[wasm_bindgen(getter)]
+    pub fn key(&self) -> String {
+        self.asset.receipt.key.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn requested_path(&self) -> String {
+        self.asset.receipt.requested_path.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn revision(&self) -> u32 {
+        self.asset.receipt.revision
+    }
+    #[wasm_bindgen(getter)]
+    pub fn byte_len(&self) -> usize {
+        self.asset.receipt.byte_len
+    }
+    #[wasm_bindgen(getter)]
+    pub fn archive_origins_available(&self) -> bool {
+        self.asset.receipt.archives.is_some()
+    }
+    /// Ordered contributing source labels; availability distinguishes cached data.
+    pub fn archive_names(&self) -> Vec<String> {
+        self.asset
+            .receipt
+            .archives
+            .as_ref()
+            .map(|origins| origins.iter().map(|origin| origin.name.clone()).collect())
+            .unwrap_or_default()
+    }
+    pub fn archive_ordinals(&self) -> Vec<u32> {
+        self.asset
+            .receipt
+            .archives
+            .as_ref()
+            .map(|origins| origins.iter().map(|origin| origin.ordinal as u32).collect())
+            .unwrap_or_default()
+    }
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.asset.bytes
+    }
+}
+/// Missing returns undefined; invalid, oversized or present uncached content
+/// throws an Error. No JS byte input is accepted or copied by this API.
+#[wasm_bindgen]
+pub fn stored_asset_checked(
+    path: String,
+    max_bytes: usize,
+) -> Result<Option<StoredAssetRead>, JsError> {
+    stored_bytes_checked(&path, max_bytes)
+        .map(|asset| asset.map(|asset| StoredAssetRead { asset }))
+        .map_err(|error| JsError::new(&error.to_string()))
+}
+pub(crate) fn stored_bytes_checked(
+    path: &str,
+    max_bytes: usize,
+) -> Result<Option<crate::browser_read::AssetRead>, crate::browser_read::ReadError> {
+    crate::browser_read::read_checked(&store(), &archives(), *revision(), path, max_bytes)
+}
+
+/// Reject non-number, non-finite, fractional and out-of-range arguments before
+/// any store/archive read. JsValue prevents generated numeric wrap/coercion.
+fn browser_budget(value: &JsValue, field: &str) -> Result<usize, JsError> {
+    let number = value
+        .as_f64()
+        .ok_or_else(|| JsError::new(&format!("{field}: budget must be a number")))?;
+    if !number.is_finite() || number.fract() != 0.0 || number < 0.0 || number > usize::MAX as f64 {
+        return Err(JsError::new(&format!(
+            "{field}: budget must be a finite integer within 0..={}",
+            usize::MAX
+        )));
+    }
+    Ok(number as usize)
+}
+/// Explicit bounded bridge to the existing committed store and archives.
+/// The caller must choose exactly "no-huffman"; streams needing a supplied table
+/// refuse without consulting an installed table or discovering an executable.
+#[wasm_bindgen]
+pub fn stored_asset_bounded(
+    path: String,
+    copy_bytes: JsValue,
+    packed_bytes: JsValue,
+    decoded_bytes: JsValue,
+    huffman_policy: JsValue,
+) -> Result<Option<StoredAssetRead>, JsError> {
+    let max_copy_bytes = browser_budget(&copy_bytes, "copy")?;
+    let max_raw_packed_bytes = browser_budget(&packed_bytes, "packed")?;
+    let max_decoded_bytes = browser_budget(&decoded_bytes, "decoded")?;
+    if huffman_policy.as_string().as_deref() != Some("no-huffman") {
+        return Err(JsError::new(
+            "huffman policy must be explicitly no-huffman; supplied-table JS binding is unsupported",
+        ));
+    }
+    let policy = crate::browser_read::BoundedReadPolicy {
+        max_copy_bytes,
+        extraction: pcx_mpq::ExtractionBudget {
+            max_raw_packed_bytes,
+            max_decoded_bytes,
+        },
+        huffman: None,
+    };
+    let revision = *revision();
+    let result =
+        crate::browser_read::read_bounded(&store(), &mut archives(), revision, &path, policy)
+            .map_err(|error| {
+                let mut message = format!("request {path:?}: {error}");
+                let origins = match &error {
+                    crate::browser_read::ReadError::BoundedExtraction {
+                        matching_archives, ..
+                    }
+                    | crate::browser_read::ReadError::BoundedAmbiguous {
+                        matching_archives, ..
+                    } => matching_archives.as_slice(),
+                    _ => &[],
+                };
+                for origin in origins {
+                    message.push_str(&format!("; matching {origin}"));
+                }
+                JsError::new(&message)
+            })?;
+    // No implicit cache publication: the returned receipt retains all origins.
+    Ok(result.map(|asset| StoredAssetRead { asset }))
+}
+
+/// Compatible fallible fallback for callers that explicitly accept the legacy
+/// archive decoder's allocation contract. Only Ok(None) means missing.
+pub(crate) fn stored_bytes_fallible(
+    path: &str,
+) -> Result<Option<crate::browser_read::AssetRead>, crate::browser_read::ReadError> {
+    let revision = *revision();
+    if let Some(asset) =
+        crate::browser_read::read_checked(&store(), &[], revision, path, usize::MAX)?
+    {
+        return Ok(Some(asset));
+    }
+    let asset = crate::browser_read::extract_fallible(
+        &mut archives(),
+        revision,
+        path,
+        MEMBER_LIMIT as usize,
+    )?;
+    if let Some(asset) = &asset {
+        add_asset(path.to_owned(), asset.bytes.clone());
+    }
+    Ok(asset)
+}
+
+/// Compatible menu wrapper. Diagnostic consumers select the fallible or checked API.
 pub(crate) fn stored_bytes(path: &str) -> Option<Vec<u8>> {
-    let key = normalize(path);
-    if key.is_empty() {
-        return None;
-    }
-    if let Some(bytes) = store().get_asset(Path::new(&key)) {
-        return Some(bytes.value().to_vec());
-    }
-    match extract_unique(&mut archives(), &path.replace('/', "\\")) {
-        Ok(bytes) => {
-            add_asset(path.to_owned(), bytes.clone());
-            Some(bytes)
-        }
-        Err(e) => {
-            note(e);
+    match stored_bytes_fallible(path) {
+        Ok(asset) => asset.map(|asset| asset.bytes),
+        Err(error) => {
+            note(error.to_string());
             None
         }
     }

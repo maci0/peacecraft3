@@ -6,3 +6,6 @@ pub mod map_admission;
 pub mod map_binding;
 pub mod map_requests;
 pub mod map_script_session;
+
+/// Explicit browser memory/archive reads with caller budgets and codec input.
+pub mod browser_read;

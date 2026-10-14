@@ -27,3 +27,10 @@ mod mpq_file_cases;
 mod mpq_fixtures;
 #[path = "support/source_budget_cases.rs"]
 mod source_budget_cases;
+
+#[path = "support/browser_bounded_cases.rs"]
+mod browser_bounded_cases;
+#[path = "support/browser_mpq_fixtures.rs"]
+mod browser_mpq_fixtures;
+#[path = "support/browser_read_cases.rs"]
+mod browser_read_cases;

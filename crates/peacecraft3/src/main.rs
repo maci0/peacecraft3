@@ -2,6 +2,8 @@
 // through here: wasm32 boots from `browser::start` instead.
 #[cfg(target_arch = "wasm32")]
 mod browser;
+#[cfg(target_arch = "wasm32")]
+use peacecraft3::browser_read;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod import_assets;
 
@@ -57,3 +59,7 @@ fn main() {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/browser_font_contract.rs"]
+mod browser_font_contract;
