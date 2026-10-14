@@ -118,7 +118,8 @@ record now produces a typed error instead of terminating the WASM app.
 The supplied installer gate also passed with its stored base `war3.mpq`:
 the RoC scene and all six authored labels render, TFT is unavailable, cancellation
 retains the previous revision and temporary decoded files are removed. The
-first checked run made 27 local code/Blob GETs, with zero uploads, sockets or page
-errors. This proves the bounded stored-base import, not language-patched install,
+final checked run also rejected an actual AVI member named `.mpq` before staging
+and made 33 local code/Blob GETs, with zero uploads, sockets or page errors.
+This proves the bounded stored-base import, not language-patched install,
 every retail disc, native archive priority or complete menu fidelity. Its private
-proof is retained in `.scratch/freearc-browser-root/browser-1/`.
+proof is retained in `.scratch/freearc-browser-root/browser-4-stable-wasm/`.
