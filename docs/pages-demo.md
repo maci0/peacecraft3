@@ -63,8 +63,10 @@ is reported. No converted movie is shipped with the page.
 
 ```sh
 cargo build --locked --release -p peacecraft3 --target wasm32-unknown-unknown
-wasm-bindgen --target web --remove-name-section --out-dir web/pkg \
+wasm-bindgen --target web --remove-name-section --remove-producers-section --out-dir web/pkg \
   target/wasm32-unknown-unknown/release/peacecraft3.wasm
+wasm-opt web/pkg/peacecraft3_bg.wasm -Oz -o web/pkg/peacecraft3_bg.optimized.wasm
+mv web/pkg/peacecraft3_bg.optimized.wasm web/pkg/peacecraft3_bg.wasm
 tools/freearc-codec/build.sh test
 mkdir -p web/pkg/freearc
 cp tools/freearc-codec/build/freearc-codec.mjs \
