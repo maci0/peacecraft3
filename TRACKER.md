@@ -116,12 +116,19 @@ byte-stable), and its decoder refuses anything that is not already canonical so
 - [x] `pcx-diff` binary: first divergence as one line — `unchanged` (exit 0) or
        `diverge tick=<n|header> field=<path> left=<v> right=<v>` (exit 1). Compares
        header identity first, then ticks in order, then the record tail
-- [ ] `pcx-play`: scenario script parser (`.rpl`) — the format is sketched
-       (`SpawnSpec`/`ScriptedAction`), real ingestion is M3+
-- [ ] `pcx-play`: deterministic action scheduler wired to real sim steps
-       (select/move/attack/build/cast/train/wait)
+- [x] `pcx-play`: checked `.rpl` ingestion, source-line errors, explicit expected
+       unit/timer/RNG state and 100 independent canonical runs. Map/world and
+       native-gameplay integration remain open.
+- [~] `pcx-play`: declaration-ordered actions enter existing simulation steps;
+       move/select/stop/nop and harness RNG are supported. Attack/build/cast/train
+       and native event-order parity remain open.
 - [ ] `pcx-diff`: seed minimiser for failing Tier C scenarios
-- [ ] `tools/playrun.rs` CLI
+- [x] `playrun` CLI and `tools/playrun.sh`: assertions, repeats, explicit work
+       limit and optional baseline comparison. Supplied baselines are not
+       automatically original-runtime evidence.
+- [x] Trace capacity is checked before allocation, including platform vector
+       layout and fallible reservation. Three native and three actual 32-bit
+       release-WASM regressions pass; invalid runs preserve existing CLI output.
 - [ ] One scenario per Rosetta campaign chapter; assert specific outcomes, not "no crash"
 - [ ] Gate: one trace byte-identical across 100 consecutive runs, and `unchanged` vs baseline
 - [ ] M5/M6 trace columns: hp/mana/xp/cooldown, and RNG draws taken *inside*
@@ -957,11 +964,11 @@ Format: `date — subsystem — symptom — root cause — status`
   graphics-library and map all-target scoped Clippy also pass. Map cleanup keeps
   the stronger original version guards; the complete 284-source original fixture
   passes after correction, as does the WASM check.
-  The app's all-target scoped Clippy check still reports 51 diagnostics in
-  existing UI/scene systems and tests (30 in the production target). Compiler
-  checks remain clean with warnings denied; full app Clippy is not yet a passed gate.
+  Native application Clippy now passes all targets/features with `--no-deps`
+  and `-D warnings`; 106 app tests pass, five original fixtures remain explicitly
+  ignored by default, and the WASM check passes. Dependency lint debt is separate.
 
-- [!] Latest four-target CI at `122ecd0` (run `38456169192`) did not start:
+- [!] Latest checked four-target CI at `db9e387` (run `38496520451`) did not start:
       GitHub reports failed account payments or an insufficient spending limit.
       Local strict/native/WASM checks are distinct from this runner blocker;
       verified Windows/macOS artifacts remain at `d31dc67`. No repeated retries.

@@ -313,7 +313,7 @@ mod local_original_tests {
         let scripts = MapScripts::compile(identity, asset(0), asset(1), asset(2), None)
             .unwrap_or_else(|e| panic!("{e}"));
         assert!(
-            scripts.program().natives().len() > 0,
+            !scripts.program().natives().is_empty(),
             "original common.j must declare natives"
         );
         let error = scripts

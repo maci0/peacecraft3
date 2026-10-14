@@ -144,7 +144,7 @@ fn unhex(text: &str) -> Result<String, String> {
         return Err(format!("invalid hex text {text:?}"));
     }
     let mut bytes = Vec::new();
-    for chunk in text.as_bytes().chunks_exact(2) {
+    for chunk in text.as_bytes().as_chunks::<2>().0 {
         let value = std::str::from_utf8(chunk).map_err(|_| "invalid hex byte")?;
         bytes.push(u8::from_str_radix(value, 16).map_err(|_| "invalid hex byte")?);
     }

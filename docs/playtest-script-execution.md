@@ -44,6 +44,14 @@ uses the current synthetic simulation's behavior; actual selection parity is unp
 `runs * (ticks * (spawns + 1) + scheduled_actions)`. It is a harness work gate, not a
 measurement of combat cost. No timing or FPS threshold decides pass/fail.
 
+The runner checks that the 64-bit tick count fits the platform's `usize` and
+`TickRecord` vector layout before creating the world. It reserves trace storage
+fallibly: an unrepresentable layout returns `RunError::TraceCapacity`, and a
+reservation failure returns `RunError::TraceAllocation`, both with the scenario
+name and tick count. The CLI reports these as run failures before writing output.
+This prevents 32-bit tick-count truncation and capacity-overflow panics; it is
+not a work or memory budget. Use `--max-work` to bound an accepted scenario.
+
 ## Source-aware maps and chapters
 
 `pcx_play::scripts::MapScripts::compile` takes actual bytes for `common.j`, `Blizzard.j`,
@@ -102,6 +110,9 @@ ScriptName aliases and reports ambiguous/malformed metadata; it does not lower W
 Synthetic tests exercise same-tick ordering, 100 independent byte-identical runs,
 explicit state checks, WTS preservation, source diagnostics, failed initialization,
 host-observed outcomes, native/script trace interleaving and fail-stop campaign ordering.
+Capacity regressions cover oversized counts, unchanged normal traces and preservation
+of an existing CLI output. The same runner tests execute on actual 32-bit release
+WASM, including a tick count larger than `u32::MAX`.
 The ignored original-source test requires explicit `PEACECRAFT3_SCRIPT_COMMON`,
 `BLIZZARD`, `MAP`, `EDITION`, `VERSION`, and `SOURCE` environment variables, each prefixed
 with `PEACECRAFT3_SCRIPT_`. Missing originals fail explicitly when requested.

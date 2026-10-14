@@ -18,6 +18,15 @@ use crate::trace::{
 /// Why a scenario or run configuration is not runnable.
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
+    #[error("scenario {scenario:?}: {ticks} tick records exceed the platform's vector layout")]
+    TraceCapacity { scenario: String, ticks: u64 },
+    #[error("scenario {scenario:?}: cannot allocate {ticks} tick records: {source}")]
+    TraceAllocation {
+        scenario: String,
+        ticks: u64,
+        #[source]
+        source: std::collections::TryReserveError,
+    },
     #[error("{kind} name {value:?} is invalid")]
     BadName { kind: &'static str, value: String },
     #[error(
@@ -35,6 +44,22 @@ pub enum RunError {
 pub fn run(scenario: &Scenario, config: &RunConfig) -> Result<Trace, RunError> {
     validate(scenario, config)?;
 
+    let tick_count = usize::try_from(scenario.ticks)
+        .ok()
+        .filter(|&n| std::alloc::Layout::array::<TickRecord>(n).is_ok())
+        .ok_or_else(|| RunError::TraceCapacity {
+            scenario: scenario.name.clone(),
+            ticks: scenario.ticks,
+        })?;
+    let mut ticks: Vec<TickRecord> = Vec::new();
+    ticks
+        .try_reserve_exact(tick_count)
+        .map_err(|source| RunError::TraceAllocation {
+            scenario: scenario.name.clone(),
+            ticks: scenario.ticks,
+            source,
+        })?;
+
     let mut world = World::empty();
     for spawn in &scenario.spawns {
         world.spawn(spawn.owner, spawn.x, spawn.y);
@@ -49,7 +74,6 @@ pub fn run(scenario: &Scenario, config: &RunConfig) -> Result<Trace, RunError> {
         schedule.entry(entry.tick).or_default().push(entry);
     }
 
-    let mut ticks: Vec<TickRecord> = Vec::with_capacity(scenario.ticks as usize);
     let mut draw_index = 0u64;
     let mut timer_seq = 0u64;
     for tick in 0..scenario.ticks {

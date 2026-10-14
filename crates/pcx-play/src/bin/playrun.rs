@@ -105,10 +105,10 @@ fn execute() -> Result<(), (u8, String)> {
     }
     // Retain the candidate trace even on baseline mismatch for diagnosis.
     std::fs::write(&output, bytes).map_err(|e| (2, format!("{output}: {e}")))?;
-    if let Some(expected) = expected {
-        if let Some(divergence) = first_divergence(&expected, &first) {
-            return Err((1, divergence.to_string()));
-        }
+    if let Some(expected) = expected
+        && let Some(divergence) = first_divergence(&expected, &first)
+    {
+        return Err((1, divergence.to_string()));
     }
     println!(
         "passed scenario={} runs={runs} ticks={} work={work} hash={:016x}",
