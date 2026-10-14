@@ -3,9 +3,9 @@
 //! Desktop-only. WASM has no UDP in the browser, so the wasm build gets the
 //! trait and the codec but not this file — which is why the trait exists at all.
 //!
-//! The LAN protocol is a request/response over broadcast, which is how 1.28c
-//! games appear on a LAN. Discovery is deliberately separate from the game
-//! transport: a host browsing for games must not have to join one.
+//! This is the project's own discovery/datagram protocol, not classic WC3 wire
+//! compatibility. Discovery is separate from game transport, so browsing hosts
+//! does not require joining one.
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
@@ -13,12 +13,7 @@ use std::time::{Duration, Instant};
 
 use crate::{Peer, Transport};
 
-/// The UDP port classic WC3 LAN games broadcast discovery on.
-///
-/// 1.28c uses 6112 for game traffic; discovery used a separate port in practice,
-/// and reusing the game port keeps a single socket. This is a placeholder until
-/// the real value is measured from a running game, and is named rather than
-/// inlined so that measurement is a one-line change.
+/// Chosen project discovery port; native port/configuration parity is unverified.
 pub const LAN_PORT: u16 = 6112;
 
 /// How long a discovery request waits for responses.
@@ -29,6 +24,9 @@ pub const DISCOVERY_REQUEST: &[u8] = b"PEACECRAFT3-DISCOVER-v1";
 
 /// Prefix of a host's response to [`DISCOVERY_REQUEST`].
 pub const DISCOVERY_RESPONSE_PREFIX: &[u8] = b"PEACECRAFT3-HOST-v1 ";
+
+// Receive must provide the complete span accepted by the existing send contract.
+const MAX_DATAGRAM_BYTES: usize = u16::MAX as usize;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
@@ -189,7 +187,7 @@ impl Transport for UdpTransport {
     type Error = TransportError;
 
     fn send(&mut self, to: Peer, datagram: &[u8]) -> Result<(), Self::Error> {
-        if datagram.len() > u16::MAX as usize {
+        if datagram.len() > MAX_DATAGRAM_BYTES {
             return Err(TransportError::DatagramTooLarge(datagram.len()));
         }
         let Some(addr) = self.peers.get(&to).copied() else {
@@ -204,7 +202,7 @@ impl Transport for UdpTransport {
 
     fn poll(&mut self) -> Option<(Peer, Vec<u8>)> {
         let socket = self.socket.as_ref()?;
-        let mut buf = [0u8; 2048];
+        let mut buf = [0u8; MAX_DATAGRAM_BYTES];
         // Non-blocking, so a poll is a poll rather than a wait.
         match socket.recv_from(&mut buf) {
             Ok((n, from)) => {
@@ -633,5 +631,59 @@ mod session_tests {
         }
         assert!(server.advance(), "input arrived, so the tick runs");
         assert_eq!(server.world().tick, 1);
+    }
+}
+
+#[cfg(test)]
+mod receive_span_tests {
+    use super::*;
+    use crate::{Datagram, decode, decode_world_payload, encode, encode_world_payload};
+    use pcx_sim::World;
+
+    #[test]
+    fn a_snapshot_larger_than_the_old_receive_span_arrives_complete() {
+        let mut sender = UdpTransport::bind("127.0.0.1:0").expect("loopback sender must bind");
+        let mut receiver = UdpTransport::bind("127.0.0.1:0").expect("loopback receiver must bind");
+        let sender_addr = sender.socket.as_ref().unwrap().local_addr().unwrap();
+        let receiver_addr = receiver.socket.as_ref().unwrap().local_addr().unwrap();
+        let destination = sender.register(receiver_addr);
+        let source = receiver.register(sender_addr);
+        let mut world = World::empty();
+        world.tick = 91;
+        while encode(&Datagram::Snapshot {
+            tick: world.tick,
+            payload: encode_world_payload(&world),
+        })
+        .len()
+            <= 2048
+        {
+            world.spawn(0, world.units.len() as i32, 0);
+        }
+        let frame = encode(&Datagram::Snapshot {
+            tick: world.tick,
+            payload: encode_world_payload(&world),
+        });
+        sender
+            .send(destination, &frame)
+            .expect("snapshot is within existing send ceiling");
+        // Bounded liveness wait, not an elapsed-time performance/fidelity gate.
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let (peer, bytes) = loop {
+            if let Some(received) = receiver.poll() {
+                break received;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "loopback snapshot did not arrive"
+            );
+            std::thread::yield_now();
+        };
+        assert_eq!(peer, source);
+        assert_eq!(bytes.len(), frame.len(), "UDP frame was truncated");
+        assert_eq!(bytes, frame, "UDP frame was truncated before decoding");
+        let Datagram::Snapshot { tick, payload } = decode(&bytes).unwrap() else {
+            panic!("snapshot kind changed");
+        };
+        assert_eq!(decode_world_payload(tick, &payload).unwrap(), world);
     }
 }
