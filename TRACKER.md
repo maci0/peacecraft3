@@ -739,7 +739,7 @@ See `PLAN.md` §3.5 for the harness design. Each chapter asserts specific outcom
 | RE-Q2 | Filename hash + seed policy | resolved — §2.3 item 3, `ev_ddc2808a…` | **closed** |
 | RE-Q3 | Table cipher + file keys | resolved — §2.3 items 4–5, `ev_703ee25f…` | **closed** |
 | RE-Q4 | Compressors | resolved — implode + zlib working | **closed** |
-| RE-Q5 | Sim tick rate / frame relationship | REA: `game.dll` main loop | open |
+| RE-Q5 | Sim tick rate / frame relationship | Exact Legacy scheduler/timer chain traced; QPC calibration, gameplay subscribers and render coupling unresolved. See `docs/re-notes/legacy-simulation-clock.md`. | open |
 | RE-Q6 | RNG generator + call order | REA: `game.dll` `FRand` | open |
 | RE-Q7 | Header words `0x20`/`0x24` | REA: `Storm.dll` open path; nothing depends on them | open |
 | RE-Q8 | Storm's live table at `+0x4C2E4` ≠ fixed table | REA: `FUN_15017650`; archives use the fixed table | open, not blocking |
