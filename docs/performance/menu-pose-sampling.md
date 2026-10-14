@@ -45,3 +45,42 @@ Local harness source, pinned library/compiler identities and three logs are in
 `.scratch/menu-pose-root/`. Original bytes are not committed. The measurement
 includes BONE tracks only; helper conversion, skeleton composition, mesh
 skinning, frame allocations, FPS and GPU/native rendering are outside it.
+
+## Borrowed pose composition
+
+`pcx_mdl::bone_matrices_from_poses` composes supplied poses through the same
+hierarchy loop used by `bone_matrices`. `pcx_gfx::pose_from_poses` uses that entry
+instead of encoding three temporary animation tracks per joint and sampling
+them again. Existing parent lookup, pivot arithmetic, cycle outputs, joint
+ordering, missing-pose identity fallback and ignored extra poses are preserved.
+This preserves the reconstruction's behavior; native malformed-hierarchy
+semantics remain unverified.
+
+The public `pcx-gfx` `pose_composition` test compares exact matrix and deformed
+vertex bits against the previous adapter across eleven boundary cases. These
+include sparse/helper parents, missing parents, cycles, duplicate IDs, short or
+extra pose slices, absent pivots and nonfinite components. The same cases execute
+on actual wasm32 with generated bindings to Cargo-built libraries.
+
+```sh
+cargo test --locked -p pcx-gfx --test pose_composition
+```
+
+A separate CPU census includes BONE and HELP sampling, composition and all
+geoset skinning over eight authored Stand frames. Fresh Cargo-built libraries
+at development optimization level 1 and an optimized census caller reproduce
+the source-leaf measurements at levels 0 and 3. Three independent runs, each
+with three internal repetitions, retain identical pose, matrix and vertex-bit
+digests. Input identities remain the two Legacy archive members listed above.
+
+| Member | Composition allocations, before → after | Composition requested bytes, before → after | Counted CPU pipeline allocations, before → after |
+| --- | ---: | ---: | ---: |
+| RoC menu | 21,537 → 6,121 | 1,693,432 → 559,616 | 22,072 → 6,656 |
+| TFT menu | 9,641 → 2,705 | 751,960 → 249,568 | 9,936 → 3,000 |
+
+Sampling and skinning allocation counts remain unchanged. The gate requires
+repeated counts, unchanged work and exact output bits, plus fewer composition
+allocations. Logs, input checksums and Cargo artifact profiles are retained in
+`.scratch/pose-composition-root-review/`. Requested allocation work is not peak
+memory. This excludes mesh upload, materials, GPU drawing, frame timing, FPS and
+native-game behavior; the public site was not rebuilt for this change.

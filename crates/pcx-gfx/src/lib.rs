@@ -183,10 +183,8 @@ pub fn pose_skeleton(
 ///
 /// [`pose_skeleton`] samples the model's own tracks at a frame; this is the
 /// same composition when the poses have already been evaluated — by Bevy's
-/// animation system, say. `bone_matrices` only knows how to sample tracks, so
-/// each pose goes in as a one-key skeleton: a single key at frame 0 holds its
-/// value at every frame, and the composition that follows is the decoder's own,
-/// quirks included, rather than a second implementation of it.
+/// animation system, say. It borrows poses directly through the decoder's
+/// composition, including its existing hierarchy and cycle behavior.
 ///
 /// `bones` and `poses` are parallel; `pivots` is the model's own pivot table.
 pub fn pose_from_poses(
@@ -195,80 +193,24 @@ pub fn pose_from_poses(
     pivots: &pcx_mdl::Pivots,
     poses: &[pcx_mdl::Pose],
 ) -> Skeleton {
-    let keyed: Vec<pcx_mdl::Bone> = bones
-        .iter()
-        .zip(
-            poses
-                .iter()
-                .copied()
-                .chain(std::iter::repeat(pcx_mdl::Pose::default())),
-        )
-        .map(|(b, pose)| one_key_bone(b, pose))
-        .collect();
-    let by_id: std::collections::HashMap<u32, usize> = keyed
+    let by_id: std::collections::HashMap<u32, usize> = bones
         .iter()
         .enumerate()
         .map(|(i, b)| (b.object_id, i))
         .collect();
     let parent = |object_id: u32| -> Option<u32> {
-        let b = keyed.iter().find(|b| b.object_id == object_id)?;
+        let b = bones.iter().find(|b| b.object_id == object_id)?;
         if b.parent_id < 0 {
             return None;
         }
         let p = b.parent_id as u32;
         by_id.contains_key(&p).then_some(p)
     };
-    let matrices = pcx_mdl::bone_matrices(&keyed, &parent, pivots, 0);
+    let matrices = pcx_mdl::bone_matrices_from_poses(bones, &parent, pivots, poses);
     Skeleton {
         matrices,
         ids: bones.iter().map(|b| b.object_id).collect(),
         names: bones.iter().map(|joint| joint.name.clone()).collect(),
-    }
-}
-
-/// A bone whose whole animation is one key at frame 0: the pose `pose`.
-fn one_key_bone(bone: &pcx_mdl::Bone, pose: pcx_mdl::Pose) -> pcx_mdl::Bone {
-    let track = |kind: pcx_mdl::TrackKind, value: [f32; 4]| {
-        let mut raw = Vec::with_capacity(20);
-        raw.extend_from_slice(&0u32.to_le_bytes());
-        for v in value {
-            raw.extend_from_slice(&v.to_le_bytes());
-        }
-        pcx_mdl::BoneTrack {
-            kind,
-            count: 1,
-            interpolation: pcx_mdl::Interpolation::None,
-            global_sequence_id: -1,
-            offset: 0,
-            stride: 20,
-            raw,
-        }
-    };
-    pcx_mdl::Bone {
-        offset: bone.offset,
-        span: bone.span,
-        name: bone.name.clone(),
-        object_id: bone.object_id,
-        parent_id: bone.parent_id,
-        flags: bone.flags,
-        tracks: vec![
-            track(
-                pcx_mdl::TrackKind::Translation,
-                [
-                    pose.translation[0],
-                    pose.translation[1],
-                    pose.translation[2],
-                    0.0,
-                ],
-            ),
-            track(pcx_mdl::TrackKind::Rotation, pose.rotation),
-            track(
-                pcx_mdl::TrackKind::Scaling,
-                [pose.scale[0], pose.scale[1], pose.scale[2], 1.0],
-            ),
-        ],
-        geoset_id: bone.geoset_id,
-        geoset_anim_id: bone.geoset_anim_id,
     }
 }
 

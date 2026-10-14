@@ -1433,6 +1433,17 @@ pub fn bone_matrices(
     frame: u32,
 ) -> Vec<[f32; 16]> {
     let poses = sample_skeleton(bones, frame);
+    bone_matrices_from_poses(bones, parent, pivots, &poses)
+}
+
+/// Compose supplied poses with the same hierarchy, pivot and cycle behavior as `bone_matrices`.
+/// Missing poses retain the pose adapter's existing identity fallback; extra poses are ignored.
+pub fn bone_matrices_from_poses(
+    bones: &[Bone],
+    parent: &dyn Fn(u32) -> Option<u32>,
+    pivots: &Pivots,
+    poses: &[Pose],
+) -> Vec<[f32; 16]> {
     // By object id, so a parent can be found without walking the list.
     let by_id: std::collections::HashMap<u32, usize> = bones
         .iter()
@@ -1455,8 +1466,8 @@ pub fn bone_matrices(
                 break;
             }
             if chain.contains(&i) {
-                // A cycle. Leave the rest of the chain at identity rather than
-                // spinning, and say so by stopping here.
+                // Stop before composing the cycle; its members retain their
+                // existing zero-initialized matrices.
                 chain.truncate(chain.iter().position(|&x| x == i).unwrap());
                 break;
             }
@@ -1465,7 +1476,7 @@ pub fn bone_matrices(
         }
         // Compose root-down so each parent exists before its child.
         for &i in chain.iter().rev() {
-            let pose = poses[i];
+            let pose = poses.get(i).copied().unwrap_or_default();
             let base = parent(bones[i].object_id)
                 .and_then(|p| by_id.get(&p).copied())
                 .filter(|&p| p != i)
