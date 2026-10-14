@@ -59,3 +59,43 @@ archive priority, release attribution, browser drawing or native fidelity.
 Captured commands, exit codes and hashes are local under
 `.scratch/browser-read-root-review/`. No original bytes belong to the commit.
 The public demo has not been rebuilt or deployed by this change.
+
+## Selected archive sources for map admission
+
+`browser_archive_source::CommittedArchiveSource` implements the existing
+`ContentSource` boundary over one explicitly selected committed archive. The
+browser module's ordinary Rust factories inspect the real archive index/revision
+and mount that selection. Callers supply exact logical/member mappings,
+`SourceInfo`, packed/decoded limits, resolver priorities and map-binding inputs.
+This adds no JavaScript configuration API, automatic source selection or UI policy.
+
+Each inventory query and read checks the selected revision, index, UTF-8 name,
+byte length and header while holding revision then archive guards. Reads borrow
+the existing archive and use bounded extraction with an explicit absent Huffman
+table. They neither clone the archive nor consult flattened renderer aliases.
+Unadvertised or physically absent members remain absent; malformed matching
+entries and decoder failures retain typed extraction causes. A failing selected
+source cannot fall through to another archive.
+
+Selection is metadata plus the owner's generation contract, not a content hash
+or unique instance witness. Legacy appends do not advance revision; they preserve
+existing indices. Arbitrary replacement with identical metadata and no revision
+bump would be undetectable. Existing drop clears and increments in separate
+steps. These APIs do not promise threaded, whole-store or cross-source snapshots.
+Ingress, decrypted tables, caller inventory and decoder working memory remain
+outside the per-read payload policy.
+
+Five public native cases cover exact selection, identity/inventory errors,
+limits, unreachable matching entries and resolver-to-application publication
+with stale-source rollback. A separate test-only export in the actual Cargo-built
+application WASM exercises the real browser globals: four mounted synthetic
+archives feed bounded map admission, a real drop invalidates their sources and
+preserves the old context/receipts, and explicit selection refuses lower-source
+fallback. All three application gate sections pass under Node with matching
+wasm-bindgen glue. The existing 14 browser-export groups also pass on that test
+artifact. This is actual application code with test-only invocation, not a new
+production FFI route, live-browser acceptance or gameplay execution.
+
+Root acceptance records are local under `.scratch/browser-source-root-review/`.
+Source mounting UI, script Host effects, game rendering and the public-site
+refresh remain separate work.

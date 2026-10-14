@@ -1,7 +1,7 @@
 // A browser has no `std::env::args` and no process to exit, so it does not come
 // through here: wasm32 boots from `browser::start` instead.
 #[cfg(target_arch = "wasm32")]
-mod browser;
+pub mod browser;
 #[cfg(target_arch = "wasm32")]
 use peacecraft3::browser_read;
 #[cfg(any(test, target_arch = "wasm32"))]
@@ -63,3 +63,18 @@ fn main() {
 #[cfg(test)]
 #[path = "../tests/support/browser_font_contract.rs"]
 mod browser_font_contract;
+
+#[cfg(all(test, target_arch = "wasm32"))]
+#[path = "../tests/support/map_admission_cases.rs"]
+mod admission;
+#[cfg(all(test, target_arch = "wasm32"))]
+#[path = "../tests/support/map_binding_cases.rs"]
+mod binding;
+#[cfg(all(test, target_arch = "wasm32"))]
+#[path = "../tests/support/map_fixtures.rs"]
+mod fixtures;
+#[cfg(all(test, target_arch = "wasm32"))]
+use crate::map_source_controls as source_controls;
+#[cfg(all(test, target_arch = "wasm32"))]
+#[path = "../tests/support/browser_application_gate.rs"]
+mod browser_application_gate;

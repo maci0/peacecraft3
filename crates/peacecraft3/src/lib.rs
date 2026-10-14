@@ -9,3 +9,5 @@ pub mod map_script_session;
 
 /// Explicit browser memory/archive reads with caller budgets and codec input.
 pub mod browser_read;
+
+pub mod browser_archive_source;

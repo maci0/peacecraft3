@@ -192,7 +192,7 @@ pub fn supplied_codec_only() {
 }
 
 #[path = "browser_unreachable_fixture.rs"]
-mod unreachable_fixture;
+pub(crate) mod unreachable_fixture;
 #[cfg_attr(test, test)]
 pub fn unreachable_no_fallback() {
     let mut sources = [

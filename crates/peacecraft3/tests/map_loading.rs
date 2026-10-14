@@ -34,3 +34,6 @@ mod browser_bounded_cases;
 mod browser_mpq_fixtures;
 #[path = "support/browser_read_cases.rs"]
 mod browser_read_cases;
+
+#[path = "support/browser_archive_source_cases.rs"]
+mod browser_archive_source_cases;

@@ -263,6 +263,36 @@ pub fn asset_revision() -> u32 {
     *revision()
 }
 
+/// Inspect only the explicitly requested committed archive index/generation.
+pub fn committed_archive_selection(
+    index: usize,
+    revision: u32,
+) -> Result<peacecraft3::browser_archive_source::ArchiveSelection, pcx_assets::SourceError> {
+    peacecraft3::browser_archive_source::ArchiveSelection::inspect(
+        ARCHIVES.get_or_init(|| Mutex::new(Vec::new())),
+        REVISION.get_or_init(|| Mutex::new(0)),
+        index,
+        revision,
+    )
+}
+
+/// Mount one explicitly selected committed archive for the real bounded resolver.
+/// No renderer aliases, archive ordering or release identity is inferred.
+pub fn committed_archive_source(
+    selected: peacecraft3::browser_archive_source::ArchiveSelection,
+    info: pcx_assets::SourceInfo,
+    names: Vec<pcx_assets::NamedMember>,
+    budget: pcx_mpq::ExtractionBudget,
+) -> Result<peacecraft3::browser_archive_source::CommittedArchiveSource, pcx_assets::SourceError> {
+    peacecraft3::browser_archive_source::CommittedArchiveSource::mount_no_huffman(
+        ARCHIVES.get_or_init(|| Mutex::new(Vec::new())),
+        REVISION.get_or_init(|| Mutex::new(0)),
+        selected,
+        info,
+        names,
+        budget,
+    )
+}
 /// Starts a transaction without altering visible archives/assets.
 #[wasm_bindgen]
 pub fn begin_archive_import() {
@@ -724,7 +754,8 @@ pub(crate) fn stored_bytes_checked(
     path: &str,
     max_bytes: usize,
 ) -> Result<Option<crate::browser_read::AssetRead>, crate::browser_read::ReadError> {
-    crate::browser_read::read_checked(&store(), &archives(), *revision(), path, max_bytes)
+    let revision = *revision();
+    crate::browser_read::read_checked(&store(), &archives(), revision, path, max_bytes)
 }
 
 /// Reject non-number, non-finite, fractional and out-of-range arguments before
