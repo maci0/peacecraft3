@@ -4,7 +4,10 @@
 //! fixed-point rounding, spawn defaults, life conversion or combat rules occur.
 use std::collections::BTreeMap;
 
-use pcx_map::{Map, MapInfo, Pathing, RandomUnit, UnitPlacement, Units};
+use pcx_map::{
+    GridAlignment, GridAlignmentError, GridDimensions, Map, MapInfo, Pathing, RandomUnit,
+    UnitPlacement, Units,
+};
 use pcx_objects::editor::{Editor, FieldDef, FieldSource, ObjectKind, Overlay, SlkId, StatValue};
 use pcx_objects::{Fourcc, Mod, Value};
 
@@ -18,6 +21,14 @@ pub struct Source {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ImportError {
+    #[error("{source_identity:?}: terrain {terrain:?} and pathing {pathing:?}: {error}")]
+    GridAlignment {
+        source_identity: Source,
+        terrain: GridDimensions,
+        pathing: GridDimensions,
+        #[source]
+        error: GridAlignmentError,
+    },
     #[error("world import requires explicit install, edition and map provenance")]
     MissingSource,
     #[error("{map}: {member}: {error}")]
@@ -248,6 +259,8 @@ pub struct ImportedWorld {
 }
 
 impl ImportedWorld {
+    /// Raw import without a terrain/pathing dimension admission policy.
+    /// Use [`Self::from_map_aligned`] for an explicitly checked grid join.
     /// `required_fields` checks availability, not numeric or gameplay validity.
     /// Required files fail with map/member context. Unsupported records stay
     /// named and inspectable; they are never silently dropped or substituted.
@@ -275,6 +288,62 @@ impl ImportedWorld {
             .units()
             .map_err(|error| read_error("war3mapUnits.doo", error))?;
         Self::from_authored(source, info, pathing, &units, catalog, required_fields)
+    }
+
+    /// Import the same authored map with uniform integer grid validation.
+    /// This is explicit project import policy, not native admission or world units.
+    /// Existing extraction/parsers have no caller allocation budget; this method
+    /// does not claim a total-memory bound. It returns derived metadata separately.
+    pub fn from_map_aligned(
+        map: &Map<'_>,
+        source: Source,
+        catalog: &impl ObjectCatalog,
+        required_fields: &[Fourcc],
+    ) -> Result<(Self, GridAlignment), ImportError> {
+        if source.install.is_empty() || source.edition.is_empty() || source.map.is_empty() {
+            return Err(ImportError::MissingSource);
+        }
+        let read_error = |member, error| ImportError::Member {
+            map: source.map.clone(),
+            member,
+            error,
+        };
+        let terrain = {
+            let terrain = map
+                .terrain()
+                .map_err(|error| read_error("war3map.w3e", error))?;
+            GridDimensions {
+                width: terrain.width(),
+                height: terrain.height(),
+            }
+        };
+        let pathing = map
+            .pathing()
+            .map_err(|error| read_error("war3map.wpm", error))?;
+        let pathing_dimensions = GridDimensions {
+            width: pathing.width,
+            height: pathing.height,
+        };
+        let alignment = pcx_map::grid_alignment::terrain_pathing_alignment(
+            terrain.width,
+            terrain.height,
+            pathing.width,
+            pathing.height,
+        )
+        .map_err(|error| ImportError::GridAlignment {
+            source_identity: source.clone(),
+            terrain,
+            pathing: pathing_dimensions,
+            error,
+        })?;
+        let info = map
+            .info()
+            .map_err(|error| read_error("war3map.w3i", error))?;
+        let units = map
+            .units()
+            .map_err(|error| read_error("war3mapUnits.doo", error))?;
+        let world = Self::from_authored(source, info, pathing, &units, catalog, required_fields)?;
+        Ok((world, alignment))
     }
 
     /// Placement data stays separate from the existing chosen fixed-tick world.

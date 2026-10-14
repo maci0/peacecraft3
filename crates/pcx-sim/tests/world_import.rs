@@ -244,8 +244,21 @@ fn original_map_imports_with_named_unsupported_records_and_asset_stats() {
         edition,
         map: map_path.clone(),
     };
-    let world = ImportedWorld::from_map(&map, source, &catalog, &[])
-        .expect("import required authored members");
+    let (world, alignment) = ImportedWorld::from_map_aligned(&map, source, &catalog, &[])
+        .expect("import required authored members with explicit grid policy");
+    let terrain = map
+        .terrain()
+        .expect("decode authored terrain for consumer gate");
+    assert_eq!(alignment.terrain.tiles.width, terrain.width());
+    assert_eq!(alignment.terrain.tiles.height, terrain.height());
+    assert_eq!(
+        alignment.terrain_corner_count,
+        terrain.corner_count() as u64
+    );
+    assert_eq!(
+        alignment.pathing_cell_count,
+        world.pathing.cells.len() as u64
+    );
     let placements = map.units().unwrap();
     assert!(
         !world.records.is_empty(),

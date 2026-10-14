@@ -11,6 +11,23 @@ or corrupt required members return errors containing the map and member name.
 The lower-level `from_authored` also requires provenance. Neither path invents
 missing map contents, pathing flags, object stats or placement defaults.
 
+`ImportedWorld::from_map_aligned` adds an explicit checked consumer route,
+returning the raw imported world and `GridAlignment` derived from that same
+map's terrain/pathing dimensions. It requires a valid `war3map.w3e`, preserves
+member extraction/parse failures and returns supplied source identity plus both
+raw dimension pairs when the uniform integer relationship is refused. Validation
+precedes placement parsing/catalog resolution. The existing `from_map` and
+`from_authored` remain raw, unaligned imports for compatibility. This uniform
+relationship is project import policy, not original-game admission, world units,
+height conversion or WPM flag semantics. The explicit original-world fixture opts
+into it; broader raw original sweeps retain their existing scope.
+
+This route adds terrain extraction/parsing to existing import work. Each current
+Map member extraction copies and opens the embedded archive. Terrain decoding
+retains raw bytes and decoded corner/slot arrays; the checked importer drops
+those arrays before pathing/placement import. No caller packed/decoded/archive
+budget is added, so the operation is not a bounded-memory import guarantee.
+
 `MetadataCatalog` keeps unit and item overlays separate and resolves their bases
 against the supplied Editor tables. Definitions are interned once per rawcode.
 The runtime metadata determines field identity, declared type and source
