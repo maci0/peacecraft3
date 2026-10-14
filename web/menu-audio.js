@@ -1,13 +1,14 @@
 // Original TFT audio. Browsers require a gesture before audible playback.
-const music = new Audio('./assets/menu-music.mp3');
+const localOnly = document.documentElement.dataset.localAssets === 'true' || new URLSearchParams(location.search).has('local');
+const music = localOnly ? new Audio() : new Audio('./assets/menu-music.mp3');
 music.loop = true;
-const clickSound = new Audio('./assets/menu-click.wav');
-clickSound.volume = 100 / 127; // GlueScreenClick in UISounds.slk.
-let enabled = true;
+const clickSound = localOnly ? new Audio() : new Audio('./assets/menu-click.wav');
+if (!localOnly) clickSound.volume = 100 / 127; // Existing staged-file policy; local imports use authored settings.
+let enabled = !localOnly;
 let unlocked = false;
 let clicks = 0;
 let introActive = false;
-let localMode = false;
+let localMode = localOnly;
 let clickNoDuplicates = true;
 let localUrls = [];
 let localSources = { music: null, click: null };
@@ -98,6 +99,8 @@ globalThis.peacecraft3Audio = {
 };
 
 const toggle = document.querySelector('#sound');
+toggle.textContent = enabled ? 'Mute sound' : 'Enable sound';
+toggle.setAttribute('aria-pressed', String(!enabled));
 toggle.addEventListener('click', () => {
   enabled = !enabled;
   music.muted = clickSound.muted = !enabled;

@@ -20,10 +20,12 @@ import init, {
   begin_archive_import, cancel_archive_import, stage_archive,
   pending_archive_member, commit_archive_import, archive_member,
   asset_revision, menu_music_path, menu_font_files, menu_font_alias,
+  enable_local_demo, local_menu_editions, open_local_menu, active_local_menu_edition,
 } from './pkg/peacecraft3.js';
 import { discoverIso, importIsoCandidates } from './iso/import.js';
 import { clickDescriptor } from './iso/audio.js';
-let localImportActive = new URLSearchParams(location.search).has('local');
+const demoOnly = document.documentElement.dataset.localAssets === 'true';
+let localImportActive = demoOnly || new URLSearchParams(location.search).has('local');
 function registerServedAsset(name, bytes) { return localImportActive ? 0 : add_asset(name, bytes); }
 
 // The original glue-screen frames, extracted from the shipped archives into
@@ -284,6 +286,7 @@ function fail(where, err) {
 
 try {
   await init();
+  if (demoOnly) enable_local_demo();
 } catch (error) {
   fail('wasm module', error);
   for (const id of ['archives', 'self', 'drop', 'iso', 'iso-import', 'iso-cancel']) document.getElementById(id).disabled = true;
@@ -295,6 +298,7 @@ say('wasm module loaded');
 // written anywhere: `add_archive` reports what the archive's own tables say.
 for (const el of [document.getElementById('self'), document.getElementById('drop')]) {
   el.addEventListener('click', () => {
+    if (isoBusy) return;
     try {
       if (el.id === 'self') {
         say(selftest());
@@ -302,6 +306,7 @@ for (const el of [document.getElementById('self'), document.getElementById('drop
       } else {
         say(`dropped ${drop_assets()} entries`);
         globalThis.peacecraft3Audio?.resetLocalAssets();
+        refreshDemoControls();
       }
     } catch (err) {
       fail(el.id, err);
@@ -311,6 +316,28 @@ for (const el of [document.getElementById('self'), document.getElementById('drop
 
 document.getElementById('archives').addEventListener('change', async (ev) => {
   const files = [...ev.target.files];
+  if (demoOnly) {
+    if (isoBusy || !files.length) return;
+    isoController = new AbortController();
+    isoState(true);
+    try {
+      begin_archive_import();
+      for (const file of files) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        isoController.signal.throwIfAborted();
+        stage_archive(file.name, bytes);
+      }
+      isoController.signal.throwIfAborted();
+      const diagnostics = commit_archive_import();
+      for (const line of diagnostics) say(line, true);
+      await applyLocalAudio({ sourceName: files.map(f => f.name).join(', '), edition: null, build: null });
+      refreshDemoControls();
+      say('Local archives committed; available menus come from validated content');
+    } catch (error) { cancel_archive_import(); fail('local archives', error); }
+    finally { isoState(false); }
+    ev.target.value = '';
+    return;
+  }
   for (const file of files) {
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
@@ -334,7 +361,43 @@ window.peacecraft3 = {
   stored_assets, begin_archive_import, cancel_archive_import, stage_archive,
   pending_archive_member, commit_archive_import, archive_member,
   asset_revision, menu_music_path, menu_font_files, menu_font_alias, discoverIso, importIsoCandidates,
+  local_menu_editions, open_local_menu, active_local_menu_edition,
 };
+
+function refreshDemoControls() {
+  if (!demoOnly) return;
+  const select = document.getElementById('demo-edition');
+  const start = document.getElementById('demo-start');
+  const editions = local_menu_editions();
+  const previous = select.value;
+  select.replaceChildren();
+  for (const edition of editions) {
+    const option = document.createElement('option');
+    option.value = edition;
+    option.textContent = edition === 'roc' ? 'Reign of Chaos' : 'The Frozen Throne';
+    select.append(option);
+  }
+  if (!editions.length) {
+    select.append(new Option('Import local assets first', ''));
+  } else {
+    select.value = editions.includes(previous) ? previous : editions.at(-1);
+  }
+  select.disabled = start.disabled = isoBusy || editions.length === 0;
+  if (!editions.length) {
+    document.getElementById('launcher-canvas').hidden = true;
+    document.getElementById('demo-placeholder').hidden = false;
+  }
+}
+if (demoOnly) {
+  document.getElementById('demo-start').addEventListener('click', () => {
+    try {
+      open_local_menu(document.getElementById('demo-edition').value);
+      document.getElementById('launcher-canvas').hidden = false;
+      document.getElementById('demo-placeholder').hidden = true;
+      document.getElementById('launcher-canvas').focus({ preventScroll: true });
+    } catch (error) { fail('local menu', error); }
+  });
+}
 
 const isoInput = document.getElementById('iso');
 const isoImport = document.getElementById('iso-import');
@@ -343,6 +406,7 @@ const isoProgress = document.getElementById('iso-progress');
 const isoCandidates = document.getElementById('iso-candidates');
 const isoProvenance = document.getElementById('iso-provenance');
 let isoFile, isoDiscovery, isoController, isoBusy = false;
+if (demoOnly) refreshDemoControls();
 function isoState(busy) {
   isoBusy = busy; isoInput.disabled = busy;
   document.getElementById('archives').disabled = busy;
@@ -350,6 +414,7 @@ function isoState(busy) {
   isoCancel.disabled = !busy;
   isoImport.disabled = busy || !isoDiscovery?.candidates.length;
   for (const input of isoCandidates.querySelectorAll('input')) input.disabled = busy;
+  if (demoOnly) refreshDemoControls();
 }
 isoCancel.addEventListener('click', () => isoController?.abort());
 isoInput.addEventListener('change', async () => {
@@ -409,6 +474,7 @@ isoImport.addEventListener('click', async () => {
     isoProvenance.textContent = JSON.stringify(result, null, 2);
     for (const line of result.diagnostics) say(line, true);
     await applyLocalAudio(result.provenance);
+    refreshDemoControls();
     isoProgress.textContent = `Committed local assets at revision ${result.revision}; ${result.canonicalPaths.length} runtime paths. Edition/build unverified.`;
     window.dispatchEvent(new CustomEvent('peacecraft3-local-import', { detail: result }));
   } catch (error) {

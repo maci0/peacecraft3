@@ -822,6 +822,12 @@ Format: `date — subsystem — symptom — root cause — status`
       **No server upload or remote extraction.** Track unsupported repacked
       installers explicitly; bounded memory, progress/cancel, and a network
       capture proving content stays local are acceptance checks (PLAN M11).
+- [x] Asset-free [GitHub Pages menu demo](https://maci0.github.io/peacecraft3-demo/):
+      only HTML/CSS/JS and WASM are published from a separate public repository.
+      Local file-input import and base-only TFT refusal pass in the packaged app;
+      competing import/clear events are guarded. Live HTTPS startup has no game
+      assets or enabled menu before import. Retail installer ISO and full gameplay
+      acceptance remain separate open gates; see `docs/pages-demo.md`.
 - [ ] Original menu feel/sound: animated background, correct button states and
       original music/clicks, verified in the running browser. Local audio files
       are extracted and playback wired; complete visual fidelity remains open.
@@ -851,7 +857,10 @@ Format: `date — subsystem — symptom — root cause — status`
       (`web/pkg/peacecraft3_bg.wasm`), zero DWARF. Still 62,950,809 of `name`
       section (symbol names, not code); `code` 47,289,068, `data` 8,629,367.
       Same lesson: measure the release path, never the dev artifact.
-- [ ] `wasm-strip` / `-C strip=symbols` on that 63 MB `name` section — unmeasured.
+- [x] Current Pages artifact uses `wasm-bindgen --remove-name-section`:
+      61,332,742 bytes, no debugging name section, with all executable sections
+      compared equal to the same build's unstripped output. Prior artifact sizes
+      above are historical. Native performance/full-frame FPS are not implied.
 - [x] Three browser limitations documented rather than fixed: **staging** (no
       destination to copy into → every source reported rejected), **install-level
       version detection** (one archive can be opened and counted, but not

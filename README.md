@@ -52,8 +52,10 @@ is not reliable evidence of every archive’s version. See the
 [Windows and macOS builds](docs/build-desktop.md) cover Intel/x64 and ARM64.
 The [native build workflow](https://github.com/maci0/peacecraft3/actions/workflows/desktop-builds.yml)
 compiles, tests and packages each target separately.
-Browser-only ISO asset discovery, without uploading the ISO to a server, is
-planned in [PLAN.md](PLAN.md).
+The [browser demo](https://maci0.github.io/peacecraft3-demo/) contains no original
+game assets. Import your own local ISO; base-only content does not enable TFT.
+See [supported imports and packaging](docs/pages-demo.md). This is a partial menu
+demo, with installer-only images and full gameplay still unsupported.
 
 The optional `pcx-blp` `wasm_smoke` example requires `--features local-fixtures`
 and locally extracted `SelectionCircleLarge.blp`, `Footman.mdx` and `misc.tga`

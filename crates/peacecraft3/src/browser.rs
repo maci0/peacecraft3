@@ -104,6 +104,76 @@ fn take_notes() -> Vec<String> {
     std::mem::take(&mut *guard)
 }
 
+#[derive(Default)]
+struct DemoControl {
+    enabled: bool,
+    editions: crate::local_demo::MenuEditions,
+    requested: Option<crate::launch::Addon>,
+    active: Option<crate::launch::Addon>,
+}
+
+static DEMO_CONTROL: OnceLock<Mutex<DemoControl>> = OnceLock::new();
+
+fn demo_control() -> std::sync::MutexGuard<'static, DemoControl> {
+    DEMO_CONTROL
+        .get_or_init(|| Mutex::new(DemoControl::default()))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+}
+
+/// Enables the asset-free demo; it cannot authorize an absent menu edition.
+#[wasm_bindgen]
+pub fn enable_local_demo() {
+    demo_control().enabled = true;
+}
+
+/// Capabilities from successfully hydrated menu models, not release detection.
+#[wasm_bindgen]
+pub fn local_menu_editions() -> Vec<String> {
+    let editions = demo_control().editions;
+    [crate::launch::Addon::Roc, crate::launch::Addon::Tft]
+        .into_iter()
+        .filter(|a| editions.allows(*a))
+        .map(|a| a.label().to_owned())
+        .collect()
+}
+
+#[wasm_bindgen]
+pub fn open_local_menu(edition: &str) -> Result<(), JsValue> {
+    let addon = match edition {
+        "roc" => crate::launch::Addon::Roc,
+        "tft" => crate::launch::Addon::Tft,
+        _ => return Err(JsValue::from_str("UNKNOWN_MENU_EDITION")),
+    };
+    let mut control = demo_control();
+    if !control.enabled || !control.editions.allows(addon) {
+        return Err(JsValue::from_str(
+            "UNAVAILABLE_MENU_EDITION: import its local content first",
+        ));
+    }
+    control.requested = Some(addon);
+    Ok(())
+}
+
+#[wasm_bindgen]
+pub fn active_local_menu_edition() -> Option<String> {
+    demo_control().active.map(|a| a.label().to_owned())
+}
+
+pub(crate) fn take_demo_control() -> (
+    bool,
+    crate::local_demo::MenuEditions,
+    Option<crate::launch::Addon>,
+) {
+    let mut control = demo_control();
+    (control.enabled, control.editions, control.requested.take())
+}
+
+pub(crate) fn publish_demo_edition(addon: crate::launch::Addon) {
+    let mut control = demo_control();
+    control.active = control.editions.allows(addon).then_some(addon);
+}
+
 /// Normalises a path into a key the asset source can be indexed by.
 ///
 /// MPQ member names are spelled with backslashes and Bevy asset paths use
@@ -446,6 +516,10 @@ pub fn commit_archive_import() -> Result<Vec<String>, JsValue> {
         .as_mut()
         .ok_or_else(|| JsValue::from_str("no active archive import"))?;
     let (assets, notes) = hydrate(set).map_err(|e| JsValue::from_str(&e))?;
+    let editions = crate::local_demo::MenuEditions {
+        roc: assets.contains_key(&normalize(crate::mainmenu_scene::scene_source(false).1)),
+        tft: assets.contains_key(&normalize(crate::mainmenu_scene::scene_source(true).1)),
+    };
     let mut rev = revision();
     let next = rev
         .checked_add(1)
@@ -458,6 +532,10 @@ pub fn commit_archive_import() -> Result<Vec<String>, JsValue> {
         add_asset(path, bytes);
     }
     *rev = next;
+    let mut control = demo_control();
+    control.editions = editions;
+    control.requested = None;
+    control.active = None;
     for line in &notes {
         note(line);
     }
@@ -635,6 +713,10 @@ pub fn drop_assets() -> usize {
     let count = clear_store();
     let mut rev = revision();
     *rev = rev.checked_add(1).expect("asset revision exhausted");
+    let mut control = demo_control();
+    control.editions = crate::local_demo::MenuEditions::default();
+    control.requested = None;
+    control.active = None;
     count
 }
 

@@ -66,6 +66,12 @@ globalThis.peacecraft3Intro = {
     active = true;
     finished = false;
     reason = null;
+    if (document.documentElement.dataset.localAssets === 'true' || new URLSearchParams(location.search).has('local')) {
+      active = false;
+      finished = true;
+      reason = 'unavailable';
+      return false;
+    }
     if (!mount()) { active = false; finished = true; reason = 'unavailable'; return false; }
     const canvas = document.querySelector('#launcher-canvas');
     if (canvas) { previousCanvasHidden = canvas.hidden; canvas.hidden = true; }

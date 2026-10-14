@@ -11,6 +11,7 @@ mod glue_menu;
 mod intro;
 mod launch;
 mod launch_gui;
+mod local_demo;
 mod mainmenu;
 mod mainmenu_scene;
 mod menu_audio;

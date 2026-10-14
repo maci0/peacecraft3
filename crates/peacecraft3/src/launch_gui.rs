@@ -27,6 +27,8 @@ pub struct Launcher {
     mode: GameMode,
     log: Vec<String>,
     staging: bool,
+    /// Local browser demo restrictions; `None` leaves native/dev mode unchanged.
+    content_editions: Option<crate::local_demo::MenuEditions>,
 }
 
 impl Default for Launcher {
@@ -36,6 +38,21 @@ impl Default for Launcher {
             mode: GameMode::default_for(pcx_mpq::Version::V1_29),
             log: Vec::new(),
             staging: false,
+            content_editions: None,
+        }
+    }
+}
+
+impl Launcher {
+    fn allows_addon(&self, addon: Addon) -> bool {
+        self.content_editions.is_none_or(|e| e.allows(addon))
+    }
+
+    fn constrain_menu_edition(&mut self) {
+        if let Some(editions) = self.content_editions
+            && !editions.allows(self.mode.addon)
+        {
+            self.mode.addon = editions.preferred().unwrap_or(Addon::Roc);
         }
     }
 }
@@ -264,7 +281,57 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     );
     crate::menu_audio::install(&mut app);
     crate::glue_menu::install(&mut app);
+    #[cfg(target_arch = "wasm32")]
+    app.add_systems(Update, synchronize_local_demo.before(colour_picks));
     app
+}
+
+#[cfg(target_arch = "wasm32")]
+fn synchronize_local_demo(
+    mut commands: Commands,
+    mut launcher: ResMut<Launcher>,
+    menu: Query<Entity, With<MenuLayer>>,
+    picks: Query<(Entity, &Pick)>,
+    buttons: Query<(Entity, &crate::glue_menu::GlueButton)>,
+) {
+    let (enabled, editions, requested) = crate::browser::take_demo_control();
+    if !enabled {
+        return;
+    }
+    launcher.content_editions = Some(editions);
+    launcher.constrain_menu_edition();
+    for (entity, pick) in &picks {
+        let disabled = match pick {
+            Pick::Addon(addon) => !editions.allows(*addon),
+            Pick::Menu => !editions.allows(launcher.mode.addon),
+            _ => continue,
+        };
+        if disabled {
+            commands.entity(entity).insert(InteractionDisabled);
+        } else {
+            commands.entity(entity).remove::<InteractionDisabled>();
+        }
+    }
+    for (entity, button) in &buttons {
+        if button.frame == "EditionButton" {
+            if editions.roc && editions.tft {
+                commands.entity(entity).remove::<InteractionDisabled>();
+            } else {
+                commands.entity(entity).insert(InteractionDisabled);
+            }
+        }
+    }
+    if editions.preferred().is_none() {
+        for entity in &menu {
+            commands.entity(entity).despawn();
+        }
+    } else if let Some(addon) = requested.filter(|a| editions.allows(*a)) {
+        launcher.mode.addon = addon;
+        if menu.is_empty() {
+            spawn_main_menu(&mut commands);
+        }
+    }
+    crate::browser::publish_demo_edition(launcher.mode.addon);
 }
 
 fn default_source() -> String {
@@ -1627,10 +1694,13 @@ pub(crate) fn apply_menu_clicks(
                 }
             }
             "EditionButton" => {
-                launcher.mode.addon = match launcher.mode.addon {
+                let next = match launcher.mode.addon {
                     Addon::Tft => Addon::Roc,
                     Addon::Roc => Addon::Tft,
                 };
+                if launcher.allows_addon(next) {
+                    launcher.mode.addon = next;
+                }
             }
             other => info!("{other}: not implemented"),
         }
@@ -1645,6 +1715,7 @@ fn apply_clicks(
     actions: Res<crate::button_actions::ButtonActions>,
     q: Query<(&Pick, Option<&InteractionDisabled>), With<Button>>,
 ) {
+    l.constrain_menu_edition();
     for entity in &actions.entities {
         let Ok((p, disabled)) = q.get(*entity) else {
             continue;
@@ -1657,13 +1728,16 @@ fn apply_clicks(
         }
         match p {
             Pick::Build(v) => l.mode.build = *v,
-            Pick::Addon(a) => l.mode.addon = *a,
+            Pick::Addon(a) if l.allows_addon(*a) => l.mode.addon = *a,
+            Pick::Addon(_) => {}
             Pick::Assets(a) => l.mode.assets = *a,
             Pick::Behaviour(b) => l.mode.behaviour = *b,
             Pick::Stage => l.staging = true,
             Pick::Download => {}
             Pick::Menu => {
-                if !intro.request_with_install(l.mode.addon == Addon::Tft, selected_install(&l)) {
+                if l.allows_addon(l.mode.addon)
+                    && !intro.request_with_install(l.mode.addon == Addon::Tft, selected_install(&l))
+                {
                     spawn_main_menu(&mut commands);
                 }
             }
@@ -1985,6 +2059,23 @@ mod menu_tests {
         assert_ne!(before, after);
         world.run_system_once(apply_menu_clicks).unwrap();
         assert_eq!(world.resource::<Launcher>().mode.addon, before);
+    }
+
+    #[test]
+    fn a_base_only_demo_refuses_the_expansion_button() {
+        let mut world = World::new();
+        press(&mut world, "EditionButton");
+        {
+            let mut launcher = world.resource_mut::<Launcher>();
+            launcher.content_editions = Some(crate::local_demo::MenuEditions {
+                roc: true,
+                tft: false,
+            });
+            launcher.constrain_menu_edition();
+            assert_eq!(launcher.mode.addon, Addon::Roc);
+        }
+        world.run_system_once(apply_menu_clicks).unwrap();
+        assert_eq!(world.resource::<Launcher>().mode.addon, Addon::Roc);
     }
 
     /// Quit exits the process.

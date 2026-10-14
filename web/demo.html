@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en" data-local-assets="true">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A partial PeaceCraft III menu demo using game files you supply locally.">
+  <title>PeaceCraft III — local menu demo</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./demo.css">
+  <link rel="stylesheet" href="./intro.css">
+</head>
+<body>
+  <a class="skip" href="#iso">Skip to ISO selection</a>
+  <main>
+    <header>
+      <h1>PeaceCraft III</h1>
+      <p class="lead">Bring your own files. Explore the menu.</p>
+      <p>This is a partial menu demo, not a playable game. The site includes no original game artwork, fonts, music or movies.</p>
+    </header>
+
+    <section class="import-panel" aria-labelledby="import-title">
+      <h2 id="import-title">Open a local game ISO</h2>
+      <p id="iso-help">Choose an ISO you own, select the archives found inside, then import them. Reading and extraction happen in your browser; your files stay on this device.</p>
+      <label class="file-label" for="iso">Game ISO</label>
+      <input id="iso" type="file" accept=".iso,application/x-iso9660-image" aria-describedby="iso-help iso-limits">
+      <div id="iso-candidates" aria-label="Archives found in the ISO"></div>
+      <div class="actions">
+        <button id="iso-import" type="button" disabled>Import selected archives</button>
+        <button id="iso-cancel" type="button" disabled>Cancel import</button>
+      </div>
+      <output id="iso-progress" role="status" aria-live="polite" aria-atomic="true">Waiting for a local ISO.</output>
+      <p id="iso-limits" class="hint">Not every disc format is supported. Installer-only images and unsupported UDF layouts are reported locally. Use an image containing readable game archives; no edition or build is assumed from its filename. Expansion content requires supplied expansion assets.</p>
+      <details>
+        <summary>Import details and diagnostics</summary>
+        <pre id="iso-provenance"></pre>
+        <ul id="log" aria-live="polite" aria-label="Import diagnostics"></ul>
+      </details>
+      <details class="advanced">
+        <summary>Already have extracted archives?</summary>
+        <p class="hint">Choose your local MPQ files. They are subject to the same local validation.</p>
+        <label for="archives">Local MPQ archives</label>
+        <input id="archives" type="file" multiple accept=".mpq,.MPQ">
+        <div class="actions">
+          <button id="drop" type="button">Clear loaded archives</button>
+          <button id="self" type="button">Archive status</button>
+        </div>
+      </details>
+    </section>
+
+    <section class="preview" aria-labelledby="preview-title">
+      <div class="preview-heading">
+        <div><h2 id="preview-title">Menu preview</h2><p class="hint">Import valid local assets to begin. Menu behavior and rendering remain incomplete.</p></div>
+        <div class="actions">
+          <label class="edition-label" for="demo-edition">Available menu
+            <select id="demo-edition" disabled><option>Import local assets first</option></select>
+          </label>
+          <button id="demo-start" type="button" disabled>Open menu</button>
+          <button id="sound" type="button" aria-pressed="false">Enable sound</button>
+          <button id="fullscreen" type="button">Fullscreen</button>
+        </div>
+      </div>
+      <div id="stage"><canvas id="launcher-canvas" hidden tabindex="0" aria-label="Partial game menu rendered from locally imported assets">Your browser needs WebAssembly and a supported graphics API to display this menu.</canvas><p id="demo-placeholder">Your menu appears here after importing local files.</p></div>
+    </section>
+    <footer>Local files are kept in this browser session. Reloading the page requires importing them again.</footer>
+  </main>
+  <script type="module" src="./menu-audio.js"></script>
+  <script type="module" src="./intro.js"></script>
+  <script type="module" src="./loader.js"></script>
+  <script type="module">
+    const fullscreen = document.getElementById('fullscreen');
+    fullscreen.disabled = !document.fullscreenEnabled;
+    fullscreen.addEventListener('click', async () => {
+      try { await document.getElementById('stage').requestFullscreen(); }
+      catch (error) { document.getElementById('iso-progress').textContent = `Fullscreen unavailable: ${error.message}`; }
+    });
+  </script>
+</body>
+</html>
