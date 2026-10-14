@@ -169,6 +169,12 @@ pub enum Error {
         "string {id} is not valid UTF-8: byte 0x{byte:02x} at body offset {at}; the file is bytes, so read them as bytes"
     )]
     NotUtf8 { id: u32, at: usize, byte: u8 },
+    #[error("WTS {region} reservation for {elements} elements failed: {source}")]
+    Reservation {
+        region: &'static str,
+        elements: usize,
+        source: std::collections::TryReserveError,
+    },
 }
 
 /// The constructs this decoder refuses rather than guess at.
@@ -323,87 +329,36 @@ impl Table {
             });
         }
 
-        let mut entries = Vec::new();
+        let start = at;
+        let mut count = 0;
         while at < data.len() {
-            let (id, digits, mut p) = parse_header(data, at)?;
-
-            // The 1.29b world editor writes a `//` annotation between the
-            // header and the brace — `// Sound\Dialogue\...` for a voice line,
-            // `// Units: hgtw (Felguard), Hotkey (Hotkey)` for a hotkey edit.
-            // The older editors write nothing. Both are measured (36 records on
-            // 1.29b's Human06, 0 on 1.28c's), so both are read and neither is
-            // inferred from the file's age.
-            let comment = if data[p..].starts_with(COMMENT) {
-                let start = p;
-                let end;
-                loop {
-                    let line_end = p + find(&data[p..], b"\r\n").ok_or(Error::Unsupported {
-                        at,
-                        detail: Unsupported::UnterminatedCommentRegion,
-                    })?;
-                    let next = line_end + 2;
-                    if &data[p..line_end] == b"{" {
-                        // The `{` line: the region ends where that line starts.
-                        end = p;
-                        p = next;
-                        break;
-                    }
-                    p = next;
-                }
-                Some(start..end)
-            } else if data[p..].starts_with(OPEN) {
-                p += OPEN.len();
-                None
-            } else {
-                return Err(Error::Unsupported {
-                    at,
-                    detail: Unsupported::NeitherBraceNorComment,
-                });
-            };
-
-            let body_start = p;
-            let rel = find(&data[p..], b"\r\n}").ok_or(Error::Unsupported {
-                at,
-                detail: Unsupported::BodyNotClosed,
-            })?;
-            let body_end = p + rel;
-            p = body_end + 3;
-            if data[p..].len() < 2 || &data[p..p + 2] != BLANK {
-                return Err(Error::Unsupported {
-                    at,
-                    detail: Unsupported::CloseNotFollowedByLf,
-                });
-            }
-            p += 2;
-            let blank = data[p..].starts_with(BLANK);
-            if blank {
-                p += 2;
-            }
-            // Whatever follows must be the next record or the end of the file.
-            // Anything else means the terminator matched inside a body and the
-            // walk has lost sync: that is a refusal, not a skip.
-            if p < data.len() && !data[p..].starts_with(HEADER) {
-                return Err(Error::Unsupported {
-                    at,
-                    detail: Unsupported::StrayBytesBetweenRecords,
-                });
-            }
-
-            entries.push(Entry {
-                id,
-                comment,
-                body: body_start..body_end,
-                blank,
-                digits,
-            });
-            at = p;
+            let (_, next) = parse_entry(data, at)?;
+            count += 1;
+            at = next;
         }
-
-        Ok(Self {
-            raw: data.to_vec(),
-            bom,
-            entries,
-        })
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(count)
+            .map_err(|source| Error::Reservation {
+                region: "record metadata",
+                elements: count,
+                source,
+            })?;
+        let mut raw = Vec::new();
+        raw.try_reserve_exact(data.len())
+            .map_err(|source| Error::Reservation {
+                region: "raw source",
+                elements: data.len(),
+                source,
+            })?;
+        at = start;
+        while at < data.len() {
+            let (entry, next) = parse_entry(data, at)?;
+            entries.push(entry);
+            at = next;
+        }
+        raw.extend_from_slice(data);
+        Ok(Self { raw, bom, entries })
     }
 
     /// The file exactly as stored.
@@ -559,6 +514,84 @@ impl Table {
             blank_separator: e.blank,
         }
     }
+}
+
+/// One borrowed record walk; source bytes are never decoded or copied here.
+fn parse_entry(data: &[u8], at: usize) -> Result<(Entry, usize), Error> {
+    let (id, digits, mut p) = parse_header(data, at)?;
+
+    // The 1.29b world editor writes a `//` annotation between the
+    // header and the brace — `// Sound\Dialogue\...` for a voice line,
+    // `// Units: hgtw (Felguard), Hotkey (Hotkey)` for a hotkey edit.
+    // The older editors write nothing. Both are measured (36 records on
+    // 1.29b's Human06, 0 on 1.28c's), so both are read and neither is
+    // inferred from the file's age.
+    let comment = if data[p..].starts_with(COMMENT) {
+        let start = p;
+        let end;
+        loop {
+            let line_end = p + find(&data[p..], b"\r\n").ok_or(Error::Unsupported {
+                at,
+                detail: Unsupported::UnterminatedCommentRegion,
+            })?;
+            let next = line_end + 2;
+            if &data[p..line_end] == b"{" {
+                // The `{` line: the region ends where that line starts.
+                end = p;
+                p = next;
+                break;
+            }
+            p = next;
+        }
+        Some(start..end)
+    } else if data[p..].starts_with(OPEN) {
+        p += OPEN.len();
+        None
+    } else {
+        return Err(Error::Unsupported {
+            at,
+            detail: Unsupported::NeitherBraceNorComment,
+        });
+    };
+
+    let body_start = p;
+    let rel = find(&data[p..], b"\r\n}").ok_or(Error::Unsupported {
+        at,
+        detail: Unsupported::BodyNotClosed,
+    })?;
+    let body_end = p + rel;
+    p = body_end + 3;
+    if data[p..].len() < 2 || &data[p..p + 2] != BLANK {
+        return Err(Error::Unsupported {
+            at,
+            detail: Unsupported::CloseNotFollowedByLf,
+        });
+    }
+    p += 2;
+    let blank = data[p..].starts_with(BLANK);
+    if blank {
+        p += 2;
+    }
+    // Whatever follows must be the next record or the end of the file.
+    // Anything else means the terminator matched inside a body and the
+    // walk has lost sync: that is a refusal, not a skip.
+    if p < data.len() && !data[p..].starts_with(HEADER) {
+        return Err(Error::Unsupported {
+            at,
+            detail: Unsupported::StrayBytesBetweenRecords,
+        });
+    }
+
+    Ok((
+        Entry {
+            id,
+            comment,
+            body: body_start..body_end,
+            blank,
+            digits,
+        },
+        p,
+    ))
 }
 
 /// Read `"STRING " <digits> "CR LF"` at `at`, returning
