@@ -964,6 +964,10 @@ Format: `date — subsystem — symptom — root cause — status`
   graphics-library and map all-target scoped Clippy also pass. Map cleanup keeps
   the stronger original version guards; the complete 284-source original fixture
   passes after correction, as does the WASM check.
+  Object-data all-target scoped Clippy also passes. Malformed stock-value errors
+  own their complete untrimmed text as `Box<str>`; their return signatures and
+  diagnostic fields are retained. The existing diagnostic regression, 43 crate
+  tests, explicit both-install default-table sweep and WASM check pass.
   Native application Clippy now passes all targets/features with `--no-deps`
   and `-D warnings`; 106 app tests pass, five original fixtures remain explicitly
   ignored by default, and the WASM check passes. Dependency lint debt is separate.

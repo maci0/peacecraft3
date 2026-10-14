@@ -644,11 +644,7 @@ fn unresolved_records_are_typed_and_reported() {
         unresolved,
         vec!["Maps\\Campaign\\Orc02Interlude.w3m war3map.w3u Nwar".to_string()],
     );
-    assert_eq!(
-        e.resolve("nman").is_some(),
-        true,
-        "spelled `Nman` in the table"
-    );
+    assert!(e.resolve("nman").is_some(), "spelled `Nman` in the table");
 }
 
 /// Every shipped object-editor file, on both builds, decoded and measured.
@@ -915,9 +911,8 @@ fn every_shipped_map_resolves_every_rawcode() {
 
         // The measured relation: one record, named, on both builds. Anything
         // else is a regression worth failing on.
-        let expected: Vec<String> = vec![format!(
-            "Maps\\Campaign\\Orc02Interlude.w3m war3map.w3u Nwar"
-        )];
+        let expected: Vec<String> =
+            vec!["Maps\\Campaign\\Orc02Interlude.w3m war3map.w3u Nwar".to_string()];
         assert_eq!(unresolved, expected, "{} unresolved rawcodes", e.build());
         assert!(collides.is_empty(), "{} collides: {collides:?}", e.build());
         unexpected.extend(unresolved);

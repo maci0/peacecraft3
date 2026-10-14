@@ -78,7 +78,7 @@ impl<'a> Cell<'a> {
             member: self.provenance.asset.member.clone(),
             location: self.provenance.location.clone(),
             declared: kind.to_string(),
-            value: self.text.to_string(),
+            value: self.text.into(),
         };
         if self.parse_error.is_some() {
             return Err(invalid());
@@ -204,7 +204,8 @@ pub enum Refusal {
         member: String,
         location: Location,
         declared: String,
-        value: String,
+        /// Complete untrimmed authored text, owned without spare capacity.
+        value: Box<str>,
     },
     #[error("no {family:?} metadata for field {fourcc:?}")]
     Metadata { family: Family, fourcc: Fourcc },

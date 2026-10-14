@@ -284,9 +284,7 @@ impl Editor {
                 what: "object-editor table",
                 detail: Some(format!("{}: {e}", id.path())),
             })?;
-            census
-                .rows_by_slk
-                .insert(*id, u32::from(table.row_count()) as usize);
+            census.rows_by_slk.insert(*id, table.row_count() as usize);
             tables.insert(*id, table);
         }
 
@@ -659,10 +657,10 @@ fn parse_txt(
         let section = profiles.get_mut(&current).expect("section exists");
         let before = section.values(&k).first().cloned();
         section.put(&k, value, file);
-        if let Some(b) = before {
-            if b != value {
-                duplicates.push((current.clone(), k));
-            }
+        if let Some(b) = before
+            && b != value
+        {
+            duplicates.push((current.clone(), k));
         }
     }
 }

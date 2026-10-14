@@ -256,10 +256,10 @@ fn cmd_diff(dir: &Install, map: &str, only: Option<&str>) -> Result<(), String> 
         if !(low.ends_with(".w3u") || low.ends_with(".w3t")) {
             continue;
         }
-        if let Some(o) = only {
-            if !name.eq_ignore_ascii_case(o) {
-                continue;
-            }
+        if let Some(o) = only
+            && !name.eq_ignore_ascii_case(o)
+        {
+            continue;
         }
         let bytes = pcx_objects::extract_object_file(&mut set, map, &name)
             .map_err(|e| format!("{map} {name}: {e}"))?;
@@ -270,7 +270,7 @@ fn cmd_diff(dir: &Install, map: &str, only: Option<&str>) -> Result<(), String> 
             file.base().len(),
             file.custom().len()
         );
-        for (rawcode, _) in overlay.mods.iter() {
+        for rawcode in overlay.mods.keys() {
             let Some(base) = editor.unit(rawcode) else {
                 unresolved.push(rawcode.clone());
                 println!("  {rawcode}: UNRESOLVED (no row in any editor table)");
@@ -496,7 +496,7 @@ fn cmd_file(dir: &Install, map: &str, name: &str) -> Result<(), String> {
                             "    {} type={} {val} end={}",
                             fourcc(m.field),
                             m.value_type.word(),
-                            fourcc(m.end_word.to_le_bytes().try_into().unwrap())
+                            fourcc(m.end_word.to_le_bytes())
                         );
                     }
                 }

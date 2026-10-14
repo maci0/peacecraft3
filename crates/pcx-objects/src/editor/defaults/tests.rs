@@ -316,7 +316,7 @@ fn markers_malformed_values_and_native_defaults_are_not_invented() {
                 SlkId::ItemData,
                 table(
                     &["itemID", "HP", "usable", "scale"],
-                    &[&["Z001", "-", "2", "NaN"]],
+                    &[&["Z001", "-", " 2 ", "NaN"]],
                 ),
             ),
             (
@@ -339,10 +339,35 @@ fn markers_malformed_values_and_native_defaults_are_not_invented() {
     );
     let item = tables.object(Family::Item, "z001").unwrap();
     assert_eq!(item.field(*b"ihpm").unwrap().value, Value::Marker("-"));
-    assert!(matches!(
-        item.field(*b"iusa"),
-        Err(Refusal::MalformedValue { .. })
-    ));
+    let malformed = item.field(*b"iusa").unwrap_err();
+    let Refusal::MalformedValue {
+        member,
+        location,
+        declared,
+        value,
+    } = &malformed
+    else {
+        panic!("unexpected refusal: {malformed}");
+    };
+    assert_eq!(member, SlkId::ItemData.path());
+    assert_eq!(
+        location,
+        &item
+            .cell(SlkId::ItemData, "usable")
+            .unwrap()
+            .provenance
+            .location
+    );
+    assert_eq!(declared, &FieldKind::Bool.to_string());
+    assert_eq!(value.as_ref(), " 2 ");
+    assert_eq!(malformed.clone(), malformed);
+    assert_eq!(
+        malformed.to_string(),
+        format!(
+            "{member}: {declared} value {:?} is malformed at {location:?}",
+            " 2 "
+        )
+    );
     assert!(matches!(
         item.field(*b"isca"),
         Err(Refusal::MalformedValue { .. })

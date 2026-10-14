@@ -969,16 +969,16 @@ mod tests {
         // Counts are read by hand from both builds' bytes: the two files are
         // the same map's data at the two version words.
         assert_eq!((fr.base_objects, fr.custom_objects, fr.mods), (10, 7, 53));
-        if let Some(dir) = install_dir() {
-            if let Some(old) = shipped(&dir, MAP_HUMAN06, FILE_MAP) {
-                let v1 = ObjectFile::parse(FILE_MAP, &old).unwrap();
-                assert_eq!(v1.version(), 1);
-                let fr1 = v1.framing();
-                assert_eq!(
-                    (fr1.base_objects, fr1.custom_objects, fr1.mods),
-                    (fr.base_objects, fr.custom_objects, fr.mods)
-                );
-            }
+        if let Some(dir) = install_dir()
+            && let Some(old) = shipped(&dir, MAP_HUMAN06, FILE_MAP)
+        {
+            let v1 = ObjectFile::parse(FILE_MAP, &old).unwrap();
+            assert_eq!(v1.version(), 1);
+            let fr1 = v1.framing();
+            assert_eq!(
+                (fr1.base_objects, fr1.custom_objects, fr1.mods),
+                (fr.base_objects, fr.custom_objects, fr.mods)
+            );
         }
     }
 
