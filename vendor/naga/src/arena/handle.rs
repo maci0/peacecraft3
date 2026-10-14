@@ -7,6 +7,32 @@
 
 use core::{cmp::Ordering, fmt, hash, marker::PhantomData};
 
+#[cfg(test)]
+mod tests {
+    use super::Handle;
+
+    #[test]
+    fn checked_indices_preserve_handle_layout() {
+        for index in [0, 1, u32::MAX as usize - 1] {
+            assert_eq!(Handle::<()>::from_usize(index).index(), index);
+        }
+        assert_eq!(size_of::<Option<Handle<()>>>(), size_of::<u32>());
+    }
+
+    #[test]
+    #[should_panic(expected = "Handle overflows")]
+    fn rejects_reserved_index() {
+        Handle::<()>::from_usize(u32::MAX as usize);
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    #[should_panic(expected = "Handle overflows")]
+    fn rejects_index_that_would_truncate() {
+        Handle::<()>::from_usize(u32::MAX as usize + 1);
+    }
+}
+
 /// An unique index in the arena array that a handle points to.
 /// The "non-max" part ensures that an `Option<Handle<T>>` has
 /// the same size and representation as `Handle<T>`.
@@ -107,11 +133,6 @@ impl<T> Handle<T> {
             .and_then(Index::new)
             .expect("Failed to insert into arena. Handle overflows");
         Handle::new(handle_index)
-    }
-
-    /// Convert a `usize` index into a `Handle<T>`, without range checks.
-    pub(super) const unsafe fn from_usize_unchecked(index: usize) -> Self {
-        Handle::new(Index::new_unchecked(index as u32))
     }
 
     /// Write this handle's index to `formatter`, preceded by `prefix`.

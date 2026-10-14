@@ -57,7 +57,7 @@ impl Span {
 
     /// The source text this span covers, or `""` if it does not land on
     /// character boundaries.
-    pub fn text<'a>(self, src: &'a str) -> &'a str {
+    pub fn text(self, src: &str) -> &str {
         let (a, b) = (self.start as usize, self.end as usize);
         if a > b || b > src.len() || !src.is_char_boundary(a) || !src.is_char_boundary(b) {
             return "";

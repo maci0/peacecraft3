@@ -143,6 +143,34 @@ The uniform fill fix does not establish their mapping or full menu fidelity.
 - Palette alpha byte for the fill is `0`, but `flags 0x0` means alpha bits are
   **off**, so the fill is opaque; the `0` is not transparency.
 
+## Correction: the material layer's static alpha **is** established
+
+An earlier caveat above says the layers' static alpha is "not established" because
+the field the decoder reads at layer `+28` is the coordinate id and reads `0.0` for
+every shipped layer. That reasoning was sound but the conclusion is now **stale**:
+the alpha exists, it is simply at a different word.
+
+`docs/re-notes/format-mdx-materials.md` records native evidence from the Legacy
+World Editor (`sha256 d198d2ca47fc29d4901f3de27ff17619824afef5af7e42b9ff17cbe03723d7b7`):
+the layer reader `0x68fdb0`
+(`ev_3a81e18f3e9583faade57a7d5b621c997ae6bfa687dc90328078b0ed208cc443`) reads an
+inclusive size, **five integer fields, then a float**, and the keyword reader
+`0x68f4b0` binds `Alpha` to that float. So the layer body is:
+
+```
++12 filterMode    +16 shading flags   +20 textureId
++24 textureAnimId +28 coordId         +32 staticAlpha   <- layer-record +24
+```
+
+`+28` being `0.0` for every shipped layer is therefore the **coordinate id**, not a
+missing alpha — which is exactly what that word is. Reading `+28` as alpha is the
+error, and it is why the field looked unset.
+
+What remains genuinely unestablished is narrower: whether any **material colour
+multiplier** or frame tint composites over these texels. The static alpha itself is
+now a measured format fact, and the "grey is texture evidence" caveat above stands
+on the colour only.
+
 ## Native interpolation probe — a diagnosed blocker
 
 The follow-up probe (identify the native Hermite/Bézier sampler address and call

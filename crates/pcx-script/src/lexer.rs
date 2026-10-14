@@ -790,8 +790,8 @@ impl<'a> Lexer<'a> {
     /// what lets `%` be both the modulus operator and the binary-literal
     /// prefix without ambiguity.
     fn prev_ends_expression(&self) -> bool {
-        for t in self.tokens.iter().rev() {
-            return match &t.kind {
+        if let Some(t) = self.tokens.last() {
+            match &t.kind {
                 Tok::Ident(_)
                 | Tok::Int(_)
                 | Tok::Real(_)
@@ -801,9 +801,10 @@ impl<'a> Lexer<'a> {
                 | Tok::RBracket => true,
                 Tok::Kw(k) => matches!(k, Kw::True | Kw::False | Kw::Null | Kw::Nothing),
                 _ => false,
-            };
+            }
+        } else {
+            false
         }
-        false
     }
 
     fn lex_word(&mut self) -> Tok {

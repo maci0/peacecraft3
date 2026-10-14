@@ -330,10 +330,10 @@ mod tests {
         for key in ["PEACECRAFT3_LEGACY_DIR", "PEACECRAFT3_INSTALL"] {
             if let Ok(dir) = std::env::var(key) {
                 let p = std::path::PathBuf::from(dir);
-                if p.is_dir() {
-                    if let Ok(mut s) = pcx_mpq::MpqSet::open_wc3(p) {
-                        return s.extract(rel).ok();
-                    }
+                if p.is_dir()
+                    && let Ok(mut s) = pcx_mpq::MpqSet::open_wc3(p)
+                {
+                    return s.extract(rel).ok();
                 }
             }
         }

@@ -55,7 +55,7 @@ def main():
             raise RuntimeError('Valgrind is not installed; the allocation gate does not require it')
         valgrind_version = command([valgrind, '--version'])
         profile = RESULTS / 'simulation.callgrind'
-        invocation = [valgrind, '--tool=callgrind', '--collect-atstart=no', '--toggle-collect=pcx_perf_measure', f'--callgrind-out-file={profile}', *invocation]
+        invocation = [valgrind, '--tool=callgrind', '--collect-atstart=no', '--toggle-collect=*pcx_perf_measure*', f'--callgrind-out-file={profile}', *invocation]
     report = json.loads(command(invocation, profiling=args.instructions))
     report.update({'target_arch': platform.machine(), 'os': platform.system(), 'compiler': command(['rustc', '--version']), 'profile': 'release-opt3-cgu1-lto-off', 'rustflags': os.environ.get('RUSTFLAGS', ''), 'valgrind': valgrind_version})
     if args.instructions:

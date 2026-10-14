@@ -441,18 +441,17 @@ fn main() -> ExitCode {
                             println!("canonical {:016x}", f.canonical_hash());
                         }
                     }
-                    if ext == "wtg" {
-                        if let Ok(wct_b) = extract_trig_file(&mut set, map, "war3map.wct") {
-                            if let Ok(wct) = Wct::parse(&wct_b) {
-                                let v = wct_wtg_violations(&wct, &f);
-                                if cmd == "info" {
-                                    if v.is_empty() {
-                                        println!("  wct/wtg relation: holds");
-                                    } else {
-                                        for x in v {
-                                            println!("  wct/wtg violation: {x}");
-                                        }
-                                    }
+                    if ext == "wtg"
+                        && let Ok(wct_b) = extract_trig_file(&mut set, map, "war3map.wct")
+                        && let Ok(wct) = Wct::parse(&wct_b)
+                    {
+                        let v = wct_wtg_violations(&wct, &f);
+                        if cmd == "info" {
+                            if v.is_empty() {
+                                println!("  wct/wtg relation: holds");
+                            } else {
+                                for x in v {
+                                    println!("  wct/wtg violation: {x}");
                                 }
                             }
                         }

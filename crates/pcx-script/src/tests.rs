@@ -828,7 +828,9 @@ fn source_kind(name: &str) -> &'static str {
 /// install), `war3map.j` out of every shipped `.w3m`/`.w3x` map, and any
 /// loose `.j` under either root. Returns UTF-8 scripts plus the sources whose
 /// bytes are not UTF-8 (kept, reported, never parsed).
-pub(super) fn corpus() -> (Vec<(String, String)>, Vec<(String, Vec<u8>)>) {
+type ScriptCorpus = (Vec<(String, String)>, Vec<(String, Vec<u8>)>);
+
+pub(super) fn corpus() -> ScriptCorpus {
     use pcx_mpq::MpqArchive;
     let mut out: Vec<(String, String)> = Vec::new();
     let mut rejects: Vec<(String, Vec<u8>)> = Vec::new();
@@ -860,7 +862,7 @@ pub(super) fn corpus() -> (Vec<(String, String)>, Vec<(String, Vec<u8>)>) {
                 continue;
             };
             let names: Vec<String> = String::from_utf8_lossy(&list)
-                .split(|c| c == '\r' || c == '\n')
+                .split(['\r', '\n'])
                 .filter(|l| !l.is_empty())
                 .map(str::to_string)
                 .collect();
@@ -927,28 +929,22 @@ pub(super) fn corpus() -> (Vec<(String, String)>, Vec<(String, Vec<u8>)>) {
 
     // 3. The demo campaign's embedded maps (1.28c).
     let camp = wc3_root().join("game/app/Campaigns/DemoCampaign.w3n");
-    if let Ok(data) = std::fs::read(&camp) {
-        if data.len() > 0x200 {
-            if let Ok(mut arc) = MpqArchive::from_bytes(data[0x200..].to_vec(), "DemoCampaign.w3n")
+    if let Ok(data) = std::fs::read(&camp)
+        && data.len() > 0x200
+        && let Ok(mut arc) = MpqArchive::from_bytes(data[0x200..].to_vec(), "DemoCampaign.w3n")
+    {
+        for entry in ["Demo03.w3m", "Demo04.w3m", "Demo05.w3m"] {
+            if let Ok(inner) = arc.extract(entry)
+                && inner.len() > 0x200
+                && let Ok(mut m) = MpqArchive::from_bytes(inner[0x200..].to_vec(), entry)
+                && let Ok(bytes) = m.extract("war3map.j")
             {
-                for entry in ["Demo03.w3m", "Demo04.w3m", "Demo05.w3m"] {
-                    if let Ok(inner) = arc.extract(entry) {
-                        if inner.len() > 0x200 {
-                            if let Ok(mut m) =
-                                MpqArchive::from_bytes(inner[0x200..].to_vec(), entry)
-                            {
-                                if let Ok(bytes) = m.extract("war3map.j") {
-                                    record_script(
-                                        format!("DemoCampaign.w3n:{entry}:war3map.j"),
-                                        bytes,
-                                        &mut out,
-                                        &mut rejects,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
+                record_script(
+                    format!("DemoCampaign.w3n:{entry}:war3map.j"),
+                    bytes,
+                    &mut out,
+                    &mut rejects,
+                );
             }
         }
     }
@@ -965,14 +961,14 @@ pub(super) fn corpus() -> (Vec<(String, String)>, Vec<(String, Vec<u8>)>) {
                 let p = e.path();
                 if p.is_dir() {
                     stack.push(p);
-                } else if p.extension().is_some_and(|x| x == "j") {
-                    if let Ok(bytes) = std::fs::read(&p) {
-                        let name = format!(
-                            "{inst}:{}",
-                            p.strip_prefix(root).unwrap_or(&p).to_string_lossy()
-                        );
-                        record_script(name, bytes, &mut out, &mut rejects);
-                    }
+                } else if p.extension().is_some_and(|x| x == "j")
+                    && let Ok(bytes) = std::fs::read(&p)
+                {
+                    let name = format!(
+                        "{inst}:{}",
+                        p.strip_prefix(root).unwrap_or(&p).to_string_lossy()
+                    );
+                    record_script(name, bytes, &mut out, &mut rejects);
                 }
             }
         }
@@ -1038,10 +1034,10 @@ fn prelude_for<'a>(name: &str, installs: &'a [(String, Script)]) -> Vec<Prelude<
                 .clone()
                 .find(|(n, _)| n.starts_with(&format!("{inst}:{BLIZZARD_ARCHIVE}:")))
                 .or_else(|| from.into_iter().next());
-            if let Some((n, s)) = chosen {
-                if n != name {
-                    out.push(Prelude::new(n, s));
-                }
+            if let Some((n, s)) = chosen
+                && n != name
+            {
+                out.push(Prelude::new(n, s));
             }
         }
     };

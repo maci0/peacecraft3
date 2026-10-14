@@ -456,10 +456,10 @@ mod lan_tests {
         };
         let mut sent = 0;
         for _ in 0..3 {
-            if let Ok(mut c) = Finder::bind() {
-                if c.find().is_ok() {
-                    sent += 1;
-                }
+            if let Ok(mut c) = Finder::bind()
+                && c.find().is_ok()
+            {
+                sent += 1;
             }
         }
         let _ = sent;

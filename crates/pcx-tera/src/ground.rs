@@ -198,7 +198,6 @@ pub enum BlendVariant {}
 /// measured: the set-rate of each bit is the same for a corner that is the high
 /// one and the low one inside its own tile, and none of them tracks map
 /// position. See [`Unsupported::CornerFlags`].
-#[must_use]
 pub fn corner_flags_meaning() -> Result<CornerFlags, Unsupported> {
     Err(Unsupported::CornerFlags)
 }

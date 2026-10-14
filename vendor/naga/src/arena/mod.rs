@@ -99,7 +99,7 @@ impl<T> Arena<T> {
         self.data
             .iter()
             .enumerate()
-            .map(|(i, v)| unsafe { (Handle::from_usize_unchecked(i), v) })
+            .map(|(i, v)| (Handle::from_usize(i), v))
     }
 
     /// Returns an iterator over the items stored in this arena, returning both
@@ -111,18 +111,18 @@ impl<T> Arena<T> {
             .iter_mut()
             .zip(self.span_info.iter())
             .enumerate()
-            .map(|(i, (v, span))| unsafe { (Handle::from_usize_unchecked(i), v, span) })
+            .map(|(i, (v, span))| (Handle::from_usize(i), v, span))
     }
 
     /// Drains the arena, returning an iterator over the items stored.
-    pub fn drain(&mut self) -> impl DoubleEndedIterator<Item = (Handle<T>, T, Span)> {
+    pub fn drain(&mut self) -> impl DoubleEndedIterator<Item = (Handle<T>, T, Span)> + use<T> {
         let arena = core::mem::take(self);
         arena
             .data
             .into_iter()
             .zip(arena.span_info)
             .enumerate()
-            .map(|(i, (v, span))| unsafe { (Handle::from_usize_unchecked(i), v, span) })
+            .map(|(i, (v, span))| (Handle::from_usize(i), v, span))
     }
 
     /// Returns a iterator over the items stored in this arena,
@@ -131,7 +131,7 @@ impl<T> Arena<T> {
         self.data
             .iter_mut()
             .enumerate()
-            .map(|(i, v)| unsafe { (Handle::from_usize_unchecked(i), v) })
+            .map(|(i, v)| (Handle::from_usize(i), v))
     }
 
     /// Adds a new value to the arena, returning a typed handle.
@@ -144,10 +144,7 @@ impl<T> Arena<T> {
 
     /// Fetch a handle to an existing type.
     pub fn fetch_if<F: Fn(&T) -> bool>(&self, fun: F) -> Option<Handle<T>> {
-        self.data
-            .iter()
-            .position(fun)
-            .map(|index| unsafe { Handle::from_usize_unchecked(index) })
+        self.data.iter().position(fun).map(Handle::from_usize)
     }
 
     /// Adds a value with a custom check for uniqueness:
@@ -161,7 +158,7 @@ impl<T> Arena<T> {
         fun: F,
     ) -> Handle<T> {
         if let Some(index) = self.data.iter().position(|d| fun(d, &value)) {
-            unsafe { Handle::from_usize_unchecked(index) }
+            Handle::from_usize(index)
         } else {
             self.append(value, span)
         }

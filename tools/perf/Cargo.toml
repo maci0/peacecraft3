@@ -18,3 +18,4 @@ debug = true
 
 [lints.rust]
 warnings = "deny"
+unsafe_code = "deny"

@@ -10,6 +10,8 @@ description = "Play-test harness: scenarios, deterministic runner, trace schema,
 pcx-sim.workspace = true
 pcx-script.workspace = true
 pcx-trig.workspace = true
+pcx-map.workspace = true
+pcx-mpq.workspace = true
 thiserror.workspace = true
 
 [lints]

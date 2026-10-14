@@ -14,7 +14,6 @@
 //!
 //! [`Handle`]: crate::arena::Handle
 //! [`NonZeroU32`]: core::num::NonZeroU32
-#![allow(dead_code)]
 
 use core::num::NonZeroU32;
 
@@ -68,24 +67,6 @@ impl NonMaxU32 {
     /// Return the value of `self` as a [`u32`].
     pub const fn get(self) -> u32 {
         self.0.get() - 1
-    }
-
-    /// Construct a [`NonMaxU32`] whose value is `n`.
-    ///
-    /// # Safety
-    ///
-    /// The value of `n` must not be [`u32::MAX`].
-    pub const unsafe fn new_unchecked(n: u32) -> NonMaxU32 {
-        NonMaxU32(unsafe { NonZeroU32::new_unchecked(n + 1) })
-    }
-
-    /// Construct a [`NonMaxU32`] whose value is `index`.
-    ///
-    /// # Safety
-    ///
-    /// - The value of `index` must be strictly less than [`u32::MAX`].
-    pub const unsafe fn from_usize_unchecked(index: usize) -> Self {
-        NonMaxU32(unsafe { NonZeroU32::new_unchecked(index as u32 + 1) })
     }
 
     pub fn checked_add(self, n: u32) -> Option<Self> {

@@ -10,8 +10,8 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2021"
-rust-version = "1.82.0"
+edition = "2024"
+rust-version = "1.99"
 name = "naga"
 version = "26.0.0"
 authors = ["gfx-rs developers"]

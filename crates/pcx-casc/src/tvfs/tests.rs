@@ -237,7 +237,7 @@ fn nested_links_provenance_and_refusals_never_pick_a_prefix_match() {
             ..
         }
     ));
-    let candidates = resolver.representations.get_mut(&[3; 9].to_vec()).unwrap();
+    let candidates = resolver.representations.get_mut([3; 9].as_slice()).unwrap();
     candidates.push(candidates[0].clone());
     assert!(matches!(
         resolver.resolve("module:units/item.bin").unwrap_err().kind,
@@ -246,7 +246,7 @@ fn nested_links_provenance_and_refusals_never_pick_a_prefix_match() {
             ..
         }
     ));
-    let candidates = resolver.representations.get_mut(&[3; 9].to_vec()).unwrap();
+    let candidates = resolver.representations.get_mut([3; 9].as_slice()).unwrap();
     candidates.pop();
     let configured = resolver.manifests.get_mut(&[2; 16]).unwrap();
     let FileRecord::Spans(spans) = &mut configured

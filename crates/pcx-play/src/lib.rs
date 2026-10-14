@@ -55,6 +55,7 @@
 
 pub mod campaign;
 pub mod diff;
+pub mod map_scripts_import;
 pub mod minimize;
 pub mod rpl;
 pub mod runner;
@@ -63,6 +64,7 @@ pub mod scenario;
 pub mod script_trace;
 pub mod scripts;
 pub mod trace;
+pub use map_scripts_import::*;
 
 pub use diff::{Divergence, first_divergence};
 pub use runner::{RunError, run};

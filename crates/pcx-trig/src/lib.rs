@@ -201,8 +201,8 @@
 //!   [`Error::UnknownFunction`] rather than a zero-arity assumption.
 //! * **Non-decimal WTS ids, LF-only line endings, and `STRING`-header
 //!   garbage** the game would atoi. Strict text, typed errors.
-
-//! `war3map.wts`, decoded in its own module: [`wts`].
+//!
+//! [`wts`] decodes `war3map.wts` in its own module.
 pub mod catalog;
 pub mod wct;
 pub mod wtg;
@@ -1697,10 +1697,10 @@ pub fn builds() -> Vec<(&'static str, PathBuf)> {
     if let Some(dir) = install_dir() {
         out.push(("1.28c", dir));
     }
-    if let Some(dir) = legacy_dir() {
-        if !out.iter().any(|(_, d)| *d == dir) {
-            out.push(("1.29b", dir));
-        }
+    if let Some(dir) = legacy_dir()
+        && !out.iter().any(|(_, d)| *d == dir)
+    {
+        out.push(("1.29b", dir));
     }
     out
 }
@@ -1763,9 +1763,9 @@ mod tests {
                 b"These islands are rich with gold, but the treasure is controlled by Ogres."
             );
             assert_eq!(w.entries()[3].body, b"Blizzard Entertainment");
-            for i in 4..=6 {
-                assert_eq!(w.entries()[i].body, b"", "STRING {} is empty", ids[i]);
-                assert!(w.entries()[i].comments.is_empty());
+            for (&id, entry) in ids[4..=6].iter().zip(&w.entries()[4..=6]) {
+                assert_eq!(entry.body, b"", "STRING {id} is empty");
+                assert!(entry.comments.is_empty());
             }
             assert_eq!(w.entries()[7].body, b"Player 1");
             assert_eq!(w.entries()[8].body, b"Player 2");

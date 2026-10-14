@@ -369,7 +369,7 @@ fn analyze(data: &[u8]) {
     let mut rows = vec![0u32; HEIGHT as usize];
     let mut sum = [0u64; 3];
 
-    for (i, p) in pixels.chunks_exact(4).enumerate() {
+    for (i, p) in pixels.as_chunks::<4>().0.iter().enumerate() {
         if p[3] > 0 {
             covered += 1;
         }
@@ -381,7 +381,7 @@ fn analyze(data: &[u8]) {
             lit += 1;
         }
         colours.insert((p[0] >> 3, p[1] >> 3, p[2] >> 3));
-        rows[i / WIDTH as usize] += u32::from(r) + u32::from(g) + u32::from(b);
+        rows[i / WIDTH as usize] += r + g + b;
     }
     let total = n as f64;
     println!("capture {WIDTH}x{HEIGHT}");

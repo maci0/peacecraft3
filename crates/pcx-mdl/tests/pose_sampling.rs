@@ -17,12 +17,15 @@ thread_local! {
 fn count_allocation() {
     let _ = ALLOCATIONS.try_with(|count| {
         if let Some(n) = count.get() {
-            count.set(Some(n + 1));
+            count.set(Some(n.saturating_add(1)));
         }
     });
 }
 
-// SAFETY: each operation delegates the identical pointer/layout to System.
+// GlobalAlloc is required to test actual allocations during borrowed sampling.
+// SAFETY: System receives unchanged layouts and valid pointers from GlobalAlloc callers;
+// const TLS counters cannot allocate and try_with tolerates thread teardown.
+#[allow(unsafe_code)]
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         count_allocation();

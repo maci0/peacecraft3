@@ -28,15 +28,14 @@ fn record(bytes: usize, realloc: bool) {
         ALLOCATED_BYTES.fetch_add(bytes, Ordering::Relaxed);
     }
 }
-// All operations forward the unchanged layout/pointer to the process allocator.
+// GlobalAlloc is required to count actual allocations in the deterministic gate.
+// SAFETY: System receives unchanged layouts and valid pointers from GlobalAlloc callers;
+// counters use only atomics and cannot allocate, unwind or affect returned pointers.
+#[allow(unsafe_code)]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record(layout.size(), false);
         unsafe { System.alloc(layout) }
-    }
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        record(layout.size(), false);
-        unsafe { System.alloc_zeroed(layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, old: Layout, size: usize) -> *mut u8 {
         record(size, true);
@@ -49,8 +48,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-// A stable symbol scopes optional Callgrind collection to actual simulation work.
-#[unsafe(no_mangle)]
+// Keep a function boundary for optional Callgrind collection of simulation work.
 #[inline(never)]
 pub fn pcx_perf_measure(world: &mut World, input: &mut Input, rng: &mut Rng) {
     for tick in 0..TICKS {

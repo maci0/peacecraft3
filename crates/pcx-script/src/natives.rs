@@ -180,9 +180,7 @@ impl NativeTable {
 
     /// How a call to `name` resolves. `None` means nothing declared the name.
     pub fn call(&self, name: &str) -> Option<NativeCall<'_>> {
-        let Some(decl) = self.by_name.get(name) else {
-            return None;
-        };
+        let decl = self.by_name.get(name)?;
         Some(match implemented(name) {
             Some(impl_) => NativeCall::Implemented(decl, impl_),
             None => NativeCall::Unimplemented(decl),

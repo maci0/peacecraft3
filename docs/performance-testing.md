@@ -25,6 +25,10 @@ The counters come from a forwarding process allocator, with no wall clock in gat
 
 The small tool has its own locked manifest and release profile; it adds no dependency to the game or workspace. Its generated binary and reports live in ignored `.scratch/perf/`. It exercises the current movement simulation only: combat, economy, map loading, asset formats, scripted campaigns, menu rendering and the GPU need their own fixed-work counters as those paths become complete.
 
+The counting allocators here and in `crates/pcx-mdl/tests/pose_sampling.rs` need the unsafe `GlobalAlloc` interface to observe actual allocation calls. Both forward unchanged layouts and pointers to `System`; their counters do not allocate or unwind. The pose test uses saturating increments so counter overflow cannot unwind from an allocator callback. Each implementation carries its safety contract and the only local exception to the `unsafe_code = "deny"` policy. The game libraries and application inherit that policy from the workspace.
+
+The retained `vendor/naga` 26.0.0 snapshot now forbids unsafe code, uses checked handles/nonzero alignment arithmetic and the standard UTF-8 boundary method, and requires Rust 1.99 / edition 2024. It is separate from the registry Naga 30.0.1 selected by the application's lockfile on 2026-10-14. Standalone checks use a byte-identical copy in `.scratch/unsafe-naga/`, with only a `[workspace]` table appended for isolation: 115 native tests pass in both debug and release; minimal/no_std and all-feature WASM checks deny warnings and pass. These are synthetic code checks, not original-game runtime evidence.
+
 ## Optional reports
 
 ```sh
@@ -34,7 +38,7 @@ python3 tools/perf/run.py --instructions
 
 The timing path emits `elapsed_ns_report_only`. That number never affects exit status. It is a diagnostic for the actual machine and current load; do not compare it as a CI speed limit.
 
-The instruction path uses an installed Valgrind Callgrind and collects only entry/exit of `pcx_perf_measure`. Setup, world digest, JSON output and process startup are outside that collection region. It still includes the allocation-counter instrumentation and allocator code invoked by the workload, so this is the instrumented workload's instruction count. Callgrind's `Ir` counts are deterministic executed work rather than wall time; its [primary documentation](https://valgrind.org/docs/manual/cl-manual.html) describes entry/exit collection and instruction events.
+The instruction path uses an installed Valgrind Callgrind and collects only entry/exit of `pcx_perf_measure`. The `*pcx_perf_measure*` matcher includes the ordinary Rust function name, preserving the collection boundary without an unsafe unmangled symbol export. Setup, world digest, JSON output and process startup are outside that collection region. It still includes the allocation-counter instrumentation and allocator code invoked by the workload, so this is the instrumented workload's instruction count. Callgrind's `Ir` counts are deterministic executed work rather than wall time; its [primary documentation](https://valgrind.org/docs/manual/cl-manual.html) describes entry/exit collection and instruction events.
 
 Instruction reports record compiler, target architecture, operating system, build profile, Rust flags and Valgrind version. Compare only matching conditions; compiler changes, code generation, library/allocator versions and architecture can alter instruction counts. These counts do not measure GPU work, memory/cache stalls, frame pacing, or real elapsed latency. The tool deliberately reports instruction counts without inventing a universal cross-machine instruction budget. Allocation/state gates still run during instruction profiling.
 

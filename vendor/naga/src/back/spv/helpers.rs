@@ -4,6 +4,19 @@ use spirv::Word;
 
 use crate::{Handle, UniqueArena};
 
+#[test]
+fn byte_chunks_preserve_utf8() {
+    for input in ["", "abcdefghi", "aé日🦀z", "🦀🦀🦀"] {
+        let chunks = string_to_byte_chunks(input, 4);
+        assert_eq!(chunks.concat(), input.as_bytes());
+        for chunk in chunks {
+            assert!(!chunk.is_empty());
+            assert!(chunk.len() <= 4);
+            assert!(core::str::from_utf8(chunk).is_ok());
+        }
+    }
+}
+
 pub(super) fn bytes_to_words(bytes: &[u8]) -> Vec<Word> {
     bytes
         .chunks(4)
@@ -28,7 +41,6 @@ pub(super) fn str_bytes_to_words(bytes: &[u8]) -> Vec<Word> {
 }
 
 /// split a string into chunks and keep utf8 valid
-#[allow(unstable_name_collisions)]
 pub(super) fn string_to_byte_chunks(input: &str, limit: usize) -> Vec<&[u8]> {
     let mut offset: usize = 0;
     let mut start: usize = 0;
@@ -120,37 +132,5 @@ pub fn global_needs_wrapper(ir_module: &crate::Module, var: &crate::GlobalVariab
         crate::TypeInner::BindingArray { .. } => false,
         // if it's not a structure or a binding array, let's wrap it to be able to put "Block"
         _ => true,
-    }
-}
-
-///HACK: this is taken from std unstable, remove it when std's floor_char_boundary is stable
-trait U8Internal {
-    fn is_utf8_char_boundary(&self) -> bool;
-}
-
-impl U8Internal for u8 {
-    fn is_utf8_char_boundary(&self) -> bool {
-        // This is bit magic equivalent to: b < 128 || b >= 192
-        (*self as i8) >= -0x40
-    }
-}
-
-trait StrUnstable {
-    fn floor_char_boundary(&self, index: usize) -> usize;
-}
-
-impl StrUnstable for str {
-    fn floor_char_boundary(&self, index: usize) -> usize {
-        if index >= self.len() {
-            self.len()
-        } else {
-            let lower_bound = index.saturating_sub(3);
-            let new_index = self.as_bytes()[lower_bound..=index]
-                .iter()
-                .rposition(|b| b.is_utf8_char_boundary());
-
-            // SAFETY: we know that the character boundary will be within four bytes
-            unsafe { lower_bound + new_index.unwrap_unchecked() }
-        }
     }
 }

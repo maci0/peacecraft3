@@ -4937,6 +4937,8 @@ dependencies = [
 name = "pcx-play"
 version = "0.1.0"
 dependencies = [
+ "pcx-map",
+ "pcx-mpq",
  "pcx-script",
  "pcx-sim",
  "pcx-trig",

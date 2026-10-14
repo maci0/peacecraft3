@@ -28,6 +28,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.lints.rust]
 warnings = "deny"
+unsafe_code = "deny"
 
 [workspace.dependencies]
 pcx-mpq = { path = "crates/pcx-mpq" }

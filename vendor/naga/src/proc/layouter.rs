@@ -2,6 +2,31 @@ use core::{fmt::Display, num::NonZeroU32, ops};
 
 use crate::arena::{Handle, HandleVec};
 
+#[cfg(test)]
+mod tests {
+    use super::Alignment;
+
+    #[test]
+    fn alignment_accepts_only_powers_of_two() {
+        for n in [0, 3, u32::MAX] {
+            assert_eq!(Alignment::new(n), None);
+        }
+        for shift in 0..32 {
+            let n = 1_u32 << shift;
+            let alignment = Alignment::new(n).unwrap();
+            assert_eq!(alignment * 1, n);
+            assert!(alignment.is_aligned(n));
+        }
+        assert_eq!(Alignment::TWO * Alignment::EIGHT, Alignment::SIXTEEN);
+    }
+
+    #[test]
+    #[should_panic(expected = "Alignment overflows")]
+    fn multiplication_rejects_overflow() {
+        let _ = Alignment::new(1 << 31).unwrap() * Alignment::TWO;
+    }
+}
+
 /// A newtype struct where its only valid values are powers of 2
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize))]
@@ -9,18 +34,17 @@ use crate::arena::{Handle, HandleVec};
 pub struct Alignment(NonZeroU32);
 
 impl Alignment {
-    pub const ONE: Self = Self(unsafe { NonZeroU32::new_unchecked(1) });
-    pub const TWO: Self = Self(unsafe { NonZeroU32::new_unchecked(2) });
-    pub const FOUR: Self = Self(unsafe { NonZeroU32::new_unchecked(4) });
-    pub const EIGHT: Self = Self(unsafe { NonZeroU32::new_unchecked(8) });
-    pub const SIXTEEN: Self = Self(unsafe { NonZeroU32::new_unchecked(16) });
+    pub const ONE: Self = Self(NonZeroU32::new(1).unwrap());
+    pub const TWO: Self = Self(NonZeroU32::new(2).unwrap());
+    pub const FOUR: Self = Self(NonZeroU32::new(4).unwrap());
+    pub const EIGHT: Self = Self(NonZeroU32::new(8).unwrap());
+    pub const SIXTEEN: Self = Self(NonZeroU32::new(16).unwrap());
 
     pub const MIN_UNIFORM: Self = Self::SIXTEEN;
 
     pub const fn new(n: u32) -> Option<Self> {
         if n.is_power_of_two() {
-            // SAFETY: value can't be 0 since we just checked if it's a power of 2
-            Some(Self(unsafe { NonZeroU32::new_unchecked(n) }))
+            Some(Self(NonZeroU32::new(n).unwrap()))
         } else {
             None
         }
@@ -68,8 +92,7 @@ impl ops::Mul for Alignment {
     type Output = Alignment;
 
     fn mul(self, rhs: Alignment) -> Self::Output {
-        // SAFETY: both lhs and rhs are powers of 2, the result will be a power of 2
-        Self(unsafe { NonZeroU32::new_unchecked(self.0.get() * rhs.0.get()) })
+        Self(self.0.checked_mul(rhs.0).expect("Alignment overflows"))
     }
 }
 

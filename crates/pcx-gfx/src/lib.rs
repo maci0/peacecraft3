@@ -938,7 +938,7 @@ mod skinning_tests {
         let parent = |id: u32| -> Option<u32> {
             let b = rig.iter().find(|b| b.object_id == id)?;
             (b.parent_id >= 0)
-                .then(|| b.parent_id as u32)
+                .then_some(b.parent_id as u32)
                 .filter(|p| by_id.contains_key(p))
         };
 

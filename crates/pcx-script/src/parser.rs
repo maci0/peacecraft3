@@ -812,10 +812,7 @@ impl Parser {
     /// `min_prec` of 0 parses the whole expression.
     fn binary(&mut self, min_prec: u8) -> Result<Expr, Error> {
         let mut lhs = self.unary()?;
-        loop {
-            let Some((op, prec)) = self.peek_binop() else {
-                break;
-            };
+        while let Some((op, prec)) = self.peek_binop() {
             if prec < min_prec {
                 break;
             }
@@ -892,33 +889,29 @@ impl Parser {
         if !matches!(e, Expr::Ident(..)) {
             return Ok(e);
         }
-        loop {
-            match self.peek().kind {
-                Tok::LParen => {
-                    let start = e.span();
-                    let args = self.call_args()?;
-                    let end = self.prev_span();
-                    e = Expr::Call {
-                        callee: Box::new(e),
-                        args,
-                        span: start.join(end),
-                    };
-                    break;
-                }
-                Tok::LBracket => {
-                    let start = e.span();
-                    self.bump();
-                    let index = self.expr()?;
-                    let end = self.expect(Tok::RBracket)?;
-                    e = Expr::Index {
-                        base: Box::new(e),
-                        index: Box::new(index),
-                        span: start.join(end),
-                    };
-                    break;
-                }
-                _ => break,
+        match self.peek().kind {
+            Tok::LParen => {
+                let start = e.span();
+                let args = self.call_args()?;
+                let end = self.prev_span();
+                e = Expr::Call {
+                    callee: Box::new(e),
+                    args,
+                    span: start.join(end),
+                };
             }
+            Tok::LBracket => {
+                let start = e.span();
+                self.bump();
+                let index = self.expr()?;
+                let end = self.expect(Tok::RBracket)?;
+                e = Expr::Index {
+                    base: Box::new(e),
+                    index: Box::new(index),
+                    span: start.join(end),
+                };
+            }
+            _ => {}
         }
         Ok(e)
     }

@@ -198,7 +198,7 @@ impl ManifoldReport {
         let mut undirected: BTreeMap<(u32, u32), usize> = BTreeMap::new();
         let mut directed: BTreeMap<(u32, u32), usize> = BTreeMap::new();
         let mut degenerate = 0usize;
-        for tri in mesh.indices.chunks_exact(3) {
+        for tri in mesh.indices.as_chunks::<3>().0 {
             let (a, b, c) = (tri[0], tri[1], tri[2]);
             for &(p, q) in &[(a, b), (b, c), (c, a)] {
                 if p == q {

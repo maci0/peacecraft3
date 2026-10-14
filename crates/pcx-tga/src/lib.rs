@@ -921,8 +921,8 @@ mod tests {
         }
 
         let mut top_down = header(0x20);
-        for row in 0..4 {
-            top_down.extend_from_slice(&bgr(image[row]));
+        for &pixel in &image {
+            top_down.extend_from_slice(&bgr(pixel));
         }
 
         let (hb, pb) = decode(&bottom_up).unwrap();

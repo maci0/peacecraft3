@@ -21,10 +21,10 @@ honours authored wrapping. The normal blue inner fill now uses decoded original
 texels and FDF-derived bounds; browser captures confirm the fill extent before
 and after resize. The largest edge discrepancy against continuous coordinates
 is 1.133 pixels, so exact pixel alignment is not certified.
-The TopLeft/TopRight sprite-layer panels play their parsed `MainMenu Birth`
-and fire the authored pop-down sound. Full fidelity remains open: inner button
-edges are not rendered, and lighting, particles, texture animation, material
-blending and original options/gameplay remain unfinished. Parser and screenshot success do not establish native behavior.
+Full fidelity remains open: the grey hanging panel and inner button edges are
+not rendered, and lighting, particles,
+texture animation, material blending and original options/gameplay remain
+unfinished. Parser and screenshot success do not establish native behavior.
 
 Earlier format-sweep baseline: **15 crates / 336 tests passing, 0 failing**, `cargo fmt`
 clean — expect the number to move, because `pcx-trig` is still being edited
@@ -406,10 +406,7 @@ viewer's terrain tile and the asset-cache plugins — neither is a format gap.
       and authored hover/pushed/disabled state rendering remain open.
 - [~] Labels use centered relative text layout and native frame normalization;
       full FDF-driven style/text/anchor migration and fidelity remain open.
-- [~] Hanging panel: TopLeft/TopRight sprite layers resolve from `war3skins.txt`,
-      play parsed `MainMenu Birth` then `MainMenu Stand` through the scene's
-      skinning path, and fire `SNDX` events via `AnimLookups.slk`/`AnimSounds.slk`.
-      Native sprite depth order, alpha-test threshold and later glue screens open.
+- [ ] Hanging panel sprite animation and native composited tint/render behavior.
 
 ## M3 — World: maps, terrain, camera, doodads
 
@@ -804,8 +801,7 @@ Format: `date — subsystem — symptom — root cause — status`
 ## WASM build
 
 - [x] Original startup movie playback with Escape/visible skip/end/error paths, soundtrack ownership, browser mute setting and native decoder cleanup. Native cinematic playback currently needs an installed FFmpeg; original startup dispatch and frame-perfect A/V parity remain unverified.
-- [x] Parsed TFT logo Birth curve and native default sprite-origin placement; shipped-model fixture and browser render verified.
-- [x] Hanging panel entrance: both sprite layers play parsed `MainMenu Birth`/`Stand`, and `SNDXARPD` plays `RightGlueScreenPopDown.wav` at 64/127. Native render captured headless (llvmpipe); browser render and native depth order unverified.
+- [x] Parsed TFT logo Birth curve and native default sprite-origin placement; shipped-model fixture and browser render verified. The hanging panel entrance remains open.
 - [x] Settings expose 1.29b only; Edition is RoC on the left, TFT on the right, TFT selected by default.
 - [ ] Complete original resolution parity: full-window background and conditional authored UI branch are traced and implemented; portrait containment is an extension, live expansion flags remain unmeasured.
 
@@ -871,6 +867,14 @@ Format: `date — subsystem — symptom — root cause — status`
 
 ## Integration audit and performance
 
+- [x] Avoidable Rust `unsafe` removed from the retained Naga snapshot and perf
+      symbol export. Workspace/tool lints deny it; Naga forbids it. Only the two
+      documented `GlobalAlloc` implementations remain for allocation gates.
+      Strict native all-target/all-feature checks, native/WASM application builds,
+      742 workspace tests (53 explicitly ignored) and 115 standalone Naga tests
+      in debug/release pass. Naga minimal/no_std and all-feature WASM checks pass;
+      allocation counts and simulation digest are unchanged. The existing host
+      Callgrind loader failure remains documented in `docs/performance-testing.md`.
 - [x] Full milestone/source audit: `docs/implementation-audit.md` records the
       remaining format, world, gameplay, scripting, campaign, multiplayer and
       browser dependencies. Historical sweep counts are not completion gates.

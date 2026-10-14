@@ -72,7 +72,7 @@ impl<T> UniqueArena<T> {
             .unwrap_or(&Span::default())
     }
 
-    pub(crate) fn drain_all(&mut self) -> UniqueArenaDrain<T> {
+    pub(crate) fn drain_all(&mut self) -> UniqueArenaDrain<'_, T> {
         UniqueArenaDrain {
             inner_elts: self.set.drain(..),
             inner_spans: self.span_info.drain(..),
@@ -107,10 +107,10 @@ impl<T: Eq + hash::Hash> UniqueArena<T> {
     /// Returns an iterator over the items stored in this arena, returning both
     /// the item's handle and a reference to it.
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = (Handle<T>, &T)> + ExactSizeIterator {
-        self.set.iter().enumerate().map(|(i, v)| {
-            let index = unsafe { Index::new_unchecked(i as u32) };
-            (Handle::new(index), v)
-        })
+        self.set
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (Handle::from_usize(i), v))
     }
 
     /// Insert a new value into the arena.
@@ -158,9 +158,7 @@ impl<T: Eq + hash::Hash> UniqueArena<T> {
     /// If this arena already contains an element equal to `value`,
     /// return its handle. Otherwise, return `None`.
     pub fn get(&self, value: &T) -> Option<Handle<T>> {
-        self.set
-            .get_index_of(value)
-            .map(|index| unsafe { Handle::from_usize_unchecked(index) })
+        self.set.get_index_of(value).map(Handle::from_usize)
     }
 
     /// Return this arena's value at `handle`, if that is a valid handle.

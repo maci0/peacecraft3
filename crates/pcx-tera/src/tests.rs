@@ -147,7 +147,7 @@ fn wall_geometry_uses_only_the_callers_coordinates_and_threshold() {
     let reversed = crate::cliff_wall([edge[1], edge[0]], 3.0).unwrap().unwrap();
     assert_eq!(reversed.normal, [-0.8, 0.6, 0.0]);
     for quad in [wall, reversed] {
-        for tri in crate::WallQuad::TRIANGLE_INDICES.chunks_exact(3) {
+        for tri in crate::WallQuad::TRIANGLE_INDICES.as_chunks::<3>().0 {
             let a = quad.positions[tri[0] as usize];
             let b = quad.positions[tri[1] as usize];
             let c = quad.positions[tri[2] as usize];
@@ -340,10 +340,9 @@ fn interp_h(t: &Terrain, gx: f32, gy: f32) -> f32 {
     a * (1.0 - fy) + b * fy
 }
 
-/// Best linear fits `z = slope*h_index + intercept` over a map's doodad types.
-/// Returns every type with at least 8 in-grid points, and whether *all*
-/// doodads landed inside the `TILE_XY` grid.
-fn all_fits(m: &Map) -> Option<(Vec<(f64, f64, usize)>, bool)> {
+type FitsSummary = (Vec<(f64, f64, usize)>, bool);
+
+fn all_fits(m: &Map) -> Option<FitsSummary> {
     let t = m.terrain().ok()?;
     let d = m.doodads().ok()?;
     let (ox, oy) = t.origin();
@@ -446,11 +445,11 @@ fn scale_is_measured_on_shipped_maps() {
             .iter()
             .filter(|(s, _, n)| *n >= 8 && (s - 0.25).abs() < 5e-3)
             .max_by_key(|(_, _, n)| *n);
-        if let Some((_, intercept, n)) = ground {
-            if (intercept + 2048.0).abs() < 40.0 {
-                reference_proved += 1;
-                eprintln!("{path}: ground type n={n} intercept={intercept:.3}");
-            }
+        if let Some((_, intercept, n)) = ground
+            && (intercept + 2048.0).abs() < 40.0
+        {
+            reference_proved += 1;
+            eprintln!("{path}: ground type n={n} intercept={intercept:.3}");
         }
     }
     assert!(
