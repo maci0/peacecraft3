@@ -57,7 +57,8 @@ export function clickDescriptor(bytes, metadataPath) {
   if (!Number.isFinite(row.Volume) || row.Volume < 0 || row.Volume > 127) throw new Error(`${metadataPath}: unsupported/missing Volume`);
   if (row.Pitch !== 1) throw new Error(`${metadataPath}: unsupported click Pitch ${row.Pitch}`);
   if (row.Flags !== 'NODUPLICATES' && row.Flags !== 0) throw new Error(`${metadataPath}: unsupported click Flags ${row.Flags}`);
-  return { path: `${row.DirectoryBase.replace(/[\\/]$/, '')}\\${row.FileNames}`,
+  const directory = row.DirectoryBase.replace(/[\\/]$/, '');
+  return { path: row.DirectoryBase ? `${directory}\\${row.FileNames}` : row.FileNames,
     settings: { volume: row.Volume / 127, noDuplicates: row.Flags === 'NODUPLICATES' },
     provenance: { metadataPath, row: row.SoundName, authored: row } };
 }

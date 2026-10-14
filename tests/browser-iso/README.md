@@ -12,6 +12,10 @@ Run the synthetic parser/import/metadata tests:
 node --test tests/browser-iso/*.test.mjs
 ```
 
+`audio-binding.test.mjs` checks authored empty-directory member paths and
+replacement/reset/mute/intro behavior through the actual audio modules with
+deterministic media doubles. These checks do not decode or play original audio.
+
 Run actual generated WASM and browser audio/network verification after building
 WASM and regenerating `web/pkg`:
 
