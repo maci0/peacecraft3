@@ -1,8 +1,9 @@
 //! Compile an explicitly identified map's actual script sources, without I/O.
 //! The caller reads local archives; no source bytes enter a trace.
-use pcx_script::{Host, NullHost, Prelude, Program, Value, Vm};
+use pcx_script::{Host, NullHost, OwnedVm, Prelude, Program, Value, Vm};
 use pcx_trig::wts::Table;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssetIdentity {
@@ -27,7 +28,7 @@ pub struct SourceDigest {
 pub struct MapScripts {
     pub identity: AssetIdentity,
     pub digests: Vec<SourceDigest>,
-    program: Program,
+    program: Arc<Program>,
     sources: BTreeMap<String, String>,
     map_label: String,
     wts: Option<Table>,
@@ -118,7 +119,7 @@ impl MapScripts {
         Ok(Self {
             identity,
             digests,
-            program,
+            program: Arc::new(program),
             sources,
             map_label: map.label.into(),
             wts,
@@ -138,8 +139,21 @@ impl MapScripts {
             },
         )
     }
+    /// Retain this map's program, localization and diagnostic sources across calls.
+    pub fn owned_vm<H: Host>(self: Arc<Self>, host: H) -> OwnedVm<OwnedLocalizedHost<H>> {
+        OwnedVm::new_owned(
+            Arc::clone(&self.program),
+            OwnedLocalizedHost {
+                inner: host,
+                context: self,
+            },
+        )
+    }
     pub fn diagnostic<H: Host>(&self, vm: &Vm<'_, H>, error: &pcx_script::Error) -> String {
-        let label = match vm.error_source() {
+        self.render_diagnostic(vm.error_source(), error)
+    }
+    fn render_diagnostic(&self, source: Option<&str>, error: &pcx_script::Error) -> String {
+        let label = match source {
             Some("the map script") | None => &self.map_label,
             Some(label) => label,
         };
@@ -179,25 +193,64 @@ impl<H: Host> Host for LocalizedHost<'_, H> {
         self.inner.native(name, args)
     }
     fn resolve_table_string(&self, id: u32) -> Result<Option<String>, String> {
-        let Some(table) = self.table else {
-            return Ok(None);
-        };
-        let Some(body) = table.body(id) else {
-            return Ok(None);
-        };
-        std::str::from_utf8(body)
-            .map(|s| Some(s.to_string()))
-            .map_err(|e| {
-                format!(
-                    "{}: WTS entry {id} is not UTF-8 at body byte {}",
-                    self.label.unwrap_or("war3map.wts"),
-                    e.valid_up_to()
-                )
-            })
+        resolve_table_string(self.table, self.label, id)
     }
     fn code_tag(&self, tag: &str) -> Option<String> {
         self.inner.code_tag(tag)
     }
+}
+
+/// A localized host retaining precisely the compiled map context its VM uses.
+pub struct OwnedLocalizedHost<H> {
+    pub inner: H,
+    context: Arc<MapScripts>,
+}
+impl<H> OwnedLocalizedHost<H> {
+    pub fn context(&self) -> &Arc<MapScripts> {
+        &self.context
+    }
+
+    /// Render the VM's error using its retained source label and source text.
+    pub fn diagnostic(&self, source: Option<&str>, error: &pcx_script::Error) -> String {
+        self.context.render_diagnostic(source, error)
+    }
+}
+impl<H: Host> Host for OwnedLocalizedHost<H> {
+    fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        self.inner.native(name, args)
+    }
+    fn resolve_table_string(&self, id: u32) -> Result<Option<String>, String> {
+        resolve_table_string(
+            self.context.wts.as_ref(),
+            self.context.wts_label.as_deref(),
+            id,
+        )
+    }
+    fn code_tag(&self, tag: &str) -> Option<String> {
+        self.inner.code_tag(tag)
+    }
+}
+
+fn resolve_table_string(
+    table: Option<&Table>,
+    label: Option<&str>,
+    id: u32,
+) -> Result<Option<String>, String> {
+    let Some(table) = table else {
+        return Ok(None);
+    };
+    let Some(body) = table.body(id) else {
+        return Ok(None);
+    };
+    std::str::from_utf8(body)
+        .map(|s| Some(s.to_string()))
+        .map_err(|e| {
+            format!(
+                "{}: WTS entry {id} is not UTF-8 at body byte {}",
+                label.unwrap_or("war3map.wts"),
+                e.valid_up_to()
+            )
+        })
 }
 
 #[cfg(test)]

@@ -33,6 +33,9 @@ use crate::span::Span;
 use crate::text::trigstr_id;
 use crate::value::{OpError, Value, binary, unary};
 use std::collections::BTreeMap;
+use std::marker::PhantomData;
+use std::ops::Deref;
+use std::sync::Arc;
 
 /// Call depth a program may reach. The engine's own limit is not measured, so
 /// this is a harness guard against a stack overflow, not a game rule.
@@ -97,8 +100,9 @@ enum Slot {
 type Frame = BTreeMap<String, Slot>;
 
 /// A running program.
-pub struct Vm<'a, H: Host> {
-    program: &'a Program,
+pub struct Vm<'a, H: Host, P: Deref<Target = Program> = &'a Program> {
+    program: P,
+    lifetime: PhantomData<&'a Program>,
     host: H,
     globals: Frame,
     steps: u64,
@@ -111,10 +115,34 @@ pub struct Vm<'a, H: Host> {
     error_source: Option<String>,
 }
 
+/// A VM retaining its resolved program without borrowing its caller.
+pub type OwnedVm<H> = Vm<'static, H, Arc<Program>>;
+
 impl<'a, H: Host> Vm<'a, H> {
     pub fn new(program: &'a Program, host: H) -> Vm<'a, H> {
-        Vm {
+        Self::with_program(program, host)
+    }
+
+    pub fn program(&self) -> &'a Program {
+        self.program
+    }
+}
+
+impl<H: Host> OwnedVm<H> {
+    pub fn new_owned(program: Arc<Program>, host: H) -> Self {
+        Self::with_program(program, host)
+    }
+
+    pub fn program(&self) -> &Program {
+        &self.program
+    }
+}
+
+impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
+    fn with_program(program: P, host: H) -> Self {
+        Self {
             program,
+            lifetime: PhantomData,
             host,
             globals: Frame::new(),
             steps: 0,
@@ -129,10 +157,6 @@ impl<'a, H: Host> Vm<'a, H> {
     /// Keep or drop `debug` statements when executing.
     pub fn set_debug(&mut self, on: bool) {
         self.run_debug = on;
-    }
-
-    pub fn program(&self) -> &'a Program {
-        self.program
     }
 
     pub fn host(&mut self) -> &mut H {
