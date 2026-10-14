@@ -541,6 +541,7 @@ pub fn commit_archive_import() -> Result<Vec<String>, JsValue> {
     }
     *rev = next;
     let mut control = demo_control();
+    control.enabled = true;
     control.editions = editions;
     control.requested = None;
     control.active = None;

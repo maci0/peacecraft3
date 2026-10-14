@@ -15,6 +15,13 @@ try {
   check(api.stored_assets().length === 0, 'staging exposed partial assets'); api.cancel_archive_import();
   const result = await importIsoCandidates(file, discovery, discovery.candidates, api);
   check(result.revision === before + 1, 'commit must increment revision exactly once');
+  check(JSON.stringify(api.local_menu_editions()) === JSON.stringify(['roc']), 'base-only import published an unavailable edition');
+  let baseEnabled = false;
+  try { api.open_local_menu('roc'); baseEnabled = true; } catch {}
+  check(baseEnabled, 'ordinary import did not activate its available base edition');
+  let expansionRefused = false;
+  try { api.open_local_menu('tft'); } catch (error) { expansionRefused = String(error).includes('UNAVAILABLE_MENU_EDITION'); }
+  check(expansionRefused, 'base-only import enabled TFT');
   const namedPath = 'Synthetic\\NamedOnly.txt';
   const named = api.archive_member(namedPath);
   check(new TextDecoder().decode(named) === 'named extraction without a listfile', 'actual Rust named extraction failed');

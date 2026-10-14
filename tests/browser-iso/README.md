@@ -47,6 +47,13 @@ Chromium/WASM **26 checked assertions**, audio lifecycle assertions passed,
 reports its assets are served by the default memory source, with no missing
 entries. Counts are observed synthetic results, not original-install gates.
 
+Ordinary-page imports now activate the same content gate at successful Rust
+commit time. The actual generated-WASM worker, without calling
+`enable_local_demo`, verifies that a base-only import permits RoC and rejects TFT.
+The extended synthetic runtime check passed 29 assertions with zero uploads,
+unexpected requests or sockets. This is menu capability enforcement, not release
+identification or a completed gameplay/campaign entitlement layer.
+
 This proves the executable import/storage/extraction/audio pipeline. It does
 not prove the file-input UI or rendered menu fidelity: the synthetic font and
 texture bytes are placeholders, and the model is a minimal authored fixture.
