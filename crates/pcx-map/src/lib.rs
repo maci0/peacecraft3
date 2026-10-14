@@ -127,6 +127,7 @@
 use std::collections::BTreeSet;
 
 pub mod doodads;
+pub mod grid_alignment;
 pub mod info;
 pub mod minimap;
 pub mod shadows;
@@ -134,6 +135,9 @@ pub mod shadows;
 pub mod pathing;
 pub mod regions;
 pub mod units;
+pub use grid_alignment::{
+    GridAlignment, GridAlignmentError, GridDimensions, PathingGridDimensions, TerrainGridDimensions,
+};
 pub use pathing::{Pathing, PathingError};
 pub use regions::{Region, RegionBounds, RegionError, Regions};
 pub use units::{RandomUnit, UnitPlacement, UnitPlacementError, Units};

@@ -1,3 +1,8 @@
+//! Validate a uniform integer relationship between authored terrain and pathing dimensions.
+//!
+//! The ratio is derived from both input grids. This import check does not establish
+//! native world units, walkability, or a required scale for all original maps.
+
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
