@@ -5,3 +5,4 @@
 pub mod map_admission;
 pub mod map_binding;
 pub mod map_requests;
+pub mod map_script_session;

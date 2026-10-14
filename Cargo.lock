@@ -5011,6 +5011,7 @@ dependencies = [
  "pcx-mpq",
  "pcx-objects",
  "pcx-play",
+ "pcx-script",
  "pcx-sim",
  "pcx-slq",
  "thiserror 2.0.21",
