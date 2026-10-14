@@ -149,3 +149,31 @@ pinned executable, with PE section raw-size bounds enforced. Two central ranges:
 
 Range identity supports reproducibility of static observations; it does not
 verify live field values or close native tick/frame/gameplay parity.
+
+## Bounded QPC calibration check
+
+An exact little-endian DWORD search over every PE section's raw bytes found
+`0x1140628` only at operands `0x796ca4` and `0x796cbd`, `0x114062c` only at
+`0x796cb7`, and `0x1140630` only at `0x796ce0`. Disassembly confirms that these
+belong to the clock getter above: it reads and writes the first field, tests the
+second, and multiplies by the third. This is a bounded negative for those exact
+address encodings. It does not exclude indirect writes, aliases, external
+mutation or other address forms, and does not establish their live defaults.
+
+The adjacent function `0x796b90..0x796c6f` calls the imported
+`QueryPerformanceFrequency` slot `0xe66298`, samples both `RDTSC` through
+`0x796c80` and `QueryPerformanceCounter` through `0xe66294`, then stores its
+result in the separate pair `0x1140618`/`0x114061c`. It has no observed store to
+the clock enable or scale fields. The arithmetic delegates `0xa57590` and
+`0xa574e0` were not inspected for this check. Neither that adjacent calibration
+nor its numeric result establishes the conversion used by `0x796ca0`.
+
+The adjacent function's 223 raw bytes have SHA-256
+`6932d413c94c404154cd1ae8a61296658b025cc5f4efc7987d67fe0662da8609`.
+The clock getter's 87 bytes retain SHA-256
+`df7ee9f36316d1a2be53eb0a6fe9fc9bb290cff8f340a7a4ddf9f52dc914ff23`.
+Local search inventories and range identities are in
+`.scratch/qpc-calibration-proof/`. QPC calibration remains unresolved; the next
+required evidence is an actual producer or write observation for the enable and
+scale fields. No such producer was positively located by this search, and no
+simulation constant was changed.
