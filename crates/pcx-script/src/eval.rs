@@ -744,7 +744,7 @@ impl<'a, H: Host> Vm<'a, H> {
     fn string(&mut self, s: &StrLit, span: Span) -> Result<Value, crate::Error> {
         let has_tag = s.parts.iter().any(|p| matches!(p, StrPart::CodeTag { .. }));
         let decoded = s.decoded();
-        if let Some(id) = trigstr_id(&decoded) {
+        if !has_tag && let Some(id) = trigstr_id(&decoded) {
             let body = self
                 .host
                 .resolve_table_string(id)

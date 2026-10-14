@@ -14,6 +14,12 @@ the existing array-needs-index error rather than returning the global value.
 Indexed operations, scalar shadowing and source spans retain their existing
 behavior.
 
+Only a literal without authored code-tag parts enters trigger-string lookup.
+The decoded text representation omits those parts, so using it as a WTS identity
+could previously fetch an unrelated entry and bypass missing-tag errors. Tagged
+literals now keep the existing substitution/refusal path. Plain WTS references,
+tags inside table bodies and opaque handle values retain their existing paths.
+
 External calls with incorrect argument counts have no script call-site span.
 Their diagnostics use the resolved function's declaration source/span. Calls
 originating inside a script retain their caller's span. Registered callback tests
