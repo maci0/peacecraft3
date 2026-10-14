@@ -12,12 +12,13 @@ const origin = process.env.PCX_DEMO_ORIGIN ?? 'http://127.0.0.1:8944/peacecraft3
 const { chromium } = await import(pathToFileURL(process.env.PCX_PLAYWRIGHT_MODULE ?? `${root}.scratch/browser-check/node_modules/playwright-core/index.mjs`));
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ executablePath: '/usr/bin/chromium', args: ['--no-sandbox', '--enable-unsafe-swiftshader'] });
-const requests = [], errors = [], logs = [], sockets = [];
+const requests = [], responses = [], errors = [], logs = [], sockets = [];
 let proof, installerImport;
 try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 1000 } });
   page.setDefaultTimeout(120000);
   page.on('request', r => requests.push({ url: r.url(), method: r.method(), body: r.postDataBuffer() !== null }));
+  page.on('response', r => responses.push({ url: r.url(), status: r.status() }));
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => logs.push(m.text()));
   page.on('websocket', s => sockets.push(s.url()));
@@ -57,6 +58,7 @@ try {
     await page.locator('#iso').setInputFiles(process.env.PCX_DEMO_INSTALLER_ISO);
     await page.waitForFunction(() => !document.querySelector('#iso').disabled);
     const discovery = await page.locator('#iso-provenance').textContent();
+    assert(discovery.trim(), `Installer discovery did not produce provenance: ${await page.locator('#iso-progress').textContent()}`);
     const details = JSON.parse(discovery);
     assert.equal(details.provenance.filesystem, 'ISO9660-Joliet');
     assert.equal(details.diagnostics.filter(d => d.code === 'UNSUPPORTED_FREEARC').length, 6);
@@ -211,7 +213,7 @@ try {
     limitation: 'Synthetic base edition-policy proof and optional locally repacked original menu; not retail installer ISO or native/full-game fidelity' };
   await writeFile(`${output}/proof.json`, JSON.stringify(proof, null, 2));
 } finally {
-  await writeFile(`${output}/diagnostics.json`, JSON.stringify({ requests, errors, logs, sockets }, null, 2));
+  await writeFile(`${output}/diagnostics.json`, JSON.stringify({ requests, responses, errors, logs, sockets }, null, 2));
   await browser.close();
 }
 console.log(JSON.stringify({ ok: proof.ok, baseOnlyRejectsTft: proof.baseOnlyRejectsTft, originalMenuChecked: proof.originalMenuChecked, requests: requests.length, errors: errors.length, sockets: sockets.length, output }));

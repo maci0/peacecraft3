@@ -8,7 +8,9 @@
 //! - `0x00..=0x7f`: a zero run of `(marker & 0x7f) + 3` bytes (so `0x7f` is
 //!   130 bytes, the format's maximum zero run).
 //!
-//! The sum of every run's length must equal the declared original size.
+//! The final zero run is capped to the remaining declared output, including
+//! the oversized terminal marker emitted by the primary compressor. Incomplete
+//! output and trailing framing are refused by the checked import policy.
 
 use thiserror::Error;
 
@@ -83,15 +85,13 @@ pub fn decompress(input: &[u8], out: &mut [u8]) -> Result<usize, SparseError> {
         } else {
             let requested = (marker & 0x7f) as usize + 3;
             let run = requested.min(decoded - out_pos);
-            if run != requested {
+            if run != requested && in_pos != end {
                 return Err(SparseError::SizeMismatch {
                     decoded,
                     produced: out_pos + requested,
                 });
             }
-            for byte in &mut out[out_pos..out_pos + run] {
-                *byte = 0;
-            }
+            out[out_pos..out_pos + run].fill(0);
             out_pos += run;
         }
     }

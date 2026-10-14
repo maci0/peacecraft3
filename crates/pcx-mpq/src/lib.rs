@@ -14,6 +14,7 @@ pub mod hash;
 pub mod header;
 pub mod huffman;
 pub mod payload;
+pub mod sparse;
 
 pub use hash::HashResult;
 pub use header::{Header, HeaderParseError};

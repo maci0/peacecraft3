@@ -88,6 +88,10 @@ issues*.
       source; Legacy has no co-located DLL, and browser import wiring remains open.
       This is not target-native 1.29b codec parity; see `format-mpq.md`.
 - [ ] `pcx-mpq`: sparse and other unsupported compression chains remain typed refusals
+      The standalone sparse reader is exposed and passes 13 checked public-API
+      tests, a 172-case synthetic primary-source differential, strict Clippy
+      and a warning-denied WASM check. Archive chain integration and original
+      sparse-member acceptance remain open; see `mpq-sparse.md`.
 - [~] `pcx-mpq`: archive priority resolution (`DEFAULT_PRIORITY` exists but is still assumed — see M0 open)
 - [x] `mpqxtract` list/show/get with glob patterns and bounded output paths
 - [x] Test: `(listfile)` decodes end to end — 529 298 bytes of imploded sectors → real paths

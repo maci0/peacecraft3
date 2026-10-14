@@ -1,8 +1,5 @@
 //! Synthetic sparse decompression parity tests.
-#[path = "../src/sparse.rs"]
-mod sparse;
-
-use sparse::{decompress, SparseError};
+use pcx_mpq::sparse::{SparseError, decompress};
 
 fn header(size: u32) -> Vec<u8> {
     size.to_be_bytes().to_vec()
@@ -34,6 +31,26 @@ fn decodes_max_zero_run_marker() {
     let mut out = [0xaa; 130];
     assert_eq!(decompress(&input, &mut out).unwrap(), 130);
     assert!(out.iter().all(|&b| b == 0));
+}
+
+#[test]
+fn terminal_zero_marker_is_capped_to_remaining_output() {
+    let mut input = header(5);
+    input.extend_from_slice(&[0x82, b'A', b'B', b'C', 0x7f]);
+    let mut out = [0xff; 5];
+    assert_eq!(decompress(&input, &mut out).unwrap(), 5);
+    assert_eq!(&out, b"ABC\0\0");
+}
+
+#[test]
+fn capped_zero_run_must_be_terminal() {
+    let mut input = header(2);
+    input.extend_from_slice(&[0x7f, 0x80, b'X']);
+    let mut out = [0xff; 2];
+    assert!(matches!(
+        decompress(&input, &mut out),
+        Err(SparseError::SizeMismatch { .. })
+    ));
 }
 
 #[test]
