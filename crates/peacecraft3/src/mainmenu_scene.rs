@@ -500,14 +500,12 @@ pub fn spawn(
         if texture.is_none() && !path.is_empty() {
             info.missing_textures.push(path.clone());
         }
-        let alpha = opacity
-            .sample(mesh.geoset as usize, interval[0], 0)
-            .ok_or_else(|| {
-                SceneError::Decode(format!(
-                    "missing opacity binding for geoset {}",
-                    mesh.geoset
-                ))
-            })?;
+        let alpha = opacity.sample(mesh.geoset, interval[0], 0).ok_or_else(|| {
+            SceneError::Decode(format!(
+                "missing opacity binding for geoset {}",
+                mesh.geoset
+            ))
+        })?;
         let material = materials.add(StandardMaterial {
             base_color: flags.base_color(texture.is_some()).with_alpha(alpha),
             base_color_texture: handle,
@@ -542,7 +540,7 @@ pub fn spawn(
                 MainMenuSceneEntity,
             ))
             .id();
-        opacity_materials.push((mesh.geoset as usize, entity, material));
+        opacity_materials.push((mesh.geoset, entity, material));
         info.geosets += 1;
     }
 
@@ -665,7 +663,7 @@ pub fn spawn(
         duration_ms: clip.map(|s| s.duration()).unwrap_or(0),
         time_ms: 0.0,
         elapsed: std::time::Duration::ZERO,
-        global_durations: global_sequence_durations(bytes),
+        global_durations: runtime.global_sequences,
     });
     info!(bones = info.bones, helpers = info.helpers, sequence = %info.sequence, global_sequence_tracks = info.global_sequence_tracks, "Original menu animation source");
     Ok(info)
@@ -712,36 +710,6 @@ fn pick<'a>(
         .iter()
         .find(|t| norm(&t.source) == want)
         .or_else(|| textures.iter().find(|t| norm(&t.source).ends_with(&want)))
-}
-
-/// The `GLBS` global-sequence durations, in milliseconds, indexed by id.
-///
-/// The chunk is a **plain array of `u32` durations with no count word**:
-/// `MainMenu3d`'s is 148 bytes, which is exactly 37 words, and the largest
-/// global-sequence id any of its 482 bone tracks references is **36** — 37
-/// values, indexed from zero. `pcx-mdl`'s own note says the id "resolves against
-/// the `GLBS` count", but this model stores no count and reading its first word
-/// as one gives 144,967, which is not a sequence count.
-///
-/// This is read here rather than through the crate because the crate exposes no
-/// accessor at all — see [`tracked_pose`] for why that matters.
-#[must_use]
-pub fn global_sequence_durations(bytes: &[u8]) -> Vec<u32> {
-    let mut i = 4usize;
-    while i + 8 <= bytes.len() {
-        let tag = &bytes[i..i + 4];
-        let size =
-            u32::from_le_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]]) as usize;
-        if tag == b"GLBS" {
-            let body = &bytes[i + 8..(i + 8 + size).min(bytes.len())];
-            return body
-                .chunks_exact(4)
-                .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
-                .collect();
-        }
-        i += 8 + size;
-    }
-    Vec::new()
 }
 
 /// One bone's pose with global-sequence tracks sampled on their **own** clock.
@@ -1361,7 +1329,9 @@ mod global_seq_tests {
     #[test]
     fn the_glbs_durations_cover_every_id_used() {
         let Some((bytes, m)) = scene() else { return };
-        let durations = global_sequence_durations(&bytes);
+        let durations = pcx_gfx::mdx_runtime::RuntimePlan::parse(&bytes)
+            .expect("checked runtime plan")
+            .global_sequences;
         assert_eq!(durations.len(), 37, "148 bytes / 4");
         let bones = m.bones(&bytes).expect("bones");
         let max_id = bones
