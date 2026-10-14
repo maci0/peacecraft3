@@ -168,8 +168,17 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
       layouts, and retains profile metadata. Twelve synthetic tests, keyed original
       Footman diffuse/ORM pixel hashes, ATI2 refusal and native/WASM checks pass;
       three source-leaf 32-bit WASM fixtures also pass. No automatic TEXS suffix or
-      namespace binding is added. BC5, punch-through BC1, other profiles, lower-mip
-      pixel decoding, application import and rendering remain unsupported/unverified.
+      namespace binding is added. CPU BC5, punch-through BC1, other profiles,
+      lower-mip pixel decoding, application import and rendering remain
+      unsupported/unverified.
+- [x] `pcx-gfx`: explicit budgeted legacy ATI2/BC5 compressed import checks the
+      actual enabled `RenderDevice` BC feature and extent limits. The complete
+      raw header, checked mip spans and compressed payload accompany the Bevy
+      `Image`. Five synthetic cases and the keyed HD Footman normal pass; actual
+      Vulkan devices on the Radeon RX 7900 XTX verify import with BC enabled and
+      typed refusal with BC disabled despite adapter support. Native/WASM checks
+      and scoped strict Clippy pass. GPU upload, rendering, browser execution,
+      channel/material/gamma semantics and automatic texture binding remain open.
 - [ ] `docs/reforged-fixes.md` fix ledger; rows default to `defer`
 
 ## M2 — Asset decoders + first Bevy render — **render smoke passed; full material fidelity open**

@@ -10,7 +10,7 @@ description = "Bevy asset loaders for the pcx-* decoders"
 profile-gpu = []
 
 [dependencies]
-bevy = "0.20"
+bevy = { version = "0.20", features = ["dds"] }
 pcx-mpq.workspace = true
 pcx-blp.workspace = true
 pcx-tga.workspace = true

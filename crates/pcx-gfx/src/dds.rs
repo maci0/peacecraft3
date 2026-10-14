@@ -72,23 +72,28 @@ pub enum Failure {
     DecoderLimits(String),
 }
 
-fn failure(source: &str, offset: usize, kind: Failure) -> Error {
+pub(crate) fn failure(source: &str, offset: usize, kind: Failure) -> Error {
     Error {
         source_name: source.into(),
         offset,
         kind,
     }
 }
-fn malformed(source: &str, offset: usize, detail: &str) -> Error {
+pub(crate) fn malformed(source: &str, offset: usize, detail: &str) -> Error {
     failure(source, offset, Failure::Malformed(detail.into()))
 }
-fn unsupported(source: &str, offset: usize, detail: impl Into<String>) -> Error {
+pub(crate) fn unsupported(source: &str, offset: usize, detail: impl Into<String>) -> Error {
     failure(source, offset, Failure::Unsupported(detail.into()))
 }
-fn overflow(source: &str, detail: &'static str) -> Error {
+pub(crate) fn overflow(source: &str, detail: &'static str) -> Error {
     failure(source, 16, Failure::Overflow(detail))
 }
-fn limit(source: &str, resource: &'static str, needed: u64, maximum: u64) -> Result<(), Error> {
+pub(crate) fn limit(
+    source: &str,
+    resource: &'static str,
+    needed: u64,
+    maximum: u64,
+) -> Result<(), Error> {
     if needed > maximum {
         return Err(failure(
             source,
@@ -102,19 +107,11 @@ fn limit(source: &str, resource: &'static str, needed: u64, maximum: u64) -> Res
     }
     Ok(())
 }
-fn word(header: &[u8; 128], at: usize) -> u32 {
+pub(crate) fn word(header: &[u8; 128], at: usize) -> u32 {
     u32::from_le_bytes(header[at..at + 4].try_into().unwrap())
 }
 
-/// Validate all authored mip spans and BC1 alpha cases before decoding/allocation.
-/// This is an explicit local import policy, not native malformed-file parity.
-pub fn inspect(bytes: &[u8], source: &str, limits: Limits) -> Result<Profile, Error> {
-    limit(
-        source,
-        "encoded input",
-        bytes.len() as u64,
-        limits.max_encoded_bytes,
-    )?;
+pub(crate) fn legacy_header<'a>(bytes: &'a [u8], source: &str) -> Result<&'a [u8; 128], Error> {
     let header: &[u8; 128] = bytes
         .get(..128)
         .and_then(|b| b.try_into().ok())
@@ -129,18 +126,10 @@ pub fn inspect(bytes: &[u8], source: &str, limits: Limits) -> Result<Profile, Er
             "header/pixel-format sizes must be 124/32",
         ));
     }
-    let fourcc = &header[84..88];
-    let format = match fourcc {
-        b"DXT1" => Format::Bc1,
-        b"DXT5" => Format::Bc3,
-        _ => {
-            return Err(unsupported(
-                source,
-                84,
-                format!("FourCC {fourcc:?}; only legacy DXT1/DXT5 are enabled"),
-            ));
-        }
-    };
+    Ok(header)
+}
+
+pub(crate) fn single_2d(header: &[u8; 128], source: &str) -> Result<(u32, u32, u32), Error> {
     let flags = word(header, 8);
     let pixel_flags = word(header, 80);
     let caps = word(header, 108);
@@ -168,6 +157,138 @@ pub fn inspect(bytes: &[u8], source: &str, limits: Limits) -> Result<Profile, Er
             "unknown header flags/caps/control fields",
         ));
     }
+    Ok((flags, pixel_flags, caps))
+}
+
+pub(crate) fn mip_chain(
+    bytes: &[u8],
+    source: &str,
+    header: &[u8; 128],
+    block_size: u64,
+    check_bc1_alpha: bool,
+) -> Result<Vec<Mip>, Error> {
+    let flags = word(header, 8);
+    let caps = word(header, 108);
+    let (width, height) = (word(header, 16), word(header, 12));
+    if width == 0 || height == 0 {
+        return Err(malformed(source, 12, "zero 2D extent"));
+    }
+    let authored_mip_count = word(header, 28);
+    let levels = if flags & 0x20000 != 0 {
+        if authored_mip_count == 0 {
+            return Err(malformed(source, 28, "flagged mip count is zero"));
+        }
+        authored_mip_count
+    } else {
+        if authored_mip_count > 1 {
+            return Err(malformed(
+                source,
+                28,
+                "multiple mips without mip-count flag",
+            ));
+        }
+        1
+    };
+    if levels > width.max(height).ilog2() + 1 {
+        return Err(malformed(
+            source,
+            28,
+            "mip count exceeds extent-derived chain",
+        ));
+    }
+    if levels > 1 && caps & 0x400008 != 0x400008 {
+        return Err(malformed(
+            source,
+            108,
+            "multiple mips without complex/mipmap caps",
+        ));
+    }
+    let mut mips = Vec::with_capacity(levels as usize);
+    let mut start = 128usize;
+    let (mut w, mut h) = (width, height);
+    for _ in 0..levels {
+        let size = u64::from(w.div_ceil(4))
+            .checked_mul(u64::from(h.div_ceil(4)))
+            .and_then(|n| n.checked_mul(block_size))
+            .ok_or_else(|| overflow(source, "mip block bytes"))?;
+        let size =
+            usize::try_from(size).map_err(|_| overflow(source, "addressable mip byte count"))?;
+        let end = start
+            .checked_add(size)
+            .ok_or_else(|| overflow(source, "mip end offset"))?;
+        let body = bytes
+            .get(start..end)
+            .ok_or_else(|| malformed(source, start, "truncated authored mip span"))?;
+        if check_bc1_alpha {
+            for (index, block) in body.as_chunks::<8>().0.iter().enumerate() {
+                let a = u16::from_le_bytes(block[..2].try_into().unwrap());
+                let b = u16::from_le_bytes(block[2..4].try_into().unwrap());
+                let selectors = u32::from_le_bytes(block[4..8].try_into().unwrap());
+                if a <= b && (0..16).any(|lane| selectors >> (lane * 2) & 3 == 3) {
+                    return Err(unsupported(
+                        source,
+                        start + index * 8,
+                        "BC1 punch-through alpha; RGB decoder would discard it",
+                    ));
+                }
+            }
+        }
+        mips.push(Mip {
+            width: w,
+            height: h,
+            bytes: start..end,
+        });
+        start = end;
+        w = (w / 2).max(1);
+        h = (h / 2).max(1);
+    }
+    if start != bytes.len() {
+        return Err(malformed(
+            source,
+            start,
+            "bytes outside the complete authored mip chain",
+        ));
+    }
+    if flags & 0x80000 != 0 && u64::from(word(header, 20)) != mips[0].bytes.len() as u64 {
+        return Err(malformed(
+            source,
+            20,
+            "linear size disagrees with top mip block span",
+        ));
+    }
+    if flags & 0x80000 == 0 && word(header, 20) != 0 {
+        return Err(unsupported(
+            source,
+            20,
+            "nonzero unflagged pitch/linear-size semantics",
+        ));
+    }
+    Ok(mips)
+}
+
+/// Validate all authored mip spans and BC1 alpha cases before decoding/allocation.
+/// This is an explicit local import policy, not native malformed-file parity.
+pub fn inspect(bytes: &[u8], source: &str, limits: Limits) -> Result<Profile, Error> {
+    limit(
+        source,
+        "encoded input",
+        bytes.len() as u64,
+        limits.max_encoded_bytes,
+    )?;
+    let header = legacy_header(bytes, source)?;
+    let fourcc = &header[84..88];
+    let format = match fourcc {
+        b"DXT1" => Format::Bc1,
+        b"DXT5" => Format::Bc3,
+        _ => {
+            return Err(unsupported(
+                source,
+                84,
+                format!("FourCC {fourcc:?}; only legacy DXT1/DXT5 are enabled"),
+            ));
+        }
+    };
+    let (flags, pixel_flags, caps) = single_2d(header, source)?;
     // DirectXTex documents NVTT's non-standard 0x40000000 marker. Retain it raw.
     let reserved = std::array::from_fn(|i| word(header, 32 + i * 4));
     if pixel_flags & !0x40000005 != 0
@@ -230,95 +351,7 @@ pub fn inspect(bytes: &[u8], source: &str, limits: Limits) -> Result<Profile, Er
     std::alloc::Layout::array::<u8>(rgba_len)
         .map_err(|_| overflow(source, "RGBA vector layout"))?;
     let authored_mip_count = word(header, 28);
-    let levels = if flags & 0x20000 != 0 {
-        if authored_mip_count == 0 {
-            return Err(malformed(source, 28, "flagged mip count is zero"));
-        }
-        authored_mip_count
-    } else {
-        if authored_mip_count > 1 {
-            return Err(malformed(
-                source,
-                28,
-                "multiple mips without mip-count flag",
-            ));
-        }
-        1
-    };
-    if levels > width.max(height).ilog2() + 1 {
-        return Err(malformed(
-            source,
-            28,
-            "mip count exceeds extent-derived chain",
-        ));
-    }
-    if levels > 1 && caps & 0x400008 != 0x400008 {
-        return Err(malformed(
-            source,
-            108,
-            "multiple mips without complex/mipmap caps",
-        ));
-    }
-    let mut mips = Vec::new();
-    let mut start = 128usize;
-    let (mut w, mut h) = (width, height);
-    for _ in 0..levels {
-        let size = u64::from(w.div_ceil(4))
-            .checked_mul(u64::from(h.div_ceil(4)))
-            .and_then(|n| n.checked_mul(block_size))
-            .ok_or_else(|| overflow(source, "mip block bytes"))?;
-        let size =
-            usize::try_from(size).map_err(|_| overflow(source, "addressable mip byte count"))?;
-        let end = start
-            .checked_add(size)
-            .ok_or_else(|| overflow(source, "mip end offset"))?;
-        let body = bytes
-            .get(start..end)
-            .ok_or_else(|| malformed(source, start, "truncated authored mip span"))?;
-        if format == Format::Bc1 {
-            for (index, block) in body.as_chunks::<8>().0.iter().enumerate() {
-                let a = u16::from_le_bytes(block[..2].try_into().unwrap());
-                let b = u16::from_le_bytes(block[2..4].try_into().unwrap());
-                let selectors = u32::from_le_bytes(block[4..8].try_into().unwrap());
-                if a <= b && (0..16).any(|lane| selectors >> (lane * 2) & 3 == 3) {
-                    return Err(unsupported(
-                        source,
-                        start + index * 8,
-                        "BC1 punch-through alpha; RGB decoder would discard it",
-                    ));
-                }
-            }
-        }
-        mips.push(Mip {
-            width: w,
-            height: h,
-            bytes: start..end,
-        });
-        start = end;
-        w = (w / 2).max(1);
-        h = (h / 2).max(1);
-    }
-    if start != bytes.len() {
-        return Err(malformed(
-            source,
-            start,
-            "bytes outside the complete authored mip chain",
-        ));
-    }
-    if flags & 0x80000 != 0 && u64::from(word(header, 20)) != mips[0].bytes.len() as u64 {
-        return Err(malformed(
-            source,
-            20,
-            "linear size disagrees with top mip block span",
-        ));
-    }
-    if flags & 0x80000 == 0 && word(header, 20) != 0 {
-        return Err(unsupported(
-            source,
-            20,
-            "nonzero unflagged pitch/linear-size semantics",
-        ));
-    }
+    let mips = mip_chain(bytes, source, header, block_size, format == Format::Bc1)?;
     Ok(Profile {
         format,
         width,
