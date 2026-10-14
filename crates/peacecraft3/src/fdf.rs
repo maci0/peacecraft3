@@ -131,22 +131,13 @@ pub struct Props {
     pub height: Option<f32>,
     /// `SetPoint`, in file order.
     pub set_points: Vec<SetPoint>,
-    /// `BackdropBackground`.
-    pub backdrop_background: Option<String>,
-    /// `BackdropEdgeFile`.
-    pub backdrop_edge: Option<String>,
-    /// `BackdropBackgroundInsets`, left/bottom/right/top as written.
-    pub insets: Option<[f32; 4]>,
-    /// `BackdropCornerSize`.
-    pub corner_size: Option<f32>,
-    /// `BackdropBackgroundSize`.
-    pub background_size: Option<f32>,
-    /// `ControlBackdrop`, naming the frame drawn for the normal state.
-    pub control_backdrop: Option<String>,
     /// `ButtonText`, naming the frame that draws a button's label.
     pub button_text: Option<String>,
     /// `Text`, an authored label or the `GlobalStrings` key for one.
     pub text: Option<String>,
+    /// Every record line as `(key, value)`, value trimmed of its trailing comma,
+    /// in file order. The typed fields above are parsed views of some of these.
+    pub records: Vec<(String, String)>,
 }
 
 /// One parsed `Frame` block.
@@ -346,30 +337,6 @@ impl Fdf {
             })
     }
 
-    /// A frame's `BackdropBackgroundInsets`, along the inheritance chain.
-    ///
-    /// # Errors
-    ///
-    /// [`FdfError::Missing`] when neither the frame nor its templates set it.
-    pub fn insets(&self, name: &str) -> Result<[f32; 4], FdfError> {
-        self.inherited(name, |p| p.insets)
-            .ok_or_else(|| FdfError::Missing {
-                frame: name.to_string(),
-                property: "BackdropBackgroundInsets",
-            })
-    }
-
-    /// A frame's `ControlBackdrop`, along the inheritance chain.
-    ///
-    /// The normal-state backdrop is usually declared on the *template* — every
-    /// button inherits `StandardButtonTemplate`'s `ControlBackdrop
-    /// "ButtonBackdropTemplate"` — so a direct read of the frame would find
-    /// nothing.
-    #[must_use]
-    pub fn control_backdrop(&self, name: &str) -> Option<String> {
-        self.inherited(name, |p| p.control_backdrop.clone())
-    }
-
     /// A frame's `ButtonText`, naming the frame that draws its label.
     #[must_use]
     pub fn button_text(&self, name: &str) -> Option<String> {
@@ -386,6 +353,52 @@ impl Fdf {
     #[must_use]
     pub fn set_point(&self, name: &str) -> Option<SetPoint> {
         self.inherited(name, |p| p.set_points.first().cloned())
+    }
+
+    /// A record's raw value along the `INHERITS` chain, nearest definition first.
+    #[must_use]
+    pub fn record(&self, name: &str, key: &str) -> Option<String> {
+        self.inherited(name, |p| {
+            p.records
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+        })
+    }
+
+    /// A record's value with its quotes removed.
+    #[must_use]
+    pub fn string(&self, name: &str, key: &str) -> Option<String> {
+        self.record(name, key).map(|v| unquote(&v))
+    }
+
+    /// Whether a flag record (`SetAllPoints`, `BackdropTileBackground`, …) is
+    /// present along the `INHERITS` chain.
+    #[must_use]
+    pub fn flag(&self, name: &str, key: &str) -> bool {
+        self.record(name, key).is_some()
+    }
+
+    /// A record's whitespace-separated numbers, or `None` when it is absent.
+    ///
+    /// # Errors
+    ///
+    /// [`FdfError::BadNumber`] when a field is not a number.
+    pub fn numbers(&self, name: &str, key: &'static str) -> Result<Option<Vec<f32>>, FdfError> {
+        let Some(value) = self.record(name, key) else {
+            return Ok(None);
+        };
+        value
+            .split_whitespace()
+            .map(|t| {
+                num(t).ok_or_else(|| FdfError::BadNumber {
+                    frame: name.to_string(),
+                    property: key,
+                    text: value.clone(),
+                })
+            })
+            .collect::<Result<Vec<f32>, _>>()
+            .map(Some)
     }
 
     /// Resolves a frame's rectangle in the engine's Y-up frame coordinates.
@@ -413,8 +426,24 @@ impl Fdf {
         if stack.iter().any(|s| s == name) {
             return Err(FdfError::Cycle(name.to_string()));
         }
-        if self.frame(name).is_none() {
+        let Some(frame) = self.frame(name) else {
             return Err(FdfError::UnknownFrame(name.to_string()));
+        };
+        // `SetAllPoints` takes the enclosing frame's rectangle; a root that sets
+        // it takes the viewport the engine gives it.
+        if self.flag(name, "SetAllPoints") {
+            let Some(parent) = frame.parent.clone() else {
+                return Ok(Rect {
+                    left: 0.0,
+                    bottom: 0.0,
+                    width: viewport.0,
+                    height: viewport.1,
+                });
+            };
+            stack.push(name.to_string());
+            let rect = self.rect_inner(&parent, viewport, stack);
+            stack.pop();
+            return rect;
         }
         let Some(sp) = self.set_point(name) else {
             // No anchor: a root. Sized by its own properties, else the viewport.
@@ -499,39 +528,24 @@ fn parse_header(rest: &str) -> Result<(Frame, bool), FdfError> {
 
 /// Applies one `Key value` line to a frame.
 fn apply_property(frame: &mut Frame, line: &str) -> Result<(), FdfError> {
+    // A flag record has no value and keeps its trailing comma on the key:
+    // `SetAllPoints,`.
     let (key, value) = match line.split_once(char::is_whitespace) {
         Some((k, v)) => (k, v.trim()),
-        None => (line, ""),
+        None => (line.trim_end_matches(','), ""),
     };
     let bad = |property: &'static str| FdfError::BadNumber {
         frame: frame.name.clone(),
         property,
         text: value.to_string(),
     };
+    frame.props.records.push((
+        key.to_string(),
+        value.trim_end_matches(',').trim().to_string(),
+    ));
     match key {
         "Width" => frame.props.width = Some(num(value).ok_or_else(|| bad("Width"))?),
         "Height" => frame.props.height = Some(num(value).ok_or_else(|| bad("Height"))?),
-        "BackdropCornerSize" => {
-            frame.props.corner_size = Some(num(value).ok_or_else(|| bad("BackdropCornerSize"))?)
-        }
-        "BackdropBackgroundSize" => {
-            frame.props.background_size =
-                Some(num(value).ok_or_else(|| bad("BackdropBackgroundSize"))?)
-        }
-        "BackdropBackgroundInsets" => {
-            let parts: Vec<f32> = value
-                .trim_end_matches(',')
-                .split_whitespace()
-                .filter_map(num)
-                .collect();
-            if parts.len() != 4 {
-                return Err(bad("BackdropBackgroundInsets"));
-            }
-            frame.props.insets = Some([parts[0], parts[1], parts[2], parts[3]]);
-        }
-        "BackdropBackground" => frame.props.backdrop_background = Some(unquote(value)),
-        "BackdropEdgeFile" => frame.props.backdrop_edge = Some(unquote(value)),
-        "ControlBackdrop" => frame.props.control_backdrop = Some(unquote(value)),
         "ButtonText" => frame.props.button_text = Some(unquote(value)),
         "Text" => frame.props.text = Some(unquote(value)),
         "SetPoint" => frame.props.set_points.push(parse_set_point(value)?),
@@ -677,7 +691,10 @@ Frame "FRAME" "MainMenuFrame" {
             Err(FdfError::Missing { .. })
         ));
         // Insets do come from that template.
-        assert_eq!(f.insets("ButtonBackdropTemplate").unwrap(), [0.004; 4]);
+        assert_eq!(
+            f.numbers("ButtonBackdropTemplate", "BackdropBackgroundInsets"),
+            Ok(Some(vec![0.004; 4]))
+        );
     }
 
     /// The anchor chain resolves to the plate-relative box the FDF describes.
@@ -734,11 +751,8 @@ Frame "FRAME" "MainMenuFrame" {
     fn a_missing_property_is_reported() {
         let f = fdf();
         assert_eq!(
-            f.insets("SinglePlayerButton"),
-            Err(FdfError::Missing {
-                frame: "SinglePlayerButton".to_string(),
-                property: "BackdropBackgroundInsets",
-            })
+            f.numbers("SinglePlayerButton", "BackdropBackgroundInsets"),
+            Ok(None)
         );
         assert!(matches!(
             f.rect("NoSuchFrame", (0.8, 0.6)),

@@ -7,6 +7,7 @@ mod import_assets;
 
 mod button_actions;
 mod fdf;
+mod glue_menu;
 mod intro;
 mod launch;
 mod launch_gui;

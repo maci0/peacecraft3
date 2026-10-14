@@ -93,32 +93,13 @@ struct LauncherPanel;
 #[derive(Component)]
 struct ButtonArt;
 
-/// The original inner fill on a main-menu entry, as opposed to the launcher's
-/// own controls, which share `Button` but are not skinned with it.
+/// The node the FDF control layer is built into; it covers the authored frame.
 #[derive(Component)]
-struct ButtonFill;
-
-/// The 3×3 wrapper the fill's image sits in. Marked separately from the image so
-/// the invalidation can despawn the wrapper — which takes the image with it —
-/// rather than only the image, which would leave an empty wrapper behind on every
-/// import.
-#[derive(Component)]
-struct ButtonFillFrame;
-
-/// A menu entry's label root, carrying its index so the authored string can be
-/// filled in once the strings text and the frame definitions are readable.
-#[derive(Component)]
-struct MenuText(usize);
+struct ControlRoot;
 
 /// Set once a label's runs exist, so it is filled once rather than every frame.
 #[derive(Component)]
 struct MenuTextFilled;
-
-/// Set on a menu entry once its inner fill exists. The plate pass skips a button
-/// carrying `ButtonArt`, so without this a fill that could not be derived on the
-/// first pass — the frame definitions had not arrived yet — would never be added.
-#[derive(Component)]
-struct ButtonFilled;
 
 // ------------------------------------------------------------- spacing/type
 
@@ -240,6 +221,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
                 poll_asset_revision,
                 invalidate_on_asset_revision,
                 apply_menu_art,
+                build_control_layer,
                 apply_menu_text,
                 initialize_menu_logo,
                 initialize_menu_scene,
@@ -281,6 +263,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
             .before(finish_intro),
     );
     crate::menu_audio::install(&mut app);
+    crate::glue_menu::install(&mut app);
     app
 }
 
@@ -362,7 +345,6 @@ fn setup(mut commands: Commands, l: Res<Launcher>) {
 /// does not, that is reported in the log rather than drawn as a rectangle that
 /// merely resembles the original.
 fn spawn_main_menu(commands: &mut Commands) {
-    use crate::mainmenu;
 
     // The frames are spawned here; their art is applied by [`apply_menu_art`]
     // afterwards. It has to be deferred because a browser cannot read the
@@ -383,26 +365,19 @@ fn spawn_main_menu(commands: &mut Commands) {
             MenuLayer,
         ))
         .with_children(|root| {
-            root.spawn(Node {
-                grid_row: GridPlacement::start(1),
-                grid_column: GridPlacement::start(1),
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::FlexEnd,
-                padding: UiRect {
-                    top: Val::Vh(mainmenu::FIRST_TOP / mainmenu::FRAME_H * 100.0),
-                    right: Val::Vw(mainmenu::FIRST_RIGHT / mainmenu::FRAME_W * 100.0),
-                    bottom: Val::Vh(mainmenu::EXIT_BOTTOM / mainmenu::FRAME_H * 100.0),
+            // The FDF control layer is built into this once the frame
+            // definitions are readable; see `build_control_layer`.
+            root.spawn((
+                Node {
+                    grid_row: GridPlacement::start(1),
+                    grid_column: GridPlacement::start(1),
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
                     ..default()
                 },
-                ..default()
-            })
-            .with_children(|buttons| {
-                for (i, id) in mainmenu::MENU.iter().enumerate() {
-                    spawn_menu_button(buttons, i, id);
-                }
-            });
+                ControlRoot,
+                Pickable::IGNORE,
+            ));
             root.spawn((
                 Node {
                     grid_row: GridPlacement::start(1),
@@ -467,17 +442,12 @@ fn poll_asset_revision(mut revision: ResMut<AssetStoreRevision>) {
     revision.0 = asset_revision();
 }
 
-type FilledLabelData = (Entity, &'static Children);
-type FilledLabelFilter = (With<MenuText>, With<MenuTextFilled>);
-
 #[derive(SystemParam)]
 struct MenuInvalidationQueries<'w, 's> {
-    text: Query<'w, 's, &'static mut Text>,
     logos: Query<'w, 's, Entity, With<crate::menu_panel::MenuLogo>>,
     scene_entities: Query<'w, 's, Entity, With<crate::mainmenu_scene::MainMenuSceneEntity>>,
-    fills: Query<'w, 's, Entity, With<ButtonFillFrame>>,
-    filled: Query<'w, 's, Entity, With<ButtonFilled>>,
-    labels: Query<'w, 's, FilledLabelData, FilledLabelFilter>,
+    controls: Query<'w, 's, (Entity, Option<&'static Children>), With<ControlRoot>>,
+    glue: ResMut<'w, crate::glue_menu::GlueImages>,
 }
 
 fn invalidate_on_asset_revision(
@@ -488,23 +458,18 @@ fn invalidate_on_asset_revision(
     queries: MenuInvalidationQueries,
 ) {
     let MenuInvalidationQueries {
-        mut text,
         logos,
         scene_entities,
-        fills,
-        filled,
-        labels,
+        controls,
+        mut glue,
     } = queries;
     if cache.revision == revision.0 {
         return;
     }
     cache.revision = revision.0;
-    // Everything decoded or derived from the old store goes, including the two
-    // texts the labels and their style come from — otherwise a second import would
-    // keep the first store's strings.
+    // Everything decoded or derived from the old store goes, including the
+    // texts the labels and their style come from.
     cache.button = None;
-    cache.panel = None;
-    cache.panel_uniform = None;
     cache.fonts.clear();
     cache.skin = None;
     cache.fdf = None;
@@ -513,28 +478,14 @@ fn invalidate_on_asset_revision(
     cache.templates = None;
     cache.main_menu = None;
     cache.native_loaded = false;
-    // The labels are rebuilt: their runs are despawned and the marker cleared so
-    // `apply_menu_text` re-spawns them from the new strings. The text root itself
-    // is kept, so the button and its click identity are untouched.
-    for (entity, children) in &labels {
-        for child in children.iter() {
-            commands.entity(child).despawn();
+    let install = glue.install.clone();
+    glue.reset(install);
+    // The control layer is rebuilt from the new frame definitions by
+    // `build_control_layer` once its root is empty.
+    for (_, children) in &controls {
+        for child in children.into_iter().flatten() {
+            commands.entity(*child).despawn();
         }
-        if let Ok(mut t) = text.get_mut(entity) {
-            t.0.clear();
-        }
-        commands.entity(entity).remove::<MenuTextFilled>();
-    }
-    // A fill's grid tracks are derived from the frames, so it is rebuilt rather
-    // than re-handled; the plate keeps its marker and has its handle swapped.
-    // The **wrapper** is despawned, which takes its image child with it —
-    // despawning only the image would leave an empty wrapper behind on every
-    // import.
-    for entity in &fills {
-        commands.entity(entity).despawn();
-    }
-    for entity in &filled {
-        commands.entity(entity).remove::<ButtonFilled>();
     }
     // The logo rebuilds once its entity is gone: `initialize_menu_logo` re-runs
     // on an empty set.
@@ -816,325 +767,132 @@ fn menu_is_visible(menu: Query<Entity, With<MenuLayer>>) -> bool {
     !menu.is_empty()
 }
 
-/// The menu's frame art, decoded once and shared by all six buttons.
+/// The menu's frame and text sources, and the plate art the launcher's own
+/// controls wear.
 #[derive(Resource, Default)]
 struct MenuArtCache {
-    /// `GlueScreen-Button1-Border.blp`, the button frame.
+    /// `GlueScreen-Button1-Border.blp`, worn by the launcher's own buttons.
     button: Option<Handle<Image>>,
+    /// The launcher panels' tiled backdrop.
     panel: Option<Handle<Image>>,
-    /// One handle per authored face, so an entry's own face is honoured instead of
-    /// every label sharing one hardcoded file.
+    /// One handle per authored face.
     fonts: std::collections::HashMap<String, Handle<Font>>,
     /// `UI\war3skins.txt`, the face -> file binding's source.
     skin: Option<String>,
-    /// Faces whose binding has already been reported, so a broken table does not
-    /// log every frame.
-    font_problems: std::collections::HashSet<String>,
-    /// The parsed frame definitions the button bounds come from. `None` until
-    /// **both** FDFs have been read and parsed, so a partially-arrived pair is
-    /// never cached as if it were complete.
+    /// Faces and labels whose problem has already been reported.
+    problems: std::collections::HashSet<String>,
+    /// The parsed frame definitions. `None` until **both** FDFs have been read
+    /// and parsed, so a partially-arrived pair is never cached as complete.
     fdf: Option<crate::fdf::Fdf>,
-    /// Set when an FDF that *is* present fails to read or parse. Retrying the same
-    /// bad bytes every frame would spin; the failure is reported once instead.
+    /// Set when an FDF that *is* present fails to read or parse, or the control
+    /// layer cannot be derived from it; reported once rather than every frame.
     fdf_failed: bool,
     /// `GlobalStrings.fdf`, the labels' source.
     strings: Option<String>,
     /// `StandardTemplates.fdf`, the label style's source.
     templates: Option<String>,
-    /// `MainMenu.fdf`, whose text frames name the per-entry style frames.
+    /// `MainMenu.fdf`, whose text frames carry per-entry style records.
     main_menu: Option<String>,
-    /// Whether the fill texture's texels are all one colour.
-    ///
-    /// The FDF asks for `BackdropTileBackground` at `BackdropBackgroundSize
-    /// 0.032`, which is tiling. This renderer draws the fill with `Stretch`
-    /// instead, and that is only pixel-equivalent when the texture is uniform —
-    /// which the shipped one is. A non-uniform texture is refused rather than
-    /// stretched, because stretching would silently be the wrong mapping.
-    panel_uniform: Option<bool>,
-    /// The asset-store generation this cache was filled from. The page replaces
-    /// its store when the user imports a local ISO, and everything decoded from
-    /// the old one has to be dropped when that happens.
+    /// The asset-store generation this cache was filled from.
     revision: u32,
     native_loaded: bool,
     install: Option<std::path::PathBuf>,
     selection: Option<String>,
 }
 
-/// Whether every texel of an RGBA8 buffer is the same colour.
-///
-/// The fill is drawn with `Stretch`, which is pixel-equivalent to the authored
-/// tiling only when the texture is one colour. Measured here rather than assumed.
-fn uniform_rgba(rgba: &[u8]) -> bool {
-    match rgba.get(..4) {
-        Some(first) => rgba.as_chunks::<4>().0.iter().all(|p| p == first),
-        None => false,
+/// Reads a text asset once it is available.
+fn cached_text(slot: &mut Option<String>, install: Option<&std::path::Path>, path: &str) {
+    if slot.is_none()
+        && let Some(bytes) = crate::mainmenu::art_bytes(install, path)
+    {
+        *slot = std::str::from_utf8(&bytes).ok().map(str::to_string);
     }
 }
 
-/// Spawns one menu entry's inner fill, or `None` when the art or the frame
-/// definitions are not ready, or the entry's frames cannot be derived.
-///
-/// The fill is a **3×3 grid wrapper**: the image occupies the middle cell, and the
-/// surrounding tracks carry the authored left/width/right and top/height/bottom
-/// as percentages of the plate. A grid track's percentage resolves against its
-/// container's width for columns and height for rows, so both axes are right
-/// without the full-window `Vw`/`Vh` mismatch a centred 4:3 or portrait menu would
-/// otherwise introduce. The wrapper fills its cell and shares it with the label,
-/// so nothing is absolute and nothing is pixel-sized.
-fn spawn_fill(
-    commands: &mut Commands,
-    cache: &MenuArtCache,
-    entry: &crate::mainmenu::MenuButton,
-) -> Option<Entity> {
-    let fill = cache.panel.as_ref()?;
-    let fdf = cache.fdf.as_ref()?;
-    // The authored record is `BackdropTileBackground` at `BackdropBackgroundSize
-    // 0.032`; this draws with `Stretch`, which is pixel-equivalent only for a
-    // uniform texture. A non-uniform one is not drawn rather than stretched,
-    // because stretching would be the wrong mapping — and the load reports it.
-    if cache.panel_uniform != Some(true) {
-        return None;
-    }
-    let (left, top, width, height) = crate::mainmenu::button_fill(fdf, entry.0).ok()?;
-    let (plate_w, plate_h) = crate::mainmenu::plate_size(fdf, entry.0).ok()?;
-    let column = |v: f32| GridTrack::percent(v / plate_w * 100.0);
-    let row = |v: f32| GridTrack::percent(v / plate_h * 100.0);
-    let wrapper = commands
-        .spawn((
-            Node {
-                grid_row: GridPlacement::start(1),
-                grid_column: GridPlacement::start(1),
-                display: Display::Grid,
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                grid_template_columns: vec![
-                    column(left),
-                    column(width),
-                    column(plate_w - left - width),
-                ],
-                grid_template_rows: vec![row(top), row(height), row(plate_h - top - height)],
-                ..default()
-            },
-            ButtonFillFrame,
-        ))
-        .id();
-    let image = commands
-        .spawn((
-            Node {
-                grid_row: GridPlacement::start(2),
-                grid_column: GridPlacement::start(2),
-                // The middle cell is the authored extent; without an explicit
-                // size the image falls back to its own 32x32 texture, which is
-                // what made the fill a small square under the label instead of
-                // the authored box.
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                ..default()
-            },
-            // `Stretch`, **not** the default `Auto`: `Auto` applies the image's
-            // own intrinsic measure, which sized the fill to the texture's 32x32
-            // instead of the authored cell. `Stretch` ignores the original size
-            // and aspect, and for this uniform texture that is pixel-equivalent.
-            ImageNode::new(fill.clone()).with_mode(NodeImageMode::Stretch),
-            ButtonFill,
-        ))
-        .id();
-    commands.entity(wrapper).add_child(image);
-    Some(wrapper)
-}
-
-/// Puts the original's frame art on the menu buttons once it can be read.
-///
-/// Deferred rather than done at spawn because the two sources become readable at
-/// different times: a desktop has the staged install on the first frame, while a
-/// browser only has what the page fetched, a moment later. Running every frame
-/// and doing nothing until the bytes exist means one code path serves both, and
-/// a button that is already wearing its art is skipped rather than re-dressed.
-type ButtonArtData = (
-    Entity,
-    &'static mut Node,
-    &'static Children,
-    Option<&'static InteractionDisabled>,
-    Option<&'static crate::mainmenu::MenuButton>,
+type ButtonArtData = (Entity, Option<&'static InteractionDisabled>);
+type ButtonArtFilter = (
+    With<Button>,
+    Without<ButtonArt>,
+    Without<crate::glue_menu::GlueButton>,
 );
-type ButtonArtFilter = (With<Button>, Without<ButtonArt>);
-type LateFillData = (
-    Entity,
-    &'static Children,
-    &'static crate::mainmenu::MenuButton,
-);
-type LateFillFilter = (With<ButtonArt>, Without<ButtonFilled>);
 
 #[derive(SystemParam)]
 struct MenuArtQueries<'w, 's> {
     buttons: Query<'w, 's, ButtonArtData, ButtonArtFilter>,
-    // Entries whose frame-derived fill arrives after their plate.
-    late: Query<'w, 's, LateFillData, LateFillFilter>,
     // Store replacement changes handles while preserving button identities.
-    dressed: Query<'w, 's, &'static mut ImageNode, (With<ButtonArt>, Without<ButtonFill>)>,
-    fills: Query<'w, 's, &'static mut ImageNode, (With<ButtonFill>, Without<ButtonArt>)>,
+    dressed: Query<'w, 's, &'static mut ImageNode, With<ButtonArt>>,
     panels: Query<'w, 's, Entity, (With<Wc3Panel>, Without<ImageNode>)>,
 }
 
+/// Reads the menu's frame definitions, strings and skin table, and puts the
+/// plate art on the launcher's own buttons.
+///
+/// Deferred rather than done at spawn because a browser only has what the page
+/// fetched, a moment later; running every frame and doing nothing until the
+/// bytes exist means one code path serves both.
 fn apply_menu_art(
     launcher: Res<Launcher>,
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
-    mut fonts: ResMut<Assets<Font>>,
     mut cache: ResMut<MenuArtCache>,
+    mut glue: ResMut<crate::glue_menu::GlueImages>,
     queries: MenuArtQueries,
 ) {
     let MenuArtQueries {
-        mut buttons,
-        late,
+        buttons,
         mut dressed,
-        mut fills,
         panels,
     } = queries;
     let selection = format!("{}:{:?}", launcher.source, launcher.mode.assets);
     if cache.selection.as_ref() != Some(&selection) {
         let install = selected_install(&launcher);
-        if cache.install != install {
-            cache.button = None;
-            cache.panel = None;
-            cache.panel_uniform = None;
-            cache.fonts.clear();
-            cache.skin = None;
-            cache.font_problems.clear();
-            cache.fdf = None;
-            cache.fdf_failed = false;
-            cache.strings = None;
-            cache.templates = None;
-            cache.main_menu = None;
-            cache.native_loaded = false;
-            cache.install = install;
+        if cache.install != install || glue.install != install {
+            *cache = MenuArtCache {
+                revision: cache.revision,
+                install: install.clone(),
+                ..default()
+            };
+            glue.reset(install);
         }
         cache.selection = Some(selection);
     }
+    let cache = &mut *cache;
     let install = cache.install.clone();
+    let install = install.as_deref();
     // The desktop install is read once; the browser store fills asynchronously.
     if !cache.native_loaded || cfg!(target_arch = "wasm32") {
-        if cache.button.is_none() {
-            let path = crate::mainmenu::BUTTON_ART;
-            if let Some(bytes) = crate::mainmenu::art_bytes(install.as_deref(), path)
+        for (slot, path) in [
+            (&mut cache.button, crate::mainmenu::BUTTON_ART),
+            (&mut cache.panel, PANEL_ART),
+        ] {
+            if slot.is_none()
+                && let Some(bytes) = crate::mainmenu::art_bytes(install, path)
                 && let Ok(tex) = pcx_gfx::load_image(&bytes, path)
             {
-                cache.button = Some(images.add(pcx_gfx::viewer::rgba_image(&tex)));
+                *slot = Some(images.add(pcx_gfx::viewer::rgba_image(&tex)));
             }
         }
-        if cache.panel.is_none()
-            && let Some(bytes) = crate::mainmenu::art_bytes(install.as_deref(), PANEL_ART)
-            && let Ok(tex) = pcx_gfx::load_image(&bytes, PANEL_ART)
+        cached_text(&mut cache.skin, install, crate::mainmenu::SKIN_TABLE);
+        cached_text(&mut cache.main_menu, install, crate::mainmenu::MAIN_MENU_FDF);
+        cached_text(&mut cache.strings, install, crate::mainmenu::GLOBAL_STRINGS_FDF);
+        cached_text(
+            &mut cache.templates,
+            install,
+            crate::mainmenu::STANDARD_TEMPLATES_FDF,
+        );
+        // Templates first, so a menu override wins.
+        if cache.fdf.is_none()
+            && !cache.fdf_failed
+            && let (Some(templates), Some(menu)) = (&cache.templates, &cache.main_menu)
         {
-            // Measured at decode, not assumed: the fill is drawn with
-            // `Stretch`, which is only right for a uniform texture.
-            let uniform = uniform_rgba(&tex.rgba);
-            if !uniform {
-                warn!(
-                    "{PANEL_ART} is not uniform; the authored tiling is not implemented, so the fill is not drawn"
-                );
-            }
-            cache.panel_uniform = Some(uniform);
-            cache.panel = Some(images.add(pcx_gfx::viewer::rgba_image(&tex)));
-        }
-        // The skin table, which binds each face to its file.
-        if cache.skin.is_none()
-            && let Some(bytes) =
-                crate::mainmenu::art_bytes(install.as_deref(), crate::mainmenu::SKIN_TABLE)
-        {
-            cache.skin = std::str::from_utf8(&bytes).ok().map(str::to_string);
-        }
-        // The frame definitions. **Both** must be read and parsed before the pair
-        // is cached: the page fetches them separately, so caching after the first
-        // one would freeze an incomplete frame set and every derivation against
-        // the menu's own frames would fail from then on.
-        if cache.fdf.is_none() && !cache.fdf_failed {
-            let templates = crate::mainmenu::art_bytes(
-                install.as_deref(),
-                crate::mainmenu::STANDARD_TEMPLATES_FDF,
-            );
-            let menu =
-                crate::mainmenu::art_bytes(install.as_deref(), crate::mainmenu::MAIN_MENU_FDF);
-            if let (Some(templates), Some(menu)) = (templates.as_deref(), menu.as_deref()) {
-                match (std::str::from_utf8(templates), std::str::from_utf8(menu)) {
-                    // Templates first, so a menu override wins.
-                    (Ok(templates), Ok(menu)) => {
-                        match crate::fdf::Fdf::parse(templates).and_then(|mut f| {
-                            f.parse_into(menu)?;
-                            Ok(f)
-                        }) {
-                            Ok(fdf) => cache.fdf = Some(fdf),
-                            Err(e) => {
-                                bevy::log::warn!("menu frame definitions unusable: {e}");
-                                cache.fdf_failed = true;
-                            }
-                        }
-                    }
-                    _ => {
-                        bevy::log::warn!("menu frame definitions are not UTF-8 text");
-                        cache.fdf_failed = true;
-                    }
-                }
-            }
-            // Not both present yet: a browser supplies them a moment apart, so
-            // leave the cache empty and try again next frame.
-        }
-        // The menu tree's own text, needed to follow each entry's `ButtonText` to
-        // the text frame whose style it draws with.
-        if cache.main_menu.is_none()
-            && let Some(bytes) =
-                crate::mainmenu::art_bytes(install.as_deref(), crate::mainmenu::MAIN_MENU_FDF)
-        {
-            cache.main_menu = std::str::from_utf8(&bytes).ok().map(str::to_string);
-        }
-        // The labels' own source. Absent until the page serves it, which is the
-        // browser's normal arrival order.
-        if cache.strings.is_none()
-            && let Some(bytes) =
-                crate::mainmenu::art_bytes(install.as_deref(), crate::mainmenu::GLOBAL_STRINGS_FDF)
-        {
-            cache.strings = std::str::from_utf8(&bytes).ok().map(str::to_string);
-        }
-        // The label style's source, which the same fetch supplies.
-        if cache.templates.is_none()
-            && let Some(bytes) = crate::mainmenu::art_bytes(
-                install.as_deref(),
-                crate::mainmenu::STANDARD_TEMPLATES_FDF,
-            )
-        {
-            cache.templates = std::str::from_utf8(&bytes).ok().map(str::to_string);
-        }
-        // Each entry's font, from its own face and the shipped skin table. No
-        // fallback: a face the table does not bind, or a file the store does not
-        // carry, leaves that entry without a font rather than substituting one.
-        if let Some(skin) = cache.skin.clone() {
-            for i in 0..crate::mainmenu::MENU.len() {
-                let Some(style) = entry_style(&cache, i) else {
-                    continue;
-                };
-                if cache.fonts.contains_key(&style.font) {
-                    continue;
-                }
-                let binding = match crate::mainmenu::menu_font_file(&skin, &style.font) {
-                    Ok(binding) => binding,
-                    Err(error) => {
-                        // A table that does not bind the face is a real problem, not
-                        // a timing one: report it once rather than every frame.
-                        if cache.font_problems.insert(style.font.clone()) {
-                            warn!("Menu font {:?}: {error}", style.font);
-                        }
-                        continue;
-                    }
-                };
-                let Some(served) = crate::mainmenu::served_font_name(&binding.file) else {
-                    continue;
-                };
-                if let Some(bytes) =
-                    crate::mainmenu::art_bytes_named(install.as_deref(), &binding.file, &served)
-                {
-                    cache
-                        .fonts
-                        .insert(style.font.clone(), fonts.add(Font::from_bytes(bytes)));
+            match crate::fdf::Fdf::parse(templates).and_then(|mut f| {
+                f.parse_into(menu)?;
+                Ok(f)
+            }) {
+                Ok(fdf) => cache.fdf = Some(fdf),
+                Err(e) => {
+                    warn!("menu frame definitions unusable: {e}");
+                    cache.fdf_failed = true;
                 }
             }
         }
@@ -1146,90 +904,15 @@ fn apply_menu_art(
                 image.image = handle.clone();
             }
         }
-        for (entity, mut node, children, disabled, menu_button) in &mut buttons {
+        for (entity, disabled) in &buttons {
             let mut image = ImageNode::new(handle.clone()).with_mode(NodeImageMode::Stretch);
             if disabled.is_some() {
                 image.color = DISABLED_FG;
             }
-            // One grid cell carries both the inner fill and the label, so they
-            // overlay. Two ordinary flex children would stack and push the label.
-            let overlay = commands
-                .spawn(Node {
-                    display: Display::Grid,
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    grid_template_columns: vec![GridTrack::percent(100.0)],
-                    grid_template_rows: vec![GridTrack::percent(100.0)],
-                    ..default()
-                })
-                .id();
-            // The original inner fill, on menu entries only: the launcher's own
-            // controls are `Button`s too and must not be skinned with it.
-            if let Some(entry) = menu_button
-                && let Some(fill_node) = spawn_fill(&mut commands, &cache, entry)
-            {
-                commands.entity(overlay).add_child(fill_node);
-                commands.entity(entity).insert(ButtonFilled);
-            }
-            // The template's own justification drives the label's box, so the
-            // vertical axis is the container's main axis and the horizontal one
-            // its cross axis.
-            let style = menu_button.and_then(|entry| entry_style(&cache, entry.0));
-            // Keep the frame on the outer button and padding on its contents.
-            let content = commands
-                .spawn(Node {
-                    grid_row: GridPlacement::start(1),
-                    grid_column: GridPlacement::start(1),
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    padding: node.padding,
-                    flex_direction: node.flex_direction,
-                    justify_content: style
-                        .as_ref()
-                        .map(|s| justify_v(s.justify_v))
-                        .unwrap_or(node.justify_content),
-                    align_items: style
-                        .as_ref()
-                        .map(|s| align_h(s.justify_h))
-                        .unwrap_or(node.align_items),
-                    row_gap: node.row_gap,
-                    column_gap: node.column_gap,
-                    ..default()
-                })
-                .id();
-            for child in children.iter() {
-                commands.entity(content).add_child(child);
-            }
-            node.padding = UiRect::ZERO;
-            commands
-                .entity(entity)
-                .insert((ButtonArt, image))
-                .add_child(overlay);
-            commands.entity(overlay).add_child(content);
-        }
-    }
-    // A frame set that arrives after the plate still gets its fill: the plate pass
-    // skips a button that already carries `ButtonArt`, so this pass is what makes
-    // a late `cache.fdf` reach the entries instead of freezing them fill-less.
-    if cache.fdf.is_some() && cache.panel.is_some() {
-        for (entity, children, entry) in &late {
-            // The plate pass gave each entry exactly one child: the overlay grid.
-            let Some(overlay) = children.first().copied() else {
-                continue;
-            };
-            if let Some(fill_node) = spawn_fill(&mut commands, &cache, entry) {
-                // First, so it draws behind the label in the shared grid cell.
-                commands.entity(overlay).insert_children(0, &[fill_node]);
-                commands.entity(entity).insert(ButtonFilled);
-            }
+            commands.entity(entity).insert((ButtonArt, image));
         }
     }
     if let Some(handle) = &cache.panel {
-        for mut image in &mut fills {
-            if image.image != *handle {
-                image.image = handle.clone();
-            }
-        }
         for entity in &panels {
             let mut image = ImageNode::new(handle.clone()).with_mode(NodeImageMode::Tiled {
                 tile_x: true,
@@ -1242,81 +925,149 @@ fn apply_menu_art(
     }
 }
 
-/// The style the entry's **own** text frame declares, resolved across the two
-/// texts. Following the entry's `ButtonText` is what honours a per-entry record
-/// override instead of assuming every entry shares one template.
-fn entry_style(cache: &MenuArtCache, index: usize) -> Option<crate::menu_text::TextStyle> {
-    let fdf = cache.fdf.as_ref()?;
-    let frame = crate::mainmenu::menu_text_frame(fdf, index).ok()?;
-    let texts: Vec<&str> = [cache.main_menu.as_deref(), cache.templates.as_deref()]
-        .into_iter()
-        .flatten()
-        .collect();
-    crate::mainmenu::menu_text_style(&texts, &frame).ok()
-}
-
-/// Spawns each menu label's runs from the authored string, once the strings text
-/// and the frame definitions are both readable.
-///
-/// Every authored run is kept, in order, so `KEY_EXIT`'s interior hotkey
-/// (`E|Cffffffffx|Rit`) renders "Exit" with its leading `E` rather than "xit". A
-/// label that cannot be derived is reported and left empty — never invented.
-fn apply_menu_text(
+/// Builds the FDF control layer into the empty [`ControlRoot`] once the frame
+/// definitions are parsed.
+fn build_control_layer(
     mut commands: Commands,
-    cache: Res<MenuArtCache>,
-    roots: Query<(Entity, &MenuText), Without<MenuTextFilled>>,
-    disabled: Query<&crate::mainmenu::MenuButton, With<InteractionDisabled>>,
+    mut cache: ResMut<MenuArtCache>,
+    roots: Query<(Entity, Option<&Children>), With<ControlRoot>>,
 ) {
-    let (Some(strings), Some(fdf)) = (cache.strings.as_deref(), cache.fdf.as_ref()) else {
+    let Some(fdf) = &cache.fdf else {
         return;
     };
-    let dimmed: Vec<usize> = disabled.iter().map(|b| b.0).collect();
-    for (entity, marker) in &roots {
-        let id = crate::mainmenu::MENU[marker.0];
-        let label = match crate::mainmenu::menu_label(strings, fdf, marker.0) {
-            Ok(label) => label,
+    let empty: Vec<Entity> = roots
+        .iter()
+        .filter(|(_, children)| children.is_none_or(|c| c.is_empty()))
+        .map(|(root, _)| root)
+        .collect();
+    if empty.is_empty() {
+        return;
+    }
+    match crate::glue_menu::control_items(
+        fdf,
+        crate::glue_menu::CONTROL_LAYER,
+        (crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H),
+    ) {
+        Ok((items, unsupported)) => {
+            if !unsupported.is_empty() {
+                warn!("Main menu frames not drawn: {unsupported:?}");
+            }
+            info!("Main menu: {} frames from the FDF control layer", items.len());
+            for root in empty {
+                crate::glue_menu::spawn(&mut commands, root, &items);
+            }
+        }
+        Err(error) => {
+            warn!("Main menu control layer: {error}");
+            cache.fdf = None;
+            cache.fdf_failed = true;
+        }
+    }
+}
+
+/// The style a text frame declares, resolved across the menu and template texts.
+fn text_style(
+    main_menu: Option<&str>,
+    templates: Option<&str>,
+    frame: &str,
+) -> Result<crate::menu_text::TextStyle, crate::menu_text::TextError> {
+    let texts: Vec<&str> = [main_menu, templates].into_iter().flatten().collect();
+    crate::mainmenu::menu_text_style(&texts, frame)
+}
+
+type LabelData = (Entity, &'static crate::glue_menu::GlueLabel, &'static ChildOf);
+
+/// Fills each label from its text frame: the authored string, its face, size,
+/// colours, justification and shadow.
+///
+/// Every authored run is kept, in order, so `KEY_EXIT`'s interior hotkey
+/// (`E|Cffffffffx|Rit`) renders "Exit" with its leading `E`. A label that cannot
+/// be derived is reported and left empty, never invented.
+fn apply_menu_text(
+    mut commands: Commands,
+    mut cache: ResMut<MenuArtCache>,
+    mut fonts: ResMut<Assets<Font>>,
+    labels: Query<LabelData, Without<MenuTextFilled>>,
+    disabled: Query<(), With<InteractionDisabled>>,
+    mut nodes: Query<&mut Node>,
+) {
+    let MenuArtCache {
+        fonts: faces,
+        skin,
+        problems,
+        fdf,
+        strings,
+        templates,
+        main_menu,
+        install,
+        ..
+    } = &mut *cache;
+    let (Some(strings), Some(fdf)) = (strings.as_deref(), fdf.as_ref()) else {
+        return;
+    };
+    for (entity, label, parent) in &labels {
+        let frame = label.frame.as_str();
+        let parsed = fdf
+            .text_value(frame)
+            .ok_or_else(|| format!("{frame} has no Text"))
+            .and_then(|key| {
+                crate::menu_text::global_string(strings, &key)
+                    .ok_or_else(|| format!("GlobalStrings has no {key}"))
+            })
+            .and_then(|raw| crate::menu_text::Label::parse(&raw).map_err(|e| e.to_string()))
+            .and_then(|parsed| {
+                text_style(main_menu.as_deref(), templates.as_deref(), frame)
+                    .map(|style| (parsed, style))
+                    .map_err(|e| e.to_string())
+            });
+        let (parsed, style) = match parsed {
+            Ok(found) => found,
             Err(error) => {
-                warn!("Menu label {id}: {error}");
+                warn!("Menu label {frame}: {error}");
                 commands.entity(entity).insert(MenuTextFilled);
                 continue;
             }
         };
-        // Each entry's style comes from its own `ButtonText` frame, so a
-        // per-entry override is honoured; an entry whose style cannot be resolved
-        // is reported and left unfilled rather than given a default.
-        let Some(style) = entry_style(&cache, marker.0) else {
-            warn!("Menu label {id}: its text frame's style is unavailable");
-            commands.entity(entity).insert(MenuTextFilled);
-            continue;
-        };
-        let size = bevy::text::FontSize::Vh(style.height / crate::mainmenu::FRAME_H * 100.0);
+        // The entry's own face, bound through the skin table. A face whose file
+        // has not been read yet defers the fill; no other face is substituted.
+        if !faces.contains_key(&style.font) {
+            let Some(skin) = skin.as_deref() else {
+                continue;
+            };
+            let binding = match crate::mainmenu::menu_font_file(skin, &style.font) {
+                Ok(binding) => binding,
+                Err(error) => {
+                    if problems.insert(style.font.clone()) {
+                        warn!("Menu font {:?}: {error}", style.font);
+                    }
+                    continue;
+                }
+            };
+            let Some(served) = crate::mainmenu::served_font_name(&binding.file) else {
+                continue;
+            };
+            let Some(bytes) =
+                crate::mainmenu::art_bytes_named(install.as_deref(), &binding.file, &served)
+            else {
+                continue;
+            };
+            faces.insert(style.font.clone(), fonts.add(Font::from_bytes(bytes)));
+        }
         info!(
-            "Menu label {id}: {} (hotkey {:?}); bound face {:?}; shadow {:?} at {:?}, FIXEDSIZE {} — shadow and FIXEDSIZE parsed, not applied",
-            label.visible(),
-            label.hotkey(),
-            style.font,
-            style.shadow_colour,
-            style.shadow_offset,
-            style.fixed_size
+            "Menu label {frame}: {:?} (hotkey {:?}), face {:?}",
+            parsed.visible(),
+            parsed.hotkey(),
+            style.font
         );
-        // The disabled colour comes from the template too, and applies to the
-        // whole label rather than to the hotkey run alone.
-        let dim = dimmed.contains(&marker.0);
+        let font = bevy::text::FontSource::Handle(faces[&style.font].clone());
+        let size = bevy::text::FontSize::Vh(style.height / crate::mainmenu::FRAME_H * 100.0);
+        let dim = disabled.contains(label.button);
         let normal = srgba(if dim { style.disabled } else { style.colour });
         let hot = srgba(if dim { style.disabled } else { style.highlight });
-        // No `TextShadow` is inserted. The FDF's `FontShadowOffset` is in authored
-        // frame units and Bevy's is in logical pixels, and no verified translation
-        // between them — nor the engine's Y-up to the UI's Y-down — has been
-        // established for a text shadow. A zero-offset shadow would be a stand-in
-        // for a feature that is not implemented, so the component is omitted until
-        // that mapping exists. The parsed shadow facts are reported above.
-        // The entry's own face, resolved from its style. A face whose file has
-        // not been read yet defers the fill — the label is left for a later frame
-        // rather than given another face or a builtin.
-        let Some(handle) = cache.fonts.get(&style.font) else {
-            continue;
-        };
-        let font = bevy::text::FontSource::Handle(handle.clone());
+        if let Ok(mut node) = nodes.get_mut(parent.parent()) {
+            node.justify_content = justify_v(style.justify_v);
+            node.align_items = align_h(style.justify_h);
+        }
         commands.entity(entity).insert((
             TextFont {
                 font: font.clone(),
@@ -1325,8 +1076,13 @@ fn apply_menu_text(
             },
             TextColor(normal),
             TextLayout::new(justify(style.justify_h), bevy::text::LineBreak::NoWrap),
+            TextShadow {
+                offset: Vec2::ZERO,
+                color: srgba(style.shadow_colour),
+            },
+            crate::glue_menu::FrameShadow(Vec2::from(style.shadow_offset)),
         ));
-        for run in &label.spans {
+        for run in &parsed.spans {
             let child = commands
                 .spawn((
                     TextSpan::new(run.text.clone()),
@@ -1343,7 +1099,6 @@ fn apply_menu_text(
         commands.entity(entity).insert(MenuTextFilled);
     }
 }
-
 /// The template's horizontal justification, as Bevy's text layout spells it.
 fn justify(h: crate::menu_text::JustifyH) -> bevy::text::Justify {
     match h {
@@ -1374,89 +1129,6 @@ fn align_h(h: crate::menu_text::JustifyH) -> AlignItems {
 /// An authored four-float colour.
 fn srgba(c: [f32; 4]) -> Color {
     Color::srgba(c[0], c[1], c[2], c[3])
-}
-
-/// One menu button, positioned from the original's own frame definition.
-fn spawn_menu_button(root: &mut ChildSpawnerCommands, index: usize, id: &str) {
-    let geometry = crate::mainmenu::button_geometry(index);
-    let backdrop_width = if index == 5 {
-        crate::mainmenu::EXIT_W
-    } else {
-        crate::mainmenu::BUTTON_W
-    };
-    let right = if index < 2 { 0.042 } else { 0.012 };
-    let text_width = if index < 2 {
-        0.149
-    } else if index == 5 {
-        0.168
-    } else {
-        0.179
-    };
-    let mut e = root.spawn((
-        Node {
-            width: Val::Vw(geometry.width * 100.0),
-            height: Val::Vh(geometry.height * 100.0),
-            min_width: Val::Rem(0.0),
-            max_width: Val::Percent(100.0),
-            min_height: Val::Rem(0.0),
-            flex_shrink: 0.0,
-            margin: UiRect {
-                top: if index == 5 {
-                    Val::Auto
-                } else if index == 0 {
-                    Val::Rem(0.0)
-                } else {
-                    Val::Vh(crate::mainmenu::BUTTON_GAP / crate::mainmenu::FRAME_H * 100.0)
-                },
-                ..default()
-            },
-            padding: UiRect {
-                left: Val::Percent((backdrop_width - right - text_width) / backdrop_width * 100.0),
-                right: Val::Percent(right / backdrop_width * 100.0),
-                top: Val::Vh(0.0165 / crate::mainmenu::FRAME_H * 100.0),
-                bottom: Val::Vh(0.0165 / crate::mainmenu::FRAME_H * 100.0),
-            },
-            flex_direction: FlexDirection::Column,
-            // `StandardButtonTextTemplate` justifies H *center* and V *middle*,
-            // so the label sits centred in its own frame — not against the
-            // right edge, which is where the frame itself is anchored.
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            ..default()
-        },
-        // The pressable marker, and nothing else: the launcher's own pills show
-        // that `Button` + `Node` is the complete recipe in 0.20, and adding
-        // `Pick`/`Pickable` here either failed to compile (`Pick` is an enum
-        // with no `default`) or, once spell as `Pickable`, made the frame stop
-        // rendering. `Pressed` is what `ui_widgets` sets on press, which is
-        // what the menu's click system waits for.
-        Button,
-        Hovered::default(),
-        crate::mainmenu::MenuButton(index),
-        Name::new(format!("menu-{id}")),
-    ));
-    // The frame art is inserted by [`apply_menu_art`] once it is available.
-    e.with_children(|b| {
-        // The label's runs are spawned by [`apply_menu_text`] once the authored
-        // string and the frame definitions are readable, so the number of runs is
-        // whatever the markup has rather than a fixed shape.
-        // The label's runs and its size are set by [`apply_menu_text`] from the
-        // template's own `FrameFont` record, so nothing is sized here.
-        b.spawn((
-            Text::new(""),
-            TextFont::default(),
-            TextColor(crate::mainmenu::LABEL),
-            TextLayout::new(bevy::text::Justify::Center, bevy::text::LineBreak::NoWrap),
-            Node {
-                flex_shrink: 0.0,
-                ..default()
-            },
-            // No `TextShadow`: see `apply_menu_text` for why the authored offset
-            // is not applied.
-            ZIndex(1),
-            MenuText(index),
-        ));
-    });
 }
 
 fn header(root: &mut ChildSpawnerCommands, _l: &Launcher) {
@@ -1904,38 +1576,49 @@ fn scroll_launcher(
     }
 }
 
-/// Clicks on the original main menu.
+/// Clicks on the original main menu, dispatched by the clicked FDF frame.
 ///
-/// The original's menu is the entry point, so a choice on it must do something
-/// visible: `options` is mapped to revealing the staging panel — which is the
-/// launcher's actual job, the same relationship the original has between its
-/// menu and its options pane. Every other entry is reported in the log with the
-/// original's own label, so the mapping stays honest about what is and is not
-/// implemented rather than pretending a button led somewhere.
+/// Options reveals the staging panel, the launcher's equivalent of the
+/// original's options pane. The edition button switches between Reign of Chaos
+/// and The Frozen Throne, which rebuilds the scene, panels and logo for that
+/// edition. Quit exits; a browser has no process to end, so there it returns to
+/// the launcher. Every other entry is reported as not implemented rather than
+/// pretending a button led somewhere.
 pub(crate) fn apply_menu_clicks(
     mut commands: Commands,
+    mut launcher: ResMut<Launcher>,
     actions: Res<crate::button_actions::ButtonActions>,
-    q: Query<&crate::mainmenu::MenuButton>,
+    q: Query<&crate::glue_menu::GlueButton>,
     menu: Query<Entity, With<MenuLayer>>,
+    #[cfg(not(target_arch = "wasm32"))] mut exit: MessageWriter<AppExit>,
 ) {
-    use crate::mainmenu;
     for entity in &actions.entities {
-        let Ok(entry) = q.get(*entity) else {
+        let Ok(button) = q.get(*entity) else {
             continue;
         };
-        let id = mainmenu::MENU[entry.0];
-        match id {
-            "options" => {
-                // Reveal the staging panel; the menu has done its job.
+        match button.frame.as_str() {
+            "OptionsButton" => {
                 for e in &menu {
                     commands.entity(e).despawn();
                 }
             }
-            _ => {
-                // Name the action by its id. The label text is the authored
-                // string, derived from the assets at render time.
-                info!("{id}");
+            #[cfg(not(target_arch = "wasm32"))]
+            "ExitButton" => {
+                exit.write(AppExit::Success);
             }
+            #[cfg(target_arch = "wasm32")]
+            "ExitButton" => {
+                for e in &menu {
+                    commands.entity(e).despawn();
+                }
+            }
+            "EditionButton" => {
+                launcher.mode.addon = match launcher.mode.addon {
+                    Addon::Tft => Addon::Roc,
+                    Addon::Roc => Addon::Tft,
+                };
+            }
+            other => info!("{other}: not implemented"),
         }
     }
 }
@@ -2144,7 +1827,7 @@ mod menu_tests {
     use super::*;
     // The click tests spawn `Pressed` buttons; nothing else in the crate needs
     // the marker, so it is imported here rather than at module scope.
-    use crate::mainmenu::{MENU, MenuButton};
+
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ui::Pressed;
 
@@ -2233,249 +1916,149 @@ mod menu_tests {
         assert!(app.world().resource::<Launcher>().staging);
     }
 
-    /// The menu's click system, exercised headlessly.
-    ///
-    /// Browser hit-testing is a property of the picking plugin and of the
-    /// window's pointer state, neither of which is what the menu's own wiring
-    /// is about. This runs `apply_menu_clicks` against a world whose menu
-    /// button carries `Pressed`, and asserts the one thing that wiring is
-    /// for: `options` dismisses the menu layer.
-    #[test]
-    fn a_pressed_options_entry_dismisses_the_menu_layer() {
-        let mut world = World::new();
-        // The layer the menu is drawn in, and one of its entries.
-        let layer = world.spawn(MenuLayer).id();
+    fn press(world: &mut World, frame: &str) -> Entity {
         let entry = world
-            .spawn((Button, MenuButton(3), Pressed, Name::new("menu-options")))
+            .spawn((
+                Button,
+                crate::glue_menu::GlueButton {
+                    frame: frame.to_string(),
+                    shortcut: None,
+                    pushed_text_offset: Vec2::ZERO,
+                },
+                Pressed,
+            ))
             .id();
-
         world.insert_resource(crate::button_actions::ButtonActions {
             entities: vec![entry],
         });
-        world.run_system_once(apply_menu_clicks).unwrap();
-
-        assert!(
-            world.get_entity(layer).is_err(),
-            "options: the menu layer is despawned"
-        );
-        // The entry itself is left alone; only the layer goes.
-        assert!(world.get_entity(entry).is_ok(), "the entry survives");
+        world.insert_resource(Launcher::default());
+        world.init_resource::<Messages<AppExit>>();
+        entry
     }
 
-    /// An entry that is not `options` must not dismiss the menu: it is reported
-    /// instead, so nothing is silently swallowed.
+    /// Options reveals the staging panel by dismissing the menu layer.
     #[test]
-    fn a_pressed_non_options_entry_leaves_the_menu_up() {
+    fn options_dismisses_the_menu_layer() {
         let mut world = World::new();
         let layer = world.spawn(MenuLayer).id();
-        let entry = world.spawn((Button, MenuButton(0), Pressed)).id();
-
-        world.insert_resource(crate::button_actions::ButtonActions {
-            entities: vec![entry],
-        });
+        let entry = press(&mut world, "OptionsButton");
         world.run_system_once(apply_menu_clicks).unwrap();
-
-        assert!(
-            world.get_entity(layer).is_ok(),
-            "a non-options entry does not dismiss the menu"
-        );
+        assert!(world.get_entity(layer).is_err(), "the menu layer is despawned");
+        assert!(world.get_entity(entry).is_ok(), "only the layer goes");
     }
 
-    /// A replaced asset store must clear what was derived from the old one.
-    ///
-    /// This is the whole reason the invalidation exists: a second import has to
-    /// remove the first store's runs, fills and parsed texts, while leaving the
-    /// button itself alone so click, Edition and the F8 overlay keep working.
+    /// An entry without a destination leaves the menu up.
     #[test]
-    fn a_new_asset_revision_clears_the_labels_and_fills() {
-        use bevy::ecs::system::RunSystemOnce;
+    fn an_unimplemented_entry_leaves_the_menu_up() {
+        let mut world = World::new();
+        let layer = world.spawn(MenuLayer).id();
+        press(&mut world, "SinglePlayerButton");
+        world.run_system_once(apply_menu_clicks).unwrap();
+        assert!(world.get_entity(layer).is_ok());
+    }
 
+    /// The edition button switches between the two editions.
+    #[test]
+    fn the_edition_button_switches_edition() {
+        let mut world = World::new();
+        press(&mut world, "EditionButton");
+        let before = world.resource::<Launcher>().mode.addon;
+        world.run_system_once(apply_menu_clicks).unwrap();
+        let after = world.resource::<Launcher>().mode.addon;
+        assert_ne!(before, after);
+        world.run_system_once(apply_menu_clicks).unwrap();
+        assert_eq!(world.resource::<Launcher>().mode.addon, before);
+    }
+
+    /// Quit exits the process.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn quit_exits() {
+        let mut world = World::new();
+        press(&mut world, "ExitButton");
+        world.run_system_once(apply_menu_clicks).unwrap();
+        let exits = world.resource::<Messages<AppExit>>();
+        assert_eq!(exits.len(), 1);
+    }
+
+    fn invalidation_world(revision: u32, store: u32) -> (World, Entity, Entity) {
         let mut world = World::new();
         world.insert_resource(MenuArtCache {
-            revision: 0,
+            revision,
+            strings: Some("x".into()),
             ..Default::default()
         });
-        world.insert_resource(AssetStoreRevision(1));
+        world.insert_resource(AssetStoreRevision(store));
         world.insert_resource(SceneLoad::default());
+        world.init_resource::<crate::glue_menu::GlueImages>();
+        let root = world.spawn((Node::default(), ControlRoot)).id();
+        let built = world.spawn(Node::default()).id();
+        world.entity_mut(root).add_child(built);
+        (world, root, built)
+    }
 
-        // A dressed entry: a plate marker, a fill wrapper, and a filled label with
-        // an old run.
-        let run = world.spawn(TextSpan::new("old")).id();
-        let label = world
-            .spawn((Text::new("old"), MenuText(0), MenuTextFilled))
-            .id();
-        world.entity_mut(label).add_child(run);
-        let fill = world.spawn((Node::default(), ButtonFill)).id();
-        let wrapper = world.spawn((Node::default(), ButtonFillFrame)).id();
-        world.entity_mut(wrapper).add_child(fill);
-        let button = world.spawn((ButtonArt, ButtonFilled)).id();
-        world.entity_mut(button).add_child(wrapper);
-
-        world
-            .run_system_once(invalidate_on_asset_revision)
-            .expect("the invalidation runs");
-
-        // The old run is despawned and the label is marked for refilling.
-        assert!(world.get_entity(run).is_err(), "the old run is still there");
-        assert!(
-            world
-                .get_entity(label)
-                .unwrap()
-                .get::<MenuTextFilled>()
-                .is_none(),
-            "the label would never be refilled"
-        );
-        // The fill is gone and the entry is marked for a fresh one. The wrapper
-        // goes with its image — despawning only the image would leave an empty
-        // wrapper behind on every import.
-        assert!(
-            world.get_entity(wrapper).is_err(),
-            "the old wrapper is still there"
-        );
-        assert!(
-            world.get_entity(fill).is_err(),
-            "the wrapper's image survived it"
-        );
-        assert!(
-            world
-                .get_entity(button)
-                .unwrap()
-                .get::<ButtonFilled>()
-                .is_none(),
-            "the fill would never be rebuilt"
-        );
-        // The button itself survives, so its click identity and Edition state are
-        // untouched.
-        assert!(
-            world
-                .get_entity(button)
-                .unwrap()
-                .get::<ButtonArt>()
-                .is_some()
-        );
-        // Every source is cleared, so the next frame reads the new store.
+    /// A replaced asset store drops the built control layer and every parsed
+    /// source, so the next frame rebuilds from the new store.
+    #[test]
+    fn a_new_asset_revision_rebuilds_the_control_layer() {
+        let (mut world, root, built) = invalidation_world(0, 1);
+        world.run_system_once(invalidate_on_asset_revision).unwrap();
+        assert!(world.get_entity(built).is_err(), "the old layer survived");
+        assert!(world.get_entity(root).is_ok(), "the root is kept for the rebuild");
         let cache = world.resource::<MenuArtCache>();
-        assert!(cache.button.is_none() && cache.panel.is_none() && cache.fonts.is_empty());
+        assert!(cache.button.is_none() && cache.fonts.is_empty());
         assert!(cache.fdf.is_none() && cache.strings.is_none() && cache.templates.is_none());
         assert!(cache.main_menu.is_none() && !cache.native_loaded);
     }
 
-    /// The frames the fill geometry test needs, matching the shipped shape.
-    const FDF_FILL: &str = r#"
-Frame "BACKDROP" "StandardMenuButtonBaseBackdrop" {
-    Width 0.256,
-    Height 0.064,
-}
-Frame "BACKDROP" "StandardButtonBackdropTemplate" {
-    BackdropBackgroundInsets 0.004 0.004 0.004 0.004,
-}
-Frame "GLUEBUTTON" "StandardIconicButtonTemplate" {
-    Height 0.031,
-    Width 0.031,
-}
-Frame "TEXTBUTTON" "StandardButtonTemplate" {
-    Height 0.031,
-    Width 0.179,
-    ControlBackdrop "ButtonBackdropTemplate",
-    Frame "BACKDROP" "ButtonBackdropTemplate" INHERITS "StandardButtonBackdropTemplate" {
+    /// An unchanged revision clears nothing.
+    #[test]
+    fn an_unchanged_revision_clears_nothing() {
+        let (mut world, _, built) = invalidation_world(7, 7);
+        world.run_system_once(invalidate_on_asset_revision).unwrap();
+        assert!(world.get_entity(built).is_ok());
+        assert!(world.resource::<MenuArtCache>().strings.is_some());
     }
-}
+
+    /// The control layer is built from the FDF into an empty root, once.
+    #[test]
+    fn the_control_layer_is_built_from_the_frame_definitions() {
+        const LAYER: &str = r#"
 Frame "FRAME" "MainMenuFrame" {
-    Frame "BACKDROP" "SinglePlayerBackdrop" INHERITS "StandardMenuButtonBaseBackdrop" {
-        SetPoint TOPRIGHT,"MainMenuFrame",TOPRIGHT, -0.015, -0.110625,
-        Frame "GLUEBUTTON" "EditionButton" INHERITS "StandardIconicButtonTemplate" {
-            SetPoint TOPRIGHT, "SinglePlayerBackdrop", TOPRIGHT, -0.012, -0.0165,
+    SetAllPoints,
+    Frame "FRAME" "ControlLayer" {
+        SetAllPoints,
+        Frame "GLUETEXTBUTTON" "OptionsButton" {
+            Width 0.179,
+            Height 0.031,
+            SetPoint TOPRIGHT,"MainMenuFrame",TOPRIGHT, -0.027, -0.1,
+            ControlShortcutKey "O",
         }
-        Frame "GLUETEXTBUTTON" "SinglePlayerButton" INHERITS WITHCHILDREN "StandardButtonTemplate" {
-            Width 0.149,
-            SetPoint TOPRIGHT, "EditionButton", TOPLEFT, 0.001, 0.0,
+        Frame "GLUETEXTBUTTON" "ExitButton" {
+            Width 0.168,
+            Height 0.031,
+            SetPoint TOP,"OptionsButton",BOTTOM, 0.0, -0.1,
         }
     }
 }
 "#;
-
-    /// The fill's image must be told to fill the middle cell. Without an explicit
-    /// size it falls back to the texture's own 32×32, which is what rendered as a
-    /// small square under each label instead of the authored extent.
-    #[test]
-    fn the_fill_image_fills_its_grid_cell() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        fn spawn_one(mut commands: Commands, cache: Res<MenuArtCache>) {
-            spawn_fill(&mut commands, &cache, &crate::mainmenu::MenuButton(0));
-        }
-
         let mut world = World::new();
         world.insert_resource(MenuArtCache {
-            panel: Some(Handle::<Image>::default()),
-            panel_uniform: Some(true),
-            fdf: Some(crate::fdf::Fdf::parse(FDF_FILL).expect("the fixture parses")),
+            fdf: Some(crate::fdf::Fdf::parse(LAYER).expect("fixture")),
             ..Default::default()
         });
-        world.run_system_once(spawn_one).expect("the fill spawns");
-
-        let mut wrappers = world.query_filtered::<&Node, With<ButtonFillFrame>>();
-        let wrapper = wrappers.iter(&world).next().expect("a wrapper was spawned");
-        assert_eq!(wrapper.display, Display::Grid);
-        assert_eq!(wrapper.grid_template_columns.len(), 3, "3 columns");
-        assert_eq!(wrapper.grid_template_rows.len(), 3, "3 rows");
-        assert_eq!(wrapper.width, Val::Percent(100.0));
-        assert_eq!(wrapper.height, Val::Percent(100.0));
-
-        let mut images = world.query_filtered::<(&Node, &ImageNode), With<ButtonFill>>();
-        let (image, node) = images.iter(&world).next().expect("an image was spawned");
-        assert_eq!(image.width, Val::Percent(100.0), "the image fills its cell");
-        assert_eq!(
-            image.height,
-            Val::Percent(100.0),
-            "the image fills its cell"
-        );
-        // The mode is the whole point: `Auto` would apply the texture's own
-        // intrinsic measure and size the fill to 32x32 whatever the cell says.
-        assert_eq!(
-            node.image_mode,
-            NodeImageMode::Stretch,
-            "the fill must stretch to its cell, not take the texture's size"
-        );
+        world.spawn((Node::default(), ControlRoot));
+        world.run_system_once(build_control_layer).unwrap();
+        world.flush();
+        let mut buttons = world.query::<&crate::glue_menu::GlueButton>();
+        let mut frames: Vec<String> = buttons.iter(&world).map(|b| b.frame.clone()).collect();
+        frames.sort();
+        assert_eq!(frames, ["ExitButton", "OptionsButton"]);
+        world.run_system_once(build_control_layer).unwrap();
+        world.flush();
+        assert_eq!(buttons.iter(&world).count(), 2, "built twice");
     }
 
-    /// A non-uniform fill texture is refused rather than stretched: `Stretch` is
-    /// only equivalent to the authored tiling when every texel is the same colour.
-    #[test]
-    fn a_non_uniform_fill_texture_is_not_drawn() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        fn spawn_one(mut commands: Commands, cache: Res<MenuArtCache>) {
-            spawn_fill(&mut commands, &cache, &crate::mainmenu::MenuButton(0));
-        }
-
-        let mut world = World::new();
-        world.insert_resource(MenuArtCache {
-            panel: Some(Handle::<Image>::default()),
-            panel_uniform: Some(false),
-            fdf: Some(crate::fdf::Fdf::parse(FDF_FILL).expect("the fixture parses")),
-            ..Default::default()
-        });
-        world.run_system_once(spawn_one).expect("the system runs");
-
-        let mut wrappers = world.query_filtered::<Entity, With<ButtonFillFrame>>();
-        assert_eq!(
-            wrappers.iter(&world).count(),
-            0,
-            "a non-uniform texture must not be stretched into the cell"
-        );
-    }
-
-    /// The uniformity check itself, on both a uniform and a mixed buffer.
-    #[test]
-    fn uniformity_is_measured_from_the_texels() {
-        assert!(uniform_rgba(&[0, 0, 58, 255, 0, 0, 58, 255]));
-        assert!(!uniform_rgba(&[0, 0, 58, 255, 0, 0, 59, 255]));
-        assert!(!uniform_rgba(&[]));
-    }
-
-    /// Six buttons and six text frames; entry 0 names `FaceA`, entry 5 names
-    /// `FaceB`, and the rest inherit the template's face.
     const FDF_FACES: &str = r#"
 Frame "TEXT" "MenuTextTemplate" {
     FrameFont "FaceCommon", 0.013, "",
@@ -2538,20 +2121,32 @@ KEY_CREDITS              "|CffffffffC|Rredits",
 KEY_EXIT                 "E|Cffffffffx|Rit",
 "#;
 
-    /// Each label takes **its own** entry's face, on the root and on every run,
-    /// and unrelated text is left alone.
-    ///
-    /// Two entries name different faces, so a first-font-wins assignment would be
-    /// caught: it would give both the same handle.
+
+    fn label(world: &mut World, frame: &str) -> Entity {
+        let button = world.spawn_empty().id();
+        let container = world.spawn(Node::default()).id();
+        let label = world
+            .spawn((
+                Text::new(""),
+                crate::glue_menu::GlueLabel {
+                    frame: frame.to_string(),
+                    button,
+                },
+            ))
+            .id();
+        world.entity_mut(container).add_child(label);
+        label
+    }
+
+    /// Each label takes **its own** text frame's face, on the root and on every
+    /// run, and unrelated text is left alone.
     #[test]
     fn each_label_takes_its_own_face_and_leaves_other_text_alone() {
-        use bevy::ecs::system::RunSystemOnce;
-
         let mut faces = Assets::<Font>::default();
         let face_a = faces.add(Font::from_bytes(Vec::new()));
         let face_b = faces.add(Font::from_bytes(Vec::new()));
-
         let mut world = World::new();
+        world.insert_resource(faces);
         let mut fonts = std::collections::HashMap::new();
         fonts.insert("FaceA".to_string(), face_a.clone());
         fonts.insert("FaceB".to_string(), face_b.clone());
@@ -2562,9 +2157,8 @@ KEY_EXIT                 "E|Cffffffffx|Rit",
             fonts,
             ..Default::default()
         });
-        // Two entries, and a launcher/F8 text node that must not be touched.
-        let single = world.spawn((Text::new(""), MenuText(0))).id();
-        let exit = world.spawn((Text::new(""), MenuText(5))).id();
+        let single = label(&mut world, "SinglePlayerButtonText");
+        let exit = label(&mut world, "ExitButtonText");
         let unrelated = world
             .spawn(TextFont {
                 font: bevy::text::FontSource::default(),
@@ -2575,21 +2169,12 @@ KEY_EXIT                 "E|Cffffffffx|Rit",
 
         world.run_system_once(apply_menu_text).expect("runs");
 
-        // The root and every run carry the entry's own handle.
-        assert_eq!(
-            world.get::<TextFont>(single).unwrap().font,
-            bevy::text::FontSource::Handle(face_a.clone()),
-            "entry 0's root took the wrong face"
-        );
-        assert_eq!(
-            world.get::<TextFont>(exit).unwrap().font,
-            bevy::text::FontSource::Handle(face_b.clone()),
-            "entry 5's root took the wrong face"
-        );
         for (root, want, visible) in [(single, &face_a, "Single Player"), (exit, &face_b, "Exit")] {
+            assert_eq!(
+                world.get::<TextFont>(root).unwrap().font,
+                bevy::text::FontSource::Handle(want.clone())
+            );
             let children: Vec<Entity> = world.get::<Children>(root).unwrap().iter().collect();
-            assert!(!children.is_empty(), "the label spawned no runs");
-            // The runs are the authored spans; concatenated they spell the label.
             let joined: String = children
                 .iter()
                 .map(|c| world.get::<TextSpan>(*c).unwrap().0.clone())
@@ -2598,12 +2183,15 @@ KEY_EXIT                 "E|Cffffffffx|Rit",
             for child in children {
                 assert_eq!(
                     world.get::<TextFont>(child).unwrap().font,
-                    bevy::text::FontSource::Handle(want.clone()),
-                    "a run took the wrong face"
+                    bevy::text::FontSource::Handle(want.clone())
                 );
             }
+            // The authored shadow is carried in frame units for placement.
+            assert_eq!(
+                world.get::<crate::glue_menu::FrameShadow>(root).unwrap().0,
+                Vec2::new(0.001, -0.001)
+            );
         }
-        // The unrelated text keeps its own font.
         assert_eq!(
             world.get::<TextFont>(unrelated).unwrap().font,
             bevy::text::FontSource::default(),
@@ -2611,82 +2199,21 @@ KEY_EXIT                 "E|Cffffffffx|Rit",
         );
     }
 
-    /// An entry whose face has no loaded handle defers its fill rather than
-    /// borrowing another face.
+    /// A label whose face has no loaded handle and no readable file defers its
+    /// fill rather than borrowing another face.
     #[test]
     fn a_missing_face_defers_the_label() {
-        use bevy::ecs::system::RunSystemOnce;
-
         let mut world = World::new();
-        let mut fonts = std::collections::HashMap::new();
-        // Only entry 0's face is loaded; entry 5's `FaceB` is not.
-        fonts.insert(
-            "FaceA".to_string(),
-            Assets::<Font>::default().add(Font::from_bytes(Vec::new())),
-        );
+        world.init_resource::<Assets<Font>>();
         world.insert_resource(MenuArtCache {
             fdf: Some(crate::fdf::Fdf::parse(FDF_FACES).expect("fixture")),
             main_menu: Some(FDF_FACES.to_string()),
             strings: Some(STRINGS_FACES.to_string()),
-            fonts,
             ..Default::default()
         });
-        let exit = world.spawn((Text::new(""), MenuText(5))).id();
+        let exit = label(&mut world, "ExitButtonText");
         world.run_system_once(apply_menu_text).expect("runs");
-
-        assert!(
-            world.get::<MenuTextFilled>(exit).is_none(),
-            "a deferred label must stay unfilled"
-        );
-        assert!(
-            world.get::<Children>(exit).is_none_or(|c| c.is_empty()),
-            "no run may be spawned without the entry's own face"
-        );
-    }
-
-    /// A second revision with the *same* value clears nothing, so an import that
-    /// does not change the store does not tear the menu down.
-    #[test]
-    fn an_unchanged_revision_clears_nothing() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        let mut world = World::new();
-        world.insert_resource(MenuArtCache {
-            revision: 7,
-            ..Default::default()
-        });
-        world.insert_resource(AssetStoreRevision(7));
-        world.insert_resource(SceneLoad::default());
-        let run = world.spawn(TextSpan::new("kept")).id();
-        let label = world
-            .spawn((Text::new("kept"), MenuText(0), MenuTextFilled))
-            .id();
-        world.entity_mut(label).add_child(run);
-
-        world.run_system_once(invalidate_on_asset_revision).unwrap();
-
-        assert!(
-            world.get_entity(run).is_ok(),
-            "an unchanged store must keep the runs"
-        );
-        assert!(
-            world
-                .get_entity(label)
-                .unwrap()
-                .get::<MenuTextFilled>()
-                .is_some()
-        );
-    }
-
-    /// Every entry must be reachable by index, which is the only thing joining
-    /// the button on screen to the label the original shows.
-    #[test]
-    fn every_menu_entry_is_addressed_by_its_own_button() {
-        for (i, id) in MENU.iter().enumerate() {
-            // An out-of-range index would be a real bug, and it is the kind
-            // that only shows up when a click lands.
-            assert!(i < MENU.len(), "{id}");
-            assert!(!id.is_empty(), "{id}");
-        }
+        assert!(world.get::<MenuTextFilled>(exit).is_none());
+        assert!(world.get::<Children>(exit).is_none_or(|c| c.is_empty()));
     }
 }

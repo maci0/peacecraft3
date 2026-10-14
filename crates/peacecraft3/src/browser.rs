@@ -275,13 +275,21 @@ fn derived_menu_fonts(
     texts: &[&str],
     skin: &str,
 ) -> Result<Vec<String>, String> {
+    let (items, _) = crate::glue_menu::control_items(
+        fdf,
+        crate::glue_menu::CONTROL_LAYER,
+        (crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H),
+    )
+    .map_err(|e| e.to_string())?;
     let mut paths = BTreeSet::new();
-    for (index, frames) in crate::mainmenu::MENU_FRAMES.iter().enumerate() {
-        if fdf.frame(frames.0).is_none() {
+    for item in &items {
+        let crate::glue_menu::Kind::Button(button) = &item.kind else {
             continue;
-        }
-        let frame = crate::mainmenu::menu_text_frame(fdf, index).map_err(|e| e.to_string())?;
-        let style = crate::mainmenu::menu_text_style(texts, &frame).map_err(|e| e.to_string())?;
+        };
+        let Some(frame) = &button.text else {
+            continue;
+        };
+        let style = crate::mainmenu::menu_text_style(texts, frame).map_err(|e| e.to_string())?;
         paths.insert(
             crate::mainmenu::menu_font_file(skin, &style.font)
                 .map_err(|e| e.to_string())?
@@ -358,15 +366,17 @@ fn hydrate(
         crate::mainmenu::served_name(skin_path),
         skin_bytes,
     )?;
-    // Backdrop paths come from the selected frame definitions, not a JS list.
+    // Backdrop and highlight art comes from the selected frame definitions,
+    // not a JS list.
     for frame in fdf.frames() {
-        for path in [
-            frame.props.backdrop_background.as_deref(),
-            frame.props.backdrop_edge.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
+        for (key, value) in &frame.props.records {
+            if !matches!(
+                key.as_str(),
+                "BackdropBackground" | "BackdropEdgeFile" | "HighlightAlphaFile"
+            ) {
+                continue;
+            }
+            let path = value.trim_matches('"');
             match extract_unique(set, path) {
                 Ok(bytes) => put(path, crate::mainmenu::served_name(path), bytes)?,
                 Err(e) if e.starts_with("MISSING_MEMBER:") => notes.push(e),
