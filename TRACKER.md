@@ -877,8 +877,9 @@ Format: `date — subsystem — symptom — root cause — status`
       submission and completion handles. The collapsed local JSON/explicit-limit
       form and metadata inspector pass production-page main-App admission,
       stale-source refusal, request cleanup and base-only TFT restriction checks.
-      Cargo-built WASM/Node gates also cover whole-state rollback. Original-map
-      execution and public-site refresh remain open;
+      Cargo-built WASM/Node gates also cover whole-state rollback. The asset-free
+      public demo matches the checked 22-file package and passes the same eight
+      main-App browser groups. Original-map execution remains open;
       see `docs/re-notes/browser-map-configuration.md`.
 - [x] JS side: `web/index.html` + `web/loader.js` + `web/pkg/`. No trunk, no
       wasm-pack, no bundler. Build is `cargo build --target wasm32-unknown-unknown

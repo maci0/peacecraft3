@@ -121,5 +121,9 @@ no uploads, sockets or page errors. The proof is local in
 The retained earlier attempts expose two harness mistakes: filling a field before
 opening its disclosure and assuming the preceding ISO import left no menu selected.
 The final test opens the disclosure first and compares selection before/after
-configuration. These checks do not establish original-map execution, native
-behavior, full rendering fidelity or public deployment.
+configuration. The published asset-free page subsequently passes the same eight
+groups with 14 code/WASM GETs and no uploads, sockets or page errors; all 22 hosted
+files match the checked package. Its private proof is in
+`.scratch/browser-configuration-ui-root-review/live-functional-main-app/`.
+These checks do not establish original-map execution, native behavior or full
+rendering fidelity.

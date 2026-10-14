@@ -134,6 +134,12 @@ GETs and no uploads, sockets or page errors. This is data admission, not gamepla
 or original-map execution. The private proof is in
 `.scratch/browser-configuration-ui-root-review/functional-main-app-policy-baseline/`.
 
+The published configuration page passes the same eight synthetic main-App groups,
+including stale-source refusal and the base-only TFT restriction. All 22 hosted
+files match the checked package byte for byte. Its 14 requests are code/WASM GETs,
+with no uploads, sockets or page errors. Public-site proof stays local in
+`.scratch/browser-configuration-ui-root-review/live-functional-main-app/`.
+
 `PCX_DEMO_INSTALLER_ISO` adds the explicit local Joliet/FreeArc directory gate.
 `PCX_DEMO_INSTALLER_MEMBER` selects an exact caller-supplied directory member for
 the streaming extraction/import gate; `PCX_DEMO_INSTALLER_EDITION` checks its
