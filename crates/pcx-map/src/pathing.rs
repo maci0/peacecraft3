@@ -60,13 +60,15 @@ impl Pathing {
         })
     }
 
+    /// Returns `None` for an out-of-grid, missing or unrepresentable cell index.
     pub fn cell(&self, x: u32, y: u32) -> Option<u8> {
         if x >= self.width || y >= self.height {
             return None;
         }
-        self.cells
-            .get(y as usize * self.width as usize + x as usize)
-            .copied()
+        let index = (y as usize)
+            .checked_mul(self.width as usize)?
+            .checked_add(x as usize)?;
+        self.cells.get(index).copied()
     }
 }
 
