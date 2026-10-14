@@ -435,7 +435,7 @@ pub fn spawn(
         .or_else(|| sequences.first());
     let interval = clip.map_or([0, 0], |clip| [clip.interval_start, clip.interval_end]);
     let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&runtime, interval)
-        .map_err(|e| SceneError::Decode(e.to_string()))?;
+        .map_err(|e| SceneError::Decode(format!("{source}: {e}")))?;
 
     let mut info = SceneInfo {
         bones: joints

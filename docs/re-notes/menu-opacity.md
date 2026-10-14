@@ -12,6 +12,14 @@ Global curves use their referenced GLBS duration and the existing elapsed clock.
 Track size, order, finite values/tangents and global references are checked.
 Duplicate channels/records and unestablished KGAA semantics are refused.
 
+The checked import also refuses duplicate alpha-key timestamps before restricting
+local keys to the selected sequence. This includes equal values, all four stored
+interpolation modes, and duplicates outside that sequence. The diagnostic retains
+the geoset ordinal, track tag and frame; the menu scene adds its input source path.
+This is a checked-import policy because precedence is unverified, not a claim that
+the native engine rejects these tracks. Raw runtime tracks remain available and
+unchanged. No keys are sorted, merged or assigned a precedence.
+
 The material's alpha is the product of its sampled KMTA/static alpha and the
 geoset's sampled KGAO/static alpha. Missing GEOA contributes multiplicative
 identity. Zero opacity hides that scene entity. The material handle and entity
@@ -30,6 +38,12 @@ local keys from another sequence, independent global clocks and malformed or
 ambiguous tracks. A real ECS regression exercises the scene material/visibility
 update, including zero opacity and an unrelated material. Both supplied original
 menu models pass the explicit local import fixture.
+
+Five public imported-MDX test groups exercise the duplicate-time policy and valid
+sampler preservation on native and actual 32-bit WASM execution. An explicit local
+TFT panel gate runs the production spawn path, constructing both Birth and Stand
+opacity plans and publishing nonempty geosets. This does not validate panel sound
+timing; the separate first-frame sound assertion remains unresolved.
 
 Native interpolation/clipping behavior, global clock phase and complete material
 composition remain fidelity gates. Neither these tests nor a screenshot certify

@@ -48,6 +48,11 @@ impl Channel {
             if previous.is_some_and(|previous| frame < previous) {
                 return Err("unordered alpha keys".into());
             }
+            if previous == Some(frame) {
+                return Err(format!(
+                    "duplicate {tag:?} alpha keys at frame {frame}; precedence unverified"
+                ));
+            }
             previous = Some(frame);
             if key[4..]
                 .as_chunks::<4>()

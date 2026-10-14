@@ -637,6 +637,37 @@ mod tests {
 
     #[test]
     #[ignore = "requires PEACECRAFT3_INSTALL with the original TFT archives"]
+    fn original_panels_spawn_with_checked_birth_and_stand_opacity() {
+        let install = std::path::PathBuf::from(
+            std::env::var_os("PEACECRAFT3_INSTALL").expect("explicit original install required"),
+        );
+        let sources = load(Some(&install), 1).unwrap();
+        let expected = sources.len();
+        assert!(expected > 0);
+        let mut world = World::new();
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut images = Assets::<Image>::default();
+        let count = spawn(
+            &mut world.commands(),
+            scene::GeosetAssets {
+                meshes: &mut meshes,
+                materials: &mut materials,
+                images: &mut images,
+            },
+            Some(&install),
+            sources,
+        )
+        .unwrap();
+        world.flush();
+        assert_eq!(count, expected);
+        let panels = world.resource::<MenuPanels>();
+        assert_eq!(panels.panels.len(), expected);
+        assert!(panels.panels.iter().all(|p| !p.geosets.handles.is_empty()));
+    }
+
+    #[test]
+    #[ignore = "requires PEACECRAFT3_INSTALL with the original TFT archives"]
     fn original_panels_load_with_entrance_and_pop_down_sound() {
         let install = std::path::PathBuf::from(
             std::env::var_os("PEACECRAFT3_INSTALL").expect("explicit original install required"),
