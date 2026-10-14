@@ -220,8 +220,8 @@ identical (different digests).
   no bone parent outside the bone set. See `menu-sprite-rendering.md` for the
   reproducible probe and its interpolation limits. Browser panel rendering and
   native quaternion interpolation remain unverified.
-- `TopLeftPanel-Expansion.mdx` (360,016 bytes) was located and hashed but not
-  parsed. It is the left-hand sprite layer and the main menu shows the right one.
+- `TopLeftPanel-Expansion.mdx` (360,016 bytes) is the left-hand sprite layer;
+  `menu_sprites.rs` loads it beside the right one.
 - **Panel selection: answered** — `GlueSpriteLayerTopRight_V1` (§2). **Scene
   selection: answered** — `GlueSpriteLayerBackground_V1` (§2). Both `_V%d`.
 - The dangling `MainMenuButton` key: confirm against a 1.28c install whether it

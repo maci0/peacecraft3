@@ -80,6 +80,16 @@ globalThis.peacecraft3Audio = {
     clicks++;
     clickSound.play().catch(report);
   },
+  // A model event sound; the app resolves its WAV bytes and volume from the
+  // install's AnimLookups.slk and AnimSounds.slk.
+  event(bytes, volume) {
+    if (!enabled || introActive) return;
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
+    const sound = new Audio(url);
+    sound.volume = volume;
+    sound.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true });
+    sound.play().catch(error => { URL.revokeObjectURL(url); report(error); });
+  },
   status() {
     return { enabled, unlocked, clicks, introActive, localMode, localSources, localUrlCount: localUrls.length, musicVolumePolicy: 'existing browser policy; original user volume unverified', musicTime: music.currentTime, musicPaused: music.paused,
       loop: music.loop, clickTime: clickSound.currentTime, clickPaused: clickSound.paused,

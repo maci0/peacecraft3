@@ -458,91 +458,28 @@ pub fn spawn(
         ..default()
     };
 
-    // One material per geoset, from that geoset's own `material_id`, and from
-    // the flags the layer actually carries.
-    let paths = pcx_gfx::model_texture_paths(bytes, source).unwrap_or_default();
-    let mdl_materials = m.materials(bytes).unwrap_or_default();
-    // The model's own texture flags, by path, so each geoset's texture repeats
-    // exactly as authored rather than as this module decides.
-    let authored: Vec<(String, u32)> = m
-        .textures(bytes)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|t| (t.path, t.flags))
-        .collect();
-    let mut handles = Vec::with_capacity(model.meshes.len());
-    let mut opacity_materials = Vec::with_capacity(model.meshes.len());
-    for mesh in &model.meshes {
-        let id = mesh.material_id as usize;
-        let path = paths.get(id).cloned().unwrap_or_default();
-        let flags = layer_flags(&mdl_materials, id);
-        if let Some(gap) = flags.blend_gap {
-            warn!(
-                material_id = id,
-                reason = gap.reason(),
-                "Original menu material rendering gap"
-            );
-            info.blend_gaps.push(gap);
-        }
-        let texture = pick(textures, &path);
-        // The texture's own `TEXS` flags decide whether it repeats. This scene's
-        // UVs run far outside `[0, 1]` — its sky spans about `U -2.6 .. 4.3` —
-        // so a clamp smears one row and column across the surface, which is what
-        // the streaked ice and water were. `rgba_image` is left alone; the
-        // sampler is set on the image it returns, so a caller that does not know
-        // about flags keeps the default it had.
-        let handle = texture.map(|t| {
-            let mut image = pcx_gfx::viewer::rgba_image(t);
-            image.sampler =
-                pcx_gfx::viewer::sampler_for_texture_flags(texture_flags(&authored, &path));
-            images.add(image)
-        });
-        if texture.is_none() && !path.is_empty() {
-            info.missing_textures.push(path.clone());
-        }
-        let alpha = opacity.sample(mesh.geoset, interval[0], 0).ok_or_else(|| {
-            SceneError::Decode(format!(
-                "missing opacity binding for geoset {}",
-                mesh.geoset
-            ))
-        })?;
-        let material = materials.add(StandardMaterial {
-            base_color: flags.base_color(texture.is_some()).with_alpha(alpha),
-            base_color_texture: handle,
-            // The glue scene is scenery, not a lit character, so a high
-            // roughness keeps it from picking up a sheen the original has not
-            // got.
-            perceptual_roughness: 1.0,
-            // `Unshaded` in the layer's shading flags. Four of the scene's 31
-            // layers carry it (`0x21` and `0xA1`), and those are the cloud and
-            // sky pieces that the original draws without lighting.
-            unlit: flags.unshaded,
-            // `filterMode`. Eighteen layers are opaque, ten blend, three add.
-            alpha_mode: flags.alpha_mode,
-            // Culling is left off on purpose: the bit that means `TwoSided` in
-            // this format is not established by measurement here (the scene's
-            // flags are `0x00`, `0x10`, `0x21`, `0x90`, `0xA1` and none of them
-            // is proven to be it), and guessing wrong makes a geoset vanish
-            // rather than merely look different. See the module docs.
-            cull_mode: None,
-            ..default()
-        });
-        handles.push(meshes.add(pcx_gfx::to_bevy_mesh(mesh)));
-        let entity = commands
-            .spawn((
-                Mesh3d(handles.last().unwrap().clone()),
-                MeshMaterial3d(material.clone()),
-                if alpha <= 0.0 {
-                    Visibility::Hidden
-                } else {
-                    Visibility::Inherited
-                },
-                MainMenuSceneEntity,
-            ))
-            .id();
-        opacity_materials.push((mesh.geoset, entity, material));
-        info.geosets += 1;
-    }
+    let Geosets {
+        handles,
+        bound: opacity_materials,
+    } = spawn_geosets(
+        commands,
+        GeosetAssets {
+            meshes,
+            materials,
+            images,
+        },
+        GeosetSource {
+            m: &m,
+            bytes,
+            source,
+            model: &model,
+            textures,
+        },
+        &opacity,
+        interval[0],
+        &mut info,
+        MainMenuSceneEntity,
+    )?;
 
     // The model's own camera.
     let cameras = m.cameras(bytes).unwrap_or_default();
@@ -669,12 +606,203 @@ pub fn spawn(
     Ok(info)
 }
 
+/// The asset stores a model's geosets are added to.
+pub struct GeosetAssets<'a> {
+    pub meshes: &'a mut Assets<Mesh>,
+    pub materials: &'a mut Assets<StandardMaterial>,
+    pub images: &'a mut Assets<Image>,
+}
+
+/// One parsed model and the decoded textures its geosets bind.
+pub struct GeosetSource<'a> {
+    pub m: &'a pcx_mdl::Mdlx,
+    pub bytes: &'a [u8],
+    pub source: &'a str,
+    pub model: &'a pcx_gfx::LoadedModel,
+    pub textures: &'a [pcx_gfx::LoadedTexture],
+}
+
+/// One geoset's authored id, its entity and its material.
+pub type BoundGeoset = (usize, Entity, Handle<StandardMaterial>);
+
+/// The meshes [`spawn_geosets`] created, parallel to the model's meshes, and the
+/// material each geoset's opacity is written to.
+pub struct Geosets {
+    pub handles: Vec<Handle<Mesh>>,
+    pub bound: Vec<BoundGeoset>,
+}
+
+/// Spawns one entity per geoset, with the material its own `material_id` and
+/// layer flags describe and its opacity at `frame`. `bundle` is added to each.
+pub fn spawn_geosets(
+    commands: &mut Commands,
+    assets: GeosetAssets,
+    source: GeosetSource,
+    opacity: &pcx_gfx::mdx_opacity::OpacityPlan,
+    frame: u32,
+    info: &mut SceneInfo,
+    bundle: impl Bundle + Clone,
+) -> Result<Geosets, SceneError> {
+    let GeosetAssets {
+        meshes,
+        materials,
+        images,
+    } = assets;
+    let GeosetSource {
+        m,
+        bytes,
+        source,
+        model,
+        textures,
+    } = source;
+    let paths = pcx_gfx::model_texture_paths(bytes, source).unwrap_or_default();
+    let mdl_materials = m.materials(bytes).unwrap_or_default();
+    // The model's own texture flags, by path, so each geoset's texture repeats
+    // exactly as authored rather than as this module decides.
+    let authored: Vec<(String, u32)> = m
+        .textures(bytes)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| (t.path, t.flags))
+        .collect();
+    let mut handles = Vec::with_capacity(model.meshes.len());
+    let mut bound = Vec::with_capacity(model.meshes.len());
+    for mesh in &model.meshes {
+        let id = mesh.material_id as usize;
+        let path = paths.get(id).cloned().unwrap_or_default();
+        let flags = layer_flags(&mdl_materials, id);
+        if let Some(gap) = flags.blend_gap {
+            warn!(
+                material_id = id,
+                reason = gap.reason(),
+                "Original menu material rendering gap"
+            );
+            info.blend_gaps.push(gap);
+        }
+        let texture = pick(textures, &path);
+        // The texture's own `TEXS` flags decide whether it repeats. The scene's
+        // UVs run far outside `[0, 1]` (its sky spans about `U -2.6 .. 4.3`), so
+        // a clamp smears one row and column across the surface.
+        let handle = texture.map(|t| {
+            let mut image = pcx_gfx::viewer::rgba_image(t);
+            image.sampler =
+                pcx_gfx::viewer::sampler_for_texture_flags(texture_flags(&authored, &path));
+            images.add(image)
+        });
+        if texture.is_none() && !path.is_empty() {
+            info.missing_textures.push(path.clone());
+        }
+        let alpha = opacity.sample(mesh.geoset, frame, 0).ok_or_else(|| {
+            SceneError::Decode(format!(
+                "missing opacity binding for geoset {}",
+                mesh.geoset
+            ))
+        })?;
+        let material = materials.add(StandardMaterial {
+            base_color: flags.base_color(texture.is_some()).with_alpha(alpha),
+            base_color_texture: handle,
+            // Glue art is scenery, not a lit character, so a high roughness
+            // keeps it from picking up a sheen the original has not got.
+            perceptual_roughness: 1.0,
+            // `Unshaded` in the layer's shading flags.
+            unlit: flags.unshaded,
+            // `filterMode`.
+            alpha_mode: flags.alpha_mode,
+            // Culling is left off on purpose: the bit that means `TwoSided` in
+            // this format is not established by measurement here, and guessing
+            // wrong makes a geoset vanish rather than merely look different.
+            cull_mode: None,
+            ..default()
+        });
+        handles.push(meshes.add(pcx_gfx::to_bevy_mesh(mesh)));
+        let entity = commands
+            .spawn((
+                Mesh3d(handles.last().unwrap().clone()),
+                MeshMaterial3d(material.clone()),
+                if alpha <= 0.0 {
+                    Visibility::Hidden
+                } else {
+                    Visibility::Inherited
+                },
+                bundle.clone(),
+            ))
+            .id();
+        bound.push((mesh.geoset, entity, material));
+        info.geosets += 1;
+    }
+    Ok(Geosets { handles, bound })
+}
+
+/// Writes each bound geoset's opacity at `frame`, hiding the ones at zero.
+pub fn apply_opacity<F: bevy::ecs::query::QueryFilter>(
+    opacity: &pcx_gfx::mdx_opacity::OpacityPlan,
+    bound: &[BoundGeoset],
+    frame: u32,
+    elapsed_ms: u64,
+    materials: &mut Assets<StandardMaterial>,
+    visibility: &mut Query<&mut Visibility, F>,
+) {
+    for (geoset, entity, handle) in bound {
+        let Some(alpha) = opacity.sample(*geoset, frame, elapsed_ms) else {
+            continue;
+        };
+        if let Some(mut material) = materials.get_mut(handle) {
+            material.base_color = material.base_color.with_alpha(alpha);
+        }
+        if let Ok(mut visibility) = visibility.get_mut(*entity) {
+            *visibility = if alpha <= 0.0 {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            };
+        }
+    }
+}
+
+/// A model's rest meshes and the joints that pose them.
+pub struct Rig<'a> {
+    pub model: &'a pcx_gfx::LoadedModel,
+    pub bones: &'a [pcx_mdl::Bone],
+    pub pivots: &'a pcx_mdl::Pivots,
+    /// `GLBS` durations, indexed by global-sequence id.
+    pub global_durations: &'a [u32],
+}
+
+/// Poses the skeleton at `frame` and rewrites every geoset's positions.
+///
+/// The poses compose through the decoder's own matrix convention
+/// ([`pcx_gfx::pose_from_poses`] and [`pcx_gfx::skin_mesh`]); global-sequence
+/// tracks run on `elapsed_ms` (see [`tracked_pose`]).
+pub fn skin_geosets(
+    rig: Rig,
+    handles: &[Handle<Mesh>],
+    frame: u32,
+    elapsed_ms: u32,
+    meshes: &mut Assets<Mesh>,
+) {
+    let poses: Vec<pcx_mdl::Pose> = rig
+        .bones
+        .iter()
+        .map(|b| tracked_pose(b, frame, elapsed_ms, rig.global_durations))
+        .collect();
+    let skeleton = pcx_gfx::pose_from_poses(rig.model, rig.bones, rig.pivots, &poses);
+    for (handle, rest) in handles.iter().zip(&rig.model.meshes) {
+        let Some(mut mesh) = meshes.get_mut(handle) else {
+            continue;
+        };
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_POSITION,
+            pcx_gfx::skin_mesh(rest, &skeleton),
+        );
+    }
+}
+
 /// Marker for the camera this module owns, so a caller can find and remove it.
 #[derive(Component)]
 pub struct MainMenuSceneCamera;
 
 /// All entities owned by a scene, so changing expansion removes the old scene.
-#[derive(Component)]
+#[derive(Component, Clone)]
 pub struct MainMenuSceneEntity;
 
 /// The authored `TEXS` flags for a texture path, or `0` when the model does not
@@ -783,52 +911,32 @@ pub fn advance(
     // running across a clip wrap, which is the whole point of it being global.
     scene.elapsed += time.delta();
     let frame = scene.interval_start + scene.time_ms as u32;
+    let elapsed_ms = scene.elapsed.as_millis();
     if let Some(opacity) = &scene.opacity {
-        for (geoset, entity, handle) in &scene.opacity_materials {
-            if let Some(alpha) = opacity.sample(*geoset, frame, scene.elapsed.as_millis() as u64) {
-                if let Some(mut material) = materials.get_mut(handle) {
-                    material.base_color = material.base_color.with_alpha(alpha);
-                }
-                if let Ok(mut visibility) = visibility.get_mut(*entity) {
-                    *visibility = if alpha <= 0.0 {
-                        Visibility::Hidden
-                    } else {
-                        Visibility::Inherited
-                    };
-                }
-            }
-        }
-    }
-
-    let Some(model) = scene.model.as_ref() else {
-        return;
-    };
-    let Some(pivots) = scene.pivots.as_ref() else {
-        return;
-    };
-    let poses: Vec<pcx_mdl::Pose> = scene
-        .bones
-        .iter()
-        .map(|b| {
-            tracked_pose(
-                b,
-                frame,
-                scene.elapsed.as_millis() as u32,
-                &scene.global_durations,
-            )
-        })
-        .collect();
-    let skeleton = pcx_gfx::pose_from_poses(model, &scene.bones, pivots, &poses);
-
-    for (handle, rest) in scene.handles.iter().zip(&model.meshes) {
-        let Some(mut mesh) = meshes.get_mut(handle) else {
-            continue;
-        };
-        mesh.insert_attribute(
-            Mesh::ATTRIBUTE_POSITION,
-            pcx_gfx::skin_mesh(rest, &skeleton),
+        apply_opacity(
+            opacity,
+            &scene.opacity_materials,
+            frame,
+            elapsed_ms as u64,
+            &mut materials,
+            &mut visibility,
         );
     }
+    let (Some(model), Some(pivots)) = (scene.model.as_ref(), scene.pivots.as_ref()) else {
+        return;
+    };
+    skin_geosets(
+        Rig {
+            model,
+            bones: &scene.bones,
+            pivots,
+            global_durations: &scene.global_durations,
+        },
+        &scene.handles,
+        frame,
+        elapsed_ms as u32,
+        &mut meshes,
+    );
 }
 
 #[cfg(test)]

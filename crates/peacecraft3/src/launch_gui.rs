@@ -259,6 +259,16 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     );
     app.add_systems(
         Update,
+        (
+            crate::menu_sprites::advance
+                .run_if(resource_exists::<crate::menu_sprites::MenuPanels>)
+                .run_if(menu_is_visible),
+            crate::menu_sprites::follow_ui_viewport,
+        )
+            .after(show_menu_or_launcher),
+    );
+    app.add_systems(
+        Update,
         crate::menu_panel::advance_logo
             .after(initialize_menu_logo)
             .run_if(menu_is_visible),
@@ -308,6 +318,8 @@ fn setup(mut commands: Commands, l: Res<Launcher>) {
         Camera2d,
         bevy::ui::IsDefaultUiCamera,
         Camera {
+            // After the menu background (-1) and its sprite layers (0).
+            order: 1,
             clear_color: bevy::camera::ClearColorConfig::Custom(BG_APP),
             ..default()
         },
@@ -537,6 +549,7 @@ fn invalidate_on_asset_revision(
         commands.entity(entity).despawn();
     }
     commands.remove_resource::<crate::mainmenu_scene::MainMenuScene>();
+    commands.remove_resource::<crate::menu_sprites::MenuPanels>();
     scene.finished = false;
     info!(
         "Asset store changed (revision {}): re-reading the menu art and labels",
@@ -641,6 +654,7 @@ fn initialize_menu_scene(
             commands.entity(entity).despawn();
         }
         commands.remove_resource::<crate::mainmenu_scene::MainMenuScene>();
+        commands.remove_resource::<crate::menu_sprites::MenuPanels>();
         state.addon = Some(launcher.mode.addon);
         state.finished = false;
     }
@@ -684,7 +698,28 @@ fn initialize_menu_scene(
             info.duration_ms,
             info.missing_textures
         ),
-        Err(error) => warn!("Original menu background: {error}"),
+        Err(error) => {
+            warn!("Original menu background: {error}");
+            return;
+        }
+    }
+    // The skin keys' `_V%d` is the edition: 0 Reign of Chaos, 1 The Frozen Throne.
+    let edition = u32::from(launcher.mode.addon == Addon::Tft);
+    let panels = crate::menu_sprites::load(install.as_deref(), edition).and_then(|sources| {
+        crate::menu_sprites::spawn(
+            &mut commands,
+            crate::mainmenu_scene::GeosetAssets {
+                meshes: &mut meshes,
+                materials: &mut materials,
+                images: &mut images,
+            },
+            install.as_deref(),
+            sources,
+        )
+    });
+    match panels {
+        Ok(count) => info!("Original menu panels: {count} sprite layers, MainMenu Birth"),
+        Err(error) => warn!("Original menu panels: {error}"),
     }
 }
 

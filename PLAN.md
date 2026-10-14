@@ -1238,7 +1238,8 @@ layer in the trace header.
 ### M11 — WASM build
 
 - [x] Skippable original startup cinematic from locally supplied media, followed by the menu. Browser playback, soundtrack pausing/resuming, mute preference and native decoder cleanup are implemented; see [movie evidence](docs/intro-movie.md).
-- [x] TFT logo uses parsed authored Birth Bézier and the traced default sprite origin; hanging-panel entrance is still open.
+- [x] TFT logo uses parsed authored Birth Bézier and the traced default sprite origin.
+- [x] Hanging-panel entrance: TopLeft/TopRight sprite layers play parsed `MainMenu Birth` then `MainMenu Stand` with their authored `SNDX` sounds; see `docs/re-notes/menu-sprite-rendering.md`.
 - [ ] Preserve original resolution handling across common classic and widescreen modes, resize and display density. Background fills the display; ordinary UI follows the original wide-window branch and direct classic conversion. Portrait containment is a browser extension. Record native live flags before claiming exact parity at every resolution.
 
 - [ ] **Local ISO import, entirely inside the browser.** The user selects an

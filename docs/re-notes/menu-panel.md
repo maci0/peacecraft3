@@ -122,4 +122,4 @@ The 500 ms entrance samples the parsed cubic Bézier and preserves fractional fr
 
 The background fills the display separately from the authored UI viewport, as the original background initialization explicitly sets the full-width flag. Widescreen controls follow the centered authored branch; square/5:4 displays retain the original direct conversion. Portrait browser containment is a compatibility policy, not an observed original-client mode.
 
-The hanging panel is now identified as the authored `SpriteLayers` models; see [panel origin](menu-panel-origin.md). It is not yet rendered, so the complete menu entrance and visual-fidelity gate remain open. Its model state machine, material layers and geoset alpha must be implemented from shipped data rather than replaced by a still image or a CSS transition.
+The hanging panel is the authored `SpriteLayers` models; see [panel origin](menu-panel-origin.md). Its `MainMenu Birth` entrance, geoset alpha and sound events are rendered from shipped data; see [sprite rendering](menu-sprite-rendering.md). The visual-fidelity gate remains open.

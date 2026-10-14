@@ -86,7 +86,7 @@ pub struct Section {
 /// This lookup policy is not proof of native engine precedence.
 ///
 /// Named for the caller-policy resolver and the tests; the production
-/// [`SkinTable::font_file_unique`] assumes no section order and so does not use it.
+/// [`SkinTable::unique_file`] assumes no section order and so does not use it.
 #[cfg(test)]
 pub const DEFAULT_SECTION: &str = "Default";
 
@@ -164,7 +164,8 @@ impl SkinTable {
         self.sections.iter().find(|s| s.name == name)
     }
 
-    /// Resolves a face to its file **without assuming any section precedence**.
+    /// Resolves a key (a font face, a sprite-layer model) to its file **without
+    /// assuming any section precedence**.
     ///
     /// The engine's lookup order is **not established**, so no section is
     /// preferred and none is guessed: the face must be defined **exactly once
@@ -183,7 +184,7 @@ impl SkinTable {
     /// [`SkinError::Duplicate`] when it defines it more than once, and
     /// [`SkinError::EmptyValue`] when it resolves to nothing. No default face or
     /// file is substituted.
-    pub fn font_file_unique(&self, face: &str) -> Result<FontBinding, SkinError> {
+    pub fn unique_file(&self, face: &str) -> Result<FontBinding, SkinError> {
         let mut found: Vec<(String, String)> = Vec::new();
         for section in self.sections() {
             for (key, value) in &section.entries {
@@ -219,7 +220,7 @@ impl SkinTable {
     /// observation of the game's font lookup has been made, so a race section
     /// overriding `[Default]` is an inference from the table's shape, not a proven
     /// behaviour. What is proven is the data: the keys, their sections and the file
-    /// they name. Production uses [`SkinTable::font_file_unique`] instead.
+    /// they name. Production uses [`SkinTable::unique_file`] instead.
     ///
     /// **Every** block with the consulted section name is aggregated, not just the
     /// first, so a repeated `[Default]` cannot hide a second definition. Within the
@@ -376,7 +377,7 @@ UndeadUITile01=UI\Widgets\Console\Undead\UndeadUITile01.blp
     #[test]
     fn a_unique_face_resolves_wherever_it_is() {
         let t = SkinTable::parse(TABLE).unwrap();
-        let b = t.font_file_unique("MasterFont").unwrap();
+        let b = t.unique_file("MasterFont").unwrap();
         assert_eq!(b.file, r"Fonts\FRIZQT__.TTF");
         assert_eq!(b.section, DEFAULT_SECTION);
     }
@@ -388,14 +389,14 @@ UndeadUITile01=UI\Widgets\Console\Undead\UndeadUITile01.blp
         let text = "[Default]\nMasterFont=Fonts\\A.TTF\n[Human]\nMasterFont=Fonts\\B.TTF\n";
         let t = SkinTable::parse(text).unwrap();
         assert!(matches!(
-            t.font_file_unique("MasterFont"),
+            t.unique_file("MasterFont"),
             Err(SkinError::Duplicate { values, .. }) if values.len() == 2
         ));
         let same = "[Default]\nMasterFont=Fonts\\A.TTF\n[Human]\nMasterFont=Fonts\\A.TTF\n";
         let t = SkinTable::parse(same).unwrap();
         assert!(
             matches!(
-                t.font_file_unique("MasterFont"),
+                t.unique_file("MasterFont"),
                 Err(SkinError::Duplicate { .. })
             ),
             "equal values are still two definitions"
@@ -407,7 +408,7 @@ UndeadUITile01=UI\Widgets\Console\Undead\UndeadUITile01.blp
     fn the_unique_resolution_refuses_missing_and_empty() {
         let t = SkinTable::parse(TABLE).unwrap();
         assert_eq!(
-            t.font_file_unique("NoSuchFont"),
+            t.unique_file("NoSuchFont"),
             Err(SkinError::UnknownFace("NoSuchFont".to_string()))
         );
         let empty = SkinTable::parse("[Default]\nMasterFont=\n").unwrap();
@@ -422,7 +423,7 @@ UndeadUITile01=UI\Widgets\Console\Undead\UndeadUITile01.blp
 
     /// The empty-value refusal, named so the assertion above stays readable.
     fn font_file_error(t: &SkinTable) -> Result<FontBinding, SkinError> {
-        t.font_file_unique("MasterFont")
+        t.unique_file("MasterFont")
     }
 
     /// A repeated section name must not hide a second definition: every block with

@@ -186,7 +186,7 @@ pub fn menu_font_file(
     skin: &str,
     face: &str,
 ) -> Result<crate::menu_skin::FontBinding, crate::menu_skin::SkinError> {
-    crate::menu_skin::SkinTable::parse(skin)?.font_file_unique(face)
+    crate::menu_skin::SkinTable::parse(skin)?.unique_file(face)
 }
 
 /// The served name for a derived font file, so a browser can supply it.

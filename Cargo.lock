@@ -5006,6 +5006,7 @@ dependencies = [
  "pcx-mdl",
  "pcx-mpq",
  "pcx-sim",
+ "pcx-slq",
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",

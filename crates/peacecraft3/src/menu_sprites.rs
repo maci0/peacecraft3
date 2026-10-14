@@ -1,906 +1,663 @@
-//! Authored TFT glue sprite layers: the panel model's entrance, as data.
+//! The glue sprite layers over the main menu's 3D background: the
+//! `GlueSpriteLayerTopLeft` and `GlueSpriteLayerTopRight` panels, their
+//! `MainMenu Birth` entrance and the sounds its event objects fire.
 //!
-//! The expansion main menu's hanging panel is the model
-//! `UI\Glues\SpriteLayers\Expansion\TopRightPanel-Expansion.mdx`, selected by the
-//! skin key `GlueSpriteLayerTopRight_V%d` in `UI\war3skins.txt` (see
-//! `docs/re-notes/menu-panel-origin.md`). This module reads that model's own
-//! `SEQS`, `BONE` and `GEOA` and exposes:
-//!
-//! 1. a **data source** — [`PanelArt::load`] parses the shipped bytes, and
-//!    [`PanelArt::sample_pose`] evaluates the model's bones and geoset alphas at
-//!    a time inside a named sequence (`MainMenu Birth` → `MainMenu Stand`);
-//! 2. a **render contract** — [`SpriteLayerContract`] carries the native
-//!    coordinate facts and [`sprite_camera`] builds an *optional*, isolated
-//!    orthographic camera for them.
-//!
-//! It deliberately does **not** touch `mainmenu_scene`'s `MainMenuScene`
-//! resource, its `GlobalAmbientLight` or its cameras. The sprite layer is a
-//! separate compositing pass over the 3D scene, and this module only describes
-//! it; the application root wires it, and owns the relative viewport.
-//!
-//! ## Why there is no finished mesh here
-//!
-//! The panel's raw `VRTX` bounds are `x [0.4243, 0.9734]`, `y [-0.1072, 1.2526]`
-//! — they **exceed** the authored glue viewport of `0.8 × 0.6`. So the vertices
-//! cannot be placed by the naive `frame.left + modelX` / `frame.bottom + modelY`
-//! rule alone: the model's own 168 KB `BONE` hierarchy transforms them first, and
-//! that transform has not been checked against the native projection. Building a
-//! mesh with a scale chosen to make it "fit" would be inventing the very
-//! projection the evidence does not yet give.
-//!
-//! So this module stops at the **data source and the sampled-pose contract**. The
-//! diagnosed blocker is: *the panel needs its bone-skinning transform applied
-//! before the glue origin rule, and the posed result has not been compared
-//! against the native C `CSpriteFrame` default projection.* Closing it means
-//! sampling the model's bones for `MainMenu Birth`/`Stand` and checking the
-//! posed extent against `0.8 × 0.6` — which needs the skinning path, not a guess.
+//! Everything is read from the install. The model paths come from
+//! `UI\war3skins.txt`; the sequences, bones, geoset opacity and `SNDX` event
+//! frames from each model; each event's file and volume from
+//! `UI\SoundInfo\AnimLookups.slk` and `AnimSounds.slk`. The panels are posed by
+//! the same skinning path as the background ([`scene::skin_geosets`]) and drawn
+//! through an orthographic camera over the authored `0.8 × 0.6` glue frame,
+//! below the UI. See `docs/re-notes/menu-sprite-rendering.md`.
+
+use std::sync::Arc;
 
 use bevy::camera::ScalingMode;
+use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
+use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::prelude::*;
-use pcx_mdl::{Interpolation, Mdlx, TrackKind};
 
-/// The panel model the expansion skin selects.
-pub const PANEL_MODEL: &str = r"UI\Glues\SpriteLayers\Expansion\TopRightPanel-Expansion.mdx";
-/// The served name for a browser.
-pub const PANEL_MODEL_SERVED: &str = "menu-sprites/toprightpanel-expansion.mdx";
+use crate::mainmenu_scene as scene;
 
-/// The skin key pattern. `UI\war3skins.txt` supplies `_V0` (Reign of Chaos),
-/// `_V1` (The Frozen Throne) and `_V1Beta`; the numeric suffix is the edition.
-pub const SKIN_KEY_TOPRIGHT: &str = "GlueSpriteLayerTopRight_V%d";
+/// The sprite-layer skin keys the glue initializer builds as `%s_V%d`, where the
+/// number is the edition (`0` Reign of Chaos, `1` The Frozen Throne). Both names
+/// are strings in `game.dll`.
+pub const LAYERS: [&str; 2] = ["GlueSpriteLayerTopLeft", "GlueSpriteLayerTopRight"];
+/// The main menu's animation tag. `game.dll`'s tag table lists `mainmenu` with
+/// the other glue screens, beside `Death`, `Birth` and `Stand`.
+const SCREEN: &str = "MainMenu";
+const BIRTH: &str = "Birth";
+const STAND: &str = "Stand";
+/// `EVTS` object name prefix of a sound event; the four characters after it are
+/// the event's `AnimLookups.slk` key.
+const SOUND_EVENT: &str = "SNDX";
+const SOUND_CODE_LEN: usize = 4;
+pub const ANIM_LOOKUPS: &str = r"UI\SoundInfo\AnimLookups.slk";
+pub const ANIM_SOUNDS: &str = r"UI\SoundInfo\AnimSounds.slk";
+/// Full scale of the sound tables' `Volume` column.
+const VOLUME_FULL: f32 = 127.0;
+/// Shared by the panel camera and the panel geosets, so the background camera
+/// does not draw the panels and the panel camera does not draw the background.
+const RENDER_LAYER: usize = 7;
+/// Draws after the background camera (`-1`) and before the UI camera (`1`).
+const CAMERA_ORDER: isize = 0;
 
-/// Edition index for the Reign of Chaos panel (`GlueSpriteLayerTopRight_V0`).
-pub const SKIN_INDEX_ROC: u32 = 0;
-/// Edition index for the expansion panel (`GlueSpriteLayerTopRight_V1`), which is
-/// the TFT default. Only this index names the `-Expansion` art; `_V1Beta`
-/// resolves to the base panel.
-pub const SKIN_INDEX_TFT: u32 = 1;
-
-/// The authored glue viewport, from the original arithmetic
-/// `out[0] = in[0] / 0.8f; out[1] = in[1] / 0.6f`
-/// (`docs/re-notes/glue-coordinate-runtime.md`). Authored X is divided by this
-/// width and authored Y by this height.
-pub const GLUE_VIEW_WIDTH: f32 = 0.8;
-/// The authored glue viewport height.
-pub const GLUE_VIEW_HEIGHT: f32 = 0.6;
-
-/// The camera argument the glue assigns the top-left/top-right overlay sprites.
-///
-/// `−1` means *no authored camera*: the overlay takes the default sprite
-/// projection rather than a `CAMS` record, which is why this model needs no
-/// camera selection (`docs/re-notes/glue-coordinate-runtime.md`).
-pub const OVERLAY_CAMERA_ARG: i32 = -1;
-
-/// The sequence that plays when the main menu appears.
-pub const SEQ_MAINMENU_BIRTH: &str = "MainMenu Birth";
-/// The sequence the menu holds.
-pub const SEQ_MAINMENU_STAND: &str = "MainMenu Stand";
-/// The sequence that plays when the menu is dismissed.
-pub const SEQ_MAINMENU_DEATH: &str = "MainMenu Death";
-
-/// Render layer for the sprite overlay. The root gives this layer to the sprite
-/// camera and to the sprite entities so the pass isolates the original 3D scene;
-/// it is a number rather than a `RenderLayers` value here because this module
-/// owns no GPU state.
-pub const SPRITE_RENDER_LAYER: u8 = 7;
-
-/// Why the panel model could not be read.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PanelProblem {
-    /// `Mdlx::parse` failed.
-    Parse(String),
-    /// A chunk the panel needs did not decode.
-    Chunk(String),
-    /// The named sequence is absent.
-    NoSequence(String),
-    /// The model has no bones, so nothing can be posed.
-    NoBones,
+/// Why the panels, or one of their sounds, could not be read.
+#[derive(Debug, thiserror::Error)]
+pub enum PanelError {
+    #[error("{0} is not readable")]
+    Missing(String),
+    #[error("{path}: {reason}")]
+    Decode { path: String, reason: String },
+    #[error("skin table: {0}")]
+    Skin(crate::menu_skin::SkinError),
+    #[error("{path} has no {name:?} sequence")]
+    NoSequence { path: String, name: String },
+    #[error("sound event {event}: {reason}")]
+    Sound { event: String, reason: String },
+    #[error(transparent)]
+    Scene(#[from] scene::SceneError),
 }
 
-impl std::fmt::Display for PanelProblem {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Parse(e) => write!(f, "the panel model did not parse: {e}"),
-            Self::Chunk(e) => write!(f, "a panel chunk did not decode: {e}"),
-            Self::NoSequence(n) => write!(f, "the panel has no {n:?} sequence"),
-            Self::NoBones => write!(f, "the panel model has no bones"),
-        }
-    }
-}
-
-/// One `SEQS` entry, as parsed.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PanelSequence {
-    /// Sequence name, e.g. `MainMenu Birth`.
-    pub name: String,
-    /// First frame, milliseconds.
-    pub start: u32,
-    /// Last frame, milliseconds.
-    pub end: u32,
-}
-
-impl PanelSequence {
-    /// Length in milliseconds.
-    #[must_use]
-    pub fn duration(&self) -> u32 {
-        self.end.saturating_sub(self.start)
-    }
-}
-
-/// One key of a bone track.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TrackKey {
-    /// Frame, milliseconds.
+/// A sound event the entrance fires, resolved to its file.
+#[derive(Debug, Clone)]
+pub struct EventSound {
+    /// The model frame the event fires at.
     pub frame: u32,
-    /// The key's value.
-    pub value: [f32; 4],
-    /// Tangent into this key.
-    pub in_tan: [f32; 4],
-    /// Tangent out of this key.
-    pub out_tan: [f32; 4],
+    pub path: String,
+    /// Linear gain, `Volume / 127`.
+    pub volume: f32,
+    pub bytes: Arc<[u8]>,
 }
 
-/// One bone track, reduced to the keys the pose sampler reads.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PanelTrack {
-    /// Translation, rotation or scaling.
-    pub kind: TrackKind,
-    /// How keys between samples are joined.
-    pub interpolation: Interpolation,
-    /// The keys, in file order.
-    pub keys: Vec<TrackKey>,
+/// One panel as read from the install, before anything is spawned.
+pub struct PanelSource {
+    pub path: String,
+    pub bytes: Vec<u8>,
+    pub timeline: Timeline,
+    pub sounds: Vec<EventSound>,
 }
 
-/// One bone, with the tracks that move it.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PanelBone {
-    /// Identifier other records reference.
-    pub object_id: u32,
-    /// Parent object id, or a negative value for a root.
-    pub parent_id: i32,
-    /// Authored name.
-    pub name: String,
-    /// The bone's animation tracks.
-    pub tracks: Vec<PanelTrack>,
-}
-
-/// A geoset-animation record, bound to its geoset **by id**.
-///
-/// The `GEOA` record's explicit `geosetId` sits at record `+24` (`body + 20`),
-/// which the current decoder drops, so this module reads it from the raw chunk
-/// and carries it here. Binding is by that id — **never** by array position,
-/// because the panel's ids are a subset of the geoset indices (it has records for
-/// `0, 2..8, 14..56` and none for `1, 9..13`), so positional pairing would
-/// misbind at least six geosets. `None` means the id could not be read, which is
-/// reported rather than defaulted.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PanelGeosetAnim {
-    /// The geoset this record animates, read from the record itself.
-    pub geoset_id: Option<u32>,
-    /// Record flags.
-    pub flags: u32,
-    /// Static alpha, before any track.
-    pub static_alpha: f32,
-    /// Static colour, before any track.
-    pub static_colour: [f32; 3],
-    /// `KGAO`/`KGAA` alpha keys, if the record animates alpha.
-    pub alpha_keys: Vec<(u32, f32)>,
-}
-
-/// A geoset's vertex bounds.
+/// `MainMenu Birth` once, then `MainMenu Stand`, in model frames (milliseconds).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PanelQuad {
-    /// `minX, minY, maxX, maxY`.
-    pub bounds: (f32, f32, f32, f32),
+pub struct Timeline {
+    pub birth: [u32; 2],
+    pub stand: [u32; 2],
+    /// The `Stand` sequence's `SEQS` looping flag.
+    pub stand_loops: bool,
 }
 
-impl PanelQuad {
-    /// Width in model units.
-    #[must_use]
-    pub fn width(&self) -> f32 {
-        self.bounds.2 - self.bounds.0
+impl Timeline {
+    fn birth_ms(&self) -> f64 {
+        f64::from(self.birth[1] - self.birth[0])
     }
 
-    /// Height in model units.
-    #[must_use]
-    pub fn height(&self) -> f32 {
-        self.bounds.3 - self.bounds.1
-    }
-}
-
-/// The parsed panel model.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PanelArt {
-    /// `SEQS`, in file order.
-    pub sequences: Vec<PanelSequence>,
-    /// `BONE`, in file order.
-    pub bones: Vec<PanelBone>,
-    /// `GEOA`, in file order.
-    pub geoset_anims: Vec<PanelGeosetAnim>,
-    /// One quad per geoset, in file order.
-    pub quads: Vec<PanelQuad>,
-    /// `TEXS` paths, in file order.
-    pub textures: Vec<String>,
-    /// Number of `CAMS` records. Expected to be zero for an overlay sprite.
-    pub camera_count: usize,
-}
-
-impl PanelArt {
-    /// Reads the panel out of the model's bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PanelProblem`] when the model will not parse or a chunk it needs
-    /// will not decode. Nothing is defaulted silently.
-    pub fn load(bytes: &[u8]) -> Result<Self, PanelProblem> {
-        let m = Mdlx::parse(bytes).map_err(|e| PanelProblem::Parse(e.to_string()))?;
-        let chunk = |e: pcx_mdl::Error| PanelProblem::Chunk(e.to_string());
-
-        let sequences = m
-            .sequences(bytes)
-            .map_err(chunk)?
-            .into_iter()
-            .map(|s| PanelSequence {
-                name: s.name,
-                start: s.interval_start,
-                end: s.interval_end,
-            })
-            .collect();
-
-        let bones: Vec<PanelBone> = m
-            .bones(bytes)
-            .map_err(chunk)?
-            .into_iter()
-            .map(|b| PanelBone {
-                object_id: b.object_id,
-                parent_id: b.parent_id,
-                name: b.name,
-                tracks: b
-                    .tracks
-                    .iter()
-                    .map(|t| PanelTrack {
-                        kind: t.kind,
-                        interpolation: t.interpolation,
-                        keys: (0..t.count as usize)
-                            .map_while(|i| {
-                                Some(TrackKey {
-                                    frame: t.key_time(i)?,
-                                    value: t.value(i)?,
-                                    in_tan: t.in_tangent(i)?,
-                                    out_tan: t.out_tangent(i)?,
-                                })
-                            })
-                            .collect(),
-                    })
-                    .collect(),
-            })
-            .collect();
-
-        let geoset_ids = geoa_geoset_ids(&m, bytes);
-        let geoset_anims: Vec<PanelGeosetAnim> = m
-            .geoset_anims(bytes)
-            .map_err(chunk)?
-            .into_iter()
-            .enumerate()
-            .map(|(i, g)| PanelGeosetAnim {
-                geoset_id: geoset_ids.get(i).copied(),
-                flags: g.flags,
-                static_alpha: g.static_alpha,
-                static_colour: g.static_colour,
-                alpha_keys: g
-                    .tracks
-                    .iter()
-                    .filter(|t| matches!(&t.magic[..], b"KGAO" | b"KGAA"))
-                    .flat_map(|t| (0..t.count as usize).map(|i| (t.frame(i), t.value(i))))
-                    .collect(),
-            })
-            .collect();
-
-        let quads = m
-            .geosets(bytes)
-            .map_err(chunk)?
-            .iter()
-            .map(|g| PanelQuad {
-                bounds: vrtx_bounds(&g.data).unwrap_or((0.0, 0.0, 0.0, 0.0)),
-            })
-            .collect();
-
-        let textures = m
-            .textures(bytes)
-            .map_err(chunk)?
-            .into_iter()
-            .map(|t| t.path)
-            .collect();
-
-        let camera_count = m.cameras(bytes).map_err(chunk)?.len();
-
-        Ok(Self {
-            sequences,
-            bones,
-            geoset_anims,
-            quads,
-            textures,
-            camera_count,
-        })
+    fn in_birth(&self, ms: f64) -> bool {
+        ms < self.birth_ms()
     }
 
-    /// The named sequence, if present.
-    #[must_use]
-    pub fn sequence(&self, name: &str) -> Option<&PanelSequence> {
-        self.sequences.iter().find(|s| s.name == name)
-    }
-
-    /// The geoset-animation record that animates `geoset_id`, found **by id**.
-    #[must_use]
-    pub fn geoanim_for_geoset(&self, geoset_id: u32) -> Option<&PanelGeosetAnim> {
-        self.geoset_anims
-            .iter()
-            .find(|g| g.geoset_id == Some(geoset_id))
-    }
-
-    /// The alpha of `geoset_id` at an absolute frame, or `None` when no record
-    /// animates that geoset.
-    #[must_use]
-    pub fn alpha_for_geoset(&self, geoset_id: u32, frame: f64) -> Option<f32> {
-        let g = self.geoanim_for_geoset(geoset_id)?;
-        if g.alpha_keys.is_empty() {
-            Some(g.static_alpha)
-        } else {
-            sample_alpha(&g.alpha_keys, frame).or(Some(g.static_alpha))
+    /// The model frame `ms` after the entrance began.
+    fn frame_at(&self, ms: f64) -> u32 {
+        if self.in_birth(ms) {
+            return self.birth[0] + ms as u32;
         }
-    }
-
-    /// The union of every geoset's vertex bounds, in **model** units.
-    ///
-    /// These are model-space extents. They are *not* screen positions: see the
-    /// module note on why the bone transform must be applied first.
-    #[must_use]
-    pub fn model_bounds(&self) -> (f32, f32, f32, f32) {
-        let mut b = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-        for q in &self.quads {
-            b.0 = b.0.min(q.bounds.0);
-            b.1 = b.1.min(q.bounds.1);
-            b.2 = b.2.max(q.bounds.2);
-            b.3 = b.3.max(q.bounds.3);
+        let period = self.stand[1] - self.stand[0];
+        let into = (ms - self.birth_ms()) as u64;
+        if !self.stand_loops || period == 0 {
+            return self.stand[0] + into.min(u64::from(period)) as u32;
         }
-        b
+        self.stand[0] + (into % u64::from(period)) as u32
     }
 
-    /// Evaluates the model at `t_ms` into `seq`.
-    ///
-    /// Every bone with a key on or before the sample contributes its local
-    /// translation, rotation and scale; every geoset-animation record contributes
-    /// an alpha. Frame is absolute — `seq.start + t_ms` — because the records key
-    /// absolute model frames, not sequence-relative ones.
-    #[must_use]
-    pub fn sample_pose(&self, seq: &PanelSequence, t_ms: f64) -> PanelPose {
-        let frame = f64::from(seq.start) + t_ms.max(0.0);
-        let mut nodes = Vec::new();
-        for bone in &self.bones {
-            let mut translation = Vec3::ZERO;
-            let mut rotation = Quat::IDENTITY;
-            let mut scale = Vec3::ONE;
-            let mut touched = false;
-            for track in &bone.tracks {
-                let Some(v) = sample_keys(&track.keys, track.interpolation, frame) else {
-                    continue;
-                };
-                touched = true;
-                match track.kind {
-                    TrackKind::Translation => translation = Vec3::new(v[0], v[1], v[2]),
-                    TrackKind::Scaling => scale = Vec3::new(v[0], v[1], v[2]),
-                    TrackKind::Rotation => {
-                        let q = Quat::from_xyzw(v[0], v[1], v[2], v[3]);
-                        rotation = if q.length_squared() > 0.0 {
-                            q.normalize()
-                        } else {
-                            Quat::IDENTITY
-                        };
-                    }
-                }
+    /// Whether an event at `frame` fires while the clock moves over `[from, to)`.
+    fn fires(&self, frame: u32, from: f64, to: f64) -> bool {
+        if (self.birth[0]..=self.birth[1]).contains(&frame) {
+            let at = f64::from(frame - self.birth[0]);
+            return from <= at && at < to;
+        }
+        if !(self.stand[0]..=self.stand[1]).contains(&frame) {
+            return false;
+        }
+        let first = self.birth_ms() + f64::from(frame - self.stand[0]);
+        let period = f64::from(self.stand[1] - self.stand[0]);
+        if !self.stand_loops || period == 0.0 {
+            return from <= first && first < to;
+        }
+        let loops = ((from - first) / period).ceil().max(0.0);
+        first + loops * period < to
+    }
+}
+
+/// Whether a sequence name is exactly the screen tag and `anim`, in any order
+/// and case, as the engine's lowercase tag table implies.
+fn tagged(name: &str, anim: &str) -> bool {
+    let tokens: Vec<&str> = name.split_whitespace().collect();
+    tokens.len() == 2
+        && tokens.iter().any(|t| t.eq_ignore_ascii_case(SCREEN))
+        && tokens.iter().any(|t| t.eq_ignore_ascii_case(anim))
+}
+
+/// The skin table names `.mdl` paths; the archives ship only the binary `.mdx`
+/// for these keys. The native extension rewrite has not been traced.
+fn binary_model_path(path: &str) -> String {
+    match path.len().checked_sub(4).and_then(|at| path.get(at..)) {
+        Some(ext) if ext.eq_ignore_ascii_case(".mdl") => format!("{}.mdx", &path[..path.len() - 4]),
+        _ => path.to_string(),
+    }
+}
+
+fn read(install: Option<&std::path::Path>, path: &str) -> Result<Vec<u8>, PanelError> {
+    crate::mainmenu::art_bytes_named(install, path, path)
+        .ok_or_else(|| PanelError::Missing(path.to_string()))
+}
+
+fn table(install: Option<&std::path::Path>, path: &str) -> Result<pcx_slq::Table, PanelError> {
+    pcx_slq::Table::parse(&read(install, path)?).map_err(|e| PanelError::Decode {
+        path: path.to_string(),
+        reason: e.to_string(),
+    })
+}
+
+/// The file and volume an `SNDX` event plays, from the two sound tables.
+///
+/// `AnimLookups.slk` maps the event's code to a sound label; `AnimSounds.slk`
+/// maps the label to `DirectoryBase`, `FileNames` and `Volume`.
+pub fn resolve_sound(
+    lookups: &pcx_slq::Table,
+    sounds: &pcx_slq::Table,
+    event: &str,
+) -> Result<(String, f32), PanelError> {
+    let fail = |reason: String| PanelError::Sound {
+        event: event.to_string(),
+        reason,
+    };
+    let code = event
+        .get(SOUND_EVENT.len()..)
+        .filter(|code| code.len() == SOUND_CODE_LEN)
+        .ok_or_else(|| fail("not an SNDX name".into()))?;
+    let label = lookups
+        .data_rows()
+        .find(|row| row.by_name("AnimSoundEvent") == Some(code))
+        .and_then(|row| row.by_name("SoundLabel"))
+        .ok_or_else(|| fail(format!("{ANIM_LOOKUPS} has no {code:?}")))?;
+    let row = sounds
+        .data_rows()
+        .find(|row| row.by_name("SoundName") == Some(label))
+        .ok_or_else(|| fail(format!("{ANIM_SOUNDS} has no {label:?}")))?;
+    let files = row
+        .by_name("FileNames")
+        .ok_or_else(|| fail(format!("{label:?} has no FileNames")))?;
+    // ponytail: the engine picks among comma-separated files at random; every
+    // menu panel sound names one, so a list is refused until one needs it.
+    if files.contains(',') {
+        return Err(fail(format!("{label:?} lists several files: {files}")));
+    }
+    let directory = row.by_name("DirectoryBase").unwrap_or_default();
+    let volume = row
+        .by_name("Volume")
+        .and_then(|v| v.parse::<f32>().ok())
+        .filter(|v| (0.0..=VOLUME_FULL).contains(v))
+        .ok_or_else(|| fail(format!("{label:?} has no Volume in 0..=127")))?;
+    Ok((format!("{directory}{files}"), volume / VOLUME_FULL))
+}
+
+/// Reads both panels for `edition` from the install (or, in a browser, from the
+/// imported archives).
+///
+/// A panel without its model or sequences is an error. A sound that cannot be
+/// resolved is logged and left out, so the entrance still plays without it.
+pub fn load(
+    install: Option<&std::path::Path>,
+    edition: u32,
+) -> Result<Vec<PanelSource>, PanelError> {
+    let skins_text = crate::mainmenu::art_bytes(install, crate::mainmenu::SKIN_TABLE)
+        .ok_or_else(|| PanelError::Missing(crate::mainmenu::SKIN_TABLE.to_string()))?;
+    let skins = crate::menu_skin::SkinTable::parse(&String::from_utf8_lossy(&skins_text))
+        .map_err(PanelError::Skin)?;
+    let tables = table(install, ANIM_LOOKUPS).and_then(|l| Ok((l, table(install, ANIM_SOUNDS)?)));
+    if let Err(error) = &tables {
+        warn!("Menu panel sounds unavailable: {error}");
+    }
+    let mut out = Vec::with_capacity(LAYERS.len());
+    for layer in LAYERS {
+        let key = format!("{layer}_V{edition}");
+        let path = binary_model_path(&skins.unique_file(&key).map_err(PanelError::Skin)?.file);
+        let bytes = read(install, &path)?;
+        let decode = |reason: String| PanelError::Decode {
+            path: path.clone(),
+            reason,
+        };
+        let m = pcx_mdl::Mdlx::parse(&bytes).map_err(|e| decode(e.to_string()))?;
+        let sequences = m.sequences(&bytes).map_err(|e| decode(e.to_string()))?;
+        let find = |anim: &str| {
+            sequences
+                .iter()
+                .find(|s| tagged(&s.name, anim))
+                .ok_or_else(|| PanelError::NoSequence {
+                    path: path.clone(),
+                    name: format!("{SCREEN} {anim}"),
+                })
+        };
+        let (birth, stand) = (find(BIRTH)?, find(STAND)?);
+        let timeline = Timeline {
+            birth: [birth.interval_start, birth.interval_end],
+            stand: [stand.interval_start, stand.interval_end],
+            stand_loops: !stand.non_looping,
+        };
+        let events = m
+            .event_nodes(&bytes, pcx_mdl::tag::EVTS)
+            .map_err(|e| decode(e.to_string()))?;
+        let mut sounds = Vec::new();
+        for event in &events {
+            let is_sound = event
+                .name
+                .get(..SOUND_EVENT.len())
+                .is_some_and(|p| p.eq_ignore_ascii_case(SOUND_EVENT));
+            let frames: Vec<u32> = event
+                .frames
+                .iter()
+                .copied()
+                .filter(|&f| {
+                    (timeline.birth[0]..=timeline.birth[1]).contains(&f)
+                        || (timeline.stand[0]..=timeline.stand[1]).contains(&f)
+                })
+                .collect();
+            if !is_sound || frames.is_empty() {
+                continue;
             }
-            if touched {
-                nodes.push((
-                    bone.object_id,
-                    NodePose {
-                        translation,
-                        rotation,
-                        scale,
-                    },
-                ));
+            let Ok((lookups, table)) = &tables else {
+                continue;
+            };
+            let resolved = resolve_sound(lookups, table, &event.name)
+                .and_then(|(file, volume)| Ok((read(install, &file)?, file, volume)));
+            match resolved {
+                Ok((wav, file, volume)) => {
+                    let wav: Arc<[u8]> = wav.into();
+                    sounds.extend(frames.into_iter().map(|frame| EventSound {
+                        frame,
+                        path: file.clone(),
+                        volume,
+                        bytes: wav.clone(),
+                    }));
+                }
+                Err(error) => warn!("{path}: {error}"),
             }
         }
+        out.push(PanelSource {
+            path,
+            bytes,
+            timeline,
+            sounds,
+        });
+    }
+    Ok(out)
+}
 
-        let alphas = self
-            .geoset_anims
+/// One spawned panel.
+struct Panel {
+    model: pcx_gfx::LoadedModel,
+    bones: Vec<pcx_mdl::Bone>,
+    pivots: pcx_mdl::Pivots,
+    global_durations: Vec<u32>,
+    geosets: scene::Geosets,
+    timeline: Timeline,
+    birth_opacity: pcx_gfx::mdx_opacity::OpacityPlan,
+    stand_opacity: pcx_gfx::mdx_opacity::OpacityPlan,
+    sounds: Vec<EventSound>,
+}
+
+/// The live panels and the entrance clock they share.
+#[derive(Resource)]
+pub struct MenuPanels {
+    panels: Vec<Panel>,
+    elapsed_ms: f64,
+}
+
+/// Marker for the panel camera, whose viewport follows the UI camera's.
+#[derive(Component)]
+pub struct PanelCamera;
+
+/// Spawns the panels and their camera. Every entity carries
+/// [`scene::MainMenuSceneEntity`], so it goes when the background does.
+pub fn spawn(
+    commands: &mut Commands,
+    assets: scene::GeosetAssets,
+    install: Option<&std::path::Path>,
+    sources: Vec<PanelSource>,
+) -> Result<usize, PanelError> {
+    let scene::GeosetAssets {
+        meshes,
+        materials,
+        images,
+    } = assets;
+    let mut panels = Vec::with_capacity(sources.len());
+    let (mut low, mut high) = (f32::MAX, f32::MIN);
+    for source in sources {
+        let PanelSource {
+            path,
+            bytes,
+            timeline,
+            sounds,
+        } = source;
+        let decode = |e: &dyn std::fmt::Display| PanelError::Decode {
+            path: path.clone(),
+            reason: e.to_string(),
+        };
+        let m = pcx_mdl::Mdlx::parse(&bytes).map_err(|e| decode(&e))?;
+        let model = pcx_gfx::load_model(&bytes, &path).map_err(|e| decode(&e))?;
+        let runtime = pcx_gfx::mdx_runtime::RuntimePlan::parse(&bytes).map_err(|e| decode(&e))?;
+        let birth_opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&runtime, timeline.birth)
+            .map_err(|e| decode(&e))?;
+        let stand_opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&runtime, timeline.stand)
+            .map_err(|e| decode(&e))?;
+        let textures: Vec<pcx_gfx::LoadedTexture> = scene::texture_paths(&bytes)?
             .iter()
-            .map(|g| {
-                if g.alpha_keys.is_empty() {
-                    g.static_alpha
-                } else {
-                    sample_alpha(&g.alpha_keys, frame).unwrap_or(g.static_alpha)
-                }
-            })
+            .filter_map(|p| pcx_gfx::load_image(&read(install, p).ok()?, p).ok())
             .collect();
-
-        PanelPose {
-            frame,
-            nodes,
-            alphas,
+        let mut info = scene::SceneInfo::default();
+        let geosets = scene::spawn_geosets(
+            commands,
+            scene::GeosetAssets {
+                meshes,
+                materials,
+                images,
+            },
+            scene::GeosetSource {
+                m: &m,
+                bytes: &bytes,
+                source: &path,
+                model: &model,
+                textures: &textures,
+            },
+            &birth_opacity,
+            timeline.birth[0],
+            &mut info,
+            (
+                scene::MainMenuSceneEntity,
+                RenderLayers::layer(RENDER_LAYER),
+                // Skinning rewrites positions without refreshing the bounds the
+                // culler reads, and the entrance moves geosets into view.
+                NoFrustumCulling,
+            ),
+        )?;
+        if !info.missing_textures.is_empty() {
+            warn!("{path}: missing textures {:?}", info.missing_textures);
         }
+        let events: Vec<(u32, &str)> = sounds.iter().map(|s| (s.frame, s.path.as_str())).collect();
+        info!(?timeline, ?events, "Menu panel {path}");
+        low = low.min(model.minimum_extent[2]);
+        high = high.max(model.maximum_extent[2]);
+        panels.push(Panel {
+            model,
+            bones: runtime.joints.joints().to_vec(),
+            pivots: runtime.joints.pivots().clone(),
+            global_durations: runtime.global_sequences,
+            geosets,
+            timeline,
+            birth_opacity,
+            stand_opacity,
+            sounds,
+        });
     }
-}
-
-/// A bone's local pose at one instant.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct NodePose {
-    /// Local translation.
-    pub translation: Vec3,
-    /// Local rotation.
-    pub rotation: Quat,
-    /// Local scale.
-    pub scale: Vec3,
-}
-
-/// The model evaluated at one frame.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PanelPose {
-    /// The absolute model frame sampled.
-    pub frame: f64,
-    /// `(object_id, local pose)` for every bone that moved.
-    pub nodes: Vec<(u32, NodePose)>,
-    /// Alpha per geoset-animation record, in file order.
-    pub alphas: Vec<f32>,
-}
-
-/// The native facts a sprite layer is drawn against.
-///
-/// Data only — the application root owns the camera, the viewport and the
-/// isolation.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SpriteLayerContract {
-    /// Authored viewport width (authored X is divided by this).
-    pub view_width: f32,
-    /// Authored viewport height (authored Y is divided by this).
-    pub view_height: f32,
-    /// The glue's camera argument for the overlay: `−1`, i.e. default projection.
-    pub camera_arg: i32,
-    /// Render layer the root should give the camera and the sprite entities.
-    pub render_layer: u8,
-    /// Edition index whose skin key names the expansion panel.
-    pub edition_index: u32,
-}
-
-impl Default for SpriteLayerContract {
-    fn default() -> Self {
-        Self {
-            view_width: GLUE_VIEW_WIDTH,
-            view_height: GLUE_VIEW_HEIGHT,
-            camera_arg: OVERLAY_CAMERA_ARG,
-            render_layer: SPRITE_RENDER_LAYER,
-            edition_index: SKIN_INDEX_TFT,
-        }
-    }
-}
-
-impl SpriteLayerContract {
-    /// The skin key for this contract's edition.
-    #[must_use]
-    pub fn skin_key(&self) -> String {
-        skin_key(SKIN_INDEX_TOPRIGHT, self.edition_index)
-    }
-}
-
-/// The sprite-layer key family, for readability at call sites.
-pub const SKIN_INDEX_TOPRIGHT: &str = "GlueSpriteLayerTopRight";
-
-/// Builds `GlueSpriteLayerTopRight_V{edition}`.
-///
-/// The pattern is `GlueSpriteLayerTopRight_V%d`; only the edition integer varies,
-/// and only `0`/`1` resolve to shipped art (`V1Beta` is a different key the `%d`
-/// call cannot produce).
-#[must_use]
-pub fn skin_key(family: &str, edition: u32) -> String {
-    format!("{family}_V{edition}")
-}
-
-/// An **optional** orthographic camera for the sprite layer.
-///
-/// The projection is `ScalingMode::Fixed` at the authored `0.8 × 0.6`, which is
-/// the glue's own unit rectangle rather than a guessed scale. Z is left at the
-/// default because no evidence fixes it for this layer, and the origin is
-/// `Transform::default()` for the root to position from the frame's own anchors —
-/// this function does not invent a screen-space offset.
-///
-/// Isolation is the root's one remaining line: give both this camera and the
-/// sprite entities `RenderLayers` for [`SpriteLayerContract::render_layer`], so
-/// the pass does not draw the original 3D scene. This module does not touch
-/// `mainmenu_scene`'s cameras or `MainMenuScene`.
-#[must_use]
-pub fn sprite_camera() -> (Camera2d, Projection, Transform) {
-    (
-        Camera2d,
+    // The default sprite projection adds model X/Y to the frame's left/bottom
+    // (`docs/re-notes/glue-coordinate-runtime.md`), so the camera centres the
+    // authored frame. Looking down -Z, depth runs from -maxZ to -minZ of the
+    // models' own extents; transparent geosets sort by that depth.
+    commands.spawn((
+        Camera3d::default(),
         Projection::Orthographic(OrthographicProjection {
             scaling_mode: ScalingMode::Fixed {
-                width: GLUE_VIEW_WIDTH,
-                height: GLUE_VIEW_HEIGHT,
+                width: crate::mainmenu::FRAME_W,
+                height: crate::mainmenu::FRAME_H,
             },
-            ..OrthographicProjection::default_2d()
+            near: -high,
+            far: -low,
+            ..OrthographicProjection::default_3d()
         }),
-        Transform::default(),
-    )
+        Transform::from_xyz(
+            crate::mainmenu::FRAME_W / 2.0,
+            crate::mainmenu::FRAME_H / 2.0,
+            0.0,
+        ),
+        Camera {
+            order: CAMERA_ORDER,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+        // Glue art is texture colour, not scene radiance.
+        Tonemapping::None,
+        DebandDither::Disabled,
+        RenderLayers::layer(RENDER_LAYER),
+        PanelCamera,
+        scene::MainMenuSceneEntity,
+    ));
+    let count = panels.len();
+    commands.insert_resource(MenuPanels {
+        panels,
+        elapsed_ms: 0.0,
+    });
+    Ok(count)
 }
 
-/// Samples a bone track at an absolute frame.
-///
-/// `None` is a step, `Linear` joins the two bracketing keys, and the tangent
-/// types use their keys' tangents. Outside the key range the nearest key holds.
-#[must_use]
-pub fn sample_keys(
-    keys: &[TrackKey],
-    interpolation: Interpolation,
-    frame: f64,
-) -> Option<[f32; 4]> {
-    let first = keys.first()?;
-    if frame <= f64::from(first.frame) {
-        return Some(first.value);
-    }
-    let last = keys.last()?;
-    if frame >= f64::from(last.frame) {
-        return Some(last.value);
-    }
-    let hi = keys.iter().position(|k| f64::from(k.frame) >= frame)?;
-    let lo = hi.saturating_sub(1);
-    let (a, b) = (&keys[lo], &keys[hi]);
-    let span = f64::from(b.frame) - f64::from(a.frame);
-    if span <= 0.0 {
-        return Some(a.value);
-    }
-    let t = ((frame - f64::from(a.frame)) / span) as f32;
-    let mut out = [0.0f32; 4];
-    for c in 0..4 {
-        out[c] = match interpolation {
-            Interpolation::None => a.value[c],
-            Interpolation::Linear => a.value[c] + (b.value[c] - a.value[c]) * t,
-            // The format's cubic Bézier stores its two control values, so the
-            // curve is the cubic through (a.value, a.out, b.in, b.value).
-            Interpolation::Bezier => bezier(a.value[c], a.out_tan[c], b.in_tan[c], b.value[c], t),
-            Interpolation::Hermite => hermite(a.value[c], b.value[c], a.out_tan[c], b.in_tan[c], t),
-        };
-    }
-    Some(out)
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = peacecraft3Audio, js_name = event)]
+    fn browser_event_sound(bytes: &[u8], volume: f32);
 }
 
-/// The cubic Bézier through control values `p0, p1, p2, p3` at `t`.
-#[must_use]
-pub fn bezier(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
-    let u = 1.0 - t;
-    u * u * u * p0 + 3.0 * u * u * t * p1 + 3.0 * u * t * t * p2 + t * t * t * p3
+#[cfg(not(target_arch = "wasm32"))]
+type SoundSink<'w> = ResMut<'w, Assets<AudioSource>>;
+#[cfg(target_arch = "wasm32")]
+type SoundSink<'w> = ();
+
+#[cfg(not(target_arch = "wasm32"))]
+fn play(commands: &mut Commands, sink: &mut SoundSink, sound: &EventSound) {
+    commands.spawn((
+        AudioPlayer(sink.add(AudioSource {
+            bytes: sound.bytes.clone(),
+        })),
+        PlaybackSettings::DESPAWN.with_volume(bevy::audio::Volume::Linear(sound.volume)),
+    ));
 }
 
-/// Cubic Hermite between two values with slopes `m0` and `m1`.
-#[must_use]
-pub fn hermite(p0: f32, p1: f32, m0: f32, m1: f32, t: f32) -> f32 {
-    let t2 = t * t;
-    let t3 = t2 * t;
-    (2.0 * t3 - 3.0 * t2 + 1.0) * p0
-        + (t3 - 2.0 * t2 + t) * m0
-        + (-2.0 * t3 + 3.0 * t2) * p1
-        + (t3 - t2) * m1
+#[cfg(target_arch = "wasm32")]
+fn play(_: &mut Commands, _: &mut SoundSink, sound: &EventSound) {
+    browser_event_sound(&sound.bytes, sound.volume);
 }
 
-/// Samples a scalar alpha track at an absolute frame.
-#[must_use]
-pub fn sample_alpha(keys: &[(u32, f32)], frame: f64) -> Option<f32> {
-    let first = keys.first()?;
-    if frame <= f64::from(first.0) {
-        return Some(first.1);
-    }
-    let last = keys.last()?;
-    if frame >= f64::from(last.0) {
-        return Some(last.1);
-    }
-    let hi = keys.iter().position(|k| f64::from(k.0) >= frame)?;
-    let (a, b) = (keys[hi - 1], keys[hi]);
-    let span = f64::from(b.0) - f64::from(a.0);
-    if span <= 0.0 {
-        return Some(a.1);
-    }
-    let t = ((frame - f64::from(a.0)) / span) as f32;
-    Some(a.1 + (b.1 - a.1) * t)
-}
-
-/// Reads each `GEOA` record's explicit geoset id, in file order.
-///
-/// The decoder drops the field, so it is read here from the raw chunk: a record
-/// is `size(u32)` then a body, and the geoset id is at body `+20`, i.e. record
-/// `+24`. The advance is `size` (the size includes its own four bytes). A record
-/// that will not close ends the walk rather than guessing, so a short vector is
-/// itself a signal that the binding is incomplete.
-fn geoa_geoset_ids(m: &Mdlx, bytes: &[u8]) -> Vec<u32> {
-    let Some(p) = m.payload(bytes, b"GEOA") else {
-        return Vec::new();
-    };
-    let mut ids = Vec::new();
-    let mut at = 0usize;
-    while at + 28 <= p.len() {
-        let Some(head) = p.get(at..at + 4).and_then(|b| b.try_into().ok()) else {
-            break;
-        };
-        let size = u32::from_le_bytes(head) as usize;
-        if size < 24 || at + size > p.len() {
-            break;
+/// Advances the entrance clock, fires the events it passed, and poses each
+/// panel at its frame.
+pub fn advance(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut state: ResMut<MenuPanels>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut visibility: Query<&mut Visibility, With<scene::MainMenuSceneEntity>>,
+    mut sink: SoundSink,
+) {
+    let from = state.elapsed_ms;
+    let to = from + time.delta_secs_f64() * 1000.0;
+    state.elapsed_ms = to;
+    for panel in &state.panels {
+        for sound in &panel.sounds {
+            if panel.timeline.fires(sound.frame, from, to) {
+                play(&mut commands, &mut sink, sound);
+            }
         }
-        let Some(id) = p.get(at + 24..at + 28).and_then(|b| b.try_into().ok()) else {
-            break;
+        let frame = panel.timeline.frame_at(to);
+        let opacity = if panel.timeline.in_birth(to) {
+            &panel.birth_opacity
+        } else {
+            &panel.stand_opacity
         };
-        ids.push(u32::from_le_bytes(id));
-        at += size;
+        scene::apply_opacity(
+            opacity,
+            &panel.geosets.bound,
+            frame,
+            to as u64,
+            &mut materials,
+            &mut visibility,
+        );
+        scene::skin_geosets(
+            scene::Rig {
+                model: &panel.model,
+                bones: &panel.bones,
+                pivots: &panel.pivots,
+                global_durations: &panel.global_durations,
+            },
+            &panel.geosets.handles,
+            frame,
+            to as u32,
+            &mut meshes,
+        );
     }
-    ids
 }
 
-/// `minX, minY, maxX, maxY` over a geoset's `VRTX` array.
-fn vrtx_bounds(data: &[u8]) -> Option<(f32, f32, f32, f32)> {
-    let at = data.windows(4).position(|w| w == b"VRTX")?;
-    let count = u32::from_le_bytes(data.get(at + 4..at + 8)?.try_into().ok()?) as usize;
-    if count == 0 {
-        return None;
+/// Keeps the panel camera on the UI camera's viewport, which holds the authored
+/// frame, and active only while the menu is shown.
+pub fn follow_ui_viewport(
+    menu: Query<(), With<crate::launch_gui::MenuLayer>>,
+    ui: Query<&Camera, (With<bevy::ui::IsDefaultUiCamera>, Without<PanelCamera>)>,
+    mut panels: Query<&mut Camera, With<PanelCamera>>,
+) {
+    let Ok(ui) = ui.single() else {
+        return;
+    };
+    let key = |v: &Option<bevy::camera::Viewport>| {
+        v.as_ref().map(|v| (v.physical_position, v.physical_size))
+    };
+    for mut camera in &mut panels {
+        if key(&camera.viewport) != key(&ui.viewport) {
+            camera.viewport = ui.viewport.clone();
+        }
+        let active = !menu.is_empty();
+        if camera.is_active != active {
+            camera.is_active = active;
+        }
     }
-    let mut b = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-    for i in 0..count {
-        let base = at + 8 + i * 12;
-        let s = data.get(base..base + 12)?;
-        let x = f32::from_le_bytes(s[0..4].try_into().ok()?);
-        let y = f32::from_le_bytes(s[4..8].try_into().ok()?);
-        b.0 = b.0.min(x);
-        b.1 = b.1.min(y);
-        b.2 = b.2.max(x);
-        b.3 = b.3.max(y);
-    }
-    Some(b)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn track(
-        kind: TrackKind,
-        interpolation: Interpolation,
-        keys: &[(u32, [f32; 4])],
-    ) -> PanelTrack {
-        PanelTrack {
-            kind,
-            interpolation,
-            keys: keys
-                .iter()
-                .map(|(f, v)| TrackKey {
-                    frame: *f,
-                    value: *v,
-                    in_tan: [0.0; 4],
-                    out_tan: [0.0; 4],
-                })
-                .collect(),
-        }
-    }
+    const TIMELINE: Timeline = Timeline {
+        birth: [2500, 3500],
+        stand: [3667, 4667],
+        stand_loops: true,
+    };
 
-    /// A linear translation track interpolates, and holds outside its range.
     #[test]
-    fn a_linear_track_interpolates_and_holds() {
-        let t = track(
-            TrackKind::Translation,
-            Interpolation::Linear,
-            &[(100, [0.0, 0.0, 0.0, 0.0]), (300, [0.2, -0.4, 0.0, 0.0])],
-        );
-        let mid = sample_keys(&t.keys, t.interpolation, 200.0).unwrap();
-        assert!((mid[0] - 0.1).abs() < 1e-6, "{mid:?}");
-        assert!((mid[1] + 0.2).abs() < 1e-6, "{mid:?}");
-        assert_eq!(
-            sample_keys(&t.keys, t.interpolation, 0.0).unwrap(),
-            [0.0; 4]
-        );
-        // Below the first key holds the first; above the last holds the last.
-        assert_eq!(
-            sample_keys(&t.keys, t.interpolation, 9.0).unwrap(),
-            [0.0; 4]
-        );
-        assert_eq!(
-            sample_keys(&t.keys, t.interpolation, 400.0).unwrap(),
-            [0.2, -0.4, 0.0, 0.0]
-        );
-    }
-
-    /// A Bézier track is read as control values, not as a ramp.
-    #[test]
-    fn a_bezier_track_uses_control_values() {
-        let mut t = track(
-            TrackKind::Translation,
-            Interpolation::Bezier,
-            &[(0, [0.0; 4]), (500, [1.0, 0.0, 0.0, 0.0])],
-        );
-        t.keys[0].out_tan = [0.533_333_0, 0.0, 0.0, 0.0];
-        t.keys[1].in_tan = [0.866_667_0, 0.0, 0.0, 0.0];
-        let mid = sample_keys(&t.keys, t.interpolation, 250.0).unwrap()[0];
-        assert!((mid - 0.65).abs() < 0.005, "got {mid}");
-        assert!((mid - 0.5).abs() > 0.1, "not a ramp");
-    }
-
-    /// A step track does not move between keys.
-    #[test]
-    fn a_step_track_holds_until_the_next_key() {
-        let t = track(
-            TrackKind::Scaling,
-            Interpolation::None,
-            &[(0, [1.0, 1.0, 1.0, 0.0]), (400, [2.0, 2.0, 2.0, 0.0])],
-        );
-        assert_eq!(
-            sample_keys(&t.keys, t.interpolation, 399.0).unwrap()[0],
-            1.0
-        );
-        assert_eq!(
-            sample_keys(&t.keys, t.interpolation, 400.0).unwrap()[0],
-            2.0
-        );
-    }
-
-    /// The alpha sampler behaves the same way as the bone sampler.
-    #[test]
-    fn alpha_samples_linearly() {
-        let keys = [(0u32, 0.0f32), (1000, 1.0)];
-        assert_eq!(sample_alpha(&keys, 0.0), Some(0.0));
-        assert_eq!(sample_alpha(&keys, 1000.0), Some(1.0));
-        assert!((sample_alpha(&keys, 500.0).unwrap() - 0.5).abs() < 1e-6);
-        assert_eq!(sample_alpha(&[], 5.0), None);
-    }
-
-    /// The skin key is the pattern the table uses, with the edition as the digit.
-    #[test]
-    fn the_skin_key_is_the_documented_pattern() {
-        assert_eq!(
-            skin_key(SKIN_INDEX_TOPRIGHT, SKIN_INDEX_ROC),
-            "GlueSpriteLayerTopRight_V0"
-        );
-        assert_eq!(
-            skin_key(SKIN_INDEX_TOPRIGHT, SKIN_INDEX_TFT),
-            "GlueSpriteLayerTopRight_V1"
-        );
-        assert_eq!(
-            SpriteLayerContract::default().skin_key(),
-            "GlueSpriteLayerTopRight_V1"
-        );
-    }
-
-    /// The contract carries the native numbers, and the camera uses them.
-    #[test]
-    fn the_contract_uses_the_native_glue_numbers() {
-        let c = SpriteLayerContract::default();
-        assert_eq!((c.view_width, c.view_height), (0.8, 0.6));
-        assert_eq!(
-            c.camera_arg, -1,
-            "overlay sprites take the default projection"
-        );
-        let (_, projection, _) = sprite_camera();
-        let Projection::Orthographic(o) = projection else {
-            panic!("expected an orthographic projection");
+    fn birth_plays_once_then_stand_loops() {
+        assert_eq!(TIMELINE.frame_at(0.0), 2500);
+        assert_eq!(TIMELINE.frame_at(999.5), 3499);
+        assert_eq!(TIMELINE.frame_at(1000.0), 3667);
+        assert_eq!(TIMELINE.frame_at(1250.0), 3917);
+        assert_eq!(TIMELINE.frame_at(2000.0), 3667);
+        let held = Timeline {
+            stand_loops: false,
+            ..TIMELINE
         };
-        // `ScalingMode` is not `PartialEq`; match the variant and compare fields.
-        match o.scaling_mode {
-            ScalingMode::Fixed { width, height } => assert_eq!((width, height), (0.8, 0.6)),
-            other => panic!("expected ScalingMode::Fixed at 0.8 x 0.6, got {other:?}"),
-        }
+        assert_eq!(held.frame_at(5000.0), 4667);
     }
 
-    /// Geoset-animation records are looked up by their own id, so a geoset with
-    /// no record reports `None` instead of picking up a neighbour's alpha.
     #[test]
-    fn geoset_anims_bind_by_id_not_by_position() {
-        let art = PanelArt {
-            sequences: vec![PanelSequence {
-                name: "MainMenu Birth".to_string(),
-                start: 0,
-                end: 1000,
-            }],
-            bones: Vec::new(),
-            geoset_anims: vec![
-                PanelGeosetAnim {
-                    geoset_id: Some(5),
-                    flags: 0,
-                    static_alpha: 0.25,
-                    static_colour: [1.0; 3],
-                    alpha_keys: Vec::new(),
-                },
-                PanelGeosetAnim {
-                    geoset_id: Some(9),
-                    flags: 0,
-                    static_alpha: 0.75,
-                    static_colour: [1.0; 3],
-                    alpha_keys: Vec::new(),
-                },
+    fn events_fire_once_per_pass() {
+        // The first frame of Birth fires on the first tick, and only then.
+        assert!(TIMELINE.fires(2500, 0.0, 16.0));
+        assert!(!TIMELINE.fires(2500, 16.0, 32.0));
+        assert!(TIMELINE.fires(3000, 490.0, 510.0));
+        // A Stand event fires on every loop.
+        assert!(TIMELINE.fires(3767, 1090.0, 1110.0));
+        assert!(TIMELINE.fires(3767, 2090.0, 2110.0));
+        assert!(!TIMELINE.fires(3767, 1110.0, 2090.0));
+        // A frame in neither sequence never fires.
+        assert!(!TIMELINE.fires(4833, 0.0, 1.0e9));
+    }
+
+    #[test]
+    fn sequences_match_screen_and_anim_tokens() {
+        assert!(tagged("MainMenu Birth", BIRTH));
+        assert!(tagged("mainmenu  birth", BIRTH));
+        assert!(!tagged("Birth", BIRTH));
+        assert!(!tagged("MainMenu Stand", BIRTH));
+        assert!(!tagged("SinglePlayer Birth Alternate", BIRTH));
+    }
+
+    #[test]
+    fn skin_mdl_paths_load_as_mdx() {
+        assert_eq!(binary_model_path(r"UI\A\B.mdl"), r"UI\A\B.mdx");
+        assert_eq!(binary_model_path(r"UI\A\B.MDL"), r"UI\A\B.mdx");
+        assert_eq!(binary_model_path(r"UI\A\B.mdx"), r"UI\A\B.mdx");
+        assert_eq!(binary_model_path("x"), "x");
+    }
+
+    fn slk(rows: &[&[&str]]) -> pcx_slq::Table {
+        let mut text = String::from("ID;PWXL;N;E\r\n");
+        for (y, row) in rows.iter().enumerate() {
+            for (x, cell) in row.iter().enumerate() {
+                let value = if cell.parse::<f32>().is_ok() {
+                    cell.to_string()
+                } else {
+                    format!("\"{cell}\"")
+                };
+                text += &format!("C;X{};Y{};K{value}\r\n", x + 1, y + 1);
+            }
+        }
+        text += "E\r\n";
+        pcx_slq::Table::parse(text.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn sound_events_resolve_through_both_tables() {
+        let lookups = slk(&[
+            &["AnimSoundEvent", "SoundLabel"],
+            &["ARPD", "RightGlueScreenPopDown"],
+            &["AMNY", "Many"],
+        ]);
+        let sounds = slk(&[
+            &["SoundName", "FileNames", "DirectoryBase", "Volume"],
+            &[
+                "RightGlueScreenPopDown",
+                "Pop.wav",
+                r"Sound\Interface\",
+                "64",
             ],
-            quads: Vec::new(),
-            textures: Vec::new(),
-            camera_count: 0,
-        };
-        // Position 0 holds id 5, position 1 holds id 9 — so index != id.
-        assert_eq!(art.alpha_for_geoset(5, 0.0), Some(0.25));
-        assert_eq!(art.alpha_for_geoset(9, 0.0), Some(0.75));
-        assert_eq!(
-            art.alpha_for_geoset(1, 0.0),
-            None,
-            "id 1 must not fall back to the record at position 0"
-        );
-        assert_eq!(
-            art.geoanim_for_geoset(9).map(|g| g.static_alpha),
-            Some(0.75)
-        );
+            &["Many", "A.wav,B.wav", r"Sound\", "64"],
+        ]);
+        let (path, volume) = resolve_sound(&lookups, &sounds, "SNDXARPD").unwrap();
+        assert_eq!(path, r"Sound\Interface\Pop.wav");
+        assert_eq!(volume, 64.0 / 127.0);
+        assert!(resolve_sound(&lookups, &sounds, "SNDXNONE").is_err());
+        assert!(resolve_sound(&lookups, &sounds, "SNDXAMNY").is_err());
+        assert!(resolve_sound(&lookups, &sounds, "SNDX").is_err());
     }
 
-    /// Against the real panel model: sequences, bones, quads and the no-camera
-    /// fact this module's contract depends on.
-    ///
-    /// Ignored because it needs the extracted game asset; run with `--ignored` and
-    /// `PEACECRAFT3_LEGACY_DIR` set. It **fails** when the asset is absent rather
-    /// than passing silently.
     #[test]
-    #[ignore = "needs the extracted panel model; run with --ignored and PEACECRAFT3_LEGACY_DIR set"]
-    fn the_shipped_panel_parses() {
-        let mut roots: Vec<std::path::PathBuf> = Vec::new();
-        if let Some(p) = std::env::var_os("PEACECRAFT3_LEGACY_DIR") {
-            roots.push(std::path::PathBuf::from(p));
+    #[ignore = "requires PEACECRAFT3_INSTALL with the original TFT archives"]
+    fn original_panels_load_with_entrance_and_pop_down_sound() {
+        let install = std::path::PathBuf::from(
+            std::env::var_os("PEACECRAFT3_INSTALL").expect("explicit original install required"),
+        );
+        let panels = load(Some(&install), 1).unwrap();
+        assert_eq!(panels.len(), LAYERS.len());
+        for panel in &panels {
+            assert!(panel.path.ends_with("-Expansion.mdx"), "{}", panel.path);
+            assert!(panel.timeline.birth[1] > panel.timeline.birth[0]);
         }
-        if let Some(p) = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(|p| p.parent())
-        {
-            roots.push(p.join("web/assets/menu-sprites"));
-        }
-        let bytes = roots
+        let right = &panels[1];
+        let pop = right
+            .sounds
             .iter()
-            .find_map(|r| std::fs::read(r.join("toprightpanel-expansion.mdx")).ok())
-            .unwrap_or_else(|| panic!("panel model not found; searched {roots:?}"));
-
-        let art = PanelArt::load(&bytes).expect("the shipped panel parses");
-        assert_eq!(
-            art.camera_count, 0,
-            "an overlay sprite has no authored camera"
-        );
-        let birth = art.sequence(SEQ_MAINMENU_BIRTH).expect("MainMenu Birth");
-        assert_eq!(birth.duration(), 1000, "the panel entrance is 1000 ms");
-        assert!(art.sequence(SEQ_MAINMENU_STAND).is_some());
-        assert!(!art.bones.is_empty(), "the panel has bones");
-
-        // Binding is by the record's own geoset id, not by array position: the
-        // shipped ids are a subset that skips 1 and 9..13.
-        let ids: Vec<u32> = art
-            .geoset_anims
-            .iter()
-            .filter_map(|g| g.geoset_id)
-            .collect();
-        assert_eq!(
-            ids.len(),
-            art.geoset_anims.len(),
-            "every record carries an id"
-        );
+            .find(|s| s.frame == right.timeline.birth[0])
+            .expect("the right panel's entrance fires a sound on its first frame");
         assert!(
-            ids.contains(&0) && ids.contains(&56),
-            "ids span the geoset range"
+            pop.path.ends_with("RightGlueScreenPopDown.wav"),
+            "{}",
+            pop.path
         );
-        assert!(!ids.contains(&1), "geoset 1 has no record");
-        assert!(art.alpha_for_geoset(0, 2500.0).is_some());
-        assert!(
-            art.alpha_for_geoset(1, 2500.0).is_none(),
-            "a geoset with no record reports none, rather than the next record's alpha"
-        );
-
-        let (x0, y0, x1, y1) = art.model_bounds();
-        assert!(
-            x1 - x0 > 0.4 && y1 - y0 > 1.0,
-            "model bounds {x0} {y0} {x1} {y1}"
-        );
-        // The blocker this module documents: those model bounds exceed 0.8 x 0.6.
-        assert!(x1 > GLUE_VIEW_WIDTH || y1 > GLUE_VIEW_HEIGHT);
-
-        let pose = art.sample_pose(birth, 0.0);
-        assert!(pose.frame >= f64::from(birth.start));
+        assert!(pop.bytes.starts_with(b"RIFF"));
     }
 }

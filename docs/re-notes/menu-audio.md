@@ -44,3 +44,9 @@ from the installation configured by `PEACECRAFT3_INSTALL`.
 No original game files are included in source or desktop build artifacts.
 Browser playback starts on the first pointer or keyboard gesture, and the page
 has a mute control. Native playback requires an audio device.
+
+Menu panel event sounds (the hanging panel's pop-down) are not configured here:
+`menu_sprites.rs` resolves each model `SNDX` event through `AnimLookups.slk`
+and `AnimSounds.slk` and plays the WAV at `Volume / 127`, natively through Bevy
+audio and in the browser through `peacecraft3Audio.event`. See
+[sprite rendering](menu-sprite-rendering.md).

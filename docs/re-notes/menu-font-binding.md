@@ -72,7 +72,7 @@ data: the keys, their sections, and the file they name.
 
 ```rust
 let table = menu_skin::SkinTable::parse(&text)?;         // SkinError::Malformed
-let b = table.font_file_unique(face)?;                  // SkinError::UnknownFace / ::Duplicate
+let b = table.unique_file(face)?;                  // SkinError::UnknownFace / ::Duplicate
 b.file      // "Fonts\FRIZQT__.TTF"
 b.section   // "Default" — where the winning entry came from
 ```

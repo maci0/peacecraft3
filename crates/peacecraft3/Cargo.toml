@@ -15,6 +15,7 @@ pcx-mpq.workspace = true
 pcx-sim.workspace = true
 pcx-gfx.workspace = true
 pcx-mdl.workspace = true
+pcx-slq.workspace = true
 bevy = "0.20"
 anyhow.workspace = true
 thiserror.workspace = true
