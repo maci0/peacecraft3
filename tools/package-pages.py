@@ -12,6 +12,7 @@ FILES = (
     ("demo.css", "demo.css"),
     ("intro.css", "intro.css"),
     ("loader.js", "loader.js"),
+    ("loading.js", "loading.js"),
     ("menu-audio.js", "menu-audio.js"),
     ("intro.js", "intro.js"),
     ("iso.js", "iso.js"),

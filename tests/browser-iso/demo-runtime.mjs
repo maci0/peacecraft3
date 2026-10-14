@@ -21,8 +21,25 @@ try {
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => logs.push(m.text()));
   page.on('websocket', s => sockets.push(s.url()));
+  await page.addInitScript(() => {
+    window.loadingPhases = [];
+    new MutationObserver(() => {
+      const status = document.querySelector('#wasm-status');
+      if (status && window.loadingPhases.at(-1) !== status.textContent) window.loadingPhases.push(status.textContent);
+    }).observe(document, { subtree: true, childList: true, characterData: true });
+  });
   await page.goto(origin, { waitUntil: 'domcontentloaded' });
+  if (process.env.PCX_DEMO_CAPTURE_DOWNLOAD) {
+    await page.waitForFunction(() => {
+      const bar = document.querySelector('#wasm-progress');
+      return bar?.hasAttribute('value') && bar.value > 0 && bar.value < bar.max;
+    });
+    await page.screenshot({ path: `${output}/wasm-download-progress.png`, fullPage: true });
+  }
   await page.waitForFunction(() => globalThis.peacecraft3?.local_menu_editions);
+  assert.match(await page.locator('#wasm-status').textContent(), /Demo ready/);
+  assert.equal(await page.locator('#wasm-progress').getAttribute('data-state'), 'complete');
+  assert((await page.evaluate(() => window.loadingPhases)).some(p => p.startsWith('Downloading demo')));
   assert.deepEqual(await page.evaluate(() => peacecraft3.stored_assets()), []);
   assert.deepEqual(await page.evaluate(() => peacecraft3.local_menu_editions()), []);
   assert(await page.locator('#demo-start').isDisabled());
@@ -33,6 +50,20 @@ try {
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile horizontal overflow');
   await page.setViewportSize({ width: 1200, height: 1000 });
 
+  if (process.env.PCX_DEMO_INSTALLER_ISO) {
+    await page.locator('#iso').setInputFiles(process.env.PCX_DEMO_INSTALLER_ISO);
+    await page.waitForFunction(() => !document.querySelector('#iso').disabled);
+    const discovery = await page.locator('#iso-provenance').textContent();
+    const details = JSON.parse(discovery);
+    assert.equal(details.provenance.filesystem, 'ISO9660-Joliet');
+    assert.equal(details.diagnostics.filter(d => d.code === 'UNSUPPORTED_FREEARC').length, 6);
+    assert.equal(await page.locator('#iso-progress').getAttribute('data-state'), 'error');
+    assert.match(await page.locator('#iso-progress').textContent(), /UNSUPPORTED_FREEARC/);
+    assert(await page.locator('#iso-import').isDisabled());
+    assert.deepEqual(await page.evaluate(() => peacecraft3.local_menu_editions()), []);
+    await page.screenshot({ path: `${output}/original-installer-blocker.png`, fullPage: true });
+  }
+
   async function commit(input) {
     const before = await page.evaluate(() => peacecraft3.asset_revision());
     await page.locator('#iso').setInputFiles(input);
@@ -42,6 +73,7 @@ try {
     await page.waitForFunction(() => !document.querySelector('#iso').disabled);
     assert.equal(await page.evaluate(() => peacecraft3.asset_revision()), before + 1,
       await page.locator('#iso-progress').textContent());
+    assert.equal(await page.locator('#iso-byte-progress').getAttribute('data-state'), 'complete');
   }
 
   // Synthetic storage/edition policy proof only; this placeholder model/font
@@ -82,6 +114,8 @@ try {
   await page.waitForFunction(() => typeof window.releaseDemoRead === 'function');
   assert(await page.locator('#iso').isDisabled());
   assert(await page.locator('#drop').isDisabled());
+  assert.equal(await page.locator('#iso-byte-progress').getAttribute('value'), null, 'unmeasured local read should remain indeterminate');
+  await page.screenshot({ path: `${output}/local-import-progress.png`, fullPage: true });
   await page.locator('#archives').setInputFiles({ name: 'competing.mpq', mimeType: 'application/octet-stream', buffer: Buffer.from(mpqFixture({ ...base, 'Synthetic\\NamedOnly.txt': new TextEncoder().encode('competing bytes') })) });
   await page.locator('#drop').dispatchEvent('click');
   assert.equal(await page.evaluate(() => peacecraft3.asset_revision()), beforeDelayed);
@@ -114,6 +148,8 @@ try {
   assert.deepEqual(errors, []);
   assert.deepEqual(sockets, []);
   proof = { ok: true, requests, errors, sockets, baseOnlyRejectsTft: rejected, overlappingImportRefused: true,
+    loadingPhases: await page.evaluate(() => window.loadingPhases),
+    originalJolietInstallerChecked: Boolean(process.env.PCX_DEMO_INSTALLER_ISO),
     originalMenuChecked: Boolean(process.env.PCX_DEMO_PREPARED),
     limitation: 'Synthetic base edition-policy proof and optional locally repacked original menu; not retail installer ISO or native/full-game fidelity' };
   await writeFile(`${output}/proof.json`, JSON.stringify(proof, null, 2));

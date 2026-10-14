@@ -947,13 +947,18 @@ Format: `date — subsystem — symptom — root cause — status`
 - World import retains original placements/ownership and metadata values.
   Human01 resolves 155 units while retaining six named unsupported `sloc` records;
   Human03 resolves two items. This is data import, not playable campaign proof.
-- ISO9660 discovery: six synthetic test groups pass with network APIs trapped.
+- ISO9660 primary/Joliet discovery: synthetic namespace, bounds and refusal
+  tests pass with network APIs trapped. The supplied installer ISO discovers
+  ten files via its actual Joliet directory; six FreeArc payloads remain refused
+  pending encrypted-directory/password/codec support. WASM download and local
+  import progress use measured work or explicit indeterminate phases.
   Transactional in-browser MPQ registration, runtime asset hydration, local audio
   and cache refresh pass actual generated-WASM/browser verification.
   Unsupported namespaces/installer payloads and conflicting archives fail closed.
 
 - Current release WASM build passed with compiler warnings denied. Generated glue
-  uses matching wasm-bindgen 0.2.129. Rendered F8 toggle/resize and menu clicks while
+  was generated with installed wasm-bindgen 0.2.128 against crate 0.2.129; browser
+  execution passed. Rendered F8 toggle/resize and menu clicks while
   visible pass on desktop/narrow browser views; hiding restores prior pixels.
 - Local ISO file-input discovery and 26 actual WASM archive assertions pass;
   Chromium audio replacement/reset passes with zero uploads/unexpected requests.

@@ -8,10 +8,26 @@ function number(bytes, at, n, width = 4) {
   else { v.setUint16(at, n, true); v.setUint16(at + 2, n); }
 }
 function rec(name, extent, size, flags = 0) {
-  const r = new Uint8Array(33 + name.length + (name.length % 2 === 0 ? 1 : 0));
+  const encoded = typeof name === 'string' ? Uint8Array.from(name, c => c.charCodeAt(0)) : name;
+  const r = new Uint8Array(33 + encoded.length + (encoded.length % 2 === 0 ? 1 : 0));
   r[0] = r.length; number(r, 2, extent); number(r, 10, size); r[25] = flags;
-  number(r, 28, 1, 2); r[32] = name.length;
-  r.set([...name].map(c => c.charCodeAt(0)), 33); return r;
+  number(r, 28, 1, 2); r[32] = encoded.length;
+  r.set(encoded, 33); return r;
+}
+function wide(name) {
+  return Uint8Array.from([...name].flatMap(c => [c.charCodeAt(0) >> 8, c.charCodeAt(0) & 255]));
+}
+function jolietFixture(name = wide('遊戲 archive.mpq'), level = '%/E') {
+  const bytes = fixture(), svd = bytes.subarray(17 * S, 18 * S);
+  svd.set(bytes.subarray(16 * S, 17 * S)); svd[0] = 2;
+  svd.fill(0, 40, 72); svd.set(wide('Unicode volume'), 40);
+  svd.set(new TextEncoder().encode(level), 88); svd.set(rec('\0', 21, S, 2), 156);
+  const end = bytes.subarray(18 * S, 19 * S); end.set(bytes.subarray(17 * S, 17 * S + 7)); end[0] = 255;
+  // Primary and supplementary directories intentionally have distinct names.
+  bytes.set(rec('\0', 21, S, 2), 21 * S);
+  bytes.set(rec('\x01', 21, S, 2), 21 * S + 34);
+  bytes.set(rec(name, 24, 64), 21 * S + 68);
+  return bytes;
 }
 function fixture(files = [{ name: 'ASSET.BIN;1', data: mpq() }]) {
   const bytes = new Uint8Array((24 + files.length) * S);
@@ -72,6 +88,37 @@ test('unsupported namespaces and multi-extent files have specific blockers', asy
   const udf = fixture(); udf.set(new TextEncoder().encode('NSR03'), 16 * S + 1);
   await assert.rejects(discover(udf), e => e.code === 'UNSUPPORTED_UDF');
   await assert.rejects(discover(fixture([{ name: 'A;1', data: mpq(), flags: 128 }])), e => e.code === 'UNSUPPORTED_MULTI_EXTENT');
+});
+test('each recognized Joliet level decodes its own UCS-2 directory, without primary aliases', async () => {
+  for (const [index, escape] of ['%/@', '%/C', '%/E'].entries()) {
+    const result = await discover(jolietFixture(wide('遊戲 archive.mpq'), escape));
+    assert.equal(result.provenance.filesystem, 'ISO9660-Joliet');
+    assert.equal(result.provenance.jolietLevel, index + 1);
+    assert.equal(result.provenance.volumeIdentifier, 'Unicode volume');
+    assert.equal(result.provenance.descriptorOffset, 17 * S);
+    assert.deepEqual(result.files.map(f => f.path), ['/遊戲 archive.mpq']);
+    assert.equal(result.candidates.length, 1);
+    assert.equal(result.candidates[0].offset, 24 * S);
+  }
+});
+test('malformed or ambiguous Joliet cannot silently fall back to valid primary MPQ', async () => {
+  for (const name of [new Uint8Array([65, 0, 66]), new Uint8Array([0xd8, 0]), wide('bad/name'), wide('bad\0name')]) {
+    await assert.rejects(discover(jolietFixture(name)), e => ['JOLIET_IDENTIFIER', 'DIRECTORY_RECORD'].includes(e.code));
+  }
+  const wrongExtent = jolietFixture(); number(wrongExtent, 17 * S + 158, 9999);
+  await assert.rejects(discover(wrongExtent), e => e.code === 'BOUNDS');
+  const mismatch = jolietFixture(); number(mismatch, 17 * S + 80, 24);
+  await assert.rejects(discover(mismatch), e => e.code === 'VOLUME_MISMATCH');
+  const duplicate = jolietFixture(); duplicate.copyWithin(18 * S, 17 * S, 18 * S);
+  await assert.rejects(discover(duplicate), e => e.code === 'AMBIGUOUS_SUPPLEMENTARY');
+  const unknown = jolietFixture(wide('x'), '%/X');
+  await assert.rejects(discover(unknown), e => e.code === 'UNSUPPORTED_SUPPLEMENTARY');
+});
+test('FreeArc signature reports the installer decoder gap without guessing names or edition', async () => {
+  const result = await discover(fixture([{ name: 'PAYLOAD;1', data: new Uint8Array([65, 114, 67, 1]) }]));
+  assert.equal(result.candidates.length, 0);
+  assert.equal(result.diagnostics[0].code, 'UNSUPPORTED_FREEARC');
+  assert.equal(result.provenance.edition, null);
 });
 test('PE is content evidence, not installer success or archive candidate', async () => {
   const pe = new Uint8Array(128); pe.set([77, 90]); new DataView(pe.buffer).setUint32(60, 64, true); pe.set([80, 69, 0, 0], 64);

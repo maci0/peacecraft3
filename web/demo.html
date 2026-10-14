@@ -16,6 +16,11 @@
       <h1>PeaceCraft III</h1>
       <p class="lead">Bring your own files. Explore the menu.</p>
       <p>This is a partial menu demo, not a playable game. The site includes no original game artwork, fonts, music or movies.</p>
+      <div class="loading-block">
+        <label for="wasm-progress">Demo loading</label>
+        <progress id="wasm-progress" aria-describedby="wasm-status"></progress>
+        <output id="wasm-status" role="status" aria-live="polite" aria-atomic="true">Waiting for the demo module.</output>
+      </div>
     </header>
 
     <section class="import-panel" aria-labelledby="import-title">
@@ -28,7 +33,11 @@
         <button id="iso-import" type="button" disabled>Import selected archives</button>
         <button id="iso-cancel" type="button" disabled>Cancel import</button>
       </div>
-      <output id="iso-progress" role="status" aria-live="polite" aria-atomic="true">Waiting for a local ISO.</output>
+      <div class="loading-block">
+        <label for="iso-byte-progress">Local file processing</label>
+        <progress id="iso-byte-progress" aria-describedby="iso-progress" hidden></progress>
+        <output id="iso-progress" role="status" aria-live="polite" aria-atomic="true">Waiting for a local ISO.</output>
+      </div>
       <p id="iso-limits" class="hint">Not every disc format is supported. Installer-only images and unsupported UDF layouts are reported locally. Use an image containing readable game archives; no edition or build is assumed from its filename. Expansion content requires supplied expansion assets.</p>
       <details>
         <summary>Import details and diagnostics</summary>

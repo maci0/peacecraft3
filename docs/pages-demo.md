@@ -8,10 +8,30 @@ private. No game art, fonts, sound, movies, MPQs, ISOs or extracted fixtures are
 published. There is no upload endpoint: selected files are read locally by the
 browser and the resulting asset store lasts only for that page session.
 
-The page is a partial menu demo. It supports the current ISO9660/direct-MPQ
+The page is a partial menu demo. It supports ISO9660 primary and Joliet directory discovery, followed by direct-MPQ
 import path; installer-only and unsupported UDF images are diagnosed rather
 than treated as working retail ISO imports. Full gameplay and native visual
 fidelity remain open.
+
+Joliet uses its own big-endian UCS-2 directory records, not primary-namespace
+filename substitution. A single recognized Joliet descriptor is selected when
+present and recorded in provenance. Unknown or multiple supplementary
+namespaces, invalid characters, conflicting volume sizes and malformed extents
+fail without falling back to primary. This follows
+[ECMA-119 Annex C](https://www.ecma-international.org/wp-content/uploads/ECMA-119_4th_edition_june_2019.pdf).
+
+The supplied Complete Edition ISO now discovers ten files with 15 bounded reads
+(8,855 bytes; largest read 2,048 bytes). Six contain FreeArc signatures and are
+reported as `UNSUPPORTED_FREEARC`; none is a directly readable MPQ. Its encrypted
+installer payload remains a separate decoder blocker. See
+[the measured ISO evidence](re-notes/original-iso-installers.md).
+
+Loading bars show measured WASM download bytes when an unencoded response has
+a reliable length, then switch to indeterminate initialization. ISO discovery
+has no known work total and remains indeterminate with a read-byte count. Archive
+reading uses selected byte totals; authored dependency validation is a separate
+indeterminate phase. Completion, cancellation and errors are explicit, with no
+timer-generated percentages.
 
 ## Edition restrictions
 
@@ -56,6 +76,11 @@ base-only ISO capability/refusal, clearing assets, and a delayed direct-MPQ read
 with competing selection/clear events. An optional `PCX_DEMO_PREPARED` points to
 an explicit local original-menu fixture for the real file-input/render gate.
 Captures and proof remain under `.scratch/pages-demo-root/`.
+
+`PCX_DEMO_INSTALLER_ISO` adds the explicit local Joliet/FreeArc discovery gate;
+`PCX_DEMO_CAPTURE_DOWNLOAD=1` captures an in-flight download against a throttled
+local test server. The current progress/Joliet captures and network evidence are
+retained separately in `.scratch/joliet-progress-root/`.
 
 The final local gate passed with the separately retained 115-member fixture:
 base-only TFT refusal, import ownership, fresh original scene and all six label

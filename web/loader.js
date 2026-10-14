@@ -24,7 +24,10 @@ import init, {
 } from './pkg/peacecraft3.js';
 import { discoverIso, importIsoCandidates } from './iso/import.js';
 import { clickDescriptor } from './iso/audio.js';
+import { createLoadingProgress, monitorWasmDownload } from './loading.js';
 const demoOnly = document.documentElement.dataset.localAssets === 'true';
+const wasmLoading = createLoadingProgress({ progressId: 'wasm-progress', statusId: 'wasm-status' });
+const isoLoading = createLoadingProgress({ progressId: 'iso-byte-progress', statusId: 'iso-progress' });
 let localImportActive = demoOnly || new URLSearchParams(location.search).has('local');
 function registerServedAsset(name, bytes) { return localImportActive ? 0 : add_asset(name, bytes); }
 
@@ -285,9 +288,15 @@ function fail(where, err) {
 }
 
 try {
-  await init();
+  if (demoOnly) {
+    wasmLoading.update({ phase: 'Connecting to demo download' });
+    const response = await fetch(new URL('./pkg/peacecraft3_bg.wasm', import.meta.url));
+    await init({ module_or_path: monitorWasmDownload(response, wasmLoading) });
+    wasmLoading.complete('Demo ready. Choose your local files.');
+  } else await init();
   if (demoOnly) enable_local_demo();
 } catch (error) {
+  wasmLoading.error(`Demo loading failed: ${error.message}`);
   fail('wasm module', error);
   for (const id of ['archives', 'self', 'drop', 'iso', 'iso-import', 'iso-cancel']) document.getElementById(id).disabled = true;
   throw error;
@@ -307,6 +316,7 @@ for (const el of [document.getElementById('self'), document.getElementById('drop
         say(`dropped ${drop_assets()} entries`);
         globalThis.peacecraft3Audio?.resetLocalAssets();
         refreshDemoControls();
+        isoLoading.reset('Loaded assets cleared. Choose local files.');
       }
     } catch (err) {
       fail(el.id, err);
@@ -320,20 +330,28 @@ document.getElementById('archives').addEventListener('change', async (ev) => {
     if (isoBusy || !files.length) return;
     isoController = new AbortController();
     isoState(true);
+    isoLoading.update({ phase: 'Reading local archives', loadedBytes: 0 });
     try {
       begin_archive_import();
+      const totalBytes = files.reduce((sum, file) => sum + file.size, 0); let loadedBytes = 0;
       for (const file of files) {
         const bytes = new Uint8Array(await file.arrayBuffer());
         isoController.signal.throwIfAborted();
         stage_archive(file.name, bytes);
+        loadedBytes += bytes.length;
+        isoLoading.update({ phase: 'Reading local archives', loadedBytes, totalBytes, totalReliable: true });
+        await new Promise(resolve => setTimeout(resolve, 0));
       }
       isoController.signal.throwIfAborted();
+      isoLoading.update({ phase: 'Validating authored dependencies locally' });
+      await new Promise(resolve => setTimeout(resolve, 0));
       const diagnostics = commit_archive_import();
       for (const line of diagnostics) say(line, true);
       await applyLocalAudio({ sourceName: files.map(f => f.name).join(', '), edition: null, build: null });
       refreshDemoControls();
       say('Local archives committed; available menus come from validated content');
-    } catch (error) { cancel_archive_import(); fail('local archives', error); }
+      isoLoading.complete('Local archives imported. Available menus follow supplied content.');
+    } catch (error) { cancel_archive_import(); isoLoading.error(error.name === 'AbortError' ? 'Import cancelled; current assets retained' : String(error)); fail('local archives', error); }
     finally { isoState(false); }
     ev.target.value = '';
     return;
@@ -422,11 +440,12 @@ isoInput.addEventListener('change', async () => {
   if (!file || isoBusy) return;
   isoFile = file; isoDiscovery = null; isoCandidates.replaceChildren();
   isoController = new AbortController(); isoState(true);
+  isoLoading.update({ phase: 'Inspecting ISO locally' });
   let lastProgress = 0;
   try {
     isoDiscovery = await discoverIso(file, { signal: isoController.signal, onProgress(work) {
       if (performance.now() - lastProgress > 100) {
-        isoProgress.textContent = `Inspecting locally: ${work.bytesRead.toLocaleString()} bytes in ${work.reads} bounded reads`;
+        isoLoading.update({ phase: `Inspecting ISO locally (${work.reads} bounded reads)`, loadedBytes: work.bytesRead });
         lastProgress = performance.now();
       }
     } });
@@ -437,10 +456,14 @@ isoInput.addEventListener('change', async () => {
       label.append(input, document.createTextNode(` ${candidate.path} — ${candidate.archiveSize.toLocaleString()} bytes at ${candidate.offset}`));
       isoCandidates.append(label);
     });
-    isoProgress.textContent = `${isoDiscovery.candidates.length} content-validated MPQ candidates; edition/build not established`;
+    isoLoading.complete(`${isoDiscovery.candidates.length} readable MPQ archives found; edition/build not established`);
+    if (!isoDiscovery.candidates.length) {
+      const codes = [...new Set(isoDiscovery.diagnostics.filter(d => d.code.startsWith('UNSUPPORTED_')).map(d => d.code))];
+      isoLoading.error(`No readable MPQ archives found. ${codes.join(', ') || 'No supported payload signature'}. Import details show the local decoder blocker.`);
+    }
     if (!isoDiscovery.candidates.length) say('No directly supported MPQ payload. See source diagnostics for the local decoder blocker.', true);
   } catch (error) {
-    isoProgress.textContent = error.name === 'AbortError' ? 'Inspection cancelled; current assets retained' : String(error);
+    isoLoading.error(error.name === 'AbortError' ? 'Inspection cancelled; current assets retained' : String(error));
     fail('local ISO discovery', error);
   } finally { isoState(false); }
 });
@@ -465,20 +488,21 @@ isoImport.addEventListener('click', async () => {
   if (isoBusy || !isoDiscovery) return;
   const selected = [...isoCandidates.querySelectorAll('input:checked')].map(input => isoDiscovery.candidates[Number(input.value)]);
   isoController = new AbortController(); isoState(true);
+  isoLoading.update({ phase: 'Reading selected MPQs locally', loadedBytes: 0 });
   const priorLocalMode = localImportActive; localImportActive = true;
   try {
     const result = await importIsoCandidates(isoFile, isoDiscovery, selected, window.peacecraft3, { signal: isoController.signal, onProgress(work) {
-      isoProgress.textContent = work.phase === 'hydrate' ? 'Validating authored model dependencies locally…' : `Reading MPQs locally: ${work.imported.toLocaleString()} / ${work.total.toLocaleString()} bytes`;
+      isoLoading.update(work.phase === 'hydrate' ? { phase: 'Validating authored model dependencies locally' } : { phase: 'Reading MPQs locally', loadedBytes: work.imported, totalBytes: work.total, totalReliable: true });
     } });
     localImportActive = true;
     isoProvenance.textContent = JSON.stringify(result, null, 2);
     for (const line of result.diagnostics) say(line, true);
     await applyLocalAudio(result.provenance);
     refreshDemoControls();
-    isoProgress.textContent = `Committed local assets at revision ${result.revision}; ${result.canonicalPaths.length} runtime paths. Edition/build unverified.`;
+    isoLoading.complete(`Committed local assets at revision ${result.revision}; ${result.canonicalPaths.length} runtime paths. Edition/build unverified.`);
     window.dispatchEvent(new CustomEvent('peacecraft3-local-import', { detail: result }));
   } catch (error) {
-    isoProgress.textContent = error.name === 'AbortError' ? 'Import cancelled; current assets retained' : String(error);
+    isoLoading.error(error.name === 'AbortError' ? 'Import cancelled; current assets retained' : String(error));
     localImportActive = priorLocalMode;
     fail('local ISO import', error);
   } finally { isoState(false); }

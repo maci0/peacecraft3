@@ -28,6 +28,8 @@ export async function importIsoCandidates(file, discovery, selected, api, {
     }
     signal?.throwIfAborted();
     onProgress?.({ phase: 'hydrate', imported, total });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    signal?.throwIfAborted();
     const diagnostics = api.commit_archive_import();
     return { provenance: discovery.provenance, archives: selected.map(({ path, offset, archiveSize }) => ({ path, offset, size: archiveSize })),
       canonicalPaths: api.stored_assets(), revision: api.asset_revision(), diagnostics };

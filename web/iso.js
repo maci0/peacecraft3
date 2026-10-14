@@ -1,4 +1,4 @@
-// ISO 9660 primary namespace only. All input reads stay in the supplied Blob.
+// ISO 9660 primary or explicitly selected Joliet namespace. Reads stay local.
 const SECTOR = 2048;
 const ascii = bytes => String.fromCharCode(...bytes);
 export class IsoError extends Error {
@@ -8,6 +8,16 @@ export class IsoError extends Error {
   }
 }
 const fail = (code, message, offset) => { throw new IsoError(code, message, offset); };
+function ucs2(bytes, absolute) {
+  if (bytes.length % 2) fail('JOLIET_IDENTIFIER', 'odd UCS-2 byte length', absolute);
+  let text = '';
+  for (let i = 0; i < bytes.length; i += 2) {
+    const code = bytes[i] * 256 + bytes[i + 1];
+    if (code >= 0xd800 && code <= 0xdfff) fail('JOLIET_IDENTIFIER', 'surrogate is not a UCS-2 character', absolute + i);
+    text += String.fromCharCode(code);
+  }
+  return text;
+}
 function range(offset, size, end) {
   if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(size) || offset < 0 || size < 0 || offset > end - size)
     fail('BOUNDS', `range ${offset}+${size} exceeds ${end}`, offset);
@@ -31,13 +41,21 @@ export async function discoverIso(blob, { signal, onProgress, maxEntries = 10000
     if (bytes.length !== size) fail('TRUNCATED', 'short Blob read', offset);
     reads++; bytesRead += size; onProgress?.({ reads, bytesRead, offset }); return bytes;
   }
-  let pvd, terminated = false;
+  let pvd, joliet, jolietSector, jolietLevel, terminated = false;
   for (let sector = 16; sector < 80; sector++) {
     const bytes = await read(sector * SECTOR, SECTOR);
     const id = ascii(bytes.subarray(1, 6));
     if (['BEA01', 'NSR02', 'NSR03', 'TEA01'].includes(id)) fail('UNSUPPORTED_UDF', 'UDF requires a verified local decoder', sector * SECTOR);
     if (id !== 'CD001' || bytes[6] !== 1) fail('NOT_ISO9660', 'invalid volume descriptor signature/version', sector * SECTOR);
-    if (bytes[0] === 2) fail('UNSUPPORTED_SUPPLEMENTARY', 'Joliet/supplementary namespaces are not decoded; refusing namespace fallback', sector * SECTOR);
+    if (bytes[0] === 2) {
+      const escape = ascii(bytes.subarray(88, 91));
+      const level = ['%/@', '%/C', '%/E'].indexOf(escape) + 1;
+      if (!level || bytes[7] || bytes.subarray(91, 120).some(n => n !== 0))
+        fail('UNSUPPORTED_SUPPLEMENTARY', 'unrecognized supplementary character set or flags; no namespace fallback', sector * SECTOR);
+      if (joliet) fail('AMBIGUOUS_SUPPLEMENTARY', 'multiple Joliet namespaces; no priority assumed', sector * SECTOR);
+      joliet = bytes; jolietSector = sector; jolietLevel = level;
+      continue;
+    }
     if (bytes[0] === 1) {
       if (pvd) fail('DUPLICATE_PVD', 'multiple primary descriptors', sector * SECTOR);
       pvd = bytes;
@@ -45,10 +63,17 @@ export async function discoverIso(blob, { signal, onProgress, maxEntries = 10000
     else if (bytes[0] !== 0) fail('UNSUPPORTED_DESCRIPTOR', `descriptor type ${bytes[0]}`, sector * SECTOR);
   }
   if (!pvd || !terminated) fail('DESCRIPTORS', 'primary descriptor and terminator required');
-  const blockSize = both(pvd, 128, 2), blocks = both(pvd, 80, 4);
-  if (blockSize !== SECTOR) fail('UNSUPPORTED_BLOCK_SIZE', `logical block size ${blockSize}`);
-  const volumeSize = blocks * blockSize; range(0, volumeSize, blob.size);
-  if (both(pvd, 120, 2) !== 1 || both(pvd, 124, 2) !== 1) fail('UNSUPPORTED_VOLUME_SET', 'multi-volume image');
+  function volume(descriptor) {
+    const blockSize = both(descriptor, 128, 2), blocks = both(descriptor, 80, 4);
+    if (blockSize !== SECTOR) fail('UNSUPPORTED_BLOCK_SIZE', `logical block size ${blockSize}`);
+    const size = blocks * blockSize; range(0, size, blob.size);
+    if (both(descriptor, 120, 2) !== 1 || both(descriptor, 124, 2) !== 1) fail('UNSUPPORTED_VOLUME_SET', 'multi-volume image');
+    return size;
+  }
+  const volumeSize = volume(pvd), blockSize = SECTOR;
+  if (joliet && volume(joliet) !== volumeSize) fail('VOLUME_MISMATCH', 'primary and Joliet volume sizes disagree');
+  // One namespace is traversed. Malformed Joliet never falls back to primary.
+  const descriptor = joliet ?? pvd, descriptorSector = joliet ? jolietSector : 16;
   function record(bytes, at, absolute) {
     const length = bytes[at];
     if (length < 34 || at + length > bytes.length) fail('DIRECTORY_RECORD', 'invalid record length', absolute);
@@ -61,12 +86,20 @@ export async function discoverIso(blob, { signal, onProgress, maxEntries = 10000
     const extent = both(r, 2, 4), size = both(r, 10, 4), offset = extent * blockSize;
     range(offset, size, volumeSize);
     const nameBytes = r.subarray(33, 33 + nameLength);
-    if ([...nameBytes].some(n => n > 127)) fail('UNSUPPORTED_IDENTIFIER', 'non-ASCII primary identifier', absolute);
-    const name = ascii(nameBytes);
-    if (name.includes('/') || name.includes('\\')) fail('DIRECTORY_RECORD', 'identifier contains path separator', absolute);
+    const special = nameBytes.length === 1 && nameBytes[0] <= 1;
+    let name;
+    if (joliet && !special) {
+      if (nameBytes.length > 128) fail('JOLIET_IDENTIFIER', 'identifier exceeds 64 UCS-2 characters', absolute);
+      name = ucs2(nameBytes, absolute + 33);
+      if ([...name].some(c => c.charCodeAt(0) < 32)) fail('JOLIET_IDENTIFIER', 'control character in identifier', absolute);
+    } else {
+      if ([...nameBytes].some(n => n > 127)) fail('UNSUPPORTED_IDENTIFIER', 'non-ASCII primary identifier', absolute);
+      name = ascii(nameBytes);
+    }
+    if (name.includes('/') || name.includes('\\') || name.includes('\0') && !special) fail('DIRECTORY_RECORD', 'identifier contains path separator or NUL', absolute);
     return { length, extent, offset, size, name, directory: Boolean(r[25] & 2) };
   }
-  const root = record(pvd, 156, 16 * SECTOR + 156);
+  const root = record(descriptor, 156, descriptorSector * SECTOR + 156);
   if (!root.directory || root.name !== '\0') fail('ROOT_RECORD', 'invalid root directory');
   const files = [], candidates = [], diagnostics = [], visited = new Set();
   const queue = [{ ...root, path: '' }]; let entries = 0;
@@ -102,6 +135,7 @@ export async function discoverIso(blob, { signal, onProgress, maxEntries = 10000
           range(v.getUint32(20, true), v.getUint32(28, true) * 16, archiveSize);
           candidates.push({ ...file, format: 'mpq', archiveSize, headerVersion: version });
         } else if (signature === 'MPQ\x1b') diagnostics.push({ ...file, code: 'UNSUPPORTED_MPQ_USERDATA', message: 'MPQ user-data wrapper requires archive decoder validation' });
+        else if (signature === 'ArC\x01') diagnostics.push({ ...file, code: 'UNSUPPORTED_FREEARC', message: 'FreeArc installer archive detected; encrypted directories and external codecs require a verified local decoder. No executable is run.' });
         else if (head[0] === 77 && head[1] === 90) {
           if (head.length < 64) fail('PE_HEADER', `${path}: truncated DOS header`, r.offset);
           const peOffset = new DataView(head.buffer).getUint32(60, true);
@@ -115,7 +149,7 @@ export async function discoverIso(blob, { signal, onProgress, maxEntries = 10000
       }
     }
   }
-  return { provenance: { sourceName: typeof blob.name === 'string' ? blob.name : null, sourceSize: blob.size, filesystem: 'ISO9660-primary', volumeIdentifier: ascii(pvd.subarray(40, 72)).trimEnd(), volumeSize, edition: null, build: null }, files, candidates, diagnostics, work: { reads, bytesRead, entries } };
+  return { provenance: { sourceName: typeof blob.name === 'string' ? blob.name : null, sourceSize: blob.size, filesystem: joliet ? 'ISO9660-Joliet' : 'ISO9660-primary', namespacePolicy: 'single recognized Joliet namespace when present; otherwise primary', descriptorOffset: descriptorSector * SECTOR, jolietLevel: jolietLevel ?? null, volumeIdentifier: joliet ? ucs2(descriptor.subarray(40, 72), descriptorSector * SECTOR + 40).replace(/[\0 ]+$/, '') : ascii(pvd.subarray(40, 72)).trimEnd(), volumeSize, edition: null, build: null }, files, candidates, diagnostics, work: { reads, bytesRead, entries } };
 }
 /** A local bounded view for the archive decoder; discovery never registers assets. */
 export function sliceIsoFile(blob, file) {
