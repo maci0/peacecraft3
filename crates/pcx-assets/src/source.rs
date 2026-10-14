@@ -75,6 +75,10 @@ pub enum SourceError {
     Ambiguous { detail: String },
     #[error("source member requires {requested} decoded bytes, exceeding caller limit {limit}")]
     Limit { requested: u64, limit: u64 },
+    #[error("source cannot enforce caller read budget {limit} before payload allocation/decode")]
+    BudgetUnsupported { limit: u64 },
+    #[error(transparent)]
+    MpqExtraction(Box<pcx_mpq::ExtractionError>),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -97,6 +101,16 @@ pub trait ContentSource: Send + Sync {
     fn info(&self) -> &SourceInfo;
     fn paths(&self) -> Result<Vec<String>, SourceError>;
     fn read(&self, member: &str) -> Result<Option<SourceContent>, SourceError>;
+    /// Refuse known oversized payloads before allocating/decoding them.
+    /// Implementations must enforce the ceiling through their payload reader.
+    /// There is no allocating fallback to read for adapters without this contract.
+    fn read_bounded(
+        &self,
+        _member: &str,
+        limit: u64,
+    ) -> Result<Option<SourceContent>, SourceError> {
+        Err(SourceError::BudgetUnsupported { limit })
+    }
 }
 
 pub struct ArchiveLayer {
@@ -249,6 +263,20 @@ impl OverrideDirectory {
     }
 
     pub(crate) fn read(&self, path: &AssetPath) -> Result<SourceContent, Error> {
+        self.read_with_budget(path, None)
+    }
+    pub(crate) fn read_bounded(
+        &self,
+        path: &AssetPath,
+        limit: u64,
+    ) -> Result<SourceContent, Error> {
+        self.read_with_budget(path, Some(limit))
+    }
+    fn read_with_budget(
+        &self,
+        path: &AssetPath,
+        limit: Option<u64>,
+    ) -> Result<SourceContent, Error> {
         self.check_root()?;
         let entry = self
             .entries
@@ -293,6 +321,18 @@ impl OverrideDirectory {
             });
         }
         crate::resolver::check_length(&self.info.id, path, entry.length, metadata.len())?;
+        if let Some(limit) = limit
+            && entry.length > limit
+        {
+            return Err(Error::Source {
+                layer: self.info.id.clone(),
+                path: Some(path.clone()),
+                source: SourceError::Limit {
+                    requested: entry.length,
+                    limit,
+                },
+            });
+        }
         let capacity = entry
             .length
             .checked_add(1)

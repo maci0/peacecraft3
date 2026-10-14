@@ -34,13 +34,20 @@ configuration callers. This action does not change the game edition or enable
 extensions. Default native/browser source mounting remains unimplemented; a
 caller must configure bindings explicitly.
 
-Limits cover specified input byte/count admission. Resolver sources can already
-allocate or decode before returning their bytes; these binder checks do not
-bound that earlier work. Table/profile/AST storage, receipts, queued messages,
-decoder working memory and overlapping old/candidate contexts have no combined
-memory bound here. Source revision/snapshot consistency is caller policy.
-Checksums describe reproducibility, not authentication. Existing stock schema
-and text-encoding permissiveness remain separate limitations.
+`MapRequests::replace_selected` uses `bind_map_bounded`. Its selected Resolver
+sources must enforce caller limits before payload reads and decoding. Unsupported
+selected sources refuse without trying another layer or legacy reads. The legacy
+`bind_map` API remains available with its post-read checks. Explicitly configured
+MPQ sources retain independent packed/decoded admission limits and optional
+caller-provided Huffman tables; archive mounting and table ownership precede
+these per-member checks. Override files check length before reserve/read.
+
+Limits cover specified input byte/count admission, not combined memory use.
+Table/profile/AST storage, receipts, queued messages, decoder working memory and
+overlapping old/candidate contexts have no combined memory bound here. Source
+revision/snapshot consistency is caller policy. Checksums describe reproducibility,
+not authentication. Existing stock schema and text-encoding permissiveness remain
+separate limitations.
 
 Public tests use the actual application library and installed Bevy message
 consumer, stock Editor/MetadataCatalog, same-map overlays and launcher activation

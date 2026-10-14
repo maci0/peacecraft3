@@ -144,6 +144,7 @@ impl MapRequests {
     }
 
     /// Candidate binding, receipts and parsed context commit together.
+    /// Selected sources must enforce caller budgets before payload reads/decode.
     pub fn replace_selected(
         &mut self,
         resolver: &pcx_assets::Resolver,
@@ -153,7 +154,7 @@ impl MapRequests {
         let label = input.map.label.to_owned();
         let identity = input.map.identity.clone();
         let revision = input.revision;
-        let bindings = match crate::map_binding::bind_map(resolver, input, limits) {
+        let bindings = match crate::map_binding::bind_map_bounded(resolver, input, limits) {
             Ok(bindings) => bindings,
             Err(source) => {
                 self.last_outcome = Some(MapOutcome {

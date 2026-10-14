@@ -5004,6 +5004,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "bevy",
+ "flate2",
  "pcx-assets",
  "pcx-gfx",
  "pcx-map",

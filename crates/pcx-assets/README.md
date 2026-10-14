@@ -44,7 +44,7 @@ IDs are errors. The override directory wins before every archive. There is no
 built-in archive-name order or art-mode priority. The caller supplies the ordering
 and chooses the relevant art/gameplay sources; this policy is not native evidence.
 
-`ContentSource` has three methods:
+`ContentSource` has four methods:
 
 * `info()` supplies layer ID, MPQ/CASC kind, source identity and detected version
   or explicit unknown version. These identify the input, not the requested mode.
@@ -54,6 +54,12 @@ and chooses the relevant art/gameplay sources; this policy is not native evidenc
 * `read(member)` supplies decoded bytes, source-declared length and exact source
   locator. Adapters must validate sizes/offsets before allocating or reading.
   Missing, malformed, ambiguous and truncated input can return `SourceError`.
+
+* `read_bounded(member, decoded_byte_limit)` is an additive opt-in contract. It
+  refuses known oversized content before payload allocation/read/decode. Its
+  default returns `SourceError::BudgetUnsupported` without calling `read`. An
+  implementing adapter must enforce the ceiling through its payload reader;
+  returning an oversized allocation for the resolver to reject is insufficient.
 
 The resolver validates lengths and locators. A listed winning member that is
 missing or fails to decode aborts resolution; it never falls back to different
@@ -73,6 +79,18 @@ or isolation from concurrent hostile filesystem changes.
 Provenance contains the winning `SourceInfo`, caller archive priority (null for
 override), exact locator and byte length. `layer_info` refuses unknown IDs;
 `paths` iterates the sorted union of all inventories.
+
+`Resolver::resolve_bounded(path, decoded_byte_limit)` uses the same winning
+source and receipts as `resolve`. The override reader revalidates mounted and
+current file sizes and refuses an oversized file before its payload reserve or
+read. It retains the existing one-byte growth probe, so this is a decoded-content
+ceiling, not an exact allocator or process-memory ceiling. Mount inventory,
+metadata checks and error allocations are outside this per-read contract.
+Legacy-constructed MPQ adapters and current CASC adapters inherit the typed
+unsupported-budget response;
+their existing `read` methods and mount-time decoder limits remain available.
+There is no fallback to another layer or to unbounded `read`. Existing `resolve`,
+`index` and `write_index` keep their existing behavior.
 
 `Resolver::index` resolves every inventoried path and returns `AssetIndex`.
 `AssetIndex::to_json` encodes a deterministic schema-version-one JSON object with
@@ -124,6 +142,35 @@ before extraction, and refuses multiple locale/platform candidates. `None`
 records an unknown version; adjacency to an executable does not identify the
 archive. The existing reader is serialized behind a mutex. Missing codecs remain
 errors; codec tables are supplied to the archive before mounting when required.
+
+`MpqSource::new_bounded(archive, id, version, members, ExtractionBudget,
+optional_huffman_table)` supplies explicit packed/decoded policy and owns the
+optional caller-provided Huffman table. Its `read_bounded` clamps the decoded
+ceiling to the caller read limit and uses `MpqArchive::extract_bounded` before any
+packed payload read/clone or decode. Extraction errors remain typed under
+`SourceError::MpqExtraction` with archive and exact member context. The legacy
+constructor has no packed policy, so its bounded reads remain explicitly
+unsupported. Its existing unbounded `read` behavior is unchanged.
+
+`MpqArchive::extract_bounded(member, budget, optional_table)` accepts dynamic
+member strings and uses the existing crypt/sector/payload implementation. Before
+packed reads it validates version-zero header/table consistency, sector metadata,
+strict selection, packed/decoded allocation layouts, byte ceilings and declared
+archive/backing spans. Identical locale/platform/block hash entries are allowed;
+distinct candidates refuse rather than guessing a locale priority. Missing input,
+malformed metadata, budget/layout failures and decoder errors retain their typed
+causes and caller member/source context. File-backed reads recheck backing length;
+this is not a transactional filesystem snapshot.
+
+Only the supplied Huffman argument is used: the bounded API neither searches for
+executables nor falls back to a previously installed archive table. `None` refuses
+Huffman through the existing decoder. Importing/parsing that optional table and
+archive mount/table allocation are outside this per-member policy. Packed and
+decoded limits do not bound simultaneous decoder buffers or total process RSS.
+The decoder retains its existing PKWARE support for binary literals and dictionary
+widths 4 through 6. Other dictionaries/literal modes, unavailable codecs and
+unsupported compression chains remain typed refusals; no native codec parity is
+claimed. Existing `extract` and its legacy discovery behavior remain unchanged.
 
 `CascSource::new(storage, tvfs_resolver, id, members)` checks matching build
 configuration and resolves every selected exact namespace. Its version comes

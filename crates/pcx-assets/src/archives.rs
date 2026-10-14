@@ -53,6 +53,10 @@ pub struct MpqSource {
     info: SourceInfo,
     archive: Mutex<pcx_mpq::MpqArchive>,
     members: BTreeMap<AssetPath, Mapping>,
+    extraction: Option<(
+        pcx_mpq::ExtractionBudget,
+        Option<pcx_mpq::huffman::HuffmanTable>,
+    )>,
 }
 
 impl MpqSource {
@@ -117,7 +121,21 @@ impl MpqSource {
             info,
             archive: Mutex::new(archive),
             members,
+            extraction: None,
         })
+    }
+    /// Add explicit packed/decoded policy and caller-owned codec input.
+    pub fn new_bounded(
+        archive: pcx_mpq::MpqArchive,
+        id: String,
+        version: Option<String>,
+        names: Vec<NamedMember>,
+        budget: pcx_mpq::ExtractionBudget,
+        huffman: Option<pcx_mpq::huffman::HuffmanTable>,
+    ) -> Result<Self, SourceError> {
+        let mut source = Self::new(archive, id, version, names, budget.max_decoded_bytes as u64)?;
+        source.extraction = Some((budget, huffman));
+        Ok(source)
     }
 }
 
@@ -144,6 +162,31 @@ impl ContentSource for MpqSource {
         Ok(Some(SourceContent {
             bytes,
             declared_length,
+            locator: mapping.member.clone(),
+        }))
+    }
+    fn read_bounded(&self, asset: &str, limit: u64) -> Result<Option<SourceContent>, SourceError> {
+        let Some((mut budget, huffman)) = self.extraction.as_ref().map(|(b, h)| (*b, h)) else {
+            return Err(SourceError::BudgetUnsupported { limit });
+        };
+        let path = AssetPath::new(asset).map_err(invalid)?;
+        let Some(mapping) = self.members.get(&path) else {
+            return Ok(None);
+        };
+        budget.max_decoded_bytes = limit.min(budget.max_decoded_bytes as u64) as usize;
+        let mut archive = self.archive.lock().map_err(|_| SourceError::Unavailable {
+            detail: "MPQ reader lock is poisoned".into(),
+        })?;
+        let bytes = archive
+            .extract_bounded(&mapping.member, budget, huffman.as_ref())
+            .map_err(|source| SourceError::MpqExtraction(Box::new(source)))?;
+        let declared_length = archive
+            .find_block(&mapping.member)
+            .ok_or_else(|| invalid("declared MPQ block disappeared"))?
+            .file_size as u64;
+        Ok(Some(SourceContent {
+            declared_length,
+            bytes,
             locator: mapping.member.clone(),
         }))
     }

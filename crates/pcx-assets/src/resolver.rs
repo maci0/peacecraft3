@@ -249,28 +249,40 @@ impl Resolver {
     }
 
     pub fn resolve(&self, value: &str) -> Result<ResolvedAsset, Error> {
+        self.resolve_with_budget(value, None)
+    }
+    /// Select the same winner as resolve, requiring a preallocation read contract.
+    /// No lower layer or unbounded read is used when the winner cannot honor it.
+    pub fn resolve_bounded(&self, value: &str, limit: u64) -> Result<ResolvedAsset, Error> {
+        self.resolve_with_budget(value, Some(limit))
+    }
+    fn resolve_with_budget(&self, value: &str, limit: Option<u64>) -> Result<ResolvedAsset, Error> {
         let path = AssetPath::new(value)?;
         if let Some(overrides) = &self.overrides
             && overrides.contains(&path)
         {
-            let content = overrides.read(&path)?;
-            return resolved(path, content, &overrides.info, None);
+            let content = match limit {
+                Some(limit) => overrides.read_bounded(&path, limit)?,
+                None => overrides.read(&path)?,
+            };
+            return resolved(path, content, &overrides.info, None, limit);
         }
         for archive in &self.archives {
             if let Some(member) = archive.members.get(&path) {
-                let content = archive
-                    .source
-                    .read(member)
-                    .map_err(|source| Error::Source {
-                        layer: archive.info.id.clone(),
-                        path: Some(path.clone()),
-                        source,
-                    })?
-                    .ok_or_else(|| Error::MissingContent {
-                        layer: archive.info.id.clone(),
-                        path: path.clone(),
-                    })?;
-                return resolved(path, content, &archive.info, Some(archive.priority));
+                let content = match limit {
+                    Some(limit) => archive.source.read_bounded(member, limit),
+                    None => archive.source.read(member),
+                }
+                .map_err(|source| Error::Source {
+                    layer: archive.info.id.clone(),
+                    path: Some(path.clone()),
+                    source,
+                })?
+                .ok_or_else(|| Error::MissingContent {
+                    layer: archive.info.id.clone(),
+                    path: path.clone(),
+                })?;
+                return resolved(path, content, &archive.info, Some(archive.priority), limit);
             }
         }
         Err(Error::MissingAsset { path })
@@ -359,6 +371,7 @@ fn resolved(
     content: SourceContent,
     info: &SourceInfo,
     archive_priority: Option<u32>,
+    limit: Option<u64>,
 ) -> Result<ResolvedAsset, Error> {
     check_length(
         &info.id,
@@ -366,6 +379,18 @@ fn resolved(
         content.declared_length,
         content.bytes.len() as u64,
     )?;
+    if let Some(limit) = limit
+        && content.declared_length > limit
+    {
+        return Err(Error::Source {
+            layer: info.id.clone(),
+            path: Some(path),
+            source: SourceError::Limit {
+                requested: content.declared_length,
+                limit,
+            },
+        });
+    }
     if content.locator.trim().is_empty() {
         return Err(Error::InvalidIdentity {
             layer: info.id.clone(),

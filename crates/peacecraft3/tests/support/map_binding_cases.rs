@@ -19,7 +19,7 @@ use std::{
 };
 const FIELDS: [[u8; 4]; 2] = [*b"STAT", *b"STAT"];
 const TABLES: [SlkId; 2] = [SlkId::UnitData, SlkId::UnitMetaData];
-fn info(id: &str) -> SourceInfo {
+pub(crate) fn info(id: &str) -> SourceInfo {
     SourceInfo {
         id: id.into(),
         kind: LayerKind::Mpq,
@@ -35,16 +35,16 @@ fn identity(source: &SourceInfo) -> AssetIdentity {
     }
 }
 #[derive(Clone)]
-enum Reply {
+pub(crate) enum Reply {
     Bytes(Vec<u8>),
     Missing,
     Ambiguous,
     Invalid,
 }
-struct SyntheticSource {
-    info: SourceInfo,
-    assets: BTreeMap<String, Reply>,
-    reads: Arc<AtomicUsize>,
+pub(crate) struct SyntheticSource {
+    pub(crate) info: SourceInfo,
+    pub(crate) assets: BTreeMap<String, Reply>,
+    pub(crate) reads: Arc<AtomicUsize>,
 }
 impl ContentSource for SyntheticSource {
     fn info(&self) -> &SourceInfo {
@@ -70,6 +70,17 @@ impl ContentSource for SyntheticSource {
             }),
         }
     }
+    fn read_bounded(&self, member: &str, limit: u64) -> Result<Option<SourceContent>, SourceError> {
+        if let Some(Reply::Bytes(bytes)) = self.assets.get(member)
+            && bytes.len() as u64 > limit
+        {
+            return Err(SourceError::Limit {
+                requested: bytes.len() as u64,
+                limit,
+            });
+        }
+        self.read(member)
+    }
 }
 fn object(value: u32) -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -86,29 +97,29 @@ fn object(value: u32) -> Vec<u8> {
     bytes.extend(0u32.to_le_bytes());
     bytes
 }
-struct Fixture {
-    files: Vec<(&'static str, Vec<u8>)>,
-    raw: Vec<u8>,
-    common: Vec<u8>,
-    bj: Vec<u8>,
-    unit_data: Vec<u8>,
-    metadata: Vec<u8>,
-    map_info: SourceInfo,
-    common_info: SourceInfo,
-    bj_info: SourceInfo,
-    catalog_infos: Vec<SourceInfo>,
-    map_id: AssetIdentity,
-    common_id: AssetIdentity,
-    bj_id: AssetIdentity,
-    catalog_id: AssetIdentity,
-    override_reply: Option<(String, Reply)>,
-    map_reads: Arc<AtomicUsize>,
-    common_reads: Arc<AtomicUsize>,
-    bj_reads: Arc<AtomicUsize>,
-    catalog_reads: Arc<AtomicUsize>,
+pub(crate) struct Fixture {
+    pub(crate) files: Vec<(&'static str, Vec<u8>)>,
+    pub(crate) raw: Vec<u8>,
+    pub(crate) common: Vec<u8>,
+    pub(crate) bj: Vec<u8>,
+    pub(crate) unit_data: Vec<u8>,
+    pub(crate) metadata: Vec<u8>,
+    pub(crate) map_info: SourceInfo,
+    pub(crate) common_info: SourceInfo,
+    pub(crate) bj_info: SourceInfo,
+    pub(crate) catalog_infos: Vec<SourceInfo>,
+    pub(crate) map_id: AssetIdentity,
+    pub(crate) common_id: AssetIdentity,
+    pub(crate) bj_id: AssetIdentity,
+    pub(crate) catalog_id: AssetIdentity,
+    pub(crate) override_reply: Option<(String, Reply)>,
+    pub(crate) map_reads: Arc<AtomicUsize>,
+    pub(crate) common_reads: Arc<AtomicUsize>,
+    pub(crate) bj_reads: Arc<AtomicUsize>,
+    pub(crate) catalog_reads: Arc<AtomicUsize>,
 }
 impl Fixture {
-    fn new(value: u32) -> Self {
+    pub(crate) fn new(value: u32) -> Self {
         let map_info = info("map");
         let common_info = info("common");
         let bj_info = info("BJ");
@@ -133,13 +144,13 @@ impl Fixture {
                 .collect::<Vec<_>>(),
         );
     }
-    fn member(&self, name: &str) -> &[u8] {
+    pub(crate) fn member(&self, name: &str) -> &[u8] {
         self.files
             .iter()
             .find(|(n, _)| *n == name)
             .map_or(&[], |(_, b)| b)
     }
-    fn resolver(&self) -> Resolver {
+    pub(crate) fn resolver(&self) -> Resolver {
         let mode = pcx_assets::GameMode {
             build: pcx_assets::Build::V1_29b,
             addon: pcx_assets::Addon::Tft,
@@ -216,7 +227,7 @@ impl Fixture {
         )
         .unwrap()
     }
-    fn input(&self, revision: u64) -> BindingInputs<'_> {
+    pub(crate) fn input(&self, revision: u64) -> BindingInputs<'_> {
         BindingInputs {
             map: IdentifiedMember {
                 path: "selected map.w3m",
@@ -244,7 +255,7 @@ impl Fixture {
             revision,
         }
     }
-    fn limits(&self) -> BindingLimits {
+    pub(crate) fn limits(&self) -> BindingLimits {
         let map = pcx_map::Map::parse(&self.raw).unwrap();
         let header = pcx_mpq::Header::parse(&mut Cursor::new(map.archive())).unwrap();
         let largest = self.files.iter().map(|(_, b)| b.len()).max().unwrap();

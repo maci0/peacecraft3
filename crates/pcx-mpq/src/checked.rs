@@ -53,7 +53,12 @@ pub enum ReadError {
     },
 }
 
-fn layout<T>(map: &str, region: &'static str, count: usize, bytes: u64) -> Result<(), ReadError> {
+pub(crate) fn layout<T>(
+    map: &str,
+    region: &'static str,
+    count: usize,
+    bytes: u64,
+) -> Result<(), ReadError> {
     Layout::array::<T>(count)
         .map(|_| ())
         .map_err(|_| ReadError::InvalidLayout {
@@ -62,7 +67,7 @@ fn layout<T>(map: &str, region: &'static str, count: usize, bytes: u64) -> Resul
             bytes,
         })
 }
-fn check_bytes(
+pub(crate) fn check_bytes(
     map: &str,
     member: &'static str,
     bytes: u64,
@@ -96,6 +101,13 @@ fn member_error(map: &str, member: &'static str, source: Error) -> ReadError {
         member,
         source,
     }
+}
+
+pub(crate) fn sector_size(header: Header) -> Option<u32> {
+    0x200u64
+        .checked_shl(u32::from(header.sector_size_shift))
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|n| *n != 0)
 }
 
 /// Table buffers are decoded after their caller budget and span checks.
@@ -162,12 +174,7 @@ impl<'a> CheckedArchive<'a> {
                 "header table extents are inconsistent",
             ));
         }
-        if 0x200u64
-            .checked_shl(u32::from(h.sector_size_shift))
-            .and_then(|n| u32::try_from(n).ok())
-            .filter(|n| *n != 0)
-            .is_none()
-        {
+        if sector_size(h).is_none() {
             return Err(archive_error(source, "sector size is not a nonzero u32"));
         }
         let (hashes, blocks) =
@@ -186,53 +193,22 @@ impl<'a> CheckedArchive<'a> {
     }
     /// Bounded Storm probe; identical keys are allowed, distinct candidates refused.
     pub fn selected_block(&self, member: &'static str) -> Result<Option<BlockEntry>, ReadError> {
-        let hashes = &self.hashes;
-        if hashes.is_empty() {
-            return Ok(None);
-        }
-        let (name1, name2) = crate::hash::hash_string_both(member);
-        let mut slot = crate::hash::start_slot(member, hashes.len());
-        let mut selected = None;
-        for _ in 0..hashes.len() {
-            let entry = &hashes[slot];
-            if entry.is_unpopulated() {
-                break;
-            }
-            if entry.name1 == name1 && entry.name2 == name2 {
-                let block = *self.blocks.get(entry.block_index as usize).ok_or_else(|| {
-                    member_error(
-                        self.source,
-                        member,
-                        Error::BadBlockIndex {
-                            index: entry.block_index,
-                            count: self.blocks.len(),
-                        },
-                    )
-                })?;
-                if !block.exists() || block.flags & crate::flags::DELETE_MARKER != 0 {
-                    return Err(member_error(
-                        self.source,
-                        member,
-                        Error::Unsupported("matching member block is not a readable existing file"),
-                    ));
+        crate::extraction::selected_block(&self.hashes, &self.blocks, member).map_err(|error| {
+            match error {
+                crate::extraction::SelectionError::Mpq(error) => {
+                    member_error(self.source, member, error)
                 }
-                let key = (entry.locale, entry.platform, entry.block_index);
-                if selected.as_ref().is_some_and(|(prior, _)| *prior != key) {
-                    return Err(ReadError::AmbiguousMember {
+                crate::extraction::SelectionError::Ambiguous { count } => {
+                    ReadError::AmbiguousMember {
                         map: self.source.into(),
                         member,
-                        count: 2,
-                    });
+                        count,
+                    }
                 }
-                selected = Some((key, block));
             }
-            slot += 1;
-            if slot == hashes.len() {
-                slot = 0;
-            }
-        }
-        Ok(selected.map(|(_, block)| block))
+        })
     }
+
     pub fn preflight_member(
         &self,
         member: &'static str,

@@ -146,13 +146,19 @@ fn account(
     *total = sum;
     Ok(())
 }
-fn resolve(resolver: &Resolver, member: &str) -> Result<ResolvedAsset, BindingError> {
-    resolver
-        .resolve(member)
-        .map_err(|source| BindingError::Resolve {
-            member: member.to_owned(),
-            source,
-        })
+fn resolve(
+    resolver: &Resolver,
+    member: &str,
+    limit: Option<usize>,
+) -> Result<ResolvedAsset, BindingError> {
+    let result = match limit {
+        Some(limit) => resolver.resolve_bounded(member, limit as u64),
+        None => resolver.resolve(member),
+    };
+    result.map_err(|source| BindingError::Resolve {
+        member: member.to_owned(),
+        source,
+    })
 }
 fn receipt(asset: &ResolvedAsset) -> AssetReceipt {
     AssetReceipt {
@@ -238,6 +244,23 @@ pub fn bind_map(
     input: BindingInputs<'_>,
     limits: BindingLimits,
 ) -> Result<MapBindings, BindingError> {
+    bind_map_with_budget(resolver, input, limits, false)
+}
+/// Require source preallocation budgets as well as existing parser/input ceilings.
+/// Sources without that read contract refuse; no unbounded fallback is performed.
+pub fn bind_map_bounded(
+    resolver: &Resolver,
+    input: BindingInputs<'_>,
+    limits: BindingLimits,
+) -> Result<MapBindings, BindingError> {
+    bind_map_with_budget(resolver, input, limits, true)
+}
+fn bind_map_with_budget(
+    resolver: &Resolver,
+    input: BindingInputs<'_>,
+    limits: BindingLimits,
+    bounded: bool,
+) -> Result<MapBindings, BindingError> {
     for (role, member) in [
         ("map", &input.map),
         ("common", &input.common),
@@ -259,7 +282,15 @@ pub fn bind_map(
         });
     }
     let mut total = 0;
-    let map = resolve(resolver, input.map.path)?;
+    let map = resolve(
+        resolver,
+        input.map.path,
+        bounded.then_some(
+            limits
+                .max_map_file_bytes
+                .min(limits.max_resolver_input_bytes),
+        ),
+    )?;
     source(&map, std::slice::from_ref(input.map.source))?;
     if map.bytes.len() > limits.max_map_file_bytes {
         return Err(BindingError::Budget {
@@ -338,7 +369,14 @@ pub fn bind_map(
     let (items, item_receipt) = overlay(item_bytes, "war3map.w3t", &input.map, &map_receipt)?;
     drop(view);
     drop(parsed);
-    let common = resolve(resolver, input.common.path)?;
+    let common = resolve(
+        resolver,
+        input.common.path,
+        bounded.then_some(
+            b.max_prelude_bytes
+                .min(limits.max_resolver_input_bytes.saturating_sub(total)),
+        ),
+    )?;
     source(&common, std::slice::from_ref(input.common.source))?;
     if common.bytes.len() > b.max_prelude_bytes {
         return Err(BindingError::Budget {
@@ -353,7 +391,15 @@ pub fn bind_map(
         common.bytes.len(),
         limits.max_resolver_input_bytes,
     )?;
-    let blizzard = resolve(resolver, input.blizzard.path)?;
+    let blizzard = resolve(
+        resolver,
+        input.blizzard.path,
+        bounded.then_some(
+            b.max_prelude_bytes
+                .saturating_sub(common.bytes.len())
+                .min(limits.max_resolver_input_bytes.saturating_sub(total)),
+        ),
+    )?;
     source(&blizzard, std::slice::from_ref(input.blizzard.source))?;
     let prelude_bytes = common
         .bytes
@@ -376,6 +422,7 @@ pub fn bind_map(
         limits.max_resolver_input_bytes,
     )?;
     let mut catalog = Vec::new();
+    let mut catalog_bytes = 0usize;
     let mut missing = Vec::new();
     let count = resolver.paths().count();
     if count > limits.reader.max_listed_paths {
@@ -394,7 +441,22 @@ pub fn bind_map(
         &listed,
         limits.reader,
         |member| {
-            let asset = match resolver.resolve(member) {
+            let limit = limits
+                .reader
+                .max_asset_bytes
+                .min(
+                    limits
+                        .reader
+                        .max_aggregate_input_bytes
+                        .saturating_sub(catalog_bytes),
+                )
+                .min(limits.max_resolver_input_bytes.saturating_sub(total));
+            let result = if bounded {
+                resolver.resolve_bounded(member, limit as u64)
+            } else {
+                resolver.resolve(member)
+            };
+            let asset = match result {
                 Ok(asset) => asset,
                 Err(pcx_assets::Error::MissingAsset { .. }) => {
                     if input
@@ -429,6 +491,14 @@ pub fn bind_map(
                 asset.bytes.len(),
                 limits.max_resolver_input_bytes,
             )?;
+            if bounded {
+                account(
+                    &mut catalog_bytes,
+                    member,
+                    asset.bytes.len(),
+                    limits.reader.max_aggregate_input_bytes,
+                )?;
+            }
             catalog.push(receipt(&asset));
             Ok(Some(asset.bytes))
         },

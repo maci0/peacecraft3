@@ -17,3 +17,13 @@ mod consumer_cases;
 mod script_session_tests;
 #[path = "support/callback_ticket_cases.rs"]
 mod ticket_cases;
+
+#[path = "support/mpq_extraction_cases.rs"]
+mod mpq_extraction_cases;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "support/mpq_file_cases.rs"]
+mod mpq_file_cases;
+#[path = "support/mpq_extraction_fixtures.rs"]
+mod mpq_fixtures;
+#[path = "support/source_budget_cases.rs"]
+mod source_budget_cases;
