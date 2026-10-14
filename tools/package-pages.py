@@ -17,6 +17,7 @@ FILES = (
     ("intro.css", "intro.css"),
     ("loader.js", "loader.js"),
     ("loading.js", "loading.js"),
+    ("map-configuration.js", "map-configuration.js"),
     ("menu-audio.js", "menu-audio.js"),
     ("intro.js", "intro.js"),
     ("iso.js", "iso.js"),

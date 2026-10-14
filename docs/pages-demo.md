@@ -59,6 +59,20 @@ The local-only page does not preload served artwork, audio or startup movies.
 Music and click audio can use imported local Blobs; unsupported/missing audio
 is reported. No converted movie is shipped with the page.
 
+## Advanced map data
+
+The collapsed **Advanced map configuration** panel accepts a local metadata JSON
+file and an explicit byte limit. Oversized files are refused before reading;
+invalid UTF-8 and Rust schema/source errors are reported without substituting
+defaults. The archive inspector exposes an explicitly selected ordinal and its
+current committed revision, not archive contents or an inferred release.
+
+The JSON must supply the source bindings, identities, field selection and budgets
+described in [browser map configuration](re-notes/browser-map-configuration.md).
+Successful loading publishes parsed map data through the existing application
+consumer. It does not run gameplay or enable additional menu editions. Controls
+are disabled while an archive import or configuration request is pending.
+
 ## Build and package
 
 ```sh
@@ -98,6 +112,27 @@ base-only ISO capability/refusal, clearing assets, and a delayed direct-MPQ read
 with competing selection/clear events. An optional `PCX_DEMO_PREPARED` points to
 an explicit local original-menu fixture for the real file-input/render gate.
 Captures and proof remain under `.scratch/pages-demo-root/`.
+
+`node tests/browser-iso/map-configuration.mjs` checks the configuration controller's
+read ceiling, fatal UTF-8, request ownership, archive metadata and import/read
+interleaving. `PCX_REAL_WASM_JS` adds an explicit Cargo-built test-WASM App gate;
+that Node/fake-DOM check is separate from a production browser frame.
+
+The current packaged demo-runtime gate also passes with the supplied local
+original-menu fixture and configuration controls disabled during import. Its 18
+requests were code/WASM or local Blob GETs, with zero page errors or sockets.
+The private proof is `.scratch/browser-configuration-ui-root-review/demo-runtime/`.
+Six reviewed asset-free captures cover default and expanded error/focus states
+at desktop, mobile and 600-CSS-pixel reflow widths without horizontal overflow.
+The 2DPR reflow capture is not a native browser zoom test.
+
+A separate production-page gate submits synthetic local metadata through the
+running main App without test-frame exports. Eight groups pass: archive metadata,
+pre-read size refusal, fatal UTF-8/schema errors, admission, stale-source refusal,
+result cleanup and preserved base-only menu restrictions. It makes 14 code/WASM
+GETs and no uploads, sockets or page errors. This is data admission, not gameplay
+or original-map execution. The private proof is in
+`.scratch/browser-configuration-ui-root-review/functional-main-app-policy-baseline/`.
 
 `PCX_DEMO_INSTALLER_ISO` adds the explicit local Joliet/FreeArc directory gate.
 `PCX_DEMO_INSTALLER_MEMBER` selects an exact caller-supplied directory member for

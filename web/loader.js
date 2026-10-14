@@ -20,12 +20,15 @@ import init, {
   begin_archive_import, cancel_archive_import, stage_archive,
   pending_archive_member, commit_archive_import, archive_member,
   asset_revision, menu_music_path, menu_font_files, menu_font_alias,
+  inspect_map_archive, submit_map_configuration, poll_map_configuration_result,
   enable_local_demo, local_menu_editions, open_local_menu, active_local_menu_edition,
 } from './pkg/peacecraft3.js';
 import { discoverIso, importIsoCandidates } from './iso/import.js';
 import { clickDescriptor } from './iso/audio.js';
 import { createLoadingProgress, monitorWasmDownload } from './loading.js';
 import { createInstallerDecoder } from './iso/installer-import.js';
+import { installMapConfiguration } from './map-configuration.js';
+let mapConfiguration;
 const demoOnly = document.documentElement.dataset.localAssets === 'true';
 const wasmLoading = createLoadingProgress({ progressId: 'wasm-progress', statusId: 'wasm-status' });
 const isoLoading = createLoadingProgress({ progressId: 'iso-byte-progress', statusId: 'iso-progress' });
@@ -317,6 +320,7 @@ for (const el of [document.getElementById('self'), document.getElementById('drop
         say(`dropped ${drop_assets()} entries`);
         globalThis.peacecraft3Audio?.resetLocalAssets();
         refreshDemoControls();
+        mapConfiguration?.refreshArchives();
         isoLoading.reset('Loaded assets cleared. Choose local files.');
       }
     } catch (err) {
@@ -366,6 +370,7 @@ document.getElementById('archives').addEventListener('change', async (ev) => {
       fail(file.name, err);
     }
   }
+  mapConfiguration?.refreshArchives();
   ev.target.value = '';
 });
 
@@ -428,6 +433,7 @@ let isoFile, isoDiscovery, isoController, isoBusy = false, installerDecoder, ins
 if (demoOnly) refreshDemoControls();
 function isoState(busy) {
   isoBusy = busy; isoInput.disabled = busy;
+  mapConfiguration?.setImportBusy(busy);
   document.getElementById('archives').disabled = busy;
   document.getElementById('drop').disabled = busy;
   isoCancel.disabled = !busy;
@@ -556,3 +562,9 @@ isoImport.addEventListener('click', async () => {
 if (demoOnly) { isoState(false); document.getElementById('self').disabled = false; }
 if (!localImportActive) await loadGlueArt();
 else say('Local-only asset mode: waiting for an ISO or archive selection');
+
+mapConfiguration = installMapConfiguration({ api: {
+  asset_revision, inspect_map_archive, submit_map_configuration, poll_map_configuration_result,
+} });
+mapConfiguration?.setImportBusy(isoBusy);
+window.addEventListener('pagehide', event => { if (!event.persisted) mapConfiguration?.dispose(); });

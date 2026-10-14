@@ -69,3 +69,11 @@ footer { margin-top: 1.5rem; }
 }
 
 #demo-placeholder { grid-area: 1 / 1; align-self: center; justify-self: center; padding: 1.5rem; text-align: center; color: #bdcecc; }
+
+.configuration-panel { margin-top: 0; padding: 1.75rem 0; border-bottom: 1px solid var(--rule); }
+.configuration-panel output { display: block; overflow-wrap: anywhere; }
+.configuration-fields { display: flex; flex-wrap: wrap; align-items: end; gap: .65rem; margin: .85rem 0; }
+.configuration-fields label { display: flex; flex-direction: column; gap: .3rem; }
+.configuration-panel input[type=text] { min-height: 44px; max-width: 100%; padding: .6rem; border: 1px solid var(--secondary); border-radius: 4px; font: inherit; color: var(--ink); background: var(--paper); }
+.configuration-panel input:disabled { opacity: .55; cursor: not-allowed; }
+@media (max-width: 600px) { .configuration-panel { padding: 1.25rem 0; } }

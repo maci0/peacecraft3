@@ -172,6 +172,8 @@ try {
   await page.waitForFunction(() => typeof window.releaseDemoRead === 'function');
   assert(await page.locator('#iso').isDisabled());
   assert(await page.locator('#drop').isDisabled());
+  assert(await page.locator('#map-config-limit').isDisabled());
+  assert(await page.locator('#map-config-file').isDisabled());
   assert.equal(await page.locator('#iso-byte-progress').getAttribute('value'), null, 'unmeasured local read should remain indeterminate');
   await page.screenshot({ path: `${output}/local-import-progress.png`, fullPage: true });
   await page.locator('#archives').setInputFiles({ name: 'competing.mpq', mimeType: 'application/octet-stream', buffer: Buffer.from(mpqFixture({ ...base, 'Synthetic\\NamedOnly.txt': new TextEncoder().encode('competing bytes') })) });
@@ -180,6 +182,8 @@ try {
   await page.evaluate(() => window.releaseDemoRead());
   await page.waitForFunction(prior => peacecraft3.asset_revision() === prior + 1, beforeDelayed);
   await page.waitForFunction(() => !document.querySelector('#archives').disabled);
+  assert(!(await page.locator('#map-config-limit').isDisabled()));
+  assert(!(await page.locator('#map-config-file').isDisabled()));
   assert.equal(await page.evaluate(() => new TextDecoder().decode(peacecraft3.archive_member('Synthetic\\NamedOnly.txt'))), new TextDecoder().decode(base['Synthetic\\NamedOnly.txt']));
 
   if (process.env.PCX_DEMO_PREPARED) {

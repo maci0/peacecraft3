@@ -6,6 +6,22 @@ it does not initialize a gameplay Host, execute campaign scripts, or enable TFT.
 The existing imported-menu edition restrictions and launcher selection remain
 independent and unchanged.
 
+## Local file controls
+
+The demo's collapsed **Advanced map configuration** panel requires a local JSON
+file and a caller-entered byte ceiling. The controller checks `File.size` before
+`arrayBuffer`, validates the returned length, and decodes UTF-8 with fatal errors.
+No source policy or metadata template is generated. Archive inspection uses the
+entered zero-based ordinal and the current committed revision.
+
+Only one controller is installed per form. It submits through the existing Rust
+inbox, polls its own request identifier, frees temporary handles, and retains the
+latest completed result until replacement or disposal. A failed JavaScript poll
+retains the identifier for a later frame; it does not acknowledge completion.
+Archive imports disable configuration controls. An import beginning during a
+metadata read refuses that submission before it reaches Rust. Completion is
+reported as map-data parsing, not playable gameplay.
+
 ## JavaScript boundary
 
 The WASM module exports these functions:
@@ -92,5 +108,18 @@ the path to matching wasm-bindgen-generated Node glue for its respective Cargo
 test artifact. Captured root commands, artifact identities and exits are local in
 `.scratch/browser-configuration-root-review/`.
 
-These gates do not establish live browser controls, original-map execution,
-native behavior, rendering, or a refreshed public demo.
+Seven controller groups cover read limits, invalid UTF-8, handles and request/import
+interleaving, including an actual Cargo-WASM App behind a fake DOM. Separately,
+the optimized production page passes eight browser groups using synthetic local
+MPQs: explicit archive inspection, pre-read byte refusal, typed metadata failures,
+one submission through the running main App, stale-source refusal and result
+cleanup. It uses no test-frame export. The previous menu selection and base-only
+TFT restriction remain intact. Its 14 requests were local code/WASM GETs, with
+no uploads, sockets or page errors. The proof is local in
+`.scratch/browser-configuration-ui-root-review/functional-main-app-policy-baseline/`.
+
+The retained earlier attempts expose two harness mistakes: filling a field before
+opening its disclosure and assuming the preceding ISO import left no menu selected.
+The final test opens the disclosure first and compares selection before/after
+configuration. These checks do not establish original-map execution, native
+behavior, full rendering fidelity or public deployment.

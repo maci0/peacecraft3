@@ -874,9 +874,11 @@ Format: `date — subsystem — symptom — root cause — status`
       `MpqArchive::from_bytes`.
 - [~] Explicit browser map configuration: mandatory caller metadata now reaches
       the existing bounded binder/App consumer through owned WASM inspection,
-      submission and completion handles. Actual Cargo-built WASM/Node gates
-      cover publication, acknowledgement and stale-source rollback. Browser
-      controls, original-map execution and public-site refresh remain open;
+      submission and completion handles. The collapsed local JSON/explicit-limit
+      form and metadata inspector pass production-page main-App admission,
+      stale-source refusal, request cleanup and base-only TFT restriction checks.
+      Cargo-built WASM/Node gates also cover whole-state rollback. Original-map
+      execution and public-site refresh remain open;
       see `docs/re-notes/browser-map-configuration.md`.
 - [x] JS side: `web/index.html` + `web/loader.js` + `web/pkg/`. No trunk, no
       wasm-pack, no bundler. Build is `cargo build --target wasm32-unknown-unknown

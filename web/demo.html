@@ -56,6 +56,35 @@
       </details>
     </section>
 
+    <details class="configuration-panel">
+      <summary id="map-config-title">Advanced map configuration</summary>
+      <p id="map-config-help">Advanced: choose a local metadata JSON file with explicit map, script and object-data sources, archive policy, identities, fields and read limits. Files stay on this device. Admission parses map data; it does not start a playable game.</p>
+      <details>
+        <summary>Inspect an imported archive</summary>
+        <output id="map-config-revision">Waiting for the demo module.</output>
+        <div class="configuration-fields">
+          <label for="map-config-ordinal">Archive ordinal (zero-based)
+            <input id="map-config-ordinal" type="text" inputmode="numeric" pattern="0|[1-9][0-9]*" disabled>
+          </label>
+          <button id="map-config-inspect" type="button" disabled>Inspect archive</button>
+        </div>
+        <output id="map-config-archive" class="hint" aria-live="polite">Enter the ordinal of an imported archive. Inspection does not select source priority or establish a game version.</output>
+      </details>
+      <form id="map-configuration" aria-describedby="map-config-help map-config-file-help">
+        <label class="file-label" for="map-config-limit">Metadata byte limit</label>
+        <input id="map-config-limit" type="text" inputmode="numeric" pattern="0|[1-9][0-9]*" required disabled aria-describedby="map-config-file-help">
+        <label class="file-label" for="map-config-file">Local configuration JSON</label>
+        <input id="map-config-file" type="file" accept=".json,application/json" required disabled aria-describedby="map-config-file-help">
+        <p id="map-config-file-help" class="hint">Enter your own byte limit before reading. Invalid UTF-8 and missing, ambiguous or unsupported configuration inputs are reported; no configuration defaults are supplied.</p>
+        <div class="actions"><button id="map-config-submit" type="submit" disabled>Load map data</button></div>
+      </form>
+      <div class="loading-block">
+        <label for="map-config-progress">Map data loading</label>
+        <progress id="map-config-progress" aria-describedby="map-config-status" hidden></progress>
+        <output id="map-config-status" role="status" aria-live="polite" aria-atomic="true">Choose a local configuration JSON and enter a byte limit.</output>
+      </div>
+    </details>
+
     <section class="preview" aria-labelledby="preview-title">
       <div class="preview-heading">
         <div><h2 id="preview-title">Menu preview</h2><p class="hint">Import valid local assets to begin. Menu behavior and rendering remain incomplete.</p></div>
