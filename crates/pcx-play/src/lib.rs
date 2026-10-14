@@ -55,6 +55,7 @@
 
 pub mod campaign;
 pub mod diff;
+pub mod generator;
 pub mod map_scripts_import;
 pub mod minimize;
 pub mod rpl;

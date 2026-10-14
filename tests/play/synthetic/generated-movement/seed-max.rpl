@@ -1,0 +1,40 @@
+pcx-rpl 1
+# generator movement-v1; synthetic, modulo-selected domains
+scenario generated-movement-v1
+map synthetic.generated-movement-v1
+ticks 12
+seed 18446744073709551615
+asset-mode vanilla
+spawn 0 -2055140488 85687
+spawn 1 -1686432880 73893
+spawn 1 1967483013 25648
+spawn 1 1372620591 88315
+spawn 1 -403642866 52792
+spawn 1 2080213962 86931
+spawn 1 -1295018765 -30781
+spawn 1 2113305032 -20637
+at 5 generated-0 0 select 540754252 -52888
+at 0 generated-1 1 select -44185163 17934
+at 10 generated-2 1 select -1729792268 -9546
+at 8 generated-3 0 nop
+at 3 generated-4 rng
+at 1 generated-5 0 move -1806048826 66649
+at 1 generated-6 1 nop
+at 7 generated-7 0 select -183016026 49057
+at 1 generated-8 1 select -133000183 -74892
+at 10 generated-9 rng
+at 8 generated-10 1 move 1114873123 67069
+at 3 generated-11 rng
+at 5 generated-12 1 stop
+at 1 generated-13 rng
+at 0 generated-14 0 nop
+at 10 generated-15 1 select -1047150807 -41330
+at 9 generated-16 0 stop
+at 11 generated-17 rng
+at 4 generated-18 1 move -1459045463 36027
+at 5 generated-19 1 move 345133660 -12706
+at 8 generated-20 0 move -1685881095 93501
+at 10 generated-21 1 select -1964785688 -43061
+at 5 generated-22 0 select -499862665 79948
+at 4 generated-23 0 select -964642591 -37939
+expect 11 units 8
