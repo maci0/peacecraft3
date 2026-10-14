@@ -7,6 +7,11 @@ optional `war3map.wts`, preserves source labels and reproducibility digests, and
 returns compiled `MapScripts`. It does not lower WTG, substitute preludes or
 implement a game Host.
 
+Compilation diagnostics retain the resolver's actual prelude or map source label
+and render positions against that source. Prelude labels cannot alias the VM's
+reserved main-source identity `the map script`; this is a caller-identity check,
+not native script rejection behavior.
+
 ## Allocation order and limits
 
 Prelude lengths and the embedded archive length are checked first, including

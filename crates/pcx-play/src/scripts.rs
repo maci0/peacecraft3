@@ -46,6 +46,14 @@ impl MapScripts {
         {
             return Err("edition, version and asset source must be explicit".into());
         }
+        for prelude in [common, blizzard] {
+            if prelude.label == "the map script" {
+                return Err(format!(
+                    "{}: prelude label aliases the VM main source identity",
+                    prelude.label
+                ));
+            }
+        }
         let mut sources = BTreeMap::new();
         let mut digests = Vec::new();
         let mut trees = Vec::new();
@@ -75,14 +83,20 @@ impl MapScripts {
             });
             trees.push(tree);
         }
-        let program = pcx_script::resolve_with(
+        let program = pcx_script::resolve_with_diagnostics(
             &trees[2],
             &[
                 Prelude::new(common.label, &trees[0]),
                 Prelude::new(blizzard.label, &trees[1]),
             ],
         )
-        .map_err(|e| format!("{}:{}", map.label, e.render(&sources[map.label])))?;
+        .map_err(|diagnostic| {
+            let label = diagnostic.source_label.as_deref().unwrap_or(map.label);
+            match sources.get(label) {
+                Some(source) => format!("{label}:{}", diagnostic.error.render(source)),
+                None => format!("{label}:{}", diagnostic.error),
+            }
+        })?;
         let wts_label = wts.map(|w| w.label.to_string());
         let wts = wts
             .map(|asset| {
