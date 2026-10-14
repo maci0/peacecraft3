@@ -1,6 +1,6 @@
 # Authored menu texture-animation bindings
 
-This is shipped-byte and reconstruction-source evidence. It identifies a
+This is local-asset and reconstruction-source evidence. It identifies a
 missing texture-animation path; it does not establish native UV matrix
 conventions or explain the screenshot's streaks or lower black region.
 
@@ -10,12 +10,24 @@ The local version-800 model files have these identities:
 
 | Model | Bytes | SHA-256 |
 | --- | ---: | --- |
-| RoC `MainMenu3d.mdx` | 2,142,419 | `cc2f5bc76ce3d0d456bf193338ed02ffdbebbf6271fbbefe630d7f954e89bf6a` |
+| RoC served `MainMenu3d.mdx`, compat archive member | 2,142,419 | `cc2f5bc76ce3d0d456bf193338ed02ffdbebbf6271fbbefe630d7f954e89bf6a` |
 | TFT `MainMenu3D_Exp.mdx` | 798,240 | `15586ffd9dc25b82a4f8ce2e679581f6e14cbcdc0916c7422d89308f010f6293` |
 
 The TFT digest matches the explicitly selected expansion member in the local
 115-member browser fixture. Archive adjacency and filenames do not identify
 the archive's game version or native lookup priority.
+
+The RoC digest above identifies `web/assets/menu3d/mainmenu3d.mdx`, not the
+measured Legacy `War3.mpq` member. That member has the same byte length but
+SHA-256 `98351d0e6f79023832d94959c91fef540f6c59692118544770fbcd4422669e64`;
+133,847 bytes differ. The entire served file matches the named member of
+`wc3/game/app/war3.mpq` (container SHA-256
+`95f1c599e083dd1970b2d972fb2e8b9c5a050b3318f0c024c389207d660e63fe`).
+The two archive members have identical chunk framing; differing bytes are
+confined to BONE, HELP and PRE2. This proves byte identity, not release attribution,
+native source priority or the staging command. RoC observations below apply to
+the compat member, independently of the distinct Legacy sampling fixture.
+The local comparison is recorded in `.scratch/roc-model-provenance/report.md`.
 
 The local probe uses the existing checked `pcx-mdl` readers for materials,
 textures, geosets, TXAN tracks and raw GLBS durations. Its source and output

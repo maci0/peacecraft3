@@ -861,6 +861,13 @@ Format: `date — subsystem — symptom — root cause — status`
       RADV hardware capture passed (9 MB RGP); viewer analysis remains unverified.
 - [x] Movement performance gate measures deterministic allocations, bytes and
       state digest under concurrent CPU load. Timing is report-only.
+- [x] Borrowed menu-track sampling removes the per-track bone/key clones.
+      All interpolation kinds and clock/duplicate behavior have regression
+      checks. An isolated allocation gate reports zero sampling allocations;
+      original RoC/TFT BONE-only measurements preserve exact pose-bit digests
+      while removing 12,064/11,504 allocations across eight sampled frames.
+      See `docs/performance/menu-pose-sampling.md`; full-frame work and FPS are
+      outside this measurement.
 - [x] Normal blue inner fill uses original decoded texels and relative,
       FDF-derived grid bounds. Actual browser import/resize captures show the
       expected fill extents. The strict one-pixel edge diagnostic fails on two

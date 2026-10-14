@@ -1300,28 +1300,46 @@ impl AnimTrack {
 pub fn sample_bone_pose(bone: &Bone, frame: u32) -> Pose {
     let mut pose = Pose::default();
     if let Some(t) = bone.translation() {
-        pose.translation = [
-            sample_vec3(t, frame, 0),
-            sample_vec3(t, frame, 1),
-            sample_vec3(t, frame, 2),
-        ];
+        pose.translation = sample_bone_track(t, frame).translation;
     }
     if let Some(t) = bone.rotation() {
-        pose.rotation = [
-            sample_vec3(t, frame, 0),
-            sample_vec3(t, frame, 1),
-            sample_vec3(t, frame, 2),
-            // The quaternion's w component is the fourth vector slot; the key
-            // stride is the track's own, so it reads like any other component.
-            sample_vec3(t, frame, 3),
-        ];
+        pose.rotation = sample_bone_track(t, frame).rotation;
     }
     if let Some(t) = bone.scaling() {
-        pose.scale = [
-            sample_vec3(t, frame, 0),
-            sample_vec3(t, frame, 1),
-            sample_vec3(t, frame, 2),
-        ];
+        pose.scale = sample_bone_track(t, frame).scale;
+    }
+    pose
+}
+
+/// Samples one borrowed track without allocating or selecting its clock.
+/// Only its property changes; the other pose properties retain their identities.
+pub fn sample_bone_track(track: &BoneTrack, frame: u32) -> Pose {
+    let mut pose = Pose::default();
+    match track.kind {
+        TrackKind::Translation => {
+            pose.translation = [
+                sample_vec3(track, frame, 0),
+                sample_vec3(track, frame, 1),
+                sample_vec3(track, frame, 2),
+            ]
+        }
+        TrackKind::Rotation => {
+            pose.rotation = [
+                sample_vec3(track, frame, 0),
+                sample_vec3(track, frame, 1),
+                sample_vec3(track, frame, 2),
+                // The quaternion's w component is the fourth vector slot; the key
+                // stride is the track's own, so it reads like any other component.
+                sample_vec3(track, frame, 3),
+            ]
+        }
+        TrackKind::Scaling => {
+            pose.scale = [
+                sample_vec3(track, frame, 0),
+                sample_vec3(track, frame, 1),
+                sample_vec3(track, frame, 2),
+            ]
+        }
     }
     pose
 }

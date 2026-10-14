@@ -724,8 +724,8 @@ fn pick<'a>(
 /// running across a clip wrap.
 ///
 /// The crate's own interpolation is reused rather than reimplemented: each track
-/// is sampled through `sample_bone_pose` on a copy of the bone carrying only
-/// that track, so Hermite and Bézier easing are still the decoder's.
+/// is sampled through the borrowed `sample_bone_track`, so Hermite and Bézier
+/// easing are still the decoder's without copying owned track bytes.
 #[must_use]
 pub fn tracked_pose(
     bone: &pcx_mdl::Bone,
@@ -747,11 +747,7 @@ pub fn tracked_pose(
             },
             Err(_) => sequence_frame,
         };
-        let one = pcx_mdl::Bone {
-            tracks: vec![track.clone()],
-            ..bone.clone()
-        };
-        let pose = pcx_mdl::sample_bone_pose(&one, frame);
+        let pose = pcx_mdl::sample_bone_track(track, frame);
         match track.kind {
             pcx_mdl::TrackKind::Translation => out.translation = pose.translation,
             pcx_mdl::TrackKind::Rotation => out.rotation = pose.rotation,
@@ -1293,6 +1289,116 @@ mod tests {
 #[cfg(test)]
 mod global_seq_tests {
     use super::*;
+
+    #[test]
+    fn borrowed_tracks_preserve_clock_fallbacks_and_duplicate_order_bit_for_bit() {
+        use pcx_mdl::{Bone, BoneTrack, Interpolation, Pose, TrackKind};
+        let mut bone = Bone {
+            offset: 0,
+            span: 0,
+            name: String::new(),
+            object_id: 0,
+            parent_id: -1,
+            flags: 0,
+            tracks: vec![],
+            geoset_id: -1,
+            geoset_anim_id: -1,
+        };
+        fn previous(bone: &Bone, sequence: u32, elapsed: u32, durations: &[u32]) -> Pose {
+            if bone.tracks.iter().all(|t| t.global_sequence_id < 0) {
+                return pcx_mdl::sample_bone_pose(bone, sequence);
+            }
+            let mut pose = Pose::default();
+            for track in &bone.tracks {
+                let frame = match u32::try_from(track.global_sequence_id) {
+                    Ok(id) => match durations.get(id as usize).copied().unwrap_or(0) {
+                        0 => sequence,
+                        d => elapsed % d,
+                    },
+                    Err(_) => sequence,
+                };
+                let one = Bone {
+                    tracks: vec![track.clone()],
+                    ..bone.clone()
+                };
+                let sampled = pcx_mdl::sample_bone_pose(&one, frame);
+                match track.kind {
+                    TrackKind::Translation => pose.translation = sampled.translation,
+                    TrackKind::Rotation => pose.rotation = sampled.rotation,
+                    TrackKind::Scaling => pose.scale = sampled.scale,
+                }
+            }
+            pose
+        }
+        fn bits(pose: Pose) -> [u32; 10] {
+            let mut bits = [0; 10];
+            for (out, value) in bits.iter_mut().zip(
+                pose.translation
+                    .into_iter()
+                    .chain(pose.rotation)
+                    .chain(pose.scale),
+            ) {
+                *out = value.to_bits();
+            }
+            bits
+        }
+        for interpolation in [
+            Interpolation::None,
+            Interpolation::Linear,
+            Interpolation::Hermite,
+            Interpolation::Bezier,
+        ] {
+            bone.tracks.clear();
+            for (kind, global) in [
+                (TrackKind::Translation, -1),
+                (TrackKind::Rotation, 0),
+                (TrackKind::Scaling, 1),
+                (TrackKind::Translation, 3),
+            ] {
+                let width = if kind == TrackKind::Rotation { 4 } else { 3 };
+                let tangents = matches!(
+                    interpolation,
+                    Interpolation::Hermite | Interpolation::Bezier
+                );
+                let mut raw = vec![];
+                for (frame, value) in [(0_u32, 2_f32), (100, 6.)] {
+                    raw.extend(frame.to_le_bytes());
+                    for base in [value, -3., 9.]
+                        .into_iter()
+                        .take(if tangents { 3 } else { 1 })
+                    {
+                        for component in 0..width {
+                            raw.extend((base + component as f32).to_le_bytes());
+                        }
+                    }
+                }
+                bone.tracks.push(BoneTrack {
+                    kind,
+                    count: 2,
+                    interpolation,
+                    global_sequence_id: global,
+                    offset: 0,
+                    stride: 4 + width * 4 * if tangents { 3 } else { 1 },
+                    raw,
+                });
+            }
+            for durations in [&[][..], &[100, 0][..], &[100, 75, 90, 80][..]] {
+                for (sequence, elapsed) in [(0, 0), (50, 125), (100, 200), (101, u32::MAX)] {
+                    assert_eq!(
+                        bits(tracked_pose(&bone, sequence, elapsed, durations)),
+                        bits(previous(&bone, sequence, elapsed, durations))
+                    );
+                }
+            }
+            for t in &mut bone.tracks {
+                t.global_sequence_id = -1;
+            }
+            bone.tracks[3].raw[4..8].copy_from_slice(&20_f32.to_le_bytes());
+            assert_eq!(tracked_pose(&bone, 0, 125, &[100]).translation[0], 2.);
+            bone.tracks[1].global_sequence_id = 0;
+            assert_eq!(tracked_pose(&bone, 0, 125, &[100]).translation[0], 20.);
+        }
+    }
 
     fn scene() -> Option<(Vec<u8>, pcx_mdl::Mdlx)> {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
