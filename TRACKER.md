@@ -177,8 +177,11 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
       `Image`. Five synthetic cases and the keyed HD Footman normal pass; actual
       Vulkan devices on the Radeon RX 7900 XTX verify import with BC enabled and
       typed refusal with BC disabled despite adapter support. Native/WASM checks
-      and scoped strict Clippy pass. GPU upload, rendering, browser execution,
-      channel/material/gamma semantics and automatic texture binding remain open.
+      and scoped strict Clippy pass. A separate keyed headless GPU upload and
+      copy/readback check preserves all twelve compressed mips exactly on the
+      enabled host device. GPU sampling/drawing, application upload integration,
+      browser execution, channel/material/gamma semantics and automatic texture
+      binding remain open.
 - [ ] `docs/reforged-fixes.md` fix ledger; rows default to `defer`
 
 ## M2 — Asset decoders + first Bevy render — **render smoke passed; full material fidelity open**

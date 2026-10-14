@@ -102,3 +102,24 @@ adapter advertising BC. The keyed asset imported as `Bc5RgUnorm`, 1024×2048,
 12 mips, 2,796,240 compressed payload bytes, with both full header and payload
 equal to source. The second device returned `Error::Capability`. These are
 observed host device/import results under explicit test policy, not native proof.
+
+## Separate host upload/readback check
+
+The keyed texture also passed a headless Vulkan copy/readback probe on the same
+BC-enabled device. It passed the imported descriptor, `LayerMajor` data order
+and compressed payload to `RenderDevice::create_texture_with_data`, the API
+used by Bevy's fresh-image upload path. `COPY_SRC` was explicitly requested as
+readback test policy; the returned image descriptor already included it.
+
+All twelve mips, including the logical 1×1 tail, returned byte-for-byte equal
+to their checked source spans: 2,796,240 compressed bytes through a 2,801,920-byte
+mapped staging buffer. Transfer padding and sub-block physical extents were
+derived from format/device APIs. The final mip source/readback MD5 was
+`0adc491d84c8738ae7706e6b8f8fc07f`. A reviewed repeat run agreed; source, pinned
+library identities and both logs remain local in
+`.scratch/reforged-ati2-gpu-boundary/`.
+
+This closes copy/readback for that named asset and enabled host device only.
+No application asset-loading pipeline, GPU sampling/decoding, shader, draw,
+browser device or native material/channel/gamma interpretation was exercised.
+No production upload integration was added by the probe.
