@@ -126,6 +126,7 @@
 
 use std::collections::BTreeSet;
 
+pub mod cameras;
 pub mod doodads;
 pub mod grid_alignment;
 pub mod info;
