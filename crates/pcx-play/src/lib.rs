@@ -58,6 +58,7 @@ pub mod cinematics;
 pub mod custom_scripts;
 pub mod diff;
 pub mod generator;
+pub mod map_admission;
 pub mod map_scripts_import;
 pub mod minimize;
 pub mod rpl;

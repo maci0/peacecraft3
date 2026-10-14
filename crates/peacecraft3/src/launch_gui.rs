@@ -217,10 +217,12 @@ pub(crate) fn window_plugin(canvas: Option<&str>) -> WindowPlugin {
 /// That ordering is the point: Bevy builds an app's asset sources while
 /// `AssetPlugin` initialises, so a caller that needs a source which is not the
 /// platform default — a browser has no filesystem to read — has to register it
-/// first. Nothing else may go in here.
+/// first. The explicitly configured map request handlers are installed afterwards.
 pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     let mut app = App::new();
     (configure)(&mut app);
+    peacecraft3::map_requests::install(&mut app);
+    crate::map_source_controls::install(&mut app);
     app.add_plugins(DefaultPlugins.set(window))
         .insert_resource(Launcher::default())
         .init_resource::<MenuArtCache>()
@@ -1286,6 +1288,29 @@ fn source_card(root: &mut ChildSpawnerCommands, l: &Launcher) {
         .with_children(|r| {
             r.spawn(tint("detected as", 11.0, TEXT_FAINT));
             r.spawn((tint("", 11.0, WARN), DetectedAs));
+        });
+        c.spawn((
+            tint("Map source configuration required", 14.0, TEXT_DIM),
+            crate::map_source_controls::SelectedMapText,
+        ));
+        c.spawn((
+            Button,
+            Hovered::default(),
+            crate::map_source_controls::LoadSelectedMap,
+            Node {
+                width: Val::Percent(100.0),
+                min_height: Val::Rem(2.375),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                padding: UiRect::horizontal(Val::Rem(0.75)),
+                border: UiRect::all(Val::Rem(0.0625)),
+                ..default()
+            },
+            BackgroundColor(BG_PILL),
+            BorderColor::all(BORDER),
+        ))
+        .with_children(|button| {
+            button.spawn(tint("Load selected map data", 14.0, TEXT));
         });
     });
 }

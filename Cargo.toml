@@ -44,6 +44,7 @@ pcx-objects = { path = "crates/pcx-objects" }
 pcx-map = { path = "crates/pcx-map" }
 pcx-tera = { path = "crates/pcx-tera" }
 pcx-sim = { path = "crates/pcx-sim" }
+pcx-play = { path = "crates/pcx-play" }
 pcx-gfx = { path = "crates/pcx-gfx" }
 
 anyhow = "1"

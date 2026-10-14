@@ -13,6 +13,8 @@ mod hud;
 mod intro;
 mod launch;
 mod launch_gui;
+mod map_source_controls;
+use peacecraft3::map_requests;
 mod local_demo;
 mod mainmenu;
 mod mainmenu_scene;

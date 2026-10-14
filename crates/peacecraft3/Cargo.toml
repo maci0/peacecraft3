@@ -13,6 +13,10 @@ profile-gpu = ["pcx-gfx/profile-gpu"]
 [dependencies]
 pcx-mpq.workspace = true
 pcx-sim.workspace = true
+pcx-play.workspace = true
+pcx-map.workspace = true
+pcx-objects.workspace = true
+pcx-assets.workspace = true
 pcx-gfx.workspace = true
 pcx-mdl.workspace = true
 pcx-slq.workspace = true

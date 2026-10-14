@@ -169,7 +169,7 @@ fn layout<T>(
         })
 }
 
-fn check_bytes(
+pub(crate) fn check_bytes(
     map: &str,
     member: &'static str,
     bytes: u64,
@@ -193,7 +193,11 @@ fn check_bytes(
     Ok(declared_bytes)
 }
 
-fn aggregate(map: &str, counts: &[usize], max_bytes: usize) -> Result<(), MapScriptImportError> {
+pub(crate) fn aggregate(
+    map: &str,
+    counts: &[usize],
+    max_bytes: usize,
+) -> Result<(), MapScriptImportError> {
     let declared_bytes = counts
         .iter()
         .try_fold(0usize, |sum, n| sum.checked_add(*n))

@@ -5004,9 +5004,13 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "bevy",
+ "pcx-assets",
  "pcx-gfx",
+ "pcx-map",
  "pcx-mdl",
  "pcx-mpq",
+ "pcx-objects",
+ "pcx-play",
  "pcx-sim",
  "pcx-slq",
  "thiserror 2.0.21",
