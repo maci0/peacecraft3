@@ -340,19 +340,31 @@ mod native {
         }
     }
 
+    #[derive(bevy::ecs::system::SystemParam)]
+    struct MovieQueries<'w, 's> {
+        skip_buttons: Query<'w, 's, (), With<Skip>>,
+        movie: Query<'w, 's, Entity, With<Movie>>,
+        sound: Query<'w, 's, (Entity, Option<&'static AudioSink>), With<MovieSound>>,
+        windows: Query<'w, 's, &'static Window>,
+        movie_image: Query<'w, 's, &'static mut Node, With<MovieImage>>,
+    }
+
     fn update(
         mut commands: Commands,
         mut intro: ResMut<Intro>,
         keys: Res<ButtonInput<KeyCode>>,
         actions: Option<Res<crate::button_actions::ButtonActions>>,
-        skip_buttons: Query<(), With<Skip>>,
-        movie: Query<Entity, With<Movie>>,
-        sound: Query<(Entity, Option<&AudioSink>), With<MovieSound>>,
         mut images: ResMut<Assets<Image>>,
         mut audio: ResMut<Assets<AudioSource>>,
-        windows: Query<&Window>,
-        mut movie_image: Query<&mut Node, With<MovieImage>>,
+        queries: MovieQueries,
     ) {
+        let MovieQueries {
+            skip_buttons,
+            movie,
+            sound,
+            windows,
+            mut movie_image,
+        } = queries;
         let skip = intro.playing
             && (keys.just_pressed(KeyCode::Escape)
                 || actions.as_ref().is_some_and(|actions| {

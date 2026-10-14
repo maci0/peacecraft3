@@ -7,6 +7,7 @@
 //! Rendering the launcher on the engine it stages for is deliberate — one fewer
 //! dependency, and the launcher and the game share a version.
 
+use bevy::ecs::system::SystemParam;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::widget::{ImageNode, NodeImageMode};
@@ -275,10 +276,10 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
 
 fn default_source() -> String {
     for key in ["PEACECRAFT3_INSTALL", "PEACECRAFT3_LEGACY_DIR"] {
-        if let Ok(path) = std::env::var(key) {
-            if classify(&path).is_ok() {
-                return path;
-            }
+        if let Ok(path) = std::env::var(key)
+            && classify(&path).is_ok()
+        {
+            return path;
         }
     }
     for c in [
@@ -454,18 +455,34 @@ fn poll_asset_revision(mut revision: ResMut<AssetStoreRevision>) {
     revision.0 = asset_revision();
 }
 
+type FilledLabelData = (Entity, &'static Children);
+type FilledLabelFilter = (With<MenuText>, With<MenuTextFilled>);
+
+#[derive(SystemParam)]
+struct MenuInvalidationQueries<'w, 's> {
+    text: Query<'w, 's, &'static mut Text>,
+    logos: Query<'w, 's, Entity, With<crate::menu_panel::MenuLogo>>,
+    scene_entities: Query<'w, 's, Entity, With<crate::mainmenu_scene::MainMenuSceneEntity>>,
+    fills: Query<'w, 's, Entity, With<ButtonFillFrame>>,
+    filled: Query<'w, 's, Entity, With<ButtonFilled>>,
+    labels: Query<'w, 's, FilledLabelData, FilledLabelFilter>,
+}
+
 fn invalidate_on_asset_revision(
     mut commands: Commands,
     revision: Res<AssetStoreRevision>,
     mut cache: ResMut<MenuArtCache>,
     mut scene: ResMut<SceneLoad>,
-    mut text: Query<&mut Text>,
-    logos: Query<Entity, With<crate::menu_panel::MenuLogo>>,
-    scene_entities: Query<Entity, With<crate::mainmenu_scene::MainMenuSceneEntity>>,
-    fills: Query<Entity, With<ButtonFillFrame>>,
-    filled: Query<Entity, With<ButtonFilled>>,
-    labels: Query<(Entity, &Children), (With<MenuText>, With<MenuTextFilled>)>,
+    queries: MenuInvalidationQueries,
 ) {
+    let MenuInvalidationQueries {
+        mut text,
+        logos,
+        scene_entities,
+        fills,
+        filled,
+        labels,
+    } = queries;
     if cache.revision == revision.0 {
         return;
     }
@@ -596,16 +613,26 @@ fn initialize_menu_logo(
     info!("Original menu logo: parsed authored Birth and native LEFT/BOTTOM projection");
 }
 
+#[derive(SystemParam)]
+struct SceneAssets<'w> {
+    meshes: ResMut<'w, Assets<Mesh>>,
+    materials: ResMut<'w, Assets<StandardMaterial>>,
+    images: ResMut<'w, Assets<Image>>,
+}
+
 fn initialize_menu_scene(
     mut commands: Commands,
     mut state: ResMut<SceneLoad>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut images: ResMut<Assets<Image>>,
+    assets: SceneAssets,
     launcher: Res<Launcher>,
     menu: Query<Entity, With<MenuLayer>>,
     scene_entities: Query<Entity, With<crate::mainmenu_scene::MainMenuSceneEntity>>,
 ) {
+    let SceneAssets {
+        mut meshes,
+        mut materials,
+        mut images,
+    } = assets;
     if menu.is_empty() {
         return;
     }
@@ -804,7 +831,7 @@ struct MenuArtCache {
 /// tiling only when the texture is one colour. Measured here rather than assumed.
 fn uniform_rgba(rgba: &[u8]) -> bool {
     match rgba.get(..4) {
-        Some(first) => rgba.chunks_exact(4).all(|p| p == first),
+        Some(first) => rgba.as_chunks::<4>().0.iter().all(|p| p == first),
         None => false,
     }
 }
@@ -888,35 +915,47 @@ fn spawn_fill(
 /// browser only has what the page fetched, a moment later. Running every frame
 /// and doing nothing until the bytes exist means one code path serves both, and
 /// a button that is already wearing its art is skipped rather than re-dressed.
+type ButtonArtData = (
+    Entity,
+    &'static mut Node,
+    &'static Children,
+    Option<&'static InteractionDisabled>,
+    Option<&'static crate::mainmenu::MenuButton>,
+);
+type ButtonArtFilter = (With<Button>, Without<ButtonArt>);
+type LateFillData = (
+    Entity,
+    &'static Children,
+    &'static crate::mainmenu::MenuButton,
+);
+type LateFillFilter = (With<ButtonArt>, Without<ButtonFilled>);
+
+#[derive(SystemParam)]
+struct MenuArtQueries<'w, 's> {
+    buttons: Query<'w, 's, ButtonArtData, ButtonArtFilter>,
+    // Entries whose frame-derived fill arrives after their plate.
+    late: Query<'w, 's, LateFillData, LateFillFilter>,
+    // Store replacement changes handles while preserving button identities.
+    dressed: Query<'w, 's, &'static mut ImageNode, (With<ButtonArt>, Without<ButtonFill>)>,
+    fills: Query<'w, 's, &'static mut ImageNode, (With<ButtonFill>, Without<ButtonArt>)>,
+    panels: Query<'w, 's, Entity, (With<Wc3Panel>, Without<ImageNode>)>,
+}
+
 fn apply_menu_art(
     launcher: Res<Launcher>,
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut fonts: ResMut<Assets<Font>>,
     mut cache: ResMut<MenuArtCache>,
-    mut buttons: Query<
-        (
-            Entity,
-            &mut Node,
-            &Children,
-            Option<&InteractionDisabled>,
-            Option<&crate::mainmenu::MenuButton>,
-        ),
-        (With<Button>, Without<ButtonArt>),
-    >,
-    // Entries that already wear their plate but not yet their fill, so a frame
-    // set arriving after the art still reaches them.
-    late: Query<
-        (Entity, &Children, &crate::mainmenu::MenuButton),
-        (With<ButtonArt>, Without<ButtonFilled>),
-    >,
-    // Buttons already wearing their art: after a store change the geometry is
-    // unchanged but the texture handle is not, so the handle is swapped in place
-    // rather than re-dressing the button and re-wrapping its label.
-    mut dressed: Query<&mut ImageNode, (With<ButtonArt>, Without<ButtonFill>)>,
-    mut fills: Query<&mut ImageNode, (With<ButtonFill>, Without<ButtonArt>)>,
-    panels: Query<Entity, (With<Wc3Panel>, Without<ImageNode>)>,
+    queries: MenuArtQueries,
 ) {
+    let MenuArtQueries {
+        mut buttons,
+        late,
+        mut dressed,
+        mut fills,
+        panels,
+    } = queries;
     let selection = format!("{}:{:?}", launcher.source, launcher.mode.assets);
     if cache.selection.as_ref() != Some(&selection) {
         let install = selected_install(&launcher);
@@ -942,35 +981,33 @@ fn apply_menu_art(
     if !cache.native_loaded || cfg!(target_arch = "wasm32") {
         if cache.button.is_none() {
             let path = crate::mainmenu::BUTTON_ART;
-            if let Some(bytes) = crate::mainmenu::art_bytes(install.as_deref(), path) {
-                if let Ok(tex) = pcx_gfx::load_image(&bytes, path) {
-                    cache.button = Some(images.add(pcx_gfx::viewer::rgba_image(&tex)));
-                }
+            if let Some(bytes) = crate::mainmenu::art_bytes(install.as_deref(), path)
+                && let Ok(tex) = pcx_gfx::load_image(&bytes, path)
+            {
+                cache.button = Some(images.add(pcx_gfx::viewer::rgba_image(&tex)));
             }
         }
-        if cache.panel.is_none() {
-            if let Some(bytes) = crate::mainmenu::art_bytes(install.as_deref(), PANEL_ART) {
-                if let Ok(tex) = pcx_gfx::load_image(&bytes, PANEL_ART) {
-                    // Measured at decode, not assumed: the fill is drawn with
-                    // `Stretch`, which is only right for a uniform texture.
-                    let uniform = uniform_rgba(&tex.rgba);
-                    if !uniform {
-                        warn!(
-                            "{PANEL_ART} is not uniform; the authored tiling is not implemented, so the fill is not drawn"
-                        );
-                    }
-                    cache.panel_uniform = Some(uniform);
-                    cache.panel = Some(images.add(pcx_gfx::viewer::rgba_image(&tex)));
-                }
+        if cache.panel.is_none()
+            && let Some(bytes) = crate::mainmenu::art_bytes(install.as_deref(), PANEL_ART)
+            && let Ok(tex) = pcx_gfx::load_image(&bytes, PANEL_ART)
+        {
+            // Measured at decode, not assumed: the fill is drawn with
+            // `Stretch`, which is only right for a uniform texture.
+            let uniform = uniform_rgba(&tex.rgba);
+            if !uniform {
+                warn!(
+                    "{PANEL_ART} is not uniform; the authored tiling is not implemented, so the fill is not drawn"
+                );
             }
+            cache.panel_uniform = Some(uniform);
+            cache.panel = Some(images.add(pcx_gfx::viewer::rgba_image(&tex)));
         }
         // The skin table, which binds each face to its file.
-        if cache.skin.is_none() {
-            if let Some(bytes) =
+        if cache.skin.is_none()
+            && let Some(bytes) =
                 crate::mainmenu::art_bytes(install.as_deref(), crate::mainmenu::SKIN_TABLE)
-            {
-                cache.skin = std::str::from_utf8(&bytes).ok().map(str::to_string);
-            }
+        {
+            cache.skin = std::str::from_utf8(&bytes).ok().map(str::to_string);
         }
         // The frame definitions. **Both** must be read and parsed before the pair
         // is cached: the page fetches them separately, so caching after the first
@@ -1009,30 +1046,28 @@ fn apply_menu_art(
         }
         // The menu tree's own text, needed to follow each entry's `ButtonText` to
         // the text frame whose style it draws with.
-        if cache.main_menu.is_none() {
-            if let Some(bytes) =
+        if cache.main_menu.is_none()
+            && let Some(bytes) =
                 crate::mainmenu::art_bytes(install.as_deref(), crate::mainmenu::MAIN_MENU_FDF)
-            {
-                cache.main_menu = std::str::from_utf8(&bytes).ok().map(str::to_string);
-            }
+        {
+            cache.main_menu = std::str::from_utf8(&bytes).ok().map(str::to_string);
         }
         // The labels' own source. Absent until the page serves it, which is the
         // browser's normal arrival order.
-        if cache.strings.is_none() {
-            if let Some(bytes) =
+        if cache.strings.is_none()
+            && let Some(bytes) =
                 crate::mainmenu::art_bytes(install.as_deref(), crate::mainmenu::GLOBAL_STRINGS_FDF)
-            {
-                cache.strings = std::str::from_utf8(&bytes).ok().map(str::to_string);
-            }
+        {
+            cache.strings = std::str::from_utf8(&bytes).ok().map(str::to_string);
         }
         // The label style's source, which the same fetch supplies.
-        if cache.templates.is_none() {
-            if let Some(bytes) = crate::mainmenu::art_bytes(
+        if cache.templates.is_none()
+            && let Some(bytes) = crate::mainmenu::art_bytes(
                 install.as_deref(),
                 crate::mainmenu::STANDARD_TEMPLATES_FDF,
-            ) {
-                cache.templates = std::str::from_utf8(&bytes).ok().map(str::to_string);
-            }
+            )
+        {
+            cache.templates = std::str::from_utf8(&bytes).ok().map(str::to_string);
         }
         // Each entry's font, from its own face and the shipped skin table. No
         // fallback: a face the table does not bind, or a file the store does not
@@ -1095,11 +1130,11 @@ fn apply_menu_art(
                 .id();
             // The original inner fill, on menu entries only: the launcher's own
             // controls are `Button`s too and must not be skinned with it.
-            if let Some(entry) = menu_button {
-                if let Some(fill_node) = spawn_fill(&mut commands, &cache, entry) {
-                    commands.entity(overlay).add_child(fill_node);
-                    commands.entity(entity).insert(ButtonFilled);
-                }
+            if let Some(entry) = menu_button
+                && let Some(fill_node) = spawn_fill(&mut commands, &cache, entry)
+            {
+                commands.entity(overlay).add_child(fill_node);
+                commands.entity(entity).insert(ButtonFilled);
             }
             // The template's own justification drives the label's box, so the
             // vertical axis is the container's main axis and the horizontal one
@@ -1755,21 +1790,17 @@ fn log_card(root: &mut ChildSpawnerCommands) {
 // ------------------------------------------------------------------ systems
 
 /// Paints the active option in each axis, and the disabled one as disabled.
-fn colour_picks(
-    l: Res<Launcher>,
-    mut q: Query<
-        (
-            &Pick,
-            &mut BackgroundColor,
-            &mut BorderColor,
-            &mut Node,
-            Option<&InteractionDisabled>,
-            Option<&Hovered>,
-            Option<&mut ImageNode>,
-        ),
-        With<Button>,
-    >,
-) {
+type PickPaintData = (
+    &'static Pick,
+    &'static mut BackgroundColor,
+    &'static mut BorderColor,
+    &'static mut Node,
+    Option<&'static InteractionDisabled>,
+    Option<&'static Hovered>,
+    Option<&'static mut ImageNode>,
+);
+
+fn colour_picks(l: Res<Launcher>, mut q: Query<PickPaintData, With<Button>>) {
     for (p, mut bg, mut border, mut node, disabled, interaction, image) in &mut q {
         if disabled.is_some() || *p == Pick::Download {
             *bg = DISABLED_BG.into();
@@ -1914,20 +1945,20 @@ fn finish_intro(mut intro: ResMut<crate::intro::Intro>, mut commands: Commands) 
     }
 }
 
+type DetectedFilter = (With<DetectedAs>, Without<LogBody>, Without<SourcePath>);
+type ModeSummaryFilter = (
+    With<ModeSummary>,
+    Without<LogBody>,
+    Without<SourcePath>,
+    Without<DetectedAs>,
+);
+
 fn refresh(
     mut l: ResMut<Launcher>,
     mut log_q: Query<&mut Text, With<LogBody>>,
     mut path_q: Query<&mut Text, (With<SourcePath>, Without<LogBody>)>,
-    mut det_q: Query<&mut Text, (With<DetectedAs>, Without<LogBody>, Without<SourcePath>)>,
-    mut sum_q: Query<
-        &mut Text,
-        (
-            With<ModeSummary>,
-            Without<LogBody>,
-            Without<SourcePath>,
-            Without<DetectedAs>,
-        ),
-    >,
+    mut det_q: Query<&mut Text, DetectedFilter>,
+    mut sum_q: Query<&mut Text, ModeSummaryFilter>,
 ) {
     if l.staging {
         l.staging = false;
@@ -2616,8 +2647,7 @@ KEY_EXIT                 "E|Cffffffffx|Rit",
     /// the button on screen to the label the original shows.
     #[test]
     fn every_menu_entry_is_addressed_by_its_own_button() {
-        for i in 0..MENU.len() {
-            let id = MENU[i];
+        for (i, id) in MENU.iter().enumerate() {
             // An out-of-range index would be a real bug, and it is the kind
             // that only shows up when a click lands.
             assert!(i < MENU.len(), "{id}");

@@ -864,6 +864,11 @@ Format: `date — subsystem — symptom — root cause — status`
       RADV hardware capture passed (9 MB RGP); viewer analysis remains unverified.
 - [x] Movement performance gate measures deterministic allocations, bytes and
       state digest under concurrent CPU load. Timing is report-only.
+- [x] Native application Clippy passes all targets/features with `--no-deps`
+      and warnings denied. Related Bevy parameters/query tuples are grouped;
+      mechanical Rust 2024 fixes preserve fields, filters and runtime behavior.
+      The 106-test app suite, explicit original menu/movie gates and WASM compiler
+      check pass. Dependency Clippy debt is outside this application-only gate.
 - [x] Borrowed menu-track sampling removes the per-track bone/key clones.
       All interpolation kinds and clock/duplicate behavior have regression
       checks. An isolated allocation gate reports zero sampling allocations;
