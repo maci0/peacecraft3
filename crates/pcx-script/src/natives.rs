@@ -27,7 +27,7 @@
 //! derivable from anything on this machine, and a slightly-wrong substring or
 //! number format is exactly the failure a loud error prevents.
 
-use crate::ast::{NativeDecl, Param, TypeRef};
+use crate::ast::{NativeDecl, Param, TypeKind, TypeRef};
 use crate::span::Span;
 use std::collections::BTreeMap;
 
@@ -59,6 +59,23 @@ pub enum NativeImpl {
     RealToInt,
 }
 
+impl NativeImpl {
+    // The existing conversion bodies each consume one scalar and return its converted scalar.
+    fn accepts_signature(self, declaration: &Native) -> bool {
+        let [parameter] = declaration.params.as_slice() else {
+            return false;
+        };
+        let (input, output) = match self {
+            Self::IntToReal => (TypeKind::Integer, TypeKind::Real),
+            Self::RealToInt => (TypeKind::Real, TypeKind::Integer),
+        };
+        !parameter.ty.array
+            && !declaration.ret.array
+            && parameter.ty.kind == input
+            && declaration.ret.kind == output
+    }
+}
+
 /// How a call to a declared native name resolves.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum NativeCall<'a> {
@@ -66,6 +83,8 @@ pub enum NativeCall<'a> {
     Unimplemented(&'a Native),
     /// One declaration the table can run.
     Implemented(&'a Native, NativeImpl),
+    /// Recognized conversion, but the supplied declaration cannot describe its implementation.
+    SignatureMismatch(&'a Native, NativeImpl),
 }
 
 /// A name declared with two different signatures.
@@ -182,7 +201,8 @@ impl NativeTable {
     pub fn call(&self, name: &str) -> Option<NativeCall<'_>> {
         let decl = self.by_name.get(name)?;
         Some(match implemented(name) {
-            Some(impl_) => NativeCall::Implemented(decl, impl_),
+            Some(impl_) if impl_.accepts_signature(decl) => NativeCall::Implemented(decl, impl_),
+            Some(impl_) => NativeCall::SignatureMismatch(decl, impl_),
             None => NativeCall::Unimplemented(decl),
         })
     }

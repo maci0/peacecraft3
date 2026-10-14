@@ -214,6 +214,12 @@ impl<'a, H: Host> Vm<'a, H> {
             })?
             .clone();
         if f.params.len() != argv.len() {
+            let span = if span == Span::EMPTY {
+                self.error_source = Some(f.source.clone());
+                f.span
+            } else {
+                span
+            };
             return Err(crate::Error::run(
                 span,
                 format!(
@@ -513,11 +519,17 @@ impl<'a, H: Host> Vm<'a, H> {
         span: Span,
         frame: &mut Frame,
     ) -> Result<Value, crate::Error> {
-        if let Some(Slot::Scalar(v)) = frame.get(name.as_str()) {
-            return Ok(v.clone());
-        }
-        if let Some(Slot::Scalar(v)) = self.globals.get(name.as_str()) {
-            return Ok(v.clone());
+        if let Some(slot) = frame
+            .get(name.as_str())
+            .or_else(|| self.globals.get(name.as_str()))
+        {
+            return match slot {
+                Slot::Scalar(v) => Ok(v.clone()),
+                Slot::Array(_) => Err(crate::Error::run(
+                    span,
+                    format!("`{}` is an array and needs an index", name.as_str()),
+                )),
+            };
         }
         // A trigger string spelled as an identifier.
         if let Some(id) = trigstr_id(name.as_str()) {
@@ -532,12 +544,6 @@ impl<'a, H: Host> Vm<'a, H> {
                     "`{}` is a function, and a function is not a value",
                     name.as_str()
                 ),
-            ));
-        }
-        if frame.contains_key(name.as_str()) || self.globals.contains_key(name.as_str()) {
-            return Err(crate::Error::run(
-                span,
-                format!("`{}` is an array and needs an index", name.as_str()),
             ));
         }
         Err(crate::Error::run(
@@ -590,6 +596,16 @@ impl<'a, H: Host> Vm<'a, H> {
                     ));
                 }
                 self.run_native(which, &argv, span)
+            }
+            Some(NativeCall::SignatureMismatch(n, which)) => {
+                let signature = crate::natives::signature_of(&n.name, &n.params, &n.ret);
+                Err(crate::Error::run(
+                    span,
+                    format!(
+                        "native `{}` cannot dispatch {which:?}: supplied declaration `{signature}` at {}:{}..{} is incompatible with the implemented conversion",
+                        n.name, n.source, n.span.start, n.span.end
+                    ),
+                ))
             }
             Some(NativeCall::Unimplemented(n)) => {
                 if n.params.len() != argv.len() {
