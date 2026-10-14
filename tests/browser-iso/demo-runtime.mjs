@@ -34,11 +34,14 @@ try {
       const bar = document.querySelector('#wasm-progress');
       return bar?.hasAttribute('value') && bar.value > 0 && bar.value < bar.max;
     });
+    assert(await page.locator('#iso').isDisabled(), 'file selection must wait for initialized handlers');
+    assert(await page.locator('#archives').isDisabled());
     await page.screenshot({ path: `${output}/wasm-download-progress.png`, fullPage: true });
   }
   await page.waitForFunction(() => globalThis.peacecraft3?.local_menu_editions);
   assert.match(await page.locator('#wasm-status').textContent(), /Demo ready/);
   assert.equal(await page.locator('#wasm-progress').getAttribute('data-state'), 'complete');
+  assert(!(await page.locator('#iso').isDisabled()), 'file selection must unlock once ready');
   assert((await page.evaluate(() => window.loadingPhases)).some(p => p.startsWith('Downloading demo')));
   assert.deepEqual(await page.evaluate(() => peacecraft3.stored_assets()), []);
   assert.deepEqual(await page.evaluate(() => peacecraft3.local_menu_editions()), []);

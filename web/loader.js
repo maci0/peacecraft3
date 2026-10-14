@@ -510,5 +510,6 @@ isoImport.addEventListener('click', async () => {
 
 // Expose initialized APIs and attach controls before the larger scene assets
 // arrive. Each renderer waits for its own required bytes in the memory store.
+if (demoOnly) { isoState(false); document.getElementById('self').disabled = false; }
 if (!localImportActive) await loadGlueArt();
 else say('Local-only asset mode: waiting for an ISO or archive selection');

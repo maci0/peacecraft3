@@ -27,7 +27,7 @@
       <h2 id="import-title">Open a local game ISO</h2>
       <p id="iso-help">Choose an ISO you own, select the archives found inside, then import them. Reading and extraction happen in your browser; your files stay on this device.</p>
       <label class="file-label" for="iso">Game ISO</label>
-      <input id="iso" type="file" accept=".iso,application/x-iso9660-image" aria-describedby="iso-help iso-limits">
+      <input id="iso" type="file" accept=".iso,application/x-iso9660-image" aria-describedby="iso-help iso-limits" disabled>
       <div id="iso-candidates" aria-label="Archives found in the ISO"></div>
       <div class="actions">
         <button id="iso-import" type="button" disabled>Import selected archives</button>
@@ -48,10 +48,10 @@
         <summary>Already have extracted archives?</summary>
         <p class="hint">Choose your local MPQ files. They are subject to the same local validation.</p>
         <label for="archives">Local MPQ archives</label>
-        <input id="archives" type="file" multiple accept=".mpq,.MPQ">
+        <input id="archives" type="file" multiple accept=".mpq,.MPQ" disabled>
         <div class="actions">
-          <button id="drop" type="button">Clear loaded archives</button>
-          <button id="self" type="button">Archive status</button>
+          <button id="drop" type="button" disabled>Clear loaded archives</button>
+          <button id="self" type="button" disabled>Archive status</button>
         </div>
       </details>
     </section>
