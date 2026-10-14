@@ -236,7 +236,7 @@ async function run() {
     await poll(() => logs.slice(logStart).some(l => l.text.includes(scenePattern)), 'Imported scene must rebuild in running app');
     for (const label of fixture.labels) {
       const font = fixture.fonts.find(font => font.id === label.id); assert(font);
-      await poll(() => logs.slice(logStart).some(l => l.text.includes(`Menu label ${label.id}: ${label.visible} (hotkey `) && l.text.includes(`face ${JSON.stringify(font.face)}`)), `Imported authored label/font ${label.id} must rebuild`);
+      await poll(() => logs.slice(logStart).some(l => l.text.includes(`Menu label ${font.textFrame}: ${JSON.stringify(label.visible)} (hotkey `) && l.text.includes(`face ${JSON.stringify(font.face)}`)), `Imported authored label/font ${label.id} must rebuild`);
     }
     f8Proof.push(await captureFps(page, 'after-import-f8-visible', true));
     await toggleFps(page); f8Proof.push(await captureFps(page, 'after-import-f8-hidden', false));

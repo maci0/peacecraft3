@@ -98,3 +98,26 @@ Two unequal files mapping to the same alias reject with `AMBIGUOUS_ASSET_ALIAS`;
 the previous visible store and revision survive. Identical content may share
 an alias. Checked memory accounting charges only newly stored names, and failed
 inserts do not partially populate the staging map.
+
+### Current control-layer capture
+
+The 2026-10-14 local Chromium run used generated WASM SHA-256
+`303dd8666f58251aa6640e9519d391e0965a56843dbf276158160c70d43acdaf`
+and the retained 115-member fixture with explicit archive-variant provenance.
+The label assertion now follows each FDF-derived text-frame name and the
+renderer diagnostic's quoted text; it still requires fresh logs after commit.
+The earlier failure against the obsolete diagnostic format is preserved.
+
+The rerun passed real file-input import, revision increment, six fresh authored
+labels/faces, scene rebuilding, six F8 visibility checks, imported click audio
+before and after resize, and conflicting-member rollback. All six labels were
+independently readable in the capture; automatic full-scene OCR was inconclusive.
+The 113 captured requests included two local Blob GETs during import, no HTTP
+requests during import, no uploads, no sockets and no page errors.
+
+Proof and 19 captures remain local under
+`.scratch/post-control-art-browser/run-2-contract-fix/`. This is functional
+acceptance of a locally repacked fixture, not retail installer ISO acceptance or
+full native fidelity. Unsupported border mappings and absent inset defaults are
+reported and omitted. Missing panel assets, sky projection, lower framing,
+material equivalence and original gameplay remain open.
