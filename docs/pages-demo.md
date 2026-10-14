@@ -86,8 +86,9 @@ allows the built static files to be published from the public repository's main
 branch without building Rust on GitHub.
 
 Publish only this checked output to the demo repository. Do not copy the entire
-`web` directory or upload browser captures. The generated debugging name section
-is removed to reduce transfer size; executable WASM sections are preserved.
+`web` directory or upload browser captures. Removing debugging names leaves
+executable sections intact. The subsequent size optimization rewrites code;
+run the generated-WASM browser checks against its final output before publishing.
 
 ## Verification
 
