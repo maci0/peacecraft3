@@ -150,6 +150,8 @@ pub enum Error {
     },
     #[error("no VERS chunk")]
     NoVersion,
+    #[error("no MODL chunk")]
+    NoModel,
     #[error("geoset sub-block tag {0:?} is not recognised")]
     UnknownGeosetTag([u8; 4]),
     #[error("geoset animation track {0:?} is not recognised")]
@@ -2688,9 +2690,7 @@ impl Mdlx {
 
     /// The `MODL` record.
     pub fn model(&self, data: &[u8]) -> Result<Model, Error> {
-        let c = self
-            .chunk(tag::MODL)
-            .expect("MODL presence checked by the sweep");
+        let c = self.chunk(tag::MODL).ok_or(Error::NoModel)?;
         let p = c.payload(data);
         if p.len() < MODL_EXTENTS + 24 {
             return Err(Error::Truncated {
