@@ -163,6 +163,13 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
       Raw FAFX records now expose borrowed 80-byte names and 260-byte paths with
       exact 340-byte tiling and source offsets. Eight synthetic tests, the keyed
       HD Footman fixture and WASM check pass; FaceFX behavior is not implemented.
+- [x] `pcx-gfx`: explicit budgeted legacy DDS BC1/BC3 top-mip CPU decoding reuses
+      the existing `image` package, checks all authored mip spans and allocation
+      layouts, and retains profile metadata. Twelve synthetic tests, keyed original
+      Footman diffuse/ORM pixel hashes, ATI2 refusal and native/WASM checks pass;
+      three source-leaf 32-bit WASM fixtures also pass. No automatic TEXS suffix or
+      namespace binding is added. BC5, punch-through BC1, other profiles, lower-mip
+      pixel decoding, application import and rendering remain unsupported/unverified.
 - [ ] `docs/reforged-fixes.md` fix ledger; rows default to `defer`
 
 ## M2 — Asset decoders + first Bevy render — **render smoke passed; full material fidelity open**

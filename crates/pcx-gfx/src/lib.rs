@@ -12,6 +12,7 @@
 
 use bevy::asset::RenderAssetUsages;
 
+pub mod dds;
 pub mod mdx_opacity;
 pub mod mdx_runtime;
 pub mod performance;
@@ -36,6 +37,7 @@ pub struct LoadedTexture {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssetKind {
     Blp,
+    Dds,
     Tga,
     Mdl,
     Unknown,
@@ -50,6 +52,7 @@ impl AssetKind {
     pub fn detect(bytes: &[u8]) -> Self {
         match bytes.get(0..4) {
             Some(b"BLP1") | Some(b"BLP0") | Some(b"BLP2") => AssetKind::Blp,
+            Some(b"DDS ") => AssetKind::Dds,
             Some(b"MDLX") => AssetKind::Mdl,
             _ if looks_like_tga(bytes) => AssetKind::Tga,
             _ => AssetKind::Unknown,
@@ -72,9 +75,18 @@ fn looks_like_tga(d: &[u8]) -> bool {
 ///
 /// Returns the decoded texture for image formats. Models are handled by
 /// [`load_model`], because a model is not one texture.
+/// DDS callers must supply resource limits through [`dds::decode`].
 pub fn load_image(bytes: &[u8], source: &str) -> Result<LoadedTexture, crate::Error> {
     let kind = AssetKind::detect(bytes);
     match kind {
+        AssetKind::Dds => Err(dds::Error {
+            source_name: source.into(),
+            offset: 0,
+            kind: dds::Failure::Unsupported(
+                "DDS requires explicit caller limits; use dds::decode".into(),
+            ),
+        }
+        .into()),
         AssetKind::Blp => {
             // Two content paths, and the header says which: direct (palettised)
             // and JPEG. Routing both through the palettised decode fails on
@@ -470,6 +482,8 @@ pub const MAX_INFLUENCES: usize = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Dds(#[from] dds::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("cannot decode: {0}")]
