@@ -123,3 +123,19 @@ This closes copy/readback for that named asset and enabled host device only.
 No application asset-loading pipeline, GPU sampling/decoding, shader, draw,
 browser device or native material/channel/gamma interpretation was exercised.
 No production upload integration was added by the probe.
+
+## Separate synthetic sampling/draw check
+
+A synthetic endpoint-only BC5 fixture passed a Vulkan shader draw and readback
+check on llvmpipe (LLVM 23.1.1, Mesa 26.2.4), a software CPU adapter. The device
+enabled `TEXTURE_COMPRESSION_BC`; the imported compressed descriptor, data order,
+payload and explicit nearest sampler were used without RGBA reconstruction.
+Both declared mips (8×8 and 4×4) produced all 80 expected RG pixels. An integer
+render target retained explicitly rounded endpoint values and draw markers;
+only draw output was copied back. Fixture values are synthetic, not game data.
+
+Code, exact commands, dependency identities and output remain local in
+`.scratch/bc5-sampling-root-review/`. This establishes that bounded synthetic
+sampling/draw path on the named software adapter. Hardware/browser behavior,
+interpolated BC values, production loading and native channel/shader/gamma
+semantics remain unverified.
