@@ -94,7 +94,9 @@ tile the original geoset, preserving both UV sets where authored.
 
 `TangentStream1800::bits(index)` returns the exact four u32 float bit patterns.
 `SkinStream1800::get(index)` returns `SkinRecord1800 { joint_words: [u16;4],
-weight_words: [u16;4] }`; `record_count()` derives the count from stored bytes.
+weight_words: [u16;4] }`; `record_count()` bounds complete records by both the
+authored word count and available bytes. Tangent/skin accessors return `None`
+for records beyond either bound, including directly constructed public streams.
 The stream's `word_count` retains the original header. All block/stream offsets
 are header offsets within Geoset.data; body offset is header+8. File offset is
 GEOS.payload_offset + Geoset.offset + 4 + stream.offset. No asset value is supplied

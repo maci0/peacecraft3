@@ -23,6 +23,9 @@ pub struct TangentStream1800<'a> {
 impl TangentStream1800<'_> {
     /// Exact four f32 bit patterns; no handedness or normalization is inferred.
     pub fn bits(&self, index: usize) -> Option<[u32; 4]> {
+        if index >= self.count as usize {
+            return None;
+        }
         let start = index.checked_mul(16)?;
         let raw = self.data.get(start..start.checked_add(16)?)?;
         Some(std::array::from_fn(|i| {
@@ -48,10 +51,14 @@ pub struct SkinStream1800<'a> {
 }
 
 impl SkinStream1800<'_> {
+    /// Complete records bounded by both the authored count and available bytes.
     pub fn record_count(&self) -> usize {
-        self.data.len() / 16
+        (self.word_count as usize / 8).min(self.data.len() / 16)
     }
     pub fn get(&self, index: usize) -> Option<SkinRecord1800> {
+        if index >= self.record_count() {
+            return None;
+        }
         let start = index.checked_mul(16)?;
         let raw = self.data.get(start..start.checked_add(16)?)?;
         let words: [u16; 8] =
