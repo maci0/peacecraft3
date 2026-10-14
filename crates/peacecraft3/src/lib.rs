@@ -11,3 +11,7 @@ pub mod map_script_session;
 pub mod browser_read;
 
 pub mod browser_archive_source;
+
+pub mod browser_configuration;
+
+pub mod browser_configuration_json;

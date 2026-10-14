@@ -48,6 +48,8 @@ use wasm_bindgen::prelude::*;
 
 use crate::launch_gui;
 
+mod configuration_ffi;
+
 /// CSS selector of the canvas winit renders into, in `web/index.html`.
 const CANVAS: &str = "#launcher-canvas";
 
@@ -293,6 +295,40 @@ pub fn committed_archive_source(
         budget,
     )
 }
+static MAP_CONFIGURATION: OnceLock<peacecraft3::browser_configuration::ConfigurationInbox> =
+    OnceLock::new();
+fn map_configuration_inbox() -> &'static peacecraft3::browser_configuration::ConfigurationInbox {
+    MAP_CONFIGURATION.get_or_init(Default::default)
+}
+/// Rust producer seam for the explicit JS schema adapter; no source policy is derived.
+pub fn enqueue_map_configuration(
+    request: peacecraft3::browser_configuration::Configuration,
+) -> Result<u32, peacecraft3::browser_configuration::InboxError> {
+    map_configuration_inbox().enqueue(request)
+}
+pub fn poll_map_configuration(
+    id: u32,
+) -> Result<peacecraft3::browser_configuration::Poll, peacecraft3::browser_configuration::InboxError>
+{
+    map_configuration_inbox().poll(id)
+}
+
+/// Decode all explicit metadata before constructing selected sources or queuing work.
+pub fn enqueue_map_configuration_json(
+    text: &str,
+    max_metadata_bytes: usize,
+) -> Result<u32, peacecraft3::browser_configuration_json::Error> {
+    peacecraft3::browser_configuration_json::decode_and_enqueue(
+        text,
+        max_metadata_bytes,
+        map_configuration_inbox(),
+        |index, revision, info, names, budget| {
+            let selected = committed_archive_selection(index, revision)?;
+            committed_archive_source(selected, info, names, budget)
+        },
+    )
+}
+
 /// Starts a transaction without altering visible archives/assets.
 #[wasm_bindgen]
 pub fn begin_archive_import() {
@@ -558,6 +594,7 @@ pub fn commit_archive_import() -> Result<Vec<String>, JsValue> {
 /// `AssetPlugin` initialises, and a registered default source is kept rather
 /// than overwritten with the platform one.
 fn configure(app: &mut App) {
+    peacecraft3::browser_configuration::install(app, map_configuration_inbox().clone());
     app.register_asset_source(
         AssetSourceId::Default,
         // 0.20: `AssetSourceBuilder::new` takes the reader directly;

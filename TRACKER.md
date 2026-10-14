@@ -872,6 +872,12 @@ Format: `date — subsystem — symptom — root cause — status`
 - [x] In-browser asset path: Bevy's default wasm asset source (HTTP reader rooted
       at `assets/`) replaced by Bevy's own `MemoryAssetReader`; archives read via
       `MpqArchive::from_bytes`.
+- [~] Explicit browser map configuration: mandatory caller metadata now reaches
+      the existing bounded binder/App consumer through owned WASM inspection,
+      submission and completion handles. Actual Cargo-built WASM/Node gates
+      cover publication, acknowledgement and stale-source rollback. Browser
+      controls, original-map execution and public-site refresh remain open;
+      see `docs/re-notes/browser-map-configuration.md`.
 - [x] JS side: `web/index.html` + `web/loader.js` + `web/pkg/`. No trunk, no
       wasm-pack, no bundler. Build is `cargo build --target wasm32-unknown-unknown
       --release -p peacecraft3` then `wasm-bindgen --target web --out-dir web/pkg`.

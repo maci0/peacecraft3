@@ -37,3 +37,8 @@ mod browser_read_cases;
 
 #[path = "support/browser_archive_source_cases.rs"]
 mod browser_archive_source_cases;
+
+#[path = "support/browser_configuration_cases.rs"]
+mod browser_configuration_cases;
+#[path = "support/browser_configuration_json_cases.rs"]
+mod browser_configuration_json_cases;

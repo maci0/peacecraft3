@@ -67,7 +67,8 @@ The public demo has not been rebuilt or deployed by this change.
 browser module's ordinary Rust factories inspect the real archive index/revision
 and mount that selection. Callers supply exact logical/member mappings,
 `SourceInfo`, packed/decoded limits, resolver priorities and map-binding inputs.
-This adds no JavaScript configuration API, automatic source selection or UI policy.
+The explicit [map configuration API](browser-map-configuration.md) builds on this
+selection boundary; neither layer supplies automatic source selection or UI policy.
 
 Each inventory query and read checks the selected revision, index, UTF-8 name,
 byte length and header while holding revision then archive guards. Reads borrow
