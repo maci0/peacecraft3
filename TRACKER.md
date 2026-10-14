@@ -87,11 +87,16 @@ issues*.
       its native decoder. Huffman weights require a caller-supplied local PE
       source; Legacy has no co-located DLL, and browser import wiring remains open.
       This is not target-native 1.29b codec parity; see `format-mpq.md`.
-- [ ] `pcx-mpq`: sparse and other unsupported compression chains remain typed refusals
+- [x] `pcx-mpq`: bounded standalone sparse (`0x20`) and sparse-plus-ZLIB (`0x22`)
+      archive admission. Six encrypted/public consumer groups pass native and
+      actual WASM; intermediate arithmetic/layout bounds are checked before
+      allocation. A selected-primary differential records 29 matching roundtrips
+      and two shared refusals across 31 synthetic vectors; no native parity claim.
+- [ ] `pcx-mpq`: other compression chains and original sparse-member acceptance
       The standalone sparse reader is exposed and passes 13 checked public-API
       tests, a 172-case synthetic primary-source differential, strict Clippy
-      and a warning-denied WASM check. Archive chain integration and original
-      sparse-member acceptance remain open; see `mpq-sparse.md`.
+      and a warning-denied WASM check. Other sparse combinations, BZIP2/LZMA and
+      target-native codec acceptance remain open; see `mpq-sparse.md`.
 - [~] `pcx-mpq`: archive priority resolution (`DEFAULT_PRIORITY` exists but is still assumed — see M0 open)
 - [x] `mpqxtract` list/show/get with glob patterns and bounded output paths
 - [x] Test: `(listfile)` decodes end to end — 529 298 bytes of imploded sectors → real paths

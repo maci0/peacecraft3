@@ -56,6 +56,12 @@ pub enum PayloadError {
     Huffman(#[from] crate::huffman::HuffmanError),
     #[error("zlib sector is corrupt")]
     Zlib,
+    #[error(transparent)]
+    Sparse(#[from] crate::sparse::SparseError),
+    #[error(
+        "sparse intermediate capacity for {output_capacity} final bytes cannot fit allocation layout"
+    )]
+    SparseStageCapacity { output_capacity: usize },
     #[error("bzip2 sector is corrupt")]
     Bzip2,
     #[error("ADPCM sector is truncated or exceeds its output buffer")]
@@ -111,6 +117,19 @@ pub fn decompress_sector_with_huffman(
     let Some(&mask) = sector.first() else {
         return Ok(0);
     };
+    if mask == COMPRESSION_SPARSE {
+        return Ok(crate::sparse::decompress(&sector[1..], out)?);
+    }
+    if mask == (COMPRESSION_SPARSE | COMPRESSION_ZLIB) {
+        // StormLib 116135c2 SCompression.cpp decodes ZLIB before SPARSE.
+        // Accepted sparse framing needs at most its four-byte header plus
+        // one marker and one literal per final byte. Zero markers emit at
+        // least one remaining byte, including a capped terminal run.
+        let capacity = sparse_stage_capacity(out.len())?;
+        let mut intermediate = vec![0; capacity];
+        let produced = decompress_stage(COMPRESSION_ZLIB, &sector[1..], &mut intermediate, table)?;
+        return Ok(crate::sparse::decompress(&intermediate[..produced], out)?);
+    }
     let allowed = COMPRESSION_PKWARE
         | COMPRESSION_ZLIB
         | COMPRESSION_HUFFMAN
@@ -157,6 +176,16 @@ pub fn decompress_sector_with_huffman(
         input = next;
     }
     unreachable!("nonzero supported mask has a decoding stage")
+}
+
+fn sparse_stage_capacity(output_capacity: usize) -> Result<usize, PayloadError> {
+    let invalid = || PayloadError::SparseStageCapacity { output_capacity };
+    let capacity = output_capacity
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(4))
+        .ok_or_else(invalid)?;
+    std::alloc::Layout::array::<u8>(capacity).map_err(|_| invalid())?;
+    Ok(capacity)
 }
 
 fn decompress_stage(
@@ -541,11 +570,20 @@ mod tests {
                 matches!(decompress_sector(&packed, &mut [0; 16]), Err(PayloadError::UnsupportedCompression { mask: m }) if m == mask | COMPRESSION_HUFFMAN)
             );
         }
-        for mask in [COMPRESSION_HUFFMAN, COMPRESSION_SPARSE] {
+        for mask in [
+            COMPRESSION_HUFFMAN,
+            COMPRESSION_SPARSE | COMPRESSION_HUFFMAN,
+        ] {
             assert!(
                 matches!(decompress_sector(&[mask], &mut [0; 16]), Err(PayloadError::UnsupportedCompression { mask: m }) if m == mask)
             );
         }
+        assert!(matches!(
+            decompress_sector(&[COMPRESSION_SPARSE], &mut [0; 16]),
+            Err(PayloadError::Sparse(
+                crate::sparse::SparseError::Truncated { need: 4, have: 0 }
+            ))
+        ));
     }
 
     #[test]
@@ -646,5 +684,26 @@ mod tests {
         raw.extend(packed);
         raw.push(2);
         assert!(decode_block(&raw, 0, 65, flags::COMPRESS, 64).is_err());
+    }
+}
+
+#[cfg(test)]
+mod sparse_capacity_tests {
+    use super::*;
+    #[test]
+    fn derived_capacity_checks_arithmetic_and_layout_before_allocation() {
+        assert_eq!(sparse_stage_capacity(0).unwrap(), 4);
+        assert_eq!(sparse_stage_capacity(1).unwrap(), 6);
+        assert_eq!(sparse_stage_capacity(64).unwrap(), 132);
+        for capacity in [
+            usize::MAX,
+            usize::MAX / 2,
+            isize::MAX as usize,
+            isize::MAX as usize / 2,
+        ] {
+            assert!(
+                matches!(sparse_stage_capacity(capacity), Err(PayloadError::SparseStageCapacity { output_capacity }) if output_capacity == capacity)
+            );
+        }
     }
 }
