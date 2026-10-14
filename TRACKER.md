@@ -544,6 +544,10 @@ ship custom objects, and a map whose rawcodes do not resolve is unplayable.
 ## M5 — Simulation core
 
 - [x] `pcx-sim`: deterministic project fixed-tick movement harness (headless, Bevy-free); original tick/RNG parity remains M6
+- [x] Movement/selection distances cover the full signed coordinate range without
+      subtraction/absolute-value overflow. Four native and four actual 32-bit
+      release-WASM regressions pass; existing simulation/network/play traces
+      remain green. Original movement/pathing semantics remain separate.
 - [~] Entity store and deterministic movement iteration exist; original game handles and full gameplay store remain open
 - [ ] Stats model: HP/mana/attack/armour/resistances/regen
 - [ ] Damage pipeline: attack types, mitigation, crit, dodge, block, invuln

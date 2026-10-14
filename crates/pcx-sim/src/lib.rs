@@ -22,14 +22,14 @@ pub mod world;
 
 /// Simulation tick duration in milliseconds.
 ///
-/// 1.28c's real sim runs at a fixed step; this is the project's chosen step and
-/// is exposed as a constant so every consumer agrees.
+/// The project's chosen step, exposed so every consumer agrees. The original
+/// game's tick rate and frame relationship remain unverified.
 pub const TICK_MS: u32 = 25;
 
 /// Fixed-point scale: 16 fractional bits.
 ///
-/// Positions are integers scaled by `1 << 16`, which gives sub-centimetre
-/// resolution at WC3's unit scale while keeping every operation exact.
+/// Positions are integers scaled by `1 << 16` in this movement harness.
+/// The mapping from original authored coordinates remains a caller concern.
 pub const FX_SHIFT: u32 = 16;
 pub const FX_ONE: i32 = 1 << FX_SHIFT;
 
@@ -184,7 +184,11 @@ pub fn step(world: &mut World, input: &Input, rng: &mut Rng) {
         let Some((tx, ty)) = unit.move_target else {
             continue;
         };
-        let (dx, dy) = (tx - unit.x, ty - unit.y);
+        // A difference between two valid Fx coordinates can exceed i32.
+        let (dx, dy) = (
+            i64::from(tx) - i64::from(unit.x),
+            i64::from(ty) - i64::from(unit.y),
+        );
         if dx == 0 && dy == 0 {
             unit.move_target = None;
             continue;
@@ -193,8 +197,11 @@ pub fn step(world: &mut World, input: &Input, rng: &mut Rng) {
         // normalising by `hypot`, because that would need a square root and a
         // rounding mode.
         const SPEED: i32 = FX_ONE / 10;
-        let step_x = dx.signum() * SPEED.min(dx.abs());
-        let step_y = dy.signum() * SPEED.min(dy.abs());
+        // Each clamped delta fits Fx; adding it stays between the current
+        // coordinate and the representable target, so cannot overflow.
+        let limit = i64::from(SPEED);
+        let step_x = dx.clamp(-limit, limit) as Fx;
+        let step_y = dy.clamp(-limit, limit) as Fx;
         unit.x += step_x;
         unit.y += step_y;
     }
@@ -211,8 +218,8 @@ fn apply_command(world: &mut World, player: u8, cmd: &Command, _rng: &mut Rng) {
             // cannot select another player's unit through a malformed order.
             for unit in &mut world.units {
                 if unit.owner == player
-                    && (unit.x - x).abs() < FX_ONE
-                    && (unit.y - y).abs() < FX_ONE
+                    && (i64::from(unit.x) - i64::from(x)).abs() < i64::from(FX_ONE)
+                    && (i64::from(unit.y) - i64::from(y)).abs() < i64::from(FX_ONE)
                 {
                     unit.move_target = None;
                 }
