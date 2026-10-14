@@ -147,6 +147,15 @@ pub use info::{Force, MapInfo, Player};
 pub use minimap::{Marker, MinimapImage, MinimapImageKind, MinimapMarkers};
 pub use shadows::Shadows;
 
+/// Retains the requested member even when archive preflight fails.
+#[derive(Debug, thiserror::Error)]
+#[error("{member}: {source}")]
+pub struct MapMemberError {
+    pub member: &'static str,
+    #[source]
+    pub source: pcx_mpq::checked::ReadError,
+}
+
 /// Container magic, written by the game before anything else.
 pub const MAP_MAGIC: [u8; 4] = *b"HM3W";
 
@@ -436,6 +445,21 @@ impl<'a> Map<'a> {
     /// Extract `name` from the embedded archive.
     pub fn extract(&self, name: &str) -> Result<Vec<u8>, pcx_mpq::Error> {
         pcx_mpq::MpqArchive::from_bytes(self.archive().to_vec(), "map")?.extract(name)
+    }
+
+    /// Extract one named member with explicit source and allocation policy.
+    /// The borrowed checked MPQ path refuses distinct locale/platform/block candidates.
+    pub fn extract_checked(
+        &self,
+        source_label: &str,
+        member: &'static str,
+        budget: pcx_mpq::checked::ReadBudget,
+    ) -> Result<Option<Vec<u8>>, MapMemberError> {
+        let extract = || {
+            pcx_mpq::checked::CheckedArchive::parse(self.archive(), source_label, budget)?
+                .extract(member, budget.max_decoded_bytes)
+        };
+        extract().map_err(|source| MapMemberError { member, source })
     }
 
     /// Open the embedded archive for name-based lookup.

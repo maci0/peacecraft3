@@ -1,15 +1,15 @@
 //! Import authored map scripts with explicit input budgets and provenance.
 //!
-//! Borrowed header and allocation-layout checks precede archive cloning and table
-//! decoding. Selected members are checked before packed/decoded allocation. These
+//! Borrowed header and allocation-layout checks precede table decoding; the archive
+//! is not cloned. Selected members are checked before packed/decoded allocation. These
 //! input limits do not bound total compiler, AST, decoder or runtime memory.
 //! Prelude sources and asset identity are supplied by the caller; no archive,
 //! locale, native Host or edition priority is inferred.
 
 use crate::scripts::{AssetIdentity, MapScripts, ScriptAsset};
 use pcx_map::Map;
-use pcx_mpq::{BlockEntry, Header, MpqArchive};
-use std::{alloc::Layout, io::Cursor};
+use pcx_mpq::checked::{CheckedArchive, ReadBudget, ReadError};
+use std::alloc::Layout;
 use thiserror::Error;
 
 const SCRIPT: &str = "war3map.j";
@@ -27,7 +27,7 @@ pub struct MapScriptBudget {
     pub max_decoded_bytes: usize,
     /// Sum of the two supplied prelude byte lengths.
     pub max_prelude_bytes: usize,
-    /// Archive bytes + decoded script/WTS bytes + prelude bytes. Table buffers
+    /// Archive input bytes + decoded script/WTS bytes + prelude bytes. Table buffers
     /// and compiler/AST allocations are not included in this input accounting.
     pub max_aggregate_input_bytes: usize,
 }
@@ -217,73 +217,6 @@ fn aggregate(map: &str, counts: &[usize], max_bytes: usize) -> Result<(), MapScr
     )
 }
 
-fn archive_error(map: &str, reason: &'static str) -> MapScriptImportError {
-    MapScriptImportError::MpqOpen {
-        map: map.into(),
-        source: pcx_mpq::Error::Unsupported(reason),
-    }
-}
-
-fn preflight_header(
-    map: &str,
-    raw: &[u8],
-    budget: MapScriptBudget,
-) -> Result<Header, MapScriptImportError> {
-    let h =
-        Header::parse(&mut Cursor::new(raw)).map_err(|source| MapScriptImportError::MpqOpen {
-            map: map.into(),
-            source: source.into(),
-        })?;
-    let table_bytes = h
-        .hash_table_bytes()
-        .checked_add(h.block_table_bytes())
-        .ok_or_else(|| archive_error(map, "table byte sum overflows"))?;
-    let bytes = usize::try_from(table_bytes).map_err(|_| MapScriptImportError::InvalidLayout {
-        map: map.into(),
-        region: "archive tables",
-        bytes: table_bytes,
-    })?;
-    if bytes > budget.max_archive_table_bytes {
-        return Err(MapScriptImportError::ArchiveTableBudgetExceeded {
-            map: map.into(),
-            bytes,
-            max_bytes: budget.max_archive_table_bytes,
-        });
-    }
-    layout::<u8>(map, "archive tables", bytes, table_bytes)?;
-    layout::<pcx_mpq::HashEntry>(
-        map,
-        "hash table",
-        h.hash_entries as usize,
-        h.hash_table_bytes(),
-    )?;
-    layout::<BlockEntry>(
-        map,
-        "block table",
-        h.block_entries as usize,
-        h.block_table_bytes(),
-    )?;
-    if h.format_version != 0 {
-        return Err(archive_error(
-            map,
-            "map import supports MPQ version zero only",
-        ));
-    }
-    if !h.is_self_consistent() || h.hash_table_pos < h.header_size {
-        return Err(archive_error(map, "header table extents are inconsistent"));
-    }
-    // Validate the mathematical size before the reader's unchecked u32 shift.
-    if 0x200u64
-        .checked_shl(u32::from(h.sector_size_shift))
-        .and_then(|n| u32::try_from(n).ok())
-        .filter(|n| *n != 0)
-        .is_none()
-    {
-        return Err(archive_error(map, "sector size is not a nonzero u32"));
-    }
-    Ok(h)
-}
-
 fn member_error(map: &str, member: &'static str, source: pcx_mpq::Error) -> MapScriptImportError {
     if member == WTS {
         MapScriptImportError::MalformedWts {
@@ -300,84 +233,41 @@ fn member_error(map: &str, member: &'static str, source: pcx_mpq::Error) -> MapS
     }
 }
 
-fn selected_block(
-    archive: &MpqArchive,
-    map: &str,
-    member: &'static str,
-) -> Result<Option<BlockEntry>, MapScriptImportError> {
-    let hashes = archive.hash_entries();
-    if hashes.is_empty() {
-        return Ok(None);
-    }
-    let (name1, name2) = pcx_mpq::hash::hash_string_both(member);
-    let mut slot = pcx_mpq::hash::start_slot(member, hashes.len());
-    let mut selected = None;
-    // Follow the reader's bounded probe policy; do not choose a locale/priority.
-    for _ in 0..hashes.len() {
-        let entry = &hashes[slot];
-        if entry.is_unpopulated() {
-            break;
+fn read_error(error: ReadError) -> MapScriptImportError {
+    match error {
+        ReadError::MpqOpen { map, source } => MapScriptImportError::MpqOpen { map, source },
+        ReadError::AmbiguousMember { map, member, count } => {
+            MapScriptImportError::AmbiguousLocalizedScript { map, member, count }
         }
-        if entry.name1 == name1 && entry.name2 == name2 {
-            let block = *archive
-                .block(entry.block_index as usize)
-                .map_err(|source| member_error(map, member, source))?;
-            if !block.exists() || block.flags & pcx_mpq::flags::DELETE_MARKER != 0 {
-                return Err(member_error(
-                    map,
-                    member,
-                    pcx_mpq::Error::Unsupported(
-                        "matching member block is not a readable existing file",
-                    ),
-                ));
-            }
-            let key = (entry.locale, entry.platform, entry.block_index);
-            if selected.as_ref().is_some_and(|(prior, _)| *prior != key) {
-                return Err(MapScriptImportError::AmbiguousLocalizedScript {
-                    map: map.into(),
-                    member,
-                    count: 2,
-                });
-            }
-            selected = Some((key, block));
-        }
-        slot += 1;
-        if slot == hashes.len() {
-            slot = 0;
-        }
-    }
-    Ok(selected.map(|(_, block)| block))
-}
-
-fn preflight_member(
-    map: &str,
-    member: &'static str,
-    block: BlockEntry,
-    h: Header,
-    limit: usize,
-    budget: MapScriptBudget,
-) -> Result<usize, MapScriptImportError> {
-    let size = check_bytes(map, member, u64::from(block.file_size), limit)?;
-    check_bytes(
-        map,
-        member,
-        u64::from(block.file_size),
-        budget.max_decoded_bytes,
-    )?;
-    check_bytes(
-        map,
-        member,
-        u64::from(block.compressed_size),
-        budget.max_raw_packed_bytes,
-    )?;
-    if u64::from(block.file_pos) + u64::from(block.compressed_size) > u64::from(h.archive_size) {
-        return Err(member_error(
+        ReadError::BudgetExceeded {
             map,
             member,
-            pcx_mpq::Error::Unsupported("packed member extends past the declared archive"),
-        ));
+            declared_bytes,
+            max_bytes,
+        } => MapScriptImportError::BudgetExceeded {
+            map,
+            member,
+            declared_bytes,
+            max_bytes,
+        },
+        ReadError::ArchiveTableBudgetExceeded {
+            map,
+            bytes,
+            max_bytes,
+        } => MapScriptImportError::ArchiveTableBudgetExceeded {
+            map,
+            bytes,
+            max_bytes,
+        },
+        ReadError::InvalidLayout { map, region, bytes } => {
+            MapScriptImportError::InvalidLayout { map, region, bytes }
+        }
+        ReadError::ExtractionFailed {
+            map,
+            member,
+            source,
+        } => member_error(&map, member, source),
     }
-    Ok(size)
 }
 
 /// Extract compiled `war3map.j` and optional WTS, then compile identified preludes.
@@ -438,56 +328,39 @@ pub fn import_map_scripts(
         &[raw.len(), prelude_bytes],
         budget.max_aggregate_input_bytes,
     )?;
-    let header = preflight_header(map_label, raw, budget)?;
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(raw.len())
-        .map_err(|source| MapScriptImportError::Allocation {
-            map: map_label.into(),
-            region: "embedded archive",
-            source,
-        })?;
-    bytes.extend_from_slice(raw);
-    let mut archive = MpqArchive::from_bytes(bytes, map_label).map_err(|source| {
-        MapScriptImportError::MpqOpen {
-            map: map_label.into(),
-            source,
-        }
-    })?;
-    let script = selected_block(&archive, map_label, SCRIPT)?.ok_or_else(|| {
-        MapScriptImportError::MissingScriptMember {
+    let archive = CheckedArchive::parse(
+        raw,
+        map_label,
+        ReadBudget {
+            max_archive_bytes: budget.max_archive_bytes,
+            max_archive_table_bytes: budget.max_archive_table_bytes,
+            max_raw_packed_bytes: budget.max_raw_packed_bytes,
+            max_decoded_bytes: budget.max_decoded_bytes,
+        },
+    )
+    .map_err(read_error)?;
+    let script_size = archive
+        .preflight_member(SCRIPT, budget.max_script_bytes)
+        .map_err(read_error)?
+        .ok_or_else(|| MapScriptImportError::MissingScriptMember {
             map: map_label.into(),
             member: SCRIPT,
-        }
-    })?;
-    let wts = selected_block(&archive, map_label, WTS)?;
-    let script_size = preflight_member(
-        map_label,
-        SCRIPT,
-        script,
-        header,
-        budget.max_script_bytes,
-        budget,
-    )?;
-    let wts_size = wts
-        .map(|block| preflight_member(map_label, WTS, block, header, budget.max_wts_bytes, budget))
-        .transpose()?
-        .unwrap_or(0);
+        })?;
+    let wts_size = archive
+        .preflight_member(WTS, budget.max_wts_bytes)
+        .map_err(read_error)?;
     aggregate(
         map_label,
-        &[raw.len(), prelude_bytes, script_size, wts_size],
+        &[raw.len(), prelude_bytes, script_size, wts_size.unwrap_or(0)],
         budget.max_aggregate_input_bytes,
     )?;
     let script_bytes = archive
-        .extract(SCRIPT)
-        .map_err(|source| member_error(map_label, SCRIPT, source))?;
-    let wts_bytes = wts
-        .map(|_| {
-            archive
-                .extract(WTS)
-                .map_err(|source| member_error(map_label, WTS, source))
-        })
-        .transpose()?;
+        .extract(SCRIPT, budget.max_script_bytes)
+        .map_err(read_error)?
+        .expect("immutable preflighted script");
+    let wts_bytes = archive
+        .extract(WTS, budget.max_wts_bytes)
+        .map_err(read_error)?;
     if let Some(bytes) = &wts_bytes {
         let table =
             pcx_trig::wts::Table::parse(bytes).map_err(|e| MapScriptImportError::MalformedWts {

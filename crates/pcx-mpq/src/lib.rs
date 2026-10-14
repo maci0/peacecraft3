@@ -9,6 +9,7 @@ use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+pub mod checked;
 pub mod crypt;
 pub mod hash;
 pub mod header;
@@ -378,6 +379,51 @@ pub struct MpqArchive {
     huffman_checked: bool,
 }
 
+fn read_tables<R: Read + Seek>(
+    reader: &mut R,
+    h: Header,
+) -> Result<(Vec<HashEntry>, Vec<BlockEntry>), Error> {
+    if !h.is_self_consistent() {
+        return Err(Error::Unsupported("header table layout is inconsistent"));
+    }
+    let t = crypt::table();
+
+    let mut raw = vec![0u8; h.hash_table_bytes() as usize];
+    reader.seek(SeekFrom::Start(u64::from(h.hash_table_pos)))?;
+    reader.read_exact(&mut raw)?;
+    crypt::decrypt(&mut raw, hash::hash_table_key(), t);
+    let hashes = raw
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .map(|e| HashEntry {
+            name1: u32::from_le_bytes(e[0..4].try_into().unwrap()),
+            name2: u32::from_le_bytes(e[4..8].try_into().unwrap()),
+            locale: u16::from_le_bytes(e[8..10].try_into().unwrap()),
+            platform: u16::from_le_bytes(e[10..12].try_into().unwrap()),
+            block_index: u32::from_le_bytes(e[12..16].try_into().unwrap()),
+        })
+        .collect();
+
+    let mut raw = vec![0u8; h.block_table_bytes() as usize];
+    reader.seek(SeekFrom::Start(u64::from(h.block_table_pos)))?;
+    reader.read_exact(&mut raw)?;
+    crypt::decrypt(&mut raw, hash::block_table_key(), t);
+    let blocks = raw
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .map(|e| BlockEntry {
+            file_pos: u32::from_le_bytes(e[0..4].try_into().unwrap()),
+            compressed_size: u32::from_le_bytes(e[4..8].try_into().unwrap()),
+            file_size: u32::from_le_bytes(e[8..12].try_into().unwrap()),
+            flags: u32::from_le_bytes(e[12..16].try_into().unwrap()),
+        })
+        .collect();
+
+    Ok((hashes, blocks))
+}
+
 impl MpqArchive {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref().to_path_buf();
@@ -421,49 +467,11 @@ impl MpqArchive {
         &self.blocks
     }
 
-    /// Decrypt and decode both tables.
+    /// Decrypt and decode both tables through the shared reader.
     fn load_tables(&mut self) -> Result<(), Error> {
-        let h = self.header;
-        if !h.is_self_consistent() {
-            return Err(Error::Unsupported("header table layout is inconsistent"));
-        }
-        let t = crypt::table();
-
-        let mut raw = vec![0u8; h.hash_table_bytes() as usize];
-        let mut r = self.file.reader();
-        r.seek(SeekFrom::Start(u64::from(h.hash_table_pos)))?;
-        r.read_exact(&mut raw)?;
-        crypt::decrypt(&mut raw, hash::hash_table_key(), t);
-        self.hashes = raw
-            .as_chunks::<16>()
-            .0
-            .iter()
-            .map(|e| HashEntry {
-                name1: u32::from_le_bytes(e[0..4].try_into().unwrap()),
-                name2: u32::from_le_bytes(e[4..8].try_into().unwrap()),
-                locale: u16::from_le_bytes(e[8..10].try_into().unwrap()),
-                platform: u16::from_le_bytes(e[10..12].try_into().unwrap()),
-                block_index: u32::from_le_bytes(e[12..16].try_into().unwrap()),
-            })
-            .collect();
-
-        let mut raw = vec![0u8; h.block_table_bytes() as usize];
-        let mut r = self.file.reader();
-        r.seek(SeekFrom::Start(u64::from(h.block_table_pos)))?;
-        r.read_exact(&mut raw)?;
-        crypt::decrypt(&mut raw, hash::block_table_key(), t);
-        self.blocks = raw
-            .as_chunks::<16>()
-            .0
-            .iter()
-            .map(|e| BlockEntry {
-                file_pos: u32::from_le_bytes(e[0..4].try_into().unwrap()),
-                compressed_size: u32::from_le_bytes(e[4..8].try_into().unwrap()),
-                file_size: u32::from_le_bytes(e[8..12].try_into().unwrap()),
-                flags: u32::from_le_bytes(e[12..16].try_into().unwrap()),
-            })
-            .collect();
-
+        let (hashes, blocks) = read_tables(&mut self.file.reader(), self.header)?;
+        self.hashes = hashes;
+        self.blocks = blocks;
         Ok(())
     }
 

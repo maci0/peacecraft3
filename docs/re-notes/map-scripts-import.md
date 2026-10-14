@@ -19,18 +19,49 @@ platform layouts and checked aggregate arithmetic. `Header::parse` reads through
 a borrowed `Cursor`; no archive clone or table allocation is needed to inspect
 counts. Serialized table byte sums, typed table vector layouts, declared extents,
 version-zero framing and mathematically valid nonzero u32 sector sizes are checked
-before archive construction. The archive copy uses fallible reservation.
+before table decoding. `pcx_mpq::checked::CheckedArchive` borrows the embedded
+archive; it does not copy the whole archive or the selected packed member.
 
 After table decoding, unique member metadata is checked for independent packed,
 decoded, script/WTS limits and packed extents before extraction. The final
 aggregate counts archive bytes plus decoded script/WTS and both prelude lengths;
-its initial archive-plus-prelude check runs before archive cloning. Exact limits
+its initial archive-plus-prelude check runs before table decoding. Exact limits
 are accepted. Layout failures and impossible arithmetic remain typed refusals.
 
 `DEFAULT` limits are harness policy, not values measured from the game. Table
 buffers are bounded separately. Decoder temporaries, error/source strings, parsed
 WTS structures, compiler/AST allocations and runtime state are not covered by a
 total process-memory guarantee. These are input-byte and allocation-layout gates.
+
+## Shared member reader
+
+`Map::extract_checked(source_label, member, ReadBudget)` exposes the same input
+policy to other map consumers. The explicit budget has separate archive, serialized
+table, packed-member and decoded-member byte ceilings. The shared reader has no
+default policy. It preserves the script importer's version-zero, self-consistent
+end-table profile; this does not expand supported MPQ formats. Existing
+`Map::extract` and archive APIs retain their behavior.
+
+Missing members return `None`; matching malformed references and conflicting
+locale/platform/block identities return contextual errors. A decoded member's
+bytes are still owned. Table buffers and decoder temporaries still allocate.
+Callers must choose member/parser and aggregate input limits separately; the
+shared ceilings do not bound total live memory.
+
+Ten actual 32-bit WASM consumer groups check limits, framing, selected extents,
+ambiguity, exact duplicate identities, absence, corrupt references and importer
+failure precedence. On an 8,528-byte synthetic archive with an 8,192-byte stored
+member, a native allocator probe records one request at least archive-sized through
+`Map::extract`, and zero through the checked path or its decoded-budget refusal.
+Three independent executions agree. This measures allocation requests for those
+inputs, not RSS, timing or native game behavior.
+
+A bounded local community-map comparison (`MY SHEEP TAG (with cameras).w3x`,
+release identity unestablished) returns identical bytes through old and checked
+readers for all seven inspected members: camera, JASS, WTS, info, terrain, pathing
+and placements. Each checked read uses exact declared table/packed and observed
+decoded limits. Original bytes and detailed source metadata stay in local scratch;
+this is extraction correspondence, not map execution or native camera proof.
 
 ## Member and WTS selection
 
