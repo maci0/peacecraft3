@@ -493,7 +493,7 @@ impl<'a> Resolver<'a> {
     /// simply a function with an empty body.
     fn declare_function(&mut self, f: &'a FunctionDecl, source: &str, main: bool) {
         match f.body {
-            Some(ref body) => {
+            Some(_) => {
                 if let Some((i, fspan)) = self.forward.remove(f.name.as_str()) {
                     if !same_call_shape(&self.functions[i], f) {
                         self.pending.push(ResolveDiagnostic {
@@ -508,8 +508,7 @@ impl<'a> Resolver<'a> {
                         });
                         return;
                     }
-                    self.functions[i].body = Some(body.clone());
-                    self.functions[i].source = source.to_string();
+                    self.functions[i] = declared_function(f, source);
                     return;
                 }
                 // A prelude declaration of the same name is left alone
