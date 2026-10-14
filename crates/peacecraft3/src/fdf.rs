@@ -246,10 +246,10 @@ impl Fdf {
                 let parent = stack.last().map(|i| self.frames[*i].name.clone());
                 let idx = self.frames.len();
                 self.index.insert(frame.name.clone(), idx);
-                if let Some(p) = &parent {
-                    if let Some(pi) = self.index.get(p).copied() {
-                        self.frames[pi].children.push(frame.name.clone());
-                    }
+                if let Some(p) = &parent
+                    && let Some(pi) = self.index.get(p).copied()
+                {
+                    self.frames[pi].children.push(frame.name.clone());
                 }
                 self.frames.push(Frame { parent, ..frame });
                 if opens {
@@ -522,7 +522,7 @@ fn apply_property(frame: &mut Frame, line: &str) -> Result<(), FdfError> {
             let parts: Vec<f32> = value
                 .trim_end_matches(',')
                 .split_whitespace()
-                .filter_map(|t| num(t))
+                .filter_map(num)
                 .collect();
             if parts.len() != 4 {
                 return Err(bad("BackdropBackgroundInsets"));

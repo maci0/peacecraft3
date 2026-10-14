@@ -374,9 +374,8 @@ pub fn text_style_in(texts: &[&str], frame: &str) -> Result<TextStyle, TextError
     let offset: [f32; 2] = floats(offset_line, 2)
         .and_then(|v| <[f32; 2]>::try_from(v).ok())
         .ok_or_else(|| bad("FontShadowOffset", offset_line))?;
-    match offset.iter().copied().find(|c| !c.is_finite()) {
-        Some(bad_value) => return Err(unusable("FontShadowOffset", bad_value)),
-        None => {}
+    if let Some(bad_value) = offset.iter().copied().find(|c| !c.is_finite()) {
+        return Err(unusable("FontShadowOffset", bad_value));
     }
     let flags = record("FontFlags")?;
 
