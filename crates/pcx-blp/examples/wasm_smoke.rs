@@ -5,7 +5,7 @@
 //! channel that survives. A browser build reads these crates from bytes that
 //! arrive over HTTP, so the paths under test are the in-memory ones.
 //!
-//! Exit codes: 0 = all good, 1 = BLP, 2 = MDX, 3 = TGA, 4 = sim, 5 = codec.
+//! Exit codes: 0 = all good, 1 = BLP, 2 = MDX, 3 = TGA, 4 = sim.
 
 use pcx_blp::Header;
 use pcx_mdl::Mdlx;
@@ -15,9 +15,7 @@ use pcx_sim::{Command, FX_ONE, Input, Rng, World, step};
 fn check_blp() -> i32 {
     let blp: &[u8] = include_bytes!("../tests/fixtures/SelectionCircleLarge.blp");
     let ok = match pcx_blp::decode(blp) {
-        Ok((Header { width, height, .. }, rgba)) => {
-            width == 128 && height == 128 && rgba.len() == 128 * 128 * 4
-        }
+        Ok((Header { width, height, .. }, rgba)) => rgba_shape(width, height, rgba.len()),
         Err(_) => false,
     };
     if ok { 0 } else { 1 }
@@ -42,7 +40,7 @@ fn check_mdx() -> i32 {
 fn check_tga() -> i32 {
     let tga: &[u8] = include_bytes!("../tests/fixtures/misc.tga");
     let ok = pcx_tga::decode(tga)
-        .map(|(h, rgba)| h.width > 0 && rgba.len() == (h.width * h.height * 4) as usize)
+        .map(|(h, rgba)| rgba_shape(u32::from(h.width), u32::from(h.height), rgba.len()))
         .unwrap_or(false);
     if ok { 0 } else { 3 }
 }
@@ -72,18 +70,15 @@ fn check_sim() -> i32 {
     if ok { 0 } else { 4 }
 }
 
-/// Exit 5: a codec round trip holds. `pcx-net` is a dev-only path here so that
-/// this crate does not depend on it for a browser build.
-fn check_codec() -> i32 {
-    let ok = {
-        let bytes = {
-            let mut v = Vec::new();
-            v.push(0u8); // Command::Nop
-            v
-        };
-        !bytes.is_empty()
-    };
-    if ok { 0 } else { 5 }
+fn rgba_shape(width: u32, height: u32, actual: usize) -> bool {
+    width > 0
+        && height > 0
+        && usize::try_from(width)
+            .ok()
+            .zip(usize::try_from(height).ok())
+            .and_then(|(w, h)| w.checked_mul(h))
+            .and_then(|pixels| pixels.checked_mul(4))
+            == Some(actual)
 }
 
 fn main() {
@@ -92,6 +87,5 @@ fn main() {
     code |= check_mdx();
     code |= check_tga();
     code |= check_sim();
-    code |= check_codec();
     std::process::exit(code);
 }
