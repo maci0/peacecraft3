@@ -804,7 +804,10 @@ Format: `date — subsystem — symptom — root cause — status`
 - [x] Enforced by test: input horizon, no rewind, no cross-player commands,
       missing tick stalls rather than diverging, server/world round trips
 - [ ] Authoritative lockstep server owning the world
-- [x] UDP transport + LAN discovery (broadcast request/response, host advert)
+- [x] Project UDP transport and discovery request/response implementation.
+      Fresh ephemeral loopback covers host response, source binding and resumed
+      game polling; actual broadcast routing and application lobby wiring remain
+      unverified. See `docs/re-notes/lan-discovery-collection.md`.
 - [x] `LanSession`: lobby states, ordered inbox, tick gated on input arrival
 - [ ] Gate: a real 1.29b LAN client joins a game we host
 - [ ] Classic Battle.net client through an emulator realm

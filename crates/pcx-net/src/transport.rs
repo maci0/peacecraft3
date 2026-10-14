@@ -36,14 +36,22 @@ pub enum TransportError {
     UnknownPeer(Peer),
     #[error("datagram of {0} bytes exceeds the {max}-byte datagram limit", max = u16::MAX as usize)]
     DatagramTooLarge(usize),
+    #[error(
+        "failed restoring discovery socket nonblocking mode: {restore}; collection failure: {collection:?}"
+    )]
+    DiscoveryRestore {
+        #[source]
+        restore: std::io::Error,
+        collection: Option<Box<TransportError>>,
+    },
 }
 
 /// A `Peer` backed by a real socket address.
 #[derive(Debug, Default)]
 pub struct UdpTransport {
     socket: Option<UdpSocket>,
-    /// Registration table, so a `Peer` is an index rather than an address that
-    /// could be spoofed by a datagram's source.
+    /// Registration table: a `Peer` indexes caller-registered endpoints.
+    /// Source-address matching is not endpoint authentication.
     peers: HashMap<Peer, SocketAddr>,
     /// Reverse map, so an incoming datagram can be attributed to a `Peer`.
     by_addr: HashMap<SocketAddr, Peer>,
@@ -94,42 +102,50 @@ impl UdpTransport {
 
     /// Collects discovery responses until the timeout expires.
     ///
-    /// Responses are parsed here rather than handed back raw, so a malformed
-    /// host cannot reach the caller with an unvalidated payload.
+    /// Responses are bound to their UDP source; the payload carries no address.
+    /// Collection temporarily blocks, then restores nonblocking game polling on
+    /// both success and error. A restoration failure retains any collection error.
     pub fn collect_hosts(&mut self) -> Result<Vec<Host>, TransportError> {
         let Some(socket) = self.socket.as_ref() else {
             return Err(TransportError::Io(std::io::Error::other("not bound")));
         };
-        let deadline = Instant::now() + DISCOVERY_TIMEOUT;
-        let mut out = Vec::new();
-        let mut buf = [0u8; 2048];
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-            socket.set_read_timeout(Some(remaining))?;
-            match socket.recv_from(&mut buf) {
-                Ok((n, from)) => {
-                    if let Some(host) = Host::parse(&buf[..n]) {
-                        if host.addr != from {
-                            continue;
-                        }
-                        out.push(Host { addr: from, ..host });
-                    }
-                }
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
-                {
+        socket.set_nonblocking(false)?;
+        let collected = (|| {
+            let deadline = Instant::now() + DISCOVERY_TIMEOUT;
+            let mut out = Vec::new();
+            let mut buf = [0u8; 2048];
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
                     break;
                 }
-                Err(e) => return Err(e.into()),
+                socket.set_read_timeout(Some(remaining))?;
+                match socket.recv_from(&mut buf) {
+                    Ok((n, from)) => {
+                        if let Some(host) = Host::parse(&buf[..n]) {
+                            out.push(Host { addr: from, ..host });
+                        }
+                    }
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::TimedOut =>
+                    {
+                        break;
+                    }
+                    Err(e) => return Err(e.into()),
+                }
             }
+            out.sort_by_key(|h| h.name.clone());
+            out.dedup_by(|a, b| a.addr == b.addr);
+            Ok(out)
+        })();
+        match socket.set_nonblocking(true) {
+            Ok(()) => collected,
+            Err(restore) => Err(TransportError::DiscoveryRestore {
+                restore,
+                collection: collected.err().map(Box::new),
+            }),
         }
-        out.sort_by_key(|h| h.name.clone());
-        out.dedup_by(|a, b| a.addr == b.addr);
-        Ok(out)
     }
 }
 
@@ -685,5 +701,78 @@ mod receive_span_tests {
             panic!("snapshot kind changed");
         };
         assert_eq!(decode_world_payload(tick, &payload).unwrap(), world);
+    }
+}
+
+#[cfg(test)]
+mod discovery_loopback {
+    use super::*;
+    #[test]
+    fn ephemeral_host_response_reaches_collector_and_polling_resumes() {
+        let mut client =
+            UdpTransport::bind("127.0.0.1:0").expect("ephemeral loopback client must bind");
+        let transport =
+            UdpTransport::bind("127.0.0.1:0").expect("ephemeral loopback host must bind");
+        let client_addr = client.socket.as_ref().unwrap().local_addr().unwrap();
+        let host_addr = transport.socket.as_ref().unwrap().local_addr().unwrap();
+        let mut host = LanHost {
+            transport,
+            name: "synthetic project host".into(),
+            map: "synthetic map".into(),
+            max_players: 5,
+            game_port: host_addr.port(),
+        };
+        client
+            .socket
+            .as_ref()
+            .unwrap()
+            .send_to(DISCOVERY_REQUEST, host_addr)
+            .unwrap();
+        let responder = std::thread::spawn(move || {
+            // Scheduling delay and deadline are bounded liveness fixtures, not speed gates.
+            std::thread::sleep(Duration::from_millis(10));
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let answered = host.serve_discovery().unwrap();
+                if !answered.is_empty() {
+                    assert_eq!(answered, [client_addr]);
+                    break;
+                }
+                assert!(Instant::now() < deadline, "loopback request did not arrive");
+                std::thread::yield_now();
+            }
+            host
+        });
+        let found = client
+            .collect_hosts()
+            .expect("collection must preserve socket failures");
+        let mut host = responder.join().unwrap();
+        assert_eq!(
+            found,
+            [Host {
+                name: "synthetic project host".into(),
+                addr: host_addr,
+                map: "synthetic map".into(),
+                players: (1, 5)
+            }]
+        );
+        let destination = host.transport().register(client_addr);
+        let source = client.register(host_addr);
+        host.transport()
+            .send(destination, b"post-collection polling")
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let packet = loop {
+            if let Some(packet) = client.poll() {
+                break packet;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "post-collection datagram did not arrive"
+            );
+            std::thread::yield_now();
+        };
+        assert_eq!(packet, (source, b"post-collection polling".to_vec()));
+        assert_eq!(client.address(source), Some(host_addr));
     }
 }
