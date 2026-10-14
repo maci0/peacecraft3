@@ -270,6 +270,21 @@ pub enum Error {
     #[error("records end at +{end:#x} but the file has {len} bytes")]
     TrailingBytes { end: usize, len: usize },
 
+    #[error(
+        "WCT declares {count} blocks at +{at:#x}, but only {length_words} minimum length words fit"
+    )]
+    WctCountOverruns {
+        at: usize,
+        count: u32,
+        length_words: usize,
+    },
+    #[error("WCT {region} reservation for {elements} elements failed: {source}")]
+    WctAllocation {
+        region: &'static str,
+        elements: usize,
+        source: std::collections::TryReserveError,
+    },
+
     // ---- wts ----
     #[error("entry at +{at:#x} does not start with `STRING `")]
     BadWtsHeader { at: usize },
@@ -690,31 +705,48 @@ impl<'a> Wct<'a> {
     pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
         let mut p = 0usize;
         let unknown0 = read_u32(data, &mut p, "unknown0")?;
-        let count = read_u32(data, &mut p, "block count")? as usize;
-        let mut blocks = Vec::with_capacity(count.min(1 << 16));
+        let stored_count = read_u32(data, &mut p, "block count")?;
+        // Even empty blocks require a length word; reject impossible counts
+        // before reserving any caller-controlled metadata.
+        let length_words = (data.len() - p) / std::mem::size_of::<u32>();
+        let count = usize::try_from(stored_count)
+            .ok()
+            .filter(|n| *n <= length_words)
+            .ok_or(Error::WctCountOverruns {
+                at: 4,
+                count: stored_count,
+                length_words,
+            })?;
+        let first = p;
         for _ in 0..count {
-            let at = p;
-            let len = read_u32(data, &mut p, "text length")? as usize;
-            let have = data.len().saturating_sub(p);
-            let end = p
-                .checked_add(len)
-                .filter(|e| *e <= data.len())
-                .ok_or(Error::Truncated {
-                    what: "text",
-                    at,
-                    need: len,
-                    have,
-                })?;
-            blocks.push(WctBlock {
-                text: data[p..end].to_vec(),
-            });
-            p = end;
+            read_wct_span(data, &mut p)?;
         }
         if p != data.len() {
             return Err(Error::TrailingBytes {
                 end: p,
                 len: data.len(),
             });
+        }
+        let mut blocks = Vec::new();
+        blocks
+            .try_reserve_exact(count)
+            .map_err(|source| Error::WctAllocation {
+                region: "block metadata",
+                elements: count,
+                source,
+            })?;
+        p = first;
+        for _ in 0..count {
+            let span = read_wct_span(data, &mut p)?;
+            let mut text = Vec::new();
+            text.try_reserve_exact(span.len())
+                .map_err(|source| Error::WctAllocation {
+                    region: "block text",
+                    elements: span.len(),
+                    source,
+                })?;
+            text.extend_from_slice(&data[span]);
+            blocks.push(WctBlock { text });
         }
         Ok(Self {
             raw: data,
@@ -761,6 +793,25 @@ impl<'a> Wct<'a> {
     pub fn framing(&self) -> WctFraming {
         WctFraming::of(self)
     }
+}
+
+/// Borrow one length-delimited raw block span without allocating.
+fn read_wct_span(data: &[u8], p: &mut usize) -> Result<std::ops::Range<usize>, Error> {
+    let at = *p;
+    let len = read_u32(data, p, "text length")? as usize;
+    let start = *p;
+    let have = data.len().saturating_sub(start);
+    let end = start
+        .checked_add(len)
+        .filter(|e| *e <= data.len())
+        .ok_or(Error::Truncated {
+            what: "text",
+            at,
+            need: len,
+            have,
+        })?;
+    *p = end;
+    Ok(start..end)
 }
 
 /// The measured framing of one WCT file.

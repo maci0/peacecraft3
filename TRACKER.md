@@ -680,6 +680,10 @@ closed by the work above:
        VM tests and the identified local Human06 compilation gate pass. Native
        source/load/initializer ordering, GUI lowering and campaign execution are
        still open; see `docs/re-notes/wct-compilation.md`.
+       Complete WCT framing is now checked before materialization; malformed
+       allocation probes and eight actual WASM parser groups pass. The explicit
+       local NightElf06 authored-context compile gate passes; chapter execution
+       remains open. See `docs/re-notes/wct-framing-preflight.md`.
 - [ ] Native function table (exact signatures, return conventions and **side-effect
        ordering** from `game.dll`)
 - [ ] `BJ` / `Blz` library surface, including the `Blz` extensions
