@@ -31,6 +31,7 @@ const MAX_MODEL_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SOUND_EVENTS: usize = 4096;
 const MAX_SOUND_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TOTAL_SOUND_BYTES: usize = 64 * 1024 * 1024;
+const MAX_SOUND_METADATA_BYTES: usize = 4096;
 
 /// The sprite-layer skin keys the glue initializer builds as `%s_V%d`, where the
 /// number is the edition (`0` Reign of Chaos, `1` The Frozen Throne). Both names
@@ -61,6 +62,21 @@ pub enum PanelError {
     Missing(String),
     #[error("{path}: {reason}")]
     Decode { path: String, reason: String },
+    #[cfg(any(not(target_arch = "wasm32"), test))]
+    #[error("{path} in {archive}: {source}")]
+    NativeRead {
+        path: String,
+        archive: String,
+        #[source]
+        source: pcx_mpq::Error,
+    },
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[error("{path}: {source}")]
+    BrowserRead {
+        path: String,
+        #[source]
+        source: Box<peacecraft3::browser_read::ReadError>,
+    },
     #[error("skin table: {0}")]
     Skin(crate::menu_skin::SkinError),
     #[error("{path} has no {name:?} sequence")]
@@ -92,7 +108,8 @@ pub struct PanelSource {
     edition: u32,
     clips: Vec<Clip>,
     pub sounds: Vec<EventSound>,
-    navigation: Result<(Vec<Clip>, Vec<EventSound>), String>,
+    pub unavailable_sounds: Vec<UnavailableSound>,
+    navigation: Result<(Vec<Clip>, LoadedSounds), String>,
 }
 
 /// `MainMenu Birth` once, then `MainMenu Stand`, in model frames (milliseconds).
@@ -198,27 +215,40 @@ pub fn model_paths(
         .collect()
 }
 
-fn read(_install: Option<&std::path::Path>, path: &str) -> Result<Vec<u8>, PanelError> {
+fn read(
+    _install: Option<&std::path::Path>,
+    path: &str,
+    max_bytes: usize,
+) -> Result<Vec<u8>, PanelError> {
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(install) = _install {
-        let mut archives = pcx_mpq::MpqSet::open_wc3(install).map_err(|e| PanelError::Decode {
-            path: path.into(),
-            reason: e.to_string(),
-        })?;
-        return archives.extract(path).map_err(|e| match e {
-            pcx_mpq::Error::NotFound(_) => PanelError::Missing(path.into()),
-            e => PanelError::Decode {
+        let mut archives =
+            pcx_mpq::MpqSet::open_wc3(install).map_err(|source| PanelError::NativeRead {
                 path: path.into(),
-                reason: e.to_string(),
-            },
-        });
+                archive: install.display().to_string(),
+                source,
+            })?;
+        let (index, block) = archives
+            .locate(path)
+            .ok_or_else(|| PanelError::Missing(path.into()))?;
+        // Retain this caller's existing selected archive and codec behavior.
+        // Both payload allocation sizes are checked before extract reads either.
+        checked_member_size(path, block.compressed_size, block.file_size, max_bytes)?;
+        let archive = archives.members()[index].path().display().to_string();
+        return archives
+            .extract(path)
+            .map_err(|source| PanelError::NativeRead {
+                path: path.into(),
+                archive,
+                source,
+            });
     }
     #[cfg(target_arch = "wasm32")]
     {
-        crate::browser::stored_bytes_fallible(path)
-            .map_err(|e| PanelError::Decode {
+        crate::browser::panel_bytes(path, max_bytes)
+            .map_err(|source| PanelError::BrowserRead {
                 path: path.into(),
-                reason: e.to_string(),
+                source: Box::new(source),
             })?
             .map(|asset| asset.bytes)
             .ok_or_else(|| PanelError::Missing(path.into()))
@@ -227,8 +257,24 @@ fn read(_install: Option<&std::path::Path>, path: &str) -> Result<Vec<u8>, Panel
     Err(PanelError::Missing(path.into()))
 }
 
+#[cfg(any(not(target_arch = "wasm32"), test))]
+fn checked_member_size(
+    path: &str,
+    packed: u32,
+    decoded: u32,
+    max_bytes: usize,
+) -> Result<(), PanelError> {
+    if u64::from(packed) > max_bytes as u64 || u64::from(decoded) > max_bytes as u64 {
+        return Err(PanelError::Decode {
+            path: path.into(),
+            reason: "packed or decoded member exceeds panel read byte bound".into(),
+        });
+    }
+    Ok(())
+}
+
 fn table(install: Option<&std::path::Path>, path: &str) -> Result<pcx_slq::Table, PanelError> {
-    let bytes = read(install, path)?;
+    let bytes = read(install, path, 1024 * 1024)?;
     if bytes.len() > 1024 * 1024 {
         return Err(PanelError::Decode {
             path: path.into(),
@@ -330,8 +376,8 @@ pub fn resolve_sound(
     let files = row
         .by_name("FileNames")
         .ok_or_else(|| fail(format!("{label:?} has no FileNames")))?;
-    // ponytail: the engine picks among comma-separated files at random; every
-    // menu panel sound names one, so a list is refused until one needs it.
+    // shortcut: comma-separated sound lists refuse until a source-backed
+    // file-selection policy is implemented.
     if files.is_empty() || files.contains(',') {
         return Err(fail(format!("{label:?} lists several files: {files}")));
     }
@@ -568,62 +614,160 @@ fn checked_sound_bytes(
     Ok((view.into(), Arc::new(source)))
 }
 
+/// Unavailable archive audio stays distinct from a decoded, playable event.
+/// Every original request/frame is retained; one record covers each qualified
+/// normalized path within the selected source batch.
+#[derive(Debug, Clone)]
+pub struct UnavailableSound {
+    pub path: String,
+    pub mask: u8,
+    pub context: String,
+    pub requests: Vec<SoundDependency>,
+}
+
+struct LoadedSounds {
+    sounds: Vec<EventSound>,
+    unavailable: Vec<UnavailableSound>,
+}
+
+fn bounded_context(text: &str) -> &str {
+    let mut end = text.len().min(MAX_SOUND_METADATA_BYTES);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+fn unavailable_codec(error: &PanelError) -> Option<(u8, String)> {
+    match error {
+        #[cfg(any(not(target_arch = "wasm32"), test))]
+        PanelError::NativeRead {
+            archive,
+            source:
+                pcx_mpq::Error::Payload(pcx_mpq::payload::PayloadError::UnsupportedCompression { mask }),
+            ..
+        } if matches!(mask, 0x01 | 0x41 | 0x81) => Some((
+            *mask,
+            format!("selected archive {}", bounded_context(archive)),
+        )),
+        #[cfg(any(target_arch = "wasm32", test))]
+        PanelError::BrowserRead { source, .. } => {
+            let mask = peacecraft3::browser_read::panel_codec_mask(source)?;
+            let peacecraft3::browser_read::ReadError::BoundedExtraction {
+                revision, origin, ..
+            } = source.as_ref()
+            else {
+                return None;
+            };
+            Some((
+                mask,
+                format!(
+                    "browser revision {revision}, archive {} {:?}",
+                    origin.ordinal,
+                    bounded_context(&origin.name)
+                ),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn loaded_sounds_with(
+    requests: Vec<SoundDependency>,
+    origin: pcx_play::scripts::AssetIdentity,
+    mut read_sound: impl FnMut(&str, usize) -> Result<Vec<u8>, PanelError>,
+) -> Result<LoadedSounds, PanelError> {
+    if requests.len() > MAX_SOUND_EVENTS
+        || requests.iter().any(|r| {
+            r.path.is_empty()
+                || r.path.len() > MAX_SOUND_METADATA_BYTES
+                || r.event.len() > MAX_SOUND_METADATA_BYTES
+                || r.path.contains('\0')
+                || !r.volume.is_finite()
+                || !(0.0..=1.0).contains(&r.volume)
+        })
+    {
+        return Err(PanelError::Sound {
+            event: "panel sound requests".into(),
+            reason: "request metadata, count or gain bound exceeded".into(),
+        });
+    }
+    let mut cache =
+        std::collections::BTreeMap::<String, (Arc<[u8]>, Arc<pcx_play::file_sounds::Assets>)>::new(
+        );
+    let mut gaps = std::collections::BTreeMap::<String, usize>::new();
+    let mut out = LoadedSounds {
+        sounds: Vec::new(),
+        unavailable: Vec::new(),
+    };
+    let mut total = 0usize;
+    for r in requests {
+        let key = r.path.replace('\\', "/").to_ascii_lowercase();
+        if let Some(&index) = gaps.get(&key) {
+            out.unavailable[index].requests.push(r);
+            continue;
+        }
+        let (bytes, source) = if let Some(sound) = cache.get(&r.path) {
+            sound.clone()
+        } else {
+            let limit = MAX_SOUND_BYTES.min(MAX_TOTAL_SOUND_BYTES - total);
+            let bytes = match read_sound(&r.path, limit) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    if let Some((mask, context)) = unavailable_codec(&error) {
+                        gaps.insert(key, out.unavailable.len());
+                        out.unavailable.push(UnavailableSound {
+                            path: r.path.clone(),
+                            mask,
+                            context,
+                            requests: vec![r],
+                        });
+                        continue;
+                    }
+                    return Err(error);
+                }
+            };
+            if bytes.len() > limit {
+                return Err(PanelError::Sound {
+                    event: r.event,
+                    reason: "sound byte or aggregate bound exceeded".into(),
+                });
+            }
+            total += bytes.len();
+            let sound = checked_sound_bytes(&r.path, &bytes, origin.clone())?;
+            cache.insert(r.path.clone(), sound.clone());
+            sound
+        };
+        out.sounds.push(EventSound {
+            frame: r.frame,
+            path: r.path,
+            volume: r.volume,
+            bytes,
+            source,
+        });
+    }
+    Ok(out)
+}
+
 fn loaded_sounds(
     install: Option<&std::path::Path>,
     edition: u32,
     requests: Vec<SoundDependency>,
-) -> Result<Vec<EventSound>, PanelError> {
-    let mut cache =
-        std::collections::BTreeMap::<String, (Arc<[u8]>, Arc<pcx_play::file_sounds::Assets>)>::new(
-        );
-    let mut total = 0usize;
-    requests
-        .into_iter()
-        .map(|r| {
-            let (bytes, source) = if let Some(sound) = cache.get(&r.path) {
-                sound.clone()
-            } else {
-                let bytes = read(install, &r.path)?;
-                total = total
-                    .checked_add(bytes.len())
-                    .filter(|&n| n <= MAX_TOTAL_SOUND_BYTES)
-                    .ok_or_else(|| PanelError::Sound {
-                        event: r.event.clone(),
-                        reason: "sound aggregate byte bound exceeded".into(),
-                    })?;
-                if bytes.len() > MAX_SOUND_BYTES {
-                    return Err(PanelError::Sound {
-                        event: r.event,
-                        reason: "sound byte bound exceeded".into(),
-                    });
-                }
-                // The backend-compatible view is admitted before any playback/entity write.
-                let origin = pcx_play::scripts::AssetIdentity {
-                    edition: format!("selected skin V{edition}"),
-                    version: "archive release unestablished".into(),
-                    source: install.map_or_else(
-                        || "selected committed browser asset batch".into(),
-                        |p| {
-                            format!(
-                                "selected install {} (member override provenance not inferred)",
-                                p.display()
-                            )
-                        },
-                    ),
-                };
-                let sound = checked_sound_bytes(&r.path, &bytes, origin)?;
-                cache.insert(r.path.clone(), sound.clone());
-                sound
-            };
-            Ok(EventSound {
-                frame: r.frame,
-                path: r.path,
-                volume: r.volume,
-                bytes,
-                source,
-            })
-        })
-        .collect()
+) -> Result<LoadedSounds, PanelError> {
+    let origin = pcx_play::scripts::AssetIdentity {
+        edition: format!("selected skin V{edition}"),
+        version: "archive release unestablished".into(),
+        source: install.map_or_else(
+            || "selected committed browser asset batch".into(),
+            |p| {
+                format!(
+                    "selected install {} (member override provenance not inferred)",
+                    p.display()
+                )
+            },
+        ),
+    };
+    loaded_sounds_with(requests, origin, |path, limit| read(install, path, limit))
 }
 
 /// Reads startup dependencies atomically. Navigation admission is retained as a
@@ -632,7 +776,7 @@ pub fn load(
     install: Option<&std::path::Path>,
     edition: u32,
 ) -> Result<Vec<PanelSource>, PanelError> {
-    let skins_text = read(install, crate::mainmenu::SKIN_TABLE)?;
+    let skins_text = read(install, crate::mainmenu::SKIN_TABLE, MAX_MODEL_BYTES)?;
     let skins =
         crate::menu_skin::SkinTable::parse(std::str::from_utf8(&skins_text).map_err(|e| {
             PanelError::Decode {
@@ -641,7 +785,7 @@ pub fn load(
             }
         })?)
         .map_err(PanelError::Skin)?;
-    let script = read(install, BLIZZARD_SCRIPT)?;
+    let script = read(install, BLIZZARD_SCRIPT, MAX_MODEL_BYTES)?;
     let scale = VolumeScale::checked(&script).map_err(|reason| PanelError::Decode {
         path: BLIZZARD_SCRIPT.into(),
         reason,
@@ -652,7 +796,7 @@ pub fn load(
         .map_err(PanelError::Skin)?
         .into_iter()
         .map(|path| {
-            let bytes = read(install, &path)?;
+            let bytes = read(install, &path, MAX_MODEL_BYTES)?;
             let startup = clips(&path, &bytes, SoundScope::Startup)?;
             let startup_sounds = loaded_sounds(
                 install,
@@ -683,7 +827,8 @@ pub fn load(
                 install: install.map(std::path::Path::to_path_buf),
                 edition,
                 clips: startup,
-                sounds: startup_sounds,
+                sounds: startup_sounds.sounds,
+                unavailable_sounds: startup_sounds.unavailable,
                 navigation,
             })
         })
@@ -802,6 +947,7 @@ struct Panel {
     phases: Vec<ClipPlan>,
     navigation_error: Option<String>,
     sounds: Vec<EventSound>,
+    unavailable_sounds: Vec<UnavailableSound>,
 }
 
 /// Mesh/material handles and independent global clock survive navigation.
@@ -896,6 +1042,7 @@ pub fn spawn(
         textures: Vec<pcx_gfx::LoadedTexture>,
         plans: Vec<ClipPlan>,
         sounds: Vec<EventSound>,
+        unavailable_sounds: Vec<UnavailableSound>,
         navigation_error: Option<String>,
     }
     let selection = sources
@@ -921,6 +1068,7 @@ pub fn spawn(
             bytes,
             clips,
             sounds,
+            unavailable_sounds,
             navigation,
             install: _,
             edition: _,
@@ -938,6 +1086,7 @@ pub fn spawn(
             .map(|c| ClipPlan::checked(&runtime, c, &path))
             .collect::<Result<_, _>>()?;
         let mut admitted_sounds = sounds;
+        let mut admitted_gaps = unavailable_sounds;
         let navigation_error = match navigation.and_then(|(clips, sounds)| {
             let extra = clips
                 .into_iter()
@@ -949,7 +1098,8 @@ pub fn spawn(
         }) {
             Ok((extra, sounds)) => {
                 plans.extend(extra);
-                admitted_sounds = sounds;
+                admitted_sounds = sounds.sounds;
+                admitted_gaps = sounds.unavailable;
                 None
             }
             Err(e) => Some(e),
@@ -957,7 +1107,10 @@ pub fn spawn(
         // Missing/malformed images are admission failures, never silently omitted.
         let textures = scene::texture_paths(&bytes)?
             .into_iter()
-            .map(|p| pcx_gfx::load_image(&read(install, &p)?, &p).map_err(|e| fail(e.to_string())))
+            .map(|p| {
+                pcx_gfx::load_image(&read(install, &p, scene::MENU_IMAGE_BYTES)?, &p)
+                    .map_err(|e| fail(e.to_string()))
+            })
             .collect::<Result<Vec<_>, PanelError>>()?;
         preflight_plans(&path, &bytes, &m, &model, &runtime, &textures, &plans[..2])?;
         let mut navigation_error = navigation_error;
@@ -977,6 +1130,7 @@ pub fn spawn(
             textures,
             plans,
             sounds: admitted_sounds,
+            unavailable_sounds: admitted_gaps,
             navigation_error,
         });
     }
@@ -1029,7 +1183,24 @@ pub fn spawn(
             phases: p.plans,
             navigation_error: p.navigation_error,
             sounds: p.sounds,
+            unavailable_sounds: p.unavailable_sounds,
         });
+    }
+    // Every sibling's full source preflight completed before publishing gaps.
+    let mut reported = std::collections::BTreeSet::new();
+    for panel in &panels {
+        for gap in &panel.unavailable_sounds {
+            let key = (
+                gap.context.as_str(),
+                gap.path.replace('\\', "/").to_ascii_lowercase(),
+                gap.mask,
+            );
+            if !reported.insert(key) {
+                continue;
+            }
+            warn!(model=%panel.path, sound=%gap.path, mask=gap.mask, source=%gap.context,
+                occurrences=gap.requests.len(), "Original menu panel audio unavailable; admitted geometry retained");
+        }
     }
     // The default sprite projection adds model X/Y to the frame's left/bottom
     // (`docs/re-notes/glue-coordinate-runtime.md`), so the camera centres the
@@ -1305,6 +1476,8 @@ pub fn follow_ui_viewport(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    include!("menu_panel_audio_gap_tests.rs");
 
     #[test]
     fn unavailable_panels_allow_navigation_but_stale_selection_refuses() {

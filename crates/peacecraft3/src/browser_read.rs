@@ -93,6 +93,102 @@ pub enum ReadError {
     },
 }
 
+/// A known panel-audio codec gap from one unambiguous bounded archive source.
+/// Other matching sources remain unverified when extraction stops at an error.
+pub fn panel_codec_mask(error: &ReadError) -> Option<u8> {
+    let ReadError::BoundedExtraction {
+        matching_archives,
+        source,
+        ..
+    } = error
+    else {
+        return None;
+    };
+    if matching_archives.len() != 1 {
+        return None;
+    }
+    match source.cause.as_ref() {
+        pcx_mpq::ExtractionCause::Mpq(pcx_mpq::Error::Payload(
+            pcx_mpq::payload::PayloadError::UnsupportedCompression {
+                mask: mask @ (0x01 | 0x41 | 0x81),
+            },
+        )) => Some(*mask),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod panel_codec_tests {
+    use super::*;
+
+    fn bounded(cause: pcx_mpq::ExtractionCause, sources: usize) -> ReadError {
+        let origin = ArchiveOrigin {
+            ordinal: 0,
+            name: "synthetic local archive".into(),
+        };
+        ReadError::BoundedExtraction {
+            requested_path: "Synthetic\\Panel.wav".into(),
+            key: "synthetic/panel.wav".into(),
+            revision: 7,
+            origin: origin.clone(),
+            matching_archives: (0..sources)
+                .map(|ordinal| ArchiveOrigin {
+                    ordinal,
+                    name: format!("synthetic source {ordinal}"),
+                })
+                .collect(),
+            source: Box::new(pcx_mpq::ExtractionError {
+                archive: origin.name.into(),
+                member: "Synthetic\\Panel.wav".into(),
+                cause: Box::new(cause),
+            }),
+        }
+    }
+
+    fn codec(mask: u8) -> pcx_mpq::ExtractionCause {
+        pcx_mpq::ExtractionCause::Mpq(pcx_mpq::Error::Payload(
+            pcx_mpq::payload::PayloadError::UnsupportedCompression { mask },
+        ))
+    }
+
+    #[test]
+    fn only_known_single_source_codec_capability_may_omit_a_sound() {
+        for mask in [0x01, 0x41, 0x81] {
+            assert_eq!(panel_codec_mask(&bounded(codec(mask), 1)), Some(mask));
+            for sources in [0, 2] {
+                assert_eq!(panel_codec_mask(&bounded(codec(mask), sources)), None);
+            }
+        }
+        for mask in [0, 0x04, 0x05, 0x40, 0x80, 0x82, 0xff] {
+            assert_eq!(panel_codec_mask(&bounded(codec(mask), 1)), None);
+        }
+    }
+
+    #[test]
+    fn malformed_missing_ambiguous_and_unbounded_reads_are_not_codec_capability() {
+        for cause in [
+            pcx_mpq::ExtractionCause::Mpq(pcx_mpq::Error::NotFound("Synthetic.wav".into())),
+            pcx_mpq::ExtractionCause::Ambiguous { count: 2 },
+            pcx_mpq::ExtractionCause::Mpq(pcx_mpq::Error::Payload(
+                pcx_mpq::payload::PayloadError::Huffman(pcx_mpq::huffman::HuffmanError::Corrupt),
+            )),
+        ] {
+            assert_eq!(panel_codec_mask(&bounded(cause, 1)), None);
+        }
+        let unbounded = ReadError::Extraction {
+            key: "Synthetic/Panel.wav".into(),
+            origin: ArchiveOrigin {
+                ordinal: 0,
+                name: "synthetic".into(),
+            },
+            source: Box::new(pcx_mpq::Error::Payload(
+                pcx_mpq::payload::PayloadError::UnsupportedCompression { mask: 0x81 },
+            )),
+        };
+        assert_eq!(panel_codec_mask(&unbounded), None);
+    }
+}
+
 /// Shares the existing browser key normalization; does not establish MPQ priority.
 pub fn normalize(path: &str) -> String {
     let mut out = String::with_capacity(path.len());

@@ -123,14 +123,34 @@ export function runPanelChecks(api) {
     const revision = api.asset_revision();
     const unavailable = commit(`unsupported-panel-sound-codec-${mask}`,
       { ...good, [soundPath]: new Uint8Array([mask, 99]) }, profiles);
-    check(unavailable.some(n => n.includes('PANEL_STARTUP_DISABLED') && n.includes('compression')),
+    check(unavailable.some(n => n.includes('PANEL_AUDIO_UNAVAILABLE') && n.includes(soundPath.replaceAll('\\', '/')) && n.includes('compression')),
       `unsupported sound codec not diagnosed: ${unavailable}`);
-    check(api.stored_asset(panelPath) === undefined, 'unadmitted panel model published');
+    check(JSON.stringify([...api.stored_asset(panelPath)]) === JSON.stringify([...good[panelPath]]), 'codec capability discarded admitted panel geometry');
+    check(JSON.stringify([...api.stored_asset(navSoundPath)]) === JSON.stringify([...good[navSoundPath]]), 'codec capability discarded another playable sound');
+    check(!unavailable.some(n => n.includes('PANEL_NAVIGATION_DISABLED')), 'codec capability disabled admitted navigation');
     check(api.stored_asset(soundPath) === undefined, 'unsupported sound bytes published');
     check(JSON.stringify(api.local_menu_editions()) === '["roc"]', 'codec failure lost static RoC menu');
     check(api.asset_revision() === revision + 1, 'codec fallback did not commit exactly once');
   }
   const retained = snapshot();
+  for (const reverse of [false, true]) {
+    const candidate = { ...good, [soundPath]: new Uint8Array([0x81, 99]) };
+    const sources = [['unsupported source', candidate, profiles], ['other matching source', { [soundPath]: good[soundPath] }, {}]];
+    if (reverse) sources.reverse();
+    api.begin_archive_import();
+    for (const [name, data, profile] of sources) api.stage_archive(name, mpqFixture(data, profile));
+    let error;
+    try { api.commit_archive_import(); } catch (e) { error = String(e); api.cancel_archive_import(); }
+    check(error?.includes(soundPath.replaceAll('\\', '/')), `unverified multi-source sound was muted: ${error}`);
+    check(snapshot() === retained, 'unverified multi-source sound changed committed store');
+  }
+  let oversized;
+  try {
+    commit('oversized-unsupported-panel-sound', { ...good, [soundPath]: new Uint8Array([0x81, 99]) },
+      { [soundPath]: { ...profiles[soundPath], fileSize: 64 * 1024 * 1024 + 1 } });
+  } catch (e) { oversized = String(e); }
+  check(oversized?.includes(soundPath.replaceAll('\\', '/')) && /limit|budget/.test(oversized), `oversized sound did not refuse before codec fallback: ${oversized}`);
+  check(snapshot() === retained, 'oversized sound changed committed store');
   for (const mask of [0x04, 0x05]) {
     let error;
     try { commit(`reserved-panel-codec-${mask}`, { ...good, [soundPath]: new Uint8Array([mask, 99]) }, profiles); }
@@ -158,6 +178,23 @@ export function runPanelChecks(api) {
       check(snapshot() === retained, 'mixed codec failure changed committed store');
       combinedRollbackCases++;
     }
+  }
+  for (const reverseEvents of [false, true]) {
+    const candidate = { ...good, [panelPath]: model({ extraStartup: true, reverseEvents }),
+      [soundPath]: new Uint8Array([0x81, 99]), [otherSoundPath]: wavFixture(),
+      [lookupPath]: table([['AnimSoundEvent', 'SoundLabel'], ['TEST', 'SyntheticPanel'],
+        ['NEXT', 'SyntheticNavigation'], ['FAIL', 'OtherStartup']]),
+      [soundsPath]: table([['SoundName', 'DirectoryBase', 'FileNames', 'Volume'],
+        ['SyntheticPanel', 'Synthetic\\Audio\\', 'panel.wav', '19'],
+        ['SyntheticNavigation', 'Synthetic\\Audio\\', 'navigation.wav', '23'],
+        ['OtherStartup', 'Synthetic\\Audio\\', 'other.wav', '17']]),
+    };
+    const notes = commit(`mixed-playable-codec-${reverseEvents}`, candidate, profiles);
+    check(notes.some(n => n.includes('PANEL_AUDIO_UNAVAILABLE')), 'mixed playable/unsupported source lost its capability diagnostic');
+    for (const path of [panelPath, otherSoundPath, navSoundPath]) {
+      check(JSON.stringify([...api.stored_asset(path)]) === JSON.stringify([...candidate[path]]), `mixed codec source discarded playable/geometry dependency: ${path}`);
+    }
+    check(api.stored_asset(soundPath) === undefined, 'mixed codec source fabricated a waveform');
   }
   const startup = commit('startup-only-panels', members(api.menu_music_path(), { navigation: false }));
   check(startup.some(n => n.includes('PANEL_NAVIGATION_DISABLED')), 'missing optional phases not diagnosed');

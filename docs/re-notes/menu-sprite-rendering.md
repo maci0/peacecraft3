@@ -85,9 +85,11 @@ convention; audible/native gain parity is unverified. Pitch variance, channel,
 priority and `CHANNELFULLPREEMPT` remain unapplied. Multiple filenames refuse
 rather than choosing an unevidenced random policy. Required startup dependencies
 are admitted together; navigation-only failures disable animation for that
-route. Browser imports with an explicitly unsupported archive sound codec omit
-the affected panel and report the decoder error, preserving the static menu.
+route. A known unsupported archive sound codec now leaves the checked panel
+geometry and phase plans usable, retaining each unavailable event separately
+from playable PCM. The decoder gap remains explicit; no waveform is invented.
 Missing or malformed required startup assets still reject the transaction.
+See [the current admission boundary](menu-panel-navigation.md).
 
 ## 4. What the panel models contain
 

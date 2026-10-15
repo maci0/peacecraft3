@@ -271,10 +271,24 @@ fn extract_unique_bounded(
     path: &str,
     limit: usize,
 ) -> Result<Vec<u8>, String> {
-    crate::browser_read::extract_fallible(set, *revision(), path, limit.min(MEMBER_LIMIT as usize))
-        .map_err(|error| error.to_string())?
-        .map(|asset| asset.bytes)
-        .ok_or_else(|| format!("MISSING_MEMBER: {path}"))
+    let limit = limit.min(MEMBER_LIMIT as usize);
+    crate::browser_read::read_bounded(
+        &Dir::default(),
+        set,
+        *revision(),
+        path,
+        crate::browser_read::BoundedReadPolicy {
+            max_copy_bytes: limit,
+            extraction: pcx_mpq::ExtractionBudget {
+                max_raw_packed_bytes: limit,
+                max_decoded_bytes: limit,
+            },
+            huffman: None,
+        },
+    )
+    .map_err(|error| error.to_string())?
+    .map(|asset| asset.bytes)
+    .ok_or_else(|| format!("MISSING_MEMBER: {path}"))
 }
 
 struct ArchiveAssetReader {
@@ -691,8 +705,8 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
             Err(e) => return Err(e),
         }
     }
-    // Admit complete panel graphs. Unsupported archive sound codecs omit that
-    // panel with a diagnostic; missing or malformed startup assets still refuse.
+    // Admit complete panel graphics even when a known audio codec is unavailable.
+    // Missing or malformed startup assets still refuse the transaction.
     // Navigation phases are optional; their failure leaves startup usable.
     for edition in [0, 1] {
         if !available_editions[edition as usize] {
@@ -731,7 +745,7 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
         }
         let mut sound_paths = std::collections::BTreeSet::new();
         let mut sound_bytes = 0usize;
-        'panel: for path in paths {
+        for path in paths {
             let bytes = extract_unique_bounded(set, &path, 16 * 1024 * 1024)?;
             let mut textures = Vec::new();
             let mut remaining = crate::mainmenu_scene::MENU_IMAGE_BYTES;
@@ -763,26 +777,25 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
                         if sound_paths.contains(&key) || !selected.insert(key) {
                             continue;
                         }
-                        let raw = match crate::browser_read::extract_fallible(
+                        let limit = (64 * 1024 * 1024 - total).min(16 * 1024 * 1024);
+                        let raw = match crate::browser_read::read_bounded(
+                            &Dir::default(),
                             set,
                             *revision(),
                             &dependency.path,
-                            16 * 1024 * 1024,
+                            crate::browser_read::BoundedReadPolicy {
+                                max_copy_bytes: limit,
+                                extraction: pcx_mpq::ExtractionBudget {
+                                    max_raw_packed_bytes: limit,
+                                    max_decoded_bytes: limit,
+                                },
+                                huffman: None,
+                            },
                         ) {
                             Ok(Some(asset)) => asset.bytes,
                             Ok(None) => return Err(format!("MISSING_MEMBER: {}", dependency.path)),
                             Err(error) => {
-                                // Only known Huffman / ADPCM+Huffman profiles may lack a
-                                // codec; unknown/reserved masks remain hard failures.
-                                if matches!(
-                                    &error,
-                                    crate::browser_read::ReadError::Extraction { source, .. }
-                                    if matches!(source.as_ref(), pcx_mpq::Error::Payload(
-                                        pcx_mpq::payload::PayloadError::UnsupportedCompression {
-                                            mask: 0x01 | 0x41 | 0x81
-                                        }
-                                    ))
-                                ) {
+                                if crate::browser_read::panel_codec_mask(&error).is_some() {
                                     unavailable_codecs.push(error.to_string());
                                     continue;
                                 }
@@ -813,20 +826,13 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
                     Ok((staged, total))
                 })();
                 match candidate {
-                    Ok(_) if !unavailable_codecs.is_empty() => {
-                        // Every other dependency was checked before accepting this fallback.
-                        let error = unavailable_codecs.join("; ");
-                        if matches!(scope, SoundScope::Startup) {
-                            notes.push(format!(
-                                "PANEL_STARTUP_DISABLED: edition={edition}; {error}"
-                            ));
-                            continue 'panel;
-                        }
-                        notes.push(format!(
-                            "PANEL_NAVIGATION_DISABLED: edition={edition}; {error}"
-                        ));
-                    }
                     Ok((staged, total)) => {
+                        // All other required dependencies passed before this capability fallback.
+                        for error in unavailable_codecs {
+                            notes.push(format!(
+                                "PANEL_AUDIO_UNAVAILABLE: edition={edition}; scope={scope:?}; {error}"
+                            ));
+                        }
                         for (sound, raw) in staged {
                             sound_paths.insert(normalize(&sound));
                             put(&sound, None, raw)?;
@@ -1110,6 +1116,16 @@ pub(crate) fn stored_bytes_checked(
 
 /// Bounded internal screen-definition read; no implicit codec discovery or cache write.
 pub(crate) fn screen_bytes(path: &str, max_bytes: usize) -> Result<Option<Vec<u8>>, String> {
+    panel_bytes(path, max_bytes)
+        .map(|asset| asset.map(|asset| asset.bytes))
+        .map_err(|e| e.to_string())
+}
+
+/// Typed bounded reads let panel audio capability remain separate from graphics.
+pub(crate) fn panel_bytes(
+    path: &str,
+    max_bytes: usize,
+) -> Result<Option<crate::browser_read::AssetRead>, crate::browser_read::ReadError> {
     let revision = *revision();
     crate::browser_read::read_bounded(
         &store(),
@@ -1125,8 +1141,6 @@ pub(crate) fn screen_bytes(path: &str, max_bytes: usize) -> Result<Option<Vec<u8
             huffman: None,
         },
     )
-    .map(|asset| asset.map(|asset| asset.bytes))
-    .map_err(|e| e.to_string())
 }
 
 /// Reject non-number, non-finite, fractional and out-of-range arguments before

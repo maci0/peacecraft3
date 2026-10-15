@@ -416,7 +416,7 @@ fn publish_menu_snapshot(
         .iter()
         .next()
         .map(|w| [w.physical_width(), w.physical_height()]);
-    crate::browser::publish_menu_snapshot(serde_json::json!({"screen":format!("{:?}",navigation.screen),"menuVisible":!menu.is_empty(),"draft":navigation.draft,"applied":navigation.applied,"notice":navigation.notice,"controls":controls,"labels":labels,"canvasPixels":canvas}).to_string());
+    crate::browser::publish_menu_snapshot(serde_json::json!({"screen":format!("{:?}",navigation.screen),"transitionActive":navigation.transition_active,"menuVisible":!menu.is_empty(),"draft":navigation.draft,"applied":navigation.applied,"notice":navigation.notice,"controls":controls,"labels":labels,"canvasPixels":canvas}).to_string());
 }
 
 #[cfg(target_arch = "wasm32")]

@@ -85,9 +85,13 @@ issues*.
       no uploads or page errors. PRE2, UI-logo composition, framebuffer alpha and
       full native menu fidelity remain separate. See
       `docs/re-notes/menu-additive-blending.md`.
-- [~] Local imports now follow skin-selected hanging-panel model/TEXS edges.
-      The expanded private fixture retains source-qualified dependencies. Actual
-      rendered-panel acceptance and full menu/sky fidelity remain open.
+- [~] Local imports follow skin-selected hanging-panel model/TEXS edges.
+      Known unsupported panel audio codecs now preserve admitted graphics and
+      other playable sounds. Qualified Legacy panel spawn and a six-capture local
+      original-fixture Main/Options/Single Player/return browser run pass, with
+      no uploads, sockets or page errors. Options-specific panel animation,
+      unavailable Huffman audio and full menu/sky fidelity remain open. See
+      `docs/re-notes/menu-panel-navigation.md`.
 
 ## M0 — RE harness and evidence base
 
