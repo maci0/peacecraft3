@@ -28,6 +28,14 @@ or uploaded. Runtime imports, including browser ISO imports, stay local.
 
 ## Collaboration and fidelity
 
+PeaceCraft III is a recreation, not a full decompilation or recompilation.
+The target is 100% fidelity to the source material's appearance, sound, feel and
+observable behavior. Internal architecture, algorithms, data structures and
+engine conventions may differ when they preserve that experience. Do not require
+proof of identical native internals before implementing a faithful recreation;
+label implementation choices and remaining fidelity questions honestly. This
+does not relax the asset-derived data rule or authorize invented game content.
+
 Read `PLAN.md`, `TRACKER.md` and relevant `docs/re-notes/` before changing original
 game behavior. Distinguish shipped-byte evidence, native-code evidence, runtime
 observations and unverified inference. Parser tests do not prove rendered or
