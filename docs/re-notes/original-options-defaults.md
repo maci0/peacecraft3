@@ -159,3 +159,21 @@ The browser cannot enumerate exclusive OS modes; native exclusive mode requests
 still need live capability checks and an observed application result. Remaining
 gameplay, graphics and device settings need their actual owners before activation.
 Unsupported settings stay disabled rather than being persisted without an effect.
+
+## Resolution and setting fidelity boundary
+
+The checked original enumeration is device-derived, not a bundled list of
+resolutions: see [the display-mode contract](original-display-modes.md). It
+retains depth and refresh as well as dimensions. A stored descriptor fallback is
+not proof of the final first-run choice after device capabilities and saved
+preferences have been considered. The current portable Resolution control still
+applies a window/canvas render size; it does not claim a confirmed OS display
+mode or silently infer missing depth/refresh intent from existing preferences.
+
+All admitted descriptor fallback strings remain available through the checked
+importer. This is data availability, not implementation of every option. Source
+Gameplay/Video/Sound controls are retained, but settings without a consuming
+gameplay, renderer or device owner stay explicitly unsupported. No measured
+option value, familiar display preset or invented dropdown content replaces
+missing behavior. Original Options panel animations now have a separate admitted
+owner; this presentation change does not activate unsupported settings.

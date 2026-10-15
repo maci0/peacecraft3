@@ -89,8 +89,10 @@ issues*.
       Known unsupported panel audio codecs now preserve admitted graphics and
       other playable sounds. Qualified Legacy panel spawn and a six-capture local
       original-fixture Main/Options/Single Player/return browser run pass, with
-      no uploads, sockets or page errors. Options-specific panel animation,
-      unavailable Huffman audio and full menu/sky fidelity remain open. See
+      no uploads, sockets or page errors. Main/Options and Main/Single Player
+      now use separately admitted source phase clocks and settle in the current
+      six-capture browser run. Unavailable Huffman audio and full menu/sky
+      fidelity remain open. See
       `docs/re-notes/menu-panel-navigation.md`.
 
 ## M0 — RE harness and evidence base
@@ -469,7 +471,9 @@ terrain rendering, asset-defined terrain materials or native rendering fidelity.
       and authored hover/pushed/disabled state rendering remain open.
 - [~] Labels use centered relative text layout and native frame normalization;
       full FDF-driven style/text/anchor migration and fidelity remain open.
-- [ ] Hanging panel sprite animation and native composited tint/render behavior.
+- [~] Source-derived hanging-panel Main/Options/Single Player phase animation
+      is integrated and locally browser-checked. Native composited tint/render
+      parity and the full-screen opening remain open.
 
 ## M3 — World: maps, terrain, camera, doodads
 
@@ -1155,19 +1159,18 @@ Format: `date — subsystem — symptom — root cause — status`
   and cache refresh pass actual generated-WASM/browser verification.
   Unsupported namespaces/installer payloads and conflicting archives fail closed.
 
-- Current release WASM build and native/WASM rustdoc passed with warnings denied;
-  generated glue uses matching wasm-bindgen 0.2.129. MainMenu ↔ SinglePlayer panel
-  phase admission, independent source clocks and target-control handoff now have
-  strict native/WASM checks, 219 app tests (nine explicit ignores) and a fresh
-  actual Chromium/WASM gate: 49 existing + 71 panel checks, 12 required rollback
-  cases and four mixed-codec failure orderings. Scene-audio cancellation and local
-  GET/Blob-only requests pass with zero uploads/sockets/page errors. Valid submenus
-  retain immediate navigation with a warning when animation is unavailable.
-  Explicit Legacy destination FDF admission passes, but original panel loading
-  still stops at unavailable Huffman/ADPCM sound decoding; full-screen opening,
-  original panel rendering/audio and native dispatch remain open. See
-  `docs/re-notes/menu-panel-navigation.md`. Prior rendered F8/resize/click captures
-  are earlier evidence, not a fresh original-data render of this batch.
+- Current release WASM, native/WASM builds, rustdoc and strict Clippy pass;
+  generated glue uses matching wasm-bindgen 0.2.129. Independent MainMenu/Options
+  and MainMenu/SinglePlayer panel admission uses source clocks and target-control
+  handoff. Four library + 257 app tests (11 explicit ignores) and 83 integration
+  tests pass. Actual Chromium/WASM executes 49 existing + 103 panel checks,
+  including 12 required rollback cases and four combined-failure orderings.
+  The unchanged local original-repack fixture passes six reviewed captures with
+  settled Main/Options/Main and Main/SinglePlayer/Main navigation, 15 local code
+  GETs and zero uploads/sockets/page errors. Known unavailable Huffman audio no
+  longer hides checked graphics. Full-screen opening, sky/native rendering,
+  audio parity and remaining Options/gameplay behavior stay open. See
+  `docs/re-notes/menu-panel-navigation.md` for exact checks and limitations.
 - Local ISO file-input discovery and 26 actual WASM archive assertions pass;
   Chromium audio replacement/reset passes with zero uploads/unexpected requests.
   Running-app File-input import refreshes six authored labels and the scene;

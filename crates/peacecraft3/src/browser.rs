@@ -760,7 +760,11 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
                 put(&texture, None, raw)?;
             }
             use crate::menu_sprites::SoundScope;
-            for scope in [SoundScope::Startup, SoundScope::MainSingle] {
+            for scope in [
+                SoundScope::Startup,
+                SoundScope::MainSingle,
+                SoundScope::MainOptions,
+            ] {
                 let mut unavailable_codecs = Vec::new();
                 let candidate = (|| -> Result<_, String> {
                     crate::menu_sprites::preflight_source(&path, &bytes, &textures, scope)
@@ -839,10 +843,13 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
                         }
                         sound_bytes = total;
                     }
-                    Err(error) if matches!(scope, SoundScope::MainSingle) => {
-                        notes.push(format!(
-                            "PANEL_NAVIGATION_DISABLED: edition={edition}; {error}"
-                        ));
+                    Err(error) if !matches!(scope, SoundScope::Startup) => {
+                        let code = if matches!(scope, SoundScope::MainOptions) {
+                            "PANEL_OPTIONS_DISABLED"
+                        } else {
+                            "PANEL_NAVIGATION_DISABLED"
+                        };
+                        notes.push(format!("{code}: edition={edition}; {error}"));
                     }
                     Err(error) => return Err(error),
                 }

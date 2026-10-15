@@ -157,8 +157,12 @@ impl Navigation {
         }
         if matches!(
             (self.screen, screen),
-            (Screen::Main, Screen::SinglePlayer) | (Screen::SinglePlayer, Screen::Main)
+            (Screen::Main, Screen::SinglePlayer | Screen::Options(_))
+                | (Screen::SinglePlayer | Screen::Options(_), Screen::Main)
         ) {
+            if matches!(screen, Screen::Options(_)) {
+                self.draft = self.applied.clone();
+            }
             self.requested = Some(screen);
             self.notice.clear();
             return;
@@ -507,11 +511,34 @@ Frame "FRAME" "A" {
     fn original_options_do_not_route_to_launcher() {
         let mut n = Navigation::default();
         assert!(n.action("OptionsButton"));
-        assert_eq!(n.screen, Screen::Options(Page::Video));
+        assert_eq!(n.screen, Screen::Main);
+        assert_eq!(n.requested.take(), Some(Screen::Options(Page::Video)));
+        n.commit_panel_owner(Screen::Options(Page::Video));
         assert!(n.action("SoundButton"));
         assert_eq!(n.screen, Screen::Options(Page::Sound));
         assert!(n.action("CancelButton"));
-        assert_eq!(n.screen, Screen::Main);
+        assert_eq!(n.screen, Screen::Options(Page::Sound));
+        assert_eq!(n.requested, Some(Screen::Main));
+    }
+    #[test]
+    fn options_owner_request_preserves_selected_page_and_tab_draft() {
+        let mut nav = Navigation {
+            options_entry: Some(Page::Gameplay),
+            ..Default::default()
+        };
+        nav.applied.values.insert("synthetic".into(), 19.0);
+        assert!(nav.action("OptionsButton"));
+        assert_eq!(nav.draft, nav.applied);
+        assert_eq!(nav.requested.take(), Some(Screen::Options(Page::Gameplay)));
+        nav.commit_panel_owner(Screen::Options(Page::Gameplay));
+        nav.draft.values.insert("synthetic".into(), 23.0);
+        assert!(nav.action("VideoButton"));
+        assert_eq!(nav.screen, Screen::Options(Page::Video));
+        assert!(nav.requested.is_none());
+        assert_eq!(nav.draft.values["synthetic"], 23.0);
+        assert!(nav.action("CancelButton"));
+        assert_eq!(nav.requested, Some(Screen::Main));
+        assert_eq!(nav.draft, nav.applied);
     }
     #[test]
     fn local_network_entry_opens_its_screen_and_returns_to_main() {
@@ -558,6 +585,8 @@ Frame "FRAME" "A" {
     fn cancel_discards_draft_settings() {
         let mut n = Navigation::default();
         n.open(Screen::Options(Page::Sound));
+        assert_eq!(n.requested.take(), Some(Screen::Options(Page::Sound)));
+        n.commit_panel_owner(Screen::Options(Page::Sound));
         n.draft.values.insert("MusicVolumeSlider".into(), 17.0);
         n.action("CancelButton");
         assert_eq!(n.draft, n.applied);

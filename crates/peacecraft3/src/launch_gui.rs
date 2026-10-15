@@ -3168,9 +3168,17 @@ mod menu_tests {
             "the original background is retained"
         );
         assert!(world.get_entity(entry).is_ok(), "only the layer goes");
+        let navigation = world.resource::<crate::menu_screens::Navigation>();
+        assert_eq!(navigation.screen, crate::menu_screens::Screen::Main);
         assert_eq!(
-            world.resource::<crate::menu_screens::Navigation>().screen,
-            crate::menu_screens::Screen::Options(crate::menu_screens::Page::Video)
+            navigation.requested,
+            Some(crate::menu_screens::Screen::Options(
+                crate::menu_screens::Page::Video
+            ))
+        );
+        assert!(
+            !navigation.transition_active,
+            "target FDF admission must run first"
         );
     }
 

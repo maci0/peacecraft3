@@ -17,13 +17,16 @@ const table = rows => text('ID;PWXL;N;E\r\n' + rows.flatMap((r, y) => r.map((s, 
   `C;X${x + 1};Y${y + 1};K"${s}"`)).join('\r\n') + '\r\nE\r\n');
 const scriptPath = 'Scripts\\Blizzard.j', lookupPath = 'UI\\SoundInfo\\AnimLookups.slk';
 const soundsPath = 'UI\\SoundInfo\\AnimSounds.slk', panelPath = 'Synthetic\\Panel.mdx';
+const optionsSoundPath = 'Synthetic\\Audio\\options.wav';
 const navSoundPath = 'Synthetic\\Audio\\navigation.wav';
 const otherSoundPath = 'Synthetic\\Audio\\other.wav';
 const soundPath = 'Synthetic\\Audio\\panel.wav', imagePath = 'Synthetic\\Panel.tga';
 
-function model({ navigation = true, empty = false, extraStartup = false, reverseEvents = false } = {}) {
-  const names = ['MainMenu Birth', 'MainMenu Stand', ...(navigation ?
-    ['MainMenu Death', 'SinglePlayer Birth', 'SinglePlayer Stand', 'SinglePlayer Death'] : [])];
+function model({ navigation = true, options = true, empty = false, extraStartup = false, reverseEvents = false } = {}) {
+  const names = ['MainMenu Birth', 'MainMenu Stand',
+    ...(navigation || options ? ['MainMenu Death'] : []),
+    ...(navigation ? ['SinglePlayer Birth', 'SinglePlayer Stand', 'SinglePlayer Death'] : []),
+    ...(options ? ['Options Birth', 'Options Stand', 'Options Death'] : [])];
   const sequences = names.map((name, i) => {
     const b = new Uint8Array(132), v = new DataView(b.buffer); b.set(text(name));
     v.setUint32(80, i * 100, true); v.setUint32(84, i * 100 + 73, true);
@@ -46,7 +49,9 @@ function model({ navigation = true, empty = false, extraStartup = false, reverse
     const node = event.slice(); node.set(text(`SNDX${code}`), 4);
     return concat(node, text('KEVT'), words(1, 0xffffffff, frame));
   };
-  const events = [eventAt('TEST', 5), eventAt('NEXT', 305)];
+  const events = [eventAt('TEST', 5)];
+  if (navigation) events.push(eventAt('NEXT', names.indexOf('SinglePlayer Birth') * 100 + 5));
+  if (options) events.push(eventAt('OPTS', names.indexOf('Options Birth') * 100 + 5));
   if (extraStartup) events.push(eventAt('FAIL', 6));
   if (reverseEvents) events.reverse();
   return concat(text('MDLX'), chunk('VERS', words(800)), chunk('MODL', info),
@@ -63,11 +68,12 @@ function members(musicPath, options) {
   b[panelPath] = model(options);
   b[scriptPath] = text('function SetSoundVolumeBJ takes sound h, real p returns nothing\ncall SetSoundVolume(h, PercentToInt(p, 37))\nendfunction\n' +
     'function PercentToInt takes real p, integer m returns integer\nlocal integer r=R2I(p*I2R(m)*0.025)\nif (r<0) then\nset r=0\nendif\nif (r>m) then\nset r=m\nendif\nreturn r\nendfunction\n');
-  b[lookupPath] = table([['AnimSoundEvent', 'SoundLabel'], ['TEST', 'SyntheticPanel'], ['NEXT', 'SyntheticNavigation']]);
+  b[lookupPath] = table([['AnimSoundEvent', 'SoundLabel'], ['TEST', 'SyntheticPanel'], ['NEXT', 'SyntheticNavigation'], ['OPTS', 'SyntheticOptions']]);
   b[soundsPath] = table([['SoundName', 'DirectoryBase', 'FileNames', 'Volume'],
     ['SyntheticPanel', 'Synthetic\\Audio\\', 'panel.wav', '19'],
-    ['SyntheticNavigation', 'Synthetic\\Audio\\', 'navigation.wav', '23']]);
-  b[soundPath] = wavFixture(); b[navSoundPath] = wavFixture();
+    ['SyntheticNavigation', 'Synthetic\\Audio\\', 'navigation.wav', '23'],
+    ['SyntheticOptions', 'Synthetic\\Audio\\', 'options.wav', '29']]);
+  b[soundPath] = wavFixture(); b[navSoundPath] = wavFixture(); b[optionsSoundPath] = wavFixture();
   const image = new Uint8Array(21), v = new DataView(image.buffer);
   image[2] = 2; v.setUint16(12, 1, true); v.setUint16(14, 1, true); image[16] = 24;
   image.set([31, 91, 173], 18); b[imagePath] = image;
@@ -86,9 +92,9 @@ export function runPanelChecks(api) {
     editions: api.local_menu_editions(), assets: api.stored_assets().map(p => [p, [...api.stored_asset(p)]]) });
   const good = members(api.menu_music_path());
   const notes = commit('synthetic-panel-graph', good);
-  check(!notes.some(n => n.includes('PANEL_NAVIGATION_DISABLED')), 'complete phases disabled navigation');
+  check(!notes.some(n => n.includes('PANEL_NAVIGATION_DISABLED') || n.includes('PANEL_OPTIONS_DISABLED')), 'complete phases disabled a navigation owner');
   check(JSON.stringify(api.local_menu_editions()) === '["roc"]', 'panels enabled absent expansion');
-  for (const p of [scriptPath, lookupPath, soundsPath, soundPath, navSoundPath, panelPath, imagePath]) {
+  for (const p of [scriptPath, lookupPath, soundsPath, soundPath, navSoundPath, optionsSoundPath, panelPath, imagePath]) {
     check(JSON.stringify([...api.stored_asset(p)]) === JSON.stringify([...good[p]]), `dependency not hydrated: ${p}`);
   }
   const before = snapshot();
@@ -196,7 +202,20 @@ export function runPanelChecks(api) {
     }
     check(api.stored_asset(soundPath) === undefined, 'mixed codec source fabricated a waveform');
   }
-  const startup = commit('startup-only-panels', members(api.menu_music_path(), { navigation: false }));
+  const withoutOptions = commit('single-only-panels', members(api.menu_music_path(), { options: false }));
+  check(withoutOptions.some(n => n.includes('PANEL_OPTIONS_DISABLED')), 'missing Options phases not diagnosed');
+  check(!withoutOptions.some(n => n.includes('PANEL_NAVIGATION_DISABLED')), 'missing Options phases disabled Single Player');
+  check(api.stored_asset(navSoundPath)?.length === good[navSoundPath].length, 'missing Options discarded Single Player audio');
+  const withoutSingle = commit('options-only-panels', members(api.menu_music_path(), { navigation: false }));
+  check(withoutSingle.some(n => n.includes('PANEL_NAVIGATION_DISABLED')), 'missing Single Player phases not diagnosed');
+  check(!withoutSingle.some(n => n.includes('PANEL_OPTIONS_DISABLED')), 'missing Single Player disabled Options');
+  check(api.stored_asset(optionsSoundPath)?.length === good[optionsSoundPath].length, 'independent Options audio not hydrated');
+  const malformedOptions = { ...good, [optionsSoundPath]: text('invalid optional waveform') };
+  const malformedNotes = commit('malformed-options-audio', malformedOptions);
+  check(malformedNotes.some(n => n.includes('PANEL_OPTIONS_DISABLED')), 'malformed Options audio not diagnosed');
+  check(!malformedNotes.some(n => n.includes('PANEL_NAVIGATION_DISABLED')), 'malformed Options disabled Single Player');
+  check(api.stored_asset(optionsSoundPath) === undefined, 'malformed optional waveform was staged');
+  const startup = commit('startup-only-panels', members(api.menu_music_path(), { navigation: false, options: false }));
   check(startup.some(n => n.includes('PANEL_NAVIGATION_DISABLED')), 'missing optional phases not diagnosed');
   check(api.stored_asset(soundPath)?.length === good[soundPath].length, 'startup dependency lost');
   return { checks, rollbackCases: failures.length, combinedRollbackCases, scope: 'synthetic production WASM hydration; no draw/audio/native proof' };

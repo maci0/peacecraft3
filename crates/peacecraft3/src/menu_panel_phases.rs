@@ -1,10 +1,36 @@
-//! Source-clock scheduling for the admitted MainMenu / SinglePlayer panel pair.
+//! Source-clock scheduling for admitted MainMenu, SinglePlayer and optional Options panels.
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Owner {
     Main,
     Single,
+    Options,
+}
+
+impl Owner {
+    /// Source selector triplet; each owner is admitted independently by callers.
+    pub const fn phases(self) -> [Phase; 3] {
+        match self {
+            Self::Main => [Phase::MainBirth, Phase::MainStand, Phase::MainDeath],
+            Self::Single => [Phase::SingleBirth, Phase::SingleStand, Phase::SingleDeath],
+            Self::Options => [
+                Phase::OptionsBirth,
+                Phase::OptionsStand,
+                Phase::OptionsDeath,
+            ],
+        }
+    }
+
+    fn can_transition(self, to: Self) -> bool {
+        matches!(
+            (self, to),
+            (Self::Main, Self::Single)
+                | (Self::Single, Self::Main)
+                | (Self::Main, Self::Options)
+                | (Self::Options, Self::Main)
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,9 +42,13 @@ pub enum Phase {
     SingleBirth,
     SingleStand,
     SingleDeath,
+    OptionsBirth,
+    OptionsStand,
+    OptionsDeath,
 }
 
 impl Phase {
+    /// Legacy Main/Single admission set. Optional owners must not enlarge it.
     pub const ALL: [Self; 6] = [
         Self::MainBirth,
         Self::MainStand,
@@ -28,6 +58,17 @@ impl Phase {
         Self::SingleDeath,
     ];
 
+    /// Separately admitted source Options triplet, appended after legacy indices.
+    pub const OPTIONS: [Self; 3] = Owner::Options.phases();
+
+    pub const fn owner(self) -> Owner {
+        match self {
+            Self::MainBirth | Self::MainStand | Self::MainDeath => Owner::Main,
+            Self::SingleBirth | Self::SingleStand | Self::SingleDeath => Owner::Single,
+            Self::OptionsBirth | Self::OptionsStand | Self::OptionsDeath => Owner::Options,
+        }
+    }
+
     pub fn selector(self) -> (&'static str, &'static str) {
         match self {
             Self::MainBirth => ("MainMenu", "Birth"),
@@ -36,6 +77,9 @@ impl Phase {
             Self::SingleBirth => ("SinglePlayer", "Birth"),
             Self::SingleStand => ("SinglePlayer", "Stand"),
             Self::SingleDeath => ("SinglePlayer", "Death"),
+            Self::OptionsBirth => ("Options", "Birth"),
+            Self::OptionsStand => ("Options", "Stand"),
+            Self::OptionsDeath => ("Options", "Death"),
         }
     }
 
@@ -43,17 +87,25 @@ impl Phase {
         match self {
             Self::MainBirth | Self::MainStand => Some((Self::MainBirth, Self::MainStand)),
             Self::SingleBirth | Self::SingleStand => Some((Self::SingleBirth, Self::SingleStand)),
+            Self::OptionsBirth | Self::OptionsStand => {
+                Some((Self::OptionsBirth, Self::OptionsStand))
+            }
             _ => None,
         }
     }
 
-    fn next(self) -> Option<Self> {
+    fn next(self, target: Option<Owner>) -> Result<Option<Self>, &'static str> {
         match self {
-            Self::MainBirth => Some(Self::MainStand),
-            Self::MainDeath => Some(Self::SingleBirth),
-            Self::SingleBirth => Some(Self::SingleStand),
-            Self::SingleDeath => Some(Self::MainBirth),
-            Self::MainStand | Self::SingleStand => None,
+            Self::MainBirth => Ok(Some(Self::MainStand)),
+            Self::SingleBirth => Ok(Some(Self::SingleStand)),
+            Self::OptionsBirth => Ok(Some(Self::OptionsStand)),
+            Self::MainDeath | Self::SingleDeath | Self::OptionsDeath => {
+                let target = target
+                    .filter(|&to| self.owner().can_transition(to))
+                    .ok_or("panel death has no supported target owner")?;
+                Ok(Some(target.phases()[0]))
+            }
+            Self::MainStand | Self::SingleStand | Self::OptionsStand => Ok(None),
         }
     }
 }
@@ -262,25 +314,14 @@ impl Clock {
     }
 
     pub fn begin(&mut self, from: Owner, to: Owner) -> Result<(), &'static str> {
-        if self.target.is_some()
-            || !matches!(
-                (from, to),
-                (Owner::Main, Owner::Single) | (Owner::Single, Owner::Main)
-            )
-        {
+        if self.target.is_some() || !from.can_transition(to) {
             return Err("panel transition is active or owner pair is unsupported");
         }
-        let expected = match from {
-            Owner::Main => Phase::MainStand,
-            Owner::Single => Phase::SingleStand,
-        };
+        let [_, expected, death] = from.phases();
         if self.phase != expected {
             return Err("panel entrance has not completed or displayed owner differs");
         }
-        self.phase = match from {
-            Owner::Main => Phase::MainDeath,
-            Owner::Single => Phase::SingleDeath,
-        };
+        self.phase = death;
         self.local = Duration::ZERO;
         self.first = true;
         self.target = Some(to);
@@ -306,7 +347,8 @@ impl Clock {
         let mut entered = None;
         for _ in 0..3 {
             let end = duration(self.phase);
-            let bounded = self.phase.next().is_some();
+            let successor = self.phase.next(self.target)?;
+            let bounded = successor.is_some();
             let available = end.saturating_sub(self.local);
             let step = if bounded {
                 remaining.min(available)
@@ -331,10 +373,13 @@ impl Clock {
                 return Ok((segments, entered));
             }
             let previous = self.phase;
-            self.phase = self.phase.next().expect("bounded phase has successor");
+            self.phase = successor.expect("bounded phase has successor");
             self.local = Duration::ZERO;
             self.first = true;
-            if matches!(previous, Phase::MainDeath | Phase::SingleDeath) {
+            if matches!(
+                previous,
+                Phase::MainDeath | Phase::SingleDeath | Phase::OptionsDeath
+            ) {
                 entered = self.target;
             } else if self.target.is_some() {
                 self.target = None;
@@ -468,5 +513,132 @@ mod tests {
         assert_eq!(zero.event_count(9, ms(0), ms(0), false), 0);
         assert!(Clip::checked([9, 9], true).is_err());
         assert!(Clip::checked([9, 8], false).is_err());
+    }
+    #[test]
+    fn optional_options_selectors_leave_legacy_indices_and_admission_unchanged() {
+        assert_eq!(Phase::ALL.len(), 6);
+        for (index, phase) in Phase::ALL.into_iter().enumerate() {
+            assert_eq!(phase as usize, index);
+            assert_ne!(phase.owner(), Owner::Options);
+        }
+        assert_eq!(Phase::OPTIONS, Owner::Options.phases());
+        for (index, (phase, animation)) in Phase::OPTIONS
+            .into_iter()
+            .zip(["Birth", "Stand", "Death"])
+            .enumerate()
+        {
+            assert_eq!(phase as usize, Phase::ALL.len() + index);
+            assert_eq!(phase.owner(), Owner::Options);
+            assert_eq!(phase.selector(), ("Options", animation));
+        }
+        // No Options durations/plans exist in this source profile.
+        let legacy = [ms(3), ms(5), ms(7), ms(13), ms(17), ms(19)];
+        let duration = |p: Phase| legacy[p as usize];
+        let mut c = Clock::default();
+        c.advance(ms(3), duration).unwrap();
+        c.begin(Owner::Main, Owner::Single).unwrap();
+        c.advance(ms(20), duration).unwrap();
+        assert_eq!(c.phase, Phase::SingleStand);
+        c.begin(Owner::Single, Owner::Main).unwrap();
+        c.advance(ms(22), duration).unwrap();
+        assert_eq!(c.phase, Phase::MainStand);
+    }
+
+    #[test]
+    fn directed_options_transition_uses_requested_owner_and_preserves_clock_remainder() {
+        let duration = |p| match p {
+            Phase::MainBirth => ms(3),
+            Phase::MainDeath => ms(7),
+            Phase::OptionsBirth => ms(11),
+            Phase::OptionsDeath => ms(13),
+            _ => ms(17),
+        };
+        let mut c = Clock::default();
+        c.advance(ms(5), duration).unwrap();
+        c.begin(Owner::Main, Owner::Options).unwrap();
+        let (segments, entered) = c.advance(ms(23), duration).unwrap();
+        assert_eq!(
+            segments.iter().map(|s| s.phase).collect::<Vec<_>>(),
+            [Phase::MainDeath, Phase::OptionsBirth, Phase::OptionsStand]
+        );
+        assert_eq!(entered, Some(Owner::Options));
+        assert_eq!(
+            (c.phase, c.local, c.global, c.target),
+            (Phase::OptionsStand, ms(5), ms(28), None)
+        );
+        c.begin(Owner::Options, Owner::Main).unwrap();
+        let (_, entered) = c.advance(ms(20), duration).unwrap();
+        assert_eq!(entered, Some(Owner::Main));
+        assert_eq!(
+            (c.phase, c.local, c.global, c.target),
+            (Phase::MainStand, ms(4), ms(48), None)
+        );
+    }
+
+    #[test]
+    fn options_boundary_hold_events_and_unequal_layers_keep_existing_rules() {
+        let mut c = Clock::default();
+        c.advance(ms(3), |_| ms(3)).unwrap();
+        c.begin(Owner::Main, Owner::Options).unwrap();
+        let (_, entered) = c.advance(ms(7), |_| ms(7)).unwrap();
+        assert_eq!(entered, Some(Owner::Options));
+        assert_eq!(
+            (c.phase, c.local, c.target),
+            (Phase::OptionsBirth, Duration::ZERO, Some(Owner::Options))
+        );
+        assert!(c.begin(Owner::Options, Owner::Main).is_err());
+        let (segments, _) = c.advance(ms(9), |_| ms(9)).unwrap();
+        let windows = layer_windows(&segments[0], ms(4), ms(9));
+        assert_eq!(
+            (windows[1].phase, windows[1].from, windows[1].to),
+            (Phase::OptionsStand, ms(0), ms(5))
+        );
+        assert_eq!(
+            layer_sample(Phase::OptionsStand, ms(2), ms(4), ms(9)),
+            (Phase::OptionsStand, ms(7))
+        );
+        let clip = Clip::checked([31, 35], false).unwrap();
+        assert_eq!(
+            clip.event_offsets(35, windows[0].from, windows[0].to, windows[0].first, 1)
+                .unwrap(),
+            [ms(4)]
+        );
+        assert_eq!(c.target, None);
+        c.begin(Owner::Options, Owner::Main).unwrap();
+        // Both zero-length transition clips drain within the existing step bound.
+        let (segments, entered) = c.advance(ms(5), |_| Duration::ZERO).unwrap();
+        assert_eq!(entered, Some(Owner::Main));
+        assert_eq!(segments.len(), 3);
+        assert_eq!(
+            (c.phase, c.local, c.target),
+            (Phase::MainStand, ms(5), None)
+        );
+    }
+
+    #[test]
+    fn unsupported_owner_edges_and_invalid_targets_refuse_without_clock_changes() {
+        for (from, to) in [
+            (Owner::Single, Owner::Options),
+            (Owner::Options, Owner::Single),
+            (Owner::Options, Owner::Options),
+        ] {
+            let mut c = Clock {
+                phase: from.phases()[1],
+                ..Clock::default()
+            };
+            let before = (c.phase, c.local, c.global, c.target);
+            assert!(c.begin(from, to).is_err());
+            assert_eq!((c.phase, c.local, c.global, c.target), before);
+        }
+        for target in [None, Some(Owner::Single), Some(Owner::Options)] {
+            let mut c = Clock {
+                phase: Phase::OptionsDeath,
+                target,
+                ..Clock::default()
+            };
+            let before = (c.phase, c.local, c.global, c.target);
+            assert!(c.advance(ms(5), |_| ms(3)).is_err());
+            assert_eq!((c.phase, c.local, c.global, c.target), before);
+        }
     }
 }

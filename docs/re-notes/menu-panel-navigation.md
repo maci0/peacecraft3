@@ -119,3 +119,48 @@ captures in `.scratch/original-options-browser/menu-panel-audio-root-20261016-ru
 Earlier baseline and initial compile failures remain recorded as failures.
 Options-specific panel animation, two unavailable codec-0x81 sounds, washed-out
 sky and full original-client visual/audio parity remain open.
+
+## Options owner
+
+Options navigation now independently admits the exact two-token source selectors
+`Options Birth`, `Options Stand` and `Options Death`, together with the MainMenu
+triplet. Main/Single Player admission remains separate: missing or malformed
+Options sequences, sound dependencies or material plans do not disable that
+route, and missing Single Player does not disable an otherwise admitted Options
+route. Both route candidates check their full source geometry/material plans
+before publication. Known unsupported audio codecs retain the same explicit
+capability state described above. Event occurrences remain scoped to the
+admitted source phases, without replaying shared MainMenu sounds twice.
+
+Main to Options and back use the existing retiring Death, incoming Birth, then
+Stand scheduling convention. Clip intervals, loop flags, poses, UV/texture
+selection, opacity and sound frames remain source-derived. This dispatch order
+is a recreation convention, not proof of the original native transition caller.
+No duration, Morph/Alternate assignment or screenshot-fitted panel placement is
+introduced. Missing optional animation retains the admitted FDF navigation with
+an explicit unavailable diagnostic.
+
+The requested Options tab is retained until target FDF admission and incoming
+control-owner commit. Tabs within Options preserve the draft without starting a
+new panel transition. Cancel restores applied settings before requesting Main;
+Apply retains existing settings validation/storage behavior before its request.
+Further actions remain blocked until the incoming phase settles.
+
+Options integration checks pass four library tests, 257 app tests (11 explicit
+local-input ignores), two CLI tests, 74 map-loading tests and seven PCM tests.
+Native/WASM builds, all-target/all-feature Clippy, rustdoc and formatting pass.
+Both explicit original source gates now preflight Options as well as Main/Single;
+the compatibility playable-PCM gate remains green. Actual release WASM passes
+103 panel checks plus 49 existing Chromium transaction checks, including
+independent absent/malformed owner cases, base-only gating, rollback and audio
+cleanup. Existing Node unit tests pass 56 with two explicit local-input skips.
+
+The separate original-fixture browser run passes six reviewed Main/Video Options/
+Main/Single Player/Main captures. Both incoming and return transitions settle;
+Options shows the source three-button housing instead of the Main five-button
+housing. Fifteen local code GETs, zero uploads/sockets/page errors. The unchanged
+150-member local repack already contains the needed source sound dependencies.
+This is not a retail-installer, native-audio or native-visual parity claim.
+Receipts and the preserved earlier failures are in
+`.scratch/options-panel-root-20261016/acceptance-1.json`. The public demo is not
+updated by this batch. Unsupported settings and washed-out sky remain open.
