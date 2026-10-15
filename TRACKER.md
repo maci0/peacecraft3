@@ -48,7 +48,7 @@ issues*.
 
 ---
 
-## Current recreation work (2026-10-15)
+## Current recreation work (2026-10-16)
 
 - [x] Shared BLP JPEG color conversion now respects BGR component order. Both
       retained logo alpha planes are unchanged; fixed public-decoder colors
@@ -68,6 +68,14 @@ issues*.
       Clippy and 2 library + 170 app + 74 integration tests pass. See
       `docs/re-notes/original-options-workflow.md` for exact build/test scopes;
       complete original-client appearance and gameplay remain open.
+- [~] Original Options defaults: checked source-profile import admits all 80
+      reviewed Legacy preference descriptors, preserving raw fallback strings,
+      including empty values. No measured defaults or display presets are copied
+      into production constants. Available device modes retain depth/refresh in
+      the original enumeration evidence; current menu choices still represent
+      render sizes. Initial preference-to-control/runtime wiring and confirmed
+      exclusive-mode application remain open. See
+      `docs/re-notes/original-options-defaults.md`.
 - [~] Local imports now follow skin-selected hanging-panel model/TEXS edges.
       The expanded private fixture retains source-qualified dependencies. Actual
       rendered-panel acceptance and full menu/sky fidelity remain open.
