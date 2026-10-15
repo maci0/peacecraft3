@@ -34,11 +34,15 @@ The server binds each connection to its player slot. A packet cannot choose anot
 
 This is a real browser-to-Rust command and state path, **not a completed Warcraft multiplayer match**. The current `pcx-sim` only supports selection, movement and stop. The local host initializes one unit per slot to exercise those existing rules. Combat, economy, map initialization, original lobby behavior, matchmaking and the game's input/render adapter are not wired into this session. `peacecraft3` currently has no gameplay caller of `pcx-net` or `pcx-sim`; `network.js` is a module for that adapter, not an Online Play button that pretends a match exists.
 
-This host is for local development. There are no accounts, isolated rooms, persistent matches or TLS termination. Reconnect tokens are random browser-generated bearer tokens; protect them and use `wss://` once public hosting is implemented. Sixteen player slots remain reserved for the host's lifetime. Its synchronous, time-limited handshake can delay ticks and must be replaced with asynchronous admission before public hosting. No public service has been deployed.
+This host is for local development. There are no accounts, isolated rooms, persistent matches, Origin restrictions or TLS termination. Reconnect tokens are random browser-generated bearer tokens; protect them and use `wss://` once public hosting is implemented. Sixteen player slots remain reserved for the host's lifetime. No public service has been deployed.
+
+TCP streams are nonblocking before HTTP upgrade. Each pending upgrade gets at most eight I/O calls and 4 KiB of I/O per loop, with a five-second deadline. Pending and upgraded connections share the connection cap; rejecting excess connections does not skip session service. These are development-host resource policies, not original game limits. Completed WebSocket traffic retains the existing packet and per-peer work limits. This prevents blocking admission from stopping the movement clock; it does not establish public-service hardening or a full match-ready barrier.
 
 ## Verification
 
 Core regression tests exercise same-tick commands from both players, identity spoofing, horizon and coordinate rejection, duplicate batches, and disconnect/resync without rewinding. A browser check uses two Chromium pages, issues opposing movement orders through the binary codec, compares exact authoritative snapshots at the same tick, forges another player's stop packet and checks rejection, then disconnects/reconnects and verifies shared authority again.
+
+Seven admission tests exercise partial reads/writes, deterministic per-poll work ceilings, deadline expiry, invalid upgrades and unrestricted I/O after completion. They preserve Tungstenite's refusal of bytes after the HTTP request. The two-browser check also passed with an additional incomplete TCP upgrade held open. No original assets were served or transmitted in that run. Native tests and strict native/WASM compilation passed; the native TCP host does not run in WASM.
 
 With `playwright-core` installed separately:
 

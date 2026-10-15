@@ -1,5 +1,9 @@
 //! Local session host: cargo run -p pcx-net --features session-server --example session_server
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "session_server/admission.rs"]
+mod admission;
+
+#[cfg(not(target_arch = "wasm32"))]
 use std::{
     collections::BTreeMap,
     io,
@@ -19,7 +23,7 @@ use tungstenite::{Message, WebSocket, protocol::WebSocketConfig};
 
 #[cfg(not(target_arch = "wasm32"))]
 struct Connection {
-    socket: WebSocket<TcpStream>,
+    socket: WebSocket<admission::Io<TcpStream>>,
     player: Option<u8>,
     deadline: Instant,
 }
@@ -51,6 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut session = Session::new(world, 1);
     let mut connections: BTreeMap<Peer, Connection> = BTreeMap::new();
+    let mut pending: Vec<admission::Pending<TcpStream>> = Vec::new();
     let mut slots: BTreeMap<String, u8> = BTreeMap::new();
     let mut next_peer = 0u32;
     let interval = Duration::from_millis(TICK_MS as u64);
@@ -59,30 +64,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "PeaceCraft session listening on ws://{address}; local movement simulation, not a complete Warcraft match"
     );
     loop {
-        if let Ok((stream, _)) = listener.accept() {
-            if connections.len() >= MAX_PLAYERS as usize {
-                continue;
-            }
-            // shortcut: synchronous admission may delay ticks; replace before public hosting.
-            stream.set_read_timeout(Some(Duration::from_millis(250)))?;
-            stream.set_write_timeout(Some(Duration::from_millis(250)))?;
+        if let Ok((stream, _)) = listener.accept()
+            && connections.len().saturating_add(pending.len()) < MAX_PLAYERS as usize
+        {
+            stream.set_nonblocking(true)?;
+            stream.set_nodelay(true)?;
             let config = WebSocketConfig::default()
                 .max_message_size(Some(MAX_PACKET_BYTES))
                 .max_frame_size(Some(MAX_PACKET_BYTES))
                 .max_write_buffer_size(64 * 1024)
                 .write_buffer_size(0);
-            if let Ok(socket) = tungstenite::accept_with_config(stream, Some(config)) {
-                socket.get_ref().set_nonblocking(true)?;
-                socket.get_ref().set_nodelay(true)?;
-                next_peer = next_peer.checked_add(1).ok_or("peer IDs exhausted")?;
-                connections.insert(
-                    Peer(next_peer),
-                    Connection {
-                        socket,
-                        player: None,
-                        deadline: Instant::now() + Duration::from_secs(5),
-                    },
-                );
+            pending.push(admission::Pending::new(stream, config, Instant::now()));
+        }
+        let mut at = 0;
+        while at < pending.len() {
+            match pending[at].poll(Instant::now()) {
+                Ok(None) => at += 1,
+                Ok(Some(socket)) => {
+                    pending.swap_remove(at);
+                    next_peer = next_peer.checked_add(1).ok_or("peer IDs exhausted")?;
+                    connections.insert(
+                        Peer(next_peer),
+                        Connection {
+                            socket,
+                            player: None,
+                            deadline: Instant::now() + Duration::from_secs(5),
+                        },
+                    );
+                }
+                Err(_) => {
+                    pending.swap_remove(at);
+                }
             }
         }
         let mut closed = vec![];
@@ -181,7 +193,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     false
                 }
             });
-            // Never advance many catch-up ticks after a blocked socket handshake.
+            // Bound catch-up work after scheduler delays.
             next_tick += interval;
             if next_tick < Instant::now() {
                 next_tick = Instant::now() + interval;
