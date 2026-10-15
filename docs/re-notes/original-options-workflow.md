@@ -17,6 +17,28 @@ Keep the selected asset source and edition explicit: the target Legacy executabl
 identity does not certify every archive in another local tree, and an installer
 label does not establish its payload's release.
 
+## First-run settings and mode-list boundary
+
+The current source inventory finds 30 slider/checkbox/popup definitions; only
+five connect to a runtime setting. This is not every editable field:
+`GLUEEDITBOX GamePortEditBox` is separately unsupported. Other controls remain
+disabled until their input/render/audio/gameplay owners can consume a checked
+value. Enabling a widget or persisting a value alone is not implementation.
+
+The inspected Options FDF and include graph supply widget ranges, steps and
+initials, but no resolution MenuItems or admitted checkbox/popup selections.
+Those slider initials are not evidence of the game's first-run preferences.
+Named config/MiscData inspection did not establish those preferences either.
+The exact client's preference fallback and mode-population path therefore remain
+an active investigation. A measured resolution or slider value must not become
+a source constant. Current window-derived selection and neutral active audio
+are recreation conventions, not recovered original defaults.
+
+Native monitor mode records include refresh and bit depth, but the current menu
+reduces them to width/height pairs. Original labels, filtering, ordering and
+initial/fallback selection are still unproved. Browser render-size choices are
+an explicit host capability, not OS-exclusive display-mode enumeration.
+
 Supported settings are actual render resolution, music/effects gains and their
 enable toggles. Native choices come from the current window, monitor and monitor
 video modes. Browser choices combine the current window resolution with the actual preview
