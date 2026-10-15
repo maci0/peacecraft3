@@ -247,3 +247,11 @@ The subsequent [map-config state](script-map-config.md) retains executed metadat
 and start locations from those same authored calls. The actual next boundary is
 `Player` at map-script line 7706, rather than `SetMapName`. No ordinary launcher
 profile/Host installation or completed config/main is implied.
+
+
+The independently approved slot result also bounds the later
+[session player arena](script-player-setup.md). Its retained admission witness
+joins those identities to this exact context and Program. Actual Human01 player
+setup now reaches `SetStartLocPrioCount` at map-script line 7765; no conventional
+slot count, other getter's arithmetic, active native-cache claim or launcher
+installation is introduced.

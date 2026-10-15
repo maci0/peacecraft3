@@ -31,9 +31,18 @@ impl pcx_sim::world::ObjectCatalog for EmptyCatalog {
     }
 }
 fn context(word: u32, common: &str, map_source: &str, label: &str) -> Arc<ParsedMapContext> {
+    context_with_wts(word, common, map_source, label, None)
+}
+fn context_with_wts(
+    word: u32,
+    common: &str,
+    map_source: &str,
+    label: &str,
+    wts: Option<&[u8]>,
+) -> Arc<ParsedMapContext> {
     let mut info = fixtures::info().canonical_bytes();
     info[8..12].copy_from_slice(&word.to_le_bytes());
-    let files = [
+    let mut files = vec![
         ("war3map.w3e", fixtures::terrain_bytes(2, 1)),
         ("war3map.wpm", fixtures::pathing_bytes(4, 2)),
         ("war3map.w3i", info),
@@ -48,6 +57,9 @@ fn context(word: u32, common: &str, map_source: &str, label: &str) -> Arc<Parsed
         ),
         ("war3map.j", map_source.as_bytes().to_vec()),
     ];
+    if let Some(wts) = wts {
+        files.push(("war3map.wts", wts.to_vec()));
+    }
     let raw = fixtures::build_synthetic_map(
         label,
         &files
@@ -62,13 +74,16 @@ fn context(word: u32, common: &str, map_source: &str, label: &str) -> Arc<Parsed
     let prelude = common.len() + bj.len();
     let scripts = MapScriptBudget {
         max_script_bytes: map_source.len(),
-        max_wts_bytes: 0,
+        max_wts_bytes: wts.map_or(0, <[u8]>::len),
         max_archive_bytes: map.archive().len(),
         max_archive_table_bytes: (h.hash_table_bytes() + h.block_table_bytes()) as usize,
         max_raw_packed_bytes: largest,
         max_decoded_bytes: largest,
         max_prelude_bytes: prelude,
-        max_aggregate_input_bytes: map.archive().len() + prelude + map_source.len(),
+        max_aggregate_input_bytes: map.archive().len()
+            + prelude
+            + map_source.len()
+            + wts.map_or(0, <[u8]>::len),
     };
     let budget = MapAdmissionBudget {
         scripts,
@@ -1091,3 +1106,6 @@ fn slot_getter_checks_independent_boundary_arguments_and_same_context_signature(
         ));
     }
 }
+
+#[path = "player_host_tests.rs"]
+mod player_objects;

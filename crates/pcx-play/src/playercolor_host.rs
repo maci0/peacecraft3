@@ -29,6 +29,10 @@ pub enum Failure {
     ConfigArguments,
     #[error("map configuration: {0}")]
     ConfigState(&'static str),
+    #[error("arguments do not match the player native declaration")]
+    PlayerArguments,
+    #[error("player setup: {0}")]
+    PlayerState(&'static str),
     #[error("enumerand {0} is outside this native's admitted source domain")]
     OutsideDomain(i32),
     #[error("unsupported closed integer expression: {0}")]
@@ -89,6 +93,7 @@ enum Entry {
     Object(String),
     Timer { live: bool },
     Group { live: bool },
+    Player { number: i32 },
 }
 pub struct EnumHost {
     program: Arc<Program>,
@@ -373,6 +378,7 @@ impl EnumHost {
             Entry::Symbolic { kind, .. } | Entry::Object(kind) => kind,
             Entry::Timer { live: true } => "timer",
             Entry::Group { live: true } => "group",
+            Entry::Player { .. } => "player",
             Entry::Timer { live: false } | Entry::Group { live: false } => {
                 return Err(self.error("arena", Failure::Identity));
             }
@@ -451,4 +457,7 @@ mod tests;
 
 #[path = "object_host.rs"]
 mod objects;
-pub use objects::{MapConfig, MapConfigBudget, ObjectHost, StartLocation, TimerHost};
+pub use objects::{
+    MapConfig, MapConfigBudget, ObjectHost, PlayerAdmissionError, PlayerBudget, PlayerSettings,
+    StartLocation, TimerHost,
+};

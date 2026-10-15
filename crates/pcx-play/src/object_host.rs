@@ -3,13 +3,14 @@ use super::Limits;
 use super::{Entry, EnumHost, Error, Failure, below};
 use pcx_script::{HandleId, Host, Value};
 use std::sync::Arc;
-/// Opt-in timer lifecycle and group membership in one bounded, non-recycling arena.
+/// Opt-in session objects and authored map/player setup in one bounded arena.
 /// Scheduling, world enumeration and callbacks remain explicit refusals.
 pub struct ObjectHost {
     inner: EnumHost,
     group_limit: Option<usize>,
     members: Vec<(HandleId, HandleId)>,
     config: Option<MapConfig>,
+    players: Option<players::Players>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -25,6 +26,7 @@ impl ObjectHost {
             group_limit: None,
             members: Vec::new(),
             config: None,
+            players: None,
         })
     }
     fn contract(
@@ -243,6 +245,9 @@ impl ObjectHost {
 }
 impl Host for ObjectHost {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.player_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.config_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -279,3 +284,7 @@ mod group_tests;
 #[path = "map_config_host.rs"]
 mod map_config;
 pub use map_config::{MapConfig, MapConfigBudget, StartLocation};
+
+#[path = "player_host.rs"]
+mod players;
+pub use players::{PlayerAdmissionError, PlayerBudget, PlayerSettings};

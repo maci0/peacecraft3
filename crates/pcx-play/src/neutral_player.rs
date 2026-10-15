@@ -295,6 +295,13 @@ impl<H> SelectedMapNeutralHost<H> {
             info_sha256,
         })
     }
+    pub(crate) fn selected_result(&self) -> i32 {
+        if self.word < self.rule.threshold {
+            self.rule.below
+        } else {
+            self.rule.at_or_above
+        }
+    }
     pub fn context(&self) -> &Arc<ParsedMapContext> {
         &self.context
     }
@@ -323,11 +330,7 @@ impl<H: Host> Host for SelectedMapNeutralHost<H> {
             }
             .to_string());
         }
-        Ok(Value::Int(if self.word < self.rule.threshold {
-            self.rule.below
-        } else {
-            self.rule.at_or_above
-        }))
+        Ok(Value::Int(self.selected_result()))
     }
     fn table_string(&self, id: u32) -> Option<String> {
         self.inner.table_string(id)

@@ -73,3 +73,9 @@ This is progress through configuration, not a completed player/lobby setup,
 config/main execution, world simulation, campaign or native exceptional-input
 parity. Player identity/state and explicit launcher Host/profile loading remain
 open. No native game process was launched.
+
+
+The later [source-bounded player setup](script-player-setup.md) executes those
+player assignments in the same retained context. The next actual config boundary
+is `SetStartLocPrioCount` at map-script line 7765. Completed placement, config/main
+and launcher wiring remain open.

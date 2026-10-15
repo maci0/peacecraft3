@@ -1004,13 +1004,16 @@ Format: `date — subsystem — symptom — root cause — status`
       identities. Explicit shared-arena timer/group admission now completes
       all Human01 globals (four timers and three groups) and enters authored
       `config`. Executed config now retains five metadata fields and five start
-      locations, reaching `Player` at map-script line 7706. All 213 play tests
-      pass with five explicit ignores; strict native/WASM Clippy, WASM library
-      generation and actual 32-bit WASM lifecycle/config checks pass. These are bounded Host/data
+      locations. Source-bounded shared-arena players retain five player
+      identities and 35 authored field assignments, reaching `SetStartLocPrioCount`
+      at map-script line 7765. All 227 play tests pass with five explicit ignores;
+      strict native/WASM Clippy, WASM generation and actual 32-bit lifecycle,
+      config and player checks pass. These are bounded Host/data
       checks, not campaign or native gameplay proof.
       Launcher profile loading/default Host wiring and other player natives
       remain open; see `selected-map-neutral-host.md`, `playercolor-host.md` and
-      `script-timer-arena.md`/`script-group-arena.md`/`script-map-config.md`.
+      `script-timer-arena.md`/`script-group-arena.md`/`script-map-config.md`/
+      `script-player-setup.md`.
 
 ### Current implemented slices (2026-10-14)
 
