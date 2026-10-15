@@ -177,3 +177,10 @@ gameplay, renderer or device owner stay explicitly unsupported. No measured
 option value, familiar display preset or invented dropdown content replaces
 missing behavior. Original Options panel animations now have a separate admitted
 owner; this presentation change does not activate unsupported settings.
+
+The subsequent [Options initialization inspection](original-options-initialization.md)
+now connects every retained control to its preference reads, including the
+seven quality-popup indexes and the compound resolution query. It resolves
+source-key correspondence without pretending unimplemented settings already
+affect gameplay or rendering. Source fallbacks, saved state and the final
+device-adjusted setting remain separate.

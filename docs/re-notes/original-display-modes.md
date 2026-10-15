@@ -47,9 +47,10 @@ read them from a caller-supplied, qualified executable, or another independently
 qualified source must supply equivalent data. A fixed familiar list of classic
 resolutions would not reproduce this device-derived path.
 
-The connection to ResolutionMenu, label formatting, sorting/grouping, supported
-saved-mode matching and first-run/default fallback is still unresolved. Merely
-finding an enumeration or a null-input reset path proves none of those choices.
+At this enumeration-only boundary, the connection to ResolutionMenu, formatting
+and selection was unresolved. The subsequent Options inspection below closes
+the local UI path; its bridge to this OS enumeration and effective first-run
+inputs remain open. A null-input reset alone establishes no default choice.
 The wider Options implementation remains open; no menu setting was enabled by
 this evidence-only slice.
 
@@ -66,3 +67,58 @@ after recording the region and hashes. That failed command is preserved as a
 failure. Later checks consume retained instruction metadata; no body reread was
 used to claim a successful original inspection. No raw code, game asset,
 credentials or original preference contents are included in the repository.
+
+## ResolutionMenu population and preference matching
+
+The subsequent qualified Options routine at `0x531260` reads reswidth,
+resheight, colordepth, adapter and fixedaspect through the known preference
+getter. It calls `0x536500` to populate ResolutionMenu, then `0x539360` to
+select a row. The getter can return saved state or a lookup-null fallback;
+observing these calls does not establish which values apply on a first run.
+
+Population consumes a count and 44-byte record array from unread `0x7d0c40`.
+This is not yet connected to the earlier 40-byte OS enumeration records.
+It filters against an owner adapter field, an unread current-kind result and
+an optional fixed-aspect-related checkbox property. The optional checkbox is
+absent from the selected retained FDF; native code supplies false when absent,
+rather than creating a replacement widget. The owner adapter's initialization,
+provider record construction and current-kind meaning remain separate inputs.
+
+The local loop offers eligible modes in provider order without sorting or
+deduplicating them. It records each row's native mode index in a parallel map.
+The source label format receives decimal width and height, adding color depth
+when that record field is nonzero. Refresh remains in the record but is not
+included in this label. Equal displayed labels can therefore represent distinct
+mode identities; collapsing choices by width/height loses source distinctions.
+The insert helper's effects on final popup order remain uninspected.
+
+Selection constructs a query using those preference inputs, the current kind
+and a zero refresh field. It scores every provider record, replacing the winner
+only for a strictly smaller unsigned score, then finds that native index in
+the visible-row map. Ties keep the first provider record. An unmapped winner
+leaves the initial row-zero request and does not update stored native selection
+in this routine. An empty list is not evidence that row zero is a valid mode.
+
+The complete scorer at `0x7cf690` prioritizes adapter, kind and flag mismatches,
+then quantized width/height distance and depth/conditional refresh differences.
+Its adapter resolver remains unread. Because this UI query sets refresh to zero,
+it does not prefer the descriptor's refreshrate fallback. Scoring operands,
+wildcards, count-dependent font style and filter operands remain source metadata;
+they must be derived from the selected input if used by a production profile.
+No diagnostic values or familiar resolution array have been copied into code.
+
+Four bounded bodies total 16,384 inspected bytes and 408 reachable instructions,
+with independent Capstone/objdump comparisons. Seventeen synthetic checks cover
+filtering, ties, refresh-zero behavior, scoring, duplicate labels, row mapping
+and empty/unmapped cases. Root replay passes separately. The checked model
+refuses excessive arithmetic rather than promising native overflow behavior.
+Evidence is retained in `.scratch/options-resolution-selection-20261016/`;
+root review is in `.scratch/options-resolution-selection-root-20261016/`.
+
+This resolves local population, formatting and matching, not a universal first-run
+resolution or exact physical mode list. The smallest remaining provider target
+is `0x7d0c40`; its relation to OS enumeration, ordering/deduplication, current
+kind and owner adapter initialization are unproved. Actual device switching,
+acknowledgement and rollback also remain unimplemented. Browser/window render
+sizes retain their existing separate meaning; no unsupported exclusive choice
+has been enabled by this inspection.

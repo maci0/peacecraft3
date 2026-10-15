@@ -78,6 +78,12 @@ issues*.
       failed audio-candidate rollback. Browser client/default transport, other
       setting owners and confirmed exclusive-mode application remain open. See
       `docs/re-notes/original-options-defaults.md`.
+      Subsequent native population checks connect every retained control to its
+      preference reads and recover ResolutionMenu labels, filtering and matching.
+      Fifteen checked label-adapter and 17 selection-model cases pass; prototypes
+      remain unapplied. Final provider/OS bridge and effective first-run selection
+      remain open. See `docs/re-notes/original-options-initialization.md` and
+      `docs/re-notes/original-display-modes.md`.
 - [x] Menu geometry now preserves source ONE/ONE additive RGB instead of
       premultiplying it by alpha. Actual Bevy draws pass 72 channel checks on
       software and Radeon Vulkan; the old-Add negative fails the expected cases.
