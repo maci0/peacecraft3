@@ -255,3 +255,9 @@ joins those identities to this exact context and Program. Actual Human01 player
 setup now reaches `SetStartLocPrioCount` at map-script line 7765; no conventional
 slot count, other getter's arithmetic, active native-cache claim or launcher
 installation is introduced.
+
+
+With [start priorities](script-start-priorities.md) admitted, this same headless
+Human01 VM completes its authored `config` and enters `main`. Its next actual
+boundary is `GetCameraMargin` at map-script line 7781. Default launcher wiring,
+native defaults, completed startup and campaign execution remain open.

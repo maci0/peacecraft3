@@ -82,3 +82,9 @@ This is player configuration state, not complete config/main, lobby membership,
 unit ownership/spawning, resources, alliances, slot-state defaults, gameplay or
 native handle parity. Start-priority relationships and explicit launcher
 profile/Host wiring remain open.
+
+
+The later [start-priority slice](script-start-priorities.md) executes the remaining
+priority statements and completes the same map's authored `config`. The next
+actual boundary is `GetCameraMargin` in `main`, at map-script line 7781. Placement
+and gameplay remain unverified.

@@ -79,3 +79,9 @@ The later [source-bounded player setup](script-player-setup.md) executes those
 player assignments in the same retained context. The next actual config boundary
 is `SetStartLocPrioCount` at map-script line 7765. Completed placement, config/main
 and launcher wiring remain open.
+
+
+The [start-priority slice](script-start-priorities.md) retains declared lists and
+explicit target/priority relationships without inventing unassigned entries.
+Together with player setup, the same authored `config` now completes. `main`
+starts and reaches unsupported `GetCameraMargin`; runtime placement remains open.

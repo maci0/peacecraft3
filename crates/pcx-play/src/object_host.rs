@@ -283,7 +283,7 @@ mod group_tests;
 
 #[path = "map_config_host.rs"]
 mod map_config;
-pub use map_config::{MapConfig, MapConfigBudget, StartLocation};
+pub use map_config::{MapConfig, MapConfigBudget, StartLocation, StartPriorities, StartPriority};
 
 #[path = "player_host.rs"]
 mod players;

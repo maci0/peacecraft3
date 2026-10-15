@@ -22,6 +22,8 @@ pub struct MapConfig {
     pub teams: Option<i32>,
     pub placement: Option<HandleId>,
     pub start_locations: Vec<StartLocation>,
+    pub start_priorities: Vec<StartPriorities>,
+    priority_limit: Option<usize>,
     budget: MapConfigBudget,
 }
 const CONTRACTS: &[(&str, &[&str], &str, bool)] = &[
@@ -65,6 +67,8 @@ impl ObjectHost {
             teams: None,
             placement: None,
             start_locations: Vec::new(),
+            start_priorities: Vec::new(),
+            priority_limit: None,
             budget,
         });
         Ok(self)
@@ -78,6 +82,9 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         self.config.as_ref()?;
+        if let Some(result) = self.priority_native(name, args) {
+            return Some(result);
+        }
         if !CONTRACTS.iter().any(|c| c.0 == name) {
             return None;
         }
@@ -195,3 +202,7 @@ impl ObjectHost {
 #[cfg(test)]
 #[path = "map_config_host_tests.rs"]
 mod tests;
+
+#[path = "start_priorities.rs"]
+mod priorities;
+pub use priorities::{StartPriorities, StartPriority};

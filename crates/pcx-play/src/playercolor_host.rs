@@ -459,5 +459,5 @@ mod tests;
 mod objects;
 pub use objects::{
     MapConfig, MapConfigBudget, ObjectHost, PlayerAdmissionError, PlayerBudget, PlayerSettings,
-    StartLocation, TimerHost,
+    StartLocation, StartPriorities, StartPriority, TimerHost,
 };
