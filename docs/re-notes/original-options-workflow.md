@@ -37,7 +37,10 @@ are recreation conventions, not recovered original defaults.
 Native monitor mode records include refresh and bit depth, but the current menu
 reduces them to width/height pairs. Original labels, filtering, ordering and
 initial/fallback selection are still unproved. Browser render-size choices are
-an explicit host capability, not OS-exclusive display-mode enumeration.
+an explicit host capability, not OS-exclusive display-mode enumeration. The
+[qualified native enumeration](original-display-modes.md) retains device/mode
+identity, depth and refresh; its connection to dropdown/default selection remains
+unresolved.
 
 Supported settings are actual render resolution, music/effects gains and their
 enable toggles. Native choices come from the current window, monitor and monitor
