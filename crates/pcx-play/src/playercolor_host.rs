@@ -47,6 +47,8 @@ pub enum Failure {
     SoundState(&'static str),
     #[error("sound label is not admitted: {0}")]
     MissingSoundLabel(String),
+    #[error("sound file is not admitted: {0}")]
+    MissingSoundFile(String),
     #[error("enumerand {0} is outside this native's admitted source domain")]
     OutsideDomain(i32),
     #[error("unsupported closed integer expression: {0}")]
@@ -121,6 +123,15 @@ enum Entry {
         resource: usize,
         fade_in_rate: i32,
         fade_out_rate: i32,
+    },
+    FileSound {
+        resource: usize,
+        looping: bool,
+        is_3d: bool,
+        stop_when_out_of_range: bool,
+        fade_in_rate: i32,
+        fade_out_rate: i32,
+        eax_setting: String,
     },
 }
 pub struct EnumHost {
@@ -407,7 +418,7 @@ impl EnumHost {
             Entry::Timer { live: true } => "timer",
             Entry::Group { live: true } => "group",
             Entry::Player { .. } => "player",
-            Entry::Sound { .. } => "sound",
+            Entry::Sound { .. } | Entry::FileSound { .. } => "sound",
             Entry::Timer { live: false } | Entry::Group { live: false } => {
                 return Err(self.error("arena", Failure::Identity));
             }
@@ -487,7 +498,7 @@ mod tests;
 #[path = "object_host.rs"]
 mod objects;
 pub use objects::{
-    CameraState, DayNightState, MapConfig, MapConfigBudget, MapMusicSelection, ObjectHost,
-    PlayerAdmissionError, PlayerBudget, PlayerSettings, SoundState, StartLocation, StartPriorities,
-    StartPriority, StartupClockState, TimerHost,
+    CameraState, DayNightState, FileSoundState, MapConfig, MapConfigBudget, MapMusicSelection,
+    ObjectHost, PlayerAdmissionError, PlayerBudget, PlayerSettings, SoundState, StartLocation,
+    StartPriorities, StartPriority, StartupClockState, TimerHost,
 };

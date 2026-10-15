@@ -1,5 +1,5 @@
 use super::{Entry, Error, Failure, ObjectHost};
-use crate::label_sounds::{BoundSound, SoundBank};
+use crate::label_sounds::{BoundSound, PcmResource, SoundBank};
 use pcx_script::{HandleId, Value};
 
 #[derive(Debug)]
@@ -35,7 +35,8 @@ impl ObjectHost {
     /// install a playback device or infer channel, fade, looping or restart rules.
     pub fn with_sound_starts(mut self, max_pending: usize) -> Result<Self, Error> {
         let name = "StartSound";
-        if self.sounds.is_none() || self.sound_start_limit.is_some() {
+        if (self.sounds.is_none() && self.file_sounds.is_none()) || self.sound_start_limit.is_some()
+        {
             return Err(self.inner.error(
                 name,
                 Failure::SoundState("sound bank required; start queue must not be admitted twice"),
@@ -87,6 +88,14 @@ impl ObjectHost {
             fade_out_rate: *fade_out_rate,
         })
     }
+    /// Common checked PCM access for both label and direct-file sound objects.
+    pub fn sound_resource(&self, identity: HandleId) -> Result<&PcmResource, Error> {
+        match self.inner.entry(identity)? {
+            Entry::Sound { .. } => Ok(self.sound_state(identity)?.resource.resource()),
+            Entry::FileSound { .. } => Ok(self.file_sound_state(identity)?.resource),
+            _ => Err(self.inner.error("sound resource", Failure::WrongFamily)),
+        }
+    }
     pub(super) fn sound_native(
         &mut self,
         name: &str,
@@ -100,7 +109,7 @@ impl ObjectHost {
                         .inner
                         .error(name, Failure::SoundState("expected sound identity")));
                 };
-                self.sound_state(*id)
+                self.sound_resource(*id)
                     .map_err(|e| self.inner.error(name, e.failure))?;
                 if self.sound_starts.len() >= limit {
                     return Err(self

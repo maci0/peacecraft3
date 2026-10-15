@@ -5,6 +5,10 @@ use pcx_slq::{CoordinateLimits, SoundTable, Table};
 #[path = "pcm_wave.rs"]
 mod wave;
 pub use wave::{PcmWave, WaveError};
+#[path = "pcm_resource.rs"]
+mod resource;
+pub use resource::PcmResource;
+pub(crate) use resource::ResourceFailure;
 
 pub struct SoundInput<'a> {
     pub label: &'a str,
@@ -52,14 +56,12 @@ pub enum Problem {
 pub struct BoundSound {
     label: String,
     row: u32,
-    member: String,
-    source_label: String,
-    origin: AssetIdentity,
-    sha256: Sha256Digest,
-    bytes: Vec<u8>,
-    pcm: PcmWave,
+    resource: PcmResource,
 }
 impl BoundSound {
+    pub fn resource(&self) -> &PcmResource {
+        &self.resource
+    }
     pub fn label(&self) -> &str {
         &self.label
     }
@@ -67,22 +69,22 @@ impl BoundSound {
         self.row
     }
     pub fn member(&self) -> &str {
-        &self.member
+        self.resource.member()
     }
     pub fn source_label(&self) -> &str {
-        &self.source_label
+        self.resource.source_label()
     }
     pub fn origin(&self) -> &AssetIdentity {
-        &self.origin
+        self.resource.origin()
     }
     pub fn sha256(&self) -> Sha256Digest {
-        self.sha256
+        self.resource.sha256()
     }
     pub fn bytes(&self) -> &[u8] {
-        &self.bytes
+        self.resource.bytes()
     }
     pub fn pcm(&self) -> &PcmWave {
-        &self.pcm
+        self.resource.pcm()
     }
 }
 #[derive(Debug)]
@@ -230,22 +232,19 @@ impl SoundBank {
             if member != input.member {
                 return Err(fail(input.asset.label, Problem::Member));
             }
-            let pcm = PcmWave::inspect(input.asset.bytes)
-                .map_err(|e| fail(input.asset.label, Problem::Wave(e)))?;
-            let mut bytes = Vec::new();
-            bytes
-                .try_reserve_exact(input.asset.bytes.len())
-                .map_err(|_| fail(input.asset.label, Problem::Budget))?;
-            bytes.extend_from_slice(input.asset.bytes);
+            let resource = PcmResource::read(&member, input.asset, &input.origin).map_err(|e| {
+                fail(
+                    input.asset.label,
+                    match e {
+                        ResourceFailure::Allocation => Problem::Budget,
+                        ResourceFailure::Decode(e) => Problem::Wave(e),
+                    },
+                )
+            })?;
             sounds.push(BoundSound {
                 label: input.label.into(),
                 row: row.index(),
-                member,
-                source_label: input.asset.label.into(),
-                origin: input.origin.clone(),
-                sha256: sha256(&bytes),
-                bytes,
-                pcm,
+                resource,
             });
         }
         Ok(Self {

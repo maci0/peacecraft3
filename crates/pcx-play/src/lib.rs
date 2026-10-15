@@ -59,6 +59,7 @@ pub mod cinematics;
 pub mod custom_scripts;
 pub mod day_night;
 pub mod diff;
+pub mod file_sounds;
 pub mod generator;
 pub mod label_sounds;
 pub mod map_admission;

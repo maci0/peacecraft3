@@ -14,6 +14,7 @@ pub struct ObjectHost {
     camera: Option<camera::CameraState>,
     day_night: Option<environment::DayNightState>,
     sounds: Option<crate::label_sounds::SoundBank>,
+    file_sounds: Option<files::State>,
     sound_start_limit: Option<usize>,
     sound_starts: Vec<HandleId>,
     startup_clock: Option<clock::StartupClockState>,
@@ -37,6 +38,7 @@ impl ObjectHost {
             camera: None,
             day_night: None,
             sounds: None,
+            file_sounds: None,
             sound_start_limit: None,
             sound_starts: Vec::new(),
             startup_clock: None,
@@ -259,6 +261,9 @@ impl ObjectHost {
 }
 impl Host for ObjectHost {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.file_sound_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.map_music_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -337,3 +342,7 @@ pub use clock::StartupClockState;
 #[path = "map_music_host.rs"]
 mod music;
 pub use music::MapMusicSelection;
+
+#[path = "file_sound_host.rs"]
+mod files;
+pub use files::FileSoundState;
