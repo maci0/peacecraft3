@@ -996,10 +996,14 @@ Format: `date — subsystem — symptom — root cause — status`
 - [!] Original script execution fails closed on unsupported
       `GetPlayerNeutralPassive` during `common.j` initialization; original
       campaign completion and native behavior are not established.
-      Opt-in selected-map adapters now derive both passive/aggressive rules from a
-      locally supplied verified executable/profile and the admitted W3I. The
-      explicit Human01 initializer gate now composes a source-derived typed
-      player-color Host and reaches `ConvertRace` after all authored colors.
+      Opt-in selected-map adapters derive passive/aggressive and first-family
+      `GetBJMaxPlayers` rules from independently approved local executable
+      profiles and the admitted W3I. The same Human01 Program/localization gate
+      composes 43 source-selected symbolic contracts, retains 432 typed
+      identities, and now reaches `GetBJPlayerNeutralVictim` at Blizzard line 44.
+      All 179 play tests pass with five explicit ignores; native/WASM strict
+      Clippy and WASM library code generation pass. These are bounded Host/data
+      checks, not campaign or native gameplay proof.
       Launcher profile loading/default Host wiring and other player natives
       remain open; see `selected-map-neutral-host.md` and `playercolor-host.md`.
 

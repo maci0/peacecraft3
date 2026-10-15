@@ -185,6 +185,9 @@ fn input(threshold: u32) -> Input {
     input_named(threshold, NATIVE_NAME)
 }
 fn input_named(threshold: u32, native_name: &str) -> Input {
+    input_named_operands(threshold, native_name, -20, 61)
+}
+fn input_named_operands(threshold: u32, native_name: &str, mask: i8, add: i8) -> Input {
     let base = 0x0030_0000u32;
     let rva = 0x1000u32;
     let raw = 0x200usize;
@@ -207,7 +210,7 @@ fn input_named(threshold: u32, native_name: &str) -> Input {
     let mut name = native_name.as_bytes().to_vec();
     name.push(0);
     let signature = b"()I\0".to_vec();
-    let g = getter(threshold, -20, 61);
+    let g = getter(threshold, mask, add);
     let h = header();
     let offsets = [0x30usize, 0x100, 0x140, 0x200, 0x300];
     let va = |offset| base + rva + offset as u32;
@@ -632,31 +635,43 @@ fn aggressive_rules(threshold: u32) -> Arc<VerifiedNeutralRule> {
 }
 #[test]
 fn named_rule_imports_refuse_a_different_native_binding() {
-    let passive = input(257);
-    assert!(matches!(
-        VerifiedNeutralRule::import_aggressive(
-            &passive.image,
-            &passive.profile,
-            &passive.approval,
-            RuleInputBudget {
-                image_bytes: passive.image.len(),
-                profile_bytes: passive.profile.len(),
-                sections: 2
+    let names = [
+        NATIVE_NAME,
+        AGGRESSIVE_NATIVE_NAME,
+        BJ_MAX_PLAYERS_NATIVE_NAME,
+    ];
+    let importers = [
+        VerifiedNeutralRule::import,
+        VerifiedNeutralRule::import_aggressive,
+        VerifiedNeutralRule::import_bj_max_players_first_family,
+    ];
+    for (source, name) in names.iter().enumerate() {
+        let i = input_named(257, name);
+        let budget = RuleInputBudget {
+            image_bytes: i.image.len(),
+            profile_bytes: i.profile.len(),
+            sections: 2,
+        };
+        for (target, importer) in importers.iter().enumerate() {
+            let result = importer(&i.image, &i.profile, &i.approval, budget);
+            if source == target {
+                assert_eq!(result.unwrap().native_name, *name);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(NeutralError::Rule(RuleProblem::Binding))
+                ));
             }
-        ),
-        Err(NeutralError::Rule(RuleProblem::Binding))
-    ));
-    let aggressive = input_named(257, AGGRESSIVE_NATIVE_NAME);
-    assert!(matches!(
-        aggressive.import(),
-        Err(NeutralError::Rule(RuleProblem::Binding))
-    ));
+        }
+    }
 }
 #[test]
 fn composed_named_hosts_use_separate_input_rules_before_global_initialization() {
-    let common = format!("{COMMON}native {AGGRESSIVE_NATIVE_NAME} takes nothing returns integer\n");
+    let common = format!(
+        "{COMMON}native {AGGRESSIVE_NATIVE_NAME} takes nothing returns integer\nnative {BJ_MAX_PLAYERS_NATIVE_NAME} takes nothing returns integer\n"
+    );
     let map = format!(
-        "globals\ninteger passive = {NATIVE_NAME}()\ninteger aggressive = {AGGRESSIVE_NATIVE_NAME}()\nendglobals\n"
+        "globals\ninteger passive = {NATIVE_NAME}()\ninteger aggressive = {AGGRESSIVE_NATIVE_NAME}()\ninteger limit = {BJ_MAX_PLAYERS_NATIVE_NAME}()\nendglobals\n"
     );
     let ctx = context(300, &common, &map, "selected-both");
     let aggressive = SelectedMapNeutralHost::try_new(
@@ -665,11 +680,29 @@ fn composed_named_hosts_use_separate_input_rules_before_global_initialization() 
         Delegate::default(),
     )
     .unwrap();
-    let host = SelectedMapNeutralHost::try_new(Arc::clone(&ctx), rules(), aggressive).unwrap();
+    let limit = SelectedMapNeutralHost::try_new(
+        Arc::clone(&ctx),
+        bj_max_players_rule(503, 29, -67),
+        aggressive,
+    )
+    .unwrap();
+    let host = SelectedMapNeutralHost::try_new(Arc::clone(&ctx), rules(), limit).unwrap();
+    assert!(Arc::ptr_eq(host.context(), host.inner().context()));
+    assert!(Arc::ptr_eq(host.context(), host.inner().inner().context()));
+    assert!(Arc::ptr_eq(
+        &ctx.scripts.shared_program(),
+        &host.inner().context().scripts.shared_program()
+    ));
+    assert_eq!(host.map_sha256(), host.inner().map_sha256());
+    assert_eq!(host.info_sha256(), host.inner().info_sha256());
+    assert_eq!(host.map_sha256(), host.inner().inner().map_sha256());
+    assert_eq!(host.info_sha256(), host.inner().inner().info_sha256());
     let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
+    assert!(Arc::ptr_eq(vm.host().context(), &ctx.scripts));
     vm.init_globals().unwrap();
     assert_eq!(vm.global("passive"), Value::Int(61));
     assert_eq!(vm.global("aggressive"), Value::Int(41));
+    assert_eq!(vm.global("limit"), Value::Int(-38));
 }
 #[test]
 fn aggressive_host_preserves_unsigned_boundaries_signature_args_and_delegation() {
@@ -705,4 +738,153 @@ fn aggressive_host_preserves_unsigned_boundaries_signature_args_and_delegation()
             ..
         })
     ));
+}
+
+fn bj_max_players_rule(threshold: u32, mask: i8, add: i8) -> Arc<VerifiedNeutralRule> {
+    let i = input_named_operands(threshold, BJ_MAX_PLAYERS_NATIVE_NAME, mask, add);
+    Arc::new(
+        VerifiedNeutralRule::import_bj_max_players_first_family(
+            &i.image,
+            &i.profile,
+            &i.approval,
+            RuleInputBudget {
+                image_bytes: i.image.len(),
+                profile_bytes: i.profile.len(),
+                sections: 2,
+            },
+        )
+        .unwrap(),
+    )
+}
+
+#[test]
+fn bj_max_players_first_family_derives_its_own_unsigned_boundary_and_signed_results() {
+    for (word, expected) in [(502, -38), (503, -67), (504, -67), (u32::MAX, -67)] {
+        let common = format!(
+            "native {BJ_MAX_PLAYERS_NATIVE_NAME} takes nothing returns integer\nnative Other takes nothing returns integer\n"
+        );
+        let ctx = context(word, &common, "// synthetic map", "selected-player-limit");
+        let mut host = SelectedMapNeutralHost::try_new(
+            Arc::clone(&ctx),
+            bj_max_players_rule(503, 29, -67),
+            Delegate::default(),
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(host.context(), &ctx));
+        assert_eq!(
+            host.native(BJ_MAX_PLAYERS_NATIVE_NAME, &[]).unwrap(),
+            Value::Int(expected)
+        );
+        let error = host
+            .native(BJ_MAX_PLAYERS_NATIVE_NAME, &[Value::Int(1)])
+            .unwrap_err();
+        assert!(error.contains("Arguments") && error.contains("selected-player-limit"));
+        assert_eq!(host.native("Other", &[]).unwrap(), Value::Int(313));
+        assert!(
+            host.native(NATIVE_NAME, &[])
+                .unwrap_err()
+                .contains("delegate refusal")
+        );
+        assert!(
+            host.native(AGGRESSIVE_NATIVE_NAME, &[])
+                .unwrap_err()
+                .contains("delegate refusal")
+        );
+        assert_eq!(host.inner().calls, 3);
+        assert_eq!(
+            host.resolve_table_string(9),
+            Err("table read failure".into())
+        );
+        assert_eq!(host.table_string(2), Some("table 2".into()));
+        assert_eq!(host.code_tag("x"), Some("tag x".into()));
+    }
+}
+
+#[test]
+fn bj_max_players_first_family_requires_approval_of_that_exact_profile_and_image() {
+    let selected = input_named_operands(503, BJ_MAX_PLAYERS_NATIVE_NAME, 29, -67);
+    let mut other = input_named_operands(997, BJ_MAX_PLAYERS_NATIVE_NAME, -37, 57);
+    let budget = RuleInputBudget {
+        image_bytes: other.image.len(),
+        profile_bytes: other.profile.len(),
+        sections: 2,
+    };
+    assert!(matches!(
+        VerifiedNeutralRule::import_bj_max_players_first_family(
+            &other.image,
+            &other.profile,
+            &selected.approval,
+            budget
+        ),
+        Err(NeutralError::Rule(RuleProblem::UnapprovedProfile))
+    ));
+    other.image[0x405] ^= 1;
+    assert!(matches!(
+        VerifiedNeutralRule::import_bj_max_players_first_family(
+            &other.image,
+            &other.profile,
+            &other.approval,
+            budget
+        ),
+        Err(NeutralError::Rule(RuleProblem::ImageIdentity))
+    ));
+}
+
+#[test]
+fn bj_max_players_first_family_requires_its_same_context_program_signature() {
+    for common in [
+        "// no declaration\n".into(),
+        format!("native {BJ_MAX_PLAYERS_NATIVE_NAME} takes nothing returns real\n"),
+        format!("native {BJ_MAX_PLAYERS_NATIVE_NAME} takes integer x returns integer\n"),
+    ] {
+        let ctx = context(
+            503,
+            &common,
+            "// synthetic map",
+            "bad-player-limit-signature",
+        );
+        assert!(matches!(
+            SelectedMapNeutralHost::try_new(ctx, bj_max_players_rule(503, 29, -67), Delegate::default()),
+            Err(NeutralError::Context { map, problem: ContextProblem::Signature }) if map == "bad-player-limit-signature"
+        ));
+    }
+}
+
+#[test]
+fn bj_max_players_initializer_keeps_next_native_diagnostic_and_sticky_failure() {
+    let common = format!(
+        "native {BJ_MAX_PLAYERS_NATIVE_NAME} takes nothing returns integer\nnative Missing takes nothing returns integer\n"
+    );
+    let map = format!(
+        "globals\ninteger limit = {BJ_MAX_PLAYERS_NATIVE_NAME}()\ninteger next = Missing()\nendglobals\n"
+    );
+    let ctx = context(502, &common, &map, "selected-player-limit-frontier");
+    let host = SelectedMapNeutralHost::try_new(
+        Arc::clone(&ctx),
+        bj_max_players_rule(503, 29, -67),
+        Delegate::default(),
+    )
+    .unwrap();
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
+    let first = vm.init_globals().unwrap_err();
+    let source = vm.error_source().unwrap().to_owned();
+    let diagnostic = vm.host().diagnostic(Some(&source), &first);
+    let initializer_source = &ctx
+        .scripts
+        .program()
+        .globals()
+        .iter()
+        .find(|global| global.name == "next")
+        .unwrap()
+        .source;
+    assert_eq!(&source, initializer_source);
+    assert!(
+        diagnostic.contains("Missing") && diagnostic.contains("selected-player-limit-frontier")
+    );
+    assert_eq!(vm.global("limit"), Value::Int(-38));
+    assert_eq!(vm.host().inner.inner().calls, 1);
+    assert_eq!(first, vm.init_globals().unwrap_err());
+    assert_eq!(vm.error_source(), Some(source.as_str()));
+    assert_eq!(vm.host().diagnostic(Some(&source), &first), diagnostic);
+    assert_eq!(vm.host().inner.inner().calls, 1);
 }

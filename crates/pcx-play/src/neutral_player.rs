@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 pub const NATIVE_NAME: &str = "GetPlayerNeutralPassive";
 pub const AGGRESSIVE_NATIVE_NAME: &str = "GetPlayerNeutralAggressive";
+pub const BJ_MAX_PLAYERS_NATIVE_NAME: &str = "GetBJMaxPlayers";
 pub type Sha256Digest = [u8; 32];
 pub(crate) fn sha256(bytes: &[u8]) -> Sha256Digest {
     Sha256::digest(bytes).into()
@@ -102,6 +103,24 @@ impl VerifiedNeutralRule {
             &approval.0,
             budget,
             AGGRESSIVE_NATIVE_NAME,
+        )
+    }
+    /// Explicit opt-in to the independently reviewed first-registration-family getter.
+    /// The approved profile binds its exact image, registration and getter identity.
+    /// Local review must join its helper/header semantics; active-family selection
+    /// and native context/cache lifetime are not established by this importer.
+    pub fn import_bj_max_players_first_family(
+        image: &[u8],
+        profile: &[u8],
+        approval: &LocalProfileApproval,
+        budget: RuleInputBudget,
+    ) -> Result<Self, NeutralError> {
+        super::neutral_rule_input::import(
+            image,
+            profile,
+            &approval.0,
+            budget,
+            BJ_MAX_PLAYERS_NATIVE_NAME,
         )
     }
     pub fn origin(&self) -> &AssetIdentity {

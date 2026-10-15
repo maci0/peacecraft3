@@ -1,53 +1,96 @@
-# Source-derived player-color identities
+# Source-derived symbolic enum identities
 
-`pcx_play::playercolor_host::ColorHost` is an opt-in concrete, session-owned Host.
-It implements `ConvertPlayerColor` as symbolic typed identity, not RGB conversion
-or native pointer emulation. The supplied compiled Program must declare the exact
-integer-to-playercolor signature and handle ancestry. Constant conversion globals
-in that native's declaring source supply the admitted enumerands. No color count,
-numeric enumerand, palette, RGB value or engine handle ID is embedded in the code.
+`pcx_play::playercolor_host::EnumHost` is an opt-in concrete, session-owned Host.
+The caller explicitly selects native names and supplies `Limits` for handle
+capacity, admission steps, expression depth and aggregate expression work to
+`checked_selected`. Admission steps count each supplied native name (including
+duplicates) and each global visited for each selected contract, before filtering.
+They do not bound parsing, string bytes or all CPU operations.
+Signature shape alone never enables a native. Each selected declaration must be
+a constant scalar integer-to-named-handle-subtype native, without a script
+override or multiple declaration sources. Constant conversion globals in that
+native's declaring source supply its admitted enumerands. The Program producer
+must enforce unique, non-reserved source labels before resolution, as
+`MapScripts::compile` does. Under that prerequisite, map-source globals cannot
+enlarge this domain. Labels alone do not authenticate original bytes, and the
+Host cannot recover origins after a producer collapses labels. No counts,
+enumerands, palettes or engine handle IDs
+are embedded in the implementation.
 
-Supported initializers use the declared conversion with an integer literal,
-parentheses or unary numeric operators under existing VM integer semantics.
-Unsupported shapes, incompatible signatures, a script override, missing domain,
-bad arguments and out-of-domain inputs report contextual errors. This supported
-domain is a local import policy, not a claim that native conversion rejects all
-other integers. Map-source globals cannot enlarge the common source's domain.
+Supported conversion arguments are closed integer literal expressions with
+parentheses and unary/binary operators evaluated by the existing VM value
+operations. Results must be integers; invalid arithmetic, identifiers and calls
+are refused. Depth and work limits are project resource policies. No other
+function/native executes to derive a domain, and no range or flag combinations
+are inferred. Unsupported initializers, incompatible declarations, missing
+domains, bad arguments and out-of-domain inputs report contextual errors. These
+admitted domains are local import policy; native behavior outside them remains
+unestablished.
 
-One bounded arena interns equal colors and assigns distinct typed identities to
-different colors and interleaved object families. Identity allocation is a
-recreation choice. Capacity failure preserves existing identities, which remain
-usable at capacity. The identity-only reservation API provides no object behavior.
-Future handle-producing operations in this Host must use the same arena; an
-arbitrary delegate that independently mints handles cannot safely be added.
-Tokens are scoped to one Host/VM session and are not cross-session identifiers.
+One bounded arena interns nominal result-family/enumerand pairs. Equal pairs
+share identity across selected native aliases; each native still checks its own
+domain before looking up that identity. Different families and interleaved object
+families have distinct identities. Reservation refuses selected enum families
+and their descendants. Capacity failure preserves existing identities, which
+remain usable at capacity. This identity allocation is a recreation choice;
+the reservation API provides no object behavior. Handle-producing operations in
+this Host must use the same arena. Tokens belong to one Host/VM session.
+
+`ColorHost` remains a type alias with the existing color-only `checked` API and
+accessors. Its compatibility entry point selects only `ConvertPlayerColor`, uses
+a fixed project-policy recursion ceiling and derives an aggregate work bound
+from source spans, plus a checked one-name/global-scan admission budget. It still
+requires the exact `playercolor` return family. Generic callers must supply explicit `Limits` and native
+selection. Symbolic identity supplies no RGB interpretation, native pointer
+semantics or gameplay behavior for any admitted family.
 
 `MapScripts::shared_program` shares the exact existing Arc with the Host instead
-of compiling or cloning a second Program. The existing selected-map scalar
-neutral adapters can wrap this Host without allocating competing handles.
-`MapScripts::owned_vm` still owns localization and diagnostics. The default
-launcher Host is unchanged; automatic installation remains separate work.
+of compiling or cloning a second Program. The selected-map scalar neutral
+adapters can wrap this Host without allocating competing handles.
+`MapScripts::owned_vm` still owns localization and diagnostics. Automatic Host
+installation and the remaining gameplay contracts are separate work.
 
 ## Verification
 
-Nine synthetic tests cover domain derivation, interning, family separation,
-capacity, source context, invalid declarations/initializers, map-domain injection,
-actual compiled global initialization, sticky failure and other-native refusal.
-The affected crate passes 163 native tests with five explicit original-input
-ignores, strict all-target/all-feature native and WASM Clippy, and WASM library
-code generation. The existing ownership test also checks shared Program identity.
+The existing nine ColorHost tests are retained. Twelve additional synthetic tests
+exercise the same public module: family separation, alias identity with distinct
+sparse domains, shared arena reservations, closed arithmetic and overflow,
+independent expression/admission budgets, exact color-family compatibility,
+declaration/source rejection, capacity, actual
+compiled global initialization, next-native refusal and sticky failure.
 
-The separate local original gate uses retained Human01, base common and Blizzard
-inputs identified in [the neutral adapter note](selected-map-neutral-host.md).
-The unchanged common SHA-256 is
-`3c21e998bf80d1e04718bd3f2ee7ef2bf1b83359e5b303a56cf59cd61a2afdcd`.
-The same admitted map and compiled Program handle both independently approved
-neutral getters and all 24 source-declared color constants, then refuse
-`ConvertRace` at common line 204. The count is an observed diagnostic, not a
-production constant. Exact commands, actual output, artifact hashes and source
-receipt are local in `.scratch/playercolor-host-root-integration/`.
+The earlier color-only integration passed 163 native tests with five explicit
+original-input ignores, strict native/WASM Clippy and WASM library code
+generation. Those results precede the shared enum implementation. The new
+twenty-one-test module passes integrated native tests. The affected crate passes
+179 native tests with five explicit original-input ignores, strict native/WASM
+all-target/all-feature Clippy, and warning-denied WASM library code generation.
+These are parser/Host checks, not rendered or native gameplay proof.
 
-The gate uses an explicitly identified compatibility object catalog, with
-unresolved records. It does not establish complete target-catalog admission,
-campaign execution, rendered color interpretation or native exceptional behavior.
-Original sources and executable-rule profiles remain local and unpublished.
+The explicit local Human01 gate retains the same admitted map, compiled Program,
+localization and independently approved scalar neutral adapters described in
+[the neutral adapter note](selected-map-neutral-host.md). Its unchanged common
+SHA-256 is `3c21e998bf80d1e04718bd3f2ee7ef2bf1b83359e5b303a56cf59cd61a2afdcd`.
+The earlier color-only gate advances 24 source-declared color constants and
+refuses `ConvertRace`. A later private shared-enum prototype uses a separately
+checked, explicit source-census native policy and verifies the derived domain
+digests. It advances 435 enum conversions across 43 selected natives to 432 typed
+identities, handles both neutral getters, then refuses `GetBJMaxPlayers` at its
+Blizzard global initializer. Repeating initialization returns the same failure
+without new calls or identities. These counts are observations, never production
+constants. Local commands, diagnostics and hashes are retained in
+`.scratch/script-enum-map-initializer/`; they precede production integration.
+
+The integrated Host has now been exercised on the same retained Human01
+admission, Program and localization owner, with all three independently approved
+scalar adapters. Its source-census policy still admits the same 43 contracts and
+432 typed identities. Global initialization makes 439 observed native calls and
+then refuses `GetBJPlayerNeutralVictim` at Blizzard line 44. A repeat returns the
+same diagnostic without more calls or identities. Actual commands, artifact/input
+hashes and logs are in `.scratch/enum-host-root-integration/`; no original input
+or profile contents are committed. Counts are diagnostic observations only.
+
+The gate uses an identified compatibility object catalog with unresolved records.
+It does not establish complete target-catalog admission, campaign execution,
+rendered interpretation or native exceptional behavior. Original inputs and
+executable-rule profiles remain local and unpublished.

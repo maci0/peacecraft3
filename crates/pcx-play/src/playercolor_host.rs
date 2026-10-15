@@ -1,70 +1,93 @@
-//! One session's host-owned typed identities; no delegate mints handles.
+//! Explicit symbolic contracts and object identities share one session-owned arena.
 use pcx_script::ast::{Expr, Literal, TypeKind};
+use pcx_script::natives::Native;
 use pcx_script::resolve::Program;
 use pcx_script::span::Span;
 use pcx_script::{HandleId, Host, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 use std::sync::Arc;
-
-// Native/type spellings are interface identifiers, not color contents or numeric IDs.
 pub const NATIVE: &str = "ConvertPlayerColor";
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Failure {
-    #[error("missing or incompatible native/type declaration")]
+    #[error("missing or incompatible constant native/type declaration")]
     Signature,
-    #[error("unsupported authored color initializer {0}")]
+    #[error("multiple declaration sources require qualification")]
+    Source,
+    #[error("unsupported authored initializer {0}")]
     Initializer(String),
-    #[error("no source-authored color enumerands")]
+    #[error("no source-authored enumerands")]
     EmptyDomain,
     #[error("expected exactly one integer argument")]
     Arguments,
-    #[error("color enumerand {0} is outside the admitted source domain")]
+    #[error("enumerand {0} is outside this native's admitted source domain")]
     OutsideDomain(i32),
+    #[error("unsupported closed integer expression: {0}")]
+    Expression(String),
+    #[error("{0} policy exceeded")]
+    Budget(&'static str),
     #[error("invalid or reserved handle type {0}")]
     Type(String),
     #[error("unknown handle identity")]
     Identity,
-    #[error("handle does not identify a playercolor")]
+    #[error("handle identifies another family")]
     WrongFamily,
     #[error("host identity capacity or allocation exceeded")]
     Capacity,
 }
 #[derive(Debug, thiserror::Error)]
-#[error("{source_context}: {declaration_source}:{declaration_span:?}: {failure}")]
+#[error(
+    "{source_context}: {native} at {declaration_source}:{declaration_span:?}, initializer {initializer:?}: {failure}"
+)]
 pub struct Error {
     pub source_context: String,
+    pub native: String,
     pub declaration_source: String,
     pub declaration_span: Span,
+    pub initializer: Option<Box<(String, Span)>>,
     pub failure: Failure,
+}
+fn error(context: &str, name: &str, native: Option<&Native>, failure: Failure) -> Error {
+    Error {
+        source_context: context.into(),
+        native: name.into(),
+        declaration_source: native.map_or_else(String::new, |n| n.source.clone()),
+        declaration_span: native.map_or(Span::EMPTY, |n| n.span),
+        initializer: None,
+        failure,
+    }
+}
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    pub max_handles: usize,
+    /// Supplied-name visits (including duplicates) plus per-contract global visits.
+    pub admission_steps: usize,
+    pub expression_depth: usize,
+    /// Aggregate evaluated AST nodes across all selected source declarations.
+    pub expression_work: usize,
+}
+#[derive(Debug)]
+pub struct Conversion {
+    pub name: String,
+    pub kind: String,
+    pub source: String,
+    pub span: Span,
+    pub domain: BTreeSet<i32>,
 }
 #[derive(Debug)]
 enum Entry {
-    PlayerColor(i32),
+    Symbolic { kind: String, enumerand: i32 },
     Object(String),
 }
-pub struct ColorHost {
+pub struct EnumHost {
     program: Arc<Program>,
     source_context: String,
-    declaration_source: String,
-    declaration_span: Span,
-    color_type: String,
-    domain: BTreeSet<i32>,
+    conversions: BTreeMap<String, Conversion>,
     arena: Vec<Entry>,
     max_handles: usize,
 }
-fn integer(expr: &Expr) -> Option<i32> {
-    match expr {
-        Expr::Literal(Literal::Int(value), _) => Some(Value::wrap32(value.value)),
-        Expr::Group(inner, _) => integer(inner),
-        Expr::Unary { op, operand, .. } => {
-            pcx_script::value::unary(*op, &Value::Int(integer(operand)?))
-                .ok()?
-                .as_int()
-        }
-        _ => None,
-    }
-}
+pub type ColorHost = EnumHost;
 fn below<'a>(program: &'a Program, mut name: &'a str, ancestor: &str) -> bool {
     for _ in 0..=program.types().count() {
         if name == ancestor {
@@ -77,164 +100,326 @@ fn below<'a>(program: &'a Program, mut name: &'a str, ancestor: &str) -> bool {
     }
     false
 }
-impl ColorHost {
-    /// Source context must qualify the caller's exact common/Program choice.
-    /// Only immutable constant conversion globals from that native's declaring source admit colors.
+fn integer(expr: &Expr, depth: usize, work: &mut usize) -> Result<i32, Failure> {
+    let child_depth = depth
+        .checked_sub(1)
+        .ok_or(Failure::Budget("expression depth"))?;
+    *work = work
+        .checked_sub(1)
+        .ok_or(Failure::Budget("expression work"))?;
+    let value = match expr {
+        Expr::Literal(Literal::Int(value), _) => return Ok(Value::wrap32(value.value)),
+        Expr::Group(inner, _) => return integer(inner, child_depth, work),
+        Expr::Unary { op, operand, .. } => {
+            pcx_script::value::unary(*op, &Value::Int(integer(operand, child_depth, work)?))
+                .map_err(|e| Failure::Expression(e.message()))?
+        }
+        Expr::Binary { op, lhs, rhs, .. } => pcx_script::value::binary(
+            *op,
+            &Value::Int(integer(lhs, child_depth, work)?),
+            &Value::Int(integer(rhs, child_depth, work)?),
+        )
+        .map_err(|e| Failure::Expression(e.message()))?,
+        _ => {
+            return Err(Failure::Expression(
+                "literal arithmetic only; identifiers and calls are not evaluated".into(),
+            ));
+        }
+    };
+    value
+        .as_int()
+        .ok_or(Failure::Expression("integer result required".into()))
+}
+impl EnumHost {
+    /// Color-only compatibility: depth64 is a project safety policy, never game data.
+    /// Source spans bound the work available to this compatibility entry point.
     pub fn checked(
         program: Arc<Program>,
-        source_context: &str,
+        context: &str,
         max_handles: usize,
     ) -> Result<Self, Error> {
         let native = program.natives().get(NATIVE);
-        let fail = |failure| Error {
-            source_context: source_context.into(),
-            declaration_source: native.map_or_else(String::new, |n| n.source.clone()),
-            declaration_span: native.map_or(Span::EMPTY, |n| n.span),
-            failure,
-        };
-        let native = native.ok_or_else(|| fail(Failure::Signature))?;
-        let [parameter] = native.params.as_slice() else {
-            return Err(fail(Failure::Signature));
-        };
-        let color_type = native.ret.kind.name();
-        if program.function(NATIVE).is_some()
-            || parameter.ty.kind != TypeKind::Integer
-            || parameter.ty.array
-            || native.ret.array
-            || color_type != "playercolor"
-            || !below(&program, color_type, "handle")
-        {
-            return Err(fail(Failure::Signature));
+        if native.is_none_or(|n| n.ret.kind.name() != "playercolor") {
+            return Err(error(context, NATIVE, native, Failure::Signature));
         }
-        let mut domain = BTreeSet::new();
-        for global in program
+        let admission_steps = program
+            .globals()
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| error(context, NATIVE, native, Failure::Capacity))?;
+        let work = program
             .globals()
             .iter()
-            .filter(|g| g.source == native.source && g.ty.kind.name() == color_type)
-        {
-            let invalid = || fail(Failure::Initializer(global.name.clone()));
-            if !global.is_constant || global.array || global.ty.array {
-                return Err(invalid());
+            .filter_map(|g| g.init.as_ref())
+            .try_fold(0usize, |sum, e| {
+                sum.checked_add(usize::try_from(e.span().end.checked_sub(e.span().start)?).ok()?)
+            })
+            .ok_or_else(|| {
+                error(
+                    context,
+                    NATIVE,
+                    program.natives().get(NATIVE),
+                    Failure::Capacity,
+                )
+            })?;
+        Self::checked_selected(
+            program,
+            context,
+            &[NATIVE],
+            Limits {
+                max_handles,
+                admission_steps,
+                expression_depth: 64,
+                expression_work: work,
+            },
+        )
+    }
+    /// Native names are explicit caller-selected symbolic contracts, never inferred from signature shape.
+    /// The Program producer must enforce MapScripts-equivalent unique, non-reserved
+    /// source labels before resolution; collapsed labels cannot be authenticated here.
+    pub fn checked_selected(
+        program: Arc<Program>,
+        context: &str,
+        names: &[&str],
+        limits: Limits,
+    ) -> Result<Self, Error> {
+        let mut conversions = BTreeMap::new();
+        let mut admission_steps = limits.admission_steps;
+        for name in names {
+            admission_steps = admission_steps.checked_sub(1).ok_or_else(|| {
+                error(
+                    context,
+                    name,
+                    program.natives().get(name),
+                    Failure::Budget("admission steps"),
+                )
+            })?;
+            if conversions.contains_key(*name) {
+                continue;
             }
-            let Some(Expr::Call { callee, args, .. }) = &global.init else {
-                return Err(invalid());
+            let native = program.natives().get(name);
+            let fail = |failure| error(context, name, native, failure);
+            let n = native.ok_or_else(|| fail(Failure::Signature))?;
+            let [parameter] = n.params.as_slice() else {
+                return Err(fail(Failure::Signature));
             };
-            let Expr::Ident(name, _) = callee.as_ref() else {
-                return Err(invalid());
-            };
-            let [arg] = args.as_slice() else {
-                return Err(invalid());
-            };
-            if name.as_str() != native.name {
-                return Err(invalid());
+            if !n.is_constant
+                || program.function(name).is_some()
+                || parameter.ty.kind != TypeKind::Integer
+                || parameter.ty.array
+                || n.ret.array
+                || !matches!(n.ret.kind, TypeKind::Named(_))
+                || !below(&program, n.ret.kind.name(), "handle")
+            {
+                return Err(fail(Failure::Signature));
             }
-            let enumerand = integer(arg).ok_or_else(invalid)?;
-            if !domain.contains(&enumerand) && domain.len() >= max_handles {
-                return Err(fail(Failure::Capacity));
+            if n.also_declared_in
+                .iter()
+                .any(|(source, _)| source != &n.source)
+            {
+                return Err(fail(Failure::Source));
             }
-            domain.insert(enumerand);
+            conversions.insert(
+                (*name).into(),
+                Conversion {
+                    name: (*name).into(),
+                    kind: n.ret.kind.name().into(),
+                    source: n.source.clone(),
+                    span: n.span,
+                    domain: BTreeSet::new(),
+                },
+            );
         }
-        if domain.is_empty() {
-            return Err(fail(Failure::EmptyDomain));
+        let mut work = limits.expression_work;
+        for conversion in conversions.values_mut() {
+            let native = program.natives().get(&conversion.name);
+            let fail = |failure| error(context, &conversion.name, native, failure);
+            for global in program.globals() {
+                admission_steps = admission_steps
+                    .checked_sub(1)
+                    .ok_or_else(|| fail(Failure::Budget("admission steps")))?;
+                if global.source != conversion.source || global.ty.kind.name() != conversion.kind {
+                    continue;
+                }
+                let invalid = |failure| {
+                    let mut e = fail(failure);
+                    e.initializer = Some(Box::new((global.name.clone(), global.span)));
+                    e
+                };
+                if !global.is_constant || global.array || global.ty.array {
+                    return Err(invalid(Failure::Initializer(global.name.clone())));
+                }
+                let Some(Expr::Call { callee, args, .. }) = &global.init else {
+                    return Err(invalid(Failure::Initializer(global.name.clone())));
+                };
+                let Expr::Ident(name, _) = callee.as_ref() else {
+                    return Err(invalid(Failure::Initializer(global.name.clone())));
+                };
+                // Other named contracts do not widen this native's domain or install themselves.
+                if name.as_str() != conversion.name {
+                    continue;
+                }
+                let [arg] = args.as_slice() else {
+                    return Err(invalid(Failure::Initializer(global.name.clone())));
+                };
+                let value = integer(arg, limits.expression_depth, &mut work).map_err(invalid)?;
+                if !conversion.domain.contains(&value)
+                    && conversion.domain.len() >= limits.max_handles
+                {
+                    return Err(fail(Failure::Capacity));
+                }
+                conversion.domain.insert(value);
+            }
+            if conversion.domain.is_empty() {
+                return Err(fail(Failure::EmptyDomain));
+            }
         }
-        if domain.len() > max_handles {
-            return Err(fail(Failure::Capacity));
+        let mut identities = BTreeSet::new();
+        for c in conversions.values() {
+            for value in &c.domain {
+                let key = (&c.kind, *value);
+                if !identities.contains(&key) && identities.len() >= limits.max_handles {
+                    return Err(error(
+                        context,
+                        &c.name,
+                        program.natives().get(&c.name),
+                        Failure::Capacity,
+                    ));
+                }
+                identities.insert(key);
+            }
         }
         Ok(Self {
-            source_context: source_context.into(),
-            declaration_source: native.source.clone(),
-            declaration_span: native.span,
-            color_type: color_type.into(),
             program,
-            domain,
+            source_context: context.into(),
+            conversions,
             arena: Vec::new(),
-            max_handles,
+            max_handles: limits.max_handles,
         })
     }
-    fn error(&self, failure: Failure) -> Error {
-        Error {
-            source_context: self.source_context.clone(),
-            declaration_source: self.declaration_source.clone(),
-            declaration_span: self.declaration_span,
+    fn error(&self, name: &str, failure: Failure) -> Error {
+        error(
+            &self.source_context,
+            name,
+            self.program.natives().get(name),
             failure,
-        }
+        )
     }
     pub fn into_vm(self) -> pcx_script::OwnedVm<Self> {
         pcx_script::OwnedVm::new_owned(Arc::clone(&self.program), self)
     }
+    pub fn conversions(&self) -> impl Iterator<Item = &Conversion> {
+        self.conversions.values()
+    }
     pub fn domain(&self) -> impl Iterator<Item = i32> + '_ {
-        self.domain.iter().copied()
+        self.conversions
+            .get(NATIVE)
+            .filter(|c| c.kind == "playercolor")
+            .into_iter()
+            .flat_map(|c| c.domain.iter().copied())
     }
     pub fn handles(&self) -> usize {
         self.arena.len()
     }
-    fn allocate(&mut self, entry: Entry) -> Result<HandleId, Error> {
-        if self.arena.len() >= self.max_handles {
-            return Err(self.error(Failure::Capacity));
-        }
-        let token = u64::try_from(self.arena.len())
+    fn id(&self, index: usize, name: &str) -> Result<HandleId, Error> {
+        u64::try_from(index)
             .ok()
             .and_then(|v| v.checked_add(1))
             .and_then(NonZeroU64::new)
-            .ok_or_else(|| self.error(Failure::Capacity))?;
+            .map(HandleId::new)
+            .ok_or_else(|| self.error(name, Failure::Capacity))
+    }
+    fn allocate(&mut self, entry: Entry, name: &str) -> Result<HandleId, Error> {
+        if self.arena.len() >= self.max_handles {
+            return Err(self.error(name, Failure::Capacity));
+        }
+        let id = self.id(self.arena.len(), name)?;
         self.arena
             .try_reserve(1)
-            .map_err(|_| self.error(Failure::Capacity))?;
+            .map_err(|_| self.error(name, Failure::Capacity))?;
         self.arena.push(entry);
-        Ok(HandleId::new(token))
+        Ok(id)
     }
-    /// Reserves only typed identity, not a unit/object payload or any game behavior.
-    /// Every future handle-producing native on this host must use this same arena.
     pub fn reserve_identity(&mut self, kind: &str) -> Result<HandleId, Error> {
-        if !below(&self.program, kind, "handle") || below(&self.program, kind, &self.color_type) {
-            return Err(self.error(Failure::Type(kind.into())));
+        if !below(&self.program, kind, "handle")
+            || self
+                .conversions
+                .values()
+                .any(|c| below(&self.program, kind, &c.kind))
+        {
+            return Err(self.error("arena", Failure::Type(kind.into())));
         }
-        self.allocate(Entry::Object(kind.into()))
+        self.allocate(Entry::Object(kind.into()), "arena")
     }
     fn entry(&self, id: HandleId) -> Result<&Entry, Error> {
         usize::try_from(id.token() - 1)
             .ok()
             .and_then(|i| self.arena.get(i))
-            .ok_or_else(|| self.error(Failure::Identity))
+            .ok_or_else(|| self.error("arena", Failure::Identity))
     }
     pub fn kind(&self, id: HandleId) -> Result<&str, Error> {
         Ok(match self.entry(id)? {
-            Entry::PlayerColor(_) => &self.color_type,
-            Entry::Object(kind) => kind,
+            Entry::Symbolic { kind, .. } | Entry::Object(kind) => kind,
         })
     }
-    pub fn player_color(&self, id: HandleId) -> Result<i32, Error> {
+    pub fn symbolic_value(&self, id: HandleId, kind: &str) -> Result<i32, Error> {
         match self.entry(id)? {
-            Entry::PlayerColor(value) => Ok(*value),
-            Entry::Object(_) => Err(self.error(Failure::WrongFamily)),
+            Entry::Symbolic {
+                kind: actual,
+                enumerand,
+            } if actual == kind => Ok(*enumerand),
+            _ => Err(self.error("arena", Failure::WrongFamily)),
         }
+    }
+    pub fn player_color(&self, id: HandleId) -> Result<i32, Error> {
+        let c = self
+            .conversions
+            .get(NATIVE)
+            .filter(|c| c.kind == "playercolor")
+            .ok_or_else(|| self.error(NATIVE, Failure::Signature))?;
+        self.symbolic_value(id, &c.kind)
     }
     pub fn convert(&mut self, args: &[Value]) -> Result<Value, Error> {
-        let [Value::Int(value)] = args else {
-            return Err(self.error(Failure::Arguments));
-        };
-        if !self.domain.contains(value) {
-            return Err(self.error(Failure::OutsideDomain(*value)));
-        }
-        if let Some(index) = self
-            .arena
-            .iter()
-            .position(|entry| matches!(entry,Entry::PlayerColor(old) if old == value))
+        if self
+            .conversions
+            .get(NATIVE)
+            .is_none_or(|c| c.kind != "playercolor")
         {
-            let token = u64::try_from(index)
-                .ok()
-                .and_then(|v| v.checked_add(1))
-                .and_then(NonZeroU64::new)
-                .ok_or_else(|| self.error(Failure::Capacity))?;
-            return Ok(Value::Handle(HandleId::new(token)));
+            return Err(self.error(NATIVE, Failure::Signature));
         }
-        self.allocate(Entry::PlayerColor(*value)).map(Value::Handle)
+        self.convert_for(NATIVE, args)
+    }
+    pub fn convert_for(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let c = self
+            .conversions
+            .get(name)
+            .ok_or_else(|| self.error(name, Failure::Signature))?;
+        let [Value::Int(value)] = args else {
+            return Err(self.error(name, Failure::Arguments));
+        };
+        if !c.domain.contains(value) {
+            return Err(self.error(name, Failure::OutsideDomain(*value)));
+        }
+        if let Some(index) = self.arena.iter().position(
+            |e| matches!(e,Entry::Symbolic {kind,enumerand} if kind==&c.kind && enumerand==value),
+        ) {
+            return self.id(index, name).map(Value::Handle);
+        }
+        let kind = c.kind.clone();
+        self.allocate(
+            Entry::Symbolic {
+                kind,
+                enumerand: *value,
+            },
+            name,
+        )
+        .map(Value::Handle)
     }
 }
-impl Host for ColorHost {
+impl Host for EnumHost {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
-        if name == NATIVE {
-            self.convert(args).map_err(|e| e.to_string())
+        if self.conversions.contains_key(name) {
+            self.convert_for(name, args).map_err(|e| e.to_string())
         } else {
             Err(format!(
                 "{}: native `{name}` is unsupported by this host",

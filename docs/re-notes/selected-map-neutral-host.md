@@ -112,3 +112,45 @@ catalog or playable campaign. The separate LostTemple patch-common context does
 not declare this native and retains the adapter's required-signature refusal;
 its ordinary Host baseline first refuses `ConvertPlayerColor`. Those contexts
 and their evidence are not interchangeable.
+
+## Explicit first-family player-limit rule
+
+`VerifiedNeutralRule::import_bj_max_players_first_family` adds the exact
+`GetBJMaxPlayers` name to the existing checked importer and selected-map Host
+path. This is explicit caller opt-in to the reviewed first-registration-family
+getter, not automatic discovery of the active native family. Its own getter
+bytes supply the comparison, signed arithmetic operands and both branch results;
+the passive/aggressive getters and their APIs are unchanged. No player-limit
+result or adjustment to another native's result is embedded in this path.
+
+Before using this entry point, local review must independently approve a NEW
+PCXNPR profile fingerprint binding the complete executable, exact native name
+and signature, first-family registration/getter identity and qualified header
+reader. Pass that reviewed fingerprint through `LocalProfileApproval`; the
+profile's own labels or digest are not approval. The decoder authenticates the
+reviewed windows and registration operands but does not interpret the skipped
+context-address/offset/call operands. Their semantic join to the successful W3I
+third-word reconstruction remains an explicit local review responsibility.
+
+The separately imported rule can wrap the same admitted `ParsedMapContext` Arc,
+Program and owned VM as the two neutral adapters. Admission, provenance, W3I
+integrity, signature checking, zero-argument dispatch and delegation retain the
+existing contracts. Synthetic tests use independent arithmetic, all three
+cross-name bindings, the same-context initializer, contextual errors and sticky
+next-native failure. They do not establish which native registration family is
+active, native cache lifetime or campaign execution. Launcher installation
+remains separate work.
+
+The local first-family profile is now independently approved against the complete
+qualified Legacy executable. Registration/name/signature/getter/header windows
+were verified before comparing the candidate fingerprint. The complete getter's
+context/delegate prefix matches the separately approved passive getter; the
+successful-header physical-third-word reconstruction remains the explicit
+recreation policy. No active native-family or context-lifetime claim follows.
+The same retained Human01 admission, compiled Program and localization owner
+passes all three scalar adapters and source-derived symbolic enum initialization,
+then refuses `GetBJPlayerNeutralVictim` at Blizzard line 44 with sticky failure.
+The affected crate passes 179 native tests, five explicit original-input ignores,
+strict native/WASM Clippy and WASM library code generation. Independent approval
+metadata is local in `.scratch/bj-max-players-root-approval/`; actual production
+gate commands, input hashes and logs are in `.scratch/enum-host-root-integration/`.
