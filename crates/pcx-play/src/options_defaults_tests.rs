@@ -295,3 +295,39 @@ fn a_present_empty_fallback_is_not_a_missing_key_or_null_pointer() {
     assert_eq!(input.get("synthetic.size").unwrap().fallback, b"");
     assert!(input.get("missing").is_none());
 }
+
+#[test]
+fn mapped_reads_and_code_discovery_preserve_initialized_section_boundaries() {
+    let (mut d, b, n) = fixture(0x300000, 7);
+    let pe = Pe::parse(&d, n).unwrap();
+    let code = pe.code_ranges().collect::<Vec<_>>();
+    assert_eq!(code.len(), 1);
+    assert_eq!(code[0].0, 0x301000);
+    assert_eq!(code[0].1, &d[0x200..0x400]);
+    assert_eq!(pe.read_from(0x302001, false).unwrap(), &d[0x401..]);
+    assert!(pe.read_from(0x302000, true).is_err());
+    assert!(pe.read_from(0x300080, false).is_err());
+    assert!(pe.read_from(u32::MAX, false).is_err());
+    assert!(pe.read_from(0x302400, false).is_err());
+    let mut cross = b.rows[0].row;
+    cross.va = 0x301ff0;
+    cross.len = 32;
+    assert!(pe.window(&cross, false).is_err());
+    put(&mut d, 0x128, 0x600);
+    let pe = Pe::parse(&d, n).unwrap();
+    assert!(pe.read_from(0x302400, false).is_err());
+    assert!(pe.read_from(0x3025ff, false).is_err());
+}
+
+#[test]
+fn uninitialized_or_non_executable_sections_never_supply_a_getter_candidate() {
+    let (d, _, n) = fixture(0x300000, 7);
+    for flags in [0x40000040, 0x600000a0, 0x20000020] {
+        let mut changed = d.clone();
+        put(&mut changed, 0x11c, flags);
+        let pe = Pe::parse(&changed, n).unwrap();
+        assert_eq!(pe.code_ranges().count(), 0);
+        assert!(pe.read_from(0x301020, true).is_err());
+    }
+    assert!(Pe::parse(&d[..0x700], n).is_err());
+}

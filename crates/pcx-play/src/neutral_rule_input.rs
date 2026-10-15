@@ -154,34 +154,54 @@ impl<'a> Pe<'a> {
         if w.len == 0 {
             return Err(bad(RuleProblem::Range));
         }
-        let rva =
-            w.va.checked_sub(self.base)
-                .ok_or_else(|| bad(RuleProblem::Range))?;
-        let end = rva
-            .checked_add(w.len)
+        let data = self
+            .read_from(w.va, code)?
+            .get(..w.len as usize)
             .ok_or_else(|| bad(RuleProblem::Range))?;
-        let mut found = self
-            .sections
-            .iter()
-            .filter(|s| rva >= s.rva && end <= s.rva + s.mapped);
-        let s = found.next().ok_or_else(|| bad(RuleProblem::Range))?;
-        if found.next().is_some()
-            || s.flags & 0x4000_0000 == 0
-            || s.flags & 0x80 != 0
-            || (code && (s.flags & 0x2000_0020 != 0x2000_0020))
-            || s.flags & 0x60 == 0
-        {
-            return Err(bad(RuleProblem::Range));
-        }
-        let within = rva - s.rva;
-        if within.checked_add(w.len).is_none_or(|e| e > s.raw_size) {
-            return Err(bad(RuleProblem::Range));
-        }
-        let data = bytes(self.d, s.raw + within as usize, w.len as usize)?;
         if sha256(data) != w.digest {
             return Err(bad(RuleProblem::RangeIdentity));
         }
         Ok(data)
+    }
+    pub(crate) fn code_ranges(&self) -> impl Iterator<Item = (u32, &'a [u8])> + '_ {
+        self.sections
+            .iter()
+            .filter(|s| Self::initialized(s, true) && s.raw_size != 0)
+            .map(|s| {
+                (
+                    self.base + s.rva,
+                    &self.d[s.raw..s.raw + s.raw_size as usize],
+                )
+            })
+    }
+    fn initialized(s: &Section, code: bool) -> bool {
+        s.flags & 0x4000_0000 != 0
+            && s.flags & 0x80 == 0
+            && (!code || s.flags & 0x2000_0020 == 0x2000_0020)
+            && s.flags & 0x60 != 0
+    }
+    /// The remaining initialized bytes in one section, never its virtual padding.
+    pub(crate) fn read_from(&self, va: u32, code: bool) -> Result<&'a [u8], NeutralError> {
+        let rva = va
+            .checked_sub(self.base)
+            .ok_or_else(|| bad(RuleProblem::Range))?;
+        let mut found = self
+            .sections
+            .iter()
+            .filter(|s| rva >= s.rva && rva < s.rva + s.mapped);
+        let s = found.next().ok_or_else(|| bad(RuleProblem::Range))?;
+        if found.next().is_some() || !Self::initialized(s, code) {
+            return Err(bad(RuleProblem::Range));
+        }
+        let within = rva - s.rva;
+        if within >= s.raw_size {
+            return Err(bad(RuleProblem::Range));
+        }
+        bytes(
+            self.d,
+            s.raw + within as usize,
+            (s.raw_size - within) as usize,
+        )
     }
 }
 pub(super) fn import(

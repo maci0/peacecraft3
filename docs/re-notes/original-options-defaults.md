@@ -50,6 +50,38 @@ are observed source facts, not implementation limits or guarantees for another
 image. No generated profile, original payload or original default table is
 distributed with the repository.
 
+## Runtime discovery
+
+`Defaults::discover` now removes the need for a manually assembled binding when
+the supplied image has the supported complete getter/descriptor profile. It
+scans only initialized readable executable sections, checks the entire getter
+shape, and derives each candidate's count, stride and fallback displacement.
+The supported descriptor profile places the fallback pointer in its last word;
+this is an explicit format interpretation, not a copied table address or value.
+All rows and their directly referenced strings must validate. Exactly one valid
+candidate is required; even two getters addressing the same table are ambiguous.
+An invalid decoy does not establish address priority. Limit exhaustion is fatal,
+including after an earlier valid candidate.
+
+`DiscoveryBudget` separately bounds complete-image bytes, selected source bytes,
+per-string bytes including NUL, complete-shape candidate count and logical scan
+work. Logical work charges full scanned code ranges, candidate table sizes and
+inspected string bytes, including repeated pointers. It is not a whole-CPU or
+whole-heap budget; the image/section/count bounds also constrain hashing and
+metadata. The existing PE mapping checks still exclude headers, overlapping
+sections, uninitialized flags, virtual padding and cross-section windows. The
+existing manually reviewed partial-selection API remains available.
+
+Nine discovery cases test moved code/data/raw offsets, changed strides/counts,
+collisions, invalid decoys in both orders, late budget exhaustion, non-executable
+and BSS ranges, truncation, malformed and empty/raw strings and exact limit edges.
+Two additional mapping regressions preserve the shared PE reader's boundaries.
+The full native package suite and strict native/WASM checks pass; an actual
+32-bit WASM leaf executes six discovery groups with mask 63 and no imports.
+The local original-image gate discovers all 80 records and preserves 12 empty
+fallbacks without supplying addresses or a profile. Receipt:
+`.scratch/options-discovery-root-20261016/`.
+
 ## Verification and remaining work
 
 Eight synthetic tests cover relocation, changed bounds/values, partial selection,
@@ -69,8 +101,8 @@ The bounded complete-table census is retained separately in
 Earlier failed fixture assertions and compile attempts remain failures in those
 logs; they are not rewritten as successful checks.
 
-This importer is a data prerequisite. The menu does not yet consume this
-profile automatically. Saved/default precedence, source units and actual setting
+This importer is a data prerequisite. The menu does not yet consume discovered
+defaults automatically. Saved/default precedence, source units and actual setting
 owners must be connected before claiming faithful Options defaults. The browser
 cannot enumerate exclusive OS modes; native exclusive mode requests need live
 capability checks and an observed application result. Unsupported settings remain

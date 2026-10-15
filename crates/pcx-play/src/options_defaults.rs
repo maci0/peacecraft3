@@ -4,6 +4,10 @@ use crate::neutral_player::{NeutralError, RuleInputBudget, Sha256Digest, sha256}
 use crate::neutral_rule_input::Pe;
 use crate::scripts::AssetIdentity;
 
+#[path = "options_defaults_discovery.rs"]
+mod discovery;
+pub use discovery::DiscoveryBudget;
+
 /// Independently reviewed row and its directly referenced strings in one image.
 #[derive(Clone, Debug)]
 pub struct RowBinding {
@@ -14,6 +18,8 @@ pub struct RowBinding {
 }
 /// Fingerprints establish identity; review establishes the getter/descriptor roles.
 /// Rows are an explicit partial selection, never an assertion of table completeness.
+/// `discover` instead qualifies a complete binding through the supported opcode
+/// and descriptor profile; that is not independent verification of every build.
 #[derive(Clone, Debug)]
 pub struct Binding {
     pub origin: AssetIdentity,
@@ -41,6 +47,10 @@ pub enum Problem {
     Row { index: u32 },
     #[error("selected row {index} has a null fallback pointer")]
     NullFallback { index: u32 },
+    #[error("no complete supported preference table found")]
+    DiscoveryNone,
+    #[error("multiple supported preference table candidates")]
+    DiscoveryAmbiguous,
 }
 #[derive(Debug)]
 pub struct Entry<'a> {
