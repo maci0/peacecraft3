@@ -1,0 +1,522 @@
+//! Original glue-screen navigation and settings. Screen geometry and vocabulary
+//! come from supplied FDFs; display modes come from the operating environment.
+use std::collections::BTreeMap;
+
+use bevy::{prelude::*, ui::InteractionDisabled, ui_widgets::Button};
+
+use crate::fdf::{Fdf, FdfError};
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Page {
+    #[default]
+    Video,
+    Sound,
+    Gameplay,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    #[default]
+    Main,
+    Options(Page),
+    SinglePlayer,
+    Campaign,
+    CustomCampaign,
+    LoadSaved,
+    Replay,
+    Skirmish,
+    Multiplayer,
+}
+
+impl Screen {
+    pub fn file(self) -> &'static str {
+        match self {
+            Self::Main => crate::mainmenu::MAIN_MENU_FDF,
+            Self::Options(_) => SCREEN_FILES[0],
+            Self::SinglePlayer => SCREEN_FILES[1],
+            Self::Campaign => SCREEN_FILES[2],
+            Self::CustomCampaign => SCREEN_FILES[3],
+            Self::LoadSaved => SCREEN_FILES[4],
+            Self::Replay => SCREEN_FILES[5],
+            Self::Skirmish => SCREEN_FILES[6],
+            Self::Multiplayer => SCREEN_FILES[7],
+        }
+    }
+    pub fn root(self) -> &'static str {
+        match self {
+            Self::Main => crate::glue_menu::CONTROL_LAYER,
+            Self::Options(_) => "OptionsControlLayer",
+            Self::SinglePlayer => "SinglePlayerMenu",
+            Self::Campaign => "CampaignMenu",
+            Self::CustomCampaign => "CustomCampaignMenu",
+            Self::LoadSaved => "LoadSavedGameScreen",
+            Self::Replay => "ViewReplayScreen",
+            Self::Skirmish => "Skirmish",
+            Self::Multiplayer => "LocalMultiplayerJoin",
+        }
+    }
+    pub fn back(self) -> Self {
+        match self {
+            Self::Campaign
+            | Self::CustomCampaign
+            | Self::LoadSaved
+            | Self::Replay
+            | Self::Skirmish => Self::SinglePlayer,
+            _ => Self::Main,
+        }
+    }
+    pub fn includes(self, fdf: &Fdf, name: &str) -> Result<bool, FdfError> {
+        let mut current = Some(name);
+        let mut remaining = fdf.frames().len();
+        while let Some(name) = current {
+            if remaining == 0 {
+                return Err(FdfError::Unsupported {
+                    frame: name.into(),
+                    property: "frame parent",
+                    value: "cyclic parent chain".into(),
+                });
+            }
+            remaining -= 1;
+            let frame = fdf
+                .frame(name)
+                .ok_or_else(|| FdfError::UnknownFrame(name.into()))?;
+            let excluded = match self {
+                Self::Options(page) => match frame.name.as_str() {
+                    "VideoPanel" => page != Page::Video,
+                    "SoundPanel" => page != Page::Sound,
+                    "GameplayPanel" => page != Page::Gameplay,
+                    _ => false,
+                },
+                // Profile editing is opened explicitly, rather than overlapping
+                // the ordinary single-player navigation on entry.
+                Self::SinglePlayer => frame.name == "ProfilePanel",
+                _ => false,
+            };
+            if excluded {
+                return Ok(false);
+            }
+            current = frame.parent.as_deref();
+        }
+        Ok(true)
+    }
+}
+
+/// Only these roots are optional additions to the original main-menu import.
+/// Values inside them are never copied into source.
+pub const SCREEN_FILES: &[&str] = &[
+    r"UI\FrameDef\Glue\OptionsMenu.fdf",
+    r"UI\FrameDef\Glue\SinglePlayerMenu.fdf",
+    r"UI\FrameDef\Glue\CampaignMenu.fdf",
+    r"UI\FrameDef\Glue\CustomCampaignMenu.fdf",
+    r"UI\FrameDef\Glue\LoadSavedGameScreen.fdf",
+    r"UI\FrameDef\Glue\ViewReplayScreen.fdf",
+    r"UI\FrameDef\Glue\Skirmish.fdf",
+    r"UI\FrameDef\Glue\LocalMultiplayerJoin.fdf",
+];
+
+/// Explicit include edges from the supplied file, not an inferred template list.
+pub fn includes(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim().strip_prefix("IncludeFile")?.trim();
+            line.strip_prefix('"')?
+                .split('"')
+                .next()
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+#[derive(Resource, Default)]
+pub struct Navigation {
+    pub screen: Screen,
+    pub built: Option<Screen>,
+    pub notice: String,
+    pub draft: Settings,
+    pub applied: Settings,
+    pub resolutions: Vec<(u32, u32)>,
+    pub options_entry: Option<Page>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Settings {
+    pub resolution: Option<(u32, u32)>,
+    /// Authored slider values, not normalized or substituted defaults.
+    pub values: BTreeMap<String, f32>,
+    pub toggles: BTreeMap<String, bool>,
+}
+
+impl Navigation {
+    pub fn open(&mut self, screen: Screen) {
+        if matches!(screen, Screen::Options(_)) && !matches!(self.screen, Screen::Options(_)) {
+            self.draft = self.applied.clone();
+        }
+        self.screen = screen;
+        self.notice.clear();
+    }
+    pub fn action(&mut self, name: &str) -> bool {
+        let next = match name {
+            "OptionsButton" => Screen::Options(self.options_entry.unwrap_or(Page::Video)),
+            "SinglePlayerButton" => Screen::SinglePlayer,
+            "MultiPlayerButton" | "LocalAreaNetworkButton" => Screen::Multiplayer,
+            "CampaignButton" => Screen::Campaign,
+            "CustomCampaignButton" => Screen::CustomCampaign,
+            "LoadSavedButton" => Screen::LoadSaved,
+            "ViewReplayButton" => Screen::Replay,
+            "SkirmishButton" => Screen::Skirmish,
+            "GameplayButton" if matches!(self.screen, Screen::Options(_)) => {
+                Screen::Options(Page::Gameplay)
+            }
+            "VideoButton" if matches!(self.screen, Screen::Options(_)) => {
+                Screen::Options(Page::Video)
+            }
+            "SoundButton" if matches!(self.screen, Screen::Options(_)) => {
+                Screen::Options(Page::Sound)
+            }
+            "CancelButton" | "BackButton" => {
+                self.draft = self.applied.clone();
+                self.screen.back()
+            }
+            _ => return false,
+        };
+        self.open(next);
+        true
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Widget {
+    Popup {
+        choices: Vec<String>,
+    },
+    Slider {
+        min: f32,
+        max: f32,
+        initial: f32,
+        step: f32,
+    },
+    Checkbox,
+}
+
+pub fn widget(fdf: &Fdf, name: &str) -> Result<Option<Widget>, FdfError> {
+    let Some(frame) = fdf.frame(name) else {
+        return Err(FdfError::UnknownFrame(name.into()));
+    };
+    Ok(match frame.kind.as_str() {
+        "SLIDER" => {
+            let number = |key: &'static str| -> Result<f32, FdfError> {
+                match fdf.numbers(name, key)?.as_deref() {
+                    Some([v]) if v.is_finite() => Ok(*v),
+                    _ => Err(FdfError::Missing {
+                        frame: name.into(),
+                        property: key,
+                    }),
+                }
+            };
+            let (min, max, initial, step) = (
+                number("SliderMinValue")?,
+                number("SliderMaxValue")?,
+                number("SliderInitialValue")?,
+                number("SliderStepSize")?,
+            );
+            if min >= max
+                || !(max - min).is_finite()
+                || step <= 0.0
+                || !(min..=max).contains(&initial)
+            {
+                return Err(FdfError::Unsupported {
+                    frame: name.into(),
+                    property: "slider range",
+                    value: format!("{min}..{max}, initial {initial}, step {step}"),
+                });
+            }
+            Some(Widget::Slider {
+                min,
+                max,
+                initial,
+                step,
+            })
+        }
+        "POPUPMENU" | "GLUEPOPUPMENU" => {
+            let choices = fdf
+                .string(name, "PopupMenuFrame")
+                .and_then(|n| fdf.frame(&n))
+                .map(|f| {
+                    f.props
+                        .records
+                        .iter()
+                        .filter(|(k, _)| k == "MenuItem")
+                        .filter_map(|(_, v)| {
+                            v.trim()
+                                .strip_prefix('"')?
+                                .split('"')
+                                .next()
+                                .map(str::to_string)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(Widget::Popup { choices })
+        }
+        "CHECKBOX" | "GLUECHECKBOX" => Some(Widget::Checkbox),
+        _ => None,
+    })
+}
+
+pub fn supported(name: &str) -> bool {
+    matches!(
+        name,
+        "ResolutionMenu"
+            | "SoundVolumeSlider"
+            | "MusicVolumeSlider"
+            | "SoundCheckBox"
+            | "MusicCheckBox"
+    )
+}
+
+#[derive(Component)]
+pub struct ScreenPosition(pub String);
+
+#[derive(Component)]
+pub struct SettingControl {
+    pub name: String,
+    pub widget: Widget,
+}
+
+#[derive(Component)]
+pub struct SettingValue(pub Entity);
+
+#[derive(Component)]
+pub struct LabelFontParent(pub String);
+
+/// Follow authored tab links before retaining the file order of other controls.
+pub fn focus_order(fdf: &Fdf, visible: &[String]) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut next = visible
+        .iter()
+        .find(|n| fdf.flag(n, "TabFocusDefault"))
+        .cloned();
+    while let Some(name) = next {
+        if !visible.contains(&name) || result.contains(&name) {
+            break;
+        }
+        next = fdf.string(&name, "TabFocusNext");
+        result.push(name);
+    }
+    for name in visible {
+        if !result.contains(name) {
+            result.push(name.clone());
+        }
+    }
+    result
+}
+
+pub fn spawn_widget(commands: &mut Commands, node: Entity, name: &str, widget: &Widget, fdf: &Fdf) {
+    commands.entity(node).insert((
+        Button,
+        bevy::picking::hover::Hovered::default(),
+        SettingControl {
+            name: name.into(),
+            widget: widget.clone(),
+        },
+        crate::glue_menu::GlueButton {
+            frame: name.into(),
+            shortcut: None,
+            pushed_text_offset: None,
+        },
+    ));
+    if !supported(name) {
+        commands.entity(node).insert(InteractionDisabled);
+    }
+    // The source's label style supplies the face, colour and font size. Popup
+    // content is dynamic (display modes or authored MenuItem records).
+    let text_frame = match widget {
+        Widget::Popup { .. } => fdf
+            .string(name, "PopupTitleFrame")
+            .and_then(|n| fdf.button_text(&n)),
+        Widget::Slider { .. } => None,
+        Widget::Checkbox => None,
+    };
+    if let Some(frame) = text_frame {
+        let wrapper = commands
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Column,
+                    ..default()
+                },
+                // Foreground values stay above subsequently attached control art.
+                ZIndex(1),
+                Pickable::IGNORE,
+            ))
+            .id();
+        commands.entity(node).add_child(wrapper);
+        let label = commands
+            .spawn((
+                Text::new(""),
+                SettingValue(node),
+                crate::glue_menu::GlueLabel {
+                    frame,
+                    button: node,
+                },
+                Pickable::IGNORE,
+            ))
+            .id();
+        commands.entity(wrapper).add_child(label);
+        if matches!(widget, Widget::Popup { .. })
+            && let Some(parent) = fdf.string(name, "PopupTitleFrame")
+        {
+            commands.entity(label).insert(LabelFontParent(parent));
+        }
+    }
+}
+
+pub fn prime_text_sizes(fdf: &mut Fdf) {
+    // Zero width is a pre-layout placeholder, replaced by shaped text extents.
+    // It does not stand in for a measured or authored text width.
+    let sizes: Vec<_> = fdf
+        .frames()
+        .iter()
+        .filter(|f| f.kind == "TEXT")
+        .filter_map(|f| {
+            crate::menu_text::render_style(fdf, &f.name)
+                .ok()
+                .map(|s| (f.name.clone(), s.height))
+        })
+        .collect();
+    for (name, height) in sizes {
+        fdf.measure_text(&name, (0.0, height));
+    }
+}
+
+pub fn slider_value(min: f32, max: f32, step: f32, fraction: f32) -> f32 {
+    (min + ((fraction.clamp(0.0, 1.0) * (max - min)) / step).round() * step).clamp(min, max)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn popup_values_have_a_foreground_layer_above_control_art() {
+        let fdf = Fdf::parse(
+            r#"
+Frame "TEXT" "Value" {
+}
+Frame "TEXTBUTTON" "Title" {
+    ButtonText "Value",
+}
+Frame "POPUPMENU" "ResolutionMenu" {
+    PopupTitleFrame "Title",
+}
+"#,
+        )
+        .unwrap();
+        let mut world = World::new();
+        let owner = world.spawn_empty().id();
+        spawn_widget(
+            &mut world.commands(),
+            owner,
+            "ResolutionMenu",
+            &Widget::Popup { choices: vec![] },
+            &fdf,
+        );
+        world.flush();
+        let wrapper = world.get::<Children>(owner).unwrap()[0];
+        assert_eq!(world.get::<ZIndex>(wrapper).unwrap().0, 1);
+        let value = world.get::<Children>(wrapper).unwrap()[0];
+        assert_eq!(world.get::<SettingValue>(value).unwrap().0, owner);
+    }
+
+    #[test]
+    fn cyclic_parent_names_return_an_error_instead_of_hanging() {
+        let fdf = Fdf::parse(
+            r#"Frame "FRAME" "OptionsControlLayer" {
+Frame "FRAME" "A" {
+Frame "FRAME" "B" {
+Frame "FRAME" "A" {
+}
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            Screen::Options(Page::Video).includes(&fdf, "A"),
+            Err(FdfError::Unsupported {
+                property: "frame parent",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn visible_and_hidden_page_ancestry_still_follow_the_source() {
+        let fdf = Fdf::parse(
+            r#"Frame "FRAME" "OptionsControlLayer" {
+Frame "FRAME" "SoundPanel" {
+Frame "FRAME" "A" {
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        assert!(Screen::Options(Page::Sound).includes(&fdf, "A").unwrap());
+        assert!(!Screen::Options(Page::Video).includes(&fdf, "A").unwrap());
+    }
+
+    #[test]
+    fn original_options_do_not_route_to_launcher() {
+        let mut n = Navigation::default();
+        assert!(n.action("OptionsButton"));
+        assert_eq!(n.screen, Screen::Options(Page::Video));
+        assert!(n.action("SoundButton"));
+        assert_eq!(n.screen, Screen::Options(Page::Sound));
+        assert!(n.action("CancelButton"));
+        assert_eq!(n.screen, Screen::Main);
+    }
+    #[test]
+    fn local_network_entry_opens_its_screen_and_returns_to_main() {
+        let mut nav = Navigation::default();
+        assert!(nav.action("LocalAreaNetworkButton"));
+        assert_eq!(nav.screen, Screen::Multiplayer);
+        assert!(nav.action("CancelButton"));
+        assert_eq!(nav.screen, Screen::Main);
+    }
+    #[test]
+    fn submenus_return_to_their_parent() {
+        let mut n = Navigation::default();
+        n.action("SinglePlayerButton");
+        n.action("CampaignButton");
+        n.action("BackButton");
+        assert_eq!(n.screen, Screen::SinglePlayer);
+        n.action("CancelButton");
+        assert_eq!(n.screen, Screen::Main);
+    }
+    #[test]
+    fn cancel_discards_draft_settings() {
+        let mut n = Navigation::default();
+        n.open(Screen::Options(Page::Sound));
+        n.draft.values.insert("MusicVolumeSlider".into(), 17.0);
+        n.action("CancelButton");
+        assert_eq!(n.draft, n.applied);
+    }
+    #[test]
+    fn focus_chain_uses_the_authored_links_before_file_order() {
+        let f=Fdf::parse("Frame \"BUTTON\" \"A\" {\n TabFocusNext \"C\",\n}\nFrame \"BUTTON\" \"B\" {\n TabFocusDefault,\n TabFocusNext \"A\",\n}\nFrame \"BUTTON\" \"C\" {\n TabFocusNext \"B\",\n}\n").unwrap();
+        assert_eq!(
+            focus_order(&f, &["A".into(), "B".into(), "C".into()]),
+            ["B", "A", "C"]
+        );
+        assert_eq!(focus_order(&f, &["A".into(), "B".into()]), ["B", "A"]);
+    }
+    #[test]
+    fn slider_steps_are_relative_to_authored_minimum() {
+        assert_eq!(slider_value(7.0, 31.0, 3.0, 0.5), 19.0);
+        assert_eq!(slider_value(7.0, 31.0, 3.0, 2.0), 31.0);
+    }
+}

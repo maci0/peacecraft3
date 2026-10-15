@@ -2,9 +2,9 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
-Last updated: 2026-10-14
+Last updated: 2026-10-15
 
-Current menu verification (2026-10-14): WASM release build succeeds; the app
+Historical menu verification (2026-10-14; current increment below): WASM release build succeeds; the app
 has 99 passing tests and five explicitly ignored local-fixture tests. PeaceCraft
 settings precede the skippable original cinematic and original menu. Edition is
 RoC on the left and TFT on the right, with TFT selected by default; 1.28 is absent
@@ -47,6 +47,29 @@ container family (`doo`/`shd`/`mmp`/minimap image), `pcx-objects`, `pcx-script` 
 issues*.
 
 ---
+
+## Current recreation work (2026-10-15)
+
+- [x] Shared BLP JPEG color conversion now respects BGR component order. Both
+      retained logo alpha planes are unchanged; fixed public-decoder colors
+      agree with an independent decoder within one intensity level on opaque
+      pixels. Synthetic tests and strict native/WASM Clippy pass. This corrects
+      cyan lettering without an artwork-specific tint. See
+      `docs/re-notes/blp-jpeg-channel-order.md`.
+- [~] Original Options and adjacent FDF screens: source-derived controls/art,
+      draft/Cancel/Apply, runtime display choices, local preferences and user
+      audio gains are implemented. Bottom-left cog separates PeaceCraft settings.
+      Submenu navigation is started; unsupported game settings and gameplay
+      actions remain explicit. Browser checks cover apply/cancel/persistence,
+      resolution reload/resize, readable narrow-window Actual size, Single Player,
+      Campaign and LAN. Full run 12 retains a final cog-caption OCR failure;
+      separate visual review and real cog click-through pass. Strict native/WASM
+      Clippy and 2 library + 170 app + 74 integration tests pass. See
+      `docs/re-notes/original-options-workflow.md` for exact build/test scopes;
+      complete original-client appearance and gameplay remain open.
+- [~] Local imports now follow skin-selected hanging-panel model/TEXS edges.
+      The expanded private fixture retains source-qualified dependencies. Actual
+      rendered-panel acceptance and full menu/sky fidelity remain open.
 
 ## M0 — RE harness and evidence base
 

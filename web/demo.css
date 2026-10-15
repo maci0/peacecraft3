@@ -48,10 +48,12 @@ pre { font-size: .8rem; }
 .preview { margin-top: 2.5rem; }
 .preview-heading { display: flex; justify-content: space-between; align-items: start; flex-wrap: wrap; gap: .5rem 2rem; }
 .preview-heading .hint { margin-bottom: .6rem; }
-#stage { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); width: 100%; height: min(70vh, 740px); min-height: 300px; background: #101719; color: #fff; }
+#stage { position: relative; overflow: hidden; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); width: 100%; height: min(70vh, 740px); min-height: 300px; background: #101719; color: #fff; }
 #launcher-canvas, .intro-player { grid-area: 1 / 1; min-width: 0; min-height: 0; }
-#launcher-canvas { display: block; width: 100%; height: 100%; }
+#launcher-canvas { position: absolute; left: 0; top: 0; transform-origin: top left; display: block; width: 100%; height: 100%; }
 #launcher-canvas[hidden] { visibility: hidden; }
+#stage[data-preview-size="actual"] { overflow: auto; }
+#stage[data-preview-size="actual"] #launcher-canvas { touch-action: pan-x pan-y !important; }
 #stage:fullscreen { width: 100vw; height: 100vh; }
 footer { margin-top: 1.5rem; }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; }

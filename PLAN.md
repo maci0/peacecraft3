@@ -8,9 +8,13 @@ Earlier classic builds are not a goal. 1.28c happens to still work through the s
 code, and its install is still present, so it costs nothing to leave working; it is no
 longer a requirement and nothing about it is allowed to shape a decision.
 
-Faithfulness rule for this project: **every behavioural and format claim must be backed by
-REA Evidence** (see [§2](#2-reverse-engineering-with-rea)). Where the original is ambiguous,
-we do not guess — we record a residual unknown and keep it visible in the tracker.
+This is a recreation, not a full decompilation or recompilation. The target is
+100% fidelity to the source material's appearance, sound, feel and observable
+behavior; internal architecture and conventions may differ. Read content and
+settings from the supplied assets rather than copying measured values into code.
+Support fidelity claims with the appropriate shipped-byte, native-code or runtime
+evidence (see [§2](#2-reverse-engineering-with-rea)); distinguish implementation
+choices from proven original behavior, and keep unresolved differences visible.
 
 ### Non-negotiable requirement: original maps must work, unmodified
 

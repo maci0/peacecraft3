@@ -97,6 +97,28 @@ pub fn scene_source(expansion: bool) -> (&'static str, &'static str, &'static st
     }
 }
 
+/// The selected background model belongs to the supplied skin table. The
+/// `scene_source` tuple remains a compatibility transport namespace only.
+pub fn skin_scene_source(
+    skin: &crate::menu_skin::SkinTable,
+    expansion: bool,
+) -> Result<String, crate::menu_skin::SkinError> {
+    let file = skin
+        .unique_file(&format!(
+            "GlueSpriteLayerBackground_V{}",
+            u32::from(expansion)
+        ))?
+        .file;
+    Ok(
+        match file.len().checked_sub(4).and_then(|at| file.get(at..)) {
+            Some(ext) if ext.eq_ignore_ascii_case(".mdl") => {
+                format!("{}.mdx", &file[..file.len() - 4])
+            }
+            _ => file,
+        },
+    )
+}
+
 /// What one material layer's flags mean for a Bevy [`StandardMaterial`].
 ///
 /// Read from the layer's own words, whose positions are measured:
@@ -657,14 +679,10 @@ pub fn spawn_geosets(
     } = source;
     let paths = pcx_gfx::model_texture_paths(bytes, source).unwrap_or_default();
     let mdl_materials = m.materials(bytes).unwrap_or_default();
-    // The model's own texture flags, by path, so each geoset's texture repeats
-    // exactly as authored rather than as this module decides.
-    let authored: Vec<(String, u32)> = m
+    // Material layer references select TEXS records, even when paths repeat.
+    let authored = m
         .textures(bytes)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|t| (t.path, t.flags))
-        .collect();
+        .map_err(|e| SceneError::Decode(e.to_string()))?;
     let mut handles = Vec::with_capacity(model.meshes.len());
     let mut bound = Vec::with_capacity(model.meshes.len());
     for mesh in &model.meshes {
@@ -679,14 +697,22 @@ pub fn spawn_geosets(
             );
             info.blend_gaps.push(gap);
         }
+        let sampler_flags = texture_flags(
+            &authored,
+            mdl_materials.get(id).ok_or_else(|| {
+                SceneError::Decode(format!(
+                    "geoset {} references absent material {id}",
+                    mesh.geoset
+                ))
+            })?,
+        )?;
         let texture = pick(textures, &path);
         // The texture's own `TEXS` flags decide whether it repeats. The scene's
         // UVs run far outside `[0, 1]` (its sky spans about `U -2.6 .. 4.3`), so
         // a clamp smears one row and column across the surface.
         let handle = texture.map(|t| {
             let mut image = pcx_gfx::viewer::rgba_image(t);
-            image.sampler =
-                pcx_gfx::viewer::sampler_for_texture_flags(texture_flags(&authored, &path));
+            image.sampler = pcx_gfx::viewer::sampler_for_texture_flags(sampler_flags);
             images.add(image)
         });
         if texture.is_none() && !path.is_empty() {
@@ -805,19 +831,26 @@ pub struct MainMenuSceneCamera;
 #[derive(Component, Clone)]
 pub struct MainMenuSceneEntity;
 
-/// The authored `TEXS` flags for a texture path, or `0` when the model does not
-/// name that path.
-///
-/// Paths are compared with either separator and without case, the same rule
-/// [`pick`] uses, so a lookup here cannot disagree with which image was chosen.
-fn texture_flags(authored: &[(String, u32)], path: &str) -> u32 {
-    let norm = |s: &str| s.replace('/', "\\").to_ascii_lowercase();
-    let want = norm(path);
+/// Read flags from the first layer's TEXS index, never from path equality.
+fn texture_flags(
+    authored: &[pcx_mdl::Texture],
+    material: &pcx_mdl::Material,
+) -> Result<u32, SceneError> {
+    let layers = material
+        .checked_layers()
+        .map_err(|e| SceneError::Decode(e.to_string()))?;
+    let Some(layer) = layers.first() else {
+        return Ok(0);
+    };
     authored
-        .iter()
-        .find(|(p, _)| norm(p) == want)
-        .map(|(_, f)| *f)
-        .unwrap_or(0)
+        .get(layer.properties.texture_id as usize)
+        .map(|texture| texture.flags)
+        .ok_or_else(|| {
+            SceneError::Decode(format!(
+                "material layer {} references absent TEXS record {}",
+                layer.properties.index, layer.properties.texture_id
+            ))
+        })
 }
 
 /// Finds the loaded texture whose source path matches `path`.
@@ -942,6 +975,38 @@ pub fn advance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_texture_paths_retain_selected_record_sampler_flags() {
+        fn material(texture: u32) -> pcx_mdl::Material {
+            let mut data = vec![0; 8];
+            data.extend_from_slice(b"LAYS");
+            data.extend_from_slice(&1_u32.to_le_bytes());
+            for word in [28, 0, 0, texture, u32::MAX, 0, 1_f32.to_bits()] {
+                data.extend_from_slice(&word.to_le_bytes());
+            }
+            pcx_mdl::Material {
+                offset: 0,
+                len: (data.len() + 4) as u32,
+                data,
+            }
+        }
+        let textures = vec![
+            pcx_mdl::Texture {
+                slot: 0,
+                path: "same.blp".into(),
+                flags: 0,
+            },
+            pcx_mdl::Texture {
+                slot: 0,
+                path: "same.blp".into(),
+                flags: 3,
+            },
+        ];
+        assert_eq!(texture_flags(&textures, &material(0)).unwrap(), 0);
+        assert_eq!(texture_flags(&textures, &material(1)).unwrap(), 3);
+        assert!(texture_flags(&textures, &material(2)).is_err());
+    }
 
     #[test]
     fn alpha_update_follows_geoset_id_and_hides_zero_opacity_without_touching_other_materials() {
@@ -1345,6 +1410,13 @@ mod tests {
     }
 
     /// The scene uses the checked decoder's alpha, not the coordinate-id word.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen]
+    pub fn menu_sampler_synthetic_check() -> u32 {
+        duplicate_texture_paths_retain_selected_record_sampler_flags();
+        1
+    }
+
     #[test]
     fn checked_layer_alpha_reaches_scene_materials() {
         let Some(bytes) = scene_bytes() else { return };

@@ -17,7 +17,13 @@ pub fn install(app: &mut App) {
             .before(crate::intro::IntroUpdate),
     );
     #[cfg(not(target_arch = "wasm32"))]
-    app.add_systems(Update, pause_for_movie.after(crate::intro::IntroUpdate));
+    app.add_systems(
+        Update,
+        (
+            pause_for_movie.after(crate::intro::IntroUpdate),
+            apply_user_volume,
+        ),
+    );
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -47,6 +53,79 @@ fn feedback(
 #[derive(Resource, Default)]
 struct MenuSounds {
     click: Option<Handle<AudioSource>>,
+    click_volume: f32,
+    no_duplicates: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Component)]
+pub(crate) struct AuthoredVolume(pub(crate) f32);
+
+#[cfg(not(target_arch = "wasm32"))]
+fn apply_user_volume(
+    settings: Res<crate::menu_settings::Backend>,
+    mut sinks: Query<(&mut AudioSink, &AuthoredVolume, Has<MenuMusic>)>,
+) {
+    use bevy::audio::AudioSinkPlayback;
+    for (mut sink, base, music) in &mut sinks {
+        let gain = if music {
+            settings.audio.effective_music()
+        } else {
+            settings.audio.effective_effects()
+        };
+        sink.set_volume(bevy::audio::Volume::Linear(base.0 * gain));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn click_descriptor(bytes: &[u8]) -> Result<(String, f32, bool), String> {
+    let table = pcx_slq::Table::parse_bounded(
+        bytes,
+        pcx_slq::CoordinateLimits {
+            max_row: 100_000,
+            max_column: 1024,
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    let rows: Vec<_> = table
+        .data_rows()
+        .filter(|r| r.by_name("SoundName") == Some("GlueScreenClick"))
+        .collect();
+    let [row] = rows.as_slice() else {
+        return Err("UISounds: expected one GlueScreenClick row".into());
+    };
+    let directory = row
+        .by_name("DirectoryBase")
+        .ok_or("UISounds: missing DirectoryBase")?;
+    let file = row
+        .by_name("FileNames")
+        .filter(|s| !s.is_empty() && !s.contains([',', ';']))
+        .ok_or("UISounds: missing or multiple click files")?;
+    let volume = row
+        .by_name("Volume")
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|v| v.is_finite() && (0.0..=127.0).contains(v))
+        .ok_or("UISounds: invalid Volume")?;
+    if row.by_name("Pitch") != Some("1") {
+        return Err("UISounds: unsupported click Pitch".into());
+    }
+    let duplicates = match row.by_name("Flags") {
+        Some("NODUPLICATES") => true,
+        Some("0") => false,
+        _ => return Err("UISounds: unsupported click Flags".into()),
+    };
+    Ok((
+        format!(
+            "{}{file}",
+            if directory.is_empty() {
+                String::new()
+            } else {
+                format!("{}\\", directory.trim_end_matches(['\\', '/']))
+            }
+        ),
+        volume / 127.0,
+        duplicates,
+    ))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -101,17 +180,33 @@ fn load(
             })),
             PlaybackSettings::LOOP,
             MenuMusic,
+            AuthoredVolume(1.0),
         ));
     } else {
         warn!(
             "Original menu music unavailable; supply a TFT installation or assets/menu-music.mp3 beside the executable"
         );
     }
-    sounds.click = local_audio("menu-click.wav").map(|bytes| {
-        assets.add(AudioSource {
-            bytes: bytes.into(),
-        })
-    });
+    let install = pcx_gfx::viewer::resolve_install(None);
+    let click = crate::mainmenu::art_bytes(Some(&install), r"UI\SoundInfo\UISounds.slk")
+        .ok_or_else(|| "UISounds.slk is unavailable".to_string())
+        .and_then(|bytes| click_descriptor(&bytes));
+    let (path, volume, no_duplicates) = match click {
+        Ok(descriptor) => descriptor,
+        Err(error) => {
+            warn!("Original menu click settings unavailable: {error}");
+            return;
+        }
+    };
+    sounds.click_volume = volume;
+    sounds.no_duplicates = no_duplicates;
+    sounds.click = crate::mainmenu::art_bytes(Some(&install), &path)
+        .or_else(|| local_audio("menu-click.wav"))
+        .map(|bytes| {
+            assets.add(AudioSource {
+                bytes: bytes.into(),
+            })
+        });
     if sounds.click.is_none() {
         warn!(
             "Original menu click unavailable; extract BigButtonClick.wav into assets/menu-click.wav beside the executable"
@@ -127,22 +222,25 @@ fn feedback(
     active: Query<(), With<ClickSound>>,
     actions: Res<crate::button_actions::ButtonActions>,
     enabled: Query<(), (With<Button>, Without<InteractionDisabled>)>,
+    settings: Res<crate::menu_settings::Backend>,
 ) {
-    // UISounds.slk: GlueScreenClick has volume 100/127 and NODUPLICATES.
     if intro.playing()
         || !actions
             .entities
             .iter()
             .any(|entity| enabled.contains(*entity))
-        || !active.is_empty()
+        || (sounds.no_duplicates && !active.is_empty())
     {
         return;
     }
     if let Some(handle) = &sounds.click {
         commands.spawn((
             AudioPlayer(handle.clone()),
-            PlaybackSettings::DESPAWN.with_volume(bevy::audio::Volume::Linear(100.0 / 127.0)),
+            PlaybackSettings::DESPAWN.with_volume(bevy::audio::Volume::Linear(
+                sounds.click_volume * settings.audio.effective_effects(),
+            )),
             ClickSound,
+            AuthoredVolume(sounds.click_volume),
         ));
     }
 }
@@ -155,8 +253,11 @@ mod tests {
     fn disabled_and_held_clicks_do_not_repeat_feedback() {
         let mut world = World::new();
         world.init_resource::<crate::intro::Intro>();
+        world.init_resource::<crate::menu_settings::Backend>();
         world.insert_resource(MenuSounds {
             click: Some(Handle::default()),
+            click_volume: 1.0,
+            no_duplicates: true,
         });
         let disabled = world.spawn((Button, Pressed, InteractionDisabled)).id();
         world.insert_resource(crate::button_actions::ButtonActions {

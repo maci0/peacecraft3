@@ -22,12 +22,14 @@ import init, {
   asset_revision, menu_music_path, menu_font_files, menu_font_alias,
   inspect_map_archive, submit_map_configuration, poll_map_configuration_result,
   enable_local_demo, local_menu_editions, open_local_menu, active_local_menu_edition,
+  menu_state,
 } from './pkg/peacecraft3.js';
 import { discoverIso, importIsoCandidates } from './iso/import.js';
 import { clickDescriptor } from './iso/audio.js';
 import { createLoadingProgress, monitorWasmDownload } from './loading.js';
 import { createInstallerDecoder } from './iso/installer-import.js';
 import { installMapConfiguration } from './map-configuration.js';
+import './menu-settings.js';
 let mapConfiguration;
 const demoOnly = document.documentElement.dataset.localAssets === 'true';
 const wasmLoading = createLoadingProgress({ progressId: 'wasm-progress', statusId: 'wasm-status' });
@@ -386,6 +388,7 @@ window.peacecraft3 = {
   pending_archive_member, commit_archive_import, archive_member,
   asset_revision, menu_music_path, menu_font_files, menu_font_alias, discoverIso, importIsoCandidates,
   local_menu_editions, open_local_menu, active_local_menu_edition,
+  menu_state,
 };
 
 function refreshDemoControls() {

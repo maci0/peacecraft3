@@ -22,10 +22,12 @@
       ::selection { background: #796225; color: #fff7dc; }
       :focus-visible:not(canvas) { outline: 2px solid var(--gold); outline-offset: 4px; }
       #layout { width: min(100%, 1040px); margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
-      #stage { order: -1; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); width: 100%; height: 80vh; min-height: 0; border: 2px solid var(--edge); background: #06090c; }
+      #stage { order: -1; position: relative; overflow: hidden; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); width: 100%; height: 80vh; min-height: 0; border: 2px solid var(--edge); background: #06090c; }
       #launcher-canvas, .intro-player { grid-area: 1 / 1; min-width: 0; min-height: 0; }
-      #launcher-canvas { display: block; width: 100%; height: 100%; }
+      #launcher-canvas { position: absolute; left: 0; top: 0; transform-origin: top left; display: block; width: 100%; height: 100%; }
       #launcher-canvas[hidden] { visibility: hidden; }
+      #stage[data-preview-size="actual"] { overflow: auto; }
+      #stage[data-preview-size="actual"] #launcher-canvas { touch-action: pan-x pan-y !important; }
       #stage:fullscreen { width: 100vw; height: 100vh; border: 0; }
       fieldset { min-width: 0; border: 2px solid var(--edge); background: var(--panel) url('./assets/bg.png'); background-blend-mode: multiply; padding: 18px 22px; margin: 0; }
       legend { padding: 0 10px; color: var(--gold); font-size: 20px; }
@@ -55,6 +57,7 @@
           <button id="self" type="button">Archive status</button>
           <button id="sound" type="button" aria-pressed="false">Mute sound</button>
           <button id="fullscreen" type="button">Fullscreen</button>
+          <button id="preview-size" type="button" aria-pressed="false">Actual size</button>
         </div>
         <div class="row" style="margin-top:1em">
           <label>Local ISO <input id="iso" type="file" accept=".iso,application/x-iso9660-image" /></label>
@@ -68,7 +71,8 @@
         <ul id="log" role="status" aria-live="polite"></ul>
       </fieldset>
 
-      <div id="stage"><canvas id="launcher-canvas" aria-label="PeaceCraft III game menu and asset launcher"></canvas></div>
+      <p class="hint">Select Actual size and scroll inside the preview for readable controls in a narrow window.</p>
+      <div id="stage" tabindex="0" role="region" aria-label="Menu preview viewport"><canvas id="launcher-canvas" aria-label="PeaceCraft III game menu and asset launcher"></canvas></div>
     </div>
 
     <script type="module" src="./menu-audio.js"></script>

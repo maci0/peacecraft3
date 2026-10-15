@@ -175,6 +175,8 @@ pub struct Frame {
 pub struct Fdf {
     frames: Vec<Frame>,
     index: HashMap<String, usize>,
+    /// Text extents measured by the renderer; explicit authored sizes win.
+    intrinsic_sizes: HashMap<String, (f32, f32)>,
 }
 
 /// A resolved rectangle in the engine's Y-**up** frame coordinates.
@@ -289,10 +291,7 @@ impl Fdf {
 
     /// Every frame, in definition order.
     ///
-    /// Needed in production on wasm, where the ISO hydration path walks the parsed
-    /// frames, and by the parser's own tests on every target. On native it has no
-    /// production caller, so it is not compiled there and cannot warn.
-    #[cfg(any(test, target_arch = "wasm32"))]
+    /// Used by screen layout and by browser-local asset hydration.
     #[must_use]
     pub fn frames(&self) -> &[Frame] {
         &self.frames
@@ -329,6 +328,7 @@ impl Fdf {
     /// [`FdfError::Missing`] when neither the frame nor its templates set it.
     pub fn width(&self, name: &str) -> Result<f32, FdfError> {
         self.inherited(name, |p| p.width)
+            .or_else(|| self.intrinsic_sizes.get(name).map(|s| s.0))
             .ok_or_else(|| FdfError::Missing {
                 frame: name.to_string(),
                 property: "Width",
@@ -342,6 +342,7 @@ impl Fdf {
     /// As [`Fdf::width`].
     pub fn height(&self, name: &str) -> Result<f32, FdfError> {
         self.inherited(name, |p| p.height)
+            .or_else(|| self.intrinsic_sizes.get(name).map(|s| s.1))
             .ok_or_else(|| FdfError::Missing {
                 frame: name.to_string(),
                 property: "Height",
@@ -358,6 +359,19 @@ impl Fdf {
     #[must_use]
     pub fn text_value(&self, name: &str) -> Option<String> {
         self.inherited(name, |p| p.text.clone())
+    }
+
+    /// Supplies shaped text extents in frame units, without replacing authored
+    /// dimensions. Layout may be repeated after the font finishes loading.
+    pub fn measure_text(&mut self, name: &str, size: (f32, f32)) {
+        if self.frame(name).is_some_and(|f| f.kind == "TEXT")
+            && size.0.is_finite()
+            && size.1.is_finite()
+            && size.0 >= 0.0
+            && size.1 >= 0.0
+        {
+            self.intrinsic_sizes.insert(name.to_string(), size);
+        }
     }
 
     /// The frame's first `SetPoint`, if it has one.
@@ -788,6 +802,41 @@ Frame "FRAME" "B" {
 "#;
         let f = Fdf::parse(text).unwrap();
         assert!(matches!(f.rect("A", (0.8, 0.6)), Err(FdfError::Cycle(_))));
+    }
+
+    /// Shaped text changes anchor chains without overriding authored dimensions.
+    #[test]
+    fn measured_text_moves_dependents_and_never_overrides_authored_dimensions() {
+        let mut f = Fdf::parse(
+            r#"
+Frame "FRAME" "Root" {
+    SetAllPoints,
+}
+Frame "TEXT" "Title" {
+    SetPoint TOPLEFT, "Root", TOPLEFT, 0.0, 0.0,
+}
+Frame "FRAME" "Follower" {
+    Width 0.13,
+    Height 0.07,
+    SetPoint TOPLEFT, "Title", BOTTOMLEFT, 0.0, -0.01,
+}
+Frame "TEXT" "Fixed" {
+    Width 0.24,
+    Height 0.04,
+}
+"#,
+        )
+        .unwrap();
+        f.measure_text("Title", (0.31, 0.06));
+        assert_eq!(f.width("Title").unwrap(), 0.31);
+        assert!((f.rect("Follower", (0.8, 0.6)).unwrap().top() - 0.53).abs() < 1e-6);
+        f.measure_text("Title", (0.31, 0.09));
+        assert!((f.rect("Follower", (0.8, 0.6)).unwrap().top() - 0.50).abs() < 1e-6);
+        f.measure_text("Title", (f32::NAN, 0.5));
+        assert_eq!(f.height("Title").unwrap(), 0.09);
+        f.measure_text("Fixed", (0.7, 0.3));
+        assert_eq!(f.width("Fixed").unwrap(), 0.24);
+        assert_eq!(f.height("Fixed").unwrap(), 0.04);
     }
 
     /// An unclosed block and a malformed number are both refused.

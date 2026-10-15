@@ -259,6 +259,100 @@ pub struct TextStyle {
     pub fixed_size: bool,
 }
 
+/// Renderer style for ordinary labels as well as buttons. Optional state colours
+/// inherit the foreground; an omitted shadow is absent. These are renderer
+/// conventions, while every present record is validated and kept.
+pub fn render_style(fdf: &crate::fdf::Fdf, frame: &str) -> Result<TextStyle, String> {
+    render_style_with_parent(fdf, frame, frame)
+}
+
+/// Preserve child records while resolving an omitted font through the actual
+/// instance's title, before a shared template child's enclosing definition.
+pub fn render_style_with_parent(
+    fdf: &crate::fdf::Fdf,
+    frame: &str,
+    parent: &str,
+) -> Result<TextStyle, String> {
+    let record = |key: &str| {
+        if let Some(value) = fdf.record(frame, key).or_else(|| fdf.record(parent, key)) {
+            return Some(value);
+        }
+        let mut current = fdf.frame(frame).and_then(|f| f.parent.clone());
+        let mut seen = std::collections::HashSet::new();
+        while let Some(name) = current {
+            if !seen.insert(name.clone()) {
+                return None;
+            }
+            if let Some(value) = fdf.record(&name, key) {
+                return Some(value);
+            }
+            current = fdf.frame(&name).and_then(|f| f.parent.clone());
+        }
+        None
+    };
+    let font_record = record("FrameFont").ok_or_else(|| format!("{frame}: missing FrameFont"))?;
+    let (font, height) = parse_frame_font(&font_record)
+        .filter(|(_, h)| h.is_finite() && *h > 0.0)
+        .ok_or_else(|| format!("{frame}: invalid FrameFont"))?;
+    let colour = |key: &'static str, fallback: Option<[f32; 4]>| -> Result<[f32; 4], String> {
+        let value = match fdf.numbers(frame, key).map_err(|e| e.to_string())? {
+            Some(v) => match v.as_slice() {
+                [r, g, b] => [*r, *g, *b, 1.0],
+                [r, g, b, a] => [*r, *g, *b, *a],
+                _ => return Err(format!("{frame}: invalid {key}")),
+            },
+            None => return fallback.ok_or_else(|| format!("{frame}: missing {key}")),
+        };
+        if value
+            .iter()
+            .all(|c| c.is_finite() && (0.0..=1.0).contains(c))
+        {
+            Ok(value)
+        } else {
+            Err(format!("{frame}: invalid {key}"))
+        }
+    };
+    let foreground = colour("FontColor", Some([1.0; 4]))?;
+    let shadow_offset = match fdf
+        .numbers(frame, "FontShadowOffset")
+        .map_err(|e| e.to_string())?
+    {
+        Some(v) => {
+            <[f32; 2]>::try_from(v).map_err(|_| format!("{frame}: invalid FontShadowOffset"))?
+        }
+        None => [0.0; 2],
+    };
+    if !shadow_offset.iter().all(|c| c.is_finite()) {
+        return Err(format!("{frame}: invalid shadow offset"));
+    }
+    let justify_h = match fdf.record(frame, "FontJustificationH").as_deref() {
+        Some("JUSTIFYLEFT") | None => JustifyH::Left,
+        Some("JUSTIFYCENTER") => JustifyH::Center,
+        Some("JUSTIFYRIGHT") => JustifyH::Right,
+        Some(v) => return Err(format!("{frame}: invalid horizontal justification {v}")),
+    };
+    let justify_v = match fdf.record(frame, "FontJustificationV").as_deref() {
+        Some("JUSTIFYTOP") | None => JustifyV::Top,
+        Some("JUSTIFYMIDDLE") => JustifyV::Middle,
+        Some("JUSTIFYBOTTOM") => JustifyV::Bottom,
+        Some(v) => return Err(format!("{frame}: invalid vertical justification {v}")),
+    };
+    Ok(TextStyle {
+        font,
+        height,
+        colour: foreground,
+        highlight: colour("FontHighlightColor", Some(foreground))?,
+        disabled: colour("FontDisabledColor", Some(foreground))?,
+        shadow_colour: colour("FontShadowColor", Some([0.0; 4]))?,
+        shadow_offset,
+        justify_h,
+        justify_v,
+        fixed_size: fdf
+            .record(frame, "FontFlags")
+            .is_some_and(|s| s.contains("FIXEDSIZE")),
+    })
+}
+
 /// Reads the value of `key` from a `GlobalStrings.fdf` text.
 ///
 /// The records are `KEY  "value",` lines. A key that is absent returns `None`;
@@ -723,5 +817,79 @@ Frame "TEXT" "T" {
             text_style(text, "Nope"),
             Err(TextError::UnknownFrame(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod parent_tests {
+    #[test]
+    fn renderer_accepts_rgb_and_rgba_records_but_not_partial_or_nonfinite_color() {
+        for (record, expected) in [
+            ("0.12 0.34 0.56", Some([0.12, 0.34, 0.56, 1.0])),
+            ("0.12 0.34 0.56 0.78", Some([0.12, 0.34, 0.56, 0.78])),
+            ("0.12 0.34", None),
+            ("0.12 NaN 0.56", None),
+        ] {
+            let f = crate::fdf::Fdf::parse(&format!(
+                "Frame \"TEXT\" \"Label\" {{\nFrameFont \"Face\",0.02,\"\",\nFontColor {record},\n}}\n"
+            )).unwrap();
+            let result = super::render_style(&f, "Label");
+            match expected {
+                Some(expected) => assert_eq!(result.unwrap().colour, expected),
+                None => assert!(result.is_err()),
+            }
+        }
+    }
+
+    #[test]
+    fn actual_title_font_preserves_child_style() {
+        let f = crate::fdf::Fdf::parse(
+            r#"Frame "TEXTBUTTON" "IndexedTemplateTitle" {
+FrameFont "TemplateFont",0.01,"",
+Frame "TEXT" "SharedTitleChild" {
+FontColor 0.2 0.3 0.4 1.0,
+FontFlags "FIXEDSIZE",
+FontJustificationH JUSTIFYRIGHT,
+}
+}
+Frame "TEXTBUTTON" "ActualPopupTitle" {
+FrameFont "InstanceFont",0.023,"",
+ButtonText "SharedTitleChild",
+}
+"#,
+        )
+        .unwrap();
+        let baseline = crate::menu_text::render_style(&f, "SharedTitleChild").unwrap();
+        assert_eq!(baseline.font, "TemplateFont");
+        let child =
+            crate::menu_text::render_style_with_parent(&f, "SharedTitleChild", "ActualPopupTitle")
+                .unwrap();
+        assert_eq!(child.font, "InstanceFont");
+        assert_eq!(child.height, 0.023);
+        assert_eq!(child.colour, [0.2, 0.3, 0.4, 1.0]);
+        assert!(child.fixed_size);
+        assert_eq!(child.justify_h, crate::menu_text::JustifyH::Right);
+    }
+    #[test]
+    fn child_font_wins_and_missing_font_is_not_invented() {
+        let f = crate::fdf::Fdf::parse(
+            r#"Frame "TEXT" "Child" {
+FrameFont "ChildFont",0.017,"",
+}
+Frame "TEXTBUTTON" "Parent" {
+FrameFont "ParentFont",0.025,"",
+}
+Frame "TEXT" "Missing" {
+}
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            crate::menu_text::render_style_with_parent(&f, "Child", "Parent")
+                .unwrap()
+                .font,
+            "ChildFont"
+        );
+        assert!(crate::menu_text::render_style_with_parent(&f, "Missing", "Absent").is_err());
     }
 }

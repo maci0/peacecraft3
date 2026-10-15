@@ -63,14 +63,16 @@ export function menuMembers(musicPath) {
   model.set(text('MDLXVERS')); v.setUint32(8, 4, true); v.setUint32(12, 800, true);
   model.set(text('TEXS'), 16); v.setUint32(20, 268, true); model.set(text(texturePath), 28);
   const fontPath = 'Synthetic\\Fonts\\SelectedFace.ttf';
+  const scenePath = 'UI\\Glues\\MainMenu\\MainMenu3d\\MainMenu3d.mdx';
+  const expansionScenePath = 'UI\\Glues\\MainMenu\\MainMenu3D_Exp\\MainMenu3D_Exp.mdx';
   const style = 'Frame "TEXT" "SyntheticTextStyle" {\n FrameFont "SelectedSyntheticFace", 0.017, "",\n FontJustificationH JUSTIFYCENTER,\n FontJustificationV JUSTIFYMIDDLE,\n FontFlags "FIXEDSIZE",\n FontColor 1 0.5 0.25 1,\n FontHighlightColor 1 1 1 1,\n FontDisabledColor 0.5 0.5 0.5 1,\n FontShadowColor 0 0 0 0.8,\n FontShadowOffset 0.002 -0.003,\n}\n';
   const members = {
     'UI\\FrameDef\\GlobalStrings.fdf': text('StringList {\n SYNTHETIC_LABEL "Synthetic label",\n}\n'),
     'UI\\FrameDef\\Glue\\StandardTemplates.fdf': text(style + 'Frame "BACKDROP" "SyntheticBackdrop" {\n BackdropBackground "Synthetic\\Texture.blp",\n}\n'),
     'UI\\FrameDef\\Glue\\MainMenu.fdf': text('Frame "FRAME" "MainMenuFrame" {\n Frame "FRAME" "ControlLayer" {\n Frame "BUTTON" "SinglePlayerButton" {\n ButtonText "SyntheticSelectedText",\n Frame "TEXT" "SyntheticSelectedText" INHERITS "SyntheticTextStyle" {\n Text "SYNTHETIC_LABEL",\n }\n }\n }\n}\n'),
-    'UI\\war3skins.txt': text(`[SyntheticSection]\nSelectedSyntheticFace=${fontPath}\n`),
+    'UI\\war3skins.txt': text(`[SyntheticSection]\nSelectedSyntheticFace=${fontPath}\nGlueSpriteLayerBackground_V0=${scenePath}\nGlueSpriteLayerBackground_V1=${expansionScenePath}\n`),
     [fontPath]: text('synthetic font placeholder: API storage proof only'),
-    'UI\\Glues\\MainMenu\\MainMenu3d\\MainMenu3d.mdx': model,
+    [scenePath]: model,
     [texturePath]: new Uint8Array([1, 9, 3, 7]),
     'UI\\SoundInfo\\UISounds.slk': clickMetadata(),
     'Synthetic\\Audio\\click.wav': wavFixture(),

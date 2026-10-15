@@ -37,6 +37,33 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
+static MENU_SNAPSHOT: OnceLock<Mutex<String>> = OnceLock::new();
+static MENU_SNAPSHOT_REQUESTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Read-only, local diagnostics. Requests one fresh post-layout snapshot; it
+/// never activates a control or changes an application setting.
+#[wasm_bindgen]
+pub fn menu_state() -> String {
+    MENU_SNAPSHOT_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+    MENU_SNAPSHOT
+        .get_or_init(|| Mutex::new("{}".into()))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+}
+
+pub(crate) fn take_menu_snapshot_request() -> bool {
+    MENU_SNAPSHOT_REQUESTED.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(crate) fn publish_menu_snapshot(snapshot: String) {
+    *MENU_SNAPSHOT
+        .get_or_init(|| Mutex::new(String::new()))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner()) = snapshot;
+}
+
 use bevy::asset::AssetApp;
 use bevy::asset::io::memory::{Dir, MemoryAssetReader};
 use bevy::asset::io::{
@@ -377,8 +404,10 @@ fn derived_menu_fonts(
     texts: &[&str],
     skin: &str,
 ) -> Result<Vec<String>, String> {
+    let mut measured = fdf.clone();
+    crate::menu_screens::prime_text_sizes(&mut measured);
     let (items, _) = crate::glue_menu::control_items(
-        fdf,
+        &measured,
         crate::glue_menu::CONTROL_LAYER,
         (crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H),
     )
@@ -399,6 +428,14 @@ fn derived_menu_fonts(
         );
     }
     for frame in fdf.frames() {
+        if frame.kind == "TEXT" && fdf.record(&frame.name, "FrameFont").is_some() {
+            let style = crate::menu_text::render_style(fdf, &frame.name)?;
+            paths.insert(
+                crate::mainmenu::menu_font_file(skin, &style.font)
+                    .map_err(|e| e.to_string())?
+                    .file,
+            );
+        }
         if let Some(target) = &frame.props.button_text
             && let Ok(style) = crate::mainmenu::menu_text_style(texts, target)
             && let Ok(binding) = crate::mainmenu::menu_font_file(skin, &style.font)
@@ -464,9 +501,42 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
         frame_texts.push(text.to_owned());
         put(path, crate::mainmenu::served_name(path), bytes)?;
     }
+    // Each submenu is optional for old/local minimal bundles; missing content
+    // is reported when opened. Present definitions and their include graph are
+    // imported locally with the same aggregate admission budget as the menu.
+    let mut loaded = BTreeSet::from([
+        normalize(crate::mainmenu::STANDARD_TEMPLATES_FDF),
+        normalize(crate::mainmenu::MAIN_MENU_FDF),
+    ]);
+    let mut pending: Vec<String> = crate::menu_screens::SCREEN_FILES
+        .iter()
+        .map(|p| p.to_string())
+        .collect();
+    while let Some(path) = pending.pop() {
+        if !loaded.insert(normalize(&path)) {
+            continue;
+        }
+        if loaded.len() > 128 {
+            return Err("MENU_INCLUDE_LIMIT: too many supplied screen dependencies".into());
+        }
+        let bytes = match extract_unique(set, &path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.starts_with("MISSING_MEMBER:") => {
+                notes.push(e);
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        let text = std::str::from_utf8(&bytes).map_err(|e| format!("{path}: {e}"))?;
+        pending.extend(crate::menu_screens::includes(text));
+        fdf.parse_into(text).map_err(|e| format!("{path}: {e}"))?;
+        frame_texts.push(text.to_string());
+        put(&path, None, bytes)?;
+    }
     let skin_path = crate::mainmenu::SKIN_TABLE;
     let skin_bytes = extract_unique(set, skin_path)?;
     let skin = std::str::from_utf8(&skin_bytes).map_err(|e| format!("{skin_path}: {e}"))?;
+    let skin_table = crate::menu_skin::SkinTable::parse(skin).map_err(|e| e.to_string())?;
     let texts: Vec<_> = frame_texts.iter().map(String::as_str).collect();
     for path in derived_menu_fonts(&fdf, &texts, skin)? {
         let alias = crate::mainmenu::served_font_name(&path)
@@ -498,8 +568,16 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
     }
     let mut models = 0;
     for expansion in [false, true] {
-        let (path, alias, directory) = crate::mainmenu_scene::scene_source(expansion);
-        match extract_unique(set, path) {
+        let (_, alias, directory) = crate::mainmenu_scene::scene_source(expansion);
+        let path = match crate::mainmenu_scene::skin_scene_source(&skin_table, expansion) {
+            Ok(path) => path,
+            Err(crate::menu_skin::SkinError::UnknownFace(key)) => {
+                notes.push(format!("MISSING_SKIN_BINDING: {key}"));
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        match extract_unique(set, &path) {
             Ok(bytes) => {
                 for texture in crate::mainmenu_scene::texture_paths(&bytes)
                     .map_err(|e| format!("{path}: {e}"))?
@@ -508,7 +586,7 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
                     let alias = crate::mainmenu_scene::texture_served_name_in(&texture, directory);
                     put(&texture, Some(&alias), raw)?;
                 }
-                put(path, Some(alias), bytes)?;
+                put(&path, Some(alias), bytes)?;
                 models += 1;
             }
             Err(e) if e.starts_with("MISSING_MEMBER:") => notes.push(e),
@@ -520,20 +598,59 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
             "MISSING_MENU_MODEL: neither existing renderer model contract is present".into(),
         );
     }
-    let path = crate::menu_panel::LOGO_MODEL;
-    match extract_unique(set, path) {
-        Ok(bytes) => {
-            for texture in
-                crate::mainmenu_scene::texture_paths(&bytes).map_err(|e| format!("{path}: {e}"))?
-            {
-                let alias = (texture.eq_ignore_ascii_case(crate::menu_panel::LOGO_TEXTURE))
-                    .then_some(crate::menu_panel::LOGO_TEXTURE_SERVED);
-                put(&texture, alias, extract_unique(set, &texture)?)?;
+    for expansion in [false, true] {
+        let path = match crate::menu_panel::logo_model_path(&skin_table, expansion) {
+            Ok(path) => path,
+            Err(crate::menu_skin::SkinError::UnknownFace(key)) => {
+                notes.push(format!("MISSING_SKIN_BINDING: {key}"));
+                continue;
             }
-            put(path, Some(crate::menu_panel::LOGO_MODEL_SERVED), bytes)?;
+            Err(error) => return Err(error.to_string()),
+        };
+        match extract_unique(set, &path) {
+            Ok(bytes) => {
+                for texture in crate::mainmenu_scene::texture_paths(&bytes)
+                    .map_err(|e| format!("{path}: {e}"))?
+                {
+                    let alias = (texture.eq_ignore_ascii_case(crate::menu_panel::LOGO_TEXTURE))
+                        .then_some(crate::menu_panel::LOGO_TEXTURE_SERVED);
+                    put(&texture, alias, extract_unique(set, &texture)?)?;
+                }
+                put(
+                    &path,
+                    expansion.then_some(crate::menu_panel::LOGO_MODEL_SERVED),
+                    bytes,
+                )?;
+            }
+            Err(e) if e.starts_with("MISSING_MEMBER:") => notes.push(e),
+            Err(e) => return Err(e),
         }
-        Err(e) if e.starts_with("MISSING_MEMBER:") => notes.push(e),
-        Err(e) => return Err(e),
+    }
+    // Hanging panels are separate skin-selected models, not part of the sky
+    // scene or logo. Import their TEXS edges into the same bounded local store.
+    for edition in [0, 1] {
+        let paths = match crate::menu_sprites::model_paths(&skin_table, edition) {
+            Ok(paths) => paths,
+            Err(crate::menu_skin::SkinError::UnknownFace(key)) => {
+                notes.push(format!("MISSING_SKIN_BINDING: {key}"));
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        for path in paths {
+            match extract_unique(set, &path) {
+                Ok(bytes) => {
+                    for texture in crate::mainmenu_scene::texture_paths(&bytes)
+                        .map_err(|e| format!("{path}: {e}"))?
+                    {
+                        put(&texture, None, extract_unique(set, &texture)?)?;
+                    }
+                    put(&path, None, bytes)?;
+                }
+                Err(error) if error.starts_with("MISSING_MEMBER:") => notes.push(error),
+                Err(error) => return Err(error),
+            }
+        }
     }
     for path in [
         crate::menu_audio::MENU_MUSIC_PATH,

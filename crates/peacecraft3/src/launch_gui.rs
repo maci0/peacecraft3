@@ -114,6 +114,18 @@ struct ButtonArt;
 #[derive(Component)]
 struct ControlRoot;
 
+#[derive(Component)]
+struct SettingsCog;
+
+#[derive(Component)]
+struct MenuNotice;
+
+#[derive(Component)]
+struct ResolutionPopup;
+
+#[derive(Component)]
+struct ResolutionChoice(u32, u32);
+
 /// Set once a label's runs exist, so it is filled once rather than every frame.
 #[derive(Component)]
 struct MenuTextFilled;
@@ -224,30 +236,46 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     peacecraft3::map_requests::install(&mut app);
     crate::map_source_controls::install(&mut app);
     app.add_plugins(DefaultPlugins.set(window))
+        .add_plugins(bevy::input_focus::tab_navigation::TabNavigationPlugin)
         .insert_resource(Launcher::default())
         .init_resource::<MenuArtCache>()
         .init_resource::<SceneLoad>()
         .init_resource::<crate::menu_panel::LogoEntrance>()
         .init_resource::<AssetStoreRevision>()
+        .init_resource::<crate::menu_screens::Navigation>()
+        .add_observer(menu_acquire_focus)
         .add_systems(Startup, setup)
         .add_systems(
             Update,
             (
-                colour_picks,
-                apply_clicks.in_set(LauncherInput),
-                finish_intro,
-                apply_menu_clicks,
-                poll_asset_revision,
-                invalidate_on_asset_revision,
-                apply_menu_art,
-                build_control_layer,
-                apply_menu_text,
-                initialize_menu_logo,
-                initialize_menu_scene,
-                show_menu_or_launcher,
-                scroll_launcher,
-                refresh,
-                crate::button_actions::clear,
+                (
+                    colour_picks,
+                    apply_clicks.in_set(LauncherInput),
+                    finish_intro,
+                    apply_menu_clicks,
+                    menu_navigation_keys,
+                    update_menu_notice,
+                )
+                    .chain(),
+                (
+                    poll_asset_revision,
+                    invalidate_on_asset_revision,
+                    apply_menu_art,
+                    build_control_layer,
+                    build_setting_controls,
+                    apply_menu_text,
+                    measure_screen_text,
+                    position_screen_nodes,
+                    initialize_menu_logo,
+                    show_logo_for_screen,
+                    initialize_menu_scene,
+                    show_menu_or_launcher,
+                    scroll_launcher,
+                    scroll_resolution_popup,
+                    refresh,
+                    crate::button_actions::clear,
+                )
+                    .chain(),
             )
                 .chain(),
         );
@@ -283,9 +311,79 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     );
     crate::menu_audio::install(&mut app);
     crate::glue_menu::install(&mut app);
+    crate::menu_settings::install(&mut app);
+    app.add_systems(
+        PostUpdate,
+        synchronize_window_camera_size.before(bevy::camera::CameraUpdateSystems),
+    );
     #[cfg(target_arch = "wasm32")]
-    app.add_systems(Update, synchronize_local_demo.before(colour_picks));
+    {
+        app.add_systems(Update, synchronize_local_demo.before(colour_picks));
+        app.add_systems(
+            PostUpdate,
+            publish_menu_snapshot
+                .after(bevy::ui::UiSystems::PostLayout)
+                .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+        );
+    }
     app
+}
+
+#[cfg(target_arch = "wasm32")]
+type DiagnosticControlData = (
+    &'static ComputedNode,
+    &'static bevy::ui::UiGlobalTransform,
+    &'static InheritedVisibility,
+    Option<&'static crate::glue_menu::GlueButton>,
+    Option<&'static ResolutionChoice>,
+    Has<SettingsCog>,
+    Has<InteractionDisabled>,
+);
+
+#[cfg(target_arch = "wasm32")]
+type DiagnosticLabelData = (
+    &'static crate::glue_menu::GlueLabel,
+    &'static Text,
+    &'static ComputedNode,
+    &'static bevy::ui::UiGlobalTransform,
+    &'static InheritedVisibility,
+);
+
+#[cfg(target_arch = "wasm32")]
+fn publish_menu_snapshot(
+    navigation: Res<crate::menu_screens::Navigation>,
+    controls: Query<DiagnosticControlData>,
+    labels: Query<DiagnosticLabelData>,
+    menu: Query<(), With<MenuLayer>>,
+    windows: Query<&Window>,
+    camera: Query<&Camera, With<bevy::ui::IsDefaultUiCamera>>,
+) {
+    if !crate::browser::take_menu_snapshot_request() {
+        return;
+    }
+    let offset = camera
+        .iter()
+        .next()
+        .and_then(|c| c.viewport.as_ref())
+        .map_or(Vec2::ZERO, |v| v.physical_position.as_vec2());
+    let controls:Vec<_>=controls.iter().filter_map(|(node,transform,visible,button,choice,cog,disabled)| {
+        if !visible.get() || node.size().min_element()<=0.0 {return None;}
+        let name=if let Some(button)=button {button.frame.clone()}else if let Some(choice)=choice {format!("ResolutionChoice:{}x{}",choice.0,choice.1)}else if cog {"PeaceCraftSettings".into()}else{return None;};
+        let min=transform.transform_point2(-node.size()/2.0)+offset;
+        let max=transform.transform_point2(node.size()/2.0)+offset;
+        Some(serde_json::json!({"name":name,"disabled":disabled,"physicalCanvasRect":[min.x,min.y,max.x-min.x,max.y-min.y]}))
+    }).collect();
+    let labels: Vec<_> = labels.iter().filter_map(|(label,text,node,transform,visible)| {
+        if !visible.get() || node.size().min_element() <= 0.0 { return None; }
+        let min = transform.transform_point2(-node.size()/2.0) + offset;
+        let max = transform.transform_point2(node.size()/2.0) + offset;
+        Some(serde_json::json!({"name":label.frame,"text":text.0,"physicalCanvasRect":[min.x,min.y,max.x-min.x,max.y-min.y]}))
+    }).collect();
+    let canvas = windows
+        .iter()
+        .next()
+        .map(|w| [w.physical_width(), w.physical_height()]);
+    crate::browser::publish_menu_snapshot(serde_json::json!({"screen":format!("{:?}",navigation.screen),"menuVisible":!menu.is_empty(),"draft":navigation.draft,"applied":navigation.applied,"notice":navigation.notice,"controls":controls,"labels":labels,"canvasPixels":canvas}).to_string());
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -431,6 +529,10 @@ fn spawn_main_menu(commands: &mut Commands) {
                 ..default()
             },
             MenuLayer,
+            bevy::input_focus::tab_navigation::TabGroup {
+                modal: true,
+                ..default()
+            },
         ))
         .with_children(|root| {
             // The FDF control layer is built into this once the frame
@@ -460,7 +562,304 @@ fn spawn_main_menu(commands: &mut Commands) {
                 Pickable::IGNORE,
                 ZIndex(1),
             ));
+            root.spawn((
+                Button,
+                SettingsCog,
+                Name::new("PeaceCraft settings"),
+                Hovered::default(),
+                bevy::input_focus::tab_navigation::TabIndex(i32::MAX),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Rem(0.75),
+                    bottom: Val::Rem(0.75),
+                    width: Val::Rem(2.5),
+                    height: Val::Rem(2.5),
+                    padding: UiRect::all(Val::Rem(0.375)),
+                    ..default()
+                },
+                BackgroundColor(BG_FIELD),
+                ZIndex(10),
+            ));
+            root.spawn((
+                Text::new(""),
+                MenuNotice,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Rem(4.0),
+                    bottom: Val::Rem(0.75),
+                    max_width: Val::Percent(75.0),
+                    ..default()
+                },
+                TextFont {
+                    font_size: bevy::text::FontSize::Rem(0.875),
+                    ..default()
+                },
+                TextColor(TEXT),
+                ZIndex(10),
+            ));
         });
+}
+
+fn update_menu_notice(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    mut icon: Local<Option<Handle<Image>>>,
+    mut cogs: Query<(Entity, &Hovered, &mut bevy::a11y::AccessibilityNode), With<SettingsCog>>,
+    mut labels: Query<&mut Text, With<MenuNotice>>,
+    navigation: Res<crate::menu_screens::Navigation>,
+    focus: (
+        Option<Res<bevy::input_focus::InputFocus>>,
+        Option<Res<bevy::input_focus::InputFocusVisible>>,
+    ),
+) {
+    if icon.is_none() {
+        // Project-owned vector geometry rasterized here, independent of game
+        // fonts or proprietary artwork. Supersampling gives a crisp small cog.
+        let side = 64u32;
+        let mut rgba = vec![0u8; (side * side * 4) as usize];
+        for y in 0..side {
+            for x in 0..side {
+                let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5) - Vec2::splat(side as f32 / 2.0);
+                let radius = p.length();
+                let angle = p.y.atan2(p.x);
+                let outer = if (angle * 8.0).cos() > 0.25 {
+                    28.0
+                } else {
+                    23.0
+                };
+                if radius < outer && radius > 11.0 {
+                    let at = ((y * side + x) * 4) as usize;
+                    rgba[at..at + 4].copy_from_slice(&[225, 212, 176, 255]);
+                }
+            }
+        }
+        *icon = Some(images.add(Image::new(
+            bevy::render::render_resource::Extent3d {
+                width: side,
+                height: side,
+                depth_or_array_layers: 1,
+            },
+            bevy::render::render_resource::TextureDimension::D2,
+            rgba,
+            bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+            bevy::asset::RenderAssetUsages::default(),
+        )));
+    }
+    let focused = focus
+        .0
+        .as_ref()
+        .and_then(|f| f.get())
+        .filter(|_| focus.1.as_ref().is_some_and(|v| v.0));
+    for (entity, _, mut accessible) in &mut cogs {
+        accessible.0.set_label("PeaceCraft settings");
+        commands.entity(entity).insert((
+            ImageNode::new(icon.as_ref().unwrap().clone()),
+            Outline {
+                width: Val::Px(if focused == Some(entity) { 2.0 } else { 0.0 }),
+                offset: Val::Px(2.0),
+                color: TEXT,
+            },
+        ));
+    }
+    for mut label in &mut labels {
+        let text = if cogs.iter().any(|(e, h, _)| h.get() || focused == Some(e)) {
+            "PeaceCraft settings"
+        } else {
+            &navigation.notice
+        };
+        if label.0 != text {
+            label.0 = text.to_string();
+        }
+    }
+}
+
+fn menu_navigation_keys(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut navigation: ResMut<crate::menu_screens::Navigation>,
+    popups: Query<Entity, With<ResolutionPopup>>,
+) {
+    if keys.just_pressed(KeyCode::Escape) && !popups.is_empty() {
+        for entity in &popups {
+            commands.entity(entity).despawn();
+        }
+        focus_resolution_control(&mut commands);
+        return;
+    }
+    if keys.just_pressed(KeyCode::Escape) && navigation.screen != crate::menu_screens::Screen::Main
+    {
+        navigation.action("CancelButton");
+    }
+}
+
+fn menu_acquire_focus(
+    mut event: On<bevy::input_focus::AcquireFocus>,
+    menus: Query<Entity, With<MenuLayer>>,
+    popups: Query<Entity, With<ResolutionPopup>>,
+    parents: Query<&ChildOf>,
+    enabled: Query<
+        (),
+        (
+            With<bevy::input_focus::tab_navigation::TabIndex>,
+            Without<InteractionDisabled>,
+        ),
+    >,
+    focus: Res<bevy::input_focus::InputFocus>,
+    mut commands: Commands,
+) {
+    let target = event.original_event_target();
+    let Some(menu) = std::iter::once(target)
+        .chain(parents.iter_ancestors(target))
+        .find(|entity| menus.contains(*entity))
+    else {
+        return;
+    };
+    // AcquireFocus is emitted by PointerFocusPlugin on press. Handle only the
+    // original menu's popup; ordinary launcher/window focus keeps its policy.
+    if let Some(popup) = popups
+        .iter()
+        .find(|popup| parents.iter_ancestors(*popup).any(|entity| entity == menu))
+        && target != popup
+        && !parents.iter_ancestors(target).any(|entity| entity == popup)
+    {
+        event.propagate(false);
+        commands.entity(popup).despawn();
+        // Deferred restoration also wins if the standard focus resolver already
+        // focused an ordinary menu control at this same event target.
+        focus_resolution_control(&mut commands);
+        return;
+    }
+    // A blank click bubbles beyond every TabIndex. Retain the current enabled
+    // menu control before the request reaches the window's focus-clear handler.
+    if event.focused_entity == menu
+        && let Some(current) = focus.get()
+        && enabled.contains(current)
+        && parents.iter_ancestors(current).any(|entity| entity == menu)
+    {
+        event.propagate(false);
+    }
+}
+
+fn focus_resolution_control(commands: &mut Commands) {
+    commands.queue(|world: &mut World| {
+        let target = world
+            .query::<(Entity, &crate::glue_menu::GlueButton)>()
+            .iter(world)
+            .find_map(|(entity, button)| (button.frame == "ResolutionMenu").then_some(entity));
+        if let Some(target) = target
+            && let Some(mut focus) = world.get_resource_mut::<bevy::input_focus::InputFocus>()
+        {
+            focus.set(target, bevy::input_focus::FocusCause::Auto);
+        }
+    });
+}
+
+fn open_resolutions(
+    commands: &mut Commands,
+    root: Entity,
+    cache: &MenuArtCache,
+    navigation: &crate::menu_screens::Navigation,
+) -> Result<(), String> {
+    let fdf = cache
+        .fdf
+        .as_ref()
+        .ok_or("Screen definitions are still loading")?;
+    let rect = fdf
+        .rect(
+            "ResolutionMenu",
+            (crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H),
+        )
+        .map_err(|e| e.to_string())?;
+    let menu = fdf
+        .string("ResolutionMenu", "PopupMenuFrame")
+        .ok_or("Resolution menu has no popup definition")?;
+    let height = match fdf
+        .numbers(&menu, "MenuItemHeight")
+        .map_err(|e| e.to_string())?
+        .as_deref()
+    {
+        Some([value]) if value.is_finite() && *value > 0.0 => *value,
+        _ => return Err("Resolution popup has no valid authored item height".into()),
+    };
+    let style = crate::menu_text::render_style(fdf, &menu)?;
+    let font = cache
+        .fonts
+        .get(&style.font)
+        .ok_or("The menu font is still loading")?
+        .clone();
+    let popup = commands
+        .spawn((
+            ResolutionPopup,
+            Name::new("Available display resolutions"),
+            bevy::input_focus::tab_navigation::TabGroup {
+                order: 1,
+                modal: true,
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(rect.left / crate::mainmenu::FRAME_W * 100.0),
+                top: Val::Percent(
+                    (crate::mainmenu::FRAME_H - rect.bottom) / crate::mainmenu::FRAME_H * 100.0,
+                ),
+                width: Val::Percent(rect.width / crate::mainmenu::FRAME_W * 100.0),
+                max_height: Val::Percent(rect.bottom / crate::mainmenu::FRAME_H * 100.0),
+                overflow: Overflow::scroll_y(),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+            BackgroundColor(BG_FIELD),
+            Hovered::default(),
+            ScrollPosition::default(),
+            ZIndex(30),
+        ))
+        .id();
+    commands.entity(root).add_child(popup);
+    for (index, &(width, pixels)) in navigation.resolutions.iter().enumerate() {
+        let choice = commands
+            .spawn((
+                Button,
+                Hovered::default(),
+                ResolutionChoice(width, pixels),
+                Name::new(format!("{width} x {pixels}")),
+                bevy::input_focus::tab_navigation::TabIndex(
+                    i32::try_from(index).map_err(|_| "Too many display modes")?,
+                ),
+                Node {
+                    min_height: Val::Vh(height / crate::mainmenu::FRAME_H * 100.0),
+                    flex_shrink: 0.0,
+                    width: Val::Percent(100.0),
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(if navigation.draft.resolution == Some((width, pixels)) {
+                    ACCENT_SOFT
+                } else {
+                    BG_FIELD
+                }),
+            ))
+            .with_child((
+                Text::new(format!("{width} x {pixels}")),
+                TextFont {
+                    font: font.clone().into(),
+                    font_size: bevy::text::FontSize::Vh(
+                        style.height / crate::mainmenu::FRAME_H * 100.0,
+                    ),
+                    ..default()
+                },
+                TextColor(srgba(style.colour)),
+                Pickable::IGNORE,
+            ))
+            .id();
+        commands.entity(popup).add_child(choice);
+        if index == 0 {
+            commands.queue(move |world: &mut World| {
+                if let Some(mut focus) = world.get_resource_mut::<bevy::input_focus::InputFocus>() {
+                    focus.set(choice, bevy::input_focus::FocusCause::Auto);
+                }
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Marker for the menu layer, so it can be dismissed once a choice is made.
@@ -524,6 +923,7 @@ fn invalidate_on_asset_revision(
     mut cache: ResMut<MenuArtCache>,
     mut scene: ResMut<SceneLoad>,
     queries: MenuInvalidationQueries,
+    navigation: Option<ResMut<crate::menu_screens::Navigation>>,
 ) {
     let MenuInvalidationQueries {
         logos,
@@ -535,6 +935,9 @@ fn invalidate_on_asset_revision(
         return;
     }
     cache.revision = revision.0;
+    if let Some(mut navigation) = navigation {
+        navigation.options_entry = None;
+    }
     // Everything decoded or derived from the old store goes, including the
     // texts the labels and their style come from.
     cache.button = None;
@@ -589,40 +992,52 @@ fn initialize_menu_logo(
     let Ok(layer) = layers.single() else {
         return;
     };
-    if !logos.is_empty() || launcher.mode.addon != Addon::Tft {
+    if !logos.is_empty() {
         return;
     }
     let install = selected_install(&launcher);
-    let assets = crate::menu_panel::load_logo(install.as_deref());
-    if !assets.is_complete() {
-        return;
-    }
-    let data = match crate::menu_panel::LogoData::parse(assets.model.as_deref().unwrap()) {
-        Ok(data) => data,
+    let inputs = || -> Result<_, String> {
+        let skin = crate::mainmenu::art_bytes(install.as_deref(), crate::mainmenu::SKIN_TABLE)
+            .ok_or_else(|| "missing logo skin table".to_string())?;
+        let skin = std::str::from_utf8(&skin).map_err(|e| format!("logo skin table: {e}"))?;
+        let skin = crate::menu_skin::SkinTable::parse(skin).map_err(|e| e.to_string())?;
+        let fdf = crate::mainmenu::art_bytes(install.as_deref(), crate::mainmenu::MAIN_MENU_FDF)
+            .ok_or_else(|| "missing logo MainMenu FDF".to_string())?;
+        let fdf = std::str::from_utf8(&fdf).map_err(|e| format!("logo MainMenu FDF: {e}"))?;
+        let fdf = crate::fdf::Fdf::parse(fdf).map_err(|e| e.to_string())?;
+        let anchor = crate::menu_panel::logo_anchor(&fdf).map_err(|e| e.to_string())?;
+        let assets = crate::menu_panel::load_logo(
+            install.as_deref(),
+            &skin,
+            launcher.mode.addon == Addon::Tft,
+        )?;
+        Ok((assets, anchor))
+    };
+    let (assets, anchor) = match inputs() {
+        Ok(inputs) => inputs,
         Err(error) => {
             warn!("Original menu logo: {error}");
             return;
         }
     };
-    if !data.planar
-        || !data
-            .texture
-            .eq_ignore_ascii_case(crate::menu_panel::LOGO_TEXTURE)
-    {
-        warn!("Original menu logo: unsupported geometry or texture binding");
+    let data = assets.data;
+    if !data.planar {
+        warn!(
+            "Original menu logo {:?}: unsupported nonplanar geometry",
+            assets.model_path
+        );
         return;
     }
-    let texture = match pcx_gfx::load_image(assets.texture.as_deref().unwrap(), &data.texture) {
+    let texture = match pcx_gfx::load_image(&assets.texture, &data.texture) {
         Ok(texture) => texture,
         Err(error) => {
             warn!("Original menu logo texture: {error}");
             return;
         }
     };
-    // FDF TOPLEFT (.13,+.04); native implicit height is maxY-minY.
-    // Its LEFT/BOTTOM model origin does not subtract the vertex minimum.
-    let left = crate::menu_panel::LOGO_ANCHOR_UNITS.0 + data.quad.0;
-    let top = data.quad_height() - crate::menu_panel::LOGO_ANCHOR_UNITS.1 - data.quad.3;
+    // Keep the existing quad projection; the FDF now supplies its anchor.
+    let left = anchor.0 + data.quad.0;
+    let top = data.quad_height() - anchor.1 - data.quad.3;
     let node = Node {
         width: Val::Vw(data.quad_width() / crate::mainmenu::FRAME_W * 100.0),
         height: Val::Vh(data.quad_height() / crate::mainmenu::FRAME_H * 100.0),
@@ -642,7 +1057,10 @@ fn initialize_menu_logo(
     commands.entity(layer).add_child(entity);
     entrance.elapsed_ms = 0.0;
     entrance.data = Some(data);
-    info!("Original menu logo: parsed authored Birth and native LEFT/BOTTOM projection");
+    info!(
+        "Original menu logo {:?}: authored Birth and FDF anchor",
+        assets.model_path
+    );
 }
 
 #[derive(SystemParam)]
@@ -650,6 +1068,26 @@ struct SceneAssets<'w> {
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<StandardMaterial>>,
     images: ResMut<'w, Assets<Image>>,
+}
+
+fn show_logo_for_screen(
+    cache: Res<MenuArtCache>,
+    mut layers: Query<&mut Visibility, With<LogoLayer>>,
+) {
+    let defined = cache.fdf.as_ref().is_some_and(|fdf| {
+        fdf.frame(crate::menu_panel::LOGO_FRAME)
+            .is_some_and(|frame| frame.kind == "SPRITE")
+    });
+    let desired = if defined {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    for mut visibility in &mut layers {
+        if *visibility != desired {
+            *visibility = desired;
+        }
+    }
 }
 
 fn initialize_menu_scene(
@@ -681,9 +1119,24 @@ fn initialize_menu_scene(
         return;
     }
     let install = selected_install(&launcher);
-    let (source, served, directory) =
+    let (_, served, directory) =
         crate::mainmenu_scene::scene_source(launcher.mode.addon == Addon::Tft);
-    let bytes = crate::mainmenu::art_bytes_named(install.as_deref(), source, served);
+    let source = crate::mainmenu::art_bytes(install.as_deref(), crate::mainmenu::SKIN_TABLE)
+        .ok_or_else(|| "background skin table unavailable".to_string())
+        .and_then(|bytes| String::from_utf8(bytes).map_err(|e| e.to_string()))
+        .and_then(|text| crate::menu_skin::SkinTable::parse(&text).map_err(|e| e.to_string()))
+        .and_then(|skin| {
+            crate::mainmenu_scene::skin_scene_source(&skin, launcher.mode.addon == Addon::Tft)
+                .map_err(|e| e.to_string())
+        });
+    let source = match source {
+        Ok(path) => path,
+        Err(error) => {
+            warn!("Original menu background: {error}");
+            return;
+        }
+    };
+    let bytes = crate::mainmenu::art_bytes_named(install.as_deref(), &source, served);
     let Some(bytes) = bytes else {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -706,7 +1159,7 @@ fn initialize_menu_scene(
         &mut meshes,
         &mut materials,
         &mut images,
-        source,
+        &source,
         &bytes,
         &textures,
     ) {
@@ -740,6 +1193,32 @@ fn initialize_menu_scene(
         Ok(count) => info!("Original menu panels: {count} sprite layers, MainMenu Birth"),
         Err(error) => warn!("Original menu panels: {error}"),
     }
+}
+
+fn synchronize_window_camera_size(
+    windows: Query<(Entity, &Window), With<bevy::window::PrimaryWindow>>,
+    mut observed: Local<Option<(Entity, UVec2)>>,
+    mut resized: MessageWriter<bevy::window::WindowResized>,
+) {
+    let Ok((entity, window)) = windows.single() else {
+        *observed = None;
+        return;
+    };
+    let current = (
+        entity,
+        UVec2::new(window.physical_width(), window.physical_height()),
+    );
+    if observed.as_ref() == Some(&current) {
+        return;
+    }
+    *observed = Some(current);
+    // Programmatic Window changes precede Winit's resize acknowledgement. Give
+    // every camera sharing this target the same dimensions before extraction.
+    resized.write(bevy::window::WindowResized {
+        window: entity,
+        width: window.width(),
+        height: window.height(),
+    });
 }
 
 fn show_menu_or_launcher(
@@ -861,6 +1340,7 @@ struct MenuArtCache {
     templates: Option<String>,
     /// `MainMenu.fdf`, whose text frames carry per-entry style records.
     main_menu: Option<String>,
+    screen: crate::menu_screens::Screen,
     /// The asset-store generation this cache was filled from.
     revision: u32,
     native_loaded: bool,
@@ -882,6 +1362,8 @@ type ButtonArtFilter = (
     With<Button>,
     Without<ButtonArt>,
     Without<crate::glue_menu::GlueButton>,
+    Without<SettingsCog>,
+    Without<ResolutionChoice>,
 );
 
 #[derive(SystemParam)]
@@ -904,6 +1386,7 @@ fn apply_menu_art(
     mut images: ResMut<Assets<Image>>,
     mut cache: ResMut<MenuArtCache>,
     mut glue: ResMut<crate::glue_menu::GlueImages>,
+    mut navigation: ResMut<crate::menu_screens::Navigation>,
     queries: MenuArtQueries,
 ) {
     let MenuArtQueries {
@@ -925,6 +1408,13 @@ fn apply_menu_art(
         cache.selection = Some(selection);
     }
     let cache = &mut *cache;
+    if cache.screen != navigation.screen {
+        cache.screen = navigation.screen;
+        cache.main_menu = None;
+        cache.fdf = None;
+        cache.fdf_failed = false;
+        cache.native_loaded = false;
+    }
     let install = cache.install.clone();
     let install = install.as_deref();
     // The desktop install is read once; the browser store fills asynchronously.
@@ -941,11 +1431,13 @@ fn apply_menu_art(
             }
         }
         cached_text(&mut cache.skin, install, crate::mainmenu::SKIN_TABLE);
-        cached_text(
-            &mut cache.main_menu,
-            install,
-            crate::mainmenu::MAIN_MENU_FDF,
-        );
+        cached_text(&mut cache.main_menu, install, cache.screen.file());
+        if cache.main_menu.is_none() && cache.screen != crate::menu_screens::Screen::Main {
+            navigation.notice = format!(
+                "Menu definition unavailable: {}. Import the corresponding game files, or press Escape to return.",
+                cache.screen.file()
+            );
+        }
         cached_text(
             &mut cache.strings,
             install,
@@ -962,10 +1454,69 @@ fn apply_menu_art(
             && let (Some(templates), Some(menu)) = (&cache.templates, &cache.main_menu)
         {
             match crate::fdf::Fdf::parse(templates).and_then(|mut f| {
+                let mut loaded = std::collections::HashSet::from([
+                    crate::mainmenu::STANDARD_TEMPLATES_FDF.to_ascii_lowercase(),
+                    cache.screen.file().to_ascii_lowercase(),
+                ]);
+                let mut pending = crate::menu_screens::includes(menu);
+                let mut sources = Vec::new();
+                let mut total = menu.len() + templates.len();
+                while let Some(path) = pending.pop() {
+                    if !loaded.insert(path.to_ascii_lowercase()) {
+                        continue;
+                    }
+                    if loaded.len() > 64 {
+                        return Err(crate::fdf::FdfError::Unsupported {
+                            frame: path,
+                            property: "IncludeFile",
+                            value: "include count limit exceeded".into(),
+                        });
+                    }
+                    let bytes = crate::mainmenu::art_bytes(install, &path).ok_or_else(|| {
+                        crate::fdf::FdfError::UnknownFrame(format!("missing include {path}"))
+                    })?;
+                    total = total.checked_add(bytes.len()).ok_or_else(|| {
+                        crate::fdf::FdfError::UnknownFrame("include size overflow".into())
+                    })?;
+                    if total > 8 * 1024 * 1024 {
+                        return Err(crate::fdf::FdfError::UnknownFrame(
+                            "screen definition size limit exceeded".into(),
+                        ));
+                    }
+                    let text = String::from_utf8(bytes).map_err(|_| {
+                        crate::fdf::FdfError::UnknownFrame(format!("non UTF-8 include {path}"))
+                    })?;
+                    pending.extend(crate::menu_screens::includes(&text));
+                    sources.push(text);
+                }
+                for source in sources.iter().rev() {
+                    f.parse_into(source)?;
+                }
                 f.parse_into(menu)?;
+                crate::menu_screens::prime_text_sizes(&mut f);
                 Ok(f)
             }) {
-                Ok(fdf) => cache.fdf = Some(fdf),
+                Ok(fdf) => {
+                    if matches!(navigation.screen, crate::menu_screens::Screen::Options(_))
+                        && navigation.options_entry.is_none()
+                    {
+                        let pages: Vec<_> = [
+                            ("GameplayButton", crate::menu_screens::Page::Gameplay),
+                            ("VideoButton", crate::menu_screens::Page::Video),
+                            ("SoundButton", crate::menu_screens::Page::Sound),
+                        ]
+                        .into_iter()
+                        .filter(|(name, _)| fdf.flag(name, "TabFocusDefault"))
+                        .map(|(_, page)| page)
+                        .collect();
+                        if let [page] = pages.as_slice() {
+                            navigation.options_entry = Some(*page);
+                            navigation.screen = crate::menu_screens::Screen::Options(*page);
+                            cache.screen = navigation.screen;
+                        }
+                    }
+                    cache.fdf = Some(fdf);
+                }
                 Err(e) => {
                     warn!("menu frame definitions unusable: {e}");
                     cache.fdf_failed = true;
@@ -1007,7 +1558,20 @@ fn build_control_layer(
     mut commands: Commands,
     mut cache: ResMut<MenuArtCache>,
     roots: Query<(Entity, Option<&Children>), With<ControlRoot>>,
+    mut navigation: ResMut<crate::menu_screens::Navigation>,
 ) {
+    if navigation.built != Some(navigation.screen) {
+        for (_, children) in &roots {
+            for child in children.into_iter().flatten() {
+                commands.entity(*child).despawn();
+            }
+        }
+        navigation.built = Some(navigation.screen);
+        // Deferred removals finish before building the new tree next frame.
+        if roots.iter().any(|(_, c)| c.is_some_and(|c| !c.is_empty())) {
+            return;
+        }
+    }
     let Some(fdf) = &cache.fdf else {
         return;
     };
@@ -1019,11 +1583,21 @@ fn build_control_layer(
     if empty.is_empty() {
         return;
     }
-    match crate::glue_menu::control_items(
-        fdf,
-        crate::glue_menu::CONTROL_LAYER,
-        (crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H),
-    ) {
+    let result = if navigation.screen == crate::menu_screens::Screen::Main {
+        crate::glue_menu::control_items(
+            fdf,
+            navigation.screen.root(),
+            (crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H),
+        )
+    } else {
+        crate::glue_menu::control_items_for(
+            fdf,
+            navigation.screen.root(),
+            (crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H),
+            |name| navigation.screen.includes(fdf, name),
+        )
+    };
+    match result {
         Ok((items, unsupported)) => {
             if !unsupported.is_empty() {
                 warn!("Main menu frames not drawn: {unsupported:?}");
@@ -1034,12 +1608,151 @@ fn build_control_layer(
             );
             for root in empty {
                 crate::glue_menu::spawn(&mut commands, root, &items);
+                let visible: Vec<_> = items
+                    .iter()
+                    .filter(|i| {
+                        matches!(
+                            i.kind,
+                            crate::glue_menu::Kind::Button(_) | crate::glue_menu::Kind::Widget(_)
+                        )
+                    })
+                    .map(|i| i.frame.clone())
+                    .collect();
+                let order = crate::menu_screens::focus_order(fdf, &visible);
+                commands.queue(move |world: &mut World| {
+                    let targets: Vec<_> = world
+                        .get::<Children>(root)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|entity| {
+                            let position =
+                                world.get::<crate::menu_screens::ScreenPosition>(*entity)?;
+                            let index = order.iter().position(|n| n == &position.0)?;
+                            Some((*entity, i32::try_from(index).ok()?))
+                        })
+                        .collect();
+                    let first = targets
+                        .iter()
+                        .filter(|(entity, _)| {
+                            !world.entity(*entity).contains::<InteractionDisabled>()
+                        })
+                        .min_by_key(|(_, index)| *index)
+                        .map(|(entity, _)| *entity);
+                    for (entity, index) in targets {
+                        world
+                            .entity_mut(entity)
+                            .insert(bevy::input_focus::tab_navigation::TabIndex(index));
+                    }
+                    if let Some(first) = first
+                        && let Some(mut focus) =
+                            world.get_resource_mut::<bevy::input_focus::InputFocus>()
+                    {
+                        focus.set(first, bevy::input_focus::FocusCause::Auto);
+                    }
+                });
             }
         }
         Err(error) => {
             warn!("Main menu control layer: {error}");
+            navigation.notice =
+                format!("This screen could not be loaded: {error}. Press Escape to return.");
             cache.fdf = None;
             cache.fdf_failed = true;
+        }
+    }
+}
+
+fn build_setting_controls(
+    mut commands: Commands,
+    cache: Res<MenuArtCache>,
+    launcher: Res<Launcher>,
+    buttons: Query<(Entity, &crate::glue_menu::GlueButton)>,
+    nodes: Query<
+        (Entity, &crate::menu_screens::ScreenPosition),
+        Without<crate::menu_screens::SettingControl>,
+    >,
+) {
+    for (entity, button) in &buttons {
+        if button.frame == "CustomCampaignButton" {
+            if launcher.mode.addon == Addon::Tft && launcher.allows_addon(Addon::Tft) {
+                commands.entity(entity).remove::<InteractionDisabled>();
+            } else {
+                commands.entity(entity).insert(InteractionDisabled);
+            }
+        }
+    }
+    let Some(fdf) = cache.fdf.as_ref() else {
+        return;
+    };
+    for (entity, position) in &nodes {
+        if let Ok(Some(widget)) = crate::menu_screens::widget(fdf, &position.0) {
+            crate::menu_screens::spawn_widget(&mut commands, entity, &position.0, &widget, fdf);
+            if let Ok(rect) = fdf.rect(
+                &position.0,
+                (crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H),
+            ) && let Err(error) = crate::glue_menu::decorate_setting(
+                &mut commands,
+                entity,
+                fdf,
+                &position.0,
+                Vec2::new(rect.width, rect.height),
+            ) {
+                warn!("Setting art {}: {error}", position.0);
+            }
+        }
+    }
+}
+
+fn measure_screen_text(
+    mut cache: ResMut<MenuArtCache>,
+    labels: Query<(&crate::glue_menu::GlueLabel, &bevy::text::TextLayoutInfo)>,
+    camera: Query<&Camera, With<bevy::ui::IsDefaultUiCamera>>,
+) {
+    let Some(size) = camera
+        .iter()
+        .next()
+        .and_then(Camera::physical_viewport_size)
+        .map(UVec2::as_vec2)
+    else {
+        return;
+    };
+    if size.min_element() <= 0.0 {
+        return;
+    }
+    let Some(fdf) = cache.fdf.as_mut() else {
+        return;
+    };
+    for (label, layout) in &labels {
+        if layout.size.x > 0.0 && layout.size.y > 0.0 {
+            fdf.measure_text(
+                &label.frame,
+                (
+                    layout.size.x / size.x * crate::mainmenu::FRAME_W,
+                    layout.size.y / size.y * crate::mainmenu::FRAME_H,
+                ),
+            );
+        }
+    }
+}
+
+fn position_screen_nodes(
+    cache: Res<MenuArtCache>,
+    mut nodes: Query<(&crate::menu_screens::ScreenPosition, &mut Node)>,
+) {
+    let Some(fdf) = cache.fdf.as_ref() else {
+        return;
+    };
+    for (position, mut node) in &mut nodes {
+        if let Ok(r) = fdf.rect(
+            &position.0,
+            (crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H),
+        ) {
+            node.left = Val::Percent(r.left / crate::mainmenu::FRAME_W * 100.0);
+            node.top = Val::Percent(
+                (crate::mainmenu::FRAME_H - r.top()) / crate::mainmenu::FRAME_H * 100.0,
+            );
+            node.width = Val::Percent(r.width / crate::mainmenu::FRAME_W * 100.0);
+            node.height = Val::Percent(r.height / crate::mainmenu::FRAME_H * 100.0);
         }
     }
 }
@@ -1058,6 +1771,8 @@ type LabelData = (
     Entity,
     &'static crate::glue_menu::GlueLabel,
     &'static ChildOf,
+    Option<&'static crate::menu_screens::SettingValue>,
+    Option<&'static crate::menu_screens::LabelFontParent>,
 );
 
 /// Fills each label from its text frame: the authored string, its face, size,
@@ -1080,28 +1795,36 @@ fn apply_menu_text(
         problems,
         fdf,
         strings,
-        templates,
         main_menu,
+        templates,
+        screen,
         install,
         ..
     } = &mut *cache;
     let (Some(strings), Some(fdf)) = (strings.as_deref(), fdf.as_ref()) else {
         return;
     };
-    for (entity, label, parent) in &labels {
+    for (entity, label, parent, dynamic, font_parent) in &labels {
         let frame = label.frame.as_str();
-        let parsed = fdf
-            .text_value(frame)
+        let parsed = dynamic
+            .map(|_| String::new())
+            .or_else(|| fdf.text_value(frame))
             .ok_or_else(|| format!("{frame} has no Text"))
-            .and_then(|key| {
-                crate::menu_text::global_string(strings, &key)
-                    .ok_or_else(|| format!("GlobalStrings has no {key}"))
-            })
+            .map(|key| crate::menu_text::global_string(strings, &key).unwrap_or(key))
             .and_then(|raw| crate::menu_text::Label::parse(&raw).map_err(|e| e.to_string()))
             .and_then(|parsed| {
-                text_style(main_menu.as_deref(), templates.as_deref(), frame)
-                    .map(|style| (parsed, style))
-                    .map_err(|e| e.to_string())
+                (if *screen == crate::menu_screens::Screen::Main {
+                    text_style(main_menu.as_deref(), templates.as_deref(), frame)
+                        .map_err(|e| e.to_string())
+                } else {
+                    crate::menu_text::render_style_with_parent(
+                        fdf,
+                        frame,
+                        font_parent.map_or(frame, |p| p.0.as_str()),
+                    )
+                })
+                .map(|style| (parsed, style))
+                .map_err(|e| e.to_string())
             });
         let (parsed, style) = match parsed {
             Ok(found) => found,
@@ -1150,6 +1873,14 @@ fn apply_menu_text(
         if let Ok(mut node) = nodes.get_mut(parent.parent()) {
             node.justify_content = justify_v(style.justify_v);
             node.align_items = align_h(style.justify_h);
+            if let Ok(Some(offset)) = fdf.numbers(frame, "FontJustificationOffset")
+                && let [x, y] = offset.as_slice()
+                && x.is_finite()
+                && y.is_finite()
+            {
+                node.padding.left = Val::Vw(*x / crate::mainmenu::FRAME_W * 100.0);
+                node.padding.top = Val::Vh(-*y / crate::mainmenu::FRAME_H * 100.0);
+            }
         }
         commands.entity(entity).insert((
             TextFont {
@@ -1158,14 +1889,21 @@ fn apply_menu_text(
                 ..default()
             },
             TextColor(normal),
-            TextLayout::new(justify(style.justify_h), bevy::text::LineBreak::NoWrap),
+            TextLayout::new(
+                justify(style.justify_h),
+                if dynamic.is_none() && fdf.record(frame, "Width").is_some() {
+                    bevy::text::LineBreak::WordBoundary
+                } else {
+                    bevy::text::LineBreak::NoWrap
+                },
+            ),
             TextShadow {
                 offset: Vec2::ZERO,
                 color: srgba(style.shadow_colour),
             },
             crate::glue_menu::FrameShadow(Vec2::from(style.shadow_offset)),
         ));
-        for run in &parsed.spans {
+        for run in parsed.spans.iter().filter(|_| dynamic.is_none()) {
             let child = commands
                 .spawn((
                     TextSpan::new(run.text.clone()),
@@ -1232,7 +1970,7 @@ fn header(root: &mut ChildSpawnerCommands, _l: &Launcher) {
         })
         .with_children(|c| {
             c.spawn(tint("PeaceCraft III", 34.0, crate::mainmenu::LABEL));
-            c.spawn(tint("The Frozen Throne · Asset launcher", 15.0, TEXT_DIM));
+            c.spawn(tint("Game configuration", 15.0, TEXT_DIM));
         });
         r.spawn((
             Button,
@@ -1682,30 +2420,122 @@ fn scroll_launcher(
     }
 }
 
+fn scroll_resolution_popup(
+    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    mut popups: Query<(&mut ScrollPosition, &ComputedNode, &Hovered), With<ResolutionPopup>>,
+    mut choices: Query<(&Hovered, &mut BackgroundColor), With<ResolutionChoice>>,
+) {
+    for (hover, mut colour) in &mut choices {
+        let next = if hover.get() { ACCENT_SOFT } else { BG_FIELD };
+        if colour.0 != next {
+            colour.0 = next;
+        }
+    }
+    for event in wheel.read() {
+        for (mut scroll, node, hover) in &mut popups {
+            if hover.get() {
+                let dy = match event.unit {
+                    bevy::input::mouse::MouseScrollUnit::Line => event.y * node.size().y / 8.0,
+                    bevy::input::mouse::MouseScrollUnit::Pixel => event.y,
+                };
+                let max = ((node.content_size().y - node.size().y) * node.inverse_scale_factor())
+                    .max(0.0);
+                scroll.0.y = (scroll.0.y - dy).clamp(0.0, max);
+            }
+        }
+    }
+}
+
 /// Clicks on the original main menu, dispatched by the clicked FDF frame.
 ///
-/// Options reveals the staging panel, the launcher's equivalent of the
-/// original's options pane. The edition button switches between Reign of Chaos
+/// Options opens the original game settings. The separate cog opens PeaceCraft
+/// configuration. The edition button switches between Reign of Chaos
 /// and The Frozen Throne, which rebuilds the scene, panels and logo for that
 /// edition. Quit exits; a browser has no process to end, so there it returns to
 /// the launcher. Every other entry is reported as not implemented rather than
 /// pretending a button led somewhere.
+#[derive(SystemParam)]
+pub(crate) struct MenuClickQueries<'w, 's> {
+    buttons: Query<'w, 's, &'static crate::glue_menu::GlueButton>,
+    menu: Query<'w, 's, Entity, With<MenuLayer>>,
+    cogs: Query<'w, 's, Entity, With<SettingsCog>>,
+    windows: Query<'w, 's, &'static mut Window>,
+    backend: ResMut<'w, crate::menu_settings::Backend>,
+    choices: Query<'w, 's, &'static ResolutionChoice>,
+    popups: Query<'w, 's, Entity, With<ResolutionPopup>>,
+    roots: Query<'w, 's, Entity, With<ControlRoot>>,
+    cache: Res<'w, MenuArtCache>,
+}
+
 pub(crate) fn apply_menu_clicks(
     mut commands: Commands,
     mut launcher: ResMut<Launcher>,
     actions: Res<crate::button_actions::ButtonActions>,
-    q: Query<&crate::glue_menu::GlueButton>,
-    menu: Query<Entity, With<MenuLayer>>,
+    mut navigation: ResMut<crate::menu_screens::Navigation>,
+    queries: MenuClickQueries,
     #[cfg(not(target_arch = "wasm32"))] mut exit: MessageWriter<AppExit>,
 ) {
+    let MenuClickQueries {
+        buttons: q,
+        menu,
+        cogs,
+        mut windows,
+        mut backend,
+        choices,
+        popups,
+        roots,
+        cache,
+    } = queries;
     for entity in &actions.entities {
+        if let Ok(choice) = choices.get(*entity) {
+            if let Err(error) =
+                crate::menu_settings::select_resolution(&mut navigation, (choice.0, choice.1))
+            {
+                navigation.notice = error;
+            }
+            for entity in &popups {
+                commands.entity(entity).despawn();
+            }
+            focus_resolution_control(&mut commands);
+            continue;
+        }
+        if cogs.contains(*entity) {
+            for e in &menu {
+                commands.entity(e).despawn();
+            }
+            continue;
+        }
         let Ok(button) = q.get(*entity) else {
             continue;
         };
+        if button.frame == "CustomCampaignButton"
+            && (launcher.mode.addon != Addon::Tft || !launcher.allows_addon(Addon::Tft))
+        {
+            navigation.notice =
+                "Custom campaigns require The Frozen Throne game files and edition.".into();
+            continue;
+        }
+        if navigation.action(&button.frame) {
+            continue;
+        }
         match button.frame.as_str() {
-            "OptionsButton" => {
-                for e in &menu {
-                    commands.entity(e).despawn();
+            "ResolutionMenu" => {
+                for entity in &popups {
+                    commands.entity(entity).despawn();
+                }
+                if popups.is_empty()
+                    && let Ok(root) = roots.single()
+                    && let Err(error) = open_resolutions(&mut commands, root, &cache, &navigation)
+                {
+                    navigation.notice = error;
+                }
+            }
+            "OKButton" if matches!(navigation.screen, crate::menu_screens::Screen::Options(_)) => {
+                if let Ok(mut window) = windows.single_mut() {
+                    match crate::menu_settings::apply(&mut navigation, &mut window, &mut backend) {
+                        Ok(()) => navigation.open(crate::menu_screens::Screen::Main),
+                        Err(error) => navigation.notice = error,
+                    }
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -1727,7 +2557,11 @@ pub(crate) fn apply_menu_clicks(
                     launcher.mode.addon = next;
                 }
             }
-            other => info!("{other}: not implemented"),
+            other => {
+                if !crate::menu_screens::supported(other) {
+                    navigation.notice = format!("{other}: this action is not available yet.");
+                }
+            }
         }
     }
 }
@@ -1739,6 +2573,7 @@ fn apply_clicks(
     mut commands: Commands,
     actions: Res<crate::button_actions::ButtonActions>,
     q: Query<(&Pick, Option<&InteractionDisabled>), With<Button>>,
+    mut navigation: Option<ResMut<crate::menu_screens::Navigation>>,
 ) {
     l.constrain_menu_edition();
     for entity in &actions.entities {
@@ -1760,6 +2595,9 @@ fn apply_clicks(
             Pick::Stage => l.staging = true,
             Pick::Download => {}
             Pick::Menu => {
+                if let Some(navigation) = navigation.as_mut() {
+                    navigation.open(crate::menu_screens::Screen::Main);
+                }
                 if l.allows_addon(l.mode.addon)
                     && !intro.request_with_install(l.mode.addon == Addon::Tft, selected_install(&l))
                 {
@@ -1938,6 +2776,28 @@ mod tests {
 #[cfg(test)]
 mod menu_tests {
     use super::*;
+
+    #[test]
+    fn logo_visibility_follows_the_current_definition_instead_of_covering_other_screens() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.insert_resource(MenuArtCache {
+            fdf: Some(
+                crate::fdf::Fdf::parse("Frame \"SPRITE\" \"WarCraftIIILogo\" {\n}\n").unwrap(),
+            ),
+            ..default()
+        });
+        let layer = world.spawn((LogoLayer, Visibility::Hidden)).id();
+        world.run_system_once(show_logo_for_screen).unwrap();
+        assert_eq!(
+            *world.get::<Visibility>(layer).unwrap(),
+            Visibility::Inherited
+        );
+        world.resource_mut::<MenuArtCache>().fdf =
+            Some(crate::fdf::Fdf::parse("Frame \"FRAME\" \"OptionsMenu\" {\n}\n").unwrap());
+        world.run_system_once(show_logo_for_screen).unwrap();
+        assert_eq!(*world.get::<Visibility>(layer).unwrap(), Visibility::Hidden);
+    }
     // The click tests spawn `Pressed` buttons; nothing else in the crate needs
     // the marker, so it is imported here rather than at module scope.
 
@@ -2030,6 +2890,9 @@ mod menu_tests {
     }
 
     fn press(world: &mut World, frame: &str) -> Entity {
+        world.init_resource::<crate::menu_screens::Navigation>();
+        world.init_resource::<crate::menu_settings::Backend>();
+        world.init_resource::<MenuArtCache>();
         let entry = world
             .spawn((
                 Button,
@@ -2049,18 +2912,22 @@ mod menu_tests {
         entry
     }
 
-    /// Options reveals the staging panel by dismissing the menu layer.
+    /// Game options retain the original menu's background and do not expose staging.
     #[test]
-    fn options_dismisses_the_menu_layer() {
+    fn options_open_the_original_settings_screen() {
         let mut world = World::new();
         let layer = world.spawn(MenuLayer).id();
         let entry = press(&mut world, "OptionsButton");
         world.run_system_once(apply_menu_clicks).unwrap();
         assert!(
-            world.get_entity(layer).is_err(),
-            "the menu layer is despawned"
+            world.get_entity(layer).is_ok(),
+            "the original background is retained"
         );
         assert!(world.get_entity(entry).is_ok(), "only the layer goes");
+        assert_eq!(
+            world.resource::<crate::menu_screens::Navigation>().screen,
+            crate::menu_screens::Screen::Options(crate::menu_screens::Page::Video)
+        );
     }
 
     /// An entry without a destination leaves the menu up.
@@ -2171,6 +3038,7 @@ Frame "FRAME" "MainMenuFrame" {
             ControlShortcutKey "O",
         }
         Frame "GLUETEXTBUTTON" "ExitButton" {
+            TabFocusDefault,
             Width 0.168,
             Height 0.031,
             SetPoint TOP,"OptionsButton",BOTTOM, 0.0, -0.1,
@@ -2183,6 +3051,8 @@ Frame "FRAME" "MainMenuFrame" {
             fdf: Some(crate::fdf::Fdf::parse(LAYER).expect("fixture")),
             ..Default::default()
         });
+        world.init_resource::<crate::menu_screens::Navigation>();
+        world.init_resource::<bevy::input_focus::InputFocus>();
         world.spawn((Node::default(), ControlRoot));
         world.run_system_once(build_control_layer).unwrap();
         world.flush();
@@ -2190,6 +3060,17 @@ Frame "FRAME" "MainMenuFrame" {
         let mut frames: Vec<String> = buttons.iter(&world).map(|b| b.frame.clone()).collect();
         frames.sort();
         assert_eq!(frames, ["ExitButton", "OptionsButton"]);
+        let focused = world
+            .resource::<bevy::input_focus::InputFocus>()
+            .get()
+            .unwrap();
+        assert_eq!(
+            world
+                .get::<crate::glue_menu::GlueButton>(focused)
+                .unwrap()
+                .frame,
+            "ExitButton"
+        );
         world.run_system_once(build_control_layer).unwrap();
         world.flush();
         assert_eq!(buttons.iter(&world).count(), 2, "built twice");
@@ -2350,5 +3231,433 @@ KEY_EXIT                 "E|Cffffffffx|Rit",
         world.run_system_once(apply_menu_text).expect("runs");
         assert!(world.get::<MenuTextFilled>(exit).is_none());
         assert!(world.get::<Children>(exit).is_none_or(|c| c.is_empty()));
+    }
+}
+
+#[cfg(test)]
+mod menu_focus_tests {
+    use super::*;
+    use bevy::{
+        camera::NormalizedRenderTarget,
+        ecs::system::SystemState,
+        input::{InputPlugin, keyboard::KeyboardInput},
+        input_focus::{
+            FocusCause, InputDispatchPlugin, InputFocus, InputFocusPlugin,
+            pointer_focus::PointerFocusPlugin,
+            tab_navigation::{
+                NavAction, TabGroup, TabIndex, TabNavigation, TabNavigationError,
+                TabNavigationPlugin,
+            },
+        },
+        picking::{
+            backend::HitData,
+            events::{Pointer, PointerClick, PointerPress},
+            pointer::{Location, PointerButton, PointerId},
+        },
+        ui_widgets::{Button, ButtonPlugin},
+        window::PrimaryWindow,
+    };
+    struct Fixture {
+        app: App,
+        window: Entity,
+        root: Entity,
+        blank: Entity,
+        owner: Entity,
+        other: Entity,
+    }
+    fn fixture(fixed: bool, early: bool) -> Fixture {
+        let mut app = App::new();
+        if fixed && early {
+            app.add_observer(menu_acquire_focus);
+        }
+        app.add_plugins((
+            InputPlugin,
+            InputFocusPlugin,
+            InputDispatchPlugin,
+            PointerFocusPlugin,
+            TabNavigationPlugin,
+            ButtonPlugin,
+        ));
+        crate::button_actions::install(&mut app);
+        if fixed && !early {
+            app.add_observer(menu_acquire_focus);
+        }
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        let root = app
+            .world_mut()
+            .spawn((
+                MenuLayer,
+                TabGroup {
+                    modal: true,
+                    order: 0,
+                },
+            ))
+            .id();
+        let blank = app.world_mut().spawn(ChildOf(root)).id();
+        let owner = app
+            .world_mut()
+            .spawn((
+                Button,
+                TabIndex(0),
+                ChildOf(root),
+                crate::glue_menu::GlueButton {
+                    frame: "ResolutionMenu".into(),
+                    shortcut: None,
+                    pushed_text_offset: None,
+                },
+            ))
+            .id();
+        let other = app
+            .world_mut()
+            .spawn((Button, TabIndex(1), ChildOf(root)))
+            .id();
+        app.update();
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(other, FocusCause::Navigated);
+        Fixture {
+            app,
+            window,
+            root,
+            blank,
+            owner,
+            other,
+        }
+    }
+    fn pointer() -> Pointer {
+        Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target: NormalizedRenderTarget::None {
+                    width: 1,
+                    height: 1,
+                },
+                position: Vec2::ZERO,
+            },
+        )
+    }
+    fn press(f: &mut Fixture, entity: Entity) {
+        f.app.world_mut().trigger(PointerPress {
+            entity,
+            pointer: pointer(),
+            button: PointerButton::Primary,
+            hit: HitData::new(entity, 0.0, None, None),
+            count: 1,
+        });
+        f.app.world_mut().flush();
+    }
+    fn next(f: &mut Fixture) -> Result<Entity, TabNavigationError> {
+        let mut system = SystemState::<(Res<InputFocus>, TabNavigation)>::new(f.app.world_mut());
+        let (focus, nav) = system.get(f.app.world()).unwrap();
+        nav.navigate(&focus, NavAction::Next)
+    }
+    fn popup(f: &mut Fixture) -> (Entity, Entity, Entity) {
+        let popup = f
+            .app
+            .world_mut()
+            .spawn((
+                ResolutionPopup,
+                TabGroup {
+                    modal: true,
+                    order: 1,
+                },
+                ChildOf(f.root),
+            ))
+            .id();
+        let blank = f.app.world_mut().spawn(ChildOf(popup)).id();
+        let choice = f
+            .app
+            .world_mut()
+            .spawn((Button, TabIndex(0), ChildOf(popup)))
+            .id();
+        f.app
+            .world_mut()
+            .resource_mut::<InputFocus>()
+            .set(choice, FocusCause::Auto);
+        (popup, blank, choice)
+    }
+    #[test]
+    fn baseline_blank_press_loses_focus_and_tab_cannot_enter_modal_menu() {
+        let mut f = fixture(false, false);
+        let blank = f.blank;
+        press(&mut f, blank);
+        assert_eq!(f.app.world().resource::<InputFocus>().get(), None);
+        assert!(matches!(
+            next(&mut f),
+            Err(TabNavigationError::NoFocusableEntities)
+        ));
+    }
+    #[test]
+    fn blank_menu_press_retains_enabled_focus_and_tab_navigation() {
+        for early in [false, true] {
+            let mut f = fixture(true, early);
+            let blank = f.blank;
+            press(&mut f, blank);
+            assert_eq!(f.app.world().resource::<InputFocus>().get(), Some(f.other));
+            assert_eq!(next(&mut f), Ok(f.owner));
+        }
+    }
+    #[test]
+    fn outside_popup_blank_press_dismisses_and_restores_owner() {
+        for early in [false, true] {
+            let mut f = fixture(true, early);
+            let (popup, _, _) = popup(&mut f);
+            let blank = f.blank;
+            press(&mut f, blank);
+            assert!(f.app.world().get_entity(popup).is_err());
+            assert_eq!(f.app.world().resource::<InputFocus>().get(), Some(f.owner));
+            assert_eq!(next(&mut f), Ok(f.other));
+        }
+    }
+    #[test]
+    fn outside_popup_button_press_restores_owner_but_completed_action_still_runs() {
+        for early in [false, true] {
+            let mut f = fixture(true, early);
+            let (popup, _, _) = popup(&mut f);
+            let other = f.other;
+            press(&mut f, other);
+            assert!(f.app.world().get_entity(popup).is_err());
+            assert_eq!(f.app.world().resource::<InputFocus>().get(), Some(f.owner));
+            f.app.world_mut().trigger(PointerClick {
+                entity: other,
+                pointer: pointer(),
+                button: PointerButton::Primary,
+                hit: HitData::new(other, 0.0, None, None),
+                duration: std::time::Duration::from_millis(1),
+                count: 1,
+            });
+            f.app.world_mut().flush();
+            assert_eq!(
+                f.app
+                    .world()
+                    .resource::<crate::button_actions::ButtonActions>()
+                    .entities,
+                [other]
+            );
+        }
+    }
+    #[test]
+    fn popup_blank_press_retains_choice_and_inside_choice_does_not_dismiss() {
+        let mut f = fixture(true, false);
+        let (popup, blank, choice) = popup(&mut f);
+        press(&mut f, blank);
+        assert_eq!(f.app.world().resource::<InputFocus>().get(), Some(choice));
+        press(&mut f, choice);
+        assert!(f.app.world().get_entity(popup).is_ok());
+        assert_eq!(f.app.world().resource::<InputFocus>().get(), Some(choice));
+        assert_eq!(next(&mut f), Ok(choice));
+    }
+    #[test]
+    fn nonmenu_window_blank_click_still_clears_focus() {
+        let mut f = fixture(true, false);
+        let outside = f.app.world_mut().spawn(ChildOf(f.window)).id();
+        press(&mut f, outside);
+        assert_eq!(f.app.world().resource::<InputFocus>().get(), None);
+    }
+    #[test]
+    fn disabled_previous_control_is_not_retained() {
+        let mut f = fixture(true, false);
+        let blank = f.blank;
+        f.app
+            .world_mut()
+            .entity_mut(f.other)
+            .insert(InteractionDisabled);
+        press(&mut f, blank);
+        assert_eq!(f.app.world().resource::<InputFocus>().get(), None);
+    }
+    #[test]
+    fn explicit_acquire_focus_uses_the_same_scoped_boundary() {
+        let mut f = fixture(true, false);
+        f.app.world_mut().trigger(bevy::input_focus::AcquireFocus {
+            focused_entity: f.blank,
+            window: f.window,
+        });
+        f.app.world_mut().flush();
+        assert_eq!(f.app.world().resource::<InputFocus>().get(), Some(f.other));
+        assert_eq!(next(&mut f), Ok(f.owner));
+        // InputDispatchPlugin is included; its actual keyboard message type is linked.
+        assert!(f.app.world().contains_resource::<Messages<KeyboardInput>>());
+    }
+}
+
+#[cfg(test)]
+mod resize_bridge_tests {
+    use super::*;
+    use bevy::{
+        camera::{CameraUpdateSystems, Projection, RenderTarget, Viewport},
+        render::{camera::camera_system, texture::ManualTextureViews},
+        window::{PrimaryWindow, WindowCreated, WindowResized, WindowScaleFactorChanged},
+    };
+    struct Fixture {
+        app: App,
+        window: Entity,
+        full: Entity,
+        bounded: Entity,
+        panels: Entity,
+    }
+    fn fixture(bridge: bool) -> Fixture {
+        let mut app = App::new();
+        app.add_message::<WindowCreated>()
+            .add_message::<WindowResized>()
+            .add_message::<WindowScaleFactorChanged>()
+            .add_message::<AssetEvent<Image>>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<ManualTextureViews>()
+            .add_systems(PostUpdate, camera_system.in_set(CameraUpdateSystems));
+        if bridge {
+            app.add_systems(
+                PostUpdate,
+                synchronize_window_camera_size.before(CameraUpdateSystems),
+            );
+        }
+        let window = app
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: (1280u32, 720u32).into(),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        let full = app
+            .world_mut()
+            .spawn((
+                Camera::default(),
+                RenderTarget::default(),
+                Projection::default(),
+            ))
+            .id();
+        let make_bounded = || {
+            (
+                Camera {
+                    viewport: Some(Viewport {
+                        physical_position: UVec2::new(160, 0),
+                        physical_size: UVec2::new(960, 720),
+                        ..default()
+                    }),
+                    ..default()
+                },
+                RenderTarget::default(),
+                Projection::default(),
+            )
+        };
+        let bounded = app.world_mut().spawn(make_bounded()).id();
+        let panels = app.world_mut().spawn(make_bounded()).id();
+        app.update();
+        Fixture {
+            app,
+            window,
+            full,
+            bounded,
+            panels,
+        }
+    }
+    fn set_size(f: &mut Fixture, width: u32, height: u32) {
+        f.app
+            .world_mut()
+            .get_mut::<Window>(f.window)
+            .unwrap()
+            .resolution
+            .set_physical_resolution(width, height);
+        let bounded_width = height * 4 / 3;
+        for entity in [f.bounded, f.panels] {
+            f.app
+                .world_mut()
+                .get_mut::<Camera>(entity)
+                .unwrap()
+                .viewport = Some(Viewport {
+                physical_position: UVec2::new(width.saturating_sub(bounded_width) / 2, 0),
+                physical_size: UVec2::new(width.min(bounded_width), height),
+                ..default()
+            });
+        }
+    }
+    fn sizes(f: &Fixture) -> [Option<UVec2>; 3] {
+        [f.full, f.bounded, f.panels].map(|entity| {
+            f.app
+                .world()
+                .get::<Camera>(entity)
+                .unwrap()
+                .physical_target_size()
+        })
+    }
+    #[test]
+    fn baseline_programmatic_shrink_splits_camera_target_sizes_until_acknowledgement() {
+        let mut f = fixture(false);
+        assert_eq!(sizes(&f), [Some(UVec2::new(1280, 720)); 3]);
+        set_size(&mut f, 752, 420);
+        f.app.update();
+        assert_eq!(
+            sizes(&f),
+            [
+                Some(UVec2::new(1280, 720)),
+                Some(UVec2::new(752, 420)),
+                Some(UVec2::new(752, 420))
+            ]
+        );
+        f.app.world_mut().write_message(WindowResized {
+            window: f.window,
+            width: 752.0,
+            height: 420.0,
+        });
+        f.app.update();
+        assert_eq!(sizes(&f), [Some(UVec2::new(752, 420)); 3]);
+    }
+    #[test]
+    fn bridge_refreshes_full_and_bounded_cameras_in_same_frame_for_shrink_and_grow() {
+        let mut f = fixture(true);
+        for (width, height) in [(752, 420), (1280, 720), (752, 420)] {
+            set_size(&mut f, width, height);
+            f.app.update();
+            assert_eq!(sizes(&f), [Some(UVec2::new(width, height)); 3]);
+            assert!(
+                f.app
+                    .world()
+                    .get::<Camera>(f.full)
+                    .unwrap()
+                    .viewport
+                    .is_none()
+            );
+        }
+    }
+    #[test]
+    fn duplicate_native_acknowledgement_does_not_change_bridge_result() {
+        let mut f = fixture(true);
+        set_size(&mut f, 752, 420);
+        f.app.update();
+        f.app.world_mut().write_message(WindowResized {
+            window: f.window,
+            width: 752.0,
+            height: 420.0,
+        });
+        f.app.update();
+        assert_eq!(sizes(&f), [Some(UVec2::new(752, 420)); 3]);
+    }
+    #[test]
+    fn bridge_clears_observation_without_primary_window_and_tracks_replacement() {
+        let mut f = fixture(true);
+        f.app
+            .world_mut()
+            .entity_mut(f.window)
+            .remove::<PrimaryWindow>();
+        f.app.update();
+        let replacement = f
+            .app
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: (752u32, 420u32).into(),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        f.app.update();
+        assert_ne!(replacement, f.window);
+        assert_eq!(sizes(&f), [Some(UVec2::new(752, 420)); 3]);
     }
 }

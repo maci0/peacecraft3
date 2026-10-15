@@ -72,6 +72,8 @@ pub struct Backdrop {
     pub background: Option<String>,
     /// `BackdropTileBackground`.
     pub tile: bool,
+    /// Authored square tile size in frame units; absent is preserved.
+    pub background_size: Option<f32>,
     /// Authored `BackdropMirrored`; its native operation remains unproved.
     pub mirrored: bool,
     /// `BackdropBackgroundInsets`, which the shipped menu always writes equal.
@@ -106,6 +108,8 @@ pub struct Button {
 pub enum Kind {
     Backdrop(Backdrop),
     Button(Box<Button>),
+    Text,
+    Widget(crate::menu_screens::Widget),
 }
 
 /// One drawable frame and where it sits, in the engine's Y-up frame units.
@@ -180,6 +184,7 @@ pub fn backdrop(fdf: &Fdf, frame: &str) -> Result<Option<Backdrop>, FdfError> {
     Ok(Some(Backdrop {
         background,
         tile: fdf.flag(frame, "BackdropTileBackground"),
+        background_size: one_number(fdf, frame, "BackdropBackgroundSize")?,
         mirrored: fdf.flag(frame, "BackdropMirrored"),
         inset,
         edge,
@@ -266,13 +271,34 @@ pub fn control_items(
     root: &str,
     viewport: (f32, f32),
 ) -> Result<(Vec<Item>, Vec<String>), FdfError> {
+    control_items_for(fdf, root, viewport, |_| Ok(true))
+}
+
+pub fn control_items_for(
+    fdf: &Fdf,
+    root: &str,
+    viewport: (f32, f32),
+    include: impl Fn(&str) -> Result<bool, FdfError>,
+) -> Result<(Vec<Item>, Vec<String>), FdfError> {
     let mut items = Vec::new();
     let mut unsupported = Vec::new();
     let frame = fdf
         .frame(root)
         .ok_or_else(|| FdfError::UnknownFrame(root.to_string()))?;
     let mut pending: Vec<String> = frame.children.iter().rev().cloned().collect();
+    let mut remaining = fdf.frames().len();
     while let Some(name) = pending.pop() {
+        if remaining == 0 {
+            return Err(FdfError::Unsupported {
+                frame: name,
+                property: "frame traversal",
+                value: "repeated child expansion exceeds the parsed frame count".into(),
+            });
+        }
+        remaining -= 1;
+        if !include(&name)? {
+            continue;
+        }
         let frame = fdf
             .frame(&name)
             .ok_or_else(|| FdfError::UnknownFrame(name.clone()))?;
@@ -296,6 +322,25 @@ pub fn control_items(
                 }
             }
             "FRAME" => {}
+            "TEXT" => {
+                if fdf.text_value(&name).is_some() {
+                    items.push(Item {
+                        rect: fdf.rect(&name, viewport)?,
+                        kind: Kind::Text,
+                        frame: name.clone(),
+                    });
+                }
+            }
+            "SLIDER" | "CHECKBOX" | "GLUECHECKBOX" | "POPUPMENU" | "GLUEPOPUPMENU" => {
+                if let Some(widget) = crate::menu_screens::widget(fdf, &name)? {
+                    items.push(Item {
+                        rect: fdf.rect(&name, viewport)?,
+                        kind: Kind::Widget(widget),
+                        frame: name.clone(),
+                    });
+                    continue;
+                }
+            }
             _ => unsupported.push(format!("{kind} {name}")),
         }
         pending.extend(frame.children.iter().rev().cloned());
@@ -323,10 +368,17 @@ const ADDITIVE_SHADER: &str = "embedded://peacecraft3/glue_additive.wgsl";
 
 pub fn install(app: &mut App) {
     bevy::asset::embedded_asset!(app, "glue_additive.wgsl");
-    app.add_plugins(UiMaterialPlugin::<AdditiveImage>::default())
-        .init_resource::<GlueImages>()
-        .add_systems(PreUpdate, shortcut_keys.after(bevy::input::InputSystems))
-        .add_systems(Update, (load_art, show_states, place_shadows));
+    bevy::asset::embedded_asset!(app, "glue_backdrop.wgsl");
+    app.add_plugins((
+        UiMaterialPlugin::<AdditiveImage>::default(),
+        UiMaterialPlugin::<BackdropImage>::default(),
+    ))
+    .init_resource::<GlueImages>()
+    .add_systems(PreUpdate, shortcut_keys.after(bevy::input::InputSystems))
+    .add_systems(
+        Update,
+        (load_art, show_states, place_shadows, update_setting_art),
+    );
 }
 
 /// `HighlightAlphaMode "ADD"`: the texture is added to what is under it.
@@ -364,6 +416,29 @@ impl UiMaterial for AdditiveImage {
         }
     }
 }
+
+/// Repeated backdrop art. Repeat counts derive from its laid-out frame rectangle
+/// divided by the authored tile size, so resizing changes physical tile dimensions
+/// with the UI while preserving authored repeats independently on each axis.
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+struct BackdropImage {
+    #[texture(0)]
+    #[sampler(1)]
+    texture: Handle<Image>,
+    #[uniform(2)]
+    uv_transform: Vec4,
+    #[uniform(3)]
+    uv_rows: Vec4,
+}
+
+impl UiMaterial for BackdropImage {
+    fn fragment_shader() -> ShaderRef {
+        ShaderRef::Path("embedded://peacecraft3/glue_backdrop.wgsl".into())
+    }
+}
+
+#[derive(Component)]
+struct BackdropRepeat(Vec2);
 
 /// A clickable FDF frame. Clicks are dispatched by [`GlueButton::frame`].
 #[derive(Component, Debug)]
@@ -414,11 +489,11 @@ struct PendingArt {
     additive: bool,
 }
 
-/// Decoded art by path, edge request and tile policy. Untiled art cannot bypass
-/// a subsequent tiled request's measured-uniformity check.
+/// Decoded art by path and sampler policy. Every edge piece shares the strip
+/// image; its source rectangle belongs to the ImageNode, not another decode.
 #[derive(Resource, Default)]
 pub struct GlueImages {
-    images: std::collections::HashMap<(String, Option<EdgePiece>, bool), Handle<Image>>,
+    images: std::collections::HashMap<(String, bool), Handle<Image>>,
     /// Reported once; a browser keeps retrying because its store fills late.
     failed: std::collections::HashSet<String>,
     pub install: Option<std::path::PathBuf>,
@@ -457,52 +532,447 @@ fn fill() -> Node {
 /// Spawns a backdrop's background and edge pieces as children of `parent`,
 /// whose size in frame units is `size`.
 fn spawn_backdrop(commands: &mut Commands, parent: Entity, art: &Backdrop, size: Vec2) {
+    if !size.is_finite() || size.cmple(Vec2::ZERO).any() {
+        warn!("Menu backdrop has invalid frame size {size:?}");
+        return;
+    }
     let local = Rect {
         left: 0.0,
         bottom: 0.0,
         width: size.x,
         height: size.y,
     };
-    if let Some(path) = &art.background
-        && let Some(inset) = art.inset
-    {
+    if let Some(path) = &art.background {
+        // Renderer convention: an omitted inset leaves the entire frame available.
+        let inset = art.inset.unwrap_or(0.0);
         let inner = Rect {
             left: inset,
             bottom: inset,
             width: size.x - 2.0 * inset,
             height: size.y - 2.0 * inset,
         };
-        let child = commands
-            .spawn((
-                placed(&inner, &local),
-                PendingArt {
-                    path: path.clone(),
-                    piece: None,
-                    mirrored: art.mirrored,
-                    tile: art.tile,
-                    additive: false,
-                },
-                Pickable::IGNORE,
-            ))
-            .id();
-        commands.entity(parent).add_child(child);
-    } else if let Some(path) = &art.background {
-        warn!(
-            "Menu art {path}: absent BackdropBackgroundInsets has no verified default; background omitted"
-        );
+        if !inset.is_finite() || inset < 0.0 || inner.width <= 0.0 || inner.height <= 0.0 {
+            warn!("Menu backdrop {path}: invalid background inset {inset}");
+        } else if art
+            .background_size
+            .is_some_and(|v| !v.is_finite() || v <= 0.0)
+        {
+            warn!("Menu backdrop {path}: invalid BackdropBackgroundSize");
+        } else {
+            let child = commands
+                .spawn((
+                    placed(&inner, &local),
+                    PendingArt {
+                        path: path.clone(),
+                        piece: None,
+                        mirrored: art.mirrored,
+                        tile: art.tile,
+                        additive: false,
+                    },
+                    Pickable::IGNORE,
+                ))
+                .id();
+            if art.tile
+                && let Some(tile_size) = art.background_size
+            {
+                let repeats = Vec2::new(inner.width, inner.height) / tile_size;
+                if repeats.is_finite() && repeats.cmpgt(Vec2::ZERO).all() {
+                    commands.entity(child).insert(BackdropRepeat(repeats));
+                }
+            }
+            commands.entity(parent).add_child(child);
+        }
     }
-    if let Some(edge) = &art.edge
-        && let Some(&piece) = edge.pieces.first()
-    {
-        // Retain one pending diagnostic for the whole unsupported edge file;
-        // no geometry or pixel slot is inferred from its flag names.
-        commands.entity(parent).insert(PendingArt {
-            path: edge.file.clone(),
-            piece: Some(piece),
-            mirrored: false,
-            tile: false,
-            additive: false,
+    if let Some(edge) = &art.edge {
+        if !edge.corner_size.is_finite() || edge.corner_size <= 0.0 {
+            warn!("Menu edge {}: invalid BackdropCornerSize", edge.file);
+            return;
+        }
+        for &piece in &edge.pieces {
+            let mut rect = edge_rect(piece, size, edge.corner_size);
+            if rect.width <= 0.0 || rect.height <= 0.0 {
+                continue;
+            }
+            if art.mirrored {
+                rect.left = size.x - rect.left - rect.width;
+            }
+            let child = commands
+                .spawn((
+                    placed(&rect, &local),
+                    PendingArt {
+                        path: edge.file.clone(),
+                        piece: Some(piece),
+                        mirrored: art.mirrored,
+                        tile: false,
+                        additive: false,
+                    },
+                    Pickable::IGNORE,
+                ))
+                .id();
+            commands.entity(parent).add_child(child);
+        }
+    }
+}
+
+/// Conventional nine-slice placement; corners shrink together to fit small frames.
+fn edge_rect(piece: EdgePiece, size: Vec2, corner: f32) -> Rect {
+    let c = corner.min(size.x * 0.5).min(size.y * 0.5);
+    let (left, bottom, width, height) = match piece {
+        EdgePiece::Left => (0.0, c, c, size.y - 2.0 * c),
+        EdgePiece::Right => (size.x - c, c, c, size.y - 2.0 * c),
+        EdgePiece::Top => (c, size.y - c, size.x - 2.0 * c, c),
+        EdgePiece::Bottom => (c, 0.0, size.x - 2.0 * c, c),
+        EdgePiece::UpperLeft => (0.0, size.y - c, c, c),
+        EdgePiece::UpperRight => (size.x - c, size.y - c, c, c),
+        EdgePiece::BottomLeft => (0.0, 0.0, c, c),
+        EdgePiece::BottomRight => (size.x - c, 0.0, c, c),
+    };
+    Rect {
+        left,
+        bottom,
+        width,
+        height,
+    }
+}
+
+#[derive(Component)]
+struct SettingThumbArt {
+    owner: Entity,
+    control: Vec2,
+    thumb: Vec2,
+    vertical: bool,
+}
+
+#[derive(Component)]
+struct SettingCheckArt {
+    owner: Entity,
+    disabled: bool,
+    has_disabled: bool,
+}
+
+fn setting_size(fdf: &Fdf, frame: &str) -> Result<Vec2, FdfError> {
+    let width = one_number(fdf, frame, "Width")?.ok_or_else(|| missing(frame, "Width"))?;
+    let height = one_number(fdf, frame, "Height")?.ok_or_else(|| missing(frame, "Height"))?;
+    let size = Vec2::new(width, height);
+    if !size.is_finite() || size.cmple(Vec2::ZERO).any() {
+        return Err(FdfError::Unsupported {
+            frame: frame.into(),
+            property: "control art size",
+            value: format!("{size:?}"),
         });
+    }
+    Ok(size)
+}
+
+fn decorate_control_backdrops(
+    commands: &mut Commands,
+    owner: Entity,
+    parent: Entity,
+    fdf: &Fdf,
+    frame: &str,
+    size: Vec2,
+) -> Result<(), FdfError> {
+    let normal = state_backdrop(fdf, frame, "ControlBackdrop")?;
+    let pushed = state_backdrop(fdf, frame, "ControlPushedBackdrop")?;
+    let disabled = state_backdrop(fdf, frame, "ControlDisabledBackdrop")?;
+    let has = [normal.is_some(), pushed.is_some(), disabled.is_some()];
+    for (state, art) in [
+        (State::Normal, normal),
+        (State::Pushed, pushed),
+        (State::Disabled, disabled),
+    ] {
+        if let Some(art) = art {
+            let layer = commands
+                .spawn((
+                    fill(),
+                    StateLayer {
+                        button: owner,
+                        state,
+                        has,
+                    },
+                    Pickable::IGNORE,
+                ))
+                .id();
+            commands.entity(parent).add_child(layer);
+            spawn_backdrop(commands, layer, &art, size);
+        }
+    }
+    Ok(())
+}
+
+fn setting_highlight(fdf: &Fdf, frame: &str, key: &str) -> Result<Option<Highlight>, FdfError> {
+    let Some(name) = fdf.string(frame, key) else {
+        return Ok(None);
+    };
+    if fdf.frame(&name).is_none() {
+        return Err(FdfError::UnknownFrame(name));
+    }
+    if fdf.string(&name, "HighlightType").as_deref() != Some("FILETEXTURE") {
+        return Err(missing(&name, "HighlightType FILETEXTURE"));
+    }
+    let file = fdf
+        .string(&name, "HighlightAlphaFile")
+        .ok_or_else(|| missing(&name, "HighlightAlphaFile"))?;
+    let additive = match fdf.string(&name, "HighlightAlphaMode").as_deref() {
+        Some("ADD") => true,
+        Some("BLEND") => false,
+        None => return Err(missing(&name, "HighlightAlphaMode")),
+        Some(value) => {
+            return Err(FdfError::Unsupported {
+                frame: name,
+                property: "HighlightAlphaMode",
+                value: value.into(),
+            });
+        }
+    };
+    Ok(Some(Highlight { file, additive }))
+}
+
+/// Attach authored backdrop/checkbox/thumb/popup-arrow art to an existing setting.
+/// Call once per rebuilt control. Geometry conventions are documented in
+/// `docs/re-notes/menu-reconstruction-renderer.md`; values remain with the widget.
+pub fn decorate_setting(
+    commands: &mut Commands,
+    node: Entity,
+    fdf: &Fdf,
+    frame: &str,
+    size: Vec2,
+) -> Result<(), FdfError> {
+    if !size.is_finite() || size.cmple(Vec2::ZERO).any() {
+        return Err(FdfError::Unsupported {
+            frame: frame.into(),
+            property: "control art size",
+            value: format!("{size:?}"),
+        });
+    }
+    decorate_control_backdrops(commands, node, node, fdf, frame, size)?;
+    let kind = fdf
+        .frame(frame)
+        .ok_or_else(|| FdfError::UnknownFrame(frame.into()))?
+        .kind
+        .as_str();
+    match kind {
+        "SLIDER" => {
+            if let Some(thumb_frame) = fdf.string(frame, "SliderThumbButtonFrame") {
+                let thumb = setting_size(fdf, &thumb_frame)?;
+                let horizontal = fdf.flag(frame, "SliderLayoutHorizontal");
+                let vertical = fdf.flag(frame, "SliderLayoutVertical");
+                if horizontal == vertical {
+                    return Err(FdfError::Unsupported {
+                        frame: frame.into(),
+                        property: "slider art orientation",
+                        value: "requires one authored layout flag".into(),
+                    });
+                }
+                if if vertical {
+                    thumb.y > size.y
+                } else {
+                    thumb.x > size.x
+                } {
+                    return Err(FdfError::Unsupported {
+                        frame: frame.into(),
+                        property: "SliderThumbButtonFrame",
+                        value: "thumb exceeds slider travel axis".into(),
+                    });
+                }
+                let min = one_number(fdf, frame, "SliderMinValue")?
+                    .ok_or_else(|| missing(frame, "SliderMinValue"))?;
+                let max = one_number(fdf, frame, "SliderMaxValue")?
+                    .ok_or_else(|| missing(frame, "SliderMaxValue"))?;
+                let value = one_number(fdf, frame, "SliderInitialValue")?
+                    .ok_or_else(|| missing(frame, "SliderInitialValue"))?;
+                if !min.is_finite()
+                    || !max.is_finite()
+                    || !value.is_finite()
+                    || min >= max
+                    || !(min..=max).contains(&value)
+                {
+                    return Err(FdfError::Unsupported {
+                        frame: frame.into(),
+                        property: "slider art range",
+                        value: format!("{min}..{max}, initial {value}"),
+                    });
+                }
+                let art = SettingThumbArt {
+                    owner: node,
+                    control: size,
+                    thumb,
+                    vertical,
+                };
+                let mut rect = Rect {
+                    left: 0.0,
+                    bottom: 0.0,
+                    width: thumb.x,
+                    height: thumb.y,
+                };
+                set_thumb_rect(
+                    &mut rect,
+                    &art,
+                    ((f64::from(value) - f64::from(min)) / (f64::from(max) - f64::from(min)))
+                        as f32,
+                );
+                let child = commands
+                    .spawn((
+                        placed(
+                            &rect,
+                            &Rect {
+                                left: 0.0,
+                                bottom: 0.0,
+                                width: size.x,
+                                height: size.y,
+                            },
+                        ),
+                        art,
+                        bevy::ui_widgets::SliderThumb,
+                        Pickable::IGNORE,
+                    ))
+                    .id();
+                commands.entity(node).add_child(child);
+                decorate_control_backdrops(commands, node, child, fdf, &thumb_frame, thumb)?;
+            }
+        }
+        "CHECKBOX" | "GLUECHECKBOX" => {
+            let checked = setting_highlight(fdf, frame, "CheckBoxCheckHighlight")?;
+            let disabled = setting_highlight(fdf, frame, "CheckBoxDisabledCheckHighlight")?;
+            let has_disabled = disabled.is_some();
+            for (disabled, art) in [(false, checked), (true, disabled)] {
+                if let Some(art) = art {
+                    let child = commands
+                        .spawn((
+                            fill(),
+                            SettingCheckArt {
+                                owner: node,
+                                disabled,
+                                has_disabled,
+                            },
+                            PendingArt {
+                                path: art.file,
+                                piece: None,
+                                mirrored: false,
+                                tile: false,
+                                additive: art.additive,
+                            },
+                            Visibility::Hidden,
+                            Pickable::IGNORE,
+                        ))
+                        .id();
+                    commands.entity(node).add_child(child);
+                }
+            }
+        }
+        "POPUPMENU" | "GLUEPOPUPMENU" => {
+            if let Some(arrow_frame) = fdf.string(frame, "PopupArrowFrame") {
+                let arrow = setting_size(fdf, &arrow_frame)?;
+                if arrow.cmpgt(size).any() {
+                    return Err(FdfError::Unsupported {
+                        frame: frame.into(),
+                        property: "PopupArrowFrame",
+                        value: "arrow exceeds control rectangle".into(),
+                    });
+                }
+                let rect = Rect {
+                    left: size.x - arrow.x,
+                    bottom: (size.y - arrow.y) * 0.5,
+                    width: arrow.x,
+                    height: arrow.y,
+                };
+                let child = commands
+                    .spawn((
+                        placed(
+                            &rect,
+                            &Rect {
+                                left: 0.0,
+                                bottom: 0.0,
+                                width: size.x,
+                                height: size.y,
+                            },
+                        ),
+                        Pickable::IGNORE,
+                    ))
+                    .id();
+                commands.entity(node).add_child(child);
+                decorate_control_backdrops(commands, node, child, fdf, &arrow_frame, arrow)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn set_thumb_rect(rect: &mut Rect, art: &SettingThumbArt, fraction: f32) {
+    if art.vertical {
+        rect.left = (art.control.x - art.thumb.x) * 0.5;
+        rect.bottom = fraction.clamp(0.0, 1.0) * (art.control.y - art.thumb.y);
+    } else {
+        rect.left = fraction.clamp(0.0, 1.0) * (art.control.x - art.thumb.x);
+        rect.bottom = (art.control.y - art.thumb.y) * 0.5;
+    }
+}
+
+fn update_setting_art(
+    values: Query<(
+        &bevy::ui_widgets::SliderValue,
+        &bevy::ui_widgets::SliderRange,
+    )>,
+    checked: Query<(Has<bevy::ui::Checked>, Has<InteractionDisabled>)>,
+    mut thumbs: Query<(&SettingThumbArt, &mut Node)>,
+    mut checks: Query<(&SettingCheckArt, &mut Visibility)>,
+) {
+    for (art, mut node) in &mut thumbs {
+        let Ok((value, range)) = values.get(art.owner) else {
+            continue;
+        };
+        if !value.0.is_finite()
+            || !range.start().is_finite()
+            || !range.end().is_finite()
+            || range.start() >= range.end()
+        {
+            continue;
+        }
+        let mut rect = Rect {
+            left: 0.0,
+            bottom: 0.0,
+            width: art.thumb.x,
+            height: art.thumb.y,
+        };
+        set_thumb_rect(
+            &mut rect,
+            art,
+            ((f64::from(value.0) - f64::from(range.start()))
+                / (f64::from(range.end()) - f64::from(range.start()))) as f32,
+        );
+        let want = placed(
+            &rect,
+            &Rect {
+                left: 0.0,
+                bottom: 0.0,
+                width: art.control.x,
+                height: art.control.y,
+            },
+        );
+        if node.left != want.left || node.top != want.top {
+            node.left = want.left;
+            node.top = want.top;
+        }
+    }
+    for (art, mut visibility) in &mut checks {
+        let Ok((checked, disabled)) = checked.get(art.owner) else {
+            continue;
+        };
+        let shown = checked
+            && if art.disabled {
+                disabled
+            } else {
+                !disabled || !art.has_disabled
+            };
+        let want = if shown {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *visibility != want {
+            *visibility = want;
+        }
     }
 }
 
@@ -517,10 +987,35 @@ pub fn spawn(commands: &mut Commands, root: Entity, items: &[Item]) {
     for item in items {
         let size = Vec2::new(item.rect.width, item.rect.height);
         let node = commands
-            .spawn((placed(&item.rect, &frame), Name::new(item.frame.clone())))
+            .spawn((
+                placed(&item.rect, &frame),
+                Name::new(item.frame.clone()),
+                crate::menu_screens::ScreenPosition(item.frame.clone()),
+            ))
             .id();
         commands.entity(root).add_child(node);
         match &item.kind {
+            Kind::Text => {
+                commands.entity(node).insert((
+                    Pickable::IGNORE,
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        ..placed(&item.rect, &frame)
+                    },
+                ));
+                let label = commands
+                    .spawn((
+                        Text::new(""),
+                        GlueLabel {
+                            frame: item.frame.clone(),
+                            button: node,
+                        },
+                        Pickable::IGNORE,
+                    ))
+                    .id();
+                commands.entity(node).add_child(label);
+            }
+            Kind::Widget(_) => {}
             Kind::Backdrop(art) => {
                 commands.entity(node).insert(Pickable::IGNORE);
                 spawn_backdrop(commands, node, art, size);
@@ -594,6 +1089,7 @@ pub fn spawn(commands: &mut Commands, root: Entity, items: &[Item]) {
                     let label = commands
                         .spawn((
                             Node {
+                                flex_direction: FlexDirection::Column,
                                 justify_content: JustifyContent::Center,
                                 align_items: AlignItems::Center,
                                 ..fill()
@@ -616,6 +1112,8 @@ pub fn spawn(commands: &mut Commands, root: Entity, items: &[Item]) {
     }
 }
 
+/// Attaches interactive setting widgets after their asset-derived rectangles
+/// have been spawned. The FDF remains the source of ranges and styles.
 /// The bytes of one art path: the install, else the browser's store.
 fn art_bytes(install: Option<&std::path::Path>, path: &str) -> Option<Vec<u8>> {
     crate::mainmenu::art_bytes(install, path).or_else(|| crate::mainmenu::from_served(path))
@@ -623,25 +1121,59 @@ fn art_bytes(install: Option<&std::path::Path>, path: &str) -> Option<Vec<u8>> {
 
 #[derive(Debug, thiserror::Error)]
 enum ArtError {
-    #[error("{path}: BackdropEdgeFile {piece:?} mapping/rotation is unproved; edge is not drawn")]
-    UnverifiedEdge { path: String, piece: EdgePiece },
-    #[error("{path}: BackdropMirrored behavior is unproved; image is not drawn")]
-    UnverifiedMirror { path: String },
+    #[error("{width}x{height}: expected a horizontal eight-square edge strip")]
+    UnsupportedEdgeShape { width: u32, height: u32 },
 }
 
-fn supported_art(art: &PendingArt) -> Result<(), ArtError> {
-    if let Some(piece) = art.piece {
-        return Err(ArtError::UnverifiedEdge {
-            path: art.path.clone(),
-            piece,
-        });
+/// Implementation policy, not a claim about native atlas internals: slots are
+/// L,R,T,B,UL,UR,BL,BR; horizontal edge sampling rotates clockwise.
+fn edge_source_rect(
+    piece: EdgePiece,
+    width: u32,
+    height: u32,
+) -> Result<bevy::math::Rect, ArtError> {
+    if height == 0 || height.checked_mul(8) != Some(width) {
+        return Err(ArtError::UnsupportedEdgeShape { width, height });
     }
-    if art.mirrored {
-        return Err(ArtError::UnverifiedMirror {
-            path: art.path.clone(),
-        });
+    let slot = match piece {
+        EdgePiece::Left => 0,
+        EdgePiece::Right => 1,
+        EdgePiece::Top => 2,
+        EdgePiece::Bottom => 3,
+        EdgePiece::UpperLeft => 4,
+        EdgePiece::UpperRight => 5,
+        EdgePiece::BottomLeft => 6,
+        EdgePiece::BottomRight => 7,
+    };
+    let x = (slot * height) as f32;
+    Ok(bevy::math::Rect::new(
+        x,
+        0.0,
+        x + height as f32,
+        height as f32,
+    ))
+}
+
+/// Horizontal edge slots are stored vertically; rotate their sampling clockwise.
+/// This is a reconstruction convention supported by the source strip and corners.
+fn horizontal_edge_material(
+    texture: Handle<Image>,
+    rect: bevy::math::Rect,
+    image_size: Vec2,
+    mirrored: bool,
+) -> BackdropImage {
+    let scale = rect.size() / image_size;
+    let origin = rect.min / image_size;
+    BackdropImage {
+        texture,
+        uv_rows: Vec4::new(0.0, 1.0, if mirrored { 1.0 } else { -1.0 }, 0.0),
+        uv_transform: Vec4::new(
+            scale.x,
+            scale.y,
+            origin.x,
+            origin.y + if mirrored { 0.0 } else { scale.y },
+        ),
     }
-    Ok(())
 }
 
 /// Whether every texel of an RGBA8 buffer is the same colour.
@@ -661,37 +1193,31 @@ fn load_art(
     mut cache: ResMut<GlueImages>,
     mut images: ResMut<Assets<Image>>,
     mut additive: ResMut<Assets<AdditiveImage>>,
-    pending: Query<(Entity, &PendingArt)>,
+    mut backgrounds: ResMut<Assets<BackdropImage>>,
+    pending: Query<(Entity, &PendingArt, Option<&BackdropRepeat>)>,
 ) {
-    for (entity, art) in &pending {
-        // Validate even cached requests: no handle can establish a native edge map.
-        if let Err(error) = supported_art(art) {
-            if cache.failed.insert(art.path.clone()) {
-                warn!("Menu art: {error}");
-            }
-            commands.entity(entity).remove::<PendingArt>();
-            continue;
-        }
-        let key = (art.path.clone(), art.piece, art.tile);
+    for (entity, art, repeats) in &pending {
+        let key = (art.path.clone(), art.tile);
         let handle = match cache.images.get(&key) {
             Some(handle) => handle.clone(),
             None => {
-                let install = cache.install.clone();
-                let decoded = art_bytes(install.as_deref(), &art.path)
+                let decoded = art_bytes(cache.install.as_deref(), &art.path)
                     .ok_or_else(|| format!("{} is not readable", art.path))
                     .and_then(|bytes| {
                         pcx_gfx::load_image(&bytes, &art.path).map_err(|e| e.to_string())
-                    })
-                    .and_then(|texture| match art.tile {
-                        // Stretch is equivalent to tiling only for measured uniform art.
-                        true if !uniform(&texture.rgba) => Err(format!(
-                            "{}: patterned BackdropTileBackground is not drawn",
-                            art.path
-                        )),
-                        _ => Ok(pcx_gfx::viewer::rgba_image(&texture)),
                     });
                 match decoded {
-                    Ok(image) => {
+                    Ok(texture) => {
+                        let mut image = pcx_gfx::viewer::rgba_image(&texture);
+                        if art.tile {
+                            image.sampler = bevy::image::ImageSampler::Descriptor(
+                                bevy::image::ImageSamplerDescriptor {
+                                    address_mode_u: bevy::image::ImageAddressMode::Repeat,
+                                    address_mode_v: bevy::image::ImageAddressMode::Repeat,
+                                    ..default()
+                                },
+                            );
+                        }
                         let handle = images.add(image);
                         cache.images.insert(key, handle.clone());
                         handle
@@ -708,14 +1234,67 @@ fn load_art(
                 }
             }
         };
+        let Some(image_asset) = images.get(&handle) else {
+            continue;
+        };
+        let rect = match art.piece {
+            Some(piece) => match edge_source_rect(piece, image_asset.width(), image_asset.height())
+            {
+                Ok(rect) => Some(rect),
+                Err(error) => {
+                    if cache.failed.insert(art.path.clone()) {
+                        warn!("Menu art {}: {error}", art.path);
+                    }
+                    commands.entity(entity).remove::<PendingArt>();
+                    continue;
+                }
+            },
+            None => None,
+        };
+        let patterned = !image_asset.data.as_deref().is_some_and(uniform);
         let mut entity = commands.entity(entity);
         entity.remove::<PendingArt>();
         if art.additive {
             entity.insert(MaterialNode(
                 additive.add(AdditiveImage { texture: handle }),
             ));
+        } else if matches!(art.piece, Some(EdgePiece::Top | EdgePiece::Bottom)) {
+            let source = rect.expect("checked source rectangle for an edge piece");
+            let image_size = Vec2::new(image_asset.width() as f32, image_asset.height() as f32);
+            entity.insert(MaterialNode(backgrounds.add(horizontal_edge_material(
+                handle,
+                source,
+                image_size,
+                art.mirrored,
+            ))));
+        } else if art.tile
+            && patterned
+            && let Some(repeats) = repeats
+        {
+            let r = repeats.0;
+            let transform = if art.mirrored {
+                Vec4::new(-r.x, r.y, r.x, 0.0)
+            } else {
+                Vec4::new(r.x, r.y, 0.0, 0.0)
+            };
+            entity.insert(MaterialNode(backgrounds.add(BackdropImage {
+                texture: handle,
+                uv_transform: transform,
+                uv_rows: Vec4::new(1.0, 0.0, 0.0, 1.0),
+            })));
         } else {
-            let image = ImageNode::new(handle).with_mode(NodeImageMode::Stretch);
+            let mut image = ImageNode::new(handle).with_mode(NodeImageMode::Stretch);
+            image.rect = rect;
+            if art.tile && patterned {
+                // With no authored tile size, retain intrinsic image dimensions
+                // in logical UI pixels as an explicit reconstruction convention.
+                image.image_mode = NodeImageMode::Tiled {
+                    tile_x: true,
+                    tile_y: true,
+                    stretch_value: 1.0,
+                };
+            }
+            image.flip_x = art.mirrored;
             entity.insert(image);
         }
     }
@@ -733,6 +1312,8 @@ fn show_states(
     mut layers: Query<(&StateLayer, &mut Visibility)>,
     mut labels: Query<(&GlueLabel, &ChildOf)>,
     mut nodes: Query<&mut Node>,
+    focus: Option<Res<bevy::input_focus::InputFocus>>,
+    focus_visible: Option<Res<bevy::input_focus::InputFocusVisible>>,
 ) {
     for (layer, mut visibility) in &mut layers {
         let Ok((_, hovered, pressed, disabled)) = buttons.get(layer.button) else {
@@ -740,7 +1321,14 @@ fn show_states(
         };
         let [_, has_pushed, has_disabled] = layer.has;
         let shown = match layer.state {
-            State::MouseOver => hovered.get() && !disabled,
+            State::MouseOver => {
+                (hovered.get()
+                    || (focus_visible.as_ref().is_some_and(|v| v.0)
+                        && focus
+                            .as_ref()
+                            .is_some_and(|f| f.get() == Some(layer.button))))
+                    && !disabled
+            }
             State::Disabled => disabled,
             State::Pushed => pressed && !disabled,
             State::Normal => !(disabled && has_disabled) && !(pressed && has_pushed && !disabled),
@@ -829,6 +1417,32 @@ fn place_shadows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_named_subtrees_cannot_expand_without_a_bound() {
+        let fdf = Fdf::parse(
+            r#"
+Frame "FRAME" "Root" {
+Frame "FRAME" "A" {
+}
+Frame "FRAME" "A" {
+}
+Frame "FRAME" "A" {
+Frame "FRAME" "B" {
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            control_items(&fdf, "Root", (0.8, 0.6)),
+            Err(FdfError::Unsupported {
+                property: "frame traversal",
+                ..
+            })
+        ));
+    }
 
     const TEMPLATES: &str = r#"
 Frame "BACKDROP" "BaseBackdrop" {
@@ -974,7 +1588,7 @@ Frame "FRAME" "MainMenuFrame" {
             .iter()
             .filter_map(|i| match &i.kind {
                 Kind::Button(b) => Some((i.frame.as_str(), b.as_ref())),
-                Kind::Backdrop(_) => None,
+                Kind::Backdrop(_) | Kind::Text | Kind::Widget(_) => None,
             })
             .collect();
         let names: Vec<&str> = buttons.iter().map(|(n, _)| *n).collect();
@@ -1053,29 +1667,128 @@ Frame "FRAME" "MainMenuFrame" {
         world.init_resource::<GlueImages>();
         world.init_resource::<Assets<Image>>();
         world.init_resource::<Assets<AdditiveImage>>();
+        world.init_resource::<Assets<BackdropImage>>();
         world
     }
 
-    #[test]
-    fn cached_untiled_pattern_cannot_bypass_tiled_request_validation() {
-        use bevy::ecs::system::RunSystemOnce;
-        let mut world = image_world();
+    fn cache_image(world: &mut World, path: &str, tile: bool, width: u32, height: u32) {
         let texture = pcx_gfx::LoadedTexture {
-            source: "synthetic-pattern.blp".into(),
-            width: 2,
-            height: 1,
-            rgba: vec![10, 20, 30, 255, 40, 50, 60, 255],
+            source: path.into(),
+            width,
+            height,
+            rgba: (0..width * height)
+                .flat_map(|i| [i as u8, 20, 30, 255])
+                .collect(),
         };
-        assert!(!uniform(&texture.rgba));
-        let image = pcx_gfx::viewer::rgba_image(&texture);
-        let handle = world.resource_mut::<Assets<Image>>().add(image);
+        let handle = world
+            .resource_mut::<Assets<Image>>()
+            .add(pcx_gfx::viewer::rgba_image(&texture));
         world
             .resource_mut::<GlueImages>()
             .images
-            .insert((texture.source.clone(), None, false), handle);
+            .insert((path.into(), tile), handle);
+    }
+
+    #[test]
+    fn all_edge_slices_render_with_distinct_source_rectangles_and_mirroring() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = image_world();
+        let mut entities = Vec::new();
+        for piece in EdgePiece::ALL {
+            cache_image(&mut world, "edge.blp", false, 16, 2);
+            entities.push((
+                piece,
+                world
+                    .spawn(PendingArt {
+                        path: "edge.blp".into(),
+                        piece: Some(piece),
+                        mirrored: true,
+                        tile: false,
+                        additive: false,
+                    })
+                    .id(),
+            ));
+        }
+        world.run_system_once(load_art).unwrap();
+        for (piece, entity) in entities {
+            if matches!(piece, EdgePiece::Top | EdgePiece::Bottom) {
+                let node = world.get::<MaterialNode<BackdropImage>>(entity).unwrap();
+                let material = world
+                    .resource::<Assets<BackdropImage>>()
+                    .get(&node.0)
+                    .unwrap();
+                let rect = edge_source_rect(piece, 16, 2).unwrap();
+                assert_eq!(material.uv_rows, Vec4::new(0.0, 1.0, 1.0, 0.0));
+                assert_eq!(
+                    material.uv_transform,
+                    Vec4::new(0.125, 1.0, rect.min.x / 16.0, 0.0)
+                );
+                // Independent asymmetric 2x2 markers: clockwise, then mirrored.
+                for (mirrored, expected) in [(false, [2, 0, 3, 1]), (true, [0, 2, 1, 3])] {
+                    let material = horizontal_edge_material(
+                        material.texture.clone(),
+                        rect,
+                        Vec2::new(16.0, 2.0),
+                        mirrored,
+                    );
+                    let mut actual = Vec::new();
+                    for y in 0..2 {
+                        for x in 0..2 {
+                            let uv = Vec2::new((x as f32 + 0.5) / 2.0, (y as f32 + 0.5) / 2.0);
+                            let rotated = Vec2::new(
+                                material.uv_rows.xy().dot(uv),
+                                material.uv_rows.zw().dot(uv),
+                            );
+                            let sample =
+                                rotated * material.uv_transform.xy() + material.uv_transform.zw();
+                            let source = sample * Vec2::new(16.0, 2.0) - rect.min;
+                            actual.push(source.y.floor() as u32 * 2 + source.x.floor() as u32);
+                        }
+                    }
+                    assert_eq!(actual, expected);
+                }
+                assert!(world.get::<ImageNode>(entity).is_none());
+            } else {
+                let image = world.get::<ImageNode>(entity).unwrap();
+                assert_eq!(image.rect, Some(edge_source_rect(piece, 16, 2).unwrap()));
+                assert!(image.flip_x);
+            }
+            assert!(world.get::<PendingArt>(entity).is_none());
+        }
+        assert!(edge_source_rect(EdgePiece::Left, 15, 2).is_err());
+        assert!(edge_source_rect(EdgePiece::Left, 8, 0).is_err());
+        assert!(edge_source_rect(EdgePiece::Left, u32::MAX, u32::MAX).is_err());
+    }
+
+    #[test]
+    fn patterned_background_keeps_per_axis_repeats_and_mirror_transform() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = image_world();
+        cache_image(&mut world, "pattern.blp", true, 2, 1);
         let entity = world
+            .spawn((
+                PendingArt {
+                    path: "pattern.blp".into(),
+                    piece: None,
+                    mirrored: true,
+                    tile: true,
+                    additive: false,
+                },
+                BackdropRepeat(Vec2::new(3.5, 1.25)),
+            ))
+            .id();
+        world.run_system_once(load_art).unwrap();
+        let node = world.get::<MaterialNode<BackdropImage>>(entity).unwrap();
+        let material = world
+            .resource::<Assets<BackdropImage>>()
+            .get(&node.0)
+            .unwrap();
+        assert_eq!(material.uv_transform, Vec4::new(-3.5, 1.25, 3.5, 0.0));
+        assert!(world.get::<PendingArt>(entity).is_none());
+        // No authored tile size uses the explicit intrinsic-image tiling convention.
+        let refused = world
             .spawn(PendingArt {
-                path: texture.source.clone(),
+                path: "pattern.blp".into(),
                 piece: None,
                 mirrored: false,
                 tile: true,
@@ -1083,58 +1796,43 @@ Frame "FRAME" "MainMenuFrame" {
             })
             .id();
         world.run_system_once(load_art).unwrap();
-        assert!(world.get::<ImageNode>(entity).is_none());
-        assert!(
-            world
-                .resource::<GlueImages>()
-                .failed
-                .contains(&texture.source)
-        );
-    }
-
-    #[test]
-    fn every_edge_request_refuses_before_even_a_cached_image_is_used() {
-        use bevy::ecs::system::RunSystemOnce;
-        let mut world = image_world();
-        let handle = world.resource_mut::<Assets<Image>>().add(Image::default());
-        let mut entities = Vec::new();
-        for piece in EdgePiece::ALL {
-            let art = PendingArt {
-                path: "synthetic-edge.blp".into(),
-                piece: Some(piece),
-                mirrored: false,
-                tile: false,
-                additive: false,
-            };
-            assert!(
-                matches!(supported_art(&art), Err(ArtError::UnverifiedEdge { piece: actual, .. }) if actual == piece)
-            );
-            world
-                .resource_mut::<GlueImages>()
-                .images
-                .insert((art.path.clone(), art.piece, art.tile), handle.clone());
-            entities.push(world.spawn(art).id());
-        }
-        world.run_system_once(load_art).unwrap();
-        for entity in entities {
-            assert!(world.get::<ImageNode>(entity).is_none());
-            assert!(world.get::<PendingArt>(entity).is_none());
-        }
-    }
-
-    #[test]
-    fn authored_mirroring_is_preserved_but_not_guessed_as_a_horizontal_flip() {
-        let art = PendingArt {
-            path: "synthetic-mirror.blp".into(),
-            piece: None,
-            mirrored: true,
-            tile: false,
-            additive: false,
-        };
         assert!(matches!(
-            supported_art(&art),
-            Err(ArtError::UnverifiedMirror { .. })
+            world.get::<ImageNode>(refused).unwrap().image_mode,
+            NodeImageMode::Tiled {
+                tile_x: true,
+                tile_y: true,
+                stretch_value: 1.0
+            }
         ));
+    }
+
+    #[test]
+    fn omitted_insets_render_full_background_and_authored_size_drives_repeats() {
+        use bevy::ecs::system::RunSystemOnce;
+        fn build(mut commands: Commands) {
+            let fdf = Fdf::parse("Frame \"BACKDROP\" \"A\" {\n BackdropBackground \"pattern.blp\",\n BackdropTileBackground,\n BackdropBackgroundSize 0.02,\n}\n").unwrap();
+            let root = commands.spawn(Node::default()).id();
+            spawn_backdrop(
+                &mut commands,
+                root,
+                &backdrop(&fdf, "A").unwrap().unwrap(),
+                Vec2::new(0.1, 0.06),
+            );
+        }
+        let mut world = image_world();
+        world.run_system_once(build).unwrap();
+        let mut q = world.query::<(&Node, &BackdropRepeat)>();
+        let (node, repeat) = q.single(&world).unwrap();
+        assert_eq!(node.width, Val::Percent(100.0));
+        assert_eq!(node.height, Val::Percent(100.0));
+        assert_eq!(repeat.0, Vec2::new(5.0, 3.0));
+        let top = edge_rect(EdgePiece::Top, Vec2::new(0.2, 0.1), 0.02);
+        assert_eq!(
+            (top.left, top.bottom, top.width, top.height),
+            (0.02, 0.08, 0.16, 0.02)
+        );
+        let small = edge_rect(EdgePiece::UpperLeft, Vec2::new(0.01, 0.01), 0.02);
+        assert_eq!((small.width, small.height), (0.005, 0.005));
     }
 
     #[test]
@@ -1143,5 +1841,147 @@ Frame "FRAME" "MainMenuFrame" {
         assert!(!uniform(&[1, 2, 3, 4, 9, 2, 3, 4]));
         assert!(!uniform(&[1, 2, 3, 4, 1]));
         assert!(!uniform(&[]));
+    }
+    #[test]
+    fn settings_art_tracks_authored_geometry_values_checked_and_disabled_states() {
+        use bevy::ecs::system::RunSystemOnce;
+        fn build(mut commands: Commands) {
+            let fdf = Fdf::parse(
+                r#"
+Frame "BACKDROP" "Base" {
+ BackdropBackground "synthetic.blp",
+}
+Frame "HIGHLIGHT" "Checked" {
+ HighlightType "FILETEXTURE",
+ HighlightAlphaFile "checked.blp",
+ HighlightAlphaMode "BLEND",
+}
+Frame "HIGHLIGHT" "DisabledChecked" {
+ HighlightType "FILETEXTURE",
+ HighlightAlphaFile "disabled-checked.blp",
+ HighlightAlphaMode "ADD",
+}
+Frame "BUTTON" "Thumb" {
+ Width 0.02,
+ Height 0.04,
+ ControlBackdrop "Base",
+}
+Frame "SLIDER" "Volume" {
+ SliderLayoutHorizontal,
+ SliderMinValue 10,
+ SliderMaxValue 30,
+ SliderInitialValue 20,
+ SliderThumbButtonFrame "Thumb",
+ ControlBackdrop "Base",
+}
+Frame "GLUECHECKBOX" "Toggle" {
+ ControlBackdrop "Base",
+ CheckBoxCheckHighlight "Checked",
+ CheckBoxDisabledCheckHighlight "DisabledChecked",
+}
+Frame "BUTTON" "Arrow" {
+ Width 0.02,
+ Height 0.02,
+ ControlBackdrop "Base",
+}
+Frame "GLUEPOPUPMENU" "Popup" {
+ PopupArrowFrame "Arrow",
+}
+"#,
+            )
+            .unwrap();
+            for (frame, size) in [
+                ("Volume", Vec2::new(0.2, 0.04)),
+                ("Toggle", Vec2::splat(0.04)),
+                ("Popup", Vec2::new(0.2, 0.04)),
+            ] {
+                let node = commands.spawn((Node::default(), Name::new(frame))).id();
+                decorate_setting(&mut commands, node, &fdf, frame, size).unwrap();
+            }
+        }
+        fn percent(value: Val, expected: f32) {
+            let Val::Percent(actual) = value else {
+                panic!("expected percent");
+            };
+            assert!((actual - expected).abs() <= 100.0 * f32::EPSILON);
+        }
+        let mut world = image_world();
+        world.run_system_once(build).unwrap();
+        let (thumb, owner) = {
+            let mut q = world.query::<(Entity, &SettingThumbArt)>();
+            let (entity, art) = q.single(&world).unwrap();
+            (entity, art.owner)
+        };
+        assert!(world.get::<bevy::ui_widgets::SliderThumb>(thumb).is_some());
+        percent(world.get::<Node>(thumb).unwrap().left, 45.0);
+        world.entity_mut(owner).insert((
+            bevy::ui_widgets::SliderValue(30.0),
+            bevy::ui_widgets::SliderRange::new(10.0, 30.0),
+        ));
+        world.run_system_once(update_setting_art).unwrap();
+        percent(world.get::<Node>(thumb).unwrap().left, 90.0);
+        world.entity_mut(owner).insert((
+            bevy::ui_widgets::SliderValue(0.0),
+            bevy::ui_widgets::SliderRange::new(-f32::MAX, f32::MAX),
+        ));
+        world.run_system_once(update_setting_art).unwrap();
+        percent(world.get::<Node>(thumb).unwrap().left, 45.0);
+        let toggle = {
+            let mut q = world.query::<&SettingCheckArt>();
+            q.iter(&world).next().unwrap().owner
+        };
+        world.entity_mut(toggle).insert(bevy::ui::Checked);
+        world.run_system_once(update_setting_art).unwrap();
+        {
+            let mut q = world.query::<(&SettingCheckArt, &Visibility)>();
+            for (art, visibility) in q.iter(&world) {
+                assert_eq!(
+                    *visibility,
+                    if art.disabled {
+                        Visibility::Hidden
+                    } else {
+                        Visibility::Inherited
+                    }
+                );
+            }
+        }
+        world.entity_mut(toggle).insert(InteractionDisabled);
+        world.run_system_once(update_setting_art).unwrap();
+        {
+            let mut q = world.query::<(&SettingCheckArt, &Visibility)>();
+            for (art, visibility) in q.iter(&world) {
+                assert_eq!(
+                    *visibility,
+                    if art.disabled {
+                        Visibility::Inherited
+                    } else {
+                        Visibility::Hidden
+                    }
+                );
+            }
+        }
+        let popup = {
+            let mut q = world.query::<(Entity, &Name)>();
+            q.iter(&world)
+                .find(|(_, name)| name.as_str() == "Popup")
+                .unwrap()
+                .0
+        };
+        let arrow = world.get::<Children>(popup).unwrap()[0];
+        let node = world.get::<Node>(arrow).unwrap();
+        percent(node.left, 90.0);
+        percent(node.top, 25.0);
+        percent(node.width, 10.0);
+        percent(node.height, 50.0);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen]
+    pub fn glue_backdrop_synthetic_check() -> u32 {
+        all_edge_slices_render_with_distinct_source_rectangles_and_mirroring();
+        patterned_background_keeps_per_axis_repeats_and_mirror_transform();
+        omitted_insets_render_full_background_and_authored_size_drives_repeats();
+        settings_art_tracks_authored_geometry_values_checked_and_disabled_states();
+        4
     }
 }

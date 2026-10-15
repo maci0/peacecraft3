@@ -1,41 +1,13 @@
-//! The expansion main menu's entrance sprite: the Frozen Throne logo.
+//! The selected main menu logo, its authored quad and entrance.
 //!
-//! The menu is missing its top-left logo. This module reads the original one out
-//! of the shipped model — its quad, its sequences and its alpha curve — and
-//! plays that model's own entrance. **No catalogue constant is treated as the
-//! renderer**: [`LogoData::parse`] takes the bytes and every number the fade
-//! uses comes from them. The constants below are the *expected* values, used
-//! only by the fixture test to check that the parse agrees with what was
-//! measured; the running code does not read them.
+//! [`LogoData::parse`] reads the quad, sequences and alpha curve from the
+//! selected model. Measured fixture expectations remain test-only; the fixed
+//! served names below are transport compatibility aliases.
 //!
-//! ## What the original is
-//!
-//! The expansion's `UI\FrameDef\Glue\MainMenu.fdf` (in `War3x.mpq`) declares the
-//! sprite and its anchor but leaves the art line **commented out**:
-//!
-//! ```text
-//! Frame "SPRITE" "WarCraftIIILogo" {
-//!     //BackgroundArt "UI\Glues\MainMenu\WarCraftIIILogo\WarCraftIIILogo.mdl",
-//!     SetPoint TOPLEFT, "MainMenuFrame", TOPLEFT, 0.13, 0.04,
-//! }
-//! ```
-//!
-//! `War3x.mpq` ships `UI\Glues\MainMenu\WarCraftIIILogo_exp\WarCraftIIILogo_exp.mdx`,
-//! the only logo model the expansion carries. **That the runtime substitutes
-//! that model for the commented line is not proven here.** The naming pattern is
-//! the archive's own (`MainMenu3d` / `MainMenu3D_Exp`), and a shipped sibling
-//! beside a commented-out reference is strong circumstantial evidence, but no
-//! observation of the runtime opening the file is recorded.
-//!
-//! ## Placement is deliberately not answered here
-//!
-//! The FDF's `0.13, 0.04` are **coordinate units**, and the native render is what
-//! establishes their meaning — they are not fractions this module may convert to
-//! percentages on its own authority. The model's `VRTX` bounds describe the
-//! artwork's rectangle and say nothing about where its sprite origin sits; the
-//! format stores no origin. So this module exposes [`LOGO_ANCHOR_UNITS`] and the
-//! parsed [`LogoData::quad`] as **separate facts** and offers no placement: the
-//! caller places it once the origin is traced.
+//! The caller explicitly selects the skin's `MainMenuLogo_V0` or
+//! `MainMenuLogo_V1` binding. Its model supplies the texture, quad and opacity;
+//! `WarCraftIIILogo` in the current MainMenu FDF supplies the anchor. The caller
+//! retains its existing model-quad projection policy.
 
 use bevy::prelude::*;
 
@@ -43,6 +15,7 @@ use pcx_mdl::NO_ID;
 
 /// The model the expansion ships for the menu logo.
 pub const LOGO_MODEL: &str = r"UI\Glues\MainMenu\WarCraftIIILogo_exp\WarCraftIIILogo_exp.mdx";
+pub const LOGO_FRAME: &str = "WarCraftIIILogo";
 /// The texture that model names in its own `TEXS`.
 pub const LOGO_TEXTURE: &str = r"ReplaceableTextures\WorldEditUI\WarcraftIIIFTLogo.blp";
 
@@ -50,14 +23,6 @@ pub const LOGO_TEXTURE: &str = r"ReplaceableTextures\WorldEditUI\WarcraftIIIFTLo
 pub const LOGO_MODEL_SERVED: &str = "menu-exp/warcraftiiilogo_exp.mdx";
 /// The served name of the texture, for a browser.
 pub const LOGO_TEXTURE_SERVED: &str = "menu-exp/warcraftiiiftlogo.blp";
-
-/// The FDF's `SetPoint TOPLEFT, "MainMenuFrame", TOPLEFT, 0.13, 0.04`, kept in
-/// the FDF's own **coordinate units**.
-///
-/// These are not fractions of the frame, and this module does not scale them
-/// into percentages: that would be asserting a placement convention the native
-/// render is the authority on. They are handed on as they were written.
-pub const LOGO_ANCHOR_UNITS: (f32, f32) = (0.13, 0.04);
 
 /// The quad bounds measured from the shipped model: `minX, minY, maxX, maxY`.
 ///
@@ -455,41 +420,97 @@ fn alpha_curve_of(data: &[u8]) -> Option<AlphaCurve> {
     Some(AlphaCurve::Bezier(keys))
 }
 
-/// The logo's original art: the model and the texture it names.
-#[derive(Debug, Clone, Default)]
+/// The selected model's parsed data and the texture its TEXS record names.
+#[derive(Debug, Clone)]
 pub struct LogoAssets {
-    /// `WarCraftIIILogo_exp.mdx`.
-    pub model: Option<Vec<u8>>,
-    /// `WarcraftIIIFTLogo.blp`, the texture the model's `TEXS` names.
-    pub texture: Option<Vec<u8>>,
-    /// The paths that were looked for and not found. A caller reports these; it
-    /// does not draw a logo that is not the original's.
-    pub missing: Vec<&'static str>,
+    pub model_path: String,
+    pub data: LogoData,
+    pub texture: Vec<u8>,
 }
 
-impl LogoAssets {
-    /// True when both halves are present.
-    #[must_use]
-    pub fn is_complete(&self) -> bool {
-        self.model.is_some() && self.texture.is_some()
-    }
-}
-
-/// Loads the logo's model and texture from an install, or from a browser store.
-#[must_use]
-pub fn load_logo(desktop: Option<&std::path::Path>) -> LogoAssets {
-    let mut out = LogoAssets {
-        model: crate::mainmenu::art_bytes_named(desktop, LOGO_MODEL, LOGO_MODEL_SERVED),
-        texture: crate::mainmenu::art_bytes_named(desktop, LOGO_TEXTURE, LOGO_TEXTURE_SERVED),
-        missing: Vec::new(),
+/// Resolve the explicit edition's skin binding, then use its binary transport.
+pub fn logo_model_path(
+    skin: &crate::menu_skin::SkinTable,
+    tft: bool,
+) -> Result<String, crate::menu_skin::SkinError> {
+    let key = if tft {
+        "MainMenuLogo_V1"
+    } else {
+        "MainMenuLogo_V0"
     };
-    if out.model.is_none() {
-        out.missing.push(LOGO_MODEL);
+    let path = skin.unique_file(key)?.file;
+    Ok(match path.get(path.len().saturating_sub(4)..) {
+        Some(ext) if ext.eq_ignore_ascii_case(".mdl") => {
+            format!("{}.mdx", &path[..path.len() - 4])
+        }
+        _ => path,
+    })
+}
+
+/// Read the current FDF's anchor without supplying an authored coordinate.
+pub fn logo_anchor(fdf: &crate::fdf::Fdf) -> Result<(f32, f32), crate::fdf::FdfError> {
+    use crate::fdf::{FdfError, Point};
+    let name = LOGO_FRAME;
+    let frame = fdf
+        .frame(name)
+        .ok_or_else(|| FdfError::UnknownFrame(name.into()))?;
+    match frame.props.set_points.as_slice() {
+        [point]
+            if point.point == Point::TopLeft
+                && point.relative == "MainMenuFrame"
+                && point.relative_point == Point::TopLeft
+                && point.x.is_finite()
+                && point.y.is_finite() =>
+        {
+            Ok((point.x, point.y))
+        }
+        points => Err(FdfError::Unsupported {
+            frame: name.into(),
+            property: "logo SetPoint",
+            value: format!("{points:?}"),
+        }),
     }
-    if out.texture.is_none() {
-        out.missing.push(LOGO_TEXTURE);
-    }
-    out
+}
+
+fn load_logo_with(
+    skin: &crate::menu_skin::SkinTable,
+    tft: bool,
+    mut read: impl FnMut(&str) -> Option<Vec<u8>>,
+) -> Result<LogoAssets, String> {
+    let model_path = logo_model_path(skin, tft).map_err(|e| e.to_string())?;
+    let model = read(&model_path).ok_or_else(|| format!("missing logo model {model_path:?}"))?;
+    let data = LogoData::parse(&model).map_err(|e| format!("logo model {model_path:?}: {e}"))?;
+    let texture = read(&data.texture).ok_or_else(|| {
+        format!(
+            "logo model {model_path:?}: missing texture {:?}",
+            data.texture
+        )
+    })?;
+    Ok(LogoAssets {
+        model_path,
+        data,
+        texture,
+    })
+}
+
+/// Load canonical selected paths first; old served aliases are compatibility only.
+pub fn load_logo(
+    desktop: Option<&std::path::Path>,
+    skin: &crate::menu_skin::SkinTable,
+    tft: bool,
+) -> Result<LogoAssets, String> {
+    load_logo_with(skin, tft, |path| {
+        crate::mainmenu::art_bytes(desktop, path).or_else(|| {
+            let alias = if path.eq_ignore_ascii_case(LOGO_MODEL) {
+                Some(LOGO_MODEL_SERVED)
+            } else if path.eq_ignore_ascii_case(LOGO_TEXTURE) {
+                Some(LOGO_TEXTURE_SERVED)
+            } else {
+                None
+            };
+            alias.and_then(crate::mainmenu::from_served)
+        })
+    })
 }
 
 #[must_use]
@@ -700,14 +721,39 @@ mod tests {
         assert!(e.elapsed_ms > 4.9, "got {}", e.elapsed_ms);
     }
 
-    /// The anchor stays in the FDF's units, and the quad is a separate fact.
     #[test]
-    fn the_anchor_units_and_the_quad_stay_distinct() {
-        assert_eq!(LOGO_ANCHOR_UNITS, (0.13, 0.04), "the FDF's own numbers");
-        assert_ne!(
-            LOGO_ANCHOR_UNITS.0, LOGO_QUAD_MEASURED.0,
-            "the anchor is not the quad's edge"
-        );
+    fn logo_paths_and_anchor_come_from_the_selected_inputs() {
+        let skin = crate::menu_skin::SkinTable::parse(
+            "[Default]\nMainMenuLogo_V0=Custom\\First.MDL\nMainMenuLogo_V1=Custom\\Second.mdx\n",
+        )
+        .unwrap();
+        assert_eq!(logo_model_path(&skin, false).unwrap(), r"Custom\First.mdx");
+        assert_eq!(logo_model_path(&skin, true).unwrap(), r"Custom\Second.mdx");
+        let fdf = crate::fdf::Fdf::parse("Frame \"SPRITE\" \"WarCraftIIILogo\" {\nSetPoint TOPLEFT,\"MainMenuFrame\",TOPLEFT,0.217,-0.063,\n}\n").unwrap();
+        assert_eq!(logo_anchor(&fdf).unwrap(), (0.217, -0.063));
+        let duplicate = crate::menu_skin::SkinTable::parse(
+            "[Default]\nMainMenuLogo_V0=a.mdl\nMainMenuLogo_V0=b.mdl\n",
+        )
+        .unwrap();
+        assert!(logo_model_path(&duplicate, false).is_err());
+        assert!(logo_model_path(&duplicate, true).is_err());
+        let wrong = crate::fdf::Fdf::parse("Frame \"SPRITE\" \"WarCraftIIILogo\" {\nSetPoint TOPRIGHT,\"MainMenuFrame\",TOPLEFT,0.2,0.1,\n}\n").unwrap();
+        assert!(logo_anchor(&wrong).is_err());
+    }
+
+    #[test]
+    fn logo_model_failures_keep_the_selected_path() {
+        let skin =
+            crate::menu_skin::SkinTable::parse("[Default]\nMainMenuLogo_V0=custom.mdl\n").unwrap();
+        let mut reads = Vec::new();
+        let failure = load_logo_with(&skin, false, |path| {
+            reads.push(path.to_string());
+            Some(b"invalid model".to_vec())
+        })
+        .unwrap_err();
+        assert_eq!(reads, ["custom.mdx"]);
+        assert!(failure.contains("custom.mdx"));
+        assert!(failure.contains("model did not parse"));
     }
 
     /// `bounds_of` over the measured quad returns the measured bounds.
@@ -755,13 +801,15 @@ mod tests {
         let assets = roots
             .iter()
             .find_map(|r| {
-                let a = load_logo(Some(r.as_path()));
-                a.is_complete().then_some(a)
+                let bytes =
+                    crate::mainmenu::art_bytes(Some(r.as_path()), crate::mainmenu::SKIN_TABLE)?;
+                let text = std::str::from_utf8(&bytes).ok()?;
+                let skin = crate::menu_skin::SkinTable::parse(text).ok()?;
+                load_logo(Some(r.as_path()), &skin, true).ok()
             })
             .unwrap_or_else(|| panic!("no Warcraft III install found; searched {roots:?}"));
 
-        let data = LogoData::parse(assets.model.as_deref().expect("model"))
-            .expect("the shipped logo parses");
+        let data = assets.data;
 
         assert_eq!(data.texture, LOGO_TEXTURE);
         assert!(data.planar, "every vertex shares one z");

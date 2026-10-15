@@ -14,6 +14,27 @@ let localUrls = [];
 let localSources = { music: null, click: null };
 let generation = 0;
 
+const musicBaseVolume = music.volume;
+let clickBaseVolume = clickSound.volume;
+let userMusicGain = 1;
+let userEffectsGain = 1;
+let userMusicEnabled = true;
+let userEffectsEnabled = true;
+const eventSounds = new Map();
+function applyUserGains() {
+  music.volume = musicBaseVolume * (userMusicEnabled ? userMusicGain : 0);
+  clickSound.volume = clickBaseVolume * (userEffectsEnabled ? userEffectsGain : 0);
+  for (const [sound, base] of eventSounds) sound.volume = base * (userEffectsEnabled ? userEffectsGain : 0);
+}
+function setUserGains(musicGain, effectsGain, musicEnabled, effectsEnabled) {
+  if (![musicGain, effectsGain].every(value => Number.isFinite(value) && value >= 0 && value <= 1) ||
+      typeof musicEnabled !== 'boolean' || typeof effectsEnabled !== 'boolean')
+    throw new TypeError('Menu user gains require finite 0..1 values and boolean channel switches');
+  userMusicGain = musicGain; userEffectsGain = effectsGain;
+  userMusicEnabled = musicEnabled; userEffectsEnabled = effectsEnabled;
+  applyUserGains();
+}
+
 function resetLocalAssets() {
   generation++;
   music.pause(); clickSound.pause();
@@ -49,7 +70,8 @@ async function setLocalAssets({ music: musicSource = null, click: clickSource = 
     const url = URL.createObjectURL(new Blob([descriptor.blob], { type }));
     localUrls.push(url); player.src = url; player.muted = !enabled;
     localSources[name] = { path: descriptor.path, provenance: descriptor.provenance };
-    if (name === 'click') { player.volume = descriptor.settings.volume; clickNoDuplicates = descriptor.settings.noDuplicates; }
+    if (name === 'click') { clickBaseVolume = descriptor.settings.volume; clickNoDuplicates = descriptor.settings.noDuplicates; }
+    applyUserGains();
     // Existing launcher music loop/volume policy is preserved, not native setting proof.
     player.load();
   }
@@ -69,6 +91,7 @@ document.addEventListener('keydown', unlock, { capture: true });
 
 globalThis.peacecraft3Audio = {
   setLocalAssets,
+  setUserGains,
   resetLocalAssets,
   pauseForIntro() { introActive = true; music.pause(); clickSound.pause(); },
   resumeAfterIntro() { introActive = false; unlocked = false; music.currentTime = 0; unlock(); },
@@ -85,14 +108,19 @@ globalThis.peacecraft3Audio = {
   // install's AnimLookups.slk and AnimSounds.slk.
   event(bytes, volume) {
     if (!enabled || introActive) return;
+    if (!Number.isFinite(volume) || volume < 0 || volume > 1) throw new TypeError('Event audio requires a finite source base volume');
     const url = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
     const sound = new Audio(url);
-    sound.volume = volume;
-    sound.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true });
-    sound.play().catch(error => { URL.revokeObjectURL(url); report(error); });
+    eventSounds.set(sound, volume);
+    sound.volume = volume * (userEffectsEnabled ? userEffectsGain : 0);
+    sound.muted = !enabled;
+    const release = () => { eventSounds.delete(sound); URL.revokeObjectURL(url); };
+    sound.addEventListener('ended', release, { once: true });
+    sound.play().catch(error => { release(); report(error); });
   },
   status() {
-    return { enabled, unlocked, clicks, introActive, localMode, localSources, localUrlCount: localUrls.length, musicVolumePolicy: 'existing browser policy; original user volume unverified', musicTime: music.currentTime, musicPaused: music.paused,
+    return { enabled, unlocked, clicks, introActive, localMode, localSources, localUrlCount: localUrls.length,
+      musicBaseVolume, clickBaseVolume, userMusicGain, userEffectsGain, userMusicEnabled, userEffectsEnabled, musicVolume: music.volume, musicVolumePolicy: 'existing browser policy; original user volume unverified', musicTime: music.currentTime, musicPaused: music.paused,
       loop: music.loop, clickTime: clickSound.currentTime, clickPaused: clickSound.paused,
       clickVolume: clickSound.volume, muted: music.muted && clickSound.muted };
   },
@@ -104,6 +132,7 @@ toggle.setAttribute('aria-pressed', String(!enabled));
 toggle.addEventListener('click', () => {
   enabled = !enabled;
   music.muted = clickSound.muted = !enabled;
+  for (const sound of eventSounds.keys()) sound.muted = !enabled;
   toggle.textContent = enabled ? 'Mute sound' : 'Enable sound';
   toggle.setAttribute('aria-pressed', String(!enabled));
   document.dispatchEvent(new CustomEvent('peacecraft3-sound-changed', { detail: { enabled } }));

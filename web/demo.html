@@ -95,9 +95,11 @@
           <button id="demo-start" type="button" disabled>Open menu</button>
           <button id="sound" type="button" aria-pressed="false">Enable sound</button>
           <button id="fullscreen" type="button">Fullscreen</button>
+          <button id="preview-size" type="button" aria-pressed="false">Actual size</button>
         </div>
       </div>
-      <div id="stage"><canvas id="launcher-canvas" hidden tabindex="0" aria-label="Partial game menu rendered from locally imported assets">Your browser needs WebAssembly and a supported graphics API to display this menu.</canvas><p id="demo-placeholder">Your menu appears here after importing local files.</p></div>
+      <p class="hint">For readable controls in a narrow window, select Actual size and scroll inside the preview. Fit the whole menu again by switching it off.</p>
+      <div id="stage" tabindex="0" role="region" aria-label="Menu preview viewport"><canvas id="launcher-canvas" hidden tabindex="0" aria-label="Partial game menu rendered from locally imported assets">Your browser needs WebAssembly and a supported graphics API to display this menu.</canvas><p id="demo-placeholder">Your menu appears here after importing local files.</p></div>
     </section>
     <footer>Local files are kept in this browser session. Reloading the page requires importing them again. <a href="./pkg/freearc/freearc-codec-source.tar.gz">Installer decoder source and license</a></footer>
   </main>

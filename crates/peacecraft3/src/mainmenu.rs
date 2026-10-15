@@ -204,7 +204,9 @@ pub fn art_bytes(desktop: Option<&std::path::Path>, wc3_path: &str) -> Option<Ve
     // served name — the `MainMenu3d` model itself, for one — is still on disk,
     // and gating the desktop read behind `served_name` would silently make it
     // unreachable.
-    from_desktop(desktop, wc3_path).or_else(|| served_name(wc3_path).and_then(from_served))
+    from_desktop(desktop, wc3_path)
+        .or_else(|| from_served(wc3_path))
+        .or_else(|| served_name(wc3_path).and_then(from_served))
 }
 
 /// One art file's bytes when the served name is not [`served_name`]'s.

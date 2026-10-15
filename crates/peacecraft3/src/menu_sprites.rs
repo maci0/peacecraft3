@@ -146,6 +146,20 @@ fn binary_model_path(path: &str) -> String {
     }
 }
 
+/// The selected skin's panel bindings, shared by native reads and local imports.
+pub fn model_paths(
+    skin: &crate::menu_skin::SkinTable,
+    edition: u32,
+) -> Result<Vec<String>, crate::menu_skin::SkinError> {
+    LAYERS
+        .iter()
+        .map(|layer| {
+            skin.unique_file(&format!("{layer}_V{edition}"))
+                .map(|binding| binary_model_path(&binding.file))
+        })
+        .collect()
+}
+
 fn read(install: Option<&std::path::Path>, path: &str) -> Result<Vec<u8>, PanelError> {
     crate::mainmenu::art_bytes_named(install, path, path)
         .ok_or_else(|| PanelError::Missing(path.to_string()))
@@ -219,9 +233,7 @@ pub fn load(
         warn!("Menu panel sounds unavailable: {error}");
     }
     let mut out = Vec::with_capacity(LAYERS.len());
-    for layer in LAYERS {
-        let key = format!("{layer}_V{edition}");
-        let path = binary_model_path(&skins.unique_file(&key).map_err(PanelError::Skin)?.file);
+    for path in model_paths(&skins, edition).map_err(PanelError::Skin)? {
         let bytes = read(install, &path)?;
         let decode = |reason: String| PanelError::Decode {
             path: path.clone(),
@@ -447,17 +459,24 @@ extern "C" {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-type SoundSink<'w> = ResMut<'w, Assets<AudioSource>>;
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct SoundSink<'w> {
+    assets: ResMut<'w, Assets<AudioSource>>,
+    settings: Res<'w, crate::menu_settings::Backend>,
+}
 #[cfg(target_arch = "wasm32")]
 type SoundSink<'w> = ();
 
 #[cfg(not(target_arch = "wasm32"))]
 fn play(commands: &mut Commands, sink: &mut SoundSink, sound: &EventSound) {
     commands.spawn((
-        AudioPlayer(sink.add(AudioSource {
+        AudioPlayer(sink.assets.add(AudioSource {
             bytes: sound.bytes.clone(),
         })),
-        PlaybackSettings::DESPAWN.with_volume(bevy::audio::Volume::Linear(sound.volume)),
+        PlaybackSettings::DESPAWN.with_volume(bevy::audio::Volume::Linear(
+            sound.volume * sink.settings.audio.effective_effects(),
+        )),
+        crate::menu_audio::AuthoredVolume(sound.volume),
     ));
 }
 
@@ -592,6 +611,25 @@ mod tests {
         assert_eq!(binary_model_path(r"UI\A\B.MDL"), r"UI\A\B.mdx");
         assert_eq!(binary_model_path(r"UI\A\B.mdx"), r"UI\A\B.mdx");
         assert_eq!(binary_model_path("x"), "x");
+    }
+
+    #[test]
+    fn panel_models_follow_the_selected_skin_and_edition_without_fallback_paths() {
+        let skins = crate::menu_skin::SkinTable::parse(
+            "[Default]\nGlueSpriteLayerTopLeft_V0=Custom/left.mdl\nGlueSpriteLayerTopRight_V0=Custom/right.mdx\nGlueSpriteLayerTopLeft_V1=Other/one.MDL\nGlueSpriteLayerTopRight_V1=Other/two.mdx\n"
+        ).unwrap();
+        assert_eq!(
+            model_paths(&skins, 0).unwrap(),
+            ["Custom/left.mdx", "Custom/right.mdx"]
+        );
+        assert_eq!(
+            model_paths(&skins, 1).unwrap(),
+            ["Other/one.mdx", "Other/two.mdx"]
+        );
+        assert!(matches!(
+            model_paths(&skins, 2),
+            Err(crate::menu_skin::SkinError::UnknownFace(_))
+        ));
     }
 
     fn slk(rows: &[&[&str]]) -> pcx_slq::Table {
