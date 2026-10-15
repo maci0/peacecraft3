@@ -45,6 +45,8 @@ pub enum Failure {
     MissingDayNightModel(String),
     #[error("sound setup: {0}")]
     SoundState(&'static str),
+    #[error("sound parameter profile {0} is unsupported by the full numeric query")]
+    UnsupportedSoundParameterProfile(crate::sound_parameters::Profile),
     #[error("sound label is not admitted: {0}")]
     MissingSoundLabel(String),
     #[error("sound file is not admitted: {0}")]
@@ -121,14 +123,14 @@ enum Entry {
     },
     Sound {
         resource: usize,
-        parameters: Option<usize>,
+        parameters: Option<crate::sound_parameters::ParameterKey>,
         duration: Option<i32>,
         fade_in_rate: i32,
         fade_out_rate: i32,
     },
     FileSound {
         resource: usize,
-        parameters: Option<usize>,
+        parameters: Option<crate::sound_parameters::ParameterKey>,
         duration: Option<i32>,
         looping: bool,
         is_3d: bool,

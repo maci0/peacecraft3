@@ -537,3 +537,508 @@ fn label_and_direct_objects_use_the_same_parameter_bank_without_replacing_pcm() 
         .is_err()
     );
 }
+
+fn banks_budget() -> BanksBudget {
+    BanksBudget {
+        banks: 4,
+        table_bytes: 8192,
+        total_table_bytes: 32768,
+        coordinates: CoordinateLimits {
+            max_row: 100,
+            max_column: 32,
+        },
+        definitions: 8,
+        metadata_bytes: 2048,
+    }
+}
+fn input<'a>(
+    data: &'a [u8],
+    source: &'a str,
+    origin: &'a AssetIdentity,
+    labels: &'a [&'a str],
+    profile: Profile,
+) -> Input<'a> {
+    Input {
+        asset: ScriptAsset {
+            label: source,
+            bytes: data,
+        },
+        origin,
+        label_column: "Selector",
+        labels,
+        profile,
+    }
+}
+fn dialogue_rows() -> Vec<Vec<&'static str>> {
+    vec![
+        vec![
+            "Selector",
+            "DirectoryBase",
+            "FileNames",
+            "Volume",
+            "Flags",
+            "version",
+        ],
+        vec![
+            "Speech",
+            "Voices\\",
+            "a.mp3,b.mp3",
+            "101",
+            "OPAQUE,DIALOGUE",
+            "-9",
+        ],
+    ]
+}
+fn mixed_banks() -> Banks {
+    let full = table(&rows());
+    let dialogue = table(&dialogue_rows());
+    let o = origin();
+    Banks::read(
+        &[
+            input(&full, "synthetic:full", &o, &["Voice"], Profile::Full),
+            input(
+                &dialogue,
+                "synthetic:dialogue",
+                &o,
+                &["Speech"],
+                Profile::Dialogue,
+            ),
+        ],
+        banks_budget(),
+    )
+    .unwrap()
+}
+#[test]
+fn multi_bank_rows_and_lookup_columns_preserve_the_actual_assignment_source() {
+    let first = table(&rows());
+    let mut r = rows();
+    r[1][0] = "Second";
+    r[1][1] = "211";
+    r[0].push("UnrelatedLookup");
+    r[1].push("Voice");
+    r[2].push("Voice");
+    let second = table(&r);
+    let mut first_origin = origin();
+    first_origin.source = "synthetic:first".into();
+    let mut second_origin = origin();
+    second_origin.source = "synthetic:second".into();
+    let banks = Banks::read(
+        &[
+            input(
+                &first,
+                "synthetic:first-table",
+                &first_origin,
+                &["Voice"],
+                Profile::Full,
+            ),
+            input(
+                &second,
+                "synthetic:second-table",
+                &second_origin,
+                &["Second"],
+                Profile::Full,
+            ),
+        ],
+        banks_budget(),
+    )
+    .unwrap();
+    let mut h = host(COMMON, "").with_sound_parameter_banks(banks).unwrap();
+    assert!(h.sound_parameter_bank().is_none());
+    assert_eq!(h.sound_parameter_banks().unwrap().sources().count(), 2);
+    let id = create(&mut h);
+    let resource = h.sound_resource(id).unwrap() as *const _;
+    for (label, volume, source, sha, origin) in [
+        (
+            "Voice",
+            83,
+            "synthetic:first-table",
+            sha256(&first),
+            &first_origin,
+        ),
+        (
+            "Second",
+            211,
+            "synthetic:second-table",
+            sha256(&second),
+            &second_origin,
+        ),
+        (
+            "Voice",
+            83,
+            "synthetic:first-table",
+            sha256(&first),
+            &first_origin,
+        ),
+    ] {
+        h.native(
+            "SetSoundParamsFromLabel",
+            &[Value::Handle(id), Value::Str(label.into())],
+        )
+        .unwrap();
+        let assignment = h.sound_parameter_assignment(id).unwrap().unwrap();
+        assert_eq!(assignment.source.source_label, source);
+        assert_eq!(assignment.source.label_column, "Selector");
+        assert_eq!(assignment.source.sha256, sha);
+        assert_eq!(assignment.source.origin, origin);
+        let ParameterValues::Full(p) = assignment.parameters else {
+            panic!("full")
+        };
+        assert_eq!((p.row, p.values.volume), (2, volume));
+        assert_eq!(
+            assignment
+                .source
+                .table
+                .by_name(p.row, "Volume")
+                .unwrap()
+                .parse::<i32>()
+                .unwrap(),
+            volume
+        );
+        assert_eq!(
+            h.sound_parameters(id).unwrap().unwrap().values.volume,
+            volume
+        );
+        assert_eq!(h.sound_resource(id).unwrap() as *const _, resource);
+    }
+    assert!(
+        h.native(
+            "SetSoundParamsFromLabel",
+            &[Value::Handle(id), Value::Str("Unadmitted".into())]
+        )
+        .is_err()
+    );
+    assert_eq!(
+        h.sound_parameter_assignment(id)
+            .unwrap()
+            .unwrap()
+            .source
+            .source_label,
+        "synthetic:first-table"
+    );
+    assert_eq!(h.inner().handles(), 1);
+}
+#[test]
+fn aggregate_preflight_and_cross_bank_duplicates_precede_all_table_parsing() {
+    let o = origin();
+    let inputs = [
+        input(b"bad-a", "first", &o, &["A"], Profile::Full),
+        input(b"bad-b", "second", &o, &["B"], Profile::Dialogue),
+    ];
+    for which in 0..8 {
+        let mut b = banks_budget();
+        match which {
+            0 => b.banks = 1,
+            1 => b.definitions = 1,
+            2 => b.total_table_bytes = 5,
+            3 => {
+                b.metadata_bytes =
+                    preflight(inputs[0].asset, &o, "Selector", &["A"], budget()).unwrap()
+            }
+            4 => b.banks = usize::MAX,
+            5 => b.definitions = usize::MAX,
+            6 => b.total_table_bytes = usize::MAX,
+            _ => b.metadata_bytes = usize::MAX,
+        };
+        assert!(matches!(
+            Banks::read(&inputs, b).unwrap_err().problem,
+            Problem::Budget
+        ));
+    }
+    let duplicates = [
+        input(b"invalid-a", "first", &o, &["Same"], Profile::Full),
+        input(b"invalid-b", "second", &o, &["Same"], Profile::Dialogue),
+    ];
+    assert!(matches!(
+        Banks::read(&duplicates, banks_budget())
+            .unwrap_err()
+            .problem,
+        Problem::Ambiguous
+    ));
+    let d = table(&rows());
+    let equal = [
+        input(&d, "one", &o, &["Voice"], Profile::Full),
+        input(&d, "two", &o, &["Voice"], Profile::Full),
+    ];
+    assert!(matches!(
+        Banks::read(&equal, banks_budget()).unwrap_err().problem,
+        Problem::Ambiguous
+    ));
+}
+#[test]
+fn dialogue_has_only_sourced_values_and_full_getter_refuses_its_typed_profile() {
+    let mut h = host(COMMON, "")
+        .with_sound_parameter_banks(mixed_banks())
+        .unwrap();
+    let id = create(&mut h);
+    let untouched = create(&mut h);
+    assert!(h.sound_parameter_assignment(id).unwrap().is_none());
+    assert!(h.sound_parameters(id).unwrap().is_none());
+    let resource = h.sound_resource(id).unwrap() as *const _;
+    h.native(
+        "SetSoundParamsFromLabel",
+        &[Value::Handle(id), Value::Str("Speech".into())],
+    )
+    .unwrap();
+    let assignment = h.sound_parameter_assignment(id).unwrap().unwrap();
+    assert_eq!(assignment.source.profile, Profile::Dialogue);
+    assert_eq!(assignment.source.source_label, "synthetic:dialogue");
+    for field in [
+        "Pitch",
+        "PitchVariance",
+        "Priority",
+        "Channel",
+        "MinDistance",
+        "MaxDistance",
+        "DistanceCutoff",
+        "EAXFlags",
+    ] {
+        assert!(assignment.source.table.column_of(field).is_none());
+    }
+    let ParameterValues::Dialogue(p) = assignment.parameters else {
+        panic!("dialogue")
+    };
+    assert_eq!(
+        *p.values,
+        DialogueValues {
+            volume: 101,
+            version: -9
+        }
+    );
+    assert_eq!(
+        (p.row, p.flags, p.directory_base, p.file_names),
+        (2, "OPAQUE,DIALOGUE", "Voices\\", "a.mp3,b.mp3")
+    );
+    assert!(matches!(
+        h.sound_parameters(id).unwrap_err().failure,
+        crate::playercolor_host::Failure::UnsupportedSoundParameterProfile(Profile::Dialogue)
+    ));
+    assert!(h.sound_parameter_bank().is_none());
+    assert!(h.sound_parameter_assignment(untouched).unwrap().is_none());
+    assert_eq!(h.sound_resource(id).unwrap() as *const _, resource);
+    let before = h.file_sound_state(id).unwrap();
+    assert_eq!(
+        (
+            before.looping,
+            before.is_3d,
+            before.stop_when_out_of_range,
+            before.fade_in_rate,
+            before.fade_out_rate,
+            before.eax_setting
+        ),
+        (true, false, true, -7, 91, "CreationEAX")
+    );
+    assert!(
+        h.native(
+            "SetSoundParamsFromLabel",
+            &[Value::Handle(id), Value::Str("Missing".into())]
+        )
+        .is_err()
+    );
+    assert!(matches!(
+        h.sound_parameter_assignment(id)
+            .unwrap()
+            .unwrap()
+            .parameters,
+        ParameterValues::Dialogue(_)
+    ));
+    h.native(
+        "SetSoundParamsFromLabel",
+        &[Value::Handle(id), Value::Str("Voice".into())],
+    )
+    .unwrap();
+    assert_eq!(h.sound_parameters(id).unwrap().unwrap().label, "Voice");
+}
+#[test]
+fn dialogue_schema_refuses_missing_or_invalid_numbers_without_coercing_opaque_text() {
+    let o = origin();
+    for (column, bad) in [(3, "_"), (3, ""), (3, "2147483648"), (5, "NaN"), (5, "1.5")] {
+        let mut r = dialogue_rows();
+        r[1][column] = bad;
+        let d = table(&r);
+        assert!(matches!(
+            Banks::read(
+                &[input(&d, "dialogue", &o, &["Speech"], Profile::Dialogue)],
+                banks_budget()
+            )
+            .unwrap_err()
+            .problem,
+            Problem::Parameter { row: 2, .. }
+        ));
+    }
+    for flags in ["_", ""] {
+        let mut r = dialogue_rows();
+        r[1][4] = flags;
+        let d = table(&r);
+        let b = Banks::read(
+            &[input(
+                &d,
+                "opaque-dialogue",
+                &o,
+                &["Speech"],
+                Profile::Dialogue,
+            )],
+            banks_budget(),
+        )
+        .unwrap();
+        let a = b.get(b.find("Speech").unwrap()).unwrap();
+        let ParameterValues::Dialogue(p) = a.parameters else {
+            panic!("dialogue")
+        };
+        assert_eq!(p.flags, flags);
+    }
+    let mut r = dialogue_rows();
+    r[1].pop();
+    let d = table(&r);
+    assert!(matches!(
+        Banks::read(
+            &[input(&d, "absent-cell", &o, &["Speech"], Profile::Dialogue)],
+            banks_budget()
+        )
+        .unwrap_err()
+        .problem,
+        Problem::Parameter {
+            field: "version",
+            ..
+        }
+    ));
+    let mut r = dialogue_rows();
+    r[0].pop();
+    r[1].pop();
+    let d = table(&r);
+    assert!(matches!(
+        Banks::read(
+            &[input(
+                &d,
+                "absent-header",
+                &o,
+                &["Speech"],
+                Profile::Dialogue
+            )],
+            banks_budget()
+        )
+        .unwrap_err()
+        .problem,
+        Problem::Ambiguous
+    ));
+    let mut r = dialogue_rows();
+    r[0].push("Pitch");
+    r[1].push("_");
+    let d = table(&r);
+    assert!(matches!(
+        Banks::read(
+            &[input(
+                &d,
+                "mixed-schema",
+                &o,
+                &["Speech"],
+                Profile::Dialogue
+            )],
+            banks_budget()
+        )
+        .unwrap_err()
+        .problem,
+        Problem::Parameter {
+            row: 1,
+            field: "Pitch"
+        }
+    ));
+    let full = table(&rows());
+    assert!(matches!(
+        Banks::read(
+            &[input(
+                &full,
+                "full-is-not-dialogue",
+                &o,
+                &["Voice"],
+                Profile::Dialogue
+            )],
+            banks_budget()
+        )
+        .unwrap_err()
+        .problem,
+        Problem::Ambiguous | Problem::Parameter { .. }
+    ));
+    let d = table(&dialogue_rows());
+    assert!(
+        Banks::read(
+            &[input(
+                &d,
+                "dialogue-is-not-full",
+                &o,
+                &["Speech"],
+                Profile::Full
+            )],
+            banks_budget()
+        )
+        .is_err()
+    );
+}
+#[test]
+fn late_bad_bank_cannot_install_or_change_a_prior_assignment() {
+    let mut h = host(COMMON, "").with_sound_parameters(bank()).unwrap();
+    let id = create(&mut h);
+    h.native(
+        "SetSoundParamsFromLabel",
+        &[Value::Handle(id), Value::Str("Other".into())],
+    )
+    .unwrap();
+    let o = origin();
+    let first = table(&rows());
+    let mut r = dialogue_rows();
+    r[1][3] = "not-an-integer";
+    let late = table(&r);
+    assert!(matches!(
+        Banks::read(
+            &[
+                input(&first, "valid-first", &o, &["Voice"], Profile::Full),
+                input(&late, "bad-late", &o, &["Speech"], Profile::Dialogue)
+            ],
+            banks_budget()
+        )
+        .unwrap_err()
+        .problem,
+        Problem::Parameter {
+            field: "Volume",
+            ..
+        }
+    ));
+    assert_eq!(h.sound_parameters(id).unwrap().unwrap().label, "Other");
+    assert_eq!(
+        h.sound_parameter_bank().unwrap().source_label(),
+        "synthetic:slk"
+    );
+    assert_eq!(h.inner().handles(), 1);
+    assert!(h.with_sound_parameter_banks(mixed_banks()).is_err());
+}
+#[test]
+fn actual_vm_keeps_dialogue_receipt_and_typed_full_refusal_at_next_native_failure() {
+    let c = format!("{COMMON}native Next takes nothing returns nothing\n");
+    let map = "globals\nsound speech=null\nendglobals\nfunction main takes nothing returns nothing\nset speech=CreateSound(\"existing.wav\",false,false,false,3,5,\"Creation\")\ncall SetSoundParamsFromLabel(speech,\"Speech\")\ncall Next()\nendfunction\n";
+    let mut vm = host(&c, map)
+        .with_sound_parameter_banks(mixed_banks())
+        .unwrap()
+        .into_vm();
+    vm.init_globals().unwrap();
+    assert!(
+        vm.call("main", &[])
+            .unwrap_err()
+            .to_string()
+            .contains("Next")
+    );
+    let Value::Handle(id) = vm.global("speech") else {
+        panic!("sound")
+    };
+    assert!(matches!(
+        vm.host().sound_parameters(id).unwrap_err().failure,
+        crate::playercolor_host::Failure::UnsupportedSoundParameterProfile(Profile::Dialogue)
+    ));
+    let a = vm.host().sound_parameter_assignment(id).unwrap().unwrap();
+    assert_eq!(a.source.source_label, "synthetic:dialogue");
+    let ParameterValues::Dialogue(p) = a.parameters else {
+        panic!("dialogue")
+    };
+    assert_eq!(p.values.volume, 101);
+    let handles = vm.host().inner().handles();
+    vm.init_globals().unwrap();
+    assert_eq!(vm.host().inner().handles(), handles);
+}

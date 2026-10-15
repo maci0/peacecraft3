@@ -15,7 +15,7 @@ pub struct ObjectHost {
     day_night: Option<environment::DayNightState>,
     sounds: Option<crate::label_sounds::SoundBank>,
     file_sounds: Option<files::State>,
-    sound_parameters: Option<crate::sound_parameters::Bank>,
+    sound_parameters: Option<crate::sound_parameters::Banks>,
     sound_start_limit: Option<usize>,
     sound_duration: bool,
     sound_starts: Vec<HandleId>,
