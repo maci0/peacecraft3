@@ -7,6 +7,7 @@
 //! Rendering the launcher on the engine it stages for is deliberate — one fewer
 //! dependency, and the launcher and the game share a version.
 
+use crate::menu_material::MenuMaterial;
 use bevy::ecs::system::SystemParam;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
@@ -264,6 +265,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     app.add_plugins(DefaultPlugins.set(window))
         .add_plugins(crate::menu_particle_order::MenuParticleOrderPlugin)
         .add_plugins(crate::mainmenu_scene::ParticleMaterialPlugin)
+        .add_plugins(bevy::pbr::MaterialPlugin::<MenuMaterial>::default())
         .add_plugins(bevy::input_focus::tab_navigation::TabNavigationPlugin)
         .insert_resource(Launcher::default())
         .init_resource::<MenuArtCache>()
@@ -1103,7 +1105,7 @@ fn initialize_menu_logo(
 #[derive(SystemParam)]
 struct SceneAssets<'w> {
     meshes: ResMut<'w, Assets<Mesh>>,
-    materials: ResMut<'w, Assets<StandardMaterial>>,
+    materials: ResMut<'w, Assets<MenuMaterial>>,
     particle_materials: ResMut<'w, Assets<crate::mainmenu_scene::ParticleMaterial>>,
     images: ResMut<'w, Assets<Image>>,
 }

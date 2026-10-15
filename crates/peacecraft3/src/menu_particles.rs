@@ -26,7 +26,7 @@ use pcx_gfx::{
 };
 use std::{sync::Arc, time::Duration};
 
-/// Particle-only forward fragment; geometry retains StandardMaterial.
+/// Particle-only forward fragment; geometry has its own menu material.
 pub type ParticleMaterial = ExtendedMaterial<StandardMaterial, ParticleFog>;
 
 /// Black fog is a reconstruction convention for additive light contribution.

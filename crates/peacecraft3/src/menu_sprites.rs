@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use crate::menu_material::MenuMaterial;
 use bevy::camera::ScalingMode;
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
@@ -1131,7 +1132,7 @@ fn play(_: &mut Commands, _: &mut SoundSink, sound: &EventSound) {
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct PanelAdvanceAssets<'w, 's> {
     meshes: ResMut<'w, Assets<Mesh>>,
-    materials: ResMut<'w, Assets<StandardMaterial>>,
+    materials: ResMut<'w, Assets<MenuMaterial>>,
     visibility: Query<'w, 's, &'static mut Visibility, With<scene::MainMenuSceneEntity>>,
 }
 
@@ -1633,7 +1634,7 @@ mod tests {
         }
         let mut world = World::new();
         let mut meshes = Assets::<Mesh>::default();
-        let mut materials = Assets::<StandardMaterial>::default();
+        let mut materials = Assets::<MenuMaterial>::default();
         let mut images = Assets::<Image>::default();
         let count = spawn(
             &mut world.commands(),

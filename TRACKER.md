@@ -78,6 +78,13 @@ issues*.
       failed audio-candidate rollback. Browser client/default transport, other
       setting owners and confirmed exclusive-mode application remain open. See
       `docs/re-notes/original-options-defaults.md`.
+- [x] Menu geometry now preserves source ONE/ONE additive RGB instead of
+      premultiplying it by alpha. Actual Bevy draws pass 72 channel checks on
+      software and Radeon Vulkan; the old-Add negative fails the expected cases.
+      Fresh local packaged browser Main/Video Options/Cancel captures pass with
+      no uploads or page errors. PRE2, UI-logo composition, framebuffer alpha and
+      full native menu fidelity remain separate. See
+      `docs/re-notes/menu-additive-blending.md`.
 - [~] Local imports now follow skin-selected hanging-panel model/TEXS edges.
       The expanded private fixture retains source-qualified dependencies. Actual
       rendered-panel acceptance and full menu/sky fidelity remain open.

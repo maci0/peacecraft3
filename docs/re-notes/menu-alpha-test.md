@@ -47,7 +47,8 @@ ordering, below/at/above-cutoff admission and a composed-alpha case that differs
 from testing texture alpha alone. These are source/component checks, not GPU or
 original-runtime tests. Compare original cutout edges and animated layer/geoset
 opacity in the selected menu at multiple resolutions before accepting rendered
-fidelity. ONE/ONE additive and Modulate2x gaps remain separate.
+fidelity. [ONE/ONE additive](menu-additive-blending.md) now has a separate menu
+material; Modulate2x remains an explicit gap.
 
 The combined application gate passes 273 native tests with eight explicit
 original-input ignores, strict all-target/all-feature native/WASM Clippy, and the

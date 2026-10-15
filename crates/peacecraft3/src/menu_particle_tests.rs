@@ -121,7 +121,7 @@ fn fog() -> crate::menu_fog::MenuFog {
 struct Spawned {
     world: World,
     meshes: Assets<Mesh>,
-    materials: Assets<StandardMaterial>,
+    materials: Assets<MenuMaterial>,
     particle_materials: Assets<ParticleMaterial>,
     images: Assets<Image>,
     result: Result<SceneInfo, SceneError>,

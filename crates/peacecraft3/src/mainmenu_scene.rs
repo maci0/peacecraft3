@@ -45,17 +45,17 @@
 //!   guessing would make a geoset disappear entirely rather than merely shade
 //!   differently. Nothing is culled until that bit is measured.
 //! * **`unlit` and the blend are the layer's own**, read from its `filterMode`
-//!   and `shadingFlags` words. Two of the format's seven modes are not
-//!   reproduced exactly, and each is reported in [`SceneInfo::blend_gaps`] with
-//!   the reason rather than being silently approximated:
+//!   and `shadingFlags` words. The shared menu material completes the base
+//!   StandardMaterial mapping; remaining approximations are reported in
+//!   [`SceneInfo::blend_gaps`]:
 //!   * `filterMode 1` (`Transparent`) uses `AlphaMode::Mask(0.75)` as an
 //!     explicit reconstruction convention from primary MDX renderers. Cutoff,
 //!     blend/depth and composed-alpha behavior are not certified native parity;
 //!     see `docs/re-notes/menu-alpha-test.md` for evidence and remaining limits.
-//!   * `filterMode 3` (`Additive`, `ONE/ONE`) differs from Bevy's
-//!     `AlphaMode::Add`, which premultiplies by alpha (`SRC_ALPHA/ONE`). The two
-//!     agree only at alpha 1. `filterMode 4` *is* Bevy's `Add` exactly, so only
-//!     `3` is flagged.
+//!   * `filterMode 3` (`Additive`) uses unattenuated RGB and `ONE/ONE` blending.
+//!     `filterMode 4` retains Bevy's alpha-weighted `Add` path. The explicit
+//!     destination-alpha preservation policy is a recreation convention, not
+//!     original framebuffer-alpha proof; see `menu-additive-blending.md`.
 //!   * `filterMode 6` (`Modulate2x`) has no equivalent and draws opaque.
 //!
 //!   `filterMode 5` (`Modulate`) maps to `AlphaMode::Multiply`, which Bevy does
@@ -74,6 +74,8 @@ mod particle_tests;
 #[path = "menu_particles.rs"]
 mod particles;
 pub use particles::{ParticleMaterial, ParticleMaterialPlugin};
+
+use crate::menu_material::MenuMaterial;
 
 use bevy::{
     camera::{CameraProjection, SubCameraView},
@@ -384,7 +386,7 @@ pub struct LayerFlags {
     pub alpha_mode: AlphaMode,
     /// The layer's static alpha. `1.0` when the layer has none.
     pub alpha: f32,
-    /// Where [`LayerFlags::alpha_mode`] is not the original's blend exactly.
+    /// Gaps in the base StandardMaterial mapping; menu specialization resolves mode 3.
     pub blend_gap: Option<BlendGap>,
 }
 
@@ -657,8 +659,8 @@ pub struct SceneInfo {
     /// Retained diagnostic field. Required first-layer image failures now return
     /// a contextual error before this model's geosets are spawned.
     pub missing_textures: Vec<String>,
-    /// One entry per geoset whose blend is not the original's exactly, with the
-    /// reason. Empty means every material blended as the format asks.
+    /// Unresolved base blend approximations after menu specialization.
+    /// An empty list does not establish complete native material parity.
     pub blend_gaps: Vec<BlendGap>,
     /// Bone tracks that are driven by a `GLBS` global sequence rather than the
     /// `Stand` clip. These are the tracks [`tracked_pose`] exists for.
@@ -712,7 +714,7 @@ pub struct MainMenuScene {
     texture_selection: Option<pcx_gfx::mdx_texture_selection::TextureSelectionPlan>,
     texture_bindings: TextureBindings,
     uv_translation: Option<pcx_gfx::mdx_uv_translation::UvTranslationPlan>,
-    opacity_materials: Vec<(usize, Entity, Handle<StandardMaterial>)>,
+    opacity_materials: Vec<(usize, Entity, Handle<MenuMaterial>)>,
     particles: Option<particles::ParticleScene>,
     clip: Option<pcx_gfx::mdx_particles::Clip>,
     /// The clip's first frame.
@@ -1004,7 +1006,7 @@ pub fn spawn(
 /// The asset stores a model's geosets are added to.
 pub struct GeosetAssets<'a> {
     pub meshes: &'a mut Assets<Mesh>,
-    pub materials: &'a mut Assets<StandardMaterial>,
+    pub materials: &'a mut Assets<MenuMaterial>,
     pub images: &'a mut Assets<Image>,
 }
 
@@ -1021,7 +1023,7 @@ pub struct GeosetSource<'a> {
 }
 
 /// One geoset's authored id, its entity and its material.
-pub type BoundGeoset = (usize, Entity, Handle<StandardMaterial>);
+pub type BoundGeoset = (usize, Entity, Handle<MenuMaterial>);
 
 /// The meshes [`spawn_geosets`] created, parallel to the model's meshes, and the
 /// material each geoset's opacity is written to.
@@ -1034,8 +1036,7 @@ pub struct Geosets {
 /// Read-only admission shared by whole-model batches and the spawn writer.
 pub struct GeosetPreflight<'a> {
     required: std::collections::BTreeMap<u32, &'a pcx_gfx::LoadedTexture>,
-    mdl_materials: Vec<pcx_mdl::Material>,
-    initial: Vec<(u32, f32, bevy::math::Affine2, bool)>,
+    initial: Vec<(u32, MenuMaterial, Option<BlendGap>)>,
 }
 
 pub fn preflight_geosets<'a>(
@@ -1100,13 +1101,33 @@ pub fn preflight_geosets<'a>(
             frame,
             0,
         )?;
-        initial.push((id, alpha, uv, fog_enabled));
+        let flags = layer_flags(&mdl_materials, mesh.material_id as usize);
+        let material = crate::menu_material::checked_source_mode(
+            StandardMaterial {
+                base_color: flags.base_color().with_alpha(alpha),
+                uv_transform: uv,
+                // Preserve the existing scenery roughness and culling conventions.
+                perceptual_roughness: 1.0,
+                unlit: flags.unshaded,
+                fog_enabled,
+                alpha_mode: flags.alpha_mode,
+                cull_mode: None,
+                ..default()
+            },
+            layer.properties.filter_mode,
+        )
+        .map_err(|error| {
+            SceneError::Decode(format!(
+                "{source}: geoset {} material {}: {error}",
+                mesh.geoset, mesh.material_id
+            ))
+        })?;
+        let gap = flags
+            .blend_gap
+            .filter(|gap| *gap != BlendGap::AdditiveIsPremultiplied);
+        initial.push((id, material, gap));
     }
-    Ok(GeosetPreflight {
-        required,
-        mdl_materials,
-        initial,
-    })
+    Ok(GeosetPreflight { required, initial })
 }
 
 /// Spawns one entity per geoset, with the material its own `material_id` and
@@ -1125,11 +1146,7 @@ pub fn spawn_geosets(
         materials,
         images,
     } = assets;
-    let GeosetPreflight {
-        required,
-        mdl_materials,
-        initial,
-    } = preflight_geosets(&source, opacity, frame)?;
+    let GeosetPreflight { required, initial } = preflight_geosets(&source, opacity, frame)?;
     let GeosetSource {
         source,
         model,
@@ -1139,10 +1156,9 @@ pub fn spawn_geosets(
     let mut texture_bindings = cache_texture_images(source, runtime, &required, images);
     let mut handles = Vec::with_capacity(model.meshes.len());
     let mut bound = Vec::with_capacity(model.meshes.len());
-    for (mesh, (texture_id, alpha, uv_transform, fog_enabled)) in model.meshes.iter().zip(initial) {
+    for (mesh, (texture_id, mut material, gap)) in model.meshes.iter().zip(initial) {
         let id = mesh.material_id as usize;
-        let flags = layer_flags(&mdl_materials, id);
-        if let Some(gap) = flags.blend_gap {
+        if let Some(gap) = gap {
             warn!(
                 material_id = id,
                 reason = gap.reason(),
@@ -1150,25 +1166,9 @@ pub fn spawn_geosets(
             );
             info.blend_gaps.push(gap);
         }
-        let image = texture_bindings.images[&texture_id].clone();
-        let material = materials.add(StandardMaterial {
-            base_color: flags.base_color().with_alpha(alpha),
-            base_color_texture: Some(image),
-            uv_transform,
-            // Glue art is scenery, not a lit character, so a high roughness
-            // keeps it from picking up a sheen the original has not got.
-            perceptual_roughness: 1.0,
-            // `Unshaded` in the layer's shading flags.
-            unlit: flags.unshaded,
-            fog_enabled,
-            // `filterMode`.
-            alpha_mode: flags.alpha_mode,
-            // Culling is left off on purpose: the bit that means `TwoSided` in
-            // this format is not established by measurement here, and guessing
-            // wrong makes a geoset vanish rather than merely look different.
-            cull_mode: None,
-            ..default()
-        });
+        material.base.base_color_texture = Some(texture_bindings.images[&texture_id].clone());
+        let alpha = material.base.base_color.alpha();
+        let material = materials.add(material);
         handles.push(meshes.add(pcx_gfx::to_bevy_mesh(mesh)));
         let entity = commands
             .spawn((
@@ -1204,7 +1204,7 @@ pub fn apply_opacity<F: bevy::ecs::query::QueryFilter>(
     bound: &[BoundGeoset],
     frame: u32,
     elapsed_ms: u64,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<MenuMaterial>,
     visibility: &mut Query<&mut Visibility, F>,
 ) {
     for (geoset, entity, handle) in bound {
@@ -1212,7 +1212,7 @@ pub fn apply_opacity<F: bevy::ecs::query::QueryFilter>(
             continue;
         };
         if let Some(mut material) = materials.get_mut(handle) {
-            material.base_color = material.base_color.with_alpha(alpha);
+            material.base.base_color = material.base.base_color.with_alpha(alpha);
         }
         if let Ok(mut visibility) = visibility.get_mut(*entity) {
             *visibility = if alpha <= 0.0 {
@@ -1274,7 +1274,7 @@ pub struct MainMenuSceneEntity;
 struct TextureBinding {
     geoset: usize,
     material_id: usize,
-    material: Handle<StandardMaterial>,
+    material: Handle<MenuMaterial>,
     last_texture: u32,
 }
 
@@ -1449,7 +1449,7 @@ pub fn apply_texture_selection(
     bindings: &mut TextureBindings,
     frame: u32,
     elapsed_ms: u64,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<MenuMaterial>,
 ) -> Result<(), SceneError> {
     let mut changes = Vec::new();
     for (index, binding) in bindings.materials.iter().enumerate() {
@@ -1483,6 +1483,7 @@ pub fn apply_texture_selection(
         if materials
             .get(&binding.material)
             .expect("validated texture material")
+            .base
             .base_color_texture
             .as_ref()
             != Some(&image)
@@ -1490,6 +1491,7 @@ pub fn apply_texture_selection(
             materials
                 .get_mut(&binding.material)
                 .expect("validated texture material")
+                .base
                 .base_color_texture = Some(image);
         }
         binding.last_texture = id;
@@ -1523,7 +1525,7 @@ pub fn apply_uv_translation(
     bindings: &TextureBindings,
     frame: u32,
     elapsed_ms: u64,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<MenuMaterial>,
 ) -> Result<(), SceneError> {
     for binding in &bindings.materials {
         sampled_uv_transform(
@@ -1559,12 +1561,14 @@ pub fn apply_uv_translation(
         if materials
             .get(&binding.material)
             .expect("validated UV material")
+            .base
             .uv_transform
             != transform
         {
             materials
                 .get_mut(&binding.material)
                 .expect("validated UV material")
+                .base
                 .uv_transform = transform;
         }
     }
@@ -1629,7 +1633,7 @@ pub fn advance(
     time: Res<Time>,
     mut scene: ResMut<MainMenuScene>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<MenuMaterial>>,
     particle_materials: Res<Assets<ParticleMaterial>>,
     mut visibility: Query<&mut Visibility, With<MainMenuSceneEntity>>,
     cameras: Query<&Transform, With<MainMenuSceneCamera>>,
@@ -1832,11 +1836,25 @@ mod tests {
         .unwrap();
         let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&plan, [0, 100]).unwrap();
         let mut world = World::new();
-        let mut materials = Assets::<StandardMaterial>::default();
-        let unaffected = materials.add(StandardMaterial::default());
-        let animated = materials.add(StandardMaterial::default());
-        let unrelated = materials.add(StandardMaterial {
-            base_color: Color::WHITE.with_alpha(0.7),
+        let mut materials = Assets::<MenuMaterial>::default();
+        let unaffected = materials.add(MenuMaterial::default());
+        let animated = materials.add(
+            crate::menu_material::checked_source_mode(
+                StandardMaterial {
+                    alpha_mode: AlphaMode::Add,
+                    ..default()
+                },
+                3,
+            )
+            .unwrap(),
+        );
+        let key =
+            crate::menu_material::MenuBlendKey::from(&materials.get(&animated).unwrap().extension);
+        let unrelated = materials.add(MenuMaterial {
+            base: StandardMaterial {
+                base_color: Color::WHITE.with_alpha(0.7),
+                ..default()
+            },
             ..default()
         });
         let first = world
@@ -1868,10 +1886,27 @@ mod tests {
             ..default()
         });
         world.run_system_once(advance).unwrap();
-        let materials = world.resource::<Assets<StandardMaterial>>();
-        assert_eq!(materials.get(&unaffected).unwrap().base_color.alpha(), 1.0);
-        assert_eq!(materials.get(&animated).unwrap().base_color.alpha(), 0.5);
-        assert_eq!(materials.get(&unrelated).unwrap().base_color.alpha(), 0.7);
+        let materials = world.resource::<Assets<MenuMaterial>>();
+        assert_eq!(
+            materials.get(&unaffected).unwrap().base.base_color.alpha(),
+            1.0
+        );
+        assert_eq!(
+            materials.get(&animated).unwrap().base.base_color.alpha(),
+            0.5
+        );
+        assert_eq!(
+            crate::menu_material::MenuBlendKey::from(&materials.get(&animated).unwrap().extension),
+            key
+        );
+        assert_eq!(
+            materials.get(&animated).unwrap().base.alpha_mode,
+            AlphaMode::Premultiplied
+        );
+        assert_eq!(
+            materials.get(&unrelated).unwrap().base.base_color.alpha(),
+            0.7
+        );
         assert_eq!(
             world.get::<Visibility>(second),
             Some(&Visibility::Inherited)
@@ -1912,7 +1947,7 @@ mod tests {
             let textures = load_textures_in(Some(&install), &bytes, scene_source(expansion).2);
             let mut world = World::new();
             let mut meshes = Assets::<Mesh>::default();
-            let mut materials = Assets::<StandardMaterial>::default();
+            let mut materials = Assets::<MenuMaterial>::default();
             let mut particle_materials = Assets::<ParticleMaterial>::default();
             let mut images = Assets::<Image>::default();
             let info = spawn(
@@ -2103,7 +2138,7 @@ mod tests {
         time.advance_by(std::time::Duration::from_nanos(16_666_667));
         world.insert_resource(time);
         world.insert_resource(Assets::<Mesh>::default());
-        world.insert_resource(Assets::<StandardMaterial>::default());
+        world.insert_resource(Assets::<MenuMaterial>::default());
         world.insert_resource(Assets::<ParticleMaterial>::default());
         world.insert_resource(MainMenuScene {
             model: Some(pcx_gfx::LoadedModel {
@@ -2285,7 +2320,7 @@ mod tests {
                 .count(),
             "shadingFlags bit 0"
         );
-        // Transparent uses the reconstruction cutout convention; mode 3 remains a gap.
+        // These are base mappings; shared menu specialization resolves mode 3.
         let gaps: Vec<BlendGap> = all.iter().filter_map(|f| f.blend_gap).collect();
         assert_eq!(gaps.len(), filter_count(3) + filter_count(6));
         assert_eq!(
@@ -2715,7 +2750,7 @@ mod texture_selection_tests {
     struct Spawned {
         world: World,
         meshes: Assets<Mesh>,
-        materials: Assets<StandardMaterial>,
+        materials: Assets<MenuMaterial>,
         images: Assets<Image>,
         result: Result<Geosets, SceneError>,
     }
@@ -2781,6 +2816,7 @@ mod texture_selection_tests {
                 .materials
                 .get(&geosets.bound[0].2)
                 .unwrap()
+                .base
                 .fog_enabled
         );
         assert!(
@@ -2788,6 +2824,7 @@ mod texture_selection_tests {
                 .materials
                 .get(&geosets.bound[1].2)
                 .unwrap()
+                .base
                 .fog_enabled
         );
     }
@@ -2802,12 +2839,31 @@ mod texture_selection_tests {
         let geosets = spawned.result.unwrap();
         let additive = spawned.materials.get(&geosets.bound[0].2).unwrap();
         let blended = spawned.materials.get(&geosets.bound[1].2).unwrap();
-        assert!(!additive.fog_enabled);
-        assert!(blended.fog_enabled);
-        assert_eq!(additive.alpha_mode, AlphaMode::Add);
-        assert_eq!(additive.base_color.alpha(), 0.25);
-        assert_eq!(blended.base_color.alpha(), 0.25);
-        assert!(!additive.unlit);
+        assert!(!additive.base.fog_enabled);
+        assert!(blended.base.fog_enabled);
+        assert_eq!(additive.base.alpha_mode, AlphaMode::Premultiplied);
+        assert_eq!(additive.base.base_color.alpha(), 0.25);
+        assert_eq!(blended.base.base_color.alpha(), 0.25);
+        assert!(!additive.base.unlit);
+    }
+
+    #[test]
+    fn unsupported_or_inconsistent_later_blend_refuses_before_any_model_write() {
+        for mode in [7, 3] {
+            let mut f = fixture(&[]);
+            f.runtime.materials[1].layers[0].properties.filter_mode = mode;
+            let mut spawned = spawn(&f);
+            let error = spawned
+                .result
+                .err()
+                .expect("unadmitted blend published")
+                .to_string();
+            assert!(error.contains("synthetic: geoset 1 material 1"), "{error}");
+            assert_eq!(rendered_entities(&mut spawned.world), 0);
+            assert!(spawned.meshes.is_empty());
+            assert!(spawned.materials.is_empty());
+            assert!(spawned.images.is_empty());
+        }
     }
 
     #[test]
@@ -2820,17 +2876,17 @@ mod texture_selection_tests {
         let geosets = spawned.result.unwrap();
         let cutout = spawned.materials.get(&geosets.bound[0].2).unwrap();
         let blended = spawned.materials.get(&geosets.bound[1].2).unwrap();
-        assert_eq!(cutout.alpha_mode, AlphaMode::Mask(0.75));
-        assert_eq!(blended.alpha_mode, AlphaMode::Blend);
-        assert_eq!(cutout.base_color.alpha(), 0.25);
-        assert_eq!(blended.base_color.alpha(), 0.25);
-        assert!(cutout.fog_enabled);
-        assert!(!cutout.unlit);
+        assert_eq!(cutout.base.alpha_mode, AlphaMode::Mask(0.75));
+        assert_eq!(blended.base.alpha_mode, AlphaMode::Blend);
+        assert_eq!(cutout.base.base_color.alpha(), 0.25);
+        assert_eq!(blended.base.base_color.alpha(), 0.25);
+        assert!(cutout.base.fog_enabled);
+        assert!(!cutout.base.unlit);
     }
 
     fn rendered_entities(world: &mut World) -> usize {
         world
-            .query::<(&Mesh3d, &MeshMaterial3d<StandardMaterial>)>()
+            .query::<(&Mesh3d, &MeshMaterial3d<MenuMaterial>)>()
             .iter(world)
             .count()
     }
@@ -2844,17 +2900,17 @@ mod texture_selection_tests {
             [100, 117],
         )
     }
-    fn material_events(app: &mut App) -> Vec<AssetEvent<StandardMaterial>> {
+    fn material_events(app: &mut App) -> Vec<AssetEvent<MenuMaterial>> {
         app.update();
         app.world_mut()
-            .resource_mut::<Messages<AssetEvent<StandardMaterial>>>()
+            .resource_mut::<Messages<AssetEvent<MenuMaterial>>>()
             .drain()
             .collect()
     }
-    fn event_app(materials: Assets<StandardMaterial>) -> App {
+    fn event_app(materials: Assets<MenuMaterial>) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
-        app.init_asset::<StandardMaterial>();
+        app.init_asset::<MenuMaterial>();
         app.init_asset::<ParticleMaterial>();
         app.insert_resource(materials);
         material_events(&mut app);
@@ -2876,6 +2932,7 @@ mod texture_selection_tests {
                 .materials
                 .get(&geosets.bound[0].2)
                 .unwrap()
+                .base
                 .base_color_texture
                 .as_ref(),
             Some(&geosets.textures.images[&2])
@@ -2932,9 +2989,10 @@ mod texture_selection_tests {
         );
         assert_eq!(
             app.world()
-                .resource::<Assets<StandardMaterial>>()
+                .resource::<Assets<MenuMaterial>>()
                 .get(&geosets.bound[0].2)
                 .unwrap()
+                .base
                 .base_color_texture
                 .as_ref(),
             Some(&geosets.textures.images[&5])
@@ -2943,7 +3001,10 @@ mod texture_selection_tests {
 
     #[test]
     fn global_clock_and_actual_asset_events_preserve_other_material_fields() {
-        let f = fixture(&[track(0, &[(0, 2), (7, 5)])]);
+        let f = fixture_with_materials(vec![
+            material_with_flags(1, &[track(0, &[(0, 2), (7, 5)])], 3, 1),
+            material(7, &[]),
+        ]);
         let spawned = spawn(&f);
         let mut geosets = spawned.result.unwrap();
         let selection = texture_selection(&f.runtime, [100, 117], "synthetic").unwrap();
@@ -2954,6 +3015,7 @@ mod texture_selection_tests {
             .materials
             .get(&other)
             .unwrap()
+            .base
             .base_color_texture
             .clone();
         let mut app = event_app(spawned.materials);
@@ -2982,18 +3044,28 @@ mod texture_selection_tests {
             if changed {
                 assert!(modified[0].is_modified(handle.id()));
             }
-            let assets = app.world().resource::<Assets<StandardMaterial>>();
+            let assets = app.world().resource::<Assets<MenuMaterial>>();
             let current = assets.get(&handle).unwrap();
             assert_eq!(
-                current.base_color_texture.as_ref(),
+                current.base.base_color_texture.as_ref(),
                 Some(&geosets.textures.images[&id])
             );
-            assert_eq!(current.base_color, initial.base_color);
-            assert_eq!(current.alpha_mode, initial.alpha_mode);
-            assert_eq!(current.unlit, initial.unlit);
-            assert_eq!(current.perceptual_roughness, initial.perceptual_roughness);
-            assert_eq!(current.cull_mode, initial.cull_mode);
-            assert_eq!(assets.get(&other).unwrap().base_color_texture, other_image);
+            assert_eq!(current.base.base_color, initial.base.base_color);
+            assert_eq!(current.base.alpha_mode, initial.base.alpha_mode);
+            assert_eq!(
+                crate::menu_material::MenuBlendKey::from(&current.extension),
+                crate::menu_material::MenuBlendKey::from(&initial.extension)
+            );
+            assert_eq!(current.base.unlit, initial.base.unlit);
+            assert_eq!(
+                current.base.perceptual_roughness,
+                initial.base.perceptual_roughness
+            );
+            assert_eq!(current.base.cull_mode, initial.base.cull_mode);
+            assert_eq!(
+                assets.get(&other).unwrap().base.base_color_texture,
+                other_image
+            );
         }
         let expected = selection.sample(0, 103, u64::MAX).unwrap();
         apply_texture_selection(
@@ -3103,7 +3175,12 @@ mod texture_selection_tests {
         let mut materials = spawned.materials;
         let selection = texture_selection(&f.runtime, [100, 117], "synthetic").unwrap();
         let first = g.bound[0].2.clone();
-        let before = materials.get(&first).unwrap().base_color_texture.clone();
+        let before = materials
+            .get(&first)
+            .unwrap()
+            .base
+            .base_color_texture
+            .clone();
         materials.remove(&g.bound[1].2);
         let mut app = event_app(materials);
         assert!(
@@ -3118,9 +3195,10 @@ mod texture_selection_tests {
         );
         assert_eq!(
             app.world()
-                .resource::<Assets<StandardMaterial>>()
+                .resource::<Assets<MenuMaterial>>()
                 .get(&first)
                 .unwrap()
+                .base
                 .base_color_texture,
             before
         );
@@ -3195,9 +3273,10 @@ mod texture_selection_tests {
         assert_eq!(
             spawned
                 .world
-                .resource::<Assets<StandardMaterial>>()
+                .resource::<Assets<MenuMaterial>>()
                 .get(&geosets.bound[0].2)
                 .unwrap()
+                .base
                 .base_color_texture
                 .as_ref(),
             Some(&scene.texture_bindings.images[&5]),
@@ -3246,9 +3325,10 @@ mod texture_selection_tests {
             assert_eq!(
                 spawned
                     .world
-                    .resource::<Assets<StandardMaterial>>()
+                    .resource::<Assets<MenuMaterial>>()
                     .get(&geosets.bound[0].2)
                     .unwrap()
+                    .base
                     .base_color_texture
                     .as_ref(),
                 Some(&scene.texture_bindings.images[&5]),
@@ -3325,7 +3405,14 @@ mod texture_selection_tests {
     }
 
     fn uv_fixture() -> Fixture {
-        let mut f = fixture(&[track(0, &[(0, 2), (7, 5)])]);
+        uv_fixture_with_mode(2)
+    }
+
+    fn uv_fixture_with_mode(mode: u32) -> Fixture {
+        let mut f = fixture_with_materials(vec![
+            material_with_flags(1, &[track(0, &[(0, 2), (7, 5)])], mode, 1),
+            material(7, &[]),
+        ]);
         f.runtime.texture_animations = vec![pcx_mdl::TextureAnim {
             offset: 0,
             len: 4,
@@ -3393,14 +3480,17 @@ mod texture_selection_tests {
 
     #[test]
     fn uv_binding_is_absolute_changed_only_and_preserves_other_material_state() {
-        let f = uv_fixture();
+        let f = uv_fixture_with_mode(3);
         let spawned = spawn(&f);
         let mut geosets = spawned.result.unwrap();
         let handle = geosets.bound[0].2.clone();
         let other = geosets.bound[1].2.clone();
         let initial = spawned.materials.get(&handle).unwrap().clone();
-        assert_eq!(initial.uv_transform.translation, Vec2::new(2., 4.));
-        assert_eq!(initial.uv_transform.matrix2, bevy::math::Mat2::IDENTITY);
+        assert_eq!(initial.base.uv_transform.translation, Vec2::new(2., 4.));
+        assert_eq!(
+            initial.base.uv_transform.matrix2,
+            bevy::math::Mat2::IDENTITY
+        );
         let sampler = spawned
             .images
             .get(&geosets.textures.images[&2])
@@ -3439,22 +3529,35 @@ mod texture_selection_tests {
             if changed {
                 assert!(modified[0].is_modified(handle.id()));
             }
-            let materials = app.world().resource::<Assets<StandardMaterial>>();
+            let materials = app.world().resource::<Assets<MenuMaterial>>();
             let actual = materials.get(&handle).unwrap();
-            assert_eq!(actual.uv_transform.translation, expected);
+            assert_eq!(actual.base.uv_transform.translation, expected);
             assert_eq!(
-                actual.uv_transform.transform_point2(Vec2::new(0.25, 0.75)),
+                actual
+                    .base
+                    .uv_transform
+                    .transform_point2(Vec2::new(0.25, 0.75)),
                 Vec2::new(0.25, 0.75) + expected
             );
-            assert_eq!(actual.uv_transform.matrix2, bevy::math::Mat2::IDENTITY);
-            assert_eq!(actual.base_color_texture, initial.base_color_texture);
-            assert_eq!(actual.base_color, initial.base_color);
-            assert_eq!(actual.alpha_mode, initial.alpha_mode);
-            assert_eq!(actual.unlit, initial.unlit);
-            assert_eq!(actual.cull_mode, initial.cull_mode);
-            assert_eq!(actual.perceptual_roughness, initial.perceptual_roughness);
+            assert_eq!(actual.base.uv_transform.matrix2, bevy::math::Mat2::IDENTITY);
             assert_eq!(
-                materials.get(&other).unwrap().uv_transform,
+                actual.base.base_color_texture,
+                initial.base.base_color_texture
+            );
+            assert_eq!(actual.base.base_color, initial.base.base_color);
+            assert_eq!(actual.base.alpha_mode, initial.base.alpha_mode);
+            assert_eq!(
+                crate::menu_material::MenuBlendKey::from(&actual.extension),
+                crate::menu_material::MenuBlendKey::from(&initial.extension)
+            );
+            assert_eq!(actual.base.unlit, initial.base.unlit);
+            assert_eq!(actual.base.cull_mode, initial.base.cull_mode);
+            assert_eq!(
+                actual.base.perceptual_roughness,
+                initial.base.perceptual_roughness
+            );
+            assert_eq!(
+                materials.get(&other).unwrap().base.uv_transform,
                 bevy::math::Affine2::IDENTITY
             );
             assert_eq!(geosets.textures.materials[0].last_texture, 2);
@@ -3470,11 +3573,11 @@ mod texture_selection_tests {
         .unwrap();
         let current = app
             .world()
-            .resource::<Assets<StandardMaterial>>()
+            .resource::<Assets<MenuMaterial>>()
             .get(&handle)
             .unwrap();
         assert_eq!(geosets.textures.materials[0].last_texture, 5);
-        assert_eq!(current.uv_transform.translation, Vec2::new(2., 4.));
+        assert_eq!(current.base.uv_transform.translation, Vec2::new(2., 4.));
         assert_eq!(
             spawned
                 .images
@@ -3500,7 +3603,7 @@ mod texture_selection_tests {
         .unwrap();
         let mut materials = spawned.materials;
         let replacement = materials.remove(&second).unwrap();
-        let before = materials.get(&first).unwrap().uv_transform;
+        let before = materials.get(&first).unwrap().base.uv_transform;
         let mut app = event_app(materials);
         let error = apply_uv_translation(
             &uv,
@@ -3513,9 +3616,10 @@ mod texture_selection_tests {
         assert!(error.to_string().contains("geoset 1 material 1 layer 0"));
         assert_eq!(
             app.world()
-                .resource::<Assets<StandardMaterial>>()
+                .resource::<Assets<MenuMaterial>>()
                 .get(&first)
                 .unwrap()
+                .base
                 .uv_transform,
             before
         );
@@ -3525,7 +3629,7 @@ mod texture_selection_tests {
                 .all(|event| !matches!(event, AssetEvent::Modified { .. }))
         );
         app.world_mut()
-            .resource_mut::<Assets<StandardMaterial>>()
+            .resource_mut::<Assets<MenuMaterial>>()
             .insert(second.id(), replacement)
             .unwrap();
         material_events(&mut app);
@@ -3539,9 +3643,10 @@ mod texture_selection_tests {
         .unwrap();
         assert_eq!(
             app.world()
-                .resource::<Assets<StandardMaterial>>()
+                .resource::<Assets<MenuMaterial>>()
                 .get(&first)
                 .unwrap()
+                .base
                 .uv_transform
                 .translation,
             Vec2::new(8., 16.)
@@ -3560,7 +3665,7 @@ mod texture_selection_tests {
         let spawned = spawn(&f);
         let geosets = spawned.result.unwrap();
         let first = geosets.bound[0].2.clone();
-        let before = spawned.materials.get(&first).unwrap().uv_transform;
+        let before = spawned.materials.get(&first).unwrap().base.uv_transform;
         let uv = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
             &f.runtime,
             [100, 117],
@@ -3583,9 +3688,10 @@ mod texture_selection_tests {
         );
         assert_eq!(
             app.world()
-                .resource::<Assets<StandardMaterial>>()
+                .resource::<Assets<MenuMaterial>>()
                 .get(&first)
                 .unwrap()
+                .base
                 .uv_transform,
             before
         );
@@ -3651,6 +3757,7 @@ mod texture_selection_tests {
             materials
                 .get(&geosets.bound[0].2)
                 .unwrap()
+                .base
                 .uv_transform
                 .translation,
             Vec2::new(2., 4.)
@@ -3669,6 +3776,7 @@ mod texture_selection_tests {
             materials
                 .get(&geosets.bound[0].2)
                 .unwrap()
+                .base
                 .uv_transform
                 .translation,
             Vec2::new(8., 16.)
@@ -3677,6 +3785,7 @@ mod texture_selection_tests {
             materials
                 .get(&geosets.bound[1].2)
                 .unwrap()
+                .base
                 .uv_transform
                 .translation,
             Vec2::new(6., 12.)
@@ -3718,9 +3827,10 @@ mod texture_selection_tests {
         assert_eq!(
             spawned
                 .world
-                .resource::<Assets<StandardMaterial>>()
+                .resource::<Assets<MenuMaterial>>()
                 .get(&geosets.bound[0].2)
                 .unwrap()
+                .base
                 .uv_transform
                 .translation,
             Vec2::new(9., 18.)
@@ -3837,6 +3947,7 @@ mod texture_selection_tests {
                             materials
                                 .get(&bound.material)
                                 .unwrap()
+                                .base
                                 .base_color_texture
                                 .as_ref(),
                             Some(&geosets.textures.images[&expected])
