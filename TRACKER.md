@@ -1009,15 +1009,16 @@ Format: `date — subsystem — symptom — root cause — status`
       relationships now let Human01 `config` complete; the same VM enters `main`
       and uses source-bound camera margins to retain authored camera bounds before
       selecting explicitly bound day/night source models, then reaching
-      `CreateMIDISound` in Blizzard.j at span `114713..114745`. All 252 play tests
+      `GetFloatGameState` through Blizzard.j at span `55083..55124` after
+      creating a source-backed PCM sound in the shared arena. All 262 play tests
       pass with five explicit ignores; strict native/WASM Clippy, WASM generation
-      and actual 32-bit lifecycle/config/player/priority/camera/model checks pass. These are bounded Host/data
+      and actual 32-bit lifecycle/config/player/priority/camera/model/sound checks pass. These are bounded Host/data
       checks, not campaign or native gameplay proof.
       Launcher profile loading/default Host wiring and other player natives
       remain open; see `selected-map-neutral-host.md`, `playercolor-host.md` and
       `script-timer-arena.md`/`script-group-arena.md`/`script-map-config.md`/
       `script-player-setup.md`/`script-start-priorities.md`/`script-camera-input.md`/
-      `script-day-night-models.md`.
+      `script-day-night-models.md`/`script-label-sounds.md`.
 
 ### Current implemented slices (2026-10-14)
 

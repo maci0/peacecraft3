@@ -4944,6 +4944,7 @@ dependencies = [
  "pcx-mpq",
  "pcx-script",
  "pcx-sim",
+ "pcx-slq",
  "pcx-trig",
  "sha2",
  "thiserror 2.0.21",

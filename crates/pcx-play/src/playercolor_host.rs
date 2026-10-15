@@ -39,6 +39,10 @@ pub enum Failure {
     DayNightState(&'static str),
     #[error("day/night model is not admitted: {0}")]
     MissingDayNightModel(String),
+    #[error("sound setup: {0}")]
+    SoundState(&'static str),
+    #[error("sound label is not admitted: {0}")]
+    MissingSoundLabel(String),
     #[error("enumerand {0} is outside this native's admitted source domain")]
     OutsideDomain(i32),
     #[error("unsupported closed integer expression: {0}")]
@@ -95,11 +99,25 @@ pub struct Conversion {
 }
 #[derive(Debug)]
 enum Entry {
-    Symbolic { kind: String, enumerand: i32 },
+    Symbolic {
+        kind: String,
+        enumerand: i32,
+    },
     Object(String),
-    Timer { live: bool },
-    Group { live: bool },
-    Player { number: i32 },
+    Timer {
+        live: bool,
+    },
+    Group {
+        live: bool,
+    },
+    Player {
+        number: i32,
+    },
+    Sound {
+        resource: usize,
+        fade_in_rate: i32,
+        fade_out_rate: i32,
+    },
 }
 pub struct EnumHost {
     program: Arc<Program>,
@@ -385,6 +403,7 @@ impl EnumHost {
             Entry::Timer { live: true } => "timer",
             Entry::Group { live: true } => "group",
             Entry::Player { .. } => "player",
+            Entry::Sound { .. } => "sound",
             Entry::Timer { live: false } | Entry::Group { live: false } => {
                 return Err(self.error("arena", Failure::Identity));
             }
@@ -465,5 +484,6 @@ mod tests;
 mod objects;
 pub use objects::{
     CameraState, DayNightState, MapConfig, MapConfigBudget, ObjectHost, PlayerAdmissionError,
-    PlayerBudget, PlayerSettings, StartLocation, StartPriorities, StartPriority, TimerHost,
+    PlayerBudget, PlayerSettings, SoundState, StartLocation, StartPriorities, StartPriority,
+    TimerHost,
 };

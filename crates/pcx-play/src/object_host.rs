@@ -13,6 +13,7 @@ pub struct ObjectHost {
     players: Option<players::Players>,
     camera: Option<camera::CameraState>,
     day_night: Option<environment::DayNightState>,
+    sounds: Option<crate::label_sounds::SoundBank>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -31,6 +32,7 @@ impl ObjectHost {
             players: None,
             camera: None,
             day_night: None,
+            sounds: None,
         })
     }
     fn contract(
@@ -249,6 +251,9 @@ impl ObjectHost {
 }
 impl Host for ObjectHost {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.sound_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.day_night_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -306,3 +311,7 @@ pub use camera::CameraState;
 #[path = "day_night_host.rs"]
 mod environment;
 pub use environment::DayNightState;
+
+#[path = "sound_host.rs"]
+mod sounds;
+pub use sounds::SoundState;
