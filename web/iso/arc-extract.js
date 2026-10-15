@@ -3,12 +3,14 @@ import { ArcError, boundedRange, checkedLimits, crc32, deriveCipher, readArcByte
 // The codec emits one solid stream; boundaries and checksums come from its directory.
 export async function extractArcMembers(blob, archive, selected, password, codec, {
   signal, onProgress, createSink, limits: limitOverrides, readBytes = 1024 * 1024,
-  maxSelectedBytes = 1024 * 1024 * 1024,
+  maxSelectedBytes = 1024 * 1024 * 1024, maxIntermediateBytes,
 } = {}) {
   const limits = checkedLimits(limitOverrides);
   if (!createSink || !Number.isSafeInteger(readBytes) || readBytes < 16 || readBytes % 16 || readBytes > limits.controlBytes)
     throw new TypeError('A bounded sink and aligned read size are required');
   if (!Number.isSafeInteger(maxSelectedBytes) || maxSelectedBytes < 1) throw new TypeError('Invalid selected-output budget');
+  if (maxIntermediateBytes !== undefined && (!Number.isSafeInteger(maxIntermediateBytes) || maxIntermediateBytes < 1))
+    throw new TypeError('Invalid intermediate-output work budget');
   if (!selected.length) throw new ArcError('ARC_SELECTION', 'select at least one archive member');
   let selectedBytes = 0; const wanted = new Set();
   for (const file of selected) {
@@ -16,17 +18,20 @@ export async function extractArcMembers(blob, archive, selected, password, codec
     wanted.add(file); selectedBytes += file.size;
     if (!Number.isSafeInteger(selectedBytes) || selectedBytes > maxSelectedBytes) throw new ArcError('ARC_LIMIT', 'selected output exceeds configured budget');
   }
+  const blockIndexes = [...new Set(selected.map(file => file.block))];
+  for (const index of blockIndexes) {
+    const block = archive.blocks[index];
+    boundedRange(block.offset, block.storedSize, blob.size);
+    if (block.originalSize > limits.decodedBlockBytes) throw new ArcError('ARC_LIMIT', 'solid output exceeds configured budget');
+  }
   const results = new Map(), sinks = new Map();
   try {
     for (const file of selected) { signal?.throwIfAborted(); sinks.set(file, await createSink(file)); }
-    const blockIndexes = [...new Set(selected.map(file => file.block))];
     const total = blockIndexes.reduce((sum, index) => sum + archive.blocks[index].originalSize, 0);
     let decodedTotal = 0;
     for (const index of blockIndexes) {
       signal?.throwIfAborted();
       const block = archive.blocks[index];
-      boundedRange(block.offset, block.storedSize, blob.size);
-      if (block.originalSize > limits.decodedBlockBytes) throw new ArcError('ARC_LIMIT', 'solid output exceeds configured budget');
       const methods = block.method.split('+'); let cipher;
       if (methods.at(-1)?.startsWith('aes-')) cipher = await deriveCipher(methods.pop(), password, { signal, limits: limitOverrides });
       let sourceAt = 0, consumed = 0, written = 0, fileIndex = 0, withinFile = 0, fileCrc = 0;
@@ -41,10 +46,13 @@ export async function extractArcMembers(blob, archive, selected, password, codec
           fileIndex++; withinFile = 0; fileCrc = 0;
         }
       }
-      await closeCompletedFiles();
       try {
+        await closeCompletedFiles();
         await codec.decodeStream({ method: methods.join('+'), expectedSize: block.originalSize,
           maxOutputBytes: limits.decodedBlockBytes, maxDictionaryBytes: limits.dictionaryBytes, signal,
+          // CTR is length preserving. Intermediate work is independently chosen,
+          // never inferred from the final decoded solid/member byte count.
+          maxInputBytes: block.storedSize, maxIntermediateBytes,
           async read(requested) {
             signal?.throwIfAborted();
             if (!Number.isSafeInteger(requested) || requested < 1) throw new ArcError('ARC_CODEC', 'invalid codec read request');
@@ -75,12 +83,14 @@ export async function extractArcMembers(blob, archive, selected, password, codec
               const bytes = chunk.subarray(at, at + size);
               fileCrc = crc32(bytes, fileCrc);
               const sink = sinks.get(file); if (sink) await sink.write(bytes);
+              signal?.throwIfAborted();
               at += size; withinFile += size; written += size;
             }
             await closeCompletedFiles();
             onProgress?.({ phase: 'decode', sourceBytes: consumed, sourceTotal: block.storedSize, decodedBytes: decodedTotal + written, decodedTotal: total });
           },
         });
+        signal?.throwIfAborted();
         if (consumed !== block.storedSize || buffered.length || written !== block.originalSize || fileIndex !== files.length)
           throw new ArcError('ARC_SIZE', 'codec stopped before the complete checked solid stream');
       } finally { cipher?.key.fill(0); cipher?.iv.fill(0); }

@@ -5,6 +5,9 @@ import { ArcError, openFreeArc, redactMethod } from './freearc.js';
 import { extractArcMembers, createTemporaryArcStorage } from './arc-extract.js';
 
 let codec, current, state, storage;
+// Independent per-attempt decoded-intermediate work policy, not a measured asset
+// size, REP final-output estimate or working-memory allowance.
+const MAX_INTERMEDIATE_BYTES = 2 * 1024 * 1024 * 1024;
 let lastProgress = 0;
 const progress = work => {
   const now = performance.now();
@@ -80,7 +83,7 @@ async function extract({ ids }, signal) {
     if (!chosen.length) continue;
     const selected = chosen.map(candidate => source.archive.files[Number(candidate.id.split(':')[1])]);
     const extracted = await extractArcMembers(source.blob, source.archive, selected, source.password, state.activeCodec,
-      { signal, createSink: storage.createSink, onProgress: progress });
+      { signal, createSink: storage.createSink, onProgress: progress, maxIntermediateBytes: MAX_INTERMEDIATE_BYTES });
     for (const entry of extracted) {
       const candidate = chosen.find(c => source.archive.files[Number(c.id.split(':')[1])] === entry.member);
       const header = new Uint8Array(await entry.file.slice(0, 32).arrayBuffer());
