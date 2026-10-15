@@ -29,6 +29,8 @@
 //!   UV-matrix mapping remains unproved; see `menu-texture-animation.md`.
 //!   GEOA/KMTA opacity is applied by authored geoset/layer IDs and clocks.
 //!   Joint tracks also use authored `GLBS` durations on a separate elapsed clock.
+//!   First-layer KMTF texture selection binds authored TEXS images and samplers
+//!   at spawn and advances on the selected local clip or independent elapsed clock.
 //! * **One texture layer per material.** Each of the scene's 31 materials
 //!   carries exactly one `LAYS` layer, so this costs nothing here, but a model
 //!   with a multi-layer material (the format allows several, drawn over each
@@ -192,12 +194,8 @@ impl LayerFlags {
     /// The material's base colour: a texture's own colours are modulated by the
     /// static alpha, which is where the scene's `0.3` and `0.55` layers get
     /// their transparency.
-    fn base_color(&self, has_texture: bool) -> Color {
-        if has_texture {
-            Color::srgba(1.0, 1.0, 1.0, self.alpha.clamp(0.0, 1.0))
-        } else {
-            Color::srgba(0.5, 0.5, 0.5, self.alpha.clamp(0.0, 1.0))
-        }
+    fn base_color(&self) -> Color {
+        Color::srgba(1.0, 1.0, 1.0, self.alpha.clamp(0.0, 1.0))
     }
 }
 
@@ -329,9 +327,9 @@ pub fn texture_served_names_in(bytes: &[u8], directory: &str) -> Vec<String> {
 /// Loads and decodes every texture the model names.
 ///
 /// Desktop first, browser store second — the same two sources the rest of the
-/// menu art uses. A texture that cannot be read or decoded is skipped and its
-/// path is reported by [`spawn`] as a missing texture, so a gap shows up as a
-/// flat-shaded geoset and a name in the list rather than as silence.
+/// menu art uses. A texture that cannot be read or decoded is skipped here;
+/// required first-layer images are admitted by [`spawn_geosets`], which returns
+/// a contextual error before spawning that model if any dependency is absent.
 #[cfg(test)]
 pub fn load_textures(
     desktop: Option<&std::path::Path>,
@@ -375,8 +373,8 @@ pub struct SceneInfo {
     pub sequence: String,
     /// That clip's length in milliseconds.
     pub duration_ms: u32,
-    /// Texture paths no loaded image matched. Every one is a geoset drawing
-    /// flat-shaded, so the list is the exact size of the gap.
+    /// Retained diagnostic field. Required first-layer image failures now return
+    /// a contextual error before this model's geosets are spawned.
     pub missing_textures: Vec<String>,
     /// One entry per geoset whose blend is not the original's exactly, with the
     /// reason. Empty means every material blended as the format asks.
@@ -392,6 +390,20 @@ pub enum SceneError {
     /// The model did not parse.
     #[error("scene model: {0}")]
     Decode(String),
+    #[error("{source_name}: {error}")]
+    TextureSelection {
+        source_name: String,
+        #[source]
+        error: pcx_gfx::mdx_texture_selection::Error,
+    },
+    #[error("{source_name}: {context}: {reason}")]
+    TextureImage {
+        source_name: String,
+        context: String,
+        reason: &'static str,
+    },
+    #[error("{source_name}: elapsed milliseconds exceed u64 clock")]
+    Clock { source_name: String },
 }
 
 /// The live background: the skeleton being posed and the meshes it drives.
@@ -406,6 +418,8 @@ pub struct MainMenuScene {
     /// One Bevy mesh per geoset, parallel to `model.meshes`.
     handles: Vec<Handle<Mesh>>,
     opacity: Option<pcx_gfx::mdx_opacity::OpacityPlan>,
+    texture_selection: Option<pcx_gfx::mdx_texture_selection::TextureSelectionPlan>,
+    texture_bindings: TextureBindings,
     opacity_materials: Vec<(usize, Entity, Handle<StandardMaterial>)>,
     /// The clip's first frame.
     interval_start: u32,
@@ -421,9 +435,8 @@ pub struct MainMenuScene {
 
 /// Build the background from the model's bytes.
 ///
-/// `textures` are the decoded images to bind; a geoset whose material names a
-/// path no image matches draws flat-shaded and the path lands in
-/// [`SceneInfo::missing_textures`].
+/// `textures` must contain every rendered first-layer static/KMTF image. Missing,
+/// ambiguous or unsupported dependencies refuse before geosets are spawned.
 ///
 /// The camera and lights come from the model. The camera is given `order: -1`
 /// so it draws **before** the UI camera; see the module docs for the caller's
@@ -459,6 +472,7 @@ pub fn spawn(
     let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&runtime, interval)
         .map_err(|e| SceneError::Decode(format!("{source}: {e}")))?;
 
+    let texture_selection = texture_selection(&runtime, interval, source)?;
     let mut info = SceneInfo {
         bones: joints
             .kinds()
@@ -483,6 +497,7 @@ pub fn spawn(
     let Geosets {
         handles,
         bound: opacity_materials,
+        textures: texture_bindings,
     } = spawn_geosets(
         commands,
         GeosetAssets {
@@ -496,6 +511,8 @@ pub fn spawn(
             source,
             model: &model,
             textures,
+            runtime: &runtime,
+            selection: &texture_selection,
         },
         &opacity,
         interval[0],
@@ -618,6 +635,8 @@ pub fn spawn(
         handles,
         opacity: Some(opacity),
         opacity_materials,
+        texture_selection: Some(texture_selection),
+        texture_bindings,
         interval_start: clip.map(|s| s.interval_start).unwrap_or(0),
         duration_ms: clip.map(|s| s.duration()).unwrap_or(0),
         time_ms: 0.0,
@@ -642,6 +661,8 @@ pub struct GeosetSource<'a> {
     pub source: &'a str,
     pub model: &'a pcx_gfx::LoadedModel,
     pub textures: &'a [pcx_gfx::LoadedTexture],
+    pub runtime: &'a pcx_gfx::mdx_runtime::RuntimePlan,
+    pub selection: &'a pcx_gfx::mdx_texture_selection::TextureSelectionPlan,
 }
 
 /// One geoset's authored id, its entity and its material.
@@ -652,6 +673,7 @@ pub type BoundGeoset = (usize, Entity, Handle<StandardMaterial>);
 pub struct Geosets {
     pub handles: Vec<Handle<Mesh>>,
     pub bound: Vec<BoundGeoset>,
+    pub textures: TextureBindings,
 }
 
 /// Spawns one entity per geoset, with the material its own `material_id` and
@@ -676,18 +698,46 @@ pub fn spawn_geosets(
         source,
         model,
         textures,
+        runtime,
+        selection,
     } = source;
-    let paths = pcx_gfx::model_texture_paths(bytes, source).unwrap_or_default();
-    let mdl_materials = m.materials(bytes).unwrap_or_default();
-    // Material layer references select TEXS records, even when paths repeat.
-    let authored = m
-        .textures(bytes)
-        .map_err(|e| SceneError::Decode(e.to_string()))?;
+    let required = required_texture_images(source, runtime, textures)?;
+    let mdl_materials = m
+        .materials(bytes)
+        .map_err(|e| SceneError::Decode(format!("{source}: {e}")))?;
+    if model.meshes.len() != runtime.geosets.len() {
+        return Err(SceneError::Decode(format!(
+            "{source}: mesh/GEOS count mismatch"
+        )));
+    }
+    // Preflight every initial selection and opacity before any asset/entity write.
+    let mut initial = Vec::with_capacity(model.meshes.len());
+    for mesh in &model.meshes {
+        let fail =
+            |reason| texture_failure(source, mesh.geoset, mesh.material_id as usize, None, reason);
+        let binding = runtime
+            .geosets
+            .get(mesh.geoset)
+            .ok_or_else(|| fail("mesh has no checked GEOS binding"))?;
+        if binding.geoset_id != mesh.geoset || binding.material_id != mesh.material_id as usize {
+            return Err(fail("mesh/checked GEOS material mismatch"));
+        }
+        let id = selection
+            .sample(mesh.geoset, frame, 0)
+            .ok_or_else(|| fail("missing initial TEXS sample"))?;
+        if !required.contains_key(&id) {
+            return Err(fail("initial sample has no admitted TEXS image"));
+        }
+        let alpha = opacity
+            .sample(mesh.geoset, frame, 0)
+            .ok_or_else(|| fail("missing initial opacity binding"))?;
+        initial.push((id, alpha));
+    }
+    let mut texture_bindings = cache_texture_images(source, runtime, &required, images);
     let mut handles = Vec::with_capacity(model.meshes.len());
     let mut bound = Vec::with_capacity(model.meshes.len());
-    for mesh in &model.meshes {
+    for (mesh, (texture_id, alpha)) in model.meshes.iter().zip(initial) {
         let id = mesh.material_id as usize;
-        let path = paths.get(id).cloned().unwrap_or_default();
         let flags = layer_flags(&mdl_materials, id);
         if let Some(gap) = flags.blend_gap {
             warn!(
@@ -697,36 +747,10 @@ pub fn spawn_geosets(
             );
             info.blend_gaps.push(gap);
         }
-        let sampler_flags = texture_flags(
-            &authored,
-            mdl_materials.get(id).ok_or_else(|| {
-                SceneError::Decode(format!(
-                    "geoset {} references absent material {id}",
-                    mesh.geoset
-                ))
-            })?,
-        )?;
-        let texture = pick(textures, &path);
-        // The texture's own `TEXS` flags decide whether it repeats. The scene's
-        // UVs run far outside `[0, 1]` (its sky spans about `U -2.6 .. 4.3`), so
-        // a clamp smears one row and column across the surface.
-        let handle = texture.map(|t| {
-            let mut image = pcx_gfx::viewer::rgba_image(t);
-            image.sampler = pcx_gfx::viewer::sampler_for_texture_flags(sampler_flags);
-            images.add(image)
-        });
-        if texture.is_none() && !path.is_empty() {
-            info.missing_textures.push(path.clone());
-        }
-        let alpha = opacity.sample(mesh.geoset, frame, 0).ok_or_else(|| {
-            SceneError::Decode(format!(
-                "missing opacity binding for geoset {}",
-                mesh.geoset
-            ))
-        })?;
+        let image = texture_bindings.images[&texture_id].clone();
         let material = materials.add(StandardMaterial {
-            base_color: flags.base_color(texture.is_some()).with_alpha(alpha),
-            base_color_texture: handle,
+            base_color: flags.base_color().with_alpha(alpha),
+            base_color_texture: Some(image),
             // Glue art is scenery, not a lit character, so a high roughness
             // keeps it from picking up a sheen the original has not got.
             perceptual_roughness: 1.0,
@@ -753,10 +777,20 @@ pub fn spawn_geosets(
                 bundle.clone(),
             ))
             .id();
+        texture_bindings.materials.push(TextureBinding {
+            geoset: mesh.geoset,
+            material_id: id,
+            material: material.clone(),
+            last_texture: texture_id,
+        });
         bound.push((mesh.geoset, entity, material));
         info.geosets += 1;
     }
-    Ok(Geosets { handles, bound })
+    Ok(Geosets {
+        handles,
+        bound,
+        textures: texture_bindings,
+    })
 }
 
 /// Writes each bound geoset's opacity at `frame`, hiding the ones at zero.
@@ -831,46 +865,231 @@ pub struct MainMenuSceneCamera;
 #[derive(Component, Clone)]
 pub struct MainMenuSceneEntity;
 
-/// Read flags from the first layer's TEXS index, never from path equality.
-fn texture_flags(
-    authored: &[pcx_mdl::Texture],
-    material: &pcx_mdl::Material,
-) -> Result<u32, SceneError> {
-    let layers = material
-        .checked_layers()
-        .map_err(|e| SceneError::Decode(e.to_string()))?;
-    let Some(layer) = layers.first() else {
-        return Ok(0);
-    };
-    authored
-        .get(layer.properties.texture_id as usize)
-        .map(|texture| texture.flags)
-        .ok_or_else(|| {
-            SceneError::Decode(format!(
-                "material layer {} references absent TEXS record {}",
-                layer.properties.index, layer.properties.texture_id
-            ))
-        })
+/// A material's last selected TEXS record; paths do not identify sampler state.
+struct TextureBinding {
+    geoset: usize,
+    material_id: usize,
+    material: Handle<StandardMaterial>,
+    last_texture: u32,
 }
 
-/// Finds the loaded texture whose source path matches `path`.
-///
-/// Both separators are accepted because the archives use backslashes while a
-/// caller may hold forward slashes, and the comparison is case-insensitive
-/// because the same file is spelled both ways in the archives.
-fn pick<'a>(
-    textures: &'a [pcx_gfx::LoadedTexture],
-    path: &str,
-) -> Option<&'a pcx_gfx::LoadedTexture> {
-    if path.is_empty() {
-        return None;
+#[derive(Default)]
+pub struct TextureBindings {
+    source: String,
+    images: std::collections::BTreeMap<u32, Handle<Image>>,
+    materials: Vec<TextureBinding>,
+}
+
+pub fn texture_selection(
+    runtime: &pcx_gfx::mdx_runtime::RuntimePlan,
+    interval: [u32; 2],
+    source: &str,
+) -> Result<pcx_gfx::mdx_texture_selection::TextureSelectionPlan, SceneError> {
+    pcx_gfx::mdx_texture_selection::TextureSelectionPlan::checked(runtime, interval).map_err(
+        |error| SceneError::TextureSelection {
+            source_name: source.into(),
+            error,
+        },
+    )
+}
+
+pub fn elapsed_millis(source: &str, elapsed: std::time::Duration) -> Result<u64, SceneError> {
+    u64::try_from(elapsed.as_millis()).map_err(|_| SceneError::Clock {
+        source_name: source.into(),
+    })
+}
+
+/// Advance the independent clock only after its full millisecond range is checked.
+pub fn advance_elapsed(
+    source: &str,
+    elapsed: &mut std::time::Duration,
+    delta: std::time::Duration,
+) -> Result<u64, SceneError> {
+    let next = elapsed
+        .checked_add(delta)
+        .ok_or_else(|| SceneError::Clock {
+            source_name: source.into(),
+        })?;
+    let millis = elapsed_millis(source, next)?;
+    *elapsed = next;
+    Ok(millis)
+}
+
+fn texture_failure(
+    source: &str,
+    geoset: usize,
+    material: usize,
+    texture: Option<(u32, &str)>,
+    reason: &'static str,
+) -> SceneError {
+    let mut context = format!("geoset {geoset} material {material} layer 0");
+    if let Some((id, path)) = texture {
+        context.push_str(&format!(" TEXS {id} {path:?}"));
     }
-    let norm = |s: &str| s.replace('/', "\\").to_ascii_lowercase();
-    let want = norm(path);
-    textures
-        .iter()
-        .find(|t| norm(&t.source) == want)
-        .or_else(|| textures.iter().find(|t| norm(&t.source).ends_with(&want)))
+    SceneError::TextureImage {
+        source_name: source.into(),
+        context,
+        reason,
+    }
+}
+
+/// Admit every first-layer static/KMTF edge before allocating images or entities.
+fn required_texture_images<'a>(
+    source: &str,
+    runtime: &pcx_gfx::mdx_runtime::RuntimePlan,
+    textures: &'a [pcx_gfx::LoadedTexture],
+) -> Result<std::collections::BTreeMap<u32, &'a pcx_gfx::LoadedTexture>, SceneError> {
+    let normalize = |path: &str| path.replace('\\', "/").to_ascii_lowercase();
+    let mut required = std::collections::BTreeMap::new();
+    for binding in &runtime.geosets {
+        let fail = |texture, reason| {
+            texture_failure(
+                source,
+                binding.geoset_id,
+                binding.material_id,
+                texture,
+                reason,
+            )
+        };
+        let layer = runtime
+            .materials
+            .get(binding.material_id)
+            .and_then(|material| material.layers.first())
+            .ok_or_else(|| fail(None, "missing checked first layer"))?;
+        let ids = std::iter::once(layer.properties.texture_id).chain(
+            layer
+                .texture_tracks
+                .iter()
+                .flat_map(|track| track.keys.iter().map(|&(_, id)| id)),
+        );
+        for id in ids {
+            if required.contains_key(&id) {
+                continue;
+            }
+            let authored = runtime
+                .textures
+                .get(id as usize)
+                .ok_or_else(|| fail(Some((id, "")), "absent TEXS record"))?;
+            let fail = |reason| fail(Some((id, authored.path.as_str())), reason);
+            if authored.path.is_empty() {
+                return Err(fail("empty texture path; no replacement source supplied"));
+            }
+            if authored.flags & !(pcx_mdl::TEXTURE_WRAP_WIDTH | pcx_mdl::TEXTURE_WRAP_HEIGHT) != 0 {
+                return Err(fail("unsupported TEXS sampler flags"));
+            }
+            let path = normalize(&authored.path);
+            let mut found: Option<&pcx_gfx::LoadedTexture> = None;
+            for image in textures
+                .iter()
+                .filter(|image| normalize(&image.source) == path)
+            {
+                let length = usize::try_from(image.width)
+                    .ok()
+                    .and_then(|width| usize::try_from(image.height).ok()?.checked_mul(width))
+                    .and_then(|pixels| pixels.checked_mul(4));
+                if image.width == 0 || image.height == 0 || length != Some(image.rgba.len()) {
+                    return Err(fail("invalid decoded RGBA dimensions or length"));
+                }
+                if found.is_some_and(|previous| {
+                    previous.width != image.width
+                        || previous.height != image.height
+                        || previous.rgba != image.rgba
+                }) {
+                    return Err(fail("unequal decoded images for canonical path"));
+                }
+                found = Some(image);
+            }
+            required.insert(
+                id,
+                found.ok_or_else(|| fail("missing decoded canonical image"))?,
+            );
+        }
+    }
+    Ok(required)
+}
+
+/// Admission proved equal canonical pixels; share backing only for equal sampler flags.
+fn cache_texture_images(
+    source: &str,
+    runtime: &pcx_gfx::mdx_runtime::RuntimePlan,
+    required: &std::collections::BTreeMap<u32, &pcx_gfx::LoadedTexture>,
+    images: &mut Assets<Image>,
+) -> TextureBindings {
+    let mut shared = std::collections::BTreeMap::new();
+    TextureBindings {
+        source: source.into(),
+        images: required
+            .iter()
+            .map(|(&id, texture)| {
+                let authored = &runtime.textures[id as usize];
+                let key = (
+                    authored.path.replace('\\', "/").to_ascii_lowercase(),
+                    authored.flags,
+                );
+                let handle = shared.entry(key).or_insert_with(|| {
+                    let mut image = pcx_gfx::viewer::rgba_image(texture);
+                    image.sampler = pcx_gfx::viewer::sampler_for_texture_flags(authored.flags);
+                    images.add(image)
+                });
+                (id, handle.clone())
+            })
+            .collect(),
+        materials: Vec::new(),
+    }
+}
+
+/// Validate all targets before any write; unchanged selections do not dirty assets.
+pub fn apply_texture_selection(
+    selection: &pcx_gfx::mdx_texture_selection::TextureSelectionPlan,
+    bindings: &mut TextureBindings,
+    frame: u32,
+    elapsed_ms: u64,
+    materials: &mut Assets<StandardMaterial>,
+) -> Result<(), SceneError> {
+    let mut changes = Vec::new();
+    for (index, binding) in bindings.materials.iter().enumerate() {
+        let fail = |texture, reason| {
+            texture_failure(
+                &bindings.source,
+                binding.geoset,
+                binding.material_id,
+                texture,
+                reason,
+            )
+        };
+        let id = selection
+            .sample(binding.geoset, frame, elapsed_ms)
+            .ok_or_else(|| fail(None, "missing sampled TEXS binding"))?;
+        let image = bindings
+            .images
+            .get(&id)
+            .ok_or_else(|| fail(Some((id, "")), "missing cached TEXS image"))?;
+        if materials.get(&binding.material).is_none() {
+            return Err(fail(Some((id, "")), "missing bound material"));
+        }
+        if id != binding.last_texture {
+            changes.push((index, id, image.clone()));
+        }
+    }
+    for (index, id, image) in changes {
+        let binding = &mut bindings.materials[index];
+        // Every target was validated above; exclusive Assets access prevents removal.
+        // Distinct authored TEXS IDs may share the same backing image.
+        if materials
+            .get(&binding.material)
+            .expect("validated texture material")
+            .base_color_texture
+            .as_ref()
+            != Some(&image)
+        {
+            materials
+                .get_mut(&binding.material)
+                .expect("validated texture material")
+                .base_color_texture = Some(image);
+        }
+        binding.last_texture = id;
+    }
+    Ok(())
 }
 
 /// One bone's pose with global-sequence tracks sampled on their **own** clock.
@@ -934,23 +1153,60 @@ pub fn advance(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut visibility: Query<&mut Visibility, With<MainMenuSceneEntity>>,
 ) {
-    if scene.duration_ms == 0 || scene.model.is_none() {
+    if scene.model.is_none() {
         return;
     }
-    // Wrap at the clip's own length so the loop is seamless.
-    let dt_ms = time.delta_secs() * 1000.0;
-    scene.time_ms = (scene.time_ms + dt_ms) % scene.duration_ms as f32;
+    // An absent or zero-length local clip holds its source frame; global tracks
+    // still use the independent elapsed clock below.
+    if scene.duration_ms == 0 {
+        scene.time_ms = 0.0;
+    } else {
+        let dt_ms = time.delta_secs() * 1000.0;
+        scene.time_ms = (scene.time_ms + dt_ms) % scene.duration_ms as f32;
+    }
     // The elapsed clock does *not* wrap with the clip: a global sequence keeps
     // running across a clip wrap, which is the whole point of it being global.
-    scene.elapsed += time.delta();
     let frame = scene.interval_start + scene.time_ms as u32;
-    let elapsed_ms = scene.elapsed.as_millis();
+    let elapsed_result = {
+        let MainMenuScene {
+            elapsed,
+            texture_bindings,
+            ..
+        } = &mut *scene;
+        advance_elapsed(&texture_bindings.source, elapsed, time.delta())
+    };
+    let elapsed_ms = match elapsed_result {
+        Ok(elapsed) => elapsed,
+        Err(error) => {
+            error!("{error}");
+            return;
+        }
+    };
+    {
+        let MainMenuScene {
+            texture_selection,
+            texture_bindings,
+            ..
+        } = &mut *scene;
+        if let Some(selection) = texture_selection
+            && let Err(error) = apply_texture_selection(
+                selection,
+                texture_bindings,
+                frame,
+                elapsed_ms,
+                &mut materials,
+            )
+        {
+            error!("{error}");
+            return;
+        }
+    }
     if let Some(opacity) = &scene.opacity {
         apply_opacity(
             opacity,
             &scene.opacity_materials,
             frame,
-            elapsed_ms as u64,
+            elapsed_ms,
             &mut materials,
             &mut visibility,
         );
@@ -975,38 +1231,6 @@ pub fn advance(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn duplicate_texture_paths_retain_selected_record_sampler_flags() {
-        fn material(texture: u32) -> pcx_mdl::Material {
-            let mut data = vec![0; 8];
-            data.extend_from_slice(b"LAYS");
-            data.extend_from_slice(&1_u32.to_le_bytes());
-            for word in [28, 0, 0, texture, u32::MAX, 0, 1_f32.to_bits()] {
-                data.extend_from_slice(&word.to_le_bytes());
-            }
-            pcx_mdl::Material {
-                offset: 0,
-                len: (data.len() + 4) as u32,
-                data,
-            }
-        }
-        let textures = vec![
-            pcx_mdl::Texture {
-                slot: 0,
-                path: "same.blp".into(),
-                flags: 0,
-            },
-            pcx_mdl::Texture {
-                slot: 0,
-                path: "same.blp".into(),
-                flags: 3,
-            },
-        ];
-        assert_eq!(texture_flags(&textures, &material(0)).unwrap(), 0);
-        assert_eq!(texture_flags(&textures, &material(1)).unwrap(), 3);
-        assert!(texture_flags(&textures, &material(2)).is_err());
-    }
 
     #[test]
     fn alpha_update_follows_geoset_id_and_hides_zero_opacity_without_touching_other_materials() {
@@ -1140,6 +1364,7 @@ mod tests {
             let authored_bones = parsed.bones(&bytes).unwrap();
             let authored_helpers = parsed.nodes(&bytes, pcx_mdl::tag::HELP).unwrap();
             assert!(!authored_helpers.is_empty(), "fixture must exercise HELP");
+            let textures = load_textures_in(Some(&install), &bytes, scene_source(expansion).2);
             let mut world = World::new();
             let mut meshes = Assets::<Mesh>::default();
             let mut materials = Assets::<StandardMaterial>::default();
@@ -1151,7 +1376,7 @@ mod tests {
                 &mut images,
                 source,
                 &bytes,
-                &[],
+                &textures,
             )
             .unwrap();
             world.flush();
@@ -1413,7 +1638,7 @@ mod tests {
     #[cfg(target_arch = "wasm32")]
     #[wasm_bindgen::prelude::wasm_bindgen]
     pub fn menu_sampler_synthetic_check() -> u32 {
-        duplicate_texture_paths_retain_selected_record_sampler_flags();
+        super::texture_selection_tests::same_path_distinct_texs_keep_samplers();
         1
     }
 
@@ -1661,5 +1886,777 @@ mod global_seq_tests {
         // Ambient is zero in every record, so the module's floor is what lights
         // the unlit pieces; that floor is not zero.
         assert!(lights.iter().all(|l| l.ambient_intensity == 0.0));
+    }
+}
+
+#[cfg(test)]
+mod texture_selection_tests {
+    use super::*;
+    use bevy::asset::{AssetApp, AssetEvent, AssetPlugin};
+    use bevy::ecs::{message::Messages, world::CommandQueue};
+    use bevy::image::{ImageAddressMode, ImageSampler};
+    use pcx_gfx::mdx_runtime::{GeosetInput, RuntimeInput, RuntimePlan};
+    use pcx_mdl::{Interpolation, Material, NO_ID, Pivots, Texture, TextureFrameTrack};
+
+    fn track(global: u32, keys: &[(i32, u32)]) -> TextureFrameTrack {
+        TextureFrameTrack {
+            interpolation: Interpolation::None,
+            global_seq_id: global,
+            keys: keys.to_vec(),
+        }
+    }
+    fn material(base: u32, tracks: &[TextureFrameTrack]) -> Material {
+        let mut layer = Vec::new();
+        for word in [2_u32, 1, base, NO_ID, 0, 0.25_f32.to_bits()] {
+            layer.extend(word.to_le_bytes());
+        }
+        for track in tracks {
+            layer.extend(b"KMTF");
+            for word in [
+                track.keys.len() as u32,
+                track.interpolation as u32,
+                track.global_seq_id,
+            ] {
+                layer.extend(word.to_le_bytes());
+            }
+            for &(frame, id) in &track.keys {
+                layer.extend(frame.to_le_bytes());
+                layer.extend(id.to_le_bytes());
+            }
+        }
+        let mut data = vec![0; 8];
+        data.extend(b"LAYS");
+        data.extend(1_u32.to_le_bytes());
+        data.extend((layer.len() as u32 + 4).to_le_bytes());
+        data.extend(layer);
+        Material {
+            offset: 0,
+            len: data.len() as u32 + 4,
+            data,
+        }
+    }
+    struct Fixture {
+        runtime: RuntimePlan,
+        bytes: Vec<u8>,
+        model: pcx_gfx::LoadedModel,
+        textures: Vec<pcx_gfx::LoadedTexture>,
+    }
+    fn fixture(tracks: &[TextureFrameTrack]) -> Fixture {
+        let materials = vec![material(1, tracks), material(7, &[])];
+        let mut bytes = b"MDLX".to_vec();
+        bytes.extend(b"VERS");
+        bytes.extend(4_u32.to_le_bytes());
+        bytes.extend(800_u32.to_le_bytes());
+        bytes.extend(b"MTLS");
+        bytes.extend(materials.iter().map(|m| m.len).sum::<u32>().to_le_bytes());
+        for m in &materials {
+            bytes.extend(m.len.to_le_bytes());
+            bytes.extend(&m.data);
+        }
+        let textures: Vec<_> = (0..9)
+            .map(|id| Texture {
+                slot: 0,
+                path: match id {
+                    1 => "Static.blp",
+                    2 | 5 => "Synthetic\\Shared.blp",
+                    7 => "Other.blp",
+                    _ => "Unused.blp",
+                }
+                .into(),
+                flags: if id == 5 { 3 } else { 0 },
+            })
+            .collect();
+        let runtime = RuntimePlan::checked(RuntimeInput {
+            bones: vec![],
+            helpers: vec![],
+            pivots: Pivots::default(),
+            geosets: (0..2)
+                .map(|id| GeosetInput {
+                    vertex_count: 3,
+                    material_id: id,
+                    matrix_joint_ids: vec![],
+                })
+                .collect(),
+            geoset_animations: vec![],
+            materials,
+            textures,
+            texture_animations: vec![],
+            global_sequences: vec![13],
+        })
+        .unwrap();
+        let model = pcx_gfx::LoadedModel {
+            name: "synthetic".into(),
+            minimum_extent: [0.; 3],
+            maximum_extent: [1.; 3],
+            bone_names: vec![],
+            bone_parents: vec![],
+            sequences: vec![],
+            meshes: (0..2)
+                .map(|id| pcx_gfx::LoadedMesh {
+                    positions: vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]],
+                    normals: vec![[0., 0., 1.]; 3],
+                    tex_coords: vec![[0., 0.], [1., 0.], [0., 1.]],
+                    indices: vec![0, 1, 2],
+                    vertex_groups: vec![0; 3],
+                    bone_indices: vec![],
+                    group_counts: vec![],
+                    geoset: id,
+                    material_id: id as u32,
+                })
+                .collect(),
+        };
+        let textures = [
+            ("Static.blp", [255, 0, 0, 255]),
+            ("synthetic/shared.blp", [0, 255, 0, 255]),
+            ("Other.blp", [0, 0, 255, 255]),
+        ]
+        .into_iter()
+        .map(|(source, rgba)| pcx_gfx::LoadedTexture {
+            width: 1,
+            height: 1,
+            rgba: rgba.to_vec(),
+            source: source.into(),
+        })
+        .collect();
+        Fixture {
+            runtime,
+            bytes,
+            model,
+            textures,
+        }
+    }
+    struct Spawned {
+        world: World,
+        meshes: Assets<Mesh>,
+        materials: Assets<StandardMaterial>,
+        images: Assets<Image>,
+        result: Result<Geosets, SceneError>,
+    }
+    fn spawn_parts(
+        source: &str,
+        runtime: &RuntimePlan,
+        bytes: &[u8],
+        model: &pcx_gfx::LoadedModel,
+        textures: &[pcx_gfx::LoadedTexture],
+        interval: [u32; 2],
+    ) -> Spawned {
+        let selection = texture_selection(runtime, interval, "synthetic").unwrap();
+        let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(runtime, interval).unwrap();
+        let m = pcx_mdl::Mdlx::parse(bytes).unwrap();
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        let mut meshes = Assets::default();
+        let mut materials = Assets::default();
+        let mut images = Assets::default();
+        let result = spawn_geosets(
+            &mut Commands::new(&mut queue, &world),
+            GeosetAssets {
+                meshes: &mut meshes,
+                materials: &mut materials,
+                images: &mut images,
+            },
+            GeosetSource {
+                m: &m,
+                bytes,
+                source,
+                model,
+                textures,
+                runtime,
+                selection: &selection,
+            },
+            &opacity,
+            interval[0],
+            &mut SceneInfo::default(),
+            Transform::default(),
+        );
+        queue.apply(&mut world);
+        Spawned {
+            world,
+            meshes,
+            materials,
+            images,
+            result,
+        }
+    }
+    fn rendered_entities(world: &mut World) -> usize {
+        world
+            .query::<(&Mesh3d, &MeshMaterial3d<StandardMaterial>)>()
+            .iter(world)
+            .count()
+    }
+    fn spawn(f: &Fixture) -> Spawned {
+        spawn_parts(
+            "synthetic",
+            &f.runtime,
+            &f.bytes,
+            &f.model,
+            &f.textures,
+            [100, 117],
+        )
+    }
+    fn material_events(app: &mut App) -> Vec<AssetEvent<StandardMaterial>> {
+        app.update();
+        app.world_mut()
+            .resource_mut::<Messages<AssetEvent<StandardMaterial>>>()
+            .drain()
+            .collect()
+    }
+    fn event_app(materials: Assets<StandardMaterial>) -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<StandardMaterial>();
+        app.insert_resource(materials);
+        material_events(&mut app);
+        app
+    }
+
+    #[test]
+    pub(super) fn same_path_distinct_texs_keep_samplers() {
+        let f = fixture(&[track(0, &[(0, 2), (7, 5)])]);
+        let mut spawned = spawn(&f);
+        let geosets = spawned.result.unwrap();
+        assert_ne!(geosets.textures.images[&2], geosets.textures.images[&5]);
+        assert_eq!(
+            geosets.textures.materials[0].last_texture, 2,
+            "spawn incorrectly bound static TEXS 1"
+        );
+        assert_eq!(
+            spawned
+                .materials
+                .get(&geosets.bound[0].2)
+                .unwrap()
+                .base_color_texture
+                .as_ref(),
+            Some(&geosets.textures.images[&2])
+        );
+        let a = spawned.images.get(&geosets.textures.images[&2]).unwrap();
+        let b = spawned.images.get(&geosets.textures.images[&5]).unwrap();
+        assert_eq!(a.data, b.data);
+        assert!(matches!(a.sampler, ImageSampler::Default));
+        let ImageSampler::Descriptor(s) = &b.sampler else {
+            panic!("lost selected TEXS sampler")
+        };
+        assert_eq!(s.address_mode_u, ImageAddressMode::Repeat);
+        assert_eq!(s.address_mode_v, ImageAddressMode::Repeat);
+        assert_eq!(rendered_entities(&mut spawned.world), 2);
+        assert_eq!(spawned.meshes.len(), 2);
+    }
+
+    #[test]
+    fn same_canonical_path_and_flags_share_backing_without_merging_texs_ids() {
+        let mut f = fixture(&[track(0, &[(0, 2), (7, 5)])]);
+        f.runtime.textures[5].flags = f.runtime.textures[2].flags;
+        f.runtime.textures[5].path = "SYNTHETIC/SHARED.BLP".into();
+        let spawned = spawn(&f);
+        let mut geosets = spawned.result.unwrap();
+        let mut app = event_app(spawned.materials);
+        assert!(geosets.textures.images.contains_key(&2));
+        assert!(geosets.textures.images.contains_key(&5));
+        assert_eq!(geosets.textures.images.len(), 4);
+        assert_eq!(
+            spawned.images.len(),
+            3,
+            "identical sampler/image allocated twice"
+        );
+        assert_eq!(geosets.textures.images[&2], geosets.textures.images[&5]);
+        assert_eq!(geosets.textures.materials[0].last_texture, 2);
+        let selection = texture_selection(&f.runtime, [100, 117], "synthetic").unwrap();
+        apply_texture_selection(
+            &selection,
+            &mut geosets.textures,
+            103,
+            7,
+            &mut app.world_mut().resource_mut(),
+        )
+        .unwrap();
+        assert!(
+            material_events(&mut app)
+                .iter()
+                .all(|event| !matches!(event, AssetEvent::Modified { .. })),
+            "equal backing image dirtied a material"
+        );
+        assert_eq!(
+            geosets.textures.materials[0].last_texture, 5,
+            "backing-image equality collapsed authored selection identity"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(&geosets.bound[0].2)
+                .unwrap()
+                .base_color_texture
+                .as_ref(),
+            Some(&geosets.textures.images[&5])
+        );
+    }
+
+    #[test]
+    fn global_clock_and_actual_asset_events_preserve_other_material_fields() {
+        let f = fixture(&[track(0, &[(0, 2), (7, 5)])]);
+        let spawned = spawn(&f);
+        let mut geosets = spawned.result.unwrap();
+        let selection = texture_selection(&f.runtime, [100, 117], "synthetic").unwrap();
+        let handle = geosets.bound[0].2.clone();
+        let other = geosets.bound[1].2.clone();
+        let initial = spawned.materials.get(&handle).unwrap().clone();
+        let other_image = spawned
+            .materials
+            .get(&other)
+            .unwrap()
+            .base_color_texture
+            .clone();
+        let mut app = event_app(spawned.materials);
+        for (elapsed, id, changed) in [
+            (6, 2, false),
+            (7, 5, true),
+            (12, 5, false),
+            (13, 2, true),
+            (20, 5, true),
+            (20, 5, false),
+        ] {
+            apply_texture_selection(
+                &selection,
+                &mut geosets.textures,
+                103,
+                elapsed,
+                &mut app.world_mut().resource_mut(),
+            )
+            .unwrap();
+            let events = material_events(&mut app);
+            let modified: Vec<_> = events
+                .iter()
+                .filter(|e| matches!(e, AssetEvent::Modified { .. }))
+                .collect();
+            assert_eq!(modified.len(), usize::from(changed), "elapsed={elapsed}");
+            if changed {
+                assert!(modified[0].is_modified(handle.id()));
+            }
+            let assets = app.world().resource::<Assets<StandardMaterial>>();
+            let current = assets.get(&handle).unwrap();
+            assert_eq!(
+                current.base_color_texture.as_ref(),
+                Some(&geosets.textures.images[&id])
+            );
+            assert_eq!(current.base_color, initial.base_color);
+            assert_eq!(current.alpha_mode, initial.alpha_mode);
+            assert_eq!(current.unlit, initial.unlit);
+            assert_eq!(current.perceptual_roughness, initial.perceptual_roughness);
+            assert_eq!(current.cull_mode, initial.cull_mode);
+            assert_eq!(assets.get(&other).unwrap().base_color_texture, other_image);
+        }
+        let expected = selection.sample(0, 103, u64::MAX).unwrap();
+        apply_texture_selection(
+            &selection,
+            &mut geosets.textures,
+            103,
+            u64::MAX,
+            &mut app.world_mut().resource_mut(),
+        )
+        .unwrap();
+        assert_eq!(geosets.textures.materials[0].last_texture, expected);
+        assert_ne!(
+            selection.sample(0, 103, u64::MAX),
+            selection.sample(0, 103, u64::MAX as u32 as u64),
+            "synthetic long clock must discriminate truncation"
+        );
+    }
+
+    #[test]
+    fn every_dependency_refuses_before_any_spawn_or_asset_allocation() {
+        let base = fixture(&[track(0, &[(0, 2), (7, 5)])]);
+        for failure in 0..7 {
+            let mut f = fixture(&[track(0, &[(0, 2), (7, 5)])]);
+            match failure {
+                0 => {
+                    f.textures.retain(|t| t.source != "synthetic/shared.blp");
+                }
+                1 => {
+                    f.runtime.textures[5].path = "MissingFuture.blp".into();
+                }
+                2 => {
+                    f.runtime.textures[5].path.clear();
+                }
+                3 => {
+                    f.runtime.textures[5].flags = 4;
+                }
+                4 => {
+                    f.textures[1].width = 0;
+                }
+                5 => {
+                    f.textures[1].rgba.pop();
+                }
+                6 => {
+                    let mut bad = f.textures[1].clone();
+                    bad.source = "SYNTHETIC\\SHARED.BLP".into();
+                    bad.rgba[0] ^= 1;
+                    f.textures.push(bad);
+                }
+                _ => unreachable!(),
+            }
+            let mut spawned = spawn(&f);
+            let error = spawned.result.err().expect("bad dependency admitted");
+            assert!(matches!(error, SceneError::TextureImage { .. }), "{error}");
+            assert_eq!(rendered_entities(&mut spawned.world), 0);
+            assert!(spawned.materials.is_empty());
+            assert!(spawned.meshes.is_empty());
+            assert!(spawned.images.is_empty());
+        }
+        let mut equal = base.textures.clone();
+        equal.push(equal[1].clone());
+        assert!(
+            spawn_parts(
+                "synthetic",
+                &base.runtime,
+                &base.bytes,
+                &base.model,
+                &equal,
+                [100, 117]
+            )
+            .result
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn failed_update_is_atomic_and_selector_errors_keep_source_context() {
+        let f = fixture(&[track(0, &[(0, 2), (7, 5)])]);
+        let spawned = spawn(&f);
+        let mut g = spawned.result.unwrap();
+        let mut materials = spawned.materials;
+        let selection = texture_selection(&f.runtime, [100, 117], "synthetic").unwrap();
+        let first = g.bound[0].2.clone();
+        let before = materials.get(&first).unwrap().base_color_texture.clone();
+        materials.remove(&g.bound[1].2);
+        let mut app = event_app(materials);
+        assert!(
+            apply_texture_selection(
+                &selection,
+                &mut g.textures,
+                103,
+                7,
+                &mut app.world_mut().resource_mut()
+            )
+            .is_err()
+        );
+        assert_eq!(
+            app.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(&first)
+                .unwrap()
+                .base_color_texture,
+            before
+        );
+        assert_eq!(g.textures.materials[0].last_texture, 2);
+        assert!(
+            material_events(&mut app)
+                .iter()
+                .all(|e| !matches!(e, AssetEvent::Modified { .. }))
+        );
+        let bad = fixture(&[track(0, &[(1, 2), (1, 5)])]);
+        let error = texture_selection(&bad.runtime, [100, 117], "source-qualified-model")
+            .err()
+            .unwrap();
+        let SceneError::TextureSelection { source_name, error } = error else {
+            panic!("lost typed selector failure")
+        };
+        assert_eq!(source_name, "source-qualified-model");
+        assert!(error.reason.contains("duplicate"));
+        assert_eq!(
+            elapsed_millis("clock", std::time::Duration::from_millis(u64::MAX)).unwrap(),
+            u64::MAX
+        );
+        assert!(matches!(
+            elapsed_millis("clock", std::time::Duration::MAX),
+            Err(SceneError::Clock { .. })
+        ));
+        let mut elapsed = std::time::Duration::from_millis(u64::MAX);
+        let before = elapsed;
+        assert!(
+            advance_elapsed("clock", &mut elapsed, std::time::Duration::from_millis(1)).is_err()
+        );
+        assert_eq!(elapsed, before, "refused clock changed elapsed");
+    }
+
+    #[test]
+    fn local_selection_uses_selected_clip_and_static_when_no_keys_apply() {
+        let f = fixture(&[track(NO_ID, &[(3, 2), (107, 5), (120, 2)])]);
+        let spawned = spawn(&f);
+        let g = spawned.result.unwrap();
+        assert_eq!(g.textures.materials[0].last_texture, 5);
+        let selection = texture_selection(&f.runtime, [200, 217], "synthetic").unwrap();
+        assert_eq!(selection.sample(0, 205, u64::MAX), Some(1));
+    }
+    #[test]
+    fn background_system_uses_elapsed_across_the_local_clip_wrap() {
+        use bevy::ecs::system::RunSystemOnce;
+        let f = fixture(&[track(0, &[(0, 2), (7, 5)])]);
+        let mut spawned = spawn(&f);
+        let geosets = spawned.result.unwrap();
+        let selection = texture_selection(&f.runtime, [100, 117], "background").unwrap();
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_millis(20));
+        spawned.world.insert_resource(time);
+        spawned.world.insert_resource(spawned.meshes);
+        spawned.world.insert_resource(spawned.materials);
+        spawned.world.insert_resource(MainMenuScene {
+            model: Some(f.model),
+            texture_selection: Some(selection),
+            texture_bindings: geosets.textures,
+            interval_start: 100,
+            duration_ms: 17,
+            ..default()
+        });
+        spawned.world.run_system_once(advance).unwrap();
+        let scene = spawned.world.resource::<MainMenuScene>();
+        assert_eq!(scene.elapsed.as_millis(), 20);
+        assert_eq!(scene.time_ms, 3.0);
+        assert_eq!(scene.texture_bindings.materials[0].last_texture, 5);
+        assert_eq!(
+            spawned
+                .world
+                .resource::<Assets<StandardMaterial>>()
+                .get(&geosets.bound[0].2)
+                .unwrap()
+                .base_color_texture
+                .as_ref(),
+            Some(&scene.texture_bindings.images[&5]),
+        );
+    }
+
+    #[test]
+    fn absent_or_zero_length_local_clip_keeps_global_textures_advancing() {
+        use bevy::ecs::system::RunSystemOnce;
+        for interval_start in [0, 100] {
+            let f = fixture(&[track(0, &[(0, 2), (7, 5)])]);
+            let mut spawned = spawn_parts(
+                "background",
+                &f.runtime,
+                &f.bytes,
+                &f.model,
+                &f.textures,
+                [interval_start, interval_start],
+            );
+            let geosets = spawned.result.unwrap();
+            let selection =
+                texture_selection(&f.runtime, [interval_start, interval_start], "background")
+                    .unwrap();
+            let mut time = Time::<()>::default();
+            time.advance_by(std::time::Duration::from_millis(7));
+            spawned.world.insert_resource(time);
+            spawned.world.insert_resource(spawned.meshes);
+            spawned.world.insert_resource(spawned.materials);
+            spawned.world.insert_resource(MainMenuScene {
+                model: Some(f.model),
+                texture_selection: Some(selection),
+                texture_bindings: geosets.textures,
+                interval_start,
+                duration_ms: 0,
+                ..default()
+            });
+            spawned.world.run_system_once(advance).unwrap();
+            let scene = spawned.world.resource::<MainMenuScene>();
+            assert_eq!(scene.elapsed.as_millis(), 7);
+            assert_eq!(scene.time_ms, 0.0);
+            assert_eq!(scene.interval_start + scene.time_ms as u32, interval_start);
+            assert_eq!(scene.texture_bindings.materials[0].last_texture, 5);
+            assert_eq!(
+                spawned
+                    .world
+                    .resource::<Assets<StandardMaterial>>()
+                    .get(&geosets.bound[0].2)
+                    .unwrap()
+                    .base_color_texture
+                    .as_ref(),
+                Some(&scene.texture_bindings.images[&5]),
+            );
+        }
+    }
+
+    #[test]
+    fn panel_phase_changes_keep_the_independent_global_clock() {
+        let mut f = fixture(&[track(NO_ID, &[(105, 2), (205, 5)])]);
+        f.runtime.materials[1].layers[0].texture_tracks = vec![track(0, &[(0, 2), (7, 5)])];
+        let birth = texture_selection(&f.runtime, [100, 110], "panel").unwrap();
+        let stand = texture_selection(&f.runtime, [200, 217], "panel").unwrap();
+        let timeline = crate::menu_sprites::Timeline {
+            birth: [100, 110],
+            stand: [200, 217],
+            stand_loops: true,
+        };
+        let spawned = spawn_parts(
+            "synthetic",
+            &f.runtime,
+            &f.bytes,
+            &f.model,
+            &f.textures,
+            [100, 110],
+        );
+        let mut g = spawned.result.unwrap();
+        let mut materials = spawned.materials;
+        let mut elapsed = std::time::Duration::ZERO;
+        assert_eq!(
+            advance_elapsed("panel", &mut elapsed, std::time::Duration::from_millis(6)).unwrap(),
+            6
+        );
+        let selected = timeline.texture_selection(elapsed.as_secs_f64() * 1000., &birth, &stand);
+        apply_texture_selection(selected, &mut g.textures, 106, 6, &mut materials).unwrap();
+        assert_eq!(g.textures.materials[0].last_texture, 2);
+        let ms =
+            advance_elapsed("panel", &mut elapsed, std::time::Duration::from_millis(11)).unwrap();
+        let selected = timeline.texture_selection(elapsed.as_secs_f64() * 1000., &birth, &stand);
+        apply_texture_selection(selected, &mut g.textures, 207, ms, &mut materials).unwrap();
+        assert_eq!(
+            g.textures.materials[0].last_texture, 5,
+            "Stand did not choose its local keys"
+        );
+        assert_eq!(
+            g.textures.materials[1].last_texture, 2,
+            "global clock reset at Birth/Stand"
+        );
+        assert_ne!(
+            selected.sample(1, 207, ms),
+            selected.sample(1, 207, ms - 10)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires explicit retained fixture manifest with source-qualified local members"]
+    fn retained_first_layer_handles_follow_authored_global_boundaries() {
+        let manifest = std::env::var("PEACECRAFT3_TEXTURE_BINDING_FIXTURE")
+            .expect("set explicit fixture manifest");
+        let rows = std::fs::read_to_string(manifest).unwrap();
+        let rows: Vec<_> = rows
+            .lines()
+            .map(|line| line.split('\t').collect::<Vec<_>>())
+            .collect();
+        let norm = |path: &str| path.replace('\\', "/").to_ascii_lowercase();
+        let mut animated_channels = 0;
+        for model_row in rows.iter().filter(|r| r[0] == "M") {
+            let source = model_row[1];
+            let raw = std::fs::read(model_row[2]).unwrap();
+            let runtime = RuntimePlan::parse(&raw).unwrap();
+            let original_materials = runtime.materials.clone();
+            let model = pcx_gfx::load_model(&raw, source).unwrap();
+            let mdl = pcx_mdl::Mdlx::parse(&raw).unwrap();
+            let clips = mdl.sequences(&raw).unwrap();
+            let clip = clips
+                .iter()
+                .find(|c| c.name == "Stand" && !c.non_looping)
+                .or_else(|| clips.first())
+                .expect("model has a source clip");
+            let interval = [clip.interval_start, clip.interval_end];
+            let selection = texture_selection(&runtime, interval, source).unwrap();
+            let ids: std::collections::BTreeSet<_> = runtime
+                .geosets
+                .iter()
+                .flat_map(|g| {
+                    let l = &runtime.materials[g.material_id].layers[0];
+                    std::iter::once(l.properties.texture_id).chain(
+                        l.texture_tracks
+                            .iter()
+                            .flat_map(|t| t.keys.iter().map(|&(_, id)| id)),
+                    )
+                })
+                .collect();
+            let textures: Vec<_> = ids
+                .iter()
+                .map(|&id| {
+                    let path = &runtime.textures[id as usize].path;
+                    let row = rows
+                        .iter()
+                        .find(|r| r[0] == "T" && norm(r[1]) == norm(path))
+                        .expect("manifest has required canonical texture");
+                    pcx_gfx::load_image(&std::fs::read(row[2]).unwrap(), path).unwrap()
+                })
+                .collect();
+            let mut spawned = spawn_parts(source, &runtime, &raw, &model, &textures, interval);
+            let mut geosets = spawned.result.unwrap();
+            let mut materials = spawned.materials;
+            assert_eq!(rendered_entities(&mut spawned.world), model.meshes.len());
+            for binding in &runtime.geosets {
+                let layer = &runtime.materials[binding.material_id].layers[0];
+                for track in &layer.texture_tracks {
+                    if track.global_seq_id == NO_ID || track.keys.is_empty() {
+                        continue;
+                    }
+                    animated_channels += 1;
+                    let duration =
+                        u64::from(runtime.global_sequences[track.global_seq_id as usize]);
+                    let mut ticks = std::collections::BTreeSet::from([
+                        0,
+                        duration - 1,
+                        duration,
+                        duration + 1,
+                        u64::MAX,
+                    ]);
+                    for &(key, _) in &track.keys {
+                        let key = u64::try_from(key).unwrap();
+                        ticks.insert(key);
+                        ticks.insert(key.saturating_sub(1));
+                        ticks.insert(key + 1);
+                        ticks.insert(duration + key);
+                    }
+                    for elapsed in ticks {
+                        apply_texture_selection(
+                            &selection,
+                            &mut geosets.textures,
+                            interval[0],
+                            elapsed,
+                            &mut materials,
+                        )
+                        .unwrap();
+                        let at = (elapsed % duration) as i64;
+                        let expected = track
+                            .keys
+                            .iter()
+                            .rev()
+                            .find(|&&(time, _)| i64::from(time) <= at)
+                            .or_else(|| track.keys.first())
+                            .unwrap()
+                            .1;
+                        let bound = geosets
+                            .textures
+                            .materials
+                            .iter()
+                            .find(|b| b.geoset == binding.geoset_id)
+                            .unwrap();
+                        assert_eq!(
+                            bound.last_texture, expected,
+                            "{source} GEOS {} elapsed {elapsed}",
+                            binding.geoset_id
+                        );
+                        assert_eq!(
+                            materials
+                                .get(&bound.material)
+                                .unwrap()
+                                .base_color_texture
+                                .as_ref(),
+                            Some(&geosets.textures.images[&expected])
+                        );
+                    }
+                    println!(
+                        "source={source} geoset={} material={} source_keys={} global_duration={duration} initial_static_id={} actual_first_id={}",
+                        binding.geoset_id,
+                        binding.material_id,
+                        track.keys.len(),
+                        layer.properties.texture_id,
+                        selection.sample(binding.geoset_id, interval[0], 0).unwrap()
+                    );
+                }
+            }
+            assert_eq!(
+                runtime.materials, original_materials,
+                "source tracks mutated"
+            );
+            println!(
+                "source={source} geosets={} required_texs_ids={}",
+                model.meshes.len(),
+                ids.len()
+            );
+        }
+        assert!(
+            animated_channels > 0,
+            "fixture did not exercise an authored global selection channel"
+        );
     }
 }

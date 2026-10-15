@@ -96,6 +96,15 @@ impl Timeline {
         ms < self.birth_ms()
     }
 
+    pub(crate) fn texture_selection<'a>(
+        &self,
+        ms: f64,
+        birth: &'a pcx_gfx::mdx_texture_selection::TextureSelectionPlan,
+        stand: &'a pcx_gfx::mdx_texture_selection::TextureSelectionPlan,
+    ) -> &'a pcx_gfx::mdx_texture_selection::TextureSelectionPlan {
+        if self.in_birth(ms) { birth } else { stand }
+    }
+
     /// The model frame `ms` after the entrance began.
     fn frame_at(&self, ms: f64) -> u32 {
         if self.in_birth(ms) {
@@ -315,6 +324,8 @@ struct Panel {
     timeline: Timeline,
     birth_opacity: pcx_gfx::mdx_opacity::OpacityPlan,
     stand_opacity: pcx_gfx::mdx_opacity::OpacityPlan,
+    birth_textures: pcx_gfx::mdx_texture_selection::TextureSelectionPlan,
+    stand_textures: pcx_gfx::mdx_texture_selection::TextureSelectionPlan,
     sounds: Vec<EventSound>,
 }
 
@@ -322,7 +333,7 @@ struct Panel {
 #[derive(Resource)]
 pub struct MenuPanels {
     panels: Vec<Panel>,
-    elapsed_ms: f64,
+    elapsed: std::time::Duration,
 }
 
 /// Marker for the panel camera, whose viewport follows the UI camera's.
@@ -362,6 +373,8 @@ pub fn spawn(
             .map_err(|e| decode(&e))?;
         let stand_opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&runtime, timeline.stand)
             .map_err(|e| decode(&e))?;
+        let birth_textures = scene::texture_selection(&runtime, timeline.birth, &path)?;
+        let stand_textures = scene::texture_selection(&runtime, timeline.stand, &path)?;
         let textures: Vec<pcx_gfx::LoadedTexture> = scene::texture_paths(&bytes)?
             .iter()
             .filter_map(|p| pcx_gfx::load_image(&read(install, p).ok()?, p).ok())
@@ -380,6 +393,8 @@ pub fn spawn(
                 source: &path,
                 model: &model,
                 textures: &textures,
+                runtime: &runtime,
+                selection: &birth_textures,
             },
             &birth_opacity,
             timeline.birth[0],
@@ -408,6 +423,8 @@ pub fn spawn(
             timeline,
             birth_opacity,
             stand_opacity,
+            birth_textures,
+            stand_textures,
             sounds,
         });
     }
@@ -446,7 +463,7 @@ pub fn spawn(
     let count = panels.len();
     commands.insert_resource(MenuPanels {
         panels,
-        elapsed_ms: 0.0,
+        elapsed: std::time::Duration::ZERO,
     });
     Ok(count)
 }
@@ -496,10 +513,16 @@ pub fn advance(
     mut visibility: Query<&mut Visibility, With<scene::MainMenuSceneEntity>>,
     mut sink: SoundSink,
 ) {
-    let from = state.elapsed_ms;
-    let to = from + time.delta_secs_f64() * 1000.0;
-    state.elapsed_ms = to;
-    for panel in &state.panels {
+    let from = state.elapsed.as_secs_f64() * 1000.0;
+    let elapsed_ms = match scene::advance_elapsed("menu panels", &mut state.elapsed, time.delta()) {
+        Ok(elapsed) => elapsed,
+        Err(error) => {
+            error!("{error}");
+            return;
+        }
+    };
+    let to = state.elapsed.as_secs_f64() * 1000.0;
+    for panel in &mut state.panels {
         for sound in &panel.sounds {
             if panel.timeline.fires(sound.frame, from, to) {
                 play(&mut commands, &mut sink, sound);
@@ -511,11 +534,25 @@ pub fn advance(
         } else {
             &panel.stand_opacity
         };
+        let textures =
+            panel
+                .timeline
+                .texture_selection(to, &panel.birth_textures, &panel.stand_textures);
+        if let Err(error) = scene::apply_texture_selection(
+            textures,
+            &mut panel.geosets.textures,
+            frame,
+            elapsed_ms,
+            &mut materials,
+        ) {
+            error!("{error}");
+            continue;
+        }
         scene::apply_opacity(
             opacity,
             &panel.geosets.bound,
             frame,
-            to as u64,
+            elapsed_ms,
             &mut materials,
             &mut visibility,
         );

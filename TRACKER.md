@@ -1011,8 +1011,13 @@ Format: `date — subsystem — symptom — root cause — status`
   The menu now binds GEOA opacity by geoset ID and samples first-layer KMTA and
   KGAO/static alpha using selected sequence/global clocks. Sparse-ID, independent
   clock and actual ECS material/visibility regressions pass; both original menu
-  imports and browser runtime pass. RGB animation, multilayer drawing and native
-  clock/blend equivalence remain open.
+  imports and browser runtime pass. First-layer KMTF texture selection now binds
+  authored TEXS IDs at spawn and advance on independent global clocks, retaining
+  per-record sampler policy and avoiding redundant material changes. Native ECS
+  regressions, both original background imports and six source-qualified retained
+  model bindings pass; strict native/WASM checks pass. Release/browser acceptance
+  of this new texture binding is pending. RGB animation, multilayer drawing and
+  native clock/blend equivalence remain open.
   The TFT sky's authored layer references a linear TXAN translation on an
   independent 999,033 ms GLBS clock. The current scene does not apply it;
   native track-to-UV mapping remains unproved. See `menu-texture-animation.md`.
