@@ -1,7 +1,7 @@
 # Authored menu texture-animation bindings
 
-This is local-asset and reconstruction-source evidence. It identifies a
-missing texture-animation path; it does not establish native UV matrix
+This is local-asset and reconstruction-source evidence. First-layer translation
+is now implemented as described below. It does not establish native UV matrix
 conventions or explain the screenshot's streaks or lower black region.
 
 ## Inputs and reproduction
@@ -59,17 +59,60 @@ global sequence 20 is **999,033 ms** and has two linear translation keys.
 The probe preserves values and tangents through the decoder rather than
 replacing either clock with the scene-loop duration.
 
-## Reconstruction gap and closing check
+## First-layer translation implementation
 
-`mainmenu_scene::spawn` applies authored texture wrapping, while its material
-creation and advance systems do not consume the layer's TXAN reference into a
-UV transform. GEOA/KMTA opacity is already applied; it is a separate path.
+`pcx_gfx::mdx_uv_translation::UvTranslationPlan` consumes the checked runtime
+plan, selected source interval and actual UV-set metadata. The existing MDX
+mesh walk now retains each UVAS count and validates its UVBS records. No UV
+declaration stays unknown; an authored zero stays zero. General runtime/rig
+parsing still accepts an otherwise valid mesh without UV metadata. Only the UV
+binding consumer refuses unknown metadata, with source and geoset context.
+Typed-only runtime inputs likewise retain unknown counts rather than assuming
+one set. The existing last-UVBS projection is unchanged, so the translation
+consumer explicitly refuses multiple sets and invalid coordinate references.
 
-Before wiring texture motion, establish the native track-to-UV transformation:
-which stored components affect U/V, their signs, rotation/scale composition and
-any pivot. The nontrivial third component makes an assumed first-two-component
-projection unsuitable as evidence. Then bind by the layer's actual TXAN index,
-sample its independent GLBS clock, and verify the material update on the
-identified geoset with an independent synthetic translation and an original
-runtime comparison. Do not tune offsets against a screenshot or claim that
-texture motion alone repairs camera, geometry, lighting or framing.
+The bounded transform is `uv + translation.xy`. This is a reconstruction
+convention corroborated by the pinned
+[war3-model renderer](https://github.com/4eb0da/war3-model/blob/52d7f421a5505a0434d764294057f2009ce3987b/renderer/modelRenderer.ts)
+and [mdx-m3-viewer layer sampling](https://github.com/flowtsohg/mdx-m3-viewer/blob/2ff0bc00c6363f425016e23d88c0fb2929d3b3cc/src/viewer/handlers/mdx/modelinstance.ts).
+The stored third component remains preserved; its value is not reassigned to
+another UV axis. Rotation, scale, unknown channels and unsupported signed time
+domains report errors rather than receiving an invented TRS/pivot convention.
+STEP, Linear, Hermite and Bezier translation reuse the existing vector sampler.
+Local keys are projected to the selected interval; global keys use independent
+u64 elapsed time modulo the authored GLBS duration. The existing endpoint clamp
+is an explicit local reconstruction convention. The retained required menu UV
+tracks span their global endpoints; generic cyclic-endpoint differences remain
+outside this bounded implementation.
+
+Background and panel materials receive their sampled transform at spawn.
+Panel Birth/Stand plans retain the continuous global clock. Advance validates
+all UV samples and material targets before writing, assigns absolute Bevy
+`Affine2` translations, and leaves unchanged transforms untouched. It neither
+accumulates offsets nor rewrites mesh UVs. TEXS identities, samplers, KMTF
+selection, alpha, shading and culling retain their existing behavior. This is
+a model-local UV transaction, not a new all-menu/all-property transaction.
+
+## Verification and remaining fidelity
+
+The complete affected native run passes 460 tests with 24 explicitly ignored
+input-dependent cases, including 184 application tests. New actual Bevy
+AssetEvents/background-system tests cover initial transforms, independent global
+time across local wrap, panel phase selection, unchanged-frame behavior,
+preservation of unrelated material state and refusal before partial writes.
+Strict native and wasm32 Clippy pass across the application, graphics and model
+crates, all targets/features, with dependency diagnostics excluded.
+
+The explicit retained-model gate admits seven source-qualified models covering
+310 geosets, using parser-derived metadata and checking exact key/wrap values.
+Both original menu backgrounds also pass the helper-parent import gate with
+real decoded textures; six retained models pass the actual image/material binding
+gate. The target Legacy parser corpus remains 3,249 parsed with zero failures.
+Sources, exact commands and logs are in `.scratch/menu-uv-root-review/` and
+`.scratch/menu-uv-app-root-review/`. These are data and CPU material checks;
+release WASM and new browser/rendered acceptance remain pending.
+
+Do not infer native clock origin, live UV orientation, full TRS behavior or sky
+projection from these checks. No camera angle, sky vertex, clear color or UV
+offset was fitted to a screenshot. Texture motion alone does not repair the
+uncovered region, geometry, lighting, particles or panel transition timelines.

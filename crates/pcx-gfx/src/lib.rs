@@ -17,6 +17,7 @@ pub mod dds_gpu;
 pub mod mdx_opacity;
 pub mod mdx_runtime;
 pub mod mdx_texture_selection;
+pub mod mdx_uv_translation;
 pub mod performance;
 pub mod viewer;
 use bevy::mesh::{Indices, PrimitiveTopology};

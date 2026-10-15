@@ -154,6 +154,14 @@ pub enum Error {
     NoModel,
     #[error("geoset sub-block tag {0:?} is not recognised")]
     UnknownGeosetTag([u8; 4]),
+    #[error("UVBS at +{at} has no preceding UVAS declaration")]
+    MissingUvSetDeclaration { at: usize },
+    #[error("UVAS at +{at} declares {declared} sets, but {actual} UVBS records were read")]
+    UvSetCount {
+        at: usize,
+        declared: u32,
+        actual: usize,
+    },
     #[error("geoset animation track {0:?} is not recognised")]
     UnknownGeoAnimTrack([u8; 4]),
     #[error("geoset has no VRTX block")]
@@ -2498,6 +2506,9 @@ pub struct Mesh {
     pub vertices: Vec3Array,
     pub normals: Vec3Array,
     pub tex_coords: UvArray,
+    /// Checked UVAS count. None means no UVAS/UVBS framing was supplied.
+    /// The legacy tex_coords projection still retains the last UVBS array.
+    pub uv_set_count: Option<u32>,
     pub triangles: Triangles,
     /// One vertex group index per vertex; indexes the model's bone groups.
     pub vertex_groups: Vec<u8>,
@@ -2916,6 +2927,7 @@ impl Mdlx {
             vertices: Vec3Array::empty(b"VRTX"),
             normals: Vec3Array::empty(b"NRMS"),
             tex_coords: UvArray::empty(),
+            uv_set_count: None,
             triangles: Triangles::empty(),
             vertex_groups: Vec::new(),
             matrix_groups: Vec::new(),
@@ -2931,6 +2943,8 @@ impl Mdlx {
             seq_bounds: Vec::new(),
         };
         let mut at = 0usize;
+        let mut uv_sets_seen = 0usize;
+        let mut uv_declaration_at = 0usize;
         while at + 8 <= g.data.len() {
             let (tag, count, _) = read_subblock(&g.data, at)?;
             if has_lod && (tag == b"TANG" || tag == b"SKIN") {
@@ -3067,16 +3081,31 @@ impl Mdlx {
                 continue;
             }
 
-            let Some(body_len) = sub_block_width(tag, count) else {
-                return Err(Error::UnknownGeosetTag(*tag));
+            let body_len = if tag == b"UVBS" {
+                usize::try_from(count)
+                    .ok()
+                    .and_then(|count| count.checked_mul(8))
+                    .ok_or(Error::Truncated {
+                        what: "UVBS coordinate byte count",
+                        at,
+                        need: usize::MAX,
+                        have: g.data.len().saturating_sub(at),
+                    })?
+            } else {
+                sub_block_width(tag, count).ok_or(Error::UnknownGeosetTag(*tag))?
             };
-            let end = 8 + body_len;
-            if at + end > g.data.len() {
+            let end = body_len.checked_add(8).ok_or(Error::Truncated {
+                what: "geoset sub-block span",
+                at,
+                need: usize::MAX,
+                have: g.data.len().saturating_sub(at),
+            })?;
+            if end > g.data.len() - at {
                 return Err(Error::Truncated {
                     what: "geoset sub-block body",
                     at,
-                    need: at + end,
-                    have: g.data.len(),
+                    need: end,
+                    have: g.data.len() - at,
                 });
             }
             let body = &g.data[at + 8..at + end];
@@ -3084,7 +3113,26 @@ impl Mdlx {
             match &tag[..] {
                 b"VRTX" => mesh.vertices = Vec3Array::new(*tag, count, body),
                 b"NRMS" => mesh.normals = Vec3Array::new(*tag, count, body),
-                b"UVBS" => mesh.tex_coords = UvArray::new(count, body),
+                b"UVAS" => {
+                    if mesh.uv_set_count.replace(count).is_some() {
+                        return Err(Error::DuplicateGeosetTag { at, tag: *tag });
+                    }
+                    uv_declaration_at = at;
+                }
+                b"UVBS" => {
+                    let declared = mesh
+                        .uv_set_count
+                        .ok_or(Error::MissingUvSetDeclaration { at })?;
+                    uv_sets_seen += 1;
+                    if uv_sets_seen > declared as usize {
+                        return Err(Error::UvSetCount {
+                            at: uv_declaration_at,
+                            declared,
+                            actual: uv_sets_seen,
+                        });
+                    }
+                    mesh.tex_coords = UvArray::new(count, body);
+                }
                 b"PVTX" => mesh.triangles = Triangles::new(count, body),
                 b"GNDX" => mesh.vertex_groups = body.to_vec(),
                 b"MTGC" => {
@@ -3097,7 +3145,7 @@ impl Mdlx {
                 }
                 // Primitive type and index count are read for their counts and
                 // do not become geometry of their own.
-                b"PTYP" | b"PCNT" | b"UVAS" => {}
+                b"PTYP" | b"PCNT" => {}
                 _ => unreachable!("no other tag is yielded"),
             }
             at += end;
@@ -3109,6 +3157,15 @@ impl Mdlx {
             return Err(Error::GeosetNotTiled {
                 at,
                 have: g.data.len(),
+            });
+        }
+        if let Some(declared) = mesh.uv_set_count
+            && uv_sets_seen != declared as usize
+        {
+            return Err(Error::UvSetCount {
+                at: uv_declaration_at,
+                declared,
+                actual: uv_sets_seen,
             });
         }
         Ok(mesh)

@@ -25,8 +25,10 @@
 //! * **`PRE2` particle emitters are not drawn.** The chunk is decoded to its
 //!   properties by `pcx-mdl`, but their native rendering is not implemented.
 //!   No stand-in particle effect is created.
-//! * **`TXAN` texture animation is not applied.** Its three-component track to
-//!   UV-matrix mapping remains unproved; see `menu-texture-animation.md`.
+//! * **First-layer `TXAN` translation only.** Checked KTAT tracks drive absolute
+//!   material UV transforms; rotation, scale and multiple UV sets refuse.
+//!   XY projection follows retained renderer references, not native runtime
+//!   proof; see `menu-texture-animation.md` for the source/evidence boundary.
 //!   GEOA/KMTA opacity is applied by authored geoset/layer IDs and clocks.
 //!   Joint tracks also use authored `GLBS` durations on a separate elapsed clock.
 //!   First-layer KMTF texture selection binds authored TEXS images and samplers
@@ -402,6 +404,8 @@ pub enum SceneError {
         context: String,
         reason: &'static str,
     },
+    #[error(transparent)]
+    UvTranslation(#[from] pcx_gfx::mdx_uv_translation::Error),
     #[error("{source_name}: elapsed milliseconds exceed u64 clock")]
     Clock { source_name: String },
 }
@@ -420,6 +424,7 @@ pub struct MainMenuScene {
     opacity: Option<pcx_gfx::mdx_opacity::OpacityPlan>,
     texture_selection: Option<pcx_gfx::mdx_texture_selection::TextureSelectionPlan>,
     texture_bindings: TextureBindings,
+    uv_translation: Option<pcx_gfx::mdx_uv_translation::UvTranslationPlan>,
     opacity_materials: Vec<(usize, Entity, Handle<StandardMaterial>)>,
     /// The clip's first frame.
     interval_start: u32,
@@ -473,6 +478,8 @@ pub fn spawn(
         .map_err(|e| SceneError::Decode(format!("{source}: {e}")))?;
 
     let texture_selection = texture_selection(&runtime, interval, source)?;
+    let uv_translation =
+        pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(&runtime, interval, source)?;
     let mut info = SceneInfo {
         bones: joints
             .kinds()
@@ -513,6 +520,7 @@ pub fn spawn(
             textures,
             runtime: &runtime,
             selection: &texture_selection,
+            uv_translation: &uv_translation,
         },
         &opacity,
         interval[0],
@@ -637,6 +645,7 @@ pub fn spawn(
         opacity_materials,
         texture_selection: Some(texture_selection),
         texture_bindings,
+        uv_translation: Some(uv_translation),
         interval_start: clip.map(|s| s.interval_start).unwrap_or(0),
         duration_ms: clip.map(|s| s.duration()).unwrap_or(0),
         time_ms: 0.0,
@@ -663,6 +672,7 @@ pub struct GeosetSource<'a> {
     pub textures: &'a [pcx_gfx::LoadedTexture],
     pub runtime: &'a pcx_gfx::mdx_runtime::RuntimePlan,
     pub selection: &'a pcx_gfx::mdx_texture_selection::TextureSelectionPlan,
+    pub uv_translation: &'a pcx_gfx::mdx_uv_translation::UvTranslationPlan,
 }
 
 /// One geoset's authored id, its entity and its material.
@@ -700,6 +710,7 @@ pub fn spawn_geosets(
         textures,
         runtime,
         selection,
+        uv_translation,
     } = source;
     let required = required_texture_images(source, runtime, textures)?;
     let mdl_materials = m
@@ -731,12 +742,20 @@ pub fn spawn_geosets(
         let alpha = opacity
             .sample(mesh.geoset, frame, 0)
             .ok_or_else(|| fail("missing initial opacity binding"))?;
-        initial.push((id, alpha));
+        let uv = sampled_uv_transform(
+            uv_translation,
+            source,
+            mesh.geoset,
+            mesh.material_id as usize,
+            frame,
+            0,
+        )?;
+        initial.push((id, alpha, uv));
     }
     let mut texture_bindings = cache_texture_images(source, runtime, &required, images);
     let mut handles = Vec::with_capacity(model.meshes.len());
     let mut bound = Vec::with_capacity(model.meshes.len());
-    for (mesh, (texture_id, alpha)) in model.meshes.iter().zip(initial) {
+    for (mesh, (texture_id, alpha, uv_transform)) in model.meshes.iter().zip(initial) {
         let id = mesh.material_id as usize;
         let flags = layer_flags(&mdl_materials, id);
         if let Some(gap) = flags.blend_gap {
@@ -751,6 +770,7 @@ pub fn spawn_geosets(
         let material = materials.add(StandardMaterial {
             base_color: flags.base_color().with_alpha(alpha),
             base_color_texture: Some(image),
+            uv_transform,
             // Glue art is scenery, not a lit character, so a high roughness
             // keeps it from picking up a sheen the original has not got.
             perceptual_roughness: 1.0,
@@ -1092,6 +1112,80 @@ pub fn apply_texture_selection(
     Ok(())
 }
 
+/// Convert a checked sample to an absolute transform of the authored UVs.
+fn sampled_uv_transform(
+    plan: &pcx_gfx::mdx_uv_translation::UvTranslationPlan,
+    source: &str,
+    geoset: usize,
+    material: usize,
+    frame: u32,
+    elapsed_ms: u64,
+) -> Result<bevy::math::Affine2, SceneError> {
+    let sample = plan.sample(geoset, frame, elapsed_ms)?.ok_or_else(|| {
+        pcx_gfx::mdx_uv_translation::Error {
+            context: format!("{source} geoset {geoset} material {material} layer 0"),
+            reason: "missing UV translation sample".into(),
+        }
+    })?;
+    Ok(bevy::math::Affine2::from_translation(Vec2::from_array(
+        sample.offset,
+    )))
+}
+
+/// Validate every target before writing; resampling avoids a per-frame change list.
+pub fn apply_uv_translation(
+    plan: &pcx_gfx::mdx_uv_translation::UvTranslationPlan,
+    bindings: &TextureBindings,
+    frame: u32,
+    elapsed_ms: u64,
+    materials: &mut Assets<StandardMaterial>,
+) -> Result<(), SceneError> {
+    for binding in &bindings.materials {
+        sampled_uv_transform(
+            plan,
+            &bindings.source,
+            binding.geoset,
+            binding.material_id,
+            frame,
+            elapsed_ms,
+        )?;
+        if materials.get(&binding.material).is_none() {
+            return Err(pcx_gfx::mdx_uv_translation::Error {
+                context: format!(
+                    "{} geoset {} material {} layer 0",
+                    bindings.source, binding.geoset, binding.material_id
+                ),
+                reason: "missing bound UV material".into(),
+            }
+            .into());
+        }
+    }
+    for binding in &bindings.materials {
+        let transform = sampled_uv_transform(
+            plan,
+            &bindings.source,
+            binding.geoset,
+            binding.material_id,
+            frame,
+            elapsed_ms,
+        )
+        .expect("validated UV sample");
+        // Exclusive asset access and pure sampling preserve the validation above.
+        if materials
+            .get(&binding.material)
+            .expect("validated UV material")
+            .uv_transform
+            != transform
+        {
+            materials
+                .get_mut(&binding.material)
+                .expect("validated UV material")
+                .uv_transform = transform;
+        }
+    }
+    Ok(())
+}
+
 /// One bone's pose with global-sequence tracks sampled on their **own** clock.
 ///
 /// A global sequence does not follow the model's `Stand` clip; it runs on its
@@ -1182,6 +1276,18 @@ pub fn advance(
             return;
         }
     };
+    if let Some(uv) = &scene.uv_translation
+        && let Err(error) = apply_uv_translation(
+            uv,
+            &scene.texture_bindings,
+            frame,
+            elapsed_ms,
+            &mut materials,
+        )
+    {
+        error!("{error}");
+        return;
+    }
     {
         let MainMenuScene {
             texture_selection,
@@ -1966,7 +2072,7 @@ mod texture_selection_tests {
                 flags: if id == 5 { 3 } else { 0 },
             })
             .collect();
-        let runtime = RuntimePlan::checked(RuntimeInput {
+        let mut runtime = RuntimePlan::checked(RuntimeInput {
             bones: vec![],
             helpers: vec![],
             pivots: Pivots::default(),
@@ -1984,6 +2090,8 @@ mod texture_selection_tests {
             global_sequences: vec![13],
         })
         .unwrap();
+        // Each synthetic loaded mesh below declares one authored UV set.
+        runtime.uv_set_counts = vec![Some(1); runtime.geosets.len()];
         let model = pcx_gfx::LoadedModel {
             name: "synthetic".into(),
             minimum_extent: [0.; 3],
@@ -2041,6 +2149,9 @@ mod texture_selection_tests {
         interval: [u32; 2],
     ) -> Spawned {
         let selection = texture_selection(runtime, interval, "synthetic").unwrap();
+        let uv_translation =
+            pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(runtime, interval, source)
+                .unwrap();
         let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(runtime, interval).unwrap();
         let m = pcx_mdl::Mdlx::parse(bytes).unwrap();
         let mut world = World::new();
@@ -2063,6 +2174,7 @@ mod texture_selection_tests {
                 textures,
                 runtime,
                 selection: &selection,
+                uv_translation: &uv_translation,
             },
             &opacity,
             interval[0],
@@ -2516,6 +2628,427 @@ mod texture_selection_tests {
         assert_ne!(
             selected.sample(1, 207, ms),
             selected.sample(1, 207, ms - 10)
+        );
+    }
+
+    fn uv_track(global: u32, keys: &[(u32, [f32; 3])]) -> pcx_mdl::KeyTrack {
+        let raw = keys
+            .iter()
+            .flat_map(|&(frame, value)| {
+                frame
+                    .to_le_bytes()
+                    .into_iter()
+                    .chain(value.into_iter().flat_map(f32::to_le_bytes))
+            })
+            .collect();
+        pcx_mdl::KeyTrack {
+            magic: *b"KTAT",
+            count: keys.len() as u32,
+            interpolation: Interpolation::Linear,
+            global_seq_id: global,
+            width: 3,
+            stride: 16,
+            raw,
+        }
+    }
+
+    fn uv_fixture() -> Fixture {
+        let mut f = fixture(&[track(0, &[(0, 2), (7, 5)])]);
+        f.runtime.texture_animations = vec![pcx_mdl::TextureAnim {
+            offset: 0,
+            len: 4,
+            tracks: vec![uv_track(0, &[(0, [2., 4., 99.]), (12, [14., 28., -99.])])],
+        }];
+        f.runtime.materials[0].layers[0].properties.texture_anim_id = 0;
+        f
+    }
+
+    #[test]
+    fn uv_spawner_refuses_a_missing_initial_sample_before_model_writes() {
+        let f = uv_fixture();
+        let mut empty = fixture(&[]).runtime;
+        empty.geosets.clear();
+        empty.uv_set_counts.clear();
+        let uv = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
+            &empty,
+            [100, 117],
+            "empty-plan",
+        )
+        .unwrap();
+        let selection = texture_selection(&f.runtime, [100, 117], "synthetic-uv").unwrap();
+        let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&f.runtime, [100, 117]).unwrap();
+        let model = pcx_mdl::Mdlx::parse(&f.bytes).unwrap();
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        let mut meshes = Assets::default();
+        let mut materials = Assets::default();
+        let mut images = Assets::default();
+        let error = spawn_geosets(
+            &mut Commands::new(&mut queue, &world),
+            GeosetAssets {
+                meshes: &mut meshes,
+                materials: &mut materials,
+                images: &mut images,
+            },
+            GeosetSource {
+                m: &model,
+                bytes: &f.bytes,
+                source: "initial-uv-source",
+                model: &f.model,
+                textures: &f.textures,
+                runtime: &f.runtime,
+                selection: &selection,
+                uv_translation: &uv,
+            },
+            &opacity,
+            100,
+            &mut SceneInfo::default(),
+            Transform::default(),
+        )
+        .err()
+        .expect("missing initial UV sample admitted");
+        queue.apply(&mut world);
+        assert!(
+            error
+                .to_string()
+                .contains("initial-uv-source geoset 0 material 0 layer 0")
+        );
+        assert_eq!(rendered_entities(&mut world), 0);
+        assert!(meshes.is_empty());
+        assert!(materials.is_empty());
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn uv_binding_is_absolute_changed_only_and_preserves_other_material_state() {
+        let f = uv_fixture();
+        let spawned = spawn(&f);
+        let mut geosets = spawned.result.unwrap();
+        let handle = geosets.bound[0].2.clone();
+        let other = geosets.bound[1].2.clone();
+        let initial = spawned.materials.get(&handle).unwrap().clone();
+        assert_eq!(initial.uv_transform.translation, Vec2::new(2., 4.));
+        assert_eq!(initial.uv_transform.matrix2, bevy::math::Mat2::IDENTITY);
+        let sampler = spawned
+            .images
+            .get(&geosets.textures.images[&2])
+            .unwrap()
+            .sampler
+            .clone();
+        let uv = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
+            &f.runtime,
+            [100, 117],
+            "synthetic-uv",
+        )
+        .unwrap();
+        let mut app = event_app(spawned.materials);
+        for (elapsed, expected, changed) in [
+            (0, Vec2::new(2., 4.), false),
+            (6, Vec2::new(8., 16.), true),
+            (6, Vec2::new(8., 16.), false),
+            (12, Vec2::new(14., 28.), true),
+            (13, Vec2::new(2., 4.), true),
+            (13, Vec2::new(2., 4.), false),
+        ] {
+            apply_uv_translation(
+                &uv,
+                &geosets.textures,
+                103,
+                elapsed,
+                &mut app.world_mut().resource_mut(),
+            )
+            .unwrap();
+            let events = material_events(&mut app);
+            let modified: Vec<_> = events
+                .iter()
+                .filter(|event| matches!(event, AssetEvent::Modified { .. }))
+                .collect();
+            assert_eq!(modified.len(), usize::from(changed), "elapsed={elapsed}");
+            if changed {
+                assert!(modified[0].is_modified(handle.id()));
+            }
+            let materials = app.world().resource::<Assets<StandardMaterial>>();
+            let actual = materials.get(&handle).unwrap();
+            assert_eq!(actual.uv_transform.translation, expected);
+            assert_eq!(
+                actual.uv_transform.transform_point2(Vec2::new(0.25, 0.75)),
+                Vec2::new(0.25, 0.75) + expected
+            );
+            assert_eq!(actual.uv_transform.matrix2, bevy::math::Mat2::IDENTITY);
+            assert_eq!(actual.base_color_texture, initial.base_color_texture);
+            assert_eq!(actual.base_color, initial.base_color);
+            assert_eq!(actual.alpha_mode, initial.alpha_mode);
+            assert_eq!(actual.unlit, initial.unlit);
+            assert_eq!(actual.cull_mode, initial.cull_mode);
+            assert_eq!(actual.perceptual_roughness, initial.perceptual_roughness);
+            assert_eq!(
+                materials.get(&other).unwrap().uv_transform,
+                bevy::math::Affine2::IDENTITY
+            );
+            assert_eq!(geosets.textures.materials[0].last_texture, 2);
+        }
+        let texture = texture_selection(&f.runtime, [100, 117], "synthetic-uv").unwrap();
+        apply_texture_selection(
+            &texture,
+            &mut geosets.textures,
+            103,
+            7,
+            &mut app.world_mut().resource_mut(),
+        )
+        .unwrap();
+        let current = app
+            .world()
+            .resource::<Assets<StandardMaterial>>()
+            .get(&handle)
+            .unwrap();
+        assert_eq!(geosets.textures.materials[0].last_texture, 5);
+        assert_eq!(current.uv_transform.translation, Vec2::new(2., 4.));
+        assert_eq!(
+            spawned
+                .images
+                .get(&geosets.textures.images[&2])
+                .unwrap()
+                .sampler,
+            sampler
+        );
+    }
+
+    #[test]
+    fn uv_binding_failure_is_atomic_and_recovers_when_the_target_returns() {
+        let f = uv_fixture();
+        let spawned = spawn(&f);
+        let geosets = spawned.result.unwrap();
+        let first = geosets.bound[0].2.clone();
+        let second = geosets.bound[1].2.clone();
+        let uv = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
+            &f.runtime,
+            [100, 117],
+            "synthetic-uv",
+        )
+        .unwrap();
+        let mut materials = spawned.materials;
+        let replacement = materials.remove(&second).unwrap();
+        let before = materials.get(&first).unwrap().uv_transform;
+        let mut app = event_app(materials);
+        let error = apply_uv_translation(
+            &uv,
+            &geosets.textures,
+            103,
+            6,
+            &mut app.world_mut().resource_mut(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("geoset 1 material 1 layer 0"));
+        assert_eq!(
+            app.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(&first)
+                .unwrap()
+                .uv_transform,
+            before
+        );
+        assert!(
+            material_events(&mut app)
+                .iter()
+                .all(|event| !matches!(event, AssetEvent::Modified { .. }))
+        );
+        app.world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .insert(second.id(), replacement)
+            .unwrap();
+        material_events(&mut app);
+        apply_uv_translation(
+            &uv,
+            &geosets.textures,
+            103,
+            6,
+            &mut app.world_mut().resource_mut(),
+        )
+        .unwrap();
+        assert_eq!(
+            app.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(&first)
+                .unwrap()
+                .uv_transform
+                .translation,
+            Vec2::new(8., 16.)
+        );
+    }
+
+    #[test]
+    fn uv_sample_failure_refuses_before_any_material_write() {
+        let mut f = uv_fixture();
+        f.runtime.texture_animations.push(pcx_mdl::TextureAnim {
+            offset: 0,
+            len: 4,
+            tracks: vec![uv_track(0, &[(0, [f32::MAX; 3]), (12, [-f32::MAX; 3])])],
+        });
+        f.runtime.materials[1].layers[0].properties.texture_anim_id = 1;
+        let spawned = spawn(&f);
+        let geosets = spawned.result.unwrap();
+        let first = geosets.bound[0].2.clone();
+        let before = spawned.materials.get(&first).unwrap().uv_transform;
+        let uv = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
+            &f.runtime,
+            [100, 117],
+            "synthetic-overflow",
+        )
+        .unwrap();
+        let mut app = event_app(spawned.materials);
+        let error = apply_uv_translation(
+            &uv,
+            &geosets.textures,
+            103,
+            6,
+            &mut app.world_mut().resource_mut(),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("synthetic-overflow geoset 1 material 1 layer 0 TXAN 1")
+        );
+        assert_eq!(
+            app.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(&first)
+                .unwrap()
+                .uv_transform,
+            before
+        );
+        assert!(
+            material_events(&mut app)
+                .iter()
+                .all(|event| !matches!(event, AssetEvent::Modified { .. }))
+        );
+    }
+
+    #[test]
+    fn uv_panel_phase_selection_preserves_the_continuous_global_clock() {
+        let mut f = uv_fixture();
+        f.runtime.texture_animations[0].tracks = vec![uv_track(
+            NO_ID,
+            &[(105, [2., 4., 0.]), (205, [8., 16., 0.])],
+        )];
+        f.runtime.texture_animations.push(pcx_mdl::TextureAnim {
+            offset: 0,
+            len: 4,
+            tracks: vec![uv_track(0, &[(0, [2., 4., 0.]), (12, [14., 28., 0.])])],
+        });
+        f.runtime.materials[1].layers[0].properties.texture_anim_id = 1;
+        let birth = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
+            &f.runtime,
+            [100, 110],
+            "panel",
+        )
+        .unwrap();
+        let stand = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
+            &f.runtime,
+            [200, 217],
+            "panel",
+        )
+        .unwrap();
+        let timeline = crate::menu_sprites::Timeline {
+            birth: [100, 110],
+            stand: [200, 217],
+            stand_loops: true,
+        };
+        let spawned = spawn_parts(
+            "panel",
+            &f.runtime,
+            &f.bytes,
+            &f.model,
+            &f.textures,
+            [100, 110],
+        );
+        let geosets = spawned.result.unwrap();
+        let mut materials = spawned.materials;
+        let mut elapsed = std::time::Duration::ZERO;
+        let ms =
+            advance_elapsed("panel", &mut elapsed, std::time::Duration::from_millis(6)).unwrap();
+        apply_uv_translation(
+            timeline.uv_translation(elapsed.as_secs_f64() * 1000., &birth, &stand),
+            &geosets.textures,
+            106,
+            ms,
+            &mut materials,
+        )
+        .unwrap();
+        assert_eq!(
+            materials
+                .get(&geosets.bound[0].2)
+                .unwrap()
+                .uv_transform
+                .translation,
+            Vec2::new(2., 4.)
+        );
+        let ms =
+            advance_elapsed("panel", &mut elapsed, std::time::Duration::from_millis(11)).unwrap();
+        apply_uv_translation(
+            timeline.uv_translation(elapsed.as_secs_f64() * 1000., &birth, &stand),
+            &geosets.textures,
+            207,
+            ms,
+            &mut materials,
+        )
+        .unwrap();
+        assert_eq!(
+            materials
+                .get(&geosets.bound[0].2)
+                .unwrap()
+                .uv_transform
+                .translation,
+            Vec2::new(8., 16.)
+        );
+        assert_eq!(
+            materials
+                .get(&geosets.bound[1].2)
+                .unwrap()
+                .uv_transform
+                .translation,
+            Vec2::new(6., 12.)
+        );
+    }
+
+    #[test]
+    fn background_uv_system_uses_elapsed_across_the_local_clip_wrap() {
+        use bevy::ecs::system::RunSystemOnce;
+        let f = uv_fixture();
+        let mut spawned = spawn(&f);
+        let geosets = spawned.result.unwrap();
+        let uv_translation = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
+            &f.runtime,
+            [100, 117],
+            "background",
+        )
+        .unwrap();
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_millis(20));
+        spawned.world.insert_resource(time);
+        spawned.world.insert_resource(spawned.meshes);
+        spawned.world.insert_resource(spawned.materials);
+        spawned.world.insert_resource(MainMenuScene {
+            model: Some(f.model),
+            uv_translation: Some(uv_translation),
+            texture_bindings: geosets.textures,
+            interval_start: 100,
+            duration_ms: 17,
+            ..default()
+        });
+        spawned.world.run_system_once(advance).unwrap();
+        let scene = spawned.world.resource::<MainMenuScene>();
+        assert_eq!(scene.elapsed.as_millis(), 20);
+        assert_eq!(scene.time_ms, 3.0);
+        assert_eq!(
+            spawned
+                .world
+                .resource::<Assets<StandardMaterial>>()
+                .get(&geosets.bound[0].2)
+                .unwrap()
+                .uv_transform
+                .translation,
+            Vec2::new(9., 18.)
         );
     }
 

@@ -1021,9 +1021,13 @@ Format: `date — subsystem — symptom — root cause — status`
   23 package hashes and passes live startup. This is not native visual parity:
   RGB animation, multilayer drawing, sky projection, the uncovered black region
   and native clock/blend equivalence remain open.
-  The TFT sky's authored layer references a linear TXAN translation on an
-  independent 999,033 ms GLBS clock. The current scene does not apply it;
-  native track-to-UV mapping remains unproved. See `menu-texture-animation.md`.
+  First-layer TXAN translation now uses parser-derived UV-set metadata and an
+  absolute UV transform on independent global clocks, including panel phases.
+  The full affected native run passes 460 tests (184 application), with 24
+  explicitly ignored inputs; required original model/import/binding gates and
+  strict native/WASM checks pass. Release/rendered acceptance is pending.
+  Rotation/scale, multiple UV sets, native clock/UV orientation, sky projection
+  and full menu fidelity remain open. See `menu-texture-animation.md`.
 - World import retains original placements/ownership and metadata values.
   Human01 resolves 155 units while retaining six named unsupported `sloc` records;
   Human03 resolves two items. This is data import, not playable campaign proof.

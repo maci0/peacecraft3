@@ -105,6 +105,15 @@ impl Timeline {
         if self.in_birth(ms) { birth } else { stand }
     }
 
+    pub(crate) fn uv_translation<'a>(
+        &self,
+        ms: f64,
+        birth: &'a pcx_gfx::mdx_uv_translation::UvTranslationPlan,
+        stand: &'a pcx_gfx::mdx_uv_translation::UvTranslationPlan,
+    ) -> &'a pcx_gfx::mdx_uv_translation::UvTranslationPlan {
+        if self.in_birth(ms) { birth } else { stand }
+    }
+
     /// The model frame `ms` after the entrance began.
     fn frame_at(&self, ms: f64) -> u32 {
         if self.in_birth(ms) {
@@ -326,6 +335,8 @@ struct Panel {
     stand_opacity: pcx_gfx::mdx_opacity::OpacityPlan,
     birth_textures: pcx_gfx::mdx_texture_selection::TextureSelectionPlan,
     stand_textures: pcx_gfx::mdx_texture_selection::TextureSelectionPlan,
+    birth_uv: pcx_gfx::mdx_uv_translation::UvTranslationPlan,
+    stand_uv: pcx_gfx::mdx_uv_translation::UvTranslationPlan,
     sounds: Vec<EventSound>,
 }
 
@@ -375,6 +386,18 @@ pub fn spawn(
             .map_err(|e| decode(&e))?;
         let birth_textures = scene::texture_selection(&runtime, timeline.birth, &path)?;
         let stand_textures = scene::texture_selection(&runtime, timeline.stand, &path)?;
+        let birth_uv = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
+            &runtime,
+            timeline.birth,
+            &path,
+        )
+        .map_err(scene::SceneError::from)?;
+        let stand_uv = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
+            &runtime,
+            timeline.stand,
+            &path,
+        )
+        .map_err(scene::SceneError::from)?;
         let textures: Vec<pcx_gfx::LoadedTexture> = scene::texture_paths(&bytes)?
             .iter()
             .filter_map(|p| pcx_gfx::load_image(&read(install, p).ok()?, p).ok())
@@ -395,6 +418,7 @@ pub fn spawn(
                 textures: &textures,
                 runtime: &runtime,
                 selection: &birth_textures,
+                uv_translation: &birth_uv,
             },
             &birth_opacity,
             timeline.birth[0],
@@ -425,6 +449,8 @@ pub fn spawn(
             stand_opacity,
             birth_textures,
             stand_textures,
+            birth_uv,
+            stand_uv,
             sounds,
         });
     }
@@ -534,6 +560,19 @@ pub fn advance(
         } else {
             &panel.stand_opacity
         };
+        let uv = panel
+            .timeline
+            .uv_translation(to, &panel.birth_uv, &panel.stand_uv);
+        if let Err(error) = scene::apply_uv_translation(
+            uv,
+            &panel.geosets.textures,
+            frame,
+            elapsed_ms,
+            &mut materials,
+        ) {
+            error!("{error}");
+            continue;
+        }
         let textures =
             panel
                 .timeline

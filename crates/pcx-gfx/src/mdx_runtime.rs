@@ -305,6 +305,9 @@ pub struct RuntimeInput {
 
 #[derive(Debug)]
 pub struct RuntimePlan {
+    /// UVAS counts in authored GEOS order. None means this geoset has no
+    /// source UVAS metadata; typed RuntimeInput leaves every entry unknown.
+    pub uv_set_counts: Vec<Option<u32>>,
     pub joints: JointPlan,
     pub geosets: Vec<GeosetBinding>,
     pub geoset_animations: Vec<GeosetAnim>,
@@ -335,8 +338,10 @@ impl RuntimePlan {
     pub fn parse(bytes: &[u8]) -> Result<Self, PlanError> {
         let mdl = Mdlx::parse(bytes)?;
         let mut geosets = Vec::new();
+        let mut uv_set_counts = Vec::new();
         for geoset in mdl.geosets(bytes)? {
             let mesh = mdl.mesh(bytes, &geoset)?;
+            uv_set_counts.push(mesh.uv_set_count);
             geosets.push(GeosetInput {
                 vertex_count: mesh.vertices.count as usize,
                 material_id: mesh.material_id,
@@ -347,7 +352,7 @@ impl RuntimePlan {
         if globals.len() % 4 != 0 {
             return Err(PlanError::GlobalSequenceShape(globals.len()));
         }
-        Self::checked(RuntimeInput {
+        let mut plan = Self::checked(RuntimeInput {
             bones: mdl.bones(bytes)?,
             helpers: mdl.nodes(bytes, pcx_mdl::tag::HELP)?,
             pivots: mdl.pivots(bytes)?,
@@ -362,7 +367,9 @@ impl RuntimePlan {
                 .iter()
                 .map(|word| u32::from_le_bytes(*word))
                 .collect(),
-        })
+        })?;
+        plan.uv_set_counts = uv_set_counts;
+        Ok(plan)
     }
 
     pub fn checked(input: RuntimeInput) -> Result<Self, PlanError> {
@@ -475,6 +482,7 @@ impl RuntimePlan {
             }
         }
         Ok(Self {
+            uv_set_counts: vec![None; geosets.len()],
             joints,
             geosets,
             geoset_animations: input.geoset_animations,
