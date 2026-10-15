@@ -25,6 +25,10 @@ pub enum Failure {
     TimerArguments,
     #[error("arguments do not match the group native declaration")]
     GroupArguments,
+    #[error("arguments do not match the map configuration native declaration")]
+    ConfigArguments,
+    #[error("map configuration: {0}")]
+    ConfigState(&'static str),
     #[error("enumerand {0} is outside this native's admitted source domain")]
     OutsideDomain(i32),
     #[error("unsupported closed integer expression: {0}")]
@@ -447,4 +451,4 @@ mod tests;
 
 #[path = "object_host.rs"]
 mod objects;
-pub use objects::{ObjectHost, TimerHost};
+pub use objects::{MapConfig, MapConfigBudget, ObjectHost, StartLocation, TimerHost};

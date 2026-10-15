@@ -241,3 +241,9 @@ the same selected Program now completes all global initialization. Repeated
 initialization retains all objects without calls. The authored map `config`
 entrypoint reaches `SetMapName` at map-script line 7807; completion of config/main,
 world simulation and ordinary launcher wiring remain open.
+
+
+The subsequent [map-config state](script-map-config.md) retains executed metadata
+and start locations from those same authored calls. The actual next boundary is
+`Player` at map-script line 7706, rather than `SetMapName`. No ordinary launcher
+profile/Host installation or completed config/main is implied.

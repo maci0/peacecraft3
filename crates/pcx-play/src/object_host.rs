@@ -9,6 +9,7 @@ pub struct ObjectHost {
     inner: EnumHost,
     group_limit: Option<usize>,
     members: Vec<(HandleId, HandleId)>,
+    config: Option<MapConfig>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -17,12 +18,13 @@ impl ObjectHost {
             ("CreateTimer", &[][..], "timer"),
             ("DestroyTimer", &["timer"][..], "nothing"),
         ] {
-            Self::contract(&inner, name, parameters, result, false, "timer")?;
+            Self::contract(&inner, name, parameters, result, false, Some("timer"))?;
         }
         Ok(Self {
             inner,
             group_limit: None,
             members: Vec::new(),
+            config: None,
         })
     }
     fn contract(
@@ -31,7 +33,7 @@ impl ObjectHost {
         parameters: &[&str],
         result: &str,
         constant: bool,
-        family: &str,
+        family: Option<&str>,
     ) -> Result<(), Error> {
         let n = inner
             .program
@@ -47,12 +49,16 @@ impl ObjectHost {
                 .iter()
                 .zip(parameters)
                 .any(|(p, expected)| p.ty.array || p.ty.kind.name() != *expected)
-            || !below(&inner.program, family, "agent")
-            || !below(&inner.program, family, "handle")
-            || inner
-                .conversions
-                .values()
-                .any(|c| below(&inner.program, family, &c.kind))
+        {
+            return Err(inner.error(name, Failure::Signature));
+        }
+        if let Some(family) = family
+            && (!below(&inner.program, family, "agent")
+                || !below(&inner.program, family, "handle")
+                || inner
+                    .conversions
+                    .values()
+                    .any(|c| below(&inner.program, family, &c.kind)))
         {
             return Err(inner.error(name, Failure::Signature));
         }
@@ -81,7 +87,7 @@ impl ObjectHost {
             ("GroupAddUnit", &["group", "unit"][..], "nothing"),
             ("GroupRemoveUnit", &["group", "unit"][..], "nothing"),
         ] {
-            Self::contract(&self.inner, name, parameters, result, false, "group")?;
+            Self::contract(&self.inner, name, parameters, result, false, Some("group"))?;
         }
         Self::contract(
             &self.inner,
@@ -89,7 +95,7 @@ impl ObjectHost {
             &["unit", "group"],
             "boolean",
             true,
-            "group",
+            Some("group"),
         )?;
         if self.members.len() > max_members {
             return Err(self
@@ -237,6 +243,9 @@ impl ObjectHost {
 }
 impl Host for ObjectHost {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.config_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(limit) = self.group_limit
             && matches!(
                 name,
@@ -266,3 +275,7 @@ mod timer_tests;
 #[cfg(test)]
 #[path = "group_host_tests.rs"]
 mod group_tests;
+
+#[path = "map_config_host.rs"]
+mod map_config;
+pub use map_config::{MapConfig, MapConfigBudget, StartLocation};

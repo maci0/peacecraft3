@@ -65,3 +65,9 @@ the first two runs retained obsolete harness expectations (an initializer
 failure and a directly qualified resolver source label). Those failed runs are
 preserved separately. This proves global initialization and the next config
 boundary, not completed config/main, launcher Host wiring or a playable campaign.
+
+
+The later [executed map-config slice](script-map-config.md) passes those metadata
+calls using session-owned state and advances the same `config` to `Player` at
+map-script line 7706. Group ordering/world integration and completed gameplay
+remain unverified.
