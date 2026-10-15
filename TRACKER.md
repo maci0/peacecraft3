@@ -1013,9 +1013,11 @@ Format: `date — subsystem — symptom — root cause — status`
       both source-backed ambient sounds. An explicit bounded start queue retains
       the authored night sound request. Source-bounded map-music selection now
       retains the executed name/random/index. Exact direct-file PCM admission now
-      creates the first authored voice object and reaches `SetSoundParamsFromLabel`.
+      creates the first authored voice object. Selected source-label parameters
+      now bind to that same sound identity while preserving its PCM/creation inputs,
+      reaching `SetSoundDuration`. Raw table flags remain separate from effective settings.
       The snapshot does not advance time or replace a running game clock, and
-      queued audio/music selection is not yet consumed by a playback backend. All 284 play tests
+      queued audio/music selection is not yet consumed by a playback backend. All 293 play tests
       pass with five explicit ignores; strict native/WASM Clippy, WASM generation
       and actual 32-bit lifecycle/config/player/priority/camera/model/clock/sound checks pass. These are bounded Host/data
       checks, not campaign or native gameplay proof.
@@ -1024,7 +1026,7 @@ Format: `date — subsystem — symptom — root cause — status`
       `script-timer-arena.md`/`script-group-arena.md`/`script-map-config.md`/
       `script-player-setup.md`/`script-start-priorities.md`/`script-camera-input.md`/
       `script-day-night-models.md`/`script-label-sounds.md`/`script-startup-clock.md`/
-      `script-map-music-selection.md`/`script-file-sounds.md`.
+      `script-map-music-selection.md`/`script-file-sounds.md`/`script-sound-parameters.md`.
 
 ### Current implemented slices (2026-10-14)
 

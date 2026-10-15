@@ -61,6 +61,7 @@ impl ObjectHost {
             fade_in_rate,
             fade_out_rate,
             eax_setting,
+            ..
         } = self.inner.entry(identity)?
         else {
             return Err(fail(Failure::WrongFamily));
@@ -128,6 +129,7 @@ impl ObjectHost {
                 .allocate(
                     Entry::FileSound {
                         resource,
+                        parameters: None,
                         looping: *looping,
                         is_3d: *is_3d,
                         stop_when_out_of_range: *stop_when_out_of_range,

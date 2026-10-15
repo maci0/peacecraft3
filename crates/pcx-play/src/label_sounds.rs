@@ -49,6 +49,8 @@ pub enum Problem {
     UnsupportedFiles,
     #[error("provided member does not match the source-derived file path")]
     Member,
+    #[error("selected sound parameter row {row}, field {field} is missing, malformed or nonfinite")]
+    Parameter { row: u32, field: &'static str },
     #[error("{0}")]
     Wave(#[source] WaveError),
 }
@@ -96,10 +98,38 @@ pub struct SoundBank {
     sounds: Vec<BoundSound>,
     label_limit: usize,
 }
-fn identity(origin: &AssetIdentity) -> bool {
+pub(crate) fn identity(origin: &AssetIdentity) -> bool {
     [&origin.source, &origin.edition, &origin.version]
         .iter()
         .all(|s| !s.trim().is_empty())
+}
+pub(crate) fn checked_table(
+    input: ScriptAsset<'_>,
+    coordinates: CoordinateLimits,
+    required: &[&str],
+) -> Result<Table, Error> {
+    let fail = |problem| Error {
+        source_context: input.label.into(),
+        problem,
+    };
+    let decoded =
+        Table::parse_bounded(input.bytes, coordinates).map_err(|e| fail(Problem::Table(e)))?;
+    if decoded.anomalies().iter().any(|a| {
+        a.severity == pcx_slq::Severity::Error
+            || matches!(
+                a.kind,
+                pcx_slq::AnomalyKind::DuplicateCell | pcx_slq::AnomalyKind::StrayDataAfterEnd
+            )
+    }) {
+        return Err(fail(Problem::Ambiguous));
+    }
+    for (i, name) in required.iter().enumerate() {
+        if required[..i].contains(name) || decoded.headers().filter(|(_, h)| h == name).count() != 1
+        {
+            return Err(fail(Problem::Ambiguous));
+        }
+    }
+    Ok(decoded)
 }
 impl SoundBank {
     /// Exact selected table/label column, with the existing FileNames/DirectoryBase schema.
@@ -174,25 +204,11 @@ impl SoundBank {
                 return Err(fail(input.asset.label, Problem::Budget));
             }
         }
-        let decoded = Table::parse_bounded(table.bytes, budget.coordinates)
-            .map_err(|e| fail(table.label, Problem::Table(e)))?;
-        if decoded.anomalies().iter().any(|a| {
-            a.severity == pcx_slq::Severity::Error
-                || matches!(
-                    a.kind,
-                    pcx_slq::AnomalyKind::DuplicateCell | pcx_slq::AnomalyKind::StrayDataAfterEnd
-                )
-        }) {
-            return Err(fail(table.label, Problem::Ambiguous));
-        }
-        let required = [label_column, "DirectoryBase", "FileNames"];
-        for (i, name) in required.iter().enumerate() {
-            if required[..i].contains(name)
-                || decoded.headers().filter(|(_, h)| h == name).count() != 1
-            {
-                return Err(fail(table.label, Problem::Ambiguous));
-            }
-        }
+        let decoded = checked_table(
+            table,
+            budget.coordinates,
+            &[label_column, "DirectoryBase", "FileNames"],
+        )?;
         let mut sounds = Vec::new();
         sounds
             .try_reserve_exact(inputs.len())
