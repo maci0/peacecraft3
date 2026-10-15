@@ -2,6 +2,7 @@ import init, * as api from '/web/pkg/peacecraft3.js';
 import { discoverIso, importIsoCandidates } from '/web/iso/import.js';
 import { clickDescriptor } from '/web/iso/audio.js';
 import { isoFixture, mpqFixture, menuMembers } from './fixtures.mjs';
+import { runPanelChecks } from './panels-runtime.mjs';
 let checks = 0;
 const check = (condition, message) => { if (!condition) throw Error(message); checks++; };
 try {
@@ -109,7 +110,8 @@ try {
   check(JSON.stringify(api.local_menu_editions()) === JSON.stringify(['roc']), 'single-column RoC input did not retain base-only gating');
   const selftest = api.selftest();
   const audio = { click, musicPath, music: [...api.archive_member(musicPath)], clickBytes: [...api.archive_member(click.path)] };
+  const panels = runPanelChecks(api);
   api.drop_assets();
   check(api.stored_asset(fogAlias) === undefined && api.stored_asset(fogPath) === undefined, 'clear retained stale fog input');
-  postMessage({ ok: true, result, checks, fonts: { files: fontFiles, aliases: fontFiles.map(path => api.menu_font_alias(path)) }, selftest, audio });
+  postMessage({ ok: true, result, checks, panels, fonts: { files: fontFiles, aliases: fontFiles.map(path => api.menu_font_alias(path)) }, selftest, audio });
 } catch (error) { postMessage({ ok: false, error: String(error), stack: error?.stack }); }

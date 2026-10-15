@@ -129,7 +129,10 @@ pub fn includes(text: &str) -> Vec<String> {
 
 #[derive(Resource, Default)]
 pub struct Navigation {
+    /// Currently displayed control owner; requests do not mutate it before admission.
     pub screen: Screen,
+    pub(crate) requested: Option<Screen>,
+    pub(crate) transition_active: bool,
     pub built: Option<Screen>,
     pub notice: String,
     pub draft: Settings,
@@ -148,13 +151,43 @@ pub struct Settings {
 
 impl Navigation {
     pub fn open(&mut self, screen: Screen) {
+        if self.transition_active || self.requested.is_some() {
+            return;
+        }
+        if matches!(
+            (self.screen, screen),
+            (Screen::Main, Screen::SinglePlayer) | (Screen::SinglePlayer, Screen::Main)
+        ) {
+            self.requested = Some(screen);
+            self.notice.clear();
+            return;
+        }
         if matches!(screen, Screen::Options(_)) && !matches!(self.screen, Screen::Options(_)) {
             self.draft = self.applied.clone();
         }
         self.screen = screen;
         self.notice.clear();
     }
+    pub(crate) fn commit_panel_owner(&mut self, screen: Screen) {
+        self.screen = screen;
+        self.notice.clear();
+    }
+
+    pub(crate) fn reset_panels(&mut self) {
+        self.requested = None;
+        self.transition_active = false;
+        self.screen = Screen::Main;
+        self.built = None;
+        self.notice.clear();
+    }
+
     pub fn action(&mut self, name: &str) -> bool {
+        // No queue or interruption: a transition consumes one request; further
+        // menu actions are ignored until its incoming phase completes.
+        if self.transition_active || self.requested.is_some() {
+            return true;
+        }
+
         let next = match name {
             "OptionsButton" => Screen::Options(self.options_entry.unwrap_or(Page::Video)),
             "SinglePlayerButton" => Screen::SinglePlayer,
@@ -491,11 +524,34 @@ Frame "FRAME" "A" {
     fn submenus_return_to_their_parent() {
         let mut n = Navigation::default();
         n.action("SinglePlayerButton");
+        assert_eq!(n.screen, Screen::Main);
+        assert_eq!(n.requested.take(), Some(Screen::SinglePlayer));
+        n.commit_panel_owner(Screen::SinglePlayer);
         n.action("CampaignButton");
         n.action("BackButton");
         assert_eq!(n.screen, Screen::SinglePlayer);
         n.action("CancelButton");
+        assert_eq!(n.screen, Screen::SinglePlayer);
+        assert_eq!(n.requested, Some(Screen::Main));
+    }
+    #[test]
+    fn panel_navigation_requests_are_transactional_and_ignore_interruptions() {
+        let mut n = Navigation::default();
+        n.open(Screen::SinglePlayer);
         assert_eq!(n.screen, Screen::Main);
+        n.action("OptionsButton");
+        assert_eq!(n.requested, Some(Screen::SinglePlayer));
+        n.requested = None;
+        n.transition_active = true;
+        n.open(Screen::Options(Page::Sound));
+        assert_eq!(n.screen, Screen::Main);
+        n.commit_panel_owner(Screen::SinglePlayer);
+        assert!(n.action("BackButton"));
+        assert!(n.requested.is_none());
+        n.reset_panels();
+        assert_eq!(n.screen, Screen::Main);
+        assert!(!n.transition_active);
+        assert!(n.requested.is_none());
     }
     #[test]
     fn cancel_discards_draft_settings() {

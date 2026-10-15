@@ -1134,10 +1134,19 @@ Format: `date — subsystem — symptom — root cause — status`
   and cache refresh pass actual generated-WASM/browser verification.
   Unsupported namespaces/installer payloads and conflicting archives fail closed.
 
-- Current release WASM build passed with compiler warnings denied. Generated glue
-  was generated with installed wasm-bindgen 0.2.128 against crate 0.2.129; browser
-  execution passed. Rendered F8 toggle/resize and menu clicks while
-  visible pass on desktop/narrow browser views; hiding restores prior pixels.
+- Current release WASM build and native/WASM rustdoc passed with warnings denied;
+  generated glue uses matching wasm-bindgen 0.2.129. MainMenu ↔ SinglePlayer panel
+  phase admission, independent source clocks and target-control handoff now have
+  strict native/WASM checks, 219 app tests (nine explicit ignores) and a fresh
+  actual Chromium/WASM gate: 49 existing + 71 panel checks, 12 required rollback
+  cases and four mixed-codec failure orderings. Scene-audio cancellation and local
+  GET/Blob-only requests pass with zero uploads/sockets/page errors. Valid submenus
+  retain immediate navigation with a warning when animation is unavailable.
+  Explicit Legacy destination FDF admission passes, but original panel loading
+  still stops at unavailable Huffman/ADPCM sound decoding; full-screen opening,
+  original panel rendering/audio and native dispatch remain open. See
+  `docs/re-notes/menu-panel-navigation.md`. Prior rendered F8/resize/click captures
+  are earlier evidence, not a fresh original-data render of this batch.
 - Local ISO file-input discovery and 26 actual WASM archive assertions pass;
   Chromium audio replacement/reset passes with zero uploads/unexpected requests.
   Running-app File-input import refreshes six authored labels and the scene;

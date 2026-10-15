@@ -27,14 +27,19 @@ function source(directory = '', volume = 37, flags = 'NODUPLICATES') {
 function playback() {
   const players = [], liveUrls = new Map(), revoked = [], warnings = [], handlers = new Map();
   let nextUrl = 0;
+  let rejectNextPlay = false;
   class Audio {
     constructor(src = '') { Object.assign(this, { src, paused: true, ended: false, muted: false, currentTime: 0, volume: 1, plays: 0 }); players.push(this); }
     canPlayType() { return 'probably'; }
     pause() { this.paused = true; }
-    play() { this.paused = false; this.plays++; return Promise.resolve(); }
+    play() {
+      this.paused = false; this.plays++;
+      const reject = rejectNextPlay; rejectNextPlay = false;
+      return reject ? Promise.reject(new Error('synthetic play failure')) : Promise.resolve();
+    }
     load() { this.paused = true; this.currentTime = 0; }
     removeAttribute(name) { if (name === 'src') this.src = ''; }
-    addEventListener() {}
+    addEventListener(name, callback) { (this.listeners ??= new Map()).set(name, callback); }
   }
   const toggle = { textContent: '', setAttribute() {}, addEventListener(name, callback) { handlers.set(`toggle:${name}`, callback); } };
   const document = { documentElement: { dataset: { localAssets: 'true' } }, querySelector() { return toggle; }, addEventListener(name, callback) { handlers.set(`document:${name}`, callback); }, dispatchEvent() {} };
@@ -44,7 +49,8 @@ function playback() {
     console: { warn(...args) { warnings.push(args); } }, CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
   });
   vm.runInContext(playbackSource, context, { filename: 'web/menu-audio.js' });
-  return { api: context.peacecraft3Audio, music: players[0], click: players[1], liveUrls, revoked, warnings,
+  return { api: context.peacecraft3Audio, music: players[0], click: players[1], players, liveUrls, revoked, warnings,
+    rejectNextPlay() { rejectNextPlay = true; },
     toggle() { handlers.get('toggle:click')(); }, pagehide() { handlers.get('window:pagehide')(); } };
 }
 
@@ -162,4 +168,38 @@ test('superseded asynchronous binding cannot replace the newer source', async ()
   assert.equal(state.click.src, currentUrl);
   assert.equal(state.liveUrls.size, 1);
   assert.equal(state.api.status().localSources.click.provenance.selected, 'newer-synthetic');
+});
+
+test('scene event cancellation pauses voices and revokes each URL once despite late completion', async () => {
+  const state = playback(); state.toggle();
+  state.api.setUserGains(1, 0.5, true, true);
+  state.api.event(new Uint8Array([1]), 0.25);
+  state.rejectNextPlay(); state.api.event(new Uint8Array([2]), 0.75);
+  const voices = state.players.slice(2);
+  assert.equal(state.api.status().eventSoundCount, 2);
+  assert.deepEqual(voices.map(v => v.volume), [0.125, 0.375]);
+  state.api.stopEvents(); state.api.stopEvents();
+  for (const voice of voices) {
+    assert.equal(voice.paused, true); assert.equal(voice.src, '');
+    voice.listeners.get('ended')();
+  }
+  await Promise.resolve();
+  assert.equal(state.api.status().eventSoundCount, 0);
+  assert.equal(state.liveUrls.size, 0); assert.equal(state.revoked.length, 2);
+  assert.equal(state.warnings.length, 0);
+});
+
+test('only successful source replacement, intro and reset cancel current scene events', async () => {
+  const state = playback(); state.toggle();
+  state.api.event(new Uint8Array([1]), 0.5);
+  await assert.rejects(state.api.setLocalAssets({ click: { ...source(), blob: new Blob(['invalid']) } }), /UNSUPPORTED_LOCAL_AUDIO/);
+  assert.equal(state.api.status().eventSoundCount, 1);
+  await state.api.setLocalAssets({ click: source() });
+  assert.equal(state.api.status().eventSoundCount, 0);
+  for (const cleanup of [() => state.api.pauseForIntro(), () => state.api.resetLocalAssets(), () => state.pagehide()]) {
+    state.api.resumeAfterIntro(); state.api.event(new Uint8Array([3]), 0.5);
+    assert.equal(state.api.status().eventSoundCount, 1);
+    cleanup(); assert.equal(state.api.status().eventSoundCount, 0);
+  }
+  assert.equal(state.liveUrls.size, 0);
 });

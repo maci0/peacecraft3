@@ -263,6 +263,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
                     poll_asset_revision,
                     invalidate_on_asset_revision,
                     apply_menu_art,
+                    process_panel_navigation,
                     build_control_layer,
                     build_setting_controls,
                     apply_menu_text,
@@ -290,13 +291,15 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     );
     app.add_systems(
         Update,
-        (
-            crate::menu_sprites::advance
-                .run_if(resource_exists::<crate::menu_sprites::MenuPanels>)
-                .run_if(menu_is_visible),
-            crate::menu_sprites::follow_ui_viewport,
-        )
-            .after(show_menu_or_launcher),
+        crate::menu_sprites::advance
+            .after(process_panel_navigation)
+            .before(build_control_layer)
+            .run_if(resource_exists::<crate::menu_sprites::MenuPanels>)
+            .run_if(menu_is_visible),
+    );
+    app.add_systems(
+        Update,
+        crate::menu_sprites::follow_ui_viewport.after(show_menu_or_launcher),
     );
     app.add_systems(
         Update,
@@ -681,6 +684,9 @@ fn menu_navigation_keys(
     mut navigation: ResMut<crate::menu_screens::Navigation>,
     popups: Query<Entity, With<ResolutionPopup>>,
 ) {
+    if navigation.transition_active || navigation.requested.is_some() {
+        return;
+    }
     if keys.just_pressed(KeyCode::Escape) && !popups.is_empty() {
         for entity in &popups {
             commands.entity(entity).despawn();
@@ -939,6 +945,7 @@ fn invalidate_on_asset_revision(
     cache.revision = revision.0;
     if let Some(mut navigation) = navigation {
         navigation.options_entry = None;
+        navigation.reset_panels();
     }
     // Everything decoded or derived from the old store goes, including the
     // texts the labels and their style come from.
@@ -946,6 +953,7 @@ fn invalidate_on_asset_revision(
     cache.fonts.clear();
     cache.skin = None;
     cache.fdf = None;
+    cache.pending_fdf = None;
     cache.fdf_failed = false;
     cache.strings = None;
     cache.templates = None;
@@ -972,6 +980,7 @@ fn invalidate_on_asset_revision(
     for entity in &scene_entities {
         commands.entity(entity).despawn();
     }
+    crate::menu_sprites::cancel_event_sounds();
     commands.remove_resource::<crate::mainmenu_scene::MainMenuScene>();
     commands.remove_resource::<crate::menu_sprites::MenuPanels>();
     scene.finished = false;
@@ -1100,6 +1109,7 @@ fn initialize_menu_scene(
     launcher: Res<Launcher>,
     menu: Query<Entity, With<MenuLayer>>,
     scene_entities: Query<Entity, With<crate::mainmenu_scene::MainMenuSceneEntity>>,
+    mut navigation: ResMut<crate::menu_screens::Navigation>,
 ) {
     let SceneAssets {
         mut meshes,
@@ -1111,6 +1121,10 @@ fn initialize_menu_scene(
         return;
     }
     if state.addon != Some(launcher.mode.addon) {
+        if state.addon.is_some() {
+            crate::menu_sprites::cancel_event_sounds();
+            navigation.reset_panels();
+        }
         for entity in &scene_entities {
             commands.entity(entity).despawn();
         }
@@ -1374,6 +1388,8 @@ struct MenuArtCache {
     /// The parsed frame definitions. `None` until **both** FDFs have been read
     /// and parsed, so a partially-arrived pair is never cached as complete.
     fdf: Option<crate::fdf::Fdf>,
+    /// Fully admitted target; displayed sources remain untouched during Death.
+    pending_fdf: Option<(crate::menu_screens::Screen, crate::fdf::Fdf, String)>,
     /// Set when an FDF that *is* present fails to read or parse, or the control
     /// layer cannot be derived from it; reported once rather than every frame.
     fdf_failed: bool,
@@ -1415,6 +1431,81 @@ struct MenuArtQueries<'w, 's> {
     // Store replacement changes handles while preserving button identities.
     dressed: Query<'w, 's, &'static mut ImageNode, With<ButtonArt>>,
     panels: Query<'w, 's, Entity, (With<Wc3Panel>, Without<ImageNode>)>,
+}
+
+/// Shared include traversal for displayed and candidate screens.
+fn parse_screen_fdf(
+    install: Option<&std::path::Path>,
+    screen: crate::menu_screens::Screen,
+    templates: &str,
+    menu: &str,
+) -> Result<crate::fdf::Fdf, crate::fdf::FdfError> {
+    let initial = menu
+        .len()
+        .checked_add(templates.len())
+        .filter(|&n| n <= 8 * 1024 * 1024)
+        .ok_or_else(|| {
+            crate::fdf::FdfError::UnknownFrame("screen definition size limit exceeded".into())
+        })?;
+    let mut f = crate::fdf::Fdf::parse(templates)?;
+    let mut loaded = std::collections::HashSet::from([
+        crate::mainmenu::STANDARD_TEMPLATES_FDF.to_ascii_lowercase(),
+        screen.file().to_ascii_lowercase(),
+    ]);
+    let mut pending = crate::menu_screens::includes(menu);
+    let mut sources = Vec::new();
+    let mut total = initial;
+    while let Some(path) = pending.pop() {
+        if !loaded.insert(path.to_ascii_lowercase()) {
+            continue;
+        }
+        if loaded.len() > 64 {
+            return Err(crate::fdf::FdfError::Unsupported {
+                frame: path,
+                property: "IncludeFile",
+                value: "include count limit exceeded".into(),
+            });
+        }
+        let bytes = crate::mainmenu::art_bytes(install, &path)
+            .ok_or_else(|| crate::fdf::FdfError::UnknownFrame(format!("missing include {path}")))?;
+        total = total
+            .checked_add(bytes.len())
+            .ok_or_else(|| crate::fdf::FdfError::UnknownFrame("include size overflow".into()))?;
+        if total > 8 * 1024 * 1024 {
+            return Err(crate::fdf::FdfError::UnknownFrame(
+                "screen definition size limit exceeded".into(),
+            ));
+        }
+        let text = String::from_utf8(bytes)
+            .map_err(|_| crate::fdf::FdfError::UnknownFrame(format!("non UTF-8 include {path}")))?;
+        pending.extend(crate::menu_screens::includes(&text));
+        sources.push(text);
+    }
+    for source in sources.iter().rev() {
+        f.parse_into(source)?;
+    }
+    f.parse_into(menu)?;
+    crate::menu_screens::prime_text_sizes(&mut f);
+    Ok(f)
+}
+
+fn read_screen_fdf(
+    install: Option<&std::path::Path>,
+    screen: crate::menu_screens::Screen,
+) -> Result<(crate::fdf::Fdf, String), String> {
+    let read = |path: &str| -> Result<String, String> {
+        let bytes =
+            crate::mainmenu::art_bytes(install, path).ok_or_else(|| format!("missing {path}"))?;
+        if bytes.len() > 8 * 1024 * 1024 {
+            return Err(format!("{path}: screen byte bound exceeded"));
+        }
+        String::from_utf8(bytes).map_err(|e| format!("{path}: {e}"))
+    };
+    let templates = read(crate::mainmenu::STANDARD_TEMPLATES_FDF)?;
+    let menu = read(screen.file())?;
+    let fdf = parse_screen_fdf(install, screen, &templates, &menu)
+        .map_err(|e| format!("{}: {e}", screen.file()))?;
+    Ok((fdf, menu))
 }
 
 /// Reads the menu's frame definitions, strings and skin table, and puts the
@@ -1496,49 +1587,7 @@ fn apply_menu_art(
             && !cache.fdf_failed
             && let (Some(templates), Some(menu)) = (&cache.templates, &cache.main_menu)
         {
-            match crate::fdf::Fdf::parse(templates).and_then(|mut f| {
-                let mut loaded = std::collections::HashSet::from([
-                    crate::mainmenu::STANDARD_TEMPLATES_FDF.to_ascii_lowercase(),
-                    cache.screen.file().to_ascii_lowercase(),
-                ]);
-                let mut pending = crate::menu_screens::includes(menu);
-                let mut sources = Vec::new();
-                let mut total = menu.len() + templates.len();
-                while let Some(path) = pending.pop() {
-                    if !loaded.insert(path.to_ascii_lowercase()) {
-                        continue;
-                    }
-                    if loaded.len() > 64 {
-                        return Err(crate::fdf::FdfError::Unsupported {
-                            frame: path,
-                            property: "IncludeFile",
-                            value: "include count limit exceeded".into(),
-                        });
-                    }
-                    let bytes = crate::mainmenu::art_bytes(install, &path).ok_or_else(|| {
-                        crate::fdf::FdfError::UnknownFrame(format!("missing include {path}"))
-                    })?;
-                    total = total.checked_add(bytes.len()).ok_or_else(|| {
-                        crate::fdf::FdfError::UnknownFrame("include size overflow".into())
-                    })?;
-                    if total > 8 * 1024 * 1024 {
-                        return Err(crate::fdf::FdfError::UnknownFrame(
-                            "screen definition size limit exceeded".into(),
-                        ));
-                    }
-                    let text = String::from_utf8(bytes).map_err(|_| {
-                        crate::fdf::FdfError::UnknownFrame(format!("non UTF-8 include {path}"))
-                    })?;
-                    pending.extend(crate::menu_screens::includes(&text));
-                    sources.push(text);
-                }
-                for source in sources.iter().rev() {
-                    f.parse_into(source)?;
-                }
-                f.parse_into(menu)?;
-                crate::menu_screens::prime_text_sizes(&mut f);
-                Ok(f)
-            }) {
+            match parse_screen_fdf(install, cache.screen, templates, menu) {
                 Ok(fdf) => {
                     if matches!(navigation.screen, crate::menu_screens::Screen::Options(_))
                         && navigation.options_entry.is_none()
@@ -1595,14 +1644,85 @@ fn apply_menu_art(
     }
 }
 
-/// Builds the FDF control layer into the empty [`ControlRoot`] once the frame
-/// definitions are parsed.
+/// One admission edge before displayed owner/control mutation. Unsupported routes
+/// retain their existing immediate behavior; no guessed phase family is mapped.
+fn process_panel_navigation(
+    mut navigation: ResMut<crate::menu_screens::Navigation>,
+    mut cache: ResMut<MenuArtCache>,
+    launcher: Res<Launcher>,
+    mut panels: Option<ResMut<crate::menu_sprites::MenuPanels>>,
+) {
+    let Some(target) = navigation.requested.take() else {
+        return;
+    };
+    let install = selected_install(&launcher);
+    let result = (|| -> Result<_, String> {
+        let (fdf, menu) = read_screen_fdf(install.as_deref(), target)?;
+        let (items, _) = crate::glue_menu::control_items_for(
+            &fdf,
+            target.root(),
+            (crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H),
+            |name| target.includes(&fdf, name),
+        )
+        .map_err(|e| format!("{}: {e}", target.file()))?;
+        if items.is_empty() {
+            return Err(format!("{}: empty target control layer", target.file()));
+        }
+        let transition = match panels.as_mut() {
+            Some(panels) => panels.request(
+                navigation.screen,
+                target,
+                install.as_deref(),
+                u32::from(launcher.mode.addon == Addon::Tft),
+            )?,
+            None => crate::menu_sprites::Transition::Unavailable(
+                "original menu panels are unavailable".into(),
+            ),
+        };
+        Ok((fdf, menu, transition))
+    })();
+    match result {
+        Ok((fdf, menu, transition)) => {
+            cache.pending_fdf = Some((target, fdf, menu));
+            match transition {
+                crate::menu_sprites::Transition::Animated => {
+                    navigation.transition_active = true;
+                    navigation.notice.clear();
+                }
+                crate::menu_sprites::Transition::Unavailable(reason) => {
+                    navigation.screen = target;
+                    navigation.transition_active = false;
+                    navigation.notice = format!("Menu animation unavailable: {reason}");
+                }
+            }
+        }
+        Err(error) => {
+            navigation.transition_active = false;
+            navigation.notice = format!("Menu transition refused: {error}");
+        }
+    }
+}
+
+/// Builds the displayed FDF control layer after source admission.
 fn build_control_layer(
     mut commands: Commands,
     mut cache: ResMut<MenuArtCache>,
     roots: Query<(Entity, Option<&Children>), With<ControlRoot>>,
     mut navigation: ResMut<crate::menu_screens::Navigation>,
 ) {
+    if cache.screen != navigation.screen
+        && cache
+            .pending_fdf
+            .as_ref()
+            .is_some_and(|(screen, _, _)| *screen == navigation.screen)
+    {
+        let (screen, fdf, menu) = cache.pending_fdf.take().expect("checked candidate owner");
+        cache.screen = screen;
+        cache.fdf = Some(fdf);
+        cache.main_menu = Some(menu);
+        cache.fdf_failed = false;
+        cache.native_loaded = false;
+    }
     if navigation.built != Some(navigation.screen) {
         for (_, children) in &roots {
             for child in children.into_iter().flatten() {
@@ -2518,6 +2638,9 @@ pub(crate) fn apply_menu_clicks(
     queries: MenuClickQueries,
     #[cfg(not(target_arch = "wasm32"))] mut exit: MessageWriter<AppExit>,
 ) {
+    if navigation.transition_active || navigation.requested.is_some() {
+        return;
+    }
     let MenuClickQueries {
         buttons: q,
         menu,
@@ -2530,6 +2653,9 @@ pub(crate) fn apply_menu_clicks(
         cache,
     } = queries;
     for entity in &actions.entities {
+        if navigation.transition_active || navigation.requested.is_some() {
+            break;
+        }
         if let Ok(choice) = choices.get(*entity) {
             if let Err(error) =
                 crate::menu_settings::select_resolution(&mut navigation, (choice.0, choice.1))
@@ -2617,6 +2743,7 @@ fn apply_clicks(
     actions: Res<crate::button_actions::ButtonActions>,
     q: Query<(&Pick, Option<&InteractionDisabled>), With<Button>>,
     mut navigation: Option<ResMut<crate::menu_screens::Navigation>>,
+    mut panels: Option<ResMut<crate::menu_sprites::MenuPanels>>,
 ) {
     l.constrain_menu_edition();
     for entity in &actions.entities {
@@ -2638,8 +2765,11 @@ fn apply_clicks(
             Pick::Stage => l.staging = true,
             Pick::Download => {}
             Pick::Menu => {
+                if let Some(panels) = panels.as_mut() {
+                    panels.reset_to_main();
+                }
                 if let Some(navigation) = navigation.as_mut() {
-                    navigation.open(crate::menu_screens::Screen::Main);
+                    navigation.reset_panels();
                 }
                 if l.allows_addon(l.mode.addon)
                     && !intro.request_with_install(l.mode.addon == Addon::Tft, selected_install(&l))
@@ -2819,6 +2949,28 @@ mod tests {
 #[cfg(test)]
 mod menu_tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires PEACECRAFT3_INSTALL with original menu FDFs"]
+    fn original_panel_destination_controls_are_admitted_independently() {
+        let install = std::path::PathBuf::from(
+            std::env::var_os("PEACECRAFT3_INSTALL").expect("explicit original install required"),
+        );
+        for screen in [
+            crate::menu_screens::Screen::Main,
+            crate::menu_screens::Screen::SinglePlayer,
+        ] {
+            let (fdf, _) = read_screen_fdf(Some(&install), screen).unwrap();
+            let (items, _) = crate::glue_menu::control_items_for(
+                &fdf,
+                screen.root(),
+                (crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H),
+                |name| screen.includes(&fdf, name),
+            )
+            .unwrap();
+            assert!(!items.is_empty(), "{}", screen.file());
+        }
+    }
 
     #[test]
     fn logo_visibility_follows_the_current_definition_instead_of_covering_other_screens() {

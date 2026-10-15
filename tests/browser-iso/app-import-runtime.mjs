@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mpqFixture, isoFixture } from './fixtures.mjs';
-import { clickDescriptor } from '../../web/iso/audio.js';
+import { clickDescriptor, soundRows } from '../../web/iso/audio.js';
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const output = process.env.PCX_APP_IMPORT_OUTPUT ?? `${root}.scratch/browser-iso-app-import`;
@@ -55,10 +55,46 @@ export function uniqueSkinFont(skin, face) {
   assert.equal(matches.length, 1, `Skin face ${face} requires exactly one definition across sections: ${JSON.stringify(matches)}`);
   assert(matches[0].file, `Empty skin font file for ${face}`); return matches[0];
 }
-function mdl(bytes) {
+function mdlChunks(bytes) {
   assert.equal(String.fromCharCode(...bytes.subarray(0, 4)), 'MDLX');
   const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), chunks = new Map();
   for (let at = 4; at < bytes.length;) { assert(at + 8 <= bytes.length); const size = v.getUint32(at + 4, true); assert(at + 8 + size <= bytes.length); chunks.set(String.fromCharCode(...bytes.subarray(at, at + 4)), bytes.subarray(at + 8, at + 8 + size)); at += 8 + size; }
+  return chunks;
+}
+export function panelSoundEvents(bytes) {
+  const chunks = mdlChunks(bytes), sequences = chunks.get('SEQS');
+  assert(sequences && sequences.length % 132 === 0, 'Malformed panel SEQS');
+  const intervals = [];
+  for (let at = 0; at < sequences.length; at += 132) {
+    const name = decode(sequences.subarray(at, at + 80)).split('\0')[0].toLowerCase().split(/\s+/);
+    if (name.length !== 2 || !name.some(n => ['mainmenu', 'singleplayer'].includes(n)) || !name.some(n => ['birth', 'stand', 'death'].includes(n))) continue;
+    const view = new DataView(sequences.buffer, sequences.byteOffset + at);
+    const start = view.getUint32(80, true), end = view.getUint32(84, true);
+    assert(start <= end); intervals.push([start, end]);
+  }
+  assert(intervals.length >= 2, 'Missing panel startup phases');
+  const events = chunks.get('EVTS') ?? new Uint8Array(), codes = [];
+  let at = 0, count = 0;
+  while (at < events.length) {
+    assert(at + 96 <= events.length && ++count <= 4096, 'Panel EVTS bound');
+    const view = new DataView(events.buffer, events.byteOffset + at), size = view.getUint32(0, true), rest = at + size;
+    assert(size >= 96 && rest + 12 <= events.length, 'Panel EVTS header');
+    assert.equal(decode(events.subarray(rest, rest + 4)), 'KEVT', 'Unsupported panel event track');
+    const track = new DataView(events.buffer, events.byteOffset + rest), frames = track.getUint32(4, true);
+    assert(frames <= 4096 && rest + 12 + frames * 4 <= events.length, 'Panel event frame bound');
+    const name = decode(events.subarray(at + 4, at + 84)).split('\0')[0];
+    const selected = Array.from({ length: frames }, (_, i) => track.getUint32(12 + i * 4, true))
+      .some(frame => intervals.some(([start, end]) => start <= frame && frame <= end));
+    if (selected && name.slice(0, 4).toUpperCase() === 'SNDX') {
+      assert.equal(name.length, 8); assert.equal(track.getUint32(8, true), 0xffffffff, 'Global panel sound unsupported');
+      codes.push(name.slice(4));
+    }
+    at = rest + 12 + frames * 4;
+  }
+  return codes;
+}
+function mdl(bytes) {
+  const chunks = mdlChunks(bytes);
   const tex = chunks.get('TEXS'); assert(tex && tex.length % 268 === 0, 'Malformed model TEXS');
   const paths = []; for (let at = 0; at < tex.length; at += 268) { const raw = tex.subarray(at + 4, at + 264); const nul = raw.indexOf(0); assert(nul >= 0); const path = decode(raw.subarray(0, nul)); if (path) paths.push(path); }
   const geos = chunks.get('GEOS'); assert(geos); let geosets = 0;
@@ -162,6 +198,34 @@ async function prepare() {
   const model = await add(modelPath), expectedScene = mdl(model);
   await addAll(expectedScene.paths);
   const logo = await add(constant(panel, 'LOGO_MODEL')); for (const texture of mdlTextures(logo)) await add(texture);
+  const sprite = await readFile(`${root}crates/peacecraft3/src/menu_sprites.rs`, 'utf8');
+  const screens = await readFile(`${root}crates/peacecraft3/src/menu_screens.rs`, 'utf8');
+  const singlePlayerPath = strings(block(screens, 'SCREEN_FILES'))[1]; assert(singlePlayerPath);
+  sourceRules[singlePlayerPath] ??= { alias: 'expansion', evidence: 'Explicit local TFT submenu fixture input; not native archive priority' };
+  const pendingFrames = [singlePlayerPath], includedFrames = new Set(); let frameBytes = 0;
+  while (pendingFrames.length) {
+    const path = pendingFrames.pop(); if (includedFrames.has(path.toLowerCase())) continue;
+    includedFrames.add(path.toLowerCase()); assert(includedFrames.size <= 64, 'Submenu include count bound');
+    const bytes = await add(path); frameBytes += bytes.length; assert(frameBytes <= 8 * 1024 * 1024, 'Submenu include byte bound');
+    for (const match of decode(bytes).matchAll(/^\s*IncludeFile\s+"([^"]+)"/gm)) pendingFrames.push(match[1]);
+  }
+  const scriptPath = constant(sprite, 'BLIZZARD_SCRIPT');
+  // Explicit fixture inputs, not a native archive-priority rule.
+  sourceRules[scriptPath] ??= { alias: 'base', evidence: 'Explicit local base-script fixture selection; archive release and native override priority unestablished' };
+  await add(scriptPath);
+  const lookupRows = soundRows(await add(constant(sprite, 'ANIM_LOOKUPS')));
+  const eventRows = soundRows(await add(constant(sprite, 'ANIM_SOUNDS')));
+  for (const layer of strings(block(sprite, 'LAYERS'))) {
+    const member = uniqueSkinFont(skin, `${layer}_V1`).file.replace(/\.mdl$/i, '.mdx');
+    const bytes = await add(member); await addAll(mdlTextures(bytes));
+    for (const code of panelSoundEvents(bytes)) {
+      const lookup = lookupRows.filter(row => row.AnimSoundEvent === code); assert.equal(lookup.length, 1, `Ambiguous/missing panel event ${code}`);
+      const rows = eventRows.filter(row => row.SoundName === lookup[0].SoundLabel); assert.equal(rows.length, 1, `Ambiguous/missing sound ${lookup[0].SoundLabel}`);
+      const row = rows[0]; assert.equal(typeof row.DirectoryBase, 'string');
+      assert(typeof row.FileNames === 'string' && row.FileNames && !row.FileNames.includes(','), 'Unsupported panel file list');
+      await add(`${row.DirectoryBase}${row.FileNames}`);
+    }
+  }
   const browserSource = await readFile(`${root}crates/peacecraft3/src/browser.rs`, 'utf8');
   const metadataContract = browserSource.match(/for path in \[\s*crate::menu_audio::MENU_MUSIC_PATH,\s*(r"[^"]+")/);
   assert(metadataContract, 'Missing browser audio metadata path contract');

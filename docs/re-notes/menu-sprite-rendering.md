@@ -2,8 +2,14 @@
 
 Scope: the main menu's glue sprite layers `GlueSpriteLayerTopLeft` and
 `GlueSpriteLayerTopRight` (the hanging panel), their `MainMenu Birth` →
-`MainMenu Stand` entrance, and the sound events that entrance fires. The
-implementation is `crates/peacecraft3/src/menu_sprites.rs`.
+`MainMenu Stand` entrance, source-selected MainMenu ↔ SinglePlayer exit/entry
+phases, and their sound events. The implementation is
+`crates/peacecraft3/src/menu_sprites.rs`; scheduling and gain derivation live in
+`menu_panel_phases.rs` and `menu_panel_volume.rs`.
+
+The historical source measurements below are metadata, not production constants
+or a new release attribution. The current acceptance and codec boundary is
+recorded in [Menu panel navigation](menu-panel-navigation.md).
 
 ## 1. Selection is by skin key
 
@@ -66,13 +72,22 @@ The code resolves through `UI\SoundInfo\AnimLookups.slk`
 ARPD → RightGlueScreenPopDown → Sound\Interface\RightGlueScreenPopDown.wav, Volume 64
 ```
 
-The WAV is PCM, 16-bit stereo 22,050 Hz, 146,866 bytes, and extracts with the
-Rust MPQ reader. Volume is applied as `Volume / 127`. Pitch (`1`), pitch
-variance (`0`), channel, priority and `CHANNELFULLPREEMPT` are not applied. A
-label that lists several files is refused: the engine picks one at random, and
-no panel sound needs that yet. Only events whose frames fall inside the played
-Birth or Stand window are loaded; a missing table or file is logged and the
-entrance plays without that sound.
+The retained decoded WAV observation is PCM, 16-bit stereo 22,050 Hz,
+146,866 bytes. That observation does not establish extraction availability for
+every install: the explicitly selected Legacy archives currently require a
+Huffman codec that their co-located inputs do not provide through the supported
+reader contract. No compatibility DLL or copied weight table is substituted.
+
+The application derives the sound-range operand from the caller-selected
+`Scripts\Blizzard.j` helpers and checks each SLK volume against that range.
+Applying the resulting fraction as linear backend gain is a recreation
+convention; audible/native gain parity is unverified. Pitch variance, channel,
+priority and `CHANNELFULLPREEMPT` remain unapplied. Multiple filenames refuse
+rather than choosing an unevidenced random policy. Required startup dependencies
+are admitted together; navigation-only failures disable animation for that
+route. Browser imports with an explicitly unsupported archive sound codec omit
+the affected panel and report the decoder error, preserving the static menu.
+Missing or malformed required startup assets still reject the transaction.
 
 ## 4. What the panel models contain
 

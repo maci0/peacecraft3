@@ -23,7 +23,7 @@ function encrypt(bytes, key) {
     b = (plain + b + (b << 5) + 3) >>> 0;
   }
 }
-export function mpqFixture(members) {
+export function mpqFixture(members, profiles = {}) {
   const entries = Object.entries(members), slots = 2 ** Math.ceil(Math.log2(Math.max(2, entries.length * 2)));
   const hashes = new Uint8Array(slots * 16); hashes.fill(255);
   const hv = new DataView(hashes.buffer), blocks = new Uint8Array(entries.length * 16), bv = new DataView(blocks.buffer);
@@ -33,7 +33,8 @@ export function mpqFixture(members) {
     while (hv.getUint32(slot * 16 + 12, true) !== 0xffffffff) slot = (slot + 1) % slots;
     hv.setUint32(slot * 16, hash(name, 1), true); hv.setUint32(slot * 16 + 4, hash(name, 2), true);
     hv.setUint32(slot * 16 + 8, 0, true); hv.setUint32(slot * 16 + 12, index, true);
-    [pos, data.length, data.length, 0x81000000].forEach((n, i) => bv.setUint32(index * 16 + i * 4, n, true));
+    const profile = profiles[name] ?? {};
+    [pos, data.length, profile.fileSize ?? data.length, profile.flags ?? 0x81000000].forEach((n, i) => bv.setUint32(index * 16 + i * 4, n, true));
     pos += data.length;
   });
   const hashPos = pos, blockPos = pos + hashes.length, size = blockPos + blocks.length;

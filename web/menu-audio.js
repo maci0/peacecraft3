@@ -24,7 +24,7 @@ const eventSounds = new Map();
 function applyUserGains() {
   music.volume = musicBaseVolume * (userMusicEnabled ? userMusicGain : 0);
   clickSound.volume = clickBaseVolume * (userEffectsEnabled ? userEffectsGain : 0);
-  for (const [sound, base] of eventSounds) sound.volume = base * (userEffectsEnabled ? userEffectsGain : 0);
+  for (const [sound, { base }] of eventSounds) sound.volume = base * (userEffectsEnabled ? userEffectsGain : 0);
 }
 function setUserGains(musicGain, effectsGain, musicEnabled, effectsEnabled) {
   if (![musicGain, effectsGain].every(value => Number.isFinite(value) && value >= 0 && value <= 1) ||
@@ -35,8 +35,14 @@ function setUserGains(musicGain, effectsGain, musicEnabled, effectsEnabled) {
   applyUserGains();
 }
 
+function stopEvents() {
+  for (const [sound, { release }] of eventSounds) {
+    sound.pause(); sound.removeAttribute('src'); sound.load(); release();
+  }
+}
 function resetLocalAssets() {
   generation++;
+  stopEvents();
   music.pause(); clickSound.pause();
   music.removeAttribute('src'); clickSound.removeAttribute('src');
   music.load(); clickSound.load();
@@ -93,7 +99,8 @@ globalThis.peacecraft3Audio = {
   setLocalAssets,
   setUserGains,
   resetLocalAssets,
-  pauseForIntro() { introActive = true; music.pause(); clickSound.pause(); },
+  stopEvents,
+  pauseForIntro() { introActive = true; music.pause(); clickSound.pause(); stopEvents(); },
   resumeAfterIntro() { introActive = false; unlocked = false; music.currentTime = 0; unlock(); },
   click() {
     if (!enabled || introActive || (localMode && !localSources.click)) return;
@@ -111,15 +118,18 @@ globalThis.peacecraft3Audio = {
     if (!Number.isFinite(volume) || volume < 0 || volume > 1) throw new TypeError('Event audio requires a finite source base volume');
     const url = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
     const sound = new Audio(url);
-    eventSounds.set(sound, volume);
+    const release = () => {
+      if (!eventSounds.delete(sound)) return false;
+      URL.revokeObjectURL(url); return true;
+    };
+    eventSounds.set(sound, { base: volume, release });
     sound.volume = volume * (userEffectsEnabled ? userEffectsGain : 0);
     sound.muted = !enabled;
-    const release = () => { eventSounds.delete(sound); URL.revokeObjectURL(url); };
     sound.addEventListener('ended', release, { once: true });
-    sound.play().catch(error => { release(); report(error); });
+    sound.play().catch(error => { if (release()) report(error); });
   },
   status() {
-    return { enabled, unlocked, clicks, introActive, localMode, localSources, localUrlCount: localUrls.length,
+    return { enabled, unlocked, clicks, introActive, localMode, localSources, localUrlCount: localUrls.length, eventSoundCount: eventSounds.size,
       musicBaseVolume, clickBaseVolume, userMusicGain, userEffectsGain, userMusicEnabled, userEffectsEnabled, musicVolume: music.volume, musicVolumePolicy: 'existing browser policy; original user volume unverified', musicTime: music.currentTime, musicPaused: music.paused,
       loop: music.loop, clickTime: clickSound.currentTime, clickPaused: clickSound.paused,
       clickVolume: clickSound.volume, muted: music.muted && clickSound.muted };

@@ -77,6 +77,20 @@ use crate::launch_gui;
 
 mod configuration_ffi;
 
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(catch, js_namespace = peacecraft3Audio, js_name = stopEvents)]
+    fn stop_browser_menu_events() -> Result<(), JsValue>;
+}
+
+fn stop_menu_events() {
+    if web_sys::window().is_some()
+        && let Err(error) = stop_browser_menu_events()
+    {
+        note(format!("Menu event audio cleanup failed: {error:?}"));
+    }
+}
+
 /// CSS selector of the canvas winit renders into, in `web/index.html`.
 const CANVAS: &str = "#launcher-canvas";
 
@@ -181,6 +195,8 @@ pub fn open_local_menu(edition: &str) -> Result<(), JsValue> {
         ));
     }
     control.requested = Some(addon);
+    drop(control);
+    stop_menu_events();
     Ok(())
 }
 
@@ -247,7 +263,15 @@ fn revision() -> std::sync::MutexGuard<'static, u32> {
 /// No priority is inferred from arrival order or filenames. Equal duplicates
 /// are safe; distinct bytes at one member path require installation evidence.
 fn extract_unique(set: &mut [pcx_mpq::MpqArchive], path: &str) -> Result<Vec<u8>, String> {
-    crate::browser_read::extract_fallible(set, *revision(), path, MEMBER_LIMIT as usize)
+    extract_unique_bounded(set, path, MEMBER_LIMIT as usize)
+}
+
+fn extract_unique_bounded(
+    set: &mut [pcx_mpq::MpqArchive],
+    path: &str,
+    limit: usize,
+) -> Result<Vec<u8>, String> {
+    crate::browser_read::extract_fallible(set, *revision(), path, limit.min(MEMBER_LIMIT as usize))
         .map_err(|error| error.to_string())?
         .map(|asset| asset.bytes)
         .ok_or_else(|| format!("MISSING_MEMBER: {path}"))
@@ -573,6 +597,7 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
         crate::menu_skin::SkinTable::parse(fog_text).map_err(|e| format!("{fog_path}: {e}"))?;
     put(fog_path, crate::mainmenu::served_name(fog_path), fog_bytes)?;
     let mut models = 0;
+    let mut available_editions = [false; 2];
     for expansion in [false, true] {
         let (_, alias, directory) = crate::mainmenu_scene::scene_source(expansion);
         let path = match crate::mainmenu_scene::skin_scene_source(&skin_table, expansion) {
@@ -627,6 +652,7 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
                 }
                 put(&path, Some(alias), bytes)?;
                 models += 1;
+                available_editions[usize::from(expansion)] = true;
             }
             Err(e) if e.starts_with("MISSING_MEMBER:") => notes.push(e),
             Err(e) => return Err(e),
@@ -665,9 +691,13 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
             Err(e) => return Err(e),
         }
     }
-    // Hanging panels are separate skin-selected models, not part of the sky
-    // scene or logo. Import their TEXS edges into the same bounded local store.
+    // Admit complete panel graphs. Unsupported archive sound codecs omit that
+    // panel with a diagnostic; missing or malformed startup assets still refuse.
+    // Navigation phases are optional; their failure leaves startup usable.
     for edition in [0, 1] {
+        if !available_editions[edition as usize] {
+            continue;
+        }
         let paths = match crate::menu_sprites::model_paths(&skin_table, edition) {
             Ok(paths) => paths,
             Err(crate::menu_skin::SkinError::UnknownFace(key)) => {
@@ -676,19 +706,142 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
             }
             Err(error) => return Err(error.to_string()),
         };
-        for path in paths {
-            match extract_unique(set, &path) {
-                Ok(bytes) => {
-                    for texture in crate::mainmenu_scene::texture_paths(&bytes)
-                        .map_err(|e| format!("{path}: {e}"))?
-                    {
-                        put(&texture, None, extract_unique(set, &texture)?)?;
-                    }
-                    put(&path, None, bytes)?;
-                }
-                Err(error) if error.starts_with("MISSING_MEMBER:") => notes.push(error),
-                Err(error) => return Err(error),
+        let script_path = crate::menu_sprites::BLIZZARD_SCRIPT;
+        let script = extract_unique_bounded(set, script_path, 2 * 1024 * 1024)?;
+        let scale = crate::menu_sprites::VolumeScale::checked(&script)
+            .map_err(|e| format!("{script_path}: {e}"))?;
+        put(script_path, None, script)?;
+        let mut tables = Vec::new();
+        for table_path in [
+            crate::menu_sprites::ANIM_LOOKUPS,
+            crate::menu_sprites::ANIM_SOUNDS,
+        ] {
+            let raw = extract_unique_bounded(set, table_path, 1024 * 1024)?;
+            tables.push(
+                pcx_slq::Table::parse_bounded(
+                    &raw,
+                    pcx_slq::CoordinateLimits {
+                        max_row: 10_000,
+                        max_column: 256,
+                    },
+                )
+                .map_err(|e| format!("{table_path}: {e}"))?,
+            );
+            put(table_path, None, raw)?;
+        }
+        let mut sound_paths = std::collections::BTreeSet::new();
+        let mut sound_bytes = 0usize;
+        'panel: for path in paths {
+            let bytes = extract_unique_bounded(set, &path, 16 * 1024 * 1024)?;
+            let mut textures = Vec::new();
+            let mut remaining = crate::mainmenu_scene::MENU_IMAGE_BYTES;
+            for texture in
+                crate::mainmenu_scene::texture_paths(&bytes).map_err(|e| format!("{path}: {e}"))?
+            {
+                let raw = extract_unique(set, &texture)?;
+                let decoded = pcx_gfx::load_image_bounded(&raw, &texture, remaining)
+                    .map_err(|e| format!("{path}: TEXS {texture}: {e}"))?;
+                remaining -= decoded.rgba.len();
+                textures.push(decoded);
+                put(&texture, None, raw)?;
             }
+            use crate::menu_sprites::SoundScope;
+            for scope in [SoundScope::Startup, SoundScope::MainSingle] {
+                let mut unavailable_codecs = Vec::new();
+                let candidate = (|| -> Result<_, String> {
+                    crate::menu_sprites::preflight_source(&path, &bytes, &textures, scope)
+                        .map_err(|e| e.to_string())?;
+                    let dependencies = crate::menu_sprites::sound_dependencies(
+                        &path, &bytes, &tables[0], &tables[1], scale, scope,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    let mut staged = Vec::new();
+                    let mut selected = std::collections::BTreeSet::new();
+                    let mut total = sound_bytes;
+                    for dependency in dependencies {
+                        let key = normalize(&dependency.path);
+                        if sound_paths.contains(&key) || !selected.insert(key) {
+                            continue;
+                        }
+                        let raw = match crate::browser_read::extract_fallible(
+                            set,
+                            *revision(),
+                            &dependency.path,
+                            16 * 1024 * 1024,
+                        ) {
+                            Ok(Some(asset)) => asset.bytes,
+                            Ok(None) => return Err(format!("MISSING_MEMBER: {}", dependency.path)),
+                            Err(error) => {
+                                // Only known Huffman / ADPCM+Huffman profiles may lack a
+                                // codec; unknown/reserved masks remain hard failures.
+                                if matches!(
+                                    &error,
+                                    crate::browser_read::ReadError::Extraction { source, .. }
+                                    if matches!(source.as_ref(), pcx_mpq::Error::Payload(
+                                        pcx_mpq::payload::PayloadError::UnsupportedCompression {
+                                            mask: 0x01 | 0x41 | 0x81
+                                        }
+                                    ))
+                                ) {
+                                    unavailable_codecs.push(error.to_string());
+                                    continue;
+                                }
+                                return Err(error.to_string());
+                            }
+                        };
+                        total = total
+                            .checked_add(raw.len())
+                            .filter(|&n| n <= 64 * 1024 * 1024)
+                            .ok_or_else(|| {
+                                format!(
+                                    "{}: panel sound aggregate byte bound exceeded",
+                                    dependency.path
+                                )
+                            })?;
+                        crate::menu_sprites::validate_sound_bytes(
+                            &dependency.path,
+                            &raw,
+                            pcx_play::scripts::AssetIdentity {
+                                edition: format!("selected skin V{edition}"),
+                                version: "archive release unestablished".into(),
+                                source: "staged local browser archive batch".into(),
+                            },
+                        )
+                        .map_err(|e| e.to_string())?;
+                        staged.push((dependency.path, raw));
+                    }
+                    Ok((staged, total))
+                })();
+                match candidate {
+                    Ok(_) if !unavailable_codecs.is_empty() => {
+                        // Every other dependency was checked before accepting this fallback.
+                        let error = unavailable_codecs.join("; ");
+                        if matches!(scope, SoundScope::Startup) {
+                            notes.push(format!(
+                                "PANEL_STARTUP_DISABLED: edition={edition}; {error}"
+                            ));
+                            continue 'panel;
+                        }
+                        notes.push(format!(
+                            "PANEL_NAVIGATION_DISABLED: edition={edition}; {error}"
+                        ));
+                    }
+                    Ok((staged, total)) => {
+                        for (sound, raw) in staged {
+                            sound_paths.insert(normalize(&sound));
+                            put(&sound, None, raw)?;
+                        }
+                        sound_bytes = total;
+                    }
+                    Err(error) if matches!(scope, SoundScope::MainSingle) => {
+                        notes.push(format!(
+                            "PANEL_NAVIGATION_DISABLED: edition={edition}; {error}"
+                        ));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            put(&path, None, bytes)?;
         }
     }
     for path in [
@@ -735,6 +888,10 @@ pub fn commit_archive_import() -> Result<Vec<String>, JsValue> {
     control.editions = editions;
     control.requested = None;
     control.active = None;
+    drop(control);
+    drop(rev);
+    drop(guard);
+    stop_menu_events();
     for line in &notes {
         note(line);
     }
@@ -1061,6 +1218,9 @@ pub fn drop_assets() -> usize {
     control.editions = crate::local_demo::MenuEditions::default();
     control.requested = None;
     control.active = None;
+    drop(control);
+    drop(rev);
+    stop_menu_events();
     count
 }
 

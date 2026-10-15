@@ -1031,22 +1031,18 @@ pub struct Geosets {
     pub textures: TextureBindings,
 }
 
-/// Spawns one entity per geoset, with the material its own `material_id` and
-/// layer flags describe and its opacity at `frame`. `bundle` is added to each.
-pub fn spawn_geosets(
-    commands: &mut Commands,
-    assets: GeosetAssets,
-    source: GeosetSource,
+/// Read-only admission shared by whole-model batches and the spawn writer.
+pub struct GeosetPreflight<'a> {
+    required: std::collections::BTreeMap<u32, &'a pcx_gfx::LoadedTexture>,
+    mdl_materials: Vec<pcx_mdl::Material>,
+    initial: Vec<(u32, f32, bevy::math::Affine2, bool)>,
+}
+
+pub fn preflight_geosets<'a>(
+    input: &GeosetSource<'a>,
     opacity: &pcx_gfx::mdx_opacity::OpacityPlan,
     frame: u32,
-    info: &mut SceneInfo,
-    bundle: impl Bundle + Clone,
-) -> Result<Geosets, SceneError> {
-    let GeosetAssets {
-        meshes,
-        materials,
-        images,
-    } = assets;
+) -> Result<GeosetPreflight<'a>, SceneError> {
     let GeosetSource {
         m,
         bytes,
@@ -1056,7 +1052,7 @@ pub fn spawn_geosets(
         runtime,
         selection,
         uv_translation,
-    } = source;
+    } = *input;
     let required = required_texture_images(source, runtime, textures)?;
     let mdl_materials = m
         .materials(bytes)
@@ -1106,6 +1102,40 @@ pub fn spawn_geosets(
         )?;
         initial.push((id, alpha, uv, fog_enabled));
     }
+    Ok(GeosetPreflight {
+        required,
+        mdl_materials,
+        initial,
+    })
+}
+
+/// Spawns one entity per geoset, with the material its own `material_id` and
+/// layer flags describe and its opacity at `frame`. `bundle` is added to each.
+pub fn spawn_geosets(
+    commands: &mut Commands,
+    assets: GeosetAssets,
+    source: GeosetSource,
+    opacity: &pcx_gfx::mdx_opacity::OpacityPlan,
+    frame: u32,
+    info: &mut SceneInfo,
+    bundle: impl Bundle + Clone,
+) -> Result<Geosets, SceneError> {
+    let GeosetAssets {
+        meshes,
+        materials,
+        images,
+    } = assets;
+    let GeosetPreflight {
+        required,
+        mdl_materials,
+        initial,
+    } = preflight_geosets(&source, opacity, frame)?;
+    let GeosetSource {
+        source,
+        model,
+        runtime,
+        ..
+    } = source;
     let mut texture_bindings = cache_texture_images(source, runtime, &required, images);
     let mut handles = Vec::with_capacity(model.meshes.len());
     let mut bound = Vec::with_capacity(model.meshes.len());
@@ -3014,6 +3044,33 @@ mod texture_selection_tests {
                 }
                 _ => unreachable!(),
             }
+            let m = pcx_mdl::Mdlx::parse(&f.bytes).unwrap();
+            let selection = texture_selection(&f.runtime, [100, 110], "synthetic").unwrap();
+            let opacity =
+                pcx_gfx::mdx_opacity::OpacityPlan::checked(&f.runtime, [100, 110]).unwrap();
+            let uv = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
+                &f.runtime,
+                [100, 110],
+                "synthetic",
+            )
+            .unwrap();
+            assert!(
+                preflight_geosets(
+                    &GeosetSource {
+                        m: &m,
+                        bytes: &f.bytes,
+                        source: "synthetic",
+                        model: &f.model,
+                        textures: &f.textures,
+                        runtime: &f.runtime,
+                        selection: &selection,
+                        uv_translation: &uv
+                    },
+                    &opacity,
+                    100
+                )
+                .is_err()
+            );
             let mut spawned = spawn(&f);
             let error = spawned.result.err().expect("bad dependency admitted");
             assert!(matches!(error, SceneError::TextureImage { .. }), "{error}");
