@@ -1,4 +1,6 @@
-//! PRE2 state layout proved by native binary/keyword readers in format-mdx-particles.md.
+//! PRE2 authored state; field evidence is recorded in format-mdx-particles.md.
+//! Static width/length names follow the pinned primary reader/consumer convention.
+//! This does not resolve the earlier native destination-name disagreement.
 use super::{PARTICLE2_FIXED, Particle2};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -9,8 +11,10 @@ pub struct Particle2Properties {
     pub gravity: f32,
     pub life_span: f32,
     pub emission_rate: f32,
-    pub length: f32,
+    /// Fixed-body +24; local X extent in the pinned primary renderer.
     pub width: f32,
+    /// Fixed-body +28; local Y extent in the pinned primary renderer.
+    pub length: f32,
     pub filter_mode: u32,
     pub rows: u32,
     pub columns: u32,
@@ -45,8 +49,8 @@ impl Particle2Properties {
             gravity: f(12),
             life_span: f(16),
             emission_rate: f(20),
-            length: f(24),
-            width: f(28),
+            width: f(24),
+            length: f(28),
             filter_mode: u(32),
             rows: u(36),
             columns: u(40),
@@ -77,8 +81,8 @@ impl Particle2Properties {
             self.gravity,
             self.life_span,
             self.emission_rate,
-            self.length,
             self.width,
+            self.length,
         ] {
             out.extend(value.to_bits().to_le_bytes());
         }

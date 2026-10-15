@@ -1719,6 +1719,23 @@ impl KeyTrack {
         Some(u32::from_le_bytes(b.try_into().ok()?))
     }
 
+    /// Signed frame time in milliseconds, preserving negative preroll.
+    ///
+    /// The existing [`Self::frame`] accessor keeps its unsigned interpretation.
+    /// This accessor checks the declared key count, record span and byte bounds;
+    /// malformed or overflowing spans return `None`. Values, interpolation,
+    /// ordering and clock/clip selection still require caller validation.
+    pub fn frame_signed(&self, i: usize) -> Option<i32> {
+        let count = usize::try_from(self.count).ok()?;
+        if i >= count || self.stride < 4 || count.checked_mul(self.stride)? != self.raw.len() {
+            return None;
+        }
+        let at = i.checked_mul(self.stride)?;
+        let end = at.checked_add(4)?;
+        let bytes = self.raw.get(at..end)?;
+        Some(i32::from_le_bytes(bytes.try_into().ok()?))
+    }
+
     /// Key `i`'s value as `width` floats, zero-padded to four.
     ///
     /// Zero padding keeps a scalar and a quaternion readable through one
@@ -6295,7 +6312,7 @@ pub struct Particle2 {
     pub flags: u32,
     /// `KGTR`/`KGRT`/`KGSC` tracks inside the node header.
     pub node_tracks: Vec<KeyTrack>,
-    /// Original fixed-state bytes; properties() exposes native-proven fields.
+    /// Original fixed-state bytes; see properties() and the field-evidence notes.
     pub state: [u8; PARTICLE2_FIXED],
     /// The `KP2*` sub-chunks, in file order, each a scalar key track.
     pub tracks: Vec<KeyTrack>,
