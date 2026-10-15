@@ -1,5 +1,5 @@
 // FreeArc 0.67 decoders for browser import: LZMA control blocks, AES-256-CTR, and
-// the `rep:...+4x4:tor:...` data-block chain. Tornado, LzmaDec and the 7-Zip AES
+// the `rep:...+[exe+]4x4:tor:...` data-block chain. Tornado, LzmaDec, x86 BCJ and the 7-Zip AES
 // code are compiled unmodified from upstream/; the 4x4 framing loop and the REP
 // decoder are re-implemented from upstream C_4x4.cpp and rep.cpp with bounds
 // checks, because rep_decompress trusts its tables and both are callback-driven.
@@ -12,6 +12,8 @@
 #include <string.h>
 
 #include "Compression/Tornado/Tornado.cpp"
+#include "Compression/LZMA2/C/Bra86.c"
+static_assert(sizeof(UInt32) == 4, "BCJ instruction position must wrap at 32 bits");
 
 extern "C" {
 #include "Compression/LZMA2/C/LzmaDec.h"
@@ -230,6 +232,12 @@ struct Stream
   uint32_t x_pos, x_len;
   bool x_eof;
 
+  // Optional C_BCJ.cpp stage: a full source-sized read, converted prefix and
+  // retained suffix. Do not move this buffer until REP consumes the prefix.
+  uint8_t *e_buf;
+  uint32_t e_have, e_pos, e_len, e_ip, e_state;
+  uint64_t max_intermediate, intermediate, max_input, input_total;
+
   // REP (rep.cpp rep_decompress): block buffer, then decode state.
   RepPhase r_phase;
   uint8_t r_hdr[4];
@@ -330,6 +338,13 @@ static int x4_fill(Stream &s)
       // Process stores the rest), so both sizes are bounded by the 4x4 block size.
       if (s.x_in_size > s.max_block || (s.x_out_size != FA_4X4_STORED && s.x_out_size > s.max_block))
         return FA_ERR_LIMIT;
+      if (s.e_buf) {
+        uint32_t decoded = s.x_out_size == FA_4X4_STORED ? s.x_in_size : s.x_out_size;
+        // Bound intermediate bytes/work before payload/decode/allocation. REP's
+        // final output ceiling is unrelated to the size of its encoded stream.
+        if (decoded > s.max_intermediate - s.intermediate) return FA_ERR_LIMIT;
+        s.intermediate += decoded;
+      }
       if (!s.x_in && (!(s.x_in = (uint8_t *) MyAlloc(s.max_block)) || !(s.x_out = (uint8_t *) MyAlloc(s.max_block))))
         return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
       s.x_in_have = 0;
@@ -348,15 +363,44 @@ static int x4_fill(Stream &s)
   return FILL_READY;
 }
 
-// Copies 4x4 output into dst until have == n: FILL_READY, FILL_NEED_INPUT, FILL_EOF or an error.
+// C_BCJ.cpp coalesces LARGE_BUFFER_SIZE reads (Channels::Read fills to the request
+// or EOF). Its <=5 rule applies only at EOF, never at a network/4x4 boundary.
+static int exe_fill(Stream &s)
+{
+  while (s.e_pos == s.e_len) {
+    if (s.e_len) {
+      s.e_have -= s.e_len;
+      memmove(s.e_buf, s.e_buf + s.e_len, s.e_have);
+      s.e_pos = s.e_len = 0;
+    }
+    while (s.e_have < LARGE_BUFFER_SIZE) {
+      int r = x4_fill(s);
+      if (r == FILL_EOF) break;
+      if (r != FILL_READY) return r;
+      uint32_t k = min32(LARGE_BUFFER_SIZE - s.e_have, s.x_len - s.x_pos);
+      memcpy(s.e_buf + s.e_have, s.x_out + s.x_pos, k);
+      s.e_have += k, s.x_pos += k;
+    }
+    if (!s.e_have) return FILL_EOF;
+    s.e_len = s.e_have <= 5 ? s.e_have : (uint32_t) x86_Convert(s.e_buf, s.e_have, s.e_ip, &s.e_state, 0);
+    if (!s.e_len || s.e_len > s.e_have) return FREEARC_ERRCODE_INTERNAL;
+    s.e_ip += s.e_len;  // Source UInt32 position wraps; wide byte accounting does not.
+  }
+  return FILL_READY;
+}
+
+// Copies the optional EXE stage (or direct 4x4 output) into REP's current field.
 static int rep_take(Stream &s, uint8_t *dst, uint32_t n, uint32_t &have)
 {
   while (have < n) {
-    int r = x4_fill(s);
+    int r = s.e_buf ? exe_fill(s) : x4_fill(s);
     if (r != FILL_READY) return r;
-    uint32_t k = min32(n - have, s.x_len - s.x_pos);
-    memcpy(dst + have, s.x_out + s.x_pos, k);
-    s.x_pos += k, have += k;
+    uint32_t &pos = s.e_buf ? s.e_pos : s.x_pos;
+    uint32_t len = s.e_buf ? s.e_len : s.x_len;
+    const uint8_t *buf = s.e_buf ? s.e_buf : s.x_out;
+    uint32_t k = min32(n - have, len - pos);
+    memcpy(dst + have, buf + pos, k);
+    pos += k, have += k;
   }
   return FILL_READY;
 }
@@ -494,6 +538,7 @@ static int stream_step(Stream &s)
 static void stream_release(Stream *s)
 {
   MyFree(s->ring), MyFree(s->r_buf), MyFree(s->x_in), MyFree(s->x_out), MyFree(s->inbuf);
+  MyFree(s->e_buf);
   s->ring = s->r_buf = s->x_in = s->x_out = s->inbuf = NULL;
 }
 
@@ -517,6 +562,11 @@ FA_EXPORT uint64_t fa_stream_default_budget(uint32_t max_dict, uint32_t max_bloc
          + FA_UPSTREAM_SLACK;
 }
 
+FA_EXPORT uint64_t fa_stream_exe_default_budget(uint32_t max_dict, uint32_t max_block, uint32_t max_tor_buffer)
+{
+  return fa_stream_default_budget(max_dict, max_block, max_tor_buffer) + LARGE_BUFFER_SIZE;
+}
+
 // One stream at a time: its limits bound every codec allocation (MyAlloc) until
 // fa_stream_free. max_dict and max_block come from the authored method string;
 // max_tor_buffer bounds the Tornado header buffer.
@@ -532,6 +582,24 @@ FA_EXPORT Stream *fa_stream_new(uint64_t max_output, uint32_t max_dict, uint32_t
   return s;
 }
 
+// Explicit EXE-only cumulative policies: decoded 4x4 bytes bound filter work;
+// pushed input bytes also bound framing work, including empty stored blocks.
+FA_EXPORT Stream *fa_stream_new_exe(uint64_t max_output, uint32_t max_dict, uint32_t max_block,
+                                    uint32_t max_tor_buffer, uint64_t max_alloc,
+                                    uint64_t max_intermediate, uint64_t max_input)
+{
+  Stream *s = fa_stream_new(max_output, max_dict, max_block, max_tor_buffer, max_alloc);
+  if (!s) return NULL;
+  s->max_intermediate = max_intermediate, s->max_input = max_input;
+  if (!(s->e_buf = (uint8_t *) MyAlloc(LARGE_BUFFER_SIZE))) {
+    stream_release(s);
+    free(s);
+    g_budget = UINT64_MAX;
+    return NULL;
+  }
+  return s;
+}
+
 FA_EXPORT uint8_t *fa_stream_input_ptr(Stream *s) { return s->inbuf; }
 FA_EXPORT uint32_t fa_stream_input_cap(void) { return FA_INPUT_CHUNK; }
 
@@ -540,6 +608,10 @@ FA_EXPORT int32_t fa_stream_input(Stream *s, uint32_t len)
 {
   if (s->error) return s->error;
   if (len > FA_INPUT_CHUNK || s->in_pos != s->in_len || s->in_eof) return s->error = FREEARC_ERRCODE_GENERAL;
+  if (s->e_buf) {
+    if (len > s->max_input - s->input_total) return s->error = FA_ERR_LIMIT;
+    s->input_total += len;
+  }
   s->in_pos = 0, s->in_len = len, s->in_eof = len == 0;
   return FREEARC_OK;
 }

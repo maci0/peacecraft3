@@ -117,7 +117,9 @@ describe('method limits', () => {
     // Defaults from REP_METHOD() and the upstream Tornado preset table (5: 16mb, 3: 4mb).
     expect(codec.methodLimits('rep+4x4:tor')).toEqual({ repDictionary: 64 << 20, blockSize: 16 << 20, torBuffer: 16 << 20 });
     expect(codec.methodLimits('rep:b1g+4x4:b2mb:tor:8mb:3')).toEqual({ repDictionary: 1 << 30, blockSize: 2 << 20, torBuffer: 4 << 20 });
-    for (const m of ['rep:32mb:256+exe+4x4:tor:16mb', 'lzma+4x4:tor', 'rep+4x4:lzma', 'rep:zz+4x4:tor'])
+    expect(codec.methodLimits('rep:7kb+exe+4x4:tor:3:9kb')).toEqual({ repDictionary: 7 << 10, blockSize: 9 << 10, torBuffer: 32 << 10, exe: true });
+    for (const m of ['rep+exe:1+4x4:tor', 'rep+exe+exe+4x4:tor', 'exe+rep+4x4:tor', 'rep+4x4:tor+exe',
+      'lzma+4x4:tor', 'rep+4x4:lzma', 'rep:zz+4x4:tor'])
       expect(() => codec.methodLimits(m)).toThrow(FreeArcCodecError);
   });
 });
@@ -160,6 +162,73 @@ async function run(c, input, opts = {}) {
   });
   return { ...res, out: Uint8Array.from(chunks.flatMap(c => [...c])) };
 }
+
+const exeFixture = {
+  input: new Uint8Array(await Bun.file(`${build}/fixtures/exe-wrap.fa`).arrayBuffer()),
+  want: new Uint8Array(await Bun.file(`${build}/fixtures/exe-wrap.out`).arrayBuffer()),
+  intermediate: Number((await Bun.file(`${build}/fixtures/exe-wrap.intermediate-size`).text()).trim()),
+};
+describe('rep + exe + 4x4:tor stream', () => {
+  const method = 'rep:4kb+exe+4x4:tor:3:8kb';
+  const { input, want, intermediate } = exeFixture;
+  const limits = { method, expectedSize: want.length, maxInputBytes: input.length, maxIntermediateBytes: intermediate };
+
+  test('upstream EXE/Tornado fixture, prefix ownership through awaited REP yields', async () => {
+    let pos = 0, writes = 0;
+    const chunks = [];
+    const res = await codec.decodeStream({ ...limits, read: async max => {
+      const chunk = input.subarray(pos, pos + Math.min(max, 97)); pos += chunk.length; return chunk;
+    }, onWrite: async chunk => {
+      const copy = chunk.slice();
+      await Promise.resolve();
+      expect(chunk).toEqual(copy);
+      chunks.push(copy); writes++;
+    } });
+    expect(writes).toBeGreaterThan(1);
+    expect(res.outputBytes).toBe(want.length);
+    const out = new Uint8Array(want.length);
+    let n = 0; for (const chunk of chunks) { out.set(chunk, n); n += chunk.length; }
+    expect(out).toEqual(want);
+    expect(intermediate).toBeGreaterThan(want.length);
+  });
+
+  test('EXE requires independent input/intermediate policies; all ceilings and reuse', async () => {
+    for (const missing of ['maxInputBytes', 'maxIntermediateBytes'])
+      await rejects(run(codec, input, { ...limits, [missing]: undefined }), 'INVALID_ARGUMENT');
+    await rejects(run(codec, input, { ...limits, maxInputBytes: input.length - 1 }), 'STREAM_LIMIT');
+    await rejects(run(codec, input, { ...limits, maxIntermediateBytes: intermediate - 1 }), 'STREAM_LIMIT');
+    await rejects(run(codec, input, { ...limits, maxIntermediateBytes: want.length }), 'STREAM_LIMIT');
+    await rejects(run(codec, input, { ...limits, maxMemoryBytes: 1 }), 'MEMORY_LIMIT');
+    await rejects(run(codec, input, { ...limits, maxOutputBytes: want.length - 1 }), 'OUTPUT_LIMIT');
+    await rejects(run(codec, input.subarray(0, input.length - 1), limits), 'TRUNCATED');
+    expect((await run(codec, input, limits)).out).toEqual(want);
+  });
+
+  test('announced intermediate refused before Tornado decode or block allocation', async () => {
+    const header = Uint8Array.from([...u32(0), ...u32(9), ...u32(0)]);
+    await rejects(run(codec, header, { method, expectedSize: 0, maxInputBytes: header.length, maxIntermediateBytes: 8 }), 'STREAM_LIMIT');
+  });
+
+  test('empty 4x4 blocks exhaust encoded input budget; empty read is EOF, not retry', async () => {
+    const input = Uint8Array.from([...u32(0), ...Array.from({ length: 200 }, () => [...u32(0xFFFFFFFF), ...u32(0)]).flat()]);
+    let pos = 0, reads = 0;
+    await rejects(codec.decodeStream({ method, expectedSize: 0, maxInputBytes: 97, maxIntermediateBytes: 0,
+      read: async max => { reads++; const chunk = input.subarray(pos, pos + Math.min(max, 13)); pos += chunk.length; return chunk; },
+      onWrite: async () => { throw new Error('zero-output blocks cannot produce REP data'); },
+    }), 'STREAM_LIMIT');
+    expect(reads).toBe(8);  // empty blocks are processed, then the excess sentinel is refused
+    reads = 0;
+    await rejects(codec.decodeStream({ ...limits, read: async () => { reads++; return new Uint8Array(0); }, onWrite: async () => {} }), 'TRUNCATED');
+    expect(reads).toBe(1);
+  });
+
+  test('cancel or sink failure releases pending prefix/budget and permits next stream', async () => {
+    const ac = new AbortController();
+    await expect(run(codec, input, { ...limits, signal: ac.signal, onWrite: async () => { ac.abort(); } })).rejects.toThrow();
+    await expect(run(codec, input, { ...limits, onWrite: async () => { throw new Error('synthetic sink failure'); } })).rejects.toThrow('synthetic sink failure');
+    expect((await run(codec, input, limits)).out).toEqual(want);
+  });
+});
 
 describe('rep + 4x4:tor stream', () => {
   test('tornado fixture from the native test (upstream compressor)', async () => {

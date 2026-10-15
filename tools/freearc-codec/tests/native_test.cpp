@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "codec.cpp"
+#include "Compression/LZMA2/exe_reference.inc"
 typedef std::vector<uint8_t> Bytes;
 
 static int failures = 0;
@@ -97,17 +98,25 @@ static Bytes x4_encode(const Bytes &data, uint32_t block, int preset)
 
 // Drives fa_stream_* with input chunks of 1..max_chunk bytes.
 static int decode(const Bytes &in, uint32_t dict, uint32_t block, uint64_t max_out, Bytes &out,
-                  uint32_t max_chunk, uint64_t *peak = NULL, uint64_t budget = 0)
+                  uint32_t max_chunk, uint64_t *peak = NULL, uint64_t budget = 0,
+                  bool exe = false, uint64_t max_intermediate = UINT64_MAX, uint64_t max_input = UINT64_MAX,
+                  uint32_t *pending_exe_yields = NULL)
 {
   out.clear();
   uint32_t tor_buffer = (block < 32 * kb ? 32 * kb : (block + 4095) & ~4095u);
-  if (!budget) budget = fa_stream_default_budget(dict, block, tor_buffer);
-  Stream *s = fa_stream_new(max_out, dict, block, tor_buffer, budget);
-  if (!s) return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
+  if (!budget) budget = exe ? fa_stream_exe_default_budget(dict, block, tor_buffer) : fa_stream_default_budget(dict, block, tor_buffer);
+  Stream *s = exe ? fa_stream_new_exe(max_out, dict, block, tor_buffer, budget, max_intermediate, max_input)
+                  : fa_stream_new(max_out, dict, block, tor_buffer, budget);
+  if (!s) {
+    EXPECT(g_used == 0, "constructor allocations leaked");
+    return FREEARC_ERRCODE_NOT_ENOUGH_MEMORY;
+  }
   size_t pos = 0;
   int r;
+  uint32_t pending_yields = 0;
   while ((r = fa_stream_step(s)) > 0 && r != FA_STEP_DONE) {
     if (r == FA_STEP_OUTPUT) {
+      if (s->e_buf && s->e_pos < s->e_len) pending_yields++;
       const uint8_t *p = fa_stream_output_ptr(s);
       out.insert(out.end(), p, p + fa_stream_output_len(s));
     } else {
@@ -122,6 +131,7 @@ static int decode(const Bytes &in, uint32_t dict, uint32_t block, uint64_t max_o
   if (r == FA_STEP_DONE) r = FREEARC_OK;
   if (r == FREEARC_OK && fa_stream_total(s) != out.size()) r = FREEARC_ERRCODE_INTERNAL;
   if (peak) *peak = fa_stream_peak_alloc(s);
+  if (pending_exe_yields) *pending_exe_yields = pending_yields;
   fa_stream_free(s);
   EXPECT(g_used == 0, "allocations leaked: %llu", (unsigned long long) g_used);
   return r;
@@ -140,6 +150,58 @@ static Bytes noise(size_t n)
   Bytes b(n);
   for (size_t i = 0; i < n; i++) b[i] = (uint8_t) rnd();
   return b;
+}
+
+static void test_exe(const char *fixture_dir)
+{
+  // REP literals cross multiple EXE windows; a small REP dictionary forces
+  // output yields while the EXE converted prefix is still pending.
+  const uint32_t dict = 4096, block = 8 * kb;
+  Bytes lit = text(LARGE_BUFFER_SIZE * 2 + 37);
+  for (size_t i = 0; i + 5 < lit.size(); i += 13) { lit[i] = i & 1 ? 0xe8 : 0xe9; lit[i+4] = i & 2 ? 0xff : 0; }
+  std::vector<std::vector<Item> > blocks;
+  for (size_t pos = 0; pos < lit.size();) {
+    size_t n = lit.size() - pos < 32771 ? lit.size() - pos : 32771;
+    Item item = { Bytes(lit.begin() + pos, lit.begin() + pos + n), 0, 0 };
+    blocks.push_back(std::vector<Item>(1, item)); pos += n;
+  }
+  Bytes want, transformed, out;
+  Bytes rep = rep_encode(dict, blocks, want);
+  MemIO io = { rep.data(), rep.size(), &transformed };
+  EXPECT(bcj_x86_de_compress(1, memio, &io) == FREEARC_OK, "upstream EXE encoding");
+  EXPECT(transformed != rep, "EXE fixture must exercise operand conversion");
+  Bytes packed = x4_encode(transformed, block, 3);
+  uint32_t compressed_blocks = 0;
+  for (size_t pos = 4; pos < packed.size();) {
+    if (le32(packed.data() + pos) != FA_4X4_STORED) compressed_blocks++;
+    pos += 8 + le32(packed.data() + pos + 4);
+  }
+  EXPECT(compressed_blocks > 0, "EXE fixture must exercise Tornado decoding");
+  uint64_t peak = 0;
+  uint32_t pending_yields = 0;
+  EXPECT(decode(packed, dict, block, want.size(), out, 97, &peak, 0, true, rep.size(), packed.size(), &pending_yields) == FREEARC_OK && out == want,
+         "EXE/Tornado/REP roundtrip and pending-prefix yields");
+  EXPECT(pending_yields > 0, "fixture must yield with an unconsumed converted EXE prefix");
+  EXPECT(peak <= fa_stream_exe_default_budget(dict, block, 32 * kb), "EXE counted memory budget");
+  EXPECT(rep.size() > want.size(), "intermediate policy must be independent of final output");
+  EXPECT(decode(packed, dict, block, want.size(), out, 97, NULL, 0, true, rep.size()-1, packed.size()) == FA_ERR_LIMIT,
+         "EXE intermediate cap");
+  EXPECT(decode(packed, dict, block, want.size(), out, 97, NULL, 0, true, rep.size(), packed.size()-1) == FA_ERR_LIMIT,
+         "EXE input cap");
+  EXPECT(decode(packed, dict, block, want.size(), out, 97, NULL, FA_INPUT_CHUNK + LARGE_BUFFER_SIZE - 1, true, rep.size(), packed.size()) == FREEARC_ERRCODE_NOT_ENOUGH_MEMORY,
+         "EXE buffer counted before allocation");
+  EXPECT(decode(packed, dict, block, want.size()-1, out, 97, NULL, 0, true, rep.size(), packed.size()) == FREEARC_ERRCODE_OUTBLOCK_TOO_SMALL,
+         "EXE final output cap");
+  Bytes cut(packed.begin(), packed.end()-1);
+  EXPECT(decode(cut, dict, block, want.size(), out, 97, NULL, 0, true, rep.size(), packed.size()) == FA_ERR_TRUNCATED,
+         "EXE surrounding framing truncation");
+  if (fixture_dir) {
+    std::string base = std::string(fixture_dir) + "/exe-wrap";
+    FILE *f = fopen((base + ".fa").c_str(), "wb"); fwrite(packed.data(), 1, packed.size(), f); fclose(f);
+    f = fopen((base + ".out").c_str(), "wb"); fwrite(want.data(), 1, want.size(), f); fclose(f);
+    f = fopen((base + ".intermediate-size").c_str(), "wb"); fprintf(f, "%zu\n", rep.size()); fclose(f);
+  }
+  printf("EXE full-chain limits/pending-prefix tests passed; Tornado blocks=%u pending-prefix yields=%u\n", compressed_blocks, pending_yields);
 }
 
 // A REP script whose output wraps a small window several times: matches cross the
@@ -243,6 +305,7 @@ int main(int argc, char **argv)
 {
   test_roundtrips(argc > 1 ? argv[1] : NULL);
   test_limits();
+  test_exe(argc > 1 ? argv[1] : NULL);
   test_mutations();
   if (failures) { fprintf(stderr, "%d failures\n", failures); return 1; }
   puts("native tests passed");

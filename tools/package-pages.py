@@ -36,9 +36,10 @@ FILES = (
     ("licenses/bevy-particle-shader.txt", "licenses/bevy-particle-shader.txt"),
 )
 IMPORT = re.compile(r"\b(?:import|export)\s+(?:[^;\n]*?\s+from\s+)?['\"]([^'\"]+)['\"]|\bimport\s*\(\s*['\"]([^'\"]+)['\"]")
-CODEC_LOCAL = ("README.md", "build.sh", "upstream.sha256", ".gitignore",
+CODEC_LOCAL = ("README.md", "build.sh", "upstream.sha256", "upstream-exe.json", ".gitignore",
                "src/codec.cpp", "src/lzma_dec.c", "src/aes.c",
-               "js/freearc-codec.mjs", "tests/native_test.cpp", "tests/codec.test.mjs")
+               "js/freearc-codec.mjs", "tests/native_test.cpp", "tests/codec.test.mjs",
+               "tests/exe_stage_test.cpp", "tests/exe-stage.test.mjs")
 CODEC_OFFER = "pkg/freearc/freearc-codec-source.tar.gz"
 
 

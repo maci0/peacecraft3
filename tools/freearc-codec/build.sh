@@ -32,11 +32,20 @@ if [[ $what == native || $what == all ]]; then
   clang "${c_flags[@]}" -g -fsanitize=address,undefined -c "$here/src/lzma_dec.c" -o "$out/lzma_dec.o"
   clang "${c_flags[@]}" -g -fsanitize=address,undefined -c "$here/src/aes.c" -o "$out/aes.o"
   clang++ -fsanitize=address,undefined "$out/native_test.o" "$out/lzma_dec.o" "$out/aes.o" -lm -o "$out/native_test"
+  clang++ "${cxx_flags[@]}" -DFREEARC_DECOMPRESS_ONLY -g -fsanitize=address,undefined -fno-sanitize=alignment \
+    -c "$here/tests/exe_stage_test.cpp" -o "$out/exe_stage_test.o"
+  clang++ -fsanitize=address,undefined "$out/exe_stage_test.o" "$out/lzma_dec.o" "$out/aes.o" -lm -o "$out/exe_stage_test"
 fi
 
 if [[ $what == test ]]; then
   "$0" all "$out"
+  # Same production EXE stage/reference test on the actual 32-bit WASM target.
+  emcc "${cxx_flags[@]}" -DFREEARC_DECOMPRESS_ONLY -c "$here/tests/exe_stage_test.cpp" -o "$out/exe_stage_test.wasm.o"
+  emcc -O2 "$out/exe_stage_test.wasm.o" "$out/lzma_dec.wasm.o" "$out/aes.wasm.o" -o "$out/exe_stage_test.wasm" \
+    --no-entry -sSTANDALONE_WASM -sALLOW_MEMORY_GROWTH -sMAXIMUM_MEMORY=1gb -sSTACK_SIZE=1mb \
+    -sABORTING_MALLOC=0 -sFILESYSTEM=0
   mkdir -p "$out/fixtures"
   "$out/native_test" "$out/fixtures"
-  FREEARC_CODEC_BUILD=$out bun test "$here/tests/codec.test.mjs"
+  "$out/exe_stage_test"
+  FREEARC_CODEC_BUILD=$out bun test "$here/tests/codec.test.mjs" "$here/tests/exe-stage.test.mjs"
 fi

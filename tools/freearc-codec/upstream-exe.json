@@ -1,0 +1,16 @@
+{
+  "upstream_commit": "537e4ff921e55da60b27bdbae0bc757010be7e53",
+  "upstream_url": "https://github.com/mrkaban/FreeArc-0.67/tree/537e4ff921e55da60b27bdbae0bc757010be7e53",
+  "algorithm_sources": [
+    "Compression/LZMA2/C/Bra86.c",
+    "Compression/LZMA2/C/Bra.h",
+    "Compression/LZMA2/C/Types.h"
+  ],
+  "window_source": "Compression/Compression.h LARGE_BUFFER_SIZE",
+  "wrapper_source": "Compression/LZMA2/C_BCJ.cpp",
+  "wrapper_source_sha256": "5fe3b2485dbd9b68a315279eecc6cc0ffe235583bccaa3ce6a03807a59c4109d",
+  "test_reference": "upstream/Compression/LZMA2/exe_reference.inc",
+  "test_reference_sha256": "a684ee21ce7090b821be98d9d584ae706c22c19243772c7d81b485376244f70b",
+  "test_reference_extraction": "exact function byte slice from int bcj_x86_de_compress through its closing brace and newline; separator whitespace and registry/class code excluded",
+  "license": "GPL-2.0 component; branch converter source carries upstream public-domain notices; LICENSE and upstream.sha256 preserved"
+}

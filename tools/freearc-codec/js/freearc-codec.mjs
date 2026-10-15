@@ -1,5 +1,5 @@
 // Loader for freearc-codec.wasm: FreeArc 0.67 LZMA, AES-256-CTR and
-// `rep+4x4:tor` decoding for local browser imports. Runs in a window or worker,
+// `rep+[exe+]4x4:tor` decoding for local browser imports. Runs in a window or worker,
 // needs no SharedArrayBuffer and no cross-origin isolation.
 //
 // Copyright (C) Bulat Ziganshin (FreeArc formats and decoders).
@@ -61,8 +61,9 @@ const isInt = p => /^\d+$/.test(p);
 // must parse; the others (match lengths, hashes, threads) are skipped unchecked.
 export function parseRep4x4TorMethod(method, presets) {
   const fields = String(method).split('+');
-  if (fields.length !== 2) fail('UNSUPPORTED_METHOD', `expected rep+4x4:tor, got ${fields.length} methods`);
-  const rep = fields[0].split(':'), x4 = fields[1].split(':');
+  const exe = fields.length === 3 && fields[1] === 'exe';
+  if (fields.length !== 2 && !exe) fail('UNSUPPORTED_METHOD', 'expected rep+[exe+]4x4:tor');
+  const rep = fields[0].split(':'), x4 = fields[exe ? 2 : 1].split(':');
   if (rep[0] !== 'rep' || x4[0] !== '4x4') fail('UNSUPPORTED_METHOD', 'expected rep+4x4:tor');
 
   let repDictionary = REP_DEFAULT_DICTIONARY;
@@ -97,7 +98,8 @@ export function parseRep4x4TorMethod(method, presets) {
   const headerBuffer = Math.ceil(Math.max(torBuffer, TOR_MIN_BUFFER) / TOR_BUFFER_ALIGN) * TOR_BUFFER_ALIGN;
   for (const [name, v] of [['rep dictionary', repDictionary], ['4x4 block', block], ['tor buffer', headerBuffer]])
     if (!(v > 0 && v <= U32_MAX)) fail('UNSUPPORTED_METHOD', `${name} ${v}`);
-  return { repDictionary, blockSize: block, torBuffer: headerBuffer };
+  // Keep the old non-EXE methodLimits result shape for existing callers.
+  return { repDictionary, blockSize: block, torBuffer: headerBuffer, ...(exe ? { exe: true } : {}) };
 }
 
 async function toModule(source) {
@@ -250,24 +252,33 @@ class FreeArcCodec {
     };
   }
 
-  // Decodes one `rep+4x4:tor` stream with AES already removed. `read(maxBytes)`
-  // resolves to up to maxBytes (a multiple of 16) or null/empty at end of input;
+  // Decodes one `rep+[exe+]4x4:tor` stream with AES already removed. `read(maxBytes)`
+  // resolves to up to maxBytes or null/empty at end of input;
   // the codec never reads past what it needs. `onWrite(chunk)` receives a view
   // into codec memory that stays valid until its promise settles. Only one
   // stream runs per instance at a time.
-  async decodeStream({ method, read, onWrite, expectedSize, maxOutputBytes = expectedSize, maxDictionaryBytes, maxMemoryBytes, signal }) {
+  async decodeStream({ method, read, onWrite, expectedSize, maxOutputBytes = expectedSize, maxDictionaryBytes, maxMemoryBytes,
+    maxInputBytes, maxIntermediateBytes, signal }) {
     const lim = this.methodLimits(method);
     uint(maxOutputBytes, 'maxOutputBytes');
     if (expectedSize !== undefined) uint(expectedSize, 'expectedSize');
     if (maxDictionaryBytes !== undefined && lim.repDictionary > uint(maxDictionaryBytes, 'maxDictionaryBytes'))
       fail('STREAM_LIMIT', `rep dictionary ${lim.repDictionary} exceeds maxDictionaryBytes ${maxDictionaryBytes}`);
+    if (lim.exe) {
+      uint(maxInputBytes, 'maxInputBytes');
+      uint(maxIntermediateBytes, 'maxIntermediateBytes');
+    }
     const ex = this.#ex, inputCap = ex.fa_stream_input_cap();
-    maxMemoryBytes ??= Number(ex.fa_stream_default_budget(lim.repDictionary, lim.blockSize, lim.torBuffer));
+    maxMemoryBytes ??= Number((lim.exe ? ex.fa_stream_exe_default_budget : ex.fa_stream_default_budget)(lim.repDictionary, lim.blockSize, lim.torBuffer));
     uint(maxMemoryBytes, 'maxMemoryBytes');
     if (this.#streaming) fail('BUSY', 'a stream is already running on this codec instance');
     this.#streaming = true;
-    const s = this.#call(() => ex.fa_stream_new(BigInt(maxOutputBytes), lim.repDictionary, lim.blockSize, lim.torBuffer, BigInt(maxMemoryBytes)));
+    let s = 0, inputBytes = 0;
     try {
+      s = this.#call(() => lim.exe
+        ? ex.fa_stream_new_exe(BigInt(maxOutputBytes), lim.repDictionary, lim.blockSize, lim.torBuffer, BigInt(maxMemoryBytes),
+          BigInt(maxIntermediateBytes), BigInt(maxInputBytes))
+        : ex.fa_stream_new(BigInt(maxOutputBytes), lim.repDictionary, lim.blockSize, lim.torBuffer, BigInt(maxMemoryBytes)));
       if (!s) fail('MEMORY_LIMIT', 'cannot allocate stream');
       for (;;) {
         signal?.throwIfAborted();
@@ -277,8 +288,13 @@ class FreeArcCodec {
           const ptr = ex.fa_stream_output_ptr(s), len = ex.fa_stream_output_len(s);
           await onWrite(this.#bytes().subarray(ptr, ptr + len));
         } else if (r === STEP_NEED_INPUT) {
-          const chunk = (await read(inputCap)) ?? new Uint8Array(0);
-          if (chunk.length > inputCap) fail('READ', `read returned ${chunk.length} > ${inputCap} bytes`);
+          // One sentinel byte can distinguish exact-cap EOF from excess input;
+          // it is refused before copying into WASM. Empty reads always mean EOF.
+          const request = lim.exe ? Math.min(inputCap, maxInputBytes - inputBytes + 1) : inputCap;
+          const chunk = (await read(request)) ?? new Uint8Array(0);
+          if (chunk.length > request) fail('READ', `read returned ${chunk.length} > ${request} bytes`);
+          if (lim.exe && chunk.length > maxInputBytes - inputBytes) fail('STREAM_LIMIT', 'EXE input exceeds maxInputBytes');
+          if (lim.exe) inputBytes += chunk.length;
           this.#call(() => {
             this.#bytes().set(chunk, ex.fa_stream_input_ptr(s));
             const st = ex.fa_stream_input(s, chunk.length);
