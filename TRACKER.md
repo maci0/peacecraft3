@@ -1010,10 +1010,12 @@ Format: `date — subsystem — symptom — root cause — status`
       and uses source-bound camera margins to retain authored camera bounds before
       selecting explicitly bound day/night source models, then reaching
       a source-qualified immutable startup time-of-day snapshot, then requesting
-      an unadmitted night ambient sound through `CreateMIDISound`. The snapshot
-      does not advance time or replace a running game clock. All 269 play tests
+      both source-backed ambient sounds. An explicit bounded start queue retains
+      the authored night sound request before `SetMapMusic` remains unsupported.
+      The snapshot does not advance time or replace a running game clock, and
+      queued audio is not yet consumed by a playback backend. All 273 play tests
       pass with five explicit ignores; strict native/WASM Clippy, WASM generation
-      and actual 32-bit lifecycle/config/player/priority/camera/model/sound checks pass. These are bounded Host/data
+      and actual 32-bit lifecycle/config/player/priority/camera/model/clock/sound checks pass. These are bounded Host/data
       checks, not campaign or native gameplay proof.
       Launcher profile loading/default Host wiring and other player natives
       remain open; see `selected-map-neutral-host.md`, `playercolor-host.md` and

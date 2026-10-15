@@ -14,6 +14,8 @@ pub struct ObjectHost {
     camera: Option<camera::CameraState>,
     day_night: Option<environment::DayNightState>,
     sounds: Option<crate::label_sounds::SoundBank>,
+    sound_start_limit: Option<usize>,
+    sound_starts: Vec<HandleId>,
     startup_clock: Option<clock::StartupClockState>,
 }
 pub type TimerHost = ObjectHost;
@@ -34,6 +36,8 @@ impl ObjectHost {
             camera: None,
             day_night: None,
             sounds: None,
+            sound_start_limit: None,
+            sound_starts: Vec::new(),
             startup_clock: None,
         })
     }

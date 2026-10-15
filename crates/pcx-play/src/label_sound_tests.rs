@@ -420,7 +420,7 @@ fn advisory_dimensions_remain_metadata_while_duplicate_values_refuse() {
         Problem::Ambiguous
     ));
 }
-const COMMON: &str = "type agent extends handle\ntype timer extends agent\ntype sound extends agent\ntype playercolor extends handle\nconstant native ConvertPlayerColor takes integer i returns playercolor\nnative CreateTimer takes nothing returns timer\nnative DestroyTimer takes timer t returns nothing\nnative CreateMIDISound takes string label, integer a, integer b returns sound\nglobals\nconstant playercolor C=ConvertPlayerColor(37)\nendglobals\n";
+const COMMON: &str = "type agent extends handle\ntype timer extends agent\ntype sound extends agent\ntype playercolor extends handle\nconstant native ConvertPlayerColor takes integer i returns playercolor\nnative CreateTimer takes nothing returns timer\nnative DestroyTimer takes timer t returns nothing\nnative CreateMIDISound takes string label, integer a, integer b returns sound\nnative StartSound takes sound soundHandle returns nothing\nglobals\nconstant playercolor C=ConvertPlayerColor(37)\nendglobals\n";
 fn enums(common: &str, map: &str, max_handles: usize) -> EnumHost {
     let common = pcx_script::parse_script(common).unwrap();
     let map = pcx_script::parse_script(map).unwrap();
@@ -542,4 +542,150 @@ fn owned_vm_retains_created_sound_resources_after_entrypoint_failure() {
     let handles = vm.host().inner().handles();
     vm.init_globals().unwrap();
     assert_eq!(vm.host().inner().handles(), handles);
+}
+#[test]
+fn bounded_sound_starts_preserve_order_repeats_and_resource_ownership() {
+    let mut h = host(COMMON, "", 8)
+        .with_label_sounds(bank())
+        .unwrap()
+        .with_sound_starts(3)
+        .unwrap();
+    let a = create(&mut h, "Breeze", 45, -7).unwrap();
+    let b = create(&mut h, "Breeze", 8, 9).unwrap();
+    let (Value::Handle(a), Value::Handle(b)) = (a, b) else {
+        panic!("sound identities")
+    };
+    let handles = h.inner().handles();
+    for id in [b, a, b] {
+        assert_eq!(
+            h.native("StartSound", &[Value::Handle(id)]).unwrap(),
+            Value::Null
+        );
+    }
+    assert_eq!(h.pending_sound_starts(), &[b, a, b]);
+    assert!(
+        h.native("StartSound", &[Value::Handle(a)])
+            .unwrap_err()
+            .contains("pending sound starts")
+    );
+    assert_eq!(h.pending_sound_starts(), &[b, a, b]);
+    assert_eq!(h.inner().handles(), handles);
+    let pending = h.take_sound_starts();
+    assert_eq!(pending, [b, a, b]);
+    assert!(h.pending_sound_starts().is_empty());
+    assert_eq!(
+        h.sound_state(pending[0]).unwrap().resource.pcm().frames(),
+        7
+    );
+    assert_eq!(h.sound_state(a).unwrap().fade_in_rate, 45);
+    assert_eq!(
+        h.native("StartSound", &[Value::Handle(a)]).unwrap(),
+        Value::Null
+    );
+    assert_eq!(h.take_sound_starts(), [a]);
+    assert!(h.take_sound_starts().is_empty());
+}
+#[test]
+fn bad_start_arguments_and_wrong_or_reserved_families_never_enqueue() {
+    let mut e = enums(COMMON, "", 8);
+    let fake = e.reserve_identity("sound").unwrap();
+    let mut h = ObjectHost::checked(e)
+        .unwrap()
+        .with_label_sounds(bank())
+        .unwrap()
+        .with_sound_starts(8)
+        .unwrap();
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    let color = h.native("ConvertPlayerColor", &[Value::Int(37)]).unwrap();
+    for args in [
+        vec![],
+        vec![Value::Null],
+        vec![Value::Int(7)],
+        vec![Value::Handle(fake)],
+        vec![timer],
+        vec![color],
+        vec![Value::Null, Value::Null],
+    ] {
+        let error = h.native("StartSound", &args).unwrap_err();
+        assert!(error.contains("StartSound"));
+        assert!(h.pending_sound_starts().is_empty());
+    }
+}
+#[test]
+fn start_admission_requires_bank_exact_contract_and_valid_platform_budget() {
+    assert!(host(COMMON, "", 8).with_sound_starts(3).is_err());
+    let mut disabled = host(COMMON, "", 8).with_label_sounds(bank()).unwrap();
+    let sound = create(&mut disabled, "Breeze", 1, 2).unwrap();
+    assert!(
+        disabled
+            .native("StartSound", std::slice::from_ref(&sound))
+            .is_err()
+    );
+    assert!(disabled.pending_sound_starts().is_empty());
+    let mut zero = disabled.with_sound_starts(0).unwrap();
+    assert!(zero.native("StartSound", &[sound]).is_err());
+    assert!(zero.pending_sound_starts().is_empty());
+    assert!(zero.with_sound_starts(4).is_err());
+    let platform_overflow = (isize::MAX as usize / std::mem::size_of::<pcx_script::HandleId>()) + 1;
+    assert!(
+        host(COMMON, "", 8)
+            .with_label_sounds(bank())
+            .unwrap()
+            .with_sound_starts(platform_overflow)
+            .is_err()
+    );
+    for bad in [
+        COMMON.replace("native StartSound", "constant native StartSound"),
+        COMMON.replace(
+            "takes sound soundHandle returns nothing",
+            "takes timer soundHandle returns nothing",
+        ),
+        COMMON.replace(
+            "takes sound soundHandle returns nothing",
+            "takes sound soundHandle returns integer",
+        ),
+    ] {
+        assert!(
+            host(&bad, "", 8)
+                .with_label_sounds(bank())
+                .unwrap()
+                .with_sound_starts(2)
+                .is_err()
+        );
+    }
+    assert!(
+        host(
+            COMMON,
+            "function StartSound takes sound s returns nothing\nendfunction\n",
+            8
+        )
+        .with_label_sounds(bank())
+        .unwrap()
+        .with_sound_starts(2)
+        .is_err()
+    );
+}
+#[test]
+fn retained_vm_start_requests_survive_later_failure_without_reinitialization() {
+    let common = format!("{COMMON}native Next takes nothing returns nothing\n");
+    let mut vm=host(&common,"globals\nsound ambient=null\nendglobals\nfunction main takes nothing returns nothing\nset ambient=CreateMIDISound(\"Breeze\",45,91)\ncall StartSound(ambient)\ncall Next()\nendfunction\n",4).with_label_sounds(bank()).unwrap().with_sound_starts(3).unwrap().into_vm();
+    vm.init_globals().unwrap();
+    assert!(
+        vm.call("main", &[])
+            .unwrap_err()
+            .to_string()
+            .contains("Next")
+    );
+    let Value::Handle(id) = vm.global("ambient") else {
+        panic!("retained sound")
+    };
+    assert_eq!(vm.host().pending_sound_starts(), [id]);
+    let handles = vm.host().inner().handles();
+    vm.init_globals().unwrap();
+    assert_eq!(vm.host().inner().handles(), handles);
+    assert_eq!(vm.host().pending_sound_starts(), [id]);
+    assert_eq!(
+        vm.host().sound_state(id).unwrap().resource.pcm().frames(),
+        7
+    );
 }

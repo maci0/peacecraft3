@@ -31,6 +31,38 @@ impl ObjectHost {
     pub fn sound_bank(&self) -> Option<&SoundBank> {
         self.sounds.as_ref()
     }
+    /// Queues sound starts for an explicit audio consumer. Admission does not
+    /// install a playback device or infer channel, fade, looping or restart rules.
+    pub fn with_sound_starts(mut self, max_pending: usize) -> Result<Self, Error> {
+        let name = "StartSound";
+        if self.sounds.is_none() || self.sound_start_limit.is_some() {
+            return Err(self.inner.error(
+                name,
+                Failure::SoundState("sound bank required; start queue must not be admitted twice"),
+            ));
+        }
+        Self::contract(
+            &self.inner,
+            name,
+            &["sound"],
+            "nothing",
+            false,
+            Some("sound"),
+        )?;
+        std::alloc::Layout::array::<HandleId>(max_pending)
+            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+        self.sound_start_limit = Some(max_pending);
+        Ok(self)
+    }
+    /// Every successful request remains in execution order, including repeats.
+    pub fn pending_sound_starts(&self) -> &[HandleId] {
+        &self.sound_starts
+    }
+    /// Transfers pending work to the consumer; sound identities/resources remain
+    /// owned by this Host. The consumer owns retry/failure handling after transfer.
+    pub fn take_sound_starts(&mut self) -> Vec<HandleId> {
+        std::mem::take(&mut self.sound_starts)
+    }
     pub fn sound_state(&self, identity: HandleId) -> Result<SoundState<'_>, Error> {
         let fail = |reason| self.inner.error("CreateMIDISound", reason);
         let bank = self
@@ -60,6 +92,28 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
+        if name == "StartSound" {
+            let limit = self.sound_start_limit?;
+            return Some((|| {
+                let [Value::Handle(id)] = args else {
+                    return Err(self
+                        .inner
+                        .error(name, Failure::SoundState("expected sound identity")));
+                };
+                self.sound_state(*id)
+                    .map_err(|e| self.inner.error(name, e.failure))?;
+                if self.sound_starts.len() >= limit {
+                    return Err(self
+                        .inner
+                        .error(name, Failure::Budget("pending sound starts")));
+                }
+                self.sound_starts
+                    .try_reserve(1)
+                    .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+                self.sound_starts.push(*id);
+                Ok(Value::Null)
+            })());
+        }
         let bank = self.sounds.as_ref()?;
         if name != "CreateMIDISound" {
             return None;

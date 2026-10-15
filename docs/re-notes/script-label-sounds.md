@@ -45,6 +45,25 @@ objects do not acquire resource state. `sound_state(id)` retains the resource
 and the exact raw fade-rate arguments. Fade units/effective clamps, lifetime,
 playback, looping, channel arbitration and renderer/backend output remain open.
 
+## Bounded start requests
+
+`with_sound_starts(max_pending)` separately admits the exact nonconstant
+`StartSound(sound)->nothing` declaration and an explicit pending-request limit.
+It requires an admitted bank and checks platform layout before use. Starts accept
+only actual resource-backed sound objects from this arena. Nulls, other families,
+generic reserved sound identities and queue-capacity failures do not enqueue.
+Every successful call is retained in script order, including repeated starts of
+the same identity. No extra sound identities or resource buffers are created.
+
+`pending_sound_starts()` exposes the ordered requests; `take_sound_starts()`
+transfers them to an explicit consumer while the Host retains identities and
+resources. The consumer owns delivery/retry after transfer. This is an internal
+recreation command boundary, not native scheduling evidence. It does not mark a
+sound as playing or install an audio device. A game audio consumer must still
+interpret the admitted source settings and implement playback. Stop/kill,
+completion callbacks, fade units, channel arbitration and restart behavior remain
+unsupported. The default Host still refuses StartSound until explicitly admitted.
+
 ## Qualified local source result
 
 The retained Human01 execution calls `CreateMIDISound` from `SetAmbientDaySound`
@@ -77,7 +96,9 @@ table initialization and filename helper were not inspected. The alternate
 registration, active family, exception handlers and runtime sound output remain
 unproved. No game, Wine, provider or REA session was run.
 
-## Verification and next boundary
+## Verification and startup boundaries
+
+### Creation baseline
 
 Ten synthetic tests cover PCM dimensions/order/padding, malformed and overflowing
 RIFF spans, profile/rate/alignment errors, exact input limits, preflight ordering,
@@ -100,3 +121,36 @@ Actual commands, immutable failed attempts, source bindings and captured results
 are local in `.scratch/midi-sound-root/`. Original PCM, table and PE payloads
 are never written or published by the gate. Source-profile selection, clock
 initialization, fades, audio playback and audible/native parity remain separate.
+
+
+### Start-request verification
+
+Four additional tests cover ordered/repeated requests, queue exhaustion without
+mutation, explicit transfer and reuse, preserved PCM/identity ownership, wrong and
+reserved families, malformed arguments, admission/signature/override failures,
+32-bit platform limits and retained VM requests after a later unsupported call.
+All fourteen sound tests execute as actual 32-bit WASM: mask 16383, zero imports.
+The complete play suite now passes 273 tests with five explicit original-input
+ignores. Strict native/WASM all-target/all-feature Clippy, library builds,
+rustdoc and formatting pass.
+
+A fresh same-Program Human01 gate explicitly supplies *both* ambient labels from
+the selected table. The night PCM resource is 22,946,888 bytes, SHA-256
+`5a12f28a9a208cded1fb1b91157f8c61bc89b4bcbdc5bce6ed9f8d27b2132765`.
+Its member path and format/frame count are derived from the table and decoded
+resource, with the same explicit bounded Huffman source as the day resource.
+No decoded payload is saved. Using the opt-in startup snapshot described in
+`script-startup-clock.md`, the authored script reads time twice, creates both
+sounds and issues one start request for the actual night sound identity. Every
+resource, fade argument and queued identity matches the captured source calls.
+
+Globals and `config` still complete; the run now reaches `SetMapMusic` in map
+script span `384467..384503`, after 554 cumulative native calls and 446 arena
+identities. The common declaration is at `157693..157798`. A baseline run with
+both PCM bindings but without start-request admission independently stopped at
+`StartSound`, Blizzard.j span `115532..115569`.
+
+Commands, immutable failed strict-lint attempts and actual corrected native/WASM
+results are local in `.scratch/sound-start-root/`. Neither an audio device nor a
+browser was used. Audible/native parity, running-clock behavior, renderer/backend
+consumption, default launcher admission and campaign completion remain open.
