@@ -90,6 +90,12 @@ same diagnostic without more calls or identities. Actual commands, artifact/inpu
 hashes and logs are in `.scratch/enum-host-root-integration/`; no original input
 or profile contents are committed. Counts are diagnostic observations only.
 
+The later same-context gate also admits the independently approved victim
+getter, advancing to `GetBJPlayerNeutralExtra` at Blizzard line 45 with the same
+symbolic identities and sticky-failure guarantees. The symbolic Host is unchanged;
+that additive scalar slice and its receipts are described in
+[the selected-map note](selected-map-neutral-host.md#selected-victim-getter).
+
 The gate uses an identified compatibility object catalog with unresolved records.
 It does not establish complete target-catalog admission, campaign execution,
 rendered interpretation or native exceptional behavior. Original inputs and

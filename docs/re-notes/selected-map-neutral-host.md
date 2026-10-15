@@ -154,3 +154,31 @@ The affected crate passes 179 native tests, five explicit original-input ignores
 strict native/WASM Clippy and WASM library code generation. Independent approval
 metadata is local in `.scratch/bj-max-players-root-approval/`; actual production
 gate commands, input hashes and logs are in `.scratch/enum-host-root-integration/`.
+
+## Selected victim getter
+
+`VerifiedNeutralRule::import_bj_neutral_victim_first_family` admits the exact
+`GetBJPlayerNeutralVictim` binding through the same checked profile/header path.
+Its own complete getter supplies both unsigned-comparison branch results; the
+implementation does not compute them from another player's result or embed an
+observed player number. The four named importers reject each other's bindings.
+
+The independently reviewed Legacy body is 39 bytes at
+`0x491190..0x4911b7` (half-open), SHA-256
+`22041f8f3b14a1d38c8549768a3ee5ae8468a12c6b26d4d4c95aae2f6bdda27a`.
+Its context/delegate prefix matches the qualified player-limit getter. Both named
+registrations are recorded; only the explicitly selected first getter was read.
+The alternative getter, active native-family choice and context/cache lifetime
+remain unproved. Independent objdump boundaries agree with the bounded Capstone
+read. The unchanged successful-header relation remains the recreation policy.
+
+Synthetic independent operands cover unsigned boundaries, same-context signature
+refusal, four-rule composition and sticky next-native diagnostics. The affected
+crate passes 182 native tests with five explicit original-input ignores, strict
+native/WASM all-target/all-feature Clippy and WASM library code generation.
+The actual same-Human01 gate retains the same Program, localization and 432
+symbolic identities, handles all four scalar rules, then refuses
+`GetBJPlayerNeutralExtra` at Blizzard line 45. Its 440 observed native calls are a
+receipt, not a production count. Independent local approval and actual commands,
+logs, artifact/input hashes are in `.scratch/neutral-victim-root/`. No original
+profile or payload is committed, and the default launcher Host is unchanged.

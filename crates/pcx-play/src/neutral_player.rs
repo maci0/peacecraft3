@@ -10,6 +10,7 @@ use std::sync::Arc;
 pub const NATIVE_NAME: &str = "GetPlayerNeutralPassive";
 pub const AGGRESSIVE_NATIVE_NAME: &str = "GetPlayerNeutralAggressive";
 pub const BJ_MAX_PLAYERS_NATIVE_NAME: &str = "GetBJMaxPlayers";
+pub const BJ_NEUTRAL_VICTIM_NATIVE_NAME: &str = "GetBJPlayerNeutralVictim";
 pub type Sha256Digest = [u8; 32];
 pub(crate) fn sha256(bytes: &[u8]) -> Sha256Digest {
     Sha256::digest(bytes).into()
@@ -121,6 +122,21 @@ impl VerifiedNeutralRule {
             &approval.0,
             budget,
             BJ_MAX_PLAYERS_NATIVE_NAME,
+        )
+    }
+    /// Opt-in to the victim getter's own approved profile and selected-header policy.
+    pub fn import_bj_neutral_victim_first_family(
+        image: &[u8],
+        profile: &[u8],
+        approval: &LocalProfileApproval,
+        budget: RuleInputBudget,
+    ) -> Result<Self, NeutralError> {
+        super::neutral_rule_input::import(
+            image,
+            profile,
+            &approval.0,
+            budget,
+            BJ_NEUTRAL_VICTIM_NATIVE_NAME,
         )
     }
     pub fn origin(&self) -> &AssetIdentity {

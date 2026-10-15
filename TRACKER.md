@@ -997,11 +997,11 @@ Format: `date — subsystem — symptom — root cause — status`
       `GetPlayerNeutralPassive` during `common.j` initialization; original
       campaign completion and native behavior are not established.
       Opt-in selected-map adapters derive passive/aggressive and first-family
-      `GetBJMaxPlayers` rules from independently approved local executable
+      `GetBJMaxPlayers`/`GetBJPlayerNeutralVictim` rules from independently approved local executable
       profiles and the admitted W3I. The same Human01 Program/localization gate
       composes 43 source-selected symbolic contracts, retains 432 typed
-      identities, and now reaches `GetBJPlayerNeutralVictim` at Blizzard line 44.
-      All 179 play tests pass with five explicit ignores; native/WASM strict
+      identities, and now reaches `GetBJPlayerNeutralExtra` at Blizzard line 45.
+      All 182 play tests pass with five explicit ignores; native/WASM strict
       Clippy and WASM library code generation pass. These are bounded Host/data
       checks, not campaign or native gameplay proof.
       Launcher profile loading/default Host wiring and other player natives
