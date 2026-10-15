@@ -1005,6 +1005,13 @@ Format: `date — subsystem — symptom — root cause — status`
 
 ### Current implemented slices (2026-10-14)
 
+- CLI Spec guidance is recorded in `AGENTS.md`. A source-only inventory covers
+  all 14 workspace binaries. Unknown application commands now return usage on
+  stderr and exit 2 instead of launching the GUI; no-argument GUI and existing
+  launch/view routes remain. Sixteen genuine subprocess cases, affected tests
+  and strict native/WASM checks pass. Structured output/offline schemas across
+  the CLI set remain open; the v0.3 candidate pin is unverified, so no full
+  conformance is claimed.
 - Menu fog is read from the required local `UI\MiscData.txt` edition column and
   attached to the original background camera. Material Unfogged flags remain
   independent of Unshaded. Missing/malformed fog rejects the import candidate

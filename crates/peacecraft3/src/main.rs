@@ -52,10 +52,17 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        _ => {
+        None => {
             launch_gui::app(launch_gui::window_plugin(None), |_| {})
                 .add_plugins(pcx_gfx::performance::PerformanceOverlayPlugin)
                 .run();
+        }
+        Some(other) => {
+            eprintln!("unknown command {other:?}");
+            eprintln!(
+                "usage: peacecraft3 [launch <sources|plan|stage> ... | view [INSTALL] MODEL [--tile FOURCC]]"
+            );
+            std::process::exit(2);
         }
     }
 }
