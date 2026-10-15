@@ -1,15 +1,8 @@
-//! A minimal model viewer: the M2 gate.
+//! A partial model viewer with an optional explicitly selected texture preview.
 //!
-//! The gate is "a Footman renders with correct skinning, animation and a
-//! sprite-lit terrain tile". This module is the first half of it — the geometry
-//! and texture path — and it exists to be *looked at*, which is why it is a
-//! window and not a test.
-//!
-//! What is verified rather than seen: every mesh that reaches the GPU carries
-//! exactly the vertex, normal, UV and index counts the decoder produced, and the
-//! texture bound to each one is the one its material names. That is in
-//! `spawn_model`'s assertions, because a render that merely *runs* can still be
-//! showing the wrong thing.
+//! This displays decoder geometry and materials; it does not prove native
+//! rendering fidelity. The optional terrain texture is a whole-texture preview
+//! beneath the model, using that model's bounds rather than W3E terrain geometry.
 
 use std::path::{Path, PathBuf};
 
@@ -19,7 +12,13 @@ use bevy::app::AnimationSystems;
 use bevy::curve::{Curve, Interval};
 use bevy::prelude::*;
 
-use crate::{LoadedTexture, load_image, pose_from_poses, skin_mesh, to_bevy};
+use crate::{LoadedTexture, pose_from_poses, skin_mesh, to_bevy};
+
+#[path = "viewer_terrain.rs"]
+mod terrain;
+pub use terrain::{
+    TerrainTileError, TerrainTileErrorKind, terrain_tile_path, terrain_tile_path_from_slk,
+};
 
 /// Where to find the archives.
 pub fn resolve_install(explicit: Option<&str>) -> PathBuf {
@@ -259,6 +258,19 @@ pub fn sampler_for_texture_flags(flags: u32) -> bevy::image::ImageSampler {
 /// `model` is an internal MPQ path such as
 /// `Units\Human\Footman\Footman.mdx`.
 pub fn run(install: &Path, model: &str) -> Result<(), crate::Error> {
+    run_with_terrain(install, model, None)
+}
+
+/// Opens a viewer with an optional, explicitly selected terrain texture.
+/// Requested terrain is validated before opening a window; no tile is inferred.
+pub fn run_with_terrain(
+    install: &Path,
+    model: &str,
+    tile_id: Option<[u8; 4]>,
+) -> Result<(), crate::Error> {
+    let terrain = tile_id
+        .map(|id| terrain::load_terrain_tile(install, id))
+        .transpose()?;
     let install = install.to_path_buf();
     let model = model.to_string();
 
@@ -266,6 +278,15 @@ pub fn run(install: &Path, model: &str) -> Result<(), crate::Error> {
         .map_err(|e| crate::Error::Decode(format!("{}: {e}", install.display())))?
         .extract(&model)
         .map_err(|e| crate::Error::Decode(format!("{model}: {e}")))?;
+
+    let terrain = terrain
+        .map(|texture| {
+            let metadata = crate::load_model(&bytes, &model)?;
+            let mesh =
+                terrain_plane_mesh(metadata.minimum_extent, metadata.maximum_extent, &model)?;
+            Ok::<_, crate::Error>((texture, mesh))
+        })
+        .transpose()?;
 
     // Textures are resolved up front so a failure is a message rather than a
     // silently untextured model.
@@ -298,7 +319,7 @@ pub fn run(install: &Path, model: &str) -> Result<(), crate::Error> {
         }))
         .add_plugins(crate::performance::PerformanceOverlayPlugin)
         .insert_resource(Viewer {
-            install,
+            terrain,
             model,
             bytes,
             textures: textures.unwrap_or_default(),
@@ -314,17 +335,12 @@ pub fn run(install: &Path, model: &str) -> Result<(), crate::Error> {
 
 #[derive(Resource)]
 struct Viewer {
-    install: PathBuf,
+    terrain: Option<(LoadedTexture, Mesh)>,
     model: String,
     bytes: Vec<u8>,
     textures: Vec<LoadedTexture>,
     spawned: bool,
 }
-
-/// The terrain tile drawn under a model, and where the viewer looks for it.
-///
-/// The shipped table that maps a ground slot fourcc to its texture path.
-const TERRAIN_SLK: &str = "TerrainArt\\Terrain.slk";
 
 fn spawn_once(
     mut commands: Commands,
@@ -467,125 +483,59 @@ fn spawn_once(
         Err(e) => error!("cannot show {}: {e}", viewer.model),
     }
 
-    // A ground plane textured with a real tile, so the model is seen on terrain
-    // rather than floating in a void. This is the "terrain tile" half of the M2
-    // gate: it proves the texture path works on a tile, not just on a model.
-    spawn_terrain(
-        &mut commands,
-        &mut images,
-        &mut meshes,
-        &mut materials,
-        &viewer.install,
-    );
+    if let Some((texture, mesh)) = viewer.terrain.take() {
+        spawn_terrain(
+            &mut commands,
+            &mut images,
+            &mut meshes,
+            &mut materials,
+            texture,
+            mesh,
+        );
+    }
 }
 
-/// Spawns a ground plane textured with an asset-derived terrain tile.
+/// Draws a preview quad using decoded texels and the model's authored bounds.
 fn spawn_terrain(
     commands: &mut Commands,
     images: &mut Assets<Image>,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
-    install: &Path,
+    texture: LoadedTexture,
+    mesh: Mesh,
 ) {
-    let (texture, tile_path) = match pcx_mpq::MpqSet::open_wc3(install).ok() {
-        Some(mut set) => {
-            let path = set
-                .extract(TERRAIN_SLK)
-                .ok()
-                .and_then(|b| terrain_tile_path_from_slk(&b).ok());
-            let texture = path
-                .as_ref()
-                .and_then(|p| set.extract(p).ok().and_then(|b| load_image(&b, p).ok()));
-            (texture, path)
-        }
-        None => (None, None),
-    };
-
-    let material = match texture {
-        Some(tex) => {
-            let handle = images.add(rgba_image(&tex));
-            materials.add(StandardMaterial {
-                base_color_texture: Some(handle),
-                // A tile is viewed edge-on; unshaded and unfogged keeps it from
-                // disappearing under the model's own lighting.
-                unlit: true,
-                perceptual_roughness: 1.0,
-                ..default()
-            })
-        }
-        None => {
-            // A missing tile must not take the scene down with it.
-            if let Some(path) = tile_path {
-                error!("cannot stage terrain tile {path}");
-            } else {
-                error!("cannot resolve terrain tile from {TERRAIN_SLK}");
-            }
-            materials.add(StandardMaterial {
-                base_color: Color::srgb(0.25, 0.30, 0.22),
-                unlit: true,
-                perceptual_roughness: 1.0,
-                ..default()
-            })
-        }
-    };
-
+    let handle = images.add(rgba_image(&texture));
+    let material = materials.add(StandardMaterial {
+        base_color_texture: Some(handle),
+        unlit: true,
+        ..default()
+    });
     commands.spawn((
         MeshMaterial3d(material),
-        Mesh3d(meshes.add(terrain_plane_mesh())),
-        Transform::from_xyz(0.0, 0.0, 0.0),
+        Mesh3d(meshes.add(mesh)),
+        Transform::default(),
     ));
 }
 
-/// Asset-derived terrain tile path from `TerrainArt\\Terrain.slk`.
-pub fn terrain_tile_path_from_slk(bytes: &[u8]) -> Result<String, crate::Error> {
-    let table = pcx_slq::Table::parse(bytes)
-        .map_err(|e| crate::Error::Decode(format!("{TERRAIN_SLK}: {e}")))?;
-    if table.column_of("tileID").is_none()
-        || table.column_of("dir").is_none()
-        || table.column_of("file").is_none()
-    {
-        return Err(crate::Error::Decode(format!(
-            "{TERRAIN_SLK}: missing column"
-        )));
-    }
-    let mut entries: Vec<([u8; 4], String)> = Vec::new();
-    for row in table.data_rows() {
-        let tile_id = row.by_name("tileID").unwrap_or("");
-        if tile_id.len() != 4 {
-            continue;
+/// A texture preview footprint derived from authored model bounds.
+/// This does not translate W3E height indices into world units.
+pub fn terrain_plane_mesh(
+    minimum: [f32; 3],
+    maximum: [f32; 3],
+    source: &str,
+) -> Result<Mesh, crate::Error> {
+    for axis in 0..3 {
+        let lo = minimum[axis];
+        let hi = maximum[axis];
+        if !lo.is_finite() || !hi.is_finite() || lo > hi || (axis < 2 && lo == hi) {
+            return Err(crate::Error::TerrainBounds {
+                source_name: source.to_owned(),
+                axis,
+                minimum: lo,
+                maximum: hi,
+            });
         }
-        let dir = row.by_name("dir").unwrap_or("");
-        let file = row.by_name("file").unwrap_or("");
-        if file.is_empty() {
-            continue;
-        }
-        let four = [
-            tile_id.as_bytes()[0],
-            tile_id.as_bytes()[1],
-            tile_id.as_bytes()[2],
-            tile_id.as_bytes()[3],
-        ];
-        entries.push((four, format!("{dir}\\{file}.blp")));
     }
-    if entries.is_empty() {
-        return Err(crate::Error::Decode(format!("{TERRAIN_SLK}: no tile rows")));
-    }
-    entries.sort_by_key(|(four, _)| *four);
-    Ok(entries[0].1.clone())
-}
-
-/// Asset-derived terrain tile path using the supplied install.
-pub fn terrain_tile_path(install: &Path) -> Result<String, crate::Error> {
-    let mut set = pcx_mpq::MpqSet::open_wc3(install)
-        .map_err(|e| crate::Error::Decode(format!("{}: {e}", install.display())))?;
-    let bytes = set
-        .extract(TERRAIN_SLK)
-        .map_err(|e| crate::Error::Decode(format!("{TERRAIN_SLK}: {e}")))?;
-    terrain_tile_path_from_slk(&bytes)
-}
-
-/// A single quad, tiled a few times so the texture reads as terrain.
-pub fn terrain_plane_mesh() -> Mesh {
     use bevy::mesh::{Indices, PrimitiveTopology};
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -594,10 +544,10 @@ pub fn terrain_plane_mesh() -> Mesh {
     mesh.insert_attribute(
         Mesh::ATTRIBUTE_POSITION,
         vec![
-            [-400.0, 400.0, 0.0],
-            [400.0, 400.0, 0.0],
-            [400.0, -400.0, 0.0],
-            [-400.0, -400.0, 0.0],
+            [minimum[0], maximum[1], minimum[2]],
+            [maximum[0], maximum[1], minimum[2]],
+            [maximum[0], minimum[1], minimum[2]],
+            [minimum[0], minimum[1], minimum[2]],
         ],
     );
     mesh.insert_attribute(
@@ -605,15 +555,15 @@ pub fn terrain_plane_mesh() -> Mesh {
         vec![[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 4]);
-    mesh.insert_indices(Indices::U16(vec![0, 1, 2, 0, 2, 3]));
-    mesh
+    mesh.insert_indices(Indices::U16(vec![0, 2, 1, 0, 3, 2]));
+    Ok(mesh)
 }
 
 /// One playback step, in milliseconds.
 ///
-/// Playback advances by this fixed step once per frame rather than by wall
-/// clock, so the pose shown on frame N of a run does not depend on how long
-/// the frames took. It is the model's own animation rate: 30 ticks a second.
+/// Deterministic viewer stepping policy: one increment per update, independent
+/// of elapsed wall time. This is not an authored model rate or proof of the
+/// original engine's animation clock. Sequence intervals still come from assets.
 const TICK_MS: f32 = 1_000.0 / 30.0;
 
 /// Which clip is playing, and the Bevy node each sequence became.

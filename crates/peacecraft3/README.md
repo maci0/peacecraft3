@@ -10,7 +10,7 @@ cargo run -p peacecraft3                        # launcher window
 cargo run -p peacecraft3 launch sources <path>  # classify a source
 cargo run -p peacecraft3 launch plan 1.29b-tft-hd-vanilla
 cargo run -p peacecraft3 launch stage 1.29b-tft-vanilla-vanilla <src> <dst>
-cargo run -p peacecraft3 view <install> [model] # M2 model viewer gate
+cargo run -p peacecraft3 -- view [install] <model> [--tile FOURCC] # explicit model/texture preview
 ```
 
 ## Building for the browser

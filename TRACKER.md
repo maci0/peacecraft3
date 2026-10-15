@@ -280,8 +280,11 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
        float meanings — not framing.
 - [x] `pcx-gfx`: Bevy loaders — `load_image`/`load_model`, magic-based format detect
 - [x] `pcx-gfx`: `to_bevy` — Footman becomes 5 Bevy meshes; skin tables intact
-- [x] `pcx-gfx` viewer: `peacecraft3 view` spawns the Footman (5 geosets, camera
-       and light framed from the model's own extents)
+- [x] `pcx-gfx` viewer: `peacecraft3 view [install] <model>` displays the explicitly
+       selected model, with camera/light framed from its extents. Optional
+       `--tile FOURCC` selects one exact table row; errors stop rather than choose
+       another row or draw a fallback color. This is a model-bound texture preview,
+       not a W3E terrain renderer; see `docs/re-notes/viewer-terrain-selection.md`.
 - [x] **The render is verified by a pixel test, not by a human.** `pcx-gfx`
        `capture` example renders the Footman offscreen (no window, render target
        image, posed at 7,000 ms) and `analyze` asserts on the readback:

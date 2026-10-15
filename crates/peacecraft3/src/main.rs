@@ -25,29 +25,26 @@ mod menu_panel;
 mod menu_skin;
 mod menu_sprites;
 mod menu_text;
+mod viewer_args;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         // A CLI path for staging and CI; with no arguments the window opens.
         Some("launch") => std::process::exit(launch::main_with(&args[1..])),
-        // The M2 gate, as a window rather than a test: it is meant to be looked at.
+        // Explicit model preview with an optional caller-selected terrain tile.
         Some("view") => {
-            let rest: Vec<String> = args[1..].to_vec();
-            let install = pcx_gfx::viewer::resolve_install(
-                rest.first()
-                    .filter(|s| !s.contains('\\') && !s.ends_with(".mdx"))
-                    .map(String::as_str),
-            );
-            let model = rest
-                .iter()
-                .find(|s| {
-                    s.to_ascii_lowercase().ends_with(".mdx")
-                        || s.to_ascii_lowercase().ends_with(".mdl")
-                })
-                .cloned()
-                .unwrap_or_else(|| "Units\\Human\\Footman\\Footman.mdx".to_string());
-            if let Err(e) = pcx_gfx::viewer::run(&install, &model) {
+            let request = match viewer_args::ViewerArgs::parse(&args[1..]) {
+                Ok(request) => request,
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
+            };
+            let install = pcx_gfx::viewer::resolve_install(request.install.as_deref());
+            if let Err(e) =
+                pcx_gfx::viewer::run_with_terrain(&install, &request.model, request.tile)
+            {
                 eprintln!("{e}");
                 std::process::exit(1);
             }

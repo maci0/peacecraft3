@@ -425,6 +425,15 @@ pub const MAX_INFLUENCES: usize = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("{source_name}: invalid terrain preview bounds on axis {axis}: {minimum}..{maximum}")]
+    TerrainBounds {
+        source_name: String,
+        axis: usize,
+        minimum: f32,
+        maximum: f32,
+    },
+    #[error(transparent)]
+    Terrain(#[from] viewer::TerrainTileError),
     #[error(transparent)]
     Dds(#[from] dds::Error),
     #[error("io: {0}")]
