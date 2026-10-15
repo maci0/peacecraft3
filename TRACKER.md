@@ -94,6 +94,12 @@ issues*.
       six-capture browser run. Unavailable Huffman audio and full menu/sky
       fidelity remain open. See
       `docs/re-notes/menu-panel-navigation.md`.
+- [x] Background camera omits the extra Bevy filmic/deband transform. Synthetic
+      non-HDR draws pass 416 source-color checks on each of software and Radeon
+      Vulkan; old-policy controls detect changed RGB. Native/WASM checks and six
+      reviewed local original-fixture browser captures pass. The fog veil remains
+      visible and native gamma/framebuffer parity is open. See
+      `docs/re-notes/menu-display-transfer.md`.
 
 ## M0 — RE harness and evidence base
 

@@ -79,6 +79,7 @@ use crate::menu_material::MenuMaterial;
 
 use bevy::{
     camera::{CameraProjection, SubCameraView},
+    core_pipeline::tonemapping::{DebandDither, Tonemapping},
     math::Vec3A,
     prelude::*,
 };
@@ -871,6 +872,9 @@ pub fn spawn(
     let camera = commands
         .spawn((
             Camera3d::default(),
+            // Preserve source-art colors instead of adding Bevy's filmic transform.
+            Tonemapping::None,
+            DebandDither::Disabled,
             Projection::custom(projection),
             camera_pose,
             fog.distance_fog(),
@@ -1989,6 +1993,14 @@ mod tests {
                 .query_filtered::<Entity, With<MainMenuSceneCamera>>()
                 .single(&world)
                 .unwrap();
+            assert_eq!(
+                world.get::<Tonemapping>(scene_camera),
+                Some(&Tonemapping::None)
+            );
+            assert_eq!(
+                world.get::<DebandDither>(scene_camera),
+                Some(&DebandDither::Disabled)
+            );
             let particle_bindings: Vec<_> = world
                 .query::<(Entity, &Mesh3d, &MeshMaterial3d<ParticleMaterial>)>()
                 .iter(&world)
@@ -4093,7 +4105,10 @@ mod texture_selection_tests {
 #[cfg(test)]
 mod fog_camera_tests {
     use super::*;
-    use bevy::pbr::{DistanceFog, FogFalloff};
+    use bevy::{
+        core_pipeline::tonemapping::{DebandDither, Tonemapping},
+        pbr::{DistanceFog, FogFalloff},
+    };
 
     pub(super) fn empty_scene_with_camera() -> Vec<u8> {
         let mut bytes = b"MDLX".to_vec();
@@ -4129,6 +4144,8 @@ mod fog_camera_tests {
         let fog = crate::menu_fog::MenuFog::checked(&table, 1).unwrap();
         let mut world = World::new();
         let ui = world.spawn(Camera2d).id();
+        let ui_tonemapping = world.get::<Tonemapping>(ui).copied();
+        let ui_deband = world.get::<DebandDither>(ui).copied();
         let mut meshes = Assets::default();
         let mut materials = Assets::default();
         let mut images = Assets::default();
@@ -4158,5 +4175,18 @@ mod fog_camera_tests {
         ));
         assert_eq!(fog.color, Color::srgba_u8(43, 71, 89, 109));
         assert!(world.get::<DistanceFog>(ui).is_none());
+        let mut output = world.query_filtered::<Entity, With<MainMenuSceneCamera>>();
+        let camera = output.single(&world).unwrap();
+        assert_eq!(
+            world.get::<Tonemapping>(camera),
+            Some(&Tonemapping::None),
+            "source menu colors must not acquire a filmic display transform"
+        );
+        assert_eq!(
+            world.get::<DebandDither>(camera),
+            Some(&DebandDither::Disabled)
+        );
+        assert_eq!(world.get::<Tonemapping>(ui).copied(), ui_tonemapping);
+        assert_eq!(world.get::<DebandDither>(ui).copied(), ui_deband);
     }
 }
