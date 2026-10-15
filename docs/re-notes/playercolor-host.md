@@ -100,3 +100,13 @@ The gate uses an identified compatibility object catalog with unresolved records
 It does not establish complete target-catalog admission, campaign execution,
 rendered interpretation or native exceptional behavior. Original inputs and
 executable-rule profiles remain local and unpublished.
+
+
+The subsequent same-context gate adds independently approved Extra and slot
+rules and passes the scalar player-limit declarations. It now refuses
+`CreateTimer` at Blizzard line 454 with 442 observed native calls and the same
+432 symbolic identities. Retry remains sticky without new calls or allocation.
+This is initialization evidence only; timers, script entrypoints and launcher
+Host wiring remain open. See the
+[selected-map note](selected-map-neutral-host.md#selected-extra-and-player-slot-getters)
+for qualified sources and actual gate receipts.

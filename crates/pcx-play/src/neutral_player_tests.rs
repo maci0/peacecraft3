@@ -640,12 +640,16 @@ fn named_rule_imports_refuse_a_different_native_binding() {
         AGGRESSIVE_NATIVE_NAME,
         BJ_MAX_PLAYERS_NATIVE_NAME,
         BJ_NEUTRAL_VICTIM_NATIVE_NAME,
+        BJ_NEUTRAL_EXTRA_NATIVE_NAME,
+        BJ_MAX_PLAYER_SLOTS_NATIVE_NAME,
     ];
     let importers = [
         VerifiedNeutralRule::import,
         VerifiedNeutralRule::import_aggressive,
         VerifiedNeutralRule::import_bj_max_players_first_family,
         VerifiedNeutralRule::import_bj_neutral_victim_first_family,
+        VerifiedNeutralRule::import_bj_neutral_extra_first_family,
+        VerifiedNeutralRule::import_bj_max_player_slots_first_family,
     ];
     for (source, name) in names.iter().enumerate() {
         let i = input_named(257, name);
@@ -670,18 +674,23 @@ fn named_rule_imports_refuse_a_different_native_binding() {
 #[test]
 fn composed_named_hosts_use_separate_input_rules_before_global_initialization() {
     let common = format!(
-        "{COMMON}native {AGGRESSIVE_NATIVE_NAME} takes nothing returns integer\nnative {BJ_MAX_PLAYERS_NATIVE_NAME} takes nothing returns integer\nnative {BJ_NEUTRAL_VICTIM_NATIVE_NAME} takes nothing returns integer\n"
+        "{COMMON}native {AGGRESSIVE_NATIVE_NAME} takes nothing returns integer\nnative {BJ_MAX_PLAYERS_NATIVE_NAME} takes nothing returns integer\nnative {BJ_NEUTRAL_VICTIM_NATIVE_NAME} takes nothing returns integer\nnative {BJ_NEUTRAL_EXTRA_NATIVE_NAME} takes nothing returns integer\nnative {BJ_MAX_PLAYER_SLOTS_NATIVE_NAME} takes nothing returns integer\n"
     );
     let map = format!(
-        "globals\ninteger passive = {NATIVE_NAME}()\ninteger aggressive = {AGGRESSIVE_NATIVE_NAME}()\ninteger limit = {BJ_MAX_PLAYERS_NATIVE_NAME}()\ninteger victim = {BJ_NEUTRAL_VICTIM_NATIVE_NAME}()\nendglobals\n"
+        "globals\ninteger passive = {NATIVE_NAME}()\ninteger aggressive = {AGGRESSIVE_NATIVE_NAME}()\ninteger limit = {BJ_MAX_PLAYERS_NATIVE_NAME}()\ninteger victim = {BJ_NEUTRAL_VICTIM_NATIVE_NAME}()\ninteger extra = {BJ_NEUTRAL_EXTRA_NATIVE_NAME}()\ninteger slots = {BJ_MAX_PLAYER_SLOTS_NATIVE_NAME}()\nendglobals\n"
     );
     let ctx = context(300, &common, &map, "selected-both");
-    let victim = SelectedMapNeutralHost::try_new(
+    let slots = SelectedMapNeutralHost::try_new(
         Arc::clone(&ctx),
-        victim_rule(65539, -53, 83),
+        slots_rule(299, -31, 19),
         Delegate::default(),
     )
     .unwrap();
+    let extra =
+        SelectedMapNeutralHost::try_new(Arc::clone(&ctx), extra_rule(301, 11, -47), slots).unwrap();
+    let victim =
+        SelectedMapNeutralHost::try_new(Arc::clone(&ctx), victim_rule(65539, -53, 83), extra)
+            .unwrap();
     let aggressive =
         SelectedMapNeutralHost::try_new(Arc::clone(&ctx), aggressive_rules(1027), victim).unwrap();
     let limit = SelectedMapNeutralHost::try_new(
@@ -708,6 +717,8 @@ fn composed_named_hosts_use_separate_input_rules_before_global_initialization() 
     assert_eq!(vm.global("aggressive"), Value::Int(41));
     assert_eq!(vm.global("limit"), Value::Int(-38));
     assert_eq!(vm.global("victim"), Value::Int(30));
+    assert_eq!(vm.global("extra"), Value::Int(-36));
+    assert_eq!(vm.global("slots"), Value::Int(19));
 }
 #[test]
 fn aggressive_host_preserves_unsigned_boundaries_signature_args_and_delegation() {
@@ -980,4 +991,103 @@ fn victim_initializer_preserves_localization_owner_and_sticky_next_native_refusa
     assert_eq!(first, vm.init_globals().unwrap_err());
     assert_eq!(vm.host().diagnostic(Some(&source), &first), diagnostic);
     assert_eq!(vm.host().inner.inner().calls, 1);
+}
+
+fn extra_rule(threshold: u32, mask: i8, add: i8) -> Arc<VerifiedNeutralRule> {
+    let i = input_named_operands(threshold, BJ_NEUTRAL_EXTRA_NATIVE_NAME, mask, add);
+    Arc::new(
+        VerifiedNeutralRule::import_bj_neutral_extra_first_family(
+            &i.image,
+            &i.profile,
+            &i.approval,
+            RuleInputBudget {
+                image_bytes: i.image.len(),
+                profile_bytes: i.profile.len(),
+                sections: 2,
+            },
+        )
+        .unwrap(),
+    )
+}
+
+#[test]
+fn extra_getter_uses_independent_operands_and_preserves_next_failure() {
+    let common = format!(
+        "native {BJ_NEUTRAL_EXTRA_NATIVE_NAME} takes nothing returns integer\nnative Missing takes nothing returns integer\n"
+    );
+    let map = format!(
+        "globals\ninteger extra = {BJ_NEUTRAL_EXTRA_NATIVE_NAME}()\ninteger next = Missing()\nendglobals\n"
+    );
+    for (word, expected) in [(0, -36), (300, -36), (301, -47), (u32::MAX, -47)] {
+        let ctx = context(word, &common, &map, "extra-initializer");
+        let host = SelectedMapNeutralHost::try_new(
+            Arc::clone(&ctx),
+            extra_rule(301, 11, -47),
+            Delegate::default(),
+        )
+        .unwrap();
+        let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
+        assert!(Arc::ptr_eq(vm.host().context(), &ctx.scripts));
+        let first = vm.init_globals().unwrap_err();
+        let source = vm.error_source().unwrap().to_owned();
+        let diagnostic = vm.host().diagnostic(Some(&source), &first);
+        assert!(diagnostic.contains("Missing") && diagnostic.contains("extra-initializer"));
+        assert_eq!(vm.global("extra"), Value::Int(expected));
+        assert_eq!(vm.host().inner.inner().calls, 1);
+        assert_eq!(first, vm.init_globals().unwrap_err());
+        assert_eq!(vm.host().diagnostic(Some(&source), &first), diagnostic);
+        assert_eq!(vm.host().inner.inner().calls, 1);
+    }
+}
+
+fn slots_rule(threshold: u32, mask: i8, add: i8) -> Arc<VerifiedNeutralRule> {
+    let i = input_named_operands(threshold, BJ_MAX_PLAYER_SLOTS_NATIVE_NAME, mask, add);
+    Arc::new(
+        VerifiedNeutralRule::import_bj_max_player_slots_first_family(
+            &i.image,
+            &i.profile,
+            &i.approval,
+            RuleInputBudget {
+                image_bytes: i.image.len(),
+                profile_bytes: i.profile.len(),
+                sections: 2,
+            },
+        )
+        .unwrap(),
+    )
+}
+
+#[test]
+fn slot_getter_checks_independent_boundary_arguments_and_same_context_signature() {
+    let common =
+        format!("native {BJ_MAX_PLAYER_SLOTS_NATIVE_NAME} takes nothing returns integer\n");
+    for (word, expected) in [(0, -12), (298, -12), (299, 19), (u32::MAX, 19)] {
+        let ctx = context(word, &common, "// map", "slot-getter");
+        let mut host =
+            SelectedMapNeutralHost::try_new(ctx, slots_rule(299, -31, 19), Delegate::default())
+                .unwrap();
+        assert_eq!(
+            host.native(BJ_MAX_PLAYER_SLOTS_NATIVE_NAME, &[]).unwrap(),
+            Value::Int(expected)
+        );
+        assert!(
+            host.native(BJ_MAX_PLAYER_SLOTS_NATIVE_NAME, &[Value::Int(1)])
+                .unwrap_err()
+                .contains("Arguments")
+        );
+    }
+    for common in [
+        "// absent".to_owned(),
+        format!("native {BJ_MAX_PLAYER_SLOTS_NATIVE_NAME} takes nothing returns real\n"),
+        format!("native {BJ_MAX_PLAYER_SLOTS_NATIVE_NAME} takes integer x returns integer\n"),
+    ] {
+        let ctx = context(299, &common, "// map", "bad-slot-signature");
+        assert!(matches!(
+            SelectedMapNeutralHost::try_new(ctx, slots_rule(299, -31, 19), Delegate::default()),
+            Err(NeutralError::Context {
+                problem: ContextProblem::Signature,
+                ..
+            })
+        ));
+    }
 }

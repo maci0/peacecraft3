@@ -182,3 +182,49 @@ symbolic identities, handles all four scalar rules, then refuses
 receipt, not a production count. Independent local approval and actual commands,
 logs, artifact/input hashes are in `.scratch/neutral-victim-root/`. No original
 profile or payload is committed, and the default launcher Host is unchanged.
+
+
+## Selected extra and player-slot getters
+
+The opt-in `import_bj_neutral_extra_first_family` and
+`import_bj_max_player_slots_first_family` methods bind
+`GetBJPlayerNeutralExtra` and `GetBJMaxPlayerSlots`, respectively, through the
+existing checked importer. Each complete getter supplies its own comparison and
+signed branch operands. Neither rule is calculated from another getter's result;
+no observed player ID, threshold or slot count is embedded in the implementation.
+All six named importers reject swapped bindings.
+
+For the same independently qualified Legacy executable, the selected complete
+Extra getter is `0x491160..0x491187` (39 bytes), SHA-256
+`da044512b9ddcb427f542fe623317c96be74fa50ddcbb600fc8285912874a58e`.
+The selected complete slot getter is `0x491100..0x491127` (39 bytes), SHA-256
+`82b197fce37562c4d90a856415ced252ddb53e6be2cfceed59e752ae591294a4`.
+Both retain the independently reviewed context/delegate prefix and successful
+header relationship. Separate objdump instruction boundaries agree with each
+bounded Capstone read. Each name has two recorded registration candidates; only
+the explicitly selected first getter was read. Active native-family choice,
+cache lifetime and default/error paths remain unproved. No callee expansion or
+native game execution was performed.
+
+Synthetic tests check independent signed operands, unsigned boundaries, swapped
+bindings, same-context signatures, six-rule initialization and sticky failure.
+The affected crate passes 184 native tests, with five explicit original-input
+ignores, strict all-target/all-feature native and WASM Clippy, and WASM library
+code generation.
+
+The actual retained Human01 gate composes all six rules with the same admitted
+Program, localization owner and source-selected enum contracts. Global
+initialization passes the player-limit declarations and advances to
+`CreateTimer` at Blizzard line 454. Its 442 observed native calls, 43 symbolic
+contracts and 432 typed identities are receipts, not production limits. Retrying
+returns the same contextual failure without more calls or identities. All
+original input hashes are unchanged. Local approvals, commands and logs are in
+`.scratch/neutral-extra-root/` and `.scratch/bj-max-slots-root/`; the latter's
+successful actual gate is `same-context-human01-2`. The first slot-gate compile
+failed on a scratch harness name/wrapper error; the corrected compile and run
+are retained separately. No profile or original payload is committed.
+
+This advances authored global initialization, not config/main or a playable
+campaign. `CreateTimer` needs real session-owned object state, not a fabricated
+handle or a successful no-op. The ordinary launcher still needs explicit rule
+profile loading and Host installation through its existing session factory.
