@@ -1018,8 +1018,10 @@ Format: `date — subsystem — symptom — root cause — status`
   every parsed emitter admitted and no uploads/sockets/page errors. Snow draws
   without the first integration's bright fog rectangles. This does not establish
   native distribution, clocks, density, phase or full material parity; gray haze
-  and temporarily empty-mesh runtime warnings remain reported. The split opening
-  gate's source is still unidentified. See `docs/re-notes/menu-particles.md`.
+  remains open. Empty meshes now stay CPU-owned until populated; actual Bevy
+  extraction/lifecycle regressions pass and a fresh browser run reports zero
+  empty-mesh allocator warnings. The split opening gate's source is still
+  unidentified. See `docs/re-notes/menu-particles.md`.
 - CLI Spec guidance is recorded in `AGENTS.md`. A source-only inventory covers
   all 14 workspace binaries. Unknown application commands now return usage on
   stderr and exit 2 instead of launching the GUI; no-argument GUI and existing
