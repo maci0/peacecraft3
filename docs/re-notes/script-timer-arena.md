@@ -58,3 +58,9 @@ unchanged. Real commands, artifact hashes and captured output are local in
 
 This does not establish timer expiration, config/main execution, a playable
 campaign, native handle semantics or default launcher Host wiring.
+
+
+The later [group slice](script-group-arena.md) names the shared wrapper
+`ObjectHost`, retaining `TimerHost` as a compatible alias and its timer-only
+constructor behavior. Explicit group admission completes the same map's global
+initialization; timer scheduling remains unsupported.

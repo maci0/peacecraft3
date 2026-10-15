@@ -234,3 +234,10 @@ The later opt-in [timer arena](script-timer-arena.md) passes those creation call
 using real shared-arena objects and advances the same initializer to `CreateGroup`
 at Blizzard line 584. Earlier scalar-only refusal receipts remain historical;
 scheduling, config/main and ordinary launcher wiring remain open.
+
+
+With explicit [group lifecycle/membership admission](script-group-arena.md),
+the same selected Program now completes all global initialization. Repeated
+initialization retains all objects without calls. The authored map `config`
+entrypoint reaches `SetMapName` at map-script line 7807; completion of config/main,
+world simulation and ordinary launcher wiring remain open.

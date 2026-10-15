@@ -11,7 +11,7 @@ pub const NATIVE: &str = "ConvertPlayerColor";
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Failure {
-    #[error("missing or incompatible constant native/type declaration")]
+    #[error("missing or incompatible native/type declaration")]
     Signature,
     #[error("multiple declaration sources require qualification")]
     Source,
@@ -23,6 +23,8 @@ pub enum Failure {
     Arguments,
     #[error("arguments do not match the timer native declaration")]
     TimerArguments,
+    #[error("arguments do not match the group native declaration")]
+    GroupArguments,
     #[error("enumerand {0} is outside this native's admitted source domain")]
     OutsideDomain(i32),
     #[error("unsupported closed integer expression: {0}")]
@@ -82,6 +84,7 @@ enum Entry {
     Symbolic { kind: String, enumerand: i32 },
     Object(String),
     Timer { live: bool },
+    Group { live: bool },
 }
 pub struct EnumHost {
     program: Arc<Program>,
@@ -365,7 +368,10 @@ impl EnumHost {
         Ok(match self.entry(id)? {
             Entry::Symbolic { kind, .. } | Entry::Object(kind) => kind,
             Entry::Timer { live: true } => "timer",
-            Entry::Timer { live: false } => return Err(self.error("arena", Failure::Identity)),
+            Entry::Group { live: true } => "group",
+            Entry::Timer { live: false } | Entry::Group { live: false } => {
+                return Err(self.error("arena", Failure::Identity));
+            }
         })
     }
     pub fn symbolic_value(&self, id: HandleId, kind: &str) -> Result<i32, Error> {
@@ -439,95 +445,6 @@ impl Host for EnumHost {
 #[path = "playercolor_host_tests.rs"]
 mod tests;
 
-/// Opt-in creation/destruction only; scheduling natives retain explicit refusal.
-/// Timer and symbolic identities share the same bounded, non-recycling arena.
-pub struct TimerHost {
-    inner: EnumHost,
-}
-impl TimerHost {
-    pub fn checked(inner: EnumHost) -> Result<Self, Error> {
-        for (name, parameters, result) in
-            [("CreateTimer", 0, "timer"), ("DestroyTimer", 1, "nothing")]
-        {
-            let n = inner
-                .program
-                .natives()
-                .get(name)
-                .ok_or_else(|| inner.error(name, Failure::Signature))?;
-            if n.is_constant
-                || inner.program.function(name).is_some()
-                || n.params.len() != parameters
-                || n.ret.array
-                || n.ret.kind.name() != result
-                || n.params
-                    .iter()
-                    .any(|p| p.ty.array || p.ty.kind.name() != "timer")
-                || !below(&inner.program, "timer", "agent")
-                || !below(&inner.program, "timer", "handle")
-                || inner
-                    .conversions
-                    .values()
-                    .any(|c| below(&inner.program, "timer", &c.kind))
-            {
-                return Err(inner.error(name, Failure::Signature));
-            }
-            if n.also_declared_in
-                .iter()
-                .any(|(source, _)| source != &n.source)
-            {
-                return Err(inner.error(name, Failure::Source));
-            }
-        }
-        Ok(Self { inner })
-    }
-    pub fn inner(&self) -> &EnumHost {
-        &self.inner
-    }
-    pub fn into_vm(self) -> pcx_script::OwnedVm<Self> {
-        pcx_script::OwnedVm::new_owned(Arc::clone(&self.inner.program), self)
-    }
-    pub fn live_timers(&self) -> usize {
-        self.inner
-            .arena
-            .iter()
-            .filter(|e| matches!(e, Entry::Timer { live: true }))
-            .count()
-    }
-    fn create(&mut self, args: &[Value]) -> Result<Value, Error> {
-        if !args.is_empty() {
-            return Err(self.inner.error("CreateTimer", Failure::TimerArguments));
-        }
-        self.inner
-            .allocate(Entry::Timer { live: true }, "CreateTimer")
-            .map(Value::Handle)
-    }
-    fn destroy(&mut self, args: &[Value]) -> Result<Value, Error> {
-        let [Value::Handle(id)] = args else {
-            return Err(self.inner.error("DestroyTimer", Failure::TimerArguments));
-        };
-        let at = usize::try_from(id.token() - 1)
-            .map_err(|_| self.inner.error("DestroyTimer", Failure::Identity))?;
-        let failure = match self.inner.arena.get_mut(at) {
-            Some(Entry::Timer { live }) if *live => {
-                *live = false;
-                return Ok(Value::Null);
-            }
-            Some(Entry::Timer { live: false }) | None => Failure::Identity,
-            _ => Failure::WrongFamily,
-        };
-        Err(self.inner.error("DestroyTimer", failure))
-    }
-}
-impl Host for TimerHost {
-    fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
-        match name {
-            "CreateTimer" => self.create(args).map_err(|e| e.to_string()),
-            "DestroyTimer" => self.destroy(args).map_err(|e| e.to_string()),
-            _ => self.inner.native(name, args),
-        }
-    }
-}
-
-#[cfg(test)]
-#[path = "timer_host_tests.rs"]
-mod timer_tests;
+#[path = "object_host.rs"]
+mod objects;
+pub use objects::{ObjectHost, TimerHost};
