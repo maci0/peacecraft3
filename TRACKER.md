@@ -55,7 +55,8 @@ issues*.
       agree with an independent decoder within one intensity level on opaque
       pixels. Synthetic tests and strict native/WASM Clippy pass. This corrects
       cyan lettering without an artwork-specific tint. See
-      `docs/re-notes/blp-jpeg-channel-order.md`.
+      `docs/re-notes/blp-jpeg-channel-order.md`. The corrected WASM is deployed
+      in the asset-free public demo at `1380001`.
 - [~] Original Options and adjacent FDF screens: source-derived controls/art,
       draft/Cancel/Apply, runtime display choices, local preferences and user
       audio gains are implemented. Bottom-left cog separates PeaceCraft settings.

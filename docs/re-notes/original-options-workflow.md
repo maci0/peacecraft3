@@ -103,3 +103,10 @@ Verification status on 2026-10-15:
   `c3c4cf523988ddae2fd47cca1565872b54a58307a8d54046880ffa8a166e7780`.
   The acceptance is this explicitly scoped set of checks and visual reviews;
   combined browser run 12 remains failed at its final caption OCR assertion.
+
+Publication: source commit `12eb299` and the asset-free demo commit `1380001`
+are pushed. GitHub Pages reports that demo build complete. All 23 served files
+match the final package hashes, including its WASM. The public demo is
+<https://maci0.github.io/peacecraft3-demo/>. Original-import interaction checks
+above ran against the identical packaged code on loopback; public-file equality
+is distinct from repeating those local-file interaction checks on the hosted URL.
