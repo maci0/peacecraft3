@@ -29,8 +29,10 @@ The inspected Options FDF and include graph supply widget ranges, steps and
 initials, but no resolution MenuItems or admitted checkbox/popup selections.
 Those slider initials are not evidence of the game's first-run preferences.
 Named config/MiscData inspection did not establish those preferences either.
-The exact client's preference fallback and mode-population path therefore remain
-an active investigation. A measured resolution or slider value must not become
+The exact client's lookup-null [fallback data path](original-options-defaults.md)
+now has a checked source importer; effective first-run selection and the
+mode-population connection remain an active investigation. A measured resolution
+or slider value must not become
 a source constant. Current window-derived selection and neutral active audio
 are recreation conventions, not recovered original defaults.
 
