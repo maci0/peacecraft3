@@ -50,6 +50,23 @@ machine load; report live timing and FPS separately.
 Do not add attribution to generated tools or agents in source, documentation,
 commit messages or pull requests.
 
+## CLI contracts
+
+Follow [The CLI Spec](https://clispec.dev/) when creating or changing command-line
+interfaces. Provide explicit structured output and errors, discoverable offline
+schema introspection, accurate exit codes, and separate stdout data from stderr
+diagnostics/progress. Non-interactive calls must complete or refuse safely.
+Declare real retry effects and bound collection/stream output appropriately.
+Preserve existing flags, output formats, exit semantics and binary/artifact
+streams; use `--format` when `--output` already names a destination. Do not add
+inert flags or new confirmation gates merely to satisfy a checklist.
+
+Read the version policy before implementing schemas: v0.3 is currently a
+candidate. Validate the declared version against checked, pinned published schema
+bytes, with process-level tests for parsing, stream separation, failure, retries
+and output limits. Do not claim conformance before those checks pass. Existing
+CLI gaps are tracked debt, not permission to copy incompatible behavior.
+
 ## Rust and build policy
 
 Use the current stable Rust release and Rust 2024 edition. Keep direct dependencies
