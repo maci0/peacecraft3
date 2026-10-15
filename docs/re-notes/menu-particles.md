@@ -62,7 +62,7 @@ the CPU/render proposal receipts. Static PRE2 width/length use the documented
 primary reader convention; the earlier native destination-name disagreement
 remains open in `format-mdx-particles.md`.
 
-The integrated application passes 443 affected native tests (18 explicitly
+The integrated application passes 446 affected native tests (18 explicitly
 ignored local-input/device cases), strict native/WASM Clippy and formatting.
 The separately executed supplied Legacy RoC/TFT ECS gate checks source emitter
 counts, material flags, priority/texture bindings and populated TFT particle
@@ -75,13 +75,20 @@ and fog cases. A local original-repack browser Main/Video Options/Main workflow
 admits every source emitter and produces four reviewed captures without uploads,
 sockets or page errors. The additive fog rectangles seen in the first integration
 capture are removed while particles remain visible. The browser uses software
-WebGL rendering, not a physical-GPU or native comparison. Existing material and
-capability gaps remain logged, including temporarily empty particle mesh buffers;
-there is no claim of a warning-free runtime or original visual parity.
+WebGL rendering, not a physical-GPU or native comparison. Empty emitters now keep
+their CPU mesh without requesting GPU extraction. Populated meshes re-extract
+under the same handle; retirement stays hidden and retains scene ownership.
+Actual Bevy extraction and live/empty/live scene tests cover that lifecycle.
+A fresh release/browser run preserves the four views and reports zero empty-mesh
+allocator warnings, uploads, sockets or page errors. Other material/capability
+gaps remain explicit; this is not a warning-free-runtime or original-parity claim.
 
 Receipts remain local in `.scratch/menu-particle-root-integration/`,
 `.scratch/menu-particle-black-fog/`, `.scratch/menu-particle-black-fog-release/`
-and `.scratch/menu-particle-final-release/`. The adapted Bevy fragment's MIT
+and `.scratch/menu-particle-final-release/`. The empty-mesh correction has new
+native/original/WASM receipts in `.scratch/particle-empty-root/` and release,
+actual WASM and browser receipts in `.scratch/particle-empty-release/`.
+The adapted Bevy fragment's MIT
 license accompanies its source and the public code package. No original game
 payload is part of either publication.
 

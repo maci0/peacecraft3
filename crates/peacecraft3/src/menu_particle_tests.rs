@@ -465,3 +465,138 @@ fn particle_image_decode_checks_budget_before_allocating_source_pixels() {
     let error = pcx_gfx::load_image_bounded(&header, "synthetic oversized TGA", 1024).unwrap_err();
     assert!(error.to_string().contains("RGBA budget"));
 }
+
+#[test]
+fn particle_visibility_track_retires_and_restarts_one_emitter_with_stable_assets() {
+    let (mut bytes, textures) = synthetic(|first, _| first.life_span = 0.02);
+    let pre2 = pcx_mdl::Mdlx::parse(&bytes)
+        .unwrap()
+        .chunk(pcx_mdl::tag::PRE2)
+        .unwrap()
+        .clone();
+    let record_size = u32::from_le_bytes(
+        bytes[pre2.payload_offset..pre2.payload_offset + 4]
+            .try_into()
+            .unwrap(),
+    ) as usize;
+    let mut visibility = pcx_mdl::Particle2TrackKind::V.tag().to_vec();
+    visibility.extend(3_u32.to_le_bytes());
+    visibility.extend(0_u32.to_le_bytes()); // STEP interpolation, independent clip clock.
+    visibility.extend(pcx_mdl::NO_ID.to_le_bytes());
+    for (frame, value) in [(13_u32, 1_f32), (63, 0.0), (153, 1.0)] {
+        visibility.extend(frame.to_le_bytes());
+        visibility.extend(value.to_le_bytes());
+    }
+    let added = visibility.len();
+    bytes[pre2.payload_offset..pre2.payload_offset + 4]
+        .copy_from_slice(&u32::try_from(record_size + added).unwrap().to_le_bytes());
+    bytes[pre2.offset + 4..pre2.offset + 8]
+        .copy_from_slice(&u32::try_from(pre2.size + added).unwrap().to_le_bytes());
+    bytes.splice(
+        pre2.payload_offset + record_size..pre2.payload_offset + record_size,
+        visibility,
+    );
+    let parsed = pcx_mdl::Mdlx::parse(&bytes)
+        .unwrap()
+        .particles2(&bytes)
+        .unwrap();
+    assert_eq!(parsed[0].tracks.len(), 1);
+    assert_eq!(
+        parsed[0].tracks[0].magic,
+        pcx_mdl::Particle2TrackKind::V.tag()
+    );
+    let mut spawned = spawn_case(&bytes, &textures);
+    assert_eq!(spawned.result.unwrap().particle_emitters, 3);
+    let camera = spawned
+        .world
+        .query_filtered::<Entity, With<MainMenuSceneCamera>>()
+        .single(&spawned.world)
+        .unwrap();
+    let order = spawned
+        .world
+        .get::<crate::menu_particle_order::SourceOrderView>(camera)
+        .unwrap()
+        .clone();
+    let mut handles = spawned
+        .world
+        .query::<(Entity, &Mesh3d, &MeshMaterial3d<ParticleMaterial>)>()
+        .iter(&spawned.world)
+        .map(|(entity, mesh, material)| {
+            (
+                order.orders[&bevy::render::sync_world::MainEntity::from(entity)].ordinal,
+                entity,
+                mesh.0.clone(),
+                material.0.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    handles.sort_by_key(|entry| entry.0);
+    assert_eq!(handles.len(), 3);
+    spawned.world.insert_resource(spawned.meshes);
+    spawned.world.insert_resource(spawned.materials);
+    spawned.world.insert_resource(spawned.particle_materials);
+    spawned.world.insert_resource(spawned.images);
+    spawned.world.insert_resource(Time::<()>::default());
+    for (delta_ms, elapsed_ms, first_visible) in
+        [(40_u64, 40_u128, true), (60, 100, false), (80, 180, true)]
+    {
+        spawned
+            .world
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(delta_ms));
+        spawned.world.run_system_once(advance).unwrap();
+        let scene = spawned.world.resource::<MainMenuScene>();
+        assert!(scene.particles.as_ref().unwrap().enabled());
+        assert_eq!(scene.elapsed.as_millis(), elapsed_ms);
+        assert_eq!(
+            spawned.world.resource::<Assets<Mesh>>().len(),
+            handles.len()
+        );
+        assert_eq!(
+            spawned.world.resource::<Assets<ParticleMaterial>>().len(),
+            handles.len()
+        );
+        for (ordinal, entity, mesh_handle, material_handle) in &handles {
+            assert_eq!(
+                &spawned.world.get::<Mesh3d>(*entity).unwrap().0,
+                mesh_handle
+            );
+            assert_eq!(
+                &spawned
+                    .world
+                    .get::<MeshMaterial3d<ParticleMaterial>>(*entity)
+                    .unwrap()
+                    .0,
+                material_handle
+            );
+            let mesh = spawned
+                .world
+                .resource::<Assets<Mesh>>()
+                .get(mesh_handle)
+                .unwrap();
+            let visible = *ordinal != 0 || first_visible;
+            assert_eq!(
+                mesh.count_vertices() > 0,
+                visible,
+                "emitter {ordinal} at {elapsed_ms} ms"
+            );
+            assert_eq!(mesh.indices().unwrap().is_empty(), !visible);
+            assert_eq!(
+                mesh.asset_usage,
+                if visible {
+                    bevy::asset::RenderAssetUsages::default()
+                } else {
+                    bevy::asset::RenderAssetUsages::MAIN_WORLD
+                }
+            );
+            assert_eq!(
+                spawned.world.get::<Visibility>(*entity),
+                Some(&if visible {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                })
+            );
+        }
+    }
+}

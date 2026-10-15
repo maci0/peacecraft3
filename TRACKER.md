@@ -1011,7 +1011,7 @@ Format: `date — subsystem — symptom — root cause — status`
 
 - Menu PRE2 now has bounded source-driven persistent simulation, image admission,
   geometry/particle ordering and a particle-only additive black-fog material.
-  The affected native suite passes 443 tests with 18 explicit local-input/device
+  The affected native suite passes 446 tests with 18 explicit local-input/device
   ignores, strict native/WASM Clippy, actual release-WASM rollback checks and
   the separately executed paired original ECS gate. A corrected local-repack
   browser workflow passes four reviewed Main/Video Options/Main captures with

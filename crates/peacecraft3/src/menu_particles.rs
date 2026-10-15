@@ -385,10 +385,11 @@ fn particle_material(source: DrawRequirements, image: Handle<Image>) -> Particle
         extension: ParticleFog::default(),
     }
 }
+// Visibility does not suppress asset extraction; empty emitters stay CPU-owned.
 fn empty_mesh() -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
+        RenderAssetUsages::MAIN_WORLD,
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new());
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, Vec::<[f32; 3]>::new());
@@ -455,7 +456,11 @@ impl Buffer {
     fn into_mesh(self) -> Mesh {
         let mut mesh = Mesh::new(
             PrimitiveTopology::TriangleList,
-            RenderAssetUsages::default(),
+            if self.positions.is_empty() {
+                RenderAssetUsages::MAIN_WORLD
+            } else {
+                RenderAssetUsages::default()
+            },
         );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals);
@@ -571,3 +576,7 @@ impl ParticleScene {
         self.simulation.plan().source()
     }
 }
+
+#[cfg(test)]
+#[path = "menu_particle_mesh_tests.rs"]
+mod mesh_tests;
