@@ -84,6 +84,10 @@ issues*.
       remain unapplied. Final provider/OS bridge and effective first-run selection
       remain open. See `docs/re-notes/original-options-initialization.md` and
       `docs/re-notes/original-display-modes.md`.
+      Shared popup parsing now refuses malformed items without shifting indexes;
+      259 app tests, both selected-original popup gates, strict native/WASM checks
+      and the actual release-WASM runtime checks pass. This does not enable
+      unimplemented quality or gameplay controls.
 - [x] Menu geometry now preserves source ONE/ONE additive RGB instead of
       premultiplying it by alpha. Actual Bevy draws pass 72 channel checks on
       software and Radeon Vulkan; the old-Add negative fails the expected cases.

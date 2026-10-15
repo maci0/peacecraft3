@@ -284,15 +284,30 @@ pub fn widget(fdf: &Fdf, name: &str) -> Result<Option<Widget>, FdfError> {
                         .records
                         .iter()
                         .filter(|(k, _)| k == "MenuItem")
-                        .filter_map(|(_, v)| {
-                            v.trim()
-                                .strip_prefix('"')?
-                                .split('"')
-                                .next()
-                                .map(str::to_string)
+                        .enumerate()
+                        .map(|(index, (_, value))| {
+                            let item = value
+                                .trim()
+                                .strip_prefix('"')
+                                .and_then(|tail| tail.split_once('"'));
+                            if let Some((label, tail)) = item
+                                && !label.trim().is_empty()
+                                && tail.trim().strip_prefix(',').is_some_and(|operand| {
+                                    operand.trim().parse::<f32>().is_ok_and(f32::is_finite)
+                                })
+                            {
+                                Ok(label.to_owned())
+                            } else {
+                                Err(FdfError::Unsupported {
+                                    frame: f.name.clone(),
+                                    property: "MenuItem",
+                                    value: format!("item {index}: {value}"),
+                                })
+                            }
                         })
-                        .collect()
+                        .collect::<Result<Vec<_>, _>>()
                 })
+                .transpose()?
                 .unwrap_or_default();
             Some(Widget::Popup { choices })
         }
@@ -436,6 +451,95 @@ pub fn slider_value(min: f32, max: f32, step: f32, fraction: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn popup_fixture(items: &str) -> Fdf {
+        Fdf::parse(&format!(
+            "Frame \"MENU\" \"ChoiceItems\" {{\n{items}\n}}\n\
+             Frame \"POPUPMENU\" \"ChoiceControl\" {{\n\
+             PopupMenuFrame \"ChoiceItems\",\n}}\n"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn popup_items_keep_authored_order_without_using_the_opaque_operand_as_an_id() {
+        let fdf = popup_fixture("MenuItem \"ZEBRA\", 7.25,\nMenuItem \"ALPHA\", 7.25,");
+        let Some(Widget::Popup { choices }) = widget(&fdf, "ChoiceControl").unwrap() else {
+            panic!("expected source popup");
+        };
+        assert_eq!(choices, ["ZEBRA", "ALPHA"]);
+        let Some(Widget::Popup { choices }) = widget(&popup_fixture(""), "ChoiceControl").unwrap()
+        else {
+            panic!("expected empty dynamic popup");
+        };
+        assert!(choices.is_empty());
+    }
+
+    #[test]
+    fn malformed_popup_items_refuse_the_list_instead_of_shifting_its_indexes() {
+        for item in [
+            "MenuItem UNQUOTED, 1,",
+            "MenuItem \"\", 1,",
+            "MenuItem \"UNCLOSED, 1,",
+            "MenuItem \"KEY\",",
+            "MenuItem \"KEY\", invalid,",
+            "MenuItem \"KEY\", NaN,",
+            "MenuItem \"KEY\", inf,",
+            "MenuItem \"KEY\", 1, 2,",
+            "MenuItem \"KEY\" suffix, 1,",
+        ] {
+            for items in [
+                format!("{item}\nMenuItem \"VALID\", 1,"),
+                format!("MenuItem \"VALID\", 1,\n{item}"),
+            ] {
+                assert!(
+                    matches!(
+                        widget(&popup_fixture(&items), "ChoiceControl"),
+                        Err(FdfError::Unsupported {
+                            frame,
+                            property: "MenuItem",
+                            ..
+                        }) if frame == "ChoiceItems"
+                    ),
+                    "must refuse the entire popup: {items}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires PEACECRAFT3_INSTALL with selected original Options FDFs"]
+    fn original_options_popup_items_preserve_source_cardinality() {
+        let install = std::path::PathBuf::from(
+            std::env::var_os("PEACECRAFT3_INSTALL").expect("explicit original install required"),
+        );
+        let (fdf, _) =
+            crate::launch_gui::read_screen_fdf(Some(&install), Screen::Options(Page::Video))
+                .unwrap();
+        let mut checked = 0;
+        for frame in fdf
+            .frames()
+            .iter()
+            .filter(|frame| matches!(frame.kind.as_str(), "POPUPMENU" | "GLUEPOPUPMENU"))
+        {
+            let Some(Widget::Popup { choices }) = widget(&fdf, &frame.name).unwrap() else {
+                panic!("expected source popup {}", frame.name);
+            };
+            let count = fdf
+                .string(&frame.name, "PopupMenuFrame")
+                .and_then(|name| fdf.frame(&name))
+                .map_or(0, |menu| {
+                    menu.props
+                        .records
+                        .iter()
+                        .filter(|(key, _)| key == "MenuItem")
+                        .count()
+                });
+            assert_eq!(choices.len(), count, "{}", frame.name);
+            checked += 1;
+        }
+        assert!(checked > 0, "selected Options input must supply popups");
+    }
 
     #[test]
     fn popup_values_have_a_foreground_layer_above_control_art() {

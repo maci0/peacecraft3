@@ -66,7 +66,7 @@ Resolution population and selection have their own
 The source-only popup adapter prototype selects label keys from checked fallback
 bytes and actual parsed FDF order. It refuses missing, malformed, negative,
 overflowing and out-of-range values and preserves source identity. A regression
-also catches malformed MenuItems being silently dropped by the current widget
+also catches malformed MenuItems being silently dropped by the baseline widget
 parser, shifting subsequent indexes. The corrected prototype rejects the entire
 preview if any item is malformed, including items after the selected entry.
 Its 15 strict leaf tests, including nine existing FDF tests, pass. It does not mutate applied
@@ -92,3 +92,23 @@ bytes or original fallback table are distributed. Earlier stale-artifact and
 compile failures remain failures; the later coherent strict compile and tests
 are recorded separately. This is native-code and synthetic-parser evidence,
 not rendered Options, original saved-state or complete settings acceptance.
+
+## Shared popup validation
+
+The production widget parser now checks every MenuItem in the supported quoted
+nonempty-label/finite-numeric-operand profile. It returns a contextual error for
+the entire popup instead of dropping a record or returning an unterminated label.
+Later malformed records also refuse; valid order and repeated opaque operands
+remain unchanged. Empty dynamic menus remain empty. No numeric operand is
+reinterpreted as a setting ID, and no new control or default preview is enabled.
+
+The original production parser fails the new regression before the fix. After
+the change, all 13 menu-screen tests and the complete app suite pass: four
+library tests, 259 app tests with 12 explicit ignores, and 83 integration tests.
+The explicit original Options popup-cardinality gate passes separately for the
+selected Legacy and compatibility installs. Strict native/WASM Clippy, full
+builds and formatting pass. Actual release-WASM checks pass 49 baseline and
+103 panel assertions, with zero uploads, unexpected requests or sockets.
+These integration checks preserve valid-source behavior; they do not add a new
+rendered/native fidelity claim. Evidence is retained in
+`.scratch/options-popup-validation-root-20261016/`.
