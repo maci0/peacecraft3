@@ -38,7 +38,35 @@ try {
   check(click.settings.volume === 37 / 127, 'audio volume was not derived');
   check(api.archive_member(click.path).length === 60, 'actual Rust click extraction failed');
   check(api.archive_member(musicPath).length === 60, 'music contract extraction failed');
+  const fogPath = 'UI\\MiscData.txt', fogAlias = 'menu/miscdata.txt';
+  check(api.stored_asset(fogAlias)?.length > 0, 'required fog alias hydration missing');
+  check(JSON.stringify([...api.stored_asset(fogAlias)]) === JSON.stringify([...api.stored_asset(fogPath)]), 'fog canonical/alias bytes differ');
+  const priorFog = [...api.stored_asset(fogAlias)];
   const priorPaths = api.stored_assets(), priorRevision = api.asset_revision();
+  const decoder = new TextDecoder(), encoder = new TextEncoder();
+  const fogText = decoder.decode(members[fogPath]);
+  const rocOnlyFog = encoder.encode(fogText.split('\n').map(line => {
+    const at = line.indexOf('=');
+    if (at < 0) return line;
+    return line.slice(0, at + 1) + line.slice(at + 1).split(',').slice(0, line.startsWith('Color=') ? 4 : 1).join(',');
+  }).join('\n'));
+  const expansionPath = decoder.decode(members['UI\\war3skins.txt']).split('\n')
+    .find(line => line.startsWith('GlueSpriteLayerBackground_V1=')).split('=').slice(1).join('=');
+  const basePath = Object.keys(members).find(path => path.toLowerCase().endsWith('mainmenu3d.mdx'));
+  const missingFog = { ...members }; delete missingFog[fogPath];
+  for (const [label, candidate] of [
+    ['missing', missingFog],
+    ['invalid UTF-8', { ...members, [fogPath]: new Uint8Array([255]) }],
+    ['malformed', { ...members, [fogPath]: encoder.encode(fogText.replace('Start=', 'MissingStart=')) }],
+    ['TFT column absent', { ...members, [fogPath]: rocOnlyFog, [expansionPath]: members[basePath] }],
+  ]) {
+    api.begin_archive_import(); api.stage_archive(`fog-${label}`, mpqFixture(candidate));
+    let fogError; try { api.commit_archive_import(); } catch (e) { fogError = String(e); api.cancel_archive_import(); }
+    check(fogError?.includes('MiscData.txt'), `${label} fog did not fail with asset context`);
+    check(api.asset_revision() === priorRevision, `${label} fog changed committed revision`);
+    check(JSON.stringify(api.stored_assets()) === JSON.stringify(priorPaths), `${label} fog changed committed paths`);
+    check(JSON.stringify([...api.stored_asset(fogAlias)]) === JSON.stringify(priorFog), `${label} fog changed prior alias bytes`);
+  }
   const conflict = { ...members, [fontFiles[0]]: new TextEncoder().encode('unequal synthetic font') };
   const conflictingFile = new File([isoFixture([{ name: 'A.BIN;1', bytes: mpqFixture(members) }, { name: 'B.BIN;1', bytes: mpqFixture(conflict) }])], 'synthetic-conflict.iso');
   const conflicts = await discoverIso(conflictingFile); let error;
@@ -76,5 +104,12 @@ try {
   const beforeEqualArchives = api.asset_revision();
   api.begin_archive_import(); api.stage_archive('equal-1', mpqFixture(members)); api.stage_archive('equal-2', mpqFixture(members));
   api.commit_archive_import(); check(api.asset_revision() === beforeEqualArchives + 1, 'equal duplicates should commit once');
-  postMessage({ ok: true, result, checks, fonts: { files: fontFiles, aliases: fontFiles.map(path => api.menu_font_alias(path)) }, selftest: api.selftest(), audio: { click, musicPath, music: [...api.archive_member(musicPath)], clickBytes: [...api.archive_member(click.path)] } });
+  api.begin_archive_import(); api.stage_archive('single-column-base', mpqFixture({ ...members, [fogPath]: rocOnlyFog }));
+  api.commit_archive_import();
+  check(JSON.stringify(api.local_menu_editions()) === JSON.stringify(['roc']), 'single-column RoC input did not retain base-only gating');
+  const selftest = api.selftest();
+  const audio = { click, musicPath, music: [...api.archive_member(musicPath)], clickBytes: [...api.archive_member(click.path)] };
+  api.drop_assets();
+  check(api.stored_asset(fogAlias) === undefined && api.stored_asset(fogPath) === undefined, 'clear retained stale fog input');
+  postMessage({ ok: true, result, checks, fonts: { files: fontFiles, aliases: fontFiles.map(path => api.menu_font_alias(path)) }, selftest, audio });
 } catch (error) { postMessage({ ok: false, error: String(error), stack: error?.stack }); }

@@ -46,6 +46,7 @@ function registerServedAsset(name, bytes) { return localImportActive ? 0 : add_a
 const GLUE = [
   ['menu/globalstrings.fdf', './assets/globalstrings.fdf'],
   ['menu/war3skins.txt', './assets/war3skins.txt'],
+  ['menu/miscdata.txt', './assets/miscdata.txt'],
   ['menu/standardtemplates.fdf', './assets/standardtemplates.fdf'],
   ['menu/mainmenu.fdf', './assets/mainmenu.fdf'],
   ['menu/button.blp', './assets/button.blp'],

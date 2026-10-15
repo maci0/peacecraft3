@@ -566,6 +566,12 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
             }
         }
     }
+    let fog_path = crate::mainmenu::MENU_FOG_CONFIG;
+    let fog_bytes = extract_unique(set, fog_path)?;
+    let fog_text = std::str::from_utf8(&fog_bytes).map_err(|e| format!("{fog_path}: {e}"))?;
+    let fog_table =
+        crate::menu_skin::SkinTable::parse(fog_text).map_err(|e| format!("{fog_path}: {e}"))?;
+    put(fog_path, crate::mainmenu::served_name(fog_path), fog_bytes)?;
     let mut models = 0;
     for expansion in [false, true] {
         let (_, alias, directory) = crate::mainmenu_scene::scene_source(expansion);
@@ -579,6 +585,14 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
         };
         match extract_unique(set, &path) {
             Ok(bytes) => {
+                crate::menu_fog::MenuFog::checked(&fog_table, usize::from(expansion)).map_err(
+                    |e| {
+                        format!(
+                            "{fog_path}: edition {} for {path}: {e}",
+                            usize::from(expansion)
+                        )
+                    },
+                )?;
                 for texture in crate::mainmenu_scene::texture_paths(&bytes)
                     .map_err(|e| format!("{path}: {e}"))?
                 {

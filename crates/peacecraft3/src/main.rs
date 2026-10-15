@@ -21,6 +21,7 @@ mod local_demo;
 mod mainmenu;
 mod mainmenu_scene;
 mod menu_audio;
+mod menu_fog;
 mod menu_panel;
 mod menu_screens;
 mod menu_settings;

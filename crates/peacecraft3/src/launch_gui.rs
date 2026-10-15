@@ -1152,16 +1152,48 @@ fn initialize_menu_scene(
     {
         return;
     }
+    let fog_path = crate::mainmenu::MENU_FOG_CONFIG;
+    let Some(fog_bytes) = crate::mainmenu::art_bytes(install.as_deref(), fog_path) else {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            state.finished = true;
+            warn!(
+                "Original menu background: {fog_path} unavailable in {:?}",
+                install
+            );
+        }
+        return;
+    };
+    let fog = std::str::from_utf8(&fog_bytes)
+        .map_err(|e| e.to_string())
+        .and_then(|text| crate::menu_skin::SkinTable::parse(text).map_err(|e| e.to_string()))
+        .and_then(|table| {
+            crate::menu_fog::MenuFog::checked(
+                &table,
+                usize::from(launcher.mode.addon == Addon::Tft),
+            )
+        });
+    let fog = match fog {
+        Ok(fog) => fog,
+        Err(error) => {
+            state.finished = true;
+            warn!("Original menu background: {fog_path}: {error}");
+            return;
+        }
+    };
     state.finished = true;
     let textures = crate::mainmenu_scene::load_textures_in(install.as_deref(), &bytes, directory);
     match crate::mainmenu_scene::spawn(
         &mut commands,
-        &mut meshes,
-        &mut materials,
-        &mut images,
+        crate::mainmenu_scene::GeosetAssets {
+            meshes: &mut meshes,
+            materials: &mut materials,
+            images: &mut images,
+        },
         &source,
         &bytes,
         &textures,
+        fog,
     ) {
         Ok(info) => info!(
             "Original menu background: {} geosets, {} textures, {} ms loop; missing {:?}",

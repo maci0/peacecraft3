@@ -45,13 +45,13 @@
 //!   guessing would make a geoset disappear entirely rather than merely shade
 //!   differently. Nothing is culled until that bit is measured.
 //! * **`unlit` and the blend are the layer's own**, read from its `filterMode`
-//!   and `shadingFlags` words. Three of the format's seven modes are not
+//!   and `shadingFlags` words. Two of the format's seven modes are not
 //!   reproduced exactly, and each is reported in [`SceneInfo::blend_gaps`] with
 //!   the reason rather than being silently approximated:
-//!   * `filterMode 1` (`Transparent`) is an **alpha test** — opaque or gone,
-//!     never partly there. Bevy's `AlphaMode::Mask(t)` is the equivalent and `t`
-//!     is a game constant this workspace has not measured, so the layer draws
-//!     blended: a hard edge becomes a soft one.
+//!   * `filterMode 1` (`Transparent`) uses `AlphaMode::Mask(0.75)` as an
+//!     explicit reconstruction convention from primary MDX renderers. Cutoff,
+//!     blend/depth and composed-alpha behavior are not certified native parity;
+//!     see `docs/re-notes/menu-alpha-test.md` for evidence and remaining limits.
 //!   * `filterMode 3` (`Additive`, `ONE/ONE`) differs from Bevy's
 //!     `AlphaMode::Add`, which premultiplies by alpha (`SRC_ALPHA/ONE`). The two
 //!     agree only at alpha 1. `filterMode 4` *is* Bevy's `Add` exactly, so only
@@ -63,11 +63,241 @@
 //! * **Animated light volumes are placed statically.** `LITE` records carry
 //!   node tracks this module does not sample, so each light sits where its
 //!   record's default puts it.
-//! * Bevy's own camera is used rather than a hand-rolled matrix, so the
-//!   projection is Bevy's; the eye, target, stored FOV and clip planes come from
-//!   the model. Native FOV-axis/projection equivalence is not established here.
+//! * The background's logical camera aspect survives target resize, with its
+//!   source angle normalized by the logical rectangle diagonal. TFT pose/clip/
+//!   topology and context draws support this rule; final native presentation
+//!   scaling and cross-mode parity remain unverified. Camera tracks stay static.
 
-use bevy::prelude::*;
+use bevy::{
+    camera::{CameraProjection, SubCameraView},
+    math::Vec3A,
+    prelude::*,
+};
+
+/// The original background uses a logical camera rectangle across the full target.
+#[derive(Clone, Debug)]
+struct MenuCameraProjection(PerspectiveProjection);
+
+fn source_camera_pose(eye: [f32; 3], target: [f32; 3]) -> Result<Transform, &'static str> {
+    let eye = Vec3::from(eye);
+    let target = Vec3::from(target);
+    if !eye.is_finite() || !target.is_finite() {
+        return Err("nonfinite source camera pose");
+    }
+    let direction = (target - eye)
+        .try_normalize()
+        .ok_or("unrepresentable source camera direction")?;
+    if direction.cross(Vec3::Z).try_normalize().is_none() {
+        return Err("source camera direction is parallel to its Z-up axis");
+    }
+    Ok(Transform::from_translation(eye).looking_at(target, Vec3::Z))
+}
+
+impl MenuCameraProjection {
+    fn checked(
+        source_angle: f32,
+        logical_size: [f32; 2],
+        near: f32,
+        far: f32,
+    ) -> Result<Self, &'static str> {
+        if !source_angle.is_finite() || source_angle <= 0.0 || source_angle >= std::f32::consts::PI
+        {
+            return Err("invalid source camera angle");
+        }
+        if logical_size.iter().any(|x| !x.is_finite() || *x <= 0.0) {
+            return Err("invalid authored logical rectangle");
+        }
+        if !near.is_finite() || !far.is_finite() || near <= 0.0 || far <= near {
+            return Err("invalid source camera clip pair");
+        }
+        let aspect_ratio = logical_size[0] / logical_size[1];
+        let fov = source_angle / (aspect_ratio * aspect_ratio + 1.0).sqrt();
+        if !aspect_ratio.is_finite() || aspect_ratio <= 0.0 || !fov.is_finite() || fov <= 0.0 {
+            return Err("unrepresentable authored projection");
+        }
+        let projection = PerspectiveProjection {
+            fov,
+            aspect_ratio,
+            near,
+            far,
+            near_clip_plane: Vec4::new(0.0, 0.0, -1.0, -near),
+        };
+        if !projection.get_clip_from_view().is_finite() {
+            return Err("unrepresentable authored projection matrix");
+        }
+        Ok(Self(projection))
+    }
+}
+
+impl CameraProjection for MenuCameraProjection {
+    fn get_clip_from_view(&self) -> Mat4 {
+        self.0.get_clip_from_view()
+    }
+
+    fn get_clip_from_view_for_sub(&self, sub_view: &SubCameraView) -> Mat4 {
+        let full = sub_view.full_size.as_vec2();
+        let size = sub_view.size.as_vec2();
+        assert!(full.cmpgt(Vec2::ZERO).all() && size.cmpgt(Vec2::ZERO).all());
+        assert!(sub_view.offset.is_finite());
+        let scale = full / size;
+        let offset = (full - 2.0 * sub_view.offset - size) / size;
+        // Crop normalized logical clip coordinates; Bevy's helper reintroduces physical aspect.
+        Mat4::from_scale_rotation_translation(
+            Vec3::new(scale.x, scale.y, 1.0),
+            Quat::IDENTITY,
+            Vec3::new(offset.x, -offset.y, 0.0),
+        ) * self.get_clip_from_view()
+    }
+
+    fn update(&mut self, _width: f32, _height: f32) {
+        // Target resize stretches the authored view without changing its logical frustum.
+    }
+
+    fn far(&self) -> f32 {
+        self.0.far()
+    }
+
+    fn get_frustum_corners(&self, z_near: f32, z_far: f32) -> [Vec3A; 8] {
+        self.0.get_frustum_corners(z_near, z_far)
+    }
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+
+    fn synthetic() -> MenuCameraProjection {
+        MenuCameraProjection::checked(0.89, [3.0, 7.0], 7.0, 311.0).unwrap()
+    }
+
+    #[test]
+    fn source_pose_is_preserved_and_malformed_directions_do_not_get_fallbacks() {
+        let eye = [7.0, 3.0, 11.0];
+        let target = [-2.0, 5.0, 19.0];
+        let pose = source_camera_pose(eye, target).unwrap();
+        assert_eq!(pose.translation, Vec3::from(eye));
+        assert!(
+            pose.forward()
+                .as_vec3()
+                .abs_diff_eq((Vec3::from(target) - Vec3::from(eye)).normalize(), 1e-6)
+        );
+        for (eye, target) in [
+            ([0.0; 3], [0.0; 3]),
+            ([0.0; 3], [0.0, 0.0, 1.0]),
+            ([0.0; 3], [0.0, 0.0, -1.0]),
+            ([f32::NAN, 0.0, 0.0], [1.0; 3]),
+            ([0.0; 3], [f32::INFINITY; 3]),
+            ([-f32::MAX; 3], [f32::MAX; 3]),
+        ] {
+            assert!(source_camera_pose(eye, target).is_err());
+        }
+    }
+
+    #[test]
+    fn source_angles_and_logical_rectangles_derive_both_transverse_scales() {
+        for angle in [0.37_f32, 0.89, 1.53] {
+            for size in [[0.23_f32, 0.71], [0.55, 0.55], [0.91, 0.31]] {
+                let p = MenuCameraProjection::checked(angle, size, 7.0, 311.0).unwrap();
+                let ratio = f64::from(size[0]) / f64::from(size[1]);
+                let y = 1.0 / (f64::from(angle) / (2.0 * (1.0 + ratio * ratio).sqrt())).tan();
+                let m = p.get_clip_from_view();
+                assert!((f64::from(m.x_axis.x) / (y / ratio) - 1.0).abs() < 4e-7);
+                assert!((f64::from(m.y_axis.y) / y - 1.0).abs() < 4e-7);
+            }
+        }
+    }
+
+    #[test]
+    fn resize_retains_logical_frustum_and_source_clips_through_dynamic_projection() {
+        let original = synthetic();
+        let expected = original.get_clip_from_view();
+        let corners = original.get_frustum_corners(-7.0, -311.0);
+        let mut dynamic = Projection::custom(original);
+        for (width, height) in [(400.0, 900.0), (1280.0, 1024.0), (1900.0, 600.0)] {
+            dynamic.update(width, height);
+            assert_eq!(dynamic.get_clip_from_view(), expected);
+            assert_eq!(dynamic.get_frustum_corners(-7.0, -311.0), corners);
+            assert_eq!(dynamic.far(), 311.0);
+            assert!((expected.project_point3(Vec3::new(0.0, 0.0, -7.0)).z - 1.0).abs() < 1e-6);
+        }
+        assert_eq!(synthetic().0.near_clip_plane.w, -7.0);
+    }
+
+    #[test]
+    fn frustum_corners_and_far_culling_follow_logical_projection() {
+        let p = synthetic();
+        let matrix = p.get_clip_from_view();
+        for (i, corner) in p.get_frustum_corners(-7.0, -311.0).iter().enumerate() {
+            let ndc = matrix.project_point3((*corner).into());
+            let expected = [(1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0)][i % 4];
+            assert!((ndc.x - expected.0).abs() < 1e-6);
+            assert!((ndc.y - expected.1).abs() < 1e-6);
+        }
+        let frustum = p.compute_frustum(&GlobalTransform::IDENTITY);
+        let far = &frustum.half_spaces[5];
+        assert!((far.normal().dot(Vec3A::new(0.0, 0.0, -311.0)) + far.d()).abs() < 1e-4);
+        assert!(far.normal().dot(Vec3A::new(0.0, 0.0, -312.0)) + far.d() < 0.0);
+    }
+
+    #[test]
+    fn subviews_crop_logical_coordinates_even_on_wide_physical_targets() {
+        let p = synthetic();
+        let whole = SubCameraView {
+            full_size: UVec2::new(1800, 600),
+            size: UVec2::new(1800, 600),
+            offset: Vec2::ZERO,
+        };
+        assert_eq!(p.get_clip_from_view_for_sub(&whole), p.get_clip_from_view());
+        let sub = SubCameraView {
+            full_size: whole.full_size,
+            size: UVec2::new(900, 300),
+            offset: Vec2::new(900.0, 0.0),
+        };
+        let crop = p.get_clip_from_view_for_sub(&sub);
+        let inv = p.get_clip_from_view().inverse();
+        for (full_ndc, expected) in [
+            (Vec3::new(0.0, 0.0, 0.4), Vec2::new(-1.0, -1.0)),
+            (Vec3::new(1.0, 1.0, 0.4), Vec2::ONE),
+            (Vec3::new(0.5, 0.5, 0.4), Vec2::ZERO),
+        ] {
+            let ndc = crop.project_point3(inv.project_point3(full_ndc));
+            assert!(ndc.truncate().abs_diff_eq(expected, 2e-6));
+            assert!((ndc.z - full_ndc.z).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn derived_projection_is_scale_invariant_and_rejects_malformed_inputs() {
+        assert_eq!(
+            MenuCameraProjection::checked(0.89, [6.0, 14.0], 7.0, 311.0)
+                .unwrap()
+                .get_clip_from_view(),
+            synthetic().get_clip_from_view()
+        );
+        for angle in [0.0, -1.0, f32::NAN, f32::INFINITY, std::f32::consts::PI] {
+            assert!(MenuCameraProjection::checked(angle, [3.0, 7.0], 7.0, 311.0).is_err());
+        }
+        for size in [
+            [0.0, 1.0],
+            [1.0, 0.0],
+            [f32::NAN, 1.0],
+            [1.0, f32::INFINITY],
+            [f32::MAX, f32::MIN_POSITIVE],
+            [f32::MIN_POSITIVE, f32::MAX],
+        ] {
+            assert!(MenuCameraProjection::checked(0.89, size, 7.0, 311.0).is_err());
+        }
+        for (near, far) in [
+            (0.0, 1.0),
+            (1.0, 1.0),
+            (2.0, 1.0),
+            (f32::NAN, 3.0),
+            (1.0, f32::INFINITY),
+        ] {
+            assert!(MenuCameraProjection::checked(0.89, [3.0, 7.0], near, far).is_err());
+        }
+    }
+}
 
 /// The model this module renders.
 pub const SCENE_ART: &str = r"UI\Glues\MainMenu\MainMenu3d\MainMenu3d.mdx";
@@ -154,15 +384,9 @@ pub struct LayerFlags {
 /// A blend the format asks for that `StandardMaterial` cannot reproduce exactly.
 ///
 /// Each variant names what is *different*, because "not exact" on its own is not
-/// actionable and the three cases fail differently on screen.
+/// actionable and the two cases fail differently on screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlendGap {
-    /// `filterMode 1`, the format's `Transparent`: the original **alpha-tests**
-    /// — a fragment is opaque or gone, never partly there. Bevy's equivalent is
-    /// `AlphaMode::Mask(t)`, and `t` is a game constant this workspace has not
-    /// measured, so the layer draws *blended* instead. A hard edge becomes a soft
-    /// one; nothing disappears, but the cutout look is not reproduced.
-    AlphaTestThresholdUnproven,
     /// `filterMode 3`, additive with `ONE/ONE`: the source colour is added
     /// unmodified. Bevy's `AlphaMode::Add` premultiplies first
     /// (`src_color *= src_alpha`, `src_alpha = 0`, giving
@@ -181,9 +405,6 @@ impl BlendGap {
     #[must_use]
     pub fn reason(self) -> &'static str {
         match self {
-            BlendGap::AlphaTestThresholdUnproven => {
-                "filterMode 1 alpha-tests; the threshold is unmeasured, so this draws blended"
-            }
             BlendGap::AdditiveIsPremultiplied => {
                 "filterMode 3 is ONE/ONE; Bevy's Add premultiplies by alpha"
             }
@@ -226,9 +447,8 @@ impl LayerFlags {
 fn alpha_mode_of(filter_mode: u32) -> (AlphaMode, Option<BlendGap>) {
     match filter_mode {
         0 => (AlphaMode::Opaque, None),
-        // The original cuts out; the threshold is not measured here, so this is
-        // blended and flagged rather than given an invented threshold.
-        1 => (AlphaMode::Blend, Some(BlendGap::AlphaTestThresholdUnproven)),
+        // Reconstruction convention from primary MDX renderers; see menu-alpha-test.md.
+        1 => (AlphaMode::Mask(0.75), None),
         2 => (AlphaMode::Blend, None),
         3 => (AlphaMode::Add, Some(BlendGap::AdditiveIsPremultiplied)),
         4 => (AlphaMode::Add, None),
@@ -448,14 +668,33 @@ pub struct MainMenuScene {
 /// UI camera configuration.
 pub fn spawn(
     commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    images: &mut Assets<Image>,
+    assets: GeosetAssets,
     source: &str,
     bytes: &[u8],
     textures: &[pcx_gfx::LoadedTexture],
+    fog: crate::menu_fog::MenuFog,
 ) -> Result<SceneInfo, SceneError> {
+    let GeosetAssets {
+        meshes,
+        materials,
+        images,
+    } = assets;
     let m = pcx_mdl::Mdlx::parse(bytes).map_err(|e| SceneError::Decode(e.to_string()))?;
+    let cameras = m
+        .cameras(bytes)
+        .map_err(|e| SceneError::Decode(format!("{source}: CAMS: {e}")))?;
+    let cam = cameras.first().ok_or_else(|| {
+        SceneError::Decode(format!("{source}: missing authored background camera"))
+    })?;
+    let projection = MenuCameraProjection::checked(
+        cam.field_of_view,
+        [crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H],
+        cam.near,
+        cam.far,
+    )
+    .map_err(|e| SceneError::Decode(format!("{source}: CAMS {}: {e}", cam.name)))?;
+    let camera_pose = source_camera_pose(cam.eye, cam.target)
+        .map_err(|e| SceneError::Decode(format!("{source}: CAMS {}: {e}", cam.name)))?;
     let model =
         pcx_gfx::load_model(bytes, source).map_err(|e| SceneError::Decode(e.to_string()))?;
     let runtime = pcx_gfx::mdx_runtime::RuntimePlan::parse(bytes)
@@ -528,36 +767,21 @@ pub fn spawn(
         MainMenuSceneEntity,
     )?;
 
-    // The model's own camera.
-    let cameras = m.cameras(bytes).unwrap_or_default();
+    // The model's camera zero, with source clips and logical projection.
     info.cameras = cameras.len();
-    if let Some(cam) = cameras.first() {
-        commands.spawn((
-            Camera3d::default(),
-            Projection::Perspective(PerspectiveProjection {
-                fov: if cam.field_of_view > 0.0 {
-                    cam.field_of_view
-                } else {
-                    std::f32::consts::FRAC_PI_4
-                },
-                near: cam.near.max(0.1),
-                far: cam.far.max(1000.0),
-                ..default()
-            }),
-            // The model is Z-up, which is the convention the rest of the
-            // workspace renders in, so `up` is `Z`.
-            Transform::from_translation(Vec3::from(cam.eye))
-                .looking_at(Vec3::from(cam.target), Vec3::Z),
-            Camera {
-                // Draw the world before the UI camera, which the launcher owns.
-                order: -1,
-                clear_color: ClearColorConfig::Custom(Color::srgb(0.0, 0.0, 0.0)),
-                ..default()
-            },
-            MainMenuSceneCamera,
-            MainMenuSceneEntity,
-        ));
-    }
+    commands.spawn((
+        Camera3d::default(),
+        Projection::custom(projection),
+        camera_pose,
+        fog.distance_fog(),
+        Camera {
+            order: -1,
+            clear_color: ClearColorConfig::Custom(Color::srgb(0.0, 0.0, 0.0)),
+            ..default()
+        },
+        MainMenuSceneCamera,
+        MainMenuSceneEntity,
+    ));
 
     // The model's own lights.
     let lights = m.lights(bytes).unwrap_or_default();
@@ -733,6 +957,15 @@ pub fn spawn_geosets(
         if binding.geoset_id != mesh.geoset || binding.material_id != mesh.material_id as usize {
             return Err(fail("mesh/checked GEOS material mismatch"));
         }
+        let layer = runtime
+            .materials
+            .get(binding.material_id)
+            .and_then(|material| material.layers.first())
+            .ok_or_else(|| fail("missing checked first material layer for fog"))?;
+        let fog_enabled = crate::menu_fog::material_fog_enabled(
+            layer.properties.shading_flags,
+            layer.properties.filter_mode,
+        );
         let id = selection
             .sample(mesh.geoset, frame, 0)
             .ok_or_else(|| fail("missing initial TEXS sample"))?;
@@ -750,12 +983,12 @@ pub fn spawn_geosets(
             frame,
             0,
         )?;
-        initial.push((id, alpha, uv));
+        initial.push((id, alpha, uv, fog_enabled));
     }
     let mut texture_bindings = cache_texture_images(source, runtime, &required, images);
     let mut handles = Vec::with_capacity(model.meshes.len());
     let mut bound = Vec::with_capacity(model.meshes.len());
-    for (mesh, (texture_id, alpha, uv_transform)) in model.meshes.iter().zip(initial) {
+    for (mesh, (texture_id, alpha, uv_transform, fog_enabled)) in model.meshes.iter().zip(initial) {
         let id = mesh.material_id as usize;
         let flags = layer_flags(&mdl_materials, id);
         if let Some(gap) = flags.blend_gap {
@@ -776,6 +1009,7 @@ pub fn spawn_geosets(
             perceptual_roughness: 1.0,
             // `Unshaded` in the layer's shading flags.
             unlit: flags.unshaded,
+            fog_enabled,
             // `filterMode`.
             alpha_mode: flags.alpha_mode,
             // Culling is left off on purpose: the bit that means `TwoSided` in
@@ -1462,7 +1696,20 @@ mod tests {
             std::env::var_os("PEACECRAFT3_MDX_INSTALL")
                 .expect("explicit original install required"),
         );
+        let fog_bytes =
+            crate::mainmenu::art_bytes(Some(&install), crate::mainmenu::MENU_FOG_CONFIG)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{}: missing {}",
+                        install.display(),
+                        crate::mainmenu::MENU_FOG_CONFIG
+                    )
+                });
+        let fog_table =
+            crate::menu_skin::SkinTable::parse(std::str::from_utf8(&fog_bytes).unwrap()).unwrap();
         for expansion in [false, true] {
+            let fog =
+                crate::menu_fog::MenuFog::checked(&fog_table, usize::from(expansion)).unwrap();
             let source = scene_source(expansion).0;
             let bytes = crate::mainmenu::art_bytes(Some(&install), source)
                 .unwrap_or_else(|| panic!("{}: missing {source}", install.display()));
@@ -1477,15 +1724,36 @@ mod tests {
             let mut images = Assets::<Image>::default();
             let info = spawn(
                 &mut world.commands(),
-                &mut meshes,
-                &mut materials,
-                &mut images,
+                GeosetAssets {
+                    meshes: &mut meshes,
+                    materials: &mut materials,
+                    images: &mut images,
+                },
                 source,
                 &bytes,
                 &textures,
+                fog,
             )
             .unwrap();
             world.flush();
+            let expected_fog = fog.distance_fog();
+            let mut camera_fog =
+                world.query_filtered::<&bevy::pbr::DistanceFog, With<MainMenuSceneCamera>>();
+            let actual_fog = camera_fog
+                .single(&world)
+                .expect("exactly one original background fog camera");
+            assert_eq!(actual_fog.color, expected_fog.color);
+            let (
+                bevy::pbr::FogFalloff::Linear { start, end },
+                bevy::pbr::FogFalloff::Linear {
+                    start: expected_start,
+                    end: expected_end,
+                },
+            ) = (&actual_fog.falloff, &expected_fog.falloff)
+            else {
+                panic!("source-selected linear fog required");
+            };
+            assert_eq!((start, end), (expected_start, expected_end));
             let scene = world.resource::<MainMenuScene>();
             assert_eq!(info.bones, authored_bones.len());
             assert_eq!(info.helpers, authored_helpers.len());
@@ -1674,9 +1942,7 @@ mod tests {
         }
     }
 
-    /// The flags the materials actually carry, as measured. These are the
-    /// numbers the material construction is built on, so they are pinned rather
-    /// than described.
+    /// Source layer fields determine the scene material state.
     #[test]
     fn the_layer_flags_are_the_measured_ones() {
         let Some(bytes) = scene_bytes() else { return };
@@ -1698,46 +1964,48 @@ mod tests {
             .iter()
             .filter(|f| f.alpha_mode == AlphaMode::Add)
             .count();
-        // filterMode 0:18, 1:6, 2:4, 3:1, 4:2 across the 31 layers.
-        assert_eq!(opaque, 18, "filterMode 0");
-        assert_eq!(blend, 10, "filterMode 1 and 2");
-        assert_eq!(add, 3, "filterMode 3 and 4");
+        let filter_count = |mode| {
+            materials
+                .iter()
+                .flat_map(|material| material.tex_layers())
+                .filter(|layer| layer.filter_mode == mode)
+                .count()
+        };
+        let masked = all
+            .iter()
+            .filter(|f| f.alpha_mode == AlphaMode::Mask(0.75))
+            .count();
+        assert_eq!(opaque, filter_count(0), "filterMode 0");
+        assert_eq!(masked, filter_count(1), "filterMode 1");
+        assert_eq!(blend, filter_count(2), "filterMode 2");
+        assert_eq!(add, filter_count(3) + filter_count(4), "filterMode 3 and 4");
         assert_eq!(
             all.iter().filter(|f| f.unshaded).count(),
-            4,
+            materials
+                .iter()
+                .flat_map(|material| material.tex_layers())
+                .filter(|layer| layer.shading_flags & 1 != 0)
+                .count(),
             "shadingFlags bit 0"
         );
-        // filterMode 1 (x6) alpha-tests and filterMode 3 (x1) is ONE/ONE;
-        // filterMode 2 (x4) and 4 (x2) are exact.
+        // Transparent uses the reconstruction cutout convention; mode 3 remains a gap.
         let gaps: Vec<BlendGap> = all.iter().filter_map(|f| f.blend_gap).collect();
-        assert_eq!(
-            gaps.len(),
-            7,
-            "six alpha-test plus one non-premultiplied additive"
-        );
-        assert_eq!(
-            gaps.iter()
-                .filter(|g| **g == BlendGap::AlphaTestThresholdUnproven)
-                .count(),
-            6
-        );
+        assert_eq!(gaps.len(), filter_count(3) + filter_count(6));
         assert_eq!(
             gaps.iter()
                 .filter(|g| **g == BlendGap::AdditiveIsPremultiplied)
                 .count(),
-            1
+            filter_count(3)
         );
 
-        // The alpha the scene really stores, and the reason the crate's field
-        // cannot be used: `TexLayer::static_alpha` reads the `coordId` word.
-        let mut alphas: Vec<String> = all.iter().map(|f| format!("{:.2}", f.alpha)).collect();
-        alphas.sort();
-        alphas.dedup();
-        assert_eq!(
-            alphas,
-            ["0.30", "0.55", "1.00"],
-            "the scene's static alphas"
-        );
+        for (material, flags) in materials.iter().zip(&all) {
+            assert_eq!(
+                flags.alpha,
+                material.checked_layers().unwrap()[0]
+                    .properties
+                    .static_alpha
+            );
+        }
     }
 
     /// The scene uses the checked decoder's alpha, not the coordinate-id word.
@@ -1760,16 +2028,13 @@ mod tests {
         }
     }
 
-    /// Every `filterMode` word's mapping, pinned. The three gaps are asserted
+    /// Every `filterMode` word's mapping, pinned. The two gaps are asserted
     /// as gaps: a change that silently drops one would make the scene look
     /// closer to right while being further from the original.
     #[test]
-    fn the_blend_mapping_is_the_vendored_one() {
+    fn the_blend_mapping_preserves_other_modes_and_gaps() {
         assert_eq!(alpha_mode_of(0), (AlphaMode::Opaque, None));
-        assert_eq!(
-            alpha_mode_of(1),
-            (AlphaMode::Blend, Some(BlendGap::AlphaTestThresholdUnproven))
-        );
+        assert_eq!(alpha_mode_of(1), (AlphaMode::Mask(0.75), None));
         assert_eq!(alpha_mode_of(2), (AlphaMode::Blend, None));
         assert_eq!(
             alpha_mode_of(3),
@@ -2012,8 +2277,23 @@ mod texture_selection_tests {
         }
     }
     fn material(base: u32, tracks: &[TextureFrameTrack]) -> Material {
+        material_with_flags(base, tracks, 2, 1)
+    }
+    fn material_with_flags(
+        base: u32,
+        tracks: &[TextureFrameTrack],
+        filter_mode: u32,
+        shading_flags: u32,
+    ) -> Material {
         let mut layer = Vec::new();
-        for word in [2_u32, 1, base, NO_ID, 0, 0.25_f32.to_bits()] {
+        for word in [
+            filter_mode,
+            shading_flags,
+            base,
+            NO_ID,
+            0,
+            0.25_f32.to_bits(),
+        ] {
             layer.extend(word.to_le_bytes());
         }
         for track in tracks {
@@ -2048,7 +2328,9 @@ mod texture_selection_tests {
         textures: Vec<pcx_gfx::LoadedTexture>,
     }
     fn fixture(tracks: &[TextureFrameTrack]) -> Fixture {
-        let materials = vec![material(1, tracks), material(7, &[])];
+        fixture_with_materials(vec![material(1, tracks), material(7, &[])])
+    }
+    fn fixture_with_materials(materials: Vec<Material>) -> Fixture {
         let mut bytes = b"MDLX".to_vec();
         bytes.extend(b"VERS");
         bytes.extend(4_u32.to_le_bytes());
@@ -2190,6 +2472,65 @@ mod texture_selection_tests {
             result,
         }
     }
+    #[test]
+    fn shared_geoset_spawn_preserves_unfogged_and_unshaded_independently() {
+        let mut f = fixture(&[]);
+        f.runtime.materials[0].layers[0].properties.shading_flags = 0x21;
+        f.runtime.materials[1].layers[0].properties.shading_flags = 0x01;
+        let spawned = spawn(&f);
+        let geosets = spawned.result.unwrap();
+        assert!(
+            !spawned
+                .materials
+                .get(&geosets.bound[0].2)
+                .unwrap()
+                .fog_enabled
+        );
+        assert!(
+            spawned
+                .materials
+                .get(&geosets.bound[1].2)
+                .unwrap()
+                .fog_enabled
+        );
+    }
+
+    #[test]
+    fn additive_source_material_does_not_add_fog_color_or_change_authored_alpha() {
+        let f = fixture_with_materials(vec![
+            material_with_flags(1, &[], 3, 0x10),
+            material_with_flags(7, &[], 2, 0x10),
+        ]);
+        let spawned = spawn(&f);
+        let geosets = spawned.result.unwrap();
+        let additive = spawned.materials.get(&geosets.bound[0].2).unwrap();
+        let blended = spawned.materials.get(&geosets.bound[1].2).unwrap();
+        assert!(!additive.fog_enabled);
+        assert!(blended.fog_enabled);
+        assert_eq!(additive.alpha_mode, AlphaMode::Add);
+        assert_eq!(additive.base_color.alpha(), 0.25);
+        assert_eq!(blended.base_color.alpha(), 0.25);
+        assert!(!additive.unlit);
+    }
+
+    #[test]
+    fn transparent_source_layer_spawns_cutout_with_authored_opacity() {
+        let f = fixture_with_materials(vec![
+            material_with_flags(1, &[], 1, 0x10),
+            material_with_flags(7, &[], 2, 0x10),
+        ]);
+        let spawned = spawn(&f);
+        let geosets = spawned.result.unwrap();
+        let cutout = spawned.materials.get(&geosets.bound[0].2).unwrap();
+        let blended = spawned.materials.get(&geosets.bound[1].2).unwrap();
+        assert_eq!(cutout.alpha_mode, AlphaMode::Mask(0.75));
+        assert_eq!(blended.alpha_mode, AlphaMode::Blend);
+        assert_eq!(cutout.base_color.alpha(), 0.25);
+        assert_eq!(blended.base_color.alpha(), 0.25);
+        assert!(cutout.fog_enabled);
+        assert!(!cutout.unlit);
+    }
+
     fn rendered_entities(world: &mut World) -> usize {
         world
             .query::<(&Mesh3d, &MeshMaterial3d<StandardMaterial>)>()
@@ -3191,5 +3532,75 @@ mod texture_selection_tests {
             animated_channels > 0,
             "fixture did not exercise an authored global selection channel"
         );
+    }
+}
+
+#[cfg(test)]
+mod fog_camera_tests {
+    use super::*;
+    use bevy::pbr::{DistanceFog, FogFalloff};
+
+    fn empty_scene_with_camera() -> Vec<u8> {
+        let mut bytes = b"MDLX".to_vec();
+        let mut chunk = |tag: &[u8; 4], payload: &[u8]| {
+            bytes.extend(tag);
+            bytes.extend(u32::try_from(payload.len()).unwrap().to_le_bytes());
+            bytes.extend(payload);
+        };
+        chunk(b"VERS", &800_u32.to_le_bytes());
+        chunk(b"MODL", &vec![0; pcx_mdl::MODL_SIZE]);
+        let mut camera = vec![0; 120];
+        camera[..4].copy_from_slice(&120_u32.to_le_bytes());
+        for (offset, value) in [
+            (84, 7_f32),
+            (88, 11.0),
+            (92, 13.0),
+            (96, 0.9),
+            (100, 701.0),
+            (104, 3.0),
+            (108, 2.0),
+            (112, 3.0),
+            (116, 5.0),
+        ] {
+            camera[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        chunk(b"CAMS", &camera);
+        bytes
+    }
+
+    #[test]
+    fn original_background_camera_gets_selected_fog_without_changing_ui_camera() {
+        let table = crate::menu_skin::SkinTable::parse("[MenuZFog]\nStyle=0,0\nDensity=.17,.29\nStart=13,23\nEnd=73,97\nColor=101,37,59,83,109,43,71,89\n").unwrap();
+        let fog = crate::menu_fog::MenuFog::checked(&table, 1).unwrap();
+        let mut world = World::new();
+        let ui = world.spawn(Camera2d).id();
+        let mut meshes = Assets::default();
+        let mut materials = Assets::default();
+        let mut images = Assets::default();
+        spawn(
+            &mut world.commands(),
+            GeosetAssets {
+                meshes: &mut meshes,
+                materials: &mut materials,
+                images: &mut images,
+            },
+            "synthetic-background",
+            &empty_scene_with_camera(),
+            &[],
+            fog,
+        )
+        .unwrap();
+        world.flush();
+        let mut cameras = world.query_filtered::<&DistanceFog, With<MainMenuSceneCamera>>();
+        let fog = cameras.single(&world).unwrap();
+        assert!(matches!(
+            fog.falloff,
+            FogFalloff::Linear {
+                start: 23.0,
+                end: 97.0
+            }
+        ));
+        assert_eq!(fog.color, Color::srgba_u8(43, 71, 89, 109));
+        assert!(world.get::<DistanceFog>(ui).is_none());
     }
 }

@@ -99,6 +99,9 @@ pub const GLOBAL_STRINGS_FDF: &str = r"UI\FrameDef\GlobalStrings.fdf";
 /// asset's.
 pub const SKIN_TABLE: &str = r"UI\war3skins.txt";
 
+/// Authored edition-specific background fog settings.
+pub const MENU_FOG_CONFIG: &str = r"UI\MiscData.txt";
+
 /// The font file `face` names, from the supplied skin table.
 ///
 /// Resolution is **unambiguous across the whole table**: the engine's section
@@ -184,6 +187,7 @@ pub fn served_name(wc3_path: &str) -> Option<&'static str> {
         BUTTON_BORDER_ART => Some("menu/border.blp"),
         BUTTON_BG_ART => Some("menu/bg.blp"),
         SKIN_TABLE => Some("menu/war3skins.txt"),
+        MENU_FOG_CONFIG => Some("menu/miscdata.txt"),
         LOGO_TEXTURE => Some("menu/logo.blp"),
         MAIN_MENU_FDF => Some("menu/mainmenu.fdf"),
         GLOBAL_STRINGS_FDF => Some("menu/globalstrings.fdf"),

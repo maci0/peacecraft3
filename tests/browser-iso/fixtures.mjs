@@ -71,6 +71,7 @@ export function menuMembers(musicPath) {
     'UI\\FrameDef\\Glue\\StandardTemplates.fdf': text(style + 'Frame "BACKDROP" "SyntheticBackdrop" {\n BackdropBackground "Synthetic\\Texture.blp",\n}\n'),
     'UI\\FrameDef\\Glue\\MainMenu.fdf': text('Frame "FRAME" "MainMenuFrame" {\n Frame "FRAME" "ControlLayer" {\n Frame "BUTTON" "SinglePlayerButton" {\n ButtonText "SyntheticSelectedText",\n Frame "TEXT" "SyntheticSelectedText" INHERITS "SyntheticTextStyle" {\n Text "SYNTHETIC_LABEL",\n }\n }\n }\n}\n'),
     'UI\\war3skins.txt': text(`[SyntheticSection]\nSelectedSyntheticFace=${fontPath}\nGlueSpriteLayerBackground_V0=${scenePath}\nGlueSpriteLayerBackground_V1=${expansionScenePath}\n`),
+    'UI\\MiscData.txt': text('[MenuZFog]\nStyle=0,0\nDensity=.17,.29\nStart=13,23\nEnd=73,97\nColor=101,37,59,83,109,43,71,89\n'),
     [fontPath]: text('synthetic font placeholder: API storage proof only'),
     [scenePath]: model,
     [texturePath]: new Uint8Array([1, 9, 3, 7]),

@@ -996,9 +996,44 @@ Format: `date — subsystem — symptom — root cause — status`
 - [!] Original script execution fails closed on unsupported
       `GetPlayerNeutralPassive` during `common.j` initialization; original
       campaign completion and native behavior are not established.
+      Opt-in selected-map adapters now derive both passive/aggressive rules from a
+      locally supplied verified executable/profile and the admitted W3I. The
+      explicit Human01 initializer gate now composes a source-derived typed
+      player-color Host and reaches `ConvertRace` after all authored colors.
+      Launcher profile loading/default Host wiring and other player natives
+      remain open; see `selected-map-neutral-host.md` and `playercolor-host.md`.
 
 ### Current implemented slices (2026-10-14)
 
+- Menu fog is read from the required local `UI\MiscData.txt` edition column and
+  attached to the original background camera. Material Unfogged flags remain
+  independent of Unshaded. Missing/malformed fog rejects the import candidate
+  before replacing its previous assets. Additive mode 3 suppresses fog color as a
+  trace-corroborated recreation convention, preserving authored alpha. The fog
+  application gate passes 272 tests with
+  eight explicit ignores, strict native/WASM Clippy and the paired original-menu
+  camera gate. Adding classic Transparent cutout raises the combined native
+  count to 273; strict native/WASM gates remain clean. The earlier release WASM passes 49 in-process import-worker checks and
+  explicit fog rollback, clear and RoC/TFT cases without a server/network.
+  A local original-fixture browser Main/Video Options/Main run passes, with no
+  uploads, sockets or page errors; its captures identified haze before the
+  additive correction. A fresh corrected release separately passes that same
+  four-capture workflow and actual WASM checks with zero uploads/sockets/errors.
+  All captures were reviewed; haze and native visual parity remain open.
+  Publication is tracked separately; see `docs/re-notes/menu-authored-fog.md`.
+- Classic material Transparent mode now uses alpha-test coverage instead of
+  soft blending, following the pinned primary renderer's cutoff and composed
+  opacity convention. Actual ECS material construction preserves source alpha;
+  PRE2 is unaffected. Native fragment/depth parity remains open; see
+  `docs/re-notes/menu-alpha-test.md`.
+- The authored menu background camera now derives its normalized angle and
+  logical aspect from CAMS plus the established glue coordinate convention.
+  Source clips/pose are checked before scene writes; resize retains the logical
+  frustum. The affected application passes 266 tests with eight explicit ignores,
+  original RoC/TFT import and material-binding gates, strict native/WASM checks
+  and a release WASM build. The code-only package is local and unpublished;
+  rendered comparison and native presentation scaling remain open. See
+  `menu-camera-projection.md`.
 - Strict workspace check across all targets/features passed; direct registry
   dependencies are at latest stable releases and compatible transitives refreshed.
   Rust stable is 1.99.0; native builders install the stable channel and deny warnings.

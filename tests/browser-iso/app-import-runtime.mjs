@@ -84,6 +84,7 @@ async function prepare() {
   const [modelPath, modelAlias] = strings(expansion[1]); assert(modelPath && modelAlias);
   const mainPath = constant(main, 'MAIN_MENU_FDF'), templatePath = constant(main, 'STANDARD_TEMPLATES_FDF'), stringsPath = constant(main, 'GLOBAL_STRINGS_FDF');
   const skinPath = constant(main, 'SKIN_TABLE');
+  const fogPath = constant(main, 'MENU_FOG_CONFIG');
   const sourceRules = JSON.parse(process.env.PCX_APP_IMPORT_MEMBER_SOURCES ?? '{}');
   // Explicit TFT fixture choices supported by the existing rendering evidence;
   // this is not an MPQ priority policy or an archive release identity claim.
@@ -135,6 +136,7 @@ async function prepare() {
     const value = global.split(/\r?\n/).map(l => l.trim()).find(l => l.startsWith(`${key} `) || l.startsWith(`${key}\t`)); assert(value, `Missing authored GlobalStrings key ${key}`);
     return { id, button: frameNames[i * 2], plate: frameNames[i * 2 + 1], key, raw: quoted(value), visible: quoted(value).replace(/\|C[0-9a-f]{8}|\|R/gi, '').replaceAll('||', '|') }; });
   const skin = decode(await add(skinPath));
+  await add(fogPath);
   const fonts = labels.map(label => {
     const textFrame = quoted(fdf.prop(label.button, 'ButtonText'));
     const face = quoted(fdf.prop(textFrame, 'FrameFont'));
@@ -173,7 +175,7 @@ async function prepare() {
   const conflictPath = `${output}/unequal-members.iso`;
   await writeFile(conflictPath, isoFixture([{ name: 'A.BIN;1', bytes: mpqFixture(members) }, { name: 'B.BIN;1', bytes: mpqFixture(conflict) }]));
   const numeric = name => { const m = main.match(new RegExp(`const\\s+${name}\\s*:\\s*f32\\s*=\\s*([0-9._]+)`)); assert(m); return Number(m[1].replaceAll('_', '')); };
-  const result = { install, executableSha256: expectedExe, archiveAliases: aliases, provenance, sourceRules, optionalFrameDiagnostics, modelPath, modelAlias, expectedScene, labels, fonts, fontFiles, skinPath, click, musicPath,
+  const result = { install, executableSha256: expectedExe, archiveAliases: aliases, provenance, sourceRules, optionalFrameDiagnostics, modelPath, modelAlias, expectedScene, labels, fonts, fontFiles, skinPath, fogPath, click, musicPath,
     frameUnits: [numeric('FRAME_W'), numeric('FRAME_H')], frameText: `${templates}\n${menu}`, isoPath, conflictPath,
     limitation: 'Locally repacked ISO/MPQ fixture from supplied original menu members; not retail ISO/installer acceptance or proven original archive priority' };
   await writeFile(`${output}/prepared.json`, JSON.stringify(result, null, 2));
@@ -188,6 +190,7 @@ function mdlTextures(bytes) {
 async function run() {
   assert.equal(process.env.PCX_APP_IMPORT_WASM_READY, '1', 'Generated WASM/glue readiness required before this running-app check');
   const fixture = JSON.parse(await readFile(`${output}/prepared.json`, 'utf8'));
+  assert(fixture.fogPath && fixture.provenance.some(record => record.member.toLowerCase() === fixture.fogPath.toLowerCase()), 'Regenerate prepared.json and its local ISO: this fixture lacks required authored fog input');
   const { chromium } = await import(pathToFileURL(process.env.PCX_PLAYWRIGHT_MODULE ?? `${root}.scratch/browser-check/node_modules/playwright-core/index.mjs`));
   const origin = process.env.PCX_APP_IMPORT_ORIGIN ?? 'http://127.0.0.1:8931';
   const browser = await chromium.launch({ executablePath: '/usr/bin/chromium', args: ['--no-sandbox', '--enable-unsafe-swiftshader'] });
@@ -199,7 +202,7 @@ async function run() {
     page.on('pageerror', e => errors.push(e.message)); page.on('console', m => logs.push({ type: m.type(), text: m.text() })); page.on('websocket', s => sockets.push(s.url()));
     await page.addInitScript(() => { window.localImportEvents = []; window.addEventListener('peacecraft3-local-import', e => localImportEvents.push(e.detail)); });
     await page.goto(`${origin}/index.html`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => globalThis.peacecraft3?.stored_asset('menu/war3skins.txt') && globalThis.peacecraft3?.stored_asset('menu/globalstrings.fdf') && globalThis.peacecraft3?.stored_asset('menu/standardtemplates.fdf') && globalThis.peacecraft3?.stored_asset('menu/mainmenu.fdf'));
+    await page.waitForFunction(() => globalThis.peacecraft3?.stored_asset('menu/war3skins.txt') && peacecraft3.stored_asset('menu/miscdata.txt') && globalThis.peacecraft3?.stored_asset('menu/globalstrings.fdf') && globalThis.peacecraft3?.stored_asset('menu/standardtemplates.fdf') && globalThis.peacecraft3?.stored_asset('menu/mainmenu.fdf'));
     const initialFonts = await page.evaluate(() => peacecraft3.menu_font_files().map(path => ({ path, alias: peacecraft3.menu_font_alias(path) })));
     assert(initialFonts.length > 0);
     for (const font of initialFonts) await page.waitForFunction(alias => peacecraft3.stored_asset(alias)?.length > 0, font.alias);
@@ -301,7 +304,7 @@ async function runFocusHandoff() {
             scrollX, scrollY, intro: peacecraft3Intro.status() }));
         });
         await page.goto(`${origin}/index.html`, { waitUntil: 'domcontentloaded' });
-        await page.waitForFunction(() => globalThis.peacecraft3?.stored_asset('menu/standardtemplates.fdf') && peacecraft3.stored_asset('menu/mainmenu.fdf') && peacecraft3.stored_asset('menu/war3skins.txt'));
+        await page.waitForFunction(() => globalThis.peacecraft3?.stored_asset('menu/standardtemplates.fdf') && peacecraft3.stored_asset('menu/mainmenu.fdf') && peacecraft3.stored_asset('menu/war3skins.txt') && peacecraft3.stored_asset('menu/miscdata.txt'));
         const settings = `${output}/${method}-launcher.png`; await page.screenshot({ path: settings });
         const { stdout } = await exec('/usr/bin/tesseract', [settings, 'stdout', '--psm', '11', 'tsv']);
         const words = stdout.split('\n').slice(1).map(line => line.split('\t')).filter(v => v.length >= 12);
