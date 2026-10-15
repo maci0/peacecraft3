@@ -37,6 +37,8 @@ pub enum Failure {
     CameraState(&'static str),
     #[error("startup clock: {0}")]
     ClockState(&'static str),
+    #[error("map music selection: {0}")]
+    MusicState(&'static str),
     #[error("day/night setup: {0}")]
     DayNightState(&'static str),
     #[error("day/night model is not admitted: {0}")]
@@ -485,7 +487,7 @@ mod tests;
 #[path = "object_host.rs"]
 mod objects;
 pub use objects::{
-    CameraState, DayNightState, MapConfig, MapConfigBudget, ObjectHost, PlayerAdmissionError,
-    PlayerBudget, PlayerSettings, SoundState, StartLocation, StartPriorities, StartPriority,
-    StartupClockState, TimerHost,
+    CameraState, DayNightState, MapConfig, MapConfigBudget, MapMusicSelection, ObjectHost,
+    PlayerAdmissionError, PlayerBudget, PlayerSettings, SoundState, StartLocation, StartPriorities,
+    StartPriority, StartupClockState, TimerHost,
 };

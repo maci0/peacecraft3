@@ -17,6 +17,7 @@ pub struct ObjectHost {
     sound_start_limit: Option<usize>,
     sound_starts: Vec<HandleId>,
     startup_clock: Option<clock::StartupClockState>,
+    map_music: Option<music::State>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -39,6 +40,7 @@ impl ObjectHost {
             sound_start_limit: None,
             sound_starts: Vec::new(),
             startup_clock: None,
+            map_music: None,
         })
     }
     fn contract(
@@ -257,6 +259,9 @@ impl ObjectHost {
 }
 impl Host for ObjectHost {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.map_music_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.startup_clock_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -328,3 +333,7 @@ pub use sounds::SoundState;
 #[path = "startup_clock_host.rs"]
 mod clock;
 pub use clock::StartupClockState;
+
+#[path = "map_music_host.rs"]
+mod music;
+pub use music::MapMusicSelection;
