@@ -612,6 +612,16 @@ pub fn cmyk_to_rgb(c: u8, m: u8, y: u8, k: u8) -> [u8; 3] {
 /// read back from the decoder rather than assumed: every shipped texture
 /// decodes to a 4-channel layout, which is why this cannot just ask for RGB24.
 pub fn decode_jpeg(d: &[u8], h: &Header, index: usize) -> Result<Vec<u8>, Error> {
+    decode_jpeg_with_limit(d, h, index, usize::MAX)
+}
+
+/// Decode with a caller budget checked against both BLP and JPEG dimensions before pixels.
+pub fn decode_jpeg_with_limit(
+    d: &[u8],
+    h: &Header,
+    index: usize,
+    max_rgba_bytes: usize,
+) -> Result<Vec<u8>, Error> {
     if h.content != 0 {
         return Err(match h.content {
             1 => Error::NotDirect,
@@ -619,24 +629,34 @@ pub fn decode_jpeg(d: &[u8], h: &Header, index: usize) -> Result<Vec<u8>, Error>
         });
     }
     let (w, hh) = h.mip_size(index);
+    let px = usize::try_from(w)
+        .ok()
+        .and_then(|w| usize::try_from(hh).ok()?.checked_mul(w))
+        .ok_or(Error::Unsupported("jpeg dimensions overflow"))?;
+    let rgba_bytes = px
+        .checked_mul(4)
+        .filter(|n| *n <= max_rgba_bytes)
+        .ok_or(Error::Unsupported("jpeg RGBA budget"))?;
     let head = jpeg_header(d, h)?;
     let body = mip_bytes(d, h, index)?;
 
-    let mut stream = Vec::with_capacity(head.len() + body.len());
+    let stream_len = head
+        .len()
+        .checked_add(body.len())
+        .ok_or(Error::Unsupported("jpeg stream size overflow"))?;
+    let mut stream = Vec::new();
+    stream
+        .try_reserve_exact(stream_len)
+        .map_err(|_| Error::Unsupported("jpeg stream allocation"))?;
     stream.extend_from_slice(head);
     stream.extend_from_slice(body);
 
     let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(&stream));
-    // `info()` is only populated once `decode()` has parsed the frame, so the
-    // decode has to come first even though the header describes the output.
-    let rgb = decoder.decode().map_err(|e| {
-        Error::Unsupported(match e {
-            jpeg_decoder::Error::Io(_) => "jpeg io",
-            _ => "unsupported jpeg data",
-        })
-    })?;
+    decoder.set_max_decoding_buffer_size(max_rgba_bytes);
+    decoder
+        .read_info()
+        .map_err(|_| Error::Unsupported("unsupported jpeg metadata"))?;
     let info = decoder.info().ok_or(Error::Unsupported("jpeg frame"))?;
-    let px = (w as usize) * (hh as usize);
     if usize::from(info.width) != w as usize || usize::from(info.height) != hh as usize {
         return Err(Error::UnrecognisedMip {
             index,
@@ -645,6 +665,12 @@ pub fn decode_jpeg(d: &[u8], h: &Header, index: usize) -> Result<Vec<u8>, Error>
             h: hh,
         });
     }
+    let rgb = decoder.decode().map_err(|e| {
+        Error::Unsupported(match e {
+            jpeg_decoder::Error::Io(_) => "jpeg io",
+            _ => "unsupported jpeg data",
+        })
+    })?;
     let format = info.pixel_format;
 
     let channels = format.pixel_bytes();
@@ -660,7 +686,10 @@ pub fn decode_jpeg(d: &[u8], h: &Header, index: usize) -> Result<Vec<u8>, Error>
     // Whether a fourth JPEG component is an alpha channel. `alpha_bits` is the
     // BLP1 flag at `0x08`: a non-zero value is the texture saying it has alpha.
     let has_alpha = h.alpha_bits > 0;
-    let mut out = vec![0u8; px * 4];
+    let mut out = Vec::new();
+    out.try_reserve_exact(rgba_bytes)
+        .map_err(|_| Error::Unsupported("jpeg RGBA allocation"))?;
+    out.resize(rgba_bytes, 0);
     for i in 0..px {
         let p = &rgb[i * channels..(i + 1) * channels];
         out[i * 4..i * 4 + 4].copy_from_slice(&rgba_from_jpeg(format, p, has_alpha));
@@ -1842,5 +1871,56 @@ mod logo_alpha_tests {
             pixels.iter().any(|p| (1..255).contains(&p[3])),
             "partial-alpha edges"
         );
+    }
+}
+
+#[cfg(test)]
+mod bounded_jpeg_tests {
+    use super::*;
+    // Synthetic two-pixel grayscale JPEG; no supplied game content.
+    fn source() -> Vec<u8> {
+        let jpeg: &[u8] = &[
+            255, 216, 255, 224, 0, 16, 74, 70, 73, 70, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 255, 219, 0,
+            67, 0, 6, 4, 5, 5, 5, 4, 6, 5, 5, 5, 7, 6, 6, 7, 9, 15, 10, 9, 8, 8, 9, 19, 13, 14, 11,
+            15, 22, 19, 23, 23, 22, 19, 21, 21, 24, 27, 35, 30, 24, 26, 33, 26, 21, 21, 30, 41, 31,
+            33, 36, 37, 39, 40, 39, 24, 29, 43, 46, 43, 38, 46, 35, 38, 39, 38, 255, 192, 0, 11, 8,
+            0, 1, 0, 2, 1, 1, 17, 0, 255, 196, 0, 20, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 6, 255, 196, 0, 27, 16, 0, 0, 7, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4,
+            5, 6, 54, 117, 179, 255, 218, 0, 8, 1, 1, 0, 0, 63, 0, 109, 12, 167, 177, 103, 167,
+            230, 81, 255, 217,
+        ];
+        let mut bytes = vec![0; 160];
+        bytes[..4].copy_from_slice(b"BLP1");
+        bytes[12..16].copy_from_slice(&2_u32.to_le_bytes());
+        bytes[16..20].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[28..32].copy_from_slice(&160_u32.to_le_bytes());
+        bytes[92..96].copy_from_slice(&(jpeg.len() as u32).to_le_bytes());
+        bytes.extend(jpeg);
+        bytes
+    }
+    #[test]
+    fn bounded_decode_preserves_pixels_and_refuses_insufficient_output_budget() {
+        let bytes = source();
+        let header = Header::parse(&bytes).unwrap();
+        let expected = decode_jpeg(&bytes, &header, 0).unwrap();
+        assert_eq!(expected.len(), 8);
+        assert_eq!(
+            decode_jpeg_with_limit(&bytes, &header, 0, 8).unwrap(),
+            expected
+        );
+        assert!(matches!(
+            decode_jpeg_with_limit(&bytes, &header, 0, 7),
+            Err(Error::Unsupported("jpeg RGBA budget"))
+        ));
+    }
+    #[test]
+    fn mismatched_jpeg_frame_is_refused_from_metadata_before_pixel_decode() {
+        let mut bytes = source();
+        bytes[12..16].copy_from_slice(&1_u32.to_le_bytes());
+        let header = Header::parse(&bytes).unwrap();
+        assert!(matches!(
+            decode_jpeg_with_limit(&bytes, &header, 0, 4),
+            Err(Error::UnrecognisedMip { w: 1, h: 1, .. })
+        ));
     }
 }

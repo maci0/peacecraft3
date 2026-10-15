@@ -593,12 +593,37 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
                         )
                     },
                 )?;
+                let context = format!(
+                    "edition={}; import candidate; member={path}",
+                    usize::from(expansion)
+                );
+                let particle_model =
+                    crate::mainmenu_scene::particle_import_needed(&context, &bytes)?;
+                let mut decoded = Vec::new();
+                let mut remaining_pixels = crate::mainmenu_scene::MENU_IMAGE_BYTES;
                 for texture in crate::mainmenu_scene::texture_paths(&bytes)
                     .map_err(|e| format!("{path}: {e}"))?
                 {
                     let raw = extract_unique(set, &texture)?;
+                    if particle_model {
+                        decoded.push(
+                            pcx_gfx::load_image_bounded(&raw, &texture, remaining_pixels)
+                                .map_err(|e| format!("{context}: TEXS {texture}: {e}"))?,
+                        );
+                    }
+                    if let Some(image) = decoded.last()
+                        && particle_model
+                    {
+                        remaining_pixels -= image.rgba.len();
+                    }
                     let alias = crate::mainmenu_scene::texture_served_name_in(&texture, directory);
                     put(&texture, Some(&alias), raw)?;
+                }
+                if particle_model
+                    && let Some(gap) =
+                        crate::mainmenu_scene::validate_particle_import(&context, &bytes, &decoded)?
+                {
+                    notes.push(gap);
                 }
                 put(&path, Some(alias), bytes)?;
                 models += 1;

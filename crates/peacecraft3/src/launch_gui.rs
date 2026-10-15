@@ -236,6 +236,8 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     peacecraft3::map_requests::install(&mut app);
     crate::map_source_controls::install(&mut app);
     app.add_plugins(DefaultPlugins.set(window))
+        .add_plugins(crate::menu_particle_order::MenuParticleOrderPlugin)
+        .add_plugins(crate::mainmenu_scene::ParticleMaterialPlugin)
         .add_plugins(bevy::input_focus::tab_navigation::TabNavigationPlugin)
         .insert_resource(Launcher::default())
         .init_resource::<MenuArtCache>()
@@ -1067,6 +1069,7 @@ fn initialize_menu_logo(
 struct SceneAssets<'w> {
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<StandardMaterial>>,
+    particle_materials: ResMut<'w, Assets<crate::mainmenu_scene::ParticleMaterial>>,
     images: ResMut<'w, Assets<Image>>,
 }
 
@@ -1101,6 +1104,7 @@ fn initialize_menu_scene(
     let SceneAssets {
         mut meshes,
         mut materials,
+        mut particle_materials,
         mut images,
     } = assets;
     if menu.is_empty() {
@@ -1183,6 +1187,10 @@ fn initialize_menu_scene(
     };
     state.finished = true;
     let textures = crate::mainmenu_scene::load_textures_in(install.as_deref(), &bytes, directory);
+    let scene_context = format!(
+        "edition={:?}; install={:?}; member={}; desktop-first/browser-store-fallback",
+        launcher.mode.addon, install, source
+    );
     match crate::mainmenu_scene::spawn(
         &mut commands,
         crate::mainmenu_scene::GeosetAssets {
@@ -1190,17 +1198,20 @@ fn initialize_menu_scene(
             materials: &mut materials,
             images: &mut images,
         },
-        &source,
+        &mut particle_materials,
+        &scene_context,
         &bytes,
         &textures,
         fog,
     ) {
         Ok(info) => info!(
-            "Original menu background: {} geosets, {} textures, {} ms loop; missing {:?}",
+            "Original menu background: {} geosets, {} textures, {} ms loop; missing {:?}; PRE2 {} emitters, gap {:?}",
             info.geosets,
             textures.len(),
             info.duration_ms,
-            info.missing_textures
+            info.missing_textures,
+            info.particle_emitters,
+            info.particle_gap
         ),
         Err(error) => {
             warn!("Original menu background: {error}");

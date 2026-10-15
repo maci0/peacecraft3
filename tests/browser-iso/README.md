@@ -23,6 +23,18 @@ WASM and regenerating `web/pkg`:
 PCX_APP_IMPORT_WASM_READY=1 node tests/browser-iso/browser-runtime.mjs
 ```
 
+Exercise particle candidate admission through a matching generated artifact:
+
+```sh
+node tests/browser-iso/particles-runtime.mjs web/pkg/peacecraft3.js web/pkg/peacecraft3_bg.wasm
+```
+
+This no-DOM test uses synthetic PRE2/TEXS/image records. Missing late images,
+malformed/oversized images, malformed properties/references and truncated records
+must preserve every committed canonical path, alias, byte, edition and revision.
+It also checks valid late dependencies, reported unsupported samplers, paired
+editions and clear. It makes no GPU draw or native-fidelity claim.
+
 The runner uses the existing `.scratch/browser-check` Playwright installation
 and `/usr/bin/chromium`. Set `PCX_PLAYWRIGHT_MODULE` to an alternate installed
 Playwright module entry point if necessary. No package install is performed.

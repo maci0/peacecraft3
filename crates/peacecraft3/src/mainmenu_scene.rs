@@ -22,9 +22,9 @@
 //!
 //! ## Known fidelity gaps, stated rather than papered over
 //!
-//! * **`PRE2` particle emitters are not drawn.** The chunk is decoded to its
-//!   properties by `pcx-mdl`, but their native rendering is not implemented.
-//!   No stand-in particle effect is created.
+//! * **Checked root-only `PRE2` profiles bind source heads/tails.** Unsupported
+//!   profiles report once and retain geometry; RNG, lighting, camera-vector and
+//!   phase conventions still require renderer acceptance.
 //! * **First-layer `TXAN` translation only.** Checked KTAT tracks drive absolute
 //!   material UV transforms; rotation, scale and multiple UV sets refuse.
 //!   XY projection follows retained renderer references, not native runtime
@@ -67,6 +67,13 @@
 //!   source angle normalized by the logical rectangle diagonal. TFT pose/clip/
 //!   topology and context draws support this rule; final native presentation
 //!   scaling and cross-mode parity remain unverified. Camera tracks stay static.
+
+#[cfg(test)]
+#[path = "menu_particle_tests.rs"]
+mod particle_tests;
+#[path = "menu_particles.rs"]
+mod particles;
+pub use particles::{ParticleMaterial, ParticleMaterialPlugin};
 
 use bevy::{
     camera::{CameraProjection, SubCameraView},
@@ -560,22 +567,74 @@ pub fn load_textures(
     load_textures_in(desktop, bytes, TEXTURE_DIR)
 }
 
+/// Caller memory policy, independent of authored texture dimensions.
+pub const MENU_IMAGE_BYTES: usize = 256 * 1024 * 1024;
+
 pub fn load_textures_in(
     desktop: Option<&std::path::Path>,
     bytes: &[u8],
     directory: &str,
 ) -> Vec<pcx_gfx::LoadedTexture> {
     let mut out = Vec::new();
+    let mut remaining = MENU_IMAGE_BYTES;
     for path in texture_paths(bytes).unwrap_or_default() {
         let served = texture_served_name_in(&path, directory);
         let Some(raw) = crate::mainmenu::art_bytes_named(desktop, &path, &served) else {
             continue;
         };
-        if let Ok(tex) = pcx_gfx::load_image(&raw, &path) {
+        if let Ok(tex) = pcx_gfx::load_image_bounded(&raw, &path, remaining) {
+            remaining -= tex.rgba.len();
             out.push(tex);
         }
     }
     out
+}
+
+/// Validate PRE2 framing before a browser import candidate can replace its store.
+#[cfg(any(test, target_arch = "wasm32"))]
+pub fn particle_import_needed(source: &str, bytes: &[u8]) -> Result<bool, String> {
+    let model = pcx_mdl::Mdlx::parse(bytes).map_err(|e| format!("{source}: {e}"))?;
+    model
+        .particles2(bytes)
+        .map(|records| !records.is_empty())
+        .map_err(|e| format!("{source}: PRE2: {e}"))
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+pub fn validate_particle_import(
+    source: &str,
+    bytes: &[u8],
+    textures: &[pcx_gfx::LoadedTexture],
+) -> Result<Option<String>, String> {
+    let model = pcx_mdl::Mdlx::parse(bytes).map_err(|e| format!("{source}: {e}"))?;
+    let runtime =
+        pcx_gfx::mdx_runtime::RuntimePlan::parse(bytes).map_err(|e| format!("{source}: {e}"))?;
+    let sequences = model
+        .sequences(bytes)
+        .map_err(|e| format!("{source}: {e}"))?;
+    let clip = sequences
+        .iter()
+        .find(|s| s.name == "Stand" && !s.non_looping)
+        .or_else(|| sequences.iter().find(|s| s.name == "Stand"))
+        .or_else(|| sequences.first());
+    match particles::prepare(
+        source,
+        &model,
+        bytes,
+        &runtime,
+        textures,
+        clip.map(|clip| pcx_gfx::mdx_particles::Clip {
+            interval: [clip.interval_start, clip.interval_end],
+            looping: !clip.non_looping,
+        }),
+    )
+    .map_err(|e| format!("{source}: PRE2: {e}"))?
+    {
+        particles::Admission::Unsupported(error) => {
+            Ok(Some(format!("{source}: PRE2 unsupported: {error}")))
+        }
+        _ => Ok(None),
+    }
 }
 
 /// What [`spawn`] managed to put in the scene, and what it could not.
@@ -604,6 +663,8 @@ pub struct SceneInfo {
     /// Bone tracks that are driven by a `GLBS` global sequence rather than the
     /// `Stand` clip. These are the tracks [`tracked_pose`] exists for.
     pub global_sequence_tracks: usize,
+    pub particle_emitters: usize,
+    pub particle_gap: Option<String>,
 }
 
 /// Why the background could not be built.
@@ -626,6 +687,12 @@ pub enum SceneError {
     },
     #[error(transparent)]
     UvTranslation(#[from] pcx_gfx::mdx_uv_translation::Error),
+    #[error("{source_name}: PRE2: {error}")]
+    Particles {
+        source_name: String,
+        #[source]
+        error: Box<particles::Error>,
+    },
     #[error("{source_name}: elapsed milliseconds exceed u64 clock")]
     Clock { source_name: String },
 }
@@ -646,6 +713,8 @@ pub struct MainMenuScene {
     texture_bindings: TextureBindings,
     uv_translation: Option<pcx_gfx::mdx_uv_translation::UvTranslationPlan>,
     opacity_materials: Vec<(usize, Entity, Handle<StandardMaterial>)>,
+    particles: Option<particles::ParticleScene>,
+    clip: Option<pcx_gfx::mdx_particles::Clip>,
     /// The clip's first frame.
     interval_start: u32,
     /// The clip's length in milliseconds.
@@ -669,6 +738,7 @@ pub struct MainMenuScene {
 pub fn spawn(
     commands: &mut Commands,
     assets: GeosetAssets,
+    particle_materials: &mut Assets<ParticleMaterial>,
     source: &str,
     bytes: &[u8],
     textures: &[pcx_gfx::LoadedTexture],
@@ -719,6 +789,29 @@ pub fn spawn(
     let texture_selection = texture_selection(&runtime, interval, source)?;
     let uv_translation =
         pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(&runtime, interval, source)?;
+    let particle_admission = particles::prepare(
+        source,
+        &m,
+        bytes,
+        &runtime,
+        textures,
+        clip.map(|clip| pcx_gfx::mdx_particles::Clip {
+            interval,
+            looping: !clip.non_looping,
+        }),
+    )
+    .map_err(|error| SceneError::Particles {
+        source_name: source.into(),
+        error: Box::new(error),
+    })?;
+    let (particle_prepared, particle_gap) = match particle_admission {
+        particles::Admission::Absent => (None, None),
+        particles::Admission::Unsupported(error) => {
+            warn!("{source}: PRE2 batch unsupported: {error}");
+            (None, Some(error.to_string()))
+        }
+        particles::Admission::Ready(prepared) => (Some(*prepared), None),
+    };
     let mut info = SceneInfo {
         bones: joints
             .kinds()
@@ -735,6 +828,10 @@ pub fn spawn(
             .flat_map(|b| b.tracks.iter())
             .filter(|t| t.global_sequence_id >= 0)
             .count(),
+        particle_emitters: particle_prepared
+            .as_ref()
+            .map_or(0, particles::Prepared::count),
+        particle_gap,
         sequence: clip.map(|s| s.name.clone()).unwrap_or_default(),
         duration_ms: clip.map(|s| s.duration()).unwrap_or(0),
         ..default()
@@ -743,7 +840,7 @@ pub fn spawn(
     let Geosets {
         handles,
         bound: opacity_materials,
-        textures: texture_bindings,
+        textures: mut texture_bindings,
     } = spawn_geosets(
         commands,
         GeosetAssets {
@@ -769,19 +866,38 @@ pub fn spawn(
 
     // The model's camera zero, with source clips and logical projection.
     info.cameras = cameras.len();
-    commands.spawn((
-        Camera3d::default(),
-        Projection::custom(projection),
-        camera_pose,
-        fog.distance_fog(),
-        Camera {
-            order: -1,
-            clear_color: ClearColorConfig::Custom(Color::srgb(0.0, 0.0, 0.0)),
-            ..default()
-        },
-        MainMenuSceneCamera,
-        MainMenuSceneEntity,
-    ));
+    let camera = commands
+        .spawn((
+            Camera3d::default(),
+            Projection::custom(projection),
+            camera_pose,
+            fog.distance_fog(),
+            Camera {
+                order: -1,
+                clear_color: ClearColorConfig::Custom(Color::srgb(0.0, 0.0, 0.0)),
+                ..default()
+            },
+            MainMenuSceneCamera,
+            MainMenuSceneEntity,
+        ))
+        .id();
+
+    let particles = particle_prepared.map(|prepared| {
+        let (particles, order) = prepared.spawn(
+            commands,
+            particles::ParticleAssets {
+                meshes,
+                materials: particle_materials,
+                images,
+            },
+            &mut texture_bindings,
+            camera,
+            &opacity_materials,
+            &runtime,
+        );
+        commands.entity(camera).insert(order);
+        particles
+    });
 
     // The model's own lights.
     let lights = m.lights(bytes).unwrap_or_default();
@@ -862,6 +978,11 @@ pub fn spawn(
 
     commands.insert_resource(MainMenuScene {
         model: Some(model),
+        particles,
+        clip: clip.map(|clip| pcx_gfx::mdx_particles::Clip {
+            interval,
+            looping: !clip.non_looping,
+        }),
         bones,
         pivots,
         handles,
@@ -1479,22 +1600,13 @@ pub fn advance(
     mut scene: ResMut<MainMenuScene>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    particle_materials: Res<Assets<ParticleMaterial>>,
     mut visibility: Query<&mut Visibility, With<MainMenuSceneEntity>>,
+    cameras: Query<&Transform, With<MainMenuSceneCamera>>,
 ) {
     if scene.model.is_none() {
         return;
     }
-    // An absent or zero-length local clip holds its source frame; global tracks
-    // still use the independent elapsed clock below.
-    if scene.duration_ms == 0 {
-        scene.time_ms = 0.0;
-    } else {
-        let dt_ms = time.delta_secs() * 1000.0;
-        scene.time_ms = (scene.time_ms + dt_ms) % scene.duration_ms as f32;
-    }
-    // The elapsed clock does *not* wrap with the clip: a global sequence keeps
-    // running across a clip wrap, which is the whole point of it being global.
-    let frame = scene.interval_start + scene.time_ms as u32;
     let elapsed_result = {
         let MainMenuScene {
             elapsed,
@@ -1510,6 +1622,55 @@ pub fn advance(
             return;
         }
     };
+    let looping = scene.clip.is_none_or(|clip| clip.looping);
+    let local_ms = if scene.duration_ms == 0 {
+        0
+    } else if looping {
+        elapsed_ms % u64::from(scene.duration_ms)
+    } else {
+        elapsed_ms.min(u64::from(scene.duration_ms))
+    };
+    scene.time_ms = local_ms as f32;
+    let frame = scene.interval_start + local_ms as u32;
+    let elapsed = scene.elapsed;
+    if let Some(particles) = scene.particles.as_mut()
+        && particles.enabled()
+    {
+        let result = cameras
+            .get(particles.camera())
+            .map_err(|_| particles::Error::Invalid("source camera ownership was lost"))
+            .and_then(|camera| {
+                particles.advance(
+                    time.delta(),
+                    elapsed,
+                    camera,
+                    &mut meshes,
+                    &particle_materials,
+                    |entity| visibility.contains(entity),
+                )
+            });
+        match result {
+            Ok(changes) => {
+                for (entity, visible) in changes {
+                    if let Ok(mut state) = visibility.get_mut(entity) {
+                        *state = if visible {
+                            Visibility::Inherited
+                        } else {
+                            Visibility::Hidden
+                        };
+                    }
+                }
+            }
+            Err(error) => {
+                error!("{}: PRE2 disabled: {error}", particles.source());
+                for entity in particles.disable() {
+                    if let Ok(mut state) = visibility.get_mut(entity) {
+                        *state = Visibility::Hidden;
+                    }
+                }
+            }
+        }
+    }
     if let Some(uv) = &scene.uv_translation
         && let Err(error) = apply_uv_translation(
             uv,
@@ -1653,6 +1814,7 @@ mod tests {
             .id();
         let second = world.spawn((MainMenuSceneEntity, Visibility::Hidden)).id();
         world.insert_resource(materials);
+        world.insert_resource(Assets::<ParticleMaterial>::default());
         world.insert_resource(Assets::<Mesh>::default());
         let mut time = Time::<()>::default();
         time.advance_by(std::time::Duration::from_millis(50));
@@ -1721,6 +1883,7 @@ mod tests {
             let mut world = World::new();
             let mut meshes = Assets::<Mesh>::default();
             let mut materials = Assets::<StandardMaterial>::default();
+            let mut particle_materials = Assets::<ParticleMaterial>::default();
             let mut images = Assets::<Image>::default();
             let info = spawn(
                 &mut world.commands(),
@@ -1729,6 +1892,7 @@ mod tests {
                     materials: &mut materials,
                     images: &mut images,
                 },
+                &mut particle_materials,
                 source,
                 &bytes,
                 &textures,
@@ -1754,6 +1918,80 @@ mod tests {
                 panic!("source-selected linear fog required");
             };
             assert_eq!((start, end), (expected_start, expected_end));
+            let authored_emitters = parsed.particles2(&bytes).unwrap();
+            assert_eq!(info.geosets, parsed.geosets(&bytes).unwrap().len());
+            let scene_camera = world
+                .query_filtered::<Entity, With<MainMenuSceneCamera>>()
+                .single(&world)
+                .unwrap();
+            let particle_bindings: Vec<_> = world
+                .query::<(Entity, &Mesh3d, &MeshMaterial3d<ParticleMaterial>)>()
+                .iter(&world)
+                .map(|(entity, mesh, material)| (entity, mesh.0.clone(), material.0.clone()))
+                .collect();
+            let mut admitted_meshes = Vec::new();
+            if expansion {
+                assert!(
+                    !authored_emitters.is_empty(),
+                    "TFT fixture must exercise source PRE2"
+                );
+                assert!(
+                    info.particle_gap.is_none(),
+                    "TFT PRE2 admission: {:?}",
+                    info.particle_gap
+                );
+                assert_eq!(info.particle_emitters, authored_emitters.len());
+            }
+            if info.particle_emitters > 0 {
+                let order = world
+                    .get::<crate::menu_particle_order::SourceOrderView>(scene_camera)
+                    .unwrap();
+                for (entity, mesh, handle) in &particle_bindings {
+                    let record =
+                        &order.orders[&bevy::render::sync_world::MainEntity::from(*entity)];
+                    assert_eq!(
+                        record.kind,
+                        crate::menu_particle_order::SourceKind::Particle
+                    );
+                    let emitter = &authored_emitters[record.ordinal as usize];
+                    let material = &particle_materials.get(handle).unwrap().base;
+                    let props = emitter.properties();
+                    assert_eq!(record.priority_plane, props.priority_plane);
+                    assert_eq!(
+                        material.unlit,
+                        emitter.flags & pcx_gfx::mdx_particles::UNSHADED != 0
+                    );
+                    assert_eq!(
+                        material.fog_enabled,
+                        emitter.flags & pcx_gfx::mdx_particles::UNFOGGED == 0
+                    );
+                    assert_eq!(
+                        material.alpha_mode,
+                        if props.filter_mode == 0 {
+                            AlphaMode::Blend
+                        } else {
+                            AlphaMode::Add
+                        }
+                    );
+                    assert_eq!(
+                        material.base_color_texture.as_ref(),
+                        world
+                            .resource::<MainMenuScene>()
+                            .texture_bindings
+                            .images
+                            .get(&props.texture_id)
+                    );
+                    admitted_meshes.push(mesh.clone());
+                }
+                assert_eq!(admitted_meshes.len(), authored_emitters.len());
+            } else {
+                assert!(world.resource::<MainMenuScene>().particles.is_none());
+                assert!(
+                    world
+                        .get::<crate::menu_particle_order::SourceOrderView>(scene_camera)
+                        .is_none()
+                );
+            }
             let scene = world.resource::<MainMenuScene>();
             assert_eq!(info.bones, authored_bones.len());
             assert_eq!(info.helpers, authored_helpers.len());
@@ -1776,6 +2014,34 @@ mod tests {
                 assert_eq!(retained.parent_id, helper.parent_id);
                 assert_eq!(retained.name, helper.name);
                 assert_eq!(retained.tracks.len(), helper.tracks.len());
+            }
+            if expansion {
+                use bevy::ecs::system::RunSystemOnce;
+                world.insert_resource(meshes);
+                world.insert_resource(materials);
+                world.insert_resource(particle_materials);
+                world.insert_resource(images);
+                let mut time = Time::<()>::default();
+                time.advance_by(std::time::Duration::from_secs(1));
+                world.insert_resource(time);
+                world.run_system_once(advance).unwrap();
+                assert!(
+                    world
+                        .resource::<MainMenuScene>()
+                        .particles
+                        .as_ref()
+                        .unwrap()
+                        .enabled()
+                );
+                let mesh_assets = world.resource::<Assets<Mesh>>();
+                assert!(
+                    admitted_meshes.iter().any(|handle| mesh_assets
+                        .get(handle)
+                        .unwrap()
+                        .count_vertices()
+                        > 0),
+                    "actual TFT source must produce scene mesh vertices; this is an ECS gate, not rendered acceptance"
+                );
             }
         }
     }
@@ -1808,6 +2074,7 @@ mod tests {
         world.insert_resource(time);
         world.insert_resource(Assets::<Mesh>::default());
         world.insert_resource(Assets::<StandardMaterial>::default());
+        world.insert_resource(Assets::<ParticleMaterial>::default());
         world.insert_resource(MainMenuScene {
             model: Some(pcx_gfx::LoadedModel {
                 name: String::new(),
@@ -2558,6 +2825,7 @@ mod texture_selection_tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<StandardMaterial>();
+        app.init_asset::<ParticleMaterial>();
         app.insert_resource(materials);
         material_events(&mut app);
         app
@@ -2851,6 +3119,9 @@ mod texture_selection_tests {
         spawned.world.insert_resource(time);
         spawned.world.insert_resource(spawned.meshes);
         spawned.world.insert_resource(spawned.materials);
+        spawned
+            .world
+            .insert_resource(Assets::<ParticleMaterial>::default());
         spawned.world.insert_resource(MainMenuScene {
             model: Some(f.model),
             texture_selection: Some(selection),
@@ -2898,6 +3169,9 @@ mod texture_selection_tests {
             spawned.world.insert_resource(time);
             spawned.world.insert_resource(spawned.meshes);
             spawned.world.insert_resource(spawned.materials);
+            spawned
+                .world
+                .insert_resource(Assets::<ParticleMaterial>::default());
             spawned.world.insert_resource(MainMenuScene {
                 model: Some(f.model),
                 texture_selection: Some(selection),
@@ -3369,6 +3643,9 @@ mod texture_selection_tests {
         spawned.world.insert_resource(time);
         spawned.world.insert_resource(spawned.meshes);
         spawned.world.insert_resource(spawned.materials);
+        spawned
+            .world
+            .insert_resource(Assets::<ParticleMaterial>::default());
         spawned.world.insert_resource(MainMenuScene {
             model: Some(f.model),
             uv_translation: Some(uv_translation),
@@ -3533,6 +3810,116 @@ mod texture_selection_tests {
             "fixture did not exercise an authored global selection channel"
         );
     }
+    #[test]
+    fn particle_union_reuses_geometry_kmtf_images_and_keeps_sampler_ownership() {
+        let mut fixture = fixture(&[track(NO_ID, &[(0, 2), (500, 5)])]);
+        fixture.textures.push(pcx_gfx::LoadedTexture {
+            width: 1,
+            height: 1,
+            rgba: vec![17, 71, 139, 43],
+            source: "Unused.blp".into(),
+        });
+        let (particle_bytes, _) = super::particle_tests::synthetic(|_, _| {});
+        let particles = pcx_mdl::Mdlx::parse(&particle_bytes).unwrap();
+        let mut texs = Vec::new();
+        for texture in &fixture.runtime.textures {
+            let mut record = vec![0; pcx_mdl::TEXTURE_SIZE];
+            record[4..4 + texture.path.len()].copy_from_slice(texture.path.as_bytes());
+            record[264..268].copy_from_slice(&texture.flags.to_le_bytes());
+            texs.extend(record);
+        }
+        super::particle_tests::chunk(&mut fixture.bytes, b"TEXS", &texs);
+        for tag in [b"PIVT", b"PRE2"] {
+            super::particle_tests::chunk(
+                &mut fixture.bytes,
+                tag,
+                particles.payload(&particle_bytes, tag).unwrap(),
+            );
+        }
+        let mut sequence = vec![0; pcx_mdl::SEQUENCE_SIZE];
+        sequence[..5].copy_from_slice(b"Stand");
+        sequence[84..88].copy_from_slice(&1000_u32.to_le_bytes());
+        super::particle_tests::chunk(&mut fixture.bytes, b"SEQS", &sequence);
+        let model = pcx_mdl::Mdlx::parse(&fixture.bytes).unwrap();
+        let particles::Admission::Ready(prepared) = particles::prepare(
+            "synthetic union",
+            &model,
+            &fixture.bytes,
+            &fixture.runtime,
+            &fixture.textures,
+            Some(pcx_gfx::mdx_particles::Clip {
+                interval: [0, 1000],
+                looping: true,
+            }),
+        )
+        .unwrap() else {
+            panic!("admission")
+        };
+        let opacity =
+            pcx_gfx::mdx_opacity::OpacityPlan::checked(&fixture.runtime, [0, 1000]).unwrap();
+        let selection = texture_selection(&fixture.runtime, [0, 1000], "synthetic union").unwrap();
+        let uv = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
+            &fixture.runtime,
+            [0, 1000],
+            "synthetic union",
+        )
+        .unwrap();
+        let mut world = World::new();
+        let mut meshes = Assets::default();
+        let mut materials = Assets::default();
+        let mut images = Assets::default();
+        let mut geosets = spawn_geosets(
+            &mut world.commands(),
+            GeosetAssets {
+                meshes: &mut meshes,
+                materials: &mut materials,
+                images: &mut images,
+            },
+            GeosetSource {
+                m: &model,
+                bytes: &fixture.bytes,
+                source: "synthetic union",
+                model: &fixture.model,
+                textures: &fixture.textures,
+                runtime: &fixture.runtime,
+                selection: &selection,
+                uv_translation: &uv,
+            },
+            &opacity,
+            0,
+            &mut SceneInfo::default(),
+            MainMenuSceneEntity,
+        )
+        .unwrap();
+        let old = geosets.textures.images.clone();
+        assert_eq!(images.len(), 4);
+        let camera = world.spawn(Camera3d::default()).id();
+        let (_, order) = (*prepared).spawn(
+            &mut world.commands(),
+            particles::ParticleAssets {
+                meshes: &mut meshes,
+                materials: &mut Assets::<ParticleMaterial>::default(),
+                images: &mut images,
+            },
+            &mut geosets.textures,
+            camera,
+            &geosets.bound,
+            &fixture.runtime,
+        );
+        world.flush();
+        assert_eq!(images.len(), 5);
+        for (id, handle) in old {
+            assert_eq!(geosets.textures.images[&id], handle);
+        }
+        assert_ne!(geosets.textures.images[&2], geosets.textures.images[&5]);
+        assert_eq!(order.orders.len(), fixture.model.meshes.len() + 3);
+        for (id, entity, _) in &geosets.bound {
+            assert_eq!(
+                order.orders[&bevy::render::sync_world::MainEntity::from(*entity)].priority_plane,
+                fixture.runtime.materials[fixture.runtime.geosets[*id].material_id].priority_plane
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3540,7 +3927,7 @@ mod fog_camera_tests {
     use super::*;
     use bevy::pbr::{DistanceFog, FogFalloff};
 
-    fn empty_scene_with_camera() -> Vec<u8> {
+    pub(super) fn empty_scene_with_camera() -> Vec<u8> {
         let mut bytes = b"MDLX".to_vec();
         let mut chunk = |tag: &[u8; 4], payload: &[u8]| {
             bytes.extend(tag);
@@ -3584,6 +3971,7 @@ mod fog_camera_tests {
                 materials: &mut materials,
                 images: &mut images,
             },
+            &mut Assets::<ParticleMaterial>::default(),
             "synthetic-background",
             &empty_scene_with_camera(),
             &[],

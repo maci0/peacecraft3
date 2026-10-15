@@ -15,6 +15,8 @@ use bevy::asset::RenderAssetUsages;
 pub mod dds;
 pub mod dds_gpu;
 pub mod mdx_opacity;
+pub mod mdx_particle_render;
+pub mod mdx_particles;
 pub mod mdx_runtime;
 pub mod mdx_texture_selection;
 pub mod mdx_uv_translation;
@@ -72,6 +74,44 @@ fn looks_like_tga(d: &[u8]) -> bool {
     let colour_map = d[1];
     let image_type = d[2];
     colour_map <= 1 && matches!(image_type, 0 | 1 | 2 | 3 | 9 | 10 | 11 | 32 | 33)
+}
+
+/// Validate decoded dimensions against caller policy before allocating a menu image.
+pub fn load_image_bounded(
+    bytes: &[u8],
+    source: &str,
+    max_rgba_bytes: usize,
+) -> Result<LoadedTexture, Error> {
+    let fail = |e| Error::Decode(format!("{source}: {e}"));
+    let (width, height, blp) = match AssetKind::detect(bytes) {
+        AssetKind::Blp => {
+            let h = pcx_blp::Header::parse(bytes).map_err(|e| fail(e.to_string()))?;
+            (h.width, h.height, Some(h))
+        }
+        AssetKind::Tga => {
+            let h = pcx_tga::Header::parse(bytes).map_err(|e| fail(e.to_string()))?;
+            (u32::from(h.width), u32::from(h.height), None)
+        }
+        _ => return load_image(bytes, source),
+    };
+    let size = usize::try_from(width)
+        .ok()
+        .and_then(|w| usize::try_from(height).ok()?.checked_mul(w))
+        .and_then(|pixels| pixels.checked_mul(4));
+    if width == 0 || height == 0 || size.is_none_or(|size| size > max_rgba_bytes) {
+        return Err(fail("decoded RGBA budget exceeded".into()));
+    }
+    if let Some(h) = blp.filter(|h| h.content == 0) {
+        let rgba = pcx_blp::decode_jpeg_with_limit(bytes, &h, 0, max_rgba_bytes)
+            .map_err(|e| fail(e.to_string()))?;
+        return Ok(LoadedTexture {
+            width,
+            height,
+            rgba,
+            source: source.into(),
+        });
+    }
+    load_image(bytes, source)
 }
 
 /// Loads bytes into whatever the format turns out to be.

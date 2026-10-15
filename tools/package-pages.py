@@ -33,6 +33,7 @@ FILES = (
     ("pkg/freearc/freearc-codec.wasm", "pkg/freearc/freearc-codec.wasm"),
     ("pkg/peacecraft3.js", "pkg/peacecraft3.js"),
     ("pkg/peacecraft3_bg.wasm", "pkg/peacecraft3_bg.wasm"),
+    ("licenses/bevy-particle-shader.txt", "licenses/bevy-particle-shader.txt"),
 )
 IMPORT = re.compile(r"\b(?:import|export)\s+(?:[^;\n]*?\s+from\s+)?['\"]([^'\"]+)['\"]|\bimport\s*\(\s*['\"]([^'\"]+)['\"]")
 CODEC_LOCAL = ("README.md", "build.sh", "upstream.sha256", ".gitignore",
