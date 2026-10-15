@@ -112,3 +112,37 @@ builds and formatting pass. Actual release-WASM checks pass 49 baseline and
 These integration checks preserve valid-source behavior; they do not add a new
 rendered/native fidelity claim. Evidence is retained in
 `.scratch/options-popup-validation-root-20261016/`.
+
+## Texture quality writes distinct preferences
+
+A later complete Options write routine at `0x538440..0x53882f` reads the
+bound TextureQualityMenu ordinal and passes it unchanged to the texquality
+preference writer. It separately derives miplevel and texcolordepth through
+branches and source operands. This is not a general reversed quality-to-mip
+formula: the first authored choice has a different miplevel word from the next
+two, while the last choice has a different texcolordepth word from the first
+two. These relationships follow instruction data flow; no measured output
+table has been installed as a production rule.
+
+The complete writer at `0x42ca10..0x42ca59` stores the incoming preference
+word in its selected record. No call follows that store; lookup/insertion
+side effects and the actual renderer consumer remain unread. This does not
+prove that miplevel is an authored BLP index, how the depth word packs alpha
+or color, which texture classes are affected, or when a reload occurs. The
+current menu decoder retains only the top image level. A sampler-only change
+would therefore be inert, and a quality Apply needs a prepared texture
+replacement before preferences are saved.
+
+Independent decoder comparisons match 330 reached instructions across those
+two bodies. Four checked data-flow tests pass, including changed source
+operands changing derived results and unknown delegates refusing. The first
+root replay passed those checks but failed report emission because a metadata
+file had not been copied; its failure is retained separately from the corrected
+successful replay. Evidence is in
+`.scratch/options-texture-quality-policy-20261016/` and
+`.scratch/options-policy-root-review-20261016/run-2/`.
+
+A subsequent narrowly qualified call-site search found no literal selector
+setup in its assumed 16-byte lookback window. That is a bounded negative,
+not absence of a texture consumer: dynamic arguments, earlier setup and other
+accessors remain possible. No unsupported quality control was enabled.

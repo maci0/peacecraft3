@@ -81,8 +81,13 @@ issues*.
       Subsequent native population checks connect every retained control to its
       preference reads and recover ResolutionMenu labels, filtering and matching.
       Fifteen checked label-adapter and 17 selection-model cases pass; prototypes
-      remain unapplied. Final provider/OS bridge and effective first-run selection
-      remain open. See `docs/re-notes/original-options-initialization.md` and
+      remain unapplied. The conditional provider/OS bridge is now checked,
+      including source-table/derived additions, stable grouping and refresh
+      replacement. Root replays pass 12 provider, six bridge and 32 augmentation
+      checks; runtime kind/adapter inputs and effective first-run selection
+      remain open. Texture quality's distinct mip/depth preference writes are
+      checked, but their renderer consumer and live replacement remain open.
+      See `docs/re-notes/original-options-initialization.md` and
       `docs/re-notes/original-display-modes.md`.
       Shared popup parsing now refuses malformed items without shifting indexes;
       259 app tests, both selected-original popup gates, strict native/WASM checks

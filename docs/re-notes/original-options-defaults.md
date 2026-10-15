@@ -162,9 +162,11 @@ Unsupported settings stay disabled rather than being persisted without an effect
 
 ## Resolution and setting fidelity boundary
 
-The checked original enumeration is device-derived, not a bundled list of
-resolutions: see [the display-mode contract](original-display-modes.md). It
-retains depth and refresh as well as dimensions. A stored descriptor fallback is
+The checked original device enumeration feeds a provider that also adds
+source-table and derived candidates: see
+[the display-mode contract](original-display-modes.md). The complete path is
+neither device-only nor a universal fixed preset list. It retains depth and
+refresh as well as dimensions. A stored descriptor fallback is
 not proof of the final first-run choice after device capabilities and saved
 preferences have been considered. The current portable Resolution control still
 applies a window/canvas render size; it does not claim a confirmed OS display

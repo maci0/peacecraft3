@@ -49,8 +49,9 @@ resolutions would not reproduce this device-derived path.
 
 At this enumeration-only boundary, the connection to ResolutionMenu, formatting
 and selection was unresolved. The subsequent Options inspection below closes
-the local UI path; its bridge to this OS enumeration and effective first-run
-inputs remain open. A null-input reset alone establishes no default choice.
+the local UI path; the conditional bridge and source-backed augmentation are
+established in the later provider inspection below. Effective first-run inputs
+remain open. A null-input reset alone establishes no default choice.
 The wider Options implementation remains open; no menu setting was enabled by
 this evidence-only slice.
 
@@ -76,9 +77,10 @@ getter. It calls `0x536500` to populate ResolutionMenu, then `0x539360` to
 select a row. The getter can return saved state or a lookup-null fallback;
 observing these calls does not establish which values apply on a first run.
 
-Population consumes a count and 44-byte record array from unread `0x7d0c40`.
-This is not yet connected to the earlier 40-byte OS enumeration records.
-It filters against an owner adapter field, an unread current-kind result and
+Population consumes a count and 44-byte record array from `0x7d0c40`, whose
+producer was unread at this first inspection boundary. The later inspection
+below connects it conditionally to the 40-byte OS enumeration records.
+It filters against an owner adapter field, a current-kind result and
 an optional fixed-aspect-related checkbox property. The optional checkbox is
 absent from the selected retained FDF; native code supplies false when absent,
 rather than creating a replacement widget. The owner adapter's initialization,
@@ -116,9 +118,56 @@ Evidence is retained in `.scratch/options-resolution-selection-20261016/`;
 root review is in `.scratch/options-resolution-selection-root-20261016/`.
 
 This resolves local population, formatting and matching, not a universal first-run
-resolution or exact physical mode list. The smallest remaining provider target
-is `0x7d0c40`; its relation to OS enumeration, ordering/deduplication, current
-kind and owner adapter initialization are unproved. Actual device switching,
-acknowledgement and rollback also remain unimplemented. Browser/window render
-sizes retain their existing separate meaning; no unsupported exclusive choice
-has been enabled by this inspection.
+resolution or exact physical mode list. The subsequent provider inspection
+closes several of that inspection's open targets. Actual device switching,
+acknowledgement and rollback remain unimplemented. Browser/window render sizes
+retain their existing separate meaning; no unsupported exclusive choice has
+been enabled by this inspection.
+
+## Conditional provider bridge and source additions
+
+The getter at `0x7d0c40` returns a global UI collection. Its producer at
+`0x7cf320` converts 40-byte source records into 44-byte UI records, preserving
+the input-array index in the additional word. The caller `0x7d0af0` forwards
+the exact collection pointer returned by `0x7d01c0` into that producer. On a
+cache miss with source selector zero, `0x7d01c0` passes that same collection to
+the already checked Windows enumerator. Selector one uses another, unread
+enumerator. The actual startup selector is not established.
+
+The complete provider is therefore more than a list of device modes. Before
+returning the collection, it augments the enumerated records using two
+source-resident dimension-pair tables, a source floating-point aspect predicate,
+a dimension transformation, and per-index dimension queries. Both tables have
+nine pairs in this selected image. Their contents and the predicate operands
+were read in memory and validated, without publishing a resolution list or
+copying those values into production. The transformation fits a rectangle to
+source-derived integer aspect units; it does not use a screenshot fit.
+
+The conversion groups records by a formatted key containing dimensions, depth,
+adapter, kind and flag. Refresh and original mode index are absent from that
+key. A later record replaces an existing group's contents only if its refresh
+is strictly closer to a source-derived operand. Equal distances retain the
+earlier record. Under the explicitly assumed ordinary successful clear,
+allocation and exact-key lookup behavior, groups keep their first occurrence
+order. The storage helpers' exceptional paths remain unread. This grouping is
+different from collapsing all equal width/height pairs.
+
+The current-kind wrapper is also closed: a null active object produces zero;
+otherwise its delegate returns the object's field at `+0xac`. The field's
+writer and enum meanings remain unproved. Do not label source kind tags as
+exclusive, borderless or windowed merely from their numeric values. The
+per-index count/dimension provider and the Options owner's adapter origin also
+remain separate inputs. A checked production profile must derive the relevant
+tables, operands and relationships from the selected client and combine them
+with actual host capabilities. Neither the raw device list alone nor a familiar
+fixed preset list reproduces this source path.
+
+Independent root replays pass 12 converter checks, six conditional-bridge
+checks and 32 augmentation checks. The last inspection independently compares
+44 reachable instructions; its four direct data ranges total 152 bytes and
+are retained only as identities/counts/validation metadata. Evidence is in
+`.scratch/options-display-provider-20261016/`,
+`.scratch/options-display-provider-caller-20261016/` and
+`.scratch/options-display-augmentation-20261016/`, with separate root reviews.
+These checks do not enumerate a live original display list, select a first-run
+mode or apply a display change.
