@@ -55,6 +55,7 @@ bytemuck = { version = "1", features = ["derive"] }
 rayon = "1"
 flate2 = "1"
 implode = "0.1"
+sha2 = { version = "0.11.1", default-features = false }
 
 [profile.release]
 opt-level = 3

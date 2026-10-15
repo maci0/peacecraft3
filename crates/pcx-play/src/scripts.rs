@@ -129,6 +129,10 @@ impl MapScripts {
     pub fn program(&self) -> &Program {
         &self.program
     }
+    /// Share this exact compiled program with a session-owned Host.
+    pub fn shared_program(&self) -> Arc<Program> {
+        Arc::clone(&self.program)
+    }
     pub fn vm<H: Host>(&self, host: H) -> Vm<'_, LocalizedHost<'_, H>> {
         Vm::new(
             &self.program,

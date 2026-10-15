@@ -123,6 +123,7 @@ pub fn map_session_retains_globals_callbacks_wts_and_replaces_without_leaks() {
     let weak = Arc::downgrade(&scripts);
     let digest = scripts.digests.clone();
     let program_address = scripts.program() as *const Program;
+    assert!(std::ptr::eq(&*scripts.shared_program(), scripts.program()));
     let mut vm = Arc::clone(&scripts).owned_vm(Capture::new(&drops));
     drop(scripts);
     app_resource_bounds(&vm);

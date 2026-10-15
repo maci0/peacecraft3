@@ -84,6 +84,7 @@ pub struct MapInputSources {
 }
 /// Owned parsed data only. World records may still carry explicit problems.
 pub struct ParsedMapContext {
+    pub(crate) admission_witness: Option<crate::neutral_player::AdmissionWitness>,
     pub sources: MapInputSources,
     pub required_fields: Vec<[u8; 4]>,
     pub input_budget: MapAdmissionBudget,
@@ -319,7 +320,20 @@ pub fn prepare_map_context<C: ObjectCatalog>(
         input.catalog,
         input.required_fields,
     )?;
+    let scripts = Arc::new(scripts);
+    let map_digest = SourceDigest {
+        label: label.into(),
+        hash: pcx_script::fnv1a64(input.map.raw()),
+    };
+    let admission_witness = crate::neutral_player::AdmissionWitness::new(
+        input.map.raw(),
+        world.info.raw(),
+        input.map_identity.clone(),
+        &map_digest,
+        Arc::clone(&scripts),
+    );
     Ok(ParsedMapContext {
+        admission_witness: Some(admission_witness),
         required_fields,
         input_budget: budget,
         sources: MapInputSources {
@@ -328,14 +342,11 @@ pub fn prepare_map_context<C: ObjectCatalog>(
             blizzard: input.blizzard.identity.clone(),
             catalog: input.catalog_identity.clone(),
         },
-        map_digest: SourceDigest {
-            label: label.into(),
-            hash: pcx_script::fnv1a64(input.map.raw()),
-        },
+        map_digest,
         world_member_digests: digests,
         terrain,
         alignment,
         world,
-        scripts: Arc::new(scripts),
+        scripts,
     })
 }

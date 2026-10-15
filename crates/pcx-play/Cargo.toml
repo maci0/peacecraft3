@@ -13,6 +13,7 @@ pcx-trig.workspace = true
 pcx-map.workspace = true
 pcx-mpq.workspace = true
 thiserror.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true
