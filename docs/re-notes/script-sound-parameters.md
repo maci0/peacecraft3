@@ -84,7 +84,7 @@ launcher Host is wired by this change.
 Nine synthetic parameter groups cover exact provenance/raw values, multi-file
 independence, budgets/platform layouts, missing/invalid/nonfinite fields,
 ambiguities, atomic assignment, both sound variants, reserved/wrong families,
-contract admission and retained VM state after a later failure. All 293 play
+contract admission and retained VM state after a later failure. At introduction, all 293 play
 checks pass, with five explicit ignores. Strict affected native/WASM
 all-target/all-feature Clippy and library builds pass. All fourteen prior
 label-sound, seven file-sound and nine parameter groups execute as actual

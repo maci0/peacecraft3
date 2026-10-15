@@ -122,12 +122,14 @@ enum Entry {
     Sound {
         resource: usize,
         parameters: Option<usize>,
+        duration: Option<i32>,
         fade_in_rate: i32,
         fade_out_rate: i32,
     },
     FileSound {
         resource: usize,
         parameters: Option<usize>,
+        duration: Option<i32>,
         looping: bool,
         is_3d: bool,
         stop_when_out_of_range: bool,

@@ -71,3 +71,44 @@ Actual source fingerprints, command logs, failed synthetic-fixture attempts and
 corrected native/WASM results remain local in `.scratch/file-sound-root/`.
 Original scripts, executable/DLL, sound tables and PCM bytes are never committed
 or uploaded.
+
+## Explicit duration state
+
+`ObjectHost::with_sound_duration()` separately admits the exact nonconstant
+`SetSoundDuration(sound,integer)->nothing` contract after sound resources are
+admitted. It rejects duplicate admission, wrong/ambiguous/overridden declarations
+and wrong sound ancestry. Both resource-backed sound variants begin with no
+assigned duration. An executed call changes only that identity's optional raw
+integer; `sound_duration(id)`, `SoundState::duration` and
+`FileSoundState::duration` expose it. Reassignment preserves the last argument,
+including zero or negative values, without guessing clamping or native sentinel
+behavior. Invalid/reserved/wrong-family identities or wrong argument types fail
+before mutation. No additional arena identity or PCM buffer is allocated.
+
+Duration state is independent of inspected PCM frames/rate and survives a later
+label-parameter assignment. This does not trim, stretch or resample PCM, schedule
+completion, implement the script `GetSoundDuration` native, or qualify native
+exceptional-input behavior. No asset duration or conversion scale is copied into
+production. The default Host still refuses this setter until explicitly admitted.
+
+The same Human01 Program/admission/localization now executes its first authored
+duration assignment while retaining the parameter row, sound identity and PCM.
+The next failure is an unadmitted filename on the following `CreateSound` call,
+map-script span `42279..42383`: 558 cumulative native calls and 447 arena
+identities. `CreateSound` itself is implemented; its caller-provided file bank
+currently lacks that resource. A bounded source-only census of the remainder of
+`InitSounds` identifies repeated creation/label/duration setup, so the next
+binding set should derive from that function rather than a hand-written list.
+Globals and config still pass; main/session publication and campaign remain open.
+
+Three new synthetic groups cover both sound variants, per-identity replacement,
+resource preservation, invalid/oversized identities, atomic failures, explicit
+contract admission and retained VM state after a later failure. The existing
+parameter cross-variant test also verifies that label assignment preserves the
+executed duration. All 296 play tests pass with five explicit ignores; affected
+strict native/WASM Clippy, library builds, native rustdoc and formatting pass.
+Actual 32-bit WASM executes all 33 label/file/duration/parameter groups with zero
+imports. The two export masks are `16777215` and `511`. Commands, rejected private
+harness compiles and corrected results stay local in `.scratch/sound-setup-root/`.
+No playback device, browser audio, default launcher or native-runtime proof is
+claimed; no original payload is committed or uploaded.

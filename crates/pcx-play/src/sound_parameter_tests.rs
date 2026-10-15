@@ -227,7 +227,7 @@ fn duplicate_headers_rows_cells_and_trailing_data_are_ambiguous() {
     let trailing = original + "C;X2;Y2;K\"0\"\r\n";
     assert!(read(trailing.as_bytes(), &["Voice"], budget()).is_err());
 }
-const COMMON: &str = "type agent extends handle\ntype sound extends agent\ntype timer extends agent\ntype playercolor extends handle\nconstant native ConvertPlayerColor takes integer i returns playercolor\nnative CreateTimer takes nothing returns timer\nnative DestroyTimer takes timer t returns nothing\nnative CreateSound takes string f, boolean repeating, boolean spatial, boolean stop, integer a, integer b, string eax returns sound\nnative CreateMIDISound takes string s, integer a, integer b returns sound\nnative SetSoundParamsFromLabel takes sound s, string label returns nothing\nnative StartSound takes sound s returns nothing\nglobals\nconstant playercolor C=ConvertPlayerColor(37)\nendglobals\n";
+const COMMON: &str = "type agent extends handle\ntype sound extends agent\ntype timer extends agent\ntype playercolor extends handle\nconstant native ConvertPlayerColor takes integer i returns playercolor\nnative CreateTimer takes nothing returns timer\nnative DestroyTimer takes timer t returns nothing\nnative CreateSound takes string f, boolean repeating, boolean spatial, boolean stop, integer a, integer b, string eax returns sound\nnative CreateMIDISound takes string s, integer a, integer b returns sound\nnative SetSoundParamsFromLabel takes sound s, string label returns nothing\nnative StartSound takes sound s returns nothing\nnative SetSoundDuration takes sound s, integer duration returns nothing\nglobals\nconstant playercolor C=ConvertPlayerColor(37)\nendglobals\n";
 fn enums(common: &str, map: &str) -> EnumHost {
     let c = pcx_script::parse_script(common).unwrap();
     let m = pcx_script::parse_script(map).unwrap();
@@ -489,6 +489,8 @@ fn label_and_direct_objects_use_the_same_parameter_bank_without_replacing_pcm() 
         .with_label_sounds(label_bank)
         .unwrap()
         .with_sound_parameters(bank())
+        .unwrap()
+        .with_sound_duration()
         .unwrap();
     let Value::Handle(id) = h
         .native(
@@ -501,12 +503,15 @@ fn label_and_direct_objects_use_the_same_parameter_bank_without_replacing_pcm() 
     };
     let direct = create(&mut h);
     for i in [id, direct] {
+        h.native("SetSoundDuration", &[Value::Handle(i), Value::Int(673)])
+            .unwrap();
         h.native(
             "SetSoundParamsFromLabel",
             &[Value::Handle(i), Value::Str("Other".into())],
         )
         .unwrap();
         assert_eq!(h.sound_parameters(i).unwrap().unwrap().values.volume, -14);
+        assert_eq!(h.sound_duration(i).unwrap(), Some(673));
     }
     let s = h.sound_state(id).unwrap();
     assert_eq!(

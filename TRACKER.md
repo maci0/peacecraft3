@@ -1015,9 +1015,11 @@ Format: `date — subsystem — symptom — root cause — status`
       retains the executed name/random/index. Exact direct-file PCM admission now
       creates the first authored voice object. Selected source-label parameters
       now bind to that same sound identity while preserving its PCM/creation inputs,
-      reaching `SetSoundDuration`. Raw table flags remain separate from effective settings.
+      and explicit executed duration state now retains the authored integer on
+      that same identity. The next `CreateSound` lacks its caller-provided file
+      binding. Raw table flags remain separate from effective settings.
       The snapshot does not advance time or replace a running game clock, and
-      queued audio/music selection is not yet consumed by a playback backend. All 293 play tests
+      queued audio/music selection is not yet consumed by a playback backend. All 296 play tests
       pass with five explicit ignores; strict native/WASM Clippy, WASM generation
       and actual 32-bit lifecycle/config/player/priority/camera/model/clock/sound checks pass. These are bounded Host/data
       checks, not campaign or native gameplay proof.

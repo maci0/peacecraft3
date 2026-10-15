@@ -124,7 +124,7 @@ fn whole_input_preflight_refuses_duplicates_identity_and_budget_before_decode() 
     n.total_bytes = d.len();
     assert!(Assets::read(&[input(&d)], n).is_ok());
 }
-const COMMON: &str = "type agent extends handle\ntype sound extends agent\ntype timer extends agent\ntype playercolor extends handle\nconstant native ConvertPlayerColor takes integer i returns playercolor\nnative CreateTimer takes nothing returns timer\nnative DestroyTimer takes timer t returns nothing\nnative CreateMIDISound takes string label, integer a, integer b returns sound\nnative CreateSound takes string file, boolean repeating, boolean spatial, boolean stop, integer a, integer b, string eax returns sound\nnative StartSound takes sound s returns nothing\nglobals\nconstant playercolor C=ConvertPlayerColor(37)\nendglobals\n";
+const COMMON: &str = "type agent extends handle\ntype sound extends agent\ntype timer extends agent\ntype playercolor extends handle\nconstant native ConvertPlayerColor takes integer i returns playercolor\nnative CreateTimer takes nothing returns timer\nnative DestroyTimer takes timer t returns nothing\nnative CreateMIDISound takes string label, integer a, integer b returns sound\nnative CreateSound takes string file, boolean repeating, boolean spatial, boolean stop, integer a, integer b, string eax returns sound\nnative StartSound takes sound s returns nothing\nnative SetSoundDuration takes sound s, integer duration returns nothing\nglobals\nconstant playercolor C=ConvertPlayerColor(37)\nendglobals\n";
 fn enums(common: &str, map: &str, max_handles: usize) -> EnumHost {
     let c = pcx_script::parse_script(common).unwrap();
     let m = pcx_script::parse_script(map).unwrap();
@@ -396,4 +396,152 @@ fn retained_vm_keeps_file_sound_state_and_start_requests_after_later_failure() {
     vm.init_globals().unwrap();
     assert_eq!(vm.host().inner().handles(), count);
     assert_eq!(vm.host().pending_sound_starts(), [id]);
+}
+
+#[test]
+fn authored_duration_is_unset_then_retained_per_label_and_file_identity() {
+    let mut h = host(COMMON, "", 8)
+        .with_file_sounds(assets(), 64)
+        .unwrap()
+        .with_label_sounds(bank())
+        .unwrap()
+        .with_sound_duration()
+        .unwrap();
+    let Value::Handle(a) = h.native("CreateSound", &args()).unwrap() else {
+        panic!("file")
+    };
+    let Value::Handle(b) = h
+        .native(
+            "CreateMIDISound",
+            &[Value::Str("Breeze".into()), Value::Int(3), Value::Int(5)],
+        )
+        .unwrap()
+    else {
+        panic!("label")
+    };
+    assert_eq!(h.sound_duration(a).unwrap(), None);
+    assert_eq!(h.sound_duration(b).unwrap(), None);
+    let hash = h.sound_resource(a).unwrap().sha256();
+    let count = h.inner().handles();
+    for duration in [-1, 0, 539, i32::MAX] {
+        assert_eq!(
+            h.native(
+                "SetSoundDuration",
+                &[Value::Handle(a), Value::Int(duration)]
+            )
+            .unwrap(),
+            Value::Null
+        );
+        assert_eq!(h.file_sound_state(a).unwrap().duration, Some(duration));
+        assert_eq!(h.sound_duration(b).unwrap(), None);
+        assert_eq!(h.sound_resource(a).unwrap().sha256(), hash);
+        assert_eq!(h.inner().handles(), count);
+    }
+    h.native("SetSoundDuration", &[Value::Handle(b), Value::Int(43)])
+        .unwrap();
+    assert_eq!(h.sound_state(b).unwrap().duration, Some(43));
+    assert_eq!(h.sound_state(b).unwrap().resource.label(), "Breeze");
+    assert_eq!(h.sound_resource(a).unwrap().pcm().frames(), 7);
+}
+#[test]
+fn duration_refuses_invalid_sound_arguments_without_changing_prior_state() {
+    let mut e = enums(COMMON, "", 8);
+    let fake = e.reserve_identity("sound").unwrap();
+    let mut h = ObjectHost::checked(e)
+        .unwrap()
+        .with_file_sounds(assets(), 64)
+        .unwrap()
+        .with_sound_duration()
+        .unwrap();
+    let Value::Handle(id) = h.native("CreateSound", &args()).unwrap() else {
+        panic!("sound")
+    };
+    h.native("SetSoundDuration", &[Value::Handle(id), Value::Int(73)])
+        .unwrap();
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    let count = h.inner().handles();
+    let wide = pcx_script::HandleId::new(std::num::NonZeroU64::new(u64::MAX).unwrap());
+    for args in [
+        vec![Value::Null, Value::Int(1)],
+        vec![Value::Handle(id), Value::Real(1.0)],
+        vec![Value::Handle(fake), Value::Int(1)],
+        vec![timer, Value::Int(1)],
+        vec![Value::Handle(wide), Value::Int(1)],
+        vec![Value::Handle(id)],
+    ] {
+        assert!(h.native("SetSoundDuration", &args).is_err());
+        assert_eq!(h.sound_duration(id).unwrap(), Some(73));
+        assert_eq!(h.inner().handles(), count);
+    }
+    assert!(h.sound_duration(fake).is_err());
+    assert!(h.sound_duration(wide).is_err());
+}
+#[test]
+fn duration_requires_admission_and_actual_vm_execution_preserves_its_last_assignment() {
+    assert!(host(COMMON, "", 8).with_sound_duration().is_err());
+    let mut h = host(COMMON, "", 8).with_file_sounds(assets(), 64).unwrap();
+    let id = h.native("CreateSound", &args()).unwrap();
+    assert!(h.native("SetSoundDuration", &[id, Value::Int(71)]).is_err());
+    assert!(
+        h.with_sound_duration()
+            .unwrap()
+            .with_sound_duration()
+            .is_err()
+    );
+    for c in [
+        COMMON.replace(
+            "native SetSoundDuration",
+            "constant native SetSoundDuration",
+        ),
+        COMMON.replace(
+            "integer duration returns nothing",
+            "real duration returns nothing",
+        ),
+        COMMON.replace(
+            "integer duration returns nothing",
+            "integer duration returns sound",
+        ),
+    ] {
+        assert!(
+            host(&c, "", 8)
+                .with_file_sounds(assets(), 64)
+                .unwrap()
+                .with_sound_duration()
+                .is_err()
+        );
+    }
+    assert!(
+        host(
+            COMMON,
+            "function SetSoundDuration takes sound s, integer d returns nothing\nendfunction\n",
+            8
+        )
+        .with_file_sounds(assets(), 64)
+        .unwrap()
+        .with_sound_duration()
+        .is_err()
+    );
+    let c = format!("{COMMON}native Next takes nothing returns nothing\n");
+    let map = "globals\nsound voice=null\nendglobals\nfunction main takes nothing returns nothing\nset voice=CreateSound(\"Media\\\\a.wav\",true,false,true,-7,91,\"AuthoredProfile\")\ncall SetSoundDuration(voice,98)\ncall SetSoundDuration(voice,103)\ncall Next()\nendfunction\n";
+    let mut vm = host(&c, map, 8)
+        .with_file_sounds(assets(), 64)
+        .unwrap()
+        .with_sound_duration()
+        .unwrap()
+        .into_vm();
+    vm.init_globals().unwrap();
+    assert!(
+        vm.call("main", &[])
+            .unwrap_err()
+            .to_string()
+            .contains("Next")
+    );
+    let Value::Handle(id) = vm.global("voice") else {
+        panic!("sound")
+    };
+    assert_eq!(vm.host().file_sound_state(id).unwrap().duration, Some(103));
+    let count = vm.host().inner().handles();
+    vm.init_globals().unwrap();
+    assert_eq!(vm.host().inner().handles(), count);
+    assert_eq!(vm.host().sound_duration(id).unwrap(), Some(103));
 }

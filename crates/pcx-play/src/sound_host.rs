@@ -5,12 +5,66 @@ use pcx_script::{HandleId, Value};
 #[derive(Debug)]
 pub struct SoundState<'a> {
     pub identity: HandleId,
+    /// Exact last SetSoundDuration argument; unset until explicitly assigned.
+    pub duration: Option<i32>,
     pub resource: &'a BoundSound,
     /// Exact authored integers; no fade units, clamping or scheduling are inferred.
     pub fade_in_rate: i32,
     pub fade_out_rate: i32,
 }
 impl ObjectHost {
+    /// Admits raw authored duration state, not a timer or playback-length override.
+    pub fn with_sound_duration(mut self) -> Result<Self, Error> {
+        let name = "SetSoundDuration";
+        if self.sound_duration || (self.sounds.is_none() && self.file_sounds.is_none()) {
+            return Err(self.inner.error(
+                name,
+                Failure::SoundState("sound resources required; duration must be admitted once"),
+            ));
+        }
+        Self::contract(
+            &self.inner,
+            name,
+            &["sound", "integer"],
+            "nothing",
+            false,
+            Some("sound"),
+        )?;
+        self.sound_duration = true;
+        Ok(self)
+    }
+    pub fn sound_duration(&self, id: HandleId) -> Result<Option<i32>, Error> {
+        match self.inner.entry(id)? {
+            Entry::Sound { duration, .. } | Entry::FileSound { duration, .. } => Ok(*duration),
+            _ => Err(self.inner.error("SetSoundDuration", Failure::WrongFamily)),
+        }
+    }
+    pub(super) fn sound_duration_native(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Option<Result<Value, Error>> {
+        if name != "SetSoundDuration" || !self.sound_duration {
+            return None;
+        }
+        Some((|| {
+            let fail = |reason| self.inner.error(name, reason);
+            let [Value::Handle(id), Value::Int(value)] = args else {
+                return Err(fail(Failure::SoundState(
+                    "expected sound identity and integer duration",
+                )));
+            };
+            self.sound_resource(*id).map_err(|e| fail(e.failure))?;
+            let at = usize::try_from(id.token() - 1).map_err(|_| fail(Failure::Identity))?;
+            let (Entry::Sound { duration, .. } | Entry::FileSound { duration, .. }) =
+                &mut self.inner.arena[at]
+            else {
+                return Err(self.inner.error(name, Failure::WrongFamily));
+            };
+            *duration = Some(*value);
+            Ok(Value::Null)
+        })())
+    }
     pub fn with_label_sounds(mut self, bank: SoundBank) -> Result<Self, Error> {
         if self.sounds.is_some() {
             return Err(self
@@ -81,6 +135,7 @@ impl ObjectHost {
         };
         Ok(SoundState {
             identity,
+            duration: self.sound_duration(identity)?,
             resource: bank
                 .sounds()
                 .get(*resource)
@@ -151,6 +206,7 @@ impl ObjectHost {
                     Entry::Sound {
                         resource,
                         parameters: None,
+                        duration: None,
                         fade_in_rate: *fade_in_rate,
                         fade_out_rate: *fade_out_rate,
                     },

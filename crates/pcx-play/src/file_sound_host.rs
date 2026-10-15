@@ -10,6 +10,8 @@ pub(super) struct State {
 #[derive(Debug)]
 pub struct FileSoundState<'a> {
     pub identity: HandleId,
+    /// Exact last SetSoundDuration argument; unset until explicitly assigned.
+    pub duration: Option<i32>,
     pub resource: &'a PcmResource,
     pub looping: bool,
     pub is_3d: bool,
@@ -68,6 +70,7 @@ impl ObjectHost {
         };
         Ok(FileSoundState {
             identity,
+            duration: self.sound_duration(identity)?,
             resource: state
                 .assets
                 .resources()
@@ -130,6 +133,7 @@ impl ObjectHost {
                     Entry::FileSound {
                         resource,
                         parameters: None,
+                        duration: None,
                         looping: *looping,
                         is_3d: *is_3d,
                         stop_when_out_of_range: *stop_when_out_of_range,
