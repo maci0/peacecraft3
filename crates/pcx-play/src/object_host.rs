@@ -11,6 +11,7 @@ pub struct ObjectHost {
     members: Vec<(HandleId, HandleId)>,
     config: Option<MapConfig>,
     players: Option<players::Players>,
+    camera: Option<camera::CameraState>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -27,6 +28,7 @@ impl ObjectHost {
             members: Vec::new(),
             config: None,
             players: None,
+            camera: None,
         })
     }
     fn contract(
@@ -245,6 +247,9 @@ impl ObjectHost {
 }
 impl Host for ObjectHost {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.camera_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.player_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -288,3 +293,7 @@ pub use map_config::{MapConfig, MapConfigBudget, StartLocation, StartPriorities,
 #[path = "player_host.rs"]
 mod players;
 pub use players::{PlayerAdmissionError, PlayerBudget, PlayerSettings};
+
+#[path = "camera_host.rs"]
+mod camera;
+pub use camera::CameraState;

@@ -51,10 +51,11 @@ impl<'a> Reader<'a> {
         })
     }
 }
-struct Window {
-    va: u32,
-    len: u32,
-    digest: Sha256Digest,
+#[derive(Clone, Copy, Debug)]
+pub struct Window {
+    pub va: u32,
+    pub len: u32,
+    pub digest: Sha256Digest,
 }
 struct Section {
     rva: u32,
@@ -63,13 +64,13 @@ struct Section {
     raw_size: u32,
     flags: u32,
 }
-struct Pe<'a> {
+pub(crate) struct Pe<'a> {
     d: &'a [u8],
     base: u32,
     sections: Vec<Section>,
 }
 impl<'a> Pe<'a> {
-    fn parse(d: &'a [u8], budget: RuleInputBudget) -> Result<Self, NeutralError> {
+    pub(crate) fn parse(d: &'a [u8], budget: RuleInputBudget) -> Result<Self, NeutralError> {
         if bytes(d, 0, 2)? != b"MZ" {
             return Err(bad(RuleProblem::PeFormat));
         }
@@ -149,7 +150,7 @@ impl<'a> Pe<'a> {
         }
         Ok(Self { d, base, sections })
     }
-    fn window(&self, w: &Window, code: bool) -> Result<&'a [u8], NeutralError> {
+    pub(crate) fn window(&self, w: &Window, code: bool) -> Result<&'a [u8], NeutralError> {
         if w.len == 0 {
             return Err(bad(RuleProblem::Range));
         }

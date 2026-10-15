@@ -33,6 +33,8 @@ pub enum Failure {
     PlayerArguments,
     #[error("player setup: {0}")]
     PlayerState(&'static str),
+    #[error("camera setup: {0}")]
+    CameraState(&'static str),
     #[error("enumerand {0} is outside this native's admitted source domain")]
     OutsideDomain(i32),
     #[error("unsupported closed integer expression: {0}")]
@@ -458,6 +460,6 @@ mod tests;
 #[path = "object_host.rs"]
 mod objects;
 pub use objects::{
-    MapConfig, MapConfigBudget, ObjectHost, PlayerAdmissionError, PlayerBudget, PlayerSettings,
-    StartLocation, StartPriorities, StartPriority, TimerHost,
+    CameraState, MapConfig, MapConfigBudget, ObjectHost, PlayerAdmissionError, PlayerBudget,
+    PlayerSettings, StartLocation, StartPriorities, StartPriority, TimerHost,
 };

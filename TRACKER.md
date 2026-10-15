@@ -1007,14 +1007,15 @@ Format: `date — subsystem — symptom — root cause — status`
       locations. Source-bounded shared-arena players retain five player
       identities and 35 authored field assignments. Bounded authored priority
       relationships now let Human01 `config` complete; the same VM enters `main`
-      and reaches `GetCameraMargin` at map-script line 7781. All 236 play tests
+      and uses source-bound camera margins to retain authored camera bounds before
+      reaching `SetDayNightModels` at map-script span `384173..384351`. All 244 play tests
       pass with five explicit ignores; strict native/WASM Clippy, WASM generation
-      and actual 32-bit lifecycle/config/player/priority checks pass. These are bounded Host/data
+      and actual 32-bit lifecycle/config/player/priority/camera checks pass. These are bounded Host/data
       checks, not campaign or native gameplay proof.
       Launcher profile loading/default Host wiring and other player natives
       remain open; see `selected-map-neutral-host.md`, `playercolor-host.md` and
       `script-timer-arena.md`/`script-group-arena.md`/`script-map-config.md`/
-      `script-player-setup.md`/`script-start-priorities.md`.
+      `script-player-setup.md`/`script-start-priorities.md`/`script-camera-input.md`.
 
 ### Current implemented slices (2026-10-14)
 
