@@ -228,3 +228,9 @@ This advances authored global initialization, not config/main or a playable
 campaign. `CreateTimer` needs real session-owned object state, not a fabricated
 handle or a successful no-op. The ordinary launcher still needs explicit rule
 profile loading and Host installation through its existing session factory.
+
+
+The later opt-in [timer arena](script-timer-arena.md) passes those creation calls
+using real shared-arena objects and advances the same initializer to `CreateGroup`
+at Blizzard line 584. Earlier scalar-only refusal receipts remain historical;
+scheduling, config/main and ordinary launcher wiring remain open.

@@ -1001,12 +1001,14 @@ Format: `date — subsystem — symptom — root cause — status`
       `GetBJMaxPlayerSlots` rules from independently approved local executable
       profiles and the admitted W3I. The same Human01 Program/localization gate
       composes 43 source-selected symbolic contracts, retains 432 typed
-      identities, and now reaches `CreateTimer` at Blizzard line 454 after passing
-      the scalar player-limit declarations. All 184 play tests pass with five explicit ignores; native/WASM strict
+      identities. An opt-in shared-arena TimerHost now creates two real timers and
+      reaches `CreateGroup` at Blizzard line 584 after passing the scalar
+      player-limit declarations. All 193 play tests pass with five explicit ignores; native/WASM strict
       Clippy and WASM library code generation pass. These are bounded Host/data
       checks, not campaign or native gameplay proof.
       Launcher profile loading/default Host wiring and other player natives
-      remain open; see `selected-map-neutral-host.md` and `playercolor-host.md`.
+      remain open; see `selected-map-neutral-host.md`, `playercolor-host.md` and
+      `script-timer-arena.md`.
 
 ### Current implemented slices (2026-10-14)
 
