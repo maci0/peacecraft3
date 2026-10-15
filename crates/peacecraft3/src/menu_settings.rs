@@ -684,6 +684,24 @@ mod tests {
         assert!(validate_settings(&values).is_err());
     }
     #[test]
+    fn saved_render_size_does_not_silently_accept_an_unimplemented_display_mode() {
+        let prefs = Preferences {
+            version: 1,
+            settings: Settings {
+                resolution: Some((931, 677)),
+                ..default()
+            },
+            audio: AudioSettings::default(),
+        };
+        let text = serde_json::to_string(&prefs).unwrap();
+        assert_eq!(decode_preferences(&text).unwrap().settings, prefs.settings);
+        let unknown = text.replace(
+            "\"settings\":{",
+            "\"settings\":{\"native_exclusive\":{\"refresh_millihertz\":60123},",
+        );
+        assert!(decode_preferences(&unknown).is_err());
+    }
+    #[test]
     fn choosing_resolution_changes_only_draft_and_refuses_stale_modes() {
         let mut nav = Navigation {
             resolutions: vec![(740, 510), (1480, 1020)],

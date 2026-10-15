@@ -41,24 +41,31 @@ descriptor words remain available for later qualified interpretation. Entry
 order is caller selection order; missing keys remain absent. The reported
 ordinal upper bound is not the number of admitted records.
 
-The root gate imported all 32 previously inspected records using their retained
-source fingerprints. The getter admits a larger positive ordinal domain; its
-uninspected records are not claimed as reviewed. No generated profile, original
-payload or original default table is distributed with the repository.
+The first root gate imported 32 previously inspected records. A subsequent
+bounded census read exactly the instruction-derived descriptor span and only
+its directly referenced strings. The root importer then admitted all 80 rows
+using independently reviewed fingerprints, preserving 12 empty fallback strings.
+There were no null pointers or duplicate names in this selected image. Those
+are observed source facts, not implementation limits or guarantees for another
+image. No generated profile, original payload or original default table is
+distributed with the repository.
 
 ## Verification and remaining work
 
-Seven synthetic tests cover relocation, changed bounds/values, partial selection,
+Eight synthetic tests cover relocation, changed bounds/values, partial selection,
 control-flow mutations, source-byte budget boundaries, bad identity, BSS,
 duplicate/stale references, exact string framing and raw non-numeric values.
 The affected full native package suite, strict native/WASM Clippy and WASM build
 pass. An actual 32-bit WASM source-leaf executes four groups with mask 15 and
-no imports. The explicitly selected original-image gate admits 32 records.
+no imports. The explicitly selected original-image gates admit the partial
+32-record selection and subsequent complete 80-record selection.
 
 Evidence is retained locally in `.scratch/options-defaults-root-20261016/`;
 native semantic receipts are in
 `.scratch/legacy-options-folded-default-field-evidence/` and the independently
 reviewed plan in `.scratch/legacy-options-default-profile-plan-20261016/`.
+The bounded complete-table census is retained separately in
+`.scratch/legacy-options-complete-descriptor-census-20261016/`.
 Earlier failed fixture assertions and compile attempts remain failures in those
 logs; they are not rewritten as successful checks.
 

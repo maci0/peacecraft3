@@ -77,6 +77,9 @@ unavailable saved values are reported. Validation/storage failure preserves
 applied state; a browser audio failure after commit is explicitly reported as
 saved/display-applied rather than a successful full apply. This transaction and
 storage design are recreation conventions, not proven native preference internals.
+The version-1 resolution field remains a window/browser render size. Unknown
+nested settings fields refuse instead of silently dropping an unsupported
+exclusive-mode request. Existing version-1 preferences remain readable.
 
 Optional source-derived submenu shells cover Single Player, Campaign, Custom
 Campaign, saved games, replays, skirmish and LAN; the original LAN button routes

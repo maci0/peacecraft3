@@ -283,3 +283,15 @@ fn duplicate_names_refuse_and_non_numeric_values_stay_raw() {
         [0xff, b'7', b'3']
     );
 }
+
+#[test]
+fn a_present_empty_fallback_is_not_a_missing_key_or_null_pointer() {
+    let (mut d, mut b, n) = fixture(0x300000, 7);
+    let at = offset(&d, b.rows[0].fallback.va);
+    d[at] = 0;
+    b.rows[0].fallback.len = 1;
+    refresh(&d, &mut b);
+    let input = Defaults::read(&d, b, n).unwrap();
+    assert_eq!(input.get("synthetic.size").unwrap().fallback, b"");
+    assert!(input.get("missing").is_none());
+}

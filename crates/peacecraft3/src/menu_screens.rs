@@ -142,6 +142,7 @@ pub struct Navigation {
 }
 
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Settings {
     pub resolution: Option<(u32, u32)>,
     /// Authored slider values, not normalized or substituted defaults.
