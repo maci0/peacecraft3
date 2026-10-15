@@ -1015,9 +1015,12 @@ Format: `date — subsystem — symptom — root cause — status`
   authored TEXS IDs at spawn and advance on independent global clocks, retaining
   per-record sampler policy and avoiding redundant material changes. Native ECS
   regressions, both original background imports and six source-qualified retained
-  model bindings pass; strict native/WASM checks pass. Release/browser acceptance
-  of this new texture binding is pending. RGB animation, multilayer drawing and
-  native clock/blend equivalence remain open.
+  model bindings pass; strict native/WASM checks pass. Release WASM and a fresh
+  original-repack browser Main/Video Options/Main run pass; reviewed captures
+  show water and the corrected logo. The asset-free demo at `6e2c4de` matches all
+  23 package hashes and passes live startup. This is not native visual parity:
+  RGB animation, multilayer drawing, sky projection, the uncovered black region
+  and native clock/blend equivalence remain open.
   The TFT sky's authored layer references a linear TXAN translation on an
   independent 999,033 ms GLBS clock. The current scene does not apply it;
   native track-to-UV mapping remains unproved. See `menu-texture-animation.md`.

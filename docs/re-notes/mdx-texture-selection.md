@@ -74,9 +74,7 @@ panel phase clocks and an explicit retained local fixture. It confirms sampled
 initial handles, per-TEXS samplers, global wrap, no texture-induced modification
 events for unchanged selections, and refusal before per-model partial spawning.
 These gates do not establish GPU output or native clock/projection semantics.
-Release WASM and rendered water acceptance remain required before this
-integration is accepted. Separate menu model calls retain the caller's existing
-transaction boundary.
+Separate menu model calls retain the caller's existing transaction boundary.
 
 The final native application suite passes 178 tests with eight explicitly
 ignored input-dependent cases. Two of those gates were then run with their
@@ -86,5 +84,22 @@ background/panel/logo models pass the real image-cache and material-handle
 boundary checks. The public selector's separate original TFT key/wrap test also
 passes. Strict native and wasm32 Clippy cover both application and graphics
 crates across all targets/features with dependency diagnostics excluded. These
-gates are captured in `.scratch/menu-texture-selection-root-review/`; they do
-not substitute for the pending release build and rendered checks.
+gates are captured in `.scratch/menu-texture-selection-root-review/`.
+
+The checked source at `15da7c4` also passes the release WASM build, bindgen
+0.2.129 and the allowlisted asset-free package. A fresh browser run imports the
+explicit local original-asset repack through the real file input and captures
+Main, Video Options and the return to Main. All three captures render; manual
+review confirms visible water and the corrected gold/blue logo. The run records
+15 local code GETs, no uploads, sockets or page errors, and preserves the exact
+build/source/package hashes in `.scratch/original-options-browser/texture-1/`
+and its build receipt. Key selection and clock boundaries are established by
+the separate public-API/ECS gates, not inferred from screenshot timing.
+
+The same 23 code/WASM/GPL corresponding-source files are published at demo
+commit `6e2c4de`; every live file matches the checked package and asset-free
+startup passes. No original textures, models, fonts, archives or screenshots
+are hosted. The browser evidence is for this local repack, not retail installer
+or native rendering parity. Sky projection, the uncovered black region,
+TXAN translation, particles, broader material fidelity and panel screen
+transition timelines remain open.
