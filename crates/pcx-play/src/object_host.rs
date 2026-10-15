@@ -14,6 +14,7 @@ pub struct ObjectHost {
     camera: Option<camera::CameraState>,
     day_night: Option<environment::DayNightState>,
     sounds: Option<crate::label_sounds::SoundBank>,
+    startup_clock: Option<clock::StartupClockState>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -33,6 +34,7 @@ impl ObjectHost {
             camera: None,
             day_night: None,
             sounds: None,
+            startup_clock: None,
         })
     }
     fn contract(
@@ -251,6 +253,9 @@ impl ObjectHost {
 }
 impl Host for ObjectHost {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.startup_clock_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.sound_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -315,3 +320,7 @@ pub use environment::DayNightState;
 #[path = "sound_host.rs"]
 mod sounds;
 pub use sounds::SoundState;
+
+#[path = "startup_clock_host.rs"]
+mod clock;
+pub use clock::StartupClockState;

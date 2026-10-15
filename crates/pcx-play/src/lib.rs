@@ -73,6 +73,7 @@ pub use rpl::{Expectation, Rpl, RplError};
 pub mod scenario;
 pub mod script_trace;
 pub mod scripts;
+pub mod startup_clock;
 pub mod trace;
 pub use map_scripts_import::*;
 
