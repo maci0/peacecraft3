@@ -24,6 +24,7 @@ pub enum RuleProblem {
     ProfileFormat,
     ImageIdentity,
     PeFormat,
+    UnsupportedArchitecture { machine: u16, optional_magic: u16 },
     Range,
     RangeIdentity,
     Binding,

@@ -12,6 +12,13 @@ use bevy::{
 };
 use std::collections::BTreeMap;
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
+#[path = "original_options_audio.rs"]
+mod original;
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct SettingsUpdate;
+
 // Local preference input policy, independent of game assets or authored values.
 const MAX_PREFERENCE_BYTES: usize = 8192;
 
@@ -85,6 +92,9 @@ impl Range {
             Err("Volume is outside its authored slider range".into())
         }
     }
+    fn value(self, gain: f32) -> f32 {
+        (f64::from(self.min) + f64::from(gain) * (f64::from(self.max) - f64::from(self.min))) as f32
+    }
     fn snap(self, value: f32) -> f32 {
         crate::menu_screens::slider_value(
             self.min,
@@ -100,6 +110,9 @@ pub struct Backend {
     ranges: BTreeMap<String, Range>,
     loaded: bool,
     has_preferences: bool,
+    preference_unreadable: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    source: Option<(String, crate::launch::GameMode)>,
     pending_resolution: Option<(u32, u32)>,
     observed_resolution: Option<(u32, u32)>,
 }
@@ -144,6 +157,33 @@ fn decode_preferences(text: &str) -> Result<Preferences, String> {
     Ok(prefs)
 }
 impl Backend {
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn set_test_preferences(&mut self, saved: bool) {
+        self.loaded = true;
+        self.has_preferences = saved;
+    }
+
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn set_test_source(&mut self, launcher: &crate::launch_gui::Launcher) {
+        let (source, mode) = launcher.audio_selection();
+        self.source = Some((source.to_owned(), mode));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn preferences_loaded(&self) -> bool {
+        self.loaded && self.preference_unreadable.is_none()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn source_matches(&self, launcher: &crate::launch_gui::Launcher) -> bool {
+        let (source, mode) = launcher.audio_selection();
+        self.source
+            .as_ref()
+            .is_some_and(|(path, selected)| path == source && *selected == mode)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn has_preferences(&self) -> bool {
+        self.has_preferences
+    }
     fn candidate_audio(
         &self,
         settings: &Settings,
@@ -156,7 +196,10 @@ impl Backend {
         ] {
             if let Some(&value) = settings.values.get(name) {
                 if let Some(range) = self.ranges.get(name) {
-                    *target = range.gain(value)?;
+                    let gain = range.gain(value)?;
+                    if previous.values.get(name) != Some(&value) {
+                        *target = gain;
+                    }
                 } else if previous.values.get(name) != Some(&value) {
                     return Err(format!("{name}: authored slider range is not loaded"));
                 }
@@ -171,6 +214,169 @@ impl Backend {
         audio.validate()?;
         Ok(audio)
     }
+}
+
+#[cfg(any(test, not(target_arch = "wasm32")))]
+fn admit_source_audio(
+    nav: &mut Navigation,
+    backend: &mut Backend,
+    seed: Option<original::Seed>,
+) -> Result<(), String> {
+    if !backend.loaded {
+        return Err("Audio preferences have not been read yet".into());
+    }
+    if let Some(error) = &backend.preference_unreadable {
+        return Err(format!("Audio preferences could not be read: {error}"));
+    }
+    let (audio, ranges, mut values, mut toggles) = if let Some(seed) = seed {
+        info!(source=%seed.origin.source, edition=%seed.origin.edition,
+              image_sha256=?seed.image_sha256, "Source-qualified Options audio fallback admitted");
+        (seed.audio, seed.ranges, seed.values, seed.toggles)
+    } else {
+        (
+            AudioSettings::default(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        )
+    };
+    let audio = if backend.has_preferences {
+        backend.audio
+    } else {
+        audio
+    };
+    if backend.has_preferences {
+        for (name, range) in &ranges {
+            let gain = if name == "MusicVolumeSlider" {
+                audio.music_gain
+            } else {
+                audio.effects_gain
+            };
+            values.insert(name.clone(), range.value(gain));
+        }
+        toggles.insert("MusicCheckBox".into(), audio.music_enabled);
+        toggles.insert("SoundCheckBox".into(), audio.effects_enabled);
+    }
+    let mut applied = nav.applied.clone();
+    applied.values = values;
+    applied.toggles = toggles;
+    backend.audio = audio;
+    backend.ranges = ranges;
+    nav.applied = applied;
+    nav.draft = nav.applied.clone();
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn prepare_source_audio(
+    install: &std::path::Path,
+    expansion: bool,
+) -> Result<Option<original::Seed>, String> {
+    use pcx_play::{
+        neutral_player::RuleInputBudget,
+        options_defaults::{Defaults, DiscoveryBudget, Problem},
+    };
+    use std::io::Read;
+    // Supported client role; no neighboring DLL, executable or default table is borrowed.
+    let path = install.join("Warcraft III.exe");
+    let mut file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    // Local input/work policy, independent of any original image's measured size.
+    const IMAGE_BYTES: usize = 32 * 1024 * 1024;
+    if file
+        .metadata()
+        .map_err(|e| format!("{}: {e}", path.display()))?
+        .len()
+        > IMAGE_BYTES as u64
+    {
+        return Err(format!(
+            "{}: Options client exceeds image budget",
+            path.display()
+        ));
+    }
+    let mut image = Vec::new();
+    image
+        .try_reserve_exact(IMAGE_BYTES + 1)
+        .map_err(|e| e.to_string())?;
+    file.by_ref()
+        .take((IMAGE_BYTES + 1) as u64)
+        .read_to_end(&mut image)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let origin = pcx_play::scripts::AssetIdentity {
+        edition: format!("selected skin V{}", u32::from(expansion)),
+        version: "pattern-qualified PE32; release identity not inferred".into(),
+        source: path.display().to_string(),
+    };
+    let defaults = match Defaults::discover(
+        &image,
+        origin,
+        DiscoveryBudget {
+            image: RuleInputBudget {
+                image_bytes: IMAGE_BYTES,
+                profile_bytes: 128 * 1024,
+                sections: 96,
+            },
+            string_bytes: 4096,
+            candidate_limit: 32,
+            work_bytes: 64 * 1024 * 1024,
+        },
+    ) {
+        Ok(defaults) => defaults,
+        Err(error)
+            if matches!(
+                error.problem,
+                Problem::DiscoveryNone
+                    | Problem::Image(pcx_play::neutral_player::NeutralError::Rule(
+                        pcx_play::neutral_player::RuleProblem::UnsupportedArchitecture { .. }
+                    ))
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    let (fdf, _) = crate::launch_gui::read_screen_fdf(
+        Some(install),
+        crate::menu_screens::Screen::Options(crate::menu_screens::Page::Sound),
+    )?;
+    original::prepare(&defaults, &fdf).map(Some)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn source_audio_candidate(
+    backend: &Backend,
+    install: Option<&std::path::Path>,
+    expansion: bool,
+) -> Result<Option<original::Seed>, String> {
+    if backend.has_preferences {
+        Ok(None)
+    } else {
+        install
+            .map(|path| prepare_source_audio(path, expansion))
+            .transpose()
+            .map(Option::flatten)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn activate_source_audio(
+    nav: &mut Navigation,
+    backend: &mut Backend,
+    seed: Option<original::Seed>,
+    launcher: &crate::launch_gui::Launcher,
+) -> Result<(), String> {
+    if seed.is_none() && !backend.has_preferences {
+        warn!(
+            "Source Options defaults unavailable; using explicitly unqualified neutral menu-audio multipliers"
+        );
+    }
+    admit_source_audio(nav, backend, seed)?;
+    let (source, mode) = launcher.audio_selection();
+    backend.source = Some((source.to_owned(), mode));
+    Ok(())
 }
 
 pub fn select_resolution(nav: &mut Navigation, resolution: (u32, u32)) -> Result<(), String> {
@@ -229,6 +435,8 @@ fn commit(
     nav.applied = nav.draft.clone();
     backend.audio = audio;
     backend.has_preferences = true;
+    backend.loaded = true;
+    backend.preference_unreadable = None;
     Ok(())
 }
 
@@ -240,6 +448,7 @@ pub fn install(app: &mut App) {
             Update,
             (environment, attach_controls, labels)
                 .chain()
+                .in_set(SettingsUpdate)
                 .before(crate::launch_gui::LauncherInput),
         );
 }
@@ -293,16 +502,20 @@ fn environment(
     observe_resolution(&mut nav, &mut backend, current);
     if !backend.loaded {
         backend.loaded = true;
-        match load_preferences()
-            .and_then(|text| text.map(|text| decode_preferences(&text)).transpose())
-        {
-            Ok(Some(prefs)) => {
-                nav.applied = prefs.settings;
-                backend.audio = prefs.audio;
-                backend.has_preferences = true;
-            }
+        match load_preferences() {
+            Ok(Some(text)) => match decode_preferences(&text) {
+                Ok(prefs) => {
+                    nav.applied = prefs.settings;
+                    backend.audio = prefs.audio;
+                    backend.has_preferences = true;
+                }
+                Err(error) => nav.notice = error,
+            },
             Ok(None) => {}
-            Err(error) => nav.notice = error,
+            Err(error) => {
+                backend.preference_unreadable = Some(error.clone());
+                nav.notice = error;
+            }
         }
         backend.pending_resolution = nav.applied.resolution;
         if nav.applied.resolution.is_none() {
@@ -310,7 +523,9 @@ fn environment(
         }
         nav.draft = nav.applied.clone();
         #[cfg(target_arch = "wasm32")]
-        if let Err(error) = push_browser_audio(backend.audio) {
+        if backend.preference_unreadable.is_none()
+            && let Err(error) = push_browser_audio(backend.audio)
+        {
             nav.notice = error;
         }
     }
@@ -367,31 +582,26 @@ fn attach_controls(
                 } else {
                     backend.audio.effects_gain
                 };
-                let current = if backend.has_preferences {
-                    range.snap(range.min + gain * (range.max - range.min))
+                // Opening a control reflects effective playback, never a different
+                // widget initial. Saved gains are authoritative across source ranges.
+                let projected = range.value(gain);
+                let value = if backend.has_preferences {
+                    projected
                 } else {
-                    // A neutral playback multiplier is not an authored UI default.
-                    // Keep the source initial in the draft until the user applies it.
-                    *initial
+                    nav.applied
+                        .values
+                        .get(&control.name)
+                        .copied()
+                        .filter(|value| range.valid(*value))
+                        .unwrap_or(projected)
                 };
-                let existing = nav.applied.values.get(&control.name).copied();
-                let value = match existing {
-                    Some(value) if range.valid(value) => value,
-                    Some(_) => {
-                        nav.notice = format!(
-                            "{}: saved value is outside the current authored range",
-                            control.name
-                        );
-                        current
-                    }
-                    None => current,
-                };
+                let previous = nav.applied.values.insert(control.name.clone(), value);
                 let draft = nav
                     .draft
                     .values
                     .entry(control.name.clone())
                     .or_insert(value);
-                if !range.valid(*draft) {
+                if previous == Some(*draft) || !range.valid(*draft) {
                     *draft = value;
                 }
                 commands.entity(entity).insert((
@@ -415,6 +625,16 @@ fn attach_controls(
                         backend.audio.effects_enabled
                     },
                 );
+                let applied = if control.name == "MusicCheckBox" {
+                    backend.audio.music_enabled
+                } else {
+                    backend.audio.effects_enabled
+                };
+                nav.applied.toggles.insert(control.name.clone(), applied);
+                nav.draft
+                    .toggles
+                    .entry(control.name.clone())
+                    .or_insert(applied);
                 if checked {
                     commands.entity(entity).insert(Checked);
                 } else {
@@ -749,10 +969,13 @@ mod tests {
         let entity = world.spawn(make()).id();
         world.run_system_once(attach_controls).unwrap();
         assert_eq!(world.resource::<Backend>().audio.effective_music(), 1.0);
-        assert!(world.resource::<Navigation>().applied.values.is_empty());
+        assert_eq!(
+            world.resource::<Navigation>().applied.values["MusicVolumeSlider"],
+            10.0
+        );
         assert_eq!(
             world.resource::<Navigation>().draft.values["MusicVolumeSlider"],
-            0.0
+            10.0
         );
         world.trigger(ValueChange {
             source: entity,
@@ -770,11 +993,14 @@ mod tests {
         world.run_system_once(attach_controls).unwrap();
         assert_eq!(world.get::<SliderValue>(replacement).unwrap().0, 3.0);
         world.resource_mut::<Navigation>().action("CancelButton");
-        assert!(world.resource::<Navigation>().draft.values.is_empty());
+        assert_eq!(
+            world.resource::<Navigation>().draft.values["MusicVolumeSlider"],
+            10.0
+        );
         assert_eq!(world.resource::<Backend>().audio.effective_music(), 1.0);
     }
     #[test]
-    fn unsaved_slider_uses_authored_initial_without_changing_active_audio() {
+    fn unsaved_slider_reflects_unqualified_playback_without_using_widget_initial() {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
         world.init_resource::<Backend>();
@@ -791,10 +1017,10 @@ mod tests {
             })
             .id();
         world.run_system_once(attach_controls).unwrap();
-        assert_eq!(world.get::<SliderValue>(control).unwrap().0, 19.0);
+        assert_eq!(world.get::<SliderValue>(control).unwrap().0, 31.0);
         assert_eq!(
             world.resource::<Navigation>().draft.values["MusicVolumeSlider"],
-            19.0
+            31.0
         );
         let backend = world.resource::<Backend>();
         assert_eq!(
@@ -806,7 +1032,7 @@ mod tests {
                 .candidate_audio(&world.resource::<Navigation>().draft, &Settings::default())
                 .unwrap()
                 .music_gain,
-            0.5
+            1.0
         );
     }
 
@@ -887,5 +1113,162 @@ mod tests {
             (740, 510)
         );
         assert_eq!(backend.audio.effective_music(), 0.5);
+    }
+    fn seed(gain: f32) -> original::Seed {
+        let range = Range {
+            min: 10.0,
+            max: 90.0,
+            step: 6.0,
+        };
+        original::Seed {
+            audio: AudioSettings {
+                music_gain: gain,
+                effects_gain: 0.4,
+                music_enabled: false,
+                effects_enabled: true,
+            },
+            values: BTreeMap::from([
+                ("MusicVolumeSlider".into(), range.value(gain)),
+                ("SoundVolumeSlider".into(), 42.0),
+            ]),
+            toggles: BTreeMap::from([
+                ("MusicCheckBox".into(), false),
+                ("SoundCheckBox".into(), true),
+            ]),
+            ranges: BTreeMap::from([
+                ("MusicVolumeSlider".into(), range),
+                ("SoundVolumeSlider".into(), range),
+            ]),
+            origin: pcx_play::scripts::AssetIdentity {
+                edition: "synthetic".into(),
+                version: "synthetic".into(),
+                source: "synthetic".into(),
+            },
+            image_sha256: [0x25; 32],
+        }
+    }
+
+    #[test]
+    fn source_fallback_activates_all_channels_and_baselines_without_saving() {
+        let mut nav = Navigation::default();
+        let mut backend = Backend {
+            loaded: true,
+            ..default()
+        };
+        admit_source_audio(&mut nav, &mut backend, Some(seed(0.2625))).unwrap();
+        assert!(!backend.has_preferences);
+        assert_eq!(backend.audio.music_gain, 0.2625);
+        assert!(!backend.audio.music_enabled);
+        assert_eq!(nav.applied, nav.draft);
+        assert_eq!(nav.applied.values["MusicVolumeSlider"], 31.0);
+        nav.draft.values.insert("MusicVolumeSlider".into(), 88.0);
+        nav.action("CancelButton");
+        assert_eq!(nav.applied, nav.draft);
+        assert_eq!(backend.audio.music_gain, 0.2625);
+    }
+
+    #[test]
+    fn saved_gains_win_and_reproject_even_when_old_units_are_in_the_new_range() {
+        let mut nav = Navigation::default();
+        nav.applied.values.insert("MusicVolumeSlider".into(), 70.0);
+        nav.draft = nav.applied.clone();
+        let mut backend = Backend {
+            loaded: true,
+            has_preferences: true,
+            ..default()
+        };
+        backend.audio.music_gain = 0.25;
+        admit_source_audio(&mut nav, &mut backend, Some(seed(0.75))).unwrap();
+        assert_eq!(backend.audio.music_gain, 0.25);
+        assert_eq!(nav.applied.values["MusicVolumeSlider"], 30.0);
+        assert_eq!(nav.applied, nav.draft);
+        assert!(backend.has_preferences);
+    }
+
+    #[test]
+    fn unreadable_preferences_and_pending_reads_preserve_dirty_state() {
+        for loaded in [false, true] {
+            let mut backend = Backend {
+                loaded,
+                preference_unreadable: loaded.then(|| "synthetic IO refusal".into()),
+                ..default()
+            };
+            let mut nav = Navigation::default();
+            nav.draft.values.insert("MusicVolumeSlider".into(), 17.0);
+            let old = nav.draft.clone();
+            assert!(admit_source_audio(&mut nav, &mut backend, Some(seed(0.25))).is_err());
+            assert_eq!(nav.draft, old);
+            assert!(nav.applied.values.is_empty());
+            assert_eq!(backend.audio.music_gain, 1.0);
+            assert!(backend.ranges.is_empty());
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[ignore = "requires explicit local selected install and expected complete client SHA256"]
+    fn original_audio_defaults_match_selected_source_before_playback() {
+        let install =
+            std::env::var_os("PEACECRAFT3_OPTIONS_INSTALL").expect("explicit local install");
+        let expected =
+            std::env::var("PEACECRAFT3_OPTIONS_IMAGE_SHA256").expect("expected client SHA256");
+        let seed = prepare_source_audio(std::path::Path::new(&install), true)
+            .unwrap()
+            .expect("supported source profile");
+        let actual: String = seed
+            .image_sha256
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(actual, expected);
+        let expected_units = seed.values.clone();
+        let expected_flags = seed.toggles.clone();
+        let audio = seed.audio;
+        let mut nav = Navigation::default();
+        let mut backend = Backend {
+            loaded: true,
+            ..default()
+        };
+        admit_source_audio(&mut nav, &mut backend, Some(seed)).unwrap();
+        assert_eq!(nav.applied.values, expected_units);
+        assert_eq!(nav.applied.toggles, expected_flags);
+        assert_eq!(nav.applied, nav.draft);
+        assert_eq!(
+            backend.audio.music_gain.to_bits(),
+            audio.music_gain.to_bits()
+        );
+        assert_eq!(
+            backend.audio.effects_gain.to_bits(),
+            audio.effects_gain.to_bits()
+        );
+        assert_eq!(backend.audio.music_enabled, audio.music_enabled);
+        assert_eq!(backend.audio.effects_enabled, audio.effects_enabled);
+        assert!(!backend.has_preferences);
+    }
+    #[test]
+    fn unchanged_controls_preserve_the_saved_normalized_gain_bits() {
+        let mut backend = Backend {
+            loaded: true,
+            has_preferences: true,
+            ..default()
+        };
+        backend.audio.music_gain = f32::from_bits(0x3eaaaaab);
+        let range = Range {
+            min: -13.0,
+            max: 73.0,
+            step: 7.0,
+        };
+        backend.ranges.insert("MusicVolumeSlider".into(), range);
+        let mut settings = Settings::default();
+        settings.values.insert(
+            "MusicVolumeSlider".into(),
+            range.value(backend.audio.music_gain),
+        );
+        let after = backend.candidate_audio(&settings, &settings).unwrap();
+        assert_eq!(
+            after.music_gain.to_bits(),
+            backend.audio.music_gain.to_bits()
+        );
+        assert_eq!(range.value(0.0), range.min);
+        assert_eq!(range.value(1.0), range.max);
     }
 }

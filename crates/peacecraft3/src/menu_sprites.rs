@@ -1097,12 +1097,16 @@ pub fn cancel_event_sounds() {
 pub(crate) struct SoundSink<'w> {
     assets: ResMut<'w, Assets<AudioSource>>,
     settings: Res<'w, crate::menu_settings::Backend>,
+    launcher: Res<'w, crate::launch_gui::Launcher>,
 }
 #[cfg(target_arch = "wasm32")]
 type SoundSink<'w> = ();
 
 #[cfg(not(target_arch = "wasm32"))]
 fn play(commands: &mut Commands, sink: &mut SoundSink, sound: &EventSound) {
+    if !sink.settings.source_matches(&sink.launcher) {
+        return;
+    }
     debug_assert_eq!(sound.source.resources().len(), 1);
     debug_assert_eq!(sound.source.resources()[0].member(), sound.path);
     commands.spawn((

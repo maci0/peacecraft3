@@ -101,9 +101,61 @@ The bounded complete-table census is retained separately in
 Earlier failed fixture assertions and compile attempts remain failures in those
 logs; they are not rewritten as successful checks.
 
-This importer is a data prerequisite. The menu does not yet consume discovered
-defaults automatically. Saved/default precedence, source units and actual setting
-owners must be connected before claiming faithful Options defaults. The browser
-cannot enumerate exclusive OS modes; native exclusive mode requests need live
-capability checks and an observed application result. Unsupported settings remain
-disabled rather than being persisted without an effect.
+## Native audio consumer
+
+The native menu now prepares the four audio fallbacks from the selected client
+and selected Sound Options/template FDFs before publishing its first music
+player. Complete project preferences win; missing or fully read invalid project
+preferences can use the checked source fallbacks. An unreadable preference file
+is a separate state and cannot be treated as absence. Source initialization
+changes the active audio and matching applied/draft controls together without
+saving preferences. Cancel returns to that baseline. Source integers remain in
+authored units, including valid values off the interactive step; no widget
+initial, copied percentage divisor or snapping replaces them. Saved normalized
+gains remain authoritative when the source range changes, and an unchanged
+control does not round-trip a gain through slider units on Apply.
+
+Preparation is source-keyed, so revisiting a tab does not reset edits. Failed
+replacement retains old media, gains and drafts; click and SNDX creation require
+the current selected-source decision, rather than a global readiness flag.
+Unsupported client-header architecture and an absent supported getter are
+capability states, distinct from malformed framing or ambiguous table discovery.
+MPQ-only sources retain explicitly unqualified neutral multipliers. No neighboring
+executable or compatibility DLL supplies defaults. Screen members and includes
+now check packed/decoded sizes against their remaining aggregate allowance
+before extraction; this is not a bound on archive-open tables or decoder RSS.
+
+Native menu music comes from the selected skin variant. A source list consisting
+only of repetitions of the same member uses the existing loop; distinct-entry
+playlists refuse instead of selecting an arbitrary entry. Click volume uses the
+selected script's admitted sound scale. An unavailable initial click is reported
+without silencing admitted music; a replacement may not discard a working click.
+The qualified Legacy click currently refuses compression mask `0x41`. The existing
+Huffman table recognizer also refuses this selected client, so no table or decoded
+click is invented or borrowed from another installation.
+
+Synthetic tests cover conversion, saved precedence, source rebasing, dirty-state
+rollback, unsupported-header distinction and gain-bit preservation. Explicit
+local original gates check the selected complete image identity, source/FDF
+conversion and the music player's preplayback volume/pause components. These
+checks do not establish audible playback, original gain response or native mixer
+parity. Evidence and earlier failed gates remain in
+`.scratch/options-audio-root-20261016/`.
+
+The final native app suite passes 240 tests with 11 explicit local-input ignores;
+the two selected-original default gates pass separately. Strict native/WASM
+checks and complete app builds pass. Seven discovery/header groups also execute
+in actual 32-bit WASM (mask 127, no imports). The complete desktop app starts with
+an empty private configuration and admits the source fallback once during the
+bounded smoke run, using a private null audio route. An earlier Xvfb attempt
+cannot present through this Vulkan driver's surface and remains a failed gate.
+Pending player settings and live sinks both receive volume/pause updates; a
+schedule regression checks the distinct launcher-input and menu-action phases.
+This startup check is not an audible or visual fidelity assessment.
+
+Browser client transport and source-generation audio admission remain open;
+this native consumer does not make the MPQ-only browser demo source-qualified.
+The browser cannot enumerate exclusive OS modes; native exclusive mode requests
+still need live capability checks and an observed application result. Remaining
+gameplay, graphics and device settings need their actual owners before activation.
+Unsupported settings stay disabled rather than being persisted without an effect.

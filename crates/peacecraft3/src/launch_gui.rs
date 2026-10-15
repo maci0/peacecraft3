@@ -44,6 +44,29 @@ impl Default for Launcher {
 }
 
 impl Launcher {
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn test_source(source: String, expansion: bool) -> Self {
+        let mut mode = GameMode::default_for(pcx_mpq::Version::V1_29);
+        mode.addon = if expansion { Addon::Tft } else { Addon::Roc };
+        Self {
+            source,
+            mode,
+            log: Vec::new(),
+            staging: false,
+            content_editions: None,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn audio_selection(&self) -> (&str, GameMode) {
+        (&self.source, self.mode)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn expansion(&self) -> bool {
+        self.mode.addon == Addon::Tft
+    }
+
     fn allows_addon(&self, addon: Addon) -> bool {
         self.content_editions.is_none_or(|e| e.allows(addon))
     }
@@ -71,6 +94,9 @@ enum Pick {
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct LauncherInput;
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct MenuActions;
 
 #[derive(Component)]
 struct SourcePath;
@@ -254,7 +280,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
                     colour_picks,
                     apply_clicks.in_set(LauncherInput),
                     finish_intro,
-                    apply_menu_clicks,
+                    apply_menu_clicks.in_set(MenuActions),
                     menu_navigation_keys,
                     update_menu_notice,
                 )
@@ -458,7 +484,7 @@ fn default_source() -> String {
     "wc3/game/app".to_string()
 }
 
-fn selected_install(launcher: &Launcher) -> Option<std::path::PathBuf> {
+pub(crate) fn selected_install(launcher: &Launcher) -> Option<std::path::PathBuf> {
     match classify(&launcher.source).ok()? {
         crate::launch::Source::Directory(path) => Some(path),
         crate::launch::Source::BattleNet(path) => {
@@ -1433,6 +1459,31 @@ struct MenuArtQueries<'w, 's> {
     panels: Query<'w, 's, Entity, (With<Wc3Panel>, Without<ImageNode>)>,
 }
 
+/// Limits packed/decoded definitions before extraction, not after allocation.
+fn read_screen_bytes(
+    install: Option<&std::path::Path>,
+    path: &str,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let install = install.ok_or_else(|| format!("{path}: no selected installation"))?;
+        let mut set = pcx_mpq::MpqSet::open_wc3(install).map_err(|e| format!("{path}: {e}"))?;
+        let (_, block) = set.locate(path).ok_or_else(|| format!("missing {path}"))?;
+        if block.compressed_size as u64 > max_bytes as u64
+            || block.file_size as u64 > max_bytes as u64
+        {
+            return Err(format!("{path}: screen input byte bound exceeded"));
+        }
+        set.extract(path).map_err(|e| format!("{path}: {e}"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = install;
+        crate::browser::screen_bytes(path, max_bytes)?.ok_or_else(|| format!("missing {path}"))
+    }
+}
+
 /// Shared include traversal for displayed and candidate screens.
 fn parse_screen_fdf(
     install: Option<&std::path::Path>,
@@ -1466,8 +1517,8 @@ fn parse_screen_fdf(
                 value: "include count limit exceeded".into(),
             });
         }
-        let bytes = crate::mainmenu::art_bytes(install, &path)
-            .ok_or_else(|| crate::fdf::FdfError::UnknownFrame(format!("missing include {path}")))?;
+        let bytes = read_screen_bytes(install, &path, 8 * 1024 * 1024 - total)
+            .map_err(crate::fdf::FdfError::UnknownFrame)?;
         total = total
             .checked_add(bytes.len())
             .ok_or_else(|| crate::fdf::FdfError::UnknownFrame("include size overflow".into()))?;
@@ -1489,20 +1540,16 @@ fn parse_screen_fdf(
     Ok(f)
 }
 
-fn read_screen_fdf(
+pub(crate) fn read_screen_fdf(
     install: Option<&std::path::Path>,
     screen: crate::menu_screens::Screen,
 ) -> Result<(crate::fdf::Fdf, String), String> {
-    let read = |path: &str| -> Result<String, String> {
-        let bytes =
-            crate::mainmenu::art_bytes(install, path).ok_or_else(|| format!("missing {path}"))?;
-        if bytes.len() > 8 * 1024 * 1024 {
-            return Err(format!("{path}: screen byte bound exceeded"));
-        }
-        String::from_utf8(bytes).map_err(|e| format!("{path}: {e}"))
+    let read = |path: &str, remaining| -> Result<String, String> {
+        String::from_utf8(read_screen_bytes(install, path, remaining)?)
+            .map_err(|e| format!("{path}: {e}"))
     };
-    let templates = read(crate::mainmenu::STANDARD_TEMPLATES_FDF)?;
-    let menu = read(screen.file())?;
+    let templates = read(crate::mainmenu::STANDARD_TEMPLATES_FDF, 8 * 1024 * 1024)?;
+    let menu = read(screen.file(), 8 * 1024 * 1024 - templates.len())?;
     let fdf = parse_screen_fdf(install, screen, &templates, &menu)
         .map_err(|e| format!("{}: {e}", screen.file()))?;
     Ok((fdf, menu))

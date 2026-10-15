@@ -111,12 +111,15 @@ fn discover(f: &Fixture) -> Result<Defaults<'_>, Error> {
 }
 fn assert_none(f: &Fixture) {
     assert!(matches!(
-        discover(f).unwrap_err().problem,
+        discover(f).err().unwrap().problem,
         Problem::DiscoveryNone
     ));
 }
 fn assert_budget(f: &Fixture) {
-    assert!(matches!(discover(f).unwrap_err().problem, Problem::Budget));
+    assert!(matches!(
+        discover(f).err().unwrap().problem,
+        Problem::Budget
+    ));
 }
 
 #[test]
@@ -174,7 +177,7 @@ fn rejects_equal_and_distinct_valid_collisions() {
         let second = code(3, 4, f.base + 0x300c + table_offset);
         f.bytes[GETTER_RAW + 0x100..GETTER_RAW + 0x100 + GETTER_BYTES].copy_from_slice(&second);
         assert!(matches!(
-            discover(&f).unwrap_err().problem,
+            discover(&f).err().unwrap().problem,
             Problem::DiscoveryAmbiguous
         ));
     }
@@ -256,7 +259,7 @@ fn bounds_and_malformed_rows_are_refused_without_partial_admission() {
     let mut f = original.clone();
     f.bytes.truncate(DATA_RAW + DATA_LEN - 1);
     assert!(matches!(
-        discover(&f).unwrap_err().problem,
+        discover(&f).err().unwrap().problem,
         Problem::Image(_)
     ));
     let mut f = original;
@@ -333,7 +336,43 @@ fn unterminated_strings_hit_global_limits_and_bad_origin_is_not_invented() {
     let mut f = fixture(0x400000, 3, 4);
     f.origin.version.clear();
     assert!(matches!(
-        discover(&f).unwrap_err().problem,
+        discover(&f).err().unwrap().problem,
         Problem::Identity
+    ));
+}
+
+#[test]
+fn unsupported_architecture_is_not_malformed_header_or_a_valid_table() {
+    use crate::neutral_player::{NeutralError, RuleProblem};
+    let mut f = fixture(0x400000, 2, 4);
+    f.bytes[0x84..0x86].copy_from_slice(&0x8664u16.to_le_bytes());
+    f.bytes[0x94..0x96].copy_from_slice(&0xf0u16.to_le_bytes());
+    f.bytes[0x98..0x9a].copy_from_slice(&0x20bu16.to_le_bytes());
+    assert!(matches!(
+        Defaults::discover(&f.bytes, f.origin.clone(), f.budget)
+            .err()
+            .unwrap()
+            .problem,
+        Problem::Image(NeutralError::Rule(RuleProblem::UnsupportedArchitecture {
+            machine: 0x8664,
+            optional_magic: 0x20b
+        }))
+    ));
+    f.bytes[0x98..0x9a].copy_from_slice(&0x777u16.to_le_bytes());
+    assert!(matches!(
+        Defaults::discover(&f.bytes, f.origin.clone(), f.budget)
+            .err()
+            .unwrap()
+            .problem,
+        Problem::Image(NeutralError::Rule(RuleProblem::PeFormat))
+    ));
+    f.bytes[0x98..0x9a].copy_from_slice(&0x20bu16.to_le_bytes());
+    f.bytes.truncate(0x98 + 0xef);
+    assert!(matches!(
+        Defaults::discover(&f.bytes, f.origin, f.budget)
+            .err()
+            .unwrap()
+            .problem,
+        Problem::Image(NeutralError::Rule(RuleProblem::Range))
     ));
 }

@@ -79,7 +79,7 @@ impl<'a> Pe<'a> {
             .checked_add(4)
             .ok_or_else(|| bad(RuleProblem::PeFormat))?;
         bytes(d, coff, 20)?;
-        if bytes(d, pe, 4)? != b"PE\0\0" || word(d, coff)? != 0x14c {
+        if bytes(d, pe, 4)? != b"PE\0\0" {
             return Err(bad(RuleProblem::PeFormat));
         }
         let count = usize::from(word(d, coff + 2)?);
@@ -90,10 +90,21 @@ impl<'a> Pe<'a> {
             .checked_add(20)
             .ok_or_else(|| bad(RuleProblem::PeFormat))?;
         let opt_size = usize::from(word(d, coff + 16)?);
-        if opt_size < 64 || word(d, opt)? != 0x10b {
+        if opt_size < 64 {
             return Err(bad(RuleProblem::PeFormat));
         }
         bytes(d, opt, opt_size)?;
+        let machine = word(d, coff)?;
+        let optional_magic = word(d, opt)?;
+        if !matches!(optional_magic, 0x10b | 0x20b) || (optional_magic == 0x20b && opt_size < 112) {
+            return Err(bad(RuleProblem::PeFormat));
+        }
+        if machine != 0x14c || optional_magic != 0x10b {
+            return Err(bad(RuleProblem::UnsupportedArchitecture {
+                machine,
+                optional_magic,
+            }));
+        }
         let base = dword(d, opt + 28)?;
         let image_size = dword(d, opt + 56)?;
         base.checked_add(image_size)

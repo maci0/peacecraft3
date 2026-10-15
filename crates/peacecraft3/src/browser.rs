@@ -1108,6 +1108,27 @@ pub(crate) fn stored_bytes_checked(
     crate::browser_read::read_checked(&store(), &archives(), revision, path, max_bytes)
 }
 
+/// Bounded internal screen-definition read; no implicit codec discovery or cache write.
+pub(crate) fn screen_bytes(path: &str, max_bytes: usize) -> Result<Option<Vec<u8>>, String> {
+    let revision = *revision();
+    crate::browser_read::read_bounded(
+        &store(),
+        &mut archives(),
+        revision,
+        path,
+        crate::browser_read::BoundedReadPolicy {
+            max_copy_bytes: max_bytes,
+            extraction: pcx_mpq::ExtractionBudget {
+                max_raw_packed_bytes: max_bytes,
+                max_decoded_bytes: max_bytes,
+            },
+            huffman: None,
+        },
+    )
+    .map(|asset| asset.map(|asset| asset.bytes))
+    .map_err(|e| e.to_string())
+}
+
 /// Reject non-number, non-finite, fractional and out-of-range arguments before
 /// any store/archive read. JsValue prevents generated numeric wrap/coercion.
 fn browser_budget(value: &JsValue, field: &str) -> Result<usize, JsError> {

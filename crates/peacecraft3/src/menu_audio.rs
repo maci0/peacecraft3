@@ -1,28 +1,39 @@
-//! Original TFT menu music and GlueScreenClick feedback.
+//! Selected source menu music and GlueScreenClick feedback.
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 use bevy::ui::Pressed;
 use bevy::ui_widgets::Button;
 
+#[cfg(target_arch = "wasm32")]
 pub(crate) const MENU_MUSIC_PATH: &str = r"Sound\Music\mp3Music\War3XMainScreen.mp3";
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct SourceAudioUpdate;
 
 pub fn install(app: &mut App) {
     #[cfg(not(target_arch = "wasm32"))]
-    app.init_resource::<MenuSounds>().add_systems(Startup, load);
+    app.init_resource::<MenuSounds>().add_systems(
+        Update,
+        load.in_set(SourceAudioUpdate)
+            .after(crate::menu_settings::SettingsUpdate)
+            .before(crate::launch_gui::LauncherInput),
+    );
     app.add_systems(
         Update,
         feedback
+            .after(crate::menu_settings::SettingsUpdate)
+            .after(SourceAudioUpdate)
             .before(crate::launch_gui::LauncherInput)
             .before(crate::intro::IntroUpdate),
     );
     #[cfg(not(target_arch = "wasm32"))]
     app.add_systems(
         Update,
-        (
-            pause_for_movie.after(crate::intro::IntroUpdate),
-            apply_user_volume,
-        ),
+        (pause_for_movie, apply_user_volume)
+            .chain()
+            .after(crate::intro::IntroUpdate)
+            .after(crate::launch_gui::MenuActions),
     );
 }
 
@@ -55,6 +66,7 @@ struct MenuSounds {
     click: Option<Handle<AudioSource>>,
     click_volume: f32,
     no_duplicates: bool,
+    attempted: Option<(String, crate::launch::GameMode, bool)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -64,21 +76,29 @@ pub(crate) struct AuthoredVolume(pub(crate) f32);
 #[cfg(not(target_arch = "wasm32"))]
 fn apply_user_volume(
     settings: Res<crate::menu_settings::Backend>,
-    mut sinks: Query<(&mut AudioSink, &AuthoredVolume, Has<MenuMusic>)>,
+    mut sinks: Query<(
+        Option<&mut AudioSink>,
+        &mut PlaybackSettings,
+        &AuthoredVolume,
+        Has<MenuMusic>,
+    )>,
 ) {
     use bevy::audio::AudioSinkPlayback;
-    for (mut sink, base, music) in &mut sinks {
+    for (sink, mut playback, base, music) in &mut sinks {
         let gain = if music {
             settings.audio.effective_music()
         } else {
             settings.audio.effective_effects()
         };
-        sink.set_volume(bevy::audio::Volume::Linear(base.0 * gain));
+        playback.volume = bevy::audio::Volume::Linear(base.0 * gain);
+        if let Some(mut sink) = sink {
+            sink.set_volume(playback.volume);
+        }
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn click_descriptor(bytes: &[u8]) -> Result<(String, f32, bool), String> {
+fn click_descriptor(bytes: &[u8], maximum: f32) -> Result<(String, f32, bool), String> {
     let table = pcx_slq::Table::parse_bounded(
         bytes,
         pcx_slq::CoordinateLimits {
@@ -101,10 +121,13 @@ fn click_descriptor(bytes: &[u8]) -> Result<(String, f32, bool), String> {
         .by_name("FileNames")
         .filter(|s| !s.is_empty() && !s.contains([',', ';']))
         .ok_or("UISounds: missing or multiple click files")?;
+    if !maximum.is_finite() || maximum <= 0.0 {
+        return Err("UISounds: invalid source sound-volume scale".into());
+    }
     let volume = row
         .by_name("Volume")
         .and_then(|s| s.parse::<f32>().ok())
-        .filter(|v| v.is_finite() && (0.0..=127.0).contains(v))
+        .filter(|v| v.is_finite() && (0.0..=maximum).contains(v))
         .ok_or("UISounds: invalid Volume")?;
     if row.by_name("Pitch") != Some("1") {
         return Err("UISounds: unsupported click Pitch".into());
@@ -123,7 +146,7 @@ fn click_descriptor(bytes: &[u8]) -> Result<(String, f32, bool), String> {
                 format!("{}\\", directory.trim_end_matches(['\\', '/']))
             }
         ),
-        volume / 127.0,
+        volume / maximum,
         duplicates,
     ))
 }
@@ -137,81 +160,198 @@ struct ClickSound;
 struct MenuMusic;
 
 #[cfg(not(target_arch = "wasm32"))]
-fn pause_for_movie(intro: Res<crate::intro::Intro>, music: Query<&AudioSink, With<MenuMusic>>) {
+fn pause_for_movie(
+    intro: Res<crate::intro::Intro>,
+    mut music: Query<(&mut PlaybackSettings, Option<&AudioSink>), With<MenuMusic>>,
+) {
     use bevy::audio::AudioSinkPlayback;
-    for sink in &music {
-        if intro.playing() {
-            sink.pause();
-        } else {
-            sink.play();
+    for (mut playback, sink) in &mut music {
+        playback.paused = intro.playing();
+        if let Some(sink) = sink {
+            if playback.paused {
+                sink.pause();
+            } else {
+                sink.play();
+            }
         }
     }
 }
 
+/// Edition-to-skin-key translation is recreation glue; the member path is source data.
 #[cfg(not(target_arch = "wasm32"))]
-fn local_audio(name: &str) -> Option<Vec<u8>> {
-    let next_to_exe = std::env::current_exe()
-        .ok()?
-        .parent()?
-        .join("assets")
-        .join(name);
-    std::fs::read(next_to_exe)
-        .or_else(|_| std::fs::read(format!("web/assets/{name}")))
-        .ok()
+pub(crate) fn music_path(
+    skin: &crate::menu_skin::SkinTable,
+    expansion: bool,
+) -> Result<String, String> {
+    let key = format!("GlueMusic_V{}", u32::from(expansion));
+    let path = skin.unique_file(&key).map_err(|e| e.to_string())?.file;
+    let mut entries = path.split(';');
+    let first = entries
+        .next()
+        .filter(|entry| !entry.is_empty() && !entry.contains(','))
+        .ok_or_else(|| format!("{key}: empty or unsupported music entry"))?;
+    if entries.any(|entry| entry != first) {
+        return Err(format!(
+            "{key}: distinct-entry music playlists are not supported"
+        ));
+    }
+    // Repeating one authored file is equivalent to the existing menu loop.
+    Ok(first.to_owned())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn load(
-    mut commands: Commands,
-    mut assets: ResMut<Assets<AudioSource>>,
-    mut sounds: ResMut<MenuSounds>,
-) {
-    let music = local_audio("menu-music.mp3").or_else(|| {
-        let install = pcx_gfx::viewer::resolve_install(None);
-        pcx_mpq::MpqSet::open_wc3(&install)
-            .ok()?
-            .extract(MENU_MUSIC_PATH)
-            .ok()
-    });
-    if let Some(bytes) = music {
-        commands.spawn((
-            AudioPlayer(assets.add(AudioSource {
-                bytes: bytes.into(),
-            })),
-            PlaybackSettings::LOOP,
-            MenuMusic,
-            AuthoredVolume(1.0),
-        ));
-    } else {
-        warn!(
-            "Original menu music unavailable; supply a TFT installation or assets/menu-music.mp3 beside the executable"
-        );
+fn member(set: &mut pcx_mpq::MpqSet, path: &str, limit: usize) -> Result<Vec<u8>, String> {
+    let (_, block) = set.locate(path).ok_or_else(|| format!("missing {path}"))?;
+    if block.compressed_size as u64 > limit as u64 || block.file_size as u64 > limit as u64 {
+        return Err(format!("{path}: menu-audio input budget exceeded"));
     }
-    let install = pcx_gfx::viewer::resolve_install(None);
-    let click = crate::mainmenu::art_bytes(Some(&install), r"UI\SoundInfo\UISounds.slk")
-        .ok_or_else(|| "UISounds.slk is unavailable".to_string())
-        .and_then(|bytes| click_descriptor(&bytes));
-    let (path, volume, no_duplicates) = match click {
-        Ok(descriptor) => descriptor,
+    set.extract(path).map_err(|e| format!("{path}: {e}"))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+type MenuVoice = Or<(With<MenuMusic>, With<ClickSound>)>;
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(bevy::ecs::system::SystemParam)]
+struct NativeAudio<'w, 's> {
+    assets: ResMut<'w, Assets<AudioSource>>,
+    sounds: ResMut<'w, MenuSounds>,
+    settings: ResMut<'w, crate::menu_settings::Backend>,
+    nav: ResMut<'w, crate::menu_screens::Navigation>,
+    intro: Res<'w, crate::intro::Intro>,
+    voices: Query<'w, 's, Entity, MenuVoice>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load(mut commands: Commands, launcher: Res<crate::launch_gui::Launcher>, state: NativeAudio) {
+    let NativeAudio {
+        mut assets,
+        mut sounds,
+        mut settings,
+        mut nav,
+        voices,
+        intro,
+    } = state;
+    if settings.source_matches(&launcher) || !settings.preferences_loaded() {
+        return;
+    }
+    let (source, mode) = launcher.audio_selection();
+    if sounds
+        .attempted
+        .as_ref()
+        .is_some_and(|(path, previous, saved)| {
+            path == source && *previous == mode && *saved == settings.has_preferences()
+        })
+    {
+        return;
+    }
+    sounds.attempted = Some((source.to_owned(), mode, settings.has_preferences()));
+    // Resolve and read the selected installation once per changed request, not per frame.
+    let install = crate::launch_gui::selected_install(&launcher);
+    let expansion = launcher.expansion();
+    // Source preparation and preferences precede every entity/voice write. Errors
+    // retain existing media and settings; no neighboring installation is borrowed.
+    let seed = match crate::menu_settings::source_audio_candidate(
+        &settings,
+        install.as_deref(),
+        expansion,
+    ) {
+        Ok(seed) => seed,
         Err(error) => {
-            warn!("Original menu click settings unavailable: {error}");
+            nav.notice = format!("Original menu audio defaults: {error}");
+            warn!("{}", nav.notice);
             return;
         }
     };
-    sounds.click_volume = volume;
-    sounds.no_duplicates = no_duplicates;
-    sounds.click = crate::mainmenu::art_bytes(Some(&install), &path)
-        .or_else(|| local_audio("menu-click.wav"))
-        .map(|bytes| {
-            assets.add(AudioSource {
-                bytes: bytes.into(),
-            })
-        });
-    if sounds.click.is_none() {
-        warn!(
-            "Original menu click unavailable; extract BigButtonClick.wav into assets/menu-click.wav beside the executable"
-        );
+    let mut set = install.as_ref().map(pcx_mpq::MpqSet::open_wc3).transpose();
+    let music = (|| {
+        let set = set
+            .as_mut()
+            .map_err(|e| e.to_string())?
+            .as_mut()
+            .ok_or("No selected MPQ source")?;
+        let skin = member(set, crate::mainmenu::SKIN_TABLE, 8 * 1024 * 1024)?;
+        let skin = crate::menu_skin::SkinTable::parse(
+            std::str::from_utf8(&skin).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        let path = music_path(&skin, expansion)?;
+        member(set, &path, 64 * 1024 * 1024)
+    })();
+    let click = (|| {
+        let set = set
+            .as_mut()
+            .map_err(|e| e.to_string())?
+            .as_mut()
+            .ok_or("No selected MPQ source")?;
+        let script = member(set, r"Scripts\Blizzard.j", 2 * 1024 * 1024)?;
+        let scale = crate::menu_sprites::VolumeScale::checked(&script)?;
+        let table = member(set, r"UI\SoundInfo\UISounds.slk", 8 * 1024 * 1024)?;
+        let (path, volume, no_duplicates) = click_descriptor(&table, scale.maximum)?;
+        let bytes = member(set, &path, 16 * 1024 * 1024)?;
+        Ok::<_, String>((bytes, volume, no_duplicates))
+    })();
+    let music = match music {
+        Ok(music) => music,
+        Err(error) => {
+            nav.notice = format!("Selected menu music unavailable: {error}");
+            warn!("{}", nav.notice);
+            return;
+        }
+    };
+    let click = match click {
+        Ok(click) => Some(click),
+        Err(error) if sounds.click.is_none() => {
+            // Missing/unsupported feedback must not silence otherwise admitted startup music.
+            warn!("Selected original menu click unavailable: {error}");
+            None
+        }
+        Err(error) => {
+            nav.notice =
+                format!("Selected menu click unavailable; previous source retained: {error}");
+            warn!("{}", nav.notice);
+            return;
+        }
+    };
+    if let Err(error) =
+        crate::menu_settings::activate_source_audio(&mut nav, &mut settings, seed, &launcher)
+    {
+        nav.notice = error;
+        return;
     }
+    // Prepared music, explicit click capability and settings publish together.
+    for voice in &voices {
+        commands.entity(voice).despawn();
+    }
+    let playback = PlaybackSettings::LOOP.with_volume(bevy::audio::Volume::Linear(
+        settings.audio.effective_music(),
+    ));
+    commands.spawn((
+        AudioPlayer(assets.add(AudioSource {
+            bytes: music.into(),
+        })),
+        if intro.playing() {
+            playback.paused()
+        } else {
+            playback
+        },
+        MenuMusic,
+        AuthoredVolume(1.0),
+    ));
+    sounds.click = click.map(|(bytes, volume, no_duplicates)| {
+        sounds.click_volume = volume;
+        sounds.no_duplicates = no_duplicates;
+        assets.add(AudioSource {
+            bytes: bytes.into(),
+        })
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(bevy::ecs::system::SystemParam)]
+struct AudioContext<'w> {
+    launcher: Res<'w, crate::launch_gui::Launcher>,
+    settings: Res<'w, crate::menu_settings::Backend>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -222,9 +362,11 @@ fn feedback(
     active: Query<(), With<ClickSound>>,
     actions: Res<crate::button_actions::ButtonActions>,
     enabled: Query<(), (With<Button>, Without<InteractionDisabled>)>,
-    settings: Res<crate::menu_settings::Backend>,
+    context: AudioContext,
 ) {
-    if intro.playing()
+    let AudioContext { launcher, settings } = context;
+    if !settings.source_matches(&launcher)
+        || intro.playing()
         || !actions
             .entities
             .iter()
@@ -250,6 +392,238 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
     #[test]
+    fn menu_music_uses_the_selected_skin_variant_without_substituting_a_path() {
+        let skin = crate::menu_skin::SkinTable::parse(
+            "[Default]\nGlueMusic_V0=base.mp3\nGlueMusic_V1=expansion.mp3\n",
+        )
+        .unwrap();
+        assert_eq!(music_path(&skin, false).unwrap(), "base.mp3");
+        assert_eq!(music_path(&skin, true).unwrap(), "expansion.mp3");
+        let repeated = crate::menu_skin::SkinTable::parse(
+            "[Default]\nGlueMusic_V0=repeated.mp3;repeated.mp3\n",
+        )
+        .unwrap();
+        assert_eq!(music_path(&repeated, false).unwrap(), "repeated.mp3");
+        for text in [
+            "[Default]\nGlueMusic_V0=\n",
+            "[Default]\nGlueMusic_V0=a,b\n",
+            "[Default]\nGlueMusic_V0=a;b\n",
+            "[Default]\nGlueMusic_V0=a\nGlueMusic_V0=b\n",
+            "[Default]\nGlueMusic_V1=only-expansion.mp3\n",
+        ] {
+            assert!(music_path(&crate::menu_skin::SkinTable::parse(text).unwrap(), false).is_err());
+        }
+    }
+
+    #[test]
+    #[ignore = "requires explicitly qualified local original install; component preplayback only"]
+    fn selected_original_defaults_reach_first_voice_and_failed_replacement_rolls_back() {
+        let install = std::path::PathBuf::from(
+            std::env::var_os("PEACECRAFT3_OPTIONS_INSTALL").expect("explicit install"),
+        );
+        let mut world = World::new();
+        world.init_resource::<crate::intro::Intro>();
+        world.init_resource::<Assets<AudioSource>>();
+        world.init_resource::<MenuSounds>();
+        world.init_resource::<crate::menu_screens::Navigation>();
+        let mut settings = crate::menu_settings::Backend::default();
+        settings.set_test_preferences(false);
+        world.insert_resource(settings);
+        world.insert_resource(crate::launch_gui::Launcher::test_source(
+            install.to_string_lossy().into_owned(),
+            true,
+        ));
+        world
+            .resource_mut::<crate::intro::Intro>()
+            .request_with_install(true, Some(install.clone()));
+        world.run_system_once(load).unwrap();
+        let settings = world.resource::<crate::menu_settings::Backend>();
+        assert!(
+            settings.source_matches(&crate::launch_gui::Launcher::test_source(
+                install.to_string_lossy().into_owned(),
+                true
+            )),
+            "{}",
+            world.resource::<crate::menu_screens::Navigation>().notice
+        );
+        assert!(!settings.has_preferences());
+        let gain = settings.audio.effective_music();
+        let (voice, playback) = world
+            .query_filtered::<(Entity, &PlaybackSettings), With<MenuMusic>>()
+            .single(&world)
+            .unwrap();
+        assert_eq!(playback.volume, bevy::audio::Volume::Linear(gain));
+        assert!(
+            playback.paused,
+            "the source music must start paused while the intro owns audio"
+        );
+        let click = world.resource::<MenuSounds>().click.clone();
+        world
+            .resource_mut::<crate::menu_screens::Navigation>()
+            .draft
+            .values
+            .insert("MusicVolumeSlider".into(), 17.0);
+        let before = world
+            .resource::<crate::menu_screens::Navigation>()
+            .draft
+            .clone();
+        world.insert_resource(crate::launch_gui::Launcher::test_source(
+            "synthetic-missing-replacement".into(),
+            false,
+        ));
+        world.run_system_once(load).unwrap();
+        assert!(world.get_entity(voice).is_ok());
+        assert_eq!(
+            world.resource::<MenuSounds>().click.as_ref(),
+            click.as_ref()
+        );
+        let settings = world.resource::<crate::menu_settings::Backend>();
+        assert_eq!(settings.audio.effective_music().to_bits(), gain.to_bits());
+        assert!(
+            settings.source_matches(&crate::launch_gui::Launcher::test_source(
+                install.to_string_lossy().into_owned(),
+                true
+            ))
+        );
+        assert!(!settings.source_matches(world.resource::<crate::launch_gui::Launcher>()));
+        assert_eq!(
+            world.resource::<crate::menu_screens::Navigation>().draft,
+            before
+        );
+    }
+
+    #[test]
+    fn failed_replacement_retains_old_media_audio_and_dirty_draft() {
+        let mut world = World::new();
+        world.init_resource::<crate::intro::Intro>();
+        world.init_resource::<Assets<AudioSource>>();
+        let mut settings = crate::menu_settings::Backend::default();
+        settings.set_test_source(&crate::launch_gui::Launcher::test_source(
+            "synthetic-old-source".into(),
+            false,
+        ));
+        settings.audio.music_gain = 0.25;
+        // A valid saved candidate avoids any client/FDF read in this synthetic test.
+        settings.set_test_preferences(true);
+        world.insert_resource(settings);
+        let mut nav = crate::menu_screens::Navigation::default();
+        nav.draft.values.insert("MusicVolumeSlider".into(), 17.0);
+        let before = nav.draft.clone();
+        world.insert_resource(nav);
+        world.insert_resource(MenuSounds {
+            click: Some(Handle::default()),
+            ..default()
+        });
+        let old_voice = world.spawn(MenuMusic).id();
+        // No selected installation: use the test constructor, never ambient originals.
+        world.insert_resource(crate::launch_gui::Launcher::test_source(
+            "synthetic-missing-install".into(),
+            true,
+        ));
+        world.run_system_once(load).unwrap();
+        assert!(world.get_entity(old_voice).is_ok());
+        assert!(world.resource::<MenuSounds>().click.is_some());
+        assert_eq!(
+            world
+                .resource::<crate::menu_settings::Backend>()
+                .audio
+                .music_gain,
+            0.25
+        );
+        assert!(
+            world
+                .resource::<crate::menu_settings::Backend>()
+                .source_matches(&crate::launch_gui::Launcher::test_source(
+                    "synthetic-old-source".into(),
+                    false
+                ))
+        );
+        assert!(
+            !world
+                .resource::<crate::menu_settings::Backend>()
+                .source_matches(world.resource::<crate::launch_gui::Launcher>())
+        );
+        assert_eq!(
+            world.resource::<crate::menu_screens::Navigation>().draft,
+            before
+        );
+        assert!(
+            world
+                .resource::<crate::menu_screens::Navigation>()
+                .applied
+                .values
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn intro_can_run_between_launcher_input_and_menu_actions() {
+        fn input() {}
+        fn finish() {}
+        fn action() {}
+        fn intro() {}
+        fn initialize(old_group: bool) -> Result<(), bevy::ecs::schedule::ScheduleBuildError> {
+            let mut app = App::new();
+            install(&mut app);
+            app.add_systems(
+                Update,
+                (input.in_set(crate::launch_gui::LauncherInput), finish).chain(),
+            );
+            app.add_systems(Update, intro.in_set(crate::intro::IntroUpdate));
+            if old_group {
+                app.add_systems(
+                    Update,
+                    action
+                        .in_set(crate::launch_gui::LauncherInput)
+                        .after(finish),
+                );
+            } else {
+                app.add_systems(
+                    Update,
+                    action.in_set(crate::launch_gui::MenuActions).after(finish),
+                );
+            }
+            app.configure_sets(
+                Update,
+                crate::intro::IntroUpdate
+                    .after(crate::launch_gui::LauncherInput)
+                    .before(finish),
+            );
+            let mut schedule = app
+                .world_mut()
+                .resource_mut::<Schedules>()
+                .remove(Update)
+                .unwrap();
+            schedule.initialize(app.world_mut()).map(|_| ())
+        }
+        assert!(
+            initialize(true).is_err(),
+            "mixed input/action group must reproduce the startup cycle"
+        );
+        initialize(false).unwrap();
+    }
+
+    #[test]
+    fn pending_music_gets_current_gains_and_intro_ownership_before_sink_creation() {
+        let mut world = World::new();
+        let mut intro = crate::intro::Intro::default();
+        intro.request(true);
+        world.insert_resource(intro);
+        let mut settings = crate::menu_settings::Backend::default();
+        settings.audio.music_gain = 0.25;
+        world.insert_resource(settings);
+        let music = world
+            .spawn((MenuMusic, AuthoredVolume(0.6), PlaybackSettings::LOOP))
+            .id();
+        world.run_system_once(pause_for_movie).unwrap();
+        world.run_system_once(apply_user_volume).unwrap();
+        let playback = world.get::<PlaybackSettings>(music).unwrap();
+        assert!(playback.paused);
+        assert_eq!(playback.volume, bevy::audio::Volume::Linear(0.6 * 0.25));
+        assert!(world.get::<AudioSink>(music).is_none());
+    }
+
+    #[test]
     fn disabled_and_held_clicks_do_not_repeat_feedback() {
         let mut world = World::new();
         world.init_resource::<crate::intro::Intro>();
@@ -258,7 +632,14 @@ mod tests {
             click: Some(Handle::default()),
             click_volume: 1.0,
             no_duplicates: true,
+            ..default()
         });
+        let launcher =
+            crate::launch_gui::Launcher::test_source("synthetic-missing-install".into(), true);
+        world
+            .resource_mut::<crate::menu_settings::Backend>()
+            .set_test_source(&launcher);
+        world.insert_resource(launcher);
         let disabled = world.spawn((Button, Pressed, InteractionDisabled)).id();
         world.insert_resource(crate::button_actions::ButtonActions {
             entities: vec![disabled],

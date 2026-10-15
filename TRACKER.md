@@ -73,8 +73,10 @@ issues*.
       including empty values. No measured defaults or display presets are copied
       into production constants. Available device modes retain depth/refresh in
       the original enumeration evidence; current menu choices still represent
-      render sizes. Initial preference-to-control/runtime wiring and confirmed
-      exclusive-mode application remain open. See
+      render sizes. Native music/effects defaults now feed the active gains and
+      matching controls before playback, with saved-preference precedence and
+      failed audio-candidate rollback. Browser client/default transport, other
+      setting owners and confirmed exclusive-mode application remain open. See
       `docs/re-notes/original-options-defaults.md`.
 - [~] Local imports now follow skin-selected hanging-panel model/TEXS edges.
       The expanded private fixture retains source-qualified dependencies. Actual
