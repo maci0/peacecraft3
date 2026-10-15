@@ -1945,8 +1945,7 @@ fn effect_nodes(chunk: &'static str, p: Option<&[u8]>) -> Result<Vec<EffectNode>
             });
         }
         let node_size = read_u32(p, at + 4)? as usize;
-        let node_end = 4 + node_size;
-        if node_size < EFFECT_NODE_FIXED || node_end > total_size {
+        if node_size < EFFECT_NODE_FIXED || node_size > total_size - 4 {
             return Err(Error::EffectRecordOverruns {
                 chunk,
                 at,
@@ -1954,6 +1953,8 @@ fn effect_nodes(chunk: &'static str, p: Option<&[u8]>) -> Result<Vec<EffectNode>
                 left: total_size,
             });
         }
+        // The enclosing record bounds this addition, including on wasm32.
+        let node_end = 4 + node_size;
 
         // The name is inline NUL-terminated inside its 80-byte field, and a
         // record may carry no name at all — the shipped set contains several.

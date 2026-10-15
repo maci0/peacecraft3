@@ -12,6 +12,7 @@ pub struct ObjectHost {
     config: Option<MapConfig>,
     players: Option<players::Players>,
     camera: Option<camera::CameraState>,
+    day_night: Option<environment::DayNightState>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -29,6 +30,7 @@ impl ObjectHost {
             config: None,
             players: None,
             camera: None,
+            day_night: None,
         })
     }
     fn contract(
@@ -247,6 +249,9 @@ impl ObjectHost {
 }
 impl Host for ObjectHost {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.day_night_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.camera_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -297,3 +302,7 @@ pub use players::{PlayerAdmissionError, PlayerBudget, PlayerSettings};
 #[path = "camera_host.rs"]
 mod camera;
 pub use camera::CameraState;
+
+#[path = "day_night_host.rs"]
+mod environment;
+pub use environment::DayNightState;

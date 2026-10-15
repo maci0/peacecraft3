@@ -57,6 +57,7 @@ pub mod camera_margins;
 pub mod campaign;
 pub mod cinematics;
 pub mod custom_scripts;
+pub mod day_night;
 pub mod diff;
 pub mod generator;
 pub mod map_admission;

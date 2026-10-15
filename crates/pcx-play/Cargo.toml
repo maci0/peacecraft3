@@ -12,6 +12,7 @@ pcx-script.workspace = true
 pcx-trig.workspace = true
 pcx-map.workspace = true
 pcx-mpq.workspace = true
+pcx-mdl.workspace = true
 thiserror.workspace = true
 sha2.workspace = true
 

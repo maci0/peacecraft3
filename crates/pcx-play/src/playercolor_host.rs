@@ -35,6 +35,10 @@ pub enum Failure {
     PlayerState(&'static str),
     #[error("camera setup: {0}")]
     CameraState(&'static str),
+    #[error("day/night setup: {0}")]
+    DayNightState(&'static str),
+    #[error("day/night model is not admitted: {0}")]
+    MissingDayNightModel(String),
     #[error("enumerand {0} is outside this native's admitted source domain")]
     OutsideDomain(i32),
     #[error("unsupported closed integer expression: {0}")]
@@ -460,6 +464,6 @@ mod tests;
 #[path = "object_host.rs"]
 mod objects;
 pub use objects::{
-    CameraState, MapConfig, MapConfigBudget, ObjectHost, PlayerAdmissionError, PlayerBudget,
-    PlayerSettings, StartLocation, StartPriorities, StartPriority, TimerHost,
+    CameraState, DayNightState, MapConfig, MapConfigBudget, ObjectHost, PlayerAdmissionError,
+    PlayerBudget, PlayerSettings, StartLocation, StartPriorities, StartPriority, TimerHost,
 };
