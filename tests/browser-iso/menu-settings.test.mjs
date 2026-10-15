@@ -17,7 +17,7 @@ function preview(width, height, availableWidth, availableHeight) {
     ResizeObserver: class { constructor(callback) { update = callback; } observe(element) { observed.push(element); } } };
   vm.runInNewContext(source, context);
   update();
-  return { canvas, stage, observed, update, button, click };
+  return { canvas, stage, observed, update, button, click, settings: context.peacecraft3Settings };
 }
 test('preview fits a selected resolution without changing its layout or backing dimensions', () => {
   const { canvas, observed } = preview(1280, 720, 360, 480);
@@ -90,4 +90,18 @@ test('actual-size wheel routing leaves fit-mode and modified input untouched', (
   assert.deepEqual([stage.scrollLeft, stage.scrollTop], [40 + 40 * 360, 90 + 90 * 480]);
   click();
   assert.equal(wheel(), 0);
+});
+
+test('parent sizing restoration replaces requested pixels and refits the preview', () => {
+  const {canvas, settings} = preview(640, 480, 320, 240);
+  canvas.style.width = '640px'; canvas.style.height = '480px'; canvas.style.transform = 'old';
+  settings.resumeParentSizing();
+  assert.equal(canvas.style.width, '100%'); assert.equal(canvas.style.height, '100%');
+  assert.equal(canvas.style.transform, 'translate(0px, 0px) scale(0.5)');
+});
+
+test('parent sizing restoration reports an unavailable canvas', () => {
+  const context = {document: {querySelector: () => null}};
+  vm.runInNewContext(source, context);
+  assert.throws(() => context.peacecraft3Settings.resumeParentSizing(), /Menu canvas is unavailable/);
 });

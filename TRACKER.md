@@ -93,6 +93,18 @@ issues*.
       259 app tests, both selected-original popup gates, strict native/WASM checks
       and the actual release-WASM runtime checks pass. This does not enable
       unimplemented quality or gameplay controls.
+      Portable resolution Apply now waits for the matching Winit client report
+      before saving, preserves the prior preferences/audio on save refusal and
+      confirms restoration before reporting it. Cancel and a retryable dirty
+      draft are retained; a post-save audio warning is a committed result.
+      First observation also replaces the startup-size seed without losing an
+      edited draft. The real-window gate, 270 app tests, strict native/WASM checks
+      and five reviewed release-browser captures pass. The browser exercises first
+      and later failed saves, parent-following restoration and a post-save audio
+      warning, with zero uploads, sockets or page errors. Physical exclusive mode,
+      source-qualified first-run choices
+      and remaining renderer/gameplay setting consumers stay open. See
+      `docs/re-notes/original-options-resolution-apply.md` for checks and scope.
 - [x] Menu geometry now preserves source ONE/ONE additive RGB instead of
       premultiplying it by alpha. Actual Bevy draws pass 72 channel checks on
       software and Radeon Vulkan; the old-Add negative fails the expected cases.

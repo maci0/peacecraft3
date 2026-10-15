@@ -30,19 +30,24 @@ initials, but no resolution MenuItems or admitted checkbox/popup selections.
 Those slider initials are not evidence of the game's first-run preferences.
 Named config/MiscData inspection did not establish those preferences either.
 The exact client's lookup-null [fallback data path](original-options-defaults.md)
-now has a checked source importer; effective first-run selection and the
-mode-population connection remain an active investigation. A measured resolution
+now has a checked source importer. Subsequent native inspection connects the
+control reads, mode provider, source-table augmentation and local matching;
+effective first-run selection and runtime integration remain open. A measured resolution
 or slider value must not become
-a source constant. Current window-derived selection and neutral active audio
-are recreation conventions, not recovered original defaults.
+a source constant. Current window-derived selection remains a recreation
+convention. Native audio consumes qualified client fallbacks when no saved
+preferences win; unsupported or MPQ-only sources retain explicitly unqualified
+neutral multipliers. See [source defaults](original-options-defaults.md).
 
 Native monitor mode records include refresh and bit depth, but the current menu
-reduces them to width/height pairs. Original labels, filtering, ordering and
-initial/fallback selection are still unproved. Browser render-size choices are
+reduces them to width/height pairs. Original labels, filtering, grouping and
+matching are now checked at their [source boundary](original-display-modes.md),
+without claiming the runtime consumer or effective first-run selection is done.
+Browser render-size choices are
 an explicit host capability, not OS-exclusive display-mode enumeration. The
 [qualified native enumeration](original-display-modes.md) retains device/mode
-identity, depth and refresh; its connection to dropdown/default selection remains
-unresolved.
+identity, depth and refresh; its complete provider also adds source-table and
+derived choices. No fixed preset list replaces that policy.
 
 Supported settings are actual render resolution, music/effects gains and their
 enable toggles. Native choices come from the current window, monitor and monitor
@@ -58,24 +63,35 @@ the contained view. Wheel input pans only in Actual size mode. This host viewing
 choice changes neither game preferences nor authored geometry. The bottom-left cog
 opens separate PeaceCraft configuration. All cameras sharing the primary window
 receive its changed dimensions before Bevy updates camera targets, so programmatic
-resolution changes cannot leave viewport and fullscreen cameras with different
-cached render extents while waiting for Winit acknowledgement. Other game settings remain disabled,
+resolution changes update their cached render extents consistently. These
+requested-dimension updates are not a Winit/compositor acknowledgement.
+Other game settings remain disabled,
 with unsupported popup values marked Unavailable, rather than pretending to work.
 
 Entering Options copies applied preferences into a draft; page changes retain
-that draft. With no saved preference, each sound slider starts at its parsed FDF
-initial value without changing active audio. Saved gains map through the current
-authored range. Slider edits, toggle edits and resolution selection affect only
+that draft. Sound sliders reflect effective gains through the parsed authored
+range, preserving qualified raw source values when available. Widget initials
+do not override active audio; saved gains remain authoritative. Slider edits,
+toggle edits and resolution selection affect only
 the draft; Cancel discards it. Escape first dismisses an open resolution popup,
 otherwise it cancels the page. The source OK button performs Apply:
-validate the supported values and currently available mode, save preferences,
-then update the render resolution and user audio multipliers. User gain multiplies
+validate the supported values and currently available render size. A changed
+size enters a pending request; preferences and audio are published only after
+Winit reports that client extent following submission. Cancel or pre-save
+failure requests restoration, which is also checked before claiming success.
+Dirty edits remain retryable after a save failure. The source Options screen
+stays open while pending, with duplicate Apply and edits held. See the
+[portable resolution transaction](original-options-resolution-apply.md).
+User gain multiplies
 the source-derived sound gain; disabling playback retains its gain for re-enabling.
 Native preferences live in the platform user configuration directory at
 `peacecraft3/settings.json`; browser preferences use localStorage. Invalid or
-unavailable saved values are reported. Validation/storage failure preserves
-applied state; a browser audio failure after commit is explicitly reported as
-saved/display-applied rather than a successful full apply. This transaction and
+unavailable saved values are reported. Validation failure makes no request or
+write. A storage failure preserves saved preferences/audio and checks best-effort
+size restoration; unconfirmed restoration reports the actual available client
+size instead of promising unchanged presentation. A browser audio failure after
+commit is explicitly reported as saved/client-size-reported, with no false
+rollback. This transaction and
 storage design are recreation conventions, not proven native preference internals.
 The version-1 resolution field remains a window/browser render size. Unknown
 nested settings fields refuse instead of silently dropping an unsupported

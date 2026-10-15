@@ -12,6 +12,9 @@ use bevy::{
 };
 use std::collections::BTreeMap;
 
+#[path = "menu_resolution.rs"]
+mod resolution;
+
 #[cfg(any(test, not(target_arch = "wasm32")))]
 #[path = "original_options_audio.rs"]
 mod original;
@@ -115,6 +118,26 @@ pub struct Backend {
     source: Option<(String, crate::launch::GameMode)>,
     pending_resolution: Option<(u32, u32)>,
     observed_resolution: Option<(u32, u32)>,
+    resize: Option<resolution::Pending>,
+}
+impl Backend {
+    pub(crate) fn applying_resolution(&self) -> bool {
+        self.resize.is_some()
+    }
+    pub(crate) fn cancel_resolution(&mut self) -> bool {
+        resolution::cancel(self)
+    }
+}
+
+pub(crate) enum ApplyOutcome {
+    Complete,
+    Pending,
+}
+
+struct Prepared {
+    settings: Settings,
+    audio: AudioSettings,
+    text: String,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -386,26 +409,18 @@ pub fn select_resolution(nav: &mut Navigation, resolution: (u32, u32)) -> Result
     nav.draft.resolution = Some(resolution);
     Ok(())
 }
-/// Commit supported preferences. Validation/storage failures leave applied
-/// state and the window unchanged. A later browser audio failure is reported
-/// explicitly as a post-commit failure. Cancel is Navigation's draft reset.
-pub fn apply(
+/// Save only after Winit reports the requested client size. This is not a
+/// compositor presentation or physical display-mode acknowledgement.
+pub(crate) fn apply(
+    entity: Entity,
     nav: &mut Navigation,
     window: &mut Window,
     backend: &mut Backend,
-) -> Result<(), String> {
-    commit(nav, window, backend, save_preferences)?;
-    #[cfg(target_arch = "wasm32")]
-    push_browser_audio(backend.audio)
-        .map_err(|error| format!("Settings were saved and the display applied, but {error}"))?;
-    Ok(())
+    launcher: &crate::launch_gui::Launcher,
+) -> Result<ApplyOutcome, String> {
+    resolution::apply(entity, nav, window, backend, launcher)
 }
-fn commit(
-    nav: &mut Navigation,
-    window: &mut Window,
-    backend: &mut Backend,
-    save: impl FnOnce(&str) -> Result<(), String>,
-) -> Result<(), String> {
+fn prepare(nav: &Navigation, backend: &Backend) -> Result<Prepared, String> {
     validate_settings(&nav.draft)?;
     if nav
         .draft
@@ -424,24 +439,62 @@ fn commit(
     if text.len() > MAX_PREFERENCE_BYTES {
         return Err("Settings exceed the preference byte limit".into());
     }
-    save(&text)?;
-    if let Some((width, height)) = nav.draft.resolution {
+    Ok(Prepared {
+        settings: nav.draft.clone(),
+        audio,
+        text,
+    })
+}
+fn publish(
+    candidate: &Prepared,
+    nav: &mut Navigation,
+    backend: &mut Backend,
+    save: impl FnOnce(&str) -> Result<(), String>,
+) -> Result<Option<String>, String> {
+    save(&candidate.text)?;
+    nav.applied = candidate.settings.clone();
+    nav.draft = nav.applied.clone();
+    backend.audio = candidate.audio;
+    backend.has_preferences = true;
+    backend.loaded = true;
+    backend.preference_unreadable = None;
+    #[cfg(target_arch = "wasm32")]
+    if let Err(error) = push_browser_audio(backend.audio) {
+        return Ok(Some(format!(
+            "Settings saved; render size confirmed, but {error}"
+        )));
+    }
+    Ok(None)
+}
+fn commit(
+    nav: &mut Navigation,
+    window: &mut Window,
+    backend: &mut Backend,
+    save: impl FnOnce(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    let candidate = prepare(nav, backend)?;
+    if candidate
+        .settings
+        .resolution
+        .is_some_and(|size| backend.observed_resolution != Some(size))
+    {
+        return Err("Render size is not confirmed; settings were not saved".into());
+    }
+    let size = candidate.settings.resolution;
+    let warning = publish(&candidate, nav, backend, save)?;
+    if let Some((width, height)) = size {
         #[cfg(target_arch = "wasm32")]
         {
             window.fit_canvas_to_parent = false;
         }
         window.resolution.set_physical_resolution(width, height);
     }
-    nav.applied = nav.draft.clone();
-    backend.audio = audio;
-    backend.has_preferences = true;
-    backend.loaded = true;
-    backend.preference_unreadable = None;
-    Ok(())
+    warning.map_or(Ok(()), Err)
 }
 
 pub fn install(app: &mut App) {
     app.init_resource::<Backend>()
+        .add_systems(First, resolution::poll)
         .add_observer(slider_changed)
         .add_observer(checkbox_changed)
         .add_systems(
@@ -453,11 +506,8 @@ pub fn install(app: &mut App) {
         );
 }
 fn observe_resolution(nav: &mut Navigation, backend: &mut Backend, current: (u32, u32)) {
-    let changed = backend
-        .observed_resolution
-        .replace(current)
-        .is_some_and(|previous| previous != current);
-    if changed && backend.pending_resolution.is_none() {
+    let changed = backend.observed_resolution.replace(current) != Some(current);
+    if changed && backend.pending_resolution.is_none() && backend.resize.is_none() {
         let previous = nav.applied.resolution.replace(current);
         if nav.draft.resolution == previous {
             nav.draft.resolution = Some(current);
@@ -468,13 +518,17 @@ fn observe_resolution(nav: &mut Navigation, backend: &mut Backend, current: (u32
 fn environment(
     mut nav: ResMut<Navigation>,
     mut backend: ResMut<Backend>,
-    mut windows: Query<(&mut Window, Option<&OnMonitor>), With<PrimaryWindow>>,
+    mut windows: Query<(Entity, &mut Window, Option<&OnMonitor>), With<PrimaryWindow>>,
     monitors: Query<&Monitor>,
+    launcher: Res<crate::launch_gui::Launcher>,
+    _main_thread: bevy::ecs::system::NonSendMarker,
 ) {
-    let Ok((mut window, on_monitor)) = windows.single_mut() else {
+    let Ok((entity, mut window, on_monitor)) = windows.single_mut() else {
         return;
     };
-    let current = (window.physical_width(), window.physical_height());
+    let current = backend
+        .observed_resolution
+        .unwrap_or((window.physical_width(), window.physical_height()));
     let mut modes = vec![current];
     if let Some(monitor) = on_monitor.and_then(|on| monitors.get(on.0).ok()) {
         modes.push((monitor.physical_width, monitor.physical_height));
@@ -499,7 +553,6 @@ fn environment(
     modes.sort_unstable();
     modes.dedup();
     nav.resolutions = modes;
-    observe_resolution(&mut nav, &mut backend, current);
     if !backend.loaded {
         backend.loaded = true;
         match load_preferences() {
@@ -518,9 +571,7 @@ fn environment(
             }
         }
         backend.pending_resolution = nav.applied.resolution;
-        if nav.applied.resolution.is_none() {
-            nav.applied.resolution = Some(current);
-        }
+        nav.applied.resolution = Some(current);
         nav.draft = nav.applied.clone();
         #[cfg(target_arch = "wasm32")]
         if backend.preference_unreadable.is_none()
@@ -529,16 +580,20 @@ fn environment(
             nav.notice = error;
         }
     }
-    if let Some(resolution) = backend.pending_resolution {
+    if backend.resize.is_none()
+        && let Some(resolution) = backend.pending_resolution
+    {
         if nav.resolutions.contains(&resolution) {
-            #[cfg(target_arch = "wasm32")]
-            {
-                window.fit_canvas_to_parent = false;
+            if resolution::startup(
+                entity,
+                &mut nav,
+                &mut window,
+                &mut backend,
+                &launcher,
+                resolution,
+            ) {
+                backend.pending_resolution = None;
             }
-            window
-                .resolution
-                .set_physical_resolution(resolution.0, resolution.1);
-            backend.pending_resolution = None;
         } else if on_monitor.is_some() || cfg!(target_arch = "wasm32") {
             nav.applied.resolution = Some(current);
             nav.draft.resolution = Some(current);
@@ -650,7 +705,11 @@ fn slider_changed(
     controls: Query<&SettingControl, Without<InteractionDisabled>>,
     mut nav: ResMut<Navigation>,
     mut commands: Commands,
+    backend: Res<Backend>,
 ) {
+    if backend.applying_resolution() {
+        return;
+    }
     let Ok(control) = controls.get(event.source) else {
         return;
     };
@@ -673,7 +732,11 @@ fn checkbox_changed(
     controls: Query<&SettingControl, Without<InteractionDisabled>>,
     mut nav: ResMut<Navigation>,
     mut commands: Commands,
+    backend: Res<Backend>,
 ) {
+    if backend.applying_resolution() {
+        return;
+    }
     let Ok(control) = controls.get(event.source) else {
         return;
     };
@@ -782,12 +845,16 @@ fn save_preferences(text: &str) -> Result<(), String> {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 extern "C" {
+    #[wasm_bindgen(catch,js_name=String)]
+    fn browser_error_text(value: &wasm_bindgen::JsValue) -> Result<String, wasm_bindgen::JsValue>;
     #[wasm_bindgen(catch,js_namespace=peacecraft3Settings,js_name=displayModes)]
     fn browser_modes() -> Result<String, wasm_bindgen::JsValue>;
     #[wasm_bindgen(catch,js_namespace=peacecraft3Settings,js_name=load)]
     fn browser_load(limit: usize) -> Result<Option<String>, wasm_bindgen::JsValue>;
     #[wasm_bindgen(catch,js_namespace=peacecraft3Settings,js_name=save)]
     fn browser_save(text: &str, limit: usize) -> Result<(), wasm_bindgen::JsValue>;
+    #[wasm_bindgen(catch,js_namespace=peacecraft3Settings,js_name=resumeParentSizing)]
+    fn browser_parent_sizing() -> Result<(), wasm_bindgen::JsValue>;
     #[wasm_bindgen(catch,js_namespace=peacecraft3Audio,js_name=setUserGains)]
     fn browser_audio(
         music: f32,
@@ -797,12 +864,27 @@ extern "C" {
     ) -> Result<(), wasm_bindgen::JsValue>;
 }
 #[cfg(target_arch = "wasm32")]
+fn browser_failure(error: wasm_bindgen::JsValue) -> String {
+    warn!("Browser settings operation failed: {error:?}");
+    // Keep the stack in diagnostics, not across the Options controls.
+    browser_error_text(&error)
+        .unwrap_or_else(|_| "Browser operation failed".into())
+        .lines()
+        .next()
+        .unwrap_or("Browser operation failed")
+        .chars()
+        .take(240)
+        .collect()
+}
+#[cfg(target_arch = "wasm32")]
 fn load_preferences() -> Result<Option<String>, String> {
-    browser_load(MAX_PREFERENCE_BYTES).map_err(|e| format!("Loading browser settings: {e:?}"))
+    browser_load(MAX_PREFERENCE_BYTES)
+        .map_err(|e| format!("Loading browser settings: {}", browser_failure(e)))
 }
 #[cfg(target_arch = "wasm32")]
 fn save_preferences(text: &str) -> Result<(), String> {
-    browser_save(text, MAX_PREFERENCE_BYTES).map_err(|e| format!("Saving browser settings: {e:?}"))
+    browser_save(text, MAX_PREFERENCE_BYTES)
+        .map_err(|e| format!("Saving browser settings: {}", browser_failure(e)))
 }
 #[cfg(target_arch = "wasm32")]
 fn push_browser_audio(audio: AudioSettings) -> Result<(), String> {
@@ -812,12 +894,51 @@ fn push_browser_audio(audio: AudioSettings) -> Result<(), String> {
         audio.music_enabled,
         audio.effects_enabled,
     )
-    .map_err(|e| format!("Applying browser audio settings: {e:?}"))
+    .map_err(|e| format!("Applying browser audio settings: {}", browser_failure(e)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unobserved_render_size_is_not_saved_as_applied() {
+        let mut nav = Navigation {
+            resolutions: vec![(740, 510)],
+            ..default()
+        };
+        nav.draft.resolution = Some((740, 510));
+        let mut window = Window::default();
+        let mut backend = Backend::default();
+        let mut saved = false;
+        assert!(
+            commit(&mut nav, &mut window, &mut backend, |_| {
+                saved = true;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!saved);
+        assert_eq!(nav.applied, Settings::default());
+    }
+    #[test]
+    fn first_host_report_replaces_startup_seed_without_losing_dirty_intent() {
+        for dirty in [false, true] {
+            let mut nav = Navigation::default();
+            nav.applied.resolution = Some((731, 419));
+            nav.draft = nav.applied.clone();
+            if dirty {
+                nav.draft.resolution = Some((997, 613));
+            }
+            let mut backend = Backend::default();
+            observe_resolution(&mut nav, &mut backend, (853, 547));
+            assert_eq!(nav.applied.resolution, Some((853, 547)));
+            assert_eq!(
+                nav.draft.resolution,
+                Some(if dirty { (997, 613) } else { (853, 547) })
+            );
+        }
+    }
+
     #[test]
     fn external_resize_does_not_block_an_audio_only_commit() {
         let mut nav = Navigation::default();
@@ -1081,6 +1202,8 @@ mod tests {
             },
         );
         let mut window = Window::default();
+        window.resolution.set_physical_resolution(740, 510);
+        backend.observed_resolution = Some((740, 510));
         let before = (window.physical_width(), window.physical_height());
         let old = nav.applied.clone();
         assert!(

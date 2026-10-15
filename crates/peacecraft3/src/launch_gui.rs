@@ -58,7 +58,6 @@ impl Launcher {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn audio_selection(&self) -> (&str, GameMode) {
         (&self.source, self.mode)
     }
@@ -711,7 +710,14 @@ fn menu_navigation_keys(
     keys: Res<ButtonInput<KeyCode>>,
     mut navigation: ResMut<crate::menu_screens::Navigation>,
     popups: Query<Entity, With<ResolutionPopup>>,
+    mut backend: ResMut<crate::menu_settings::Backend>,
 ) {
+    if backend.applying_resolution() {
+        if keys.just_pressed(KeyCode::Escape) {
+            backend.cancel_resolution();
+        }
+        return;
+    }
     if navigation.transition_active || navigation.requested.is_some() {
         return;
     }
@@ -2671,12 +2677,13 @@ pub(crate) struct MenuClickQueries<'w, 's> {
     buttons: Query<'w, 's, &'static crate::glue_menu::GlueButton>,
     menu: Query<'w, 's, Entity, With<MenuLayer>>,
     cogs: Query<'w, 's, Entity, With<SettingsCog>>,
-    windows: Query<'w, 's, &'static mut Window>,
+    windows: Query<'w, 's, (Entity, &'static mut Window)>,
     backend: ResMut<'w, crate::menu_settings::Backend>,
     choices: Query<'w, 's, &'static ResolutionChoice>,
     popups: Query<'w, 's, Entity, With<ResolutionPopup>>,
     roots: Query<'w, 's, Entity, With<ControlRoot>>,
     cache: Res<'w, MenuArtCache>,
+    _main_thread: bevy::ecs::system::NonSendMarker,
 }
 
 pub(crate) fn apply_menu_clicks(
@@ -2700,8 +2707,17 @@ pub(crate) fn apply_menu_clicks(
         popups,
         roots,
         cache,
+        _main_thread: _,
     } = queries;
     for entity in &actions.entities {
+        if backend.applying_resolution() {
+            if q.get(*entity)
+                .is_ok_and(|button| matches!(button.frame.as_str(), "CancelButton" | "BackButton"))
+            {
+                backend.cancel_resolution();
+            }
+            continue;
+        }
         if navigation.transition_active || navigation.requested.is_some() {
             break;
         }
@@ -2749,9 +2765,18 @@ pub(crate) fn apply_menu_clicks(
                 }
             }
             "OKButton" if matches!(navigation.screen, crate::menu_screens::Screen::Options(_)) => {
-                if let Ok(mut window) = windows.single_mut() {
-                    match crate::menu_settings::apply(&mut navigation, &mut window, &mut backend) {
-                        Ok(()) => navigation.open(crate::menu_screens::Screen::Main),
+                if let Ok((entity, mut window)) = windows.single_mut() {
+                    match crate::menu_settings::apply(
+                        entity,
+                        &mut navigation,
+                        &mut window,
+                        &mut backend,
+                        &launcher,
+                    ) {
+                        Ok(crate::menu_settings::ApplyOutcome::Complete) => {
+                            navigation.open(crate::menu_screens::Screen::Main)
+                        }
+                        Ok(crate::menu_settings::ApplyOutcome::Pending) => {}
                         Err(error) => navigation.notice = error,
                     }
                 }

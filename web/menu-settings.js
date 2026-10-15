@@ -24,6 +24,12 @@ globalThis.peacecraft3Settings = {
     }
     return JSON.stringify(modes);
   },
+  resumeParentSizing() {
+    const canvas = document.querySelector('#launcher-canvas');
+    if (!canvas) throw new Error('Menu canvas is unavailable');
+    canvas.style.width = canvas.style.height = '100%';
+    fitPreview();
+  },
   load(limit) {
     const text = localStorage.getItem(key);
     return text === null ? undefined : bounded(text, limit);
