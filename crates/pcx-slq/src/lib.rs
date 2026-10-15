@@ -233,6 +233,16 @@ pub enum Error {
     },
     #[error("record {index}: X or Y index is zero, which addresses no cell")]
     ZeroIndex { index: usize },
+    #[error(
+        "record {index} at byte {offset}: {axis} coordinate {actual} exceeds caller limit {limit}"
+    )]
+    CoordinateLimit {
+        index: usize,
+        offset: usize,
+        axis: char,
+        actual: u32,
+        limit: u32,
+    },
     #[error("truncated: {what} at byte {offset}, file is {len} bytes")]
     Truncated {
         what: &'static str,
@@ -262,6 +272,9 @@ pub enum Severity {
 /// The kinds of thing a shipped file does that a strict reader has to notice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AnomalyKind {
+    /// A later K value addresses an already populated cell. The existing first
+    /// value is retained; no native duplicate precedence is established.
+    DuplicateCell,
     /// A `C` record carried a payload under a tag other than `K`.
     ///
     /// The three `Splats\T_SplatData.slk` records written `C;Y1;X7;A…` hit
@@ -373,6 +386,17 @@ pub struct Cell {
     pub generated: bool,
 }
 
+/// Explicit coordinate ceilings for [`Table::parse_bounded`].
+///
+/// Limits apply to the sticky cursor of both C and F records, not advisory B
+/// dimensions. They bound grid extent and coordinate-driven postprocessing;
+/// input bytes, record count and total allocator memory are not capped here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoordinateLimits {
+    pub max_row: u32,
+    pub max_column: u32,
+}
+
 impl Table {
     /// Parse a whole `.slk`.
     ///
@@ -381,6 +405,20 @@ impl Table {
     /// non-numeric index, a zero index, or truncation. Provable-but-lossy
     /// oddities come back in [`Table::anomalies`] instead.
     pub fn parse(data: &[u8]) -> Result<Self, Error> {
+        Self::parse_with_limits(data, None)
+    }
+
+    /// Parse with caller-selected C/F cursor coordinate ceilings.
+    ///
+    /// A zero ceiling refuses every positive coordinate on that axis. Limits
+    /// are checked before cell insertion or coordinate-driven finish work.
+    /// The caller must separately bound source bytes when admitting input;
+    /// this does not provide an allocation or total-work budget.
+    pub fn parse_bounded(data: &[u8], limits: CoordinateLimits) -> Result<Self, Error> {
+        Self::parse_with_limits(data, Some(limits))
+    }
+
+    fn parse_with_limits(data: &[u8], limits: Option<CoordinateLimits>) -> Result<Self, Error> {
         let mut t = Table::default();
 
         let head = data.get(..SIGNATURE.len()).ok_or(Error::Empty)?;
@@ -429,6 +467,7 @@ impl Table {
             })?;
             *t.record_counts.entry(kind.letter()).or_default() += 1;
 
+            let record_index = record;
             let fields = split_fields(&line[1..], record, line_offset)?;
             record += 1;
 
@@ -464,10 +503,33 @@ impl Table {
                     if cursor_x == 0 || cursor_y == 0 {
                         return Err(Error::ZeroIndex { index: record });
                     }
+                    if let Some(limits) = limits {
+                        for (axis, actual, limit) in [
+                            ('X', cursor_x, limits.max_column),
+                            ('Y', cursor_y, limits.max_row),
+                        ] {
+                            if actual > limit {
+                                return Err(Error::CoordinateLimit {
+                                    index: record_index,
+                                    offset: line_offset,
+                                    axis,
+                                    actual,
+                                    limit,
+                                });
+                            }
+                        }
+                    }
                     if kind == RecordKind::Cell {
                         let generated = field(&fields, 'E').is_some();
                         match field(&fields, 'K') {
-                            Some(value) => t.insert(cursor_y, cursor_x, value, generated),
+                            Some(value) => {
+                                t.insert(cursor_y, cursor_x, value, generated, record_index);
+                                // Extra K fields were previously ignored; preserve the
+                                // first value while retaining each repeated write.
+                                for _ in fields.iter().filter(|(tag, _)| *tag == 'K').skip(1) {
+                                    t.duplicate_cell(cursor_y, cursor_x, record_index);
+                                }
+                            }
                             None => {
                                 let stray = fields
                                     .iter()
@@ -522,7 +584,10 @@ impl Table {
         Ok(t)
     }
 
-    fn insert(&mut self, row: u32, column: u32, value: &str, generated: bool) {
+    fn insert(&mut self, row: u32, column: u32, value: &str, generated: bool, record: usize) {
+        if self.cells.contains_key(&(row, column)) {
+            self.duplicate_cell(row, column, record);
+        }
         self.max_row = self.max_row.max(row);
         self.max_column = self.max_column.max(column);
         if row == 1 {
@@ -544,6 +609,17 @@ impl Table {
         self.cells
             .entry((row, column))
             .or_insert_with(|| value.to_string());
+    }
+
+    fn duplicate_cell(&mut self, row: u32, column: u32, record: usize) {
+        self.push_anomaly(Anomaly {
+            kind: AnomalyKind::DuplicateCell,
+            severity: Severity::Warning,
+            row: Some(row),
+            column: Some(column),
+            record,
+            detail: format!("row {row} col {column}: repeated K value; first value retained"),
+        });
     }
 
     fn push_anomaly(&mut self, a: Anomaly) {

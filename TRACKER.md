@@ -352,10 +352,15 @@ a bare `FrostwyrmPissed5` with no extension and 1.29b lists 4 and dropped it, th
 zero `P`/`F`/`O` records and zero `E` formulas across all 65 files, against 462 / 2,868 /
 3 / 2,430 on 1.28c.
 
-**Gate:** met for the renderer; met for animation and the interactive viewer's terrain
-tile in the offscreen path only — and animation now reaches the viewer through a real
-`AnimationClip` on Bevy 0.20 rather than a posed skeleton. The open items are the
-viewer's terrain tile and the asset-cache plugins — neither is a format gap.
+- Caller-selected SYLK coordinate limits now reject oversized C/F cursors before
+  cell insertion or extent-driven postprocessing. Repeated K writes expose ambiguity
+  while retaining the existing first value. Seven synthetic native and actual
+  32-bit WASM cases pass; this is checked import policy, not native precedence or
+  a whole-process memory bound. See `docs/re-notes/sylk-admission-limits.md`.
+
+**Display boundary:** offscreen geometry/animation checks and the explicitly selected
+model-bound texture preview are partial display evidence. They do not close W3E
+terrain rendering, asset-defined terrain materials or native rendering fidelity.
 
 ### Known issues
 
@@ -364,9 +369,10 @@ viewer's terrain tile and the asset-cache plugins — neither is a format gap.
   rounding between `jpeg-decoder` and libjpeg, not a format mismatch. Chasing
   bit-exactness would mean porting libjpeg's IDCT, so it is documented rather
   than fixed.
-- Rust 1.99 Clippy passes scoped strict checks for MDL/BLP/SYLK/map libraries,
-  tests and CLIs, and the graphics library. Dependency lint expansion and other
-  workspace targets have not been claimed clean.
+- Rust 1.99 workspace Clippy passes native all-target/all-feature checks with
+  `--no-deps -D warnings`; affected SYLK/terrain/object/asset/application targets
+  also pass on WASM. External dependency lints and other platform CI are not
+  covered by those checks.
 - `nodes()` must not be pointed at `CAMS` or `LITE`. Both are read through their
   own readers, and the shared one is *kept* as a pinned misread rather than
   deleted: 30 of 656 camera records on 1.29b yield a `parent_id` in `0..100000`
