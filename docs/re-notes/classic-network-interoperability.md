@@ -294,3 +294,79 @@ This is a query of a known original host address under Wine. Broadcast host
 collection, launcher integration, TCP join, the reverse host direction,
 original-to-original play and sustained mixed-client simulation remain open.
 No original map contents were transferred. NET-C03 is not closed by discovery.
+
+## Original-to-original lobby baseline
+
+Two independent, unmodified copies of the supplied `1.29.2.9231` install joined
+one LAN lobby under Wine. Both source manifests contain the same 564 files and
+the executable identity above. Each client used its own prefix and 1280×960,
+96-DPI framebuffer on the isolated internal network. Both lobby captures show
+the host and peer. No game was started.
+
+A controlled leave/rejoin retained 28 complete Ethernet packets: no packet
+truncation, capture drops, TCP gaps or conflicting overlaps. The earlier capture
+retained only discovery and is not handshake evidence. The new connection's
+64-byte client stream and 226-byte host stream pass the integrated `Decoder`,
+including one-byte fragmentation and `finish` checks. They contain, in order:
+
+| Direction | W3GS messages |
+| --- | --- |
+| Client → host | REQJOIN, MAPSIZE, PONG |
+| Host → client | SLOTINFOJOIN, PLAYERINFO, MAPCHECK, SLOTINFO, SLOTINFO, PING |
+
+The join request's host counter and entry key equal the advertisement. The
+integrated slot reader accepts all three slot messages. After the peer reports
+that it has the map, its slot's download status changes from 255 to 100. No
+map-part message occurs in this capture. The pong body equals the host's ping.
+
+The selected standalone map, found under the supplied install's `Maps/`
+directory, passes `bind_selected_map` against that original MAPCHECK: whole-file
+size/CRC-32 and member-stream XORO/SHA-1 all match. Both supplied War3 and War3x
+archives contain identical external common/blizzard script bytes; either copy
+gives the same comparison, without inferring archive priority. The map has no
+applicable embedded prelude overrides. A one-byte map mutation and absent local
+bytes both refuse. The advertisement's path/XORO and its 20 extension bytes equal
+the MAPCHECK path/XORO/SHA-1 in this one observation. The discovery parser still
+retains that extension opaquely.
+
+The four seed bytes differ across the initial join and later slot updates.
+Keep each executed update: an early lobby seed is not an established game-start
+seed or proof of matching random streams. The native join request also has a
+longer address tail than the older GHost++ receiver describes; its unknown bytes
+must not become guessed defaults or an assumed socket-address layout.
+
+Private capture, command receipts, reassembly self-checks and compiled production
+reader results are in
+`.scratch/classic-network-20261016/root-original-join-audit/`; the two runtime
+directories are `.scratch/original-game-vm/classic-lan-{host,join}-1280-1/`.
+These establish an original-to-original lobby baseline and one original map
+fingerprint comparison. PeaceCraft TCP join, the reverse host direction,
+countdown, action exchange and sustained mixed-client play remain open.
+
+## Verified-map size reply
+
+`MapMatch::map_size_reply` encodes the pinned receiver's 13-byte MAPSIZE form:
+the caller's four unspecified prefix bytes, the protocol's "have map" flag and
+the already verified whole-file size in little-endian order. It allocates
+nothing. The prefix is explicit; equality with MAPCHECK's prefix is not assumed.
+`MapMatch` can only be obtained through the selected-map fingerprint comparison,
+so a missing or mismatched map does not produce this reply through that path.
+
+This constructs bytes only. It does not send them, set a lobby-ready flag or
+establish host acceptance. Revision-bound session publication and TCP join still
+need integration. The original capture supplies a separate offline comparison
+for the complete reply; no original bytes are embedded in the synthetic tests.
+
+The generated reply equals the original client's captured reply byte for byte.
+Five map tests execute successfully under WASI; strict native/browser-WASM
+Clippy, rustdoc, formatting and both library builds pass. The native suite has
+128 passing checks with four socket tests explicitly excluded after this
+session's sandbox denied their socket operations. The failed full-suite log is
+retained; no new live network result is claimed. Evidence is under
+`.scratch/classic-network-20261016/root-map-size-reply/`.
+
+After runtime access was restored, the unfiltered native suite passed all 132
+checks, including those four socket tests. The same five WASI tests, strict
+native/browser-WASM checks, rustdoc, formatting and both library builds passed
+again. These later logs are in `followup-unrestricted/`; the earlier permission
+failures remain intact. This still does not establish a live PeaceCraft join.

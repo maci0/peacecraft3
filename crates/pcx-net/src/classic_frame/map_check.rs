@@ -10,6 +10,8 @@ use sha1::{Digest, Sha1};
 
 /// Pinned `CGameProtocol::W3GS_MAPCHECK` identifier.
 pub const MAPCHECK_ID: u8 = 61;
+/// Pinned `CGameProtocol::W3GS_MAPSIZE` identifier.
+pub const MAPSIZE_ID: u8 = 66;
 
 /// Borrowed caller-selected bytes with their edition/version and resolver source.
 #[derive(Debug, Clone, Copy)]
@@ -90,6 +92,18 @@ impl<'a> MapMatch<'a> {
     /// Whether common.j and blizzard.j respectively came from the map overrides.
     pub fn map_preludes(&self) -> [bool; 2] {
         self.map_preludes
+    }
+
+    /// Encode the pinned receiver's "have map" response using the verified size.
+    ///
+    /// The caller supplies its profile's four unspecified prefix bytes; they
+    /// are not inferred from MAPCHECK. This does not send, publish lobby state,
+    /// or establish that the host accepted the response.
+    pub fn map_size_reply(&self, prefix: [u8; 4]) -> [u8; 13] {
+        let mut reply = [W3GS_FAMILY, MAPSIZE_ID, 13, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0];
+        reply[4..8].copy_from_slice(&prefix);
+        reply[9..].copy_from_slice(&self.fingerprints.size.to_le_bytes());
+        reply
     }
 }
 

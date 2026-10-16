@@ -1033,6 +1033,16 @@ Format: `date — subsystem — symptom — root cause — status`
       pinned C++ checksum vectors pass. Map-ready publication, original peer
       exchange and full NET-C05 acceptance remain open; see
       `docs/re-notes/classic-network-interoperability.md`.
+      An original-to-original Wine lobby baseline now retains a complete
+      leave/rejoin handshake. Integrated readers accept its frames/slots and
+      verify the original MAPCHECK against the supplied local map/scripts;
+      modified/absent maps refuse. Slot download status reaches 100 without
+      map transfer. Lobby seed words change between updates; no game-start or
+      RNG agreement follows. This is not a PeaceCraft peer exchange.
+      A successful `MapMatch` now constructs a MAPSIZE "have map" reply from
+      its verified size and an explicit caller prefix; it equals the captured
+      original reply offline. Five map checks pass under WASI. Sending that
+      reply and publishing revision-bound readiness remain unimplemented.
 - [ ] NET-C06: Ordered actions and checksum/RNG agreement, followed by a ten-minute
       mixed-client match without divergence; lobby-only success is insufficient.
       Bounded source-profile action-body readers now preserve player ids,

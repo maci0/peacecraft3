@@ -58,6 +58,47 @@ fn packet(bytes: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+fn map_size_reply_uses_verified_file_size_and_preserves_prefix() {
+    let map = fixture(&[("war3map.j", b"C")]);
+    assert!(map.len() > usize::from(u8::MAX));
+    let wire = packet(&map);
+    let frame = decode_one(&wire, wire.len()).unwrap();
+    let matched = frame
+        .bind_selected_map(selected(&map), budget(map.len()))
+        .unwrap();
+    let prefix = [0x93, 0, 0xF1, 0x80];
+    let reply = matched.map_size_reply(prefix);
+    let reply_frame = decode_one(&reply, reply.len()).unwrap();
+    assert_eq!(reply_frame.family(), W3GS_FAMILY);
+    assert_eq!(reply_frame.id(), 66);
+    assert_eq!(reply_frame.bytes().len(), 13);
+    assert_eq!(&reply_frame.body()[..4], &prefix);
+    assert_eq!(reply_frame.body()[4], 1);
+    assert_eq!(
+        u32::from_le_bytes(reply_frame.body()[5..].try_into().unwrap()),
+        u32::try_from(map.len()).unwrap()
+    );
+    let mut decoder = Decoder::new(FrameLimits {
+        max_frame_bytes: reply.len(),
+        max_frames: 1,
+    })
+    .unwrap();
+    let mut frames = Vec::new();
+    for byte in reply.as_chunks::<1>().0 {
+        frames.extend(decoder.push(byte).unwrap());
+    }
+    decoder.finish().unwrap();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].bytes(), reply);
+    assert!(
+        frame
+            .bind_selected_map(selected(&[]), budget(map.len()))
+            .map(|matched| matched.map_size_reply(prefix))
+            .is_err()
+    );
+}
+
+#[test]
 fn mismatched_or_absent_local_map_refuses_before_ready() {
     assert_eq!(crc(b"abc"), 0x3524_41c2);
     let map = fixture(&[("war3map.j", b"C")]);
