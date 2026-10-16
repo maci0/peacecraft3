@@ -185,3 +185,37 @@ test('initial zero-sized member close failure aborts sinks before codec entry', 
   /initial close failure/);
   assert.deepEqual(storage.aborted, ['selected.mpq']);
 });
+
+test('aggregate selected solid-block member counts are refused before prefix reads or sinks', async () => {
+  // Each block is inside the entry limit. Only the combined member count is not.
+  const limits = { entries: 3 };
+  const prefix = Uint8Array.of(1), selectedBytes = Uint8Array.of(2, 3, 4);
+  const blockBytes = new Uint8Array(prefix.length + selectedBytes.length);
+  blockBytes.set(prefix, 0); blockBytes.set(selectedBytes, prefix.length);
+  const blobBytes = new Uint8Array(blockBytes.length * 2);
+  blobBytes.set(blockBytes, 0); blobBytes.set(blockBytes, blockBytes.length);
+  const files = [0, 1].flatMap(block => [
+    { path: `prefix-${block}.txt`, size: prefix.length, crc: crc32(prefix), directory: false, block },
+    { path: `selected-${block}.mpq`, size: selectedBytes.length, crc: crc32(selectedBytes), directory: false, block },
+  ]);
+  assert.equal(files.filter(file => file.block === 0).length, limits.entries - 1);
+  assert.equal(files.filter(file => file.block === 1).length, limits.entries - 1);
+  const archive = {
+    files,
+    blocks: [0, 1].map(index => ({ method: 'storing', offset: index * blockBytes.length, storedSize: blockBytes.length, originalSize: blockBytes.length })),
+  };
+  let slices = 0, sinks = 0, codecCalls = 0;
+  const blob = { size: blobBytes.length, slice(...args) { slices += 1; return new Blob([blobBytes]).slice(...args); } };
+  await assert.rejects(extractArcMembers(blob, archive, [files[1], files[3]], new Uint8Array([1]), {
+    async decodeStream({ read, onWrite }) {
+      codecCalls += 1;
+      const all = [];
+      for (;;) { const part = await read(3); if (!part.length) break; all.push(...part); }
+      await onWrite(Uint8Array.from(all));
+    },
+  }, {
+    limits, readBytes: 16,
+    createSink() { sinks += 1; return { async write() {}, async close() {}, async abort() {} }; },
+  }), error => error.code === 'ARC_LIMIT' && error.message.includes('aggregate file count exceeds limit'));
+  assert.equal(slices, 0); assert.equal(sinks, 0); assert.equal(codecCalls, 0);
+});

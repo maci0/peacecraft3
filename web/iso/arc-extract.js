@@ -18,11 +18,20 @@ export async function extractArcMembers(blob, archive, selected, password, codec
     wanted.add(file); selectedBytes += file.size;
     if (!Number.isSafeInteger(selectedBytes) || selectedBytes > maxSelectedBytes) throw new ArcError('ARC_LIMIT', 'selected output exceeds configured budget');
   }
-  const blockIndexes = [...new Set(selected.map(file => file.block))];
+  const selectedBlocks = new Set(selected.map(file => file.block));
+  const blockIndexes = [...selectedBlocks];
   for (const index of blockIndexes) {
     const block = archive.blocks[index];
     boundedRange(block.offset, block.storedSize, blob.size);
     if (block.originalSize > limits.decodedBlockBytes) throw new ArcError('ARC_LIMIT', 'solid output exceeds configured budget');
+  }
+  // Caller-built directories skip parseDirectory. Count the members the solid
+  // walk will visit, including unselected prefixes, before any sink or read.
+  let solidEntries = 0;
+  for (const file of archive.files) {
+    if (!selectedBlocks.has(file.block)) continue;
+    if (solidEntries === limits.entries) throw new ArcError('ARC_LIMIT', 'aggregate file count exceeds limit');
+    solidEntries += 1;
   }
   const results = new Map(), sinks = new Map();
   try {
