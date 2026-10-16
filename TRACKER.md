@@ -1175,7 +1175,11 @@ Format: `date — subsystem — symptom — root cause — status`
       matches the script's coordinate bits. Bounded register/unregister
       requests now preserve their sound identities,
       dimensions and position snapshots. The same gate reaches 142 rectangles
-      and seven stacked registrations; its next refusal is `CreateCameraSetup`.
+      and seven stacked registrations. Shared-arena camera setups now retain
+      18 identities, 126 executed field assignments and 18 destinations with
+      exact value/duration-bit checks. Its next refusal is
+      `SetPlayerTechMaxAllowed`; applied camera motion remains open. See
+      `docs/re-notes/script-camera-setups.md`.
       This probe still uses the explicitly identified compatibility object catalog;
       launcher bank preparation remains open.
       The selected CampaignStrings reader now derives ordered chapter/map

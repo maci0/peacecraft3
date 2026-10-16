@@ -35,6 +35,8 @@ pub enum Failure {
     PlayerState(&'static str),
     #[error("camera setup: {0}")]
     CameraState(&'static str),
+    #[error("camera setup object: {0}")]
+    CameraSetupObject(&'static str),
     #[error("startup clock: {0}")]
     ClockState(&'static str),
     #[error("map music selection: {0}")]
@@ -156,6 +158,10 @@ enum Entry {
     },
     Rect {
         bounds: Option<[f32; 4]>,
+    },
+    CameraSetup {
+        fields: Vec<objects::CameraFieldRecord>,
+        destination: Option<objects::CameraDestination>,
     },
 }
 pub struct EnumHost {
@@ -455,6 +461,7 @@ impl EnumHost {
             Entry::Rect { bounds: None } => {
                 return Err(self.error("arena", Failure::Identity));
             }
+            Entry::CameraSetup { .. } => "camerasetup",
         })
     }
     pub fn symbolic_value(&self, id: HandleId, kind: &str) -> Result<i32, Error> {
@@ -531,8 +538,9 @@ mod tests;
 #[path = "object_host.rs"]
 mod objects;
 pub use objects::{
-    CameraState, DayNightState, FileSoundState, MapConfig, MapConfigBudget, MapMusicSelection,
-    ObjectHost, PlayerAdmissionError, PlayerBudget, PlayerSettings, QuestBudget, QuestEvent,
-    QuestFlag, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest, StartLocation,
-    StartPriorities, StartPriority, StartupClockState, TimerHost,
+    CameraDestination, CameraFieldRecord, CameraState, DayNightState, FileSoundState, MapConfig,
+    MapConfigBudget, MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerBudget,
+    PlayerSettings, QuestBudget, QuestEvent, QuestFlag, SoundProperties, SoundState,
+    StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
+    StartupClockState, TimerHost,
 };

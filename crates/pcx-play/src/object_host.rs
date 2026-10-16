@@ -26,6 +26,7 @@ pub struct ObjectHost {
     map_music: Option<music::State>,
     quests: Option<crate::quest_session::QuestSession>,
     rectangles: bool,
+    camera_setups: Option<camera_setup::Admission>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -57,6 +58,7 @@ impl ObjectHost {
             map_music: None,
             quests: None,
             rectangles: false,
+            camera_setups: None,
         })
     }
     fn contract(
@@ -66,6 +68,18 @@ impl ObjectHost {
         result: &str,
         constant: bool,
         family: Option<&str>,
+    ) -> Result<(), Error> {
+        Self::contract_in(inner, name, parameters, result, constant, family, true)
+    }
+    /// Families declared directly under `handle` stay eligible when `require_agent` is false.
+    fn contract_in(
+        inner: &EnumHost,
+        name: &str,
+        parameters: &[&str],
+        result: &str,
+        constant: bool,
+        family: Option<&str>,
+        require_agent: bool,
     ) -> Result<(), Error> {
         let n = inner
             .program
@@ -85,8 +99,9 @@ impl ObjectHost {
             return Err(inner.error(name, Failure::Signature));
         }
         if let Some(family) = family
-            && (!below(&inner.program, family, "agent")
+            && ((require_agent && !below(&inner.program, family, "agent"))
                 || !below(&inner.program, family, "handle")
+                || family == "handle"
                 || inner
                     .conversions
                     .values()
@@ -314,6 +329,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.quest_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.camera_setup_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.rect_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -396,3 +414,7 @@ pub use sound_properties::SoundProperties;
 #[path = "stacked_sound_host.rs"]
 mod stacked_sounds;
 pub use stacked_sounds::{StackedSoundAction, StackedSoundRequest};
+
+#[path = "camera_setup_host.rs"]
+mod camera_setup;
+pub use camera_setup::{CameraDestination, CameraFieldRecord};
