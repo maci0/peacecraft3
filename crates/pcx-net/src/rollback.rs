@@ -206,7 +206,8 @@ pub enum SnapReason {
 /// it did not, and the difference matters to whoever is watching the player.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Correction {
-    /// Prediction already agreed with authority. Nothing ran.
+    /// Positions agreed at the same tick. Authority's other fields were adopted
+    /// without running another simulation step.
     Aligned,
     /// Authority was restored at `tick` and `resimulated` unacknowledged ticks
     /// of the client's own input were replayed on top of it.

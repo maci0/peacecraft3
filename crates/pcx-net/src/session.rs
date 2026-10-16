@@ -28,6 +28,7 @@ pub struct Session {
     server: Server,
     peers: BTreeMap<Peer, u8>,
     inputs: BTreeMap<u64, BTreeMap<u8, Vec<Command>>>,
+    stops_pending: [bool; MAX_PLAYERS as usize],
 }
 
 impl Session {
@@ -36,6 +37,7 @@ impl Session {
             server: Server::new(world, seed),
             peers: BTreeMap::new(),
             inputs: BTreeMap::new(),
+            stops_pending: [false; MAX_PLAYERS as usize],
         }
     }
 
@@ -62,10 +64,7 @@ impl Session {
             // Drop buckets emptied by the removal above so a closed peer cannot
             // leave stale slots for later ticks.
             self.inputs.retain(|_, players| !players.is_empty());
-            self.inputs
-                .entry(self.world().tick)
-                .or_default()
-                .insert(player, vec![Command::Stop]);
+            self.stops_pending[usize::from(player)] = true;
         }
     }
 
@@ -132,6 +131,20 @@ impl Session {
     /// Called only by the server's 25 ms clock. Missing commands mean no new orders;
     /// the existing sim still resolves movement, even if a browser disconnects.
     pub fn advance(&mut self) -> Vec<u8> {
+        // Disconnect stops every owned unit, independently of UI selection.
+        if self.stops_pending.contains(&true) {
+            for unit in &mut self.server.world.units {
+                if self
+                    .stops_pending
+                    .get(usize::from(unit.owner))
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    unit.move_target = None;
+                }
+            }
+            self.stops_pending.fill(false);
+        }
         let tick = self.world().tick;
         let commands = self
             .inputs

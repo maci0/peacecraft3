@@ -30,6 +30,31 @@ session.connect();
 
 The server binds each connection to its player slot. A packet cannot choose another player. Per-tick batches merge every player's commands before `Server::accept`, preventing one player's order from replacing another's. Commands are limited to 32 per player per tick, 1 KiB packets and the existing 120-tick horizon. Coordinate bounds prevent overflowing the simulation's fixed-point subtraction. Duplicate batches are rejected; submit multiple commands in one batch. The server advances the existing movement rules every 25 ms, with no new orders when a player is silent. Disconnect drops that player's queued orders and issues stop. Resync sends the current snapshot; it never rewinds the shared server for a client.
 
+## Selection and snapshots
+
+`Select` now replaces the sending player's selection. `Move` and `Stop` affect
+that selection; units outside it retain their previous movement orders. The
+existing strict fixed-point selection boundary is unchanged. Spawned harness
+units start selected to preserve move-before-select behavior; this is a project
+simulation convention, not a measured original-game selection default.
+
+World snapshots preserve selection. An all-selected world keeps the original
+version-0 bytes. A world with any deselected unit appends ASCII `SEL`, version
+`1`, then one byte (`0` or `1`) per unit in the existing order. Rust and browser
+decoders reject unknown versions, malformed flags, truncated records and extra
+bytes. Older decoders reject the extension rather than silently restoring the
+wrong selection. Browser unit objects always expose a boolean `selected`.
+
+The Rust prediction client replays unacknowledged commands when an older
+snapshot arrives, even if positions match. Same-tick authority replaces the
+complete predicted world without applying inputs twice. Existing history,
+acknowledgement and replay-work limits still decide when correction must snap.
+
+Disconnect is an authority action: at the next server tick it stops every unit
+owned by that player without changing selection. A new connection's accepted
+orders run after that cleanup. This keeps unselected units from continuing an
+old order after their owner disconnects.
+
 ## What is working, and what remains
 
 This is a real browser-to-Rust command and state path, **not a completed Warcraft multiplayer match**. The current `pcx-sim` only supports selection, movement and stop. The local host initializes one unit per slot to exercise those existing rules. Combat, economy, map initialization, original lobby behavior, matchmaking and the game's input/render adapter are not wired into this session. `peacecraft3` currently has no gameplay caller of `pcx-net` or `pcx-sim`; `network.js` is a module for that adapter, not an Online Play button that pretends a match exists.
@@ -51,3 +76,22 @@ node crates/pcx-net/examples/check_browser_session.mjs /absolute/path/to/playwri
 ```
 
 The script expects both local servers above. Chromium defaults to `/usr/bin/chromium`; set `CHROMIUM` for a different executable. Successful output records the player slots and ticks compared. It proves the current movement simulation and transport, not unimplemented original game rules or UI.
+
+## Selection regression checks
+
+The integrated native simulation/network suite passes 115 tests; actual WASI
+execution passes 102 (desktop transport tests are omitted there). Three Node
+tests cover five Rust-generated accepted packets, nine malformed packets and a
+control that demonstrates selection loss if the suffix is dropped. The existing
+playtest suite and strict native/WASM compilation remain green.
+
+The fresh two-browser session now also forces a deselected snapshot, verifies
+that an empty selection cannot move its unit, reselects it and observes movement
+again. Both pages receive identical authority, reconnect and resync successfully;
+spoofed input is rejected. The run records four local code GETs without request
+bodies, three expected local WebSocket connections and zero page errors. No game
+assets are loaded by this check. Test-owned servers stop after the run.
+
+This verifies the existing movement session and wire format. The running game
+still needs its gameplay input/render and lobby integration; native selection
+behavior and complete multiplayer matches remain open.

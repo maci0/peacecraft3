@@ -29,10 +29,34 @@ export function decodeSnapshot(buffer) {
       unit.moveTarget = [view.getInt32(at, true), view.getInt32(at + 4, true)];
       at += 8;
     }
+    unit.selected = true;
     units.push(unit);
   }
-  if (at !== view.byteLength) throw new Error('Trailing snapshot bytes');
+  const flags = selectionFlags(view, at, count);
+  if (flags) for (let i = 0; i < units.length; i++) units[i].selected = flags[i];
   return { tick, nextUnitId, units };
+}
+
+// Version 0 ends after the units and means every unit is selected. Version 1
+// is the ASCII tag SEL, a version byte of 1, and one 0 or 1 flag per unit in
+// the same order. Anything else is refused whole; flags are never dropped.
+function selectionFlags(view, at, count) {
+  if (at === view.byteLength) return null;
+  const tag = at + 3 <= view.byteLength && view.getUint8(at) === 0x53 && view.getUint8(at + 1) === 0x45 && view.getUint8(at + 2) === 0x4c;
+  if (!tag) throw new Error('Trailing snapshot bytes');
+  if (at + 4 > view.byteLength) throw new Error('Truncated selection');
+  const version = view.getUint8(at + 3);
+  if (version !== 1) throw new Error('Unsupported selection version');
+  const flagsAt = at + 4;
+  if (flagsAt + count > view.byteLength) throw new Error('Truncated selection');
+  if (flagsAt + count !== view.byteLength) throw new Error('Trailing snapshot bytes');
+  const flags = [];
+  for (let i = 0; i < count; i++) {
+    const flag = view.getUint8(flagsAt + i);
+    if (flag !== 0 && flag !== 1) throw new Error('Bad selection flag');
+    flags.push(flag === 1);
+  }
+  return flags;
 }
 
 export class PeacecraftSession extends EventTarget {

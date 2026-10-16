@@ -55,11 +55,16 @@ pub enum Error {
 pub enum Command {
     /// Do nothing for this tick.
     Nop,
-    /// Select units by world position, i.e. what a click resolves to.
+    /// Replace this player's harness selection with owned units inside the
+    /// existing axis-aligned `FX_ONE` test, and clear those units' targets.
+    /// Owned units outside the test are deselected and keep any current target.
     Select { x: Fx, y: Fx },
-    /// Issue a move intent to the selected units.
+    /// Issue a move intent to this player's selected units.
+    ///
+    /// `Unit::selected` starts set, so a move before any `Select` still reaches
+    /// every unit that player owns. This is the harness rule, not native pathing.
     Move { x: Fx, y: Fx },
-    /// Issue a stop intent.
+    /// Clear move targets of this player's selected units.
     Stop,
 }
 
@@ -85,6 +90,10 @@ pub struct Input {
 pub struct Unit {
     pub id: u32,
     pub owner: u8,
+    /// Harness selection. Spawn sets this so a move before any `Select` still
+    /// reaches every owned unit. Not a native selection flag. Version-0
+    /// snapshots omit it and decode as selected.
+    pub selected: bool,
     pub x: Fx,
     pub y: Fx,
     /// Current movement order, if any.
@@ -118,6 +127,7 @@ impl World {
         self.units.push(Unit {
             id,
             owner,
+            selected: true,
             x,
             y,
             move_target: None,
@@ -209,6 +219,15 @@ pub fn step(world: &mut World, input: &Input, rng: &mut Rng) {
     world.tick += 1;
 }
 
+/// Whether an owned unit is inside the harness selection test.
+///
+/// Differences are widened before the absolute value. Each axis uses the
+/// existing strict `< FX_ONE` comparison. This is not a native selection radius.
+pub(crate) fn unit_within_selection(unit_x: Fx, unit_y: Fx, x: Fx, y: Fx) -> bool {
+    (i64::from(unit_x) - i64::from(x)).abs() < i64::from(FX_ONE)
+        && (i64::from(unit_y) - i64::from(y)).abs() < i64::from(FX_ONE)
+}
+
 /// Applies one command, validating it against the world.
 fn apply_command(world: &mut World, player: u8, cmd: &Command, _rng: &mut Rng) {
     match *cmd {
@@ -217,24 +236,27 @@ fn apply_command(world: &mut World, player: u8, cmd: &Command, _rng: &mut Rng) {
             // Selection is the player's own choice of a unit they own; a client
             // cannot select another player's unit through a malformed order.
             for unit in &mut world.units {
-                if unit.owner == player
-                    && (i64::from(unit.x) - i64::from(x)).abs() < i64::from(FX_ONE)
-                    && (i64::from(unit.y) - i64::from(y)).abs() < i64::from(FX_ONE)
-                {
+                if unit.owner != player {
+                    continue;
+                }
+                if unit_within_selection(unit.x, unit.y, x, y) {
+                    unit.selected = true;
                     unit.move_target = None;
+                } else {
+                    unit.selected = false;
                 }
             }
         }
         Command::Move { x, y } => {
             for unit in &mut world.units {
-                if unit.owner == player {
+                if unit.owner == player && unit.selected {
                     unit.move_target = Some((x, y));
                 }
             }
         }
         Command::Stop => {
             for unit in &mut world.units {
-                if unit.owner == player {
+                if unit.owner == player && unit.selected {
                     unit.move_target = None;
                 }
             }

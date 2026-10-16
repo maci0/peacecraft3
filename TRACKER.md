@@ -1017,6 +1017,11 @@ Format: `date — subsystem — symptom — root cause — status`
 - [~] Complete original resolution parity: full-window background and conditional authored UI branch are traced and implemented; portrait containment is an extension, live expansion flags remain unmeasured.
 
 - [x] Two-browser local WebSocket command/snapshot path for existing movement rules, including same-tick merging, identity rejection and disconnect/reconnect/resync.
+      Selection now survives snapshots and bounded client replay. The browser
+      decoder accepts the checked selection extension; the live two-browser gate
+      covers deselection, ignored move, reselection and reconnect. Disconnect
+      stops unselected owned units too. Native and actual WASI regressions pass;
+      original gameplay/lobby integration remains open.
 - [ ] Actual gameplay/lobby integration and public multiplayer service; see `docs/browser-online.md` for the current limits.
 
 - [~] Browser-only ISO import: local File/Blob reads, filesystem discovery,

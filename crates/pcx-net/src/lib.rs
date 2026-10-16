@@ -88,6 +88,10 @@ pub enum CodecError {
         first_record: u32,
         record: u32,
     },
+    #[error("unsupported world snapshot version {found}; this build reads {supported}")]
+    UnsupportedSnapshotVersion { found: u8, supported: u8 },
+    #[error("snapshot selection flag {flag} at record {record} is not 0 or 1")]
+    BadSelectionFlag { record: u32, flag: u8 },
 }
 
 /// What a datagram means.
@@ -323,7 +327,16 @@ const UNIT_HEAD_BYTES: usize = 4 /* id */ + 1 /* owner */ + 4 /* x */ + 4 /* y *
 /// Bytes a unit's move target occupies when it has one.
 const UNIT_TARGET_BYTES: usize = 8;
 
+/// Suffix tag for snapshot selection version 1. Absent on version 0.
+const SELECTION_TAG: &[u8] = b"SEL";
+const SELECTION_VERSION: u8 = 1;
+
 /// Encodes a world for the wire.
+///
+/// Version 0, with no suffix, is the historical payload and means every unit
+/// is selected. A world with any deselected unit appends `SEL`, version 1, and
+/// one 0 or 1 flag per unit. Existing decoders reject that suffix as trailing
+/// bytes instead of dropping the flags.
 pub fn encode_world_payload(world: &pcx_sim::World) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&world.next_unit_id.to_le_bytes());
@@ -342,7 +355,73 @@ pub fn encode_world_payload(world: &pcx_sim::World) -> Vec<u8> {
             None => out.push(0),
         }
     }
+    if world.units.iter().any(|unit| !unit.selected) {
+        out.extend_from_slice(SELECTION_TAG);
+        out.push(SELECTION_VERSION);
+        for unit in &world.units {
+            out.push(u8::from(unit.selected));
+        }
+    }
     out
+}
+
+fn world_selection_flags(bytes: &[u8], at: usize, count: u32) -> Result<Option<&[u8]>, CodecError> {
+    if at == bytes.len() {
+        return Ok(None);
+    }
+    let rest = &bytes[at..];
+    if !rest.starts_with(SELECTION_TAG) {
+        return Err(CodecError::TrailingBytes {
+            remaining: rest.len(),
+        });
+    }
+    if rest.len() < SELECTION_TAG.len() + 1 {
+        return Err(CodecError::PayloadTooShort {
+            kind: 3,
+            need: at + SELECTION_TAG.len() + 1,
+            got: bytes.len(),
+        });
+    }
+    let found = rest[SELECTION_TAG.len()];
+    if found != SELECTION_VERSION {
+        return Err(CodecError::UnsupportedSnapshotVersion {
+            found,
+            supported: SELECTION_VERSION,
+        });
+    }
+    let flag_at = at + SELECTION_TAG.len() + 1;
+    let count_usize = usize::try_from(count).map_err(|_| CodecError::PayloadSpanOverflow {
+        at: flag_at,
+        len: usize::MAX,
+    })?;
+    let end = flag_at
+        .checked_add(count_usize)
+        .ok_or(CodecError::PayloadSpanOverflow {
+            at: flag_at,
+            len: count_usize,
+        })?;
+    if bytes.len() < end {
+        return Err(CodecError::PayloadTooShort {
+            kind: 3,
+            need: end,
+            got: bytes.len(),
+        });
+    }
+    if bytes.len() != end {
+        return Err(CodecError::TrailingBytes {
+            remaining: bytes.len() - end,
+        });
+    }
+    let flags = &bytes[flag_at..end];
+    for (record, &flag) in flags.iter().enumerate() {
+        if flag > 1 {
+            return Err(CodecError::BadSelectionFlag {
+                record: record as u32,
+                flag,
+            });
+        }
+    }
+    Ok(Some(flags))
 }
 
 fn world_payload_span(bytes: &[u8], at: usize, len: usize) -> Result<(&[u8], usize), CodecError> {
@@ -390,6 +469,7 @@ pub fn decode_world_payload(tick: u64, bytes: &[u8]) -> Result<pcx_sim::World, C
         Ok(pcx_sim::Unit {
             id,
             owner,
+            selected: true,
             x,
             y,
             move_target,
@@ -400,16 +480,15 @@ pub fn decode_world_payload(tick: u64, bytes: &[u8]) -> Result<pcx_sim::World, C
     for _ in 0..count {
         take_unit(&mut at)?;
     }
-    if at != bytes.len() {
-        return Err(CodecError::TrailingBytes {
-            remaining: bytes.len() - at,
-        });
-    }
+    let flags = world_selection_flags(bytes, at, count)?;
     let mut units = Vec::with_capacity(count.min(4096) as usize);
     let mut unit_ids = BTreeMap::new();
     at = 8;
     for record in 0..count {
-        let unit = take_unit(&mut at)?;
+        let mut unit = take_unit(&mut at)?;
+        if let Some(flags) = &flags {
+            unit.selected = flags[record as usize] == 1;
+        }
         if let Some(first_record) = unit_ids.insert(unit.id, record) {
             return Err(CodecError::DuplicateUnitId {
                 tick,
@@ -705,7 +784,11 @@ impl Client {
     ///    server's acknowledged clock, is a late duplicate and is ignored.
     ///    Applying one would rewind the client, which is the one thing this
     ///    design forbids.
-    /// 2. No positional divergence means there is nothing to fix.
+    /// 2. No positional divergence at the snapshot's own tick means there is
+    ///    nothing newer to replay. An older snapshot can still share positions
+    ///    with a prediction that already applied Select, Move, or Stop; those
+    ///    unacknowledged inputs are replayed under the same bounds as a
+    ///    positional correction.
     /// 3. Without an acknowledgement there is no boundary between inputs the
     ///    server has consumed and inputs it has not, so authority is adopted.
     /// 4. A tick the ring has forgotten cannot be replayed, because the server
@@ -736,9 +819,18 @@ impl Client {
         self.authoritative = snapshot.clone();
         self.consensus_tick = tick;
 
-        let correction = if divergence == 0 {
+        let correction = if divergence == 0 && tick == self.predicted.tick {
+            // Authority for this tick wins, including selection and targets.
+            // Do not replay: the inputs that produced this tick are already
+            // at or behind it, and running them again would apply them twice.
+            if self.predicted != snapshot {
+                self.predicted = snapshot.clone();
+            }
             rollback::Correction::Aligned
         } else {
+            // The snapshot is not this prediction's tick, or positions differ.
+            // Replay unacknowledged inputs from the snapshot, or snap when the
+            // ack, history window, or resim budget does not allow it.
             self.correct(snapshot.clone())
         };
 
@@ -1465,5 +1557,107 @@ mod tests {
         );
         assert_eq!(client.predicted(), &authoritative);
         assert!(client.history().is_empty());
+    }
+
+    #[test]
+    fn version_0_snapshot_bytes_omit_the_selection_trailer() {
+        let mut world = World::empty();
+        world.spawn(0, 1, 2);
+        let bytes = encode_world_payload(&world);
+        assert!(bytes.windows(3).all(|window| window != b"SEL"));
+        let restored = decode_world_payload(0, &bytes).unwrap();
+        assert!(restored.units.iter().all(|unit| unit.selected));
+        assert_eq!(encode_world_payload(&restored), bytes);
+    }
+
+    #[test]
+    fn narrowed_selection_round_trips_and_matches_move_and_stop() {
+        let mut world = World::empty();
+        let near = world.spawn(0, 0, 0);
+        let far = world.spawn(0, 10, 0);
+        world.units[1].selected = false;
+        world.units[1].move_target = Some((FX_ONE * 20, 0));
+        let bytes = encode_world_payload(&world);
+        assert!(bytes.windows(3).any(|window| window == b"SEL"));
+        let restored = decode_world_payload(world.tick, &bytes).unwrap();
+        assert_eq!(restored, world);
+        assert_eq!(encode_world_payload(&restored), bytes);
+        let mut original = world.clone();
+        let mut decoded = restored;
+        let move_order = order(0, vec![Command::Move { x: 50, y: 0 }], 0);
+        let mut rng_a = Rng::new(1);
+        let mut rng_b = Rng::new(1);
+        pcx_sim::step(&mut original, &move_order, &mut rng_a);
+        pcx_sim::step(&mut decoded, &move_order, &mut rng_b);
+        assert_eq!(original, decoded);
+        assert!(original.unit(near).unwrap().move_target.is_some());
+        assert_eq!(
+            original.unit(far).unwrap().move_target,
+            Some((FX_ONE * 20, 0))
+        );
+        let stop = order(0, vec![Command::Stop], 1);
+        pcx_sim::step(&mut original, &stop, &mut rng_a);
+        pcx_sim::step(&mut decoded, &stop, &mut rng_b);
+        assert_eq!(original, decoded);
+        assert!(original.unit(near).unwrap().move_target.is_none());
+        assert_eq!(
+            original.unit(far).unwrap().move_target,
+            Some((FX_ONE * 20, 0))
+        );
+    }
+
+    #[test]
+    fn unknown_selection_version_is_refused_and_junk_stays_trailing() {
+        let mut world = World::empty();
+        world.spawn(0, 0, 0);
+        world.units[0].selected = false;
+        let mut bytes = encode_world_payload(&world);
+        let at = bytes
+            .windows(3)
+            .position(|window| window == b"SEL")
+            .unwrap();
+        bytes.truncate(at);
+        bytes.push(255);
+        assert!(matches!(
+            decode_world_payload(0, &bytes),
+            Err(CodecError::TrailingBytes { remaining: 1 })
+        ));
+        bytes.truncate(at);
+        bytes.extend_from_slice(b"SEL");
+        bytes.push(2);
+        bytes.push(0);
+        assert!(matches!(
+            decode_world_payload(0, &bytes),
+            Err(CodecError::UnsupportedSnapshotVersion {
+                found: 2,
+                supported: 1
+            })
+        ));
+    }
+
+    #[test]
+    fn aligned_reconcile_adopts_selection_before_move() {
+        let mut world = World::empty();
+        world.spawn(0, 0, 0);
+        world.spawn(0, 4, 0);
+        let mut client = Client::from_world(world.clone(), 3);
+        let mut snapshot = world.clone();
+        snapshot.units[1].selected = false;
+        let report = client.reconcile_detailed(snapshot.clone());
+        assert_eq!(report.correction, rollback::Correction::Aligned);
+        assert!(!client.predicted().units[1].selected);
+        assert_eq!(client.predicted().tick, snapshot.tick);
+        let mut predicted = client.predicted().clone();
+        let input = order(0, vec![Command::Move { x: 9, y: 0 }], predicted.tick);
+        let mut rng_a = Rng::new(1);
+        let mut rng_b = Rng::new(1);
+        pcx_sim::step(&mut predicted, &input, &mut rng_a);
+        pcx_sim::step(&mut snapshot, &input, &mut rng_b);
+        assert_eq!(
+            predicted.units[0].move_target,
+            snapshot.units[0].move_target
+        );
+        assert_eq!(predicted.units[1].move_target, None);
+        assert_eq!(predicted.units[1].selected, snapshot.units[1].selected);
     }
 }

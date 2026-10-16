@@ -8,7 +8,11 @@ const socketUrl = process.argv[4] ?? 'ws://127.0.0.1:8932';
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] });
 try {
   const pages = await Promise.all([browser.newPage(), browser.newPage()]);
+  const requests = [], sockets = [], pageErrors = [];
   for (const page of pages) {
+    page.on('request', request => requests.push({ url: request.url(), method: request.method(), body: request.postData() }));
+    page.on('websocket', socket => sockets.push(socket.url()));
+    page.on('pageerror', error => pageErrors.push(error.message));
     await page.goto(`${base}/network.js`);
     await page.evaluate(async ({ base, socketUrl }) => {
       const { PeacecraftSession } = await import(`${base}/network.js`);
@@ -42,6 +46,40 @@ try {
   assert.ok(world.units.find(u => u.owner === players[0]).x > initial.find(u => u.owner === players[0]).x);
   assert.ok(world.units.find(u => u.owner === players[1]).x < initial.find(u => u.owner === players[1]).x);
 
+  // Force a selection trailer, then return to the legacy all-selected payload.
+  const deselectTick = (BigInt(await a.evaluate(() => session.world.tick.toString())) + 12n).toString();
+  await a.evaluate(tick => session.commands([
+    { kind: 'stop' },
+    { kind: 'select', x: 100 * 65536, y: 100 * 65536 },
+    { kind: 'move', x: 20 * 65536, y: 0 },
+  ], tick), deselectTick);
+  const deselectedTick = (BigInt(deselectTick) + 2n).toString();
+  for (const page of pages) await page.waitForFunction(tick => worlds.has(tick), deselectedTick);
+  const deselected = await Promise.all(pages.map(page => page.evaluate(tick => worlds.get(tick), deselectedTick)));
+  assert.equal(deselected[0], deselected[1], 'selection trailer must reach both browsers');
+  const held = JSON.parse(deselected[0]).units.find(unit => unit.owner === players[0]);
+  assert.equal(held.selected, false);
+  assert.equal(held.moveTarget, null, 'move after an empty selection must not move the unit');
+  const heldTick = (BigInt(deselectedTick) + 3n).toString();
+  for (const page of pages) await page.waitForFunction(tick => worlds.has(tick), heldTick);
+  for (const page of pages) {
+    const unit = JSON.parse(await page.evaluate(tick => worlds.get(tick), heldTick)).units.find(unit => unit.owner === players[0]);
+    assert.equal(unit.x, held.x);
+    assert.equal(unit.selected, false);
+  }
+  const reselectTick = (BigInt(await a.evaluate(() => session.world.tick.toString())) + 12n).toString();
+  await a.evaluate(({ tick, x, y }) => session.commands([
+    { kind: 'select', x, y },
+    { kind: 'move', x: x + 65536, y },
+  ], tick), { tick: reselectTick, x: held.x, y: held.y });
+  const reselectedTick = (BigInt(reselectTick) + 2n).toString();
+  for (const page of pages) await page.waitForFunction(tick => worlds.has(tick), reselectedTick);
+  const reselected = await Promise.all(pages.map(page => page.evaluate(tick => worlds.get(tick), reselectedTick)));
+  assert.equal(reselected[0], reselected[1]);
+  const moving = JSON.parse(reselected[0]).units.find(unit => unit.owner === players[0]);
+  assert.equal(moving.selected, true);
+  assert.ok(moving.x > held.x, 'reselected unit must accept a later move');
+
   // Forge a valid codec packet for the other player's slot; the server must reject it.
   await a.evaluate(player => {
     const bytes = new Uint8Array(11); const view = new DataView(bytes.buffer);
@@ -66,5 +104,16 @@ try {
   const resynced = await Promise.all(pages.map(page => page.evaluate(tick => worlds.get(tick), compareTick)));
   assert.equal(resynced[0], resynced[1], 'reconnected browser must share current authority');
   for (const page of pages) assert.deepEqual(await page.evaluate(() => errors), []);
-  console.log(JSON.stringify({ players, commandTick: tick, identicalWorldTick: checkedTick, spoofRejected: true, reconnectWorldTick: compareTick, resyncEqual: true }));
+  assert.deepEqual(pageErrors, []);
+  assert.ok(requests.length > 0);
+  for (const request of requests) {
+    const url = new URL(request.url);
+    assert.equal(url.origin, new URL(base).origin);
+    assert.ok(['/network.js', '/favicon.ico'].includes(url.pathname), `unexpected HTTP input ${url.pathname}`);
+    assert.equal(request.method, 'GET');
+    assert.equal(request.body, null);
+  }
+  assert.ok(sockets.length >= 3, 'both connections and reconnect must be observed');
+  assert.ok(sockets.every(url => new URL(url).href === new URL(socketUrl).href));
+  console.log(JSON.stringify({ players, commandTick: tick, identicalWorldTick: checkedTick, spoofRejected: true, reconnectWorldTick: compareTick, resyncEqual: true, selectionTrailerEqual: true, emptySelectionHeld: true, reselectedMoved: true, httpGets: requests.length, unexpectedHttpRequests: 0, webSocketConnections: sockets.length, pageErrors: pageErrors.length }));
 } finally { await browser.close(); }
