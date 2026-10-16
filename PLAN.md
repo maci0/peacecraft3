@@ -445,12 +445,16 @@ Rules:
 
 The scripted harness is pointed at the stock campaigns and run to completion:
 
-| Campaign | Chapters | Gate |
+| Source | Selection | Gate |
 |---|---|---|
-| Human (RoC + TFTP) | 5 + 3 | every chapter's win condition asserted; final chapter completes |
-| Orc, Undead, Night Elf | 3 + 1 each | same |
-| Demo campaign (`DemoCampaign.w3n`) | 1 | loads, all triggers fire, completes |
-| Custom-map smoke set (`Maps/*.w3m`, ~60 shipped) | all | loads and runs its init script without error |
+| Stock RoC and TFT campaigns, all races | Authored campaign and mission entries from the selected installation | Every chapter's win condition asserted; each final chapter completes |
+| Demo campaign (`DemoCampaign.w3n`) | Chapters read from the supplied container | Loads, all triggers fire, completes |
+| Custom-map smoke set | Enumerated supplied map members | Loads and runs each init script without error |
+
+Campaign counts, chapter map paths and ordering come from supplied source data,
+not a fixed table in the engine or this acceptance plan. The existing
+`pcx-objects::editor::campaign_index` reader retains authored index slots and
+mission rows. It does not establish unlocks, completion or a next-chapter rule.
 
 A chapter passing means: the intro dialogue gates fire in order, all quest objectives are
 satisfied, the win condition triggers, and the end-of-movie/`endGame` sequence is entered.
@@ -1154,8 +1158,8 @@ surface, localization handles, timers, handles, and event ordering.
 - **Raw JASS** — a hand-written `war3map.j` shipped in the map, no trigger graph. DotA
   is this path.
 - **Trigger graph** — the editor's `WTG` (+ `WCT` for the trigger's custom text), which
-  must desugar to JASS with the original's exact semantics, including generated-code
-  naming so `GetTriggerName` and friends return the right strings. Athena is this path.
+  must desugar to JASS with the original's observable semantics and preserve names
+  referenced by generated scripts and globals. Athena is this path.
 
 A VM that only runs raw JASS, or that runs trigger graphs with subtly different ordering,
 passes a smoke test and still fails DotA or Athena.
@@ -1165,10 +1169,11 @@ APIs in active use at once, so the native surface must carry the older shapes an
 `Blz` extensions together, and a missing native must fail loudly rather than silently
 returning zero.
 
-**What exists now, so the remaining work is sized honestly.** Both front ends have
-landed, and neither is a VM:
+**Current implementation and its limits.** The syntax/container measurements
+below establish parsing. The resolver, interpreter and persistent application
+session now exist; they do not establish complete native or map behavior:
 
-- **`pcx-script` — the raw-JASS front end.** Lexer, parser and an exact tree. It parses
+- **`pcx-script` — raw-JASS syntax and execution.** Lexer, parser and an exact tree. It parses
   **1,326 real scripts** with round-trip proven on every one — 462 install scripts
   (`Scripts\*.j`/`*.ai` out of both installs' MPQs), 191 `war3map.j` from the shipped
   `.w3m` maps, 676 from the community `.w3x` maps in those Maps trees, and 3 from
@@ -1177,11 +1182,12 @@ landed, and neither is a VM:
   canonical bytes, the same FNV-1a 64 hash, and idempotent printing. Every node carries
   a `Span`, and `SourceMap` turns those into the map's own 1-based line/column — which
   is what makes "fail loudly with the map's own identifier" implementable.
-  **There is no interpreter here on purpose:** no evaluation, no name resolution, no
-  type checking, no native dispatch, no `^^` substitution. A half-VM built on a lossy
-  tree is worse than no VM, because the loss is invisible and the result is *plausible
-  but wrong*. vJass `method`/`cast`/`delegate`, `.` member access, bare `!`, comma local
-  lists and chained `a[i][j]` are refused rather than guessed at.
+  Those corpus measurements are syntax evidence. Current code resolves names,
+  evaluates typed values, arrays and functions, and dispatches caller-owned natives
+  with source diagnostics. `MapScriptSession` owns one admitted VM and rejects
+  callbacks belonging to a replaced session. Native coverage, scheduling and
+  complete save state remain open. vJass `method`/`cast`/`delegate`, `.` member
+  access, bare `!`, comma local lists and chained `a[i][j]` remain explicit refusals.
 - **`pcx-trig` — the trigger-graph containers.** `war3map.wts` (table strings),
   `war3map.wtg` (the editor's trigger graph) and `war3map.wct` (a trigger's custom
   text), each walked byte-exactly on every shipped file — 133/133 wts, 132/132 wct,
@@ -1191,12 +1197,26 @@ landed, and neither is a VM:
   `UI\TriggerData.txt`, never from the file. (`X Hero Siege 3.08.w3x` is refused as
   unprovable: it opens `?STRING 1`, a stray byte no other file carries.)
 
-So M7's remaining work is not "everything": it is the VM (value/handle model, handle
-casting and wrapping), the WTG→JASS desugaring with the original's generated-code
-naming, the native table with its exact signatures and **side-effect ordering**, the
-`BJ`/`Blz` surface, `wts` handle resolution, `^^` substitution, timers and event
-ordering, and `war3map.ini`. The two things that are *not* left are the syntax layer
-and the containers — both are now measured rather than assumed.
+The bounded WCT/custom-script compilation path also preserves ordering and source
+diagnostics. Full WTG-to-JASS behavior, generated-name compatibility and all
+unsupported profiles remain open. Container and parser tests do not prove those
+semantics.
+
+The current campaign Host retains executed player, sound, camera, rectangle,
+technology, destructable and source-bound unit state. Human01 globals and `config`
+complete in the retained local probe; `main` now reaches the unsupported
+`CreateTrigger`. This is execution evidence for that selected source profile,
+not a playable chapter. No application gameplay-session factory connects the
+Host, simulation, terrain and HUD yet. See
+[map admission](docs/re-notes/map-data-admission.md) and
+[executed Host state](docs/re-notes/script-player-setup.md).
+
+Remaining work includes native behavior and handle lifetimes, actual trigger
+registration/delivery and VM callbacks, timer/event ordering, the `BJ`/`Blz`
+surface, complete localization substitution, and application game-loop wiring.
+Implement from the selected declarations and observed behavior; do not introduce
+natives merely because a roadmap example names them. The syntax/VM foundation
+cannot close the campaign and community-map gates below.
 
 **Done when, and this is the real gate:**
 - **DotA** runs: joins, creates units, runs its timers, and completes a match without a
