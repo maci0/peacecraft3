@@ -67,6 +67,8 @@ pub enum Failure {
     QuestArguments,
     #[error("quest state: {0}")]
     QuestState(&'static str),
+    #[error("rectangle state: {0}")]
+    RectState(&'static str),
     #[error("host identity capacity or allocation exceeded")]
     Capacity,
 }
@@ -149,6 +151,9 @@ enum Entry {
     },
     QuestItem {
         live: bool,
+    },
+    Rect {
+        bounds: Option<[f32; 4]>,
     },
 }
 pub struct EnumHost {
@@ -442,6 +447,10 @@ impl EnumHost {
             Entry::Quest { live: true } => "quest",
             Entry::QuestItem { live: true } => "questitem",
             Entry::Quest { live: false } | Entry::QuestItem { live: false } => {
+                return Err(self.error("arena", Failure::Identity));
+            }
+            Entry::Rect { bounds: Some(_) } => "rect",
+            Entry::Rect { bounds: None } => {
                 return Err(self.error("arena", Failure::Identity));
             }
         })

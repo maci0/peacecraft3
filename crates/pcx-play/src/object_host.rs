@@ -22,6 +22,7 @@ pub struct ObjectHost {
     startup_clock: Option<clock::StartupClockState>,
     map_music: Option<music::State>,
     quests: Option<crate::quest_session::QuestSession>,
+    rectangles: bool,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -49,6 +50,7 @@ impl ObjectHost {
             startup_clock: None,
             map_music: None,
             quests: None,
+            rectangles: false,
         })
     }
     fn contract(
@@ -300,6 +302,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.quest_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.rect_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(limit) = self.group_limit
             && matches!(
                 name,
@@ -368,3 +373,6 @@ mod parameters;
 #[path = "quest_host.rs"]
 mod quests;
 pub use quests::{QuestBudget, QuestEvent, QuestFlag};
+
+#[path = "rect_host.rs"]
+mod rectangles;

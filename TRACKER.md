@@ -1168,9 +1168,11 @@ Format: `date — subsystem — symptom — root cause — status`
       that same identity. Bounded MPEG admission now retains original encoded
       resources alongside PCM: the pinned Human01 VM admits all 58 direct file
       bindings and 51 distinct parameter labels, then executes all 58 creations,
-      label assignments and duration assignments. Its next refusal is `Rect` in
-      region initialization. This probe still uses the explicitly identified
-      compatibility object catalog; launcher bank preparation remains open.
+      label assignments and duration assignments. Shared-arena rectangles now
+      retain all 98 executed region bounds with exact coordinate-bit checks;
+      its next refusal is `SetSoundPosition` during initialization. This probe
+      still uses the explicitly identified compatibility object catalog;
+      launcher bank preparation remains open.
       Raw table flags remain separate from effective settings.
       Explicit parameter collections now retain each assigned table/row/source,
       reject cross-table label ambiguity and preserve a separate dialogue schema
@@ -1189,7 +1191,7 @@ Format: `date — subsystem — symptom — root cause — status`
       `script-day-night-models.md`/`script-label-sounds.md`/`script-startup-clock.md`/
       `script-map-music-selection.md`/`script-file-sounds.md`/`script-sound-parameters.md`/
       `script-sound-parameter-banks.md`/`script-pcm-decoder.md`/
-      `script-mp3-sounds.md`.
+      `script-mp3-sounds.md`/`script-rectangles.md`.
 
 ### Current implemented slices (2026-10-14)
 
