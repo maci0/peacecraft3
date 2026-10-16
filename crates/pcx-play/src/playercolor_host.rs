@@ -542,5 +542,5 @@ pub use objects::{
     MapConfigBudget, MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerBudget,
     PlayerSettings, QuestBudget, QuestEvent, QuestFlag, SoundProperties, SoundState,
     StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
-    StartupClockState, TimerHost,
+    StartupClockState, TechLimitBudget, TimerHost,
 };

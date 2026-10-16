@@ -1178,7 +1178,10 @@ Format: `date — subsystem — symptom — root cause — status`
       and seven stacked registrations. Shared-arena camera setups now retain
       18 identities, 126 executed field assignments and 18 destinations with
       exact value/duration-bit checks. Its next refusal is
-      `SetPlayerTechMaxAllowed`; applied camera motion remains open. See
+      `SetPlayerTechMaxAllowed` in that camera gate. The subsequent player-state
+      gate now retains all 36 executed technology maxima on their source players;
+      its next refusal is `SetPlayerTechResearched`. These values do not yet
+      enforce construction or training. Applied camera motion remains open. See
       `docs/re-notes/script-camera-setups.md`.
       This probe still uses the explicitly identified compatibility object catalog;
       launcher bank preparation remains open.

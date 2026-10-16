@@ -462,3 +462,6 @@ fn a_map_cannot_ambiguously_redeclare_player_in_another_source() {
         Err(PlayerAdmissionError::Contract(e)) if e.failure == Failure::Source)
     );
 }
+
+#[path = "player_tech_tests.rs"]
+mod player_tech;

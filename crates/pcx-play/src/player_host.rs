@@ -35,11 +35,23 @@ pub struct PlayerSettings {
     pub controller: Option<HandleId>,
     pub name: Option<String>,
     pub on_score_screen: Option<bool>,
+    /// Executed `SetPlayerTechMaxAllowed` pairs. Absence is unset, not a default limit.
+    pub tech_max: Vec<(i32, i32)>,
+}
+/// Caller bound on stored `(player, techid)` records. Not a native or build limit.
+#[derive(Clone, Copy, Debug)]
+pub struct TechLimitBudget {
+    pub max_records: usize,
+}
+struct TechLimits {
+    max_records: usize,
+    records: usize,
 }
 pub(super) struct Players {
     source: SelectedMapNeutralHost<()>,
     slots: usize,
     budget: PlayerBudget,
+    tech: Option<TechLimits>,
     rows: Vec<PlayerSettings>,
 }
 const CONTRACTS: &[(&str, &[&str], &str, bool)] = &[
@@ -149,7 +161,47 @@ impl ObjectHost {
             source,
             slots,
             budget,
+            tech: None,
             rows: Vec::new(),
+        });
+        Ok(self)
+    }
+    /// Admit the declared tech-max setter and getter on the existing player rows.
+    ///
+    /// Records store the executed signed `techid` and `maximum` for that player
+    /// identity. They are not rawcodes, categories, or build enforcement. An
+    /// unset getter refuses until a source or default policy exists. A new key
+    /// is refused at the caller record bound before allocation; replacing an
+    /// existing key does not allocate. Argument-shape refusals are this
+    /// recreation's contract checks, not a claim about native exceptional inputs.
+    pub fn with_player_tech_limits(mut self, budget: TechLimitBudget) -> Result<Self, Error> {
+        let fail = |reason| self.inner.error("SetPlayerTechMaxAllowed", reason);
+        match self.players.as_ref() {
+            None => return Err(fail(Failure::PlayerState("not admitted"))),
+            Some(players) if players.tech.is_some() => {
+                return Err(fail(Failure::PlayerState("tech limits already admitted")));
+            }
+            Some(_) => {}
+        }
+        std::alloc::Layout::array::<(i32, i32)>(budget.max_records)
+            .map_err(|_| fail(Failure::Capacity))?;
+        for &(name, parameters, result, constant) in TECH_CONTRACTS {
+            Self::contract(
+                &self.inner,
+                name,
+                parameters,
+                result,
+                constant,
+                Some("player"),
+            )?;
+        }
+        let players = self
+            .players
+            .as_mut()
+            .ok_or_else(|| fail(Failure::PlayerState("not admitted")))?;
+        players.tech = Some(TechLimits {
+            max_records: budget.max_records,
+            records: 0,
         });
         Ok(self)
     }
@@ -212,8 +264,11 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
-        self.players.as_ref()?;
-        if !CONTRACTS.iter().any(|c| c.0 == name) {
+        let players = self.players.as_ref()?;
+        let tech = TECH_CONTRACTS.iter().any(|c| c.0 == name);
+        if tech {
+            players.tech.as_ref()?;
+        } else if !CONTRACTS.iter().any(|c| c.0 == name) {
             return None;
         }
         Some(self.apply_player(name, args))
@@ -256,6 +311,7 @@ impl ObjectHost {
                 controller: None,
                 name: None,
                 on_score_screen: None,
+                tech_max: Vec::new(),
             });
             return Ok(Value::Handle(id));
         }
@@ -361,7 +417,58 @@ impl ObjectHost {
                 .as_ref()
                 .map(|s| Value::Str(s.clone()))
                 .ok_or_else(|| fail(Failure::PlayerState("name is unset"))),
+            ("SetPlayerTechMaxAllowed", [Value::Int(techid), Value::Int(maximum)]) => {
+                if let Some(limit) = players.rows[at]
+                    .tech_max
+                    .iter_mut()
+                    .find(|(id, _)| *id == *techid)
+                {
+                    limit.1 = *maximum;
+                    return Ok(Value::Null);
+                }
+                let (records, max_records) = match players.tech.as_ref() {
+                    Some(tech) => (tech.records, tech.max_records),
+                    None => {
+                        return Err(fail(Failure::PlayerState("tech limits are not admitted")));
+                    }
+                };
+                if records >= max_records {
+                    return Err(fail(Failure::Budget("player tech limits")));
+                }
+                players.rows[at]
+                    .tech_max
+                    .try_reserve(1)
+                    .map_err(|_| fail(Failure::Capacity))?;
+                players.rows[at].tech_max.push((*techid, *maximum));
+                let tech = players
+                    .tech
+                    .as_mut()
+                    .ok_or_else(|| fail(Failure::PlayerState("tech limits are not admitted")))?;
+                tech.records += 1;
+                Ok(Value::Null)
+            }
+            ("GetPlayerTechMaxAllowed", [Value::Int(techid)]) => players.rows[at]
+                .tech_max
+                .iter()
+                .find(|(id, _)| *id == *techid)
+                .map(|(_, maximum)| Value::Int(*maximum))
+                .ok_or_else(|| fail(Failure::PlayerState("tech max is unset"))),
             _ => Err(fail(Failure::PlayerArguments)),
         }
     }
 }
+
+const TECH_CONTRACTS: &[(&str, &[&str], &str, bool)] = &[
+    (
+        "SetPlayerTechMaxAllowed",
+        &["player", "integer", "integer"],
+        "nothing",
+        true,
+    ),
+    (
+        "GetPlayerTechMaxAllowed",
+        &["player", "integer"],
+        "integer",
+        true,
+    ),
+];

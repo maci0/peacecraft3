@@ -88,3 +88,29 @@ The later [start-priority slice](script-start-priorities.md) executes the remain
 priority statements and completes the same map's authored `config`. The next
 actual boundary is `GetCameraMargin` in `main`, at map-script line 7781. Placement
 and gameplay remain unverified.
+
+## Player technology maximums
+
+The same retained Human01 Program completes globals and `config`, then stores
+36 distinct executed `(player, techid, maximum)` records. Each source player,
+signed id and signed maximum matches the actual captured call. Previously
+accepted camera, rectangle and sound state remains intact. The next refusal is
+`SetPlayerTechResearched` at map span `378455..378507`, declared in the selected
+`common.j` at `113299..113406`. This remains script-state evidence; no training,
+construction, upgrade effect or playable campaign is established.
+
+`ObjectHost::with_player_tech_limits` admits `SetPlayerTechMaxAllowed` and
+`GetPlayerTechMaxAllowed` on players already admitted in the shared arena. Both
+declarations are the constant natives `takes player, integer, integer returns
+nothing` and `takes player, integer returns integer`. The caller supplies
+`TechLimitBudget.max_records` before any new `(player, techid)` record is
+allocated. Replacing an existing key does not allocate and still works when the
+bound is full. A zero bound refuses the first new key.
+
+Each record keeps the executed signed `techid` and `maximum` on that player
+identity. The integers are not treated as FourCC values, categories, or build
+rules, and they are not clamped. An unset getter refuses; no default limit is
+invented. Storing a maximum does not enforce training or construction. Refusing
+a non-integer or wrong-arity call is this recreation's contract check. It is not
+a claim that the shipped native rejects that input. Root still owns wiring this
+admission into a map run.
