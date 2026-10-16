@@ -252,3 +252,36 @@ Evidence: `.scratch/browser-display-rows-root-20261017/`. The reviewed private
 package contains code only. No package was published. The Options left panel,
 popup typography and artwork, unsupported settings and complete mode-list
 parity remain open.
+
+### Authored resolution dropdown artwork and focus
+
+The open list resolves its selected MENU's `ControlBackdrop` through the existing
+backdrop renderer. `MenuBorder`, `MenuItemHeight`, normal font colour and
+`MenuTextHighlightColor` stay with the selected FDF. Invalid artwork or highlight
+data refuses the popup. A clipped outer plate holds the border still while an
+inset child scrolls the ordered offers; row fills no longer cover the artwork.
+
+The border's Y conversion on both axes, top/left row text and MENU-specific
+highlight follow the pinned reconstruction renderer profile in
+[GameUI](https://github.com/Retera/WarsmashModEngine/blob/f9e0aeed4be372d6016519d0e97b384aa873f374/core/src/com/etheller/warsmash/parsers/fdf/GameUI.java#L1246)
+and [MenuFrame](https://github.com/Retera/WarsmashModEngine/blob/f9e0aeed4be372d6016519d0e97b384aa873f374/core/src/com/etheller/warsmash/parsers/fdf/frames/MenuFrame.java#L37).
+This is a recreation choice, not a native execution claim.
+
+Keyboard navigation starts from the current selection witness. Focus scrolling
+runs after layout, including an initially hidden automatic focus. Pointer and
+visible keyboard focus use the authored highlight. Wheel lines follow the
+computed source row height; physical trackpad deltas become logical scroll
+pixels before scaling.
+
+Four popup/system regressions and 361 application tests pass, with 18 explicit
+gates ignored. Strict native/browser Clippy, the browser build and formatting
+pass. A fresh generated-WASM browser run verifies the authored blue plate,
+gold hover/keyboard cues, selection after reopening against the current list,
+Escape and Cancel back to Main. All three captures report stable state and were
+reviewed. Requests are local code GETs only, with no uploads or page errors.
+
+Evidence: `.scratch/resolution-dropdown-art-20261017/root-2/`. The earlier
+collector's stale-list assertion remains a failed result; it is not counted as
+acceptance. Source mode policy, exclusive switching, font rasterization,
+unsupported settings and full native appearance remain open. No original assets
+were packaged or published.

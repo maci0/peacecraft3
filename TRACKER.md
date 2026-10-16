@@ -1563,3 +1563,18 @@ and browser Clippy and the actual browser build pass. Evidence is retained in
 `.scratch/browser-display-rows-root-20261017/`. No original assets were packaged
 and nothing was published. Full original mode policy, physical switching,
 Options panel/artwork/typography and unsupported settings remain open.
+
+
+The resolution dropdown now renders the selected MENU's backdrop, border and
+text highlight through the existing authored-art path. A fixed clipped plate
+surrounds the row scroller. Focus scrolling waits for first layout, starts at the
+selected witness, and physical trackpad deltas are converted to logical pixels.
+Four popup/system regressions and 361 application tests pass (18 explicit gates
+ignored), with strict native/browser Clippy, browser build and formatting. The
+fresh local browser run passes source-colour hover/keyboard checks, selection
+after reopening against the current rows, Escape and Cancel back to Main; all
+three reviewed captures are stable. Evidence is in
+`.scratch/resolution-dropdown-art-20261017/root-2/`. The earlier rejected
+collector result remains retained. No original assets were packaged or
+published. Complete source mode policy, physical switching, font rasterization
+and full native Options parity remain open.

@@ -158,6 +158,15 @@ struct ResolutionPopup;
 #[derive(Component)]
 struct ResolutionChoice(crate::menu_screens::OfferedResolution);
 
+#[derive(Component)]
+struct ResolutionScroll;
+
+#[derive(Component)]
+struct ResolutionChoiceColours {
+    normal: Color,
+    highlight: Option<Color>,
+}
+
 /// Set once a label's runs exist, so it is filled once rather than every frame.
 #[derive(Component)]
 struct MenuTextFilled;
@@ -309,7 +318,6 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
                     initialize_menu_scene,
                     show_menu_or_launcher,
                     scroll_launcher,
-                    scroll_resolution_popup,
                     refresh,
                     crate::button_actions::clear,
                 )
@@ -317,6 +325,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
             )
                 .chain(),
         );
+    install_resolution_popup_input(&mut app);
     app.add_systems(
         Update,
         crate::mainmenu_scene::advance
@@ -1000,6 +1009,7 @@ fn focus_resolution_control(commands: &mut Commands) {
     });
 }
 
+/// The selected MENU supplies its backdrop, row size, border and text highlight.
 fn open_resolutions(
     commands: &mut Commands,
     root: Entity,
@@ -1027,12 +1037,67 @@ fn open_resolutions(
         Some([value]) if value.is_finite() && *value > 0.0 => *value,
         _ => return Err("Resolution popup has no valid authored item height".into()),
     };
+    let menu_border = match fdf
+        .numbers(&menu, "MenuBorder")
+        .map_err(|e| e.to_string())?
+        .as_deref()
+    {
+        None => 0.0,
+        Some([value]) if value.is_finite() && *value >= 0.0 => *value,
+        _ => return Err("Resolution popup has no valid authored menu border".into()),
+    };
+    let backdrop_frame = fdf
+        .string(&menu, "ControlBackdrop")
+        .ok_or_else(|| format!("Resolution popup {menu} has no control backdrop"))?;
+    if crate::glue_menu::backdrop(fdf, &backdrop_frame)
+        .map_err(|error| error.to_string())?
+        .is_none()
+    {
+        return Err(format!(
+            "Resolution popup backdrop {backdrop_frame} draws nothing"
+        ));
+    }
     let style = crate::menu_text::render_style(fdf, &menu)?;
+    let highlight = match fdf
+        .numbers(&menu, "MenuTextHighlightColor")
+        .map_err(|error| error.to_string())?
+        .as_deref()
+    {
+        None => None,
+        Some([r, g, b, a])
+            if [*r, *g, *b, *a]
+                .iter()
+                .all(|value| value.is_finite() && (0.0..=1.0).contains(value)) =>
+        {
+            Some(srgba([*r, *g, *b, *a]))
+        }
+        _ => return Err(format!("{menu}: invalid MenuTextHighlightColor")),
+    };
     let font = cache
         .fonts
         .get(&style.font)
         .ok_or("The menu font is still loading")?
         .clone();
+    let list_height = height * navigation.resolutions.len() as f32 + menu_border * 2.0;
+    let visible_height = list_height.min(rect.bottom);
+    if !list_height.is_finite()
+        || visible_height <= menu_border * 2.0
+        || !rect.width.is_finite()
+        || rect.width <= menu_border * 2.0
+    {
+        return Err("Resolution popup has no room for its authored rows and border".into());
+    }
+    let popup_node = Node {
+        position_type: PositionType::Absolute,
+        left: Val::Percent(rect.left / crate::mainmenu::FRAME_W * 100.0),
+        top: Val::Percent(
+            (crate::mainmenu::FRAME_H - rect.bottom) / crate::mainmenu::FRAME_H * 100.0,
+        ),
+        width: Val::Percent(rect.width / crate::mainmenu::FRAME_W * 100.0),
+        height: Val::Vh(visible_height / crate::mainmenu::FRAME_H * 100.0),
+        overflow: Overflow::clip(),
+        ..default()
+    };
     let popup = commands
         .spawn((
             ResolutionPopup,
@@ -1043,47 +1108,69 @@ fn open_resolutions(
                 order: 1,
                 modal: true,
             },
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Percent(rect.left / crate::mainmenu::FRAME_W * 100.0),
-                top: Val::Percent(
-                    (crate::mainmenu::FRAME_H - rect.bottom) / crate::mainmenu::FRAME_H * 100.0,
-                ),
-                width: Val::Percent(rect.width / crate::mainmenu::FRAME_W * 100.0),
-                max_height: Val::Percent(rect.bottom / crate::mainmenu::FRAME_H * 100.0),
-                overflow: Overflow::scroll_y(),
-                flex_direction: FlexDirection::Column,
-                ..default()
-            },
-            BackgroundColor(BG_FIELD),
+            popup_node,
             Hovered::default(),
-            ScrollPosition::default(),
             ZIndex(30),
         ))
         .id();
     commands.entity(root).add_child(popup);
+    if let Err(error) = crate::glue_menu::decorate_setting(
+        commands,
+        popup,
+        fdf,
+        &menu,
+        Vec2::new(rect.width, visible_height),
+    ) {
+        commands.entity(popup).despawn();
+        return Err(error.to_string());
+    }
+    // MENU's one convertY border is a physical-height-derived inset on both axes.
+    let inset = Val::Vh(menu_border / crate::mainmenu::FRAME_H * 100.0);
+    let scroller = commands
+        .spawn((
+            ResolutionScroll,
+            Node {
+                position_type: PositionType::Absolute,
+                left: inset,
+                right: inset,
+                top: inset,
+                bottom: inset,
+                overflow: Overflow::scroll_y(),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Stretch,
+                ..default()
+            },
+            Hovered::default(),
+            ScrollPosition::default(),
+        ))
+        .id();
+    commands.entity(popup).add_child(scroller);
+    let initial_focus = navigation
+        .resolutions
+        .iter()
+        .position(|offer| navigation.resolution_highlighted(offer))
+        .unwrap_or(0);
     for (index, offer) in navigation.resolutions.iter().enumerate() {
+        let row = Node {
+            min_height: Val::Vh(height / crate::mainmenu::FRAME_H * 100.0),
+            flex_shrink: 0.0,
+            align_items: AlignItems::FlexStart,
+            ..default()
+        };
         let choice = commands
             .spawn((
                 Button,
                 Hovered::default(),
                 ResolutionChoice(offer.clone()),
+                ResolutionChoiceColours {
+                    normal: srgba(style.colour),
+                    highlight,
+                },
                 Name::new(offer.label.clone()),
                 bevy::input_focus::tab_navigation::TabIndex(
                     i32::try_from(index).map_err(|_| "Too many display modes")?,
                 ),
-                Node {
-                    min_height: Val::Vh(height / crate::mainmenu::FRAME_H * 100.0),
-                    flex_shrink: 0.0,
-                    width: Val::Percent(100.0),
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
-                BackgroundColor(if navigation.resolution_highlighted(offer) {
-                    ACCENT_SOFT
-                } else {
-                    BG_FIELD
-                }),
+                row,
             ))
             .with_child((
                 Text::new(offer.label.clone()),
@@ -1098,8 +1185,8 @@ fn open_resolutions(
                 Pickable::IGNORE,
             ))
             .id();
-        commands.entity(popup).add_child(choice);
-        if index == 0 {
+        commands.entity(scroller).add_child(choice);
+        if index == initial_focus {
             commands.queue(move |world: &mut World| {
                 if let Some(mut focus) = world.get_resource_mut::<bevy::input_focus::InputFocus>() {
                     focus.set(choice, bevy::input_focus::FocusCause::Auto);
@@ -2992,29 +3079,120 @@ fn scroll_launcher(
     }
 }
 
+fn install_resolution_popup_input(app: &mut App) {
+    // Opening sets focus before the new rows have their first layout.
+    app.add_systems(
+        PostUpdate,
+        scroll_resolution_popup
+            .after(bevy::ui::UiSystems::Layout)
+            .before(bevy::ui::UiSystems::PostLayout),
+    );
+}
+
 fn scroll_resolution_popup(
     mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
-    mut popups: Query<(&mut ScrollPosition, &ComputedNode, &Hovered), With<ResolutionPopup>>,
-    mut choices: Query<(&Hovered, &mut BackgroundColor), With<ResolutionChoice>>,
+    mut scrolls: Query<(Entity, &mut ScrollPosition, &Hovered, &Children), With<ResolutionScroll>>,
+    rows: Query<
+        (
+            Entity,
+            &ChildOf,
+            &Hovered,
+            &Children,
+            &ResolutionChoiceColours,
+        ),
+        With<ResolutionChoice>,
+    >,
+    geometry: Query<(&ComputedNode, &UiGlobalTransform)>,
+    mut text: Query<&mut TextColor>,
+    focus: (
+        Option<Res<bevy::input_focus::InputFocus>>,
+        Option<Res<bevy::input_focus::InputFocusVisible>>,
+    ),
 ) {
-    for (hover, mut colour) in &mut choices {
-        let next = if hover.get() { ACCENT_SOFT } else { BG_FIELD };
-        if colour.0 != next {
-            colour.0 = next;
+    let focused = focus.0.as_ref().and_then(|focus| focus.get());
+    let visible_focus = focused.filter(|_| focus.1.as_ref().is_some_and(|visible| visible.0));
+    for (entity, _, hovered, children, colours) in &rows {
+        let next = if hovered.get() || visible_focus == Some(entity) {
+            colours.highlight.unwrap_or(colours.normal)
+        } else {
+            colours.normal
+        };
+        for child in children {
+            if let Ok(mut colour) = text.get_mut(*child)
+                && colour.0 != next
+            {
+                colour.0 = next;
+            }
         }
     }
     for event in wheel.read() {
-        for (mut scroll, node, hover) in &mut popups {
-            if hover.get() {
-                let dy = match event.unit {
-                    bevy::input::mouse::MouseScrollUnit::Line => event.y * node.size().y / 8.0,
-                    bevy::input::mouse::MouseScrollUnit::Pixel => event.y,
-                };
-                let max = ((node.content_size().y - node.size().y) * node.inverse_scale_factor())
-                    .max(0.0);
+        if !event.y.is_finite() {
+            continue;
+        }
+        for (entity, mut scroll, hovered, children) in &mut scrolls {
+            if !hovered.get()
+                && !children
+                    .iter()
+                    .any(|child| rows.get(child).is_ok_and(|(_, _, hover, _, _)| hover.get()))
+            {
+                continue;
+            }
+            let Ok((node, _)) = geometry.get(entity) else {
+                continue;
+            };
+            if !node.inverse_scale_factor().is_finite()
+                || node.inverse_scale_factor() <= 0.0
+                || !node.size().is_finite()
+                || !node.content_size().is_finite()
+            {
+                continue;
+            }
+            let dy = match event.unit {
+                bevy::input::mouse::MouseScrollUnit::Line => {
+                    let Some(row) = children.iter().find_map(|child| geometry.get(child).ok())
+                    else {
+                        continue;
+                    };
+                    event.y * row.0.size().y * node.inverse_scale_factor()
+                }
+                bevy::input::mouse::MouseScrollUnit::Pixel => event.y * node.inverse_scale_factor(),
+            };
+            let max =
+                ((node.content_size().y - node.size().y) * node.inverse_scale_factor()).max(0.0);
+            if dy.is_finite() {
                 scroll.0.y = (scroll.0.y - dy).clamp(0.0, max);
             }
         }
+    }
+    let focus_changed = focus.0.as_ref().is_some_and(|focus| focus.is_changed());
+    if focus_changed
+        && let Some(focused) = focused
+        && let Ok((_, parent, _, _, _)) = rows.get(focused)
+        && let Ok((entity, mut scroll, _, _)) = scrolls.get_mut(parent.parent())
+        && let Ok((viewport, transform)) = geometry.get(entity)
+        && let Ok((row, row_transform)) = geometry.get(focused)
+        && viewport.inverse_scale_factor().is_finite()
+        && viewport.inverse_scale_factor() > 0.0
+        && viewport.size().is_finite()
+        && viewport.content_size().is_finite()
+        && row.size().is_finite()
+    {
+        let viewport_top = transform.affine().translation.y - viewport.size().y * 0.5;
+        let viewport_bottom = viewport_top + viewport.size().y;
+        let pending = scroll.0.y / viewport.inverse_scale_factor() - viewport.scroll_position.y;
+        let top = row_transform.affine().translation.y - row.size().y * 0.5 - pending;
+        let bottom = top + row.size().y;
+        let adjustment = if top < viewport_top {
+            top - viewport_top
+        } else if bottom > viewport_bottom {
+            bottom - viewport_bottom
+        } else {
+            0.0
+        };
+        let max = ((viewport.content_size().y - viewport.size().y)
+            * viewport.inverse_scale_factor())
+        .max(0.0);
+        scroll.0.y = (scroll.0.y + adjustment * viewport.inverse_scale_factor()).clamp(0.0, max);
     }
 }
 
@@ -4975,3 +5153,7 @@ mod resize_bridge_tests {
 #[cfg(test)]
 #[path = "settings_cog_tests.rs"]
 mod settings_cog_tests;
+
+#[cfg(test)]
+#[path = "resolution_popup_tests.rs"]
+mod resolution_popup_tests;
