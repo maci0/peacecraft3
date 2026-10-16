@@ -273,9 +273,11 @@ pub fn render_style_with_parent(
     frame: &str,
     parent: &str,
 ) -> Result<TextStyle, String> {
-    let record = |key: &str| {
-        if let Some(value) = fdf.record(frame, key).or_else(|| fdf.record(parent, key)) {
-            return Some(value);
+    let record_frame = |key: &str| {
+        for name in [frame, parent] {
+            if fdf.record(name, key).is_some() {
+                return Some(name.to_owned());
+            }
         }
         let mut current = fdf.frame(frame).and_then(|f| f.parent.clone());
         let mut seen = std::collections::HashSet::new();
@@ -283,19 +285,24 @@ pub fn render_style_with_parent(
             if !seen.insert(name.clone()) {
                 return None;
             }
-            if let Some(value) = fdf.record(&name, key) {
-                return Some(value);
+            if fdf.record(&name, key).is_some() {
+                return Some(name);
             }
             current = fdf.frame(&name).and_then(|f| f.parent.clone());
         }
         None
     };
+    let record = |key: &str| record_frame(key).and_then(|name| fdf.record(&name, key));
     let font_record = record("FrameFont").ok_or_else(|| format!("{frame}: missing FrameFont"))?;
     let (font, height) = parse_frame_font(&font_record)
         .filter(|(_, h)| h.is_finite() && *h > 0.0)
         .ok_or_else(|| format!("{frame}: invalid FrameFont"))?;
     let colour = |key: &'static str, fallback: Option<[f32; 4]>| -> Result<[f32; 4], String> {
-        let value = match fdf.numbers(frame, key).map_err(|e| e.to_string())? {
+        let shadow_parent = (key == "FontShadowColor")
+            .then(|| record_frame(key))
+            .flatten();
+        let source = shadow_parent.as_deref().unwrap_or(frame);
+        let value = match fdf.numbers(source, key).map_err(|e| e.to_string())? {
             Some(v) => match v.as_slice() {
                 [r, g, b] => [*r, *g, *b, 1.0],
                 [r, g, b, a] => [*r, *g, *b, *a],
@@ -314,7 +321,10 @@ pub fn render_style_with_parent(
     };
     let foreground = colour("FontColor", Some([1.0; 4]))?;
     let shadow_offset = match fdf
-        .numbers(frame, "FontShadowOffset")
+        .numbers(
+            record_frame("FontShadowOffset").as_deref().unwrap_or(frame),
+            "FontShadowOffset",
+        )
         .map_err(|e| e.to_string())?
     {
         Some(v) => {
@@ -854,6 +864,8 @@ FontJustificationH JUSTIFYRIGHT,
 }
 Frame "TEXTBUTTON" "ActualPopupTitle" {
 FrameFont "InstanceFont",0.023,"",
+FontShadowColor 0.2 0.1 0.3 0.8,
+FontShadowOffset 0.002 -0.003,
 ButtonText "SharedTitleChild",
 }
 "#,
@@ -864,11 +876,45 @@ ButtonText "SharedTitleChild",
         let child =
             crate::menu_text::render_style_with_parent(&f, "SharedTitleChild", "ActualPopupTitle")
                 .unwrap();
+        assert_eq!(child.shadow_offset, [0.002, -0.003]);
+        assert_eq!(child.shadow_colour, [0.2, 0.1, 0.3, 0.8]);
         assert_eq!(child.font, "InstanceFont");
         assert_eq!(child.height, 0.023);
         assert_eq!(child.colour, [0.2, 0.3, 0.4, 1.0]);
         assert!(child.fixed_size);
         assert_eq!(child.justify_h, crate::menu_text::JustifyH::Right);
+    }
+    #[test]
+    fn shadow_child_overrides_and_bad_parent_records_stay_explicit() {
+        for (child, parent, expected) in [
+            (
+                "",
+                "FontShadowColor 0.1 0.2 0.3 0.4,\nFontShadowOffset 0.003 -0.004,",
+                Some(([0.1, 0.2, 0.3, 0.4], [0.003, -0.004])),
+            ),
+            (
+                "FontShadowColor 0 0 0 0,\nFontShadowOffset 0 0,",
+                "FontShadowColor 0.1 0.2 0.3 0.4,\nFontShadowOffset 0.003 -0.004,",
+                Some(([0.0; 4], [0.0; 2])),
+            ),
+            ("", "", Some(([0.0; 4], [0.0; 2]))),
+            ("", "FontShadowColor NaN 0 0 1,", None),
+            ("", "FontShadowOffset 0 NaN,", None),
+            ("", "FontShadowOffset 1,", None),
+            ("", "FontShadowColor 1 0,", None),
+        ] {
+            let fdf = crate::fdf::Fdf::parse(&format!(
+                "Frame \"TEXT\" \"Child\" {{\n{child}\n}}\nFrame \"TEXTBUTTON\" \"Parent\" {{\nFrameFont \"Face\",0.02,\"\",\n{parent}\n}}\n"
+            )).unwrap();
+            let result = super::render_style_with_parent(&fdf, "Child", "Parent");
+            if let Some((colour, offset)) = expected {
+                let style = result.unwrap();
+                assert_eq!(style.shadow_colour, colour);
+                assert_eq!(style.shadow_offset, offset);
+            } else {
+                assert!(result.is_err(), "{parent}: {result:?}");
+            }
+        }
     }
     #[test]
     fn child_font_wins_and_missing_font_is_not_invented() {

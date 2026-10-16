@@ -106,9 +106,9 @@ and `Default` alike; each face appears **1×** across the table.
   section can override `[Default]` is inferred from the table's shape; no native
   observation of the font lookup was made. What is proven is the data: the keys,
   their sections, and the file they name.
-* **The shadow offset** remains unapplied (see `menu-sprite-rendering.md`); this
-  note does not change that.
-* Shadow mapping remains unapplied.
+* **Native shadow equivalence remains unverified.** The current renderer passes
+  authored offsets through `FrameShadow` into viewport-relative `TextShadow`
+  placement; this does not prove matching native glyph rasterization.
 
 ## Runtime integration (2026-10-14)
 
@@ -137,3 +137,19 @@ same path that resolves `MainMenuLogo_V%d` through `FUN_005c30a0` (see
 the active skin, then the default skin. Reading that function's section lookup
 would settle the override order; a repeated REA pass on the 14.8 MB image has
 timed out before and is not the plan.
+
+## Popup title shadow inheritance (2026-10-16)
+
+Popup label style now resolves omitted shadow colour and offset through the same
+actual-title and enclosing-frame lookup used by its font. Explicit child records,
+including zero offset or zero alpha, keep precedence. Malformed inherited records
+refuse instead of becoming invisible defaults. Numeric parsing stays on the
+existing FDF path; `FrameShadow` placement and the other text colours are unchanged.
+
+The previous implementation fails the synthetic title-only shadow regression.
+The correction passes all 418 application tests (15 explicit ignores), strict
+native/WASM Clippy, rustdoc and both builds. Twenty-six parser/style cases execute
+under WASI, including inheritance, explicit zero, absence and malformed parent
+records. This is style/component-path verification; no new original-game or
+rendered pixel comparison was run. Root evidence is in
+`.scratch/cursor50-extra-20261016/root-034/`.
