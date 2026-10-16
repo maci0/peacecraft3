@@ -124,7 +124,8 @@ connecting or writing and rearms each partial read/write against one absolute
 deadline. It accepts an explicit socket address; the reference probe alone is
 restricted to the owned loopback endpoint.
 
-Root verification passes all 101 native network checks, including 15 framing/TCP
+Root verification against an isolated copy of the committed sources passes all
+100 native network checks, including 15 framing/TCP
 cases, and ten actual WASI codec tests. Strict native/WASM checks, rustdoc and
 both library builds pass. A fresh probe compiled against the integrated library
 matches the pinned realm's init/auth-info exchange and its missing-init negative
