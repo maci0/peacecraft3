@@ -110,11 +110,14 @@ issues*.
       decorative text spans no longer lose mouse activation when pressed labels
       move. Seven widget regressions and a production-text/picking regression
       pass; removing the span fix reproduces zero clicks/actions. The complete
-      suite passes 281 app tests with 13 explicit ignores, four library and 83
+      suite passes 282 app tests with 13 explicit ignores, four library and 84
       integration tests, with strict native/WASM checks. A fresh local packaged
       browser passes both source sliders at two viewport layouts, mouse Apply
       and Cancel preservation, with four reviewed captures and zero uploads,
-      sockets or page errors. Same-frame pointer batching remains open. The
+      sockets or page errors. Disabling a pressed button now clears its temporary
+      pressed state without activation, including deferred press insertion;
+      re-enable permits a fresh click. Native/WASM checks cover that additional
+      lifecycle fix. Same-frame pointer batching remains open. The
       earlier larger-view caption-disappearance claim is withdrawn: exact
       runtime-bounded image regions are unchanged between entry and Sound in
       both the old and fresh large-view runs. No rendering repair is claimed. See

@@ -2,7 +2,7 @@
 use bevy::{
     picking::events::PointerClick,
     prelude::*,
-    ui::InteractionDisabled,
+    ui::{InteractionDisabled, Pressed},
     ui_widgets::{Activate, ActivateOnPress, Button},
 };
 
@@ -17,7 +17,21 @@ pub(crate) fn install(app: &mut App) {
     }
     app.init_resource::<ButtonActions>()
         .add_observer(collect)
-        .add_observer(collect_click);
+        .add_observer(collect_click)
+        .add_observer(clear_disabled_press);
+}
+
+// Press insertion may be deferred until after the control becomes disabled.
+type DisabledPressFilter = (With<Button>, With<InteractionDisabled>, With<Pressed>);
+
+fn clear_disabled_press(
+    event: On<Add<(InteractionDisabled, Pressed)>>,
+    disabled: Query<(), DisabledPressFilter>,
+    mut commands: Commands,
+) {
+    if disabled.contains(event.entity) {
+        commands.entity(event.entity).try_remove::<Pressed>();
+    }
 }
 
 fn collect(
@@ -161,6 +175,49 @@ mod tests {
         world.flush();
         assert!(world.resource::<ButtonActions>().entities.is_empty());
         assert!(!world.entity(button).contains::<Pressed>());
+    }
+
+    #[test]
+    fn disabling_during_press_clears_state_even_with_deferred_press_insertion() {
+        for deferred in [false, true] {
+            let mut app = app();
+            let world = app.world_mut();
+            let button = world.spawn(Button).id();
+            if deferred {
+                world.commands().trigger(press(button));
+                world.commands().entity(button).insert(InteractionDisabled);
+            } else {
+                world.trigger(press(button));
+                world.flush();
+                assert!(world.entity(button).contains::<Pressed>());
+                world.entity_mut(button).insert(InteractionDisabled);
+            }
+            world.flush();
+            world.trigger(release(button));
+            world.flush();
+            assert!(world.resource::<ButtonActions>().entities.is_empty());
+            assert!(
+                !world.entity(button).contains::<Pressed>(),
+                "deferred={deferred}"
+            );
+
+            world.entity_mut(button).remove::<InteractionDisabled>();
+            world.trigger(press(button));
+            world.flush();
+            assert!(world.entity(button).contains::<Pressed>());
+            world.trigger(PointerClick {
+                entity: button,
+                pointer: pointer(),
+                button: PointerButton::Primary,
+                hit: HitData::new(button, 0.0, None, None),
+                duration: std::time::Duration::from_millis(1),
+                count: 1,
+            });
+            world.trigger(release(button));
+            world.flush();
+            assert!(!world.entity(button).contains::<Pressed>());
+            assert_eq!(world.resource::<ButtonActions>().entities, [button]);
+        }
     }
 
     #[test]

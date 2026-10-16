@@ -135,3 +135,26 @@ Local evidence: `.scratch/options-slider-root-20261016/`. Original assets,
 fixture metadata and screenshots remain local. The full original Options scope
 continues in [the defaults note](original-options-defaults.md) and
 [the display-mode contract](original-display-modes.md).
+
+## Disabling a pressed button
+
+The stock widget leaves its temporary `Pressed` component behind when a control
+becomes disabled between pointer down and release. Its release/out/cancel
+handlers skip disabled controls. The input prototype independently reproduces
+this in both the stock and ordered dispatcher, so it is a separate lifecycle
+bug, not evidence against the event-location fix.
+
+The shared app button owner now removes that temporary component when either
+`InteractionDisabled` or `Pressed` is added to an already-disabled button. Both
+additions matter because a press insertion can be deferred until after disable.
+The removal tolerates the old control being despawned before its command runs.
+It emits no activation and leaves enabled held buttons alone. A regression fails
+on the old owner, then passes immediate and deferred disable, release without
+activation, and a fresh successful click after re-enable. This does not fix
+same-frame pointer hit resolution or enable any unsupported setting.
+
+The complete native suite, strict native/WASM Clippy, WASM application build and
+format checks pass. Evidence, including the baseline failure and intermediate
+compile/test corrections, remains local in
+`.scratch/button-disable-root-20261016/`. This is ECS lifecycle evidence; no new
+browser capture or native-client parity is claimed for this additional change.
