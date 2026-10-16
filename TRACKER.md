@@ -85,6 +85,15 @@ integration. A completed prototype does not close its broader milestone.
       This is a Wine menu reference; movies, synchronized recreation comparison
       and complete pixel fidelity remain open. See
       `docs/re-notes/original-game-vm.md`.
+- [~] Paired original/browser UI replay sends one checked physical-input journal
+      to both isolated targets, preserves unchanged checkpoint PNGs and reports
+      exact RGB differences. Twenty-one strict harness tests and an actual
+      browser adapter check pass. Four checkpoints complete at 1024×768,
+      1280×960, 1920×1080 and 2560×1440; the 4K browser screenshot times out and
+      is retained as failed. Before/after capture snapshots expose asynchronous
+      UI changes. RNG/clock synchronization and pixel fidelity remain open;
+      non-null seeded comparison refuses rather than inventing a seed hook.
+      See `docs/re-notes/original-game-vm.md`.
 - [~] Original Options and adjacent FDF screens: source-derived controls/art,
       draft/Cancel/Apply, runtime display choices, local preferences and user
       audio gains are implemented. Bottom-left cog separates PeaceCraft settings.
@@ -928,7 +937,7 @@ See `PLAN.md` §3.5 for the harness design. Each chapter asserts specific outcom
 | RE-Q3 | Table cipher + file keys | resolved — §2.3 items 4–5, `ev_703ee25f…` | **closed** |
 | RE-Q4 | Compressors | resolved — implode + zlib working | **closed** |
 | RE-Q5 | Sim tick rate / frame relationship | Exact Legacy scheduler/timer chain traced; QPC calibration, gameplay subscribers and render coupling unresolved. See `docs/re-notes/legacy-simulation-clock.md`. | open |
-| RE-Q6 | RNG generator + call order | REA: `game.dll` `FRand` | open |
+| RE-Q6 | RNG generator + call order | Two fresh exact-Legacy Wine runs reproduce an authored A/A/B/A seed probe with identical local output; generator, other consumers and recreation parity remain unproved. See `docs/re-notes/original-rng-control.md`. | open |
 | RE-Q7 | Header words `0x20`/`0x24` | REA: `Storm.dll` open path; nothing depends on them | open |
 | RE-Q8 | Storm's live table at `+0x4C2E4` ≠ fixed table | REA: `FUN_15017650`; archives use the fixed table | open, not blocking |
 | RE-Q9 | Archive priority order | REA: `game.dll` archive-open sequence; `DEFAULT_PRIORITY` assumed | open |

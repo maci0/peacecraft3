@@ -134,8 +134,10 @@ Hosts do not implement the supplied random natives. No original launcher seed
 hook has been proved. A non-null script seed therefore refuses before input
 effects; a recorded number never becomes an applied-seed claim. The report
 always retains `deterministic_parity_verified: false`. A private, intentionally
-modified test-map probe is the next step toward observing actual seed setters
-and draw sequences. It is not acceptance of unmodified campaign behavior.
+modified test-map probe has produced matching seeded observations in two fresh
+original runs; see `original-rng-control.md`. This is not acceptance of
+unmodified campaign behavior. Recreation RNG and paired seed integration remain
+open.
 
 The extended diagnostic completed four paired checkpoints at 1280×960,
 1920×1080 and 2560×1440. A 3840×2160 browser screenshot exceeded the adapter's
