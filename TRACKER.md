@@ -57,6 +57,15 @@ issues*.
       cyan lettering without an artwork-specific tint. See
       `docs/re-notes/blp-jpeg-channel-order.md`. The corrected WASM is deployed
       in the asset-free public demo at `1380001`.
+- [x] Local original-game reference harness: private Docker/Wine/Xvfb runs,
+      hashed installation copies, source/settings/window receipts, offline CLI
+      schema and equal-extent comparison reports. Ten strict harness tests pass.
+      Five 96-DPI runs cover 1024×768, 1280×960, 1920×1080, 2560×1440 and
+      3840×2160; all 15 reviewed Main/Options/Video captures match their PNG,
+      display and Warcraft client extents. Originals and captures stay local.
+      This is a Wine menu reference; movies, synchronized recreation comparison
+      and complete pixel fidelity remain open. See
+      `docs/re-notes/original-game-vm.md`.
 - [~] Original Options and adjacent FDF screens: source-derived controls/art,
       draft/Cancel/Apply, runtime display choices, local preferences and user
       audio gains are implemented. Bottom-left cog separates PeaceCraft settings.

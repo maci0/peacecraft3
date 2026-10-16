@@ -1,0 +1,365 @@
+{
+  "clispec": "0.3",
+  "name": "original-game-reference",
+  "version": "0.1.0",
+  "description": "Private Wine/Xvfb reference, not native Windows ground truth.",
+  "output": {
+    "tty": "json",
+    "piped": "json"
+  },
+  "global_args": [
+    {
+      "name": "--format",
+      "type": "string",
+      "enum": [
+        "json",
+        "text"
+      ],
+      "default": "json"
+    }
+  ],
+  "commands": [
+    {
+      "name": "schema",
+      "description": "Describe the offline CLI contract.",
+      "effects": "read_only",
+      "output_kind": "data",
+      "cardinality": "single",
+      "args": [],
+      "stdout_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "prepare",
+      "description": "Copy and hash source into a new private run; refuses existing destination.",
+      "effects": "non_idempotent",
+      "output_kind": "data",
+      "cardinality": "single",
+      "args": [
+        {
+          "name": "--source",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--run-dir",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "stdout_schema": {
+        "type": "object",
+        "properties": {
+          "run_dir": {
+            "type": "string"
+          },
+          "file_count": {
+            "type": "integer"
+          },
+          "executable_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_dir",
+          "file_count",
+          "executable_sha256"
+        ]
+      }
+    },
+    {
+      "name": "launch",
+      "description": "Start an isolated original executable; a matching running experiment returns its container; changed calibration, stopped runs and prior failed-launch receipts refuse reuse.",
+      "effects": "non_idempotent",
+      "output_kind": "data",
+      "cardinality": "single",
+      "args": [
+        {
+          "name": "--run-dir",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--width",
+          "type": "integer",
+          "required": true
+        },
+        {
+          "name": "--height",
+          "type": "integer",
+          "required": true
+        },
+        {
+          "name": "--dpi",
+          "type": "integer",
+          "required": true
+        },
+        {
+          "name": "--game-arg",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "stdout_schema": {
+        "type": "object",
+        "properties": {
+          "container": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "container"
+        ]
+      }
+    },
+    {
+      "name": "status",
+      "description": "Inspect the owned container and local initialization receipts.",
+      "effects": "read_only",
+      "output_kind": "data",
+      "cardinality": "single",
+      "args": [
+        {
+          "name": "--run-dir",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "stdout_schema": {
+        "type": "object",
+        "properties": {
+          "container": {
+            "type": "string"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "runtime": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "container",
+          "ready",
+          "state",
+          "runtime"
+        ]
+      }
+    },
+    {
+      "name": "stop",
+      "description": "Stop only the labeled reference container; preserve files and container.",
+      "effects": "idempotent",
+      "output_kind": "data",
+      "cardinality": "single",
+      "args": [
+        {
+          "name": "--run-dir",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "stdout_schema": {
+        "type": "object",
+        "properties": {
+          "running": {
+            "type": "boolean"
+          },
+          "container_preserved": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "running",
+          "container_preserved"
+        ]
+      }
+    },
+    {
+      "name": "capture",
+      "description": "Capture root framebuffer and settings; refuses existing label.",
+      "effects": "non_idempotent",
+      "output_kind": "data",
+      "cardinality": "single",
+      "args": [
+        {
+          "name": "--run-dir",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--label",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "stdout_schema": {
+        "type": "object",
+        "properties": {
+          "capture": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "capture",
+          "sha256"
+        ]
+      }
+    },
+    {
+      "name": "key",
+      "description": "Send one key chord; repeating sends it again.",
+      "effects": "non_idempotent",
+      "output_kind": "data",
+      "cardinality": "single",
+      "args": [
+        {
+          "name": "--run-dir",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--key",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "stdout_schema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "utc": {
+            "type": "string"
+          },
+          "monotonic_ns": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action",
+          "key",
+          "utc",
+          "monotonic_ns"
+        ]
+      }
+    },
+    {
+      "name": "click",
+      "description": "Send one primary click; repeating clicks again.",
+      "effects": "non_idempotent",
+      "output_kind": "data",
+      "cardinality": "single",
+      "args": [
+        {
+          "name": "--run-dir",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--x",
+          "type": "integer",
+          "required": true
+        },
+        {
+          "name": "--y",
+          "type": "integer",
+          "required": true
+        }
+      ],
+      "stdout_schema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "x": {
+            "type": "integer"
+          },
+          "y": {
+            "type": "integer"
+          },
+          "utc": {
+            "type": "string"
+          },
+          "monotonic_ns": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action",
+          "x",
+          "y",
+          "utc",
+          "monotonic_ns"
+        ]
+      }
+    },
+    {
+      "name": "report",
+      "description": "Copy a same-extent pair to a new local HTML report; refuses existing destination.",
+      "effects": "non_idempotent",
+      "output_kind": "data",
+      "cardinality": "single",
+      "args": [
+        {
+          "name": "--reference",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--recreation",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--output",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--note",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "stdout_schema": {
+        "type": "object",
+        "properties": {
+          "report": {
+            "type": "string"
+          },
+          "extent": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "report",
+          "extent"
+        ]
+      }
+    }
+  ],
+  "errors": [
+    {
+      "kind": "reference_failed",
+      "exit_code": 2,
+      "retryable": false,
+      "description": "Invalid input, unavailable runtime or failed operation; inspect local state before retrying."
+    }
+  ]
+}
