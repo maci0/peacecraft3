@@ -1593,3 +1593,12 @@ right Stand and shared Options Death. All 363 app tests and strict native/browse
 Clippy pass, with formatting. Evidence:
 `.scratch/category-pop-advance-20261017/root-verification/`. Test-only change;
 no audible original comparison or full Bevy WASI claim.
+
+A fresh same-source font A/B comparison rejected uniform physical-pixel
+truncation: some label dimensions improve, but other reference-matching widths
+regress and the heavier fringe remains. Both captures are stable and local;
+the experimental code was removed and the prior Rust sources restored exactly.
+The candidate's 365 passing tests do not close typography; the restored product
+retains its verified 363-test baseline. Evidence:
+`.scratch/menu-font-experiment-20261017/decision.json`. Font rasterization,
+spacing, archive selection and native visual parity stay open. No publication.

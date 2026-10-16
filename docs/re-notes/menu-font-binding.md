@@ -173,3 +173,33 @@ category-animation regression that hid the right panel. A separate
 housing in a fresh capture. Overall Options parity, typography and native
 rasterization remain open.
 Evidence: `.scratch/options-category-root-20261017/`.
+
+## Font quantization experiment (2026-10-17)
+
+Uniformly truncating the current physical font size was tested against fresh
+unchanged-font and experimental browser captures at the original witness's
+1280x960 extent. Both imports used the same local source closure; both captures
+reported stable state, seventeen local code GETs and no uploads or page errors.
+The fixture font matches the qualified install member, while the original
+runtime's winning archive remains unobserved.
+
+The change improves some label dimensions but moves Gameplay and Cancel widths
+away from the reference where the previous path was closer. The heavier fringe
+also remains. The experiment was rejected and both Rust files restored exactly;
+no quantization helper or font refresh system remains in the product. Source
+`FrameFont` sizing, shadow and layout remain on their previous paths.
+
+The pinned renderer's integer cast is useful implementation evidence, but its
+[menu viewport is established at startup](https://github.com/Retera/WarsmashModEngine/blob/f9e0aeed4be372d6016519d0e97b384aa873f374/core/src/com/etheller/warsmash/WarsmashGdxMenuScreen.java#L108)
+and its [resize path updates that viewport](https://github.com/Retera/WarsmashModEngine/blob/f9e0aeed4be372d6016519d0e97b384aa873f374/core/src/com/etheller/warsmash/WarsmashGdxMenuScreen.java#L546).
+That alone does not establish re-quantizing current physical pixels on each
+resize or density change. The candidate passed 365 app tests and strict
+native/browser checks; those tests do not outweigh the mixed visible result.
+The restored product is the previously verified 363-test implementation.
+
+Evidence: `.scratch/menu-font-experiment-20261017/decision.json`, the two private
+code-only packages and `right-label-metrics.json`. Masks and regions are image
+analysis only; no measured coordinates or font sizes were copied into product
+constants. A scheduled resize fixture was not run because the candidate was
+withheld. Typography, text rasterization, control spacing and full native visual
+parity remain open. Neither package nor original content was published.
