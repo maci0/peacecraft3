@@ -3,6 +3,7 @@ use pcx_script::ast::{Expr, Literal, TypeKind};
 use pcx_script::natives::Native;
 use pcx_script::resolve::Program;
 use pcx_script::span::Span;
+use pcx_script::value::FunctionId;
 use pcx_script::{HandleId, Host, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
@@ -188,6 +189,11 @@ enum Entry {
         unit: HandleId,
         unitevent: HandleId,
         enumerand: i32,
+    },
+    /// One `triggeraction` handle. The callback is not run at registration.
+    TriggerAction {
+        trigger: HandleId,
+        function: FunctionId,
     },
 }
 pub struct EnumHost {
@@ -500,6 +506,7 @@ impl EnumHost {
             Entry::Unit { .. } => "unit",
             Entry::Trigger => "trigger",
             Entry::RegisteredUnitEvent { .. } => "event",
+            Entry::TriggerAction { .. } => "triggeraction",
         })
     }
     pub fn symbolic_value(&self, id: HandleId, kind: &str) -> Result<i32, Error> {
@@ -581,5 +588,5 @@ pub use objects::{
     MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerBudget, PlayerSettings, QuestBudget,
     QuestEvent, QuestFlag, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest,
     StartLocation, StartPriorities, StartPriority, StartupClockState, TechLimitBudget, TimerHost,
-    TriggerBudget, UnitBudget, UnitEventRegistration,
+    TriggerActionRecord, TriggerBudget, UnitBudget, UnitEventRegistration,
 };

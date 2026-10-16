@@ -1217,8 +1217,10 @@ Format: `date — subsystem — symptom — root cause — status`
       retains 53 executed unit records against the same selected catalog and one
       explicit acquire-range assignment. Shared-arena trigger admission then
       retains one trigger and one unit-event registration with their exact
-      captured identities and symbolic enumerand. The next refusal is
-      `TriggerAddAction` at map span `68526..68583`; action execution and event
+      captured identities and symbolic enumerand. Admitting authored action
+      registration then reaches 153 source-bound units, three triggers, three
+      unit events and three action records. The next refusal is `SetHeroLevel`
+      at map span `67629..67678`; callback execution and event
       delivery remain open. See `docs/re-notes/script-trigger-admission.md`.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or

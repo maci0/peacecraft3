@@ -1,16 +1,19 @@
 //! Shared-arena `CreateTrigger` and `TriggerRegisterUnitEvent` admission.
 //!
 //! Enabled state is not stored. `EnableTrigger`, `DisableTrigger`,
-//! `IsTriggerEnabled`, conditions, actions and event delivery stay unsupported.
-//! `TriggerAddAction` is not this contract: the loaded declaration returns
-//! `triggeraction`.
+//! `IsTriggerEnabled`, conditions and event delivery stay unsupported.
+//! `TriggerAddAction` retains the loaded callback and does not run it.
 use super::super::{Entry, Error, Failure, below};
 use super::ObjectHost;
+use pcx_script::resolve::Program;
+use pcx_script::span::Span;
+use pcx_script::value::FunctionId;
 use pcx_script::{HandleId, Value};
 
 const CREATE: &str = "CreateTrigger";
 const REGISTER: &str = "TriggerRegisterUnitEvent";
 const CONVERT: &str = "ConvertUnitEvent";
+const ADD: &str = "TriggerAddAction";
 
 /// Caller bounds for retained identities. Not a firing or population limit.
 #[derive(Clone, Copy, Debug)]
@@ -19,6 +22,18 @@ pub struct TriggerBudget {
     pub max_triggers: usize,
     /// Retained `TriggerRegisterUnitEvent` event identities.
     pub max_unit_events: usize,
+    /// Retained `TriggerAddAction` identities.
+    pub max_actions: usize,
+}
+
+/// Callback retained for later delivery. `function`, `source` and `span` are the
+/// loaded declaration. `trigger` is the registration's owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TriggerActionRecord<'a> {
+    pub function: FunctionId,
+    pub source: &'a str,
+    pub span: Span,
+    pub trigger: HandleId,
 }
 
 /// Identities retained from one successful registration. `enumerand` is the
@@ -34,8 +49,10 @@ pub struct UnitEventRegistration {
 pub(super) struct Admission {
     max_triggers: usize,
     max_unit_events: usize,
+    max_actions: usize,
     retained_triggers: usize,
     retained_events: usize,
+    retained_actions: usize,
 }
 
 impl ObjectHost {
@@ -52,6 +69,8 @@ impl ObjectHost {
         std::alloc::Layout::array::<HandleId>(budget.max_triggers)
             .map_err(|_| fail(Failure::Capacity))?;
         std::alloc::Layout::array::<UnitEventRegistration>(budget.max_unit_events)
+            .map_err(|_| fail(Failure::Capacity))?;
+        std::alloc::Layout::array::<(HandleId, FunctionId)>(budget.max_actions)
             .map_err(|_| fail(Failure::Capacity))?;
         Self::contract(&self.inner, CREATE, &[], "trigger", false, Some("trigger"))?;
         Self::contract(
@@ -120,11 +139,28 @@ impl ObjectHost {
         {
             return Err(fail(Failure::Signature));
         }
+        if let Some(add) = self.inner.program.natives().get(ADD) {
+            Self::contract_in(
+                &self.inner,
+                ADD,
+                &["trigger", "code"],
+                "triggeraction",
+                false,
+                Some("triggeraction"),
+                false,
+            )?;
+            if add.source != source {
+                return Err(self.inner.error(ADD, Failure::Source));
+            }
+            loaded_type(&self.inner, ADD, "triggeraction", "handle", &source)?;
+        }
         self.triggers = Some(Admission {
             max_triggers: budget.max_triggers,
             max_unit_events: budget.max_unit_events,
+            max_actions: budget.max_actions,
             retained_triggers: 0,
             retained_events: 0,
+            retained_actions: 0,
         });
         Ok(self)
     }
@@ -171,6 +207,7 @@ impl ObjectHost {
         match name {
             CREATE => Some(self.create_trigger(args)),
             REGISTER => Some(self.register_unit_event(args)),
+            ADD if self.inner.program.natives().get(ADD).is_some() => Some(self.add_action(args)),
             _ => None,
         }
     }
@@ -277,6 +314,72 @@ impl ObjectHost {
         admitted.retained_events += 1;
         Ok(Value::Handle(id))
     }
+
+    /// Loaded `trigger, code -> triggeraction` registration. The callback body
+    /// is not entered.
+    pub fn trigger_action(&self, id: HandleId) -> Result<TriggerActionRecord<'_>, Error> {
+        let _ = self.admitted_triggers()?;
+        let (trigger, function_id) = match self
+            .inner
+            .entry(id)
+            .map_err(|error| self.inner.error(ADD, error.failure))?
+        {
+            Entry::TriggerAction { trigger, function } => (*trigger, *function),
+            _ => return Err(self.inner.error(ADD, Failure::WrongFamily)),
+        };
+        let function = callback(&self.inner.program, function_id)
+            .map_err(|failure| self.inner.error(ADD, failure))?;
+        Ok(TriggerActionRecord {
+            function: function_id,
+            source: &function.source,
+            span: function.span,
+            trigger,
+        })
+    }
+
+    fn add_action(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let (trigger, function_id) = {
+            let fail = |reason| self.inner.error(ADD, reason);
+            let [Value::Handle(trigger), Value::Code(function_id)] = args else {
+                return Err(fail(Failure::TriggerState(
+                    "arguments do not match the trigger native declaration",
+                )));
+            };
+            match self
+                .inner
+                .entry(*trigger)
+                .map_err(|error| self.inner.error(ADD, error.failure))?
+            {
+                Entry::Trigger => {}
+                _ => return Err(fail(Failure::WrongFamily)),
+            }
+            callback(&self.inner.program, *function_id).map_err(fail)?;
+            let (retained, max) = {
+                let admitted = self.admitted_triggers()?;
+                (admitted.retained_actions, admitted.max_actions)
+            };
+            if retained >= max {
+                return Err(fail(Failure::Budget("trigger action")));
+            }
+            if self.inner.handles() >= self.inner.max_handles {
+                return Err(fail(Failure::Capacity));
+            }
+            (*trigger, *function_id)
+        };
+        let id = self.inner.allocate(
+            Entry::TriggerAction {
+                trigger,
+                function: function_id,
+            },
+            ADD,
+        )?;
+        let admitted = self
+            .triggers
+            .as_mut()
+            .ok_or_else(|| self.inner.error(ADD, Failure::TriggerState("not admitted")))?;
+        admitted.retained_actions += 1;
+        Ok(Value::Handle(id))
+    }
 }
 
 fn loaded_type(
@@ -298,4 +401,18 @@ fn loaded_type(
         return Err(inner.error(native, Failure::Signature));
     }
     Ok(())
+}
+
+/// Same index lookup the chapter runner uses before a later `call`.
+fn callback(program: &Program, id: FunctionId) -> Result<&pcx_script::resolve::Function, Failure> {
+    let function = program
+        .functions()
+        .get(id.index())
+        .ok_or(Failure::TriggerState("callback is not a loaded function"))?;
+    if !function.params.is_empty() || function.ret.array || function.ret.kind.name() != "nothing" {
+        return Err(Failure::TriggerState(
+            "callback takes nothing returns nothing",
+        ));
+    }
+    Ok(function)
 }

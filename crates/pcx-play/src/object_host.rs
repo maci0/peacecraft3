@@ -444,4 +444,4 @@ pub use unit_creation::{ExecutedUnit, UnitBudget};
 
 #[path = "trigger_host.rs"]
 mod trigger_admission;
-pub use trigger_admission::{TriggerBudget, UnitEventRegistration};
+pub use trigger_admission::{TriggerActionRecord, TriggerBudget, UnitEventRegistration};
