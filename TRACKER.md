@@ -1356,8 +1356,11 @@ Format: `date — subsystem — symptom — root cause — status`
   preserved. Six colour and five duplicate-time plan cases plus seven runtime
   cases pass natively and under WASI; an ECS update/atomic-refusal regression,
   both supplied menu imports and strict native/browser-WASM builds pass. Native
-  flag/colour-space semantics and rendered colour parity remain open. See
-  `menu-opacity.md`.
+  flag/colour-space semantics and rendered colour parity remain open. A later
+  explicit synthetic Bevy render-graph gate passes 108 RGB checks on each of
+  software and Radeon Vulkan, including asymmetric KGAC endpoints and an untinted
+  control. This verifies transport through the actual caller/material, not paired
+  original-game parity. See `menu-opacity.md`.
   First-layer TXAN translation now uses parser-derived UV-set metadata and an
   absolute UV transform on independent global clocks, including panel phases.
   The full affected native run passes 460 tests (184 application), with 24

@@ -74,8 +74,27 @@ that leaf excludes Bevy rendering. The four-mode colour sampler executed separat
 under WASI. The affected application suite passed 419 tests with 15 explicit
 original-input gates ignored. Native and browser-WASM application builds, strict
 native/WASM Clippy and rustdoc passed. Both supplied compatibility-install menu
-models passed the explicit local import gate. These are import and execution
-checks; no new colour render readback or paired original-game capture was run.
+models passed the explicit local import gate. Those results establish import and
+execution behavior.
+
+A subsequent explicit synthetic GPU gate now runs the actual
+`apply_geoset_colour` caller and production `MenuMaterial` through Bevy's render
+graph. Sparse static tint, both asymmetric KGAC endpoints and missing-GEOA white
+produce 108 checked RGB components across 36 sampled pixels on each of llvmpipe
+and Radeon RX 7900 XTX Vulkan. The untinted control differs from the static tint.
+Material alpha remains unchanged before rendering. The fixture uses an unlit,
+opaque Rgba16Float target without tone mapping and a deterministic 48-update cap;
+timing is not an acceptance threshold. The test is explicitly ignored in the
+ordinary suite because it requires a local Vulkan adapter:
+
+```sh
+cargo test --locked -p peacecraft3 --bin peacecraft3 \
+  menu_colour_gpu_tests::authored_geoset_colour_reaches_the_menu_material_render_graph \
+  -- --ignored --exact --nocapture --test-threads=1
+```
+
+This confirms colour transport through that render path. It does not establish
+native colour-space, blend composition or paired original-game visual parity.
 
 Native interpolation/clipping behavior, global clock phase and complete material
 composition remain fidelity gates. Neither these tests nor a screenshot certify

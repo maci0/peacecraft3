@@ -21,6 +21,8 @@ mod local_demo;
 mod mainmenu;
 mod mainmenu_scene;
 mod menu_audio;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod menu_colour_gpu_tests;
 mod menu_fog;
 mod menu_material;
 mod menu_panel;
