@@ -895,6 +895,10 @@ milestone, regardless of unit-test count.
       inheritance instead of silently producing rectangles. Application tests
       and a seven-case actual WASM source-leaf gate pass; no production HUD
       integration or native/rendered parity is claimed. See `hud-derivation.md`.
+      Shared FDF parsing now preserves nested ConsoleUI texture records without
+      closing their frame or leaking properties. Both explicitly selected local
+      ConsoleUI members parse; 13 actual WASI parser cases pass. Texture rendering
+      remains open; see `docs/re-notes/hud-texture-blocks.md`.
 - [ ] Audio parity (`.slk` sound-list channels, 3D positioning)
 - [~] Deterministic movement work/allocation/state gate exists; extend fixed-work gates to gameplay/rendering as implemented. Report 4v4 1080p FPS observationally, never as a load-dependent pass/fail test.
 

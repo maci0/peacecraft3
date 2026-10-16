@@ -9,9 +9,12 @@
 //! defaulting: an unknown frame, a cycle in the anchor chain, a missing property
 //! or a malformed number all become an [`FdfError`].
 //!
-//! Scope: `Frame "TYPE" "NAME" [INHERITS [WITHCHILDREN] "TEMPLATE"] { … }` blocks
-//! and the handful of properties listed in [`Props`]. Comments (`//`) are
-//! stripped; everything else is ignored, not guessed at.
+//! Scope: `Frame "TYPE" "NAME" [INHERITS [WITHCHILDREN] "TEMPLATE"] { … }` blocks,
+//! nested `Texture { … }` blocks, and the handful of properties listed in
+//! [`Props`]. Comments (`//`) are stripped. A `Texture` block keeps its own
+//! records on the enclosing frame; those records are not frame layout. Any
+//! other `{` block is refused. It is not closed as a frame and its lines are
+//! not written onto a neighboring frame.
 //!
 //! **One line, one record.** A frame's `{` and `}` are expected on their own
 //! lines with each property on its own line, which is how both shipped files are
@@ -151,6 +154,17 @@ pub struct Props {
     pub records: Vec<(String, String)>,
 }
 
+/// Records inside one `Texture { … }` block, in file order.
+///
+/// The block has no authored name. Its enclosing frame is the `Frame` whose
+/// [`Frame::textures`] list holds it, and sibling blocks are the other entries
+/// of that list. Nothing here is copied onto the frame's layout properties.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextureBlock {
+    /// `(key, value)` as written, with the trailing comma removed from the value.
+    pub records: Vec<(String, String)>,
+}
+
 /// One parsed `Frame` block.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Frame {
@@ -168,6 +182,8 @@ pub struct Frame {
     pub props: Props,
     /// Child frame names, in file order.
     pub children: Vec<String>,
+    /// Nested `Texture` blocks, in file order.
+    pub textures: Vec<TextureBlock>,
 }
 
 /// Every frame parsed from one or more FDF texts, indexed by name.
@@ -227,7 +243,7 @@ impl Fdf {
     ///
     /// Returns [`FdfError`] on a malformed header or an unclosed block.
     pub fn parse_into(&mut self, text: &str) -> Result<(), FdfError> {
-        let mut stack: Vec<usize> = Vec::new();
+        let mut stack: Vec<Open> = Vec::new();
         for raw in text.lines() {
             let line = strip_comment(raw).trim();
             if line.is_empty() {
@@ -246,8 +262,15 @@ impl Fdf {
                 .strip_prefix("Frame")
                 .filter(|r| r.is_empty() || r.starts_with(' ') || r.starts_with('\t'))
             {
+                if let Some(Open::Texture { frame, index }) = stack.last().copied() {
+                    return Err(FdfError::Unsupported {
+                        frame: self.frames[frame].name.clone(),
+                        property: "block",
+                        value: format!("Frame inside Texture#{index}"),
+                    });
+                }
                 let (frame, opens) = parse_header(rest)?;
-                let parent = stack.last().map(|i| self.frames[*i].name.clone());
+                let parent = innermost_frame(&stack).map(|i| self.frames[i].name.clone());
                 let idx = self.frames.len();
                 self.index.insert(frame.name.clone(), idx);
                 if let Some(p) = &parent
@@ -257,18 +280,66 @@ impl Fdf {
                 }
                 self.frames.push(Frame { parent, ..frame });
                 if opens {
-                    stack.push(idx);
+                    stack.push(Open::Frame(idx));
                 }
                 continue;
             }
-            // A property line belongs to the innermost open frame.
-            if let Some(&cur) = stack.last() {
-                apply_property(&mut self.frames[cur], line)?;
+            if let Some(keyword) = block_keyword(line) {
+                self.open_block(&mut stack, keyword)?;
+                continue;
+            }
+            match stack.last().copied() {
+                Some(Open::Texture { frame, index }) => {
+                    self.frames[frame].textures[index]
+                        .records
+                        .push(split_record(line));
+                }
+                Some(Open::Frame(cur)) => apply_property(&mut self.frames[cur], line)?,
+                None => {}
             }
         }
-        if let Some(&open) = stack.last() {
-            return Err(FdfError::Unterminated(self.frames[open].name.clone()));
+        if let Some(open) = stack.last() {
+            let name = match *open {
+                Open::Frame(index) => self.frames[index].name.clone(),
+                Open::Texture { frame, index } => {
+                    format!("{} Texture#{index}", self.frames[frame].name)
+                }
+            };
+            return Err(FdfError::Unterminated(name));
         }
+        Ok(())
+    }
+
+    fn open_block(&mut self, stack: &mut Vec<Open>, keyword: &str) -> Result<(), FdfError> {
+        if keyword != "Texture" {
+            let frame = innermost_frame(stack)
+                .map(|index| self.frames[index].name.clone())
+                .unwrap_or_else(|| "<root>".to_string());
+            return Err(FdfError::Unsupported {
+                frame,
+                property: "block",
+                value: keyword.to_string(),
+            });
+        }
+        if let Some(Open::Texture { frame, index }) = stack.last().copied() {
+            return Err(FdfError::Unsupported {
+                frame: self.frames[frame].name.clone(),
+                property: "block",
+                value: format!("Texture inside Texture#{index}"),
+            });
+        }
+        let Some(frame) = innermost_frame(stack) else {
+            return Err(FdfError::Unsupported {
+                frame: "<root>".to_string(),
+                property: "block",
+                value: "Texture".to_string(),
+            });
+        };
+        let index = self.frames[frame].textures.len();
+        self.frames[frame].textures.push(TextureBlock {
+            records: Vec::new(),
+        });
+        stack.push(Open::Texture { frame, index });
         Ok(())
     }
 
@@ -546,34 +617,68 @@ fn parse_header(rest: &str) -> Result<(Frame, bool), FdfError> {
             parent: None,
             props: Props::default(),
             children: Vec::new(),
+            textures: Vec::new(),
         },
         rest.contains('{'),
     ))
 }
 
-/// Applies one `Key value` line to a frame.
-fn apply_property(frame: &mut Frame, line: &str) -> Result<(), FdfError> {
-    // A flag record has no value and keeps its trailing comma on the key:
-    // `SetAllPoints,`.
+/// What `{` … `}` is currently open. A texture sits inside one frame and
+/// does not replace that frame on the stack.
+#[derive(Clone, Copy)]
+enum Open {
+    Frame(usize),
+    Texture { frame: usize, index: usize },
+}
+
+fn innermost_frame(stack: &[Open]) -> Option<usize> {
+    stack.last().map(|open| match *open {
+        Open::Frame(index) => index,
+        Open::Texture { frame, .. } => frame,
+    })
+}
+
+/// `Keyword {` opens a nested block. A bare `{`, or a line that also carries
+/// a value, is not a block keyword.
+fn block_keyword(line: &str) -> Option<&str> {
+    let line = line.trim().trim_end_matches(',').trim();
+    let keyword = line.strip_suffix('{')?.trim();
+    if keyword.is_empty() {
+        return None;
+    }
+    keyword
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        .then_some(keyword)
+}
+
+/// Splits one `Key value` record. A flag keeps an empty value: `SetAllPoints,`.
+fn split_record(line: &str) -> (String, String) {
     let (key, value) = match line.split_once(char::is_whitespace) {
-        Some((k, v)) => (k, v.trim()),
+        Some((key, value)) => (key, value.trim()),
         None => (line.trim_end_matches(','), ""),
     };
+    (
+        key.to_string(),
+        value.trim_end_matches(',').trim().to_string(),
+    )
+}
+
+/// Applies one `Key value` line to a frame.
+fn apply_property(frame: &mut Frame, line: &str) -> Result<(), FdfError> {
+    let (key, value) = split_record(line);
     let bad = |property: &'static str| FdfError::BadNumber {
         frame: frame.name.clone(),
         property,
-        text: value.to_string(),
+        text: value.clone(),
     };
-    frame.props.records.push((
-        key.to_string(),
-        value.trim_end_matches(',').trim().to_string(),
-    ));
-    match key {
-        "Width" => frame.props.width = Some(num(value).ok_or_else(|| bad("Width"))?),
-        "Height" => frame.props.height = Some(num(value).ok_or_else(|| bad("Height"))?),
-        "ButtonText" => frame.props.button_text = Some(unquote(value)),
-        "Text" => frame.props.text = Some(unquote(value)),
-        "SetPoint" => frame.props.set_points.push(parse_set_point(value)?),
+    frame.props.records.push((key.clone(), value.clone()));
+    match key.as_str() {
+        "Width" => frame.props.width = Some(num(&value).ok_or_else(|| bad("Width"))?),
+        "Height" => frame.props.height = Some(num(&value).ok_or_else(|| bad("Height"))?),
+        "ButtonText" => frame.props.button_text = Some(unquote(&value)),
+        "Text" => frame.props.text = Some(unquote(&value)),
+        "SetPoint" => frame.props.set_points.push(parse_set_point(&value)?),
         _ => {}
     }
     Ok(())
@@ -849,5 +954,147 @@ Frame "TEXT" "Fixed" {
         let bad = "Frame \"FRAME\" \"A\" {\n Width wide,\n}\n";
         assert!(matches!(Fdf::parse(bad), Err(FdfError::BadNumber { .. })));
         assert!(matches!(Fdf::parse("Frame\n"), Err(FdfError::Header(_))));
+    }
+
+    #[test]
+    fn menu_style_frames_do_not_gain_texture_blocks() {
+        let fdf = fdf();
+        assert!(fdf.frames().iter().all(|frame| frame.textures.is_empty()));
+        let nested = Fdf::parse(
+            r#"
+Frame "FRAME" "Root" {
+Frame "FRAME" "A" {
+}
+Frame "FRAME" "A" {
+}
+Frame "FRAME" "A" {
+Frame "FRAME" "B" {
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        assert_eq!(nested.frame("B").unwrap().parent.as_deref(), Some("A"));
+        assert!(
+            nested
+                .frames()
+                .iter()
+                .all(|frame| frame.textures.is_empty())
+        );
+    }
+
+    #[test]
+    fn texture_blocks_stay_on_their_frame_and_do_not_bleed() {
+        let fdf = Fdf::parse(
+            r#"
+Frame "FRAME" "Plate" {
+    Width 0.2,
+    Height 0.1,
+    Texture {
+        Width 0.9,
+        Height 0.8,
+        File "left.blp",
+    }
+    Texture {
+        File "right.blp",
+        Width 0.05,
+    }
+    SetPoint TOPLEFT, "Plate", TOPLEFT, 0.01, -0.02,
+    Frame "BACKDROP" "Child" {
+        Width 0.3,
+        Height 0.3,
+    }
+}
+"#,
+        )
+        .unwrap();
+        let plate = fdf.frame("Plate").unwrap();
+        assert_eq!(plate.props.width, Some(0.2));
+        assert_eq!(plate.props.height, Some(0.1));
+        assert!(plate.props.set_points.len() == 1);
+        assert!(plate.props.records.iter().all(|(key, _)| key != "File"));
+        assert_eq!(plate.children, vec!["Child".to_string()]);
+        assert_eq!(plate.textures.len(), 2);
+        assert_eq!(
+            plate.textures[0].records,
+            vec![
+                ("Width".into(), "0.9".into()),
+                ("Height".into(), "0.8".into()),
+                ("File".into(), "\"left.blp\"".into()),
+            ]
+        );
+        assert_eq!(
+            plate.textures[1].records[0],
+            ("File".into(), "\"right.blp\"".into())
+        );
+        let child = fdf.frame("Child").unwrap();
+        assert_eq!(child.parent.as_deref(), Some("Plate"));
+        assert!(child.textures.is_empty());
+        assert_eq!(child.props.width, Some(0.3));
+    }
+
+    #[test]
+    fn closing_a_texture_does_not_drop_the_following_frame_record() {
+        let fdf = Fdf::parse(
+            r#"
+Frame "FRAME" "Plate" {
+    Width 0.2,
+    Height 0.1,
+    Texture {
+        File "only.blp",
+    }
+    SetPoint BOTTOMLEFT, "Plate", BOTTOMLEFT, 0.0, 0.0,
+}
+"#,
+        )
+        .unwrap();
+        let plate = fdf.frame("Plate").unwrap();
+        assert_eq!(plate.textures.len(), 1);
+        assert_eq!(plate.textures[0].records.len(), 1);
+        assert_eq!(plate.props.set_points.len(), 1);
+        assert_eq!(plate.props.width, Some(0.2));
+    }
+
+    #[test]
+    fn unknown_blocks_are_refused_without_becoming_the_parent_frame() {
+        let err = Fdf::parse(
+            r#"
+Frame "FRAME" "Plate" {
+    Width 0.2,
+    Height 0.1,
+    Layer {
+        Width 9,
+    }
+}
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            FdfError::Unsupported {
+                frame,
+                property: "block",
+                value,
+            } if frame == "Plate" && value == "Layer"
+        ));
+        assert!(matches!(
+            Fdf::parse("Texture {\n File \"orphan.blp\",\n}\n"),
+            Err(FdfError::Unsupported {
+                frame: root,
+                property: "block",
+                value,
+            }) if root == "<root>" && value == "Texture"
+        ));
+        assert!(matches!(
+            Fdf::parse(
+                "Frame \"FRAME\" \"Plate\" {\n Texture {\n Frame \"FRAME\" \"Inner\" {\n Width 1,\n Height 1,\n }\n }\n}\n"
+            ),
+            Err(FdfError::Unsupported {
+                property: "block",
+                value,
+                ..
+            }) if value.contains("Frame inside Texture")
+        ));
     }
 }
