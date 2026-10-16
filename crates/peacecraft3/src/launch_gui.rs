@@ -143,6 +143,13 @@ struct ControlRoot;
 #[derive(Component)]
 struct SettingsCog;
 
+/// Full-window black clear behind the centered menu picture.
+///
+/// It is not the default UI camera. It runs only while a menu layer exists,
+/// so the launcher's own clear stays in charge when the menu is gone.
+#[derive(Component)]
+struct MenuLetterbox;
+
 #[derive(Component)]
 struct MenuNotice;
 
@@ -150,7 +157,7 @@ struct MenuNotice;
 struct ResolutionPopup;
 
 #[derive(Component)]
-struct ResolutionChoice(u32, u32);
+struct ResolutionChoice(crate::menu_screens::OfferedResolution);
 
 /// Set once a label's runs exist, so it is filled once rather than every frame.
 #[derive(Component)]
@@ -346,6 +353,8 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     crate::menu_audio::install(&mut app);
     crate::glue_menu::install(&mut app);
     crate::menu_settings::install(&mut app);
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::startup_window::install(&mut app);
     app.add_systems(
         PostUpdate,
         synchronize_window_camera_size.before(bevy::camera::CameraUpdateSystems),
@@ -457,7 +466,7 @@ fn publish_menu_snapshot(
         .map_or(Vec2::ZERO, |v| v.physical_position.as_vec2());
     let controls:Vec<_>=controls.iter().filter_map(|(node,transform,visible,button,choice,setting,value,cog,disabled,pressed,hovered)| {
         if !visible.get() || node.size().min_element()<=0.0 {return None;}
-        let name=if let Some(button)=button {button.frame.clone()}else if let Some(choice)=choice {format!("ResolutionChoice:{}x{}",choice.0,choice.1)}else if cog {"PeaceCraftSettings".into()}else{return None;};
+        let name=if let Some(button)=button {button.frame.clone()}else if let Some(choice)=choice {format!("ResolutionChoice:{}",choice.0.label)}else if cog {"PeaceCraftSettings".into()}else{return None;};
         let min=transform.transform_point2(-node.size()/2.0)+offset;
         let max=transform.transform_point2(node.size()/2.0)+offset;
         let slider=setting.and_then(|setting|match setting.widget {
@@ -566,6 +575,18 @@ pub(crate) fn selected_install(launcher: &Launcher) -> Option<std::path::PathBuf
 }
 
 fn setup(mut commands: Commands, l: Res<Launcher>) {
+    commands.spawn((
+        Camera2d,
+        MenuLetterbox,
+        Camera {
+            // Before the menu background (-1). Clears the bars outside the
+            // centered 4:3 picture. Inactive until a menu layer exists.
+            order: -2,
+            is_active: false,
+            clear_color: bevy::camera::ClearColorConfig::Custom(Color::srgb(0.0, 0.0, 0.0)),
+            ..default()
+        },
+    ));
     commands.spawn((
         Camera2d,
         bevy::ui::IsDefaultUiCamera,
@@ -680,7 +701,7 @@ fn spawn_main_menu(commands: &mut Commands) {
                     padding: UiRect::all(Val::Rem(0.375)),
                     ..default()
                 },
-                BackgroundColor(BG_FIELD),
+                BackgroundColor(Color::NONE),
                 ZIndex(10),
             ));
             root.spawn((
@@ -853,10 +874,18 @@ fn update_menu_notice(
         .as_ref()
         .and_then(|f| f.get())
         .filter(|_| focus.1.as_ref().is_some_and(|v| v.0));
-    for (entity, _, mut accessible) in &mut cogs {
+    for (entity, hovered, mut accessible) in &mut cogs {
         accessible.0.set_label("PeaceCraft settings");
+        // The hit target, tab order, and name stay. Idle frames do not paint
+        // the gear or its panel over the original scene.
+        let shown = hovered.get() || focused == Some(entity);
         commands.entity(entity).insert((
-            ImageNode::new(icon.as_ref().unwrap().clone()),
+            ImageNode::new(icon.as_ref().unwrap().clone()).with_color(Color::srgba(
+                1.0,
+                1.0,
+                1.0,
+                if shown { 1.0 } else { 0.0 },
+            )),
             Outline {
                 width: Val::Px(if focused == Some(entity) { 2.0 } else { 0.0 }),
                 offset: Val::Px(2.0),
@@ -1008,7 +1037,9 @@ fn open_resolutions(
     let popup = commands
         .spawn((
             ResolutionPopup,
-            Name::new("Available display resolutions"),
+            Name::new(crate::menu_screens::resolution_popup_title(
+                &navigation.resolutions,
+            )),
             bevy::input_focus::tab_navigation::TabGroup {
                 order: 1,
                 modal: true,
@@ -1032,13 +1063,13 @@ fn open_resolutions(
         ))
         .id();
     commands.entity(root).add_child(popup);
-    for (index, &(width, pixels)) in navigation.resolutions.iter().enumerate() {
+    for (index, offer) in navigation.resolutions.iter().enumerate() {
         let choice = commands
             .spawn((
                 Button,
                 Hovered::default(),
-                ResolutionChoice(width, pixels),
-                Name::new(format!("{width} x {pixels}")),
+                ResolutionChoice(offer.clone()),
+                Name::new(offer.label.clone()),
                 bevy::input_focus::tab_navigation::TabIndex(
                     i32::try_from(index).map_err(|_| "Too many display modes")?,
                 ),
@@ -1049,14 +1080,14 @@ fn open_resolutions(
                     align_items: AlignItems::Center,
                     ..default()
                 },
-                BackgroundColor(if navigation.draft.resolution == Some((width, pixels)) {
+                BackgroundColor(if navigation.resolution_highlighted(offer) {
                     ACCENT_SOFT
                 } else {
                     BG_FIELD
                 }),
             ))
             .with_child((
-                Text::new(format!("{width} x {pixels}")),
+                Text::new(offer.label.clone()),
                 TextFont {
                     font: font.clone().into(),
                     font_size: bevy::text::FontSize::Vh(
@@ -1488,6 +1519,12 @@ fn synchronize_window_camera_size(
     });
 }
 
+type LetterboxCameraFilter = (
+    With<MenuLetterbox>,
+    Without<crate::mainmenu_scene::MainMenuSceneCamera>,
+    Without<bevy::ui::IsDefaultUiCamera>,
+);
+
 fn show_menu_or_launcher(
     intro: Res<crate::intro::Intro>,
     windows: Query<&Window>,
@@ -1501,6 +1538,7 @@ fn show_menu_or_launcher(
             Without<crate::mainmenu_scene::MainMenuSceneCamera>,
         ),
     >,
+    mut letterboxes: Query<&mut Camera, LetterboxCameraFilter>,
 ) {
     // The original CFrame renderer has a centered 4:3 branch. Its main-menu
     // live flags are unmeasured; keep the authored extent without stretching.
@@ -1536,11 +1574,28 @@ fn show_menu_or_launcher(
         }
     }
     for mut camera in &mut cameras {
-        // Original GlueSpriteLayerBackground explicitly sets frame flag bit 0;
-        // it fills the display independently of the authored panel coordinates.
-        if camera.viewport.is_some() {
-            camera.viewport = None;
+        // Original runtime widescreen captures are a centered 4:3 picture with black
+        // side bars, and that content box matches `viewport` above. The scene
+        // camera uses the same rectangle so its logical frustum is not
+        // stretched across the bars. Square and 5:4 clients still take the
+        // full window through the direct-conversion branch.
+        let desired = viewport
+            .as_ref()
+            .map(|v| (v.physical_position, v.physical_size));
+        if camera
+            .viewport
+            .as_ref()
+            .map(|v| (v.physical_position, v.physical_size))
+            != desired
+        {
+            camera.viewport = viewport.clone();
         }
+        let active = !menu.is_empty();
+        if camera.is_active != active {
+            camera.is_active = active;
+        }
+    }
+    for mut camera in &mut letterboxes {
         let active = !menu.is_empty();
         if camera.is_active != active {
             camera.is_active = active;
@@ -3038,9 +3093,7 @@ pub(crate) fn apply_menu_clicks(
             break;
         }
         if let Ok(choice) = choices.get(*entity) {
-            if let Err(error) =
-                crate::menu_settings::select_resolution(&mut navigation, (choice.0, choice.1))
-            {
+            if let Err(error) = crate::menu_settings::select_offer(&mut navigation, &choice.0) {
                 navigation.notice = error;
             }
             for entity in &popups {
@@ -3410,14 +3463,18 @@ mod menu_tests {
                 crate::mainmenu_scene::MainMenuSceneCamera,
             ))
             .id();
+        let letterbox = world.spawn((Camera::default(), MenuLetterbox)).id();
         world.run_system_once(show_menu_or_launcher).unwrap();
         assert!(!world.get::<Camera>(scene).unwrap().is_active);
+        assert!(!world.get::<Camera>(letterbox).unwrap().is_active);
         assert!(matches!(world.get::<Camera>(ui).unwrap().clear_color,
             ClearColorConfig::Custom(color) if color == BG_APP));
 
         let menu = world.spawn(MenuLayer).id();
         world.run_system_once(show_menu_or_launcher).unwrap();
         assert!(world.get::<Camera>(scene).unwrap().is_active);
+        assert!(world.get::<Camera>(letterbox).unwrap().is_active);
+        assert!(world.get::<Camera>(scene).unwrap().viewport.is_none());
         assert!(matches!(
             world.get::<Camera>(ui).unwrap().clear_color,
             ClearColorConfig::None
@@ -3433,6 +3490,15 @@ mod menu_tests {
         let viewport = world.get::<Camera>(ui).unwrap().viewport.as_ref().unwrap();
         assert_eq!(viewport.physical_position, UVec2::new(200, 0));
         assert_eq!(viewport.physical_size, UVec2::new(1200, 900));
+        assert_eq!(
+            world
+                .get::<Camera>(scene)
+                .unwrap()
+                .viewport
+                .as_ref()
+                .map(|v| (v.physical_position, v.physical_size)),
+            Some((UVec2::new(200, 0), UVec2::new(1200, 900)))
+        );
         world
             .get_mut::<Window>(window)
             .unwrap()
@@ -3442,19 +3508,29 @@ mod menu_tests {
         let viewport = world.get::<Camera>(ui).unwrap().viewport.as_ref().unwrap();
         assert_eq!(viewport.physical_position, UVec2::new(0, 225));
         assert_eq!(viewport.physical_size, UVec2::new(600, 450));
-        assert!(
-            world.get::<Camera>(scene).unwrap().viewport.is_none(),
-            "original background fills the display"
+        let scene_viewport = world.get::<Camera>(scene).unwrap().viewport.clone();
+        let ui_viewport = world.get::<Camera>(ui).unwrap().viewport.clone();
+        assert_eq!(
+            scene_viewport
+                .as_ref()
+                .map(|v| (v.physical_position, v.physical_size)),
+            ui_viewport
+                .as_ref()
+                .map(|v| (v.physical_position, v.physical_size)),
+            "scene and UI share the centered picture"
         );
+        assert!(world.get::<Camera>(letterbox).unwrap().is_active);
 
         // An unavailable original scene must not leave the settings' old pixels.
         world.despawn(scene);
         world.run_system_once(show_menu_or_launcher).unwrap();
+        assert!(world.get::<Camera>(letterbox).unwrap().is_active);
         assert!(matches!(world.get::<Camera>(ui).unwrap().clear_color,
             ClearColorConfig::Custom(color) if color == BG_APP));
         world.despawn(menu);
         world.run_system_once(show_menu_or_launcher).unwrap();
         assert!(world.get::<Camera>(ui).unwrap().viewport.is_none());
+        assert!(!world.get::<Camera>(letterbox).unwrap().is_active);
     }
 
     #[test]

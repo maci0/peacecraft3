@@ -82,11 +82,11 @@ pub(super) fn apply(
     if backend.resize.is_some() {
         return Ok(ApplyOutcome::Pending);
     }
-    let candidate = prepare(nav, backend)?;
     let current = host(entity)
         .filter(|h| h.size.0 > 0 && h.size.1 > 0)
         .ok_or("The window's client size is unavailable; settings were not saved")?;
     backend.observed_resolution = Some(current.size);
+    let candidate = prepare(nav, backend)?;
     backend.pending_resolution = None;
     if candidate
         .settings
@@ -378,7 +378,10 @@ mod tests {
         let target = (741, 511);
         let mut nav = Navigation {
             screen: crate::menu_screens::Screen::Options(crate::menu_screens::Page::Video),
-            resolutions: vec![old, target],
+            resolutions: vec![
+                crate::menu_screens::OfferedResolution::render_size(old.0, old.1),
+                crate::menu_screens::OfferedResolution::render_size(target.0, target.1),
+            ],
             ..default()
         };
         nav.applied.resolution = Some(old);

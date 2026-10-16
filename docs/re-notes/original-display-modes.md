@@ -212,3 +212,98 @@ The three synthetic analyzer groups and retained-metadata root replay pass.
 Evidence: `.scratch/options-mode-caller-body-20261016/` and
 `.scratch/options-caller-root-review-20261016/`. No runtime mode policy or
 hard-coded default was introduced.
+
+## Project startup window
+
+The investigation above stands. PeaceCraft still creates the native window
+from the 880 by 860 seed in `launch_gui::window_plugin`. After settings have
+loaded, and only once the host monitor is known, `startup_window` may request
+a windowed client of nine tenths of that monitor's physical width and height,
+centered on the current monitor.
+
+That fraction is a PeaceCraft presentation policy. Asset-derived Warcraft III
+defaults stay unselected: there is no preset list and no exclusive mode
+change. An explicit saved resolution keeps the seed until the existing resolution
+transaction restores a size the display can show. A saved size the display
+cannot show keeps the current window and its existing notice. A preference
+file with audio settings and no resolution allows the monitor fit. An unreadable
+preference file has no saved size, so the monitor fit still runs. The browser
+build does not resize the canvas bitmap here. Its page gives the stage the
+viewport, and the canvas follows that box. Focusing the canvas reveals that
+stage without resetting its internal pan. The stage origin is aligned to the
+current device-pixel grid from DOM geometry; fractional surrounding page
+layout must not clip a viewport-sized canvas. Render dimensions and authored
+menu coordinates are unchanged by this page-layout correction.
+
+## Production selector
+
+When one selected client image admits exactly one enumeration-family profile
+and the primary monitor reports video modes, Options lists those grouped rows.
+Admission depths, minimum width, enumerated kind and flag, the refresh center,
+the score operands and both label formats are read from that image. Host width,
+height, observed depth and refresh are the records. Linux and other hosts that
+are not Windows or macOS leave bit depth unqualified, so those labels use the
+size-only format. Windows and macOS pass a nonzero reported bit depth. Refresh
+still groups on every native host, including Linux. Offer order is first-seen
+provider order after grouping. Winit's video-mode order is not
+EnumDisplaySettings order.
+
+The absent FixedAspectRatio checkbox supplies flag 0. If the discovered
+enumeration flag is not 0, the qualified list is empty. The adapter-owner
+compare and the active-kind compare stay off because those inputs are
+unresolved and applying them would hide rows. Pair-table augmentation and the
+per-index providers are separate unread inputs and are not offered. An empty
+result is not filled from a preset list or from the current window.
+
+Apply still changes the window or browser render extent. It does not request
+an exclusive physical mode. Browser builds, a missing image and an unadmitted
+profile use measured render sizes and identify them as render sizes. A
+qualified profile whose primary-monitor rows are all rejected stays empty.
+Version-1 preferences store the render size only. Same-size depth and refresh
+remain a session selection until cancel, reopen, a draft size change, or
+replacement of that row.
+
+Synthetic image tests check admission, order, grouping, depth and refresh
+filtering, missing input and score ties. They do not establish rendered Options
+parity or a physical mode switch.
+
+### Indexed capacity investigation
+
+Further bounded offline reads of the same qualified Legacy client identify
+`7d8b70` as a count produced through `EnumDisplayMonitors`. The indexed width
+and height helpers select an enumerated monitor handle. Their common rectangle
+helper chooses `MONITORINFO.rcMonitor` or `rcWork`; `7d7d80` then subtracts
+the frame extent returned by `AdjustWindowRectEx` for source-selected styles.
+The selector-3 table paths use the work rectangle, while selector-2 paths use
+the full monitor rectangle. Those style operands must still be derived from
+the supplied client, rather than copied into a preset policy.
+
+A single primary-monitor physical extent therefore does not establish every
+candidate family's bound. The current production enumeration path does not
+yet supply work-area and source-style frame capabilities or active-kind and
+adapter-owner selection. Those remain integration work. Repeated label sites
+with identical formats and limits now share one effective profile; conflicting
+sites still refuse. Ten synthetic tests and the explicit selected Legacy image
+admission gate pass. These checks do not prove equal rendered choice lists.
+
+Evidence: `.scratch/options-display-capacities-20261017/` and
+`.scratch/options-display-selector-root-20261017/`. The six code windows total
+3 KiB; independent instruction decoders agree on their reached boundaries.
+No game, display mode, window or running original process was changed by these
+reads. Allocation failure and monitor-order correspondence remain unqualified.
+
+A separate conditional check reads the second pair table from that unchanged
+image. The caller saves the selector-2 full-monitor result and copies those
+dimensions unchanged into both dimension pairs of its final row. The earlier
+aspect-transform call belongs to another path; finding that call elsewhere in
+the same function does not bind it to this row. A 4:3 witness cannot distinguish
+the two interpretations.
+
+With the original list capture's framebuffer supplied as the full-monitor bound,
+the popup flag-zero table rows followed by that full bound match all five visible
+rows in order. This checks consistency with that observation; it does not
+establish the original active kind, adapter owner, absence of hidden rows, or
+equal choices on another monitor. No table payload was saved by the check.
+The corrected receipt is
+`.scratch/options-display-visible-witness-20261017/full-bound-receipt.json`;
+the earlier aspect-fit receipt is retained as superseded evidence.

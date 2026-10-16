@@ -42,7 +42,10 @@ fn drive(
             nav.draft = nav.applied.clone();
             let target = (613, 419);
             assert_ne!(observed.size, target);
-            nav.resolutions.push(target);
+            nav.resolutions
+                .push(crate::menu_screens::OfferedResolution::render_size(
+                    target.0, target.1,
+                ));
             nav.draft.resolution = Some(target);
             nav.draft.toggles.insert("MusicCheckBox".into(), false);
             assert!(matches!(
@@ -70,7 +73,10 @@ fn drive(
             std::fs::rename(&gate.preference, gate.preference.with_extension("backup")).unwrap();
             std::fs::create_dir(&gate.preference).unwrap();
             nav.requested = None;
-            nav.resolutions.push((577, 367));
+            nav.resolutions
+                .push(crate::menu_screens::OfferedResolution::render_size(
+                    577, 367,
+                ));
             nav.draft.resolution = Some((577, 367));
             nav.draft.toggles.insert("MusicCheckBox".into(), true);
             assert!(matches!(
@@ -112,7 +118,10 @@ fn drive(
             std::fs::rename(gate.preference.with_extension("backup"), &gate.preference).unwrap();
             gate.events.push(serde_json::json!({"phase":"save_failure_restore_reported","reported":observed.size,"preferences_unchanged":true,"audio_unchanged":true}));
 
-            nav.resolutions.push((589, 373));
+            nav.resolutions
+                .push(crate::menu_screens::OfferedResolution::render_size(
+                    589, 373,
+                ));
             nav.draft.resolution = Some((589, 373));
             assert!(matches!(
                 apply(entity, &mut nav, &mut window, &mut backend, &launcher),
@@ -128,6 +137,25 @@ fn drive(
             assert_eq!(nav.draft, nav.applied);
             assert_eq!(nav.requested, Some(crate::menu_screens::Screen::Main));
             gate.events.push(serde_json::json!({"phase":"cancel_restore_reported","reported":observed.size,"preferences_unchanged":true}));
+
+            nav.requested = None;
+            nav.resolutions.clear();
+            backend.observed_resolution = None;
+            nav.draft.toggles.insert("MusicCheckBox".into(), true);
+            assert!(matches!(
+                apply(entity, &mut nav, &mut window, &mut backend, &launcher),
+                Ok(ApplyOutcome::Complete)
+            ));
+            assert!(backend.resize.is_none());
+            assert_eq!(backend.observed_resolution, Some(observed.size));
+            assert_eq!(host(entity).unwrap().size, observed.size);
+            assert!(nav.resolutions.is_empty());
+            let text = std::fs::read_to_string(&gate.preference).unwrap();
+            let prefs = decode_preferences(&text).unwrap();
+            assert_eq!(prefs.settings.resolution, Some(observed.size));
+            assert!(prefs.audio.music_enabled);
+            assert!(backend.audio.music_enabled);
+            gate.events.push(serde_json::json!({"phase":"confirmed_current_audio_saved_without_offers","reported":observed.size,"resize_requested":false}));
             let result = serde_json::json!({"ok":true,"events":gate.events,
                 "session_type":std::env::var("XDG_SESSION_TYPE").ok(),
                 "scope":"actual Winit client-size reports and real private storage; no compositor presentation or physical display-mode claim"});

@@ -128,6 +128,58 @@ pub fn includes(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// One offered row. Render extents and qualified client rows share this value,
+/// and `render_extent_only` keeps those two claims distinct.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OfferedResolution {
+    pub label: String,
+    pub size: (u32, u32),
+    pub depth: Option<u32>,
+    pub refresh_millihertz: Option<u32>,
+    pub adapter: u32,
+    pub mode_index: u32,
+    pub kind: i32,
+    pub flag: u8,
+    pub render_extent_only: bool,
+}
+
+impl OfferedResolution {
+    pub fn render_size(width: u32, height: u32) -> Self {
+        Self {
+            label: format!("{width} x {height}"),
+            size: (width, height),
+            depth: None,
+            refresh_millihertz: None,
+            adapter: 0,
+            mode_index: 0,
+            kind: 0,
+            flag: 0,
+            render_extent_only: true,
+        }
+    }
+
+    pub fn same_mode(&self, other: &Self) -> bool {
+        self.size == other.size
+            && self.depth == other.depth
+            && self.refresh_millihertz == other.refresh_millihertz
+            && self.adapter == other.adapter
+            && self.mode_index == other.mode_index
+            && self.kind == other.kind
+            && self.flag == other.flag
+            && self.render_extent_only == other.render_extent_only
+    }
+}
+
+pub(crate) fn resolution_popup_title(rows: &[OfferedResolution]) -> &'static str {
+    if rows.iter().any(|row| !row.render_extent_only) {
+        "Sizes from the qualified client and this monitor. Apply changes the window render size."
+    } else if rows.is_empty() {
+        "No display sizes are available."
+    } else {
+        "Render sizes, not exclusive display modes."
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct Navigation {
     /// Currently displayed control owner; requests do not mutate it before admission.
@@ -138,7 +190,8 @@ pub struct Navigation {
     pub notice: String,
     pub draft: Settings,
     pub applied: Settings,
-    pub resolutions: Vec<(u32, u32)>,
+    pub resolutions: Vec<OfferedResolution>,
+    pub selected_offer: Option<OfferedResolution>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
@@ -151,6 +204,29 @@ pub struct Settings {
 }
 
 impl Navigation {
+    fn restore_draft(&mut self) {
+        self.draft = self.applied.clone();
+        self.selected_offer = None;
+    }
+
+    pub(crate) fn offers_size(&self, size: (u32, u32)) -> bool {
+        self.resolutions.iter().any(|row| row.size == size)
+    }
+
+    pub(crate) fn resolution_highlighted(&self, row: &OfferedResolution) -> bool {
+        if let Some(selected) = &self.selected_offer
+            && self.draft.resolution == Some(selected.size)
+        {
+            return selected.same_mode(row);
+        }
+        self.draft.resolution == Some(row.size)
+            && self
+                .resolutions
+                .iter()
+                .find(|candidate| candidate.size == row.size)
+                .is_some_and(|first| first.same_mode(row))
+    }
+
     pub fn open(&mut self, screen: Screen) {
         if self.transition_active || self.requested.is_some() {
             return;
@@ -161,14 +237,14 @@ impl Navigation {
                 | (Screen::SinglePlayer | Screen::Options(_), Screen::Main)
         ) {
             if matches!(screen, Screen::Options(_)) {
-                self.draft = self.applied.clone();
+                self.restore_draft();
             }
             self.requested = Some(screen);
             self.notice.clear();
             return;
         }
         if matches!(screen, Screen::Options(_)) && !matches!(self.screen, Screen::Options(_)) {
-            self.draft = self.applied.clone();
+            self.restore_draft();
         }
         self.screen = screen;
         self.notice.clear();
@@ -212,7 +288,7 @@ impl Navigation {
                 Screen::Options(Page::Sound)
             }
             "CancelButton" | "BackButton" => {
-                self.draft = self.applied.clone();
+                self.restore_draft();
                 self.screen.back()
             }
             _ => return false,

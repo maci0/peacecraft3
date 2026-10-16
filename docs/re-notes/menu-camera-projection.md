@@ -74,3 +74,35 @@ Fog, lighting, particles, layered materials, sky/water appearance and screen
 transitions remain separate work. Bevy's infinite reverse-depth projection plus
 far-frustum culling is not proof of bit-identical finite native GPU clipping.
 Mathematical and ECS tests do not establish final rendered/native parity.
+
+## Widescreen presentation
+
+The logical frustum above is unchanged. Retained original runtime main-menu captures at
+1920 by 1080 and 2560 by 1440 are a centered 4:3 picture with black side bars.
+Their content boxes match the UI viewport already computed for those sizes:
+origin (240, 0) and 1440 by 1080, and origin (320, 0) and 1920 by 1440. The
+1024 by 768 capture fills the window. Square and 5:4 clients keep the existing
+full-window branch; those shapes were not observed in this capture set.
+
+The scene camera now uses that same viewport; a separate camera clears the
+bars to black while the menu exists. This reproduces the observed final
+presentation without claiming the same internal render-target composition.
+A local browser build of this viewport change has produced reviewed main-menu
+captures at 1920 by 1080 and 1024 by 768. The wide capture has the centered
+1440 by 1080 picture; the compact capture fills its canvas. Both pass the
+capture adapter's exact canvas/viewport geometry checks. The remaining Options
+sequence hit its operation deadline, so this is not full workflow acceptance.
+The integrated native application suite passes 340 tests against stable inputs.
+The actual-window startup and render-size transaction checks also pass; these
+checks do not draw the menu or close the Options capture gap. Logs are retained
+under `.scratch/menu-ui-native-root-20261017/verification-5/`.
+
+The actual imported ISO candidate matches its retained MPQ byte-for-byte.
+Fresh reads of the background, skin, font, fog configuration and two expansion
+panels match their selected Legacy-install members; all four source-archive
+fingerprints in the fixture metadata match the original capture's recorded
+installation. This narrows input uncertainty without establishing the original
+runtime's winning archive or matching animation phase. Background contrast,
+panel appearance and font fringes still differ. Evidence stays local under
+`.scratch/startup-current-baseline-20261017/attempt-4/` and
+`.scratch/startup-current-asset-qualification-20261017/`.

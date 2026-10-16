@@ -69,6 +69,7 @@ pub mod mp3_frame;
 pub mod neutral_player;
 mod neutral_rule_input;
 pub mod options_defaults;
+pub mod options_modes;
 pub mod pcm_decoder;
 pub mod playercolor_host;
 pub mod quest_session;

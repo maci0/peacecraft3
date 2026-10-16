@@ -32,6 +32,8 @@ mod menu_settings;
 mod menu_skin;
 mod menu_sprites;
 mod menu_text;
+#[cfg(not(target_arch = "wasm32"))]
+mod startup_window;
 mod viewer_args;
 
 fn main() {

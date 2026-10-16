@@ -213,3 +213,41 @@ fn actual_keyboard_activate_and_click_paths_enqueue_only_on_main() {
         }
     }
 }
+
+#[test]
+fn settings_cog_is_visible_on_hover_and_keyboard_focus_without_an_idle_panel() {
+    use super::{MenuArtCache, update_menu_notice};
+    use bevy::{input_focus::InputFocusVisible, picking::hover::Hovered};
+
+    let (mut app, cog) = fixture();
+    app.init_resource::<Assets<Image>>();
+    app.init_resource::<MenuArtCache>();
+    app.insert_resource(InputFocus::default());
+    app.insert_resource(InputFocusVisible(false));
+    scope(&mut app, Screen::Main);
+    assert_eq!(
+        app.world().get::<BackgroundColor>(cog).unwrap().0,
+        Color::NONE
+    );
+
+    for (hovered, focused, keyboard, alpha) in [
+        (false, false, false, 0.0),
+        (true, false, false, 1.0),
+        (false, true, true, 1.0),
+        (false, true, false, 0.0),
+    ] {
+        app.world_mut().entity_mut(cog).insert(Hovered(hovered));
+        app.insert_resource(if focused {
+            InputFocus::from_entity(cog)
+        } else {
+            InputFocus::default()
+        });
+        app.insert_resource(InputFocusVisible(keyboard));
+        app.world_mut().run_system_once(update_menu_notice).unwrap();
+        assert_eq!(
+            app.world().get::<ImageNode>(cog).unwrap().color.alpha(),
+            alpha
+        );
+        assert_scope(app.world(), cog, true);
+    }
+}

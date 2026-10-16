@@ -2,9 +2,12 @@
 
 The current Resolution control changes the window/browser render extent. It
 does not choose an exclusive physical display mode, bit depth or refresh.
-Source-qualified full mode choices remain separate work in
-[the display contract](original-display-modes.md). No original resolution
-presets or preference values were copied into this implementation.
+No original resolution presets or preference values were copied into this
+implementation.
+
+The selector may list source-qualified rows from an admitted client profile
+and the primary monitor. Apply still changes only the client render extent.
+See [the display contract](original-display-modes.md).
 
 Previously Apply saved preferences before Winit processed the resize, then
 reported the requested dimensions as applied. The regression fails against that
@@ -21,6 +24,12 @@ Window or this app's synthesized WindowResized events. A reported match permits
 saving and publication, followed by the normal Main-menu transition. Unchanged
 sizes and audio-only changes retain the direct validated path. Source/window
 replacement and changed drafts cannot publish a stale candidate.
+
+The current reported client size need not occur in the source-qualified choice
+list. Keeping that size allows an audio-only Apply after startup fitting or an
+external resize. Apply refreshes the actual Winit report before validating this
+case; a new unavailable size and an explicitly selected row that disappeared
+still refuse. This does not add the current size to the original-derived list.
 
 If Winit recreates the native window for the same Bevy entity, abandoning a
 pending request restores that component's prior size and canvas-sizing flag.
@@ -43,6 +52,14 @@ Filesystem/localStorage, a window system and audio are not one atomic resource.
 Browser audio can still fail after storage succeeds. That branch keeps committed
 settings, reports the post-save audio failure and stays in Options; it does not
 enter the pre-save rollback path or claim nothing changed.
+
+The current integration also passes an actual X11/Winit transaction with no
+offered sizes and a cleared cached observation. Audio-only Apply obtains the
+native client size directly, saves at that size without requesting a resize,
+and leaves the offered list empty. The same run passes save-failure restoration
+and Cancel. The stable application suite passes 340 tests. Evidence is retained
+under `.scratch/menu-ui-native-root-20261017/verification-5/`; this is narrower
+than a rendered Options or exclusive-display acceptance test.
 
 ## Observation limits
 

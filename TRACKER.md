@@ -1507,6 +1507,25 @@ Format: `date — subsystem — symptom — root cause — status`
 
 ## Remaining-work dependency map
 
+The current menu baseline preserves source-qualified enumeration rows, labels,
+refresh grouping and session selection without a preset resolution list. A
+native first-run window fits nine tenths of its reported monitor; explicit saved
+resolution intent retains the existing restoration owner. This fraction is a
+project presentation policy, not an original game default. Audio-only Apply can
+save at an actual reported client size absent from the offered list.
+
+This integration passes 340 application tests, three explicit actual-window
+gates, strict native/browser-WASM Clippy, ten display-profile tests executed by
+Wasmtime, and warning-denied display documentation. Source-table popup families,
+active original mode policy, exclusive switching and equal rendered Options
+choices remain open. The current installer engine does not admit the supported
+display profile; its successful local extraction does not grant that capability.
+Wide and compact main-menu captures pass geometry checks, but the fresh Options
+sequence remains incomplete. No new browser package is published by this
+checkpoint. Evidence is retained in `.scratch/menu-ui-native-root-20261017/`,
+`.scratch/menu-ui-cross-root-20261017/` and
+`.scratch/browser-display-profile-root-20261017/`.
+
 The [101-entry requirements map](docs/remaining-work/README.md) reconciles the
 open and partial gates against source evidence and lists their prerequisites.
 It is pinned to the pre-correction tracker snapshot; broad gameplay and original

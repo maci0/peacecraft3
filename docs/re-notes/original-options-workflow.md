@@ -34,27 +34,34 @@ Those slider initials are not evidence of the game's first-run preferences.
 Named config/MiscData inspection did not establish those preferences either.
 The exact client's lookup-null [fallback data path](original-options-defaults.md)
 now has a checked source importer. Subsequent native inspection connects the
-control reads, mode provider, source-table augmentation and local matching;
-effective first-run selection and runtime integration remain open. A measured resolution
-or slider value must not become
-a source constant. Current window-derived selection remains a recreation
-convention. Native audio consumes qualified client fallbacks when no saved
-preferences win; unsupported or MPQ-only sources retain explicitly unqualified
+control reads, mode provider, source-table augmentation and local matching.
+The enumeration-family selector is wired when that profile is admitted.
+Augmentation, exclusive physical modes and effective first-run selection remain
+open. A measured resolution or slider value must not become a source constant.
+Current window-derived selection remains a recreation convention. Native audio
+consumes qualified client fallbacks when no saved preferences win; unsupported
+or MPQ-only sources retain explicitly unqualified
 neutral multipliers. See [source defaults](original-options-defaults.md).
 
-Native monitor mode records include refresh and bit depth, but the current menu
-reduces them to width/height pairs. Original labels, filtering, grouping and
-matching are now checked at their [source boundary](original-display-modes.md),
-without claiming the runtime consumer or effective first-run selection is done.
-Browser render-size choices are
-an explicit host capability, not OS-exclusive display-mode enumeration. The
+Native monitor mode records include refresh and bit depth. When the selected
+client admits an enumeration-family profile and the primary monitor has video
+modes, the menu offers those grouped source labels in provider order. Otherwise
+it lists measured render sizes. Original labels, filtering, grouping and
+matching are checked at their [source boundary](original-display-modes.md).
+Pair-table augmentation and exclusive physical modes are not offered. Browser
+render-size choices are an explicit host capability, not OS-exclusive
+display-mode enumeration. The
 [qualified native enumeration](original-display-modes.md) retains device/mode
 identity, depth and refresh; its complete provider also adds source-table and
-derived choices. No fixed preset list replaces that policy.
+derived choices that this selector does not invent. No fixed preset list
+replaces that policy.
 
 Supported settings are actual render resolution, music/effects gains and their
-enable toggles. Native choices come from the current window, monitor and monitor
-video modes. Browser choices combine the current window resolution with the actual preview
+enable toggles. Qualified native choices come from the primary monitor's video
+modes after the admitted client's enumeration filter and refresh grouping.
+Without that profile, native choices are the current window, the current
+monitor size and that monitor's video-mode sizes, reduced to render sizes.
+Browser choices combine the current window resolution with the actual preview
 container and screen dimensions at the observed device pixel ratio. The container
 remains measurable after selecting another mode; temporary canvas bitmap sizes
 are excluded. This is not an enumerated OS mode list. Browser preview fitting centers and scales

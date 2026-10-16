@@ -1,6 +1,9 @@
-//! Supported user preferences. Slider units come from the current FDF widgets;
-//! display choices come from the current window/monitor or browser environment.
-use crate::menu_screens::{Navigation, SettingControl, SettingValue, Settings, Widget};
+//! Supported user preferences. Slider units come from the current FDF widgets.
+//! Qualified display rows come from the selected client's mode profile and the
+//! primary monitor. Otherwise the list is measured render sizes.
+use crate::menu_screens::{
+    Navigation, OfferedResolution, SettingControl, SettingValue, Settings, Widget,
+};
 use bevy::{
     prelude::*,
     ui::{Checked, InteractionDisabled},
@@ -8,7 +11,7 @@ use bevy::{
         Checkbox, Slider, SliderOrientation, SliderRange, SliderStep, SliderValue, TrackClick,
         ValueChange,
     },
-    window::{Monitor, OnMonitor, PrimaryWindow},
+    window::{Monitor, OnMonitor, PrimaryMonitor, PrimaryWindow},
 };
 use std::collections::BTreeMap;
 
@@ -117,18 +120,43 @@ impl Range {
         )
     }
 }
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct DisplayAdmission {
+    path: String,
+    expansion: bool,
+    state: DisplayState,
+    announced: bool,
+    empty_noted: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+enum DisplayState {
+    #[default]
+    Unchecked,
+    Unqualified {
+        detail: Option<String>,
+    },
+    Qualified(pcx_play::options_modes::Policy),
+}
+
 #[derive(Resource, Default)]
 pub struct Backend {
     pub audio: AudioSettings,
     ranges: BTreeMap<String, Range>,
     loaded: bool,
     has_preferences: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    saved_resolution: bool,
     preference_unreadable: Option<String>,
     #[cfg(not(target_arch = "wasm32"))]
     source: Option<(String, crate::launch::GameMode)>,
     pending_resolution: Option<(u32, u32)>,
     observed_resolution: Option<(u32, u32)>,
     resize: Option<resolution::Pending>,
+    #[cfg(not(target_arch = "wasm32"))]
+    display: DisplayAdmission,
 }
 impl Backend {
     pub(crate) fn applying_resolution(&self) -> bool {
@@ -197,6 +225,12 @@ impl Backend {
     }
 
     #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn set_test_saved_resolution(&mut self, saved: bool) {
+        self.set_test_preferences(true);
+        self.saved_resolution = saved;
+    }
+
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn set_test_source(&mut self, launcher: &crate::launch_gui::Launcher) {
         let (source, mode) = launcher.audio_selection();
         self.source = Some((source.to_owned(), mode));
@@ -216,6 +250,10 @@ impl Backend {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn has_preferences(&self) -> bool {
         self.has_preferences
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn has_saved_resolution(&self) -> bool {
+        self.saved_resolution
     }
     fn candidate_audio(
         &self,
@@ -470,11 +508,25 @@ pub(crate) fn activate_source_audio(
     Ok(())
 }
 
+#[cfg(test)]
 pub fn select_resolution(nav: &mut Navigation, resolution: (u32, u32)) -> Result<(), String> {
-    if !nav.resolutions.contains(&resolution) {
+    let Some(offer) = nav
+        .resolutions
+        .iter()
+        .find(|row| row.size == resolution)
+        .cloned()
+    else {
+        return Err("That resolution is no longer available on this display".into());
+    };
+    select_offer(nav, &offer)
+}
+
+pub fn select_offer(nav: &mut Navigation, offer: &OfferedResolution) -> Result<(), String> {
+    if !nav.resolutions.iter().any(|row| row.same_mode(offer)) {
         return Err("That resolution is no longer available on this display".into());
     }
-    nav.draft.resolution = Some(resolution);
+    nav.selected_offer = Some(offer.clone());
+    nav.draft.resolution = Some(offer.size);
     Ok(())
 }
 /// Save only after Winit reports the requested client size. This is not a
@@ -490,12 +542,16 @@ pub(crate) fn apply(
 }
 fn prepare(nav: &Navigation, backend: &Backend) -> Result<Prepared, String> {
     validate_settings(&nav.draft)?;
-    if nav
-        .draft
-        .resolution
-        .is_some_and(|r| !nav.resolutions.contains(&r))
-    {
-        return Err("Selected resolution is unavailable on this display".into());
+    if let Some(size) = nav.draft.resolution {
+        if !nav.offers_size(size) && backend.observed_resolution != Some(size) {
+            return Err("Selected resolution is unavailable on this display".into());
+        }
+        if let Some(selected) = &nav.selected_offer
+            && selected.size == size
+            && !nav.resolutions.iter().any(|row| row.same_mode(selected))
+        {
+            return Err("Selected resolution is unavailable on this display".into());
+        }
     }
     let audio = backend.candidate_audio(&nav.draft, &nav.applied)?;
     let text = serde_json::to_string(&Preferences {
@@ -579,7 +635,309 @@ fn observe_resolution(nav: &mut Navigation, backend: &mut Backend, current: (u32
         let previous = nav.applied.resolution.replace(current);
         if nav.draft.resolution == previous {
             nav.draft.resolution = Some(current);
+            if previous != Some(current) {
+                nav.selected_offer = None;
+            }
         }
+    }
+}
+
+fn render_offers(mut modes: Vec<(u32, u32)>) -> Vec<OfferedResolution> {
+    modes.retain(|(width, height)| *width > 0 && *height > 0);
+    modes.sort_unstable();
+    modes.dedup();
+    modes
+        .into_iter()
+        .map(|(width, height)| OfferedResolution::render_size(width, height))
+        .collect()
+}
+
+fn offered_from_row(row: &pcx_play::options_modes::Row) -> OfferedResolution {
+    OfferedResolution {
+        label: row.label.clone(),
+        size: (row.width, row.height),
+        depth: row.depth,
+        refresh_millihertz: row.refresh_millihertz,
+        adapter: row.adapter,
+        mode_index: row.mode_index,
+        kind: row.kind,
+        flag: row.flag,
+        render_extent_only: false,
+    }
+}
+
+fn catalog_row(offer: &OfferedResolution) -> pcx_play::options_modes::Row {
+    pcx_play::options_modes::Row {
+        label: offer.label.clone(),
+        width: offer.size.0,
+        height: offer.size.1,
+        depth: offer.depth,
+        refresh_millihertz: offer.refresh_millihertz,
+        adapter: offer.adapter,
+        mode_index: offer.mode_index,
+        kind: offer.kind,
+        flag: offer.flag,
+    }
+}
+
+fn first_exact(rows: &[OfferedResolution], size: (u32, u32)) -> Option<OfferedResolution> {
+    rows.iter().find(|row| row.size == size).cloned()
+}
+
+fn choose_offer(nav: &mut Navigation, policy: Option<&pcx_play::options_modes::Policy>) {
+    let Some(size) = nav.draft.resolution else {
+        nav.selected_offer = None;
+        return;
+    };
+    if let Some(selected) = nav.selected_offer.clone()
+        && selected.size == size
+        && let Some(row) = nav.resolutions.iter().find(|row| row.same_mode(&selected))
+    {
+        nav.selected_offer = Some(row.clone());
+        return;
+    }
+    if let Some(policy) = policy
+        && nav.resolutions.iter().any(|row| !row.render_extent_only)
+        && let Some(row) = scored_offer(policy, &nav.resolutions, size)
+    {
+        nav.selected_offer = Some(row);
+        return;
+    }
+    nav.selected_offer = first_exact(&nav.resolutions, size);
+}
+
+fn scored_offer(
+    policy: &pcx_play::options_modes::Policy,
+    rows: &[OfferedResolution],
+    size: (u32, u32),
+) -> Option<OfferedResolution> {
+    let qualified: Vec<_> = rows
+        .iter()
+        .filter(|row| !row.render_extent_only)
+        .map(catalog_row)
+        .collect();
+    let (Ok(width), Ok(height)) = (i32::try_from(size.0), i32::try_from(size.1)) else {
+        return first_exact(rows, size);
+    };
+    let query = pcx_play::options_modes::Query {
+        width,
+        height,
+        depth: 0,
+        refresh: 0,
+        adapter: qualified.first()?.adapter,
+        kind: policy.kind(),
+        flag: 0,
+    };
+    let winner = policy
+        .select(&qualified, query)
+        .ok()
+        .flatten()
+        .and_then(|index| qualified.get(index))
+        .filter(|row| row.width == size.0 && row.height == size.1);
+    winner
+        .map(offered_from_row)
+        .or_else(|| first_exact(rows, size))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn observed_depth(bits: u16) -> Option<u32> {
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        (bits != 0).then_some(u32::from(bits))
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = bits;
+        None
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn session_adapter(policy: &pcx_play::options_modes::Policy) -> Option<u32> {
+    (1..64u32).find(|&candidate| {
+        i32::try_from(candidate)
+            .ok()
+            .is_some_and(|signed| signed != policy.sentinel() && signed != policy.wildcard())
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn qualified_offers(
+    policy: &pcx_play::options_modes::Policy,
+    monitor: &Monitor,
+) -> Result<Vec<OfferedResolution>, String> {
+    let Some(adapter) = session_adapter(policy) else {
+        return Err("Display mode profile has no usable session monitor token".into());
+    };
+    let mut records = Vec::new();
+    for (index, mode) in monitor.video_modes.iter().enumerate() {
+        let Ok(mode_index) = u32::try_from(index) else {
+            return Err("Display mode list exceeds its index limit".into());
+        };
+        records.push(pcx_play::options_modes::HostRecord {
+            width: mode.physical_size.x,
+            height: mode.physical_size.y,
+            depth: observed_depth(mode.bit_depth),
+            refresh_millihertz: (mode.refresh_rate_millihertz != 0)
+                .then_some(mode.refresh_rate_millihertz),
+            adapter,
+            mode_index,
+        });
+    }
+    policy
+        .rows(&records, Some(0))
+        .map(|rows| rows.iter().map(offered_from_row).collect())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn discover_display_policy(
+    install: &std::path::Path,
+    expansion: bool,
+) -> Result<Option<pcx_play::options_modes::Policy>, String> {
+    use pcx_play::{
+        neutral_player::RuleInputBudget,
+        options_modes::{DiscoveryBudget, Policy, Problem},
+    };
+    use std::io::Read;
+    const IMAGE_BYTES: usize = 32 * 1024 * 1024;
+    let path = install.join("Warcraft III.exe");
+    let mut file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    if file
+        .metadata()
+        .map_err(|error| format!("{}: {error}", path.display()))?
+        .len()
+        > IMAGE_BYTES as u64
+    {
+        return Err(format!(
+            "{}: Options client exceeds image budget",
+            path.display()
+        ));
+    }
+    let mut image = Vec::new();
+    image
+        .try_reserve_exact(IMAGE_BYTES + 1)
+        .map_err(|error| error.to_string())?;
+    file.by_ref()
+        .take((IMAGE_BYTES + 1) as u64)
+        .read_to_end(&mut image)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let origin = pcx_play::scripts::AssetIdentity {
+        edition: format!("selected skin V{}", u32::from(expansion)),
+        version: "pattern-qualified PE32; release identity not inferred".into(),
+        source: path.display().to_string(),
+    };
+    match Policy::discover(
+        &image,
+        origin,
+        DiscoveryBudget {
+            image: RuleInputBudget {
+                image_bytes: IMAGE_BYTES,
+                profile_bytes: 128 * 1024,
+                sections: 96,
+            },
+            label_bytes: 256,
+            candidate_limit: 32,
+            work_bytes: 64 * 1024 * 1024,
+        },
+    ) {
+        Ok(policy) => Ok(Some(policy)),
+        Err(error)
+            if matches!(
+                error.problem,
+                Problem::None
+                    | Problem::Image(pcx_play::neutral_player::NeutralError::Rule(
+                        pcx_play::neutral_player::RuleProblem::UnsupportedArchitecture { .. }
+                    ))
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn display_policy(
+    backend: &mut Backend,
+    launcher: &crate::launch_gui::Launcher,
+) -> Option<pcx_play::options_modes::Policy> {
+    let install = crate::launch_gui::selected_install(launcher)?;
+    let path = install.join("Warcraft III.exe").display().to_string();
+    let expansion = launcher.expansion();
+    if backend.display.path != path || backend.display.expansion != expansion {
+        backend.display = DisplayAdmission {
+            path,
+            expansion,
+            ..Default::default()
+        };
+    }
+    if matches!(backend.display.state, DisplayState::Unchecked) {
+        backend.display.state = match discover_display_policy(&install, expansion) {
+            Ok(Some(policy)) => DisplayState::Qualified(policy),
+            Ok(None) => DisplayState::Unqualified { detail: None },
+            Err(detail) => DisplayState::Unqualified {
+                detail: Some(detail),
+            },
+        };
+        backend.display.announced = false;
+        backend.display.empty_noted = false;
+    }
+    match &backend.display.state {
+        DisplayState::Qualified(policy) => Some(policy.clone()),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn note_listing_failure(nav: &mut Navigation, backend: &mut Backend, error: &str) {
+    if backend.display.empty_noted {
+        return;
+    }
+    warn!("Qualified display modes could not be listed: {error}");
+    if nav.notice.is_empty() {
+        nav.notice = format!("Qualified display modes could not be listed. {error}");
+    }
+    backend.display.empty_noted = true;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn clear_qualified_notice(nav: &mut Navigation) {
+    const LISTING: &str = "Qualified display modes could not be listed.";
+    const EMPTY: &str = "No display modes passed the qualified client filter for this monitor.";
+    if nav.notice == EMPTY || nav.notice.starts_with(LISTING) {
+        nav.notice.clear();
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn announce_display(nav: &mut Navigation, backend: &mut Backend, empty_qualified: bool) {
+    if !backend.display.announced {
+        if let DisplayState::Unqualified {
+            detail: Some(detail),
+        } = &backend.display.state
+        {
+            let detail = detail.clone();
+            warn!("Display mode profile was not admitted: {detail}");
+            if nav.notice.is_empty() {
+                nav.notice = format!(
+                    "Display mode profile was not admitted; listing render sizes only. {detail}"
+                );
+            }
+        }
+        backend.display.announced = true;
+    }
+    if empty_qualified && !backend.display.empty_noted {
+        warn!("Qualified display profile admitted no modes for the primary monitor");
+        if nav.notice.is_empty() {
+            nav.notice =
+                "No display modes passed the qualified client filter for this monitor.".into();
+        }
+        backend.display.empty_noted = true;
     }
 }
 
@@ -587,7 +945,7 @@ fn environment(
     mut nav: ResMut<Navigation>,
     mut backend: ResMut<Backend>,
     mut windows: Query<(Entity, &mut Window, Option<&OnMonitor>), With<PrimaryWindow>>,
-    monitors: Query<&Monitor>,
+    monitors: Query<(&Monitor, Has<PrimaryMonitor>)>,
     launcher: Res<crate::launch_gui::Launcher>,
     _main_thread: bevy::ecs::system::NonSendMarker,
 ) {
@@ -598,7 +956,7 @@ fn environment(
         .observed_resolution
         .unwrap_or((window.physical_width(), window.physical_height()));
     let mut modes = vec![current];
-    if let Some(monitor) = on_monitor.and_then(|on| monitors.get(on.0).ok()) {
+    if let Some((monitor, _)) = on_monitor.and_then(|on| monitors.get(on.0).ok()) {
         modes.push((monitor.physical_width, monitor.physical_height));
         modes.extend(
             monitor
@@ -617,15 +975,49 @@ fn environment(
         Ok(_) => nav.notice = "Browser display information exceeds its input limit".into(),
         Err(error) => nav.notice = format!("Browser display information: {error:?}"),
     }
-    modes.retain(|(w, h)| *w > 0 && *h > 0);
-    modes.sort_unstable();
-    modes.dedup();
-    nav.resolutions = modes;
+    #[cfg(target_arch = "wasm32")]
+    let policy: Option<pcx_play::options_modes::Policy> = None;
+    #[cfg(target_arch = "wasm32")]
+    {
+        nav.resolutions = render_offers(modes);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let policy = display_policy(&mut backend, &launcher);
+    #[cfg(not(target_arch = "wasm32"))]
+    let empty_qualified = if let Some(policy) = policy.as_ref()
+        && let Some((monitor, _)) = monitors.iter().find(|(_, primary)| *primary)
+    {
+        match qualified_offers(policy, monitor) {
+            Ok(rows) => {
+                let empty = rows.is_empty();
+                if !empty {
+                    clear_qualified_notice(&mut nav);
+                }
+                nav.resolutions = rows;
+                empty
+            }
+            Err(error) => {
+                nav.resolutions.clear();
+                note_listing_failure(&mut nav, &mut backend, &error);
+                false
+            }
+        }
+    } else {
+        nav.resolutions = render_offers(modes);
+        if !nav.resolutions.is_empty() {
+            clear_qualified_notice(&mut nav);
+        }
+        false
+    };
     if !backend.loaded {
         backend.loaded = true;
         match load_preferences() {
             Ok(Some(text)) => match decode_preferences(&text) {
                 Ok(prefs) => {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        backend.saved_resolution = prefs.settings.resolution.is_some();
+                    }
                     nav.applied = prefs.settings;
                     backend.audio = prefs.audio;
                     backend.has_preferences = true;
@@ -651,7 +1043,7 @@ fn environment(
     if backend.resize.is_none()
         && let Some(resolution) = backend.pending_resolution
     {
-        if nav.resolutions.contains(&resolution) {
+        if nav.offers_size(resolution) {
             if resolution::startup(
                 entity,
                 &mut nav,
@@ -670,6 +1062,9 @@ fn environment(
                 "Saved resolution is unavailable on this display; using the current window".into();
         }
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    announce_display(&mut nav, &mut backend, empty_qualified);
+    choose_offer(&mut nav, policy.as_ref());
 }
 fn attach_controls(
     mut commands: Commands,
@@ -849,7 +1244,13 @@ fn labels(
             Widget::Popup { .. } if control.name == "ResolutionMenu" => nav
                 .draft
                 .resolution
-                .map(|(w, h)| format!("{w} x {h}"))
+                .map(|(w, h)| {
+                    nav.selected_offer
+                        .as_ref()
+                        .filter(|offer| offer.size == (w, h))
+                        .map(|offer| offer.label.clone())
+                        .unwrap_or_else(|| format!("{w} x {h}"))
+                })
                 .unwrap_or_default(),
             Widget::Popup { .. } => preview
                 .and_then(|p| p.popup.clone())
@@ -984,7 +1385,7 @@ mod tests {
     #[test]
     fn unobserved_render_size_is_not_saved_as_applied() {
         let mut nav = Navigation {
-            resolutions: vec![(740, 510)],
+            resolutions: vec![OfferedResolution::render_size(740, 510)],
             ..default()
         };
         nav.draft.resolution = Some((740, 510));
@@ -1027,10 +1428,11 @@ mod tests {
         observe_resolution(&mut nav, &mut backend, (740, 510));
         nav.applied.resolution = Some((740, 510));
         nav.draft = nav.applied.clone();
-        nav.resolutions = vec![(960, 650)];
+        nav.resolutions = vec![OfferedResolution::render_size(800, 600)];
         observe_resolution(&mut nav, &mut backend, (960, 650));
         assert_eq!(nav.applied.resolution, Some((960, 650)));
         assert_eq!(nav.draft.resolution, Some((960, 650)));
+        assert!(!nav.offers_size((960, 650)));
         nav.draft.toggles.insert("MusicCheckBox".into(), false);
         let mut window = Window::default();
         window.resolution.set_physical_resolution(960, 650);
@@ -1040,6 +1442,25 @@ mod tests {
             (window.physical_width(), window.physical_height()),
             (960, 650)
         );
+    }
+
+    #[test]
+    fn unavailable_sizes_need_a_current_report_and_stale_selections_still_refuse() {
+        let current = (913, 617);
+        let mut nav = Navigation::default();
+        nav.applied.resolution = Some(current);
+        nav.draft = nav.applied.clone();
+        let mut backend = Backend::default();
+        for observed in [None, Some((701, 503))] {
+            backend.observed_resolution = observed;
+            assert!(prepare(&nav, &backend).is_err());
+        }
+        backend.observed_resolution = Some(current);
+        nav.draft.resolution = Some((811, 563));
+        assert!(prepare(&nav, &backend).is_err());
+        nav.draft.resolution = Some(current);
+        nav.selected_offer = Some(OfferedResolution::render_size(current.0, current.1));
+        assert!(prepare(&nav, &backend).is_err());
     }
 
     #[test]
@@ -1126,7 +1547,10 @@ mod tests {
     #[test]
     fn choosing_resolution_changes_only_draft_and_refuses_stale_modes() {
         let mut nav = Navigation {
-            resolutions: vec![(740, 510), (1480, 1020)],
+            resolutions: vec![
+                OfferedResolution::render_size(740, 510),
+                OfferedResolution::render_size(1480, 1020),
+            ],
             ..default()
         };
         let applied = nav.applied.clone();
@@ -1268,7 +1692,7 @@ mod tests {
     #[test]
     fn apply_validation_and_storage_failure_preserve_state_then_commit_once() {
         let mut nav = Navigation {
-            resolutions: vec![(740, 510)],
+            resolutions: vec![OfferedResolution::render_size(740, 510)],
             ..default()
         };
         nav.draft.resolution = Some((740, 510));
@@ -1318,6 +1742,110 @@ mod tests {
         );
         assert_eq!(backend.audio.effective_music(), 0.5);
     }
+    #[test]
+    fn same_size_offers_keep_the_selected_refresh_until_cancel() {
+        let slow = OfferedResolution {
+            refresh_millihertz: Some(60_000),
+            mode_index: 1,
+            label: "800x600".into(),
+            render_extent_only: false,
+            ..OfferedResolution::render_size(800, 600)
+        };
+        let fast = OfferedResolution {
+            refresh_millihertz: Some(144_000),
+            mode_index: 4,
+            ..slow.clone()
+        };
+        let mut nav = Navigation {
+            screen: crate::menu_screens::Screen::Options(crate::menu_screens::Page::Video),
+            resolutions: vec![slow, fast.clone()],
+            ..default()
+        };
+        select_offer(&mut nav, &fast).unwrap();
+        assert_eq!(nav.draft.resolution, Some((800, 600)));
+        assert_eq!(
+            nav.selected_offer.as_ref().unwrap().refresh_millihertz,
+            Some(144_000)
+        );
+        assert!(select_offer(&mut nav, &OfferedResolution::render_size(1, 1)).is_err());
+        assert_eq!(
+            nav.selected_offer.as_ref().unwrap().mode_index,
+            4,
+            "a refused row must not replace the selection"
+        );
+        nav.action("CancelButton");
+        assert!(nav.selected_offer.is_none());
+        assert_eq!(nav.draft.resolution, nav.applied.resolution);
+    }
+
+    #[test]
+    fn choose_offer_keeps_same_size_identity_and_replaces_a_stale_size() {
+        let slow = OfferedResolution {
+            refresh_millihertz: Some(60_000),
+            mode_index: 1,
+            label: "800x600".into(),
+            render_extent_only: false,
+            ..OfferedResolution::render_size(800, 600)
+        };
+        let fast = OfferedResolution {
+            refresh_millihertz: Some(144_000),
+            mode_index: 4,
+            ..slow.clone()
+        };
+        let mut nav = Navigation {
+            resolutions: vec![slow, fast.clone(), OfferedResolution::render_size(640, 480)],
+            ..default()
+        };
+        nav.draft.resolution = Some((800, 600));
+        select_offer(&mut nav, &fast).unwrap();
+        choose_offer(&mut nav, None);
+        assert_eq!(nav.selected_offer.as_ref().unwrap().mode_index, 4);
+        assert_eq!(nav.draft.resolution, Some((800, 600)));
+        nav.draft.resolution = Some((640, 480));
+        choose_offer(&mut nav, None);
+        assert_eq!(nav.draft.resolution, Some((640, 480)));
+        let selected = nav.selected_offer.as_ref().unwrap();
+        assert!(selected.render_extent_only);
+        assert_eq!(selected.size, (640, 480));
+        nav.draft.resolution = Some((1, 1));
+        choose_offer(&mut nav, None);
+        assert!(nav.selected_offer.is_none());
+        assert_eq!(nav.draft.resolution, Some((1, 1)));
+        assert_eq!(nav.resolutions.len(), 3);
+    }
+
+    #[test]
+    fn render_offers_drop_nonpositive_sizes_and_add_no_fallback() {
+        let rows = render_offers(vec![(0, 10), (10, 0), (800, 600), (800, 600), (640, 480)]);
+        assert!(rows.iter().all(|row| row.render_extent_only));
+        assert_eq!(
+            rows.iter().map(|row| row.size).collect::<Vec<_>>(),
+            vec![(640, 480), (800, 600)]
+        );
+        assert!(render_offers(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn popup_title_separates_qualified_rows_render_sizes_and_an_empty_list() {
+        let render = OfferedResolution::render_size(800, 600);
+        let qualified = OfferedResolution {
+            render_extent_only: false,
+            ..render.clone()
+        };
+        assert_eq!(
+            crate::menu_screens::resolution_popup_title(&[]),
+            "No display sizes are available."
+        );
+        assert_eq!(
+            crate::menu_screens::resolution_popup_title(&[render]),
+            "Render sizes, not exclusive display modes."
+        );
+        assert_eq!(
+            crate::menu_screens::resolution_popup_title(&[qualified]),
+            "Sizes from the qualified client and this monitor. Apply changes the window render size."
+        );
+    }
+
     fn seed(gain: f32) -> original::Seed {
         let range = Range {
             min: 10.0,
