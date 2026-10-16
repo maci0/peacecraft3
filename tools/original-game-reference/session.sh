@@ -7,7 +7,7 @@ printf "enable-shm = no\nenable-memfd = no\n" >"$HOME/.config/pulse/client.conf"
 export PULSE_SERVER="unix:$XDG_RUNTIME_DIR/native"
 pulseaudio --daemonize=yes --exit-idle-time=-1 --log-target=file:/run/reference/pulseaudio.log -n -L "module-native-protocol-unix socket=$XDG_RUNTIME_DIR/native" -L "module-null-sink sink_name=reference"
 pactl list short sinks >audio-sinks.txt
-Xvfb "$DISPLAY" -screen 0 "${REFERENCE_WIDTH}x${REFERENCE_HEIGHT}x24" -dpi "$REFERENCE_DPI" -nolisten tcp >xvfb.log 2>&1 &
+Xvfb "$DISPLAY" -screen 0 "${REFERENCE_WIDTH}x${REFERENCE_HEIGHT}x24" -dpi "$REFERENCE_DPI" -r -nolisten tcp >xvfb.log 2>&1 &
 xpid=$!
 trap 'wineserver -k || true; pulseaudio --kill || true; kill "$xpid" || true' EXIT INT TERM
 for i in $(seq 1 100); do xdpyinfo >/dev/null 2>&1 && break; sleep .1; done

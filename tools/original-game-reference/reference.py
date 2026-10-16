@@ -142,6 +142,7 @@ def launch(args):
                'framebuffer': [args.width, args.height], 'x_dpi': args.dpi,
                'runtime': 'Wine/Xvfb/software Mesa; not native Windows ground truth',
                'harness_sha256': {p.name: digest(p) for p in [HERE / 'reference.py', HERE / 'session.sh', HERE / 'Dockerfile']},
+               'keyboard_autorepeat': 'disabled by Xvfb -r; replay supplies explicit down/up events',
                'movie_decoder': 'winegstreamer disabled: unsupported DirectShow playback'})
     container = command(argv)
     mark(path, 'launch', {'container': container})
@@ -231,6 +232,11 @@ def report(args):
     return {'report': str(target / 'index.html'), 'extent': size}
 
 
+def compare(args):
+    from replay import compare as replay
+    return replay(args, sys.modules[__name__])
+
+
 class Parser(argparse.ArgumentParser):
     def error(self, message):
         raise Failure(message)
@@ -260,6 +266,10 @@ def parser():
             a.add_argument('--x', type=int, required=True); a.add_argument('--y', type=int, required=True)
     a = s.add_parser('report')
     for arg in ['reference', 'recreation', 'output', 'note']: a.add_argument('--' + arg, required=True)
+    a = s.add_parser('compare', help='replay one shared input journal and compare paired captures')
+    for arg in ['run-dir', 'scenario', 'url', 'manifest', 'iso', 'playwright-module', 'output']:
+        a.add_argument('--' + arg, required=True)
+    a.add_argument('--chromium', default='/usr/bin/chromium')
     return p
 
 
@@ -270,10 +280,14 @@ def main():
             result = json.loads((HERE / 'schema.json').read_text())
         else:
             handler = {'prepare': prepare, 'launch': launch, 'status': status, 'stop': stop,
-                       'capture': capture, 'key': action, 'click': action, 'report': report}[args.command]
+                       'capture': capture, 'key': action, 'click': action, 'report': report,
+                       'compare': compare}[args.command]
             result = handler(args)
         print(json.dumps(result) if args.format == 'json' else json.dumps(result, indent=2))
-        return 0
+        return 1 if args.command == 'compare' and not result['images_equal'] else 0
+    except KeyboardInterrupt:
+        print(json.dumps({'error': {'kind': 'reference_interrupted', 'message': 'Interrupted; inspect retained receipts before starting a new run', 'retryable': False}}), file=sys.stderr)
+        return 130
     except (Failure, OSError, ValueError, ImportError, subprocess.TimeoutExpired) as error:
         print(json.dumps({'error': {'kind': 'reference_failed', 'message': str(error), 'retryable': False}}), file=sys.stderr)
         return 2

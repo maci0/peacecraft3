@@ -98,3 +98,50 @@ changed to fit a screenshot.
 Actual captures, display/window receipts, action timestamps and command logs stay
 in ignored local directories. Equal-size screenshots are necessary for comparison
 but do not synchronize animation clocks or establish complete visual fidelity.
+
+## Paired input replay
+
+The comparison command now sends one bounded, versioned physical-input journal
+to both the private original window and a fresh local browser canvas. It checks
+the original client extent/DPI/focus and disables X keyboard auto-repeat for
+explicit down/up replay. The browser uses actual DPR1, identical physical pixels,
+physical key codes and a hash-checked code-only loopback page. Original imports
+remain local File/Blob data; service workers and WebSockets are blocked.
+
+A live 1024×768 diagnostic replays one pointer move and six key transitions,
+with four paired checkpoints: Main, Options entry, Video and return to Main.
+All eight images were visually reviewed. Both sides receive the same event
+objects; the receipt retains actual operation times and requested delays after
+both preceding operations finish. There were 15 admitted code GETs and no
+browser errors, uploads or sockets. The CLI returns the documented difference
+outcome 1 with JSON data on stdout and empty stderr. Images differ; this is not
+a parity pass. In particular, the original Options landing has no selected
+category body while the recreation immediately displays Gameplay settings.
+
+Two harness defects were found through actual checks and corrected. Viewport
+coordinates passed directly to CDP capture produced a correctly sized but wrong
+crop containing demo HTML; the retained 4K attempt is rejected. A synthetic
+red-header/green-canvas browser test verifies the document offset and exact
+canvas coverage. Another early diagnostic included capture cost in absolute
+deadlines, compressing later input waits; the current scheduler waits relative
+to completion of both preceding operations. Those early artifacts stay local
+and are not accepted as timing evidence. The real browser adapter test also
+checks explicit pointer events and shifted physical letter/digit keys.
+
+Randomness and animation phase are still uncontrolled. The synthetic simulation
+RNG, JASS native RNG and menu-particle stream are separate; current gameplay
+Hosts do not implement the supplied random natives. No original launcher seed
+hook has been proved. A non-null script seed therefore refuses before input
+effects; a recorded number never becomes an applied-seed claim. The report
+always retains `deterministic_parity_verified: false`. A private, intentionally
+modified test-map probe is the next step toward observing actual seed setters
+and draw sequences. It is not acceptance of unmodified campaign behavior.
+
+The extended diagnostic completed four paired checkpoints at 1280×960,
+1920×1080 and 2560×1440. A 3840×2160 browser screenshot exceeded the adapter's
+30-second operation bound; that run is retained as failed, not a 4K paired pass.
+Original-only 4K reference captures remain independently valid. Earlier browser
+receipts sampled menu state before the screenshot; slow software rendering can
+advance the screen while capture waits. Current receipts retain before/after
+snapshots and flag changes instead of treating a pre-image snapshot as proof of
+the rendered state. Animation/game tick synchronization remains open.

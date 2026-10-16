@@ -1,7 +1,7 @@
 {
   "clispec": "0.3",
   "name": "original-game-reference",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Private Wine/Xvfb reference, not native Windows ground truth.",
   "output": {
     "tty": "json",
@@ -352,6 +352,82 @@
           "extent"
         ]
       }
+    },
+    {
+      "name": "compare",
+      "description": "Replay the same bounded physical-input journal against an owned original window and local recreation. Seeded deterministic comparison refuses until both setters are implemented. Outputs paired image reports and observed timing; no lockstep/parity claim.",
+      "effects": "non_idempotent",
+      "output_kind": "data",
+      "cardinality": "single",
+      "args": [
+        {
+          "name": "--run-dir",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--scenario",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--url",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--manifest",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--iso",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--playwright-module",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--output",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--chromium",
+          "type": "string",
+          "default": "/usr/bin/chromium"
+        }
+      ],
+      "stdout_schema": {
+        "type": "object",
+        "required": [
+          "report",
+          "receipt",
+          "checkpoints",
+          "images_equal",
+          "deterministic_parity_verified"
+        ],
+        "properties": {
+          "report": {
+            "type": "string"
+          },
+          "receipt": {
+            "type": "string"
+          },
+          "checkpoints": {
+            "type": "integer"
+          },
+          "images_equal": {
+            "type": "boolean"
+          },
+          "deterministic_parity_verified": {
+            "const": false
+          }
+        }
+      }
     }
   ],
   "errors": [
@@ -360,6 +436,274 @@
       "exit_code": 2,
       "retryable": false,
       "description": "Invalid input, unavailable runtime or failed operation; inspect local state before retrying."
+    },
+    {
+      "kind": "reference_interrupted",
+      "exit_code": 130,
+      "retryable": false,
+      "description": "Interrupted. Paired replay releases potentially held inputs, closes its browser and preserves receipts; inspect state before a new isolated run."
     }
-  ]
+  ],
+  "outcomes": [
+    {
+      "name": "images_differ",
+      "description": "Completed paired captures differ. Structured comparison data is on stdout; this does not establish a cause or deterministic parity.",
+      "code": 1
+    }
+  ],
+  "extensions": {
+    "comparison_scenario": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "edition",
+        "extent",
+        "dpi",
+        "window_title",
+        "seed",
+        "events"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "edition": {
+          "enum": [
+            "roc",
+            "tft"
+          ]
+        },
+        "extent": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4096
+          }
+        },
+        "dpi": {
+          "const": 96
+        },
+        "window_title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^\\x00-\\x1f]+$"
+        },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -2147483648,
+          "maximum": 2147483647,
+          "description": "Non-null values are recognized but currently refuse before effects: paired seed application is not implemented. null explicitly requests an uncontrolled visual diagnostic."
+        },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "checkpoint"
+                  },
+                  "after_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 30000
+                  },
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "after_ms",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "key"
+                  },
+                  "after_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 30000
+                  },
+                  "phase": {
+                    "enum": [
+                      "down",
+                      "up"
+                    ]
+                  },
+                  "key": {
+                    "enum": [
+                      "a",
+                      "b",
+                      "c",
+                      "d",
+                      "e",
+                      "f",
+                      "g",
+                      "h",
+                      "i",
+                      "j",
+                      "k",
+                      "l",
+                      "m",
+                      "n",
+                      "o",
+                      "p",
+                      "q",
+                      "r",
+                      "s",
+                      "t",
+                      "u",
+                      "v",
+                      "w",
+                      "x",
+                      "y",
+                      "z",
+                      "0",
+                      "1",
+                      "2",
+                      "3",
+                      "4",
+                      "5",
+                      "6",
+                      "7",
+                      "8",
+                      "9",
+                      "Enter",
+                      "Escape",
+                      "Tab",
+                      "Backspace",
+                      "Space",
+                      "ArrowLeft",
+                      "ArrowRight",
+                      "ArrowUp",
+                      "ArrowDown",
+                      "Delete",
+                      "Shift",
+                      "Control",
+                      "Alt"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "after_ms",
+                  "phase",
+                  "key"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "pointer"
+                  },
+                  "after_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 30000
+                  },
+                  "phase": {
+                    "enum": [
+                      "move"
+                    ]
+                  },
+                  "x": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "y": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "kind",
+                  "after_ms",
+                  "phase",
+                  "x",
+                  "y"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "pointer"
+                  },
+                  "after_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 30000
+                  },
+                  "phase": {
+                    "enum": [
+                      "down",
+                      "up"
+                    ]
+                  },
+                  "x": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "y": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "button": {
+                    "enum": [
+                      "left",
+                      "middle",
+                      "right"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "after_ms",
+                  "phase",
+                  "x",
+                  "y",
+                  "button"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      },
+      "x-runtime-invariants": [
+        "At least one and at most32 unique checkpoints; pointer coordinates within extent; input down/up balanced and all released at checkpoints/end; explicit move required before button down/up; total scheduled waits<=300000ms.",
+        "after_ms is a barrier-relative delay following completion on both targets, not a fixed game tick.",
+        "Current RNG/animation phase uncontrolled; deterministic parity is never asserted."
+      ]
+    },
+    "seed_control": "unsupported",
+    "collection_limits": {
+      "browser_observations_per_collection": 1024,
+      "checkpoints": 32,
+      "events": 256,
+      "protocol_bytes": 2097152
+    }
+  }
 }
