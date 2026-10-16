@@ -88,5 +88,16 @@ and browser-WASM Clippy and warning-denied application documentation pass with
 stable source hashes. Formatting checks pass. Receipts are in
 `.scratch/menu-depth-root-20261017/verification-1/`.
 
-These checks establish the recreation's material pipeline. A rebuilt browser
-menu and original Warcraft III execution of the bits remain separate gates.
+The matching local browser package also renders reviewed wide and compact Main,
+Options landing and Video Options captures. The five-capture run reaches its
+480-second collection deadline before completing the resolution-list click;
+it exits 124 and is not a complete interaction gate. Both owned reference
+clients were resumed and their lobbies visually rechecked afterward. The package
+contains no original assets and was not published.
+
+The captures retain visible gaps: the Video Options panel background/border,
+popup text placement, unsupported settings, fog/lighting and font edges need
+separate work. No screenshot fit or replacement content was introduced. Receipts
+and visual reviews are in `.scratch/menu-depth-root-20261017/`.
+These checks establish the recreation's material pipeline and the four recorded
+browser states; original Warcraft III execution of the bits remains unobserved.

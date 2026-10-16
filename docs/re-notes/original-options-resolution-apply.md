@@ -5,8 +5,9 @@ does not choose an exclusive physical display mode, bit depth or refresh.
 No original resolution presets or preference values were copied into this
 implementation.
 
-The selector may list source-qualified rows from an admitted client profile
-and the primary monitor. Apply still changes only the client render extent.
+The selector may list source-qualified frameless rows for current monitors, or
+primary-monitor enumeration rows, from an admitted client profile. Apply still
+changes only the client render extent.
 See [the display contract](original-display-modes.md).
 
 Previously Apply saved preferences before Winit processed the resize, then

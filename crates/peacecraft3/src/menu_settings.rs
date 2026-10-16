@@ -1,6 +1,7 @@
 //! Supported user preferences. Slider units come from the current FDF widgets.
 //! Qualified display rows come from the selected client's mode profile and the
-//! primary monitor. Otherwise the list is measured render sizes.
+//! primary monitor. A selector-2 popup profile lists every current monitor's
+//! full rectangle. Otherwise the list is measured render sizes.
 use crate::menu_screens::{
     Navigation, OfferedResolution, SettingControl, SettingValue, Settings, Widget,
 };
@@ -138,7 +139,7 @@ enum DisplayState {
     Unqualified {
         detail: Option<String>,
     },
-    Qualified(pcx_play::options_modes::Policy),
+    Qualified(std::sync::Arc<pcx_play::options_modes::Policy>),
 }
 
 #[derive(Resource, Default)]
@@ -652,6 +653,7 @@ fn render_offers(mut modes: Vec<(u32, u32)>) -> Vec<OfferedResolution> {
         .collect()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn offered_from_row(row: &pcx_play::options_modes::Row) -> OfferedResolution {
     OfferedResolution {
         label: row.label.clone(),
@@ -662,6 +664,8 @@ fn offered_from_row(row: &pcx_play::options_modes::Row) -> OfferedResolution {
         mode_index: row.mode_index,
         kind: row.kind,
         flag: row.flag,
+        monitor_ordinal: row.monitor_ordinal,
+        monitor: None,
         render_extent_only: false,
     }
 }
@@ -677,6 +681,7 @@ fn catalog_row(offer: &OfferedResolution) -> pcx_play::options_modes::Row {
         mode_index: offer.mode_index,
         kind: offer.kind,
         flag: offer.flag,
+        monitor_ordinal: offer.monitor_ordinal,
     }
 }
 
@@ -684,11 +689,38 @@ fn first_exact(rows: &[OfferedResolution], size: (u32, u32)) -> Option<OfferedRe
     rows.iter().find(|row| row.size == size).cloned()
 }
 
+fn same_monitor_mode(selected: &OfferedResolution, row: &OfferedResolution) -> bool {
+    selected.monitor.is_some()
+        && selected.monitor == row.monitor
+        && selected.size == row.size
+        && selected.depth == row.depth
+        && selected.refresh_millihertz == row.refresh_millihertz
+        && selected.adapter == row.adapter
+        && selected.mode_index == row.mode_index
+        && selected.kind == row.kind
+        && selected.flag == row.flag
+        && selected.render_extent_only == row.render_extent_only
+}
+
 fn choose_offer(nav: &mut Navigation, policy: Option<&pcx_play::options_modes::Policy>) {
     let Some(size) = nav.draft.resolution else {
         nav.selected_offer = None;
         return;
     };
+    if let Some(selected) = nav.selected_offer.clone()
+        && selected.size == size
+        && selected.monitor.is_some()
+    {
+        if let Some(row) = nav
+            .resolutions
+            .iter()
+            .find(|row| same_monitor_mode(&selected, row))
+        {
+            nav.selected_offer = Some(row.clone());
+        }
+        // A missing entity keeps the witness and draft.resolution. prepare refuses Apply.
+        return;
+    }
     if let Some(selected) = nav.selected_offer.clone()
         && selected.size == size
         && let Some(row) = nav.resolutions.iter().find(|row| row.same_mode(&selected))
@@ -719,13 +751,18 @@ fn scored_offer(
     let (Ok(width), Ok(height)) = (i32::try_from(size.0), i32::try_from(size.1)) else {
         return first_exact(rows, size);
     };
+    // Recreation presentation policy for selector-2 rows on the render-extent
+    // path. The active-kind compare and the adapter-owner field stay unread.
+    let kind = policy
+        .popup_presentation_kind()
+        .unwrap_or_else(|| policy.kind());
     let query = pcx_play::options_modes::Query {
         width,
         height,
         depth: 0,
         refresh: 0,
         adapter: qualified.first()?.adapter,
-        kind: policy.kind(),
+        kind,
         flag: 0,
     };
     let winner = policy
@@ -735,7 +772,20 @@ fn scored_offer(
         .and_then(|index| qualified.get(index))
         .filter(|row| row.width == size.0 && row.height == size.1);
     winner
-        .map(offered_from_row)
+        .and_then(|row| {
+            rows.iter().find(|offer| {
+                !offer.render_extent_only
+                    && offer.size == (row.width, row.height)
+                    && offer.depth == row.depth
+                    && offer.refresh_millihertz == row.refresh_millihertz
+                    && offer.adapter == row.adapter
+                    && offer.mode_index == row.mode_index
+                    && offer.kind == row.kind
+                    && offer.flag == row.flag
+                    && offer.monitor_ordinal == row.monitor_ordinal
+            })
+        })
+        .cloned()
         .or_else(|| first_exact(rows, size))
 }
 
@@ -788,6 +838,57 @@ fn qualified_offers(
         .rows(&records, Some(0))
         .map(|rows| rows.iter().map(offered_from_row).collect())
         .map_err(|error| error.to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn popup_offers<'a>(
+    policy: &pcx_play::options_modes::Policy,
+    monitors: impl Iterator<Item = (Entity, &'a Monitor, bool)>,
+) -> Result<Vec<OfferedResolution>, String> {
+    let Some(adapter) = session_adapter(policy) else {
+        return Err("Display mode profile has no usable session monitor token".into());
+    };
+    let mut bounds = Vec::new();
+    let mut ids = Vec::new();
+    for (entity, monitor, _) in monitors {
+        if bounds.len() >= pcx_play::options_modes::MAX_HOST_RECORDS {
+            return Err("Display monitor list exceeds its record limit".into());
+        }
+        let Ok(ordinal) = u32::try_from(bounds.len()) else {
+            return Err("Display monitor list exceeds its index limit".into());
+        };
+        bounds.try_reserve(1).map_err(|error| error.to_string())?;
+        ids.try_reserve(1).map_err(|error| error.to_string())?;
+        bounds.push(pcx_play::options_modes::MonitorBound {
+            ordinal,
+            width: monitor.physical_width,
+            height: monitor.physical_height,
+        });
+        ids.push(entity);
+    }
+    let rows = policy
+        .popup_rows(&bounds, Some(0), adapter)
+        .map_err(|error| error.to_string())?;
+    let mut offers = Vec::new();
+    offers
+        .try_reserve(rows.len())
+        .map_err(|error| error.to_string())?;
+    for row in &rows {
+        let Some(ordinal) = row.monitor_ordinal else {
+            return Err("Popup row is missing its monitor ordinal".into());
+        };
+        let Some(entity) = usize::try_from(ordinal)
+            .ok()
+            .and_then(|index| ids.get(index))
+            .copied()
+        else {
+            return Err("Popup row monitor is missing from this pass".into());
+        };
+        let mut offer = offered_from_row(row);
+        offer.monitor = Some(entity);
+        offers.push(offer);
+    }
+    Ok(offers)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -865,7 +966,7 @@ fn discover_display_policy(
 fn display_policy(
     backend: &mut Backend,
     launcher: &crate::launch_gui::Launcher,
-) -> Option<pcx_play::options_modes::Policy> {
+) -> Option<std::sync::Arc<pcx_play::options_modes::Policy>> {
     let install = crate::launch_gui::selected_install(launcher)?;
     let path = install.join("Warcraft III.exe").display().to_string();
     let expansion = launcher.expansion();
@@ -878,7 +979,7 @@ fn display_policy(
     }
     if matches!(backend.display.state, DisplayState::Unchecked) {
         backend.display.state = match discover_display_policy(&install, expansion) {
-            Ok(Some(policy)) => DisplayState::Qualified(policy),
+            Ok(Some(policy)) => DisplayState::Qualified(std::sync::Arc::new(policy)),
             Ok(None) => DisplayState::Unqualified { detail: None },
             Err(detail) => DisplayState::Unqualified {
                 detail: Some(detail),
@@ -945,7 +1046,7 @@ fn environment(
     mut nav: ResMut<Navigation>,
     mut backend: ResMut<Backend>,
     mut windows: Query<(Entity, &mut Window, Option<&OnMonitor>), With<PrimaryWindow>>,
-    monitors: Query<(&Monitor, Has<PrimaryMonitor>)>,
+    monitors: Query<(Entity, &Monitor, Has<PrimaryMonitor>)>,
     launcher: Res<crate::launch_gui::Launcher>,
     _main_thread: bevy::ecs::system::NonSendMarker,
 ) {
@@ -956,7 +1057,7 @@ fn environment(
         .observed_resolution
         .unwrap_or((window.physical_width(), window.physical_height()));
     let mut modes = vec![current];
-    if let Some((monitor, _)) = on_monitor.and_then(|on| monitors.get(on.0).ok()) {
+    if let Some((_, monitor, _)) = on_monitor.and_then(|on| monitors.get(on.0).ok()) {
         modes.push((monitor.physical_width, monitor.physical_height));
         modes.extend(
             monitor
@@ -976,7 +1077,7 @@ fn environment(
         Err(error) => nav.notice = format!("Browser display information: {error:?}"),
     }
     #[cfg(target_arch = "wasm32")]
-    let policy: Option<pcx_play::options_modes::Policy> = None;
+    let policy: Option<std::sync::Arc<pcx_play::options_modes::Policy>> = None;
     #[cfg(target_arch = "wasm32")]
     {
         nav.resolutions = render_offers(modes);
@@ -984,30 +1085,51 @@ fn environment(
     #[cfg(not(target_arch = "wasm32"))]
     let policy = display_policy(&mut backend, &launcher);
     #[cfg(not(target_arch = "wasm32"))]
-    let empty_qualified = if let Some(policy) = policy.as_ref()
-        && let Some((monitor, _)) = monitors.iter().find(|(_, primary)| *primary)
-    {
-        match qualified_offers(policy, monitor) {
-            Ok(rows) => {
-                let empty = rows.is_empty();
-                if !empty {
-                    clear_qualified_notice(&mut nav);
+    let (empty_qualified, popup_list) = if let Some(policy) = policy.as_ref() {
+        if policy.has_popup_profile() {
+            match popup_offers(policy, monitors.iter()) {
+                Ok(rows) => {
+                    if !rows.is_empty() {
+                        clear_qualified_notice(&mut nav);
+                    }
+                    nav.resolutions = rows;
+                    (false, true)
                 }
-                nav.resolutions = rows;
-                empty
+                Err(error) => {
+                    nav.resolutions.clear();
+                    note_listing_failure(&mut nav, &mut backend, &error);
+                    (false, true)
+                }
             }
-            Err(error) => {
-                nav.resolutions.clear();
-                note_listing_failure(&mut nav, &mut backend, &error);
-                false
+        } else if let Some((_, monitor, _)) = monitors.iter().find(|(_, _, primary)| *primary) {
+            match qualified_offers(policy, monitor) {
+                Ok(rows) => {
+                    let empty = rows.is_empty();
+                    if !empty {
+                        clear_qualified_notice(&mut nav);
+                    }
+                    nav.resolutions = rows;
+                    (empty, false)
+                }
+                Err(error) => {
+                    nav.resolutions.clear();
+                    note_listing_failure(&mut nav, &mut backend, &error);
+                    (false, false)
+                }
             }
+        } else {
+            nav.resolutions = render_offers(modes);
+            if !nav.resolutions.is_empty() {
+                clear_qualified_notice(&mut nav);
+            }
+            (false, false)
         }
     } else {
         nav.resolutions = render_offers(modes);
         if !nav.resolutions.is_empty() {
             clear_qualified_notice(&mut nav);
         }
-        false
+        (false, false)
     };
     if !backend.loaded {
         backend.loaded = true;
@@ -1064,7 +1186,11 @@ fn environment(
     }
     #[cfg(not(target_arch = "wasm32"))]
     announce_display(&mut nav, &mut backend, empty_qualified);
-    choose_offer(&mut nav, policy.as_ref());
+    #[cfg(not(target_arch = "wasm32"))]
+    if popup_list && nav.notice.is_empty() {
+        nav.notice = crate::menu_screens::POPUP_WORK_AREA_NOTICE.into();
+    }
+    choose_offer(&mut nav, policy.as_deref());
 }
 fn attach_controls(
     mut commands: Commands,
@@ -1844,6 +1970,76 @@ mod tests {
             crate::menu_screens::resolution_popup_title(&[qualified]),
             "Sizes from the qualified client and this monitor. Apply changes the window render size."
         );
+        let popup = OfferedResolution {
+            monitor: Some(Entity::from_raw_u32(3).unwrap()),
+            monitor_ordinal: Some(2),
+            render_extent_only: false,
+            ..OfferedResolution::render_size(1024, 768)
+        };
+        assert_eq!(
+            crate::menu_screens::resolution_popup_title(&[popup]),
+            crate::menu_screens::POPUP_WORK_AREA_NOTICE
+        );
+    }
+
+    #[test]
+    fn clicked_monitor_keeps_intent_when_its_entity_disappears() {
+        let kept = Entity::from_raw_u32(3).unwrap();
+        let other = Entity::from_raw_u32(9).unwrap();
+        let first = OfferedResolution {
+            monitor: Some(kept),
+            monitor_ordinal: Some(0),
+            render_extent_only: false,
+            ..OfferedResolution::render_size(800, 600)
+        };
+        let second = OfferedResolution {
+            monitor: Some(other),
+            monitor_ordinal: Some(1),
+            ..first.clone()
+        };
+        let mut nav = Navigation {
+            resolutions: vec![first.clone(), second.clone()],
+            ..default()
+        };
+        nav.draft.resolution = Some((800, 600));
+        select_offer(&mut nav, &first).unwrap();
+        let mut reordered_other = second;
+        reordered_other.monitor_ordinal = Some(0);
+        let mut reordered_kept = first;
+        reordered_kept.monitor_ordinal = Some(1);
+        nav.resolutions = vec![reordered_other.clone(), reordered_kept];
+        choose_offer(&mut nav, None);
+        let selected = nav.selected_offer.as_ref().unwrap();
+        assert_eq!(selected.monitor, Some(kept));
+        assert_eq!(selected.monitor_ordinal, Some(1));
+        assert_eq!(nav.draft.resolution, Some((800, 600)));
+        nav.resolutions = vec![reordered_other];
+        let witness = nav.selected_offer.clone();
+        choose_offer(&mut nav, None);
+        choose_offer(&mut nav, None);
+        assert_eq!(nav.selected_offer, witness);
+        assert_eq!(nav.selected_offer.as_ref().unwrap().monitor, Some(kept));
+        assert_eq!(nav.draft.resolution, Some((800, 600)));
+        assert_eq!(nav.resolutions.len(), 1);
+        assert_eq!(nav.resolutions[0].monitor, Some(other));
+        assert_eq!(nav.resolutions[0].size, (800, 600));
+        assert!(!nav.resolution_highlighted(&nav.resolutions[0]));
+        assert!(nav.offers_size((800, 600)));
+        let backend = Backend::default();
+        assert_eq!(
+            prepare(&nav, &backend).err().unwrap(),
+            "Selected resolution is unavailable on this display"
+        );
+        let remaining = nav.resolutions[0].clone();
+        select_offer(&mut nav, &remaining).unwrap();
+        assert_eq!(nav.selected_offer.as_ref().unwrap().monitor, Some(other));
+        assert_eq!(
+            nav.selected_offer.as_ref().unwrap().monitor_ordinal,
+            Some(0)
+        );
+        assert_eq!(nav.draft.resolution, Some((800, 600)));
+        assert!(nav.resolution_highlighted(&nav.resolutions[0]));
+        assert!(prepare(&nav, &backend).is_ok());
     }
 
     fn seed(gain: f32) -> original::Seed {

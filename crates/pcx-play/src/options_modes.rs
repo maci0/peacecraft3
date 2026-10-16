@@ -2,15 +2,22 @@
 //!
 //! The supported profile is the admission compare, the following flag and kind
 //! stores, the refresh-center replacement, the selection score and the two
-//! label formats. Pair-table augmentation and per-index providers are separate
-//! inputs and are not offered here. Operand values come from the image.
+//! label formats. A complete selector-2 popup caller also supplies pair families
+//! and one appended full-monitor record. Operand values come from the image.
 
 use crate::neutral_player::{NeutralError, RuleInputBudget};
 use crate::neutral_rule_input::Pe;
 use crate::scripts::AssetIdentity;
 
 const STORE_WINDOW: usize = 96;
-const MAX_HOST_RECORDS: usize = 4096;
+/// Resource ceiling for supplied host records and emitted popup rows.
+pub const MAX_HOST_RECORDS: usize = 4096;
+// Resource ceiling for pairs in one referenced table, not a measured table size.
+const MAX_PAIRS: usize = 128;
+/// `WS_POPUP` in the Win32 window-style definitions.
+const WS_POPUP: u32 = 0x8000_0000;
+/// `WS_EX_APPWINDOW` in the Win32 extended-style definitions.
+const WS_EX_APPWINDOW: u32 = 0x0004_0000;
 
 /// Explicit caller limits for one image. Immediate values are not limits.
 #[derive(Clone, Copy)]
@@ -20,7 +27,8 @@ pub struct DiscoveryBudget {
     pub label_bytes: usize,
     /// Successful profile-site matches before discovery stops.
     pub candidate_limit: usize,
-    /// Scanned code bytes plus inspected label bytes.
+    /// Scanned code, inspected labels and selected pair-table bytes. Includes
+    /// the second code-range walk and each bounded prologue search.
     pub work_bytes: usize,
 }
 
@@ -72,6 +80,18 @@ pub struct Row {
     pub mode_index: u32,
     pub kind: i32,
     pub flag: u8,
+    /// Pass index of the monitor bound that produced a popup row.
+    pub monitor_ordinal: Option<u32>,
+}
+
+/// One monitor's full rectangle for this listing pass.
+/// `ordinal` is that pass index. It is not a session adapter token and it is
+/// not a stable host identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MonitorBound {
+    pub ordinal: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,6 +127,7 @@ pub struct Policy {
     label_with_depth: String,
     label_size_only: String,
     label_limit: usize,
+    popup: Option<PopupProfile>,
 }
 
 struct FilterSite {
@@ -214,6 +235,7 @@ impl Policy {
         let mut center = None;
         let mut score = None;
         let mut label = None;
+        let mut bounds = Vec::new();
         for (code_va, code) in pe.code_ranges() {
             charge(&mut work, code.len(), budget.work_bytes).map_err(fail)?;
             for offset in 0..code.len() {
@@ -253,8 +275,28 @@ impl Policy {
                     Ok(None) => {}
                     Err(problem) => return Err(fail_at(problem, "label")),
                 }
+                let hit = match_bounds(code, offset, &mut work, budget)
+                    .map_err(|problem| fail_at(problem, "popup bounds"))?;
+                if let Some(hit) = hit {
+                    let Some(entry) = u32::try_from(hit.entry)
+                        .ok()
+                        .and_then(|at| code_va.checked_add(at))
+                    else {
+                        continue;
+                    };
+                    admit(&mut candidates, budget.candidate_limit, false)
+                        .map_err(|problem| fail_at(problem, "popup bounds"))?;
+                    bounds
+                        .try_reserve(1)
+                        .map_err(|_| fail_at(Problem::Budget, "popup bounds"))?;
+                    bounds.push(BoundsHit {
+                        entry,
+                        selector: hit.selector,
+                    });
+                }
             }
         }
+        let popup = link_popup(&pe, budget, &mut work, &mut selected, &bounds).map_err(fail)?;
         let (Some(filter), Some(center_hz), Some(score), Some(label)) =
             (filter, center, score, label)
         else {
@@ -281,7 +323,36 @@ impl Policy {
             label_with_depth: label.with_depth,
             label_size_only: label.size_only,
             label_limit: label.limit,
+            popup,
         })
+    }
+
+    pub fn has_popup_profile(&self) -> bool {
+        self.popup.is_some()
+    }
+
+    /// Shared kind of the flag-0 popup rows, including the appended full-monitor
+    /// record when its flag is 0. This is a recreation presentation choice for
+    /// render-extent selection. The active-kind compare and the adapter-owner
+    /// field stay unread.
+    pub fn popup_presentation_kind(&self) -> Option<i32> {
+        let popup = self.popup.as_ref()?;
+        let mut kind = None;
+        for family in popup.families.iter().filter(|family| family.flag == 0) {
+            match kind {
+                None => kind = Some(family.kind),
+                Some(previous) if previous == family.kind => {}
+                Some(_) => return None,
+            }
+        }
+        if let Some(full) = popup.full.filter(|full| full.flag == 0) {
+            match kind {
+                None => kind = Some(full.kind),
+                Some(previous) if previous == full.kind => {}
+                Some(_) => return None,
+            }
+        }
+        kind
     }
 
     pub fn origin(&self) -> &AssetIdentity {
@@ -314,6 +385,9 @@ impl Policy {
             return Err(self.err(Problem::Budget));
         }
         let mut groups: Vec<Group> = Vec::new();
+        groups
+            .try_reserve(records.len())
+            .map_err(|_| self.err(Problem::Budget))?;
         for record in records {
             if record.width == 0
                 || record.height == 0
@@ -393,9 +467,129 @@ impl Policy {
                 mode_index: group.mode_index,
                 kind,
                 flag,
+                monitor_ordinal: None,
             });
         }
         Ok(rows)
+    }
+
+    /// Selector-2 pair families in caller order, then the appended record when
+    /// its capture-to-record shape validated. That record is the supplied full
+    /// monitor bound. `required_flag` keeps the absent-checkbox value when set.
+    /// A non-positive monitor adds no rows. One bound is not applied to any
+    /// other source family. Table offsets identify session rows, not exclusive
+    /// host modes. Equal source keys keep their first occurrence.
+    pub fn popup_rows(
+        &self,
+        monitors: &[MonitorBound],
+        required_flag: Option<u8>,
+        session_adapter: u32,
+    ) -> Result<Vec<Row>, Error> {
+        let Some(popup) = &self.popup else {
+            return Ok(Vec::new());
+        };
+        if monitors.len() > MAX_HOST_RECORDS {
+            return Err(self.err(Problem::Budget));
+        }
+        i32::try_from(session_adapter).map_err(|_| self.err(Problem::Overflow))?;
+        let mut rows = Vec::new();
+        for monitor in monitors {
+            if monitor.width == 0 || monitor.height == 0 {
+                continue;
+            }
+            let width = signed(monitor.width).map_err(|problem| self.err(problem))?;
+            let height = signed(monitor.height).map_err(|problem| self.err(problem))?;
+            for family in &popup.families {
+                if required_flag.is_some_and(|flag| flag != family.flag) {
+                    continue;
+                }
+                for (index, pair) in family.pairs.iter().enumerate() {
+                    if pair.0 > width || pair.1 > height {
+                        continue;
+                    }
+                    let mode_index =
+                        u32::try_from(index).map_err(|_| self.err(Problem::Overflow))?;
+                    self.push_labeled(
+                        &mut rows,
+                        LabeledParts {
+                            width: pair.0,
+                            height: pair.1,
+                            adapter: session_adapter,
+                            mode_index,
+                            kind: family.kind,
+                            flag: family.flag,
+                            monitor_ordinal: Some(monitor.ordinal),
+                        },
+                    )?;
+                }
+            }
+            if let Some(full) = popup.full
+                && !required_flag.is_some_and(|flag| flag != full.flag)
+            {
+                self.push_labeled(
+                    &mut rows,
+                    LabeledParts {
+                        width,
+                        height,
+                        adapter: session_adapter,
+                        mode_index: 0,
+                        kind: full.kind,
+                        flag: full.flag,
+                        monitor_ordinal: Some(monitor.ordinal),
+                    },
+                )?;
+            }
+        }
+        Ok(rows)
+    }
+
+    fn push_labeled(&self, rows: &mut Vec<Row>, parts: LabeledParts) -> Result<(), Error> {
+        let width = u32::try_from(parts.width).map_err(|_| self.err(Problem::Overflow))?;
+        let height = u32::try_from(parts.height).map_err(|_| self.err(Problem::Overflow))?;
+        // The converter groups dimensions/depth/adapter/kind/flag, excluding mode index.
+        if rows.iter().any(|row| {
+            row.width == width
+                && row.height == height
+                && row.depth.is_none()
+                && row.adapter == parts.adapter
+                && row.kind == parts.kind
+                && row.flag == parts.flag
+                && row.monitor_ordinal == parts.monitor_ordinal
+        }) {
+            return Ok(());
+        }
+        if rows.len() >= MAX_HOST_RECORDS {
+            return Err(self.err(Problem::Budget));
+        }
+        rows.try_reserve(1).map_err(|_| self.err(Problem::Budget))?;
+        rows.push(self.labeled_row(parts)?);
+        Ok(())
+    }
+
+    fn labeled_row(&self, parts: LabeledParts) -> Result<Row, Error> {
+        let width = u32::try_from(parts.width).map_err(|_| self.err(Problem::Overflow))?;
+        let height = u32::try_from(parts.height).map_err(|_| self.err(Problem::Overflow))?;
+        let label = format_label(
+            self.label_size_only.as_str(),
+            &[
+                signed(width).map_err(|problem| self.err(problem))?,
+                signed(height).map_err(|problem| self.err(problem))?,
+            ],
+            self.label_limit,
+        )
+        .map_err(|problem| self.err(problem))?;
+        Ok(Row {
+            label,
+            width,
+            height,
+            depth: None,
+            refresh_millihertz: None,
+            adapter: parts.adapter,
+            mode_index: parts.mode_index,
+            kind: parts.kind,
+            flag: parts.flag,
+            monitor_ordinal: parts.monitor_ordinal,
+        })
     }
 
     /// Lowest unsigned score wins. Equal scores keep the earlier row.
@@ -927,6 +1121,512 @@ fn format_label(template: &str, values: &[i32], limit: usize) -> Result<String, 
         return Err(Problem::Label);
     }
     Ok(out)
+}
+
+struct LabeledParts {
+    width: i32,
+    height: i32,
+    adapter: u32,
+    mode_index: u32,
+    kind: i32,
+    flag: u8,
+    monitor_ordinal: Option<u32>,
+}
+
+struct BoundsMatch {
+    entry: usize,
+    selector: u8,
+}
+
+struct BoundsHit {
+    entry: u32,
+    selector: u8,
+}
+
+struct ParsedFamily {
+    start: u32,
+    end: u32,
+    kind: i32,
+    flag: u8,
+}
+
+struct ParsedCaller {
+    families: [ParsedFamily; 2],
+    full: Option<FullRecord>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FullRecord {
+    kind: i32,
+    flag: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PopupFamily {
+    pairs: Vec<(i32, i32)>,
+    kind: i32,
+    flag: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PopupProfile {
+    families: Vec<PopupFamily>,
+    full: Option<FullRecord>,
+}
+
+fn match_bounds(
+    code: &[u8],
+    offset: usize,
+    work: &mut usize,
+    budget: DiscoveryBudget,
+) -> Result<Option<BoundsMatch>, Problem> {
+    let Some(selector) = popup_selector(code, offset) else {
+        return Ok(None);
+    };
+    let Some(entry) = bounds_entry(code, offset, work, budget)? else {
+        return Ok(None);
+    };
+    Ok(Some(BoundsMatch { entry, selector }))
+}
+
+fn popup_selector(code: &[u8], offset: usize) -> Option<u8> {
+    let bytes = code.get(offset..)?;
+    let mut cursor = Cur { bytes, index: 0 };
+    cursor.expect(&[0x8b, 0x75, 0x08, 0x33, 0xc9, 0x8b, 0xc6, 0x33, 0xd2])?;
+    cursor.expect(&[0x83, 0xe8, 0x01])?;
+    let style1_at = cursor.rel8(0x74)?;
+    cursor.expect(&[0x83, 0xe8, 0x01])?;
+    let style2_at = cursor.rel8(0x74)?;
+    cursor.expect(&[0x83, 0xe8, 0x01])?;
+    let past_at = cursor.rel8(0x75)?;
+    cursor.expect(&[0xba])?;
+    let style3 = cursor.u32()?;
+    let join_from_3 = cursor.rel8(0xeb)?;
+    if cursor.index as isize != style2_at {
+        return None;
+    }
+    cursor.expect(&[0xba])?;
+    let style2 = cursor.u32()?;
+    let join_from_2 = cursor.rel8(0xeb)?;
+    if cursor.index as isize != style1_at {
+        return None;
+    }
+    cursor.expect(&[0xba])?;
+    let style1 = cursor.u32()?;
+    if cursor.index as isize != join_from_3 || cursor.index as isize != join_from_2 {
+        return None;
+    }
+    cursor.expect(&[0xb9])?;
+    let exstyle = cursor.u32()?;
+    if cursor.index as isize != past_at || exstyle != WS_EX_APPWINDOW {
+        return None;
+    }
+    cursor.expect(&[
+        0x51, 0x6a, 0x00, 0x52, 0x8d, 0x45, 0xec, 0x0f, 0x57, 0xc0, 0x50, 0x0f, 0x11, 0x45, 0xec,
+        0xff, 0x15,
+    ])?;
+    cursor.take(4)?;
+    let rest = cursor.rest().get(..96)?;
+    // `mov esi, [ebp+0xc]` sits between `cmp esi, imm8` and `sete` and leaves
+    // flags unchanged, so the immediate is still the work-rectangle selector.
+    let sete = rest.windows(8).position(|chunk| {
+        chunk[0] == 0x83
+            && chunk[1] == 0xfe
+            && chunk[3] == 0x8b
+            && chunk[4] == 0x75
+            && chunk[5] == 0x0c
+            && chunk[6] == 0x0f
+            && chunk[7] == 0x94
+    })?;
+    let work = rest[sete + 2];
+    let styles = [style1, style2, style3];
+    let mut selector = None;
+    for (index, style) in styles.iter().copied().enumerate() {
+        if style == WS_POPUP {
+            if selector.is_some() {
+                return None;
+            }
+            selector = u8::try_from(index + 1).ok();
+        }
+    }
+    let selector = selector?;
+    if work == selector {
+        return None;
+    }
+    Some(selector)
+}
+
+/// `push ebp; mov ebp, esp`, either `89 /r` or `8B /r`.
+fn is_frame_prologue(code: &[u8], index: usize) -> bool {
+    code.get(index..index.saturating_add(3))
+        .is_some_and(|bytes| bytes == [0x55, 0x89, 0xe5] || bytes == [0x55, 0x8b, 0xec])
+}
+
+fn bounds_entry(
+    code: &[u8],
+    pattern: usize,
+    work: &mut usize,
+    budget: DiscoveryBudget,
+) -> Result<Option<usize>, Problem> {
+    let begin = pattern.saturating_sub(40);
+    charge(work, pattern - begin, budget.work_bytes)?;
+    let mut found = None;
+    let mut index = begin;
+    while index + 3 <= pattern {
+        if is_frame_prologue(code, index) {
+            found = Some(index);
+        }
+        index += 1;
+    }
+    Ok(found)
+}
+
+fn link_popup(
+    pe: &Pe<'_>,
+    budget: DiscoveryBudget,
+    work: &mut usize,
+    selected: &mut usize,
+    bounds: &[BoundsHit],
+) -> Result<Option<PopupProfile>, Problem> {
+    if bounds.is_empty() {
+        return Ok(None);
+    }
+    let mut found = None;
+    for (code_va, code) in pe.code_ranges() {
+        charge(work, code.len(), budget.work_bytes)?;
+        for parsed in caller_groups(code, code_va, bounds, budget, work)? {
+            let profile = load_popup(pe, budget, work, selected, &parsed)?;
+            match &found {
+                None => found = Some(profile),
+                Some(previous) if previous == &profile => {}
+                Some(_) => return Err(Problem::Ambiguous),
+            }
+        }
+    }
+    Ok(found)
+}
+
+fn caller_groups(
+    code: &[u8],
+    code_va: u32,
+    bounds: &[BoundsHit],
+    budget: DiscoveryBudget,
+    work: &mut usize,
+) -> Result<Vec<ParsedCaller>, Problem> {
+    let call_cap = budget.candidate_limit.saturating_mul(3);
+    let mut calls = Vec::new();
+    let mut index = 0usize;
+    while index + 5 <= code.len() {
+        if code[index] == 0xe8
+            && index >= 3
+            && code[index - 3] == 0x56
+            && code[index - 2] == 0x6a
+            && let Some(target) = call_target(code, code_va, index)
+            && bounds
+                .iter()
+                .any(|hit| hit.entry == target && hit.selector == code[index - 1])
+        {
+            if calls.len() >= call_cap {
+                return Err(Problem::Budget);
+            }
+            calls.try_reserve(1).map_err(|_| Problem::Budget)?;
+            calls.push(index);
+        }
+        index += 1;
+    }
+    let mut grouped: Vec<(usize, Vec<usize>)> = Vec::new();
+    for call in calls {
+        let Some(entry_at) = function_entry_before(code, call, work, budget)? else {
+            continue;
+        };
+        if let Some(group) = grouped.iter_mut().find(|group| group.0 == entry_at) {
+            group.1.try_reserve(1).map_err(|_| Problem::Budget)?;
+            group.1.push(call);
+        } else {
+            if grouped.len() >= budget.candidate_limit {
+                return Err(Problem::Budget);
+            }
+            let mut group_calls = Vec::new();
+            group_calls.try_reserve(1).map_err(|_| Problem::Budget)?;
+            group_calls.push(call);
+            grouped.try_reserve(1).map_err(|_| Problem::Budget)?;
+            grouped.push((entry_at, group_calls));
+        }
+    }
+    let mut parsed = Vec::new();
+    for (span_start, group) in grouped {
+        if let Some(caller) = parse_calls(code, span_start, &group) {
+            parsed.try_reserve(1).map_err(|_| Problem::Budget)?;
+            parsed.push(caller);
+        }
+    }
+    Ok(parsed)
+}
+
+fn parse_calls(code: &[u8], span_start: usize, calls: &[usize]) -> Option<ParsedCaller> {
+    if calls.len() != 3 || calls.iter().any(|call| *call < span_start) {
+        return None;
+    }
+    if !is_capture(code, calls[0]) || table_family(code, calls[0]).is_some() {
+        return None;
+    }
+    let mut families = [None, None];
+    let mut later_end = None;
+    for (slot, &call) in calls[1..].iter().enumerate() {
+        let captured = is_capture(code, call);
+        let table = table_family(code, call);
+        if captured || table.is_none() {
+            return None;
+        }
+        let table = table?;
+        later_end = Some(table.pattern_end);
+        families[slot] = Some(ParsedFamily {
+            start: table.start,
+            end: table.end,
+            kind: table.kind,
+            flag: table.flag,
+        });
+    }
+    Some(ParsedCaller {
+        families: [families[0].take()?, families[1].take()?],
+        full: full_record(code, later_end?),
+    })
+}
+
+fn call_target(code: &[u8], code_va: u32, call: usize) -> Option<u32> {
+    let rel = i32::from_le_bytes(code.get(call + 1..call + 5)?.try_into().ok()?);
+    let next = code_va.checked_add(u32::try_from(call + 5).ok()?)?;
+    Some(next.wrapping_add(rel as u32))
+}
+
+fn is_capture(code: &[u8], call: usize) -> bool {
+    code.get(call + 5..)
+        .and_then(|tail| tail.strip_prefix(&[0x83, 0xc4, 0x08, 0x89, 0x55, 0x08]))
+        .is_some_and(|width| width.starts_with(&[0x89, 0xc3]) || width.starts_with(&[0x8b, 0xd8]))
+}
+
+struct TableFamily {
+    start: u32,
+    end: u32,
+    kind: i32,
+    flag: u8,
+    pattern_end: usize,
+}
+
+fn table_family(code: &[u8], call: usize) -> Option<TableFamily> {
+    let push = call.checked_sub(3)?;
+    let window_from = push.saturating_sub(16);
+    let region = code.get(window_from..push)?;
+    let bf_rel = region.iter().rposition(|byte| *byte == 0xbf)?;
+    let bf = window_from + bf_rel;
+    if bf + 5 > push || !is_nop_gap(code.get(bf + 5..push)?) {
+        return None;
+    }
+    let start = u32::from_le_bytes(code.get(bf + 1..bf + 5)?.try_into().ok()?);
+    let scan_end = call.checked_add(5)?.checked_add(0x120)?.min(code.len());
+    let tail = code.get(call + 5..scan_end)?;
+    let add = tail
+        .windows(9)
+        .position(|chunk| chunk.starts_with(&[0x83, 0xc7, 0x08, 0x81, 0xff]))?;
+    let end = u32::from_le_bytes(tail.get(add + 5..add + 9)?.try_into().ok()?);
+    let record = tail.get(..add)?;
+    if one_record_word(record, 0xcc)? != 0 || one_record_word(record, 0xd0)? != 0 {
+        return None;
+    }
+    let (kind, flag) = one_kind_flag(record)?;
+    Some(TableFamily {
+        start,
+        end,
+        kind,
+        flag,
+        pattern_end: call + 5 + add + 9,
+    })
+}
+
+fn is_nop_gap(gap: &[u8]) -> bool {
+    let mut index = 0;
+    while index < gap.len() {
+        if gap[index] == 0x90 {
+            index += 1;
+            continue;
+        }
+        if gap[index..].starts_with(&[0x0f, 0x1f, 0x00]) {
+            index += 3;
+            continue;
+        }
+        if gap[index..].starts_with(&[0x0f, 0x1f, 0x40, 0x00]) {
+            index += 4;
+            continue;
+        }
+        if gap[index..].starts_with(&[0x0f, 0x1f, 0x44, 0x00, 0x00]) {
+            index += 5;
+            continue;
+        }
+        if gap[index..].starts_with(&[0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00]) {
+            index += 9;
+            continue;
+        }
+        return false;
+    }
+    true
+}
+
+fn one_kind_flag(window: &[u8]) -> Option<(i32, u8)> {
+    let mut found = None;
+    let mut index = 0;
+    while index + 7 <= window.len() {
+        if window[index..].starts_with(&[0xc7, 0x45, 0xc8]) {
+            if found.is_some() {
+                return None;
+            }
+            let kind = i32::from_le_bytes(window.get(index + 3..index + 7)?.try_into().ok()?);
+            let flag_at = index + 7;
+            if !window.get(flag_at..)?.starts_with(&[0xc6, 0x45, 0xd4]) {
+                return None;
+            }
+            let flag = *window.get(flag_at + 3)?;
+            found = Some((kind, flag));
+            index = flag_at + 4;
+            continue;
+        }
+        index += 1;
+    }
+    found
+}
+
+fn one_record_word(window: &[u8], slot: u8) -> Option<u32> {
+    let mut stores = window
+        .windows(7)
+        .filter(|bytes| bytes.starts_with(&[0xc7, 0x45, slot]));
+    let store = stores.next()?;
+    if stores.next().is_some() {
+        return None;
+    }
+    Some(u32::from_le_bytes(store[3..].try_into().ok()?))
+}
+
+/// The appended record reloads the captured edx from `[ebp+8]` into eax and
+/// stores ebx (captured eax) with that eax into both dimension pairs. A shape
+/// that does not validate omits the record.
+fn full_record(code: &[u8], from: usize) -> Option<FullRecord> {
+    let window = code
+        .get(from..)?
+        .get(..16.min(code.len().saturating_sub(from)))?;
+    let start = window
+        .windows(3)
+        .position(|chunk| chunk == [0x8b, 0x45, 0x08])?;
+    let mut cursor = Cur {
+        bytes: code.get(from + start..)?,
+        index: 0,
+    };
+    cursor.expect(&[0x8b, 0x45, 0x08, 0xb9])?;
+    cursor.take(4)?;
+    cursor.expect(&[0x89, 0x75, 0xb0, 0xc7, 0x45, 0xb4])?;
+    if cursor.u32()? != 0 {
+        return None;
+    }
+    cursor.expect(&[
+        0x89, 0x5d, 0xb8, 0x89, 0x45, 0xbc, 0x89, 0x5d, 0xc0, 0x89, 0x45, 0xc4,
+    ])?;
+    cursor.expect(&[0xc7, 0x45, 0xcc])?;
+    if cursor.u32()? != 0 {
+        return None;
+    }
+    cursor.expect(&[0xc7, 0x45, 0xd0])?;
+    if cursor.u32()? != 0 {
+        return None;
+    }
+    cursor.expect(&[0xc7, 0x45, 0xc8])?;
+    let kind = cursor.i32()?;
+    cursor.expect(&[0xc6, 0x45, 0xd4])?;
+    let flag = cursor.u8()?;
+    cursor.expect(&[0xe8])?;
+    cursor.take(4)?;
+    cursor.expect(&[
+        0x0f, 0x10, 0x45, 0xb0, 0x46, 0x0f, 0x11, 0x00, 0x0f, 0x10, 0x45, 0xc0, 0x0f, 0x11, 0x40,
+        0x10, 0xf3, 0x0f, 0x7e, 0x45, 0xd0, 0x66, 0x0f, 0xd6, 0x40, 0x20, 0x3b, 0x75, 0xf4,
+    ])?;
+    Some(FullRecord { kind, flag })
+}
+
+fn function_entry_before(
+    code: &[u8],
+    call: usize,
+    work: &mut usize,
+    budget: DiscoveryBudget,
+) -> Result<Option<usize>, Problem> {
+    let begin = call.saturating_sub(0x800);
+    charge(work, call - begin, budget.work_bytes)?;
+    let mut found = None;
+    let mut index = begin;
+    while index + 3 <= call {
+        if is_frame_prologue(code, index) {
+            found = Some(index);
+        }
+        index += 1;
+    }
+    Ok(found)
+}
+
+fn load_popup(
+    pe: &Pe<'_>,
+    budget: DiscoveryBudget,
+    work: &mut usize,
+    selected: &mut usize,
+    parsed: &ParsedCaller,
+) -> Result<PopupProfile, Problem> {
+    let mut families = Vec::new();
+    families
+        .try_reserve(parsed.families.len())
+        .map_err(|_| Problem::Budget)?;
+    for family in &parsed.families {
+        let count = table_count(family.start, family.end).ok_or(Problem::Operand)?;
+        let bytes = count.checked_mul(8).ok_or(Problem::Operand)?;
+        charge(work, bytes, budget.work_bytes)?;
+        charge(selected, bytes, budget.image.profile_bytes)?;
+        let pairs = read_pairs(pe, family.start, count)?;
+        families.push(PopupFamily {
+            pairs,
+            kind: family.kind,
+            flag: family.flag,
+        });
+    }
+    Ok(PopupProfile {
+        families,
+        full: parsed.full,
+    })
+}
+
+fn table_count(start: u32, end: u32) -> Option<usize> {
+    let span = end.checked_sub(start)?;
+    if span == 0 || !span.is_multiple_of(8) {
+        return None;
+    }
+    let count = usize::try_from(span / 8).ok()?;
+    (1..=MAX_PAIRS).contains(&count).then_some(count)
+}
+
+fn read_pairs(pe: &Pe<'_>, va: u32, count: usize) -> Result<Vec<(i32, i32)>, Problem> {
+    let len = count.checked_mul(8).ok_or(Problem::Operand)?;
+    let tail = pe.read_from(va, false).map_err(|_| Problem::Operand)?;
+    let bytes = tail.get(..len).ok_or(Problem::Operand)?;
+    let mut pairs = Vec::new();
+    pairs
+        .try_reserve_exact(count)
+        .map_err(|_| Problem::Budget)?;
+    for chunk in bytes.as_chunks::<8>().0 {
+        let width = i32::from_le_bytes(chunk[..4].try_into().map_err(|_| Problem::Operand)?);
+        let height = i32::from_le_bytes(chunk[4..].try_into().map_err(|_| Problem::Operand)?);
+        if width <= 0 || height <= 0 {
+            return Err(Problem::Operand);
+        }
+        pairs.push((width, height));
+    }
+    if pairs.len() == count {
+        Ok(pairs)
+    } else {
+        Err(Problem::Operand)
+    }
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@ use super::*;
 
 const CODE_RAW: usize = 0x200;
 const CODE_LEN: usize = 0x1000;
+const CODE_RVA: u32 = 0x1000;
 const DATA_RAW: usize = 0x1200;
 const DATA_LEN: usize = 0x400;
 const DATA_RVA: u32 = 0x3000;
@@ -250,7 +251,7 @@ fn fixture(spec: &Spec) -> Fixture {
         (0xb4, spec.base),
         (0xd0, 0x5000),
         (0x100, CODE_LEN as u32),
-        (0x104, 0x1000),
+        (0x104, CODE_RVA),
         (0x108, CODE_LEN as u32),
         (0x10c, CODE_RAW as u32),
         (0x11c, 0x6000_0020),
@@ -549,6 +550,7 @@ fn selection_prefers_the_closer_size_keeps_ties_and_scores_refresh_without_round
             mode_index: 0,
             kind: policy.kind(),
             flag: 0,
+            monitor_ordinal: None,
         },
         Row {
             label: "b".into(),
@@ -560,6 +562,7 @@ fn selection_prefers_the_closer_size_keeps_ties_and_scores_refresh_without_round
             mode_index: 1,
             kind: policy.kind(),
             flag: 0,
+            monitor_ordinal: None,
         },
     ];
     assert_eq!(
@@ -614,6 +617,7 @@ fn adapter_mismatch_outranks_a_small_size_delta_and_overflow_is_refused() {
             mode_index: 0,
             kind: normal_policy.kind(),
             flag: 0,
+            monitor_ordinal: None,
         },
         Row {
             label: "near".into(),
@@ -625,6 +629,7 @@ fn adapter_mismatch_outranks_a_small_size_delta_and_overflow_is_refused() {
             mode_index: 1,
             kind: normal_policy.kind(),
             flag: 0,
+            monitor_ordinal: None,
         },
     ];
     assert_eq!(
@@ -647,6 +652,7 @@ fn adapter_mismatch_outranks_a_small_size_delta_and_overflow_is_refused() {
         mode_index: 0,
         kind: 9,
         flag: 0,
+        monitor_ordinal: None,
     };
     assert!(matches!(
         policy
@@ -711,4 +717,736 @@ fn selected_original_mode_profile_is_admitted() {
     )
     .unwrap();
     assert_eq!(policy.origin(), &origin);
+}
+
+const PLANTED_KIND: i32 = 11;
+
+#[test]
+fn popup_grouping_keeps_first_source_key_and_separate_monitors_and_flags() {
+    let spec = spec(0x400000);
+    let mut image = fixture(&spec);
+    plant_popup(
+        &mut image.bytes,
+        spec.base,
+        [(151, 97), (151, 97)],
+        super::WS_POPUP,
+        3,
+        true,
+        16,
+    );
+    write_pair(&mut image.bytes, DATA_RAW + 0x90, 151, 97);
+    write_pair(&mut image.bytes, DATA_RAW + 0x98, 151, 97);
+    let admitted = policy(&image);
+    let monitors = [bound(4, 151, 97), bound(7, 151, 97)];
+    let rows = admitted.popup_rows(&monitors, Some(0), 3).unwrap();
+    assert_eq!(labels(&rows), ["151/97", "151/97"]);
+    assert_eq!(rows[0].monitor_ordinal, Some(4));
+    assert_eq!(rows[1].monitor_ordinal, Some(7));
+    assert!(rows.iter().all(|row| row.mode_index == 0));
+
+    let rows = admitted.popup_rows(&monitors, None, 3).unwrap();
+    assert_eq!(labels(&rows), ["151/97", "151/97", "151/97", "151/97"]);
+    assert_eq!(
+        rows.iter().map(|row| row.flag).collect::<Vec<_>>(),
+        [0, 1, 0, 1]
+    );
+}
+
+#[test]
+fn popup_profile_requires_zero_depth_and_refresh_stores_before_omitting_them() {
+    for slot in [0xcc, 0xd0] {
+        let spec = spec(0x400000);
+        let mut image = fixture(&spec);
+        plant_popup(
+            &mut image.bytes,
+            spec.base,
+            [(151, 97), (400, 280)],
+            super::WS_POPUP,
+            3,
+            true,
+            16,
+        );
+        let store = image
+            .bytes
+            .windows(7)
+            .position(|bytes| bytes == [0xc7, 0x45, slot, 0, 0, 0, 0])
+            .unwrap();
+        image.bytes[store + 3] = 1;
+        assert!(!policy(&image).has_popup_profile());
+    }
+}
+
+#[test]
+fn popup_rows_emit_the_captured_full_monitor_bound() {
+    let spec = spec(0x400000);
+    let mut image = fixture(&spec);
+    plant_popup(
+        &mut image.bytes,
+        spec.base,
+        [(151, 97), (400, 280)],
+        super::WS_POPUP,
+        3,
+        true,
+        16,
+    );
+    let admitted = policy(&image);
+    assert!(admitted.has_popup_profile());
+    assert_eq!(admitted.popup_presentation_kind(), Some(PLANTED_KIND));
+    assert!(admitted.rows(&[], Some(0)).unwrap().is_empty());
+    let enumerated = admitted
+        .rows(&[host(800, 600, Some(24), Some(60_000), 2, 3)], Some(0))
+        .unwrap();
+    assert_eq!(enumerated[0].label, "800/600/24");
+    assert!(enumerated[0].monitor_ordinal.is_none());
+
+    let rows = popup_at(&admitted, 210, 150, Some(0));
+    assert_eq!(labels(&rows), ["151/97", "210/150"]);
+    assert_eq!(rows[1].width, 210);
+    assert_eq!(rows[1].height, 150);
+    assert_eq!(rows[1].mode_index, 0);
+    assert!(rows.iter().all(|row| row.label != "4/45"));
+    assert!(rows.iter().all(|row| {
+        row.flag == 0
+            && row.kind == PLANTED_KIND
+            && row.adapter == 4
+            && row.monitor_ordinal == Some(0)
+            && row.depth.is_none()
+            && row.refresh_millihertz.is_none()
+    }));
+
+    let wide = popup_at(&admitted, 1366, 768, Some(0));
+    assert_eq!(labels(&wide), ["151/97", "400/280", "1366/768"]);
+    assert!(
+        wide.iter()
+            .any(|row| row.width == 1366 && row.height == 768)
+    );
+    assert!(
+        wide.iter()
+            .all(|row| (row.width, row.height) != (1024, 768) && row.label != "4/45")
+    );
+
+    assert_eq!(
+        labels(&popup_at(&admitted, 210, 150, None)),
+        ["151/97", "119/85", "203/145", "210/150"]
+    );
+    assert_eq!(
+        labels(&popup_at(&admitted, 210, 150, Some(1))),
+        ["119/85", "203/145"]
+    );
+    let square = popup_at(&admitted, 400, 400, None);
+    assert_eq!(
+        labels(&square),
+        ["151/97", "400/280", "119/85", "203/145", "400/400"]
+    );
+    assert!(square.iter().all(|row| row.label != "333/222"));
+
+    let monitors = admitted
+        .popup_rows(&[bound(0, 210, 150), bound(1, 100, 80)], Some(0), 4)
+        .unwrap();
+    assert_eq!(labels(&monitors), ["151/97", "210/150", "100/80"]);
+    assert_eq!(
+        monitors
+            .iter()
+            .map(|row| row.monitor_ordinal)
+            .collect::<Vec<_>>(),
+        [Some(0), Some(0), Some(1)]
+    );
+    assert!(monitors.iter().all(|row| row.adapter == 4));
+    assert!(
+        monitors
+            .iter()
+            .any(|row| row.monitor_ordinal != Some(row.adapter))
+    );
+    let skipped = admitted
+        .popup_rows(&[bound(9, 0, 150), bound(0, 210, 150)], Some(0), 4)
+        .unwrap();
+    assert_eq!(labels(&skipped), ["151/97", "210/150"]);
+    assert!(skipped.iter().all(|row| row.monitor_ordinal == Some(0)));
+    assert_eq!(labels(&popup_at(&admitted, 1, 1, Some(0))), ["1/1"]);
+    assert!(matches!(
+        admitted
+            .popup_rows(&[bound(0, 210, 150)], Some(0), u32::MAX)
+            .err()
+            .unwrap()
+            .problem,
+        Problem::Overflow
+    ));
+
+    plant_popup(
+        &mut image.bytes,
+        spec.base,
+        [(221, 155), (113, 75)],
+        super::WS_POPUP,
+        3,
+        true,
+        16,
+    );
+    let changed = popup_at(&policy(&image), 210, 150, Some(0));
+    assert_eq!(labels(&changed), ["113/75", "210/150"]);
+    assert_eq!(changed[0].mode_index, 1);
+}
+
+#[test]
+fn equivalent_frame_and_capture_moves_admit_the_full_monitor_row() {
+    for prologue in [[0x55, 0x89, 0xe5], [0x55, 0x8b, 0xec]] {
+        for width_move in [[0x89, 0xc3], [0x8b, 0xd8]] {
+            let spec = spec(0x400000);
+            let mut image = fixture(&spec);
+            plant_popup(
+                &mut image.bytes,
+                spec.base,
+                [(151, 97), (400, 280)],
+                super::WS_POPUP,
+                3,
+                true,
+                16,
+            );
+            image.bytes[CODE_RAW + 0x600..CODE_RAW + 0x603].copy_from_slice(&prologue);
+            image.bytes[CODE_RAW + 0x680..CODE_RAW + 0x683].copy_from_slice(&prologue);
+            let capture = image
+                .bytes
+                .windows(8)
+                .position(|bytes| bytes == [0x83, 0xc4, 0x08, 0x89, 0x55, 0x08, 0x89, 0xc3])
+                .unwrap();
+            image.bytes[capture + 6..capture + 8].copy_from_slice(&width_move);
+            let admitted = policy(&image);
+            assert!(admitted.has_popup_profile());
+            assert_eq!(
+                labels(&popup_at(&admitted, 210, 150, Some(0))),
+                ["151/97", "210/150"]
+            );
+        }
+    }
+}
+
+#[test]
+fn a_missing_final_record_omits_that_family() {
+    let spec = spec(0x400000);
+    let mut image = fixture(&spec);
+    plant_popup(
+        &mut image.bytes,
+        spec.base,
+        [(151, 97), (400, 280)],
+        super::WS_POPUP,
+        3,
+        false,
+        16,
+    );
+    let admitted = policy(&image);
+    assert!(admitted.has_popup_profile());
+    assert_eq!(admitted.popup_presentation_kind(), Some(PLANTED_KIND));
+    let rows = popup_at(&admitted, 210, 150, Some(0));
+    assert_eq!(labels(&rows), ["151/97"]);
+    assert!(rows.iter().all(|row| row.label != "210/150"));
+}
+
+#[test]
+fn unqualified_popup_style_keeps_the_enumeration_path() {
+    let spec = spec(0x400000);
+    let mut framed = fixture(&spec);
+    plant_popup(
+        &mut framed.bytes,
+        spec.base,
+        [(151, 97), (400, 280)],
+        super::WS_POPUP | 0x00c0_0000,
+        3,
+        true,
+        16,
+    );
+    let framed_policy = policy(&framed);
+    assert!(!framed_policy.has_popup_profile());
+    assert!(framed_policy.popup_presentation_kind().is_none());
+    let rows = framed_policy
+        .rows(&[host(800, 600, Some(24), None, 2, 0)], Some(0))
+        .unwrap();
+    assert_eq!(rows[0].label, "800/600/24");
+    assert!(rows[0].monitor_ordinal.is_none());
+    assert!(popup_at(&framed_policy, 210, 150, Some(0)).is_empty());
+
+    let mut same_selector = fixture(&spec);
+    plant_popup(
+        &mut same_selector.bytes,
+        spec.base,
+        [(151, 97), (400, 280)],
+        super::WS_POPUP,
+        2,
+        true,
+        16,
+    );
+    let refused = policy(&same_selector);
+    assert!(!refused.has_popup_profile());
+    assert_eq!(
+        refused
+            .rows(&[host(800, 600, Some(24), None, 2, 0)], Some(0))
+            .unwrap()[0]
+            .label,
+        "800/600/24"
+    );
+}
+
+#[test]
+fn a_complete_popup_caller_rejects_a_malformed_table() {
+    let spec = spec(0x400000);
+    let mut negative = fixture(&spec);
+    plant_popup(
+        &mut negative.bytes,
+        spec.base,
+        [(151, 97), (400, 280)],
+        super::WS_POPUP,
+        3,
+        true,
+        16,
+    );
+    write_pair(&mut negative.bytes, DATA_RAW + 0x90, 119, -1);
+    assert!(matches!(problem(&negative), Problem::Operand));
+
+    let mut empty = fixture(&spec);
+    plant_popup(
+        &mut empty.bytes,
+        spec.base,
+        [(151, 97), (400, 280)],
+        super::WS_POPUP,
+        3,
+        true,
+        0,
+    );
+    empty.budget.image.profile_bytes = 15;
+    assert!(matches!(problem(&empty), Problem::Operand));
+}
+
+#[test]
+fn popup_discovery_charges_before_table_reads() {
+    let spec = spec(0x400000);
+    let mut limited = fixture(&spec);
+    plant_popup(
+        &mut limited.bytes,
+        spec.base,
+        [(151, 97), (400, 280)],
+        super::WS_POPUP,
+        3,
+        true,
+        16,
+    );
+    write_pair(&mut limited.bytes, DATA_RAW + 0x90, 119, 0);
+    limited.budget.candidate_limit = 4;
+    assert!(matches!(problem(&limited), Problem::Budget));
+
+    let mut admitted = fixture(&spec);
+    plant_popup(
+        &mut admitted.bytes,
+        spec.base,
+        [(151, 97), (400, 280)],
+        super::WS_POPUP,
+        3,
+        true,
+        16,
+    );
+    admitted.budget.candidate_limit = 5;
+    assert!(policy(&admitted).has_popup_profile());
+
+    let mut profile_budget = fixture(&spec);
+    plant_popup(
+        &mut profile_budget.bytes,
+        spec.base,
+        [(151, 97), (400, 280)],
+        super::WS_POPUP,
+        3,
+        true,
+        16,
+    );
+    write_pair(&mut profile_budget.bytes, DATA_RAW + 0x90, -4, 85);
+    profile_budget.budget.image.profile_bytes = 40;
+    assert!(matches!(problem(&profile_budget), Problem::Budget));
+
+    let mut work_budget = fixture(&spec);
+    plant_popup(
+        &mut work_budget.bytes,
+        spec.base,
+        [(151, 97), (400, 280)],
+        super::WS_POPUP,
+        3,
+        true,
+        16,
+    );
+    write_pair(&mut work_budget.bytes, DATA_RAW + 0x90, 119, 0);
+    let label_bytes = spec.with_depth.len() + 1 + spec.size_only.len() + 1;
+    let allowance = scanned_work_before_second_table(&work_budget.bytes, label_bytes);
+    work_budget.budget.work_bytes = allowance;
+    assert!(matches!(problem(&work_budget), Problem::Budget));
+    work_budget.budget.work_bytes = allowance + 16;
+    assert!(matches!(problem(&work_budget), Problem::Operand));
+
+    let mut many_bounds = fixture(&spec);
+    for off in [0x500usize, 0x560, 0x5c0] {
+        write_bounds(&mut many_bounds.bytes, off, super::WS_POPUP, 3);
+    }
+    many_bounds.budget.candidate_limit = 6;
+    assert!(matches!(problem(&many_bounds), Problem::Budget));
+
+    let mut many_calls = fixture(&spec);
+    write_bounds(&mut many_calls.bytes, 0x600, super::WS_POPUP, 3);
+    write_pair(&mut many_calls.bytes, DATA_RAW + 0x90, 0, 1);
+    plant_matching_calls(&mut many_calls.bytes, 0x700, 25, 8, false);
+    many_calls.budget.candidate_limit = 8;
+    assert!(matches!(problem(&many_calls), Problem::Budget));
+
+    let mut many_groups = fixture(&spec);
+    write_bounds(&mut many_groups.bytes, 0x600, super::WS_POPUP, 3);
+    write_pair(&mut many_groups.bytes, DATA_RAW + 0x90, -1, 1);
+    plant_matching_calls(&mut many_groups.bytes, 0x700, 9, 16, true);
+    many_groups.budget.candidate_limit = 8;
+    assert!(matches!(problem(&many_groups), Problem::Budget));
+}
+
+#[test]
+fn popup_rows_cap_monitors_and_emitted_rows() {
+    let spec = spec(0x400000);
+    let mut image = fixture(&spec);
+    plant_popup(
+        &mut image.bytes,
+        spec.base,
+        [(151, 97), (400, 280)],
+        super::WS_POPUP,
+        3,
+        true,
+        16,
+    );
+    let admitted = policy(&image);
+    let monitors: Vec<_> = (0..super::MAX_HOST_RECORDS + 1)
+        .map(|ordinal| bound(u32::try_from(ordinal).unwrap(), 0, 0))
+        .collect();
+    assert!(matches!(
+        admitted
+            .popup_rows(&monitors, Some(0), 4)
+            .err()
+            .unwrap()
+            .problem,
+        Problem::Budget
+    ));
+    let aggregate: Vec<_> = (0..1400).map(|ordinal| bound(ordinal, 1366, 768)).collect();
+    assert!(matches!(
+        admitted
+            .popup_rows(&aggregate, Some(0), 4)
+            .err()
+            .unwrap()
+            .problem,
+        Problem::Budget
+    ));
+}
+
+#[test]
+#[ignore = "requires PEACECRAFT3_OPTIONS_CLIENT with an explicitly selected original client"]
+fn selected_original_popup_profile_uses_the_full_monitor_bound() {
+    use std::io::Read;
+    let path = std::path::PathBuf::from(
+        std::env::var_os("PEACECRAFT3_OPTIONS_CLIENT").expect("explicit original client required"),
+    );
+    let mut file = std::fs::File::open(&path).unwrap();
+    let max_bytes = 32 * 1024 * 1024;
+    assert!(file.metadata().unwrap().len() <= max_bytes as u64);
+    let mut image = Vec::new();
+    file.by_ref()
+        .take(max_bytes as u64 + 1)
+        .read_to_end(&mut image)
+        .unwrap();
+    assert!(image.len() <= max_bytes);
+    let origin = AssetIdentity {
+        edition: "explicit local client; adjacent archives unqualified".into(),
+        version: "selected input; pattern qualification only".into(),
+        source: path.display().to_string(),
+    };
+    let policy = Policy::discover(
+        &image,
+        origin,
+        DiscoveryBudget {
+            image: RuleInputBudget {
+                image_bytes: max_bytes,
+                profile_bytes: 128 * 1024,
+                sections: 96,
+            },
+            label_bytes: 256,
+            candidate_limit: 32,
+            work_bytes: 64 * 1024 * 1024,
+        },
+    )
+    .unwrap();
+    assert!(policy.has_popup_profile());
+    let kind = policy
+        .popup_presentation_kind()
+        .expect("flag-0 popup rows share one presentation kind");
+    let rows = policy
+        .popup_rows(&[bound(0, 1920, 1080), bound(1, 800, 600)], Some(0), 1)
+        .unwrap();
+    assert!(!rows.is_empty());
+    assert!(rows.iter().all(|row| {
+        row.flag == 0 && row.adapter == 1 && row.kind == kind && row.monitor_ordinal.is_some()
+    }));
+    let mut wide = 0usize;
+    let mut narrow = 0usize;
+    for row in &rows {
+        match row.monitor_ordinal {
+            Some(0) => {
+                assert!(row.width <= 1920 && row.height <= 1080);
+                wide += 1;
+            }
+            Some(1) => {
+                assert!(row.width <= 800 && row.height <= 600);
+                narrow += 1;
+            }
+            _ => panic!("popup row monitor ordinal"),
+        }
+    }
+    assert!(wide > 0);
+    assert!(narrow <= wide);
+    assert!(
+        rows.iter()
+            .any(|row| row.monitor_ordinal == Some(0) && row.width == 1920 && row.height == 1080)
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.monitor_ordinal == Some(1) && row.width == 800 && row.height == 600)
+    );
+    assert!(policy.rows(&[], Some(0)).unwrap().is_empty());
+}
+
+fn scanned_work_before_second_table(bytes: &[u8], label_bytes: usize) -> usize {
+    let code = &bytes[CODE_RAW..CODE_RAW + CODE_LEN];
+    let prefix = [0x8b, 0x75, 0x08, 0x33, 0xc9, 0x8b, 0xc6, 0x33, 0xd2];
+    let mut patterns = code
+        .windows(prefix.len())
+        .enumerate()
+        .filter(|(_, window)| window.starts_with(&prefix));
+    let (pattern, _) = patterns.next().expect("bounds cascade");
+    assert!(patterns.next().is_none());
+    let bounds_window = pattern - pattern.saturating_sub(40);
+    let mut calls = Vec::new();
+    let mut index = 0usize;
+    while index + 5 <= code.len() {
+        if code[index] == 0xe8
+            && index >= 3
+            && code[index - 3] == 0x56
+            && code[index - 2] == 0x6a
+            && code[index - 1] == 2
+        {
+            calls.push(index);
+        }
+        index += 1;
+    }
+    assert_eq!(calls.len(), 3);
+    let entry_windows: usize = calls
+        .iter()
+        .map(|call| call - call.saturating_sub(0x800))
+        .sum();
+    CODE_LEN + label_bytes + bounds_window + CODE_LEN + entry_windows + 16
+}
+
+fn bound(ordinal: u32, width: u32, height: u32) -> MonitorBound {
+    MonitorBound {
+        ordinal,
+        width,
+        height,
+    }
+}
+
+fn labels(rows: &[Row]) -> Vec<&str> {
+    rows.iter().map(|row| row.label.as_str()).collect()
+}
+
+fn popup_at(policy: &Policy, width: u32, height: u32, flag: Option<u8>) -> Vec<Row> {
+    policy
+        .popup_rows(&[bound(0, width, height)], flag, 4)
+        .unwrap()
+}
+
+fn push_u32(buf: &mut Vec<u8>, value: u32) {
+    buf.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_kind(buf: &mut Vec<u8>, kind: i32, flag: u8) {
+    buf.extend_from_slice(&[0xc7, 0x45, 0xc8]);
+    buf.extend_from_slice(&kind.to_le_bytes());
+    buf.extend_from_slice(&[0xc6, 0x45, 0xd4, flag]);
+}
+
+fn bounds_bytes(style2: u32, work_selector: u8) -> Vec<u8> {
+    let mut buf = vec![0x55, 0x89, 0xe5, 0x90, 0x90];
+    buf.extend_from_slice(&[0x8b, 0x75, 0x08, 0x33, 0xc9, 0x8b, 0xc6, 0x33, 0xd2]);
+    buf.extend_from_slice(&[0x83, 0xe8, 0x01]);
+    let je1 = mark(&mut buf, 0x74);
+    buf.extend_from_slice(&[0x83, 0xe8, 0x01]);
+    let je2 = mark(&mut buf, 0x74);
+    buf.extend_from_slice(&[0x83, 0xe8, 0x01]);
+    let jne = mark(&mut buf, 0x75);
+    buf.push(0xba);
+    push_u32(&mut buf, 0x06cf_0000);
+    let jmp3 = mark(&mut buf, 0xeb);
+    let style2_at = buf.len();
+    rel(je2, style2_at, &mut buf);
+    buf.push(0xba);
+    push_u32(&mut buf, style2);
+    let jmp2 = mark(&mut buf, 0xeb);
+    let style1_at = buf.len();
+    rel(je1, style1_at, &mut buf);
+    buf.push(0xba);
+    push_u32(&mut buf, 0x8608_0000);
+    let join = buf.len();
+    rel(jmp3, join, &mut buf);
+    rel(jmp2, join, &mut buf);
+    buf.push(0xb9);
+    push_u32(&mut buf, super::WS_EX_APPWINDOW);
+    let past = buf.len();
+    rel(jne, past, &mut buf);
+    buf.extend_from_slice(&[
+        0x51,
+        0x6a,
+        0x00,
+        0x52,
+        0x8d,
+        0x45,
+        0xec,
+        0x0f,
+        0x57,
+        0xc0,
+        0x50,
+        0x0f,
+        0x11,
+        0x45,
+        0xec,
+        0xff,
+        0x15,
+        0,
+        0,
+        0,
+        0,
+        0x83,
+        0xfe,
+        work_selector,
+        0x8b,
+        0x75,
+        0x0c,
+        0x0f,
+        0x94,
+        0xc0,
+    ]);
+    buf
+}
+
+fn write_bounds(bytes: &mut [u8], off: usize, style2: u32, work_selector: u8) {
+    let bounds = bounds_bytes(style2, work_selector);
+    assert!(off >= 0x4c0);
+    assert!(off + bounds.len() <= CODE_LEN);
+    bytes[CODE_RAW + off..CODE_RAW + off + bounds.len()].copy_from_slice(&bounds);
+}
+
+fn emit_call(buf: &mut Vec<u8>, slots: &mut Vec<(usize, usize)>, target_off: usize) {
+    buf.push(0xe8);
+    let at = buf.len();
+    buf.extend_from_slice(&0u32.to_le_bytes());
+    slots.push((at, target_off));
+}
+
+fn write_pair(bytes: &mut [u8], at: usize, width: i32, height: i32) {
+    bytes[at..at + 4].copy_from_slice(&width.to_le_bytes());
+    bytes[at + 4..at + 8].copy_from_slice(&height.to_le_bytes());
+}
+
+fn full_record_bytes(kind: i32, flag: u8) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&[0x8b, 0x45, 0x08, 0xb9]);
+    push_u32(&mut buf, 0x0102_0304);
+    buf.extend_from_slice(&[0x89, 0x75, 0xb0, 0xc7, 0x45, 0xb4]);
+    push_u32(&mut buf, 0);
+    buf.extend_from_slice(&[
+        0x89, 0x5d, 0xb8, 0x89, 0x45, 0xbc, 0x89, 0x5d, 0xc0, 0x89, 0x45, 0xc4, 0xc7, 0x45, 0xcc,
+    ]);
+    push_u32(&mut buf, 0);
+    buf.extend_from_slice(&[0xc7, 0x45, 0xd0]);
+    push_u32(&mut buf, 0);
+    push_kind(&mut buf, kind, flag);
+    buf.extend_from_slice(&[0xe8, 0, 0, 0, 0]);
+    buf.extend_from_slice(&[
+        0x0f, 0x10, 0x45, 0xb0, 0x46, 0x0f, 0x11, 0x00, 0x0f, 0x10, 0x45, 0xc0, 0x0f, 0x11, 0x40,
+        0x10, 0xf3, 0x0f, 0x7e, 0x45, 0xd0, 0x66, 0x0f, 0xd6, 0x40, 0x20, 0x3b, 0x75, 0xf4,
+    ]);
+    buf
+}
+
+fn plant_popup(
+    bytes: &mut [u8],
+    base: u32,
+    flag0: [(i32, i32); 2],
+    style2: u32,
+    work_selector: u8,
+    with_full: bool,
+    span: u32,
+) {
+    let bounds_off = 0x600usize;
+    let caller_off = 0x680usize;
+    write_bounds(bytes, bounds_off, style2, work_selector);
+    let table0 = base + DATA_RVA + 0x80;
+    let table1 = table0 + 16;
+    let decoy = table1 + 16;
+    let mut caller = Vec::new();
+    let mut slots = Vec::new();
+    caller.extend_from_slice(&[0x55, 0x89, 0xe5]);
+    caller.push(0xbf);
+    push_u32(&mut caller, decoy);
+    caller.push(0x90);
+    caller.extend_from_slice(&[0x56, 0x6a, 0x03]);
+    emit_call(&mut caller, &mut slots, bounds_off);
+    caller.resize(caller.len() + 16, 0x90);
+    caller.extend_from_slice(&[0x56, 0x6a, 0x02]);
+    emit_call(&mut caller, &mut slots, bounds_off);
+    caller.extend_from_slice(&[0x83, 0xc4, 0x08, 0x89, 0x55, 0x08, 0x89, 0xc3]);
+    for (start, flag) in [(table0, 0u8), (table1, 1)] {
+        caller.push(0xbf);
+        push_u32(&mut caller, start);
+        caller.push(0x90);
+        caller.extend_from_slice(&[0x56, 0x6a, 0x02]);
+        emit_call(&mut caller, &mut slots, bounds_off);
+        for slot in [0xcc, 0xd0] {
+            caller.extend_from_slice(&[0xc7, 0x45, slot]);
+            push_u32(&mut caller, 0);
+        }
+        push_kind(&mut caller, PLANTED_KIND, flag);
+        caller.extend_from_slice(&[0x83, 0xc7, 0x08, 0x81, 0xff]);
+        push_u32(&mut caller, start + span);
+    }
+    if with_full {
+        caller.extend_from_slice(&full_record_bytes(PLANTED_KIND, 0));
+    }
+    assert!(caller_off + caller.len() <= CODE_LEN);
+    bytes[CODE_RAW + caller_off..CODE_RAW + caller_off + caller.len()].copy_from_slice(&caller);
+    for (at, target_off) in slots {
+        let next = u32::try_from(caller_off + at + 4).unwrap();
+        let rel = (CODE_RVA + u32::try_from(target_off).unwrap()).wrapping_sub(CODE_RVA + next);
+        bytes[CODE_RAW + caller_off + at..CODE_RAW + caller_off + at + 4]
+            .copy_from_slice(&rel.to_le_bytes());
+    }
+    write_pair(bytes, DATA_RAW + 0x80, flag0[0].0, flag0[0].1);
+    write_pair(bytes, DATA_RAW + 0x88, flag0[1].0, flag0[1].1);
+    write_pair(bytes, DATA_RAW + 0x90, 119, 85);
+    write_pair(bytes, DATA_RAW + 0x98, 203, 145);
+    write_pair(bytes, DATA_RAW + 0xA0, 333, 222);
+}
+
+fn plant_matching_calls(bytes: &mut [u8], at: usize, count: usize, stride: usize, prologue: bool) {
+    let body = if prologue { 11 } else { 8 };
+    assert!(stride >= body);
+    assert!(at + count * stride <= CODE_LEN);
+    for index in 0..count {
+        let slot = at + index * stride;
+        let cursor = if prologue {
+            bytes[CODE_RAW + slot..CODE_RAW + slot + 3].copy_from_slice(&[0x55, 0x89, 0xe5]);
+            slot + 3
+        } else {
+            slot
+        };
+        bytes[CODE_RAW + cursor..CODE_RAW + cursor + 3].copy_from_slice(&[0x56, 0x6a, 0x02]);
+        let call = cursor + 3;
+        bytes[CODE_RAW + call] = 0xe8;
+        let next = u32::try_from(call + 5).unwrap();
+        let rel = (CODE_RVA + 0x600).wrapping_sub(CODE_RVA + next);
+        bytes[CODE_RAW + call + 1..CODE_RAW + call + 5].copy_from_slice(&rel.to_le_bytes());
+    }
 }

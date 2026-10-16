@@ -1531,8 +1531,20 @@ Disabled depth testing also suppresses writes, matching the pinned viewer/OpenGL
 profile. All 108 RGB overlap checks and the existing geoset-colour GPU readback
 pass on Vulkan; 346 application tests, strict native/browser-WASM Clippy and
 warning-denied application documentation pass.
-Evidence is in `.scratch/menu-depth-root-20261017/verification-1/`. Original depth
-execution and a fresh browser menu capture remain open.
+Evidence is in `.scratch/menu-depth-root-20261017/verification-1/`. The matching
+private browser package has four reviewed Main/Options captures. Its fifth
+resolution-list capture misses the bounded collection deadline, so the complete
+interaction gate remains open. Original depth execution, the missing Video
+panel artwork, popup text placement and other visual differences remain open.
+
+The selector-2 caller now derives frameless rows from source tables and each
+monitor's full bound, with first-occurrence grouping and stable monitor identity.
+Losing a selected monitor retains the draft and refuses Apply. Nineteen native
+and actual WASI display tests, the supplied Legacy profile gate, 347 application
+tests and strict native/browser-WASM checks pass. Evidence is in
+`.scratch/options-display-popup-root-20261017/`. Work-area families, original
+active policy, exclusive switching and equal rendered choice lists remain open;
+browser client-image import and row wiring are still being integrated.
 
 The [101-entry requirements map](docs/remaining-work/README.md) reconciles the
 open and partial gates against source evidence and lists their prerequisites.

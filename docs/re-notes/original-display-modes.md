@@ -237,8 +237,10 @@ menu coordinates are unchanged by this page-layout correction.
 
 ## Production selector
 
-When one selected client image admits exactly one enumeration-family profile
-and the primary monitor reports video modes, Options lists those grouped rows.
+When the selected client admits a complete selector-2 popup caller, Options uses
+its source pair families and captured full-monitor bounds as described below.
+Otherwise, with one enumeration-family profile and primary-monitor video modes,
+Options lists those grouped enumeration rows.
 Admission depths, minimum width, enumerated kind and flag, the refresh center,
 the score operands and both label formats are read from that image. Host width,
 height, observed depth and refresh are the records. Linux and other hosts that
@@ -251,9 +253,9 @@ EnumDisplaySettings order.
 The absent FixedAspectRatio checkbox supplies flag 0. If the discovered
 enumeration flag is not 0, the qualified list is empty. The adapter-owner
 compare and the active-kind compare stay off because those inputs are
-unresolved and applying them would hide rows. Pair-table augmentation and the
-per-index providers are separate unread inputs and are not offered. An empty
-result is not filled from a preset list or from the current window.
+unresolved and applying them would hide rows. Work-area families remain withheld.
+An empty qualified result is not filled from a preset list or from the current
+window.
 
 Apply still changes the window or browser render extent. It does not request
 an exclusive physical mode. Browser builds, a missing image and an unadmitted
@@ -307,3 +309,47 @@ equal choices on another monitor. No table payload was saved by the check.
 The corrected receipt is
 `.scratch/options-display-visible-witness-20261017/full-bound-receipt.json`;
 the earlier aspect-fit receipt is retained as superseded evidence.
+
+### Selector-2 caller integration
+
+The checked profile now links the frameless bounds helper to one capture call
+followed by two table loops. It reads table extents, pairs, kind and flag from
+that selected image. Table records must explicitly write zero depth and refresh
+before those fields are represented as absent. Both equivalent x86 frame and
+captured-width MOV encodings are supported; the supplied Legacy gate exposed an
+encoding the original synthetic fixture missed.
+
+Each current monitor supplies its own full physical bound. Pair families keep
+caller order, then the validated final record adds that raw bound. The unrelated
+aspect transform is not applied. Equal dimension/depth/monitor/kind/flag keys
+group at their first occurrence, so a full bound that already exists in a table
+does not add a duplicate choice. Different monitors and flags stay distinct.
+Table offsets are session row identities, not exclusive OS mode IDs.
+
+The app retains the selected monitor Entity and refreshes its pass ordinal after
+query reordering. If that Entity disappears, it preserves the draft and stale
+witness; Apply refuses until an explicit valid selection replaces it. An
+equal-sized remaining monitor cannot silently take the old choice. Neither the
+Entity nor its ordinal is persisted in version-1 render-size preferences.
+
+Discovery caps candidates, calls, groups, inspected tables, code passes and
+backward searches before growth or reads. Host inputs and emitted rows have
+separate bounded counts. Bad complete table operands refuse instead of becoming
+a missing profile. The parsed profile is shared from the application cache;
+its pair tables are not cloned every frame.
+
+Nineteen synthetic display tests pass natively and execute under Wasmtime. The
+explicit supplied-Legacy popup-profile gate, 347 application tests, strict native
+and browser-WASM Clippy, warning-denied profile documentation and formatting
+checks pass. The duplicate-row regression
+first fails with six rows instead of two. Evidence, including earlier compilation
+and admission failures, is retained in
+`.scratch/options-display-popup-root-20261017/`.
+
+This is a source-qualified frameless subset. Selector-3 work-area/frame
+capacities, original active-kind and adapter-owner policy, monitor-order parity,
+exclusive switching and equal rendered original choice lists remain open.
+Browser builds still use measured render extents pending their imported-image
+consumer; the current installer engine does not admit this profile. The four
+fresh browser menu captures in `.scratch/menu-depth-root-20261017/` precede this
+selector integration and do not establish its rendered acceptance.

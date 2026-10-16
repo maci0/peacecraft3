@@ -140,6 +140,12 @@ pub struct OfferedResolution {
     pub mode_index: u32,
     pub kind: i32,
     pub flag: u8,
+    /// Pass index for a selector-2 popup row. Enumeration rows and render sizes
+    /// leave this empty. It is metadata for the current listing pass.
+    pub monitor_ordinal: Option<u32>,
+    /// Opaque host monitor identity for a popup row. This is not a client
+    /// protocol field and it is distinct from `adapter` and `monitor_ordinal`.
+    pub monitor: Option<Entity>,
     pub render_extent_only: bool,
 }
 
@@ -154,6 +160,8 @@ impl OfferedResolution {
             mode_index: 0,
             kind: 0,
             flag: 0,
+            monitor_ordinal: None,
+            monitor: None,
             render_extent_only: true,
         }
     }
@@ -166,12 +174,19 @@ impl OfferedResolution {
             && self.mode_index == other.mode_index
             && self.kind == other.kind
             && self.flag == other.flag
+            && self.monitor_ordinal == other.monitor_ordinal
+            && self.monitor == other.monitor
             && self.render_extent_only == other.render_extent_only
     }
 }
 
+pub(crate) const POPUP_WORK_AREA_NOTICE: &str =
+    "Windowed work-area sizes are unavailable on this host. Apply changes the window render size.";
+
 pub(crate) fn resolution_popup_title(rows: &[OfferedResolution]) -> &'static str {
-    if rows.iter().any(|row| !row.render_extent_only) {
+    if rows.iter().any(|row| row.monitor.is_some()) {
+        POPUP_WORK_AREA_NOTICE
+    } else if rows.iter().any(|row| !row.render_extent_only) {
         "Sizes from the qualified client and this monitor. Apply changes the window render size."
     } else if rows.is_empty() {
         "No display sizes are available."
