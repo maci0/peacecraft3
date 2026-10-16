@@ -16,9 +16,17 @@ export function createInstallerDecoder({ onProgress, WorkerClass = globalThis.Wo
     if (closed) return Promise.reject(new Error('Local installer decoder is closed'));
     signal?.throwIfAborted(); const id = ++sequence;
     return new Promise((resolve, reject) => {
-      const abort = () => worker.postMessage({ command: 'cancel' });
+      const abort = () => {
+        const request = requests.get(id);
+        if (!request) return;
+        requests.delete(id);
+        request.removeAbort();
+        try { worker.postMessage({ id, command: 'cancel' }); }
+        finally { request.reject(signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')); }
+      };
       signal?.addEventListener('abort', abort, { once: true });
       requests.set(id, { resolve, reject, removeAbort: () => signal?.removeEventListener('abort', abort) });
+      if (signal?.aborted) { abort(); return; }
       worker.postMessage({ id, command, args });
     });
   }
@@ -28,4 +36,30 @@ export function createInstallerDecoder({ onProgress, WorkerClass = globalThis.Wo
     cleanup: () => call('cleanup'),
     close() { closed = true; worker.terminate(); rejectAll(new Error('Local installer decoder closed')); },
   };
+}
+
+// Caller-side transaction for files already extracted by this decoder.
+// Abort is checked before begin so a retired request cannot open a revision.
+export async function stageStoredInstallerFiles(files, sourceName, api, { signal, onProgress } = {}) {
+  signal?.throwIfAborted();
+  api.begin_archive_import();
+  try {
+    for (const entry of files) {
+      signal?.throwIfAborted();
+      onProgress?.({ phase: 'archive', path: entry.path });
+      const bytes = new Uint8Array(await entry.file.arrayBuffer());
+      signal?.throwIfAborted();
+      api.stage_archive(`${sourceName}:${entry.path} (stored, unpatched)`, bytes);
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    signal?.throwIfAborted();
+    onProgress?.({ phase: 'hydrate' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    signal?.throwIfAborted();
+    const diagnostics = api.commit_archive_import();
+    return { diagnostics, canonicalPaths: api.stored_assets(), revision: api.asset_revision() };
+  } catch (error) {
+    api.cancel_archive_import();
+    throw error;
+  }
 }

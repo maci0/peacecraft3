@@ -4,7 +4,7 @@ import { inspectInstaller } from './installer.js';
 import { ArcError, openFreeArc, redactMethod } from './freearc.js';
 import { extractArcMembers, createTemporaryArcStorage } from './arc-extract.js';
 
-let codec, current, state, storage;
+let codec, current, currentId, state, storage;
 // Independent per-attempt decoded-intermediate work policy, not a measured asset
 // size, REP final-output estimate or working-memory allowance.
 const MAX_INTERMEDIATE_BYTES = 2 * 1024 * 1024 * 1024;
@@ -96,8 +96,12 @@ async function extract({ ids }, signal) {
 }
 onmessage = async event => {
   const { id, command, args } = event.data ?? {};
-  if (command === 'cancel') { current?.abort(); return; }
+  if (command === 'cancel') {
+    if (current && currentId === id) current.abort();
+    return;
+  }
   if (current) { postMessage({ id, error: { message: 'Installer decoder is busy' } }); return; }
+  currentId = id;
   current = new AbortController();
   try {
     let result;
@@ -109,5 +113,5 @@ onmessage = async event => {
   } catch (error) {
     await storage?.remove().catch(() => {}); storage = undefined;
     postMessage({ id, error: { name: error.name, code: error.code, message: error.message } });
-  } finally { current = undefined; }
+  } finally { current = undefined; currentId = undefined; }
 };

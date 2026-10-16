@@ -27,7 +27,7 @@ import init, {
 import { discoverIso, importIsoCandidates } from './iso/import.js';
 import { clickDescriptor } from './iso/audio.js';
 import { createLoadingProgress, monitorWasmDownload } from './loading.js';
-import { createInstallerDecoder } from './iso/installer-import.js';
+import { createInstallerDecoder, stageStoredInstallerFiles } from './iso/installer-import.js';
 import { installMapConfiguration } from './map-configuration.js';
 import './menu-settings.js';
 let mapConfiguration;
@@ -512,7 +512,9 @@ async function applyLocalAudio(provenance) {
 isoImport.addEventListener('click', async () => {
   if (isoBusy || !isoDiscovery) return;
   const selected = [...isoCandidates.querySelectorAll('input:checked')].map(input => isoDiscovery.candidates[Number(input.value)]);
-  isoController = new AbortController(); isoState(true);
+  isoController = new AbortController();
+  const importSignal = isoController.signal;
+  isoState(true);
   isoLoading.update({ phase: 'Reading selected MPQs locally', loadedBytes: 0 });
   const priorLocalMode = localImportActive; localImportActive = true;
   try {
@@ -523,23 +525,22 @@ isoImport.addEventListener('click', async () => {
         throw new Error('Selected installer archives exceed the local memory budget');
       if (installerNeedsRestart) {
         installerDecoder?.close(); installerDecoder = createInstallerDecoder({ onProgress: installerProgress });
-        await installerDecoder.inspect(isoFile, isoDiscovery, isoController.signal); installerNeedsRestart = false;
+        await installerDecoder.inspect(isoFile, isoDiscovery, importSignal); installerNeedsRestart = false;
       }
-      const extracted = await installerDecoder.extract(selected.map(c => c.id), isoController.signal);
-      begin_archive_import();
-      for (const entry of extracted.files) {
-        isoController.signal.throwIfAborted();
-        isoLoading.update({ phase: `Validating extracted archive ${entry.path}` });
-        stage_archive(`${isoDiscovery.provenance.sourceName}:${entry.path} (stored, unpatched)`, new Uint8Array(await entry.file.arrayBuffer()));
-        await new Promise(resolve => setTimeout(resolve, 0));
-      }
-      isoController.signal.throwIfAborted();
-      isoLoading.update({ phase: 'Validating authored model dependencies locally' });
-      await new Promise(resolve => setTimeout(resolve, 0)); isoController.signal.throwIfAborted();
-      const diagnostics = commit_archive_import();
+      const extracted = await installerDecoder.extract(selected.map(c => c.id), importSignal);
+      const staged = await stageStoredInstallerFiles(extracted.files, isoDiscovery.provenance.sourceName, {
+        begin_archive_import, cancel_archive_import, stage_archive, commit_archive_import, stored_assets, asset_revision,
+      }, {
+        signal: importSignal,
+        onProgress(work) {
+          isoLoading.update({ phase: work.phase === 'hydrate'
+            ? 'Validating authored model dependencies locally'
+            : `Validating extracted archive ${work.path}` });
+        },
+      });
       result = { provenance: { ...isoDiscovery.provenance, variant: extracted.variant, languagePatchesApplied: false },
-        canonicalPaths: stored_assets(), revision: asset_revision(), diagnostics };
-    } else result = await importIsoCandidates(isoFile, isoDiscovery, selected, window.peacecraft3, { signal: isoController.signal, onProgress(work) {
+        canonicalPaths: staged.canonicalPaths, revision: staged.revision, diagnostics: staged.diagnostics };
+    } else result = await importIsoCandidates(isoFile, isoDiscovery, selected, window.peacecraft3, { signal: importSignal, onProgress(work) {
       isoLoading.update(work.phase === 'hydrate' ? { phase: 'Validating authored model dependencies locally' } : { phase: 'Reading MPQs locally', loadedBytes: work.imported, totalBytes: work.total, totalReliable: true });
     } });
     localImportActive = true;
