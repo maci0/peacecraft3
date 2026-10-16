@@ -197,3 +197,12 @@ This is not a retail-installer, native-audio or native-visual parity claim.
 Receipts and the preserved earlier failures are in
 `.scratch/options-panel-root-20261016/acceptance-1.json`. The public demo is not
 updated by this batch. Unsupported settings and washed-out sky remain open.
+
+A native-only regression now drives production `advance` with synthetic clip and
+sound records, then reads spawned audio players and authored gains. It verifies
+left category events, continued right Stand without a restarted opening event,
+and the Options Death slice on both layers after the real return request. The
+regression and 363 application tests pass (18 explicit gates ignored), with
+strict native/browser Clippy and formatting. Evidence:
+`.scratch/category-pop-advance-20261017/root-verification/`. This adds no runtime
+behavior and proves neither audible parity nor full Bevy WASI support.

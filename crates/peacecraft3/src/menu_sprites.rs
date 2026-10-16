@@ -1849,6 +1849,199 @@ mod tests {
         assert!(panels.clock.target.is_none());
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    mod category_pop_slice {
+        use super::super::*;
+        use super::{origin, request, wave};
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::prelude::{Assets, AudioPlayer, AudioSource, Mesh, Time, World};
+        use std::time::Duration;
+
+        #[test]
+        fn category_pops_stay_on_their_source_slice() {
+            let runtime =
+                pcx_gfx::mdx_runtime::RuntimePlan::checked(pcx_gfx::mdx_runtime::RuntimeInput {
+                    bones: Vec::new(),
+                    helpers: Vec::new(),
+                    pivots: pcx_mdl::Pivots(Vec::new()),
+                    geosets: Vec::new(),
+                    geoset_animations: Vec::new(),
+                    materials: Vec::new(),
+                    textures: Vec::new(),
+                    texture_animations: Vec::new(),
+                    global_sequences: Vec::new(),
+                })
+                .unwrap();
+            // Slots before Options Birth are index placement, not Main or Single coverage.
+            let options_specs = [
+                ([0, 1], false),
+                ([0, 1], false),
+                ([0, 1], false),
+                ([0, 1], false),
+                ([100, 300], true),
+                ([400, 440], false),
+            ];
+            let category_specs = [([0, 40], false), ([0, 40], false), ([200, 240], false)];
+            let category_rows = [(0, 0.2), (132, 0.6), (200, 0.7), (172, 0.9), (400, 0.15)];
+            let options_rows = [(100, 0.3), (132, 0.5), (250, 0.35), (172, 0.8), (400, 0.4)];
+            let plans = |specs: &[([u32; 2], bool)]| -> Vec<ClipPlan> {
+                specs
+                    .iter()
+                    .map(|&(interval, loops)| {
+                        ClipPlan::checked(
+                            &runtime,
+                            Clip::checked(interval, loops).unwrap(),
+                            "synthetic",
+                        )
+                        .unwrap()
+                    })
+                    .collect()
+            };
+            let sounds = |rows: &[(u32, f32)]| {
+                loaded_sounds_with(
+                    rows.iter()
+                        .map(|&(frame, volume)| {
+                            let mut sound = request("Local/slice.wav", frame);
+                            sound.volume = volume;
+                            sound
+                        })
+                        .collect(),
+                    origin(),
+                    |_, _| Ok(wave()),
+                )
+                .unwrap()
+            };
+            let mut clock = Clock::default();
+            clock.phase = Phase::OptionsStand;
+            clock.local = Duration::from_millis(32);
+            clock.global = Duration::from_millis(40);
+            let mut panels = MenuPanels {
+                panels: LAYERS
+                    .into_iter()
+                    .map(|layer| Panel {
+                        layer,
+                        path: format!("synthetic/{layer}"),
+                        model: pcx_gfx::LoadedModel {
+                            name: String::new(),
+                            minimum_extent: [0.0; 3],
+                            maximum_extent: [0.0; 3],
+                            meshes: Vec::new(),
+                            bone_names: Vec::new(),
+                            bone_parents: Vec::new(),
+                            sequences: Vec::new(),
+                        },
+                        bones: Vec::new(),
+                        pivots: pcx_mdl::Pivots(Vec::new()),
+                        global_durations: Vec::new(),
+                        geosets: scene::Geosets {
+                            handles: Vec::new(),
+                            bound: Vec::new(),
+                            textures: scene::TextureBindings::default(),
+                        },
+                        phases: Vec::new(),
+                        navigation_error: None,
+                        options: Ok((plans(&options_specs), sounds(&options_rows))),
+                        category: Ok((plans(&category_specs), sounds(&category_rows))),
+                        sounds: Vec::new(),
+                        unavailable_sounds: Vec::new(),
+                    })
+                    .collect(),
+                clock,
+                destination: None,
+                install: None,
+                edition: 0,
+                category_refused: false,
+                category_stand_origin: None,
+            };
+            panels
+                .sync_category_plate(crate::menu_screens::Screen::Options(
+                    crate::menu_screens::Page::Video,
+                ))
+                .unwrap();
+            assert_eq!(panels.category_stand_origin, Some(Duration::from_millis(8)));
+            assert_eq!(panels.clock.phase, Phase::OptionsMorph);
+            assert_eq!(panels.clock.local, Duration::ZERO);
+            assert_eq!(panels.clock.global, Duration::from_millis(40));
+
+            let mut world = World::new();
+            world.init_resource::<Assets<Mesh>>();
+            world.init_resource::<Assets<MenuMaterial>>();
+            world.init_resource::<Assets<AudioSource>>();
+            world.init_resource::<crate::menu_screens::Navigation>();
+            let launcher =
+                crate::launch_gui::Launcher::test_source("synthetic-panel-source".into(), true);
+            let mut backend = crate::menu_settings::Backend::default();
+            backend.set_test_source(&launcher);
+            world.insert_resource(backend);
+            world.insert_resource(launcher);
+            world.insert_resource(Time::<()>::default());
+            world.insert_resource(panels);
+            let played = |world: &mut World| {
+                let mut gains: Vec<f32> = world
+                    .query::<&crate::menu_audio::AuthoredVolume>()
+                    .iter(&*world)
+                    .map(|volume| volume.0)
+                    .collect();
+                gains.sort_by(f32::total_cmp);
+                assert_eq!(
+                    world.query::<&AudioPlayer>().iter(&*world).count(),
+                    gains.len()
+                );
+                let notice = world
+                    .resource::<crate::menu_screens::Navigation>()
+                    .notice
+                    .clone();
+                assert!(notice.is_empty(), "{notice}");
+                gains
+            };
+
+            world
+                .resource_mut::<Time<()>>()
+                .advance_by(Duration::from_millis(40));
+            world.run_system_once(advance).unwrap();
+            assert_eq!(played(&mut world), vec![0.2, 0.5]);
+            {
+                let panels = world.resource::<MenuPanels>();
+                assert_eq!(panels.clock.phase, Phase::OptionsStandAlternate);
+                assert_eq!(panels.clock.local, Duration::ZERO);
+                assert_eq!(panels.clock.global, Duration::from_millis(80));
+                assert_eq!(panels.category_stand_origin, Some(Duration::from_millis(8)));
+            }
+            assert!(matches!(
+                world.resource_mut::<MenuPanels>().request(
+                    crate::menu_screens::Screen::Options(crate::menu_screens::Page::Video),
+                    crate::menu_screens::Screen::Main,
+                    None,
+                    0,
+                ),
+                Ok(Transition::Animated)
+            ));
+            world
+                .resource_mut::<Time<()>>()
+                .advance_by(Duration::from_millis(16));
+            world.run_system_once(advance).unwrap();
+            assert_eq!(played(&mut world), vec![0.2, 0.5, 0.7, 0.8]);
+            assert_eq!(
+                world.resource::<MenuPanels>().clock.phase,
+                Phase::OptionsMorphAlternate
+            );
+            assert_eq!(
+                world.resource::<MenuPanels>().clock.local,
+                Duration::from_millis(16)
+            );
+            world
+                .resource_mut::<Time<()>>()
+                .advance_by(Duration::from_millis(40));
+            world.run_system_once(advance).unwrap();
+            assert_eq!(played(&mut world), vec![0.2, 0.4, 0.4, 0.5, 0.7, 0.8]);
+            {
+                let panels = world.resource::<MenuPanels>();
+                assert_eq!(panels.clock.phase, Phase::OptionsDeath);
+                assert_eq!(panels.clock.local, Duration::from_millis(16));
+            }
+        }
+    }
+
     const TIMELINE: Timeline = Timeline {
         birth: [2500, 3500],
         stand: [3667, 4667],

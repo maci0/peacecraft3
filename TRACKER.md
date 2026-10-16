@@ -1586,3 +1586,10 @@ ignored), with strict native/browser Clippy, browser build and formatting.
 Evidence: `.scratch/resolution-focus-resize-20261017/`. Geometry is synthetic;
 fresh rendered resize and native behavior remain unmeasured. No font, mode-policy
 or physical display switching claim is added.
+
+The category sound-slice regression now calls production panel `advance` and the
+real return request, checking spawned players/gains for left category, continued
+right Stand and shared Options Death. All 363 app tests and strict native/browser
+Clippy pass, with formatting. Evidence:
+`.scratch/category-pop-advance-20261017/root-verification/`. Test-only change;
+no audible original comparison or full Bevy WASI claim.
