@@ -160,3 +160,28 @@ shows less of the 1-second entrance.
   archives by game path; sounds go through `peacecraft3Audio.event`), native
   depth order, the alpha-test threshold, `0x40`/`0x80` depth flags, Hermite
   quaternion parity, and the other glue screens' Birth/Death transitions.
+
+## Split-gate candidate boundary
+
+The retained skin also binds `GlueSpriteLayerCenter_V1` to
+`CenterPanel-Expansion.mdl`. The existing model resolver selects its binary
+member in the explicitly selected local `War3x.mpq`; the member is 4,164 bytes,
+SHA-256 `006ca3dd87f4cb212598ae0ba9078c2ee6b152c49a0ab45ff30c1961ec6885f1`.
+Its BattleNet directory name establishes neither exclusion from MainMenu nor
+startup ownership. The current panel owner does not load this Center layer.
+
+One bounded exact-member inspection finds four adjacent coplanar quads sharing
+one translation-only root joint. Checked Birth/Stand/Death samples move them
+together as a thin horizontal strip. Under the current panel caller's placement,
+Birth moves the strip down from above the frame and Death returns it above.
+This supplies no separate upper/lower shutter geometry and does not justify
+installing it as the requested full-screen opening animation. Nine sampled poses
+and static layer alpha do not prove continuous motion or textured coverage;
+the textures and startup/return dispatch were not inspected.
+
+The strict source-leaf compile and exact-member run pass. Independent root replay
+verifies all 21 receipt files and recomputes the nine union bounds from retained
+metadata without rereading an original. Evidence remains local in
+`.scratch/menu-split-gate-center-20261016/` and
+`.scratch/menu-split-gate-center-root-review-20261016/`. No Center placement,
+timing or dispatch is added to production by this evidence.
