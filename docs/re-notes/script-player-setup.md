@@ -233,3 +233,27 @@ nine unit-creation cases executed under WASI, and an actual WASM application
 catalog-binding case pass. There is still no application gameplay session
 factory calling this admission helper. These results establish executed creation
 records, not spawned game entities, rendering or a playable campaign.
+
+## Executed unit acquire range
+
+An admitted `SetUnitAcquireRange` writes its executed finite real onto the
+existing unit record. The optional declaration must share `CreateUnit`'s source
+and have the loaded `unit, real -> nothing` contract. Units without an assignment
+retain `None`; an executed zero is `Some(0.0)`. The setter does not resolve the
+catalog, allocate another record, change the definition or implement aggro.
+Finite negative values are retained, with no guessed clamp or default range.
+
+The existing `executed_unit` accessor exposes this state. Wrong-family, unknown
+and non-finite calls preserve the prior value. Mutable arena access constructs
+an error only on failure. `GetUnitAcquireRange` remains unsupported.
+
+The same Human01 program retains one range assignment with exactly the captured
+real bits and 53 unit creation records. Globals and `config` still complete.
+`main` next refuses `CreateTrigger` at map span `68442..68459`, declared in the
+selected `common.j` at `69768..69821`. The earlier sound, camera, rectangle,
+technology and destructable checks still pass. This is script-state evidence;
+there is no active gameplay scene or aggro behavior from this change.
+
+Verification covers the current play library and application tests, 12 executed
+WASI unit cases, strict native/WASM Clippy, rustdoc and the actual retained-map
+run. No original game bytes are published.

@@ -14,6 +14,7 @@ use pcx_sim::world::{Definition, ObjectCatalog, ResolutionProblem, Source};
 use std::sync::Arc;
 
 const NATIVE: &str = "CreateUnit";
+const SET_RANGE: &str = "SetUnitAcquireRange";
 const KIND: &str = "unit";
 
 /// Caller bounds. Not a world, population, or rendering limit.
@@ -36,6 +37,9 @@ pub struct ExecutedUnit {
     pub x: f32,
     pub y: f32,
     pub face: f32,
+    /// Executed `SetUnitAcquireRange` real. `None` means the native has not
+    /// run for this handle. `Some(0.0)` is an executed zero, not that absence.
+    pub acquire_range: Option<f32>,
 }
 
 pub(super) struct Admission {
@@ -47,6 +51,8 @@ pub(super) struct Admission {
     max_retained_fields: usize,
     max_modifications: usize,
     records: usize,
+    /// Present when this program declares `SetUnitAcquireRange` on the same source.
+    acquire_span: Option<Span>,
 }
 
 impl ObjectHost {
@@ -92,6 +98,7 @@ impl ObjectHost {
             .try_reserve_exact(native.source.len())
             .map_err(|_| fail(Failure::Capacity))?;
         declaration_source.push_str(&native.source);
+        let acquire_span = self.acquire_declaration(&declaration_source)?;
         self.units = Some(Admission {
             catalog,
             source,
@@ -101,6 +108,7 @@ impl ObjectHost {
             max_retained_fields: budget.max_retained_fields,
             max_modifications: budget.max_modifications,
             records: 0,
+            acquire_span,
         });
         Ok(self)
     }
@@ -129,16 +137,69 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
-        if name != NATIVE || self.units.is_none() {
-            return None;
+        self.units.as_ref()?;
+        if name == NATIVE {
+            return Some(self.create_unit(args));
         }
-        Some(self.create_unit(args))
+        if name == SET_RANGE && self.admitted_units().ok()?.acquire_span.is_some() {
+            return Some(self.set_acquire_range(args));
+        }
+        None
     }
 
     fn admitted_units(&self) -> Result<&Admission, Error> {
         self.units
             .as_ref()
             .ok_or_else(|| self.inner.error(NATIVE, Failure::UnitState("not admitted")))
+    }
+
+    /// `Ok(None)` when the program does not declare the setter. A present
+    /// declaration must return `nothing`, take `unit` then `real`, and share
+    /// `CreateUnit`'s source. Parameter kinds are the loaded native's contract.
+    fn acquire_declaration(&self, create_source: &str) -> Result<Option<Span>, Error> {
+        let Some(native) = self.inner.program.natives().get(SET_RANGE) else {
+            return Ok(None);
+        };
+        Self::contract(
+            &self.inner,
+            SET_RANGE,
+            &["unit", "real"],
+            "nothing",
+            false,
+            Some(KIND),
+        )?;
+        if native.source != create_source {
+            return Err(self.inner.error(SET_RANGE, Failure::Source));
+        }
+        Ok(Some(native.span))
+    }
+
+    fn set_acquire_range(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let (id, range) = {
+            let fail = |reason| self.inner.error(SET_RANGE, reason);
+            let [Value::Handle(unit), range] = args else {
+                return Err(fail(Failure::UnitState(
+                    "arguments do not match the unit native declaration",
+                )));
+            };
+            let range = finite_real(range).map_err(fail)?;
+            match self
+                .inner
+                .entry(*unit)
+                .map_err(|error| self.inner.error(SET_RANGE, error.failure))?
+            {
+                Entry::Unit { .. } => {}
+                _ => return Err(fail(Failure::WrongFamily)),
+            }
+            (*unit, range)
+        };
+        match self.inner.entry_mut(id)? {
+            Entry::Unit { record } => {
+                record.acquire_range = Some(range);
+                Ok(Value::Null)
+            }
+            _ => Err(self.inner.error(SET_RANGE, Failure::WrongFamily)),
+        }
     }
 
     fn create_unit(&mut self, args: &[Value]) -> Result<Value, Error> {
@@ -221,6 +282,7 @@ impl ObjectHost {
                 x,
                 y,
                 face,
+                acquire_range: None,
             }
         };
         let id = self.inner.allocate(Entry::Unit { record }, NATIVE)?;

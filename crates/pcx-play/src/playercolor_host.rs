@@ -457,6 +457,14 @@ impl EnumHost {
             .and_then(|i| self.arena.get(i))
             .ok_or_else(|| self.error("arena", Failure::Identity))
     }
+    fn entry_mut(&mut self, id: HandleId) -> Result<&mut Entry, Error> {
+        let index =
+            usize::try_from(id.token() - 1).map_err(|_| self.error("arena", Failure::Identity))?;
+        if index >= self.arena.len() {
+            return Err(self.error("arena", Failure::Identity));
+        }
+        Ok(&mut self.arena[index])
+    }
     pub fn kind(&self, id: HandleId) -> Result<&str, Error> {
         Ok(match self.entry(id)? {
             Entry::Symbolic { kind, .. } | Entry::Object(kind) => kind,

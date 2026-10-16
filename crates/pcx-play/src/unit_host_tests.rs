@@ -92,7 +92,7 @@ fn script_common(unit_parent: &str, declare_create: bool) -> String {
     let globals = COMMON.find("\nglobals\n").expect("globals");
     let mut common = COMMON.to_string();
     let native = if declare_create {
-        "native CreateUnit takes player id, integer unitid, real x, real y, real face returns unit\n"
+        "native CreateUnit takes player id, integer unitid, real x, real y, real face returns unit\nnative SetUnitAcquireRange takes unit whichUnit, real newAcquireRange returns nothing\n"
     } else {
         ""
     };
@@ -179,7 +179,7 @@ fn open_with(
     }
 }
 
-const MAP: &str = "globals\nplayer P = null\nunit U = null\ntimer T = null\nendglobals\nfunction main takes nothing returns nothing\nset P = Player(4)\nset U = CreateUnit(P, 'hfoo', 1.5, -2.25, 90.0)\nendfunction\nfunction missing takes nothing returns unit\nreturn CreateUnit(P, 'zzzz', 0.0, 0.0, 0.0)\nendfunction\nfunction item takes nothing returns unit\nreturn CreateUnit(P, 'item', 0.0, 0.0, 0.0)\nendfunction\nfunction mismatched takes nothing returns unit\nreturn CreateUnit(P, 'bad!', 0.0, 0.0, 0.0)\nendfunction\nfunction wrong takes nothing returns unit\nset T = CreateTimer()\nreturn CreateUnit(T, 'hfoo', 0.0, 0.0, 0.0)\nendfunction\nfunction again takes nothing returns unit\nreturn CreateUnit(P, 'hfoo', 0.0, 0.0, 0.0)\nendfunction\n";
+const MAP: &str = "globals\nplayer P = null\nunit U = null\ntimer T = null\nendglobals\nfunction main takes nothing returns nothing\nset P = Player(4)\nset U = CreateUnit(P, 'hfoo', 1.5, -2.25, 90.0)\nendfunction\nfunction missing takes nothing returns unit\nreturn CreateUnit(P, 'zzzz', 0.0, 0.0, 0.0)\nendfunction\nfunction item takes nothing returns unit\nreturn CreateUnit(P, 'item', 0.0, 0.0, 0.0)\nendfunction\nfunction mismatched takes nothing returns unit\nreturn CreateUnit(P, 'bad!', 0.0, 0.0, 0.0)\nendfunction\nfunction wrong takes nothing returns unit\nset T = CreateTimer()\nreturn CreateUnit(T, 'hfoo', 0.0, 0.0, 0.0)\nendfunction\nfunction again takes nothing returns unit\nreturn CreateUnit(P, 'hfoo', 0.0, 0.0, 0.0)\nendfunction\nfunction zero takes nothing returns nothing\ncall SetUnitAcquireRange(U, 0.0)\nendfunction\nfunction negative takes nothing returns nothing\ncall SetUnitAcquireRange(U, -12.5)\nendfunction\nfunction wrong_range takes nothing returns nothing\nset T = CreateTimer()\ncall SetUnitAcquireRange(T, 4.0)\nendfunction\n";
 
 #[test]
 fn owned_vm_retains_catalog_result_and_typed_resolve_failures() {
@@ -438,4 +438,226 @@ fn unadmitted_create_unit_is_unsupported_on_the_owned_vm_host() {
     vm.call("main", &[]).unwrap();
     let error = vm.host().native("CreateUnit", &[]).unwrap_err();
     assert!(error.contains("unsupported"), "{error}");
+}
+
+#[test]
+fn owned_vm_set_acquire_range_keeps_exact_finite_real_and_prior_state() {
+    let mut session = open(4, 16, MAP);
+    session.vm.init_globals().unwrap();
+    session.vm.call("main", &[]).unwrap();
+    let Value::Handle(unit) = session.vm.global("U") else {
+        panic!("unit");
+    };
+    let rawcode = session
+        .vm
+        .host()
+        .inner
+        .executed_unit(unit)
+        .unwrap()
+        .definition
+        .rawcode;
+    assert_eq!(
+        session
+            .vm
+            .host()
+            .inner
+            .executed_unit(unit)
+            .unwrap()
+            .acquire_range,
+        None
+    );
+    let hits = session.hits.load(Ordering::SeqCst);
+    session.vm.call("zero", &[]).unwrap();
+    assert_eq!(
+        session
+            .vm
+            .host()
+            .inner
+            .executed_unit(unit)
+            .unwrap()
+            .acquire_range,
+        Some(0.0)
+    );
+    assert_ne!(
+        session
+            .vm
+            .host()
+            .inner
+            .executed_unit(unit)
+            .unwrap()
+            .acquire_range,
+        None
+    );
+    let family = session.vm.call("wrong_range", &[]).unwrap_err().to_string();
+    assert!(
+        family.contains("handle identifies another family"),
+        "{family}"
+    );
+    assert!(family.contains("synthetic/common.j"), "{family}");
+    assert_eq!(
+        session
+            .vm
+            .host()
+            .inner
+            .executed_unit(unit)
+            .unwrap()
+            .acquire_range,
+        Some(0.0)
+    );
+    session.vm.call("negative", &[]).unwrap();
+    assert_eq!(
+        session
+            .vm
+            .host()
+            .inner
+            .executed_unit(unit)
+            .unwrap()
+            .acquire_range,
+        Some(-12.5)
+    );
+    let Value::Handle(player) = session.vm.global("P") else {
+        panic!("player");
+    };
+    let non_finite = session
+        .vm
+        .host()
+        .native(
+            "SetUnitAcquireRange",
+            &[Value::Handle(unit), Value::Real(f32::NAN)],
+        )
+        .unwrap_err();
+    assert!(
+        non_finite.contains("recreation policy: finite real required"),
+        "{non_finite}"
+    );
+    assert!(non_finite.contains("synthetic/common.j"), "{non_finite}");
+    let unknown = session
+        .vm
+        .host()
+        .native(
+            "SetUnitAcquireRange",
+            &[Value::Handle(player), Value::Real(8.0)],
+        )
+        .unwrap_err();
+    assert!(
+        unknown.contains("handle identifies another family"),
+        "{unknown}"
+    );
+    let missing = session
+        .vm
+        .host()
+        .native(
+            "SetUnitAcquireRange",
+            &[
+                Value::Handle(pcx_script::HandleId::new(
+                    std::num::NonZeroU64::new(9_999).unwrap(),
+                )),
+                Value::Real(8.0),
+            ],
+        )
+        .unwrap_err();
+    assert!(missing.contains("unknown handle identity"), "{missing}");
+    assert_eq!(
+        session
+            .vm
+            .host()
+            .inner
+            .executed_unit(unit)
+            .unwrap()
+            .acquire_range,
+        Some(-12.5)
+    );
+    assert_eq!(
+        session
+            .vm
+            .host()
+            .inner
+            .executed_unit(unit)
+            .unwrap()
+            .definition
+            .rawcode,
+        rawcode
+    );
+    assert_eq!(session.hits.load(Ordering::SeqCst), hits);
+    let getter = session
+        .vm
+        .host()
+        .native("GetUnitAcquireRange", &[Value::Handle(unit)])
+        .unwrap_err();
+    assert!(getter.contains("unsupported"), "{getter}");
+}
+
+#[test]
+fn acquire_range_bad_signature_does_not_admit_or_resolve() {
+    let common = script_common("widget", true).replace(
+        "native SetUnitAcquireRange takes unit whichUnit, real newAcquireRange returns nothing\n",
+        "native SetUnitAcquireRange takes integer whichUnit returns nothing\n",
+    );
+    let ctx = context(
+        300,
+        &common,
+        "function main takes nothing returns nothing\nendfunction\n",
+        "unit-catalog",
+    );
+    let (catalog, hits, _) = counting();
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+    let error = match object(&ctx, 4)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(1))
+    {
+        Err(error) => error,
+        Ok(_) => panic!("bad acquire-range signature was admitted"),
+    };
+    assert_eq!(error.failure, Failure::Signature);
+    assert_eq!(error.native, "SetUnitAcquireRange");
+    assert_eq!(error.declaration_source, "synthetic/common.j");
+    assert_ne!(error.declaration_span, pcx_script::span::Span::EMPTY);
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn acquire_range_from_another_source_is_refused() {
+    let primary = "type agent extends handle\ntype widget extends agent\ntype unit extends widget\ntype player extends agent\ntype timer extends agent\ntype playercolor extends handle\nconstant native ConvertPlayerColor takes integer i returns playercolor\nnative CreateTimer takes nothing returns timer\nnative DestroyTimer takes timer t returns nothing\nnative CreateUnit takes player id, integer unitid, real x, real y, real face returns unit\nglobals\nconstant playercolor C = ConvertPlayerColor(1)\nendglobals\n";
+    let other =
+        "native SetUnitAcquireRange takes unit whichUnit, real newAcquireRange returns nothing\n";
+    let map = pcx_script::parse_script("").unwrap();
+    let primary = pcx_script::parse_script(primary).unwrap();
+    let other = pcx_script::parse_script(other).unwrap();
+    let program = Arc::new(
+        pcx_script::resolve_with(
+            &map,
+            &[
+                pcx_script::Prelude::new("synthetic/common.j", &primary),
+                pcx_script::Prelude::new("synthetic/other.j", &other),
+            ],
+        )
+        .unwrap(),
+    );
+    let inner = crate::playercolor_host::EnumHost::checked_selected(
+        program,
+        "split-source",
+        &["ConvertPlayerColor"],
+        crate::playercolor_host::Limits {
+            max_handles: 4,
+            admission_steps: 100,
+            expression_depth: 16,
+            expression_work: 100,
+        },
+    )
+    .unwrap();
+    let (catalog, hits, _) = counting();
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+    let error = match crate::playercolor_host::ObjectHost::checked(inner)
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(1))
+    {
+        Err(error) => error,
+        Ok(_) => panic!("foreign acquire-range source was admitted"),
+    };
+    assert_eq!(error.failure, Failure::Source);
+    assert_eq!(error.native, "SetUnitAcquireRange");
+    assert_eq!(error.declaration_source, "synthetic/other.j");
+    assert_ne!(error.declaration_span, pcx_script::span::Span::EMPTY);
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
 }
