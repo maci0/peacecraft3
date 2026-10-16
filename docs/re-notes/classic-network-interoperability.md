@@ -13,6 +13,10 @@ models session transitions; it is not a BNCS implementation. Original-client
 crossplay, classic authentication and ten-minute mixed-client matches remain
 unverified.
 
+`classic_frame` now provides a separate bounded BNCS/W3GS header codec and
+native TCP caller. Packet bodies remain opaque; this is not realm login or
+W3GS lobby/gameplay support.
+
 ## Public references checked on 2026-10-16
 
 | Reference | Role | Version boundary |
@@ -104,3 +108,30 @@ or a CLI conformance claim.
 
 This closes NET-C01 only. Login, W3GS negotiation, original 1.29b LAN joins and
 mixed-client matches still need their own implementation and runtime evidence.
+
+## Integrated framing and TCP caller
+
+BNCS (`0xFF`) and W3GS (`0xF7`) use distinct family bytes and a four-byte header
+whose little-endian length includes that header. The source references are the
+pinned PvPGN `bnet_protocol.h` and GHost++ `gameprotocol.h`/`gameprotocol.cpp`.
+The BNCS connection-init byte is outside this frame format.
+
+The codec borrows a complete input or assembles fragmented frames with caller
+byte/count ceilings and fallible reservations. Validated frame bytes are private.
+A malformed or over-budget stream becomes terminal, including a bad tail after
+a valid frame in one chunk. The TCP caller validates framing policy before
+connecting or writing and rearms each partial read/write against one absolute
+deadline. It accepts an explicit socket address; the reference probe alone is
+restricted to the owned loopback endpoint.
+
+Root verification passes all 101 native network checks, including 15 framing/TCP
+cases, and ten actual WASI codec tests. Strict native/WASM checks, rustdoc and
+both library builds pass. A fresh probe compiled against the integrated library
+matches the pinned realm's init/auth-info exchange and its missing-init negative
+case. Deadline propagation is tested with explicit per-write remaining budgets;
+no elapsed-time performance threshold is used. Commands and receipts are in
+`.scratch/classic-network-20261016/root-framing/`.
+
+This advances NET-C02 framing only. No W3GS peer, original client, account or key
+was used. Message-body codecs, authentication, lobby negotiation and sustained
+mixed-client play remain open.

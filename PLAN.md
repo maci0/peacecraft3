@@ -1253,7 +1253,10 @@ layer in the trace header.
 - [ ] Gate: a real 1.29b LAN client joins a game we host and plays it out
 - [ ] Classic Battle.net client against an emulator realm
 - [ ] Our own low-latency protocol, benchmarked against the classical ones
-- [ ] Every path obeys *server holds state* — the client proposes, never authors
+- [ ] Own hosted sessions validate state and proposed commands on the host.
+      Classic crossplay preserves original action/lockstep/checksum semantics
+      with host admission and relay validation; original clients do not consume
+      the project's movement snapshots.
 
 ### M11 — WASM build
 

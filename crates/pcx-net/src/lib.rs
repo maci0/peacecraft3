@@ -27,6 +27,7 @@ use pcx_sim::{Input, World, step, validate_input};
 pub mod transport;
 
 pub mod bnet;
+pub mod classic_frame;
 pub mod rollback;
 pub mod session;
 
