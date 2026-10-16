@@ -285,3 +285,13 @@ collector's stale-list assertion remains a failed result; it is not counted as
 acceptance. Source mode policy, exclusive switching, font rasterization,
 unsupported settings and full native appearance remain open. No original assets
 were packaged or published.
+
+The focused row is also checked after viewport size or density changes, using
+last-valid geometry on the existing scroller. Unchanged geometry leaves wheel
+scrolling independent of focus. The regression failed at logical scroll 80
+instead of 160 before the fix. Five popup/system regressions and 362 app tests
+now pass (18 explicit gates ignored), with strict native/browser Clippy, the
+browser build and formatting. Evidence:
+`.scratch/resolution-focus-resize-20261017/`. This follow-up uses synthetic
+computed-layout inputs to the production system; no fresh rendered resize or
+native behavior comparison is claimed. Font and mode policy remain unchanged.

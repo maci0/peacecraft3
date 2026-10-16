@@ -1578,3 +1578,11 @@ three reviewed captures are stable. Evidence is in
 collector result remains retained. No original assets were packaged or
 published. Complete source mode policy, physical switching, font rasterization
 and full native Options parity remain open.
+
+A focused dropdown row now stays visible across viewport-size and density
+changes; unchanged geometry preserves manual wheel scrolling. The discriminating
+persistent-system regression and all 362 app tests pass (18 explicit gates
+ignored), with strict native/browser Clippy, browser build and formatting.
+Evidence: `.scratch/resolution-focus-resize-20261017/`. Geometry is synthetic;
+fresh rendered resize and native behavior remain unmeasured. No font, mode-policy
+or physical display switching claim is added.

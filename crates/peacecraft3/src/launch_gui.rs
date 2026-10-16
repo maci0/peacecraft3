@@ -158,8 +158,11 @@ struct ResolutionPopup;
 #[derive(Component)]
 struct ResolutionChoice(crate::menu_screens::OfferedResolution);
 
-#[derive(Component)]
-struct ResolutionScroll;
+#[derive(Component, Default)]
+struct ResolutionScroll {
+    viewport_size: Vec2,
+    inverse_scale: f32,
+}
 
 #[derive(Component)]
 struct ResolutionChoiceColours {
@@ -1128,7 +1131,7 @@ fn open_resolutions(
     let inset = Val::Vh(menu_border / crate::mainmenu::FRAME_H * 100.0);
     let scroller = commands
         .spawn((
-            ResolutionScroll,
+            ResolutionScroll::default(),
             Node {
                 position_type: PositionType::Absolute,
                 left: inset,
@@ -3091,7 +3094,13 @@ fn install_resolution_popup_input(app: &mut App) {
 
 fn scroll_resolution_popup(
     mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
-    mut scrolls: Query<(Entity, &mut ScrollPosition, &Hovered, &Children), With<ResolutionScroll>>,
+    mut scrolls: Query<(
+        Entity,
+        &mut ScrollPosition,
+        &Hovered,
+        &Children,
+        &mut ResolutionScroll,
+    )>,
     rows: Query<
         (
             Entity,
@@ -3129,7 +3138,7 @@ fn scroll_resolution_popup(
         if !event.y.is_finite() {
             continue;
         }
-        for (entity, mut scroll, hovered, children) in &mut scrolls {
+        for (entity, mut scroll, hovered, children, _) in &mut scrolls {
             if !hovered.get()
                 && !children
                     .iter()
@@ -3165,18 +3174,23 @@ fn scroll_resolution_popup(
         }
     }
     let focus_changed = focus.0.as_ref().is_some_and(|focus| focus.is_changed());
-    if focus_changed
-        && let Some(focused) = focused
+    if let Some(focused) = focused
         && let Ok((_, parent, _, _, _)) = rows.get(focused)
-        && let Ok((entity, mut scroll, _, _)) = scrolls.get_mut(parent.parent())
+        && let Ok((entity, mut scroll, _, _, mut state)) = scrolls.get_mut(parent.parent())
         && let Ok((viewport, transform)) = geometry.get(entity)
         && let Ok((row, row_transform)) = geometry.get(focused)
         && viewport.inverse_scale_factor().is_finite()
         && viewport.inverse_scale_factor() > 0.0
         && viewport.size().is_finite()
+        && viewport.size().min_element() > 0.0
         && viewport.content_size().is_finite()
         && row.size().is_finite()
+        && (focus_changed
+            || state.viewport_size != viewport.size()
+            || state.inverse_scale != viewport.inverse_scale_factor())
     {
+        state.viewport_size = viewport.size();
+        state.inverse_scale = viewport.inverse_scale_factor();
         let viewport_top = transform.affine().translation.y - viewport.size().y * 0.5;
         let viewport_bottom = viewport_top + viewport.size().y;
         let pending = scroll.0.y / viewport.inverse_scale_factor() - viewport.scroll_position.y;
