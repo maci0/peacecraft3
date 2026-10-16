@@ -7,6 +7,10 @@
 
 use std::io::{self, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 
 use super::{Decoder, FrameError, FrameLimits, OwnedFrame};
@@ -32,6 +36,8 @@ pub struct CallPolicy {
 pub enum CallError {
     /// The deadline elapsed, the connect budget was zero, or a wait timed out.
     Deadline,
+    /// An explicit controller cancellation, distinct from peer EOF or timeout.
+    Cancelled,
     /// The request exceeds the remaining cumulative write allowance.
     WriteTooLarge {
         /// Request length.
@@ -56,6 +62,7 @@ impl std::fmt::Display for CallError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Deadline => write!(f, "absolute I/O deadline elapsed"),
+            Self::Cancelled => write!(f, "classic connection cancelled by controller"),
             Self::WriteTooLarge { len, limit } => {
                 write!(f, "request is {len} bytes and the write limit is {limit}")
             }
@@ -282,6 +289,32 @@ impl<S: Read + Write> FramedIo<S> {
 /// Protocol admission, map validation and application worker placement are caller duties.
 pub struct Connection {
     io: FramedIo<TcpStream>,
+    cancelled: Arc<AtomicBool>,
+}
+
+/// Controller for one connection. It exposes shutdown, not socket reads/writes.
+///
+/// Dropping this handle does not cancel. Cancellation aborts transport; it is
+/// not a graceful W3GS leave and cannot undo bytes already written or results
+/// already delivered. Application publication still needs its request identity.
+pub struct CancellationHandle {
+    stream: TcpStream,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CancellationHandle {
+    /// Mark cancellation and wake an outstanding socket operation.
+    ///
+    /// Repeated shutdown of an already disconnected socket succeeds. Other
+    /// shutdown errors are reported; the cancellation flag remains set.
+    pub fn cancel(&self) -> io::Result<()> {
+        self.cancelled.store(true, Ordering::Release);
+        match self.stream.shutdown(std::net::Shutdown::Both) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == ErrorKind::NotConnected => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
 }
 
 impl Connection {
@@ -295,7 +328,54 @@ impl Connection {
         let stream = TcpStream::connect_timeout(&addr, connect_for).map_err(map_wait)?;
         Ok(Self {
             io: FramedIo::new(stream, policy, decoder),
+            cancelled: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// Create a controller for this established connection, without exposing I/O.
+    /// The clone refers only to this socket, including after a replacement connects.
+    pub fn cancellation_handle(&self) -> io::Result<CancellationHandle> {
+        if self.io.state != StreamState::Open || self.cancelled.load(Ordering::Acquire) {
+            return Err(io::Error::new(
+                ErrorKind::NotConnected,
+                "classic connection is no longer open",
+            ));
+        }
+        Ok(CancellationHandle {
+            stream: self.io.stream.try_clone()?,
+            cancelled: Arc::clone(&self.cancelled),
+        })
+    }
+
+    fn check_cancellation(&mut self) -> Result<(), CallError> {
+        if !self.cancelled.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let was_open = self.io.state == StreamState::Open;
+        self.io.state = StreamState::Failed;
+        if was_open {
+            let _ = self.io.stream.shutdown(std::net::Shutdown::Both);
+        }
+        Err(CallError::Cancelled)
+    }
+
+    fn complete_operation<T>(
+        &mut self,
+        was_open: bool,
+        result: Result<T, CallError>,
+    ) -> Result<T, CallError> {
+        let cancelled = self.cancelled.load(Ordering::Acquire);
+        if cancelled {
+            self.io.state = StreamState::Failed;
+        }
+        if was_open && self.io.state != StreamState::Open {
+            let _ = self.io.stream.shutdown(std::net::Shutdown::Both);
+        }
+        if cancelled {
+            Err(CallError::Cancelled)
+        } else {
+            result
+        }
     }
 
     /// Actual local socket endpoint, without selecting a client listen port.
@@ -305,22 +385,32 @@ impl Connection {
 
     /// Write raw bytes within the cumulative write ceiling; no automatic resend.
     pub fn send(&mut self, bytes: &[u8]) -> Result<(), CallError> {
+        self.check_cancellation()?;
         let was_open = self.io.state == StreamState::Open;
         let result = self.io.send(bytes, arm_tcp);
-        if was_open && result.is_err() {
-            let _ = self.io.stream.shutdown(std::net::Shutdown::Both);
-        }
-        result
+        self.complete_operation(was_open, result)
     }
 
     /// Return the next frame, preserving queued frames and any partial next frame.
     pub fn receive(&mut self) -> Result<Option<OwnedFrame>, CallError> {
+        self.receive_with_arm(arm_tcp)
+    }
+
+    fn receive_with_arm(
+        &mut self,
+        arm: impl FnMut(&mut TcpStream, Duration) -> Result<(), CallError>,
+    ) -> Result<Option<OwnedFrame>, CallError> {
+        self.check_cancellation()?;
         let was_open = self.io.state == StreamState::Open;
-        let result = self.io.receive(arm_tcp);
-        if was_open && !matches!(result, Ok(Some(_))) {
-            let _ = self.io.stream.shutdown(std::net::Shutdown::Both);
-        }
-        result
+        let result = self.io.receive(arm);
+        self.complete_operation(was_open, result)
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        // A retained controller must not keep the peer connection alive.
+        let _ = self.io.stream.shutdown(std::net::Shutdown::Both);
     }
 }
 
@@ -697,6 +787,124 @@ mod tests {
             matches!(connection.receive(), Err(CallError::Io(e)) if e.kind() == std::io::ErrorKind::ConnectionAborted)
         );
         peer.join().unwrap();
+    }
+
+    #[test]
+    fn cancellation_suppresses_queued_frames_and_further_writes() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut connection = Connection::connect(
+            listener.local_addr().unwrap(),
+            policy(Instant::now() + Duration::from_secs(5)),
+        )
+        .unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let cancel = connection.cancellation_handle().unwrap();
+        let wire = encode(BNCS_FAMILY, 0x25, &[]).unwrap();
+        connection.io.pending = super::Decoder::new(policy(Instant::now()).frames)
+            .unwrap()
+            .push(&wire)
+            .unwrap()
+            .into_iter();
+        cancel.cancel().unwrap();
+        cancel.cancel().unwrap();
+        assert_eq!(
+            connection.cancellation_handle().err().unwrap().kind(),
+            std::io::ErrorKind::NotConnected
+        );
+        assert!(matches!(connection.receive(), Err(CallError::Cancelled)));
+        assert!(matches!(
+            connection.send(b"late"),
+            Err(CallError::Cancelled)
+        ));
+        let mut after_cancel = Vec::new();
+        peer.read_to_end(&mut after_cancel).unwrap();
+        assert!(after_cancel.is_empty());
+    }
+
+    #[test]
+    fn cancellation_wakes_an_in_progress_receive() {
+        use std::sync::mpsc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut connection = Connection::connect(
+            listener.local_addr().unwrap(),
+            policy(Instant::now() + Duration::from_secs(30)),
+        )
+        .unwrap();
+        let (_peer, _) = listener.accept().unwrap();
+        let cancel = connection.cancellation_handle().unwrap();
+        let (armed_tx, armed_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = connection.receive_with_arm(|socket, timeout| {
+                super::arm_tcp(socket, timeout)?;
+                armed_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+                Ok(())
+            });
+            result_tx.send(result).unwrap();
+        });
+        armed_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        cancel.cancel().unwrap();
+        release_tx.send(()).unwrap();
+        assert!(matches!(
+            result_rx.recv_timeout(Duration::from_secs(3)).unwrap(),
+            Err(CallError::Cancelled)
+        ));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn retained_controller_does_not_keep_dropped_connection_alive_or_cancel_replacement() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let original =
+            Connection::connect(endpoint, policy(Instant::now() + Duration::from_secs(5))).unwrap();
+        let (mut old_peer, _) = listener.accept().unwrap();
+        old_peer
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let retired = original.cancellation_handle().unwrap();
+        drop(original);
+        assert_eq!(old_peer.read(&mut [0; 1]).unwrap(), 0);
+
+        let mut replacement =
+            Connection::connect(endpoint, policy(Instant::now() + Duration::from_secs(5))).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        retired.cancel().unwrap();
+        replacement.send(b"new").unwrap();
+        let mut request = [0; 3];
+        peer.read_exact(&mut request).unwrap();
+        assert_eq!(&request, b"new");
+        let wire = encode(BNCS_FAMILY, 0x25, &[]).unwrap();
+        peer.write_all(&wire).unwrap();
+        assert_eq!(replacement.receive().unwrap().unwrap().bytes(), wire);
+    }
+
+    #[test]
+    fn dropping_controller_preserves_connection_and_closed_connections_refuse_new_controllers() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut connection = Connection::connect(
+            listener.local_addr().unwrap(),
+            policy(Instant::now() + Duration::from_secs(5)),
+        )
+        .unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        drop(connection.cancellation_handle().unwrap());
+        connection.send(b"ok").unwrap();
+        let mut request = [0; 2];
+        peer.read_exact(&mut request).unwrap();
+        assert_eq!(&request, b"ok");
+        peer.shutdown(std::net::Shutdown::Both).unwrap();
+        assert!(connection.receive().unwrap().is_none());
+        assert_eq!(
+            connection.cancellation_handle().err().unwrap().kind(),
+            std::io::ErrorKind::NotConnected
+        );
     }
 
     #[test]

@@ -477,3 +477,42 @@ no account or key is sent. Commands and retained failures are under
 This blocking native primitive needs application worker, cancellation and
 revision-bound publication wiring. It does not admit a map/player, select
 assets, implement lag/reconnect policy or prove peer-to-peer/gameplay fidelity.
+
+## Controller cancellation of an established TCP connection
+
+`Connection::cancellation_handle` gives the controller a shutdown-only socket
+clone and a flag shared with that connection. `cancel` marks the flag before
+shutting down both directions, so an outstanding receive can terminate without
+waiting for its deadline. Reads and writes check the flag before and after I/O
+and report `CallError::Cancelled` when observed; queued frames are not delivered
+after that observation. Cancellation cannot undo bytes or results already
+delivered, so application publication still needs its request identity.
+
+Dropping a controller does not cancel. Dropping the connection explicitly shuts
+down the socket even if a controller survives. A retained controller refers to
+that old socket and cannot cancel a replacement connection to the same endpoint.
+New controllers are refused after cancellation, EOF or a terminal failure.
+Connection establishment remains bounded by its connect timeout; this handle is
+only available after connection establishment.
+
+Four new loopback regression groups cover queued-frame/write refusal, a receive
+that has passed its cancellation guard, retained-controller lifetime and
+replacement isolation, and controller drop versus connection EOF. Channel
+synchronization places cancellation between the receive guard and socket read;
+there is no elapsed-time performance threshold. All 146 native checks and 35
+actual WASI codec tests pass, alongside strict native/browser-WASM Clippy,
+rustdoc, formatting and both library builds. The socket module remains native
+only.
+
+A private caller uses the production connection to join the unmodified supplied
+Legacy 1.29.2 host, verify the selected map, receive its own occupied slot at
+100 and answer ping. A separate controller thread then requests cancellation;
+the network worker returns `Cancelled`, rather than accepting expiry or peer
+EOF as completion. The original host records the probe's departure. The local
+PvPGN auth-info and missing-init controls still pass without an account or key.
+Commands, delivered-frame artifacts and UI observations remain local under
+`.scratch/classic-network-20261017/root-tcp-cancel/`.
+
+This is a transport abort, not a graceful W3GS leave. Application worker and
+revision-bound publication wiring, lag/reconnect policy, countdown and original-
+client gameplay remain open. NET-C08 is not closed by these transport checks.

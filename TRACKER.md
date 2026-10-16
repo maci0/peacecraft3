@@ -1066,7 +1066,11 @@ Format: `date — subsystem — symptom — root cause — status`
       The native continuous TCP caller shuts down on transport/framing/budget
       failure, refuses reuse, checks partial EOF and preserves one absolute
       deadline across calls. Loopback tests cover peer closure and multi-step
-      partial frames. Application cancellation, lag and reconnect remain open.
+      partial frames. A shutdown-only controller now aborts an established
+      connection with an explicit Cancelled result; loopback tests cover stale
+      controller isolation, and a live original-host probe cancels after map
+      verification and ping/pong. Application worker/publication wiring, graceful
+      leave, lag and reconnect remain open.
 - [ ] NET-C09: Reproducible original/PeaceCraft network comparison harness using
       local assets, the same admitted map and captured inputs/seed; no proprietary
       asset transfers, credentials or key material in committed evidence.
