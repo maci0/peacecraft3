@@ -2,7 +2,7 @@
 
 use pcx_map::Map;
 use pcx_mpq::{MpqSet, fnv1a64};
-use pcx_tera::{Unsupported, WaterData};
+use pcx_tera::{WaterBudget, WaterData, WaterSelection};
 
 #[test]
 #[ignore = "requires PEACECRAFT3_WATER_INSTALL, PEACECRAFT3_WATER_EDITION and PEACECRAFT3_WATER_MAP"]
@@ -131,11 +131,51 @@ fn local_water_inputs() -> Result<(), Box<dyn std::error::Error>> {
             for (bit, count) in position_bits.iter_mut().enumerate() {
                 *count += usize::from(raw.corner.position_word & (1 << bit) != 0);
             }
-            assert_eq!(water.water_level(cx, cy), Err(Unsupported::WaterLevel));
+            assert!(water.water_present(cx, cy).is_some());
         }
     }
     assert_eq!(last_end, Some(terrain.raw().len()));
-    assert_eq!(water.mesh(), Err(Unsupported::WaterGeometry));
+    let water_slk = set.extract("TerrainArt\\Water.slk")?;
+    let water_table = pcx_slq::Table::parse(&water_slk)?;
+    let profile = pcx_tera::WaterProfile::open(
+        &water_table,
+        "TerrainArt\\Water.slk",
+        WaterSelection::TilesetSha,
+        &terrain,
+    )?;
+    let mut level_min = f32::MAX;
+    let mut level_max = f32::MIN;
+    let mut wet_corners = 0u64;
+    for cy in 0..=terrain.height() {
+        for cx in 0..=terrain.width() {
+            let level = water
+                .water_level(cx, cy, &profile)?
+                .ok_or("in-range corner returned no water level")?;
+            level_min = level_min.min(level);
+            level_max = level_max.max(level);
+            if water.water_present(cx, cy) == Some(true) {
+                wet_corners += 1;
+            }
+        }
+    }
+    let mesh = water.mesh(
+        &profile,
+        &WaterBudget {
+            max_vertices: u64::try_from(terrain.corner_count())?
+                .checked_mul(4)
+                .ok_or("water vertex budget overflows")?,
+            max_indices: u64::from(terrain.width())
+                .checked_mul(u64::from(terrain.height()))
+                .and_then(|tiles| tiles.checked_mul(6))
+                .ok_or("water index budget overflows")?,
+        },
+    )?;
+    println!(
+        "  water_id={} wet_corners={wet_corners} wet_tiles={} vertices={} level_min={level_min} level_max={level_max}",
+        profile.water_id(),
+        mesh.wet_tiles,
+        mesh.positions.len()
+    );
     println!("  raw +4 bit set counts (not meanings): {flags:?}");
     println!("  raw +2 word bit set counts (not meanings): {position_bits:?}");
     if let Ok(script) = map.extract("war3map.j") {

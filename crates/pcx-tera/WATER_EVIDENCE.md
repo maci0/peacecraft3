@@ -1,15 +1,23 @@
-# Water input evidence and unresolved geometry
+# Water input and geometry evidence
 
-Water settings exist in the supplied assets. The investigation below does **not**
-establish a W3E water-present mask, water-height decoding, index-to-world mapping,
-water-table row selection, or surface topology. This is an unresolved
-interpretation, not evidence that Warcraft III maps lack water.
+Water settings exist in the supplied assets. The shipped-byte notes below do not
+by themselves prove a native water function. The geometry implemented in
+`WaterData` is a labelled recreation of WarsmashModEngine commit
+`f9e0aeed4be372d6016519d0e97b384aa873f374` (`Corner.load` and
+`SoftwareWaterAndGroundMesh`), placed in this crate's measured `world_z` scale.
+It is not a claim that those native internals were re-traced.
 
-`WaterData` therefore exposes original corner records and explicit source/edition
-provenance. In-range `water_level` requests return `Unsupported::WaterLevel`, and
-`mesh` returns `Unsupported::WaterGeometry`. It supplies neither a guessed plane
-nor an empty/dry mesh. Out-of-grid `water_level` requests return `Ok(None)`;
-that does not mean dry ground.
+`WaterData` still exposes original corner records and explicit source/edition
+provenance. Presence is the Warsmash water flag after this parser's nibble
+shift. Level and mesh require a caller-selected `Water.slk` row: either an
+explicit `waterID` or the W3E tileset byte plus the Warsmash suffix `Sha`.
+The row's `height` cell is parsed and scaled by `TILE_XY`. A missing row,
+unparsable height, or exhausted caller budget is an error. A dry grid is an
+empty mesh, not a stand-in plane. Out-of-grid `water_level` returns `Ok(None)`;
+that does not mean dry ground. Colour, texture frames, opacity, and the
+animation clock stay raw cells. `Unsupported::WaterLevel` and
+`Unsupported::WaterGeometry` remain named variants and are not returned by
+this path.
 
 ## Shipped-byte observations
 
@@ -125,7 +133,8 @@ scale, UV/material rule or native wall-placement claim. Existing `CliffRule`
 and `CliffThreshold` refusals remain intact.
 
 Synthetic tests check raw reserved-bit preservation and record offsets,
-provenance requirements, water refusal behavior, threshold boundaries,
+provenance requirements, dry/wet/non-flat water meshes, missing profiles,
+budget limits, threshold boundaries,
 perimeter order, triangle winding/normals, flat edges, reversed edges and
 invalid/nonfinite geometry. These prove API behavior, not original rendering.
 
@@ -150,3 +159,19 @@ cargo test -p pcx-tera --locked --test local_water -- --ignored --nocapture
 
 Only summaries and this interpretation boundary are recorded. Original payloads,
 extracted files, and generated copies of their contents remain local.
+
+## Current geometry integration
+
+The current geometry path borrows the existing parsed SYLK table and selected
+row; it adds no parser or copied-row allocation policy. Vertex and index caps
+apply before mesh storage is reserved. The in-memory Human01 terrain check
+passes with the explicitly selected compatibility install. Synthetic checks
+cover ambiguous rows, non-finite or overflowing table heights, independent
+vertex/index caps, masked height words and non-flat wet tiles. Native and actual
+WASI executions are recorded in `.scratch/ground-water-root-20261016/`.
+
+The separate proposed ground material is not integrated. Its packed-atlas
+nearest sampling differs from the pinned reference's filtered, isolated cells
+and mipmaps. Ground texture predecode limits, that sampling behavior, water
+materials, cliffs, ramps and blight remain work for the renderer. Geometry
+checks establish none of those rendered results or native visual parity.

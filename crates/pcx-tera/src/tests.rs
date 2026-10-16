@@ -103,20 +103,61 @@ fn water_preserves_original_corner_bytes_and_provenance() {
     assert!(water.raw_corner(0, u32::MAX).is_none());
 }
 
+fn water_slk(id: &str, height: &str) -> String {
+    format!(
+        "ID;PWXL;N;E\r\nC;Y1;X1;K\"waterID\"\r\nC;X2;K\"height\"\r\nC;Y2;X1;K\"{id}\"\r\nC;X2;K\"{height}\"\r\nE\r\n"
+    )
+}
+
+fn water_tile(tileset: u8, corners: &[(u16, u16, u8)]) -> Terrain {
+    let mut bytes = pcx_map::TERRAIN_MAGIC.to_vec();
+    bytes.extend(pcx_map::TERRAIN_VERSION.to_le_bytes());
+    bytes.push(tileset);
+    bytes.extend(0u32.to_le_bytes());
+    bytes.extend(1u32.to_le_bytes());
+    bytes.extend_from_slice(b"Ldrt");
+    bytes.extend(0u32.to_le_bytes());
+    bytes.extend(2u32.to_le_bytes());
+    bytes.extend(2u32.to_le_bytes());
+    bytes.extend(0f32.to_le_bytes());
+    bytes.extend(0f32.to_le_bytes());
+    for &(ground, water, flags) in corners {
+        bytes.extend(ground.to_le_bytes());
+        bytes.extend(water.to_le_bytes());
+        bytes.push(flags << 4);
+        bytes.push(0);
+        bytes.push(0);
+    }
+    Terrain::from_bytes(bytes).unwrap()
+}
+
+fn water_budget() -> crate::WaterBudget {
+    crate::WaterBudget {
+        max_vertices: 64,
+        max_indices: 64,
+    }
+}
+
 #[test]
-fn water_refuses_semantics_instead_of_returning_a_dry_plane() {
-    let terrain = fixture_terrain();
+fn dry_water_mesh_is_empty_and_out_of_range_is_none() {
+    let terrain = water_tile(b'L', &[(8192, 8192, 0); 4]);
     let water = crate::WaterData::new(&terrain, "synthetic edition", "fixture.w3m").unwrap();
-    assert_eq!(water.water_level(0, 0), Err(crate::Unsupported::WaterLevel));
-    assert_eq!(water.water_level(2, 2), Err(crate::Unsupported::WaterLevel));
-    assert_eq!(water.water_level(3, 0), Ok(None));
-    assert_eq!(water.mesh(), Err(crate::Unsupported::WaterGeometry));
-    assert!(crate::Unsupported::WaterLevel.to_string().contains("+2"));
-    assert!(
-        crate::Unsupported::WaterGeometry
-            .to_string()
-            .contains("unproven")
-    );
+    let bytes = water_slk("LSha", "0.5");
+    let table = pcx_slq::Table::parse(bytes.as_bytes()).unwrap();
+    let profile = crate::WaterProfile::open(
+        &table,
+        "synthetic Water.slk",
+        crate::WaterSelection::TilesetSha,
+        &terrain,
+    )
+    .unwrap();
+    assert_eq!(profile.water_id(), "LSha");
+    assert_eq!(profile.height_offset(), 0.5 * TILE_XY);
+    assert_eq!(water.water_present(0, 0), Some(false));
+    assert_eq!(water.water_level(3, 0, &profile).unwrap(), None);
+    let mesh = water.mesh(&profile, &water_budget()).unwrap();
+    assert_eq!(mesh.wet_tiles, 0);
+    assert!(mesh.positions.is_empty());
     assert!(matches!(
         crate::WaterData::new(&terrain, " ", "fixture.w3m"),
         Err(crate::MissingWaterProvenance("edition"))
@@ -125,6 +166,162 @@ fn water_refuses_semantics_instead_of_returning_a_dry_plane() {
         crate::WaterData::new(&terrain, "synthetic edition", ""),
         Err(crate::MissingWaterProvenance("map source"))
     ));
+    assert!(
+        crate::Unsupported::WaterLevel
+            .to_string()
+            .contains("Water.slk")
+    );
+    assert!(
+        crate::Unsupported::WaterGeometry
+            .to_string()
+            .contains("WaterData::mesh")
+    );
+}
+
+#[test]
+fn wet_nonflat_levels_use_the_masked_second_word_and_selected_offset() {
+    let words = [8192u16, 8196, 8192 | 0x4000, 8192 | 0x8000];
+    let terrain = water_tile(
+        b'L',
+        &[
+            (8192, words[0], 0b0100),
+            (8192, words[1], 0),
+            (8192, words[2], 0),
+            (8192, words[3], 0),
+        ],
+    );
+    let water = crate::WaterData::new(&terrain, "synthetic edition", "fixture.w3m").unwrap();
+    let bytes = water_slk("Pool", "0.25");
+    let table = pcx_slq::Table::parse(bytes.as_bytes()).unwrap();
+    let profile = crate::WaterProfile::open(
+        &table,
+        "synthetic Water.slk",
+        crate::WaterSelection::Explicit("Pool"),
+        &terrain,
+    )
+    .unwrap();
+    let offset = profile.height_offset();
+    for (index, word) in words.into_iter().enumerate() {
+        let level = water
+            .water_level(index as u32 % 2, index as u32 / 2, &profile)
+            .unwrap()
+            .unwrap();
+        assert_eq!(level, crate::world_z(word & 0x3FFF) + offset);
+    }
+    let mesh = water.mesh(&profile, &water_budget()).unwrap();
+    assert_eq!(mesh.wet_tiles, 1);
+    assert_eq!(mesh.indices, vec![0, 1, 3, 0, 3, 2]);
+    assert_eq!(mesh.positions[1][2], crate::world_z(8196) + offset);
+    assert_ne!(mesh.positions[0][2], mesh.positions[1][2]);
+}
+
+#[test]
+fn malformed_water_profile_and_short_budget_are_errors() {
+    let terrain = water_tile(b'L', &[(8192, 8192, 0b0100); 4]);
+    let water = crate::WaterData::new(&terrain, "synthetic edition", "fixture.w3m").unwrap();
+    let missing = water_slk("Other", "0");
+    let table = pcx_slq::Table::parse(missing.as_bytes()).unwrap();
+    assert!(matches!(
+        crate::WaterProfile::open(
+            &table,
+            "synthetic Water.slk",
+            crate::WaterSelection::Explicit("LSha"),
+            &terrain,
+        ),
+        Err(crate::WaterError::MissingRow { .. })
+    ));
+    let bad = water_slk("LSha", "nope");
+    let table = pcx_slq::Table::parse(bad.as_bytes()).unwrap();
+    assert!(matches!(
+        crate::WaterProfile::open(
+            &table,
+            "synthetic Water.slk",
+            crate::WaterSelection::TilesetSha,
+            &terrain,
+        ),
+        Err(crate::WaterError::MissingField {
+            field: "height",
+            ..
+        })
+    ));
+    let bytes = water_slk("LSha", "0");
+    let table = pcx_slq::Table::parse(bytes.as_bytes()).unwrap();
+    let profile = crate::WaterProfile::open(
+        &table,
+        "synthetic Water.slk",
+        crate::WaterSelection::TilesetSha,
+        &terrain,
+    )
+    .unwrap();
+    assert!(matches!(
+        water.mesh(
+            &profile,
+            &crate::WaterBudget {
+                max_vertices: 3,
+                max_indices: 64,
+            },
+        ),
+        Err(crate::WaterError::Budget {
+            what: "vertices",
+            needed: 4,
+            ..
+        })
+    ));
+    assert!(matches!(
+        water.mesh(
+            &profile,
+            &crate::WaterBudget {
+                max_indices: 5,
+                ..water_budget()
+            },
+        ),
+        Err(crate::WaterError::Budget {
+            what: "indices",
+            needed: 6,
+            limit: 5,
+        })
+    ));
+    let unnamed = water_tile(0, &[(8192, 8192, 0); 4]);
+    assert!(matches!(
+        crate::WaterProfile::open(
+            &table,
+            "synthetic Water.slk",
+            crate::WaterSelection::TilesetSha,
+            &unnamed,
+        ),
+        Err(crate::WaterError::TilesetByte { byte: 0 })
+    ));
+}
+
+#[test]
+fn water_profiles_refuse_duplicate_rows_and_nonfinite_height() {
+    let terrain = water_tile(b'L', &[(8192, 8192, 0b0100); 4]);
+    let duplicate = water_slk("LSha", "0");
+    let duplicate = format!(
+        "{}C;Y3;X1;K\"LSha\"\r\nC;X2;K0\r\nE\r\n",
+        duplicate.strip_suffix("E\r\n").unwrap(),
+    );
+    let table = pcx_slq::Table::parse(duplicate.as_bytes()).unwrap();
+    assert!(matches!(
+        crate::WaterProfile::open(&table, "duplicate.slk", crate::WaterSelection::TilesetSha, &terrain),
+        Err(crate::WaterError::Ambiguous { table, .. }) if table == "duplicate.slk"
+    ));
+    for height in ["NaN", "inf", "3.4028235e38"] {
+        let bytes = water_slk("LSha", height);
+        let table = pcx_slq::Table::parse(bytes.as_bytes()).unwrap();
+        assert!(matches!(
+            crate::WaterProfile::open(
+                &table,
+                "invalid.slk",
+                crate::WaterSelection::TilesetSha,
+                &terrain
+            ),
+            Err(crate::WaterError::MissingField {
+                field: "height",
+                ..
+            })
+        ));
+    }
 }
 
 #[test]
