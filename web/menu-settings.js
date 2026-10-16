@@ -52,6 +52,12 @@ function fitPreview() {
   const width = canvas.clientWidth, height = canvas.clientHeight;
   const availableWidth = stage.clientWidth, availableHeight = stage.clientHeight;
   if (![width, height, availableWidth, availableHeight].every(value => Number.isFinite(value) && value > 0)) return;
+  const ratio = globalThis.devicePixelRatio;
+  if (Number.isFinite(ratio) && ratio > 0) {
+    // Fractional page layout must not crop a viewport-sized canvas after scrolling.
+    const naturalTop = stage.getBoundingClientRect().top - (Number.parseFloat(stage.style.top) || 0);
+    if (Number.isFinite(naturalTop)) stage.style.top = `${Math.round(naturalTop * ratio) / ratio - naturalTop}px`;
+  }
   const actual = stage.dataset.previewSize === 'actual';
   const scale = actual ? 1 : Math.min(1, availableWidth / width, availableHeight / height);
   const x = actual ? 0 : (availableWidth - width * scale) / 2;
@@ -68,6 +74,13 @@ if (typeof ResizeObserver === 'function') {
 
 const previewSize = document.querySelector('#preview-size');
 const previewStage = document.querySelector('#stage');
+const previewCanvas = document.querySelector('#launcher-canvas');
+if (previewStage && previewCanvas) {
+  previewCanvas.addEventListener('focus', () => {
+    fitPreview();
+    previewStage.scrollIntoView({block: 'start', behavior: 'instant'});
+  });
+}
 if (previewSize && previewStage) {
   previewSize.addEventListener('click', () => {
     const actual = previewStage.dataset.previewSize !== 'actual';

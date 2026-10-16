@@ -4,16 +4,19 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 
 const source = await readFile(new URL('../../web/menu-settings.js', import.meta.url), 'utf8');
-function preview(width, height, availableWidth, availableHeight) {
-  const canvas = { width, height, clientWidth: width, clientHeight: height, style: {} };
+function preview(width, height, availableWidth, availableHeight, stageTop = 0, dpr = 1) {
+  const canvas = { width, height, clientWidth: width, clientHeight: height, style: {}, listeners: {},
+    addEventListener(type, callback) { this.listeners[type] = callback; } };
   const stage = { clientWidth: availableWidth, clientHeight: availableHeight, dataset: {}, scrollLeft: 0, scrollTop: 0,
+    style: {}, getBoundingClientRect() { return { top: stageTop + (Number.parseFloat(this.style.top) || 0) }; },
+    scrollIntoView(options) { this.scrolled = options; },
     listeners: {}, addEventListener(type, callback, options) { assert.equal(options.capture, true); assert.equal(options.passive, false); this.listeners[type] = callback; } };
   let click;
   const button = { attributes: {}, addEventListener: (type, callback) => { assert.equal(type, 'click'); click = callback; },
     setAttribute(name, value) { this.attributes[name] = value; } };
   let update;
   const observed = [];
-  const context = { document: { querySelector: selector => ({ '#stage': stage, '#launcher-canvas': canvas, '#preview-size': button })[selector] ?? null },
+  const context = { devicePixelRatio: dpr, document: { querySelector: selector => ({ '#stage': stage, '#launcher-canvas': canvas, '#preview-size': button })[selector] ?? null },
     ResizeObserver: class { constructor(callback) { update = callback; } observe(element) { observed.push(element); } } };
   vm.runInNewContext(source, context);
   update();
@@ -40,8 +43,23 @@ test('temporarily zero-sized preview retains its last valid transform', () => {
   assert.equal(canvas.style.transform, previous);
 });
 
+test('preview aligns a fractional page origin without drift and focus reveals the canvas', () => {
+  for (const dpr of [1, 2]) {
+    const {canvas, stage, update} = preview(800, 600, 800, 600, 57.3125, dpr);
+    assert.equal(stage.getBoundingClientRect().top * dpr, Math.round(57.3125 * dpr));
+    const top = stage.style.top;
+    update();
+    assert.equal(stage.style.top, top);
+    assert.equal(typeof canvas.listeners.focus, 'function');
+    canvas.listeners.focus();
+    assert.equal(stage.scrolled.block, 'start');
+    assert.equal(stage.scrolled.behavior, 'instant');
+    assert.deepEqual([canvas.width, canvas.height, canvas.clientWidth, canvas.clientHeight], [800, 600, 800, 600]);
+  }
+});
+
 test('display choices derive from the preview container and screen, never a startup bitmap', () => {
-  const canvas = { width: 300, height: 150 };
+  const canvas = { width: 300, height: 150, addEventListener() {} };
   const stage = { clientWidth: 744, clientHeight: 418, addEventListener() {} };
   const context = { document: { querySelector: selector => ({ '#stage': stage, '#launcher-canvas': canvas })[selector] ?? null }, devicePixelRatio: 1,
     screen: { width: 1366, height: 768 } };
@@ -65,6 +83,8 @@ test('actual-size preview stays readable without modifying selected render or la
   assert.equal(canvas.style.transform, 'translate(0px, 0px) scale(1)');
   assert.deepEqual([canvas.width, canvas.height, canvas.clientWidth, canvas.clientHeight], [1280, 720, 1280, 720]);
   stage.scrollLeft = 700; stage.scrollTop = 250;
+  canvas.listeners.focus();
+  assert.deepEqual([stage.scrollLeft, stage.scrollTop], [700, 250]);
   click();
   assert.equal(stage.dataset.previewSize, 'fit');
   assert.equal(button.attributes['aria-pressed'], 'false');
