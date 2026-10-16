@@ -1024,6 +1024,9 @@ Format: `date — subsystem — symptom — root cause — status`
       peer exchange or proof of matching RNG streams.
 - [ ] NET-C06: Ordered actions and checksum/RNG agreement, followed by a ten-minute
       mixed-client match without divergence; lobby-only success is insufficient.
+      Bounded source-profile action-body readers now preserve player ids,
+      payload order and raw checksum bytes. Checksum verification, game-order
+      decoding, simulation agreement and original-client exchange remain open.
 - [ ] NET-C07: Classic realm version checks, authentication and negative cases,
       channel/chat, game advertisement/list/join; unmodified and loader profiles
       have separate results, including the unresolved 1.29.2 authentication path.

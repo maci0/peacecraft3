@@ -15,7 +15,8 @@ unverified.
 
 `classic_frame` now provides a separate bounded BNCS/W3GS header codec and
 native TCP caller. Typed readers cover the selected authentication challenge
-and W3GS join refusals/slot records. This is not realm login or completed
+and W3GS join refusals, slot records and opaque action subrecords. This is not
+realm login or completed
 W3GS lobby/gameplay support.
 
 ## Public references checked on 2026-10-16
@@ -176,3 +177,25 @@ This adds no slot store, matchmaking, client admission or RNG implementation.
 The seed's presence does not show that either client has applied it or that
 their streams agree. NET-C05 remains open. Root evidence is in
 `.scratch/classic-network-20261016/root-slot-seed/`.
+
+## Opaque ordered action bodies
+
+`Frame::incoming_actions` and `OwnedFrame::incoming_actions` check the pinned
+GHost++ incoming action bodies, including subrecord lengths and the caller's
+record ceiling. Each player id and payload stays in wire order. The first
+incoming form retains its little-endian interval; the second form keeps its
+two prefix bytes raw. Empty queues stay distinct from a malformed checksum or
+subrecord tail. An invalid later record refuses the whole message.
+
+The outgoing reader retains the connection-supplied player id, four checksum
+bytes and borrowed payload. The pinned receiver refuses player id 255; the
+reader preserves that rule. It does not derive an id from the action body.
+Checksum bytes are retained without verification, and payloads are not decoded
+as game orders or translated to the project's movement protocol.
+
+Twenty-nine scoped native frame tests and twenty-four actual WASI tests pass,
+including ordered non-empty/empty actions, count and length refusal and a valid
+record followed by a malformed tail. Strict native/WASM Clippy, rustdoc and both
+library builds pass. No live action exchange or original-client match was run.
+NET-C06 remains open; root evidence is in
+`.scratch/classic-network-20261016/root-actions/`.

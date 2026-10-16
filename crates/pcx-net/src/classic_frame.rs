@@ -7,8 +7,9 @@
 //! `ghost/gameprotocol.h` commit `6ba90f426e96f80fe013a468d1e07151a510adbe`
 //! defines `W3GS_HEADER_CONSTANT` as 247, and `AssignLength` writes the
 //! packet's byte count into indices 2 and 3. Bodies stay opaque except
-//! [`Frame::reject_join`], [`auth_info`] and [`slot_seed`], which read join refusals,
-//! source-profile-qualified authentication challenges and raw lobby slot/seed records.
+//! [`Frame::reject_join`], [`auth_info`], [`slot_seed`] and [`action`]. These read
+//! join refusals, source-profile-qualified authentication challenges, raw lobby
+//! slot/seed records and ordered opaque action subrecords.
 //! A decoded reason is always a refusal. It is not admission and it is not
 //! simulation state.
 //!
@@ -105,6 +106,27 @@ impl OwnedFrame {
     pub fn reject_join(&self) -> Result<RejectJoin, RejectJoinError> {
         classify_reject_join(self.family(), self.id(), self.body())
     }
+
+    /// W3GS incoming action subrecords borrowed from this frame.
+    ///
+    /// [`Err`] keeps no records. Payloads are not game orders.
+    pub fn incoming_actions(
+        &self,
+        limits: action::ActionLimits,
+    ) -> Result<action::IncomingActions<'_>, action::ActionError> {
+        action::parse_incoming(self.family(), self.id(), self.body(), limits)
+    }
+
+    /// One W3GS outgoing action for `player_id`, borrowed from this frame.
+    ///
+    /// The player id is the connection id `RECEIVE_W3GS_OUTGOING_ACTION`
+    /// receives. It is not a byte in the body. The payload is not a game order.
+    pub fn outgoing_action(
+        &self,
+        player_id: u8,
+    ) -> Result<action::OutgoingAction<'_>, action::ActionError> {
+        action::parse_outgoing(self.family(), self.id(), self.body(), player_id)
+    }
 }
 
 /// A frame borrowed from the caller's buffer. Constructing one does not allocate.
@@ -161,6 +183,27 @@ impl<'a> Frame<'a> {
     /// [`Ok`] is a refusal. This method does not admit a player.
     pub fn reject_join(self) -> Result<RejectJoin, RejectJoinError> {
         classify_reject_join(self.family(), self.id(), self.body())
+    }
+
+    /// W3GS incoming action subrecords borrowed from this frame.
+    ///
+    /// [`Err`] keeps no records. Payloads are not game orders.
+    pub fn incoming_actions(
+        self,
+        limits: action::ActionLimits,
+    ) -> Result<action::IncomingActions<'a>, action::ActionError> {
+        action::parse_incoming(self.family(), self.id(), self.body(), limits)
+    }
+
+    /// One W3GS outgoing action for `player_id`, borrowed from this frame.
+    ///
+    /// The player id is the connection id `RECEIVE_W3GS_OUTGOING_ACTION`
+    /// receives. It is not a byte in the body. The payload is not a game order.
+    pub fn outgoing_action(
+        self,
+        player_id: u8,
+    ) -> Result<action::OutgoingAction<'a>, action::ActionError> {
+        action::parse_outgoing(self.family(), self.id(), self.body(), player_id)
     }
 }
 
@@ -499,6 +542,7 @@ fn validate_header(header: &[u8], max_frame_bytes: usize) -> Result<usize, Frame
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tcp;
 
+pub mod action;
 pub mod auth_info;
 pub mod slot_seed;
 
