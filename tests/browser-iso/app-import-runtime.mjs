@@ -22,16 +22,16 @@ function constant(source, name) {
   const match = source.match(new RegExp(`const\\s+${name}\\s*:\\s*&str\\s*=\\s*(r"[^"]*"|"(?:\\\\.|[^"\\\\])*")`));
   assert(match, `Missing Rust path contract ${name}`); return strings(match[1])[0];
 }
-function block(source, name) { const match = source.match(new RegExp(`const\\s+${name}[^=]*=\\s*\\[([\\s\\S]*?)\\];`)); assert(match, `Missing Rust contract ${name}`); return match[1]; }
+export function block(source, name) { const match = source.match(new RegExp(`const\\s+${name}\\b[^=]*=\\s*&?\\s*\\[([\\s\\S]*?)\\];`)); assert(match, `Missing Rust contract ${name}`); return match[1]; }
 function frames(text) {
   const map = new Map(), stack = []; let pending;
   for (let line of text.split(/\r?\n/)) {
     line = line.replace(/\/\/.*$/, '').trim(); if (!line) continue;
-    const header = line.match(/^Frame\s+"[^"]+"\s+"([^"]+)"(?:\s+INHERITS(?:\s+WITHCHILDREN)?\s+"([^"]+)")?/);
-    if (header) { pending = { name: header[1], inherits: header[2], props: {} }; map.set(pending.name, pending); }
+    const header = line.match(/^Frame\s+"([^"]+)"\s+"([^"]+)"(?:\s+INHERITS(?:\s+WITHCHILDREN)?\s+"([^"]+)")?/);
+    if (header) { pending = { kind: header[1], name: header[2], inherits: header[3], parent: stack.at(-1)?.name, props: {} }; map.set(pending.name, pending); }
     if (line.includes('{') && pending) { stack.push(pending); pending = null; continue; }
     if (line.startsWith('}')) { stack.pop(); continue; }
-    if (stack.length && !header) { const m = line.match(/^(\w+)\s+(.+?)[,;]?$/); if (m && !(m[1] in stack.at(-1).props)) stack.at(-1).props[m[1]] = m[2]; }
+    if (stack.length && !header) { const m = line.match(/^(\w+)(?:\s+(.+?))?[,;]?$/); if (m && !(m[1] in stack.at(-1).props)) stack.at(-1).props[m[1]] = m[2] ?? ''; }
   }
   function prop(name, key, seen = new Set()) {
     assert(!seen.has(name), `Frame inheritance cycle ${name}`); seen.add(name);
@@ -40,6 +40,22 @@ function frames(text) {
     return f.inherits ? prop(f.inherits, key, seen) : undefined;
   }
   return { map, prop };
+}
+export function menuEntryFrames(source, root) {
+  const fdf = frames(source); assert(fdf.map.has(root), `Missing authored control root ${root}`);
+  return [...fdf.map.values()].filter(frame => {
+    if (!['GLUETEXTBUTTON', 'GLUEBUTTON', 'TEXTBUTTON', 'BUTTON'].includes(frame.kind)) return false;
+    const seen = new Set(); let parent = frame.parent;
+    while (parent && parent !== root) {
+      assert(!seen.has(parent), `Frame parent cycle ${parent}`); seen.add(parent);
+      parent = fdf.map.get(parent)?.parent;
+    }
+    return parent === root && fdf.prop(frame.name, 'ButtonText') !== undefined;
+  }).map(frame => ({
+    id: frame.name.replace(/Button$/, '').replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase(),
+    button: frame.name, plate: frame.name,
+    textFrame: quoted(fdf.prop(frame.name, 'ButtonText')),
+  }));
 }
 const quoted = raw => { const m = raw?.match(/"((?:\\.|[^"\\])*)"/); assert(m, `Expected quoted record: ${raw}`); return m[1].replaceAll('\\\\', '\\').replaceAll('\\"', '"'); };
 export function uniqueSkinFont(skin, face) {
@@ -167,10 +183,14 @@ async function prepare() {
     if (errors.length) throw new Error(`REQUIRED_MEMBERS_BLOCKED:\n${errors.join('\n')}`);
   }
   const templates = decode(await add(templatePath)), menu = decode(await add(mainPath)), global = decode(await add(stringsPath));
-  const fdf = frames(`${templates}\n${menu}`), ids = strings(block(main, 'MENU')), frameNames = strings(block(main, 'MENU_FRAMES'));
-  const labels = ids.map((id, i) => { const textFrame = quoted(fdf.prop(frameNames[i * 2], 'ButtonText')), key = quoted(fdf.prop(textFrame, 'Text'));
+  const frameText = `${templates}\n${menu}`, fdf = frames(frameText);
+  const controls = await readFile(`${root}crates/peacecraft3/src/glue_menu.rs`, 'utf8');
+  const entries = menuEntryFrames(frameText, constant(controls, 'CONTROL_LAYER'));
+  assert(entries.length, 'No authored labelled menu controls');
+  const frameNames = entries.flatMap(entry => [entry.button, entry.textFrame]);
+  const labels = entries.map(({id, button, plate, textFrame}) => { const key = quoted(fdf.prop(textFrame, 'Text'));
     const value = global.split(/\r?\n/).map(l => l.trim()).find(l => l.startsWith(`${key} `) || l.startsWith(`${key}\t`)); assert(value, `Missing authored GlobalStrings key ${key}`);
-    return { id, button: frameNames[i * 2], plate: frameNames[i * 2 + 1], key, raw: quoted(value), visible: quoted(value).replace(/\|C[0-9a-f]{8}|\|R/gi, '').replaceAll('||', '|') }; });
+    return { id, button, plate, key, raw: quoted(value), visible: quoted(value).replace(/\|C[0-9a-f]{8}|\|R/gi, '').replaceAll('||', '|') }; });
   const skin = decode(await add(skinPath));
   await add(fogPath);
   const fonts = labels.map(label => {
@@ -185,6 +205,7 @@ async function prepare() {
     if (requiredFrames.has(name)) return; requiredFrames.add(name);
     const frame = fdf.map.get(name); assert(frame, `Missing consumed frame ${name}`);
     if (frame.inherits) visitFrame(frame.inherits);
+    if (frame.parent) visitFrame(frame.parent);
     for (const key of ['ControlBackdrop', 'ButtonText']) if (frame.props[key]) visitFrame(quoted(frame.props[key]));
   }
   for (const name of frameNames) visitFrame(name);
@@ -422,6 +443,9 @@ async function clickAuthoredEntry(page, fixture) {
   const f = frames(fixture.frameText), [vw, vh] = fixture.frameUnits;
   const points = { TOPLEFT: [0, 1], TOP: [.5, 1], TOPRIGHT: [1, 1], LEFT: [0, .5], CENTER: [.5, .5], RIGHT: [1, .5], BOTTOMLEFT: [0, 0], BOTTOM: [.5, 0], BOTTOMRIGHT: [1, 0] };
   function rect(name, seen = new Set()) { assert(!seen.has(name)); seen.add(name); const anchor = f.prop(name, 'SetPoint');
+    if (f.prop(name, 'SetAllPoints') !== undefined) {
+      const parent = f.map.get(name)?.parent; assert(parent, `SetAllPoints requires a parent for ${name}`); return rect(parent, seen);
+    }
     const width = Number(f.prop(name, 'Width')?.replace(/,$/, '')), height = Number(f.prop(name, 'Height')?.replace(/,$/, ''));
     if (!anchor) return [0, 0, Number.isFinite(width) ? width : vw, Number.isFinite(height) ? height : vh];
     assert(Number.isFinite(width) && Number.isFinite(height)); const m = anchor.match(/^(\w+)\s*,\s*"([^"]+)"\s*,\s*(\w+)\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)/); assert(m, `Unsupported authored SetPoint ${anchor}`);
