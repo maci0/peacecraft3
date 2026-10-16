@@ -257,3 +257,23 @@ there is no active gameplay scene or aggro behavior from this change.
 Verification covers the current play library and application tests, 12 executed
 WASI unit cases, strict native/WASM Clippy, rustdoc and the actual retained-map
 run. No original game bytes are published.
+
+## Executed hero-level request
+
+When declared with the loaded `unit, integer, boolean -> nothing` contract
+and the same source as `CreateUnit`, `SetHeroLevel` retains the executed signed
+level and eye-candy flag on that existing unit. Both fields stay absent until
+that call runs; zero and false remain explicit assignments. Wrong-family and
+unknown handles refuse without mutation. Programs without the declaration
+keep unit creation support. No catalog lookup or allocation occurs in the setter.
+
+This records a request. It does not derive experience, hero stats or visual
+effects, classify heroes from rawcode spelling, or supply `GetHeroLevel`.
+
+The same Human01 probe retains one request matching the captured call, alongside
+153 unit records and three trigger actions. Globals and `config` still complete.
+The next refusal is `SetUnitState`, map span `67684..67742`, declared by the
+selected `common.j` at `91204..91315`. No gameplay scene or playable chapter
+is established. Sixteen unit cases run under WASI; the full play and application
+tests, strict native/WASM Clippy, rustdoc and browser-target library build pass.
+Root evidence is in `.scratch/cursor-gameplay-20261016/root-hero-level/`.

@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 const NATIVE: &str = "CreateUnit";
 const SET_RANGE: &str = "SetUnitAcquireRange";
+const SET_HERO_LEVEL: &str = "SetHeroLevel";
 const KIND: &str = "unit";
 
 /// Caller bounds. Not a world, population, or rendering limit.
@@ -29,6 +30,10 @@ pub struct UnitBudget {
 
 /// Checked catalog result plus the executed call. `executed_owner` is the
 /// player number from this call, not a preplaced control word.
+///
+/// `requested_hero_level` and `requested_show_eye_candy` record one executed
+/// `SetHeroLevel` call. They are not derived experience, hero stats, or
+/// eye-candy effects.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutedUnit {
     pub definition: Definition,
@@ -40,6 +45,14 @@ pub struct ExecutedUnit {
     /// Executed `SetUnitAcquireRange` real. `None` means the native has not
     /// run for this handle. `Some(0.0)` is an executed zero, not that absence.
     pub acquire_range: Option<f32>,
+    /// Executed `SetHeroLevel` integer. `None` means that native has not run.
+    /// `Some(0)` and negative values are the executed input, not a clamp or
+    /// a derived level.
+    pub requested_hero_level: Option<i32>,
+    /// Executed `showEyeCandy` argument. `None` means `SetHeroLevel` has not
+    /// run. `Some(false)` is an executed false, not that absence, and it does
+    /// not play an effect.
+    pub requested_show_eye_candy: Option<bool>,
 }
 
 pub(super) struct Admission {
@@ -53,6 +66,8 @@ pub(super) struct Admission {
     records: usize,
     /// Present when this program declares `SetUnitAcquireRange` on the same source.
     acquire_span: Option<Span>,
+    /// Present when this program declares `SetHeroLevel` on the same source.
+    hero_level_span: Option<Span>,
 }
 
 impl ObjectHost {
@@ -99,6 +114,7 @@ impl ObjectHost {
             .map_err(|_| fail(Failure::Capacity))?;
         declaration_source.push_str(&native.source);
         let acquire_span = self.acquire_declaration(&declaration_source)?;
+        let hero_level_span = self.hero_level_declaration(&declaration_source)?;
         self.units = Some(Admission {
             catalog,
             source,
@@ -109,6 +125,7 @@ impl ObjectHost {
             max_modifications: budget.max_modifications,
             records: 0,
             acquire_span,
+            hero_level_span,
         });
         Ok(self)
     }
@@ -144,6 +161,9 @@ impl ObjectHost {
         if name == SET_RANGE && self.admitted_units().ok()?.acquire_span.is_some() {
             return Some(self.set_acquire_range(args));
         }
+        if name == SET_HERO_LEVEL && self.admitted_units().ok()?.hero_level_span.is_some() {
+            return Some(self.set_hero_level(args));
+        }
         None
     }
 
@@ -172,6 +192,60 @@ impl ObjectHost {
             return Err(self.inner.error(SET_RANGE, Failure::Source));
         }
         Ok(Some(native.span))
+    }
+
+    /// `Ok(None)` when the program does not declare `SetHeroLevel`. A present
+    /// declaration must return `nothing`, take `unit`, `integer`, then
+    /// `boolean`, and share `CreateUnit`'s source.
+    fn hero_level_declaration(&self, create_source: &str) -> Result<Option<Span>, Error> {
+        let Some(native) = self.inner.program.natives().get(SET_HERO_LEVEL) else {
+            return Ok(None);
+        };
+        Self::contract(
+            &self.inner,
+            SET_HERO_LEVEL,
+            &["unit", "integer", "boolean"],
+            "nothing",
+            false,
+            Some(KIND),
+        )?;
+        if native.source != create_source {
+            return Err(self.inner.error(SET_HERO_LEVEL, Failure::Source));
+        }
+        Ok(Some(native.span))
+    }
+
+    fn set_hero_level(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let (id, level, show_eye_candy) = {
+            let fail = |reason| self.inner.error(SET_HERO_LEVEL, reason);
+            let [
+                Value::Handle(unit),
+                Value::Int(level),
+                Value::Bool(show_eye_candy),
+            ] = args
+            else {
+                return Err(fail(Failure::UnitState(
+                    "arguments do not match the unit native declaration",
+                )));
+            };
+            match self
+                .inner
+                .entry(*unit)
+                .map_err(|error| self.inner.error(SET_HERO_LEVEL, error.failure))?
+            {
+                Entry::Unit { .. } => {}
+                _ => return Err(fail(Failure::WrongFamily)),
+            }
+            (*unit, *level, *show_eye_candy)
+        };
+        match self.inner.entry_mut(id)? {
+            Entry::Unit { record } => {
+                record.requested_hero_level = Some(level);
+                record.requested_show_eye_candy = Some(show_eye_candy);
+                Ok(Value::Null)
+            }
+            _ => Err(self.inner.error(SET_HERO_LEVEL, Failure::WrongFamily)),
+        }
     }
 
     fn set_acquire_range(&mut self, args: &[Value]) -> Result<Value, Error> {
@@ -283,6 +357,8 @@ impl ObjectHost {
                 y,
                 face,
                 acquire_range: None,
+                requested_hero_level: None,
+                requested_show_eye_candy: None,
             }
         };
         let id = self.inner.allocate(Entry::Unit { record }, NATIVE)?;

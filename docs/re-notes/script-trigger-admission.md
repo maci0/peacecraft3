@@ -27,8 +27,9 @@ pass. Evidence is retained in
 The same locally supplied Human01 program still completes global initialization
 and `config`. Its `main` now creates three triggers and registers three unit events;
 the captured identities and loaded enumerands match the retained records. It also
-registers three actions and reaches 153 source-bound executed units before
-refusing `SetHeroLevel` at map span `67629..67678`. This does not establish callback execution,
+registers three actions and reaches 153 source-bound executed units. The
+subsequent hero-request gate retains one executed `SetHeroLevel` assignment
+and refuses `SetUnitState` at map span `67684..67742`. This does not establish callback execution,
 native event behavior, a rendered world or campaign completion.
 
 ## Authored action registration

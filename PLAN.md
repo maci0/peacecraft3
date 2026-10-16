@@ -1204,8 +1204,8 @@ semantics.
 
 The current campaign Host retains executed player, sound, camera, rectangle,
 technology, destructable and source-bound unit state. Human01 globals and `config`
-complete in the retained local probe; `main` now reaches the unsupported
-`SetHeroLevel`. This is execution evidence for that selected source profile,
+complete in the retained local probe; `main` now retains the executed
+`SetHeroLevel` request and reaches unsupported `SetUnitState`. This is execution evidence for that selected source profile,
 not a playable chapter. No application gameplay-session factory connects the
 Host, simulation, terrain and HUD yet. See
 [map admission](docs/re-notes/map-data-admission.md) and

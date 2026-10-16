@@ -92,7 +92,7 @@ fn script_common(unit_parent: &str, declare_create: bool) -> String {
     let globals = COMMON.find("\nglobals\n").expect("globals");
     let mut common = COMMON.to_string();
     let native = if declare_create {
-        "native CreateUnit takes player id, integer unitid, real x, real y, real face returns unit\nnative SetUnitAcquireRange takes unit whichUnit, real newAcquireRange returns nothing\n"
+        "native CreateUnit takes player id, integer unitid, real x, real y, real face returns unit\nnative SetUnitAcquireRange takes unit whichUnit, real newAcquireRange returns nothing\nnative SetHeroLevel takes unit whichHero, integer level, boolean showEyeCandy returns nothing\n"
     } else {
         ""
     };
@@ -179,7 +179,7 @@ fn open_with(
     }
 }
 
-const MAP: &str = "globals\nplayer P = null\nunit U = null\ntimer T = null\nendglobals\nfunction main takes nothing returns nothing\nset P = Player(4)\nset U = CreateUnit(P, 'hfoo', 1.5, -2.25, 90.0)\nendfunction\nfunction missing takes nothing returns unit\nreturn CreateUnit(P, 'zzzz', 0.0, 0.0, 0.0)\nendfunction\nfunction item takes nothing returns unit\nreturn CreateUnit(P, 'item', 0.0, 0.0, 0.0)\nendfunction\nfunction mismatched takes nothing returns unit\nreturn CreateUnit(P, 'bad!', 0.0, 0.0, 0.0)\nendfunction\nfunction wrong takes nothing returns unit\nset T = CreateTimer()\nreturn CreateUnit(T, 'hfoo', 0.0, 0.0, 0.0)\nendfunction\nfunction again takes nothing returns unit\nreturn CreateUnit(P, 'hfoo', 0.0, 0.0, 0.0)\nendfunction\nfunction zero takes nothing returns nothing\ncall SetUnitAcquireRange(U, 0.0)\nendfunction\nfunction negative takes nothing returns nothing\ncall SetUnitAcquireRange(U, -12.5)\nendfunction\nfunction wrong_range takes nothing returns nothing\nset T = CreateTimer()\ncall SetUnitAcquireRange(T, 4.0)\nendfunction\n";
+const MAP: &str = "globals\nplayer P = null\nunit U = null\ntimer T = null\nendglobals\nfunction main takes nothing returns nothing\nset P = Player(4)\nset U = CreateUnit(P, 'hfoo', 1.5, -2.25, 90.0)\nendfunction\nfunction missing takes nothing returns unit\nreturn CreateUnit(P, 'zzzz', 0.0, 0.0, 0.0)\nendfunction\nfunction item takes nothing returns unit\nreturn CreateUnit(P, 'item', 0.0, 0.0, 0.0)\nendfunction\nfunction mismatched takes nothing returns unit\nreturn CreateUnit(P, 'bad!', 0.0, 0.0, 0.0)\nendfunction\nfunction wrong takes nothing returns unit\nset T = CreateTimer()\nreturn CreateUnit(T, 'hfoo', 0.0, 0.0, 0.0)\nendfunction\nfunction again takes nothing returns unit\nreturn CreateUnit(P, 'hfoo', 0.0, 0.0, 0.0)\nendfunction\nfunction zero takes nothing returns nothing\ncall SetUnitAcquireRange(U, 0.0)\nendfunction\nfunction negative takes nothing returns nothing\ncall SetUnitAcquireRange(U, -12.5)\nendfunction\nfunction wrong_range takes nothing returns nothing\nset T = CreateTimer()\ncall SetUnitAcquireRange(T, 4.0)\nendfunction\nfunction level_zero takes nothing returns nothing\ncall SetHeroLevel(U, 0, false)\nendfunction\nfunction level_signed takes nothing returns nothing\ncall SetHeroLevel(U, -7, true)\nendfunction\nfunction level_foreign takes nothing returns nothing\nset T = CreateTimer()\ncall SetHeroLevel(T, 4, false)\nendfunction\n";
 
 #[test]
 fn owned_vm_retains_catalog_result_and_typed_resolve_failures() {
@@ -659,5 +659,222 @@ fn acquire_range_from_another_source_is_refused() {
     assert_eq!(error.native, "SetUnitAcquireRange");
     assert_eq!(error.declaration_source, "synthetic/other.j");
     assert_ne!(error.declaration_span, pcx_script::span::Span::EMPTY);
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn owned_vm_set_hero_level_keeps_exact_request_on_the_admitted_unit() {
+    let mut session = open(4, 16, MAP);
+    session.vm.init_globals().unwrap();
+    session.vm.call("main", &[]).unwrap();
+    let Value::Handle(unit) = session.vm.global("U") else {
+        panic!("unit");
+    };
+    let before = session.vm.host().inner.executed_unit(unit).unwrap().clone();
+    assert_eq!(before.definition.rawcode, *b"hfoo");
+    assert_eq!(before.requested_hero_level, None);
+    assert_eq!(before.requested_show_eye_candy, None);
+    assert_eq!(session.hits.load(Ordering::SeqCst), 1);
+    session.vm.call("level_zero", &[]).unwrap();
+    let zero = session.vm.host().inner.executed_unit(unit).unwrap().clone();
+    assert_eq!(zero.requested_hero_level, Some(0));
+    assert_eq!(zero.requested_show_eye_candy, Some(false));
+    assert_ne!(zero.requested_hero_level, None);
+    assert_eq!(zero.definition, before.definition);
+    assert_eq!(zero.executed_owner, before.executed_owner);
+    assert_eq!(zero.source, before.source);
+    assert_eq!(zero.x, before.x);
+    assert_eq!(zero.y, before.y);
+    assert_eq!(zero.face, before.face);
+    assert_eq!(zero.acquire_range, None);
+    assert_eq!(session.hits.load(Ordering::SeqCst), 1);
+    let foreign = session
+        .vm
+        .call("level_foreign", &[])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        foreign.contains("handle identifies another family"),
+        "{foreign}"
+    );
+    assert!(foreign.contains("synthetic/common.j"), "{foreign}");
+    assert!(foreign.contains("SetHeroLevel"), "{foreign}");
+    assert_eq!(
+        session
+            .vm
+            .host()
+            .inner
+            .executed_unit(unit)
+            .unwrap()
+            .requested_hero_level,
+        Some(0)
+    );
+    assert_eq!(
+        session
+            .vm
+            .host()
+            .inner
+            .executed_unit(unit)
+            .unwrap()
+            .requested_show_eye_candy,
+        Some(false)
+    );
+    let Value::Handle(player) = session.vm.global("P") else {
+        panic!("player");
+    };
+    let player_target = session
+        .vm
+        .host()
+        .native(
+            "SetHeroLevel",
+            &[Value::Handle(player), Value::Int(4), Value::Bool(false)],
+        )
+        .unwrap_err();
+    assert!(
+        player_target.contains("handle identifies another family"),
+        "{player_target}"
+    );
+    let missing = session
+        .vm
+        .host()
+        .native(
+            "SetHeroLevel",
+            &[
+                Value::Handle(pcx_script::HandleId::new(
+                    std::num::NonZeroU64::new(9_999).unwrap(),
+                )),
+                Value::Int(4),
+                Value::Bool(true),
+            ],
+        )
+        .unwrap_err();
+    assert!(missing.contains("unknown handle identity"), "{missing}");
+    assert_eq!(
+        session
+            .vm
+            .host()
+            .inner
+            .executed_unit(unit)
+            .unwrap()
+            .requested_hero_level,
+        Some(0)
+    );
+    session.vm.call("level_signed", &[]).unwrap();
+    let signed = session.vm.host().inner.executed_unit(unit).unwrap();
+    assert_eq!(signed.requested_hero_level, Some(-7));
+    assert_eq!(signed.requested_show_eye_candy, Some(true));
+    assert_eq!(signed.definition.rawcode, *b"hfoo");
+    assert_eq!(session.hits.load(Ordering::SeqCst), 1);
+    let getter = session
+        .vm
+        .host()
+        .native("GetHeroLevel", &[Value::Handle(unit)])
+        .unwrap_err();
+    assert!(getter.contains("unsupported"), "{getter}");
+    assert_eq!(
+        session
+            .vm
+            .host()
+            .inner
+            .executed_unit(unit)
+            .unwrap()
+            .requested_hero_level,
+        Some(-7)
+    );
+}
+
+#[test]
+fn hero_level_bad_signature_does_not_admit_or_resolve() {
+    let common = script_common("widget", true).replace(
+        "native SetHeroLevel takes unit whichHero, integer level, boolean showEyeCandy returns nothing\n",
+        "native SetHeroLevel takes integer level returns nothing\n",
+    );
+    let ctx = context(
+        300,
+        &common,
+        "function main takes nothing returns nothing\nendfunction\n",
+        "unit-catalog",
+    );
+    let (catalog, hits, _) = counting();
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+    let error = match object(&ctx, 4)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(1))
+    {
+        Err(error) => error,
+        Ok(_) => panic!("bad hero-level signature was admitted"),
+    };
+    assert_eq!(error.failure, Failure::Signature);
+    assert_eq!(error.native, "SetHeroLevel");
+    assert_eq!(error.declaration_source, "synthetic/common.j");
+    assert_ne!(error.declaration_span, pcx_script::span::Span::EMPTY);
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn hero_level_from_another_source_is_refused() {
+    let primary = "type agent extends handle\ntype widget extends agent\ntype unit extends widget\ntype player extends agent\ntype timer extends agent\ntype playercolor extends handle\nconstant native ConvertPlayerColor takes integer i returns playercolor\nnative CreateTimer takes nothing returns timer\nnative DestroyTimer takes timer t returns nothing\nnative CreateUnit takes player id, integer unitid, real x, real y, real face returns unit\nglobals\nconstant playercolor C = ConvertPlayerColor(1)\nendglobals\n";
+    let other = "native SetHeroLevel takes unit whichHero, integer level, boolean showEyeCandy returns nothing\n";
+    let map = pcx_script::parse_script("").unwrap();
+    let primary = pcx_script::parse_script(primary).unwrap();
+    let other = pcx_script::parse_script(other).unwrap();
+    let program = Arc::new(
+        pcx_script::resolve_with(
+            &map,
+            &[
+                pcx_script::Prelude::new("synthetic/common.j", &primary),
+                pcx_script::Prelude::new("synthetic/other.j", &other),
+            ],
+        )
+        .unwrap(),
+    );
+    let inner = crate::playercolor_host::EnumHost::checked_selected(
+        program,
+        "split-source",
+        &["ConvertPlayerColor"],
+        crate::playercolor_host::Limits {
+            max_handles: 4,
+            admission_steps: 100,
+            expression_depth: 16,
+            expression_work: 100,
+        },
+    )
+    .unwrap();
+    let (catalog, hits, _) = counting();
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+    let error = match crate::playercolor_host::ObjectHost::checked(inner)
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(1))
+    {
+        Err(error) => error,
+        Ok(_) => panic!("foreign hero-level source was admitted"),
+    };
+    assert_eq!(error.failure, Failure::Source);
+    assert_eq!(error.native, "SetHeroLevel");
+    assert_eq!(error.declaration_source, "synthetic/other.j");
+    assert_ne!(error.declaration_span, pcx_script::span::Span::EMPTY);
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn unit_creation_still_admits_a_program_without_the_hero_setter() {
+    let common = script_common("widget", true).replace(
+        "native SetHeroLevel takes unit whichHero, integer level, boolean showEyeCandy returns nothing\n",
+        "",
+    );
+    let ctx = context(
+        300,
+        &common,
+        "function main takes nothing returns nothing\nendfunction\n",
+        "unit-catalog",
+    );
+    let (catalog, hits, _) = counting();
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+    let mut host = object(&ctx, 4)
+        .with_unit_catalog(shared, source(), limits(1))
+        .unwrap();
+    let error = host.native("SetHeroLevel", &[]).unwrap_err();
+    assert!(error.contains("unsupported"), "{error}");
     assert_eq!(hits.load(Ordering::SeqCst), 0);
 }
