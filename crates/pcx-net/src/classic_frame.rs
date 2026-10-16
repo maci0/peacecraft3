@@ -7,7 +7,8 @@
 //! `ghost/gameprotocol.h` commit `6ba90f426e96f80fe013a468d1e07151a510adbe`
 //! defines `W3GS_HEADER_CONSTANT` as 247, and `AssignLength` writes the
 //! packet's byte count into indices 2 and 3. Bodies stay opaque except
-//! [`Frame::reject_join`], [`auth_info`], [`slot_seed`], [`action`] and [`map_check`]. These read
+//! [`Frame::reject_join`], [`auth_info`], [`slot_seed`], [`action`], [`map_check`]
+//! and [`game_info`]. These read
 //! join refusals, source-profile-qualified authentication challenges, raw lobby
 //! slot/seed records and ordered opaque action subrecords.
 //! A decoded reason is always a refusal. It is not admission and it is not
@@ -544,6 +545,7 @@ pub mod tcp;
 
 pub mod action;
 pub mod auth_info;
+pub mod game_info;
 pub mod map_check;
 pub mod slot_seed;
 

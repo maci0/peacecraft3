@@ -13,11 +13,11 @@ models session transitions; it is not a BNCS implementation. Original-client
 crossplay, classic authentication and ten-minute mixed-client matches remain
 unverified.
 
-`classic_frame` now provides a separate bounded BNCS/W3GS header codec and
-native TCP caller. Typed readers cover the selected authentication challenge
-and W3GS join refusals, slot records, selected-map checks and opaque action subrecords. This is not
-realm login or completed
-W3GS lobby/gameplay support.
+`classic_frame` now provides a separate bounded BNCS/W3GS header codec, native
+TCP caller and bounded unicast LAN query. Typed readers cover the selected
+authentication challenge and W3GS join refusals, slot records, discovery
+advertisements, selected-map checks and opaque action subrecords. This is not
+realm login or completed W3GS lobby/gameplay support.
 
 ## Public references checked on 2026-10-16
 
@@ -244,3 +244,53 @@ original-client exchange or mixed-client match was run or implemented here.
 The shared map parser's supported-container policy still applies; this is a
 pinned sender-profile check, not proof of every original client check. NET-C05
 and both original LAN host directions remain open.
+
+## Original-host LAN discovery query
+
+The supplied original `1.29.2.9231` executable
+(`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`)
+hosted an unmodified supplied melee map through its LAN UI. Its private Wine
+container used an internal Docker network, no published ports and no default
+route. A specific limited-broadcast route was added inside that container's
+network namespace. The production reference harness was unchanged; the private
+launch receipt records the network specialization, namespace and route changes.
+The actual client/capture extent was 1280×960 at 96 DPI.
+
+Captured original broadcasts contained `W3GS_CREATEGAME` with product bytes
+`50 58 33 57` and version word `29`. A search using those observed fields returned
+a 129-byte `W3GS_GAMEINFO`. Different-version and unknown-product stimuli had no
+response within their explicit bounds; a following matching control responded.
+Initial browser captures before hosting contained no packets and establish no
+search-request layout or unique cause of that silence.
+
+`game_info` reads the selected product and complete version word, game name,
+host counter/key, dimensions, checksum/path/name bytes and fixed tail. Slot
+counts do not allocate records or imply occupancy policy. The stat-mask codec
+follows the pinned GHost++ `UTIL_DecodeStatString` relation. Terminators, fixed
+shape, canonical odd-byte encoding and derived decoded size are checked before
+the fallible decoded allocation. The original reply has 20 bytes beyond the
+older sender's final stat zero. They remain opaque; no checksum or signature
+meaning is assigned. Strings stay bytes, without UTF-8 loss or path rewriting.
+
+The native `game_info::udp::query` sends one search to an explicit unicast
+endpoint, counts every receive attempt including foreign peers, detects an
+oversize datagram with one spare buffer byte, and rearms each socket operation
+to the remaining absolute deadline. Failures do not resend. It returns a
+validated `OwnedFrame`; it neither collects broadcasts nor edits a lobby.
+The compiled production caller successfully queried the original host and
+retained the same advertised map path/checksum/port and all extension bytes. A mismatched
+selected profile refuses the retained reply.
+
+Synthetic tests cover the sender fixture, product/version mismatch, every
+truncated prefix, stat bounds/shape, opaque extensions, streamed frames and
+actual loopback UDP success, foreign-peer exhaustion, oversize and pre-expired
+policy. Pure parsing executes under WASI; native UDP is excluded on WASM.
+The full native network suite, strict native/browser-WASM checks, rustdoc and
+the browser-target library build pass. Local commands, source identities and
+runtime receipts are under `.scratch/classic-network-20261016/root-game-info/`
+and `.scratch/original-game-vm/classic-lan-host-1280-1/`.
+
+This is a query of a known original host address under Wine. Broadcast host
+collection, launcher integration, TCP join, the reverse host direction,
+original-to-original play and sustained mixed-client simulation remain open.
+No original map contents were transferred. NET-C03 is not closed by discovery.

@@ -1015,6 +1015,11 @@ Format: `date — subsystem — symptom — root cause — status`
       Original-client and lobby/gameplay checks remain open.
 - [ ] NET-C03: PeaceCraft discovers and joins an original Legacy 1.29b LAN host
       over its original UDP discovery / TCP game path.
+      A bounded production unicast query now reads a live original-host
+      GAMEINFO using its observed product/version, preserving the map path,
+      checksum, port and opaque stat extension. Synthetic native/WASI and
+      loopback checks pass. Broadcast collection, launcher integration and TCP
+      join remain open; see `docs/re-notes/classic-network-interoperability.md`.
 - [ ] NET-C04: Original unmodified Legacy 1.29b client discovers and joins a
       PeaceCraft host; record exact executable identity and both directions.
 - [ ] NET-C05: Original-compatible lobby slots, map fingerprints, readiness and
