@@ -1966,6 +1966,11 @@ fn process_panel_navigation(
     mut panels: Option<ResMut<crate::menu_sprites::MenuPanels>>,
 ) {
     let Some(target) = navigation.requested.take() else {
+        if let Some(panels) = panels.as_mut()
+            && let Err(reason) = panels.sync_category_plate(navigation.screen)
+        {
+            navigation.notice = format!("Menu animation unavailable: {reason}");
+        }
         return;
     };
     let install = selected_install(&launcher);

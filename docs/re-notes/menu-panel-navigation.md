@@ -133,17 +133,50 @@ capability state described above. Event occurrences remain scoped to the
 admitted source phases, without replaying shared MainMenu sounds twice.
 
 Main to Options and back use the existing retiring Death, incoming Birth, then
-Stand scheduling convention. Clip intervals, loop flags, poses, UV/texture
-selection, opacity and sound frames remain source-derived. This dispatch order
-is a recreation convention, not proof of the original native transition caller.
-No duration, Morph/Alternate assignment or screenshot-fitted panel placement is
-introduced. Missing optional animation retains the admitted FDF navigation with
-an explicit unavailable diagnostic.
+Stand scheduling convention. While that clock is on Options Stand, a Gameplay,
+Video, or Sound page plays source `Options Morph` on the skin's left sprite
+layer and then holds `Options Stand Alternate`. The right sprite keeps its
+Options Stand clock, including its authored looping behavior. Its skin key is
+retained through loading and spawning; neither filenames nor geoset numbers
+choose that role. Only the left layer controls the category transition duration.
+Cancel from that hold plays `Options Morph Alternate` on the left, then Options
+Death and Main Birth on both. The blank category page stays on Options Stand. Clip
+intervals, loop flags, poses, UV/texture selection, opacity and sound frames
+remain source-derived. This dispatch order is a recreation convention, not
+proof of the original native transition caller. No screenshot-fitted panel
+placement is introduced. Missing optional animation retains the admitted FDF
+navigation with an explicit unavailable diagnostic.
+
+The first category capture revealed the left plate but incorrectly hid the
+right housing and chains. That capture was rejected despite passing navigation
+and text-alignment assertions. The selected right models have visible Options
+Stand geometry that their category sequences hide; the original runtime witness
+retains both housings. This supports the per-layer recreation dispatch above,
+without establishing the native dispatcher's internal architecture. The right
+layer's unused category dependencies cannot disable the left transition.
+
+The corrected per-layer controller passes 357 application tests, the explicitly
+selected original panel gate, strict native/browser Clippy, the browser build
+and formatting. Ten actual source-clock tests execute on native and Wasmtime;
+this is not a full Bevy WASI build. The generated browser WASM passes 128
+synthetic hydration assertions, including category dependency failures that
+retain Options controls and geometry.
+
+A fresh actual-app import of the local 152-member source closure shows the left
+plate and both right housings/chains together. The resolution value is vertically
+centered, and Cancel completes on Main. The capture reports no state change
+during collection, no external requests, uploads, sockets or page errors. Original
+packed category waveforms remain on the explicit unsupported-codec path; no
+audible parity is claimed. Open-list artwork, lighting, typography, unsupported
+settings and complete native fidelity remain open. Root receipts and reviewed
+captures are in `.scratch/options-category-root-20261017/layer-policy-1/`.
+The source closure remains private; the code-only package was not published.
 
 The requested Options tab is retained until target FDF admission and incoming
-control-owner commit. Tabs within Options preserve the draft without starting a
-new panel transition. Cancel restores applied settings before requesting Main;
-Apply retains existing settings validation/storage behavior before its request.
+control-owner commit. Tabs within Options preserve the draft and start only
+those category plate sequences. Cancel restores applied settings before
+requesting Main; Apply retains existing settings validation/storage behavior
+before its request.
 Further actions remain blocked until the incoming phase settles.
 
 Options integration checks pass four library tests, 257 app tests (11 explicit

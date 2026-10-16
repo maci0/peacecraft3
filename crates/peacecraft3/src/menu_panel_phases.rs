@@ -45,6 +45,9 @@ pub enum Phase {
     OptionsBirth,
     OptionsStand,
     OptionsDeath,
+    OptionsMorph,
+    OptionsStandAlternate,
+    OptionsMorphAlternate,
 }
 
 impl Phase {
@@ -65,7 +68,12 @@ impl Phase {
         match self {
             Self::MainBirth | Self::MainStand | Self::MainDeath => Owner::Main,
             Self::SingleBirth | Self::SingleStand | Self::SingleDeath => Owner::Single,
-            Self::OptionsBirth | Self::OptionsStand | Self::OptionsDeath => Owner::Options,
+            Self::OptionsBirth
+            | Self::OptionsStand
+            | Self::OptionsDeath
+            | Self::OptionsMorph
+            | Self::OptionsStandAlternate
+            | Self::OptionsMorphAlternate => Owner::Options,
         }
     }
 
@@ -80,6 +88,9 @@ impl Phase {
             Self::OptionsBirth => ("Options", "Birth"),
             Self::OptionsStand => ("Options", "Stand"),
             Self::OptionsDeath => ("Options", "Death"),
+            Self::OptionsMorph => ("Options", "Morph"),
+            Self::OptionsStandAlternate => ("Options", "Stand Alternate"),
+            Self::OptionsMorphAlternate => ("Options", "Morph Alternate"),
         }
     }
 
@@ -90,6 +101,9 @@ impl Phase {
             Self::OptionsBirth | Self::OptionsStand => {
                 Some((Self::OptionsBirth, Self::OptionsStand))
             }
+            Self::OptionsMorph | Self::OptionsStandAlternate => {
+                Some((Self::OptionsMorph, Self::OptionsStandAlternate))
+            }
             _ => None,
         }
     }
@@ -99,13 +113,22 @@ impl Phase {
             Self::MainBirth => Ok(Some(Self::MainStand)),
             Self::SingleBirth => Ok(Some(Self::SingleStand)),
             Self::OptionsBirth => Ok(Some(Self::OptionsStand)),
+            Self::OptionsMorph => Ok(Some(Self::OptionsStandAlternate)),
+            Self::OptionsMorphAlternate => Ok(Some(if target.is_some() {
+                Self::OptionsDeath
+            } else {
+                Self::OptionsStand
+            })),
             Self::MainDeath | Self::SingleDeath | Self::OptionsDeath => {
                 let target = target
                     .filter(|&to| self.owner().can_transition(to))
                     .ok_or("panel death has no supported target owner")?;
                 Ok(Some(target.phases()[0]))
             }
-            Self::MainStand | Self::SingleStand | Self::OptionsStand => Ok(None),
+            Self::MainStand
+            | Self::SingleStand
+            | Self::OptionsStand
+            | Self::OptionsStandAlternate => Ok(None),
         }
     }
 }
@@ -317,6 +340,14 @@ impl Clock {
         if self.target.is_some() || !from.can_transition(to) {
             return Err("panel transition is active or owner pair is unsupported");
         }
+        if self.phase == Phase::OptionsStandAlternate && from == Owner::Options && to == Owner::Main
+        {
+            self.phase = Phase::OptionsMorphAlternate;
+            self.local = Duration::ZERO;
+            self.first = true;
+            self.target = Some(to);
+            return Ok(());
+        }
         let [_, expected, death] = from.phases();
         if self.phase != expected {
             return Err("panel entrance has not completed or displayed owner differs");
@@ -328,7 +359,19 @@ impl Clock {
         Ok(())
     }
 
-    /// At most Death -> Birth -> Stand, with unequal layer durations supplied
+    /// Source `Options Morph` from a settled Options Stand, with no owner target.
+    pub fn begin_category(&mut self) -> Result<(), &'static str> {
+        if self.target.is_some() || self.phase != Phase::OptionsStand {
+            return Err("panel category morph requires a settled options stand");
+        }
+        self.phase = Phase::OptionsMorph;
+        self.local = Duration::ZERO;
+        self.first = true;
+        self.target = None;
+        Ok(())
+    }
+
+    /// At most Morph Alternate -> Death -> Birth -> Stand, with layer durations supplied
     /// by the admitted clips. Preview on a clone before publishing any effects.
     pub fn advance(
         &mut self,
@@ -345,7 +388,7 @@ impl Clock {
         let mut remaining = delta;
         let mut segments = Vec::new();
         let mut entered = None;
-        for _ in 0..3 {
+        for _ in 0..4 {
             let end = duration(self.phase);
             let successor = self.phase.next(self.target)?;
             let bounded = successor.is_some();
@@ -381,7 +424,7 @@ impl Clock {
                 Phase::MainDeath | Phase::SingleDeath | Phase::OptionsDeath
             ) {
                 entered = self.target;
-            } else if self.target.is_some() {
+            } else if previous != Phase::OptionsMorphAlternate && self.target.is_some() {
                 self.target = None;
             }
             // Even an exact boundary samples the incoming phase at frame zero;
@@ -531,6 +574,24 @@ mod tests {
             assert_eq!(phase.owner(), Owner::Options);
             assert_eq!(phase.selector(), ("Options", animation));
         }
+        assert_eq!(
+            [
+                Phase::OptionsMorph,
+                Phase::OptionsStandAlternate,
+                Phase::OptionsMorphAlternate,
+            ]
+            .map(|phase| phase as usize),
+            [9, 10, 11]
+        );
+        assert_eq!(Phase::OptionsMorph.selector(), ("Options", "Morph"));
+        assert_eq!(
+            Phase::OptionsStandAlternate.selector(),
+            ("Options", "Stand Alternate")
+        );
+        assert_eq!(
+            Phase::OptionsMorphAlternate.selector(),
+            ("Options", "Morph Alternate")
+        );
         // No Options durations/plans exist in this source profile.
         let legacy = [ms(3), ms(5), ms(7), ms(13), ms(17), ms(19)];
         let duration = |p: Phase| legacy[p as usize];
@@ -640,5 +701,89 @@ mod tests {
             assert!(c.advance(ms(5), |_| ms(3)).is_err());
             assert_eq!((c.phase, c.local, c.global, c.target), before);
         }
+    }
+
+    #[test]
+    fn category_plate_morphs_in_and_leaves_through_the_authored_sequences() {
+        let duration = |phase: Phase| match phase {
+            Phase::OptionsMorph => ms(5),
+            Phase::OptionsMorphAlternate => ms(4),
+            Phase::OptionsDeath => ms(6),
+            Phase::MainBirth => ms(3),
+            _ => ms(17),
+        };
+        let mut clock = Clock {
+            phase: Phase::OptionsStand,
+            ..Clock::default()
+        };
+        clock.begin_category().unwrap();
+        let (segments, entered) = clock.advance(ms(5), duration).unwrap();
+        assert_eq!(entered, None);
+        assert_eq!(
+            segments
+                .iter()
+                .map(|segment| segment.phase)
+                .collect::<Vec<_>>(),
+            [Phase::OptionsMorph]
+        );
+        assert_eq!(
+            (clock.phase, clock.local, clock.target),
+            (Phase::OptionsStandAlternate, Duration::ZERO, None)
+        );
+        let held = (clock.phase, clock.local, clock.global, clock.target);
+        assert!(clock.begin_category().is_err());
+        assert_eq!((clock.phase, clock.local, clock.global, clock.target), held);
+        let segment = Segment {
+            phase: Phase::OptionsMorph,
+            from: Duration::ZERO,
+            to: ms(5),
+            first: true,
+        };
+        assert_eq!(
+            layer_windows(&segment, ms(4), ms(5))
+                .iter()
+                .map(|window| window.phase)
+                .collect::<Vec<_>>(),
+            [Phase::OptionsMorph, Phase::OptionsStandAlternate]
+        );
+        clock.begin(Owner::Options, Owner::Main).unwrap();
+        let (segments, entered) = clock.advance(ms(13), duration).unwrap();
+        assert_eq!(
+            segments
+                .iter()
+                .map(|segment| segment.phase)
+                .collect::<Vec<_>>(),
+            [
+                Phase::OptionsMorphAlternate,
+                Phase::OptionsDeath,
+                Phase::MainBirth
+            ]
+        );
+        assert_eq!(entered, Some(Owner::Main));
+        assert_eq!(
+            (clock.phase, clock.local, clock.target),
+            (Phase::MainStand, Duration::ZERO, None)
+        );
+        let mut blank = Clock {
+            phase: Phase::OptionsStand,
+            ..Clock::default()
+        };
+        blank.begin(Owner::Options, Owner::Main).unwrap();
+        assert_eq!(
+            (blank.phase, blank.target),
+            (Phase::OptionsDeath, Some(Owner::Main))
+        );
+        let mut overrun = Clock {
+            phase: Phase::OptionsStandAlternate,
+            ..Clock::default()
+        };
+        overrun.begin(Owner::Options, Owner::Main).unwrap();
+        let (segments, entered) = overrun.advance(ms(14), duration).unwrap();
+        assert_eq!(segments.len(), 4);
+        assert_eq!(entered, Some(Owner::Main));
+        assert_eq!(
+            (overrun.phase, overrun.local, overrun.global, overrun.target),
+            (Phase::MainStand, ms(1), ms(14), None)
+        );
     }
 }

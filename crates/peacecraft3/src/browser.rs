@@ -874,6 +874,7 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
                 SoundScope::Startup,
                 SoundScope::MainSingle,
                 SoundScope::MainOptions,
+                SoundScope::Category,
             ] {
                 let mut unavailable_codecs = Vec::new();
                 let candidate = (|| -> Result<_, String> {
@@ -954,10 +955,10 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
                         sound_bytes = total;
                     }
                     Err(error) if !matches!(scope, SoundScope::Startup) => {
-                        let code = if matches!(scope, SoundScope::MainOptions) {
-                            "PANEL_OPTIONS_DISABLED"
-                        } else {
-                            "PANEL_NAVIGATION_DISABLED"
+                        let code = match scope {
+                            SoundScope::MainOptions => "PANEL_OPTIONS_DISABLED",
+                            SoundScope::Category => "PANEL_CATEGORY_DISABLED",
+                            _ => "PANEL_NAVIGATION_DISABLED",
                         };
                         notes.push(format!("{code}: edition={edition}; {error}"));
                     }

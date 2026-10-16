@@ -167,7 +167,9 @@ The component regression covers omission, inherited top alignment, ordinary
 labels and malformed input. All 356 application tests, strict native/browser
 Clippy and the browser build pass. An actual browser import of the selected
 original panel/FDF inputs places the resolution value exactly at its control's
-vertical center. Cancel returns to Main. The same capture exposes a separate
-category-animation regression that hides the right panel, so it is not accepted
-as overall Options parity. Typography and native rasterization remain open.
+vertical center. Cancel returns to Main. The first capture also exposed a
+category-animation regression that hid the right panel. A separate
+[per-layer correction](menu-panel-navigation.md#options-owner) restores that
+housing in a fresh capture. Overall Options parity, typography and native
+rasterization remain open.
 Evidence: `.scratch/options-category-root-20261017/`.

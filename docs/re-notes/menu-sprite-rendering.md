@@ -43,8 +43,17 @@ Both panels carry the same 62-sequence state machine. The loader matches a
 sequence whose two whitespace-separated tokens are the screen tag and the
 animation, case-insensitively. It plays `MainMenu Birth` once and then
 `MainMenu Stand`, holding Stand's last frame because its `SEQS` flag is
-non-looping. The native glue dispatcher that selects these names is not traced;
-the tag table is the evidence.
+non-looping. A selector whose animation contains whitespace matches the full
+`{owner} {animation}` name, so the two-token `Options Stand` selector matches
+only `Options Stand`. The native glue dispatcher that selects these names is
+not traced; the tag table is the evidence.
+
+Options category selection animates the retained left skin layer with Morph,
+Stand Alternate and Morph Alternate. The right layer continues Options Stand:
+using the category sequences there hides housing geometry that the original
+Video Options capture keeps visible. Sequence intervals, material tracks and
+poses still come from each selected model. See the
+[dispatch and verification boundary](menu-panel-navigation.md#options-owner).
 
 Posed through `pcx_gfx` skinning at the Birth key times, the TFT right panel's
 upper section drops from `y 1.227` to `0.631` while its lower piece rises from

@@ -83,7 +83,9 @@ export function panelSoundEvents(bytes) {
   const intervals = [];
   for (let at = 0; at < sequences.length; at += 132) {
     const name = decode(sequences.subarray(at, at + 80)).split('\0')[0].toLowerCase().split(/\s+/);
-    if (name.length !== 2 || !name.some(n => ['mainmenu', 'singleplayer', 'options'].includes(n)) || !name.some(n => ['birth', 'stand', 'death'].includes(n))) continue;
+    const ownerPhase = name.length === 2 && name.some(n => ['mainmenu', 'singleplayer', 'options'].includes(n)) && name.some(n => ['birth', 'stand', 'death'].includes(n));
+    const categoryPhase = name[0] === 'options' && ['morph', 'stand alternate', 'morph alternate'].includes(name.slice(1).join(' '));
+    if (!ownerPhase && !categoryPhase) continue;
     const view = new DataView(sequences.buffer, sequences.byteOffset + at);
     const start = view.getUint32(80, true), end = view.getUint32(84, true);
     assert(start <= end); intervals.push([start, end]);

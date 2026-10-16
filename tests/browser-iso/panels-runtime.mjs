@@ -18,15 +18,17 @@ const table = rows => text('ID;PWXL;N;E\r\n' + rows.flatMap((r, y) => r.map((s, 
 const scriptPath = 'Scripts\\Blizzard.j', lookupPath = 'UI\\SoundInfo\\AnimLookups.slk';
 const soundsPath = 'UI\\SoundInfo\\AnimSounds.slk', panelPath = 'Synthetic\\Panel.mdx';
 const optionsSoundPath = 'Synthetic\\Audio\\options.wav';
+const categorySoundPath = 'Synthetic\\Audio\\category.wav';
 const navSoundPath = 'Synthetic\\Audio\\navigation.wav';
 const otherSoundPath = 'Synthetic\\Audio\\other.wav';
 const soundPath = 'Synthetic\\Audio\\panel.wav', imagePath = 'Synthetic\\Panel.tga';
 
-function model({ navigation = true, options = true, empty = false, extraStartup = false, reverseEvents = false } = {}) {
+function model({ navigation = true, options = true, category = false, empty = false, extraStartup = false, reverseEvents = false } = {}) {
   const names = ['MainMenu Birth', 'MainMenu Stand',
     ...(navigation || options ? ['MainMenu Death'] : []),
     ...(navigation ? ['SinglePlayer Birth', 'SinglePlayer Stand', 'SinglePlayer Death'] : []),
-    ...(options ? ['Options Birth', 'Options Stand', 'Options Death'] : [])];
+    ...(options ? ['Options Birth', 'Options Stand', 'Options Death'] : []),
+    ...(category ? ['Options Morph', 'Options Stand Alternate', 'Options Morph Alternate'] : [])];
   const sequences = names.map((name, i) => {
     const b = new Uint8Array(132), v = new DataView(b.buffer); b.set(text(name));
     v.setUint32(80, i * 100, true); v.setUint32(84, i * 100 + 73, true);
@@ -52,6 +54,7 @@ function model({ navigation = true, options = true, empty = false, extraStartup 
   const events = [eventAt('TEST', 5)];
   if (navigation) events.push(eventAt('NEXT', names.indexOf('SinglePlayer Birth') * 100 + 5));
   if (options) events.push(eventAt('OPTS', names.indexOf('Options Birth') * 100 + 5));
+  if (category) events.push(eventAt('CATG', names.indexOf('Options Morph') * 100 + 5));
   if (extraStartup) events.push(eventAt('FAIL', 6));
   if (reverseEvents) events.reverse();
   return concat(text('MDLX'), chunk('VERS', words(800)), chunk('MODL', info),
@@ -68,12 +71,19 @@ function members(musicPath, options) {
   b[panelPath] = model(options);
   b[scriptPath] = text('function SetSoundVolumeBJ takes sound h, real p returns nothing\ncall SetSoundVolume(h, PercentToInt(p, 37))\nendfunction\n' +
     'function PercentToInt takes real p, integer m returns integer\nlocal integer r=R2I(p*I2R(m)*0.025)\nif (r<0) then\nset r=0\nendif\nif (r>m) then\nset r=m\nendif\nreturn r\nendfunction\n');
-  b[lookupPath] = table([['AnimSoundEvent', 'SoundLabel'], ['TEST', 'SyntheticPanel'], ['NEXT', 'SyntheticNavigation'], ['OPTS', 'SyntheticOptions']]);
-  b[soundsPath] = table([['SoundName', 'DirectoryBase', 'FileNames', 'Volume'],
+  const lookups = [['AnimSoundEvent', 'SoundLabel'], ['TEST', 'SyntheticPanel'], ['NEXT', 'SyntheticNavigation'], ['OPTS', 'SyntheticOptions']];
+  const soundRows = [['SoundName', 'DirectoryBase', 'FileNames', 'Volume'],
     ['SyntheticPanel', 'Synthetic\\Audio\\', 'panel.wav', '19'],
     ['SyntheticNavigation', 'Synthetic\\Audio\\', 'navigation.wav', '23'],
-    ['SyntheticOptions', 'Synthetic\\Audio\\', 'options.wav', '29']]);
+    ['SyntheticOptions', 'Synthetic\\Audio\\', 'options.wav', '29']];
+  if (options?.category) {
+    lookups.push(['CATG', 'SyntheticCategory']);
+    soundRows.push(['SyntheticCategory', 'Synthetic\\Audio\\', 'category.wav', '31']);
+  }
+  b[lookupPath] = table(lookups);
+  b[soundsPath] = table(soundRows);
   b[soundPath] = wavFixture(); b[navSoundPath] = wavFixture(); b[optionsSoundPath] = wavFixture();
+  if (options?.category) b[categorySoundPath] = wavFixture();
   const image = new Uint8Array(21), v = new DataView(image.buffer);
   image[2] = 2; v.setUint16(12, 1, true); v.setUint16(14, 1, true); image[16] = 24;
   image.set([31, 91, 173], 18); b[imagePath] = image;
@@ -93,6 +103,7 @@ export function runPanelChecks(api) {
   const good = members(api.menu_music_path());
   const notes = commit('synthetic-panel-graph', good);
   check(!notes.some(n => n.includes('PANEL_NAVIGATION_DISABLED') || n.includes('PANEL_OPTIONS_DISABLED')), 'complete phases disabled a navigation owner');
+  check(notes.some(n => n.startsWith('PANEL_CATEGORY_DISABLED:')), 'absent category sequences produced no category notice');
   check(JSON.stringify(api.local_menu_editions()) === '["roc"]', 'panels enabled absent expansion');
   for (const p of [scriptPath, lookupPath, soundsPath, soundPath, navSoundPath, optionsSoundPath, panelPath, imagePath]) {
     check(JSON.stringify([...api.stored_asset(p)]) === JSON.stringify([...good[p]]), `dependency not hydrated: ${p}`);
@@ -218,5 +229,41 @@ export function runPanelChecks(api) {
   const startup = commit('startup-only-panels', members(api.menu_music_path(), { navigation: false, options: false }));
   check(startup.some(n => n.includes('PANEL_NAVIGATION_DISABLED')), 'missing optional phases not diagnosed');
   check(api.stored_asset(soundPath)?.length === good[soundPath].length, 'startup dependency lost');
+  const categoryGood = members(api.menu_music_path(), { category: true });
+  const categoryNotes = commit('category-plate-sounds', categoryGood);
+  check(!categoryNotes.some(n => n.includes('PANEL_CATEGORY_DISABLED') || n.includes('PANEL_OPTIONS_DISABLED') || n.includes('PANEL_NAVIGATION_DISABLED')), 'admitted category plate disabled an owner');
+  for (const p of [optionsSoundPath, categorySoundPath, panelPath]) {
+    check(JSON.stringify([...api.stored_asset(p)]) === JSON.stringify([...categoryGood[p]]), `category admission dropped ${p}`);
+  }
+  check(api.menu_font_files().length === 1, 'category admission dropped control-derived fonts');
+  const missingCategory = { ...categoryGood };
+  delete missingCategory[categorySoundPath];
+  const missingCategoryNotes = commit('missing-category-sound', missingCategory);
+  check(missingCategoryNotes.some(n => n.startsWith('PANEL_CATEGORY_DISABLED:') && n.includes('MISSING_MEMBER') && n.includes('category.wav')), `missing category sound stayed on another notice: ${missingCategoryNotes}`);
+  check(!missingCategoryNotes.some(n => n.includes('PANEL_OPTIONS_DISABLED') || n.includes('PANEL_NAVIGATION_DISABLED')), 'missing category sound disabled the options triplet or navigation');
+  check(api.stored_asset(optionsSoundPath)?.length === categoryGood[optionsSoundPath].length, 'missing category sound dropped options audio');
+  check(api.stored_asset(navSoundPath)?.length === categoryGood[navSoundPath].length, 'missing category sound dropped navigation audio');
+  check(JSON.stringify([...api.stored_asset(panelPath)]) === JSON.stringify([...categoryGood[panelPath]]), 'missing category sound dropped panel geometry');
+  check(api.stored_asset(categorySoundPath) === undefined, 'missing category sound published a substitute');
+  check(api.menu_font_files().length === 1, 'missing category sound dropped built controls');
+  const malformedCategory = { ...categoryGood, [categorySoundPath]: text('not a category waveform') };
+  const malformedCategoryNotes = commit('malformed-category-sound', malformedCategory);
+  check(malformedCategoryNotes.some(n => n.startsWith('PANEL_CATEGORY_DISABLED:')), 'malformed category sound was not refused on its own');
+  check(!malformedCategoryNotes.some(n => n.includes('PANEL_OPTIONS_DISABLED') || n.includes('PANEL_NAVIGATION_DISABLED')), 'malformed category sound disabled another owner');
+  check(api.stored_asset(optionsSoundPath)?.length === categoryGood[optionsSoundPath].length, 'malformed category sound dropped options audio');
+  check(JSON.stringify([...api.stored_asset(panelPath)]) === JSON.stringify([...categoryGood[panelPath]]), 'malformed category sound dropped panel geometry');
+  check(api.stored_asset(categorySoundPath) === undefined, 'malformed category waveform was staged');
+  check(api.menu_font_files().length === 1, 'malformed category sound dropped built controls');
+  const categoryProfiles = { [categorySoundPath]: { fileSize: 60, flags: 0x81000200 } };
+  const categoryCodec = commit('unsupported-category-codec',
+    { ...categoryGood, [categorySoundPath]: new Uint8Array([0x81, 99]) }, categoryProfiles);
+  check(categoryCodec.some(n => n.includes('PANEL_AUDIO_UNAVAILABLE') && n.includes('scope=Category') && n.includes('compression') && n.includes(categorySoundPath.replaceAll('\\', '/'))),
+    `category codec did not keep the visual path: ${categoryCodec}`);
+  check(!categoryCodec.some(n => n.includes('PANEL_CATEGORY_DISABLED') || n.includes('PANEL_OPTIONS_DISABLED') || n.includes('PANEL_NAVIGATION_DISABLED')),
+    'category codec disabled an admitted owner');
+  check(JSON.stringify([...api.stored_asset(panelPath)]) === JSON.stringify([...categoryGood[panelPath]]), 'category codec discarded panel geometry');
+  check(api.stored_asset(optionsSoundPath)?.length === categoryGood[optionsSoundPath].length, 'category codec discarded options audio');
+  check(api.stored_asset(categorySoundPath) === undefined, 'unsupported category bytes published');
+  check(api.menu_font_files().length === 1, 'category codec dropped built controls');
   return { checks, rollbackCases: failures.length, combinedRollbackCases, scope: 'synthetic production WASM hydration; no draw/audio/native proof' };
 }

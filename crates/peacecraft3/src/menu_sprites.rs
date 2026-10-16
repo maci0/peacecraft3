@@ -102,6 +102,7 @@ pub struct EventSound {
 
 /// One panel as read from the install, before anything is spawned.
 pub struct PanelSource {
+    layer: &'static str,
     pub path: String,
     pub bytes: Vec<u8>,
     install: Option<std::path::PathBuf>,
@@ -111,6 +112,7 @@ pub struct PanelSource {
     pub unavailable_sounds: Vec<UnavailableSound>,
     navigation: Result<(Vec<Clip>, LoadedSounds), String>,
     options: Result<(Vec<Clip>, LoadedSounds), String>,
+    category: Result<(Vec<Clip>, LoadedSounds), String>,
 }
 
 /// `MainMenu Birth` once, then `MainMenu Stand`, in model frames (milliseconds).
@@ -414,6 +416,7 @@ pub enum SoundScope {
     Startup,
     MainSingle,
     MainOptions,
+    Category,
 }
 
 impl SoundScope {
@@ -428,6 +431,11 @@ impl SoundScope {
                 Phase::OPTIONS[0],
                 Phase::OPTIONS[1],
                 Phase::OPTIONS[2],
+            ],
+            Self::Category => &[
+                Phase::OptionsMorph,
+                Phase::OptionsStandAlternate,
+                Phase::OptionsMorphAlternate,
             ],
         }
     }
@@ -456,11 +464,18 @@ fn clips(path: &str, bytes: &[u8], scope: SoundScope) -> Result<Vec<Clip>, Panel
         .iter()
         .map(|phase| {
             let (owner, animation) = phase.selector();
-            let mut matching = sequences.iter().filter(|s| {
-                let tokens: Vec<_> = s.name.split_whitespace().collect();
-                tokens.len() == 2
-                    && tokens.iter().any(|t| t.eq_ignore_ascii_case(owner))
-                    && tokens.iter().any(|t| t.eq_ignore_ascii_case(animation))
+            let full_name = format!("{owner} {animation}");
+            let mut matching = sequences.iter().filter(|sequence| {
+                if animation.split_whitespace().nth(1).is_some() {
+                    sequence.name.eq_ignore_ascii_case(&full_name)
+                } else {
+                    let tokens: Vec<_> = sequence.name.split_whitespace().collect();
+                    tokens.len() == 2
+                        && tokens.iter().any(|token| token.eq_ignore_ascii_case(owner))
+                        && tokens
+                            .iter()
+                            .any(|token| token.eq_ignore_ascii_case(animation))
+                }
             });
             let s = matching.next().ok_or_else(|| PanelError::NoSequence {
                 path: path.into(),
@@ -469,7 +484,14 @@ fn clips(path: &str, bytes: &[u8], scope: SoundScope) -> Result<Vec<Clip>, Panel
             if matching.next().is_some() {
                 return Err(fail(format!("ambiguous {owner} {animation}")));
             }
-            if animation != "Stand" && !s.non_looping {
+            let stand = matches!(
+                phase,
+                Phase::MainStand
+                    | Phase::SingleStand
+                    | Phase::OptionsStand
+                    | Phase::OptionsStandAlternate
+            );
+            if !stand && !s.non_looping {
                 return Err(fail(format!("{owner} {animation} is looping")));
             }
             Clip::checked([s.interval_start, s.interval_end], !s.non_looping)
@@ -811,7 +833,8 @@ pub fn load(
     model_paths(&skins, edition)
         .map_err(PanelError::Skin)?
         .into_iter()
-        .map(|path| {
+        .zip(LAYERS)
+        .map(|(path, layer)| {
             let bytes = read(install, &path, MAX_MODEL_BYTES)?;
             let startup = clips(&path, &bytes, SoundScope::Startup)?;
             let startup_sounds = loaded_sounds(
@@ -831,7 +854,9 @@ pub fn load(
             };
             let navigation = admit(SoundScope::MainSingle).map_err(|e| e.to_string());
             let options = admit(SoundScope::MainOptions).map_err(|e| e.to_string());
+            let category = admit(SoundScope::Category).map_err(|e| e.to_string());
             Ok(PanelSource {
+                layer,
                 path,
                 bytes,
                 install: install.map(std::path::Path::to_path_buf),
@@ -841,6 +866,7 @@ pub fn load(
                 unavailable_sounds: startup_sounds.unavailable,
                 navigation,
                 options,
+                category,
             })
         })
         .collect()
@@ -949,6 +975,7 @@ impl ClipPlan {
 }
 
 struct Panel {
+    layer: &'static str,
     path: String,
     model: pcx_gfx::LoadedModel,
     bones: Vec<pcx_mdl::Bone>,
@@ -958,31 +985,51 @@ struct Panel {
     phases: Vec<ClipPlan>,
     navigation_error: Option<String>,
     options: Result<(Vec<ClipPlan>, LoadedSounds), String>,
+    category: Result<(Vec<ClipPlan>, LoadedSounds), String>,
     sounds: Vec<EventSound>,
     unavailable_sounds: Vec<UnavailableSound>,
 }
 
 impl Panel {
+    fn duration(&self, phase: Phase) -> Option<std::time::Duration> {
+        if SoundScope::Category.phases().contains(&phase) && self.layer != LAYERS[0] {
+            return None;
+        }
+        self.plan(phase).map(|plan| plan.clip.duration())
+    }
+
     fn plan(&self, phase: Phase) -> Option<&ClipPlan> {
-        Self::plan_for(&self.phases, &self.options, phase)
+        Self::plan_for(&self.phases, &self.options, &self.category, phase)
     }
     fn plan_for<'a>(
         phases: &'a [ClipPlan],
         options: &'a Result<(Vec<ClipPlan>, LoadedSounds), String>,
+        category: &'a Result<(Vec<ClipPlan>, LoadedSounds), String>,
         phase: Phase,
     ) -> Option<&'a ClipPlan> {
         if let Some(plan) = phases.get(phase as usize) {
             return Some(plan);
         }
-        let plans = &options.as_ref().ok()?.0;
-        let index = SoundScope::MainOptions
+        if let Some(index) = SoundScope::MainOptions
             .phases()
             .iter()
-            .position(|p| *p == phase)?;
-        plans.get(index)
+            .position(|candidate| *candidate == phase)
+        {
+            return options.as_ref().ok()?.0.get(index);
+        }
+        let index = SoundScope::Category
+            .phases()
+            .iter()
+            .position(|candidate| *candidate == phase)?;
+        category.as_ref().ok()?.0.get(index)
     }
 
     fn sounds(&self, phase: Phase) -> &[EventSound] {
+        if SoundScope::Category.phases().contains(&phase)
+            && let Ok((_, sounds)) = &self.category
+        {
+            return &sounds.sounds;
+        }
         if (phase.owner() == Owner::Options || self.navigation_error.is_some())
             && let Ok((_, sounds)) = &self.options
         {
@@ -1000,6 +1047,8 @@ pub struct MenuPanels {
     destination: Option<crate::menu_screens::Screen>,
     install: Option<std::path::PathBuf>,
     edition: u32,
+    category_refused: bool,
+    category_stand_origin: Option<std::time::Duration>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1047,10 +1096,69 @@ impl MenuPanels {
                 }
             }
         }
+        if self.clock.phase == Phase::OptionsStandAlternate {
+            for p in self.panels.iter().filter(|panel| panel.layer == LAYERS[0]) {
+                if p.plan(Phase::OptionsMorphAlternate).is_none() {
+                    return Ok(Transition::Unavailable(format!(
+                        "{}: missing {:?}",
+                        p.path,
+                        Phase::OptionsMorphAlternate
+                    )));
+                }
+            }
+        }
         self.clock.begin(from, target).map_err(str::to_string)?;
         self.destination = Some(to);
         Ok(Transition::Animated)
     }
+
+    /// Starts the category plate when a Gameplay, Video, or Sound page is
+    /// already displayed and the owner clock is on Options Stand.
+    pub fn sync_category_plate(
+        &mut self,
+        screen: crate::menu_screens::Screen,
+    ) -> Result<(), String> {
+        let crate::menu_screens::Screen::Options(
+            crate::menu_screens::Page::Video
+            | crate::menu_screens::Page::Sound
+            | crate::menu_screens::Page::Gameplay,
+        ) = screen
+        else {
+            return Ok(());
+        };
+        if self.category_refused
+            || self.panels.is_empty()
+            || self.clock.target.is_some()
+            || self.clock.phase != Phase::OptionsStand
+        {
+            return Ok(());
+        }
+        if !self.panels.iter().any(|panel| panel.layer == LAYERS[0]) {
+            self.category_refused = true;
+            return Err("the selected skin has no left category panel".into());
+        }
+        for panel in self.panels.iter().filter(|panel| panel.layer == LAYERS[0]) {
+            if panel.category.is_err()
+                || panel.plan(Phase::OptionsMorph).is_none()
+                || panel.plan(Phase::OptionsStandAlternate).is_none()
+            {
+                self.category_refused = true;
+                return Err(match panel.category.as_ref() {
+                    Err(error) => format!("{}: {error}", panel.path),
+                    Ok(_) => format!("{}: missing category panel phase", panel.path),
+                });
+            }
+        }
+        let origin = self
+            .clock
+            .global
+            .checked_sub(self.clock.local)
+            .ok_or("Options Stand local clock exceeds the global clock")?;
+        self.clock.begin_category().map_err(str::to_string)?;
+        self.category_stand_origin = Some(origin);
+        Ok(())
+    }
+
     pub fn reset_to_main(&mut self) {
         if matches!(self.clock.phase, Phase::MainBirth | Phase::MainStand)
             && self.clock.target.is_none()
@@ -1065,6 +1173,7 @@ impl MenuPanels {
             .unwrap_or_default();
         self.clock.settle_main(elapsed);
         self.destination = None;
+        self.category_stand_origin = None;
     }
 }
 
@@ -1086,6 +1195,7 @@ pub fn spawn(
         images,
     } = assets;
     struct Prepared {
+        layer: &'static str,
         path: String,
         bytes: Vec<u8>,
         m: pcx_mdl::Mdlx,
@@ -1097,6 +1207,7 @@ pub fn spawn(
         unavailable_sounds: Vec<UnavailableSound>,
         navigation_error: Option<String>,
         options: Result<(Vec<ClipPlan>, LoadedSounds), String>,
+        category: Result<(Vec<ClipPlan>, LoadedSounds), String>,
     }
     let selection = sources
         .first()
@@ -1117,6 +1228,7 @@ pub fn spawn(
     let mut prepared = Vec::with_capacity(sources.len());
     for source in sources {
         let PanelSource {
+            layer,
             path,
             bytes,
             clips,
@@ -1124,6 +1236,7 @@ pub fn spawn(
             unavailable_sounds,
             navigation,
             options,
+            category,
             install: _,
             edition: _,
         } = source;
@@ -1185,7 +1298,18 @@ pub fn spawn(
                 .map_err(|error| error.to_string())?;
             Ok((plans, sounds))
         });
+        let category = category.and_then(|(clips, sounds)| {
+            let plans = clips
+                .into_iter()
+                .map(|clip| ClipPlan::checked(&runtime, clip, &path))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
+            preflight_plans(&path, &bytes, &m, &model, &runtime, &textures, &plans)
+                .map_err(|error| error.to_string())?;
+            Ok((plans, sounds))
+        });
         prepared.push(Prepared {
+            layer,
             path,
             bytes,
             m,
@@ -1197,6 +1321,7 @@ pub fn spawn(
             unavailable_sounds: admitted_gaps,
             navigation_error,
             options,
+            category,
         });
     }
     if prepared.is_empty() {
@@ -1239,6 +1364,7 @@ pub fn spawn(
         low = low.min(p.model.minimum_extent[2]);
         high = high.max(p.model.maximum_extent[2]);
         panels.push(Panel {
+            layer: p.layer,
             path: p.path,
             model: p.model,
             bones: p.runtime.joints.joints().to_vec(),
@@ -1248,6 +1374,7 @@ pub fn spawn(
             phases: p.plans,
             navigation_error: p.navigation_error,
             options: p.options,
+            category: p.category,
             sounds: p.sounds,
             unavailable_sounds: p.unavailable_sounds,
         });
@@ -1255,14 +1382,26 @@ pub fn spawn(
     // Every sibling's full source preflight completed before publishing gaps.
     let mut reported = std::collections::BTreeSet::new();
     for panel in &panels {
-        for gap in panel.unavailable_sounds.iter().chain(
-            panel
-                .options
-                .as_ref()
-                .ok()
-                .into_iter()
-                .flat_map(|(_, sounds)| &sounds.unavailable),
-        ) {
+        for gap in panel
+            .unavailable_sounds
+            .iter()
+            .chain(
+                panel
+                    .options
+                    .as_ref()
+                    .ok()
+                    .into_iter()
+                    .flat_map(|(_, sounds)| &sounds.unavailable),
+            )
+            .chain(
+                panel
+                    .category
+                    .as_ref()
+                    .ok()
+                    .into_iter()
+                    .flat_map(|(_, sounds)| &sounds.unavailable),
+            )
+        {
             let key = (
                 gap.context.as_str(),
                 gap.path.replace('\\', "/").to_ascii_lowercase(),
@@ -1314,6 +1453,8 @@ pub fn spawn(
         destination: None,
         install: selection.0,
         edition: selection.1,
+        category_refused: false,
+        category_stand_origin: None,
     });
     Ok(count)
 }
@@ -1374,6 +1515,23 @@ fn play(_: &mut Commands, _: &mut SoundSink, sound: &EventSound) {
     browser_event_sound(&sound.bytes, sound.volume);
 }
 
+fn layer_clock(
+    layer: &str,
+    phase: Phase,
+    local: std::time::Duration,
+    global: std::time::Duration,
+    stand_origin: Option<std::time::Duration>,
+) -> Result<(Phase, std::time::Duration), &'static str> {
+    if layer == LAYERS[1] && SoundScope::Category.phases().contains(&phase) {
+        let origin = stand_origin.ok_or("category transition has no Options Stand origin")?;
+        return global
+            .checked_sub(origin)
+            .map(|local| (Phase::OptionsStand, local))
+            .ok_or("Options Stand origin exceeds the global clock");
+    }
+    Ok((phase, local))
+}
+
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct PanelAdvanceAssets<'w, 's> {
     meshes: ResMut<'w, Assets<Mesh>>,
@@ -1401,7 +1559,7 @@ pub fn advance(
         state
             .panels
             .iter()
-            .filter_map(|p| p.plan(phase).map(|plan| plan.clip.duration()))
+            .filter_map(|p| p.duration(phase))
             .max()
             .unwrap_or_default()
     });
@@ -1419,21 +1577,42 @@ pub fn advance(
                 state
                     .panels
                     .iter()
-                    .filter_map(|p| p.plan(birth).map(|plan| plan.clip.duration()))
+                    .filter_map(|p| p.duration(birth))
                     .max()
                     .unwrap_or_default()
             })
             .unwrap_or_default()
     };
     let mut events = Vec::new();
+    let mut segment_global = state.clock.global;
     for (segment_id, segment) in segments.iter().enumerate() {
+        let delta = segment.to - segment.from;
         for (panel_id, panel) in state.panels.iter().enumerate() {
-            let birth = segment
-                .phase
+            let (phase, from) = match layer_clock(
+                panel.layer,
+                segment.phase,
+                segment.from,
+                segment_global,
+                state.category_stand_origin,
+            ) {
+                Ok(clock) => clock,
+                Err(error) => {
+                    navigation.notice = error.into();
+                    return;
+                }
+            };
+            let mapped = phases::Segment {
+                phase,
+                from,
+                to: from + delta,
+                first: segment.first && phase == segment.phase,
+            };
+            let bias = segment.from.as_nanos() as i128 - from.as_nanos() as i128;
+            let birth = phase
                 .birth_and_stand()
                 .and_then(|(birth, _)| panel.plan(birth).map(|plan| plan.clip.duration()))
                 .unwrap_or_default();
-            for window in phases::layer_windows(segment, birth, group_birth(segment.phase)) {
+            for window in phases::layer_windows(&mapped, birth, group_birth(phase)) {
                 let Some(plan) = panel.plan(window.phase) else {
                     navigation.notice = format!(
                         "{}: missing admitted panel phase {:?}",
@@ -1453,9 +1632,10 @@ pub fn advance(
                         Ok(offsets) => events.extend(offsets.into_iter().map(|offset| {
                             (
                                 segment_id,
-                                offset.as_nanos() as i128 + window.event_bias_nanos,
+                                offset.as_nanos() as i128 + window.event_bias_nanos + bias,
                                 panel_id,
                                 sound_id,
+                                window.phase,
                             )
                         })),
                         Err(error) => {
@@ -1466,17 +1646,38 @@ pub fn advance(
                 }
             }
         }
+        segment_global += delta;
     }
     let group_entry = group_birth(next.phase);
+    let options_entry = group_birth(Phase::OptionsStand);
+    let stand_origin = state.category_stand_origin;
     let elapsed_ms = u64::try_from(next.global.as_millis()).expect("clock preview checked");
     for panel in &mut state.panels {
-        let birth = next
-            .phase
+        let (phase, local) = match layer_clock(
+            panel.layer,
+            next.phase,
+            next.local,
+            next.global,
+            stand_origin,
+        ) {
+            Ok(clock) => clock,
+            Err(error) => {
+                navigation.notice = error.into();
+                return;
+            }
+        };
+        let birth = phase
             .birth_and_stand()
             .and_then(|(birth, _)| panel.plan(birth).map(|plan| plan.clip.duration()))
             .unwrap_or_default();
-        let (phase, local) = phases::layer_sample(next.phase, next.local, birth, group_entry);
-        let Some(plan) = Panel::plan_for(&panel.phases, &panel.options, phase) else {
+        let entry = if phase == next.phase {
+            group_entry
+        } else {
+            options_entry
+        };
+        let (phase, local) = phases::layer_sample(phase, local, birth, entry);
+        let Some(plan) = Panel::plan_for(&panel.phases, &panel.options, &panel.category, phase)
+        else {
             navigation.notice = format!("{}: missing admitted panel phase {:?}", panel.path, phase);
             return;
         };
@@ -1531,12 +1732,12 @@ pub fn advance(
             &mut meshes,
         );
     }
-    events.sort_by_key(|&(segment, offset, _, _)| (segment, offset));
-    for (segment, _, panel, sound) in events {
+    events.sort_by_key(|&(segment, offset, _, _, _)| (segment, offset));
+    for (_, _, panel, sound, phase) in events {
         play(
             &mut commands,
             &mut sink,
-            &state.panels[panel].sounds(segments[segment].phase)[sound],
+            &state.panels[panel].sounds(phase)[sound],
         );
     }
     if let Some(owner) = entered {
@@ -1552,7 +1753,14 @@ pub fn advance(
             },
         });
     }
-    navigation.transition_active = next.target.is_some();
+    navigation.transition_active = next.target.is_some()
+        || matches!(
+            next.phase,
+            Phase::OptionsMorph | Phase::OptionsMorphAlternate
+        );
+    if next.phase.owner() != Owner::Options {
+        state.category_stand_origin = None;
+    }
     state.clock = next;
 }
 
@@ -1585,6 +1793,38 @@ mod tests {
     include!("menu_panel_audio_gap_tests.rs");
 
     #[test]
+    fn category_clock_changes_only_the_left_skin_layer_and_keeps_right_stand_time() {
+        use std::time::Duration;
+        let ms = Duration::from_millis;
+        let origin = Some(ms(5));
+        let right_stand = Clip {
+            interval: [300, 307],
+            loops: true,
+        };
+        for (phase, local, global, expected) in [
+            (Phase::OptionsMorph, 2, 9, 4),
+            (Phase::OptionsStandAlternate, 1, 12, 7),
+            (Phase::OptionsMorphAlternate, 3, 21, 16),
+        ] {
+            assert_eq!(
+                layer_clock(LAYERS[0], phase, ms(local), ms(global), origin),
+                Ok((phase, ms(local)))
+            );
+            let (mapped, elapsed) =
+                layer_clock(LAYERS[1], phase, ms(local), ms(global), origin).unwrap();
+            assert_eq!(mapped, Phase::OptionsStand);
+            assert_eq!(elapsed, ms(expected));
+            assert_eq!(right_stand.frame(elapsed), 300 + expected as u32 % 7);
+        }
+        assert_eq!(
+            layer_clock(LAYERS[1], Phase::OptionsDeath, ms(3), ms(22), origin),
+            Ok((Phase::OptionsDeath, ms(3)))
+        );
+        assert!(layer_clock(LAYERS[1], Phase::OptionsMorph, ms(0), ms(3), origin).is_err());
+        assert!(layer_clock(LAYERS[1], Phase::OptionsMorph, ms(0), ms(3), None).is_err());
+    }
+
+    #[test]
     fn unavailable_panels_allow_navigation_but_stale_selection_refuses() {
         use crate::menu_screens::Screen;
         let mut panels = MenuPanels {
@@ -1593,6 +1833,8 @@ mod tests {
             destination: None,
             install: None,
             edition: 0,
+            category_refused: false,
+            category_stand_origin: None,
         };
         assert!(matches!(
             panels.request(Screen::Main, Screen::SinglePlayer, None, 0),
@@ -1783,6 +2025,51 @@ mod tests {
     }
 
     #[test]
+    fn category_plate_sequences_admit_apart_from_the_options_triplet() {
+        let category = event_model(SoundScope::Category);
+        let admitted = clips("category only", &category, SoundScope::Category).unwrap();
+        assert_eq!(admitted.len(), SoundScope::Category.phases().len());
+        assert_eq!(admitted[1].interval, [30, 34]);
+        assert!(clips("category only", &category, SoundScope::MainOptions).is_err());
+        let options = event_model(SoundScope::MainOptions);
+        assert!(clips("options only", &options, SoundScope::Category).is_err());
+
+        let mut both = options;
+        for (name, start) in [
+            ("Options Morph", 200u32),
+            ("Options Stand Alternate", 900),
+            ("Options Morph Alternate", 300),
+        ] {
+            let at = both.windows(4).position(|bytes| bytes == b"SEQS").unwrap();
+            let size_at = at + 4;
+            let size = u32::from_le_bytes(both[size_at..size_at + 4].try_into().unwrap());
+            let mut sequence = vec![0; 132];
+            sequence[..name.len()].copy_from_slice(name.as_bytes());
+            sequence[80..84].copy_from_slice(&start.to_le_bytes());
+            sequence[84..88].copy_from_slice(&(start + 4).to_le_bytes());
+            sequence[92..96].copy_from_slice(&1u32.to_le_bytes());
+            let insert = size_at + 4 + size as usize;
+            both.splice(insert..insert, sequence);
+            both[size_at..size_at + 4].copy_from_slice(&(size + 132).to_le_bytes());
+        }
+        let admitted = clips("stand and alternate", &both, SoundScope::MainOptions).unwrap();
+        let stand = SoundScope::MainOptions
+            .phases()
+            .iter()
+            .position(|phase| *phase == Phase::OptionsStand)
+            .unwrap();
+        assert_eq!(admitted[stand].interval, [90, 94]);
+        let admitted = clips("stand and alternate", &both, SoundScope::Category).unwrap();
+        assert_eq!(
+            admitted
+                .iter()
+                .map(|clip| clip.interval)
+                .collect::<Vec<_>>(),
+            [[200, 204], [900, 904], [300, 304]]
+        );
+    }
+
+    #[test]
     fn options_sound_scope_retains_events_and_rejects_looping_transition() {
         let lookups = slk(&[&["AnimSoundEvent", "SoundLabel"], &["TEST", "Synthetic"]]);
         let sounds = slk(&[
@@ -1946,6 +2233,7 @@ mod tests {
                 SoundScope::Startup,
                 SoundScope::MainSingle,
                 SoundScope::MainOptions,
+                SoundScope::Category,
             ] {
                 preflight_source(&panel.path, &panel.bytes, &textures, scope).unwrap();
             }
@@ -1954,6 +2242,12 @@ mod tests {
                 "{}: {:?}",
                 panel.path,
                 panel.options.as_ref().err()
+            );
+            assert!(
+                panel.category.is_ok(),
+                "{}: {:?}",
+                panel.path,
+                panel.category.as_ref().err()
             );
             assert!(
                 panel.navigation.is_ok(),
@@ -1982,6 +2276,73 @@ mod tests {
         let panels = world.resource::<MenuPanels>();
         assert_eq!(panels.panels.len(), expected);
         assert!(panels.panels.iter().all(|p| !p.geosets.handles.is_empty()));
+        assert!(
+            panels.panels.iter().any(|panel| {
+                let landing = panel.plan(Phase::OptionsStand).unwrap();
+                let category = panel.plan(Phase::OptionsStandAlternate).unwrap();
+                panel.model.meshes.iter().any(|mesh| {
+                    category
+                        .opacity
+                        .sample(mesh.geoset, category.clip.interval[0], 0)
+                        .zip(
+                            landing
+                                .opacity
+                                .sample(mesh.geoset, landing.clip.interval[0], 0),
+                        )
+                        .is_some_and(|(shown, hidden)| shown > hidden)
+                })
+            }),
+            "the selected category sequence must reveal source geometry absent on the landing"
+        );
+        let mut panels = world.resource_mut::<MenuPanels>();
+        let right = panels
+            .panels
+            .iter()
+            .position(|panel| panel.layer == LAYERS[1])
+            .unwrap();
+        let left = panels
+            .panels
+            .iter()
+            .position(|panel| panel.layer == LAYERS[0])
+            .unwrap();
+        assert!(panels.panels[right].duration(Phase::OptionsMorph).is_none());
+        assert!(panels.panels[left].duration(Phase::OptionsMorph).is_some());
+        let right_panel = &panels.panels[right];
+        let stand = right_panel.plan(Phase::OptionsStand).unwrap();
+        let alternate = right_panel.plan(Phase::OptionsStandAlternate).unwrap();
+        assert!(
+            right_panel.model.meshes.iter().any(|mesh| {
+                stand
+                    .opacity
+                    .sample(mesh.geoset, stand.clip.interval[0], 0)
+                    .zip(
+                        alternate
+                            .opacity
+                            .sample(mesh.geoset, alternate.clip.interval[0], 0),
+                    )
+                    .is_some_and(|(visible, hidden)| visible > hidden)
+            }),
+            "the selected right model loses visible housing geometry in the category sequence"
+        );
+        panels.clock.phase = Phase::OptionsStand;
+        panels.panels[right].category = Err("unused right category dependency".into());
+        panels
+            .sync_category_plate(crate::menu_screens::Screen::Options(
+                crate::menu_screens::Page::Video,
+            ))
+            .unwrap();
+        assert_eq!(panels.clock.phase, Phase::OptionsMorph);
+        panels.clock.phase = Phase::OptionsStand;
+        panels.panels[left].category = Err("synthetic missing category dependency".into());
+        assert!(
+            panels
+                .sync_category_plate(crate::menu_screens::Screen::Options(
+                    crate::menu_screens::Page::Video
+                ))
+                .is_err()
+        );
+        assert_eq!(panels.clock.phase, Phase::OptionsStand);
+        assert!(panels.panels.iter().all(|panel| panel.options.is_ok()));
     }
 
     #[test]
