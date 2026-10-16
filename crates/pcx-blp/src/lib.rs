@@ -23,7 +23,7 @@
 //! `Detector.js` / `(attributes)` blob, not a texture. Between the two walks,
 //! every existing block in every archive of both builds has been read.
 //!
-//! **Nothing else remains open.** No shipped byte is BLP0, none is BLP2, and no
+//! In that census, no shipped byte is BLP0, none is BLP2, and no
 //! `content` byte outside `{0, 1}` exists. So [`Header::parse`] refuses BLP0
 //! outright and [`decode_mip`] refuses BLP2 payloads: both layouts are described
 //! by the public format notes but confirmed by no byte we are allowed to trust,
@@ -146,6 +146,8 @@ pub enum Error {
         end: usize,
         len: usize,
     },
+    #[error("mip index {index} exceeds the {MAX_MIPS} header slots")]
+    InvalidMipIndex { index: usize },
     #[error("mip {index} is {size} bytes, which is not a recognised encoding of {w}x{h}")]
     UnrecognisedMip {
         index: usize,
@@ -172,6 +174,7 @@ impl Error {
             Error::NotDirect => "jpeg-content",
             Error::Truncated { .. } => "truncated",
             Error::MipOutOfBounds { .. } => "mip-out-of-bounds",
+            Error::InvalidMipIndex { .. } => "invalid-mip-index",
             Error::UnrecognisedMip { .. } => "unrecognised-mip",
             Error::Unsupported(_) => "unsupported",
         }
@@ -356,7 +359,8 @@ impl Header {
     pub fn mip_size(&self, index: usize) -> (u32, u32) {
         let mut w = self.width;
         let mut h = self.height;
-        for _ in 0..index {
+        // After 32 halvings both u32 dimensions stay at one.
+        for _ in 0..index.min(u32::BITS as usize) {
             w = (w >> 1).max(1);
             h = (h >> 1).max(1);
         }
@@ -451,12 +455,26 @@ pub fn palette_entry_count(h: &Header) -> usize {
     (h.mip_offsets[0] as usize).saturating_sub(h.palette_base()) / 4
 }
 
-/// Raw bytes of mip `index`.
+/// Raw bytes of mip `index`; an unpopulated slot returns an empty slice.
 pub fn mip_bytes<'a>(d: &'a [u8], h: &Header, index: usize) -> Result<&'a [u8], Error> {
-    let off = h.mip_offsets[index] as usize;
-    let size = h.mip_sizes[index] as usize;
+    let (&off, &size) = h
+        .mip_offsets
+        .get(index)
+        .zip(h.mip_sizes.get(index))
+        .ok_or(Error::InvalidMipIndex { index })?;
+    let off = off as usize;
+    let size = size as usize;
     if size == 0 {
         return Ok(&[]);
+    }
+    if off == 0 {
+        let (w, height) = h.mip_size(index);
+        return Err(Error::UnrecognisedMip {
+            index,
+            size,
+            w,
+            h: height,
+        });
     }
     let end = off.checked_add(size).ok_or(Error::MipOutOfBounds {
         index,
@@ -486,17 +504,17 @@ pub fn bytes_per_pixel(d: &[u8], h: &Header, index: usize) -> Result<Option<u32>
     if h.content != 1 {
         return Ok(None);
     }
+    let raw = mip_bytes(d, h, index)?;
     let (w, hh) = h.mip_size(index);
     let px = (w as u64) * (hh as u64);
     if px == 0 {
         return Err(Error::UnrecognisedMip {
             index,
-            size: mip_bytes(d, h, index)?.len(),
+            size: raw.len(),
             w,
             h: hh,
         });
     }
-    let raw = mip_bytes(d, h, index)?;
     if raw.is_empty() {
         return Ok(None);
     }
@@ -537,38 +555,29 @@ pub fn decode_mip(d: &[u8], h: &Header, index: usize) -> Result<Vec<u8>, Error> 
         1 => {}
         content => return Err(Error::UnknownContent { content }),
     }
-    let (w, hh) = h.mip_size(index);
-    let px = (w as usize) * (hh as usize);
     let raw = mip_bytes(d, h, index)?;
-    if raw.is_empty() {
-        return Ok(Vec::new());
-    }
+    let (w, hh) = h.mip_size(index);
+    let bpp = bytes_per_pixel(d, h, index)?.ok_or(Error::UnrecognisedMip {
+        index,
+        size: raw.len(),
+        w,
+        h: hh,
+    })?;
+    let px = raw.len() / bpp as usize;
+    let rgba_bytes = px
+        .checked_mul(4)
+        .ok_or(Error::Unsupported("direct RGBA size overflow"))?;
     let pal = palette(d, h)?;
-
-    let mut out = vec![0u8; px * 4];
-    match raw.len() {
-        n if n == px => {
-            for i in 0..px {
-                let [b, g, r, _] = pal[raw[i] as usize];
-                out[i * 4..i * 4 + 4].copy_from_slice(&[r, g, b, 255]);
-            }
-            Ok(out)
-        }
-        n if n == px * 2 => {
-            let (indices, alpha) = raw.split_at(px);
-            for i in 0..px {
-                let [b, g, r, _] = pal[indices[i] as usize];
-                out[i * 4..i * 4 + 4].copy_from_slice(&[r, g, b, alpha[i]]);
-            }
-            Ok(out)
-        }
-        n => Err(Error::UnrecognisedMip {
-            index,
-            size: n,
-            w,
-            h: hh,
-        }),
+    let mut out = Vec::new();
+    out.try_reserve_exact(rgba_bytes)
+        .map_err(|_| Error::Unsupported("direct RGBA allocation"))?;
+    out.resize(rgba_bytes, 0);
+    let (indices, alpha) = raw.split_at(px);
+    for (i, &index) in indices.iter().enumerate() {
+        let [b, g, r, _] = pal[index as usize];
+        out[i * 4..i * 4 + 4].copy_from_slice(&[r, g, b, alpha.get(i).copied().unwrap_or(255)]);
     }
+    Ok(out)
 }
 
 /// The shared JPEG header that precedes every mip in a JPEG-content BLP1.
@@ -583,12 +592,14 @@ pub fn jpeg_header<'a>(d: &'a [u8], h: &Header) -> Result<&'a [u8], Error> {
         return Err(Error::Unsupported("not a JPEG-content BLP"));
     }
     let size = u32_at(d, JPEG_HEADER_SIZE_AT, "jpeg header size")? as usize;
-    d.get(JPEG_HEADER_AT..JPEG_HEADER_AT + size)
-        .ok_or(Error::Truncated {
-            what: "jpeg header",
-            need: JPEG_HEADER_AT + size,
-            have: d.len(),
-        })
+    let end = JPEG_HEADER_AT
+        .checked_add(size)
+        .ok_or(Error::Unsupported("jpeg header size overflow"))?;
+    d.get(JPEG_HEADER_AT..end).ok_or(Error::Truncated {
+        what: "jpeg header",
+        need: end,
+        have: d.len(),
+    })
 }
 
 /// Inverted-CMYK to RGB, as the shipped JPEG textures require.
@@ -628,7 +639,16 @@ pub fn decode_jpeg_with_limit(
             content => Error::UnknownContent { content },
         });
     }
+    let body = mip_bytes(d, h, index)?;
     let (w, hh) = h.mip_size(index);
+    if body.is_empty() {
+        return Err(Error::UnrecognisedMip {
+            index,
+            size: 0,
+            w,
+            h: hh,
+        });
+    }
     let px = usize::try_from(w)
         .ok()
         .and_then(|w| usize::try_from(hh).ok()?.checked_mul(w))
@@ -638,7 +658,6 @@ pub fn decode_jpeg_with_limit(
         .filter(|n| *n <= max_rgba_bytes)
         .ok_or(Error::Unsupported("jpeg RGBA budget"))?;
     let head = jpeg_header(d, h)?;
-    let body = mip_bytes(d, h, index)?;
 
     let stream_len = head
         .len()
@@ -1406,7 +1425,10 @@ mod tests {
     fn each_content_byte_has_exactly_one_decoding_path() {
         let mut d = vec![0u8; 0x9C + 64 + 0x100];
         d[..4].copy_from_slice(b"BLP1");
+        d[0x0C..0x10].copy_from_slice(&1u32.to_le_bytes());
+        d[0x10..0x14].copy_from_slice(&1u32.to_le_bytes());
         d[0x1C..0x20].copy_from_slice(&0x124u32.to_le_bytes());
+        d[0x5C..0x60].copy_from_slice(&1u32.to_le_bytes());
         // content 0: the JPEG path owns it, the direct path refuses.
         d[0x04..0x08].copy_from_slice(&0u32.to_le_bytes());
         let h = Header::parse(&d).unwrap();
@@ -1416,7 +1438,7 @@ mod tests {
         let h = Header::parse(&d).unwrap();
         assert!(matches!(decode_jpeg(&d, &h, 0), Err(Error::NotDirect)));
         assert_eq!(h.encoding(), Encoding::Paletted);
-        assert!(matches!(decode(&d), Ok((_, _))), "direct content decodes");
+        assert_eq!(decode(&d).unwrap().1, [0, 0, 0, 255]);
     }
 
     /// The census buckets a refusal into its own row rather than dropping it,

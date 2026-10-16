@@ -251,3 +251,20 @@ legitimate supported-audio baseline. Compact status presentation and the
 pre-Cancel baseline comparison correct those separate issues; the fresh run
 passes. Exact receipts and the preserved earlier failures are local in
 `.scratch/options-source-preview-root-20261016/`.
+
+## Texture-quality decoder prerequisite
+
+Source-derived mip selection must not turn an absent BLP level into an empty
+image. The shared decoder now returns a contextual error for a selected absent
+level, an invalid header index or a populated zero-offset level. Raw inspection
+still returns an empty slice/unknown bytes-per-pixel for an unpopulated slot.
+Dimension halving has bounded work even for an arbitrarily large index; direct
+payload shape is checked before fallible RGBA allocation, and shared JPEG-header
+arithmetic is checked on 32-bit targets. The existing inspector routes raw dump
+requests through the same bounds check and handles a short tail safely.
+
+This prerequisite does not enable Texture Quality. The source's distinct mip
+and color-depth writes still need a complete renderer consumer and live image
+replacement transaction; an RGBA8 mip-only implementation cannot stand in for
+all authored choices. Decoder checks establish neither native texture packing
+nor rendered quality parity. Callers still own their decoded-size budgets.

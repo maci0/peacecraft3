@@ -87,6 +87,9 @@ issues*.
       checks; runtime kind/adapter inputs and effective first-run selection
       remain open. Texture quality's distinct mip/depth preference writes are
       checked, but their renderer consumer and live replacement remain open.
+      Selected BLP mip decoding now refuses invalid/absent levels before image
+      allocation while retaining raw absent-slot inspection. This decoder guard
+      does not enable Texture Quality or establish its color-depth behavior.
       See `docs/re-notes/original-options-initialization.md` and
       `docs/re-notes/original-display-modes.md`.
       Shared popup parsing now refuses malformed items without shifting indexes;

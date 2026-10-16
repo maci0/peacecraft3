@@ -11,7 +11,9 @@
 
 use std::process::ExitCode;
 
-use pcx_blp::{Census, Framing, Header, MAX_MIPS, bytes_per_pixel, decode_jpeg, decode_mip};
+use pcx_blp::{
+    Census, Framing, Header, MAX_MIPS, bytes_per_pixel, decode_jpeg, decode_mip, mip_bytes,
+};
 
 fn hex(data: &[u8]) -> String {
     let mut s = String::with_capacity(data.len() * 3);
@@ -268,14 +270,17 @@ fn main() -> ExitCode {
     if cmd == "dump" {
         let mip = num(0, 0);
         let want = num(1, 64);
-        let off = h.mip_offsets[mip] as usize;
-        let size = h.mip_sizes[mip] as usize;
-        let Some(raw) = data.get(off..off + size) else {
-            eprintln!("{label}: mip {mip} [{off}, {}) past EOF", off + size);
-            return ExitCode::from(1);
+        let raw = match mip_bytes(&data, &h, mip) {
+            Ok(raw) => raw,
+            Err(error) => {
+                eprintln!("{label}: {error}");
+                return ExitCode::from(1);
+            }
         };
+        let off = h.mip_offsets[mip] as usize;
+        let size = raw.len();
         let (w, hh) = h.mip_size(mip);
-        let px = (w * hh) as usize;
+        let px = u64::from(w) * u64::from(hh);
         println!(
             "mip{mip} {w}x{hh} off {off:#x} size {size} px {px} bpp {:.3}",
             size as f64 / px as f64
@@ -284,8 +289,9 @@ fn main() -> ExitCode {
         println!("  head[0..{n}]   {}", hex(&raw[..n]));
         println!("  head histogram {:?}", histogram(&raw[..n]));
         if size > n {
-            println!("  tail[-16..]    {}", hex(&raw[size - 16..]));
+            println!("  tail[-16..]    {}", hex(&raw[size.saturating_sub(16)..]));
         }
+        let px = usize::try_from(px).unwrap_or(usize::MAX);
         for (label, base) in [("half A", 0usize), ("half B", px.min(raw.len() / 2))] {
             let len = px.min(raw.len());
             if base + len <= raw.len() && len > 0 {
