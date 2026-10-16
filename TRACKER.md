@@ -1187,8 +1187,11 @@ Format: `date — subsystem — symptom — root cause — status`
       and one researched-level record, matching the executed signed values and
       player identities. Creation-state support then retains four destructable
       records with exact executed arguments on the same arena. Its next refusal
-      is `CreateDeadDestructableZ` at map span `58398..58471`; no world objects
-      or rendering are claimed. These values do not yet enforce construction, training or
+      is `CreateDeadDestructableZ` at map span `58398..58471`. Admitting the
+      declared create variants then retains five creation records, including
+      the executed dead form and its supplied `z`; the next refusal is
+      `CreateUnit` at map span `69421..69469`. No world objects or rendering are
+      claimed. These values do not yet enforce construction, training or
       upgrade effects. Applied camera motion remains open. See
       `docs/re-notes/script-camera-setups.md`.
       This probe still uses the explicitly identified compatibility object catalog;

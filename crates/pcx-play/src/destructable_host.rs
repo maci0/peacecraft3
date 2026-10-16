@@ -1,15 +1,53 @@
-//! Executed `CreateDestructable` arguments on the shared arena.
+//! Executed destructable-creation arguments on the shared arena.
 //!
-//! A record retains the declaration's integer id and finite reals. It is not a
-//! mesh, life total, pathing cell, or world object. `CreateDestructableZ` and
-//! `CreateDeadDestructable` stay unsupported.
+//! One allocation path serves the four declared create natives. A record keeps
+//! the executed id, finite reals, variation, whether that native supplied `z`,
+//! and whether the native requested the dead form. It is not a mesh, terrain
+//! height, life total, pathing cell, or world object.
 use super::super::{Entry, Error, Failure, below};
 use super::ObjectHost;
 use pcx_script::span::Span;
 use pcx_script::{HandleId, Value};
 
-const NATIVE: &str = "CreateDestructable";
 const KIND: &str = "destructable";
+const BASE: &[&str] = &["integer", "real", "real", "real", "real", "integer"];
+const WITH_Z: &[&str] = &["integer", "real", "real", "real", "real", "real", "integer"];
+
+struct Shape {
+    name: &'static str,
+    parameters: &'static [&'static str],
+    /// The native's parameter list includes `z`. Absence is not a height.
+    z: bool,
+    /// The native is one of the `CreateDead*` declarations. Not a life total.
+    dead: bool,
+}
+
+const SHAPES: &[Shape] = &[
+    Shape {
+        name: "CreateDestructable",
+        parameters: BASE,
+        z: false,
+        dead: false,
+    },
+    Shape {
+        name: "CreateDestructableZ",
+        parameters: WITH_Z,
+        z: true,
+        dead: false,
+    },
+    Shape {
+        name: "CreateDeadDestructable",
+        parameters: BASE,
+        z: false,
+        dead: true,
+    },
+    Shape {
+        name: "CreateDeadDestructableZ",
+        parameters: WITH_Z,
+        z: true,
+        dead: true,
+    },
+];
 
 /// Caller bound on creation records. Not a world or rendering limit.
 #[derive(Clone, Copy, Debug)]
@@ -19,32 +57,39 @@ pub struct DestructableBudget {
 
 /// One executed creation. Coordinates, facing and scale are the call's finite reals.
 /// Facing is retained in the declared real, not converted from the source comment.
+/// `z` is `None` when the creating native has no `z` parameter. `dead` is the
+/// source-requested dead form, not a computed life or a later kill.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DestructableCreation {
     pub objectid: i32,
     pub x: f32,
     pub y: f32,
+    pub z: Option<f32>,
     pub face: f32,
     pub scale: f32,
     pub variation: i32,
+    pub dead: bool,
 }
 
 pub(super) struct Admission {
     max_records: usize,
     records: usize,
     source: String,
-    span: Span,
+    spans: [Option<Span>; SHAPES.len()],
 }
 
 impl ObjectHost {
-    /// Admit `CreateDestructable` on the shared arena.
+    /// Admit destructable creation on the shared arena.
     ///
-    /// The native must return `destructable`, and that type must extend `widget`.
-    /// The declaration source and span are kept. New records are refused at
-    /// `budget.max_records` before allocation. A non-finite real is refused as
-    /// this recreation's policy; that is not a claim about the shipped native.
+    /// `CreateDestructable` is required. Each of the other three create natives
+    /// is admitted only when that program declares it with the same source and
+    /// the matching parameter list. A program that omits a variant still
+    /// admits the base native. The type must extend `widget`. New records are
+    /// refused at `budget.max_records` before allocation. A non-finite real is
+    /// refused as this recreation's policy; that is not a claim about the
+    /// shipped native.
     pub fn with_destructables(mut self, budget: DestructableBudget) -> Result<Self, Error> {
-        let fail = |reason| self.inner.error(NATIVE, reason);
+        let fail = |reason| self.inner.error(SHAPES[0].name, reason);
         if self.destructables.is_some() {
             return Err(fail(Failure::DestructableState("already admitted")));
         }
@@ -53,48 +98,79 @@ impl ObjectHost {
         if !below(&self.inner.program, KIND, "widget") {
             return Err(fail(Failure::Signature));
         }
-        Self::contract(
-            &self.inner,
-            NATIVE,
-            &["integer", "real", "real", "real", "real", "integer"],
-            KIND,
-            false,
-            Some(KIND),
-        )?;
-        let native = self
-            .inner
-            .program
-            .natives()
-            .get(NATIVE)
-            .ok_or_else(|| fail(Failure::Signature))?;
+        let mut spans = [None; SHAPES.len()];
         let mut source = String::new();
-        source
-            .try_reserve_exact(native.source.len())
-            .map_err(|_| fail(Failure::Capacity))?;
-        source.push_str(&native.source);
+        for (index, shape) in SHAPES.iter().enumerate() {
+            let present = self.inner.program.natives().get(shape.name).is_some();
+            if index == 0 && !present {
+                return Err(fail(Failure::Signature));
+            }
+            if !present {
+                continue;
+            }
+            Self::contract(
+                &self.inner,
+                shape.name,
+                shape.parameters,
+                KIND,
+                false,
+                Some(KIND),
+            )?;
+            let native = self
+                .inner
+                .program
+                .natives()
+                .get(shape.name)
+                .ok_or_else(|| self.inner.error(shape.name, Failure::Signature))?;
+            if index == 0 {
+                source
+                    .try_reserve_exact(native.source.len())
+                    .map_err(|_| fail(Failure::Capacity))?;
+                source.push_str(&native.source);
+            } else if native.source != source {
+                return Err(self.inner.error(shape.name, Failure::Source));
+            }
+            spans[index] = Some(native.span);
+        }
         self.destructables = Some(Admission {
             max_records: budget.max_records,
             records: 0,
             source,
-            span: native.span,
+            spans,
         });
         Ok(self)
     }
 
-    /// Declaration retained at admission. The record itself is not a world object.
+    /// Base `CreateDestructable` declaration retained at admission.
+    /// The record itself is not a world object.
     pub fn destructable_declaration(&self) -> Result<(&str, Span), Error> {
-        let admitted = self.destructables.as_ref().ok_or_else(|| {
+        let admitted = self.admitted()?;
+        let span = admitted.spans[0].ok_or_else(|| {
             self.inner
-                .error(NATIVE, Failure::DestructableState("not admitted"))
+                .error(SHAPES[0].name, Failure::DestructableState("not admitted"))
         })?;
-        Ok((&admitted.source, admitted.span))
+        Ok((&admitted.source, span))
+    }
+
+    /// Span of an admitted create variant. `Ok(None)` means that native was
+    /// absent from the program, so calls stay unsupported.
+    pub fn destructable_variant_declaration(
+        &self,
+        name: &str,
+    ) -> Result<Option<(&str, Span)>, Error> {
+        let index = SHAPES
+            .iter()
+            .position(|shape| shape.name == name)
+            .ok_or_else(|| self.inner.error(name, Failure::Signature))?;
+        let admitted = self.admitted()?;
+        Ok(admitted.spans[index].map(|span| (admitted.source.as_str(), span)))
     }
 
     /// Executed creation for an identity of this family. Other families are refused.
     pub fn destructable_creation(&self, id: HandleId) -> Result<DestructableCreation, Error> {
         match self.inner.entry(id)? {
             Entry::Destructable { creation } => Ok(*creation),
-            _ => Err(self.inner.error(NATIVE, Failure::WrongFamily)),
+            _ => Err(self.inner.error(SHAPES[0].name, Failure::WrongFamily)),
         }
     }
 
@@ -103,40 +179,22 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
-        if name != NATIVE {
-            return None;
-        }
-        self.destructables.as_ref()?;
-        Some(self.create_destructable(args))
+        let index = SHAPES.iter().position(|shape| shape.name == name)?;
+        self.destructables.as_ref()?.spans[index]?;
+        Some(self.create_destructable(index, args))
     }
 
-    fn create_destructable(&mut self, args: &[Value]) -> Result<Value, Error> {
-        let fail = |reason| self.inner.error(NATIVE, reason);
-        let [
-            Value::Int(objectid),
-            x,
-            y,
-            face,
-            scale,
-            Value::Int(variation),
-        ] = args
-        else {
-            return Err(fail(Failure::DestructableState(
-                "arguments do not match the destructable native declaration",
-            )));
-        };
-        let x = finite_real(x).map_err(fail)?;
-        let y = finite_real(y).map_err(fail)?;
-        let face = finite_real(face).map_err(fail)?;
-        let scale = finite_real(scale).map_err(fail)?;
-        let creation = DestructableCreation {
-            objectid: *objectid,
-            x,
-            y,
-            face,
-            scale,
-            variation: *variation,
-        };
+    fn admitted(&self) -> Result<&Admission, Error> {
+        self.destructables.as_ref().ok_or_else(|| {
+            self.inner
+                .error(SHAPES[0].name, Failure::DestructableState("not admitted"))
+        })
+    }
+
+    fn create_destructable(&mut self, index: usize, args: &[Value]) -> Result<Value, Error> {
+        let shape = &SHAPES[index];
+        let fail = |reason| self.inner.error(shape.name, reason);
+        let creation = creation_from(shape, args).map_err(fail)?;
         let (records, max_records) = {
             let admitted = self
                 .destructables
@@ -149,14 +207,65 @@ impl ObjectHost {
         }
         let id = self
             .inner
-            .allocate(Entry::Destructable { creation }, NATIVE)?;
+            .allocate(Entry::Destructable { creation }, shape.name)?;
         let Some(admitted) = self.destructables.as_mut() else {
             return Err(self
                 .inner
-                .error(NATIVE, Failure::DestructableState("not admitted")));
+                .error(shape.name, Failure::DestructableState("not admitted")));
         };
         admitted.records += 1;
         Ok(Value::Handle(id))
+    }
+}
+
+fn creation_from(shape: &Shape, args: &[Value]) -> Result<DestructableCreation, Failure> {
+    let mismatch =
+        Failure::DestructableState("arguments do not match the destructable native declaration");
+    if shape.z {
+        let [
+            Value::Int(objectid),
+            x,
+            y,
+            z,
+            face,
+            scale,
+            Value::Int(variation),
+        ] = args
+        else {
+            return Err(mismatch);
+        };
+        Ok(DestructableCreation {
+            objectid: *objectid,
+            x: finite_real(x)?,
+            y: finite_real(y)?,
+            z: Some(finite_real(z)?),
+            face: finite_real(face)?,
+            scale: finite_real(scale)?,
+            variation: *variation,
+            dead: shape.dead,
+        })
+    } else {
+        let [
+            Value::Int(objectid),
+            x,
+            y,
+            face,
+            scale,
+            Value::Int(variation),
+        ] = args
+        else {
+            return Err(mismatch);
+        };
+        Ok(DestructableCreation {
+            objectid: *objectid,
+            x: finite_real(x)?,
+            y: finite_real(y)?,
+            z: None,
+            face: finite_real(face)?,
+            scale: finite_real(scale)?,
+            variation: *variation,
+            dead: shape.dead,
+        })
     }
 }
 

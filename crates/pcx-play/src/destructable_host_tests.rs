@@ -16,7 +16,6 @@ constant native ConvertPlayerColor takes integer value returns playercolor
 native CreateTimer takes nothing returns timer
 native DestroyTimer takes timer which returns nothing
 native CreateDestructable takes integer objectid, real x, real y, real face, real scale, integer variation returns destructable
-native CreateDestructableZ takes integer objectid, real x, real y, real z, real face, real scale, integer variation returns destructable
 globals
 constant playercolor COLOR = ConvertPlayerColor(19)
 endglobals
@@ -92,6 +91,8 @@ fn executed_payload_and_declaration_source_stay_on_the_destructable_identity() {
             face: 0.0,
             scale: 3.5,
             variation: i32::MIN,
+            z: None,
+            dead: false,
         }
     );
     let timer = host.native("CreateTimer", &[]).unwrap();
@@ -220,6 +221,153 @@ fn admission_requires_widget_ancestry_one_source_and_the_declared_signature() {
     assert!(unsupported.contains("unsupported"), "{unsupported}");
 }
 
+fn variant_declarations() -> String {
+    let globals = DECLARATIONS.find("\nglobals\n").expect("globals");
+    let mut text = DECLARATIONS.to_string();
+    text.insert_str(
+        globals + 1,
+        "native CreateDestructableZ takes integer objectid, real x, real y, real z, real face, real scale, integer variation returns destructable\n\
+native CreateDeadDestructable takes integer objectid, real x, real y, real face, real scale, integer variation returns destructable\n\
+native CreateDeadDestructableZ takes integer objectid, real x, real y, real z, real face, real scale, integer variation returns destructable\n\
+native RemoveDestructable takes destructable d returns nothing\n\
+native KillDestructable takes destructable d returns nothing\n",
+    );
+    text
+}
+
+#[test]
+fn variants_share_one_budget_and_absent_or_bad_declarations_stay_isolated() {
+    let declarations = variant_declarations();
+    let mut host = host_from(&declarations, "", 4)
+        .with_destructables(DestructableBudget { max_records: 1 })
+        .unwrap();
+    let parsed = pcx_script::parse_script(&declarations).unwrap();
+    for name in [
+        "CreateDestructable",
+        "CreateDestructableZ",
+        "CreateDeadDestructable",
+        "CreateDeadDestructableZ",
+    ] {
+        let (source, span) = host
+            .destructable_variant_declaration(name)
+            .unwrap()
+            .expect(name);
+        assert_eq!(source, "synthetic:destructables");
+        let declared = parsed
+            .natives()
+            .find(|native| native.name.name == name)
+            .unwrap();
+        assert_eq!(span, declared.span);
+    }
+    assert!(
+        admitted(1, 4)
+            .destructable_variant_declaration("CreateDeadDestructableZ")
+            .unwrap()
+            .is_none()
+    );
+    let handles = host.inner().handles();
+    let infinite = host
+        .native(
+            "CreateDestructableZ",
+            &[
+                Value::Int(1),
+                Value::Real(0.0),
+                Value::Real(0.0),
+                Value::Real(f32::NAN),
+                Value::Real(0.0),
+                Value::Real(1.0),
+                Value::Int(0),
+            ],
+        )
+        .unwrap_err();
+    assert!(
+        infinite.contains("recreation policy: finite real required"),
+        "{infinite}"
+    );
+    let wrong_kind = host
+        .native(
+            "CreateDeadDestructableZ",
+            &[
+                Value::Int(1),
+                Value::Real(0.0),
+                Value::Real(0.0),
+                Value::Int(4),
+                Value::Real(0.0),
+                Value::Real(1.0),
+                Value::Int(0),
+            ],
+        )
+        .unwrap_err();
+    assert!(
+        wrong_kind.contains("arguments do not match the destructable native declaration"),
+        "{wrong_kind}"
+    );
+    assert!(!wrong_kind.contains("exception"), "{wrong_kind}");
+    assert_eq!(host.inner().handles(), handles);
+    let created = host
+        .native(
+            "CreateDeadDestructable",
+            &[
+                Value::Int(-2),
+                Value::Real(0.0),
+                Value::Real(1.0),
+                Value::Real(-8.0),
+                Value::Real(0.5),
+                Value::Int(3),
+            ],
+        )
+        .unwrap();
+    let Value::Handle(id) = created else {
+        panic!("dead destructable");
+    };
+    assert_eq!(
+        host.destructable_creation(id).unwrap(),
+        DestructableCreation {
+            objectid: -2,
+            x: 0.0,
+            y: 1.0,
+            z: None,
+            face: -8.0,
+            scale: 0.5,
+            variation: 3,
+            dead: true,
+        }
+    );
+    let budget = host
+        .native("CreateDestructableZ", &{
+            let mut args = payload(1, 0).to_vec();
+            args.insert(3, Value::Real(9.0));
+            args
+        })
+        .unwrap_err();
+    assert!(budget.contains("destructable creation"), "{budget}");
+    assert!(host.destructable_creation(id).unwrap().dead);
+    assert_eq!(host.inner().handles(), handles + 1);
+    for name in ["RemoveDestructable", "KillDestructable"] {
+        let refused = host.native(name, &[Value::Handle(id)]).unwrap_err();
+        assert!(refused.contains("unsupported"), "{refused}");
+        assert_eq!(host.destructable_creation(id).unwrap().variation, 3);
+    }
+    let broken = declarations.replace(
+        "native CreateDestructableZ takes integer objectid, real x, real y, real z, real face, real scale, integer variation returns destructable",
+        "native CreateDestructableZ takes integer objectid, real x, real y, real z, real face, real scale, integer variation returns widget",
+    );
+    let signature =
+        match host_from(&broken, "", 4).with_destructables(DestructableBudget { max_records: 1 }) {
+            Err(error) => error,
+            Ok(_) => panic!("wrong Z declaration was admitted"),
+        };
+    assert_eq!(signature.failure, Failure::Signature);
+    let only_in_map = "native CreateDestructableZ takes integer objectid, real x, real y, real z, real face, real scale, integer variation returns destructable\n";
+    let foreign = match host_from(DECLARATIONS, only_in_map, 4)
+        .with_destructables(DestructableBudget { max_records: 1 })
+    {
+        Err(error) => error,
+        Ok(_) => panic!("cross-source Z declaration was admitted"),
+    };
+    assert_eq!(foreign.failure, Failure::Source);
+}
+
 fn wave() -> Vec<u8> {
     let mut bytes = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
     bytes.extend(16u32.to_le_bytes());
@@ -248,9 +396,9 @@ fn owned_vm_keeps_destructable_records_beside_sound_timer_and_player_identities(
     let mut common = common;
     common.insert_str(
         globals + 1,
-        "native CreateSound takes string file, boolean repeating, boolean spatial, boolean stop, integer fadeIn, integer fadeOut, string eax returns sound\nnative CreateDestructable takes integer objectid, real x, real y, real face, real scale, integer variation returns destructable\n",
+        "native CreateSound takes string file, boolean repeating, boolean spatial, boolean stop, integer fadeIn, integer fadeOut, string eax returns sound\nnative CreateDestructable takes integer objectid, real x, real y, real face, real scale, integer variation returns destructable\nnative CreateDestructableZ takes integer objectid, real x, real y, real z, real face, real scale, integer variation returns destructable\nnative CreateDeadDestructable takes integer objectid, real x, real y, real face, real scale, integer variation returns destructable\nnative CreateDeadDestructableZ takes integer objectid, real x, real y, real z, real face, real scale, integer variation returns destructable\n",
     );
-    let map = "globals\nplayer P = null\ntimer T = null\nsound S = null\ndestructable D = null\nendglobals\nfunction main takes nothing returns nothing\nset P = Player(0)\nset T = CreateTimer()\nset S = CreateSound(\"Media\\\\a.wav\", false, false, false, 0, 0, \"\")\nset D = CreateDestructable(-7, 1.5, -2.25, 0.0, 3.5, -1)\nendfunction\n";
+    let map = "globals\nplayer P = null\ntimer T = null\nsound S = null\ndestructable A = null\ndestructable B = null\ndestructable C = null\ndestructable D = null\nendglobals\nfunction main takes nothing returns nothing\nset P = Player(0)\nset T = CreateTimer()\nset S = CreateSound(\"Media\\\\a.wav\", false, false, false, 0, 0, \"\")\nset A = CreateDestructable(-7, 1.5, -2.25, 0.0, 3.5, -1)\nset B = CreateDestructableZ(-3, 0.5, 2.0, -4.25, 90.0, 1.0, 2)\nset C = CreateDeadDestructable(8, -1.0, 0.0, 15.0, 0.25, 0)\nset D = CreateDeadDestructableZ(1, 3.0, -3.0, 12.5, 180.0, 2.0, -5)\nendfunction\n";
     let ctx = context(301, &common, map, "destructable-creation");
     let pcm = wave();
     let assets = Assets::read(
@@ -279,7 +427,7 @@ fn owned_vm_keeps_destructable_records_beside_sound_timer_and_player_identities(
         .unwrap()
         .with_file_sounds(assets, 8)
         .unwrap()
-        .with_destructables(DestructableBudget { max_records: 1 })
+        .with_destructables(DestructableBudget { max_records: 4 })
         .unwrap();
     let (source, span) = host.destructable_declaration().unwrap();
     assert_eq!(source, "synthetic/common.j");
@@ -296,17 +444,25 @@ fn owned_vm_keeps_destructable_records_beside_sound_timer_and_player_identities(
     let Value::Handle(sound) = vm.global("S") else {
         panic!("sound");
     };
-    let Value::Handle(destructable) = vm.global("D") else {
-        panic!("destructable");
+    let Value::Handle(base) = vm.global("A") else {
+        panic!("base destructable");
+    };
+    let Value::Handle(elevated) = vm.global("B") else {
+        panic!("z destructable");
+    };
+    let Value::Handle(dead) = vm.global("C") else {
+        panic!("dead destructable");
+    };
+    let Value::Handle(dead_z) = vm.global("D") else {
+        panic!("dead z destructable");
     };
     let host = vm.host();
     assert_eq!(host.inner.inner().kind(player).unwrap(), "player");
     assert_eq!(host.inner.inner().kind(timer).unwrap(), "timer");
     assert_eq!(host.inner.inner().kind(sound).unwrap(), "sound");
-    assert_eq!(
-        host.inner.inner().kind(destructable).unwrap(),
-        "destructable"
-    );
+    for id in [base, elevated, dead, dead_z] {
+        assert_eq!(host.inner.inner().kind(id).unwrap(), "destructable");
+    }
     assert_eq!(
         host.inner
             .native("GetPlayerId", &[Value::Handle(player)])
@@ -322,23 +478,37 @@ fn owned_vm_keeps_destructable_records_beside_sound_timer_and_player_identities(
         r"Media\a.wav"
     );
     assert_eq!(
-        host.inner.destructable_creation(destructable).unwrap(),
+        host.inner.destructable_creation(base).unwrap(),
         DestructableCreation {
             objectid: -7,
             x: 1.5,
             y: -2.25,
+            z: None,
             face: 0.0,
             scale: 3.5,
             variation: -1,
+            dead: false,
         }
     );
+    assert_eq!(
+        host.inner.destructable_creation(elevated).unwrap().z,
+        Some(-4.25)
+    );
+    assert!(!host.inner.destructable_creation(elevated).unwrap().dead);
+    assert_eq!(host.inner.destructable_creation(dead).unwrap().z, None);
+    assert!(host.inner.destructable_creation(dead).unwrap().dead);
+    assert_eq!(
+        host.inner.destructable_creation(dead_z).unwrap().z,
+        Some(12.5)
+    );
+    assert!(host.inner.destructable_creation(dead_z).unwrap().dead);
     assert_eq!(
         host.inner.destructable_creation(sound).unwrap_err().failure,
         Failure::WrongFamily
     );
     let cross = host
         .inner
-        .native("GetPlayerId", &[Value::Handle(destructable)])
+        .native("GetPlayerId", &[Value::Handle(base)])
         .unwrap_err();
     assert!(cross.contains("another family"), "{cross}");
 }

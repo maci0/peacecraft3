@@ -174,3 +174,31 @@ camera, rectangle, research and sound checks still pass. The next refusal is
 `CreateDeadDestructableZ` at map span `58398..58471`, declared in the selected
 `common.j` at `85741..85894`. No destructable catalog lookup, terrain-height
 selection, life total or world/render consumer is established by that run.
+
+## Destructable create variants
+
+The same creation record now serves `CreateDestructable`,
+`CreateDestructableZ`, `CreateDeadDestructable`, and
+`CreateDeadDestructableZ` through one allocation path. `CreateDestructable`
+remains required. Each other native is admitted only when the program declares
+it, with the same source and the declared parameter list. A small program that
+omits a variant still admits the base native, and calls to the omitted native
+stay unsupported.
+
+`z` is `None` when the creating native has no `z` parameter, and the executed
+finite real when it does. That absence is not a terrain height. `dead` records
+that the call used a `CreateDead*` native. It is not a life total, a kill, or
+a pathing change. `RemoveDestructable` and `KillDestructable` stay unsupported.
+The record is still not a mesh or a placed world object.
+
+The same Human01 Program now retains five creation records, including the
+executed dead form with its supplied `z`. All integer values, real bit patterns,
+variant declarations and shared identities match the captured calls. Globals
+and `config` still complete; `main` next refuses `CreateUnit` at map span
+`69421..69469`, declared in the selected `common.j` at `90363..90474`.
+The existing camera, rectangle, technology and sound checks still pass.
+
+Verification: 385 native tests pass with six explicit ignores; all five
+destructable tests execute under WASI. Strict native/WASM Clippy, downstream
+application checks, rustdoc and formatting pass. This establishes executed
+creation state, not world placement, rendering or a playable chapter.
