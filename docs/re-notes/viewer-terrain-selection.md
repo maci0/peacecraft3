@@ -20,6 +20,17 @@ model's extent record. Non-finite/inverted bounds and zero-area XY footprints
 are errors; a flat Z range is allowed. Counter-clockwise triangles face the same
 direction as their +Z normals, matching Bevy's ordinary back-face culling.
 
+The shared graphics model loader also rejects non-finite MODL extent components
+before importing geometry, with the source and axis in the decode error. The raw
+MDX header reader still preserves those words for inspection. Finite flat, empty
+and inverted records remain unchanged at this boundary; the footprint consumer
+keeps its stricter ordering and nonzero XY requirements. In particular, four
+shipped particle/effect headers in each supplied install have inverted bounds,
+so a global ordered-box rule would reject original assets. The explicit header
+census read 3,234 compatibility-install and 3,249 Legacy-install models: none
+had non-finite header bounds. This uses the selected archive-reader policy and
+does not establish native archive priority or rendered behavior.
+
 This is a whole-texture, unlit model-viewer convention. It does not establish
 terrain atlas cell/variant selection, native UVs/sampling/material behavior,
 W3E world-height calibration, ground blending, cliffs, water or gameplay camera

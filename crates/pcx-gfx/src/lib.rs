@@ -384,14 +384,23 @@ pub struct Sequence {
 
 /// Decode a model into Bevy-shaped geometry.
 ///
-/// Never fails on an empty or unusual model: one with no geosets is a legal
-/// model, and callers need to be able to tell that apart from a parse failure.
+/// A model with no geosets remains legal and distinct from a parse failure.
+/// Graphics import requires finite bounds; extent consumers validate their use.
 pub fn load_model(bytes: &[u8], source: &str) -> Result<LoadedModel, crate::Error> {
     let m =
         pcx_mdl::Mdlx::parse(bytes).map_err(|e| crate::Error::Decode(format!("{source}: {e}")))?;
     let model = m
         .model(bytes)
         .map_err(|e| crate::Error::Decode(format!("{source}: {e}")))?;
+    for axis in 0..3 {
+        let minimum = model.minimum_extent[axis];
+        let maximum = model.maximum_extent[axis];
+        if !minimum.is_finite() || !maximum.is_finite() {
+            return Err(crate::Error::Decode(format!(
+                "{source}: nonfinite MODL extent axis {axis}: {minimum}..{maximum}"
+            )));
+        }
+    }
 
     let mut meshes = Vec::new();
     let geosets = m

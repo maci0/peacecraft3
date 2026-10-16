@@ -1333,6 +1333,11 @@ Format: `date — subsystem — symptom — root cause — status`
   branches still have synthetic coverage only.
 - MDX checked layers retain authored layer counts, corrected alpha, filter/shading
   fields, alpha/texture tracks and PRE2 data. Full renderer wiring remains open.
+  Graphics model import now rejects non-finite header extents with source/axis
+  context while preserving raw parser words and finite flat/inverted records.
+  The local header census reads all 3,234 compatibility and 3,249 Legacy models;
+  four in each have inverted bounds and remain accepted. Footprint-specific
+  ordering stays with its consumer; see `viewer-terrain-selection.md`.
   The menu now binds GEOA opacity by geoset ID and samples first-layer KMTA and
   KGAO/static alpha using selected sequence/global clocks. Sparse-ID, independent
   clock and actual ECS material/visibility regressions pass; both original menu
