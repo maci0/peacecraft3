@@ -1019,6 +1019,9 @@ Format: `date — subsystem — symptom — root cause — status`
       PeaceCraft host; record exact executable identity and both directions.
 - [ ] NET-C05: Original-compatible lobby slots, map fingerprints, readiness and
       start/seed exchange; mismatched local edition/build/map refuses before play.
+      Source-profile slot-info/join body decoding retains raw slot fields and
+      seed bytes with exact size/count checks. It is not readiness, an original
+      peer exchange or proof of matching RNG streams.
 - [ ] NET-C06: Ordered actions and checksum/RNG agreement, followed by a ten-minute
       mixed-client match without divergence; lobby-only success is insufficient.
 - [ ] NET-C07: Classic realm version checks, authentication and negative cases,

@@ -15,7 +15,8 @@ unverified.
 
 `classic_frame` now provides a separate bounded BNCS/W3GS header codec and
 native TCP caller. Typed readers cover the selected authentication challenge
-and W3GS join refusals. This is not realm login or W3GS lobby/gameplay support.
+and W3GS join refusals/slot records. This is not realm login or completed
+W3GS lobby/gameplay support.
 
 ## Public references checked on 2026-10-16
 
@@ -159,3 +160,19 @@ stream decoder/TCP caller. The root realm probe uses the integrated reader
 and profile fields loaded from the pinned local server sources. No account,
 key, original client or gameplay session is involved. Root evidence is in
 `.scratch/classic-network-20261016/root-typed-messages/`. NET-C02 remains partial.
+
+## Raw slot and seed records
+
+`slot_seed` reads the caller-selected `W3GS_SLOTINFO` or `W3GS_SLOTINFOJOIN`
+body from an already validated frame. The length prefix, record count, nine
+fields per record, four seed bytes and fixed join suffix follow the pinned
+GHost++ source. A complete shape is checked before retaining slot records.
+`playerSlots` stays separate from the number of records, including a zero-record
+packet. Unknown field values and the join suffix remain raw.
+
+Native and actual WASI tests exercise truncation at every body prefix, wrong
+family/profile, count/size mismatch and both borrowed and streamed frame callers.
+This adds no slot store, matchmaking, client admission or RNG implementation.
+The seed's presence does not show that either client has applied it or that
+their streams agree. NET-C05 remains open. Root evidence is in
+`.scratch/classic-network-20261016/root-slot-seed/`.

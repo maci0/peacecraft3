@@ -7,8 +7,8 @@
 //! `ghost/gameprotocol.h` commit `6ba90f426e96f80fe013a468d1e07151a510adbe`
 //! defines `W3GS_HEADER_CONSTANT` as 247, and `AssignLength` writes the
 //! packet's byte count into indices 2 and 3. Bodies stay opaque except
-//! [`Frame::reject_join`] and [`auth_info`], which read join refusals and
-//! source-profile-qualified authentication challenges.
+//! [`Frame::reject_join`], [`auth_info`] and [`slot_seed`], which read join refusals,
+//! source-profile-qualified authentication challenges and raw lobby slot/seed records.
 //! A decoded reason is always a refusal. It is not admission and it is not
 //! simulation state.
 //!
@@ -500,6 +500,7 @@ fn validate_header(header: &[u8], max_frame_bytes: usize) -> Result<usize, Frame
 pub mod tcp;
 
 pub mod auth_info;
+pub mod slot_seed;
 
 #[cfg(test)]
 mod tests {
