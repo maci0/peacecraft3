@@ -1240,6 +1240,12 @@ Format: `date — subsystem — symptom — root cause — status`
       records; resource spending and combat remain unimplemented. The next
       refusal is `IssueImmediateOrder` at map span `67827..67884`; callback
       execution and event delivery remain open. See `docs/re-notes/script-trigger-admission.md`.
+      A source-associated original-client order control now repeats at actual
+      3840×2160 and 1280×960 under isolated Wine: on/off transitions succeed,
+      repeats and an invalid order fail, and a sibling unit stays independent.
+      Both preload outputs match byte for byte. This instrumented probe does
+      not implement the order native or advance that VM frontier; see
+      `docs/re-notes/script-immediate-orders.md`.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or
       upgrade effects. Applied camera motion remains open. See

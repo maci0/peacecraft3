@@ -303,3 +303,9 @@ tests pass with fifteen explicit ignores. All 22 unit cases execute under WASI.
 Strict native/WASM Clippy, rustdoc and browser-target library build pass.
 This establishes executed state, not a gameplay scene or playable chapter.
 Root evidence is in `.scratch/cursor-gameplay-20261016/root-unit-states/`.
+
+The subsequent [immediate-order control](script-immediate-orders.md) now joins
+the refused unit to its authored ability and records original-client on/off,
+repeated-order and invalid-order results at two actual resolutions. That
+instrumented experiment does not implement `IssueImmediateOrder` or advance the
+unchanged-map VM frontier.
