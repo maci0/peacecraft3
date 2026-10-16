@@ -287,6 +287,8 @@ pub enum Error {
         have: usize,
         need: usize,
     },
+    #[error("shadow map {width}x{height} tiles overflows the checked 16·w·h cell count")]
+    ShadowSizeOverflow { width: u32, height: u32 },
     #[error("minimap file is {have} bytes; the declared counts need {need}")]
     MinimapTruncated { have: usize, need: usize },
     #[error("minimap file declares {markers} markers, which need {need} bytes, not {have}")]

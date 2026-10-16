@@ -169,7 +169,7 @@ impl<'a> CameraFile<'a> {
 pub struct CameraRecord<'a> {
     /// Half-open member-relative byte range, including terminator and any extension.
     pub span: Range<usize>,
-    /// Ten unmodified f32 words in primary source order: target[3], rotation,
+    /// Ten unmodified f32 words in primary source order: `target[3]`, rotation,
     /// angleOfAttack, distance, roll, fieldOfView, farClippingPlane, nearClippingPlane.
     pub words: &'a [u8],
     pub name_span: Range<usize>,
