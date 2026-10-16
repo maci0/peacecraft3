@@ -4936,6 +4936,7 @@ dependencies = [
  "pcx-map",
  "pcx-mdl",
  "pcx-mpq",
+ "pcx-objects",
  "pcx-script",
  "pcx-sim",
  "pcx-slq",

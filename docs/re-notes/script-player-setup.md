@@ -202,3 +202,34 @@ Verification: 385 native tests pass with six explicit ignores; all five
 destructable tests execute under WASI. Strict native/WASM Clippy, downstream
 application checks, rustdoc and formatting pass. This establishes executed
 creation state, not world placement, rendering or a playable chapter.
+
+## Executed unit creation
+
+`ObjectHost::with_unit_catalog` admits `CreateUnit` against the caller's selected
+catalog `Arc`. `MapBindings::admit_executed_units` passes that existing catalog
+and the same source identity used for map admission. It does not load another
+catalog or infer an installation from a unit id. Record and handle limits are
+checked before catalog resolution. Separate retained-field and modification
+limits are checked on the returned definition; they do not bound the catalog's
+internal allocation or work.
+
+A successful call retains the checked definition, executed player number,
+source identity, and finite x/y/facing values on the shared handle arena. Integer
+rawcodes pass through as four big-endian bytes. Catalog failures keep their typed
+reason and declaration context. Finite-real refusal is a recreation policy.
+No life, stats, model, movement-world id or rendering defaults are assigned.
+
+The same retained Human01 program now creates 53 unit records. Their definitions
+match the same selected catalog, and their owners and coordinate/facing bits
+match the executed calls. Globals and `config` still complete. The next refusal
+is `SetUnitAcquireRange`, map span `68392..68428`, declared in the selected
+`common.j` at `92262..92356`. Previous camera, rectangle, technology,
+destructable and sound checks remain intact. This uses the explicitly qualified
+compatibility catalog from the preceding probes, not established native Legacy
+archive priority.
+
+Strict native/WASM Clippy and rustdoc, the play library and application tests,
+nine unit-creation cases executed under WASI, and an actual WASM application
+catalog-binding case pass. There is still no application gameplay session
+factory calling this admission helper. These results establish executed creation
+records, not spawned game entities, rendering or a playable campaign.

@@ -1166,3 +1166,59 @@ pub fn configured_source_card_failure_retains_context_and_receipts() {
             .contains("Map request failed:")
     );
 }
+
+#[cfg_attr(test, test)]
+pub fn bound_catalog_is_shared_with_executed_unit_admission() {
+    use pcx_play::playercolor_host::{EnumHost, Limits, ObjectHost, UnitBudget};
+    let mut f = Fixture::new(236);
+    f.common.extend_from_slice(b"type agent extends handle\ntype widget extends agent\ntype unit extends widget\ntype player extends agent\ntype timer extends agent\nnative CreateTimer takes nothing returns timer\nnative DestroyTimer takes timer t returns nothing\nnative CreateUnit takes player p, integer id, real x, real y, real face returns unit\n");
+    let bindings = bind_map_bounded(&f.resolver(), f.input(1), f.limits()).unwrap();
+    let mut state = MapRequests {
+        bindings: Some(bindings),
+        ..Default::default()
+    };
+    let request = state.selected_map_request().unwrap();
+    state.deliver(request);
+    let context = state.admission.context().unwrap();
+    let inner = EnumHost::checked_selected(
+        context.scripts.shared_program(),
+        "selected fixture",
+        &[],
+        Limits {
+            max_handles: 8,
+            admission_steps: 0,
+            expression_depth: 1,
+            expression_work: 0,
+        },
+    )
+    .unwrap();
+    let host = state
+        .bindings
+        .as_ref()
+        .unwrap()
+        .admit_executed_units(
+            ObjectHost::checked(inner).unwrap(),
+            UnitBudget {
+                max_records: 1,
+                max_retained_fields: 1,
+                max_modifications: 1,
+            },
+        )
+        .unwrap();
+    let selected = &state.bindings.as_ref().unwrap().catalog.0;
+    assert!(Arc::ptr_eq(&host.unit_catalog().unwrap(), selected));
+    assert_eq!(
+        host.unit_catalog().unwrap().resolve(*b"UNIT"),
+        selected.resolve(*b"UNIT")
+    );
+    let declaration = context
+        .scripts
+        .program()
+        .natives()
+        .get("CreateUnit")
+        .unwrap();
+    assert_eq!(
+        host.unit_declaration().unwrap(),
+        (declaration.source.as_str(), declaration.span)
+    );
+}

@@ -73,6 +73,13 @@ pub enum Failure {
     RectState(&'static str),
     #[error("destructable creation: {0}")]
     DestructableState(&'static str),
+    #[error("unit creation: {0}")]
+    UnitState(&'static str),
+    #[error("unit catalog {requested:?}: {problem:?}")]
+    UnitCatalog {
+        requested: [u8; 4],
+        problem: Box<pcx_sim::world::ResolutionProblem>,
+    },
     #[error("host identity capacity or allocation exceeded")]
     Capacity,
 }
@@ -167,6 +174,9 @@ enum Entry {
     },
     Destructable {
         creation: objects::DestructableCreation,
+    },
+    Unit {
+        record: objects::ExecutedUnit,
     },
 }
 pub struct EnumHost {
@@ -468,6 +478,7 @@ impl EnumHost {
             }
             Entry::CameraSetup { .. } => "camerasetup",
             Entry::Destructable { .. } => "destructable",
+            Entry::Unit { .. } => "unit",
         })
     }
     pub fn symbolic_value(&self, id: HandleId, kind: &str) -> Result<i32, Error> {
@@ -545,8 +556,9 @@ mod tests;
 mod objects;
 pub use objects::{
     CameraDestination, CameraFieldRecord, CameraState, DayNightState, DestructableBudget,
-    DestructableCreation, FileSoundState, MapConfig, MapConfigBudget, MapMusicSelection,
-    ObjectHost, PlayerAdmissionError, PlayerBudget, PlayerSettings, QuestBudget, QuestEvent,
-    QuestFlag, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest, StartLocation,
-    StartPriorities, StartPriority, StartupClockState, TechLimitBudget, TimerHost,
+    DestructableCreation, ExecutedUnit, FileSoundState, MapConfig, MapConfigBudget,
+    MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerBudget, PlayerSettings, QuestBudget,
+    QuestEvent, QuestFlag, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest,
+    StartLocation, StartPriorities, StartPriority, StartupClockState, TechLimitBudget, TimerHost,
+    UnitBudget,
 };

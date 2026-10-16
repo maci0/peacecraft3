@@ -471,3 +471,6 @@ mod player_research;
 
 #[path = "destructable_host_tests.rs"]
 mod destructable_creation;
+
+#[path = "unit_host_tests.rs"]
+mod unit_creation;

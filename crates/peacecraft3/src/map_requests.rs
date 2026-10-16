@@ -398,3 +398,28 @@ pub fn bind_metadata<E: std::error::Error + Send + Sync + 'static>(
         items,
     })))
 }
+
+impl MapBindings {
+    /// Clone the catalog arc this binding already selected.
+    ///
+    /// Install, edition, and map are `map_identity` and `map_label`, the same
+    /// pair map admission stores on `ImportedWorld.source`. Receipts stay on
+    /// this binding; they are not copied into a second catalog schema. No
+    /// application system constructs `ObjectHost`. A session factory must call
+    /// this while it still holds these bindings.
+    pub fn admit_executed_units(
+        &self,
+        host: pcx_play::playercolor_host::ObjectHost,
+        budget: pcx_play::playercolor_host::UnitBudget,
+    ) -> Result<pcx_play::playercolor_host::ObjectHost, pcx_play::playercolor_host::Error> {
+        host.with_unit_catalog(
+            Arc::clone(&self.catalog.0),
+            pcx_sim::world::Source {
+                install: self.map_identity.source.clone(),
+                edition: self.map_identity.edition.clone(),
+                map: self.map_label.clone(),
+            },
+            budget,
+        )
+    }
+}
