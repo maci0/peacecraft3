@@ -156,10 +156,16 @@ shows less of the 1-second entrance.
 - Native render captured on Xvfb with llvmpipe: the panel closes on the button
   stack with chains, metal border and the lower Quit housing in place. No audio
   device was present, so playback was not heard.
+- The menu material maps first-layer shading bits `0x40` and `0x80`. `0x40`
+  selects compare `Always` and forces the depth write off, because a disabled
+  OpenGL depth test leaves the depth buffer unchanged. `0x80` forces the write
+  off and leaves the compare. Clear bits keep `GreaterEqual` and the
+  blend-coupled write. The mapping is the pinned viewer profile. Original
+  Warcraft III depth execution remains unobserved.
 - Not verified: browser rendering (panels and textures resolve through imported
   archives by game path; sounds go through `peacecraft3Audio.event`), native
-  depth order, the alpha-test threshold, `0x40`/`0x80` depth flags, Hermite
-  quaternion parity, and the other glue screens' Birth/Death transitions.
+  depth order, the alpha-test threshold, Hermite quaternion parity, and the
+  other glue screens' Birth/Death transitions.
 
 ## Split-gate candidate boundary
 

@@ -121,7 +121,10 @@ honoured the way the name suggests, would need the shipped runtime or a capture.
    layer in either scene sets. The earlier hypothesis that the domes covered the
    scene by drawing without depth testing is therefore withdrawn.
 
-No culling or depth behaviour has been changed on any of this.
+Menu geometry maps `0x40` and `0x80` through the existing menu material.
+`0x40` disables the test and the write. `0x80` disables the write only.
+Culling is unchanged. What the original renderer does with those bits remains
+unestablished in this note.
 
 ## Minimal proposed fix
 

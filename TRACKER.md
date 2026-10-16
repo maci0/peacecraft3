@@ -1526,6 +1526,14 @@ checkpoint. Evidence is retained in `.scratch/menu-ui-native-root-20261017/`,
 `.scratch/menu-ui-cross-root-20261017/` and
 `.scratch/browser-display-profile-root-20261017/`.
 
+The authored depth bits now reach the background and panel material pipeline.
+Disabled depth testing also suppresses writes, matching the pinned viewer/OpenGL
+profile. All 108 RGB overlap checks and the existing geoset-colour GPU readback
+pass on Vulkan; 346 application tests, strict native/browser-WASM Clippy and
+warning-denied application documentation pass.
+Evidence is in `.scratch/menu-depth-root-20261017/verification-1/`. Original depth
+execution and a fresh browser menu capture remain open.
+
 The [101-entry requirements map](docs/remaining-work/README.md) reconciles the
 open and partial gates against source evidence and lists their prerequisites.
 It is pinned to the pre-correction tracker snapshot; broad gameplay and original

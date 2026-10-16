@@ -37,8 +37,18 @@ opacity remains in material base color before that test. PRE2 is unaffected.
 The primary viewer retains surviving combined alpha; Bevy Mask sets surviving
 alpha to one. Admitted coverage and unblended source RGB agree on these points,
 while framebuffer alpha and subsequent use require separate evaluation. Authored
-NoDepthSet/NoDepthTest overrides are not implemented by this mapping. No native
-execution or screenshots selected the cutoff. Native cutout parity remains open.
+NoDepthTest (`0x40`) and NoDepthSet (`0x80`) are applied by the menu material,
+independently of this cutoff. Khronos `glDepthMask` leaves the depth buffer
+unchanged when the depth test is disabled, even when the mask is true
+(<https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDepthMask.xhtml>,
+<https://wikis.khronos.org/opengl/GLAPI/glDepthMask>). The pinned viewer's
+`Layer.bind` reaches that state by disabling `DEPTH_TEST` before it sets the
+mask, so `0x40` selects `CompareFunction::Always` and forces the write off.
+`0x80` forces the write off and leaves the compare. Clear bits leave
+`GreaterEqual` and the blend-coupled write. The mapping is the pinned
+mdx-m3-viewer, war3-model, and Warsmash profile. Original Warcraft III depth
+execution remains unobserved. No native execution or screenshots selected the
+cutoff. Native cutout parity remains open.
 
 Synthetic ECS tests cover actual source-layer material construction, mode
 separation, preservation of authored material alpha

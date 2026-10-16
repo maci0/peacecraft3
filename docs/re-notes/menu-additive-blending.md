@@ -3,13 +3,15 @@
 Classic layer filter mode 3 requests ONE/ONE RGB addition. The previous menu
 binding used Bevy Add, whose shader multiplies RGB by alpha first. The shared
 menu geometry material now selects the existing StandardMaterial Premultiplied
-shader branch for mode 3 and specializes only the forward color blend to
-ONE/ONE/Add. Mode 4 retains ordinary Add. No shader fork, texture substitution,
-color adjustment or measured asset value is introduced. PRE2 and the UI logo
-have independent material paths.
+shader branch for mode 3 and specializes the forward color blend to
+ONE/ONE/Add. The same specialization applies shading bits `0x40` and `0x80`.
+`0x40` selects `Always` and forces the depth write off. `0x80` forces the
+write off and leaves the compare. Mode 4 retains ordinary Add. No shader fork,
+texture substitution, color adjustment or measured asset value is introduced.
+PRE2 and the UI logo have independent material paths.
 
-The extension key derives from the checked source filter word, not from Bevy's
-base alpha approximation. All source materials are prepared before any model
+The extension key carries the checked source filter word and shading bits
+`0x40` and `0x80`. All source materials are prepared before any model
 asset/entity writes; an unsupported or inconsistent later layer refuses the
 whole batch. The same store serves background and panel geometry. Opacity,
 KMTF and TXAN updates mutate the base material while retaining its handle and
@@ -18,8 +20,13 @@ specialization key; source sampler and ordering admission remain unchanged.
 The RGB equation does not establish original framebuffer-alpha behavior. The
 explicit compatibility policy preserves destination alpha, like the old Add
 path. Ordered rendering is retained rather than silently selecting weighted
-OIT. Existing zero-opacity visibility, first-layer-only rendering, cutout
-convention, Modulate2x and depth/culling gaps remain separate fidelity limits.
+OIT. Existing zero-opacity visibility, first-layer-only rendering, the cutout
+convention, and Modulate2x remain separate fidelity limits. Culling is
+unchanged. Filter mode 6 keeps the opaque depth write when both depth bits
+are clear; either bit forces that write off. The pinned viewers suppress the
+Modulate2x write even with both bits clear. A blend layer with `0x40` compares
+always and keeps its depth write off. Native depth order and original Warcraft
+III execution of these bits remain unobserved.
 
 ## Verification boundary
 
@@ -62,3 +69,24 @@ working background and Options controls. The fixture and captures stay local.
 The UI logo looks gold/blue in these captures, but its full material composition
 and comparison against a running original remain independent questions; this
 geometry change does not claim a separate logo-color fix or full menu fidelity.
+
+## Authored depth flags: current verification
+
+The source layer's shading word now reaches the shared background/panel material
+specialization. The disabled-test profile also disables writes: replacing an
+OpenGL disabled test with wgpu `Always` alone would incorrectly keep opaque
+depth writes. Descriptor tests cover opaque, mask, blend and additive modes,
+including unrelated state preservation and mode 6's existing clear-bit fallback.
+
+The actual Vulkan overlap readback passes 108 RGB checks over four cases:
+ordinary occlusion, a farther disabled-test layer, a nearer no-write layer, and
+a nearer disabled-test opaque layer. The last case distinguishes disabling the
+write from merely changing the comparison. The existing geoset-colour readback
+also passes through the shared harness. Both ran on Radeon RX 7900 XTX/RADV.
+The application suite passes 346 tests with 18 explicit ignores. Strict native
+and browser-WASM Clippy and warning-denied application documentation pass with
+stable source hashes. Formatting checks pass. Receipts are in
+`.scratch/menu-depth-root-20261017/verification-1/`.
+
+These checks establish the recreation's material pipeline. A rebuilt browser
+menu and original Warcraft III execution of the bits remain separate gates.

@@ -1,7 +1,7 @@
 //! Synthetic render-graph check; original-client colour-space parity is separate.
 use crate::{
     mainmenu_scene::apply_geoset_colour,
-    menu_material::{MenuMaterial, checked_source_mode},
+    menu_material::{MenuMaterial, NO_DEPTH_SET, NO_DEPTH_TEST, checked_source_mode},
 };
 use bevy::{
     asset::AssetPlugin,
@@ -24,6 +24,10 @@ use pcx_gfx::{
     mdx_runtime::{GeosetInput, RuntimeInput, RuntimePlan},
 };
 use std::time::Duration;
+
+const READBACK_WIDTH: u32 = 128;
+const READBACK_HEIGHT: u32 = 32;
+const QUAD_EXTENT: f32 = 0.75;
 
 fn plan(animated: bool) -> OpacityPlan {
     let mut data = Vec::new();
@@ -103,6 +107,12 @@ struct Capture {
     last: Vec<u8>,
 }
 
+struct GpuReadback {
+    bytes: Vec<u8>,
+    stride: usize,
+    completed: usize,
+}
+
 fn half(bytes: &[u8]) -> f32 {
     let bits = u16::from_le_bytes(bytes.try_into().unwrap());
     let sign = if bits & 0x8000 == 0 { 1.0 } else { -1.0 };
@@ -121,11 +131,7 @@ fn half(bytes: &[u8]) -> f32 {
     }
 }
 
-#[test]
-#[ignore = "requires a local Vulkan render adapter; synthetic GPU readback"]
-fn authored_geoset_colour_reaches_the_menu_material_render_graph() {
-    const WIDTH: u32 = 128;
-    const HEIGHT: u32 = 32;
+fn vulkan_menu_app(label: &str) -> App {
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -155,10 +161,19 @@ fn authored_geoset_colour_reaches_the_menu_material_render_graph() {
     app.finish();
     app.cleanup();
     println!(
-        "colour-readback adapter={:?}",
+        "{label} adapter={:?}",
         **app.world().resource::<RenderAdapterInfo>()
     );
-    let mut image = Image::new_target_texture(WIDTH, HEIGHT, TextureFormat::Rgba16Float, None);
+    app
+}
+
+fn spawn_readback_camera(app: &mut App) -> Handle<Image> {
+    let mut image = Image::new_target_texture(
+        READBACK_WIDTH,
+        READBACK_HEIGHT,
+        TextureFormat::Rgba16Float,
+        None,
+    );
     image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
     let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
     app.world_mut().spawn((
@@ -183,58 +198,44 @@ fn authored_geoset_colour_reaches_the_menu_material_render_graph() {
         DebandDither::Disabled,
         Msaa::Off,
     ));
-    let quad = app
-        .world_mut()
-        .resource_mut::<Assets<Mesh>>()
-        .add(Rectangle::new(0.75, 0.75));
-    let static_plan = plan(false);
-    let animated_plan = plan(true);
-    for (column, (plan, geoset, frame)) in [
-        (&static_plan, 1, 0),
-        (&animated_plan, 1, 0),
-        (&animated_plan, 1, 100),
-        (&static_plan, 0, 0),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let mut materials = app.world_mut().resource_mut::<Assets<MenuMaterial>>();
-        let handle = materials.add(
-            checked_source_mode(
-                StandardMaterial {
-                    base_color: Color::srgba(0.1, 0.2, 0.3, 0.7),
-                    unlit: true,
-                    fog_enabled: false,
-                    cull_mode: None,
-                    alpha_mode: AlphaMode::Opaque,
-                    ..default()
-                },
-                0,
-            )
-            .unwrap(),
-        );
-        apply_geoset_colour(
-            plan,
-            &[(geoset, Entity::PLACEHOLDER, handle.clone())],
-            frame,
-            0,
-            &mut materials,
+    target
+}
+
+fn add_menu_material(
+    materials: &mut Assets<MenuMaterial>,
+    base_color: Color,
+    alpha_mode: AlphaMode,
+    filter_mode: u32,
+    shading_flags: u32,
+) -> Handle<MenuMaterial> {
+    materials.add(
+        checked_source_mode(
+            StandardMaterial {
+                base_color,
+                unlit: true,
+                fog_enabled: false,
+                cull_mode: None,
+                alpha_mode,
+                ..default()
+            },
+            filter_mode,
+            shading_flags,
         )
-        .unwrap();
-        assert_eq!(materials.get(&handle).unwrap().base.base_color.alpha(), 0.7);
-        app.world_mut().spawn((
-            Mesh3d(quad.clone()),
-            MeshMaterial3d(handle),
-            Transform::from_xyz(column as f32 - 1.5, 0.0, 0.0),
-        ));
-    }
+        .unwrap(),
+    )
+}
+
+fn drive_readback(app: &mut App, target: Handle<Image>) -> GpuReadback {
     for frame in 0..48 {
         if frame == 24 {
             app.world_mut()
                 .spawn(Readback::texture(target.clone()))
                 .observe(
                     |event: On<ReadbackComplete>, mut capture: ResMut<Capture>| {
-                        assert!(event.data.len() <= (WIDTH as usize * 8 + 256) * HEIGHT as usize);
+                        assert!(
+                            event.data.len()
+                                <= (READBACK_WIDTH as usize * 8 + 256) * READBACK_HEIGHT as usize
+                        );
                         capture.completed += 1;
                         capture.last.clone_from(&event.data);
                     },
@@ -255,9 +256,101 @@ fn authored_geoset_colour_reaches_the_menu_material_render_graph() {
         capture.completed > 0,
         "no readback within deterministic frame cap"
     );
-    assert!(capture.last.len().is_multiple_of(HEIGHT as usize));
-    let stride = capture.last.len() / HEIGHT as usize;
-    assert!(stride >= WIDTH as usize * 8);
+    assert!(capture.last.len().is_multiple_of(READBACK_HEIGHT as usize));
+    let stride = capture.last.len() / READBACK_HEIGHT as usize;
+    assert!(stride >= READBACK_WIDTH as usize * 8);
+    GpuReadback {
+        bytes: capture.last.clone(),
+        stride,
+        completed: capture.completed,
+    }
+}
+
+fn channel_at(
+    bytes: &[u8],
+    stride: usize,
+    column: usize,
+    dx: usize,
+    dy: usize,
+    channel: usize,
+) -> f32 {
+    let column_px = READBACK_WIDTH as usize / 4;
+    let offset = dy * stride + (column * column_px + dx) * 8 + channel * 2;
+    half(&bytes[offset..offset + 2])
+}
+
+fn spawn_menu_quad(
+    app: &mut App,
+    mesh: &Handle<Mesh>,
+    place: (usize, f32),
+    source: (Color, AlphaMode, u32, u32),
+) {
+    let (column, z) = place;
+    let (color, alpha_mode, filter_mode, shading_flags) = source;
+    let handle = {
+        let mut materials = app.world_mut().resource_mut::<Assets<MenuMaterial>>();
+        add_menu_material(
+            &mut materials,
+            color,
+            alpha_mode,
+            filter_mode,
+            shading_flags,
+        )
+    };
+    app.world_mut().spawn((
+        Mesh3d(mesh.clone()),
+        MeshMaterial3d(handle),
+        Transform::from_xyz(column as f32 - 1.5, 0.0, z),
+    ));
+}
+
+#[test]
+#[ignore = "requires a local Vulkan render adapter; synthetic GPU readback"]
+fn authored_geoset_colour_reaches_the_menu_material_render_graph() {
+    let mut app = vulkan_menu_app("colour-readback");
+    let target = spawn_readback_camera(&mut app);
+    let quad = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Rectangle::new(QUAD_EXTENT, QUAD_EXTENT));
+    let static_plan = plan(false);
+    let animated_plan = plan(true);
+    for (column, (plan, geoset, frame)) in [
+        (&static_plan, 1, 0),
+        (&animated_plan, 1, 0),
+        (&animated_plan, 1, 100),
+        (&static_plan, 0, 0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let handle = {
+            let mut materials = app.world_mut().resource_mut::<Assets<MenuMaterial>>();
+            let handle = add_menu_material(
+                &mut materials,
+                Color::srgba(0.1, 0.2, 0.3, 0.7),
+                AlphaMode::Opaque,
+                0,
+                0,
+            );
+            apply_geoset_colour(
+                plan,
+                &[(geoset, Entity::PLACEHOLDER, handle.clone())],
+                frame,
+                0,
+                &mut materials,
+            )
+            .unwrap();
+            assert_eq!(materials.get(&handle).unwrap().base.base_color.alpha(), 0.7);
+            handle
+        };
+        app.world_mut().spawn((
+            Mesh3d(quad.clone()),
+            MeshMaterial3d(handle),
+            Transform::from_xyz(column as f32 - 1.5, 0.0, 0.0),
+        ));
+    }
+    let readback = drive_readback(&mut app, target);
     let expected = [
         [0.25, 0.5, 0.75],
         [0.0, 0.0, 1.0],
@@ -270,13 +363,12 @@ fn authored_geoset_colour_reaches_the_menu_material_render_graph() {
         let linear = Color::srgb(rgb[0], rgb[1], rgb[2]).to_linear();
         for dy in [15, 16, 17] {
             for dx in [15, 16, 17] {
-                let offset = dy * stride + (column * 32 + dx) * 8;
                 for (channel, expected) in [linear.red, linear.green, linear.blue]
                     .into_iter()
                     .enumerate()
                 {
-                    let at = offset + channel * 2;
-                    let actual = half(&capture.last[at..at + 2]);
+                    let actual =
+                        channel_at(&readback.bytes, readback.stride, column, dx, dy, channel);
                     assert!(
                         actual.is_finite() && (actual - expected).abs() < 0.002,
                         "column={column} channel={channel} expected={expected} actual={actual}"
@@ -299,6 +391,73 @@ fn authored_geoset_colour_reaches_the_menu_material_render_graph() {
     }
     println!(
         "colour-readback frames=48 completed={} pixels=36 rgb_checks={checks} target=Rgba16Float",
-        capture.completed
+        readback.completed
+    );
+}
+
+#[test]
+#[ignore = "requires a local Vulkan render adapter; synthetic GPU readback"]
+fn depth_flags_change_overlapping_opaque_and_blend_visibility() {
+    // Near red is opaque and spawned before far transparent blue.
+    // Columns are control, farther 0x40, nearer 0x80, and nearer 0x40 only.
+    // Column 1 is blue from the far quad's Always compare. The descriptor
+    // keeps that blend write off. Column 3 is blue when the nearer 0x40 quad
+    // leaves the cleared depth; a surviving opaque write leaves it red.
+    let columns = [
+        (0, 0),
+        (0, NO_DEPTH_TEST),
+        (NO_DEPTH_SET, 0),
+        (NO_DEPTH_TEST, 0),
+    ];
+    let mut app = vulkan_menu_app("depth-readback");
+    let target = spawn_readback_camera(&mut app);
+    let quad = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Rectangle::new(QUAD_EXTENT, QUAD_EXTENT));
+    let near = Color::linear_rgb(1.0, 0.0, 0.0);
+    let far = Color::linear_rgb(0.0, 0.0, 1.0);
+    for (column, (near_flags, _)) in columns.iter().copied().enumerate() {
+        spawn_menu_quad(
+            &mut app,
+            &quad,
+            (column, 1.0),
+            (near, AlphaMode::Opaque, 0, near_flags),
+        );
+    }
+    for (column, (_, far_flags)) in columns.iter().copied().enumerate() {
+        spawn_menu_quad(
+            &mut app,
+            &quad,
+            (column, -1.0),
+            (far, AlphaMode::Blend, 2, far_flags),
+        );
+    }
+    let readback = drive_readback(&mut app, target);
+    let expected = [
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0],
+    ];
+    let mut checks = 0;
+    for (column, rgb) in expected.into_iter().enumerate() {
+        for dy in [15, 16, 17] {
+            for dx in [15, 16, 17] {
+                for (channel, expected) in rgb.into_iter().enumerate() {
+                    let actual =
+                        channel_at(&readback.bytes, readback.stride, column, dx, dy, channel);
+                    assert!(
+                        actual.is_finite() && (actual - expected).abs() < 0.002,
+                        "column={column} channel={channel} expected={expected} actual={actual}"
+                    );
+                    checks += 1;
+                }
+            }
+        }
+    }
+    println!(
+        "depth-readback frames=48 completed={} pixels=36 rgb_checks={checks} target=Rgba16Float",
+        readback.completed
     );
 }

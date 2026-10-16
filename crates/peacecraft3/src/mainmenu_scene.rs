@@ -1116,6 +1116,7 @@ pub fn preflight_geosets<'a>(
                 ..default()
             },
             layer.properties.filter_mode,
+            layer.properties.shading_flags,
         )
         .map_err(|error| {
             SceneError::Decode(format!(
@@ -1903,6 +1904,7 @@ mod tests {
                     ..default()
                 },
                 3,
+                0,
             )
             .unwrap(),
         );
