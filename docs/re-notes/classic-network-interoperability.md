@@ -14,8 +14,8 @@ crossplay, classic authentication and ten-minute mixed-client matches remain
 unverified.
 
 `classic_frame` now provides a separate bounded BNCS/W3GS header codec and
-native TCP caller. Packet bodies remain opaque; this is not realm login or
-W3GS lobby/gameplay support.
+native TCP caller. Typed readers cover the selected authentication challenge
+and W3GS join refusals. This is not realm login or W3GS lobby/gameplay support.
 
 ## Public references checked on 2026-10-16
 
@@ -124,8 +124,8 @@ connecting or writing and rearms each partial read/write against one absolute
 deadline. It accepts an explicit socket address; the reference probe alone is
 restricted to the owned loopback endpoint.
 
-Root verification against an isolated copy of the committed sources passes all
-100 native network checks, including 15 framing/TCP
+At the framing integration, root verification against isolated committed sources
+passed all 100 native network checks, including 15 framing/TCP
 cases, and ten actual WASI codec tests. Strict native/WASM checks, rustdoc and
 both library builds pass. A fresh probe compiled against the integrated library
 matches the pinned realm's init/auth-info exchange and its missing-init negative
@@ -134,5 +134,28 @@ no elapsed-time performance threshold is used. Commands and receipts are in
 `.scratch/classic-network-20261016/root-framing/`.
 
 This advances NET-C02 framing only. No W3GS peer, original client, account or key
-was used. Message-body codecs, authentication, lobby negotiation and sustained
-mixed-client play remain open.
+was used. Authentication, remaining message bodies, lobby negotiation and
+sustained mixed-client play remain open.
+
+## Typed authentication challenge and join refusal
+
+The challenge reader accepts an already validated BNCS frame, a caller-selected
+reply variant and the expected versioncheck filename/equation bytes. It borrows
+those packet fields without allocating, checks terminators and caller string
+caps, and requires the selected variant's exact signature tail. The equation
+is compared with the selected profile; it is not executed. The source contract
+is PvPGN `9cd173f4e02ba3d9f8f15a67ca308b5eb78723e4`. This is a challenge
+reader, not account authentication or signature verification.
+
+The W3GS reader requires packet id `W3GS_REJECTJOIN` and exactly one
+little-endian reason word. The three named reasons follow GHost++
+`6ba90f426e96f80fe013a468d1e07151a510adbe`; any other value remains raw.
+Every decoded reason is a refusal. Another packet, including slot-info join,
+is an error for this reader and never counts as admission.
+
+Synthetic native and WASI tests cover malformed fields, selected-profile
+mismatches, wrong packet families/ids and typed parsing after the existing
+stream decoder/TCP caller. The root realm probe uses the integrated reader
+and profile fields loaded from the pinned local server sources. No account,
+key, original client or gameplay session is involved. Root evidence is in
+`.scratch/classic-network-20261016/root-typed-messages/`. NET-C02 remains partial.

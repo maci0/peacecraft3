@@ -1,12 +1,16 @@
 //! BNCS (`0xFF`) and W3GS (`0xF7`) header framing.
 //!
-//! The four-byte header is the whole of this crate's protocol knowledge.
-//! BNCS length is the `t_bnet_header.size` field in pinned PvPGN
-//! `src/common/bnet_protocol.h`: a little-endian count of the whole packet,
-//! including the header, and the first stored type byte is `0xFF`.
-//! W3GS uses the same width. Pinned GHost++ `ghost/gameprotocol.h` defines
-//! `W3GS_HEADER_CONSTANT` as 247, and `AssignLength` writes the packet's byte
-//! count into indices 2 and 3. Bodies are opaque. They are not simulation state.
+//! The four-byte header is the framing contract. BNCS length is the
+//! `t_bnet_header.size` field in pinned PvPGN `src/common/bnet_protocol.h`: a
+//! little-endian count of the whole packet, including the header, and the
+//! first stored type byte is `0xFF`. W3GS uses the same width. Pinned GHost++
+//! `ghost/gameprotocol.h` commit `6ba90f426e96f80fe013a468d1e07151a510adbe`
+//! defines `W3GS_HEADER_CONSTANT` as 247, and `AssignLength` writes the
+//! packet's byte count into indices 2 and 3. Bodies stay opaque except
+//! [`Frame::reject_join`] and [`auth_info`], which read join refusals and
+//! source-profile-qualified authentication challenges.
+//! A decoded reason is always a refusal. It is not admission and it is not
+//! simulation state.
 //!
 //! Resource limits are caller-supplied. A declared length above that limit is
 //! refused before any buffer is grown to the declared size. A decoding error
@@ -21,6 +25,18 @@ pub const BNCS_FAMILY: u8 = 0xFF;
 
 /// GHost++ `W3GS_HEADER_CONSTANT`.
 pub const W3GS_FAMILY: u8 = 247;
+
+/// GHost++ `W3GS_REJECTJOIN` at commit `6ba90f426e96f80fe013a468d1e07151a510adbe`.
+pub const W3GS_REJECTJOIN: u8 = 5;
+
+/// GHost++ `REJECTJOIN_FULL` from that same `gameprotocol.h`.
+pub const REJECTJOIN_FULL: u32 = 9;
+
+/// GHost++ `REJECTJOIN_STARTED` from that same `gameprotocol.h`.
+pub const REJECTJOIN_STARTED: u32 = 10;
+
+/// GHost++ `REJECTJOIN_WRONGPASSWORD` from that same `gameprotocol.h`.
+pub const REJECTJOIN_WRONGPASSWORD: u32 = 27;
 
 /// Marker, identifier, and little-endian length.
 pub const HEADER_LEN: usize = 4;
@@ -65,6 +81,30 @@ impl OwnedFrame {
     pub fn body(&self) -> &[u8] {
         &self.bytes[HEADER_LEN..]
     }
+
+    /// Parse a challenge against the caller-selected product and versioncheck profile.
+    pub fn server_auth_info(
+        &self,
+        variant: auth_info::AuthReplyVariant,
+        profile: auth_info::CheckRevisionProfile<'_>,
+        limits: auth_info::AuthInfoLimits,
+    ) -> Result<auth_info::ServerAuthInfo<'_>, auth_info::AuthInfoError> {
+        auth_info::parse(
+            self.family(),
+            self.id(),
+            self.body(),
+            variant,
+            profile,
+            limits,
+        )
+    }
+
+    /// Read a W3GS reject-join reason from this frame.
+    ///
+    /// [`Ok`] is a refusal. This method does not admit a player.
+    pub fn reject_join(&self) -> Result<RejectJoin, RejectJoinError> {
+        classify_reject_join(self.family(), self.id(), self.body())
+    }
 }
 
 /// A frame borrowed from the caller's buffer. Constructing one does not allocate.
@@ -97,6 +137,30 @@ impl<'a> Frame<'a> {
     /// Bytes after the four-byte header.
     pub fn body(self) -> &'a [u8] {
         &self.bytes[HEADER_LEN..]
+    }
+
+    /// Parse a challenge against the caller-selected product and versioncheck profile.
+    pub fn server_auth_info(
+        self,
+        variant: auth_info::AuthReplyVariant,
+        profile: auth_info::CheckRevisionProfile<'_>,
+        limits: auth_info::AuthInfoLimits,
+    ) -> Result<auth_info::ServerAuthInfo<'a>, auth_info::AuthInfoError> {
+        auth_info::parse(
+            self.family(),
+            self.id(),
+            self.body(),
+            variant,
+            profile,
+            limits,
+        )
+    }
+
+    /// Read a W3GS reject-join reason from this frame.
+    ///
+    /// [`Ok`] is a refusal. This method does not admit a player.
+    pub fn reject_join(self) -> Result<RejectJoin, RejectJoinError> {
+        classify_reject_join(self.family(), self.id(), self.body())
     }
 }
 
@@ -169,6 +233,70 @@ impl fmt::Display for FrameError {
 }
 
 impl std::error::Error for FrameError {}
+
+/// A decoded W3GS reject-join reason.
+///
+/// Every variant refuses the join. GHost++ `SEND_W3GS_REJECTJOIN` appends one
+/// `uint32_t` through `UTIL_AppendByteArray(packet, reason, false)`. At commit
+/// `6ba90f426e96f80fe013a468d1e07151a510adbe`, `false` keeps the low byte first
+/// from `UTIL_CreateByteArray`, so the reason is little-endian.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RejectJoin {
+    /// `REJECTJOIN_FULL`.
+    Full,
+    /// `REJECTJOIN_STARTED`.
+    Started,
+    /// `REJECTJOIN_WRONGPASSWORD`.
+    WrongPassword,
+    /// A reason other than the three named constants, retained raw.
+    Unknown(u32),
+}
+
+/// Why a frame is not a W3GS reject-join refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RejectJoinError {
+    /// Header family is not [`W3GS_FAMILY`].
+    WrongFamily(u8),
+    /// Header id is not [`W3GS_REJECTJOIN`].
+    WrongId(u8),
+    /// Body is not the four-byte reason.
+    BodyLength {
+        /// Body length that was refused.
+        len: usize,
+    },
+}
+
+impl fmt::Display for RejectJoinError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WrongFamily(family) => write!(f, "reject-join family {family} is not W3GS"),
+            Self::WrongId(id) => write!(f, "reject-join id {id} is not W3GS_REJECTJOIN"),
+            Self::BodyLength { len } => {
+                write!(f, "reject-join body is {len} bytes, not the 4-byte reason")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RejectJoinError {}
+
+fn classify_reject_join(family: u8, id: u8, body: &[u8]) -> Result<RejectJoin, RejectJoinError> {
+    if family != W3GS_FAMILY {
+        return Err(RejectJoinError::WrongFamily(family));
+    }
+    if id != W3GS_REJECTJOIN {
+        return Err(RejectJoinError::WrongId(id));
+    }
+    let Ok(bytes) = <[u8; 4]>::try_from(body) else {
+        return Err(RejectJoinError::BodyLength { len: body.len() });
+    };
+    Ok(match u32::from_le_bytes(bytes) {
+        REJECTJOIN_FULL => RejectJoin::Full,
+        REJECTJOIN_STARTED => RejectJoin::Started,
+        REJECTJOIN_WRONGPASSWORD => RejectJoin::WrongPassword,
+        raw => RejectJoin::Unknown(raw),
+    })
+}
 
 /// Streaming decoder.
 ///
@@ -371,6 +499,8 @@ fn validate_header(header: &[u8], max_frame_bytes: usize) -> Result<usize, Frame
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tcp;
 
+pub mod auth_info;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,6 +654,108 @@ mod tests {
         assert_eq!(error, FrameError::FrameCount { limit: 1 });
         assert_eq!(decoder.buffered_len(), 0);
         assert_eq!(decoder.finish().unwrap_err(), error);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn frames_from_decoded_caller(bytes: &[u8], max_frames: usize) -> Vec<OwnedFrame> {
+        use std::io::{self, Read, Write};
+        use std::time::{Duration, Instant};
+
+        struct Reply {
+            data: Vec<u8>,
+            pos: usize,
+        }
+
+        impl Read for Reply {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                let rest = &self.data[self.pos..];
+                let count = rest.len().min(buf.len());
+                buf[..count].copy_from_slice(&rest[..count]);
+                self.pos += count;
+                Ok(count)
+            }
+        }
+
+        impl Write for Reply {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut stream = Reply {
+            data: bytes.to_vec(),
+            pos: 0,
+        };
+        let policy = super::tcp::CallPolicy {
+            deadline: Instant::now() + Duration::from_secs(2),
+            connect_timeout: Duration::from_secs(1),
+            max_write_bytes: 1,
+            max_read_bytes: bytes.len().max(1),
+            frames: limits(64, max_frames),
+        };
+        super::tcp::exchange_io(&mut stream, b"", &policy, |_stream, timeout| {
+            assert!(!timeout.is_zero());
+            Ok(())
+        })
+        .unwrap_or_else(|error| panic!("exchange_io failed: {error}"))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn frames_from_decoded_caller(bytes: &[u8], max_frames: usize) -> Vec<OwnedFrame> {
+        let mut decoder = Decoder::new(limits(64, max_frames)).unwrap();
+        let frames = decoder.push(bytes).unwrap();
+        decoder.finish().unwrap();
+        frames
+    }
+
+    #[test]
+    fn decoded_exchange_reject_join_refuses_named_and_unknown_reasons() {
+        let named = [
+            (REJECTJOIN_FULL, RejectJoin::Full),
+            (REJECTJOIN_STARTED, RejectJoin::Started),
+            (REJECTJOIN_WRONGPASSWORD, RejectJoin::WrongPassword),
+        ];
+        let mut packets = Vec::new();
+        for (reason, _) in named {
+            packets.push(encode(W3GS_FAMILY, W3GS_REJECTJOIN, &reason.to_le_bytes()).unwrap());
+        }
+        packets.push(encode(W3GS_FAMILY, W3GS_REJECTJOIN, &1u32.to_le_bytes()).unwrap());
+        packets.push(encode(W3GS_FAMILY, W3GS_REJECTJOIN, &0u32.to_le_bytes()).unwrap());
+        packets.push(encode(BNCS_FAMILY, W3GS_REJECTJOIN, &REJECTJOIN_FULL.to_le_bytes()).unwrap());
+        // Pinned `W3GS_SLOTINFOJOIN` is 4. That frame is not admission here.
+        packets.push(encode(W3GS_FAMILY, 4, &REJECTJOIN_FULL.to_le_bytes()).unwrap());
+        packets.push(encode(W3GS_FAMILY, W3GS_REJECTJOIN, &[9, 0, 0]).unwrap());
+        packets.push(encode(W3GS_FAMILY, W3GS_REJECTJOIN, &[9, 0, 0, 0, 1]).unwrap());
+
+        let mut stream = Vec::new();
+        for packet in &packets {
+            stream.extend_from_slice(packet);
+        }
+        let frames = frames_from_decoded_caller(&stream, packets.len());
+        assert_eq!(frames.len(), packets.len());
+
+        for (frame, (_, expected)) in frames.iter().zip(named) {
+            assert_eq!(frame.reject_join(), Ok(expected));
+        }
+        assert_eq!(frames[3].reject_join(), Ok(RejectJoin::Unknown(1)));
+        assert_eq!(frames[4].reject_join(), Ok(RejectJoin::Unknown(0)));
+        assert_eq!(
+            frames[5].reject_join(),
+            Err(RejectJoinError::WrongFamily(BNCS_FAMILY))
+        );
+        assert_eq!(frames[6].reject_join(), Err(RejectJoinError::WrongId(4)));
+        assert_eq!(
+            frames[7].reject_join(),
+            Err(RejectJoinError::BodyLength { len: 3 })
+        );
+        assert_eq!(
+            frames[8].reject_join(),
+            Err(RejectJoinError::BodyLength { len: 5 })
+        );
     }
 
     #[test]

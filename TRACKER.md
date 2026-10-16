@@ -1009,8 +1009,10 @@ Format: `date — subsystem — symptom — root cause — status`
       This is a reference server, not original-client login or gameplay.
 - [~] NET-C02: BNCS/W3GS header framing and a bounded native TCP caller pass
       fragmented/malformed/count/size tests and the owned PvPGN init/auth-info
-      probe. Message bodies remain opaque; the project codec is a separate
-      protocol. Original-client and lobby/gameplay checks remain open.
+      probe. Typed challenge parsing checks the selected versioncheck profile;
+      W3GS reject-join decoding always returns a refusal, including raw unknown
+      reasons. Other message bodies and the project codec remain separate.
+      Original-client and lobby/gameplay checks remain open.
 - [ ] NET-C03: PeaceCraft discovers and joins an original Legacy 1.29b LAN host
       over its original UDP discovery / TCP game path.
 - [ ] NET-C04: Original unmodified Legacy 1.29b client discovers and joins a

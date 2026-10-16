@@ -157,7 +157,7 @@ fn arm_tcp(stream: &mut TcpStream, timeout: Duration) -> Result<(), CallError> {
 /// that blocks past that duration can still overrun the deadline; [`exchange`]
 /// arms a real socket. `Interrupted` is retried until the deadline elapses.
 /// `policy.connect_timeout` is not used here.
-fn exchange_io<S: Read + Write>(
+pub(super) fn exchange_io<S: Read + Write>(
     stream: &mut S,
     request: &[u8],
     policy: &CallPolicy,
