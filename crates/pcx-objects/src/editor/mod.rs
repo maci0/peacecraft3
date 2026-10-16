@@ -161,6 +161,7 @@ use pcx_mpq::MpqSet;
 
 use crate::Error;
 
+pub mod campaign_index;
 pub mod defaults;
 pub mod meta;
 pub mod object;

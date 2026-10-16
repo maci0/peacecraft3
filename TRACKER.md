@@ -1178,6 +1178,12 @@ Format: `date — subsystem — symptom — root cause — status`
       and seven stacked registrations; its next refusal is `CreateCameraSetup`.
       This probe still uses the explicitly identified compatibility object catalog;
       launcher bank preparation remains open.
+      The selected CampaignStrings reader now derives ordered chapter/map
+      records through the shared profile parser, retaining blank slots and
+      uninterpreted extra fields. Synthetic native/WASI checks and explicit
+      base/expansion member gates pass. Unlock/progress rules, chapter UI and
+      the map execution caller remain open; see
+      `docs/re-notes/campaign-index.md`.
       Raw table flags remain separate from effective settings.
       Explicit parameter collections now retain each assigned table/row/source,
       reject cross-table label ambiguity and preserve a separate dialogue schema

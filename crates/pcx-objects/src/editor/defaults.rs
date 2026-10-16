@@ -247,7 +247,7 @@ struct Assignment {
     parse_error: Option<String>,
 }
 
-struct ParsedProfile {
+pub(crate) struct ParsedProfile {
     sections: Sections,
     unresolved: Vec<Unresolved>,
 }
@@ -904,7 +904,36 @@ fn profile_families(member: &str) -> Vec<Family> {
     }
 }
 
-fn parse_profile(bytes: &[u8], member: &str) -> Result<ParsedProfile, Unresolved> {
+impl ParsedProfile {
+    pub(crate) fn unresolved(&self) -> &[Unresolved] {
+        &self.unresolved
+    }
+
+    pub(crate) fn has_section(&self, section: &str) -> bool {
+        self.sections.contains_key(section)
+    }
+
+    pub(crate) fn keys(&self, section: &str) -> Option<Vec<&str>> {
+        self.sections
+            .get(section)
+            .map(|keys| keys.keys().map(String::as_str).collect())
+    }
+
+    pub(crate) fn raw_fields(&self, section: &str, key: &str) -> Vec<(usize, &str)> {
+        self.sections
+            .get(section)
+            .and_then(|keys| keys.get(key))
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| (item.line, item.raw.as_str()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+pub(crate) fn parse_profile(bytes: &[u8], member: &str) -> Result<ParsedProfile, Unresolved> {
     let error = |detail: String| Unresolved::Asset {
         member: member.into(),
         detail,
@@ -956,15 +985,8 @@ fn parse_profile(bytes: &[u8], member: &str) -> Result<ParsedProfile, Unresolved
             continue;
         }
         let raw = value.trim();
-        let (value, parse_error) = match profile_elements(raw) {
-            Ok(elements) => (
-                if elements.len() == 1 {
-                    elements[0]
-                } else {
-                    raw
-                },
-                None,
-            ),
+        let (value, parse_error) = match profile_value(raw) {
+            Ok(value) => (value, None),
             Err(detail) => {
                 unresolved.push(line_error(detail.clone()));
                 (raw, Some(detail))
@@ -989,24 +1011,43 @@ fn parse_profile(bytes: &[u8], member: &str) -> Result<ParsedProfile, Unresolved
 }
 
 /// Quotes shield commas. Backslashes are literal Warcraft paths, not escapes.
-fn profile_elements(raw: &str) -> Result<Vec<&str>, String> {
-    let mut quoted = false;
-    let mut start = 0;
-    let mut elements = Vec::new();
-    for (index, ch) in raw.char_indices() {
-        if ch == '"' {
-            quoted = !quoted;
+pub(crate) fn profile_elements(raw: &str) -> Result<Vec<&str>, String> {
+    profile_elements_iter(raw).collect()
+}
+
+/// Validate borrowed fields incrementally so callers can bound output growth.
+pub(crate) fn profile_elements_iter(raw: &str) -> impl Iterator<Item = Result<&str, String>> {
+    let mut tail = Some(raw);
+    std::iter::from_fn(move || {
+        let raw = tail.take()?;
+        let mut quoted = false;
+        for (index, ch) in raw.char_indices() {
+            if ch == '"' {
+                quoted = !quoted;
+            } else if ch == ',' && !quoted {
+                tail = Some(&raw[index + 1..]);
+                return Some(profile_element(&raw[..index]));
+            }
         }
-        if ch == ',' && !quoted {
-            elements.push(profile_element(&raw[start..index])?);
-            start = index + 1;
-        }
+        Some(if quoted {
+            Err("unterminated profile quote".into())
+        } else {
+            profile_element(raw)
+        })
+    })
+}
+
+fn profile_value(raw: &str) -> Result<&str, String> {
+    let mut fields = profile_elements_iter(raw);
+    let first = fields
+        .next()
+        .expect("even an empty profile has one field")?;
+    let mut multiple = false;
+    for field in fields {
+        field?;
+        multiple = true;
     }
-    if quoted {
-        return Err("unterminated profile quote".into());
-    }
-    elements.push(profile_element(&raw[start..])?);
-    Ok(elements)
+    Ok(if multiple { raw } else { first })
 }
 
 fn profile_element(raw: &str) -> Result<&str, String> {
