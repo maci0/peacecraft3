@@ -29,6 +29,7 @@ pub struct ObjectHost {
     camera_setups: Option<camera_setup::Admission>,
     destructables: Option<destructables::Admission>,
     units: Option<unit_creation::Admission>,
+    triggers: Option<trigger_admission::Admission>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -63,6 +64,7 @@ impl ObjectHost {
             camera_setups: None,
             destructables: None,
             units: None,
+            triggers: None,
         })
     }
     fn contract(
@@ -345,6 +347,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.unit_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.trigger_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(limit) = self.group_limit
             && matches!(
                 name,
@@ -436,3 +441,7 @@ pub use destructables::{DestructableBudget, DestructableCreation};
 #[path = "unit_host.rs"]
 mod unit_creation;
 pub use unit_creation::{ExecutedUnit, UnitBudget};
+
+#[path = "trigger_host.rs"]
+mod trigger_admission;
+pub use trigger_admission::{TriggerBudget, UnitEventRegistration};

@@ -80,6 +80,8 @@ pub enum Failure {
         requested: [u8; 4],
         problem: Box<pcx_sim::world::ResolutionProblem>,
     },
+    #[error("trigger admission: {0}")]
+    TriggerState(&'static str),
     #[error("host identity capacity or allocation exceeded")]
     Capacity,
 }
@@ -177,6 +179,15 @@ enum Entry {
     },
     Unit {
         record: objects::ExecutedUnit,
+    },
+    /// Trigger identity, without an inferred enabled-state default.
+    Trigger,
+    /// One `event` handle for a loaded `TriggerRegisterUnitEvent` call.
+    RegisteredUnitEvent {
+        trigger: HandleId,
+        unit: HandleId,
+        unitevent: HandleId,
+        enumerand: i32,
     },
 }
 pub struct EnumHost {
@@ -487,6 +498,8 @@ impl EnumHost {
             Entry::CameraSetup { .. } => "camerasetup",
             Entry::Destructable { .. } => "destructable",
             Entry::Unit { .. } => "unit",
+            Entry::Trigger => "trigger",
+            Entry::RegisteredUnitEvent { .. } => "event",
         })
     }
     pub fn symbolic_value(&self, id: HandleId, kind: &str) -> Result<i32, Error> {
@@ -568,5 +581,5 @@ pub use objects::{
     MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerBudget, PlayerSettings, QuestBudget,
     QuestEvent, QuestFlag, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest,
     StartLocation, StartPriorities, StartPriority, StartupClockState, TechLimitBudget, TimerHost,
-    UnitBudget,
+    TriggerBudget, UnitBudget, UnitEventRegistration,
 };

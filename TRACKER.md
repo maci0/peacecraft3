@@ -1168,8 +1168,8 @@ Format: `date — subsystem — symptom — root cause — status`
       FDF-derived grid bounds. Actual browser import/resize captures show the
       expected fill extents. The strict one-pixel edge diagnostic fails on two
       edges (maximum 1.133 pixels); inner edges/state art remain unfinished.
-- [!] Original script execution fails closed on unsupported
-      `GetPlayerNeutralPassive` during `common.j` initialization; original
+- [!] Original script execution remains incomplete. Selected-map adapters now
+      pass the earlier `GetPlayerNeutralPassive` initialization boundary; original
       campaign completion and native behavior are not established.
       Opt-in selected-map adapters derive passive/aggressive and first-family
       `GetBJMaxPlayers`/`GetBJPlayerNeutralVictim`/`GetBJPlayerNeutralExtra`/
@@ -1213,8 +1213,15 @@ Format: `date — subsystem — symptom — root cause — status`
       is `CreateDeadDestructableZ` at map span `58398..58471`. Admitting the
       declared create variants then retains five creation records, including
       the executed dead form and its supplied `z`; the next refusal is
-      `CreateUnit` at map span `69421..69469`. No world objects or rendering are
-      claimed. These values do not yet enforce construction, training or
+      `CreateUnit` at map span `69421..69469`. Source-bound unit creation now
+      retains 53 executed unit records against the same selected catalog and one
+      explicit acquire-range assignment. Shared-arena trigger admission then
+      retains one trigger and one unit-event registration with their exact
+      captured identities and symbolic enumerand. The next refusal is
+      `TriggerAddAction` at map span `68526..68583`; action execution and event
+      delivery remain open. See `docs/re-notes/script-trigger-admission.md`.
+      No world objects or rendering are claimed. These values do not yet enforce
+      construction, training or
       upgrade effects. Applied camera motion remains open. See
       `docs/re-notes/script-camera-setups.md`.
       This probe still uses the explicitly identified compatibility object catalog;
