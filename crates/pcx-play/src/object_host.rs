@@ -21,6 +21,7 @@ pub struct ObjectHost {
     sound_starts: Vec<HandleId>,
     startup_clock: Option<clock::StartupClockState>,
     map_music: Option<music::State>,
+    quests: Option<crate::quest_session::QuestSession>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -47,6 +48,7 @@ impl ObjectHost {
             sound_starts: Vec::new(),
             startup_clock: None,
             map_music: None,
+            quests: None,
         })
     }
     fn contract(
@@ -295,6 +297,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.config_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.quest_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(limit) = self.group_limit
             && matches!(
                 name,
@@ -359,3 +364,7 @@ pub use files::FileSoundState;
 
 #[path = "sound_parameter_host.rs"]
 mod parameters;
+
+#[path = "quest_host.rs"]
+mod quests;
+pub use quests::{QuestBudget, QuestEvent, QuestFlag};

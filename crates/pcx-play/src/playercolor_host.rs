@@ -63,6 +63,10 @@ pub enum Failure {
     Identity,
     #[error("handle identifies another family")]
     WrongFamily,
+    #[error("arguments do not match the quest native declaration")]
+    QuestArguments,
+    #[error("quest state: {0}")]
+    QuestState(&'static str),
     #[error("host identity capacity or allocation exceeded")]
     Capacity,
 }
@@ -138,6 +142,12 @@ enum Entry {
         fade_in_rate: i32,
         fade_out_rate: i32,
         eax_setting: String,
+    },
+    Quest {
+        live: bool,
+    },
+    QuestItem {
+        live: bool,
     },
 }
 pub struct EnumHost {
@@ -428,6 +438,11 @@ impl EnumHost {
             Entry::Timer { live: false } | Entry::Group { live: false } => {
                 return Err(self.error("arena", Failure::Identity));
             }
+            Entry::Quest { live: true } => "quest",
+            Entry::QuestItem { live: true } => "questitem",
+            Entry::Quest { live: false } | Entry::QuestItem { live: false } => {
+                return Err(self.error("arena", Failure::Identity));
+            }
         })
     }
     pub fn symbolic_value(&self, id: HandleId, kind: &str) -> Result<i32, Error> {
@@ -505,6 +520,7 @@ mod tests;
 mod objects;
 pub use objects::{
     CameraState, DayNightState, FileSoundState, MapConfig, MapConfigBudget, MapMusicSelection,
-    ObjectHost, PlayerAdmissionError, PlayerBudget, PlayerSettings, SoundState, StartLocation,
-    StartPriorities, StartPriority, StartupClockState, TimerHost,
+    ObjectHost, PlayerAdmissionError, PlayerBudget, PlayerSettings, QuestBudget, QuestEvent,
+    QuestFlag, SoundState, StartLocation, StartPriorities, StartPriority, StartupClockState,
+    TimerHost,
 };

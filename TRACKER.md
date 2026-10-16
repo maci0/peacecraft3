@@ -918,6 +918,11 @@ See `PLAN.md` §3.5 for the harness design. Each chapter asserts specific outcom
 ### Tier B — completion
 - [ ] Intro dialogue gates fire in order, per chapter
 - [ ] All quest objectives satisfied and tracked
+      Explicit quest/quest-item state now shares the gameplay handle arena;
+      creation, setters/queries, destruction, budgets and stale/cross-kind
+      refusals execute in native and WASI tests. Initial flags follow the pinned
+      original runtime probe, not guessed false values. Campaign objectives and
+      the rendered quest window remain open; see `docs/re-notes/script-quests.md`.
 - [ ] Win condition triggers; end-of-movie / `endGame` entered
 - [ ] Custom-map smoke set: all shipped `Maps/*.w3m` load and run their init script
 
