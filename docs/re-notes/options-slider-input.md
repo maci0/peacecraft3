@@ -158,3 +158,52 @@ format checks pass. Evidence, including the baseline failure and intermediate
 compile/test corrections, remains local in
 `.scratch/button-disable-root-20261016/`. This is ECS lifecycle evidence; no new
 browser capture or native-client parity is claimed for this additional change.
+
+## Event-local pointer hits
+
+The application now opts into an event-local picking path in three locally
+patched Bevy 0.20 crates. The normal UI, sprite and window resolvers use each
+input's own location instead of sharing the frame's final hover. Input dispatch
+keeps the existing pointer state machine and applies observer commands between
+inputs. Final live hover also reconciles targets moving under a stationary
+drag, with ordinary Enter/Leave events and no fabricated pointer movement.
+Cached layout is not replayed. See [the patch scope](../../vendor/BEVY_PATCHES.md).
+
+The new application tests use real window input, picking and widgets, including
+the current shared button owner and slider adapter. Fresh clicks, an A click
+ending over B, capture, cancellation, touch, multiple pointers, observer changes,
+mixed backend priority and stationary drag targets pass. The unchanged opt-out
+fresh-click case remains an explicit negative control, ignored in the ordinary
+suite and separately demonstrated to fail without the opt-in. Native tests pass 301 app
+cases with 14 explicit ignores, four library and 84 integration cases; the
+patched picking crate also passes 22 unit tests. Strict native/WASM Clippy,
+production-library checks, warning-denied documentation and the release browser
+application build pass. Upstream sprite/UI packaged test fixtures are not a
+complete local test suite: the sprite tests reference a sibling font and an
+unavailable test macro. No suppression or test deletion substitutes for them.
+
+The browser harness has a trusted native-input `--fast-click` route. It checks
+fresh hover A, then A-click/final-pointer-B, using control rectangles from runtime
+diagnostics. Each case must show press and release within one current update and
+the requested final pointer location. Split-frame timing is unqualified. Exactly
+one identical press/release/click sender and one matching logical action are
+required, with no held state. A tab rebuild can despawn that sender before the
+late diagnostic owner lookup; the captured unique action identifies the sender
+without inventing a replacement mapping. Wrong known owners, different senders,
+extra events and extra actions still fail. The first real run exposed that
+late-owner lookup limitation; its failed assertion is retained separately.
+
+The corrected combined `--fast-click --slider` run passes on the fresh final
+release package. Both fast cases have trusted canvas input and qualified
+current-update witnesses. The existing source sliders also pass midpoint,
+keyboard, outside-drag/release, mouse Apply and Cancel checks at both viewport
+layouts. Five captures were reviewed. All 24 package files match their receipt;
+15 local code GETs, one preference save, and zero uploads, sockets, unexpected
+requests or page errors are recorded. This remains a local repacked-original
+fixture check. The PeaceCraft cog still overlaps a disabled field on Options;
+that separate presentation defect is not closed by the input fix.
+
+Local app/browser evidence is in `.scratch/options-ordered-input-root-20261016/`,
+including the failed assertion and documentation checks. Earlier prototypes
+remain in their separate frozen evidence directories. Source defaults,
+physical display modes and complete original-menu fidelity remain separate.

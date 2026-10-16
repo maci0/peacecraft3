@@ -50,6 +50,25 @@ function saveWitness(witness, target) {
   assert.deepEqual(witness.bitmap, target, 'Storage ran before canvas bitmap reached target');
   assert.deepEqual(witness.clientPhysical, target, 'Storage ran before client extent reached target');
 }
+// Current-update press/release qualify the actual batch; their targets are the oracle.
+function fastBatchFrame(s, physical) {
+  return s?.picking?.press?.length>0 && s.picking.release?.length>0 &&
+    s.pointer?.physical?.every((v,i)=>Math.abs(v-physical[i])<2);
+}
+function fastBatchOracle(s, name) {
+  assert.equal(s.picking.recordLimit,16);assert.deepEqual(s.lastAction?.frames,[name]);assert.equal(s.lastAction.truncated,false);
+  let sender;
+  for(const kind of ['press','release','click']) {
+    const events=s.picking[kind];assert(Array.isArray(events)&&events.length===1,kind+' must contain exactly one sender');
+    const event=events[0];assert.equal(typeof event.entity,'string');assert(event.entity.length>0,'Missing picking entity');
+    if(sender===undefined)sender=event.entity;else assert.equal(event.entity,sender,'Press/release/click sender changed');
+    // PostUpdate owner lookup can lose the despawned tab; the exact A action above remains.
+    assert(event.owner===name||event.owner===null,kind+' targeted another logical control');
+  }
+  assert.equal(s.lastAction.screen.startsWith('Options('),true);
+  assert.deepEqual(s.picking.pressing??[],[]);assert.deepEqual(s.picking.dragging??[],[]);
+}
+
 function selfCheck() {
   const controls = [{name:'ResolutionChoice:731x419'}, {name:'ResolutionChoice:997x613'}];
   assert.deepEqual(distinctChoice(controls, [731,419]).size, [997,613]);
@@ -72,11 +91,30 @@ function selfCheck() {
   assert.equal(sliderValue({min:-30,max:110,step:7,value:1},40),40);
   assert.equal(sliderValue({min:-30,max:110,step:7,value:1},500),110);
   assert.throws(()=>sliderValue({min:0,max:1,step:0,value:0},0));
+  const frame={screen:'Options(Sound)',pointer:{physical:[31,47]},picking:{recordLimit:16,press:[{entity:'synthetic-E',owner:'A'}],release:[{entity:'synthetic-E',owner:'A'}],click:[{entity:'synthetic-E',owner:'A'}],pressing:[],dragging:[]},lastAction:{frames:['A'],screen:'Options(Video)',truncated:false}};
+  assert(fastBatchFrame(frame,[31,47]));fastBatchOracle(frame,'A');
+  for(const kind of ['press','release','click']){const bad=structuredClone(frame);bad.picking[kind][0].owner='B';assert(fastBatchFrame(bad,[31,47]));assert.throws(()=>fastBatchOracle(bad,'A'));}
+  for(const kind of ['press','release']){const split=structuredClone(frame);split.picking[kind]=[];assert(!fastBatchFrame(split,[31,47]));}
+  assert(!fastBatchFrame(frame,[97,83]));
+  const duplicate=structuredClone(frame);duplicate.lastAction.frames.push('A');assert.throws(()=>fastBatchOracle(duplicate,'A'));
+  for(let mask=0;mask<8;mask++){const gone=structuredClone(frame);['press','release','click'].forEach((k,i)=>{if(mask&(1<<i))gone.picking[k][0].owner=null;});fastBatchOracle(gone,'A');}
+  for(const kind of ['press','release','click']) {
+    const different=structuredClone(frame);different.picking[kind][0].entity='synthetic-other';assert.throws(()=>fastBatchOracle(different,'A'));
+    for(const entity of [undefined,null,'',7]){const bad=structuredClone(frame);bad.picking[kind][0].entity=entity;assert.throws(()=>fastBatchOracle(bad,'A'));}
+    for(const owner of [undefined,'B']){const bad=structuredClone(frame);bad.picking[kind][0].owner=owner;assert.throws(()=>fastBatchOracle(bad,'A'));}
+    const extra=structuredClone(frame);extra.picking[kind].push({...extra.picking[kind][0]});assert.throws(()=>fastBatchOracle(extra,'A'));
+    const missing=structuredClone(frame);missing.picking[kind]=[];assert.throws(()=>fastBatchOracle(missing,'A'));
+  }
+  for(const frames of [[],['B'],['A','B'],['A','A'],null]){const bad=structuredClone(frame);bad.lastAction.frames=frames;assert.throws(()=>fastBatchOracle(bad,'A'));}
+  const truncated=structuredClone(frame);truncated.lastAction.truncated=true;assert.throws(()=>fastBatchOracle(truncated,'A'));
+
   console.log(JSON.stringify({ok:true,selfCheck:true,browserLaunched:false,networkRequests:0,originalReads:0}));
 }
 
 async function run() {
   const applyProbe=process.argv.includes('--apply-probe');
+  const fastClick=process.argv.includes('--fast-click');
+  assert(!fastClick||!applyProbe,'--fast-click cannot be combined with diagnostic-only --apply-probe');
   const sliderRun=process.argv.includes('--slider')||applyProbe;
   const env = process.env, root = await realpath(env.PCX_REPO_ROOT ?? process.cwd());
   assert.equal(env.PCX_OPTIONS_WASM_READY, '1', 'Require an explicitly prepared fresh release');
@@ -108,7 +146,7 @@ async function run() {
   const preferenceKey = settingsSource.match(/const key = '([^']+)';/)?.[1]; assert(preferenceKey);
   const {chromium} = await import(pathToFileURL(env.PCX_PLAYWRIGHT_MODULE ?? resolve(root,'.scratch/browser-check/node_modules/playwright-core/index.mjs')));
   // CDP emulation alone does not scale Chromium's device-pixel ResizeObserver box.
-  const browser = await chromium.launch({executablePath:env.PCX_CHROMIUM ?? '/usr/bin/chromium',args:['--no-sandbox','--enable-unsafe-swiftshader',...(sliderRun?['--force-device-scale-factor=2']:[])]});
+  const browser = await chromium.launch({executablePath:env.PCX_CHROMIUM ?? '/usr/bin/chromium',args:['--no-sandbox','--enable-unsafe-swiftshader',...((sliderRun||fastClick)?['--force-device-scale-factor=2']:[])]});
   const requests=[],responses=[],blocked=[],errors=[],sockets=[],logs=[],steps=[],captures=[];
   let page, failure, lastState, passed=false;
   async function poll(check, why) {
@@ -127,7 +165,7 @@ async function run() {
   const prefs = () => page.evaluate(key=>localStorage.getItem(key),preferenceKey);
   const audio = () => page.evaluate(()=>{const a=peacecraft3Audio.status(); return Object.fromEntries(['musicBaseVolume','clickBaseVolume','userMusicGain','userEffectsGain','userMusicEnabled','userEffectsEnabled','musicVolume','clickVolume'].map(k=>[k,a[k]]));});
   async function targetExtent(target) { await poll(async()=>{const e=await extent();return equal(e.bitmap,target)&&equal(e.clientPhysical,target);},'Canvas did not reach '+target); }
-  async function click(name) {
+  async function controlPoint(name) {
     const s = await state(s=>s.menuVisible && !s.transitionActive && s.controls?.some(c=>c.name===name && !c.disabled),'No enabled control: '+name);
     const c = s.controls.find(c=>c.name===name);
     await page.evaluate(rect=>{
@@ -142,8 +180,12 @@ async function run() {
     let r=physicalRect(c.physicalCanvasRect,bounds,size),view=page.viewportSize();
     if(r.y+r.height/2<0||r.y+r.height/2>view.height){await page.evaluate(y=>scrollBy(0,y),r.y+r.height/2-view.height/2);bounds=await page.locator('#launcher-canvas').boundingBox();r=physicalRect(c.physicalCanvasRect,bounds,size);}
     const x=r.x+r.width/2,y=r.y+r.height/2; assert(x>=0&&x<view.width&&y>=0&&y<view.height,'Runtime control outside viewport');
-    await page.mouse.move(x,y);
     const expected=[c.physicalCanvasRect[0]+c.physicalCanvasRect[2]/2,c.physicalCanvasRect[1]+c.physicalCanvasRect[3]/2];
+    return {s,c,r,x,y,expected,bounds,size};
+  }
+  async function click(name) {
+    const {s,r,x,y,expected,bounds,size}=await controlPoint(name);
+    await page.mouse.move(x,y);
     const hovered=await state(s=>s.pointer?.physical?.every((v,i)=>Math.abs(v-expected[i])<2)&&s.controls.some(c=>c.name===name&&c.hovered===true),'UI hover did not reach '+name);
     const input={action:'pointer',name,screen:s.screen,rect:r,canvasBounds:bounds,bitmap:size,pointer:hovered.pointer,viewport:hovered.uiViewportPixels};
     steps.push(input);console.log(JSON.stringify(input));
@@ -164,6 +206,59 @@ async function run() {
       assert(label?.filled&&label.text.length>0,'Source tab text was not retained in diagnostics: '+name);
     }
     captures.push({name,path,sha256:hash(await readFile(path)),state:s,extent:await extent()});
+  }
+  async function checkFastClicks() {
+    await openOptions();await settled('Options(Video)');
+    const client=await page.context().newCDPSession(page),cases=[];
+    try {
+      for(const item of [
+        {name:'fresh-A',a:'SoundButton',b:'VideoButton',screen:'Options(Sound)',finalB:false},
+        {name:'A-click-final-B',a:'VideoButton',b:'SoundButton',screen:'Options(Video)',finalB:true},
+      ]) {
+        const b=await controlPoint(item.b);await page.mouse.move(b.x,b.y);
+        const before=await state(s=>s.pointer?.physical?.every((v,i)=>Math.abs(v-b.expected[i])<2)&&
+          s.controls.some(c=>c.name===item.b&&c.hovered)&&!s.controls.some(c=>c.name===item.a&&c.hovered)&&
+          ['press','release','click'].every(k=>s.picking?.[k]?.length===0)&&!s.controls.some(c=>c.pressed),'Idle hover B was not acknowledged');
+        assert(!before.lastAction?.frames?.includes(item.a),'Baseline action already equals the new target');
+        const a=await controlPoint(item.a),final= item.finalB?b:a;
+        assert.deepEqual(a.bounds,b.bounds,'Resolving tab bounds scrolled the canvas between targets');
+        assert(!equal(a.expected,b.expected),'Fast-input controls overlap');
+        await page.evaluate(points=>{
+          for(const {x,y} of points)if(document.elementFromPoint(x,y)?.id!=='launcher-canvas')throw Error('Runtime control center is occluded by DOM');
+          const gate={active:true,records:[],count:0,truncated:false,raf:0,last:null};globalThis.__pcxFastFrames=gate;
+          globalThis.__pcxNativeInput.length=0;
+          // Rearm the existing read-only diagnostic every browser frame; never override rAF/update.
+          peacecraft3.menu_state();
+          const tick=()=>{if(!gate.active)return;const raw=peacecraft3.menu_state();if(raw&&raw!==gate.last){
+            gate.last=raw;const s=JSON.parse(raw);gate.count++;
+            if(gate.records.length===64){gate.records.shift();gate.truncated=true;}
+            gate.records.push({screen:s.screen,pointer:s.pointer,picking:s.picking,lastAction:s.lastAction});
+          }gate.raf=requestAnimationFrame(tick);};gate.raf=requestAnimationFrame(tick);
+        },[a,b]);
+        const events=[{type:'mouseMoved',x:a.x,y:a.y,button:'none',buttons:0},
+          {type:'mousePressed',x:a.x,y:a.y,button:'left',buttons:1,clickCount:1},
+          {type:'mouseReleased',x:a.x,y:a.y,button:'left',buttons:0,clickCount:1}];
+        if(item.finalB)events.push({type:'mouseMoved',x:b.x,y:b.y,button:'none',buttons:0});
+        let witness,recording,native;
+        try {
+          // One ordered CDP transport batch; actual snapshot qualification detects any frame split.
+          await Promise.all(events.map(event=>client.send('Input.dispatchMouseEvent',{...event,pointerType:'mouse'})));
+          await poll(async()=>{recording=await page.evaluate(()=>{const g=__pcxFastFrames;return {records:g.records,count:g.count,truncated:g.truncated};});witness=recording.records.find(s=>fastBatchFrame(s,final.expected));return Boolean(witness);},'UNQUALIFIED '+item.name+': no single current-update press+release with final pointer; no same-frame claim');
+          fastBatchOracle(witness,item.a);
+          native=await page.evaluate(()=>__pcxNativeInput.filter(e=>['pointerdown','pointerup'].includes(e.type)));
+          assert.deepEqual(native.map(e=>[e.type,e.trusted,e.button]),[['pointerdown',true,0],['pointerup',true,0]],'Require one trusted native press/release');
+          assert(native.every(e=>e.target==='launcher-canvas'&&Math.abs(e.x-a.x)<=1&&Math.abs(e.y-a.y)<=1),'Native press/release did not occur at actual A canvas point');
+          await settled(item.screen);
+          cases.push({case:item,before,targets:{a,b},events,witness,recording,native});
+        } finally {
+          const proof=await page.evaluate(()=>{const g=globalThis.__pcxFastFrames;if(!g)return null;g.active=false;cancelAnimationFrame(g.raf);return {records:g.records,count:g.count,truncated:g.truncated,native:__pcxNativeInput};});
+          await save('fast-click-'+item.name+'.json',{case:item,before,targets:{a,b},events,witness,proof});
+        }
+      }
+      await capture('fast-click-qualified');await click('CancelButton');await settled('Main');
+      assert.equal(await prefs(),null,'Fast tab input unexpectedly saved settings');
+      await save('fast-click-observations.json',{cases,qualified:true,trustedNativeInput:true,diagnosticActions:0,coordinateSource:'runtime physicalCanvasRect'});
+    } finally {await client.detach();}
   }
   const witnesses = () => page.evaluate(()=>globalThis.__pcxResizeGate.saves);
   async function checkApplyProbe() {
@@ -242,16 +337,16 @@ async function run() {
   }
   try {
     // Synthetic browser host geometry, independent of authored game layout.
-    const context=await browser.newContext({viewport:sliderRun?{width:440,height:350}:{width:1500,height:1000},screen:{width:1280,height:720},deviceScaleFactor:sliderRun?2:1,serviceWorkers:'block'});
+    const context=await browser.newContext({viewport:(sliderRun||fastClick)?{width:440,height:350}:{width:1500,height:1000},screen:{width:1280,height:720},deviceScaleFactor:(sliderRun||fastClick)?2:1,serviceWorkers:'block'});
     await context.route('**/*',route=>{const r=route.request();if(allowedRequest(r.url(),r.method(),r.postDataBuffer()!==null,files))return route.continue();blocked.push({url:r.url(),method:r.method()});return route.abort('blockedbyclient');});
     context.on('request',r=>requests.push({url:r.url(),method:r.method(),body:r.postDataBuffer()!==null}));
     context.on('response',r=>responses.push({url:r.url(),status:r.status()}));
     page=await context.newPage(); page.setDefaultTimeout(120000);
     await page.addInitScript(()=>{
       const events=[];globalThis.__pcxNativeInput=events;
-      for(const type of ['pointerdown','pointerup','pointercancel','gotpointercapture','lostpointercapture','mousedown','mouseup','mouseleave','blur','focus'])addEventListener(type,event=>{
+      for(const type of ['pointermove','pointerdown','pointerup','pointercancel','gotpointercapture','lostpointercapture','mousedown','mouseup','mouseleave','blur','focus'])addEventListener(type,event=>{
         if(events.length===128)events.shift();
-        events.push({type,target:event.target?.id??event.target?.nodeName??null,button:event.button??null,buttons:event.buttons??null,pointer:event.pointerId??null,x:event.clientX??null,y:event.clientY??null,time:event.timeStamp});
+        events.push({type,trusted:event.isTrusted,target:event.target?.id??event.target?.nodeName??null,button:event.button??null,buttons:event.buttons??null,pointer:event.pointerId??null,x:event.clientX??null,y:event.clientY??null,time:event.timeStamp});
       },{capture:true,passive:true});
     });
     page.on('pageerror',e=>errors.push(e.message));
@@ -282,11 +377,12 @@ async function run() {
       };
       peacecraft3Audio.setUserGains=function(...args){if(gate.fault==='audio')throw Error('Injected postcommit audio refusal');return gate.gains.apply(this,args);};
     },preferenceKey);
+    if(fastClick)await checkFastClicks();
     if(applyProbe) {
       await checkApplyProbe();
     } else if(sliderRun) {
       await checkSliders();
-    } else {
+    } else if(!fastClick) {
     await openOptions();const original=await snapshot();await targetExtent(dimensions(original.applied.resolution));
     const initialAudio=await audio(), refused=await chooseOther(original.applied.resolution), refusedDraft=(await snapshot()).draft;
     await page.evaluate(()=>{__pcxResizeGate.fault='storage';});await click('OKButton');
@@ -332,7 +428,7 @@ async function run() {
     const finalState=page&&!page.isClosed()?await snapshot().catch(()=>lastState):lastState;
     const finalExtent=page&&!page.isClosed()?await extent().catch(()=>null):null;
     await save('proof.json',{passed,failure,finalState,finalExtent,packageReceipt:{path:env.PCX_OPTIONS_BUILD_RECEIPT,sha256:hash(receiptBytes)},fixture:{path:env.PCX_OPTIONS_PREPARED,sha256:hash(fixtureBytes)},packageChecks,requests,responses,blocked,errors,sockets,logs,steps,captures,saves,
-      diagnosticOnly:applyProbe,scope:applyProbe?'Focused pointer/keyboard Apply diagnostic; not complete slider acceptance':sliderRun?'Source-derived slider pointer/keyboard input, local audio Apply/Cancel at centered/origin-zero UI viewports; no native parity claim':'Browser-reported canvas/client render extent and local preference transaction; screenshots require manual rendered review; no compositor/display-mode or native parity claim',reloadTested:false});
+      fastClick,diagnosticOnly:applyProbe,scope:fastClick?'Trusted browser fast pointer batches; current-update input/action witnesses required; no native parity claim'+(sliderRun?'; includes existing slider Apply/Cancel route':''):applyProbe?'Focused pointer/keyboard Apply diagnostic; not complete slider acceptance':sliderRun?'Source-derived slider pointer/keyboard input, local audio Apply/Cancel at centered/origin-zero UI viewports; no native parity claim':'Browser-reported canvas/client render extent and local preference transaction; screenshots require manual rendered review; no compositor/display-mode or native parity claim',reloadTested:false});
     await browser.close();
   }
   console.log(JSON.stringify({ok:passed,output,captures:captures.length,uploads:0}));

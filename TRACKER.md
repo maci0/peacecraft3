@@ -117,7 +117,15 @@ issues*.
       sockets or page errors. Disabling a pressed button now clears its temporary
       pressed state without activation, including deferred press insertion;
       re-enable permits a fresh click. Native/WASM checks cover that additional
-      lifecycle fix. Same-frame pointer batching remains open. The
+      lifecycle fix. Event-local UI/sprite/window hit resolution now preserves
+      fresh same-frame clicks and A-click/final-pointer-B targeting. Nineteen
+      new app pipeline cases and a trusted browser batch check pass, alongside
+      the source sliders, mouse Apply and Cancel. The complete suite passes
+      301 app cases with 14 explicit ignores, four library and 84 integration
+      cases; strict native/WASM/library/docs checks and release app build pass.
+      The final 24-file browser package has five reviewed captures, 15 local
+      code GETs and zero uploads, sockets or page errors. The visible cog overlap
+      and disabled-setting source previews remain separate work. The
       earlier larger-view caption-disappearance claim is withdrawn: exact
       runtime-bounded image regions are unchanged between entry and Sound in
       both the old and fresh large-view runs. No rendering repair is claimed. See

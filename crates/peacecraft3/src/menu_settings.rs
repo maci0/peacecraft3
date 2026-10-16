@@ -18,6 +18,10 @@ mod resolution;
 #[path = "menu_slider.rs"]
 mod slider;
 
+#[cfg(test)]
+#[path = "menu_picking_tests.rs"]
+mod picking_tests;
+
 #[cfg(any(test, not(target_arch = "wasm32")))]
 #[path = "original_options_audio.rs"]
 mod original;

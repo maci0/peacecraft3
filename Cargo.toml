@@ -57,6 +57,11 @@ flate2 = "1"
 implode = "0.1"
 sha2 = { version = "0.11.1", default-features = false }
 
+[patch.crates-io]
+bevy_picking = { path = "vendor/bevy_picking" }
+bevy_ui = { path = "vendor/bevy_ui" }
+bevy_sprite = { path = "vendor/bevy_sprite" }
+
 [profile.release]
 opt-level = 3
 lto = "thin"

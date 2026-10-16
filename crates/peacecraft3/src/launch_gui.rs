@@ -262,6 +262,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     peacecraft3::map_requests::install(&mut app);
     crate::map_source_controls::install(&mut app);
     app.add_plugins(DefaultPlugins.set(window))
+        .init_resource::<bevy::picking::ordered::OrderedPointerInput>()
         .add_plugins(crate::menu_particle_order::MenuParticleOrderPlugin)
         .add_plugins(crate::mainmenu_scene::ParticleMaterialPlugin)
         .add_plugins(bevy::pbr::MaterialPlugin::<MenuMaterial>::default())
