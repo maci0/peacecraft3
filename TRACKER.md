@@ -1344,8 +1344,15 @@ Format: `date — subsystem — symptom — root cause — status`
   original-repack browser Main/Video Options/Main run pass; reviewed captures
   show water and the corrected logo. The asset-free demo at `6e2c4de` matches all
   23 package hashes and passes live startup. This is not native visual parity:
-  RGB animation, multilayer drawing, sky projection, the uncovered black region
-  and native clock/blend equivalence remain open.
+  multilayer drawing, sky projection, the uncovered black region and native
+  clock/blend equivalence remain open. GEOA static tint and KGAC animation now
+  reach background/panel materials through a pinned Warsmash source profile:
+  static file order passes through, animated BGR swaps into RGB, and alpha is
+  preserved. Six colour and five duplicate-time plan cases plus seven runtime
+  cases pass natively and under WASI; an ECS update/atomic-refusal regression,
+  both supplied menu imports and strict native/browser-WASM builds pass. Native
+  flag/colour-space semantics and rendered colour parity remain open. See
+  `menu-opacity.md`.
   First-layer TXAN translation now uses parser-derived UV-set metadata and an
   absolute UV transform on independent global clocks, including panel phases.
   The full affected native run passes 460 tests (184 application), with 24

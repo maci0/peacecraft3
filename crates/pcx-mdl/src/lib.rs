@@ -1288,15 +1288,45 @@ impl AnimTrack {
     /// Key order is `frame, value, inTan, outTan`, so for a scalar the tangents
     /// sit at +8 and +12.
     pub fn in_tangent(&self, i: usize) -> f32 {
-        let k = self.key_len();
-        let b = &self.raw[i * k + 8..i * k + 12];
-        f32::from_bits(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        self.component_in_tangent(i, 0)
     }
 
     /// Outgoing tangent of key `i`, for a hermite or bezier track.
     pub fn out_tangent(&self, i: usize) -> f32 {
+        self.component_out_tangent(i, 0)
+    }
+
+    /// One float from key `i`'s value vector (component 0 is the scalar channel).
+    fn component_value(&self, i: usize, component: usize) -> f32 {
         let k = self.key_len();
-        let b = &self.raw[i * k + 12..i * k + 16];
+        let w = self.components();
+        debug_assert!(component < w);
+        let at = i * k + 4 + component * 4;
+        let b = &self.raw[at..at + 4];
+        f32::from_bits(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    /// In-tangent for one component; matches [`KeyTrack`] width-aware layout.
+    fn component_in_tangent(&self, i: usize, component: usize) -> f32 {
+        if !self.interpolation.has_tangents() {
+            return 0.0;
+        }
+        let k = self.key_len();
+        let w = self.components();
+        let at = i * k + 4 + w * 4 + component * 4;
+        let b = &self.raw[at..at + 4];
+        f32::from_bits(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    /// Out-tangent for one component; matches [`KeyTrack`] width-aware layout.
+    fn component_out_tangent(&self, i: usize, component: usize) -> f32 {
+        if !self.interpolation.has_tangents() {
+            return 0.0;
+        }
+        let k = self.key_len();
+        let w = self.components();
+        let at = i * k + 4 + 2 * w * 4 + component * 4;
+        let b = &self.raw[at..at + 4];
         f32::from_bits(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 }
@@ -1576,23 +1606,12 @@ pub fn transform_point(m: &[f32; 16], p: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-/// Samples a scalar track at `frame`.
-///
-/// Outside the key range a track holds its nearest end value rather than
-/// extrapolating, which matches how the format behaves: a model with no keys for
-/// the current sequence is static, not unbounded.
-pub fn sample_scalar(track: &AnimTrack, frame: u32) -> f32 {
+/// Span between two keys for `frame`, or `None` when `frame` is outside the interior.
+fn anim_interior_span(track: &AnimTrack, frame: u32) -> Option<(usize, usize, u32, u32)> {
     let n = track.count as usize;
-    if n == 0 {
-        return 0.0;
+    if n < 2 || frame <= track.frame(0) || frame >= track.frame(n - 1) {
+        return None;
     }
-    if n == 1 || frame <= track.frame(0) {
-        return track.value(0);
-    }
-    if frame >= track.frame(n - 1) {
-        return track.value(n - 1);
-    }
-
     let mut lo = 0usize;
     let mut hi = n - 1;
     while hi - lo > 1 {
@@ -1603,9 +1622,22 @@ pub fn sample_scalar(track: &AnimTrack, frame: u32) -> f32 {
             hi = mid;
         }
     }
-    let (f0, f1) = (track.frame(lo), track.frame(hi));
-    let (v0, v1) = (track.value(lo), track.value(hi));
+    Some((lo, hi, track.frame(lo), track.frame(hi)))
+}
 
+fn interpolate_anim_component(
+    track: &AnimTrack,
+    lo: usize,
+    hi: usize,
+    f0: u32,
+    f1: u32,
+    frame: u32,
+    component: usize,
+) -> f32 {
+    let (v0, v1) = (
+        track.component_value(lo, component),
+        track.component_value(hi, component),
+    );
     match track.interpolation {
         Interpolation::None => v0,
         Interpolation::Linear => {
@@ -1624,12 +1656,72 @@ pub fn sample_scalar(track: &AnimTrack, frame: u32) -> f32 {
                 track.interpolation,
                 v0,
                 v1,
-                track.out_tangent(lo),
-                track.in_tangent(hi),
+                track.component_out_tangent(lo, component),
+                track.component_in_tangent(hi, component),
                 t,
             )
         }
     }
+}
+
+fn sample_anim_component(track: &AnimTrack, frame: u32, component: usize) -> f32 {
+    let n = track.count as usize;
+    if n == 0 {
+        return 0.0;
+    }
+    if n == 1 || frame <= track.frame(0) {
+        return track.component_value(0, component);
+    }
+    if frame >= track.frame(n - 1) {
+        return track.component_value(n - 1, component);
+    }
+    let Some((lo, hi, f0, f1)) = anim_interior_span(track, frame) else {
+        return track.component_value(0, component);
+    };
+    interpolate_anim_component(track, lo, hi, f0, f1, frame, component)
+}
+
+/// Samples a scalar track at `frame`.
+///
+/// Outside the key range a track holds its nearest end value rather than
+/// extrapolating, which matches how the format behaves: a model with no keys for
+/// the current sequence is static, not unbounded.
+pub fn sample_scalar(track: &AnimTrack, frame: u32) -> f32 {
+    sample_anim_component(track, frame, 0)
+}
+
+/// Samples a `KGAC` track at `frame`.
+///
+/// Returns raw stored components with one shared key-span search. The caller
+/// supplies a validated `KGAC` track; material channel mapping is separate.
+pub fn sample_colour(track: &AnimTrack, frame: u32) -> [f32; 3] {
+    let n = track.count as usize;
+    if n == 0 {
+        return [0.0; 3];
+    }
+    if n == 1 || frame <= track.frame(0) {
+        return [
+            track.component_value(0, 0),
+            track.component_value(0, 1),
+            track.component_value(0, 2),
+        ];
+    }
+    if frame >= track.frame(n - 1) {
+        let last = n - 1;
+        return [
+            track.component_value(last, 0),
+            track.component_value(last, 1),
+            track.component_value(last, 2),
+        ];
+    }
+    let Some((lo, hi, f0, f1)) = anim_interior_span(track, frame) else {
+        return [0.0; 3];
+    };
+    [
+        interpolate_anim_component(track, lo, hi, f0, f1, frame, 0),
+        interpolate_anim_component(track, lo, hi, f0, f1, frame, 1),
+        interpolate_anim_component(track, lo, hi, f0, f1, frame, 2),
+    ]
 }
 
 /// Bezier tangents are control points; Hermite tangents are derivatives.
@@ -4315,6 +4407,28 @@ mod tests {
             },
         };
         assert_eq!(sample_scalar(&flat, 50), 0.25, "two keys on one frame");
+    }
+
+    #[test]
+    fn colour_track_samples_each_component() {
+        let mut raw = Vec::new();
+        for (frame, colour) in [(0u32, [0.0f32, 0.5, 1.0]), (100, [1.0, 0.0, 0.5])] {
+            raw.extend(frame.to_le_bytes());
+            for value in colour {
+                raw.extend(value.to_le_bytes());
+            }
+        }
+        let track = AnimTrack {
+            magic: *b"KGAC",
+            count: 2,
+            interpolation: Interpolation::Linear,
+            global_seq_id: NO_ID,
+            raw,
+        };
+        let mid = sample_colour(&track, 50);
+        assert!((mid[0] - 0.5).abs() < 1e-6);
+        assert!((mid[1] - 0.25).abs() < 1e-6);
+        assert!((mid[2] - 0.75).abs() < 1e-6);
     }
 
     /// `PIVT` is one position per node, so its length is a fact about the model

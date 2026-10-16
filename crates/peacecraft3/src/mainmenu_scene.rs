@@ -29,7 +29,8 @@
 //!   material UV transforms; rotation, scale and multiple UV sets refuse.
 //!   XY projection follows retained renderer references, not native runtime
 //!   proof; see `menu-texture-animation.md` for the source/evidence boundary.
-//!   GEOA/KMTA opacity is applied by authored geoset/layer IDs and clocks.
+//!   GEOA/KMTA opacity and GEOA static colour/KGAC RGB are applied by authored
+//!   geoset/layer IDs and clocks.
 //!   Joint tracks also use authored `GLBS` durations on a separate elapsed clock.
 //!   First-layer KMTF texture selection binds authored TEXS images and samplers
 //!   at spawn and advances on the selected local clip or independent elapsed clock.
@@ -420,15 +421,6 @@ impl BlendGap {
             }
             BlendGap::Modulate2x => "filterMode 6 modulate-2x has no equivalent; draws opaque",
         }
-    }
-}
-
-impl LayerFlags {
-    /// The material's base colour: a texture's own colours are modulated by the
-    /// static alpha, which is where the scene's `0.3` and `0.55` layers get
-    /// their transparency.
-    fn base_color(&self) -> Color {
-        Color::srgba(1.0, 1.0, 1.0, self.alpha.clamp(0.0, 1.0))
     }
 }
 
@@ -1097,6 +1089,9 @@ pub fn preflight_geosets<'a>(
         let alpha = opacity
             .sample(mesh.geoset, frame, 0)
             .ok_or_else(|| fail("missing initial opacity binding"))?;
+        let rgb = opacity
+            .sample_material_colour(mesh.geoset, frame, 0)
+            .map_err(|error| SceneError::Decode(format!("{source}: {error}")))?;
         let uv = sampled_uv_transform(
             uv_translation,
             source,
@@ -1108,7 +1103,7 @@ pub fn preflight_geosets<'a>(
         let flags = layer_flags(&mdl_materials, mesh.material_id as usize);
         let material = crate::menu_material::checked_source_mode(
             StandardMaterial {
-                base_color: flags.base_color().with_alpha(alpha),
+                base_color: Color::srgba(rgb[0], rgb[1], rgb[2], alpha),
                 uv_transform: uv,
                 // Preserve the existing scenery roughness and culling conventions.
                 perceptual_roughness: 1.0,
@@ -1226,6 +1221,38 @@ pub fn apply_opacity<F: bevy::ecs::query::QueryFilter>(
             };
         }
     }
+}
+
+/// Writes each bound geoset's RGB at `frame`, preserving its composed alpha.
+pub fn apply_geoset_colour(
+    opacity: &pcx_gfx::mdx_opacity::OpacityPlan,
+    bound: &[BoundGeoset],
+    frame: u32,
+    elapsed_ms: u64,
+    materials: &mut Assets<MenuMaterial>,
+) -> Result<(), SceneError> {
+    for (geoset, _, handle) in bound {
+        opacity
+            .sample_material_colour(*geoset, frame, elapsed_ms)
+            .map_err(|error| SceneError::Decode(error.to_string()))?;
+        if materials.get(handle).is_none() {
+            return Err(SceneError::Decode(format!(
+                "geoset {geoset}: missing bound colour material"
+            )));
+        }
+    }
+    // The immutable plan resamples identically after every target has been checked.
+    for (geoset, _, handle) in bound {
+        let rgb = opacity
+            .sample_material_colour(*geoset, frame, elapsed_ms)
+            .expect("validated colour sample");
+        let mut material = materials
+            .get_mut(handle)
+            .expect("validated colour material");
+        let alpha = material.base.base_color.alpha();
+        material.base.base_color = Color::srgba(rgb[0], rgb[1], rgb[2], alpha);
+    }
+    Ok(())
 }
 
 /// A model's rest meshes and the joints that pose them.
@@ -1741,6 +1768,16 @@ pub fn advance(
         }
     }
     if let Some(opacity) = &scene.opacity {
+        if let Err(error) = apply_geoset_colour(
+            opacity,
+            &scene.opacity_materials,
+            frame,
+            elapsed_ms,
+            &mut materials,
+        ) {
+            error!("{error}");
+            return;
+        }
         apply_opacity(
             opacity,
             &scene.opacity_materials,
@@ -1918,6 +1955,112 @@ mod tests {
         world.run_system_once(advance).unwrap();
         assert_eq!(world.get::<Visibility>(second), Some(&Visibility::Hidden));
         assert_eq!(world.get::<Visibility>(first), Some(&Visibility::Inherited));
+    }
+
+    #[test]
+    fn geoset_colour_update_follows_geoset_id_without_touching_unrelated_materials() {
+        use pcx_gfx::mdx_runtime::{GeosetInput, RuntimeInput, RuntimePlan};
+        let mut data = Vec::new();
+        for word in [
+            0u32,
+            0,
+            u32::from_le_bytes(*b"LAYS"),
+            1,
+            28,
+            2,
+            0,
+            0,
+            pcx_mdl::NO_ID,
+            0,
+            1f32.to_bits(),
+        ] {
+            data.extend(word.to_le_bytes());
+        }
+        let plan = RuntimePlan::checked(RuntimeInput {
+            bones: vec![],
+            helpers: vec![],
+            pivots: pcx_mdl::Pivots(vec![]),
+            geosets: (0..2)
+                .map(|_| GeosetInput {
+                    vertex_count: 0,
+                    material_id: 0,
+                    matrix_joint_ids: vec![],
+                })
+                .collect(),
+            geoset_animations: vec![pcx_mdl::GeosetAnim {
+                offset: 0,
+                len: 60,
+                flags: 0x2,
+                geoset_id: 1,
+                static_alpha: 1.0,
+                static_colour: [0.25, 0.5, 0.75],
+                tracks: vec![],
+                trailing: 0,
+            }],
+            materials: vec![pcx_mdl::Material {
+                offset: 0,
+                len: data.len() as u32 + 4,
+                data,
+            }],
+            textures: vec![pcx_mdl::Texture {
+                slot: 0,
+                path: "synthetic".into(),
+                flags: 0,
+            }],
+            texture_animations: vec![],
+            global_sequences: vec![],
+        })
+        .unwrap();
+        let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&plan, [0, 100]).unwrap();
+        let mut materials = Assets::<MenuMaterial>::default();
+        let white = materials.add(MenuMaterial {
+            base: StandardMaterial {
+                base_color: Color::WHITE,
+                ..default()
+            },
+            ..default()
+        });
+        let tinted = materials.add(MenuMaterial {
+            base: StandardMaterial {
+                base_color: Color::WHITE,
+                ..default()
+            },
+            ..default()
+        });
+        let bound = [
+            (0usize, Entity::PLACEHOLDER, white.clone()),
+            (1, Entity::PLACEHOLDER, tinted.clone()),
+        ];
+        let unrelated = materials.add(MenuMaterial {
+            base: StandardMaterial {
+                base_color: Color::srgba(0.1, 0.2, 0.3, 0.4),
+                ..default()
+            },
+            ..default()
+        });
+        let unrelated_before = materials.get(&unrelated).unwrap().base.base_color;
+        materials.get_mut(&white).unwrap().base.base_color = Color::srgba(0.4, 0.5, 0.6, 0.7);
+        let before = materials.get(&white).unwrap().base.base_color;
+        let invalid = [
+            (0usize, Entity::PLACEHOLDER, white.clone()),
+            (1, Entity::PLACEHOLDER, Handle::default()),
+        ];
+        assert!(apply_geoset_colour(&opacity, &invalid, 0, 0, &mut materials).is_err());
+        assert_eq!(materials.get(&white).unwrap().base.base_color, before);
+        apply_geoset_colour(&opacity, &bound, 0, 0, &mut materials).unwrap();
+        assert_eq!(materials.get(&white).unwrap().base.base_color.alpha(), 0.7);
+        assert_eq!(
+            materials.get(&unrelated).unwrap().base.base_color,
+            unrelated_before
+        );
+        let white_mat = materials.get(&white).unwrap();
+        assert_eq!(white_mat.base.base_color.to_srgba().red, 1.0);
+        assert_eq!(white_mat.base.base_color.to_srgba().green, 1.0);
+        assert_eq!(white_mat.base.base_color.to_srgba().blue, 1.0);
+        let tinted_mat = materials.get(&tinted).unwrap();
+        assert!((tinted_mat.base.base_color.to_srgba().red - 0.25).abs() < 1e-6);
+        assert!((tinted_mat.base.base_color.to_srgba().green - 0.5).abs() < 1e-6);
+        assert!((tinted_mat.base.base_color.to_srgba().blue - 0.75).abs() < 1e-6);
     }
 
     #[test]

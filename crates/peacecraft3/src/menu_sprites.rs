@@ -1500,6 +1500,16 @@ pub fn advance(
             navigation.notice = format!("{}: {error}", panel.path);
             return;
         }
+        if let Err(error) = scene::apply_geoset_colour(
+            &plan.opacity,
+            &panel.geosets.bound,
+            frame,
+            elapsed_ms,
+            &mut materials,
+        ) {
+            navigation.notice = format!("{}: {error}", panel.path);
+            return;
+        }
         scene::apply_opacity(
             &plan.opacity,
             &panel.geosets.bound,
