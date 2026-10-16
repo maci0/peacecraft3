@@ -1379,7 +1379,7 @@ fn show_states(
 
 /// `ControlShortcutKey`: pressing the key activates its enabled button, as a
 /// click does. Runs before `Update`, so every action consumer sees it.
-fn shortcut_keys(
+pub(crate) fn shortcut_keys(
     mut keys: MessageReader<bevy::input::keyboard::KeyboardInput>,
     buttons: Query<(Entity, &GlueButton), Without<InteractionDisabled>>,
     mut actions: ResMut<crate::button_actions::ButtonActions>,

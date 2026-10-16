@@ -2084,36 +2084,9 @@ fn build_control_layer(
                     .map(|i| i.frame.clone())
                     .collect();
                 let order = crate::menu_screens::focus_order(fdf, &visible);
+                let options_ok = options_ok_enabled(navigation.screen);
                 commands.queue(move |world: &mut World| {
-                    let targets: Vec<_> = world
-                        .get::<Children>(root)
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|entity| {
-                            let position =
-                                world.get::<crate::menu_screens::ScreenPosition>(*entity)?;
-                            let index = order.iter().position(|n| n == &position.0)?;
-                            Some((*entity, i32::try_from(index).ok()?))
-                        })
-                        .collect();
-                    let first = targets
-                        .iter()
-                        .filter(|(entity, _)| {
-                            !world.entity(*entity).contains::<InteractionDisabled>()
-                        })
-                        .min_by_key(|(_, index)| *index)
-                        .map(|(entity, _)| *entity);
-                    for (entity, index) in targets {
-                        world
-                            .entity_mut(entity)
-                            .insert(bevy::input_focus::tab_navigation::TabIndex(index));
-                    }
-                    if let Some(first) = first
-                        && let Some(mut focus) =
-                            world.get_resource_mut::<bevy::input_focus::InputFocus>()
-                    {
-                        focus.set(first, bevy::input_focus::FocusCause::Auto);
-                    }
+                    configure_spawned_controls(world, root, &order, options_ok);
                 });
             }
         }
@@ -2127,6 +2100,63 @@ fn build_control_layer(
     }
     if let Some(preview) = prepared_preview {
         cache.preview = preview;
+    }
+}
+
+/// `None` leaves OK alone. `Some(false)` is the blank Options landing.
+fn options_ok_enabled(screen: crate::menu_screens::Screen) -> Option<bool> {
+    match screen {
+        crate::menu_screens::Screen::Options(crate::menu_screens::Page::Unselected) => Some(false),
+        crate::menu_screens::Screen::Options(_) => Some(true),
+        _ => None,
+    }
+}
+
+fn configure_spawned_controls(
+    world: &mut World,
+    root: Entity,
+    order: &[String],
+    options_ok: Option<bool>,
+) {
+    let targets: Vec<_> = world
+        .get::<Children>(root)
+        .into_iter()
+        .flatten()
+        .filter_map(|entity| {
+            let position = world.get::<crate::menu_screens::ScreenPosition>(*entity)?;
+            let index = order.iter().position(|n| n == &position.0)?;
+            Some((*entity, i32::try_from(index).ok()?))
+        })
+        .collect();
+    if let Some(enabled) = options_ok {
+        for &(entity, _) in &targets {
+            let ok = world
+                .get::<crate::glue_menu::GlueButton>(entity)
+                .is_some_and(|button| button.frame == "OKButton");
+            if !ok {
+                continue;
+            }
+            if enabled {
+                world.entity_mut(entity).remove::<InteractionDisabled>();
+            } else {
+                world.entity_mut(entity).insert(InteractionDisabled);
+            }
+        }
+    }
+    let first = targets
+        .iter()
+        .filter(|(entity, _)| !world.entity(*entity).contains::<InteractionDisabled>())
+        .min_by_key(|(_, index)| *index)
+        .map(|(entity, _)| *entity);
+    for (entity, index) in targets {
+        world
+            .entity_mut(entity)
+            .insert(bevy::input_focus::tab_navigation::TabIndex(index));
+    }
+    if let Some(first) = first
+        && let Some(mut focus) = world.get_resource_mut::<bevy::input_focus::InputFocus>()
+    {
+        focus.set(first, bevy::input_focus::FocusCause::Auto);
     }
 }
 
@@ -2933,7 +2963,14 @@ fn scroll_resolution_popup(
 /// pretending a button led somewhere.
 #[derive(SystemParam)]
 pub(crate) struct MenuClickQueries<'w, 's> {
-    buttons: Query<'w, 's, &'static crate::glue_menu::GlueButton>,
+    buttons: Query<
+        'w,
+        's,
+        (
+            &'static crate::glue_menu::GlueButton,
+            Has<InteractionDisabled>,
+        ),
+    >,
     menu: Query<'w, 's, Entity, With<MenuLayer>>,
     cogs: Query<'w, 's, Entity, With<SettingsCog>>,
     windows: Query<'w, 's, (Entity, &'static mut Window)>,
@@ -2962,7 +2999,7 @@ pub(crate) fn apply_menu_clicks(
         && let Some(trace) = queries.diagnostic.as_deref_mut()
     {
         trace.0 = Some(serde_json::json!({
-            "frames":actions.entities.iter().take(16).map(|entity|queries.buttons.get(*entity).map_or_else(|_|format!("{entity:?}"),|button|button.frame.clone())).collect::<Vec<_>>(),
+            "frames":actions.entities.iter().take(16).map(|entity|queries.buttons.get(*entity).map_or_else(|_|format!("{entity:?}"),|(button,_)|button.frame.clone())).collect::<Vec<_>>(),
             "truncated":actions.entities.len()>16,
             "screen":format!("{:?}",navigation.screen),
             "requested":navigation.requested.map(|screen|format!("{screen:?}")),
@@ -2990,9 +3027,9 @@ pub(crate) fn apply_menu_clicks(
     } = queries;
     for entity in &actions.entities {
         if backend.applying_resolution() {
-            if q.get(*entity)
-                .is_ok_and(|button| matches!(button.frame.as_str(), "CancelButton" | "BackButton"))
-            {
+            if q.get(*entity).is_ok_and(|(button, _)| {
+                matches!(button.frame.as_str(), "CancelButton" | "BackButton")
+            }) {
                 backend.cancel_resolution();
             }
             continue;
@@ -3021,9 +3058,13 @@ pub(crate) fn apply_menu_clicks(
             }
             continue;
         }
-        let Ok(button) = q.get(*entity) else {
+        let Ok((button, disabled)) = q.get(*entity) else {
             continue;
         };
+        // A click or shortcut queued before OK was disabled must not apply.
+        if disabled {
+            continue;
+        }
         if button.frame == "CustomCampaignButton"
             && (launcher.mode.addon != Addon::Tft || !launcher.allows_addon(Addon::Tft))
         {
@@ -3486,6 +3527,159 @@ mod menu_tests {
         assert!(
             !navigation.transition_active,
             "target FDF admission must run first"
+        );
+    }
+
+    fn options_draft(world: &mut World, screen: crate::menu_screens::Screen) {
+        let mut navigation = world.resource_mut::<crate::menu_screens::Navigation>();
+        navigation.screen = screen;
+        navigation.applied.values.insert("synthetic".into(), 1.0);
+        navigation.draft = navigation.applied.clone();
+        navigation.draft.values.insert("synthetic".into(), 9.0);
+    }
+
+    #[test]
+    fn a_disabled_ok_click_keeps_the_unselected_draft() {
+        let mut world = World::new();
+        world.spawn(MenuLayer);
+        let entry = press(&mut world, "OKButton");
+        world.entity_mut(entry).insert(InteractionDisabled);
+        world.spawn(Window::default());
+        options_draft(
+            &mut world,
+            crate::menu_screens::Screen::Options(crate::menu_screens::Page::Unselected),
+        );
+        world.run_system_once(apply_menu_clicks).unwrap();
+        let navigation = world.resource::<crate::menu_screens::Navigation>();
+        assert_eq!(
+            navigation.screen,
+            crate::menu_screens::Screen::Options(crate::menu_screens::Page::Unselected)
+        );
+        assert!(navigation.requested.is_none());
+        assert!(navigation.notice.is_empty());
+        assert_eq!(navigation.draft.values["synthetic"], 9.0);
+    }
+
+    #[test]
+    fn an_enabled_ok_click_reaches_apply_without_committing_the_draft() {
+        let mut world = World::new();
+        world.spawn(MenuLayer);
+        press(&mut world, "OKButton");
+        world.spawn(Window::default());
+        options_draft(
+            &mut world,
+            crate::menu_screens::Screen::Options(crate::menu_screens::Page::Gameplay),
+        );
+        world.run_system_once(apply_menu_clicks).unwrap();
+        let navigation = world.resource::<crate::menu_screens::Navigation>();
+        assert_eq!(
+            navigation.screen,
+            crate::menu_screens::Screen::Options(crate::menu_screens::Page::Gameplay)
+        );
+        assert!(navigation.requested.is_none());
+        assert!(!navigation.notice.is_empty());
+        assert_eq!(navigation.draft.values["synthetic"], 9.0);
+        assert_eq!(navigation.applied.values["synthetic"], 1.0);
+    }
+
+    #[test]
+    fn cancel_discards_the_draft_while_ok_stays_disabled() {
+        let mut world = World::new();
+        world.spawn(MenuLayer);
+        press(&mut world, "CancelButton");
+        options_draft(
+            &mut world,
+            crate::menu_screens::Screen::Options(crate::menu_screens::Page::Sound),
+        );
+        world.run_system_once(apply_menu_clicks).unwrap();
+        let navigation = world.resource::<crate::menu_screens::Navigation>();
+        assert_eq!(
+            navigation.requested,
+            Some(crate::menu_screens::Screen::Main)
+        );
+        assert_eq!(navigation.draft, navigation.applied);
+    }
+
+    #[test]
+    fn unselected_ok_is_disabled_and_skipped_by_default_focus() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<bevy::input_focus::InputFocus>();
+        let world = app.world_mut();
+        let root = world.spawn_empty().id();
+        let ok = world
+            .spawn((
+                ChildOf(root),
+                Button,
+                crate::menu_screens::ScreenPosition("OKButton".into()),
+                crate::glue_menu::GlueButton {
+                    frame: "OKButton".into(),
+                    shortcut: Some('O'),
+                    pushed_text_offset: None,
+                },
+            ))
+            .id();
+        let cancel = world
+            .spawn((
+                ChildOf(root),
+                Button,
+                crate::menu_screens::ScreenPosition("CancelButton".into()),
+                crate::glue_menu::GlueButton {
+                    frame: "CancelButton".into(),
+                    shortcut: Some('C'),
+                    pushed_text_offset: None,
+                },
+            ))
+            .id();
+        world.flush();
+        configure_spawned_controls(
+            world,
+            root,
+            &["OKButton".into(), "CancelButton".into()],
+            Some(false),
+        );
+        assert!(world.entity(ok).contains::<InteractionDisabled>());
+        assert!(!world.entity(cancel).contains::<InteractionDisabled>());
+        assert_eq!(
+            world.resource::<bevy::input_focus::InputFocus>().get(),
+            Some(cancel)
+        );
+        crate::button_actions::install(&mut app);
+        app.add_message::<bevy::input::keyboard::KeyboardInput>();
+        let send = |app: &mut App| {
+            app.world_mut()
+                .write_message(bevy::input::keyboard::KeyboardInput {
+                    key_code: KeyCode::KeyO,
+                    logical_key: bevy::input::keyboard::Key::Character("o".into()),
+                    state: bevy::input::ButtonState::Pressed,
+                    repeat: false,
+                    window: Entity::PLACEHOLDER,
+                    text: None,
+                });
+            app.world_mut()
+                .run_system_once(crate::glue_menu::shortcut_keys)
+                .unwrap();
+        };
+        send(&mut app);
+        assert!(
+            app.world()
+                .resource::<crate::button_actions::ButtonActions>()
+                .entities
+                .is_empty()
+        );
+        configure_spawned_controls(
+            app.world_mut(),
+            root,
+            &["OKButton".into(), "CancelButton".into()],
+            Some(true),
+        );
+        assert!(!app.world().entity(ok).contains::<InteractionDisabled>());
+        send(&mut app);
+        assert_eq!(
+            app.world()
+                .resource::<crate::button_actions::ButtonActions>()
+                .entities,
+            [ok]
         );
     }
 

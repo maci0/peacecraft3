@@ -182,3 +182,29 @@ caller-selected compat-tree and Legacy installs; this does not assign either
 archive a release through directory adjacency. Source-leaf WebAssembly tests
 also exercise the blank body and retained source focus. These checks do not
 replace a fresh browser visual comparison or certify complete Options parity.
+
+## OK follows the selected category
+
+Two private Wine/Xvfb reference runs of the pinned Legacy executable
+(`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`,
+VERSIONINFO `1.29.2.9231`) at 1024×768 and 96 DPI show gray, inactive OK
+on the blank category landing. Clicking it leaves that landing open. Settled
+Gameplay, Video and Sound pages each enable OK before any edit. It remains
+enabled after an actual music-slider change and a category switch. Cancel
+returns to Main; reopening Options restores the blank landing and inactive OK.
+Immediate transition captures were excluded from the settled-state comparison.
+This establishes the observed category rule, not a dirty-draft rule or full
+visual parity.
+
+The control rebuild applies `InteractionDisabled` before assigning default
+focus. Pointer collection, shortcut handling and disabled artwork use that
+component; the action consumer also refuses an action queued before its button
+became disabled. Cancel still restores the applied draft. No sampled pixel
+values or screenshot coordinates are used by the implementation.
+
+Four new behavior tests cover stale queued OK, enabled Apply, Cancel, default
+focus and the real shortcut system. The complete current check passes four
+library, 327 application and 84 integration tests, with 15 explicit application
+ignores. Scoped all-target/all-feature Clippy, WASM Clippy with warnings denied,
+formatting and whitespace checks pass. Fresh release-browser interaction and
+visual comparison remain a separate gate.
