@@ -1022,8 +1022,11 @@ Format: `date — subsystem — symptom — root cause — status`
       encoder and map validator/reply to reach the original lobby, receive map
       status 100 and answer pings. The later run generates its 1.29 IPv4 address
       tail from a route-selected IP and its own bound listener port, with no
-      REQJOIN capture input. Broadcast collection, launcher integration,
-      persistent lobby transport and peer-to-peer reachability remain open;
+      REQJOIN capture input. The native `tcp::Connection` now carries its
+      decoder, queued/partial frames and cumulative bounds across join, map
+      and ping responses; the original-host probe uses that production caller.
+      Broadcast collection, launcher/lobby wiring and peer-to-peer reachability
+      remain open;
       see `docs/re-notes/classic-network-interoperability.md`.
 - [ ] NET-C04: Original unmodified Legacy 1.29b client discovers and joins a
       PeaceCraft host; record exact executable identity and both directions.
@@ -1060,6 +1063,10 @@ Format: `date — subsystem — symptom — root cause — status`
       have separate results, including the unresolved 1.29.2 authentication path.
 - [ ] NET-C08: Disconnect, timeout, lag and cancellation; prove any optional
       reconnect extension separately from original-client support.
+      The native continuous TCP caller shuts down on transport/framing/budget
+      failure, refuses reuse, checks partial EOF and preserves one absolute
+      deadline across calls. Loopback tests cover peer closure and multi-step
+      partial frames. Application cancellation, lag and reconnect remain open.
 - [ ] NET-C09: Reproducible original/PeaceCraft network comparison harness using
       local assets, the same admitted map and captured inputs/seed; no proprietary
       asset transfers, credentials or key material in committed evidence.

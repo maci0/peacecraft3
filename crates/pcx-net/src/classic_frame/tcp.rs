@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use super::{Decoder, FrameError, FrameLimits, OwnedFrame};
 
-/// Bounds for one call. None of these values are protocol constants.
+/// Bounds for one exchange or an entire [`Connection`]. No protocol defaults.
 #[derive(Debug, Clone, Copy)]
 pub struct CallPolicy {
     /// Absolute monotonic deadline for connect, write, and read.
@@ -19,7 +19,7 @@ pub struct CallPolicy {
     /// Upper bound on the connect wait. Zero, or a deadline that is not still
     /// in the future, fails before a socket is opened.
     pub connect_timeout: Duration,
-    /// Largest request that will be written.
+    /// Largest total number of bytes that will be written.
     pub max_write_bytes: usize,
     /// Largest total number of bytes that will be read.
     pub max_read_bytes: usize,
@@ -27,16 +27,16 @@ pub struct CallPolicy {
     pub frames: FrameLimits,
 }
 
-/// Failure of [`exchange`] or its byte-stream I/O.
+/// Failure of [`exchange`], [`Connection`] or their byte-stream I/O.
 #[derive(Debug)]
 pub enum CallError {
     /// The deadline elapsed, the connect budget was zero, or a wait timed out.
     Deadline,
-    /// The request is larger than [`CallPolicy::max_write_bytes`].
+    /// The request exceeds the remaining cumulative write allowance.
     WriteTooLarge {
         /// Request length.
         len: usize,
-        /// Configured ceiling.
+        /// Remaining byte allowance (the full ceiling for a one-shot exchange).
         limit: usize,
     },
     /// The reply reached [`CallPolicy::max_read_bytes`] before the requested frames.
@@ -150,13 +150,204 @@ fn arm_tcp(stream: &mut TcpStream, timeout: Duration) -> Result<(), CallError> {
     Ok(())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StreamState {
+    Open,
+    Eof,
+    Failed,
+}
+
+struct FramedIo<S> {
+    stream: S,
+    decoder: Decoder,
+    pending: std::vec::IntoIter<OwnedFrame>,
+    policy: CallPolicy,
+    read: usize,
+    written: usize,
+    state: StreamState,
+}
+
+fn failed_connection() -> CallError {
+    CallError::Io(io::Error::new(
+        ErrorKind::ConnectionAborted,
+        "classic connection is unusable after a previous failure",
+    ))
+}
+
+impl<S: Read + Write> FramedIo<S> {
+    fn new(stream: S, policy: CallPolicy, decoder: Decoder) -> Self {
+        Self {
+            stream,
+            decoder,
+            pending: Vec::new().into_iter(),
+            policy,
+            read: 0,
+            written: 0,
+            state: StreamState::Open,
+        }
+    }
+
+    fn send(
+        &mut self,
+        bytes: &[u8],
+        arm: impl FnMut(&mut S, Duration) -> Result<(), CallError>,
+    ) -> Result<(), CallError> {
+        match self.state {
+            StreamState::Failed => return Err(failed_connection()),
+            StreamState::Eof => {
+                return Err(CallError::Io(io::Error::new(
+                    ErrorKind::NotConnected,
+                    "classic connection reached EOF",
+                )));
+            }
+            StreamState::Open => {}
+        }
+        let result = (|| {
+            let available = self.policy.max_write_bytes - self.written;
+            if bytes.len() > available {
+                return Err(CallError::WriteTooLarge {
+                    len: bytes.len(),
+                    limit: available,
+                });
+            }
+            remaining(self.policy.deadline)?;
+            self.written += bytes.len();
+            write_all_bounded(
+                &mut self.stream,
+                bytes,
+                || remaining(self.policy.deadline),
+                arm,
+            )
+        })();
+        if result.is_err() {
+            self.state = StreamState::Failed;
+        }
+        result
+    }
+
+    fn receive(
+        &mut self,
+        mut arm: impl FnMut(&mut S, Duration) -> Result<(), CallError>,
+    ) -> Result<Option<OwnedFrame>, CallError> {
+        match self.state {
+            StreamState::Failed => return Err(failed_connection()),
+            StreamState::Eof => return Ok(None),
+            StreamState::Open => {}
+        }
+        let result = (|| {
+            remaining(self.policy.deadline)?;
+            if let Some(frame) = self.pending.next() {
+                return Ok(Some(frame));
+            }
+            let mut scratch = [0u8; 512];
+            loop {
+                if self.read >= self.policy.max_read_bytes {
+                    return Err(CallError::ReadTooLarge {
+                        read: self.read,
+                        limit: self.policy.max_read_bytes,
+                    });
+                }
+                let want = scratch.len().min(self.policy.max_read_bytes - self.read);
+                let count = read_some(
+                    &mut self.stream,
+                    &mut scratch[..want],
+                    self.policy.deadline,
+                    &mut arm,
+                )?;
+                if count == 0 {
+                    self.decoder.finish()?;
+                    self.state = StreamState::Eof;
+                    return Ok(None);
+                }
+                self.read += count;
+                self.pending = self.decoder.push(&scratch[..count])?.into_iter();
+                if let Some(frame) = self.pending.next() {
+                    return Ok(Some(frame));
+                }
+            }
+        })();
+        if result.is_err() {
+            self.state = StreamState::Failed;
+        }
+        result
+    }
+}
+
+/// Native connection retaining its frame decoder across caller responses.
+///
+/// The supplied deadline and byte/frame ceilings apply to the entire connection;
+/// no call resets or extends them. I/O blocks with the remaining socket timeout.
+/// EOF validates the final frame, shuts down the socket and returns `None`.
+/// Any error is terminal; later operations refuse. Drop releases the socket.
+/// Protocol admission, map validation and application worker placement are caller duties.
+pub struct Connection {
+    io: FramedIo<TcpStream>,
+}
+
+impl Connection {
+    /// Validate limits and deadline before opening one TCP connection, without retrying.
+    pub fn connect(addr: SocketAddr, policy: CallPolicy) -> Result<Self, CallError> {
+        let decoder = Decoder::new(policy.frames)?;
+        if policy.connect_timeout.is_zero() {
+            return Err(CallError::Deadline);
+        }
+        let connect_for = remaining(policy.deadline)?.min(policy.connect_timeout);
+        let stream = TcpStream::connect_timeout(&addr, connect_for).map_err(map_wait)?;
+        Ok(Self {
+            io: FramedIo::new(stream, policy, decoder),
+        })
+    }
+
+    /// Actual local socket endpoint, without selecting a client listen port.
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.io.stream.local_addr()
+    }
+
+    /// Write raw bytes within the cumulative write ceiling; no automatic resend.
+    pub fn send(&mut self, bytes: &[u8]) -> Result<(), CallError> {
+        let was_open = self.io.state == StreamState::Open;
+        let result = self.io.send(bytes, arm_tcp);
+        if was_open && result.is_err() {
+            let _ = self.io.stream.shutdown(std::net::Shutdown::Both);
+        }
+        result
+    }
+
+    /// Return the next frame, preserving queued frames and any partial next frame.
+    pub fn receive(&mut self) -> Result<Option<OwnedFrame>, CallError> {
+        let was_open = self.io.state == StreamState::Open;
+        let result = self.io.receive(arm_tcp);
+        if was_open && !matches!(result, Ok(Some(_))) {
+            let _ = self.io.stream.shutdown(std::net::Shutdown::Both);
+        }
+        result
+    }
+}
+
+fn collect_replies<S: Read + Write>(
+    io: &mut FramedIo<S>,
+    request: &[u8],
+    mut arm: impl FnMut(&mut S, Duration) -> Result<(), CallError>,
+) -> Result<Vec<OwnedFrame>, CallError> {
+    io.send(request, &mut arm)?;
+    let mut frames = Vec::new();
+    while frames.len() < io.policy.frames.max_frames {
+        let Some(frame) = io.receive(&mut arm)? else {
+            break;
+        };
+        frames.try_reserve(1).map_err(|_| FrameError::Allocation)?;
+        frames.push(frame);
+    }
+    io.decoder.finish()?;
+    Ok(frames)
+}
+
 /// Write `request` to an already connected stream and read complete frames.
 ///
-/// `arm` runs before every write and read with the time remaining until
-/// `policy.deadline`. A TCP caller uses it to set the socket timeout. A stream
-/// that blocks past that duration can still overrun the deadline; [`exchange`]
-/// arms a real socket. `Interrupted` is retried until the deadline elapses.
-/// `policy.connect_timeout` is not used here.
+/// `arm` runs before every write and read with the remaining absolute deadline.
+/// A blocking stream must honor that duration. `Interrupted` is retried without
+/// resetting the deadline; `connect_timeout` is unused here.
+#[cfg(test)]
 pub(super) fn exchange_io<S: Read + Write>(
     stream: &mut S,
     request: &[u8],
@@ -169,38 +360,17 @@ pub(super) fn exchange_io<S: Read + Write>(
             limit: policy.max_write_bytes,
         });
     }
-    let mut decoder = Decoder::new(policy.frames)?;
-    write_all_bounded(stream, request, || remaining(policy.deadline), &mut arm)?;
-    let mut frames = Vec::new();
-    let mut read_total = 0usize;
-    let mut scratch = [0u8; 512];
-    while frames.len() < policy.frames.max_frames {
-        if read_total >= policy.max_read_bytes {
-            return Err(CallError::ReadTooLarge {
-                read: read_total,
-                limit: policy.max_read_bytes,
-            });
-        }
-        let want = scratch.len().min(policy.max_read_bytes - read_total);
-        let count = read_some(stream, &mut scratch[..want], policy.deadline, &mut arm)?;
-        if count == 0 {
-            break;
-        }
-        read_total += count;
-        let decoded = decoder.push(&scratch[..count])?;
-        frames
-            .try_reserve(decoded.len())
-            .map_err(|_| CallError::Frame(FrameError::Allocation))?;
-        frames.extend(decoded);
-    }
-    decoder.finish()?;
-    Ok(frames)
+    let decoder = Decoder::new(policy.frames)?;
+    let mut io = FramedIo::new(stream, *policy, decoder);
+    collect_replies(&mut io, request, |stream, timeout| {
+        arm(&mut **stream, timeout)
+    })
 }
 
 /// Connect to `addr`, write `request`, and read complete frames.
 ///
-/// A zero `connect_timeout`, or a `deadline` that is not still in the future,
-/// returns [`CallError::Deadline`] and does not open a socket.
+/// A zero `connect_timeout`, or a deadline that is not still in the future,
+/// returns [`CallError::Deadline`] without opening a socket.
 pub fn exchange(
     addr: SocketAddr,
     request: &[u8],
@@ -212,16 +382,8 @@ pub fn exchange(
             limit: policy.max_write_bytes,
         });
     }
-    let _ = Decoder::new(policy.frames)?;
-    if policy.connect_timeout.is_zero() {
-        return Err(CallError::Deadline);
-    }
-    let connect_for = remaining(policy.deadline)?.min(policy.connect_timeout);
-    if connect_for.is_zero() {
-        return Err(CallError::Deadline);
-    }
-    let mut stream = TcpStream::connect_timeout(&addr, connect_for).map_err(map_wait)?;
-    exchange_io(&mut stream, request, policy, arm_tcp)
+    let mut connection = Connection::connect(addr, *policy)?;
+    collect_replies(&mut connection.io, request, arm_tcp)
 }
 
 #[cfg(test)]
@@ -231,7 +393,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::super::{BNCS_FAMILY, FrameError, FrameLimits, encode};
-    use super::{CallError, CallPolicy, exchange, exchange_io, write_all_bounded};
+    use super::{
+        CallError, CallPolicy, Connection, FramedIo, exchange, exchange_io, write_all_bounded,
+    };
 
     fn policy(deadline: Instant) -> CallPolicy {
         CallPolicy {
@@ -316,6 +480,223 @@ mod tests {
             self.read_pos += count;
             Ok(count)
         }
+    }
+
+    fn framed(script: Script, policy: CallPolicy) -> FramedIo<Script> {
+        FramedIo::new(script, policy, super::Decoder::new(policy.frames).unwrap())
+    }
+
+    #[test]
+    fn connection_write_count_cannot_wrap() {
+        let mut limits = policy(Instant::now() + Duration::from_secs(2));
+        limits.max_write_bytes = usize::MAX;
+        let mut io = framed(Script::new(&[]), limits);
+        io.written = usize::MAX - 1;
+        assert!(io.send(b"xy", |_, _| Ok(())).is_err());
+        assert!(io.stream.written.is_empty());
+    }
+
+    #[test]
+    fn connection_retains_batch_queue_and_partial_header_between_responses() {
+        let first = encode(BNCS_FAMILY, 0x25, &[]).unwrap();
+        let second = encode(BNCS_FAMILY, 0x50, b"abc").unwrap();
+        let third = encode(BNCS_FAMILY, 0x51, b"def").unwrap();
+        let initial = [first, second, third[..3].to_vec()].concat();
+        let mut limits = policy(Instant::now() + Duration::from_secs(2));
+        limits.frames.max_frames = 3;
+        let mut io = framed(Script::new(&initial), limits);
+        assert_eq!(io.receive(|_, _| Ok(())).unwrap().unwrap().id(), 0x25);
+        let read = io.stream.read_pos;
+        assert_eq!(io.decoder.buffered_len(), 3);
+        assert_eq!(io.receive(|_, _| Ok(())).unwrap().unwrap().id(), 0x50);
+        assert_eq!(io.stream.read_pos, read);
+        io.send(b"response", |_, _| Ok(())).unwrap();
+        io.stream.read_from.extend_from_slice(&third[3..]);
+        assert_eq!(io.receive(|_, _| Ok(())).unwrap().unwrap().body(), b"def");
+        assert_eq!(io.stream.written, b"response");
+        assert!(io.receive(|_, _| Ok(())).unwrap().is_none());
+        assert!(
+            io.receive(|_, _| panic!("EOF must not do I/O"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            matches!(io.send(b"late", |_, _| panic!("EOF must not write")), Err(CallError::Io(e)) if e.kind() == std::io::ErrorKind::NotConnected)
+        );
+    }
+
+    #[test]
+    fn connection_does_not_reset_byte_or_frame_ceilings_between_calls() {
+        let one = encode(BNCS_FAMILY, 0x25, &[]).unwrap();
+        let mut limits = policy(Instant::now() + Duration::from_secs(2));
+        limits.max_write_bytes = 3;
+        let mut writer = framed(Script::new(&[]), limits);
+        writer.send(b"ab", |_, _| Ok(())).unwrap();
+        assert!(matches!(
+            writer.send(b"cd", |_, _| Ok(())),
+            Err(CallError::WriteTooLarge { .. })
+        ));
+        assert_eq!(writer.stream.written, b"ab");
+        assert!(
+            writer
+                .send(b"x", |_, _| panic!("failed stream must not write"))
+                .is_err()
+        );
+        limits.max_read_bytes = 8;
+        limits.frames.max_frames = 3;
+        let mut reader = framed(Script::new(&one), limits);
+        reader.receive(|_, _| Ok(())).unwrap().unwrap();
+        reader.stream.read_from.extend(&one);
+        reader.receive(|_, _| Ok(())).unwrap().unwrap();
+        reader.stream.read_from.extend(&one);
+        assert!(matches!(
+            reader.receive(|_, _| panic!("read limit must precede I/O")),
+            Err(CallError::ReadTooLarge { read: 8, limit: 8 })
+        ));
+        limits.max_read_bytes = 64;
+        limits.frames.max_frames = 2;
+        let mut reader = framed(Script::new(&one), limits);
+        reader.receive(|_, _| Ok(())).unwrap().unwrap();
+        reader.stream.read_from.extend(&one);
+        reader.receive(|_, _| Ok(())).unwrap().unwrap();
+        reader.stream.read_from.extend(&one);
+        assert!(matches!(
+            reader.receive(|_, _| Ok(())),
+            Err(CallError::Frame(FrameError::FrameCount { limit: 2 }))
+        ));
+        assert!(
+            reader
+                .receive(|_, _| panic!("frame failure is terminal"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn connection_failure_preserves_partial_write_and_rejects_partial_eof() {
+        let limits = policy(Instant::now() + Duration::from_secs(2));
+        let mut script = Script::new(&[]);
+        script.write_chunk = 1;
+        script.timeout_after = Some(1);
+        let mut writer = framed(script, limits);
+        assert!(matches!(
+            writer.send(b"abc", |_, _| Ok(())),
+            Err(CallError::Deadline)
+        ));
+        assert_eq!(writer.stream.written, b"a");
+        writer.stream.timeout_after = None;
+        assert!(
+            writer
+                .send(b"retry", |_, _| panic!("partial write must not resume"))
+                .is_err()
+        );
+        assert_eq!(writer.stream.written, b"a");
+        let one = encode(BNCS_FAMILY, 0x25, &[]).unwrap();
+        let mut data = one.clone();
+        data.extend_from_slice(&one[..2]);
+        let mut reader = framed(Script::new(&data), limits);
+        reader.receive(|_, _| Ok(())).unwrap().unwrap();
+        assert!(matches!(
+            reader.receive(|_, _| Ok(())),
+            Err(CallError::Frame(FrameError::Incomplete { have: 2 }))
+        ));
+        assert!(
+            reader
+                .receive(|_, _| panic!("partial EOF must not resume"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn connection_deadline_applies_to_queued_frames_without_another_read() {
+        let one = encode(BNCS_FAMILY, 0x25, &[]).unwrap();
+        let data = [one.clone(), one].concat();
+        let mut io = framed(
+            Script::new(&data),
+            policy(Instant::now() + Duration::from_secs(2)),
+        );
+        io.receive(|_, _| Ok(())).unwrap().unwrap();
+        io.policy.deadline = Instant::now() - Duration::from_secs(1);
+        assert!(matches!(
+            io.receive(|_, _| panic!("expired queue must not read")),
+            Err(CallError::Deadline)
+        ));
+        assert!(
+            io.send(b"late", |_, _| panic!("deadline failure is terminal"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn connection_keeps_partial_frame_across_a_lobby_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let peer = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            socket
+                .set_write_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut request = [0; 4];
+            socket.read_exact(&mut request).unwrap();
+            assert_eq!(&request, b"join");
+            let first = encode(BNCS_FAMILY, 0x25, &[]).unwrap();
+            let second = encode(BNCS_FAMILY, 0x50, b"xyz").unwrap();
+            socket
+                .write_all(&[first, second[..2].to_vec()].concat())
+                .unwrap();
+            let mut reply = [0; 5];
+            socket.read_exact(&mut reply).unwrap();
+            assert_eq!(&reply, b"ready");
+            socket.write_all(&second[2..]).unwrap();
+        });
+        let mut connection =
+            Connection::connect(address, policy(Instant::now() + Duration::from_secs(5))).unwrap();
+        assert_eq!(connection.local_addr().unwrap().ip(), address.ip());
+        connection.send(b"join").unwrap();
+        assert_eq!(connection.receive().unwrap().unwrap().id(), 0x25);
+        connection.send(b"ready").unwrap();
+        let response = connection.receive().unwrap().unwrap();
+        assert_eq!((response.id(), response.body()), (0x50, &b"xyz"[..]));
+        assert!(connection.receive().unwrap().is_none());
+        assert!(connection.receive().unwrap().is_none());
+        peer.join().unwrap();
+    }
+
+    #[test]
+    fn connection_closes_socket_after_frame_refusal_and_cannot_resume() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let peer = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            socket
+                .set_write_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            socket.write_all(&[BNCS_FAMILY, 0x50, 0xFF, 0x7F]).unwrap();
+            let mut after_refusal = Vec::new();
+            socket.read_to_end(&mut after_refusal).unwrap();
+            assert!(after_refusal.is_empty());
+        });
+        let mut connection =
+            Connection::connect(address, policy(Instant::now() + Duration::from_secs(5))).unwrap();
+        assert!(matches!(
+            connection.receive(),
+            Err(CallError::Frame(FrameError::Oversize {
+                declared: 32767,
+                limit: 64
+            }))
+        ));
+        assert!(
+            matches!(connection.send(b"retry"), Err(CallError::Io(e)) if e.kind() == std::io::ErrorKind::ConnectionAborted)
+        );
+        assert!(
+            matches!(connection.receive(), Err(CallError::Io(e)) if e.kind() == std::io::ErrorKind::ConnectionAborted)
+        );
+        peer.join().unwrap();
     }
 
     #[test]
@@ -452,6 +833,10 @@ mod tests {
         zero.connect_timeout = Duration::ZERO;
         let error = exchange(addr, b"hi", &zero).unwrap_err();
         assert!(matches!(error, CallError::Deadline));
+        assert!(matches!(
+            Connection::connect(addr, zero),
+            Err(CallError::Deadline)
+        ));
 
         for limits in [
             FrameLimits {
@@ -469,6 +854,10 @@ mod tests {
                 exchange(addr, b"hi", &invalid),
                 Err(CallError::Frame(FrameError::Limit))
             ));
+            assert!(matches!(
+                Connection::connect(addr, invalid),
+                Err(CallError::Frame(FrameError::Limit))
+            ));
             let mut script = Script::new(&[]);
             assert!(matches!(
                 exchange_io(&mut script, b"hi", &invalid, |_, _| Ok(())),
@@ -480,6 +869,10 @@ mod tests {
         let past = Instant::now() - Duration::from_secs(1);
         let error = exchange(addr, b"hi", &policy(past)).unwrap_err();
         assert!(matches!(error, CallError::Deadline));
+        assert!(matches!(
+            Connection::connect(addr, policy(past)),
+            Err(CallError::Deadline)
+        ));
         assert_eq!(
             listener.accept().unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock

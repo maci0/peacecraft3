@@ -440,3 +440,40 @@ WASM Clippy, rustdoc, formatting and both library builds pass. Evidence is under
 Listening on the advertised endpoint is not proof of peer-to-peer exchange.
 Persistent application lobby transport, launcher integration, countdown and
 gameplay remain open; NET-C03 is still not closed.
+
+## Continuous bounded native TCP connection
+
+`tcp::Connection` retains the socket, decoder, queued frames and partial next
+frame across caller responses. Its `CallPolicy` deadline and read/write/frame
+ceilings cover the entire connection; calls cannot renew or reset them. Each
+socket wait uses the remaining deadline. Write refusal reports the attempted
+request and remaining allowance. The caller can read the actual local endpoint
+without selecting a client listen port implicitly.
+
+Transport, framing and budget errors are terminal and shut down the socket.
+Partial writes are not retried by a later call. EOF validates the decoder,
+shuts down the socket and remains an empty result; partial EOF is an error.
+The existing one-shot `exchange` uses the same I/O implementation and retains
+its request/reply contract. Its scripted test adapter is test-only.
+
+Seven new regression groups exercise a real multi-step loopback exchange,
+queued frames and a deterministic partial next header, cumulative byte/frame
+bounds, counter exhaustion, expired queued frames, partial writes/EOF and actual
+peer closure after refusal. The initial counter-exhaustion regression failed
+before the remaining-allowance check replaced the saturating counter. All 142
+native checks and strict native/browser-WASM Clippy, rustdoc, formatting and
+library builds pass. The native socket module is excluded on WASM; the 35 pure
+classic-codec tests still execute successfully under WASI.
+
+The private original-host probe now calls this production connection for join,
+map reply and ping/pong instead of maintaining a separate socket/decoder loop.
+The host confirms its verified map status at 100. The client address is generated
+from its actual TCP source IP and bound listener port. Delivered-frame artifacts
+are complete frame sequences, not raw TCP captures. The refactored one-shot
+caller also passes the pinned local PvPGN challenge and missing-init controls;
+no account or key is sent. Commands and retained failures are under
+`.scratch/classic-network-20261016/root-tcp-connection/`.
+
+This blocking native primitive needs application worker, cancellation and
+revision-bound publication wiring. It does not admit a map/player, select
+assets, implement lag/reconnect policy or prove peer-to-peer/gameplay fidelity.
