@@ -37,6 +37,8 @@ pub struct PlayerSettings {
     pub on_score_screen: Option<bool>,
     /// Executed `SetPlayerTechMaxAllowed` pairs. Absence is unset, not a default limit.
     pub tech_max: Vec<(i32, i32)>,
+    /// Executed `SetPlayerTechResearched` pairs. Absence is unset, not level 0.
+    pub tech_researched: Vec<(i32, i32)>,
 }
 /// Caller bound on stored `(player, techid)` records. Not a native or build limit.
 #[derive(Clone, Copy, Debug)]
@@ -52,6 +54,7 @@ pub(super) struct Players {
     slots: usize,
     budget: PlayerBudget,
     tech: Option<TechLimits>,
+    research: Option<TechLimits>,
     rows: Vec<PlayerSettings>,
 }
 const CONTRACTS: &[(&str, &[&str], &str, bool)] = &[
@@ -162,6 +165,7 @@ impl ObjectHost {
             slots,
             budget,
             tech: None,
+            research: None,
             rows: Vec::new(),
         });
         Ok(self)
@@ -200,6 +204,48 @@ impl ObjectHost {
             .as_mut()
             .ok_or_else(|| fail(Failure::PlayerState("not admitted")))?;
         players.tech = Some(TechLimits {
+            max_records: budget.max_records,
+            records: 0,
+        });
+        Ok(self)
+    }
+    /// Admit `SetPlayerTechResearched` on the existing player rows.
+    ///
+    /// Each record stores one executed signed `(techid, setToLevel)` pair for
+    /// that player identity. The pair is written together: a refused new key
+    /// leaves the row unchanged. Replacing an existing key updates the level in
+    /// place and does not allocate. The integers are not rawcodes, categories,
+    /// clamps, or upgrade effects. `GetPlayerTechResearched` and
+    /// `GetPlayerTechCount` stay unsupported because their `specificonly`
+    /// aggregate-versus-exact behavior is not established; an absent pair is
+    /// not level 0. Argument-shape refusals are this recreation's contract
+    /// checks, not a claim about native exceptional inputs.
+    pub fn with_player_tech_researched(mut self, budget: TechLimitBudget) -> Result<Self, Error> {
+        let fail = |reason| self.inner.error("SetPlayerTechResearched", reason);
+        match self.players.as_ref() {
+            None => return Err(fail(Failure::PlayerState("not admitted"))),
+            Some(players) if players.research.is_some() => {
+                return Err(fail(Failure::PlayerState("tech research already admitted")));
+            }
+            Some(_) => {}
+        }
+        std::alloc::Layout::array::<(i32, i32)>(budget.max_records)
+            .map_err(|_| fail(Failure::Capacity))?;
+        for &(name, parameters, result, constant) in RESEARCH_CONTRACTS {
+            Self::contract(
+                &self.inner,
+                name,
+                parameters,
+                result,
+                constant,
+                Some("player"),
+            )?;
+        }
+        let players = self
+            .players
+            .as_mut()
+            .ok_or_else(|| fail(Failure::PlayerState("not admitted")))?;
+        players.research = Some(TechLimits {
             max_records: budget.max_records,
             records: 0,
         });
@@ -266,8 +312,11 @@ impl ObjectHost {
     ) -> Option<Result<Value, Error>> {
         let players = self.players.as_ref()?;
         let tech = TECH_CONTRACTS.iter().any(|c| c.0 == name);
+        let research = RESEARCH_CONTRACTS.iter().any(|c| c.0 == name);
         if tech {
             players.tech.as_ref()?;
+        } else if research {
+            players.research.as_ref()?;
         } else if !CONTRACTS.iter().any(|c| c.0 == name) {
             return None;
         }
@@ -312,6 +361,7 @@ impl ObjectHost {
                 name: None,
                 on_score_screen: None,
                 tech_max: Vec::new(),
+                tech_researched: Vec::new(),
             });
             return Ok(Value::Handle(id));
         }
@@ -453,6 +503,36 @@ impl ObjectHost {
                 .find(|(id, _)| *id == *techid)
                 .map(|(_, maximum)| Value::Int(*maximum))
                 .ok_or_else(|| fail(Failure::PlayerState("tech max is unset"))),
+            ("SetPlayerTechResearched", [Value::Int(techid), Value::Int(level)]) => {
+                if let Some(stored) = players.rows[at]
+                    .tech_researched
+                    .iter_mut()
+                    .find(|(id, _)| *id == *techid)
+                {
+                    stored.1 = *level;
+                    return Ok(Value::Null);
+                }
+                let (records, max_records) = match players.research.as_ref() {
+                    Some(research) => (research.records, research.max_records),
+                    None => {
+                        return Err(fail(Failure::PlayerState("tech research is not admitted")));
+                    }
+                };
+                if records >= max_records {
+                    return Err(fail(Failure::Budget("player tech research")));
+                }
+                players.rows[at]
+                    .tech_researched
+                    .try_reserve(1)
+                    .map_err(|_| fail(Failure::Capacity))?;
+                players.rows[at].tech_researched.push((*techid, *level));
+                let research = players
+                    .research
+                    .as_mut()
+                    .ok_or_else(|| fail(Failure::PlayerState("tech research is not admitted")))?;
+                research.records += 1;
+                Ok(Value::Null)
+            }
             _ => Err(fail(Failure::PlayerArguments)),
         }
     }
@@ -472,3 +552,10 @@ const TECH_CONTRACTS: &[(&str, &[&str], &str, bool)] = &[
         true,
     ),
 ];
+
+const RESEARCH_CONTRACTS: &[(&str, &[&str], &str, bool)] = &[(
+    "SetPlayerTechResearched",
+    &["player", "integer", "integer"],
+    "nothing",
+    true,
+)];

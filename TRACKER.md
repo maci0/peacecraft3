@@ -1179,9 +1179,12 @@ Format: `date — subsystem — symptom — root cause — status`
       18 identities, 126 executed field assignments and 18 destinations with
       exact value/duration-bit checks. Its next refusal is
       `SetPlayerTechMaxAllowed` in that camera gate. The subsequent player-state
-      gate now retains all 36 executed technology maxima on their source players;
-      its next refusal is `SetPlayerTechResearched`. These values do not yet
-      enforce construction or training. Applied camera motion remains open. See
+      gate retained 36 executed technology maxima on their source players.
+      With researched-level storage admitted, the same run retains 65 maxima
+      and one researched-level record, matching the executed signed values and
+      player identities. Its next refusal is `CreateDestructable` at map span
+      `58030..58093`. These values do not yet enforce construction, training or
+      upgrade effects. Applied camera motion remains open. See
       `docs/re-notes/script-camera-setups.md`.
       This probe still uses the explicitly identified compatibility object catalog;
       launcher bank preparation remains open.

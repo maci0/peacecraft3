@@ -465,3 +465,6 @@ fn a_map_cannot_ambiguously_redeclare_player_in_another_source() {
 
 #[path = "player_tech_tests.rs"]
 mod player_tech;
+
+#[path = "player_research_tests.rs"]
+mod player_research;

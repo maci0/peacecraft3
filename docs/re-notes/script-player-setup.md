@@ -114,3 +114,39 @@ invented. Storing a maximum does not enforce training or construction. Refusing
 a non-integer or wrong-arity call is this recreation's contract check. It is not
 a claim that the shipped native rejects that input. Root still owns wiring this
 admission into a map run.
+
+## Player technology researched levels
+
+`ObjectHost::with_player_tech_researched` admits `SetPlayerTechResearched` on
+the same player rows. The selected `common.j` declaration is the constant
+native `takes player, integer, integer returns nothing`, with the third
+parameter named `setToLevel`. The selected `Blizzard.j` wrapper
+`SetPlayerTechResearchedSwap` only reorders those arguments. Neither source
+comment defines a tech category, a clamp, or an upgrade effect.
+
+The caller supplies a separate `TechLimitBudget.max_records` before any new
+`(player, techid)` research record is allocated. Replacing an existing key
+updates that level in place. A zero bound refuses the first new key. The
+executed signed id and level are stored together. They are not treated as
+FourCC values.
+
+`GetPlayerTechResearched` returns boolean and `GetPlayerTechCount` returns
+integer. Both take `specificonly`. `GetPlayerTechCountSimple` passes `true`,
+which does not establish whether that flag is an exact id, a category rollup,
+or something else. Those getters, and `AddPlayerTechResearched`, stay
+unsupported. An absent researched pair is not reported as level 0.
+
+The same retained Human01 Program completes globals and `config`, then stores
+one researched-level record and 65 technology maxima on the existing source
+players. Each retained signed id, level and maximum matches the captured
+executed call, with no duplicate stored keys. The prior rectangle, camera and
+sound checks still pass. The next refusal is `CreateDestructable` at map span
+`58030..58093`, declared in the selected `common.j` at `85292..85437`.
+This is script-state evidence, with the previously qualified compatibility
+object catalog; it does not establish upgrade effects, destruction objects,
+rendering or a playable chapter.
+
+Verification: 377 native tests pass with six explicit ignores, five research
+tests execute under WASI, and strict native/WASM Clippy and downstream app
+checks pass. The actual map gate validates the retained state and stops at the
+next unsupported call. No original data is published.
