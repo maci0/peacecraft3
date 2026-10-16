@@ -71,6 +71,8 @@ pub enum Failure {
     QuestState(&'static str),
     #[error("rectangle state: {0}")]
     RectState(&'static str),
+    #[error("destructable creation: {0}")]
+    DestructableState(&'static str),
     #[error("host identity capacity or allocation exceeded")]
     Capacity,
 }
@@ -162,6 +164,9 @@ enum Entry {
     CameraSetup {
         fields: Vec<objects::CameraFieldRecord>,
         destination: Option<objects::CameraDestination>,
+    },
+    Destructable {
+        creation: objects::DestructableCreation,
     },
 }
 pub struct EnumHost {
@@ -462,6 +467,7 @@ impl EnumHost {
                 return Err(self.error("arena", Failure::Identity));
             }
             Entry::CameraSetup { .. } => "camerasetup",
+            Entry::Destructable { .. } => "destructable",
         })
     }
     pub fn symbolic_value(&self, id: HandleId, kind: &str) -> Result<i32, Error> {
@@ -538,9 +544,9 @@ mod tests;
 #[path = "object_host.rs"]
 mod objects;
 pub use objects::{
-    CameraDestination, CameraFieldRecord, CameraState, DayNightState, FileSoundState, MapConfig,
-    MapConfigBudget, MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerBudget,
-    PlayerSettings, QuestBudget, QuestEvent, QuestFlag, SoundProperties, SoundState,
-    StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
-    StartupClockState, TechLimitBudget, TimerHost,
+    CameraDestination, CameraFieldRecord, CameraState, DayNightState, DestructableBudget,
+    DestructableCreation, FileSoundState, MapConfig, MapConfigBudget, MapMusicSelection,
+    ObjectHost, PlayerAdmissionError, PlayerBudget, PlayerSettings, QuestBudget, QuestEvent,
+    QuestFlag, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest, StartLocation,
+    StartPriorities, StartPriority, StartupClockState, TechLimitBudget, TimerHost,
 };

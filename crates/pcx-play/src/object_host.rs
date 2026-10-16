@@ -27,6 +27,7 @@ pub struct ObjectHost {
     quests: Option<crate::quest_session::QuestSession>,
     rectangles: bool,
     camera_setups: Option<camera_setup::Admission>,
+    destructables: Option<destructables::Admission>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -59,6 +60,7 @@ impl ObjectHost {
             quests: None,
             rectangles: false,
             camera_setups: None,
+            destructables: None,
         })
     }
     fn contract(
@@ -335,6 +337,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.rect_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.destructable_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(limit) = self.group_limit
             && matches!(
                 name,
@@ -418,3 +423,7 @@ pub use stacked_sounds::{StackedSoundAction, StackedSoundRequest};
 #[path = "camera_setup_host.rs"]
 mod camera_setup;
 pub use camera_setup::{CameraDestination, CameraFieldRecord};
+
+#[path = "destructable_host.rs"]
+mod destructables;
+pub use destructables::{DestructableBudget, DestructableCreation};

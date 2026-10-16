@@ -1185,8 +1185,10 @@ Format: `date — subsystem — symptom — root cause — status`
       gate retained 36 executed technology maxima on their source players.
       With researched-level storage admitted, the same run retains 65 maxima
       and one researched-level record, matching the executed signed values and
-      player identities. Its next refusal is `CreateDestructable` at map span
-      `58030..58093`. These values do not yet enforce construction, training or
+      player identities. Creation-state support then retains four destructable
+      records with exact executed arguments on the same arena. Its next refusal
+      is `CreateDeadDestructableZ` at map span `58398..58471`; no world objects
+      or rendering are claimed. These values do not yet enforce construction, training or
       upgrade effects. Applied camera motion remains open. See
       `docs/re-notes/script-camera-setups.md`.
       This probe still uses the explicitly identified compatibility object catalog;

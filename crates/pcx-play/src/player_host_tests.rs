@@ -468,3 +468,6 @@ mod player_tech;
 
 #[path = "player_research_tests.rs"]
 mod player_research;
+
+#[path = "destructable_host_tests.rs"]
+mod destructable_creation;

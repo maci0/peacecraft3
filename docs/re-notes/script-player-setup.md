@@ -150,3 +150,27 @@ Verification: 377 native tests pass with six explicit ignores, five research
 tests execute under WASI, and strict native/WASM Clippy and downstream app
 checks pass. The actual map gate validates the retained state and stops at the
 next unsupported call. No original data is published.
+
+## Destructable creation records
+
+`ObjectHost::with_destructables` admits `CreateDestructable` on the shared
+arena. The selected `common.j` declaration takes `integer objectid`, four
+reals (`x`, `y`, `face`, `scale`) and `integer variation`, and returns
+`destructable`. That type extends `widget`. The caller supplies
+`DestructableBudget.max_records` before a new record is allocated. Each record
+keeps the executed integer id, finite reals and variation, plus the
+declaration source and span. The id is not resolved through a destructable
+catalog, and no model path, life, pathing or scale default is invented.
+
+A non-finite real is refused as this recreation's policy. That is not a claim
+that the shipped native rejects it. `CreateDestructableZ` and
+`CreateDeadDestructable` stay unsupported. The record is creation state for a
+later world or render consumer. It is not a mesh or a placed world object.
+
+The same Human01 Program retains four executed `CreateDestructable` records.
+Each integer id and variation, real coordinate/facing/scale bit pattern, source
+declaration and shared handle identity matches the captured call. The preceding
+camera, rectangle, research and sound checks still pass. The next refusal is
+`CreateDeadDestructableZ` at map span `58398..58471`, declared in the selected
+`common.j` at `85741..85894`. No destructable catalog lookup, terrain-height
+selection, life total or world/render consumer is established by that run.
