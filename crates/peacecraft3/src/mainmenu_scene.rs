@@ -1092,6 +1092,8 @@ pub fn preflight_geosets<'a>(
         let rgb = opacity
             .sample_material_colour(mesh.geoset, frame, 0)
             .map_err(|error| SceneError::Decode(format!("{source}: {error}")))?;
+        let base_color = checked_geoset_colour(mesh.geoset, rgb, alpha)
+            .map_err(|error| SceneError::Decode(format!("{source}: {error}")))?;
         let uv = sampled_uv_transform(
             uv_translation,
             source,
@@ -1103,7 +1105,7 @@ pub fn preflight_geosets<'a>(
         let flags = layer_flags(&mdl_materials, mesh.material_id as usize);
         let material = crate::menu_material::checked_source_mode(
             StandardMaterial {
-                base_color: Color::srgba(rgb[0], rgb[1], rgb[2], alpha),
+                base_color,
                 uv_transform: uv,
                 // Preserve the existing scenery roughness and culling conventions.
                 perceptual_roughness: 1.0,
@@ -1232,14 +1234,13 @@ pub fn apply_geoset_colour(
     materials: &mut Assets<MenuMaterial>,
 ) -> Result<(), SceneError> {
     for (geoset, _, handle) in bound {
-        opacity
+        let rgb = opacity
             .sample_material_colour(*geoset, frame, elapsed_ms)
             .map_err(|error| SceneError::Decode(error.to_string()))?;
-        if materials.get(handle).is_none() {
-            return Err(SceneError::Decode(format!(
-                "geoset {geoset}: missing bound colour material"
-            )));
-        }
+        let material = materials.get(handle).ok_or_else(|| {
+            SceneError::Decode(format!("geoset {geoset}: missing bound colour material"))
+        })?;
+        checked_geoset_colour(*geoset, rgb, material.base.base_color.alpha())?;
     }
     // The immutable plan resamples identically after every target has been checked.
     for (geoset, _, handle) in bound {
@@ -1250,9 +1251,25 @@ pub fn apply_geoset_colour(
             .get_mut(handle)
             .expect("validated colour material");
         let alpha = material.base.base_color.alpha();
-        material.base.base_color = Color::srgba(rgb[0], rgb[1], rgb[2], alpha);
+        material.base.base_color =
+            checked_geoset_colour(*geoset, rgb, alpha).expect("validated representable colour");
     }
     Ok(())
+}
+
+fn checked_geoset_colour(geoset: usize, rgb: [f32; 3], alpha: f32) -> Result<Color, SceneError> {
+    let colour = Color::srgba(rgb[0], rgb[1], rgb[2], alpha);
+    let linear = colour.to_linear();
+    if [linear.red, linear.green, linear.blue, linear.alpha]
+        .iter()
+        .all(|component| component.is_finite())
+    {
+        Ok(colour)
+    } else {
+        Err(SceneError::Decode(format!(
+            "geoset {geoset}: colour cannot be represented as finite linear RGBA"
+        )))
+    }
 }
 
 /// A model's rest meshes and the joints that pose them.
@@ -1976,7 +1993,7 @@ mod tests {
         ] {
             data.extend(word.to_le_bytes());
         }
-        let plan = RuntimePlan::checked(RuntimeInput {
+        let mut plan = RuntimePlan::checked(RuntimeInput {
             bones: vec![],
             helpers: vec![],
             pivots: pcx_mdl::Pivots(vec![]),
@@ -2061,6 +2078,39 @@ mod tests {
         assert!((tinted_mat.base.base_color.to_srgba().red - 0.25).abs() < 1e-6);
         assert!((tinted_mat.base.base_color.to_srgba().green - 0.5).abs() < 1e-6);
         assert!((tinted_mat.base.base_color.to_srgba().blue - 0.75).abs() < 1e-6);
+
+        // Finite source words can overflow the renderer's sRGB-to-linear conversion.
+        assert!(
+            !Color::srgba(f32::MAX, 0.5, 0.75, 1.0)
+                .to_linear()
+                .red
+                .is_finite()
+        );
+        plan.geoset_animations[0].static_colour = [f32::MAX, 0.5, 0.75];
+        let overflow = pcx_gfx::mdx_opacity::OpacityPlan::checked(&plan, [0, 100]).unwrap();
+        let before = bound
+            .each_ref()
+            .map(|(_, _, handle)| materials.get(handle).unwrap().base.base_color);
+        assert!(apply_geoset_colour(&overflow, &bound, 0, 0, &mut materials).is_err());
+        assert_eq!(
+            bound
+                .each_ref()
+                .map(|(_, _, handle)| materials.get(handle).unwrap().base.base_color),
+            before
+        );
+        plan.geoset_animations[0].static_colour = [2.0, 0.5, 0.75];
+        let hdr = pcx_gfx::mdx_opacity::OpacityPlan::checked(&plan, [0, 100]).unwrap();
+        apply_geoset_colour(&hdr, &bound, 0, 0, &mut materials).unwrap();
+        assert_eq!(
+            materials
+                .get(&tinted)
+                .unwrap()
+                .base
+                .base_color
+                .to_srgba()
+                .red,
+            2.0
+        );
     }
 
     #[test]

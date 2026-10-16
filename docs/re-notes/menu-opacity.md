@@ -48,6 +48,16 @@ selected frame and elapsed clock. Updates validate every target and sample befor
 writing, preserve alpha, and leave unrelated materials alone. Additional material
 layers and complete native blend behavior remain open.
 
+Material creation and updates also check the renderer's sRGB-to-linear
+conversion. A finite source component can overflow that conversion; such a
+sample now returns a geoset-specific error before any bound material changes.
+Representable values above one remain unchanged. This is a renderer admission
+policy, not a native colour-range claim. The ECS regression reproduces the old
+acceptance of `f32::MAX`, verifies complete rollback, and preserves an unclamped
+HDR sample. The 419 ordinary application tests, both explicit Vulkan colour
+gates, original menu import, strict native/WASM Clippy, rustdoc and native/WASM
+builds pass with this boundary check.
+
 The independent [MDX viewer geoset-animation implementation](https://github.com/flowtsohg/mdx-m3-viewer/blob/master/src/viewer/handlers/mdx/geosetanimation.ts)
 also identifies KGAO as alpha and keeps its static value when no curve applies.
 Its [batch update](https://github.com/flowtsohg/mdx-m3-viewer/blob/master/src/viewer/handlers/mdx/modelinstance.ts)
