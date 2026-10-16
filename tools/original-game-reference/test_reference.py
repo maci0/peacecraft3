@@ -17,9 +17,9 @@ SPEC.loader.exec_module(ref)
 
 
 class ReferenceTests(unittest.TestCase):
-    def invoke(self, *args):
+    def invoke(self, *args, env=None, timeout=10):
         return subprocess.run([sys.executable, str(HERE / 'reference.py'), *args],
-                              input='', capture_output=True, text=True, timeout=10)
+                              input='', capture_output=True, text=True, timeout=timeout, env=env)
 
     def test_schema_offline_and_published_pin(self):
         result = self.invoke('--format', 'json', 'schema')
@@ -72,9 +72,63 @@ class ReferenceTests(unittest.TestCase):
         completed = subprocess.CompletedProcess([], 0, json.dumps([{'Config': {'Labels': {}}}]).encode(), b'')
         with patch.object(ref.subprocess, 'run', return_value=completed):
             with self.assertRaisesRegex(ref.Failure, 'ownership'): ref.inspect(Path('/private'))
-        completed = subprocess.CompletedProcess([], 1, b'', b'error: no such object: example')
-        with patch.object(ref.subprocess, 'run', return_value=completed), patch.object(ref, 'command'):
+        missing = subprocess.CompletedProcess([], 1, b'', b'error: no such object: example')
+        info = subprocess.CompletedProcess([], 0, b'24.0.0', b'')
+        with patch.object(ref.subprocess, 'run', side_effect=[missing, info]) as run:
             self.assertIsNone(ref.inspect(Path('/private')))
+            self.assertEqual(run.call_args_list[1].args[0][:2], ['docker', 'info'])
+
+    def test_status_refuses_inspect_output_over_protocol_bytes(self):
+        schema = json.loads((HERE / 'schema.json').read_text())
+        self.assertEqual(schema['clispec'], '0.3')
+        self.assertEqual(schema['extensions']['collection_limits']['protocol_bytes'], ref.MAX_METADATA)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run = root / 'run'
+            run.mkdir()
+            (run / 'source.json').write_text('{}\n')
+            resolved = str(run.resolve())
+            bindir = root / 'bin'
+            bindir.mkdir()
+            docker = bindir / 'docker'
+            docker.write_text(
+                f'#!{sys.executable}\n'
+                'import os, sys\n'
+                'from pathlib import Path\n'
+                'stream = sys.stderr if os.environ.get("DOCKER_STREAM") == "stderr" else sys.stdout\n'
+                'stream.buffer.write(Path(os.environ["DOCKER_INSPECT_OUT"]).read_bytes())\n'
+                'sys.exit(int(os.environ.get("DOCKER_EXIT", "0")))\n'
+            )
+            docker.chmod(0o755)
+            oversized = root / 'oversized.json'
+            small = root / 'small.json'
+            pad = 'p' * (ref.MAX_METADATA + 1)
+            document = {'Config': {'Labels': {ref.LABEL: resolved}}, 'State': {'Running': False, 'pad': pad}}
+            oversized.write_text(json.dumps([document]))
+            self.assertGreater(oversized.stat().st_size, ref.MAX_METADATA)
+            small.write_text(json.dumps([{'Config': {'Labels': {ref.LABEL: resolved}}, 'State': {'Running': False}}]))
+            env = os.environ.copy()
+            env['PATH'] = str(bindir) + os.pathsep + env.get('PATH', '')
+            env['DOCKER_INSPECT_OUT'] = str(oversized)
+            for stream in ['stdout', 'stderr']:
+                for exit_code in ['0', '1']:
+                    with self.subTest(stream=stream, exit_code=exit_code):
+                        env.update(DOCKER_STREAM=stream, DOCKER_EXIT=exit_code)
+                        result = self.invoke('status', '--run-dir', resolved, env=env, timeout=30)
+                        self.assertEqual(result.returncode, 2, result.stderr)
+                        self.assertFalse(result.stdout)
+                        error = json.loads(result.stderr)['error']
+                        self.assertEqual(error['kind'], 'reference_failed')
+                        self.assertIn('exceeds 2 MiB', error['message'])
+                        self.assertFalse(error['retryable'])
+                        self.assertNotIn(pad[:64], result.stdout)
+                        self.assertNotIn(pad[:64], result.stderr)
+            env.update(DOCKER_STREAM='stdout', DOCKER_EXIT='0')
+            env['DOCKER_INSPECT_OUT'] = str(small)
+            result = self.invoke('status', '--run-dir', resolved, env=env, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(result.stderr)
+            self.assertEqual(json.loads(result.stdout)['state'], {'Running': False})
 
     def test_command_bound_and_failure(self):
         for completed in [subprocess.CompletedProcess([], 0, b'x' * (ref.MAX_METADATA + 1), b''),

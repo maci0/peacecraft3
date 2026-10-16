@@ -22,10 +22,13 @@ class Failure(Exception):
     pass
 
 
-def command(argv, *, timeout=30):
+def command(argv, *, timeout=30, check=True):
     result = subprocess.run(argv, capture_output=True, timeout=timeout)
+    # The metadata cap applies even when the caller classifies a non-zero exit.
     if len(result.stdout) > MAX_METADATA or len(result.stderr) > MAX_METADATA:
         raise Failure('command metadata exceeds 2 MiB; inspect local logs')
+    if not check:
+        return result
     if result.returncode:
         diagnostic = result.stderr.decode(errors='replace')[-4000:]
         raise Failure(f'{argv[0]} exited {result.returncode}: {diagnostic}')
@@ -55,7 +58,7 @@ def name(path):
 
 
 def inspect(path):
-    result = subprocess.run(['docker', 'inspect', name(path)], capture_output=True, timeout=30)
+    result = command(['docker', 'inspect', name(path)], check=False)
     if result.returncode:
         # A daemon failure must not be mistaken for an absent/stopped container.
         command(['docker', 'info', '--format', '{{.ServerVersion}}'])
