@@ -15,7 +15,7 @@ unverified.
 
 `classic_frame` now provides a separate bounded BNCS/W3GS header codec and
 native TCP caller. Typed readers cover the selected authentication challenge
-and W3GS join refusals, slot records and opaque action subrecords. This is not
+and W3GS join refusals, slot records, selected-map checks and opaque action subrecords. This is not
 realm login or completed
 W3GS lobby/gameplay support.
 
@@ -199,3 +199,48 @@ record followed by a malformed tail. Strict native/WASM Clippy, rustdoc and both
 library builds pass. No live action exchange or original-client match was run.
 NET-C06 remains open; root evidence is in
 `.scratch/classic-network-20261016/root-actions/`.
+
+## Selected-map fingerprint comparison
+
+`Frame::bind_selected_map` and `OwnedFrame::bind_selected_map` now compare a
+`W3GS_MAPCHECK` with borrowed caller-selected map/prelude bytes and explicit
+edition/version/source identities. The protocol path is caller-supplied and
+compared byte for byte; a resolver path or display label is not substituted.
+The result has private fields and read-only accessors. It borrows the selected
+map rather than retaining a second payload. It is not a lobby-ready capability.
+
+The contract follows pinned GHost++
+[`SEND_W3GS_MAPCHECK`](https://github.com/ghostBot/ghostplusplus/blob/6ba90f426e96f80fe013a468d1e07151a510adbe/ghost/gameprotocol.cpp)
+and [`CMap::Load`/`XORRotateLeft`](https://github.com/ghostBot/ghostplusplus/blob/6ba90f426e96f80fe013a468d1e07151a510adbe/ghost/map.cpp).
+Size and CRC-32 cover the whole selected file. The existing map parser validates
+its header/archive/trailer relation, then the bounded MPQ reader extracts only
+the embedded archive members. XORO and SHA-1 cover the applicable common and
+blizzard scripts, protocol separator, preferred map script and ordered map
+members. Nonempty map preludes override the external ones; an empty override
+uses the selected external bytes. Root-script precedence is retained when both
+script paths exist. A missing map script, failed extraction, ambiguous member,
+incomplete required source or mismatched external edition/version refuses.
+
+Archive/table/packed/member limits precede the relevant allocations. An explicit
+total hashing budget counts the whole-file CRC input and each mixed member;
+the next member is charged before decoding it. Each member buffer is dropped
+before the next. These are input bounds, not a total process-memory guarantee.
+The packet's four unspecified prefix bytes remain raw. No checksum is replaced
+with project FNV/SHA-256, and SHA-1 is not treated as authentication.
+
+Four synthetic groups cover truncation at every packet prefix, missing and
+invalid selected maps, all fingerprint mismatches, overrides, alternate script
+paths, exact/short budgets, all mixed member positions, borrowed/streamed frames
+and byte identity. They pass natively and under actual WASI execution. Independent
+C++ vectors compiled from the pinned XOR/rotate, CRC and SHA sources match the
+fixtures. Strict native/browser-WASM checks and rustdoc pass. The full native
+network suite also passes against the current worktree, which includes separate
+project-discovery work in `transport.rs`; this slice does not change that file.
+Commands and source hashes are in
+`.scratch/classic-network-20261016/root-map-check/`.
+
+No map-size response, transfer, countdown, revision-bound lobby publication,
+original-client exchange or mixed-client match was run or implemented here.
+The shared map parser's supported-container policy still applies; this is a
+pinned sender-profile check, not proof of every original client check. NET-C05
+and both original LAN host directions remain open.

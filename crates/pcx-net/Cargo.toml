@@ -15,10 +15,11 @@ required-features = ["session-server"]
 
 [dependencies]
 pcx-sim.workspace = true
-thiserror.workspace = true
-
-[dev-dependencies]
 pcx-mpq.workspace = true
+pcx-map.workspace = true
+thiserror.workspace = true
+crc32fast = "1.5.2"
+sha1 = "0.11.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tungstenite = { version = "0.30", optional = true, default-features = false, features = ["handshake"] }

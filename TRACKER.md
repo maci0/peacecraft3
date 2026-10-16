@@ -1022,6 +1022,12 @@ Format: `date — subsystem — symptom — root cause — status`
       Source-profile slot-info/join body decoding retains raw slot fields and
       seed bytes with exact size/count checks. It is not readiness, an original
       peer exchange or proof of matching RNG streams.
+      Source-profile MAPCHECK comparison now validates the selected complete
+      file's size/CRC-32 and the applicable MPQ/script XORO/SHA-1 stream, with
+      caller byte budgets and borrowed provenance. Synthetic native/WASI and
+      pinned C++ checksum vectors pass. Map-ready publication, original peer
+      exchange and full NET-C05 acceptance remain open; see
+      `docs/re-notes/classic-network-interoperability.md`.
 - [ ] NET-C06: Ordered actions and checksum/RNG agreement, followed by a ten-minute
       mixed-client match without divergence; lobby-only success is insufficient.
       Bounded source-profile action-body readers now preserve player ids,
