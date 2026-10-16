@@ -131,7 +131,11 @@ Screenshot work does not consume the next requested input hold/wait. This is
 barrier-relative wall-clock replay, **not simulation lockstep**. Captures retain
 the two real renderers' outputs; clocks and animation phases are not synchronized.
 The report compares decoded RGB pixels, gives changed bounds and channel errors,
-and preserves the unchanged source PNGs. Exit 0 means the observed checkpoint
+and preserves the unchanged source PNGs. Checkpoints retain the browser's change
+flag: `frame_time` means state changed during capture and the image is unqualified
+for stable comparison; otherwise `match` and `pixel_mismatch` describe the pixels.
+These labels do not establish which simulation tick was rendered.
+Exit 0 means the observed checkpoint
 images match, exit 1 means they differ, and exit 2 means input/runtime refusal.
 None of these outcomes establishes complete game parity.
 

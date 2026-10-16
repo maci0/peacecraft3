@@ -252,6 +252,86 @@ class ReplayTests(unittest.TestCase):
             self.assertEqual(difference['max_channel_error'], 1)
             with self.assertRaisesRegex(ValueError, 'extent'): replay.image_difference(a, b, [9, 6])
 
+    def test_unstable_capture_is_not_a_stable_pixel_mismatch(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp); run = tmp / 'run'; (run / 'game').mkdir(parents=True)
+            (run / 'game/Warcraft III.exe').write_bytes(b'synthetic executable')
+            reference.write_json(run / 'source.json', {'executable_sha256': reference.digest(run / 'game/Warcraft III.exe')})
+            reference.write_json(run / 'launch.json', {'framebuffer': [8, 6], 'x_dpi': 96})
+            manifest = tmp / 'code.json'; reference.write_json(manifest, {'files': {'synthetic.js': {}}})
+            iso = tmp / 'fixture.iso'; iso.write_bytes(b'synthetic source')
+            module = tmp / 'fixture.mjs'; module.write_text('')
+            path = tmp / 'scenario.json'; value = scenario()
+            value['extent'] = [8, 6]
+            value['events'] = [{'kind': 'checkpoint', 'after_ms': 0, 'name': 'stable'},
+                               {'kind': 'checkpoint', 'after_ms': 0, 'name': 'moved'}]
+            reference.write_json(path, value)
+            args = SimpleNamespace(scenario=str(path), run_dir=str(run), url='http://127.0.0.1:1/index.html',
+                manifest=str(manifest), iso=str(iso), playwright_module=str(module), chromium='synthetic', output=str(tmp / 'output'))
+
+            def write_delta(target):
+                image = Image.new('RGB', (8, 6), (10, 20, 30))
+                image.putpixel((3, 2), (11, 20, 30))
+                image.save(target)
+
+            def capture(capture_args):
+                target = tmp / f'{capture_args.label}.png'
+                Image.new('RGB', (8, 6), (10, 20, 30)).save(target)
+                return {'capture': str(target), 'sha256': 'synthetic-reference'}
+
+            class SyntheticBrowser:
+                def __init__(self, *unused): pass
+                def receive(self, *unused): return {'data': {'state': {'screen': 'Synthetic'}}}
+                def request(self, op, **arguments):
+                    if op == 'summary': return {'finished': True}
+                    path = Path(arguments['path'])
+                    write_delta(path)
+                    changed = path.name.startswith('moved-')
+                    return {'path': str(path), 'sha256': 'synthetic-recreation',
+                            'geometry': {'clip': {'width': 8, 'height': 6, 'scale': 1}},
+                            'state_before': {'screen': 'Synthetic'},
+                            'state_after': {'screen': 'Synthetic-next'} if changed else {'screen': 'Synthetic'},
+                            'state_changed_during_capture': changed}
+                def close(self): pass
+
+            def execute(unused_run, argv):
+                return 'Xvfb :99 -screen 0 8x6x24 -r -nolisten tcp'
+
+            with patch.object(reference, 'inspect', return_value={'State': {'Running': True}}), \
+                 patch.object(reference, 'execute', side_effect=execute), \
+                 patch.object(replay, 'native_window', return_value={'window': '1'}), \
+                 patch.object(replay, 'Browser', SyntheticBrowser), \
+                 patch.object(reference, 'capture', side_effect=capture):
+                result = replay.compare(args, reference)
+            receipt = json.loads((tmp / 'output/comparison.json').read_text())
+            checkpoints = {item['name']: item for item in receipt['checkpoints']}
+            self.assertEqual(checkpoints['stable']['difference'], checkpoints['moved']['difference'])
+            self.assertFalse(checkpoints['stable']['difference']['equal'])
+            self.assertEqual(checkpoints['stable']['difference']['changed_bounds'], [3, 2, 4, 3])
+            self.assertEqual(checkpoints['stable']['difference']['max_channel_error'], 1)
+            self.assertFalse(checkpoints['stable']['state_changed_during_capture'])
+            self.assertTrue(checkpoints['moved']['state_changed_during_capture'])
+            self.assertEqual(checkpoints['stable']['kind'], 'pixel_mismatch')
+            self.assertEqual(checkpoints['moved']['kind'], 'frame_time')
+            self.assertNotEqual(checkpoints['moved']['kind'], 'pixel_mismatch')
+            self.assertFalse(receipt['observed_images_equal'])
+            self.assertFalse(result['images_equal'])
+            self.assertFalse(result['deterministic_parity_verified'])
+            page = (tmp / 'output/index.html').read_text()
+            self.assertIn('pixel_mismatch', page)
+            self.assertIn('frame_time', page)
+            self.assertIn('state_changed_during_capture=false', page)
+            self.assertIn('state_changed_during_capture=true', page)
+            self.assertIn('unqualified for stable comparison', page)
+            stable_note = json.loads((tmp / 'output/stable/receipt.json').read_text())['note']
+            moved_note = json.loads((tmp / 'output/moved/receipt.json').read_text())['note']
+            self.assertIn('state_changed_during_capture is false', stable_note)
+            self.assertNotIn('unqualified for stable comparison', stable_note)
+            self.assertIn('state_changed_during_capture is true', moved_note)
+            self.assertIn('unqualified for stable comparison', moved_note)
+            self.assertNotIn('state_before', checkpoints['moved'])
+
 
 if __name__ == '__main__':
     unittest.main()

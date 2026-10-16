@@ -161,6 +161,14 @@ def image_difference(reference, recreation, extent):
                 'max_channel_error': maximum, 'mean_absolute_channel_error': absolute / (extent[0] * extent[1] * 3)}
 
 
+def comparison_kind(difference, state_changed_during_capture):
+    if type(state_changed_during_capture) is not bool:
+        raise ValueError('state_changed_during_capture must be the browser capture boolean')
+    if state_changed_during_capture:
+        return 'frame_time'
+    return 'match' if difference['equal'] else 'pixel_mismatch'
+
+
 def native_window(ref, run, scenario):
     display = ref.execute(run, ['xdpyinfo'])
     width, height = scenario['extent']
@@ -285,14 +293,22 @@ def compare(args, ref):
                     native = pair.submit(ref.capture, SimpleNamespace(run_dir=str(run), label=label))
                     recreation = pair.submit(browser.request, 'capture', path=str(output / f'{event["name"]}-recreation.png'))
                     journal['original'], journal['recreation'] = native.result(), recreation.result()
+                    changed = journal['recreation'].get('state_changed_during_capture')
+                    if type(changed) is not bool:
+                        raise ref.Failure('browser capture must include boolean state_changed_during_capture')
+                    note = ('Same declared inputs; random streams and animation phases uncontrolled. '
+                            'Wine reference, not native Windows parity. '
+                            f'state_changed_during_capture is {str(changed).lower()}.')
+                    if changed:
+                        note += ' This capture is unqualified for stable comparison.'
                     target = output / event['name']
                     report = ref.report(SimpleNamespace(reference=journal['original']['capture'],
-                        recreation=journal['recreation']['path'], output=str(target),
-                        note='Same declared inputs; random streams and animation phases uncontrolled. Wine reference, not native Windows parity.'))
+                        recreation=journal['recreation']['path'], output=str(target), note=note))
                     ref.write_json(target / 'browser-capture.json', journal['recreation'])
                     journal['recreation'] = {key: value for key, value in journal['recreation'].items() if key not in ('state_before', 'state_after')}
                     metrics = image_difference(target / 'reference.png', target / 'recreation.png', scenario['extent'])
-                    result['checkpoints'].append({'name': event['name'], 'report': report, 'difference': metrics})
+                    result['checkpoints'].append({'name': event['name'], 'report': report, 'difference': metrics,
+                        'state_changed_during_capture': changed, 'kind': comparison_kind(metrics, changed)})
                 else:
                     native = pair.submit(native_input, ref, run, event)
                     recreation = pair.submit(browser.request, 'input', event=event)
@@ -303,10 +319,15 @@ def compare(args, ref):
         result['browser_end'] = browser.request('summary')
         result['observed_images_equal'] = all(c['difference']['equal'] for c in result['checkpoints'])
         links = ''.join(f'<li><a href="{html.escape(c["name"])}/index.html">{html.escape(c["name"])}</a>: '
+                        f'{html.escape(c["kind"])}; state_changed_during_capture='
+                        f'{str(c["state_changed_during_capture"]).lower()}; '
                         f'{html.escape(json.dumps(c["difference"]))}</li>' for c in result['checkpoints'])
+        unstable = ', '.join(html.escape(c['name']) for c in result['checkpoints'] if c['kind'] == 'frame_time')
+        qualification = (' Captures classified frame_time (' + unstable
+                         + ') changed during capture and are unqualified for stable comparison.' if unstable else '')
         (output / 'index.html').write_text('<!doctype html><meta charset="utf-8"><title>Paired input comparison</title>'
             '<h1>Paired input comparison</h1><p>Uncontrolled RNG and animation clocks. '
-            'These are observed outputs, not verified deterministic parity.</p><ul>' + links + '</ul>')
+            'These are observed outputs, not verified deterministic parity.' + qualification + '</p><ul>' + links + '</ul>')
         return {'report': str(output / 'index.html'), 'receipt': str(output / 'comparison.json'),
                 'checkpoints': len(result['checkpoints']), 'images_equal': result['observed_images_equal'],
                 'deterministic_parity_verified': False}
