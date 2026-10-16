@@ -77,7 +77,9 @@ and replay loading remain to be connected. Prepare and launch a fresh reference
 run, then inspect its Main-menu capture.
 `compare` requires the Xvfb `-r` setting used by the current session script, so
 OS auto-repeat cannot insert extra keys. Stopped or older experiments remain
-preserved. Supply a local, explicitly prepared ISO source closure containing one
+preserved. It requires exactly one default X screen and a full-frame client on
+that screen, with exact dimensions and DPI; another screen cannot supply the
+calibration. Supply a local, explicitly prepared ISO source closure containing one
 import candidate, an asset-free loopback demo page and its code build receipt:
 
 ```sh

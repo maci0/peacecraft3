@@ -164,7 +164,15 @@ def image_difference(reference, recreation, extent):
 def native_window(ref, run, scenario):
     display = ref.execute(run, ['xdpyinfo'])
     width, height = scenario['extent']
-    if f'{width}x{height} pixels' not in display or '96x96 dots per inch' not in display:
+    # Input and root capture use the single default screen created by session.sh.
+    sections = re.split(r'(?m)^screen #(\d+):[ \t]*$', display)
+    screen = sections[-1] if len(sections) == 3 else ''
+    dimensions = re.findall(r'(?m)^[ \t]*dimensions:[ \t]*(\d+)x(\d+) pixels\b', screen)
+    resolutions = re.findall(r'(?m)^[ \t]*resolution:[ \t]*(\d+)x(\d+) dots per inch\b', screen)
+    default_screen = re.findall(r'(?m)^default screen number:[ \t]*(\d+)[ \t]*$', sections[0])
+    if (len(sections) != 3 or sections[1] != '0' or default_screen != ['0']
+            or dimensions != [(str(width), str(height))]
+            or resolutions != [(str(scenario['dpi']), str(scenario['dpi']))]):
         raise ref.Failure('actual X framebuffer/DPI differs from the scenario')
     pattern = '^' + re.escape(scenario['window_title']) + '$'
     ids = ref.execute(run, ['xdotool', 'search', '--onlyvisible', '--name', pattern]).splitlines()
@@ -174,7 +182,7 @@ def native_window(ref, run, scenario):
     geometry = ref.execute(run, ['xdotool', 'getwindowgeometry', '--shell', window])
     fields = dict(line.split('=', 1) for line in geometry.splitlines() if '=' in line)
     expected = dict(zip(('WIDTH', 'HEIGHT'), map(str, scenario['extent'])))
-    if any(fields.get(key) != value for key, value in {**expected, 'X': '0', 'Y': '0'}.items()):
+    if any(fields.get(key) != value for key, value in {**expected, 'X': '0', 'Y': '0', 'SCREEN': '0'}.items()):
         raise ref.Failure('original client must occupy the full requested framebuffer at origin')
     ref.execute(run, ['xdotool', 'windowfocus', '--sync', window])
     if ref.execute(run, ['xdotool', 'getwindowfocus']).strip() != window:

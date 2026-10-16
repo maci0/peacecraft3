@@ -28,6 +28,56 @@ def scenario():
 
 
 class ReplayTests(unittest.TestCase):
+    def test_native_grid_matches_the_only_default_screen_and_window(self):
+        display = ('default screen number:    0\n'
+                   'screen #0:\n'
+                   '  dimensions:    1920x1080 pixels (508x286 millimeters)\n'
+                   '  resolution:    96x96 dots per inch\n')
+
+        def check(text=display, extent=(1920, 1080), screen='0'):
+            calls = []
+
+            def execute(unused_run, argv):
+                calls.append(argv)
+                if argv == ['xdpyinfo']:
+                    return text
+                if argv[:2] == ['xdotool', 'search']:
+                    return '42'
+                if argv[:2] == ['xdotool', 'getwindowgeometry']:
+                    return (f'WINDOW=42\nX=0\nY=0\nWIDTH={extent[0]}\n'
+                            f'HEIGHT={extent[1]}\nSCREEN={screen}')
+                if argv == ['xdotool', 'windowfocus', '--sync', '42']:
+                    return ''
+                if argv == ['xdotool', 'getwindowfocus']:
+                    return '42'
+                self.fail(f'unexpected command: {argv}')
+
+            ref = SimpleNamespace(execute=execute, Failure=reference.Failure,
+                                  MAX_METADATA=reference.MAX_METADATA)
+            value = {'extent': list(extent), 'dpi': 96, 'window_title': 'Synthetic reference'}
+            return replay.native_window(ref, 'synthetic-run', value), calls
+
+        found, calls = check()
+        self.assertEqual(found['window'], '42')
+        self.assertIn(['xdotool', 'windowfocus', '--sync', '42'], calls)
+        invalid = [
+            (display, (920, 1080)),
+            (display.replace('96x96', '196x96'), (1920, 1080)),
+            (display.replace('screen #0:', 'screen #1:'), (1920, 1080)),
+            (display.replace('number:    0', 'number:    1'), (1920, 1080)),
+            (display + 'screen #1:\n  dimensions: 80x60 pixels\n'
+                       '  resolution: 96x96 dots per inch\n', (1920, 1080)),
+            (display + '  resolution: 120x120 dots per inch\n', (1920, 1080)),
+            ('default screen number: 0\n', (1920, 1080)),
+        ]
+        for text, extent in invalid:
+            with self.subTest(text=text, extent=extent), self.assertRaisesRegex(
+                    reference.Failure, 'framebuffer/DPI'):
+                check(text, extent)
+        for screen in ['1', '']:
+            with self.subTest(screen=screen), self.assertRaisesRegex(reference.Failure, 'framebuffer'):
+                check(screen=screen)
+
     def test_offline_input_schema_describes_the_supported_journal(self):
         import jsonschema
         schema = json.loads((HERE / 'schema.json').read_text())['extensions']['comparison_scenario']
