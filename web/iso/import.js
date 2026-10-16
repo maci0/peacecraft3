@@ -1,4 +1,5 @@
 import { discoverIso, sliceIsoFile } from '../iso.js';
+import { directEngineFile } from './engine-member.js';
 
 // Resource budgets, not measured game data. Each archive is copied separately.
 export async function importIsoCandidates(file, discovery, selected, api, {
@@ -26,13 +27,23 @@ export async function importIsoCandidates(file, discovery, selected, api, {
       // Yield for cancel and relative UI progress before the next archive.
       await new Promise(resolve => setTimeout(resolve, 0));
     }
+    const engine = directEngineFile(discovery.files);
+    let clientImageSource = null;
+    if (engine.file) {
+      signal?.throwIfAborted();
+      const image = new Uint8Array(await sliceIsoFile(file, engine.file).arrayBuffer());
+      if (image.byteLength !== engine.file.size) throw new Error('ISO client image length does not match its directory record');
+      clientImageSource = `${discovery.provenance.sourceName ?? 'local Blob'}:${engine.file.path}@${engine.file.offset}`;
+      api.stage_client_image(clientImageSource, image);
+    }
     signal?.throwIfAborted();
     onProgress?.({ phase: 'hydrate', imported, total });
     await new Promise(resolve => setTimeout(resolve, 0));
     signal?.throwIfAborted();
     const diagnostics = api.commit_archive_import();
     return { provenance: discovery.provenance, archives: selected.map(({ path, offset, archiveSize }) => ({ path, offset, size: archiveSize })),
-      canonicalPaths: api.stored_assets(), revision: api.asset_revision(), diagnostics };
+      canonicalPaths: api.stored_assets(), revision: api.asset_revision(), diagnostics,
+      clientImageStatus: engine.status, clientImageSource, clientImageRole: engine.role };
   } catch (error) { api.cancel_archive_import(); throw error; }
 }
 export { discoverIso };

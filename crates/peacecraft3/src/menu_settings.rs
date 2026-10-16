@@ -1,7 +1,8 @@
 //! Supported user preferences. Slider units come from the current FDF widgets.
 //! Qualified display rows come from the selected client's mode profile and the
 //! primary monitor. A selector-2 popup profile lists every current monitor's
-//! full rectangle. Otherwise the list is measured render sizes.
+//! full rectangle. On the browser, that profile lists logical canvas rows for
+//! one physical screen observation. Otherwise the list is measured render sizes.
 use crate::menu_screens::{
     Navigation, OfferedResolution, SettingControl, SettingValue, Settings, Widget,
 };
@@ -121,17 +122,20 @@ impl Range {
         )
     }
 }
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct DisplayAdmission {
+    #[cfg(not(target_arch = "wasm32"))]
     path: String,
+    #[cfg(target_arch = "wasm32")]
+    revision: Option<u32>,
     expansion: bool,
     state: DisplayState,
+    #[cfg(not(target_arch = "wasm32"))]
     announced: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     empty_noted: bool,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 enum DisplayState {
     #[default]
@@ -156,7 +160,6 @@ pub struct Backend {
     pending_resolution: Option<(u32, u32)>,
     observed_resolution: Option<(u32, u32)>,
     resize: Option<resolution::Pending>,
-    #[cfg(not(target_arch = "wasm32"))]
     display: DisplayAdmission,
 }
 impl Backend {
@@ -891,53 +894,30 @@ fn popup_offers<'a>(
     Ok(offers)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn discover_display_policy(
-    install: &std::path::Path,
+const DISPLAY_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+
+/// `source` is the image input identity. The version label records pattern
+/// qualification and does not name a release.
+fn admit_display_image(
+    image: &[u8],
+    source: &str,
     expansion: bool,
 ) -> Result<Option<pcx_play::options_modes::Policy>, String> {
     use pcx_play::{
         neutral_player::RuleInputBudget,
         options_modes::{DiscoveryBudget, Policy, Problem},
     };
-    use std::io::Read;
-    const IMAGE_BYTES: usize = 32 * 1024 * 1024;
-    let path = install.join("Warcraft III.exe");
-    let mut file = match std::fs::File::open(&path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("{}: {error}", path.display())),
-    };
-    if file
-        .metadata()
-        .map_err(|error| format!("{}: {error}", path.display()))?
-        .len()
-        > IMAGE_BYTES as u64
-    {
-        return Err(format!(
-            "{}: Options client exceeds image budget",
-            path.display()
-        ));
-    }
-    let mut image = Vec::new();
-    image
-        .try_reserve_exact(IMAGE_BYTES + 1)
-        .map_err(|error| error.to_string())?;
-    file.by_ref()
-        .take((IMAGE_BYTES + 1) as u64)
-        .read_to_end(&mut image)
-        .map_err(|error| format!("{}: {error}", path.display()))?;
     let origin = pcx_play::scripts::AssetIdentity {
         edition: format!("selected skin V{}", u32::from(expansion)),
         version: "pattern-qualified PE32; release identity not inferred".into(),
-        source: path.display().to_string(),
+        source: source.to_owned(),
     };
     match Policy::discover(
-        &image,
+        image,
         origin,
         DiscoveryBudget {
             image: RuleInputBudget {
-                image_bytes: IMAGE_BYTES,
+                image_bytes: DISPLAY_IMAGE_BYTES,
                 profile_bytes: 128 * 1024,
                 sections: 96,
             },
@@ -960,6 +940,41 @@ fn discover_display_policy(
         }
         Err(error) => Err(error.to_string()),
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn discover_display_policy(
+    install: &std::path::Path,
+    expansion: bool,
+) -> Result<Option<pcx_play::options_modes::Policy>, String> {
+    use std::io::Read;
+    let path = install.join("Warcraft III.exe");
+    let mut file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    if file
+        .metadata()
+        .map_err(|error| format!("{}: {error}", path.display()))?
+        .len()
+        > DISPLAY_IMAGE_BYTES as u64
+    {
+        return Err(format!(
+            "{}: Options client exceeds image budget",
+            path.display()
+        ));
+    }
+    let mut image = Vec::new();
+    image
+        .try_reserve_exact(DISPLAY_IMAGE_BYTES + 1)
+        .map_err(|error| error.to_string())?;
+    file.by_ref()
+        .take((DISPLAY_IMAGE_BYTES + 1) as u64)
+        .read_to_end(&mut image)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let source = path.display().to_string();
+    admit_display_image(&image, &source, expansion)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1042,6 +1057,222 @@ fn announce_display(nav: &mut Navigation, backend: &mut Backend, empty_qualified
     }
 }
 
+#[cfg(any(test, target_arch = "wasm32"))]
+const BROWSER_SOURCE_NOTICE: &str =
+    "Source choices are bounded by the browser screen. Apply changes the render extent.";
+#[cfg(any(test, target_arch = "wasm32"))]
+const BROWSER_MEASURED_IMAGE_NOTICE: &str =
+    "A missing or unsupported client image keeps the measured choices.";
+#[cfg(any(test, target_arch = "wasm32"))]
+const BROWSER_MEASURED_BOUND_NOTICE: &str =
+    "The browser screen bound is unavailable. Measured choices stay.";
+#[cfg(any(test, target_arch = "wasm32"))]
+const BROWSER_MEASURED_PROFILE_NOTICE: &str =
+    "This client image has no source display rows. Measured choices stay.";
+#[cfg(any(test, target_arch = "wasm32"))]
+const BROWSER_ADMISSION_NOTICE: &str =
+    "Display mode profile was not admitted. Measured choices stay.";
+#[cfg(any(test, target_arch = "wasm32"))]
+const BROWSER_LISTING_NOTICE: &str = "Source display choices could not be listed.";
+#[cfg(any(test, target_arch = "wasm32"))]
+const BROWSER_SCREEN_BOUND_NOTICE: &str = "Browser screen bound:";
+
+#[cfg(any(test, target_arch = "wasm32"))]
+enum BrowserProfileKind<'a> {
+    Absent,
+    Failed(&'a str),
+    Popup,
+    Other,
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn same_browser_admission(
+    cached_revision: Option<u32>,
+    cached_expansion: bool,
+    revision: u32,
+    expansion: bool,
+) -> bool {
+    cached_revision == Some(revision) && cached_expansion == expansion
+}
+
+/// Logical canvas row for one browser screen observation.
+/// `adapter` is the render-only session placeholder 0, the same value
+/// `OfferedResolution::render_size` stores. Depth, refresh, monitor, and
+/// monitor ordinal stay empty. Label, order, kind, flag, and mode index come
+/// from the parser row. Hardware identity and the source current-kind policy
+/// stay out of this offer.
+#[cfg(any(test, target_arch = "wasm32"))]
+fn browser_canvas_offer(row: &pcx_play::options_modes::Row) -> OfferedResolution {
+    OfferedResolution {
+        label: row.label.clone(),
+        size: (row.width, row.height),
+        depth: None,
+        refresh_millihertz: None,
+        adapter: 0,
+        mode_index: row.mode_index,
+        kind: row.kind,
+        flag: row.flag,
+        monitor_ordinal: None,
+        monitor: None,
+        render_extent_only: true,
+    }
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn resolve_browser_list(
+    measured: Vec<OfferedResolution>,
+    kind: BrowserProfileKind<'_>,
+    bound: Option<(u32, u32)>,
+    listed: Result<Vec<OfferedResolution>, String>,
+) -> (Vec<OfferedResolution>, String) {
+    match kind {
+        BrowserProfileKind::Popup if bound.is_some() => match listed {
+            Ok(rows) => (rows, BROWSER_SOURCE_NOTICE.to_owned()),
+            Err(error) => (Vec::new(), format!("{BROWSER_LISTING_NOTICE} {error}")),
+        },
+        BrowserProfileKind::Popup => (measured, BROWSER_MEASURED_BOUND_NOTICE.to_owned()),
+        BrowserProfileKind::Other => (measured, BROWSER_MEASURED_PROFILE_NOTICE.to_owned()),
+        BrowserProfileKind::Failed(detail) => {
+            (measured, format!("{BROWSER_ADMISSION_NOTICE} {detail}"))
+        }
+        BrowserProfileKind::Absent => (measured, BROWSER_MEASURED_IMAGE_NOTICE.to_owned()),
+    }
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn browser_qualification_notice(text: &str) -> bool {
+    text == BROWSER_SOURCE_NOTICE
+        || text == BROWSER_MEASURED_IMAGE_NOTICE
+        || text == BROWSER_MEASURED_BOUND_NOTICE
+        || text == BROWSER_MEASURED_PROFILE_NOTICE
+        || text.starts_with(BROWSER_ADMISSION_NOTICE)
+        || text.starts_with(BROWSER_LISTING_NOTICE)
+        || text.starts_with(BROWSER_SCREEN_BOUND_NOTICE)
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn assign_browser_notice(nav: &mut Navigation, notice: String) {
+    if nav.notice.is_empty() || browser_qualification_notice(&nav.notice) {
+        nav.notice = notice;
+    }
+}
+
+/// Frameless flag-0 families for one positive screen observation.
+/// The session adapter is the render-only placeholder 0. The bound ordinal is
+/// only the pass index `popup_rows` copies onto each row; the canvas offer
+/// drops it.
+#[cfg(target_arch = "wasm32")]
+fn browser_popup_offers(
+    policy: &pcx_play::options_modes::Policy,
+    width: u32,
+    height: u32,
+) -> Result<Vec<OfferedResolution>, String> {
+    let rows = policy
+        .popup_rows(
+            &[pcx_play::options_modes::MonitorBound {
+                ordinal: 0,
+                width,
+                height,
+            }],
+            Some(0),
+            0,
+        )
+        .map_err(|error| error.to_string())?;
+    let mut offers = Vec::new();
+    offers
+        .try_reserve(rows.len())
+        .map_err(|error| error.to_string())?;
+    for row in &rows {
+        offers.push(browser_canvas_offer(row));
+    }
+    Ok(offers)
+}
+
+/// Reads the committed image only when the asset revision or selected skin
+/// changes. The callback borrows those bytes for admission and does not store
+/// them. No image for that revision clears the cached profile.
+#[cfg(target_arch = "wasm32")]
+fn remember_browser_admission(backend: &mut Backend, expansion: bool) {
+    let revision = crate::browser::asset_revision();
+    if same_browser_admission(
+        backend.display.revision,
+        backend.display.expansion,
+        revision,
+        expansion,
+    ) {
+        return;
+    }
+    let admission = crate::browser::with_committed_client_image(|source, bytes| {
+        admit_display_image(bytes, source, expansion)
+    })
+    .unwrap_or(Ok(None));
+    backend.display = DisplayAdmission {
+        revision: Some(revision),
+        expansion,
+        state: match admission {
+            Ok(Some(policy)) => DisplayState::Qualified(std::sync::Arc::new(policy)),
+            Ok(None) => DisplayState::Unqualified { detail: None },
+            Err(detail) => DisplayState::Unqualified {
+                detail: Some(detail),
+            },
+        },
+    };
+}
+
+/// Positive physical pixels from `peacecraft3Settings.screenBound`.
+/// `Ok(None)` is a missing bound and keeps measured render sizes.
+#[cfg(target_arch = "wasm32")]
+fn read_browser_screen_bound() -> Result<Option<(u32, u32)>, String> {
+    let text = browser_screen_bound().map_err(browser_failure)?;
+    if text.len() > MAX_PREFERENCE_BYTES {
+        return Err("exceeds its input limit".into());
+    }
+    let parsed = serde_json::from_str::<Option<(u32, u32)>>(&text)
+        .map_err(|error| format!("malformed: {error}"))?;
+    Ok(parsed.filter(|(width, height)| *width > 0 && *height > 0))
+}
+
+/// `modes` is the measured window, stage, and screen list from `displayModes`.
+/// Popup rows use `screenBound` alone.
+#[cfg(target_arch = "wasm32")]
+fn load_browser_resolutions(
+    nav: &mut Navigation,
+    backend: &mut Backend,
+    expansion: bool,
+    modes: Vec<(u32, u32)>,
+) -> String {
+    remember_browser_admission(backend, expansion);
+    let measured = render_offers(modes);
+    let (rows, notice) = match read_browser_screen_bound() {
+        Err(error) => (measured, format!("{BROWSER_SCREEN_BOUND_NOTICE} {error}")),
+        Ok(bound) => {
+            let listed = match (&backend.display.state, bound) {
+                (DisplayState::Qualified(policy), Some((width, height)))
+                    if policy.has_popup_profile() =>
+                {
+                    browser_popup_offers(policy, width, height)
+                }
+                _ => Ok(Vec::new()),
+            };
+            let kind = match &backend.display.state {
+                DisplayState::Qualified(policy) if policy.has_popup_profile() => {
+                    BrowserProfileKind::Popup
+                }
+                DisplayState::Qualified(_) => BrowserProfileKind::Other,
+                DisplayState::Unqualified {
+                    detail: Some(detail),
+                } => BrowserProfileKind::Failed(detail),
+                DisplayState::Unqualified { detail: None } | DisplayState::Unchecked => {
+                    BrowserProfileKind::Absent
+                }
+            };
+            resolve_browser_list(measured, kind, bound, listed)
+        }
+    };
+    nav.resolutions = rows;
+    notice
+}
+
 fn environment(
     mut nav: ResMut<Navigation>,
     mut backend: ResMut<Backend>,
@@ -1077,11 +1308,11 @@ fn environment(
         Err(error) => nav.notice = format!("Browser display information: {error:?}"),
     }
     #[cfg(target_arch = "wasm32")]
-    let policy: Option<std::sync::Arc<pcx_play::options_modes::Policy>> = None;
+    let browser_notice =
+        load_browser_resolutions(&mut nav, &mut backend, launcher.expansion(), modes);
+    // Explicit click or exact size. The admitted profile is not a score input.
     #[cfg(target_arch = "wasm32")]
-    {
-        nav.resolutions = render_offers(modes);
-    }
+    let policy: Option<std::sync::Arc<pcx_play::options_modes::Policy>> = None;
     #[cfg(not(target_arch = "wasm32"))]
     let policy = display_policy(&mut backend, &launcher);
     #[cfg(not(target_arch = "wasm32"))]
@@ -1190,6 +1421,8 @@ fn environment(
     if popup_list && nav.notice.is_empty() {
         nav.notice = crate::menu_screens::POPUP_WORK_AREA_NOTICE.into();
     }
+    #[cfg(target_arch = "wasm32")]
+    assign_browser_notice(&mut nav, browser_notice);
     choose_offer(&mut nav, policy.as_deref());
 }
 fn attach_controls(
@@ -1457,6 +1690,8 @@ extern "C" {
     fn browser_error_text(value: &wasm_bindgen::JsValue) -> Result<String, wasm_bindgen::JsValue>;
     #[wasm_bindgen(catch,js_namespace=peacecraft3Settings,js_name=displayModes)]
     fn browser_modes() -> Result<String, wasm_bindgen::JsValue>;
+    #[wasm_bindgen(catch,js_namespace=peacecraft3Settings,js_name=screenBound)]
+    fn browser_screen_bound() -> Result<String, wasm_bindgen::JsValue>;
     #[wasm_bindgen(catch,js_namespace=peacecraft3Settings,js_name=load)]
     fn browser_load(limit: usize) -> Result<Option<String>, wasm_bindgen::JsValue>;
     #[wasm_bindgen(catch,js_namespace=peacecraft3Settings,js_name=save)]
@@ -1949,6 +2184,170 @@ mod tests {
             vec![(640, 480), (800, 600)]
         );
         assert!(render_offers(Vec::new()).is_empty());
+    }
+
+    fn parser_row(
+        width: u32,
+        height: u32,
+        mode_index: u32,
+        kind: i32,
+    ) -> pcx_play::options_modes::Row {
+        pcx_play::options_modes::Row {
+            label: format!("{width}/{height}"),
+            width,
+            height,
+            depth: Some(32),
+            refresh_millihertz: Some(60_000),
+            adapter: 7,
+            mode_index,
+            kind,
+            flag: 0,
+            monitor_ordinal: Some(4),
+        }
+    }
+
+    #[test]
+    fn browser_canvas_offer_keeps_parser_fields_and_clears_hardware_identity() {
+        let row = parser_row(800, 600, 2, 11);
+        let offer = browser_canvas_offer(&row);
+        assert_eq!(offer.label, "800/600");
+        assert_eq!(offer.size, (800, 600));
+        assert_eq!(offer.mode_index, 2);
+        assert_eq!(offer.kind, 11);
+        assert_eq!(offer.flag, 0);
+        assert_eq!(offer.adapter, 0);
+        assert!(offer.depth.is_none());
+        assert!(offer.refresh_millihertz.is_none());
+        assert!(offer.monitor.is_none());
+        assert!(offer.monitor_ordinal.is_none());
+        assert!(offer.render_extent_only);
+        assert_eq!(offer.adapter, OfferedResolution::render_size(1, 1).adapter);
+    }
+
+    #[test]
+    fn browser_popup_list_keeps_empty_results_and_measured_fallbacks() {
+        let measured = render_offers(vec![(1920, 1080), (800, 600)]);
+        let later = browser_canvas_offer(&parser_row(400, 280, 1, 11));
+        let earlier = browser_canvas_offer(&parser_row(151, 97, 0, 11));
+        let (rows, notice) = resolve_browser_list(
+            measured.clone(),
+            BrowserProfileKind::Popup,
+            Some((1366, 768)),
+            Ok(vec![later.clone(), earlier.clone()]),
+        );
+        assert_eq!(rows, vec![later, earlier.clone()]);
+        assert_eq!(notice, BROWSER_SOURCE_NOTICE);
+        let (rows, notice) = resolve_browser_list(
+            measured.clone(),
+            BrowserProfileKind::Popup,
+            Some((100, 80)),
+            Ok(Vec::new()),
+        );
+        assert!(rows.is_empty());
+        assert_eq!(notice, BROWSER_SOURCE_NOTICE);
+        let (rows, notice) = resolve_browser_list(
+            measured.clone(),
+            BrowserProfileKind::Popup,
+            Some((100, 80)),
+            Err("label budget".into()),
+        );
+        assert!(rows.is_empty());
+        assert_eq!(notice, format!("{BROWSER_LISTING_NOTICE} label budget"));
+        let (rows, notice) = resolve_browser_list(
+            measured.clone(),
+            BrowserProfileKind::Popup,
+            None,
+            Err("unused".into()),
+        );
+        assert_eq!(rows, measured);
+        assert_eq!(notice, BROWSER_MEASURED_BOUND_NOTICE);
+        let (rows, notice) = resolve_browser_list(
+            measured.clone(),
+            BrowserProfileKind::Absent,
+            Some((1366, 768)),
+            Ok(vec![earlier]),
+        );
+        assert_eq!(rows, measured);
+        assert_eq!(notice, BROWSER_MEASURED_IMAGE_NOTICE);
+        let (rows, notice) = resolve_browser_list(
+            measured.clone(),
+            BrowserProfileKind::Other,
+            Some((1366, 768)),
+            Ok(Vec::new()),
+        );
+        assert_eq!(rows, measured);
+        assert_eq!(notice, BROWSER_MEASURED_PROFILE_NOTICE);
+        let (rows, notice) = resolve_browser_list(
+            measured.clone(),
+            BrowserProfileKind::Failed("invalid PE image"),
+            Some((1366, 768)),
+            Ok(Vec::new()),
+        );
+        assert_eq!(rows, measured);
+        assert_eq!(
+            notice,
+            format!("{BROWSER_ADMISSION_NOTICE} invalid PE image")
+        );
+    }
+
+    #[test]
+    fn browser_selection_stays_on_the_clicked_canvas_row() {
+        let first = browser_canvas_offer(&parser_row(800, 600, 0, 11));
+        let second = browser_canvas_offer(&parser_row(800, 600, 1, 3));
+        let mut nav = Navigation {
+            resolutions: vec![first, second.clone()],
+            ..default()
+        };
+        nav.draft.resolution = Some((800, 600));
+        select_offer(&mut nav, &second).unwrap();
+        choose_offer(&mut nav, None);
+        let selected = nav.selected_offer.as_ref().unwrap();
+        assert_eq!(selected.mode_index, 1);
+        assert_eq!(selected.kind, 3);
+        assert!(selected.render_extent_only);
+        assert!(selected.monitor.is_none());
+        assert_eq!(nav.draft.resolution, Some((800, 600)));
+    }
+
+    #[test]
+    fn browser_admission_cache_tracks_revision_and_skin() {
+        assert!(!same_browser_admission(None, false, 0, false));
+        assert!(same_browser_admission(Some(4), true, 4, true));
+        assert!(!same_browser_admission(Some(4), true, 5, true));
+        assert!(!same_browser_admission(Some(4), false, 4, true));
+    }
+
+    #[test]
+    fn admit_display_image_keeps_the_input_identity() {
+        let blank = admit_display_image(&[0, 1, 2, 3], "  ", false).unwrap_err();
+        assert!(blank.contains("selected skin V0"));
+        assert!(blank.contains("pattern-qualified PE32; release identity not inferred"));
+        let named = admit_display_image(b"not-a-client", "chosen.dll", true).unwrap_err();
+        assert!(named.contains("chosen.dll"));
+        assert!(named.contains("selected skin V1"));
+        assert!(named.contains("pattern-qualified PE32; release identity not inferred"));
+    }
+
+    #[test]
+    fn browser_qualification_notice_does_not_replace_other_messages() {
+        let mut nav = Navigation::default();
+        assign_browser_notice(&mut nav, BROWSER_SOURCE_NOTICE.to_owned());
+        assert_eq!(nav.notice, BROWSER_SOURCE_NOTICE);
+        assign_browser_notice(&mut nav, BROWSER_MEASURED_IMAGE_NOTICE.to_owned());
+        assert_eq!(nav.notice, BROWSER_MEASURED_IMAGE_NOTICE);
+        assert!(browser_qualification_notice(&format!(
+            "{BROWSER_LISTING_NOTICE} label budget"
+        )));
+        assert!(browser_qualification_notice(&format!(
+            "{BROWSER_SCREEN_BOUND_NOTICE} exceeds its input limit"
+        )));
+        assert!(!browser_qualification_notice(
+            "Browser display information exceeds its input limit"
+        ));
+        nav.notice =
+            "Saved resolution is unavailable on this display; using the current window".into();
+        assign_browser_notice(&mut nav, BROWSER_SOURCE_NOTICE.to_owned());
+        assert!(nav.notice.starts_with("Saved resolution"));
     }
 
     #[test]

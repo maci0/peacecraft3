@@ -1544,9 +1544,22 @@ and actual WASI display tests, the supplied Legacy profile gate, 347 application
 tests and strict native/browser-WASM checks pass. Evidence is in
 `.scratch/options-display-popup-root-20261017/`. Work-area families, original
 active policy, exclusive switching and equal rendered choice lists remain open;
-browser client-image import and row wiring are still being integrated.
+browser client-image import and row wiring are now integrated; the conditional
+five-row browser gate below passes.
 
 The [101-entry requirements map](docs/remaining-work/README.md) reconciles the
 open and partial gates against source evidence and lists their prerequisites.
 It is pinned to the pre-correction tracker snapshot; broad gameplay and original
 comparison gates remain open.
+
+Browser display input now shares the native image admission parser. The existing
+picker accepts one optional local client image with its MPQs; cancel and failed
+hydrate keep the previous image/assets/revision, while an archive-only replacement
+clears the image. Eight actual generated-WASM transaction checks and a focused
+Video Options dropdown run pass. At the retained original screen bound, its five
+visible rows match the original witness in order. The screenshot was reviewed
+and its capture state is stable. Forty JS tests, 353 app tests, strict native
+and browser Clippy and the actual browser build pass. Evidence is retained in
+`.scratch/browser-display-rows-root-20261017/`. No original assets were packaged
+and nothing was published. Full original mode policy, physical switching,
+Options panel/artwork/typography and unsupported settings remain open.

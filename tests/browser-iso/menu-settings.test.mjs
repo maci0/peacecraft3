@@ -73,6 +73,41 @@ test('display choices derive from the preview container and screen, never a star
   assert.deepEqual(modes(), [[716, 928], [2732, 1536]]);
 });
 
+test('screen bound observes physical screen pixels without changing display modes', () => {
+  const canvas = { width: 300, height: 150, addEventListener() {} };
+  const stage = { clientWidth: 744, clientHeight: 418, addEventListener() {} };
+  const context = {
+    document: { querySelector: selector => ({ '#stage': stage, '#launcher-canvas': canvas })[selector] ?? null },
+    devicePixelRatio: 2,
+    screen: { width: 1366, height: 768 },
+  };
+  vm.runInNewContext(source, context);
+  const modes = () => JSON.parse(context.peacecraft3Settings.displayModes());
+  const bound = () => context.peacecraft3Settings.screenBound();
+  assert.equal(bound(), '[2732,1536]');
+  assert.deepEqual(modes(), [[1488, 836], [2732, 1536]]);
+  context.screen.width = 1366.4;
+  assert.equal(bound(), '[2733,1536]');
+  assert.deepEqual(modes(), [[1488, 836], [2733, 1536]]);
+  context.screen.width = 1366;
+  context.devicePixelRatio = Number.NaN;
+  assert.equal(bound(), 'null');
+  assert.deepEqual(modes(), []);
+  context.devicePixelRatio = 0;
+  assert.equal(bound(), 'null');
+  context.devicePixelRatio = 1;
+  context.screen.height = 0;
+  assert.equal(bound(), 'null');
+  assert.deepEqual(modes(), [[744, 418]]);
+  context.screen.height = 768;
+  context.screen.width = 0x100000000;
+  assert.equal(bound(), 'null');
+  assert.deepEqual(modes(), [[744, 418]]);
+  context.screen = undefined;
+  assert.equal(bound(), 'null');
+  assert.deepEqual(modes(), [[744, 418]]);
+});
+
 test('actual-size preview stays readable without modifying selected render or layout size', () => {
   const { canvas, stage, button, click, update } = preview(1280, 720, 360, 480);
   click();

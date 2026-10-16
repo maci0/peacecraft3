@@ -6,23 +6,41 @@ function bounded(text, limit) {
     throw new RangeError('Settings exceed the preference byte limit');
   return text;
 }
+function acceptedMode(width, height) {
+  return Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0 &&
+    width <= 0xffffffff && height <= 0xffffffff;
+}
+function physicalPixels(cssWidth, cssHeight) {
+  const ratio = globalThis.devicePixelRatio;
+  if (!Number.isFinite(ratio) || ratio <= 0) return null;
+  const width = Math.round(cssWidth * ratio);
+  const height = Math.round(cssHeight * ratio);
+  return acceptedMode(width, height) ? [width, height] : null;
+}
 globalThis.peacecraft3Settings = {
   displayModes() {
     const modes = [];
     const add = (width, height) => {
-      if (Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0 &&
-          width <= 0xffffffff && height <= 0xffffffff && !modes.some(mode => mode[0] === width && mode[1] === height))
+      if (acceptedMode(width, height) && !modes.some(mode => mode[0] === width && mode[1] === height))
         modes.push([width, height]);
     };
-    const ratio = globalThis.devicePixelRatio;
-    if (Number.isFinite(ratio) && ratio > 0) {
-      // The preview's content box remains measurable when a selected canvas mode
-      // changes. Do not treat the canvas's temporary startup bitmap as a mode.
-      const stage = document.querySelector('#stage');
-      if (stage) add(Math.round(stage.clientWidth * ratio), Math.round(stage.clientHeight * ratio));
-      if (globalThis.screen) add(Math.round(screen.width * ratio), Math.round(screen.height * ratio));
+    // The preview's content box remains measurable when a selected canvas mode
+    // changes. Do not treat the canvas's temporary startup bitmap as a mode.
+    const stage = document.querySelector('#stage');
+    if (stage) {
+      const size = physicalPixels(stage.clientWidth, stage.clientHeight);
+      if (size) add(size[0], size[1]);
+    }
+    if (globalThis.screen) {
+      const size = physicalPixels(screen.width, screen.height);
+      if (size) add(size[0], size[1]);
     }
     return JSON.stringify(modes);
+  },
+  // One physical screen rectangle. This is not a displayModes entry.
+  screenBound() {
+    if (!globalThis.screen) return 'null';
+    return JSON.stringify(physicalPixels(screen.width, screen.height));
   },
   resumeParentSizing() {
     const canvas = document.querySelector('#launcher-canvas');

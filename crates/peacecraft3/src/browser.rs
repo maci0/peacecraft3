@@ -260,6 +260,98 @@ fn revision() -> std::sync::MutexGuard<'static, u32> {
         .unwrap_or_else(|p| p.into_inner())
 }
 
+/// Same image ceiling `Policy::discover` uses for one selected client.
+const CLIENT_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+
+struct ClientImage {
+    source: String,
+    bytes: Vec<u8>,
+}
+
+struct CommittedClientImage {
+    revision: u32,
+    source: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Default)]
+struct ClientImageTxn {
+    pending: Option<ClientImage>,
+    committed: Option<CommittedClientImage>,
+}
+
+fn client_image_input(source: &str, len: usize) -> Result<(), &'static str> {
+    if source.trim().is_empty() {
+        return Err("missing source identity");
+    }
+    if len == 0 {
+        return Err("client image is empty");
+    }
+    if len > CLIENT_IMAGE_BYTES {
+        return Err("Options client exceeds image budget");
+    }
+    Ok(())
+}
+
+impl ClientImageTxn {
+    fn clear_pending(&mut self) {
+        self.pending = None;
+    }
+
+    fn clear_all(&mut self) {
+        self.pending = None;
+        self.committed = None;
+    }
+
+    fn stage(&mut self, active: bool, source: String, bytes: Vec<u8>) -> Result<(), &'static str> {
+        if !active {
+            return Err("no active archive import");
+        }
+        client_image_input(&source, bytes.len())?;
+        if self.pending.is_some() {
+            return Err("client image is already staged");
+        }
+        self.pending = Some(ClientImage { source, bytes });
+        Ok(())
+    }
+
+    /// Installs the pending image at `revision`. An empty pending slot clears
+    /// the previous image so the new revision does not keep it.
+    fn publish(&mut self, revision: u32) {
+        let pending = self.pending.take();
+        self.committed = pending.map(|image| CommittedClientImage {
+            revision,
+            source: image.source,
+            bytes: image.bytes,
+        });
+    }
+
+    fn committed_at(&self, revision: u32) -> Option<(&str, &[u8])> {
+        self.committed
+            .as_ref()
+            .filter(|image| image.revision == revision)
+            .map(|image| (image.source.as_str(), image.bytes.as_slice()))
+    }
+}
+
+static CLIENT_IMAGES: OnceLock<Mutex<ClientImageTxn>> = OnceLock::new();
+
+fn client_images() -> std::sync::MutexGuard<'static, ClientImageTxn> {
+    CLIENT_IMAGES
+        .get_or_init(|| Mutex::new(ClientImageTxn::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+}
+
+/// Lends the image published for the current asset revision.
+/// The bytes stay in this slot. The callback must not re-enter the slot.
+pub(crate) fn with_committed_client_image<T>(read: impl FnOnce(&str, &[u8]) -> T) -> Option<T> {
+    let revision = *revision();
+    let slot = client_images();
+    let (source, bytes) = slot.committed_at(revision)?;
+    Some(read(source, bytes))
+}
+
 /// No priority is inferred from arrival order or filenames. Equal duplicates
 /// are safe; distinct bytes at one member path require installation evidence.
 fn extract_unique(set: &mut [pcx_mpq::MpqArchive], path: &str) -> Result<Vec<u8>, String> {
@@ -398,11 +490,13 @@ pub fn enqueue_map_configuration_json(
 #[wasm_bindgen]
 pub fn begin_archive_import() {
     *pending() = Some(Vec::new());
+    client_images().clear_pending();
 }
 
 #[wasm_bindgen]
 pub fn cancel_archive_import() {
     *pending() = None;
+    client_images().clear_pending();
 }
 
 /// Validate an archive into the pending transaction; no members become visible.
@@ -417,6 +511,22 @@ pub fn stage_archive(name: String, bytes: Vec<u8>) -> Result<String, JsValue> {
         .ok_or_else(|| JsValue::from_str("no active archive import"))?
         .push(archive);
     Ok(summary)
+}
+
+/// One client image for the open archive transaction. The bytes stay in this slot.
+#[wasm_bindgen]
+pub fn stage_client_image(source: String, bytes: Vec<u8>) -> Result<(), JsValue> {
+    // Drop the archive guard before the image slot. wasm mutexes panic on re-entry.
+    let active = pending().is_some();
+    client_images()
+        .stage(active, source, bytes)
+        .map_err(JsValue::from_str)
+}
+
+/// Source identity committed with the current asset revision. Bytes stay here.
+#[wasm_bindgen]
+pub fn committed_client_image_identity() -> Option<String> {
+    with_committed_client_image(|source, _bytes| source.to_owned())
 }
 
 /// Named extraction from the staged set, including codec and conflict errors.
@@ -895,6 +1005,7 @@ pub fn commit_archive_import() -> Result<Vec<String>, JsValue> {
     for (path, bytes) in assets {
         add_asset(path, bytes);
     }
+    client_images().publish(next);
     *rev = next;
     let mut control = demo_control();
     control.enabled = true;
@@ -1255,6 +1366,7 @@ pub fn drop_assets() -> usize {
     *pending() = None;
     let count = clear_store();
     let mut rev = revision();
+    client_images().clear_all();
     *rev = rev.checked_add(1).expect("asset revision exhausted");
     let mut control = demo_control();
     control.editions = crate::local_demo::MenuEditions::default();
@@ -1350,6 +1462,92 @@ mod tests {
         );
         assert_eq!(drop_assets(), 2);
         assert!(stored_assets().is_empty());
+    }
+
+    #[test]
+    fn client_image_publishes_once_and_cancel_keeps_the_prior_image() {
+        let mut slot = ClientImageTxn::default();
+        slot.clear_pending();
+        slot.stage(true, "archive::game.dll".into(), b"one".to_vec())
+            .unwrap();
+        slot.publish(3);
+        assert_eq!(
+            slot.committed_at(3).unwrap(),
+            ("archive::game.dll", b"one".as_slice())
+        );
+        assert!(slot.committed_at(2).is_none());
+
+        slot.clear_pending();
+        slot.stage(true, "archive::next.dll".into(), b"two".to_vec())
+            .unwrap();
+        slot.clear_pending();
+        assert_eq!(slot.committed_at(3).unwrap().1, b"one");
+
+        slot.clear_pending();
+        slot.stage(true, "archive::next.dll".into(), b"two".to_vec())
+            .unwrap();
+        assert_eq!(
+            slot.stage(true, "archive::third.dll".into(), b"three".to_vec()),
+            Err("client image is already staged")
+        );
+        slot.publish(4);
+        assert_eq!(slot.committed_at(4).unwrap().1, b"two");
+        assert!(slot.committed_at(3).is_none());
+
+        slot.clear_pending();
+        slot.publish(5);
+        assert!(slot.committed_at(5).is_none());
+        assert!(slot.stage(false, "late".into(), b"x".to_vec()).is_err());
+        assert_eq!(
+            client_image_input("fixture", CLIENT_IMAGE_BYTES + 1),
+            Err("Options client exceeds image budget")
+        );
+        assert_eq!(client_image_input("  ", 1), Err("missing source identity"));
+        assert_eq!(
+            client_image_input("fixture", 0),
+            Err("client image is empty")
+        );
+    }
+
+    #[test]
+    fn failed_commit_keeps_the_staged_image_off_the_store_and_revision() {
+        let _ = drop_assets();
+        let revision = asset_revision();
+        let stored = stored_assets();
+        {
+            let mut slot = client_images();
+            slot.clear_pending();
+            slot.stage(true, "prior::game.dll".into(), b"prior-bytes".to_vec())
+                .unwrap();
+            slot.publish(revision);
+        }
+        let prior =
+            with_committed_client_image(|source, bytes| (source.to_owned(), bytes.to_vec()));
+        assert_eq!(prior.unwrap().1, b"prior-bytes");
+        assert_eq!(
+            committed_client_image_identity().as_deref(),
+            Some("prior::game.dll")
+        );
+
+        begin_archive_import();
+        stage_client_image("next::game.dll".into(), b"next-bytes".to_vec()).unwrap();
+        assert_eq!(stored_assets(), stored);
+        assert!(commit_archive_import().is_err());
+        assert_eq!(asset_revision(), revision);
+        assert_eq!(stored_assets(), stored);
+        let kept = with_committed_client_image(|source, bytes| (source.to_owned(), bytes.to_vec()));
+        assert_eq!(
+            kept.unwrap(),
+            ("prior::game.dll".to_owned(), b"prior-bytes".to_vec())
+        );
+
+        cancel_archive_import();
+        assert!(stage_client_image("late".into(), b"x".to_vec()).is_err());
+        let still = with_committed_client_image(|_source, bytes| bytes.to_vec());
+        assert_eq!(still.unwrap(), b"prior-bytes");
+        let _ = drop_assets();
+        assert!(with_committed_client_image(|_, _| ()).is_none());
+        assert!(committed_client_image_identity().is_none());
     }
 
     #[test]

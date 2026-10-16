@@ -48,9 +48,10 @@ client admits an enumeration-family profile and the primary monitor has video
 modes, the menu offers those grouped source labels in provider order. Otherwise
 it lists measured render sizes. Original labels, filtering, grouping and
 matching are checked at their [source boundary](original-display-modes.md).
-Pair-table augmentation and exclusive physical modes are not offered. Browser
-render-size choices are an explicit host capability, not OS-exclusive
-display-mode enumeration. The
+Selector-3 work-area families and exclusive physical modes are not offered. Browser
+choices stay render extents. An admitted frameless popup profile can list its
+source rows against one physical screen observation. That observation is not a
+monitor, and the rows are not exclusive or work-area modes. The
 [qualified native enumeration](original-display-modes.md) retains device/mode
 identity, depth and refresh; its complete provider also adds source-table and
 derived choices that this selector does not invent. No fixed preset list
@@ -61,10 +62,14 @@ enable toggles. Qualified native choices come from the primary monitor's video
 modes after the admitted client's enumeration filter and refresh grouping.
 Without that profile, native choices are the current window, the current
 monitor size and that monitor's video-mode sizes, reduced to render sizes.
-Browser choices combine the current window resolution with the actual preview
-container and screen dimensions at the observed device pixel ratio. The container
-remains measurable after selecting another mode; temporary canvas bitmap sizes
-are excluded. This is not an enumerated OS mode list. Browser preview fitting centers and scales
+Without an admitted frameless popup profile, or without a positive physical
+screen bound, browser choices are the current window plus the preview
+container and screen at the device pixel ratio. The container stays measurable
+after a selection; temporary canvas bitmap sizes are excluded. Those
+`displayModes` pairs are not monitors. The popup bound is the separate
+physical screen observation. A missing or unsupported client image keeps the
+measured choices. An empty admitted popup list stays empty. Apply changes the
+render extent. This is not an enumerated OS mode list. Browser preview fitting centers and scales
 the canvas with a CSS transform, preserving its backing resolution and layout box;
 it does not independently resize authored game controls. Fit view can make a high-resolution
 menu too small to read in a narrow window. The host Actual size toggle instead
@@ -215,3 +220,35 @@ library, 327 application and 84 integration tests, with 15 explicit application
 ignores. Scoped all-target/all-feature Clippy, WASM Clippy with warnings denied,
 formatting and whitespace checks pass. Fresh release-browser interaction and
 visual comparison remain a separate gate.
+
+## Local client-image input and browser display rows
+
+The existing archive picker accepts one optional client executable or DLL beside
+the MPQs. The client image is bounded separately and commits only after the
+archive dependency closure hydrates successfully. It is kept outside the asset
+store and is neither uploaded nor persisted. Cancel and a failed commit preserve
+the prior image, assets and revision. A successful replacement with no image
+clears the old image. Installer imports can supply a unique named engine member;
+its filename and size do not establish a release or grant a display profile.
+
+The browser admits that image through the same post-read parser as native.
+Admission is cached by asset revision and selected skin. A qualified frameless
+profile supplies source rows against the browser screen observation. Missing or
+unsupported inputs keep measured render sizes; an admitted empty list stays
+empty. These remain canvas render sizes, with no physical monitor identity,
+color depth, refresh or exclusive mode switching.
+
+The actual generated-WASM browser transaction passes eight checks, including
+real picker input, cancel, failed hydrate, invalid input, archive-only
+replacement and clear. A separate focused browser run opens Video Options and
+the dropdown at the retained original capture's screen bound. Its five visible
+rows match that conditional original witness in order. Both images were
+reviewed; the browser capture reports no state change during capture. The
+transaction and popup runs each record seventeen local code GETs, no uploads,
+no external requests and no page errors. Forty JavaScript tests, 353 application
+tests, strict native/browser Clippy and the browser build pass.
+
+Evidence: `.scratch/browser-display-rows-root-20261017/`. The reviewed private
+package contains code only. No package was published. The Options left panel,
+popup typography and artwork, unsupported settings and complete mode-list
+parity remain open.

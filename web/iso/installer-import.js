@@ -1,4 +1,12 @@
 // Dedicated decoder instance per selected ISO; data crosses only local worker messages.
+import { CLIENT_IMAGE_BYTES } from './engine-member.js';
+
+function declaredClientImageLength(clientImage) {
+  if (clientImage.bytes instanceof Uint8Array) return clientImage.bytes.byteLength;
+  const size = clientImage.file?.size;
+  return Number.isSafeInteger(size) ? size : Number.NaN;
+}
+
 export function createInstallerDecoder({ onProgress, WorkerClass = globalThis.Worker } = {}) {
   const worker = new WorkerClass(new URL('./arc-worker.js', import.meta.url), { type: 'module' });
   const requests = new Map(); let sequence = 0, closed = false;
@@ -40,7 +48,7 @@ export function createInstallerDecoder({ onProgress, WorkerClass = globalThis.Wo
 
 // Caller-side transaction for files already extracted by this decoder.
 // Abort is checked before begin so a retired request cannot open a revision.
-export async function stageStoredInstallerFiles(files, sourceName, api, { signal, onProgress } = {}) {
+export async function stageStoredInstallerFiles(files, sourceName, api, { signal, onProgress, clientImage = null } = {}) {
   signal?.throwIfAborted();
   api.begin_archive_import();
   try {
@@ -51,6 +59,20 @@ export async function stageStoredInstallerFiles(files, sourceName, api, { signal
       signal?.throwIfAborted();
       api.stage_archive(`${sourceName}:${entry.path} (stored, unpatched)`, bytes);
       await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    if (clientImage) {
+      const source = clientImage.source;
+      const declared = declaredClientImageLength(clientImage);
+      if (typeof source !== 'string' || !source.trim() || !Number.isSafeInteger(declared) || declared < 1 || declared > CLIENT_IMAGE_BYTES)
+        throw new Error('Installer client image is missing its source identity or exceeds its budget');
+      signal?.throwIfAborted();
+      const bytes = clientImage.bytes instanceof Uint8Array
+        ? clientImage.bytes
+        : new Uint8Array(await clientImage.file.arrayBuffer());
+      signal?.throwIfAborted();
+      if (bytes.byteLength !== declared)
+        throw new Error('Installer client image length does not match its declared size');
+      api.stage_client_image(source, bytes);
     }
     signal?.throwIfAborted();
     onProgress?.({ phase: 'hydrate' });

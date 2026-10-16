@@ -40,7 +40,9 @@ The current application reduces device modes to `(width,height)` pairs. That
 loses fields the original routine retains. Future mode choices must preserve
 stable device/mode identity, depth and refresh, and distinguish a window render
 size from an exclusive display mode. Browser render sizes are a separate host
-capability; a browser cannot claim this OS-exclusive enumeration contract.
+capability; a browser cannot claim this OS-exclusive enumeration contract. A
+browser popup list is one logical canvas bound from the screen observation,
+not per-index native capacity.
 
 Do not paste observed filter/default values into code. A checked profile may
 read them from a caller-supplied, qualified executable, or another independently
@@ -258,9 +260,13 @@ An empty qualified result is not filled from a preset list or from the current
 window.
 
 Apply still changes the window or browser render extent. It does not request
-an exclusive physical mode. Browser builds, a missing image and an unadmitted
-profile use measured render sizes and identify them as render sizes. A
-qualified profile whose primary-monitor rows are all rejected stays empty.
+an exclusive physical mode. A browser popup row is a logical canvas size for
+the physical screen observation: render extent only, with no monitor, depth,
+or refresh. Hardware identity and the source current-kind policy stay out of
+that row. A missing image, an unsupported image, or a missing screen bound
+keeps measured render sizes. An admitted browser popup list that is empty
+stays empty. A qualified profile whose primary-monitor rows are all rejected
+stays empty.
 Version-1 preferences store the render size only. Same-size depth and refresh
 remain a session selection until cancel, reopen, a draft size change, or
 replacement of that row.
@@ -349,7 +355,32 @@ and admission failures, is retained in
 This is a source-qualified frameless subset. Selector-3 work-area/frame
 capacities, original active-kind and adapter-owner policy, monitor-order parity,
 exclusive switching and equal rendered original choice lists remain open.
-Browser builds still use measured render extents pending their imported-image
-consumer; the current installer engine does not admit this profile. The four
-fresh browser menu captures in `.scratch/menu-depth-root-20261017/` precede this
-selector integration and do not establish its rendered acceptance.
+Browser builds list logical canvas rows when the committed image admits this
+popup profile and the physical screen bound is positive. A missing or
+unsupported image keeps measured render extents. The retained installer-engine admission did not find this profile. The four fresh browser menu captures in
+`.scratch/menu-depth-root-20261017/` precede this selector integration and do
+not establish its rendered acceptance.
+
+### Browser import and conditional visible-list gate
+
+The existing file picker now commits an optional bounded client image with its
+archives. A successful hydrate publishes the image on the same revision; cancel
+or failed hydrate retains the previous image and assets. Replacing the archives
+without an image clears the previous profile input. The image stays local and
+outside the asset store. The retained installer-engine gate did not admit a profile; this runtime gate
+uses an explicitly supplied Legacy image that admits the frameless profile.
+
+With that image and the retained original screen bound, the actual browser
+dropdown offers the same five visible rows in the same order. This is a
+conditional runtime comparison against one retained Wine capture, not an
+exhaustive device census or proof of original active-kind/adapter policy.
+The reviewed current screenshot retains Options panel, typography and popup
+artwork differences. No physical mode switch was attempted.
+
+The generated-WASM transaction passes eight checks; the focused dropdown run
+records no page errors, uploads or external requests. The screenshot's state
+is stable across capture. Forty importer/settings JavaScript tests and 353
+application tests pass; strict native and browser checks pass. Evidence is
+`.scratch/browser-display-rows-root-20261017/`. The browser artifact is private
+and contains no original assets. Full original list and rendered parity remain
+open.

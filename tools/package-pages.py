@@ -16,6 +16,7 @@ FILES = (
     ("demo.css", "demo.css"),
     ("intro.css", "intro.css"),
     ("loader.js", "loader.js"),
+    ("local-archives.js", "local-archives.js"),
     ("loading.js", "loading.js"),
     ("map-configuration.js", "map-configuration.js"),
     ("menu-audio.js", "menu-audio.js"),
@@ -28,6 +29,7 @@ FILES = (
     ("iso/freearc.js", "iso/freearc.js"),
     ("iso/arc-extract.js", "iso/arc-extract.js"),
     ("iso/arc-worker.js", "iso/arc-worker.js"),
+    ("iso/engine-member.js", "iso/engine-member.js"),
     ("iso/installer-import.js", "iso/installer-import.js"),
     ("pkg/freearc/freearc-codec.mjs", "pkg/freearc/freearc-codec.mjs"),
     ("pkg/freearc/freearc-codec.wasm", "pkg/freearc/freearc-codec.wasm"),
@@ -177,8 +179,12 @@ def self_test() -> None:
         (source / "pkg/peacecraft3.js").write_text("import { fixture } from './snippets/fixture/module.js';\n")
         stray = snippet.parent / "unreferenced.js"
         stray.write_text("not shipped")
+        (source / "iso/engine-member.js").write_text("export function planEngineMembers() { return null; }\n")
+        (source / "iso/arc-worker.js").write_text("import { planEngineMembers } from './engine-member.js';\n")
         names = package(source, root / "dist", codec)
         assert names == sorted([target for _, target in FILES] + ["pkg/snippets/fixture/module.js", CODEC_OFFER, ".nojekyll"])
+        assert (root / "dist/iso/engine-member.js").read_text() == "export function planEngineMembers() { return null; }\n"
+        assert (root / "dist/iso/arc-worker.js").read_text() == "import { planEngineMembers } from './engine-member.js';\n"
         assert not (root / "dist/assets").exists()
         assert not (root / "dist/pkg/snippets/fixture/unreferenced.js").exists()
 

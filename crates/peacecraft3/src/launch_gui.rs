@@ -62,7 +62,6 @@ impl Launcher {
         (&self.source, self.mode)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn expansion(&self) -> bool {
         self.mode.addon == Addon::Tft
     }

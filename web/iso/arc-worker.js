@@ -1,13 +1,15 @@
 // Independent local decoder worker. It never runs installer code or sends files.
 import { loadFreeArcCodec } from '../pkg/freearc/freearc-codec.mjs';
 import { inspectInstaller } from './installer.js';
-import { ArcError, openFreeArc, redactMethod } from './freearc.js';
+import { ArcError, checkedLimits, openFreeArc, redactMethod } from './freearc.js';
 import { extractArcMembers, createTemporaryArcStorage } from './arc-extract.js';
+import { planEngineMembers } from './engine-member.js';
 
 let codec, current, currentId, state, storage;
 // Independent per-attempt decoded-intermediate work policy, not a measured asset
 // size, REP final-output estimate or working-memory allowance.
 const MAX_INTERMEDIATE_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_SELECTED_BYTES = 1024 * 1024 * 1024;
 let lastProgress = 0;
 const progress = work => {
   const now = performance.now();
@@ -75,24 +77,45 @@ async function extract({ ids }, signal) {
     if (!candidate) throw new Error('Installer candidate was not discovered in this transaction');
     return candidate;
   });
-  if (wanted.reduce((sum, c) => sum + c.archiveSize, 0) > 1024 * 1024 * 1024) throw new Error('Selected archive bytes exceed the local import budget');
+  const mpqTotal = wanted.reduce((sum, c) => sum + c.archiveSize, 0);
+  if (mpqTotal > MAX_SELECTED_BYTES) throw new Error('Selected archive bytes exceed the local import budget');
   await storage?.remove(); storage = await createTemporaryArcStorage();
   const files = [];
+  let clientImage = null;
+  let clientImageStatus = 'absent';
+  const solidBudget = checkedLimits().decodedBlockBytes;
   for (let index = 0; index < state.sources.length; index++) {
     const source = state.sources[index], chosen = wanted.filter(c => Number(c.id.split(':')[0]) === index);
     if (!chosen.length) continue;
     const selected = chosen.map(candidate => source.archive.files[Number(candidate.id.split(':')[1])]);
-    const extracted = await extractArcMembers(source.blob, source.archive, selected, source.password, state.activeCodec,
-      { signal, createSink: storage.createSink, onProgress: progress, maxIntermediateBytes: MAX_INTERMEDIATE_BYTES });
+    const chosenBytes = chosen.reduce((sum, candidate) => sum + candidate.archiveSize, 0);
+    const plan = planEngineMembers(source.archive, selected, {
+      maxSelectedBytes: MAX_SELECTED_BYTES, decodedBlockBytes: solidBudget,
+      reservedBytes: mpqTotal - chosenBytes,
+    });
+    let takeImage = Boolean(plan.image);
+    if (takeImage && (clientImage || clientImageStatus === 'ambiguous-across-sources')) {
+      clientImage = null;
+      clientImageStatus = 'ambiguous-across-sources';
+      takeImage = false;
+    }
+    const extracted = await extractArcMembers(source.blob, source.archive, takeImage ? plan.members : selected, source.password, state.activeCodec,
+      { signal, createSink: storage.createSink, onProgress: progress, maxIntermediateBytes: MAX_INTERMEDIATE_BYTES, maxSelectedBytes: MAX_SELECTED_BYTES });
     for (const entry of extracted) {
+      if (takeImage && entry.member === plan.image) {
+        clientImage = { source: `${source.entry.path}::${entry.member.path}`, role: plan.role, file: entry.file };
+        clientImageStatus = 'selected';
+        continue;
+      }
       const candidate = chosen.find(c => source.archive.files[Number(c.id.split(':')[1])] === entry.member);
       const header = new Uint8Array(await entry.file.slice(0, 32).arrayBuffer());
       if (header.length < 32 || header[0] !== 77 || header[1] !== 80 || header[2] !== 81 || header[3] !== 26)
         throw new ArcError('ARC_MEMBER_FORMAT', `decoded MPQ-named file has no supported MPQ header: ${entry.member.path}`);
       files.push({ id: candidate.id, path: candidate.path, file: entry.file });
     }
+    if (!clientImage && clientImageStatus !== 'ambiguous-across-sources') clientImageStatus = plan.status;
   }
-  return { files, variant: 'stored base files before language patches', languagePatchesApplied: false };
+  return { files, clientImage, clientImageStatus, variant: 'stored base files before language patches', languagePatchesApplied: false };
 }
 onmessage = async event => {
   const { id, command, args } = event.data ?? {};
