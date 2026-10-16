@@ -186,3 +186,68 @@ seven quality-popup indexes and the compound resolution query. It resolves
 source-key correspondence without pretending unimplemented settings already
 affect gameplay or rendering. Source fallbacks, saved state and the final
 device-adjusted setting remain separate.
+
+
+## Read-only fallback previews
+
+Settings without runtime owners now have a separate, disabled presentation path.
+The selected client is qualified through the same bounded discovery used by the
+audio importer. One source-keyed snapshot joins the inspected control/key
+relationships to the selected Options FDF and localization. All fallback bytes
+remain input data; the implementation contains no copied preference table.
+
+Popup ordinals select the authored MenuItem order and checked localized label.
+The numeric MenuItem operand stays opaque. Empty dynamic menus, missing or
+ambiguous labels, unsupported markup and out-of-range indexes remain unavailable.
+Checkbox previews admit only the exact textual zero/one profile. Slider previews
+admit nonnegative signed integers exactly representable as f32 and within the
+selected authored range, preserving raw units without snapping or guessing a
+divisor. These limited display interpretations are explicit recreation policies,
+not a proof of original conversion behavior on arbitrary values.
+
+Preview components supply captions, disabled art and source-value accessibility
+information. They do not install input behavior, change the draft, save a
+preference or imply a rendering/gameplay effect. Unavailable values remove stale
+check/slider state and hide an otherwise arbitrary slider thumb. Existing supported
+resolution and audio controls keep their actual consumers. An archive-only
+browser source has no qualified executable fallback snapshot and reports that
+capability as unavailable rather than borrowing defaults from another install.
+
+The snapshot is admitted with the same FDF candidate and source/edition/revision
+identity. An unavailable preview cannot prevent unrelated Main/Single Player
+navigation, and stale candidates cannot replace the displayed owner. Saved
+preferences do not suppress source qualification for this separate presentation;
+they continue to govern supported active settings.
+
+The project settings cog is scoped to Main. Submenus remove it from display,
+pointer picking, keyboard focus and accessibility navigation; returning to Main
+restores it without stealing another control's focus. Menu status and failed
+Apply notices retain priority over read-only preview help. Compact project status
+text uses its own font size; detailed unavailable reasons remain accessibility
+descriptions rather than covering the original controls. These changes do not
+establish original first-run selections, physical display switching, quality
+settings effects or complete original Options fidelity.
+
+
+The current native app suite passes 409 tests with 15 explicit local-input
+ignores. The separately run selected-original gate checks all 25 disabled
+bindings against the same qualified client, selected Options FDF/include graph
+and localization: 23 projections are admitted and the two empty dynamic menus
+refuse. It checks real caption/art-state/accessibility components, not native
+rendered pixels. The existing selected-original audio gate also passes.
+
+Strict native/WASM app Clippy for all targets/features and the actual release
+app build pass. A fresh packaged browser run checks Main/Single Player/Main
+before Options, all three pages before and after a save, 32 disabled-control
+input cases, active audio slider pointer/keyboard/drag behavior in both viewport
+layouts, Apply/Cancel and restored Main cog click-through. All 12 captures were
+reviewed locally. The run makes 15 local code GETs with no uploads, sockets or
+page errors. Original fixture assets stay local. Archive-only previews remain
+unavailable; this is not a positive browser-client fallback import test.
+
+The earlier browser run remains a failure: it exposed oversized project help
+covering controls and compared pre-Sound empty control maps against the later
+legitimate supported-audio baseline. Compact status presentation and the
+pre-Cancel baseline comparison correct those separate issues; the fresh run
+passes. Exact receipts and the preserved earlier failures are local in
+`.scratch/options-source-preview-root-20261016/`.

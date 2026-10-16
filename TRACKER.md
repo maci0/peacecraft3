@@ -93,6 +93,20 @@ issues*.
       259 app tests, both selected-original popup gates, strict native/WASM checks
       and the actual release-WASM runtime checks pass. This does not enable
       unimplemented quality or gameplay controls.
+      Disabled settings now have source-qualified read-only previews: the
+      explicit selected-original client/FDF gate checks all 25 bindings, with
+      23 admitted projections and two empty dynamic-menu refusals. Unavailable
+      slider state is cleared, while supported audio/resolution owners retain
+      Apply/Cancel and saved-preference behavior. Main-only cog scope includes
+      pointer, keyboard focus and accessibility. Current native app suite:
+      409 passes/15 explicit ignores; strict native/WASM app checks and release
+      build pass. Fresh local browser checks 32 disabled input cases across
+      all three tabs before/after saving, active audio at both viewport origins,
+      fresh Main/Single Player/Main and restored cog click-through. Twelve
+      reviewed captures, 15 local code GETs, zero uploads/sockets/page errors.
+      Browser archive-only sources have no admitted client fallback input;
+      previews remain unavailable there. Other setting effects and complete
+      original first-run/mode fidelity remain open. See the fallback note above.
       Portable resolution Apply now waits for the matching Winit client report
       before saving, preserves the prior preferences/audio on save refusal and
       confirms restoration before reporting it. Cancel and a retryable dirty

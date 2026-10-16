@@ -823,6 +823,11 @@ pub fn decorate_setting(
                             },
                         ),
                         art,
+                        if crate::menu_screens::supported(frame) {
+                            Visibility::Inherited
+                        } else {
+                            Visibility::Hidden
+                        },
                         bevy::ui_widgets::SliderThumb,
                         Pickable::IGNORE,
                     ))
@@ -915,13 +920,20 @@ fn update_setting_art(
         &bevy::ui_widgets::SliderRange,
     )>,
     checked: Query<(Has<bevy::ui::Checked>, Has<InteractionDisabled>)>,
-    mut thumbs: Query<(&SettingThumbArt, &mut Node)>,
+    mut thumbs: Query<(&SettingThumbArt, &mut Node, &mut Visibility), Without<SettingCheckArt>>,
+    previews: Query<(), With<crate::menu_settings::preview::Control>>,
     mut checks: Query<(&SettingCheckArt, &mut Visibility)>,
 ) {
-    for (art, mut node) in &mut thumbs {
+    for (art, mut node, mut visibility) in &mut thumbs {
         let Ok((value, range)) = values.get(art.owner) else {
+            if previews.contains(art.owner) {
+                *visibility = Visibility::Hidden;
+            }
             continue;
         };
+        if previews.contains(art.owner) {
+            *visibility = Visibility::Inherited;
+        }
         if !value.0.is_finite()
             || !range.start().is_finite()
             || !range.end().is_finite()
@@ -1983,5 +1995,77 @@ Frame "GLUEPOPUPMENU" "Popup" {
         omitted_insets_render_full_background_and_authored_size_drives_repeats();
         settings_art_tracks_authored_geometry_values_checked_and_disabled_states();
         4
+    }
+    #[test]
+    fn unavailable_preview_thumb_hides_initial_and_resets_after_a_valid_preview() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let owner = world.spawn(bevy::ui_widgets::Button).id();
+        let widget = crate::menu_screens::Widget::Slider {
+            min: 0.0,
+            max: 10.0,
+            initial: 5.0,
+            step: 3.0,
+        };
+        let missing = crate::menu_settings::preview::Snapshot::unavailable(
+            "synthetic".into(),
+            "No admitted client defaults.",
+        );
+        crate::menu_settings::preview::attach(
+            &mut world.commands(),
+            owner,
+            "GammaSlider",
+            &widget,
+            &missing,
+        );
+        world.flush();
+        let thumb = world
+            .spawn((
+                Node::default(),
+                Visibility::Inherited,
+                SettingThumbArt {
+                    owner,
+                    control: Vec2::new(10.0, 2.0),
+                    thumb: Vec2::new(1.0, 1.0),
+                    vertical: false,
+                },
+            ))
+            .id();
+        let check = world
+            .spawn((
+                Visibility::Inherited,
+                SettingCheckArt {
+                    owner,
+                    disabled: true,
+                    has_disabled: true,
+                },
+            ))
+            .id();
+        world.run_system_once(update_setting_art).unwrap();
+        assert_eq!(*world.get::<Visibility>(check).unwrap(), Visibility::Hidden);
+        assert_eq!(*world.get::<Visibility>(thumb).unwrap(), Visibility::Hidden);
+        world.entity_mut(owner).insert((
+            bevy::ui_widgets::SliderValue(7.0),
+            bevy::ui_widgets::SliderRange::new(0.0, 10.0),
+        ));
+        world.run_system_once(update_setting_art).unwrap();
+        assert_eq!(
+            *world.get::<Visibility>(thumb).unwrap(),
+            Visibility::Inherited
+        );
+        let Val::Percent(left) = world.get::<Node>(thumb).unwrap().left else {
+            panic!("relative thumb position required")
+        };
+        assert!((left - 63.0).abs() < 0.001);
+        crate::menu_settings::preview::attach(
+            &mut world.commands(),
+            owner,
+            "GammaSlider",
+            &widget,
+            &missing,
+        );
+        world.flush();
+        world.run_system_once(update_setting_art).unwrap();
+        assert_eq!(*world.get::<Visibility>(thumb).unwrap(), Visibility::Hidden);
     }
 }

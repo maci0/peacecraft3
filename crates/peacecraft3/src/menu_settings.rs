@@ -26,6 +26,9 @@ mod picking_tests;
 #[path = "original_options_audio.rs"]
 mod original;
 
+#[path = "original_options_preview.rs"]
+pub(crate) mod preview;
+
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct SettingsUpdate;
 
@@ -298,10 +301,11 @@ fn admit_source_audio(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn prepare_source_audio(
+fn with_source_defaults<T>(
     install: &std::path::Path,
     expansion: bool,
-) -> Result<Option<original::Seed>, String> {
+    consume: impl FnOnce(&pcx_play::options_defaults::Defaults<'_>) -> Result<T, String>,
+) -> Result<Option<T>, String> {
     use pcx_play::{
         neutral_player::RuleInputBudget,
         options_defaults::{Defaults, DiscoveryBudget, Problem},
@@ -368,11 +372,68 @@ fn prepare_source_audio(
         }
         Err(error) => return Err(error.to_string()),
     };
-    let (fdf, _) = crate::launch_gui::read_screen_fdf(
-        Some(install),
-        crate::menu_screens::Screen::Options(crate::menu_screens::Page::Sound),
-    )?;
-    original::prepare(&defaults, &fdf).map(Some)
+    consume(&defaults).map(Some)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn prepare_source_audio(
+    install: &std::path::Path,
+    expansion: bool,
+) -> Result<Option<original::Seed>, String> {
+    with_source_defaults(install, expansion, |defaults| {
+        let (fdf, _) = crate::launch_gui::read_screen_fdf(
+            Some(install),
+            crate::menu_screens::Screen::Options(crate::menu_screens::Page::Sound),
+        )?;
+        original::prepare(defaults, &fdf)
+    })
+}
+/// Optional presentation: a discovery failure never enters the audio transaction.
+pub(crate) fn source_preview<'a>(
+    install: Option<&std::path::Path>,
+    expansion: bool,
+    controls: impl IntoIterator<Item = (&'a str, &'a Widget)>,
+    strings: Option<&str>,
+    key: String,
+) -> preview::Snapshot {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (install, expansion, controls, strings);
+        preview::Snapshot::unavailable(
+            key,
+            "Archive-only sources have no admitted client defaults.",
+        )
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let Some(install) = install else {
+            return preview::Snapshot::unavailable(key, "No selected client source is available.");
+        };
+        let Some(strings) = strings else {
+            return preview::Snapshot::unavailable(
+                key,
+                "The selected localization is unavailable.",
+            );
+        };
+        match with_source_defaults(install, expansion, |defaults| {
+            Ok(preview::Snapshot::checked(
+                defaults,
+                controls,
+                strings,
+                key.clone(),
+            ))
+        }) {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => preview::Snapshot::unavailable(
+                key,
+                "The selected client has no supported defaults profile.",
+            ),
+            Err(error) => preview::Snapshot::unavailable(
+                key,
+                &format!("Source defaults could not be admitted: {error}"),
+            ),
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -758,16 +819,26 @@ fn checkbox_changed(
         commands.entity(event.source).remove::<Checked>();
     }
 }
+type SettingLabelData = (
+    &'static SettingControl,
+    Has<Checked>,
+    Option<&'static preview::Control>,
+    Option<&'static SliderValue>,
+);
+
 fn labels(
     nav: Res<Navigation>,
     mut labels: Query<(&SettingValue, &mut Text)>,
-    controls: Query<(&SettingControl, Has<Checked>)>,
+    controls: Query<SettingLabelData>,
 ) {
     for (owner, mut text) in &mut labels {
-        let Ok((control, checked)) = controls.get(owner.0) else {
+        let Ok((control, checked, preview, slider)) = controls.get(owner.0) else {
             continue;
         };
         let value = match &control.widget {
+            Widget::Slider { .. } if preview.is_some() => slider
+                .map(|value| value.0.to_string())
+                .unwrap_or_else(|| "Unavailable".into()),
             Widget::Slider { initial, .. } => nav
                 .draft
                 .values
@@ -780,7 +851,9 @@ fn labels(
                 .resolution
                 .map(|(w, h)| format!("{w} x {h}"))
                 .unwrap_or_default(),
-            Widget::Popup { .. } => "Unavailable".to_string(),
+            Widget::Popup { .. } => preview
+                .and_then(|p| p.popup.clone())
+                .unwrap_or_else(|| "Unavailable".into()),
             Widget::Checkbox => {
                 if checked {
                     "×".into()

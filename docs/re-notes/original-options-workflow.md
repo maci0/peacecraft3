@@ -23,7 +23,10 @@ The current source inventory finds 30 slider/checkbox/popup definitions; only
 five connect to a runtime setting. This is not every editable field:
 `GLUEEDITBOX GamePortEditBox` is separately unsupported. Other controls remain
 disabled until their input/render/audio/gameplay owners can consume a checked
-value. Enabling a widget or persisting a value alone is not implementation.
+value. Qualified native inputs can provide read-only source fallback previews;
+archive-only browser inputs report unavailable values. Neither presentation
+admits an applied preference. Enabling a widget or persisting a value alone is
+not implementation.
 
 The inspected Options FDF and include graph supply widget ranges, steps and
 initials, but no resolution MenuItems or admitted checkbox/popup selections.
@@ -60,13 +63,17 @@ it does not independently resize authored game controls. Fit view can make a hig
 menu too small to read in a narrow window. The host Actual size toggle instead
 keeps identity scale and scrolls within the preview; switching it off restores
 the contained view. Wheel input pans only in Actual size mode. This host viewing
-choice changes neither game preferences nor authored geometry. The bottom-left cog
-opens separate PeaceCraft configuration. All cameras sharing the primary window
+choice changes neither game preferences nor authored geometry. The bottom-left cog on Main
+opens separate PeaceCraft configuration and is hidden on original submenus. All cameras sharing the primary window
 receive its changed dimensions before Bevy updates camera targets, so programmatic
 resolution changes update their cached render extents consistently. These
 requested-dimension updates are not a Winit/compositor acknowledgement.
-Other game settings remain disabled,
-with unsupported popup values marked Unavailable, rather than pretending to work.
+Other game settings remain disabled. Their optional
+[source fallback previews](original-options-defaults.md#read-only-fallback-previews)
+retain checked raw units, source item order and localization without changing
+the draft or installing input behavior. Missing or unsupported projections are
+marked Unavailable; unavailable sliders hide an arbitrary thumb. This does not
+make those settings effective or establish original first-run state.
 
 Entering Options copies applied preferences into a draft; page changes retain
 that draft. Sound sliders reflect effective gains through the parsed authored

@@ -69,6 +69,37 @@ function fastBatchOracle(s, name) {
   assert.deepEqual(s.picking.pressing??[],[]);assert.deepEqual(s.picking.dragging??[],[]);
 }
 
+// Existing recreation binding identifiers; no defaults, labels or geometry are copied.
+const previewBindings = new Map([["ModelDetailMenu","P"],["AnimQualityMenu","P"],["TextureQualityMenu","P"],["ParticlesMenu","P"],["LightsMenu","P"],["ShadowsMenu","P"],["OcclusionMenu","P"],["ChatSupportMenu","P"],["ProviderMenu","P"],["MouseScrollSlider","S"],["KeyScrollSlider","S"],["GammaSlider","S"],["MouseScrollDisableCheckBox","C"],["TooltipsCheckBox","C"],["HealthBarsCheckBox","C"],["SubgroupCheckBox","C"],["FormationToggleCheckBox","C"],["CustomKeysCheckBox","C"],["AutosaveReplayCheckBox","C"],["AmbientCheckBox","C"],["MovementCheckBox","C"],["UnitCheckBox","C"],["SubtitlesCheckBox","C"],["EnviroCheckBox","C"],["PositionalCheckBox","C"]]);
+const cogName = 'PeaceCraftSettings';
+function cogScope(s, main) {
+  const cogs=s.controls.filter(c=>c.name===cogName);
+  assert.equal(cogs.length,main?1:0,'Cog must be a visible hit target only on Main');
+  if(main)assert.equal(cogs[0].disabled,false,'Restored Main cog is disabled');
+}
+function previewControls(s) {
+  const controls=s.controls.filter(c=>previewBindings.has(c.name));
+  assert(controls.length>0,'No bound disabled setting is visible on '+s.screen);
+  assert.equal(new Set(controls.map(c=>c.name)).size,controls.length,'Duplicate preview control');
+  for(const c of controls) {
+    assert.equal(c.disabled,true,'Unavailable source setting became interactive: '+c.name);
+    assert(!Object.hasOwn(s.draft.values,c.name)&&!Object.hasOwn(s.draft.toggles,c.name),'Unavailable preview leaked into draft');
+    assert(!Object.hasOwn(s.applied.values,c.name)&&!Object.hasOwn(s.applied.toggles,c.name),'Unavailable preview leaked into applied settings');
+    if(previewBindings.get(c.name)==='S')assert.equal(c.slider?.value,null,'Browser archive-only slider pretends to have a source fallback');
+  }
+  for(const c of controls.filter(c=>previewBindings.get(c.name)==='P')) {
+    const r=c.physicalCanvasRect;
+    assert(r?.length===4&&r.every(Number.isFinite)&&r[2]>0&&r[3]>0,'Missing popup rectangle');
+    assert(s.labels.some(l=>{
+      if(!l.visible||l.text!=='Unavailable')return false;
+      const b=l.physicalCanvasRect;if(b?.length!==4||!b.every(Number.isFinite))return false;
+      const x=b[0]+b[2]/2,y=b[1]+b[3]/2;
+      return x>=r[0]&&x<=r[0]+r[2]&&y>=r[1]&&y<=r[1]+r[3];
+    }),'No unavailable value label within popup '+c.name);
+  }
+  return controls;
+}
+
 function selfCheck() {
   const controls = [{name:'ResolutionChoice:731x419'}, {name:'ResolutionChoice:997x613'}];
   assert.deepEqual(distinctChoice(controls, [731,419]).size, [997,613]);
@@ -108,10 +139,18 @@ function selfCheck() {
   for(const frames of [[],['B'],['A','B'],['A','A'],null]){const bad=structuredClone(frame);bad.lastAction.frames=frames;assert.throws(()=>fastBatchOracle(bad,'A'));}
   const truncated=structuredClone(frame);truncated.lastAction.truncated=true;assert.throws(()=>fastBatchOracle(truncated,'A'));
 
+  const unavailable={screen:'Options(Synthetic)',controls:[{name:'GammaSlider',disabled:true,slider:{value:null}},{name:'TextureQualityMenu',disabled:true,physicalCanvasRect:[10,20,60,30]}],labels:[{visible:true,text:'Unavailable',physicalCanvasRect:[15,25,20,10]}],draft:{values:{},toggles:{}},applied:{values:{},toggles:{}}};
+  assert.equal(previewControls(unavailable).length,2);cogScope(unavailable,false);
+  const main=structuredClone(unavailable);main.controls.push({name:cogName,disabled:false});cogScope(main,true);
+  assert.throws(()=>cogScope(main,false));assert.throws(()=>cogScope(unavailable,true));
+  for(const mutate of [s=>s.controls[0].disabled=false,s=>s.controls[0].slider.value=0,s=>s.controls.push({...s.controls[0]}),s=>s.labels[0].text='Invented',s=>s.labels[0].physicalCanvasRect[0]=900,s=>s.draft.values.GammaSlider=0,s=>s.applied.toggles.GammaSlider=false]) {
+    const bad=structuredClone(unavailable);mutate(bad);assert.throws(()=>previewControls(bad));
+  }
   console.log(JSON.stringify({ok:true,selfCheck:true,browserLaunched:false,networkRequests:0,originalReads:0}));
 }
 
 async function run() {
+  const sourcePreviewCog=process.argv.includes('--source-preview-cog');
   const applyProbe=process.argv.includes('--apply-probe');
   const fastClick=process.argv.includes('--fast-click');
   assert(!fastClick||!applyProbe,'--fast-click cannot be combined with diagnostic-only --apply-probe');
@@ -165,8 +204,8 @@ async function run() {
   const prefs = () => page.evaluate(key=>localStorage.getItem(key),preferenceKey);
   const audio = () => page.evaluate(()=>{const a=peacecraft3Audio.status(); return Object.fromEntries(['musicBaseVolume','clickBaseVolume','userMusicGain','userEffectsGain','userMusicEnabled','userEffectsEnabled','musicVolume','clickVolume'].map(k=>[k,a[k]]));});
   async function targetExtent(target) { await poll(async()=>{const e=await extent();return equal(e.bitmap,target)&&equal(e.clientPhysical,target);},'Canvas did not reach '+target); }
-  async function controlPoint(name) {
-    const s = await state(s=>s.menuVisible && !s.transitionActive && s.controls?.some(c=>c.name===name && !c.disabled),'No enabled control: '+name);
+  async function controlPoint(name, allowDisabled=false) {
+    const s = await state(s=>s.menuVisible && !s.transitionActive && s.controls?.some(c=>c.name===name && (allowDisabled||!c.disabled)),'No eligible control: '+name);
     const c = s.controls.find(c=>c.name===name);
     await page.evaluate(rect=>{
       const stage=document.querySelector('#stage'),canvas=document.querySelector('#launcher-canvas');
@@ -206,6 +245,51 @@ async function run() {
       assert(label?.filled&&label.text.length>0,'Source tab text was not retained in diagnostics: '+name);
     }
     captures.push({name,path,sha256:hash(await readFile(path)),state:s,extent:await extent()});
+  }
+  async function checkDisabledTabs(stage) {
+    const stored=await prefs(), activeAudio=await audio();
+    await openOptions();
+    const pages=[['GameplayButton','Options(Gameplay)'],['VideoButton','Options(Video)'],['SoundButton','Options(Sound)']];
+    for(const [tab,screen] of pages) {
+      await click(tab);let s=await settled(screen);cogScope(s,false);
+      // Existing read-only snapshots are frame-delayed; wait for the tab's labels/layout.
+      await state(s=>s.labels?.some(l=>l.visible&&l.glyphs>0),'Tab labels did not settle');
+      s=await snapshot();const controls=previewControls(s);
+      // Recheck every binding after save; repeat input once per widget kind.
+      const kinds=new Set();
+      const clicked=stage==='before-save'?controls:controls.filter(c=>{const kind=previewBindings.get(c.name);if(kinds.has(kind))return false;kinds.add(kind);return true;});
+      for(const c of clicked) {
+        const point=await controlPoint(c.name,true), unchanged=await snapshot();
+        await page.mouse.move(point.x,point.y);
+        await state(s=>s.pointer?.physical?.every((v,i)=>Math.abs(v-point.expected[i])<2),'Pointer did not reach disabled setting');
+        await page.mouse.down();await page.evaluate(async()=>{await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);});
+        await page.mouse.up();await page.evaluate(async()=>{await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);});
+        const after=await settled(screen);cogScope(after,false);previewControls(after);
+        assert.deepEqual(after.draft,unchanged.draft,'Disabled setting changed draft');
+        assert.deepEqual(after.applied,unchanged.applied,'Disabled setting changed applied state');
+        assert(!after.controls.some(c=>c.name.startsWith('ResolutionChoice:')),'Disabled popup opened a selector');
+        assert.equal(await prefs(),stored,'Disabled setting wrote preferences');assert.deepEqual(await audio(),activeAudio,'Disabled setting changed active audio');
+        steps.push({action:'disabled-source-preview-click',stage,screen,name:c.name,state:after});
+        console.log(JSON.stringify({action:'disabled-source-preview-click',stage,screen,name:c.name}));
+      }
+      await capture('preview-'+stage+'-'+screen.match(/\((.*)\)/)[1].toLowerCase());
+    }
+    // Entering Sound can materialize the existing supported audio baseline.
+    const admitted=(await snapshot()).applied;
+    await click('CancelButton');const returned=await settled('Main');cogScope(returned,true);
+    assert.deepEqual(returned.applied,admitted);assert.deepEqual(returned.draft,returned.applied);
+    assert.equal(await prefs(),stored);assert.deepEqual(await audio(),activeAudio);
+  }
+  async function checkPreOptionsNavigation() {
+    const before=await settled('Main'),stored=await prefs();cogScope(before,true);
+    await click('SinglePlayerButton');const single=await settled('SinglePlayer');cogScope(single,false);
+    await capture('preview-cog-before-options-single-player');
+    // Source navigation identifiers, with no assumed authored coordinates or labels.
+    const back=single.controls.find(c=>['BackButton','CancelButton'].includes(c.name)&&!c.disabled);
+    assert(back,'Single Player has no admitted return control');await click(back.name);
+    const returned=await settled('Main');cogScope(returned,true);assert.equal(await prefs(),stored);
+    steps.push({action:'main-single-main-before-options',before,single,returned});
+    await checkDisabledTabs('before-save');
   }
   async function checkFastClicks() {
     await openOptions();await settled('Options(Video)');
@@ -377,6 +461,7 @@ async function run() {
       };
       peacecraft3Audio.setUserGains=function(...args){if(gate.fault==='audio')throw Error('Injected postcommit audio refusal');return gate.gains.apply(this,args);};
     },preferenceKey);
+    if(sourcePreviewCog)await checkPreOptionsNavigation();
     if(fastClick)await checkFastClicks();
     if(applyProbe) {
       await checkApplyProbe();
@@ -420,6 +505,12 @@ async function run() {
     await click('CancelButton');await settled('Main');await targetExtent(next);assert.equal(await prefs(),after);assert.deepEqual((await snapshot()).applied,dirty);
     await capture('04-cancel-after-commit');
     }
+    if(sourcePreviewCog) {
+      await checkDisabledTabs('after-existing-cases');
+      const main=await settled('Main');cogScope(main,true);await click(cogName);
+      await state(s=>!s.menuVisible,'Restored Main cog did not open PeaceCraft settings');
+      await capture('preview-cog-main-click-through');
+    }
     assert.deepEqual(errors,[]);assert.deepEqual(sockets,[]);assert.deepEqual(blocked,[]);assert(requests.every(r=>allowedRequest(r.url,r.method,r.body,files)));assert(responses.every(r=>r.status<400));
     passed=true;
   } catch(error) {failure={message:error.message,stack:error.stack};if(page&&!page.isClosed())await page.screenshot({path:resolve(output,'failure.png'),fullPage:true}).catch(()=>{});throw error;}
@@ -428,7 +519,7 @@ async function run() {
     const finalState=page&&!page.isClosed()?await snapshot().catch(()=>lastState):lastState;
     const finalExtent=page&&!page.isClosed()?await extent().catch(()=>null):null;
     await save('proof.json',{passed,failure,finalState,finalExtent,packageReceipt:{path:env.PCX_OPTIONS_BUILD_RECEIPT,sha256:hash(receiptBytes)},fixture:{path:env.PCX_OPTIONS_PREPARED,sha256:hash(fixtureBytes)},packageChecks,requests,responses,blocked,errors,sockets,logs,steps,captures,saves,
-      fastClick,diagnosticOnly:applyProbe,scope:fastClick?'Trusted browser fast pointer batches; current-update input/action witnesses required; no native parity claim'+(sliderRun?'; includes existing slider Apply/Cancel route':''):applyProbe?'Focused pointer/keyboard Apply diagnostic; not complete slider acceptance':sliderRun?'Source-derived slider pointer/keyboard input, local audio Apply/Cancel at centered/origin-zero UI viewports; no native parity claim':'Browser-reported canvas/client render extent and local preference transaction; screenshots require manual rendered review; no compositor/display-mode or native parity claim',reloadTested:false});
+      sourcePreviewCog,fastClick,diagnosticOnly:applyProbe,scope:(sourcePreviewCog?'Read-only unavailable previews, per-control pointer refusal, pre-Options SinglePlayer navigation and Main-only cog; ':'')+(fastClick?'Trusted browser fast pointer batches; current-update input/action witnesses required; no native parity claim'+(sliderRun?'; includes existing slider Apply/Cancel route':''):applyProbe?'Focused pointer/keyboard Apply diagnostic; not complete slider acceptance':sliderRun?'Source-derived slider pointer/keyboard input, local audio Apply/Cancel at centered/origin-zero UI viewports; no native parity claim':'Browser-reported canvas/client render extent and local preference transaction; screenshots require manual rendered review; no compositor/display-mode or native parity claim'),reloadTested:false});
     await browser.close();
   }
   console.log(JSON.stringify({ok:passed,output,captures:captures.length,uploads:0}));

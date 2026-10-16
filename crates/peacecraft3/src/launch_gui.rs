@@ -284,7 +284,6 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
                     finish_intro,
                     apply_menu_clicks.in_set(MenuActions),
                     menu_navigation_keys,
-                    update_menu_notice,
                 )
                     .chain(),
                 (
@@ -294,6 +293,8 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
                     process_panel_navigation,
                     build_control_layer,
                     build_setting_controls,
+                    sync_settings_cog,
+                    update_menu_notice,
                     apply_menu_text,
                     measure_screen_text,
                     position_screen_nodes,
@@ -666,6 +667,7 @@ fn spawn_main_menu(commands: &mut Commands) {
             root.spawn((
                 Button,
                 SettingsCog,
+                Pickable::default(),
                 Name::new("PeaceCraft settings"),
                 Hovered::default(),
                 bevy::input_focus::tab_navigation::TabIndex(i32::MAX),
@@ -684,6 +686,7 @@ fn spawn_main_menu(commands: &mut Commands) {
             root.spawn((
                 Text::new(""),
                 MenuNotice,
+                Pickable::IGNORE,
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Rem(4.0),
@@ -692,7 +695,8 @@ fn spawn_main_menu(commands: &mut Commands) {
                     ..default()
                 },
                 TextFont {
-                    font_size: bevy::text::FontSize::Rem(0.875),
+                    // Project status text must not inherit the game's root font size.
+                    font_size: bevy::text::FontSize::Px(14.0),
                     ..default()
                 },
                 TextColor(TEXT),
@@ -701,18 +705,116 @@ fn spawn_main_menu(commands: &mut Commands) {
         });
 }
 
+type SettingsCogData = (
+    Entity,
+    &'static mut Node,
+    &'static mut Visibility,
+    &'static mut Pickable,
+    &'static mut bevy::input_focus::tab_navigation::TabIndex,
+    &'static mut bevy::a11y::AccessibilityNode,
+    Has<InteractionDisabled>,
+);
+
+fn sync_settings_cog(
+    navigation: Res<crate::menu_screens::Navigation>,
+    mut commands: Commands,
+    mut cogs: Query<SettingsCogData, With<SettingsCog>>,
+    mut focus: Option<ResMut<bevy::input_focus::InputFocus>>,
+) {
+    let enabled = navigation.screen == crate::menu_screens::Screen::Main;
+    for (entity, mut node, mut visibility, mut pickable, mut tab, mut accessible, disabled) in
+        &mut cogs
+    {
+        let display = if enabled {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != display {
+            node.display = display;
+        }
+        let desired = if enabled {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *visibility != desired {
+            *visibility = desired;
+        }
+        let desired = if enabled {
+            Pickable::default()
+        } else {
+            Pickable::IGNORE
+        };
+        if *pickable != desired {
+            *pickable = desired;
+        }
+        let desired = if enabled { i32::MAX } else { -1 };
+        if tab.0 != desired {
+            tab.0 = desired;
+        }
+        if enabled {
+            if accessible.is_hidden() {
+                accessible.clear_hidden();
+            }
+            if accessible.is_disabled() {
+                accessible.clear_disabled();
+            }
+            if disabled {
+                commands.entity(entity).remove::<InteractionDisabled>();
+            }
+        } else {
+            if !accessible.is_hidden() {
+                accessible.set_hidden();
+            }
+            if !accessible.is_disabled() {
+                accessible.set_disabled();
+            }
+            if !disabled {
+                commands.entity(entity).insert(InteractionDisabled);
+            }
+            commands.entity(entity).remove::<bevy::ui::Pressed>();
+            if let Some(focus) = focus.as_deref_mut()
+                && focus.get() == Some(entity)
+            {
+                focus.clear();
+            }
+        }
+    }
+}
+
+#[derive(SystemParam)]
+struct MenuNoticeState<'w, 's> {
+    navigation: Res<'w, crate::menu_screens::Navigation>,
+    cache: Res<'w, MenuArtCache>,
+    previewed: Query<
+        'w,
+        's,
+        (
+            &'static Hovered,
+            &'static crate::menu_settings::preview::Control,
+        ),
+        With<InteractionDisabled>,
+    >,
+}
+
 fn update_menu_notice(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut icon: Local<Option<Handle<Image>>>,
     mut cogs: Query<(Entity, &Hovered, &mut bevy::a11y::AccessibilityNode), With<SettingsCog>>,
     mut labels: Query<&mut Text, With<MenuNotice>>,
-    navigation: Res<crate::menu_screens::Navigation>,
+    state: MenuNoticeState,
     focus: (
         Option<Res<bevy::input_focus::InputFocus>>,
         Option<Res<bevy::input_focus::InputFocusVisible>>,
     ),
 ) {
+    let MenuNoticeState {
+        navigation,
+        cache,
+        previewed,
+    } = state;
     if icon.is_none() {
         // Project-owned vector geometry rasterized here, independent of game
         // fonts or proprietary artwork. Supersampling gives a crisp small cog.
@@ -763,13 +865,18 @@ fn update_menu_notice(
         ));
     }
     for mut label in &mut labels {
-        let text = if cogs.iter().any(|(e, h, _)| h.get() || focused == Some(e)) {
-            "PeaceCraft settings"
-        } else {
-            &navigation.notice
-        };
+        let text = crate::menu_settings::preview::notice(
+            &navigation.notice,
+            navigation.screen == crate::menu_screens::Screen::Main
+                && cogs.iter().any(|(e, h, _)| h.get() || focused == Some(e)),
+            matches!(navigation.screen, crate::menu_screens::Screen::Options(_)),
+            previewed
+                .iter()
+                .find_map(|(hovered, control)| hovered.get().then_some(control)),
+            &cache.preview,
+        );
         if label.0 != text {
-            label.0 = text.to_string();
+            label.0 = text;
         }
     }
 }
@@ -1057,6 +1164,7 @@ fn invalidate_on_asset_revision(
     cache.skin = None;
     cache.fdf = None;
     cache.pending_fdf = None;
+    cache.preview = default();
     cache.fdf_failed = false;
     cache.strings = None;
     cache.templates = None;
@@ -1492,7 +1600,15 @@ struct MenuArtCache {
     /// and parsed, so a partially-arrived pair is never cached as complete.
     fdf: Option<crate::fdf::Fdf>,
     /// Fully admitted target; displayed sources remain untouched during Death.
-    pending_fdf: Option<(crate::menu_screens::Screen, crate::fdf::Fdf, String)>,
+    pending_fdf: Option<(
+        crate::menu_screens::Screen,
+        crate::fdf::Fdf,
+        String,
+        std::sync::Arc<crate::menu_settings::preview::Snapshot>,
+        String,
+    )>,
+    /// Display-only snapshot published with its admitted FDF candidate.
+    preview: std::sync::Arc<crate::menu_settings::preview::Snapshot>,
     /// Set when an FDF that *is* present fails to read or parse, or the control
     /// layer cannot be derived from it; reported once rather than every frame.
     fdf_failed: bool,
@@ -1652,9 +1768,12 @@ fn apply_menu_art(
         mut dressed,
         panels,
     } = queries;
-    let selection = format!("{}:{:?}", launcher.source, launcher.mode.assets);
+    let selection = format!("{}:{:?}", launcher.source, launcher.mode);
     if cache.selection.as_ref() != Some(&selection) {
         navigation.options_entry = None;
+        navigation.built = None;
+        cache.pending_fdf = None;
+        cache.preview = default();
         let install = selected_install(&launcher);
         if cache.install != install || glue.install != install {
             *cache = MenuArtCache {
@@ -1757,6 +1876,41 @@ fn apply_menu_art(
     }
 }
 
+fn menu_source_key(launcher: &Launcher, revision: u32) -> String {
+    format!("{}:{:?}:{revision}", launcher.source, launcher.mode)
+}
+fn prepare_options_preview(
+    launcher: &Launcher,
+    revision: u32,
+    screen: crate::menu_screens::Screen,
+    fdf: &crate::fdf::Fdf,
+    strings: Option<&str>,
+    current: &std::sync::Arc<crate::menu_settings::preview::Snapshot>,
+) -> std::sync::Arc<crate::menu_settings::preview::Snapshot> {
+    let key = menu_source_key(launcher, revision);
+    if !matches!(screen, crate::menu_screens::Screen::Options(_)) || current.matches(&key) {
+        return std::sync::Arc::clone(current);
+    }
+    // Prepare every retained disabled control once: tab changes reuse this snapshot.
+    let controls = match crate::menu_settings::preview::widgets(fdf) {
+        Ok(controls) => controls,
+        Err(error) => {
+            return std::sync::Arc::new(crate::menu_settings::preview::Snapshot::unavailable(
+                key,
+                &format!("Source widget preview could not be admitted: {error}"),
+            ));
+        }
+    };
+    let install = selected_install(launcher);
+    std::sync::Arc::new(crate::menu_settings::source_preview(
+        install.as_deref(),
+        launcher.mode.addon == Addon::Tft,
+        controls.iter().map(|(name, widget)| (*name, widget)),
+        strings,
+        key,
+    ))
+}
+
 /// One admission edge before displayed owner/control mutation. Unsupported routes
 /// retain their existing immediate behavior; no guessed phase family is mapped.
 fn process_panel_navigation(
@@ -1782,6 +1936,15 @@ fn process_panel_navigation(
         if items.is_empty() {
             return Err(format!("{}: empty target control layer", target.file()));
         }
+        let candidate_key = menu_source_key(&launcher, cache.revision);
+        let preview = prepare_options_preview(
+            &launcher,
+            cache.revision,
+            target,
+            &fdf,
+            cache.strings.as_deref(),
+            &cache.preview,
+        );
         let transition = match panels.as_mut() {
             Some(panels) => panels.request(
                 navigation.screen,
@@ -1793,12 +1956,12 @@ fn process_panel_navigation(
                 "original menu panels are unavailable".into(),
             ),
         };
-        Ok((target, entry, fdf, menu, transition))
+        Ok((target, entry, fdf, menu, preview, candidate_key, transition))
     })();
     match result {
-        Ok((target, entry, fdf, menu, transition)) => {
+        Ok((target, entry, fdf, menu, preview, candidate_key, transition)) => {
             navigation.options_entry = entry;
-            cache.pending_fdf = Some((target, fdf, menu));
+            cache.pending_fdf = Some((target, fdf, menu, preview, candidate_key));
             match transition {
                 crate::menu_sprites::Transition::Animated => {
                     navigation.transition_active = true;
@@ -1818,25 +1981,45 @@ fn process_panel_navigation(
     }
 }
 
+/// Pending source ownership is independent of optional Options preview capability.
+/// False leaves the displayed cache/tree/built choice untouched; invalidation owns
+/// any later source reset. During Death the current owner retains its candidate.
+fn publish_pending_control_source(
+    cache: &mut MenuArtCache,
+    screen: crate::menu_screens::Screen,
+    source_key: &str,
+) -> bool {
+    if cache.screen == screen {
+        return true;
+    }
+    let Some((target, _, _, _, candidate_key)) = cache.pending_fdf.as_ref() else {
+        return true;
+    };
+    if *target != screen || candidate_key != source_key {
+        return false;
+    }
+    let (screen, fdf, menu, preview, _) =
+        cache.pending_fdf.take().expect("checked candidate owner");
+    cache.preview = preview;
+    cache.screen = screen;
+    cache.fdf = Some(fdf);
+    cache.main_menu = Some(menu);
+    cache.fdf_failed = false;
+    cache.native_loaded = false;
+    true
+}
+
 /// Builds the displayed FDF control layer after source admission.
 fn build_control_layer(
     mut commands: Commands,
+    launcher: Res<Launcher>,
     mut cache: ResMut<MenuArtCache>,
     roots: Query<(Entity, Option<&Children>), With<ControlRoot>>,
     mut navigation: ResMut<crate::menu_screens::Navigation>,
 ) {
-    if cache.screen != navigation.screen
-        && cache
-            .pending_fdf
-            .as_ref()
-            .is_some_and(|(screen, _, _)| *screen == navigation.screen)
-    {
-        let (screen, fdf, menu) = cache.pending_fdf.take().expect("checked candidate owner");
-        cache.screen = screen;
-        cache.fdf = Some(fdf);
-        cache.main_menu = Some(menu);
-        cache.fdf_failed = false;
-        cache.native_loaded = false;
+    let source_key = menu_source_key(&launcher, cache.revision);
+    if !publish_pending_control_source(&mut cache, navigation.screen, &source_key) {
+        return;
     }
     if navigation.built != Some(navigation.screen) {
         for (_, children) in &roots {
@@ -1850,6 +2033,9 @@ fn build_control_layer(
             return;
         }
     }
+    let needs_preview = !cache
+        .preview
+        .matches(&menu_source_key(&launcher, cache.revision));
     let Some(fdf) = &cache.fdf else {
         return;
     };
@@ -1875,8 +2061,19 @@ fn build_control_layer(
             |name| navigation.screen.includes(fdf, name),
         )
     };
+    let mut prepared_preview = None;
     match result {
         Ok((items, unsupported)) => {
+            if needs_preview {
+                prepared_preview = Some(prepare_options_preview(
+                    &launcher,
+                    cache.revision,
+                    navigation.screen,
+                    fdf,
+                    cache.strings.as_deref(),
+                    &cache.preview,
+                ));
+            }
             if !unsupported.is_empty() {
                 warn!("Main menu frames not drawn: {unsupported:?}");
             }
@@ -1938,6 +2135,9 @@ fn build_control_layer(
             cache.fdf_failed = true;
         }
     }
+    if let Some(preview) = prepared_preview {
+        cache.preview = preview;
+    }
 }
 
 fn build_setting_controls(
@@ -1965,6 +2165,13 @@ fn build_setting_controls(
     for (entity, position) in &nodes {
         if let Ok(Some(widget)) = crate::menu_screens::widget(fdf, &position.0) {
             crate::menu_screens::spawn_widget(&mut commands, entity, &position.0, &widget, fdf);
+            crate::menu_settings::preview::attach(
+                &mut commands,
+                entity,
+                &position.0,
+                &widget,
+                &cache.preview,
+            );
             if let Ok(rect) = fdf.rect(
                 &position.0,
                 (crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H),
@@ -2816,8 +3023,11 @@ pub(crate) fn apply_menu_clicks(
             continue;
         }
         if cogs.contains(*entity) {
-            for e in &menu {
-                commands.entity(e).despawn();
+            // A stale queued action must not bypass the original settings workflow.
+            if navigation.screen == crate::menu_screens::Screen::Main {
+                for e in &menu {
+                    commands.entity(e).despawn();
+                }
             }
             continue;
         }
@@ -3410,6 +3620,7 @@ Frame "FRAME" "MainMenuFrame" {
             fdf: Some(crate::fdf::Fdf::parse(LAYER).expect("fixture")),
             ..Default::default()
         });
+        world.insert_resource(Launcher::default());
         world.init_resource::<crate::menu_screens::Navigation>();
         world.init_resource::<bevy::input_focus::InputFocus>();
         world.spawn((Node::default(), ControlRoot));
@@ -4090,6 +4301,8 @@ mod menu_focus_tests {
 #[cfg(test)]
 mod resize_bridge_tests {
     use super::*;
+    #[cfg(not(target_arch = "wasm32"))]
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::{
         camera::{CameraUpdateSystems, Projection, RenderTarget, Viewport},
         render::{camera::camera_system, texture::ManualTextureViews},
@@ -4264,4 +4477,163 @@ mod resize_bridge_tests {
         assert_ne!(replacement, f.window);
         assert_eq!(sizes(&f), [Some(UVec2::new(752, 420)); 3]);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn stage_pending_source(
+        cache: &mut MenuArtCache,
+        screen: crate::menu_screens::Screen,
+        label: &str,
+        key: String,
+    ) -> (
+        *const crate::fdf::Frame,
+        std::sync::Arc<crate::menu_settings::preview::Snapshot>,
+    ) {
+        let fdf = crate::fdf::Fdf::parse(&format!("Frame \"FRAME\" \"{label}\" {{\n}}\n")).unwrap();
+        let pointer = fdf.frames().as_ptr();
+        let preview = std::sync::Arc::clone(&cache.preview);
+        cache.pending_fdf = Some((
+            screen,
+            fdf,
+            label.into(),
+            std::sync::Arc::clone(&preview),
+            key,
+        ));
+        (pointer, preview)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn pending_candidate_fresh_single_and_main_consume_exact_source_before_options() {
+        use crate::menu_screens::Screen;
+        let mut world = World::new();
+        world.insert_resource(Launcher::test_source("synthetic-source-A".into(), true));
+        assert!(matches!(
+            world.resource::<Launcher>().mode.addon,
+            Addon::Tft
+        ));
+        world.insert_resource(MenuArtCache::default());
+        world.init_resource::<crate::menu_screens::Navigation>();
+        for (screen, label) in [
+            (Screen::SinglePlayer, "ADMITTED_SINGLE"),
+            (Screen::Main, "ADMITTED_MAIN"),
+        ] {
+            let key = menu_source_key(
+                world.resource::<Launcher>(),
+                world.resource::<MenuArtCache>().revision,
+            );
+            assert!(
+                !world.resource::<MenuArtCache>().preview.matches(&key),
+                "this gate must precede Options discovery"
+            );
+            let (pointer, preview) = stage_pending_source(
+                &mut world.resource_mut::<MenuArtCache>(),
+                screen,
+                label,
+                key,
+            );
+            world
+                .resource_mut::<crate::menu_screens::Navigation>()
+                .screen = screen;
+            world.run_system_once(build_control_layer).unwrap();
+            world.flush();
+            let cache = world.resource::<MenuArtCache>();
+            assert_eq!(cache.screen, screen);
+            assert!(cache.pending_fdf.is_none());
+            assert_eq!(
+                cache.fdf.as_ref().unwrap().frames().as_ptr(),
+                pointer,
+                "exact admitted FDF must move, not be reread"
+            );
+            assert_eq!(cache.main_menu.as_deref(), Some(label));
+            assert!(std::sync::Arc::ptr_eq(&cache.preview, &preview));
+            assert!(!cache.fdf_failed && !cache.native_loaded);
+            assert!(
+                cache.button.is_none()
+                    && cache.panel.is_none()
+                    && cache.fonts.is_empty()
+                    && cache.skin.is_none()
+                    && cache.problems.is_empty()
+                    && cache.templates.is_none()
+                    && cache.install.is_none()
+                    && cache.selection.is_none()
+            );
+            assert_eq!(
+                world.resource::<crate::menu_screens::Navigation>().built,
+                Some(screen)
+            );
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn pending_candidate_stale_source_mode_or_generation_keeps_displayed_choice() {
+        use crate::menu_screens::Screen;
+        for changed in ["source", "mode", "generation"] {
+            let mut world = World::new();
+            world.insert_resource(Launcher::test_source("synthetic-source-A".into(), true));
+            let old_fdf =
+                crate::fdf::Fdf::parse("Frame \"FRAME\" \"DISPLAYED_MAIN\" {\n}\n").unwrap();
+            let old_pointer = old_fdf.frames().as_ptr();
+            world.insert_resource(MenuArtCache {
+                fdf: Some(old_fdf),
+                main_menu: Some("DISPLAYED_MAIN".into()),
+                native_loaded: true,
+                fdf_failed: true,
+                ..default()
+            });
+            let old_preview = std::sync::Arc::clone(&world.resource::<MenuArtCache>().preview);
+            let key = menu_source_key(
+                world.resource::<Launcher>(),
+                world.resource::<MenuArtCache>().revision,
+            );
+            stage_pending_source(
+                &mut world.resource_mut::<MenuArtCache>(),
+                Screen::SinglePlayer,
+                "STALE_SINGLE",
+                key,
+            );
+            let mut navigation = crate::menu_screens::Navigation {
+                built: Some(Screen::Main),
+                screen: Screen::Main,
+                ..default()
+            };
+            navigation
+                .draft
+                .values
+                .insert("MusicVolumeSlider".into(), 37.0);
+            world.insert_resource(navigation);
+            let root = world.spawn((Node::default(), ControlRoot)).id();
+            let child = world.spawn(Node::default()).id();
+            world.entity_mut(root).add_child(child);
+            // Before the outgoing owner changes, Death keeps the admitted target pending.
+            world.run_system_once(build_control_layer).unwrap();
+            world.flush();
+            assert!(world.resource::<MenuArtCache>().pending_fdf.is_some());
+            world
+                .resource_mut::<crate::menu_screens::Navigation>()
+                .screen = Screen::SinglePlayer;
+            match changed {
+                "source" => world.resource_mut::<Launcher>().source = "synthetic-source-B".into(),
+                "mode" => world.resource_mut::<Launcher>().mode.addon = Addon::Roc,
+                _ => world.resource_mut::<MenuArtCache>().revision += 1,
+            }
+            world.run_system_once(build_control_layer).unwrap();
+            world.flush();
+            let cache = world.resource::<MenuArtCache>();
+            assert_eq!(cache.screen, Screen::Main);
+            assert!(cache.pending_fdf.is_some());
+            assert_eq!(cache.fdf.as_ref().unwrap().frames().as_ptr(), old_pointer);
+            assert_eq!(cache.main_menu.as_deref(), Some("DISPLAYED_MAIN"));
+            assert!(std::sync::Arc::ptr_eq(&cache.preview, &old_preview));
+            assert!(cache.native_loaded && cache.fdf_failed);
+            let navigation = world.resource::<crate::menu_screens::Navigation>();
+            assert_eq!(navigation.built, Some(Screen::Main));
+            assert_eq!(navigation.draft.values["MusicVolumeSlider"], 37.0);
+            assert!(
+                world.get_entity(child).is_ok(),
+                "stale admission must not clear the old control tree"
+            );
+        }
+    }
 }
+
+#[cfg(test)]
+#[path = "settings_cog_tests.rs"]
+mod settings_cog_tests;
