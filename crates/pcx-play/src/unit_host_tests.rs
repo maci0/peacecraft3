@@ -1,5 +1,5 @@
 use super::{COMMON, budget, context, object, slots_rule};
-use crate::playercolor_host::{Failure, UnitBudget};
+use crate::playercolor_host::{EnumHost, Failure, Limits, ObjectHost, UnitBudget, UnitStateBudget};
 use pcx_objects::editor::ObjectKind;
 use pcx_script::{Host, Value};
 use pcx_sim::world::{
@@ -877,4 +877,521 @@ fn unit_creation_still_admits_a_program_without_the_hero_setter() {
     let error = host.native("SetHeroLevel", &[]).unwrap_err();
     assert!(error.contains("unsupported"), "{error}");
     assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+const STATE_CONVERSIONS: &[&str] = &[
+    "ConvertPlacement",
+    "ConvertPlayerColor",
+    "ConvertRacePref",
+    "ConvertMapControl",
+    "ConvertUnitState",
+];
+
+const STATE_MAP: &str = "globals\nplayer P = null\nunit U = null\nunit V = null\ntimer T = null\nendglobals\nfunction main takes nothing returns nothing\nset P = Player(4)\nset U = CreateUnit(P, 'hfoo', 1.5, -2.25, 90.0)\nset V = CreateUnit(P, 'hfoo', 3.0, 4.0, 0.0)\nendfunction\nfunction zero takes nothing returns nothing\ncall SetUnitState(U, FIRST, 0)\nendfunction\nfunction finite takes nothing returns nothing\ncall SetUnitState(U, FIRST, -12.5)\nendfunction\nfunction other takes nothing returns nothing\ncall SetUnitState(U, SECOND, 4.5)\nendfunction\nfunction other_unit takes nothing returns nothing\ncall SetUnitState(V, FIRST, 1.0)\nendfunction\nfunction wrong takes nothing returns nothing\nset T = CreateTimer()\ncall SetUnitState(T, FIRST, 1.0)\nendfunction\n";
+
+fn state_common(declare_state: bool) -> String {
+    let globals = COMMON.find("\nglobals\n").expect("globals");
+    let mut common = COMMON.to_string();
+    let mut extra = String::from(
+        "type widget extends agent\ntype unit extends widget\ntype unitstate extends handle\nnative CreateUnit takes player id, integer unitid, real x, real y, real face returns unit\nnative SetUnitAcquireRange takes unit whichUnit, real newAcquireRange returns nothing\nnative SetHeroLevel takes unit whichHero, integer level, boolean showEyeCandy returns nothing\n",
+    );
+    if declare_state {
+        extra.push_str(
+            "constant native ConvertUnitState takes integer i returns unitstate\nnative SetUnitState takes unit whichUnit, unitstate whichUnitState, real newVal returns nothing\nconstant native GetUnitState takes unit whichUnit, unitstate whichUnitState returns real\n",
+        );
+    }
+    common.insert_str(globals + 1, &extra);
+    if declare_state {
+        common = common.replacen(
+            "\nglobals\n",
+            "\nglobals\nconstant unitstate FIRST = ConvertUnitState(0)\nconstant unitstate SECOND = ConvertUnitState(-4)\n",
+            1,
+        );
+    }
+    common
+}
+
+fn state_enums(ctx: &crate::map_admission::ParsedMapContext, names: &[&str]) -> EnumHost {
+    EnumHost::checked_selected(
+        ctx.scripts.shared_program(),
+        &ctx.map_digest.label,
+        names,
+        Limits {
+            max_handles: 32,
+            admission_steps: 1000,
+            expression_depth: 16,
+            expression_work: 1000,
+        },
+    )
+    .unwrap()
+}
+
+type StateSession = (
+    pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>,
+    Arc<AtomicUsize>,
+    Arc<dyn ObjectCatalog + Send + Sync>,
+);
+
+fn state_catalog_host(
+    common: &str,
+    map: &str,
+    names: &[&str],
+    max_state_records: usize,
+) -> Result<StateSession, crate::playercolor_host::Error> {
+    let ctx = context(300, common, map, "unit-catalog");
+    let (catalog, hits, _) = counting();
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+    let host = ObjectHost::checked(state_enums(&ctx, names))
+        .unwrap()
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(Arc::clone(&shared), source(), limits(2))?
+        .with_unit_states(UnitStateBudget {
+            max_records: max_state_records,
+        })?;
+    assert!(Arc::ptr_eq(&host.unit_catalog().unwrap(), &shared));
+    Ok((Arc::clone(&ctx.scripts).owned_vm(host), hits, shared))
+}
+
+fn assignment_bits(
+    unit: &crate::playercolor_host::ExecutedUnit,
+    state: pcx_script::HandleId,
+) -> Option<u32> {
+    unit.unit_states
+        .iter()
+        .find(|assignment| assignment.unitstate == state)
+        .map(|assignment| assignment.value.to_bits())
+}
+
+#[test]
+fn owned_vm_set_unit_state_retains_the_domain_handle_and_exact_finite_value() {
+    let (mut vm, hits, _) =
+        state_catalog_host(&state_common(true), STATE_MAP, STATE_CONVERSIONS, 1)
+            .expect("unit state admission");
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+    let Value::Handle(unit) = vm.global("U") else {
+        panic!("unit");
+    };
+    let Value::Handle(other_unit) = vm.global("V") else {
+        panic!("second unit");
+    };
+    let Value::Handle(first) = vm
+        .host()
+        .native("ConvertUnitState", &[Value::Int(0)])
+        .unwrap()
+    else {
+        panic!("domain handle");
+    };
+    let Value::Handle(second) = vm
+        .host()
+        .native("ConvertUnitState", &[Value::Int(-4)])
+        .unwrap()
+    else {
+        panic!("second domain handle");
+    };
+    assert_eq!(vm.global("FIRST"), Value::Handle(first));
+    assert_eq!(
+        vm.host()
+            .inner
+            .inner()
+            .symbolic_value(first, "unitstate")
+            .unwrap(),
+        0
+    );
+    let created = vm.host().inner.executed_unit(unit).unwrap().clone();
+    assert!(created.unit_states.is_empty());
+    assert_eq!(created.unit_states.capacity(), 0);
+    assert_eq!(created.acquire_range, None);
+    assert_eq!(created.requested_hero_level, None);
+    let outside = vm
+        .host()
+        .native("ConvertUnitState", &[Value::Int(1)])
+        .unwrap_err();
+    assert!(outside.contains("outside"), "{outside}");
+    let ordinal = vm
+        .host()
+        .native(
+            "SetUnitState",
+            &[Value::Handle(unit), Value::Int(0), Value::Real(5.0)],
+        )
+        .unwrap_err();
+    assert!(
+        ordinal.contains("arguments do not match the unit native declaration"),
+        "{ordinal}"
+    );
+    let unknown_state = vm
+        .host()
+        .native(
+            "SetUnitState",
+            &[
+                Value::Handle(unit),
+                Value::Handle(pcx_script::HandleId::new(
+                    std::num::NonZeroU64::new(9_999).unwrap(),
+                )),
+                Value::Real(5.0),
+            ],
+        )
+        .unwrap_err();
+    assert!(
+        unknown_state.contains("unknown handle identity"),
+        "{unknown_state}"
+    );
+    let Value::Handle(player) = vm.global("P") else {
+        panic!("player");
+    };
+    let wrong_state_family = vm
+        .host()
+        .native(
+            "SetUnitState",
+            &[
+                Value::Handle(unit),
+                Value::Handle(player),
+                Value::Real(f32::NAN),
+            ],
+        )
+        .unwrap_err();
+    assert!(
+        wrong_state_family.contains("handle identifies another family"),
+        "{wrong_state_family}"
+    );
+    let untouched = vm.host().inner.executed_unit(unit).unwrap();
+    assert!(untouched.unit_states.is_empty());
+    assert_eq!(untouched.unit_states.capacity(), 0);
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+
+    vm.call("zero", &[]).unwrap();
+    let zero = vm.host().inner.executed_unit(unit).unwrap().clone();
+    assert_eq!(zero.unit_states.len(), 1);
+    assert_eq!(assignment_bits(&zero, first), Some(0.0f32.to_bits()));
+    assert_eq!(assignment_bits(&zero, second), None);
+    assert_eq!(zero.definition, created.definition);
+    assert_eq!(zero.x.to_bits(), created.x.to_bits());
+    assert_eq!(zero.y.to_bits(), created.y.to_bits());
+    assert_eq!(zero.face.to_bits(), created.face.to_bits());
+    assert_eq!(zero.acquire_range, None);
+    assert_eq!(zero.requested_hero_level, None);
+    assert_eq!(zero.requested_show_eye_candy, None);
+    assert!(
+        vm.host()
+            .inner
+            .executed_unit(other_unit)
+            .unwrap()
+            .unit_states
+            .is_empty()
+    );
+    let capacity = zero.unit_states.capacity();
+    assert!(capacity >= 1);
+
+    vm.call("finite", &[]).unwrap();
+    let replaced = vm.host().inner.executed_unit(unit).unwrap().clone();
+    assert_eq!(replaced.unit_states.len(), 1);
+    assert_eq!(replaced.unit_states.capacity(), capacity);
+    assert_eq!(
+        assignment_bits(&replaced, first),
+        Some((-12.5f32).to_bits())
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+
+    let full = vm.call("other", &[]).unwrap_err().to_string();
+    assert!(full.contains("unit state assignments"), "{full}");
+    let other_full = vm.call("other_unit", &[]).unwrap_err().to_string();
+    assert!(
+        other_full.contains("unit state assignments"),
+        "{other_full}"
+    );
+    let foreign = vm.call("wrong", &[]).unwrap_err().to_string();
+    assert!(
+        foreign.contains("handle identifies another family"),
+        "{foreign}"
+    );
+    let non_finite = vm
+        .host()
+        .native(
+            "SetUnitState",
+            &[
+                Value::Handle(unit),
+                Value::Handle(first),
+                Value::Real(f32::INFINITY),
+            ],
+        )
+        .unwrap_err();
+    assert!(non_finite.contains("finite real required"), "{non_finite}");
+    let nan = vm
+        .host()
+        .native(
+            "SetUnitState",
+            &[
+                Value::Handle(unit),
+                Value::Handle(second),
+                Value::Real(f32::NAN),
+            ],
+        )
+        .unwrap_err();
+    assert!(nan.contains("finite real required"), "{nan}");
+    let kept = vm.host().inner.executed_unit(unit).unwrap().clone();
+    assert_eq!(kept.unit_states.len(), 1);
+    assert_eq!(kept.unit_states.capacity(), capacity);
+    assert_eq!(assignment_bits(&kept, first), Some((-12.5f32).to_bits()));
+    assert_eq!(
+        vm.host()
+            .inner
+            .executed_unit(other_unit)
+            .unwrap()
+            .unit_states
+            .len(),
+        0
+    );
+
+    let exact = f32::from_bits(0x3f800001);
+    vm.host()
+        .native(
+            "SetUnitState",
+            &[Value::Handle(unit), Value::Handle(first), Value::Real(0.0)],
+        )
+        .unwrap();
+    assert_eq!(
+        assignment_bits(vm.host().inner.executed_unit(unit).unwrap(), first),
+        Some(0.0f32.to_bits())
+    );
+    vm.host()
+        .native(
+            "SetUnitState",
+            &[
+                Value::Handle(unit),
+                Value::Handle(first),
+                Value::Real(exact),
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        assignment_bits(vm.host().inner.executed_unit(unit).unwrap(), first),
+        Some(exact.to_bits())
+    );
+    let wide = i32::MIN;
+    vm.host()
+        .native(
+            "SetUnitState",
+            &[Value::Handle(unit), Value::Handle(first), Value::Int(wide)],
+        )
+        .unwrap();
+    let stored = vm.host().inner.executed_unit(unit).unwrap().clone();
+    assert_eq!(stored.unit_states.len(), 1);
+    assert_eq!(stored.unit_states.capacity(), capacity);
+    assert_eq!(
+        assignment_bits(&stored, first),
+        Some((wide as f32).to_bits())
+    );
+    assert_eq!(stored.definition, created.definition);
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+    let getter = vm
+        .host()
+        .native("GetUnitState", &[Value::Handle(unit), Value::Handle(first)])
+        .unwrap_err();
+    assert!(getter.contains("unsupported"), "{getter}");
+    assert_eq!(
+        assignment_bits(vm.host().inner.executed_unit(unit).unwrap(), first),
+        Some((wide as f32).to_bits())
+    );
+}
+
+#[test]
+fn unit_creation_without_the_state_setter_leaves_assignments_absent() {
+    let mut session = open(4, 16, MAP);
+    session.vm.init_globals().unwrap();
+    session.vm.call("main", &[]).unwrap();
+    let Value::Handle(unit) = session.vm.global("U") else {
+        panic!("unit");
+    };
+    assert!(
+        session
+            .vm
+            .host()
+            .inner
+            .executed_unit(unit)
+            .unwrap()
+            .unit_states
+            .is_empty()
+    );
+    let unsupported = session
+        .vm
+        .host()
+        .native(
+            "SetUnitState",
+            &[Value::Handle(unit), Value::Int(0), Value::Real(0.0)],
+        )
+        .unwrap_err();
+    assert!(unsupported.contains("unsupported"), "{unsupported}");
+    assert!(
+        session
+            .vm
+            .host()
+            .inner
+            .executed_unit(unit)
+            .unwrap()
+            .unit_states
+            .is_empty()
+    );
+    assert_eq!(session.hits.load(Ordering::SeqCst), 1);
+
+    let ctx = context(
+        300,
+        &script_common("widget", true),
+        "function main takes nothing returns nothing\nendfunction\n",
+        "unit-catalog",
+    );
+    let (catalog, hits, _) = counting();
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+    let error = match object(&ctx, 4)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(1))
+        .unwrap()
+        .with_unit_states(UnitStateBudget { max_records: 1 })
+    {
+        Err(error) => error,
+        Ok(_) => panic!("omitted setter was admitted"),
+    };
+    assert_eq!(error.failure, Failure::Signature);
+    assert_eq!(error.native, "SetUnitState");
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn unit_state_bad_signature_does_not_admit_or_allocate() {
+    for replacement in [
+        "native SetUnitState takes integer level returns nothing\n",
+        "constant native SetUnitState takes unit whichUnit, unitstate whichUnitState, real newVal returns nothing\n",
+    ] {
+        let common = state_common(true).replacen(
+            "native SetUnitState takes unit whichUnit, unitstate whichUnitState, real newVal returns nothing\n",
+            replacement,
+            1,
+        );
+        let ctx = context(
+            300,
+            &common,
+            "function main takes nothing returns nothing\nendfunction\n",
+            "unit-catalog",
+        );
+        let (catalog, hits, _) = counting();
+        let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+        let error = match ObjectHost::checked(state_enums(&ctx, STATE_CONVERSIONS))
+            .unwrap()
+            .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+            .unwrap()
+            .with_unit_catalog(shared, source(), limits(1))
+            .unwrap()
+            .with_unit_states(UnitStateBudget { max_records: 4 })
+        {
+            Err(error) => error,
+            Ok(_) => panic!("bad unit-state signature was admitted"),
+        };
+        assert_eq!(error.failure, Failure::Signature);
+        assert_eq!(error.native, "SetUnitState");
+        assert_eq!(error.declaration_source, "synthetic/common.j");
+        assert_ne!(error.declaration_span, pcx_script::span::Span::EMPTY);
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn unit_state_from_another_source_is_refused() {
+    let primary = state_common(true).replacen(
+        "native SetUnitState takes unit whichUnit, unitstate whichUnitState, real newVal returns nothing\n",
+        "",
+        1,
+    );
+    let other = "native SetUnitState takes unit whichUnit, unitstate whichUnitState, real newVal returns nothing\n";
+    let map = pcx_script::parse_script("").unwrap();
+    let primary = pcx_script::parse_script(&primary).unwrap();
+    let other = pcx_script::parse_script(other).unwrap();
+    let program = Arc::new(
+        pcx_script::resolve_with(
+            &map,
+            &[
+                pcx_script::Prelude::new("synthetic/common.j", &primary),
+                pcx_script::Prelude::new("synthetic/other.j", &other),
+            ],
+        )
+        .unwrap(),
+    );
+    let inner = EnumHost::checked_selected(
+        Arc::clone(&program),
+        "split-source",
+        STATE_CONVERSIONS,
+        Limits {
+            max_handles: 32,
+            admission_steps: 1000,
+            expression_depth: 16,
+            expression_work: 1000,
+        },
+    )
+    .unwrap();
+    let (catalog, hits, _) = counting();
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+    let error = match ObjectHost::checked(inner)
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(1))
+        .unwrap()
+        .with_unit_states(UnitStateBudget { max_records: 1 })
+    {
+        Err(error) => error,
+        Ok(_) => panic!("foreign unit-state source was admitted"),
+    };
+    assert_eq!(error.failure, Failure::Source);
+    assert_eq!(error.native, "SetUnitState");
+    assert_eq!(error.declaration_source, "synthetic/other.j");
+    assert_ne!(error.declaration_span, pcx_script::span::Span::EMPTY);
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn unit_state_requires_the_selected_convert_domain() {
+    let names: Vec<&str> = STATE_CONVERSIONS
+        .iter()
+        .copied()
+        .filter(|name| *name != "ConvertUnitState")
+        .collect();
+    let ctx = context(
+        300,
+        &state_common(true),
+        "function main takes nothing returns nothing\nendfunction\n",
+        "unit-catalog",
+    );
+    let (catalog, hits, _) = counting();
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+    let error = match ObjectHost::checked(state_enums(&ctx, &names))
+        .unwrap()
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(1))
+        .unwrap()
+        .with_unit_states(UnitStateBudget { max_records: 1 })
+    {
+        Err(error) => error,
+        Ok(_) => panic!("unselected unit-state domain was admitted"),
+    };
+    assert_eq!(error.failure, Failure::Signature);
+    assert_eq!(error.native, "ConvertUnitState");
+    assert_eq!(error.declaration_source, "synthetic/common.j");
+    assert_ne!(error.declaration_span, pcx_script::span::Span::EMPTY);
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn root_zero_state_budget_leaves_units_and_assignments_unchanged() {
+    let (mut vm, hits, _) =
+        state_catalog_host(&state_common(true), STATE_MAP, STATE_CONVERSIONS, 0).unwrap();
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    let Value::Handle(unit) = vm.global("U") else {
+        panic!("unit")
+    };
+    let before = vm.host().inner.executed_unit(unit).unwrap().clone();
+    let error = vm.call("zero", &[]).unwrap_err().to_string();
+    assert!(error.contains("unit state assignments"), "{error}");
+    assert_eq!(vm.host().inner.executed_unit(unit).unwrap(), &before);
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
 }

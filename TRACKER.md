@@ -1231,9 +1231,12 @@ Format: `date — subsystem — symptom — root cause — status`
       registration then reaches 153 source-bound units, three triggers, three
       unit events and three action records. One executed `SetHeroLevel` request
       now retains its signed level and eye-candy flag on that same unit;
-      experience, derived stats and effects remain unimplemented. The next
-      refusal is `SetUnitState` at map span `67684..67742`; callback execution
-      and event delivery remain open. See `docs/re-notes/script-trigger-admission.md`.
+      experience, derived stats and effects remain unimplemented. One executed
+      `SetUnitState` assignment now keeps its symbolic domain handle and exact
+      finite real, with caller-bounded pair storage. This reaches 154 unit
+      records; resource spending and combat remain unimplemented. The next
+      refusal is `IssueImmediateOrder` at map span `67827..67884`; callback
+      execution and event delivery remain open. See `docs/re-notes/script-trigger-admission.md`.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or
       upgrade effects. Applied camera motion remains open. See

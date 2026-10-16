@@ -440,7 +440,7 @@ pub use destructables::{DestructableBudget, DestructableCreation};
 
 #[path = "unit_host.rs"]
 mod unit_creation;
-pub use unit_creation::{ExecutedUnit, UnitBudget};
+pub use unit_creation::{ExecutedUnit, ExecutedUnitState, UnitBudget, UnitStateBudget};
 
 #[path = "trigger_host.rs"]
 mod trigger_admission;

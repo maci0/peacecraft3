@@ -5,6 +5,10 @@
 //! checked before `resolve` and before the per-unit `Source` clone. Trigger
 //! creation does not read preplaced owners. The integer rawcode is
 //! `i32::to_be_bytes`. `base_rawcode` is stored as the catalog returned it.
+//!
+//! `SetUnitState` is a separate opt-in on that same unit. It retains the
+//! executed `ConvertUnitState` handle and finite value. It does not spend a
+//! resource or apply combat.
 use super::super::{Entry, Error, Failure, below};
 use super::ObjectHost;
 use pcx_objects::editor::ObjectKind;
@@ -16,6 +20,9 @@ use std::sync::Arc;
 const NATIVE: &str = "CreateUnit";
 const SET_RANGE: &str = "SetUnitAcquireRange";
 const SET_HERO_LEVEL: &str = "SetHeroLevel";
+const SET_STATE: &str = "SetUnitState";
+const CONVERT_STATE: &str = "ConvertUnitState";
+const STATE_KIND: &str = "unitstate";
 const KIND: &str = "unit";
 
 /// Caller bounds. Not a world, population, or rendering limit.
@@ -26,6 +33,26 @@ pub struct UnitBudget {
     pub max_retained_fields: usize,
     /// Maximum authored modifications retained from one successful resolve.
     pub max_modifications: usize,
+}
+
+/// Caller bound on retained `(unit, unitstate handle)` pairs.
+///
+/// Not a life, mana, population, or combat limit.
+#[derive(Clone, Copy, Debug)]
+pub struct UnitStateBudget {
+    pub max_records: usize,
+}
+
+/// One executed `SetUnitState` pair on an admitted unit.
+///
+/// `unitstate` is the handle from the selected `ConvertUnitState` domain.
+/// The domain ordinal is not stored. `value` is the exact finite input:
+/// `0.0` is an assignment, and a handle absent from the unit's list has not
+/// been assigned. This is not a resource balance or a derived maximum.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExecutedUnitState {
+    pub unitstate: HandleId,
+    pub value: f32,
 }
 
 /// Checked catalog result plus the executed call. `executed_owner` is the
@@ -53,6 +80,14 @@ pub struct ExecutedUnit {
     /// run. `Some(false)` is an executed false, not that absence, and it does
     /// not play an effect.
     pub requested_show_eye_candy: Option<bool>,
+    /// Executed `SetUnitState` pairs. Empty means none have run. A stored
+    /// `0.0` is an executed value, not an omitted state.
+    pub unit_states: Vec<ExecutedUnitState>,
+}
+
+struct UnitStateLimits {
+    max_records: usize,
+    records: usize,
 }
 
 pub(super) struct Admission {
@@ -68,6 +103,8 @@ pub(super) struct Admission {
     acquire_span: Option<Span>,
     /// Present when this program declares `SetHeroLevel` on the same source.
     hero_level_span: Option<Span>,
+    /// Present after [`ObjectHost::with_unit_states`] admits the setter.
+    unit_state: Option<UnitStateLimits>,
 }
 
 impl ObjectHost {
@@ -126,6 +163,95 @@ impl ObjectHost {
             records: 0,
             acquire_span,
             hero_level_span,
+            unit_state: None,
+        });
+        Ok(self)
+    }
+
+    /// Admit executed `SetUnitState` on units from [`Self::with_unit_catalog`].
+    ///
+    /// Callers that skip this keep unit creation. `SetUnitState` stays
+    /// unsupported when the program omits it, and also when it is declared
+    /// but this admission was not requested. Opting in requires the loaded
+    /// non-constant `unit, unitstate, real -> nothing` contract, the same
+    /// source as `CreateUnit`, and a selected `ConvertUnitState` domain of
+    /// kind `unitstate` from that source.
+    ///
+    /// `budget.max_records` counts distinct pairs. Replacing a retained pair
+    /// updates the finite value in place. A new pair at the limit is refused
+    /// before `try_reserve`. `GetUnitState` is not admitted: a missing pair is
+    /// not a returned real.
+    pub fn with_unit_states(mut self, budget: UnitStateBudget) -> Result<Self, Error> {
+        let admitted = self.units.as_ref().ok_or_else(|| {
+            self.inner
+                .error(SET_STATE, Failure::UnitState("not admitted"))
+        })?;
+        if admitted.unit_state.is_some() {
+            return Err(self
+                .inner
+                .error(SET_STATE, Failure::UnitState("already admitted")));
+        }
+        let create_source = &admitted.declaration_source;
+        Self::contract(
+            &self.inner,
+            SET_STATE,
+            &["unit", STATE_KIND, "real"],
+            "nothing",
+            false,
+            Some(KIND),
+        )?;
+        let setter = self
+            .inner
+            .program
+            .natives()
+            .get(SET_STATE)
+            .ok_or_else(|| self.inner.error(SET_STATE, Failure::Signature))?;
+        if setter.source != *create_source {
+            return Err(self.inner.error(SET_STATE, Failure::Source));
+        }
+        Self::contract(
+            &self.inner,
+            CONVERT_STATE,
+            &["integer"],
+            STATE_KIND,
+            true,
+            None,
+        )?;
+        let convert = self
+            .inner
+            .program
+            .natives()
+            .get(CONVERT_STATE)
+            .ok_or_else(|| self.inner.error(CONVERT_STATE, Failure::Signature))?;
+        if convert.source != *create_source {
+            return Err(self.inner.error(CONVERT_STATE, Failure::Source));
+        }
+        let conversion = self
+            .inner
+            .conversions
+            .get(CONVERT_STATE)
+            .ok_or_else(|| self.inner.error(CONVERT_STATE, Failure::Signature))?;
+        if conversion.source != *create_source {
+            return Err(self.inner.error(CONVERT_STATE, Failure::Source));
+        }
+        if conversion.kind != STATE_KIND {
+            return Err(self.inner.error(CONVERT_STATE, Failure::Signature));
+        }
+        if conversion.domain.is_empty() {
+            return Err(self.inner.error(CONVERT_STATE, Failure::EmptyDomain));
+        }
+        if !below(&self.inner.program, STATE_KIND, "handle") {
+            return Err(self.inner.error(SET_STATE, Failure::Signature));
+        }
+        std::alloc::Layout::array::<ExecutedUnitState>(budget.max_records)
+            .map_err(|_| self.inner.error(SET_STATE, Failure::Capacity))?;
+        let admitted = self.units.as_mut().ok_or_else(|| {
+            self.inner
+                .error(SET_STATE, Failure::UnitState("not admitted"))
+        })?;
+        admitted.unit_state = Some(UnitStateLimits {
+            max_records: budget.max_records,
+            records: 0,
         });
         Ok(self)
     }
@@ -163,6 +289,9 @@ impl ObjectHost {
         }
         if name == SET_HERO_LEVEL && self.admitted_units().ok()?.hero_level_span.is_some() {
             return Some(self.set_hero_level(args));
+        }
+        if name == SET_STATE && self.admitted_units().ok()?.unit_state.is_some() {
+            return Some(self.set_unit_state(args));
         }
         None
     }
@@ -246,6 +375,100 @@ impl ObjectHost {
             }
             _ => Err(self.inner.error(SET_HERO_LEVEL, Failure::WrongFamily)),
         }
+    }
+
+    fn set_unit_state(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let (unit, state, value) = {
+            let fail = |reason| self.inner.error(SET_STATE, reason);
+            let [Value::Handle(unit), Value::Handle(state), value] = args else {
+                return Err(fail(Failure::UnitState(
+                    "arguments do not match the unit native declaration",
+                )));
+            };
+            match self
+                .inner
+                .entry(*unit)
+                .map_err(|error| self.inner.error(SET_STATE, error.failure))?
+            {
+                Entry::Unit { .. } => {}
+                _ => return Err(fail(Failure::WrongFamily)),
+            }
+            let enumerand = match self
+                .inner
+                .entry(*state)
+                .map_err(|error| self.inner.error(SET_STATE, error.failure))?
+            {
+                Entry::Symbolic { kind, enumerand } if kind == STATE_KIND => *enumerand,
+                _ => return Err(fail(Failure::WrongFamily)),
+            };
+            let in_domain = self
+                .inner
+                .conversions
+                .get(CONVERT_STATE)
+                .is_some_and(|conversion| {
+                    conversion.kind == STATE_KIND && conversion.domain.contains(&enumerand)
+                });
+            if !in_domain {
+                return Err(fail(Failure::OutsideDomain(enumerand)));
+            }
+            let value = finite_state_value(value).map_err(fail)?;
+            let (records, max_records) = {
+                let limits = self
+                    .admitted_units()?
+                    .unit_state
+                    .as_ref()
+                    .ok_or_else(|| fail(Failure::UnitState("not admitted")))?;
+                (limits.records, limits.max_records)
+            };
+            let replacing = match self
+                .inner
+                .entry(*unit)
+                .map_err(|error| self.inner.error(SET_STATE, error.failure))?
+            {
+                Entry::Unit { record } => record
+                    .unit_states
+                    .iter()
+                    .any(|assignment| assignment.unitstate == *state),
+                _ => return Err(fail(Failure::WrongFamily)),
+            };
+            if !replacing && records >= max_records {
+                return Err(fail(Failure::Budget("unit state assignments")));
+            }
+            (*unit, *state, value)
+        };
+        let inserted = match self.inner.entry_mut(unit)? {
+            Entry::Unit { record } => {
+                if let Some(found) = record
+                    .unit_states
+                    .iter_mut()
+                    .find(|assignment| assignment.unitstate == state)
+                {
+                    found.value = value;
+                    false
+                } else if record.unit_states.try_reserve(1).is_err() {
+                    return Err(self.inner.error(SET_STATE, Failure::Capacity));
+                } else {
+                    record.unit_states.push(ExecutedUnitState {
+                        unitstate: state,
+                        value,
+                    });
+                    true
+                }
+            }
+            _ => return Err(self.inner.error(SET_STATE, Failure::WrongFamily)),
+        };
+        if inserted {
+            let limits = self
+                .units
+                .as_mut()
+                .and_then(|admitted| admitted.unit_state.as_mut())
+                .ok_or_else(|| {
+                    self.inner
+                        .error(SET_STATE, Failure::UnitState("not admitted"))
+                })?;
+            limits.records += 1;
+        }
+        Ok(Value::Null)
     }
 
     fn set_acquire_range(&mut self, args: &[Value]) -> Result<Value, Error> {
@@ -359,6 +582,7 @@ impl ObjectHost {
                 acquire_range: None,
                 requested_hero_level: None,
                 requested_show_eye_candy: None,
+                unit_states: Vec::new(),
             }
         };
         let id = self.inner.allocate(Entry::Unit { record }, NATIVE)?;
@@ -380,5 +604,21 @@ fn finite_real(value: &Value) -> Result<f32, Failure> {
         _ => Err(Failure::UnitState(
             "arguments do not match the unit native declaration",
         )),
+    }
+}
+
+/// Finite `real`, or an integer literal in that slot via [`Value::as_real`].
+///
+/// The integer conversion is `i as f32`. It is not a clamp or a unit-state scale.
+fn finite_state_value(value: &Value) -> Result<f32, Failure> {
+    let real = value.as_real().ok_or(Failure::UnitState(
+        "arguments do not match the unit native declaration",
+    ))?;
+    if real.is_finite() {
+        Ok(real)
+    } else {
+        Err(Failure::UnitState(
+            "recreation policy: finite real required",
+        ))
     }
 }

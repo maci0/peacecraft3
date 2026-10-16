@@ -277,3 +277,29 @@ selected `common.j` at `91204..91315`. No gameplay scene or playable chapter
 is established. Sixteen unit cases run under WASI; the full play and application
 tests, strict native/WASM Clippy, rustdoc and browser-target library build pass.
 Root evidence is in `.scratch/cursor-gameplay-20261016/root-hero-level/`.
+
+## Executed unit-state assignment
+
+`ObjectHost::with_unit_states` admits the selected `SetUnitState` contract and
+`ConvertUnitState` domain on the existing unit arena. Each assigned pair keeps
+the symbolic handle and finite real. An integer argument uses the VM's existing
+real conversion. Zero stays distinct from an absent assignment; negative finite
+inputs are retained without a guessed clamp or maximum. The caller bounds distinct
+pairs before allocation, while replacing a retained pair updates it in place.
+Programs that omit this opt-in keep unit creation. Wrong-family, unknown and
+non-finite calls leave prior assignments unchanged. No state ordinal table is
+embedded, and no `GetUnitState`, resource spending or combat consumer is added.
+
+The same retained Human01 Program completes globals and `config`, retains one
+assignment matching the captured domain handle and real bits, and reaches 154
+source-bound unit records. The next refusal is `IssueImmediateOrder`, map span
+`67827..67884`, declared in the selected `common.j` at `106038..106124`.
+The compatibility catalog remains explicitly selected; native Legacy archive
+priority is unproved. The previous sound, camera, rectangle, technology,
+destructable, hero-request and trigger-registration checks still pass.
+
+Verification: 305 play tests pass with three explicit ignores; 417 application
+tests pass with fifteen explicit ignores. All 22 unit cases execute under WASI.
+Strict native/WASM Clippy, rustdoc and browser-target library build pass.
+This establishes executed state, not a gameplay scene or playable chapter.
+Root evidence is in `.scratch/cursor-gameplay-20261016/root-unit-states/`.

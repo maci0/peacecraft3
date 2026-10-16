@@ -584,9 +584,10 @@ mod tests;
 mod objects;
 pub use objects::{
     CameraDestination, CameraFieldRecord, CameraState, DayNightState, DestructableBudget,
-    DestructableCreation, ExecutedUnit, FileSoundState, MapConfig, MapConfigBudget,
-    MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerBudget, PlayerSettings, QuestBudget,
-    QuestEvent, QuestFlag, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest,
-    StartLocation, StartPriorities, StartPriority, StartupClockState, TechLimitBudget, TimerHost,
-    TriggerActionRecord, TriggerBudget, UnitBudget, UnitEventRegistration,
+    DestructableCreation, ExecutedUnit, ExecutedUnitState, FileSoundState, MapConfig,
+    MapConfigBudget, MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerBudget,
+    PlayerSettings, QuestBudget, QuestEvent, QuestFlag, SoundProperties, SoundState,
+    StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
+    StartupClockState, TechLimitBudget, TimerHost, TriggerActionRecord, TriggerBudget, UnitBudget,
+    UnitEventRegistration, UnitStateBudget,
 };
