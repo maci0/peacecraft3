@@ -75,6 +75,14 @@ the draft or installing input behavior. Missing or unsupported projections are
 marked Unavailable; unavailable sliders hide an arbitrary thumb. This does not
 make those settings effective or establish original first-run state.
 
+Entering Options shows the category controls with no settings body selected.
+The selected FDF still supplies keyboard focus; `TabFocusDefault` does not choose
+a category. Explicit Gameplay, Video and Sound clicks show their own body while
+retaining draft edits. Returning to Main and reopening Options resets category
+selection. This follows the isolated original-client entry and reentry
+observations. The empty landing's OK enablement remains a comparison question;
+this correction does not infer a dirty-state rule from its appearance.
+
 Entering Options copies applied preferences into a draft; page changes retain
 that draft. Sound sliders reflect effective gains through the parsed authored
 range, preserving qualified raw source values when available. Widget initials
@@ -163,3 +171,14 @@ match the final package hashes, including its WASM. The public demo is
 <https://maci0.github.io/peacecraft3-demo/>. Original-import interaction checks
 above ran against the identical packaged code on loopback; public-file equality
 is distinct from repeating those local-file interaction checks on the hosted URL.
+
+## Blank category landing validation
+
+The application suite passes 4 library, 319 application and 84 integration tests
+with 15 explicit application ignores. All-target, all-feature scoped Clippy with
+warnings denied, the WASM compile check and workspace formatting pass. The
+explicit original Options popup-cardinality test passes separately for the
+caller-selected compat-tree and Legacy installs; this does not assign either
+archive a release through directory adjacency. Source-leaf WebAssembly tests
+also exercise the blank body and retained source focus. These checks do not
+replace a fresh browser visual comparison or certify complete Options parity.

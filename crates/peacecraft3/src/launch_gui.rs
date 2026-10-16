@@ -1154,7 +1154,6 @@ fn invalidate_on_asset_revision(
     }
     cache.revision = revision.0;
     if let Some(mut navigation) = navigation {
-        navigation.options_entry = None;
         navigation.reset_panels();
     }
     // Everything decoded or derived from the old store goes, including the
@@ -1770,7 +1769,6 @@ fn apply_menu_art(
     } = queries;
     let selection = format!("{}:{:?}", launcher.source, launcher.mode);
     if cache.selection.as_ref() != Some(&selection) {
-        navigation.options_entry = None;
         navigation.built = None;
         cache.pending_fdf = None;
         cache.preview = default();
@@ -1833,12 +1831,6 @@ fn apply_menu_art(
         {
             match parse_screen_fdf(install, cache.screen, templates, menu) {
                 Ok(fdf) => {
-                    if matches!(navigation.screen, crate::menu_screens::Screen::Options(_))
-                        && navigation.options_entry.is_none()
-                    {
-                        let (_, entry) = navigation.options_target(&fdf, navigation.screen);
-                        navigation.options_entry = entry;
-                    }
                     cache.fdf = Some(fdf);
                 }
                 Err(e) => {
@@ -1925,7 +1917,6 @@ fn process_panel_navigation(
     let install = selected_install(&launcher);
     let result = (|| -> Result<_, String> {
         let (fdf, menu) = read_screen_fdf(install.as_deref(), target)?;
-        let (target, entry) = navigation.options_target(&fdf, target);
         let (items, _) = crate::glue_menu::control_items_for(
             &fdf,
             target.root(),
@@ -1956,11 +1947,10 @@ fn process_panel_navigation(
                 "original menu panels are unavailable".into(),
             ),
         };
-        Ok((target, entry, fdf, menu, preview, candidate_key, transition))
+        Ok((target, fdf, menu, preview, candidate_key, transition))
     })();
     match result {
-        Ok((target, entry, fdf, menu, preview, candidate_key, transition)) => {
-            navigation.options_entry = entry;
+        Ok((target, fdf, menu, preview, candidate_key, transition)) => {
             cache.pending_fdf = Some((target, fdf, menu, preview, candidate_key));
             match transition {
                 crate::menu_sprites::Transition::Animated => {
@@ -3490,7 +3480,7 @@ mod menu_tests {
         assert_eq!(
             navigation.requested,
             Some(crate::menu_screens::Screen::Options(
-                crate::menu_screens::Page::Video
+                crate::menu_screens::Page::Unselected
             ))
         );
         assert!(

@@ -21,8 +21,9 @@ use bevy::{
     ui_widgets::{Activate, ButtonPlugin},
 };
 
-fn off_main_screens() -> [Screen; 10] {
+fn off_main_screens() -> [Screen; 11] {
     [
+        Screen::Options(Page::Unselected),
         Screen::Options(Page::Video),
         Screen::Options(Page::Sound),
         Screen::Options(Page::Gameplay),
