@@ -302,7 +302,7 @@ byte-stable), and its decoder refuses anything that is not already canonical so
        layout and fallible reservation. Three native and three actual 32-bit
        release-WASM regressions pass; invalid runs preserve existing CLI output.
 - [ ] One scenario per Rosetta campaign chapter; assert specific outcomes, not "no crash"
-- [ ] Gate: one trace byte-identical across 100 consecutive runs, and `unchanged` vs baseline
+- [~] Gate: one trace byte-identical across 100 consecutive runs, and `unchanged` vs baseline. Synthetic harness and RPL self-repeats do not meet that original-game baseline.
 - [ ] M5/M6 trace columns: hp/mana/xp/cooldown, and RNG draws taken *inside*
        `pcx_sim::step` rather than beside it
 
@@ -326,7 +326,7 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
       retain provenance and produce deterministic indexes. Concrete MPQ/CASC
       adapters read explicitly mapped members and retain their identities;
       application mode selection and exact-target archive priority remain open.
-- [ ] Asset modes: `vanilla` (default) / `reforged` / `reforged-hd` / `reforged-fixes`
+- [~] Asset modes: orthogonal build/addon/asset/behaviour axes exist (`vanilla`/`hd`/`reforged` assets and `fixes` behaviour). The literal set `vanilla` / `reforged` / `reforged-hd` / `reforged-fixes` is not that grammar, and application selection remains open.
 - [x] Library `override/` drop-in tree + generated `index.json`; app wiring pending
 - [~] Gate: Reforged Footman geometry loads through the same `pcx-gfx` path as vanilla.
       The checked version-1800 LoD trailer yields five geosets and 582 vertices
@@ -627,9 +627,9 @@ The list below is the measured part; the rest of the container surface is tracke
        (`game.dll` names `war3mapMap.blp`/`.tga`; the Reforged PDBs name
        `war3map.mmp`/`war3mapMap.blp`/`.shd`/`.doo`). A map really carrying one is
        **refused** (`UnprovenContent`) — there is no layout to read it with
-- [ ] `pcx-map`: regions (rects / circles / polygons)
+- [~] `pcx-map`: versioned `war3map.w3r` bounds parse. Circle and polygon regions, and runtime region handles, remain open.
 - [~] `pcx-map`: `war3map.w3i` MapInfo parser exists; complete slot/object semantics and runtime integration remain open
-- [ ] `pcx-map`: preplaced units, item sets, random tables
+- [~] `pcx-map`: `war3mapUnits.doo` placements, item-set groups and random-selection payloads parse. Spawning them into the simulation remains open.
 - [~] `pcx-tera`: corner terrain meshes exist; slot texture blending and world runtime integration remain open
 - [~] `pcx-tera`: caller-selected cliff wall geometry is implemented and tested;
       original cliff placement/threshold and water rendering remain open.
@@ -638,7 +638,7 @@ The list below is the measured part; the rest of the container surface is tracke
 - [ ] Camera: bounds, pitch, pan speed, zoom steps — values from RE
 - [ ] **Gate:** Human campaign mission 1 loads and pans identically
 - [ ] **Gate:** a community map's full container parses — container, `w3e`, `doo`, `shd`,
-       minimap and `w3i` now all measured; `w3i`, `wpmp` and regions are what is left
+       minimap measured; `w3i` and region bounds parse, while slot semantics, `wpmp`, non-rect regions and full-container proof remain
 
 ## M4 — Object data
 
@@ -710,10 +710,10 @@ ship custom objects, and a map whose rawcodes do not resolve is unplayable.
       missing and unsupported joins are reported. This is supplied-asset data,
       not proof of engine defaults, tech-tree behavior or gameplay parity.
 - [ ] `pcx-objects`: `war3map.wpmp` allied shared data
-- [ ] Unit table: 4 races + neutral, buildings, heroes
-- [ ] Ability table + ability levels/objects
-- [ ] Item table, upgrade table, buff table, destructable table
-- [ ] Tech tree, availability, random item/unit tables
+- [~] Unit table: 4 races + neutral, buildings, heroes. Stock SLK cells exist; race, building and hero gameplay rules remain open.
+- [~] Ability table + ability levels/objects. AbilityData cells exist; level objects and runtime abilities remain open.
+- [~] Item table, upgrade table, buff table, destructable table. Stock family cells exist; gameplay tables remain open.
+- [~] Tech tree, availability, random item/unit tables
       Caller-selected field catalog is checked separately: unknown metadata
       identifiers return an error; raw joins retain provenance and refusals.
       Synthetic tests and an explicit local archive gate cover collection,
@@ -739,8 +739,8 @@ ship custom objects, and a map whose rawcodes do not resolve is unplayable.
 - [ ] Stats model: HP/mana/attack/armour/resistances/regen
 - [ ] Damage pipeline: attack types, mitigation, crit, dodge, block, invuln
 - [ ] Combat abilities, spells, channeling, stacking buffs/debuffs
-- [ ] Orders: move/attack/attack-move/hold/patrol/follow/stop, queueing
-- [ ] Pathing: walkability grid, local avoidance, formation offsets
+- [~] Orders: select, move and stop reach the movement sim. Attack, attack-move, hold, patrol, follow and queueing remain open.
+- [~] Pathing: `war3map.wpm` flag rasters parse. Walkability consumption, local avoidance and formation offsets remain open.
 - [ ] Cooldowns, cast times, mana cost, upkeep
 - [ ] Projectiles, missiles, tracking
 - [ ] Death, respawn, corpse decay, XP/levels
@@ -785,9 +785,7 @@ post-1.24 APIs in active use simultaneously.
 - [x] Deliberate refusals: vJass `method`/`cast`/`delegate` and Zinc (`.j` library and
        scope *containers* parse, their bodies are vanilla), `.` member access and `..`,
        bare `!`, comma-separated local lists, `constant … array`, chained `a[i][j]`
-- [ ] **No interpreter by design** — no evaluation, no name/type resolution, no native
-       dispatch, no `^^` code-tag substitution. A half-VM on a lossy tree is worse than
-       no VM, because the loss is invisible and the result is *plausible but wrong*
+- [x] Interpreter prohibition retired. `pcx-script` resolves and evaluates, and `pcx-play` hosts caller-owned natives, including `TRIGSTR_` lookup. Native coverage, ordering and the map gates below stay open.
 
 #### `pcx-trig` — the trigger-graph containers
 
@@ -859,13 +857,13 @@ closed by the work above:
        allocation probes and eight actual WASM parser groups pass. The explicit
        local NightElf06 authored-context compile gate passes; chapter execution
        remains open. See `docs/re-notes/wct-framing-preflight.md`.
-- [ ] Native function table (exact signatures, return conventions and **side-effect
-       ordering** from `game.dll`)
-- [ ] `BJ` / `Blz` library surface, including the `Blz` extensions
-- [ ] Timers and the original's timer/event ordering — the single thing DotA depends on
-       most
-- [ ] `war3map.wts` string handles + localization lookups (the *container* is decoded;
-       the VM-side handle resolution is not)
+- [~] Native function table (exact signatures, return conventions and **side-effect
+       ordering** from `game.dll`). Caller-owned hosts implement a bounded subset; the full table remains open.
+- [~] `BJ` / `Blz` library surface, including the `Blz` extensions. A few neutral-player `GetBJ*` adapters exist; the library remains open.
+- [~] Timers and the original's timer/event ordering — the single thing DotA depends on
+       most. `CreateTimer` handle admission exists; original event ordering does not.
+- [~] `war3map.wts` string handles + localization lookups (the container is decoded;
+       evaluator `TRIGSTR_` lookup exists). Broader localization and handle semantics remain open.
 - [ ] `war3map.ini` — script source selection, safe mode, forced flags
 - [ ] Pre-1.20 **and** post-1.24 native shapes coexisting; a missing native or
        unresolved rawcode must fail loudly with the map's own identifier, never
@@ -941,7 +939,7 @@ See `PLAN.md` §3.5 for the harness design. Each chapter asserts specific outcom
 | RE-Q7 | Header words `0x20`/`0x24` | REA: `Storm.dll` open path; nothing depends on them | open |
 | RE-Q8 | Storm's live table at `+0x4C2E4` ≠ fixed table | REA: `FUN_15017650`; archives use the fixed table | open, not blocking |
 | RE-Q9 | Archive priority order | REA: `game.dll` archive-open sequence; `DEFAULT_PRIORITY` assumed | open |
-| RE-Q10 | ADPCM decompression (blocks 2,685 `.wav`) | REA: Storm.dll ADPCM decompressor; derive the step table + index schedule from it, do not port from memory | open, the only gap left in M1 |
+| RE-Q10 | ADPCM decompression (blocks 2,685 `.wav`) | Synthetic sector agreement is verified by the M1 ADPCM gate. Target-native 1.29b parity and browser wiring remain open. | partial; not the sole M1 gap |
 | RE-Q11 | Determinism of the original under Wine | REA `capture-process`; gates all of Tier A/B | open, blocks M1b |
 | RE-Q12 | `blizzard.ax` purpose | REA / string scan | open |
 | RE-Q14 | `game.dll` leaks its full build tree + class names | **closed** — `docs/re-notes/001-classic-symbols.md`; 254 paths, 25 subsystems, artifacts in `rea/` | **closed** |
@@ -982,7 +980,7 @@ Format: `date — subsystem — symptom — root cause — status`
       client prediction + reconciliation — 26 tests
 - [x] Enforced by test: input horizon, no rewind, no cross-player commands,
       missing tick stalls rather than diverging, server/world round trips
-- [ ] Authoritative lockstep server owning the world
+- [x] Movement lockstep server owns `pcx_sim::World` (`pcx-net::Server`). Gameplay-state ownership remains the open simulation store.
 - [x] Project UDP transport and discovery request/response implementation.
       Fresh ephemeral loopback covers host response, source binding and resumed
       game polling; actual broadcast routing and application lobby wiring remain
@@ -1012,12 +1010,12 @@ Format: `date — subsystem — symptom — root cause — status`
 - [x] Original startup movie playback with Escape/visible skip/end/error paths, soundtrack ownership, browser mute setting and native decoder cleanup. Native cinematic playback currently needs an installed FFmpeg; original startup dispatch and frame-perfect A/V parity remain unverified.
 - [x] Parsed TFT logo Birth curve and native default sprite-origin placement; shipped-model fixture and browser render verified. The hanging panel entrance remains open.
 - [x] Settings expose 1.29b only; Edition is RoC on the left, TFT on the right, TFT selected by default.
-- [ ] Complete original resolution parity: full-window background and conditional authored UI branch are traced and implemented; portrait containment is an extension, live expansion flags remain unmeasured.
+- [~] Complete original resolution parity: full-window background and conditional authored UI branch are traced and implemented; portrait containment is an extension, live expansion flags remain unmeasured.
 
 - [x] Two-browser local WebSocket command/snapshot path for existing movement rules, including same-tick merging, identity rejection and disconnect/reconnect/resync.
 - [ ] Actual gameplay/lobby integration and public multiplayer service; see `docs/browser-online.md` for the current limits.
 
-- [ ] Browser-only ISO import: local File/Blob reads, filesystem discovery,
+- [~] Browser-only ISO import: local File/Blob reads, filesystem discovery,
       validated Warcraft III archive selection and in-memory asset loading.
       **No server upload or remote extraction.** Track unsupported repacked
       installers explicitly; bounded memory, progress/cancel, and a network
@@ -1028,7 +1026,7 @@ Format: `date — subsystem — symptom — root cause — status`
       competing import/clear events are guarded. Live HTTPS startup has no game
       assets or enabled menu before import. Retail installer ISO and full gameplay
       acceptance remain separate open gates; see `docs/pages-demo.md`.
-- [ ] Original menu feel/sound: animated background, correct button states and
+- [~] Original menu feel/sound: animated background, correct button states and
       original music/clicks, verified in the running browser. Local audio files
       are extracted and playback wired; complete visual fidelity remains open.
 - [x] `pcx-sim` + `pcx-net` build for `wasm32-unknown-unknown` (transport cfg'd out)
@@ -1344,3 +1342,10 @@ Format: `date — subsystem — symptom — root cause — status`
       GEOS ordinal. Equal vertex counts no longer select another geoset's rest
       positions/bindings. A synthetic ECS regression also preserves unrelated
       model instances; strict package tests and WASM compile check pass.
+
+## Remaining-work dependency map
+
+The [101-entry requirements map](docs/remaining-work/README.md) reconciles the
+open and partial gates against source evidence and lists their prerequisites.
+It is pinned to the pre-correction tracker snapshot; broad gameplay and original
+comparison gates remain open.

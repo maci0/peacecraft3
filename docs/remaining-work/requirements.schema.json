@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://peacecraft3.local/tracker-reconciliation.schema.json",
+  "title": "Tracker reconciliation matrix",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tracker_sha256",
+    "item_count",
+    "items",
+    "dependency_order",
+    "implementation_order",
+    "false_closed_audit",
+    "non_checkbox"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "tracker_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "item_count": { "type": "integer", "minimum": 1 },
+    "dependency_order": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "pattern": "^T[0-9]{4}$" }
+    },
+    "implementation_order": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "pattern": "^T[0-9]{4}$" }
+    },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/item" }
+    },
+    "false_closed_audit": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/audit" }
+    },
+    "non_checkbox": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/extra" }
+    }
+  },
+  "$defs": {
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "line",
+        "mark",
+        "recommended_mark",
+        "section",
+        "text",
+        "domain",
+        "disposition",
+        "false_open",
+        "false_closed",
+        "broad_gate",
+        "acceptance_gate",
+        "owner_lane",
+        "next_slice",
+        "evidence",
+        "order",
+        "depends_on"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^T[0-9]{4}$" },
+        "line": { "type": "integer", "minimum": 1 },
+        "mark": { "enum": [" ", "~", "?", "!"] },
+        "recommended_mark": { "enum": [" ", "~", "?", "!", "x"] },
+        "section": { "type": "string", "minLength": 1 },
+        "text": { "type": "string", "minLength": 1 },
+        "domain": {
+          "enum": [
+            "campaign",
+            "ui",
+            "sim",
+            "maps",
+            "scripts",
+            "assets",
+            "audio",
+            "multiplayer",
+            "desktop",
+            "browser",
+            "cli",
+            "performance",
+            "rng"
+          ]
+        },
+        "disposition": {
+          "enum": [
+            "accurate_open",
+            "accurate_partial",
+            "accurate_unknown",
+            "accurate_blocked",
+            "partial_unmarked",
+            "wording_stale_still_open",
+            "false_open",
+            "superseded_constraint",
+            "blocker_advanced"
+          ]
+        },
+        "false_open": { "type": "boolean" },
+        "false_closed": { "const": false },
+        "broad_gate": { "type": "boolean" },
+        "acceptance_gate": { "type": "string", "minLength": 1 },
+        "owner_lane": { "type": "string", "minLength": 1 },
+        "next_slice": { "type": "string", "minLength": 1 },
+        "order": { "type": "integer", "minimum": 1 },
+        "depends_on": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^T[0-9]{4}$" }
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/evidence" }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "note"],
+      "properties": {
+        "kind": { "enum": ["source", "absence"] },
+        "path": { "type": "string", "minLength": 1 },
+        "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "verdict", "note"],
+      "properties": {
+        "subject": { "type": "string", "minLength": 1 },
+        "verdict": { "enum": ["not_reopened"] },
+        "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "extra": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "owner_lane", "acceptance_gate", "evidence"],
+      "properties": {
+        "domain": { "type": "string", "minLength": 1 },
+        "owner_lane": { "type": "string", "minLength": 1 },
+        "acceptance_gate": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

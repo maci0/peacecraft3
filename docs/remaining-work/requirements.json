@@ -1,0 +1,2946 @@
+{
+  "schema_version": 1,
+  "tracker_sha256": "de3d669c60343a2560cc3647a0bc7043f666ebb67ea63638d48e99f19967a60a",
+  "item_count": 101,
+  "items": [
+    {
+      "id": "T0788",
+      "line": 788,
+      "mark": " ",
+      "recommended_mark": "x",
+      "section": "PeaceCraft3 \u2014 Tracker / M7 \u2014 Scripting (JASS + triggers) / `pcx-script` \u2014 raw-JASS syntax, resolution and interpreter foundation",
+      "text": "**No interpreter by design** \u2014 no evaluation, no name/type resolution, no native dispatch, no `^^` code-tag substitution. A half-VM on a lossy tree is worse than no VM, because the loss is invisible and the result is *plausible but wrong*",
+      "domain": "scripts",
+      "disposition": "superseded_constraint",
+      "false_open": true,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Retire the prohibition. Do not treat the interpreter as native-complete.",
+      "owner_lane": "10-tracker",
+      "next_slice": "Retire the prohibition. Do not treat the interpreter as native-complete.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-script/src/lib.rs",
+          "note": "The crate exports eval, resolve, natives and value. The unchecked prohibition describes an older tree."
+        }
+      ],
+      "order": 1,
+      "depends_on": []
+    },
+    {
+      "id": "T0985",
+      "line": 985,
+      "mark": " ",
+      "recommended_mark": "x",
+      "section": "PeaceCraft3 \u2014 Tracker / Multiplayer",
+      "text": "Authoritative lockstep server owning the world",
+      "domain": "multiplayer",
+      "disposition": "false_open",
+      "false_open": true,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Close only the movement-world server. Gameplay ownership stays on the simulation store.",
+      "owner_lane": "unassigned:multiplayer",
+      "next_slice": "Close only the movement-world server. Gameplay ownership stays on the simulation store.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-net/src/lib.rs",
+          "note": "Server stores world, accepts input, and advances only when that tick's input is present. An earlier checkbox already records this server."
+        }
+      ],
+      "order": 2,
+      "depends_on": []
+    },
+    {
+      "id": "T1133",
+      "line": 1133,
+      "mark": "!",
+      "recommended_mark": "!",
+      "section": "PeaceCraft3 \u2014 Tracker / Integration audit and performance",
+      "text": "Original script execution fails closed on unsupported `GetPlayerNeutralPassive` during `common.j` initialization; original campaign completion and native behavior are not established. Opt-in selected-map adapters derive passive/aggressive and first-family `GetBJMaxPlayers`/`GetBJPlayerNeutralVictim`/`GetBJPlayerNeutralExtra`/ `GetBJMaxPlayerSlots` rules from independently approved local executable profiles and the admitted W3I. The same Human01 Program/localization gate composes 43 source-selected symbolic contracts, retains 432 typed identities. Explicit shared-arena timer/group admission now completes all Human01 globals (four timers and three groups) and enters authored `config`. Executed config now retains five metadata fields and five start locations. Source-bounded shared-arena players retain five player identities and 35 authored field assignments. Bounded authored priority relationships now let Human01 `config` complete; the same VM enters `main` and uses source-bound camera margins to retain authored camera bounds before selecting explicitly bound day/night source models, then reaching a source-qualified immutable startup time-of-day snapshot, then requesting both source-backed ambient sounds. An explicit bounded start queue retains the authored night sound request. Source-bounded map-music selection now retains the executed name/random/index. Exact direct-file PCM admission now creates the first authored voice object. Selected source-label parameters now bind to that same sound identity while preserving its PCM/creation inputs, and explicit executed duration state now retains the authored integer on that same identity. The next `CreateSound` lacks its caller-provided file binding. Raw table flags remain separate from effective settings. Explicit parameter collections now retain each assigned table/row/source, reject cross-table label ambiguity and preserve a separate dialogue schema without fabricating the absent full-profile fields. A bounded PCM decoder view preserves source receipts and exact samples while placing fmt/data chunks before opaque ancillary chunks for the installed WAV decoder. The snapshot does not advance time or replace a running game clock, and queued audio/music selection is not yet consumed by a playback backend. All 305 play tests pass with five explicit ignores; strict native/WASM Clippy, WASM generation and actual 32-bit lifecycle/config/player/priority/camera/model/clock/sound checks pass. These are bounded Host/data checks, not campaign or native gameplay proof. Launcher profile loading/default Host wiring and other player natives remain open; see `selected-map-neutral-host.md`, `playercolor-host.md` and `script-timer-arena.md`/`script-group-arena.md`/`script-map-config.md`/ `script-player-setup.md`/`script-start-priorities.md`/`script-camera-input.md`/ `script-day-night-models.md`/`script-label-sounds.md`/`script-startup-clock.md`/ `script-map-music-selection.md`/`script-file-sounds.md`/`script-sound-parameters.md`/ `script-sound-parameter-banks.md`/`script-pcm-decoder.md`.",
+      "domain": "campaign",
+      "disposition": "blocker_advanced",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "The named neutral getter is no longer the current stop. Continue from the missing CreateSound file binding without calling the campaign complete.",
+      "owner_lane": "01-campaign",
+      "next_slice": "The named neutral getter is no longer the current stop. Continue from the missing CreateSound file binding without calling the campaign complete.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-play/src/neutral_player.rs",
+          "note": "Passive and aggressive neutral adapters exist. The same checkbox says the next CreateSound lacks its file binding and that campaign completion is not established."
+        }
+      ],
+      "order": 3,
+      "depends_on": [
+        "T0849",
+        "T0632"
+      ]
+    },
+    {
+      "id": "T0849",
+      "line": 849,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M7 \u2014 Scripting (JASS + triggers) / What M7 still is",
+      "text": "JASS resolver, typed values, interpreter and caller-owned Host exist. Native handle behavior/casts and the game Host remain incomplete.",
+      "domain": "scripts",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Extend the caller-owned host one missing native at a time.",
+      "owner_lane": "01-campaign",
+      "next_slice": "Extend the caller-owned host one missing native at a time.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-script/src/eval.rs",
+          "note": "Evaluation exists. The checkbox keeps native handle behavior incomplete."
+        }
+      ],
+      "order": 4,
+      "depends_on": [
+        "T0788"
+      ]
+    },
+    {
+      "id": "T0862",
+      "line": 862,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M7 \u2014 Scripting (JASS + triggers) / What M7 still is",
+      "text": "Native function table (exact signatures, return conventions and **side-effect ordering** from `game.dll`)",
+      "domain": "scripts",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Add measured natives with source diagnostics. Do not fill the table with zero returns.",
+      "owner_lane": "01-campaign",
+      "next_slice": "Add measured natives with source diagnostics. Do not fill the table with zero returns.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-play/src/object_host.rs",
+          "note": "A bounded host dispatches selected natives such as CreateTimer. It is not a game.dll signature table."
+        }
+      ],
+      "order": 5,
+      "depends_on": [
+        "T0849"
+      ]
+    },
+    {
+      "id": "T0852",
+      "line": 852,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M7 \u2014 Scripting (JASS + triggers) / What M7 still is",
+      "text": "`WCT` custom-text compilation: the public bounded adapter joins checked zero-header WCT/v4 WTG bodies with caller-supplied context and preludes, preserves cross-block state, source diagnostics and WTS lookup. Synthetic VM tests and the identified local Human06 compilation gate pass. Native source/load/initializer ordering, GUI lowering and campaign execution are still open; see `docs/re-notes/wct-compilation.md`. Complete WCT framing is now checked before materialization; malformed allocation probes and eight actual WASM parser groups pass. The explicit local NightElf06 authored-context compile gate passes; chapter execution remains open. See `docs/re-notes/wct-framing-preflight.md`.",
+      "domain": "scripts",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Chapter execution remains open after the Human06 and NightElf06 compile gates.",
+      "owner_lane": "01-campaign",
+      "next_slice": "Chapter execution remains open after the Human06 and NightElf06 compile gates.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/re-notes/wct-compilation.md",
+          "note": "Bounded WCT compilation is checked. Campaign execution is explicitly open."
+        }
+      ],
+      "order": 6,
+      "depends_on": [
+        "T0849"
+      ]
+    },
+    {
+      "id": "T0867",
+      "line": 867,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M7 \u2014 Scripting (JASS + triggers) / What M7 still is",
+      "text": "`war3map.wts` string handles + localization lookups (the *container* is decoded; the VM-side handle resolution is not)",
+      "domain": "scripts",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Localization beyond TRIGSTR_ lookup stays open.",
+      "owner_lane": "01-campaign",
+      "next_slice": "Localization beyond TRIGSTR_ lookup stays open.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-script/src/eval.rs",
+          "note": "String literals spelled TRIGSTR_<id> resolve through the host. The checkbox's claim that VM lookup does not exist is stale."
+        }
+      ],
+      "order": 6,
+      "depends_on": [
+        "T0849"
+      ]
+    },
+    {
+      "id": "T0738",
+      "line": 738,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M5 \u2014 Simulation core",
+      "text": "Entity store and deterministic movement iteration exist; original game handles and full gameplay store remain open",
+      "domain": "sim",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Keep original game handles and the full gameplay store open.",
+      "owner_lane": "04-orders",
+      "next_slice": "Keep original game handles and the full gameplay store open.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-sim/src/lib.rs",
+          "note": "World::spawn assigns monotonic movement ids. They are not original handles."
+        }
+      ],
+      "order": 7,
+      "depends_on": []
+    },
+    {
+      "id": "T0631",
+      "line": 631,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M3 \u2014 World: maps, terrain, camera, doodads",
+      "text": "`pcx-map`: `war3map.w3i` MapInfo parser exists; complete slot/object semantics and runtime integration remain open",
+      "domain": "maps",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Finish slot and object semantics before treating map info as playable setup.",
+      "owner_lane": "01-campaign",
+      "next_slice": "Finish slot and object semantics before treating map info as playable setup.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-map/src/info.rs",
+          "note": "MapInfo parses. The checkbox keeps slot semantics and runtime integration open."
+        }
+      ],
+      "order": 8,
+      "depends_on": []
+    },
+    {
+      "id": "T0632",
+      "line": 632,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M3 \u2014 World: maps, terrain, camera, doodads",
+      "text": "`pcx-map`: preplaced units, item sets, random tables",
+      "domain": "maps",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Spawn admitted placements through the existing world. Do not claim the campaign loads.",
+      "owner_lane": "01-campaign",
+      "next_slice": "Spawn admitted placements through the existing world. Do not claim the campaign loads.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-map/src/units.rs",
+          "note": "UnitPlacement retains item_sets and RandomUnit. The sim World has no placement import."
+        }
+      ],
+      "order": 9,
+      "depends_on": [
+        "T0738"
+      ]
+    },
+    {
+      "id": "T1045",
+      "line": 1045,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / WASM build",
+      "text": "Explicit browser map configuration: mandatory caller metadata now reaches the existing bounded binder/App consumer through owned WASM inspection, submission and completion handles. The collapsed local JSON/explicit-limit form and metadata inspector pass production-page main-App admission, stale-source refusal, request cleanup and base-only TFT restriction checks. Cargo-built WASM/Node gates also cover whole-state rollback. The asset-free public demo matches the checked 22-file package and passes the same eight main-App browser groups. Original-map execution remains open; see `docs/re-notes/browser-map-configuration.md`.",
+      "domain": "browser",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Original-map execution remains open after metadata admission.",
+      "owner_lane": "01-campaign",
+      "next_slice": "Original-map execution remains open after metadata admission.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/re-notes/browser-map-configuration.md",
+          "note": "Caller metadata reaches the binder. Execution of an original map is the remaining gate."
+        }
+      ],
+      "order": 9,
+      "depends_on": [
+        "T1133"
+      ]
+    },
+    {
+      "id": "T0633",
+      "line": 633,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M3 \u2014 World: maps, terrain, camera, doodads",
+      "text": "`pcx-tera`: corner terrain meshes exist; slot texture blending and world runtime integration remain open",
+      "domain": "maps",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Refuse blend weights until source establishes them, then integrate one scene.",
+      "owner_lane": "03-terrain",
+      "next_slice": "Refuse blend weights until source establishes them, then integrate one scene.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-tera/src/ground.rs",
+          "note": "Corner meshes exist. Blend weights are explicitly refused."
+        }
+      ],
+      "order": 10,
+      "depends_on": [
+        "T0631"
+      ]
+    },
+    {
+      "id": "T0634",
+      "line": 634,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M3 \u2014 World: maps, terrain, camera, doodads",
+      "text": "`pcx-tera`: caller-selected cliff wall geometry is implemented and tested; original cliff placement/threshold and water rendering remain open. `WaterData` preserves source records and reports unproven level/geometry explicitly; see `crates/pcx-tera/WATER_EVIDENCE.md`.",
+      "domain": "maps",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Keep cliff threshold and water geometry unproven until measured.",
+      "owner_lane": "03-terrain",
+      "next_slice": "Keep cliff threshold and water geometry unproven until measured.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-tera/src/cliff.rs",
+          "note": "cliff_threshold returns Unsupported. WaterData preserves source records."
+        }
+      ],
+      "order": 11,
+      "depends_on": [
+        "T0633"
+      ]
+    },
+    {
+      "id": "T0894",
+      "line": 894,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M8 \u2014 Full campaign + polish",
+      "text": "UI parity (HUD, minimap, command card, tooltips, chat) The test-only HUD derivation now refuses broken template chains, missing labels, ambiguous/non-finite layout records and unsupported child/anchor inheritance instead of silently producing rectangles. Application tests and a seven-case actual WASM source-leaf gate pass; no production HUD integration or native/rendered parity is claimed. See `hud-derivation.md`.",
+      "domain": "ui",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Integrate the test-only HUD derivation into the in-game viewport.",
+      "owner_lane": "02-hud",
+      "next_slice": "Integrate the test-only HUD derivation into the in-game viewport.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/peacecraft3/src/hud.rs",
+          "note": "The module states that no production integration exists."
+        }
+      ],
+      "order": 11,
+      "depends_on": [
+        "T0631"
+      ]
+    },
+    {
+      "id": "T0630",
+      "line": 630,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M3 \u2014 World: maps, terrain, camera, doodads",
+      "text": "`pcx-map`: regions (rects / circles / polygons)",
+      "domain": "maps",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Do not invent circle or polygon regions. Runtime handles wait on a measured shape.",
+      "owner_lane": "unassigned:map-regions",
+      "next_slice": "Do not invent circle or polygon regions. Runtime handles wait on a measured shape.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-map/src/regions.rs",
+          "note": "Region bounds are four integers or four floats. There is no circle or polygon variant."
+        }
+      ],
+      "order": 12,
+      "depends_on": []
+    },
+    {
+      "id": "T0638",
+      "line": 638,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M3 \u2014 World: maps, terrain, camera, doodads",
+      "text": "Camera: bounds, pitch, pan speed, zoom steps \u2014 values from RE",
+      "domain": "maps",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Take pan and zoom speeds from RE. Authored W3C records are not those control values.",
+      "owner_lane": "03-terrain",
+      "next_slice": "Take pan and zoom speeds from RE. Authored W3C records are not those control values.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-map/src/cameras.rs",
+          "note": "war3map.w3c framing is parsed and explicitly does not infer native camera behavior."
+        },
+        {
+          "kind": "source",
+          "path": "crates/pcx-play/src/camera_margins.rs",
+          "note": "Script-bound camera margins exist separately from RE pan/zoom steps."
+        }
+      ],
+      "order": 13,
+      "depends_on": []
+    },
+    {
+      "id": "T0290",
+      "line": 290,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M1b \u2014 Play-test harness skeleton (new)",
+      "text": "`pcx-play`: declaration-ordered actions enter existing simulation steps; move/select/stop/nop and harness RNG are supported. Attack/build/cast/train and native event-order parity remain open.",
+      "domain": "sim",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Add attack/build/cast/train only after those orders exist in the sim.",
+      "owner_lane": "04-orders",
+      "next_slice": "Add attack/build/cast/train only after those orders exist in the sim.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-sim/src/lib.rs",
+          "note": "Command is Nop, Select, Move and Stop."
+        }
+      ],
+      "order": 14,
+      "depends_on": []
+    },
+    {
+      "id": "T0742",
+      "line": 742,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M5 \u2014 Simulation core",
+      "text": "Orders: move/attack/attack-move/hold/patrol/follow/stop, queueing",
+      "domain": "sim",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Extend orders past select, move and stop without inventing unproved command ids.",
+      "owner_lane": "04-orders",
+      "next_slice": "Extend orders past select, move and stop without inventing unproved command ids.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-sim/src/lib.rs",
+          "note": "Select, Move and Stop are applied. Attack, hold, patrol, follow and queues are absent."
+        }
+      ],
+      "order": 15,
+      "depends_on": [
+        "T0738"
+      ]
+    },
+    {
+      "id": "T0485",
+      "line": 485,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M2 \u2014 Asset decoders + first Bevy render \u2014 **render smoke passed; full material fidelity open**",
+      "text": "`pcx-gfx` `view`: no terrain tile (the capture draws one; the viewer does not)",
+      "domain": "maps",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Show a caller-selected terrain tile in the viewer without using the capture example as the product path.",
+      "owner_lane": "03-terrain",
+      "next_slice": "Show a caller-selected terrain tile in the viewer without using the capture example as the product path.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-gfx/examples/capture.rs",
+          "note": "The capture example draws a terrain tile. The view command still does not."
+        }
+      ],
+      "order": 16,
+      "depends_on": [
+        "T0633"
+      ]
+    },
+    {
+      "id": "T0743",
+      "line": 743,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M5 \u2014 Simulation core",
+      "text": "Pathing: walkability grid, local avoidance, formation offsets",
+      "domain": "sim",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Consume war3map.wpm flags. Local avoidance and formations stay open.",
+      "owner_lane": "03-terrain",
+      "next_slice": "Consume war3map.wpm flags. Local avoidance and formations stay open.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-map/src/pathing.rs",
+          "note": "Pathing parses MP3W rasters. step() moves by a fixed delta and ignores those cells."
+        }
+      ],
+      "order": 17,
+      "depends_on": [
+        "T0742"
+      ]
+    },
+    {
+      "id": "T0712",
+      "line": 712,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M4 \u2014 Object data",
+      "text": "`pcx-objects`: `war3map.wpmp` allied shared data",
+      "domain": "maps",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Measure allied shared data before parsing it.",
+      "owner_lane": "unassigned:map-wpmp",
+      "next_slice": "Measure allied shared data before parsing it.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "crates/pcx-map/src",
+          "note": "No wpmp parser module exists. The name appears only as an unparsed member example."
+        }
+      ],
+      "order": 18,
+      "depends_on": []
+    },
+    {
+      "id": "T0739",
+      "line": 739,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M5 \u2014 Simulation core",
+      "text": "Stats model: HP/mana/attack/armour/resistances/regen",
+      "domain": "sim",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Bind authored HP, mana, attack, armour, resistances and regen with explicit conversions.",
+      "owner_lane": "08-combat",
+      "next_slice": "Bind authored HP, mana, attack, armour, resistances and regen with explicit conversions.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-sim/src/lib.rs",
+          "note": "Unit has no stat fields."
+        }
+      ],
+      "order": 19,
+      "depends_on": [
+        "T0738",
+        "T0713"
+      ]
+    },
+    {
+      "id": "T0713",
+      "line": 713,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M4 \u2014 Object data",
+      "text": "Unit table: 4 races + neutral, buildings, heroes",
+      "domain": "sim",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Consume authored unit fields. Do not treat Family::Unit as race or hero rules.",
+      "owner_lane": "08-combat",
+      "next_slice": "Consume authored unit fields. Do not treat Family::Unit as race or hero rules.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-objects/src/editor/defaults.rs",
+          "note": "Family::Unit joins unit SLK tables. No race, building or hero rule table is evaluated."
+        }
+      ],
+      "order": 20,
+      "depends_on": [
+        "T0707"
+      ]
+    },
+    {
+      "id": "T0714",
+      "line": 714,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M4 \u2014 Object data",
+      "text": "Ability table + ability levels/objects",
+      "domain": "sim",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Keep ability levels closed until a measured object layout and a sim consumer exist.",
+      "owner_lane": "08-combat",
+      "next_slice": "Keep ability levels closed until a measured object layout and a sim consumer exist.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-objects/src/editor/defaults.rs",
+          "note": "Family::Ability reads AbilityData. Level and runtime ability objects are not implemented."
+        }
+      ],
+      "order": 21,
+      "depends_on": [
+        "T0713"
+      ]
+    },
+    {
+      "id": "T0715",
+      "line": 715,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M4 \u2014 Object data",
+      "text": "Item table, upgrade table, buff table, destructable table",
+      "domain": "sim",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Gameplay item, upgrade, buff and destructable behavior stays open behind the stock cells.",
+      "owner_lane": "08-combat",
+      "next_slice": "Gameplay item, upgrade, buff and destructable behavior stays open behind the stock cells.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-objects/src/editor/defaults.rs",
+          "note": "Family includes Item, Upgrade, Buff and Destructable as data joins."
+        }
+      ],
+      "order": 22,
+      "depends_on": [
+        "T0713"
+      ]
+    },
+    {
+      "id": "T0716",
+      "line": 716,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M4 \u2014 Object data",
+      "text": "Tech tree, availability, random item/unit tables Caller-selected field catalog is checked separately: unknown metadata identifiers return an error; raw joins retain provenance and refusals. Synthetic tests and an explicit local archive gate cover collection, not native prerequisite evaluation or availability.",
+      "domain": "sim",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Evaluate prerequisites only from authored rules. The field catalog must not count as availability.",
+      "owner_lane": "08-combat",
+      "next_slice": "Evaluate prerequisites only from authored rules. The field catalog must not count as availability.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-objects/src/requirements.rs",
+          "note": "RequirementsCatalog collects field joins and does not evaluate dependencies."
+        }
+      ],
+      "order": 23,
+      "depends_on": [
+        "T0714"
+      ]
+    },
+    {
+      "id": "T0306",
+      "line": 306,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M1b \u2014 Play-test harness skeleton (new)",
+      "text": "M5/M6 trace columns: hp/mana/xp/cooldown, and RNG draws taken *inside* `pcx_sim::step` rather than beside it",
+      "domain": "rng",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Record hp/mana/xp/cooldown only after the sim stores them, and draw RNG inside step.",
+      "owner_lane": "08-combat",
+      "next_slice": "Record hp/mana/xp/cooldown only after the sim stores them, and draw RNG inside step.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-play/src/runner.rs",
+          "note": "RngDraw is taken before step. pcx_sim::step passes _rng through unused."
+        },
+        {
+          "kind": "source",
+          "path": "crates/pcx-sim/src/lib.rs",
+          "note": "Unit stores id, owner, position and move_target. No hp, mana, xp or cooldown."
+        }
+      ],
+      "order": 24,
+      "depends_on": [
+        "T0739",
+        "T0752"
+      ]
+    },
+    {
+      "id": "T0740",
+      "line": 740,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M5 \u2014 Simulation core",
+      "text": "Damage pipeline: attack types, mitigation, crit, dodge, block, invuln",
+      "domain": "sim",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Implement attack-type mitigation only from authored fields. Do not invent crit, dodge or block formulas.",
+      "owner_lane": "08-combat",
+      "next_slice": "Implement attack-type mitigation only from authored fields. Do not invent crit, dodge or block formulas.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "crates/pcx-sim/src/lib.rs",
+          "note": "No damage function exists beside movement stepping."
+        }
+      ],
+      "order": 25,
+      "depends_on": [
+        "T0739"
+      ]
+    },
+    {
+      "id": "T0741",
+      "line": 741,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M5 \u2014 Simulation core",
+      "text": "Combat abilities, spells, channeling, stacking buffs/debuffs",
+      "domain": "sim",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Add one authored spell consumer after ability data and orders can name it.",
+      "owner_lane": "08-combat",
+      "next_slice": "Add one authored spell consumer after ability data and orders can name it.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "crates/pcx-sim/src/lib.rs",
+          "note": "No spell, channel or buff state exists."
+        }
+      ],
+      "order": 26,
+      "depends_on": [
+        "T0714",
+        "T0740"
+      ]
+    },
+    {
+      "id": "T0744",
+      "line": 744,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M5 \u2014 Simulation core",
+      "text": "Cooldowns, cast times, mana cost, upkeep",
+      "domain": "sim",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Store cooldown, cast time, mana cost and upkeep on the combat consumer.",
+      "owner_lane": "08-combat",
+      "next_slice": "Store cooldown, cast time, mana cost and upkeep on the combat consumer.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "crates/pcx-sim/src/lib.rs",
+          "note": "No cooldown or mana field exists."
+        }
+      ],
+      "order": 27,
+      "depends_on": [
+        "T0739"
+      ]
+    },
+    {
+      "id": "T0745",
+      "line": 745,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M5 \u2014 Simulation core",
+      "text": "Projectiles, missiles, tracking",
+      "domain": "sim",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Add projectile state only with authored speed and impact rules.",
+      "owner_lane": "08-combat",
+      "next_slice": "Add projectile state only with authored speed and impact rules.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "crates/pcx-sim/src",
+          "note": "The sim crate has no projectile type."
+        }
+      ],
+      "order": 28,
+      "depends_on": [
+        "T0740"
+      ]
+    },
+    {
+      "id": "T0746",
+      "line": 746,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M5 \u2014 Simulation core",
+      "text": "Death, respawn, corpse decay, XP/levels",
+      "domain": "sim",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Model death and experience only after HP exists.",
+      "owner_lane": "08-combat",
+      "next_slice": "Model death and experience only after HP exists.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "crates/pcx-sim/src/lib.rs",
+          "note": "Units are not removed, respawned or granted experience."
+        }
+      ],
+      "order": 29,
+      "depends_on": [
+        "T0739"
+      ]
+    },
+    {
+      "id": "T0304",
+      "line": 304,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M1b \u2014 Play-test harness skeleton (new)",
+      "text": "One scenario per Rosetta campaign chapter; assert specific outcomes, not \"no crash\"",
+      "domain": "campaign",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Add one outcome-bearing scenario after a chapter can execute config and main.",
+      "owner_lane": "07-progression",
+      "next_slice": "Add one outcome-bearing scenario after a chapter can execute config and main.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "tests/play",
+          "note": "tests/play has synthetic movement RPLs and no per-chapter Rosetta scenarios."
+        }
+      ],
+      "order": 30,
+      "depends_on": [
+        "T1133"
+      ]
+    },
+    {
+      "id": "T0639",
+      "line": 639,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M3 \u2014 World: maps, terrain, camera, doodads",
+      "text": "**Gate:** Human campaign mission 1 loads and pans identically",
+      "domain": "campaign",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Load and pan Human mission 1 only after terrain, camera and campaign startup meet.",
+      "owner_lane": "03-terrain",
+      "next_slice": "Load and pan Human mission 1 only after terrain, camera and campaign startup meet.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "crates/pcx-play/src/campaign.rs",
+          "note": "run_chapter exists for a host trait. It does not load or pan Human mission 1."
+        }
+      ],
+      "order": 31,
+      "depends_on": [
+        "T0638",
+        "T0633",
+        "T1133"
+      ]
+    },
+    {
+      "id": "T0640",
+      "line": 640,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M3 \u2014 World: maps, terrain, camera, doodads",
+      "text": "**Gate:** a community map's full container parses \u2014 container, `w3e`, `doo`, `shd`, minimap and `w3i` now all measured; `w3i`, `wpmp` and regions are what is left",
+      "domain": "maps",
+      "disposition": "wording_stale_still_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Parse wpmp and prove one community container. Region and w3i parsers are not that proof.",
+      "owner_lane": "unassigned:map-container",
+      "next_slice": "Parse wpmp and prove one community container. Region and w3i parsers are not that proof.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-map/src/regions.rs",
+          "note": "The checkbox still lists regions and w3i as entirely remaining. Parsers exist; wpmp and the full-container gate do not."
+        }
+      ],
+      "order": 32,
+      "depends_on": [
+        "T0630",
+        "T0712"
+      ]
+    },
+    {
+      "id": "T0721",
+      "line": 721,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M4 \u2014 Object data",
+      "text": "**Gate:** stock unit stats diff-clean against in-game editor",
+      "domain": "sim",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Diff stock stats against the in-game editor after a stats consumer exists.",
+      "owner_lane": "08-combat",
+      "next_slice": "Diff stock stats against the in-game editor after a stats consumer exists.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "crates/pcx-sim/src/lib.rs",
+          "note": "The movement world has no stat fields to diff."
+        }
+      ],
+      "order": 33,
+      "depends_on": [
+        "T0739",
+        "T0713"
+      ]
+    },
+    {
+      "id": "T0747",
+      "line": 747,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M5 \u2014 Simulation core",
+      "text": "**Gate:** 1v1 duel HP curves identical to original",
+      "domain": "sim",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Compare duel HP curves with the original only after the damage pipeline exists.",
+      "owner_lane": "08-combat",
+      "next_slice": "Compare duel HP curves with the original only after the damage pipeline exists.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "crates/pcx-sim/src/lib.rs",
+          "note": "There is no HP curve to compare."
+        }
+      ],
+      "order": 34,
+      "depends_on": [
+        "T0740",
+        "T0752"
+      ]
+    },
+    {
+      "id": "T0850",
+      "line": 850,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M7 \u2014 Scripting (JASS + triggers) / What M7 still is",
+      "text": "`WTG` trigger graph \u2192 JASS desugar with the original's exact semantics (incl. generated-code naming so `GetTriggerName` returns the right string)",
+      "domain": "scripts",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Desugar WTG to JASS with original generated names before Athena can prove the path.",
+      "owner_lane": "unassigned:wtg-desugar",
+      "next_slice": "Desugar WTG to JASS with original generated names before Athena can prove the path.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-trig/src/wtg.rs",
+          "note": "WTG v4 framing parses. No desugar to JASS is implemented."
+        }
+      ],
+      "order": 35,
+      "depends_on": [
+        "T0849"
+      ]
+    },
+    {
+      "id": "T0864",
+      "line": 864,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M7 \u2014 Scripting (JASS + triggers) / What M7 still is",
+      "text": "`BJ` / `Blz` library surface, including the `Blz` extensions",
+      "domain": "scripts",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Keep Blz and the rest of Blizzard.j open. The few GetBJ player adapters do not close this item.",
+      "owner_lane": "01-campaign",
+      "next_slice": "Keep Blz and the rest of Blizzard.j open. The few GetBJ player adapters do not close this item.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-play/src/neutral_player.rs",
+          "note": "GetBJMaxPlayers and related neutral adapters exist. Blz is not implemented as a library."
+        }
+      ],
+      "order": 36,
+      "depends_on": [
+        "T0862"
+      ]
+    },
+    {
+      "id": "T0865",
+      "line": 865,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M7 \u2014 Scripting (JASS + triggers) / What M7 still is",
+      "text": "Timers and the original's timer/event ordering \u2014 the single thing DotA depends on most",
+      "domain": "scripts",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Original timer and event ordering remains the DotA gate, beyond CreateTimer admission.",
+      "owner_lane": "unassigned:script-timers",
+      "next_slice": "Original timer and event ordering remains the DotA gate, beyond CreateTimer admission.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-play/src/object_host.rs",
+          "note": "CreateTimer allocates a handle. It does not run the original timer queue."
+        }
+      ],
+      "order": 37,
+      "depends_on": [
+        "T0862",
+        "T0751"
+      ]
+    },
+    {
+      "id": "T0869",
+      "line": 869,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M7 \u2014 Scripting (JASS + triggers) / What M7 still is",
+      "text": "`war3map.ini` \u2014 script source selection, safe mode, forced flags",
+      "domain": "scripts",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Parse script source selection, safe mode and forced flags from the map ini.",
+      "owner_lane": "unassigned:map-ini",
+      "next_slice": "Parse script source selection, safe mode and forced flags from the map ini.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "crates/pcx-map/src",
+          "note": "No war3map.ini parser is present."
+        }
+      ],
+      "order": 38,
+      "depends_on": []
+    },
+    {
+      "id": "T0870",
+      "line": 870,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M7 \u2014 Scripting (JASS + triggers) / What M7 still is",
+      "text": "Pre-1.20 **and** post-1.24 native shapes coexisting; a missing native or unresolved rawcode must fail loudly with the map's own identifier, never silently return zero",
+      "domain": "scripts",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Fail missing natives and unresolved rawcodes with the map identifier.",
+      "owner_lane": "unassigned:script-vm",
+      "next_slice": "Fail missing natives and unresolved rawcodes with the map identifier.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-script/src/eval.rs",
+          "note": "Missing TRIGSTR entries fail with the identifier. Coexisting pre-1.20 and post-1.24 native shapes are not implemented."
+        }
+      ],
+      "order": 39,
+      "depends_on": [
+        "T0862"
+      ]
+    },
+    {
+      "id": "T0088",
+      "line": 88,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / Current recreation work (2026-10-16) / Campaign and gameplay implementation queue",
+      "text": "Paired original/browser UI replay sends one checked physical-input journal to both isolated targets, preserves unchanged checkpoint PNGs and reports exact RGB differences. Twenty-one strict harness tests and an actual browser adapter check pass. Four checkpoints complete at 1024\u00d7768, 1280\u00d7960, 1920\u00d71080 and 2560\u00d71440; the 4K browser screenshot times out and is retained as failed. Before/after capture snapshots expose asynchronous UI changes. RNG/clock synchronization and pixel fidelity remain open; non-null seeded comparison refuses rather than inventing a seed hook. See `docs/re-notes/original-game-vm.md`.",
+      "domain": "ui",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Keep the 4K browser checkpoint failure and unsynchronized RNG/clock comparison open.",
+      "owner_lane": "unassigned:menu-replay",
+      "next_slice": "Keep the 4K browser checkpoint failure and unsynchronized RNG/clock comparison open.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/re-notes/original-game-vm.md",
+          "note": "The checkbox already records a failed 4K checkpoint and refused seeded comparison."
+        }
+      ],
+      "order": 40,
+      "depends_on": []
+    },
+    {
+      "id": "T0097",
+      "line": 97,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / Current recreation work (2026-10-16) / Campaign and gameplay implementation queue",
+      "text": "Original Options and adjacent FDF screens: source-derived controls/art, draft/Cancel/Apply, runtime display choices, local preferences and user audio gains are implemented. Bottom-left cog separates PeaceCraft settings. Submenu navigation is started; unsupported game settings and gameplay actions remain explicit. Browser checks cover apply/cancel/persistence, resolution reload/resize, readable narrow-window Actual size, Single Player, Campaign and LAN. Full run 12 retains a final cog-caption OCR failure; separate visual review and real cog click-through pass. Strict native/WASM Clippy and 2 library + 170 app + 74 integration tests pass. See `docs/re-notes/original-options-workflow.md` for exact build/test scopes; complete original-client appearance and gameplay remain open.",
+      "domain": "ui",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Finish unsupported game-setting actions and original-client appearance.",
+      "owner_lane": "unassigned:options",
+      "next_slice": "Finish unsupported game-setting actions and original-client appearance.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/re-notes/original-options-workflow.md",
+          "note": "Options workflow is partial; gameplay actions stay explicit."
+        }
+      ],
+      "order": 41,
+      "depends_on": []
+    },
+    {
+      "id": "T0108",
+      "line": 108,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / Current recreation work (2026-10-16) / Campaign and gameplay implementation queue",
+      "text": "Original Options defaults: checked source-profile import admits all 80 reviewed Legacy preference descriptors, preserving raw fallback strings, including empty values. No measured defaults or display presets are copied into production constants. Available device modes retain depth/refresh in the original enumeration evidence; current menu choices still represent render sizes. Native music/effects defaults now feed the active gains and matching controls before playback, with saved-preference precedence and failed audio-candidate rollback. Browser client/default transport, other setting owners and confirmed exclusive-mode application remain open. See `docs/re-notes/original-options-defaults.md`. Subsequent native population checks connect every retained control to its preference reads and recover ResolutionMenu labels, filtering and matching. Fifteen checked label-adapter and 17 selection-model cases pass; prototypes remain unapplied. The conditional provider/OS bridge is now checked, including source-table/derived additions, stable grouping and refresh replacement. Root replays pass 12 provider, six bridge and 32 augmentation checks; runtime kind/adapter inputs and effective first-run selection remain open. Texture quality's distinct mip/depth preference writes are checked, but their renderer consumer and live replacement remain open. Selected BLP mip decoding now refuses invalid/absent levels before image allocation while retaining raw absent-slot inspection. This decoder guard does not enable Texture Quality or establish its color-depth behavior. See `docs/re-notes/original-options-initialization.md` and `docs/re-notes/original-display-modes.md`. Shared popup parsing now refuses malformed items without shifting indexes; 259 app tests, both selected-original popup gates, strict native/WASM checks and the actual release-WASM runtime checks pass. This does not enable unimplemented quality or gameplay controls. Disabled settings now have source-qualified read-only previews: the explicit selected-original client/FDF gate checks all 25 bindings, with 23 admitted projections and two empty dynamic-menu refusals. Unavailable slider state is cleared, while supported audio/resolution owners retain Apply/Cancel and saved-preference behavior. Main-only cog scope includes pointer, keyboard focus and accessibility. Current native app suite: 409 passes/15 explicit ignores; strict native/WASM app checks and release build pass. Fresh local browser checks 32 disabled input cases across all three tabs before/after saving, active audio at both viewport origins, fresh Main/Single Player/Main and restored cog click-through. Twelve reviewed captures, 15 local code GETs, zero uploads/sockets/page errors. Browser archive-only sources have no admitted client fallback input; previews remain unavailable there. Other setting effects and complete original first-run/mode fidelity remain open. See the fallback note above. Portable resolution Apply now waits for the matching Winit client report before saving, preserves the prior preferences/audio on save refusal and confirms restoration before reporting it. Cancel and a retryable dirty draft are retained; a post-save audio warning is a committed result. First observation also replaces the startup-size seed without losing an edited draft. The real-window gate, 270 app tests, strict native/WASM checks and five reviewed release-browser captures pass. The browser exercises first and later failed saves, parent-following restoration and a post-save audio warning, with zero uploads, sockets or page errors. Physical exclusive mode, source-qualified first-run choices and remaining renderer/gameplay setting consumers stay open. See `docs/re-notes/original-options-resolution-apply.md` for checks and scope. Centered-viewport slider presses now use the UI camera's local coordinate space, explicit Options tab choices survive entry discovery, and generated decorative text spans no longer lose mouse activation when pressed labels move. Seven widget regressions and a production-text/picking regression pass; removing the span fix reproduces zero clicks/actions. The complete suite passes 282 app tests with 13 explicit ignores, four library and 84 integration tests, with strict native/WASM checks. A fresh local packaged browser passes both source sliders at two viewport layouts, mouse Apply and Cancel preservation, with four reviewed captures and zero uploads, sockets or page errors. Disabling a pressed button now clears its temporary pressed state without activation, including deferred press insertion; re-enable permits a fresh click. Native/WASM checks cover that additional lifecycle fix. Event-local UI/sprite/window hit resolution now preserves fresh same-frame clicks and A-click/final-pointer-B targeting. Nineteen new app pipeline cases and a trusted browser batch check pass, alongside the source sliders, mouse Apply and Cancel. The complete suite passes 301 app cases with 14 explicit ignores, four library and 84 integration cases; strict native/WASM/library/docs checks and release app build pass. The final 24-file browser package has five reviewed captures, 15 local code GETs and zero uploads, sockets or page errors. The visible cog overlap and disabled-setting source previews remain separate work. The earlier larger-view caption-disappearance claim is withdrawn: exact runtime-bounded image regions are unchanged between entry and Sound in both the old and fresh large-view runs. No rendering repair is claimed. See `docs/re-notes/options-slider-input.md`.",
+      "domain": "ui",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Wire runtime device kind, exclusive mode and the texture-quality renderer consumer.",
+      "owner_lane": "unassigned:options-defaults",
+      "next_slice": "Wire runtime device kind, exclusive mode and the texture-quality renderer consumer.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/re-notes/original-options-defaults.md",
+          "note": "Profile import is checked; several display consumers remain open in the checkbox."
+        }
+      ],
+      "order": 42,
+      "depends_on": [
+        "T0097"
+      ]
+    },
+    {
+      "id": "T0194",
+      "line": 194,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / Current recreation work (2026-10-16) / Campaign and gameplay implementation queue",
+      "text": "Local imports follow skin-selected hanging-panel model/TEXS edges. Known unsupported panel audio codecs now preserve admitted graphics and other playable sounds. Qualified Legacy panel spawn and a six-capture local original-fixture Main/Options/Single Player/return browser run pass, with no uploads, sockets or page errors. Main/Options and Main/Single Player now use separately admitted source phase clocks and settle in the current six-capture browser run. Unavailable Huffman audio and full menu/sky fidelity remain open. See `docs/re-notes/menu-panel-navigation.md`.",
+      "domain": "ui",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Native panel tint and full-screen opening stay outside this import slice.",
+      "owner_lane": "unassigned:menu-panel",
+      "next_slice": "Native panel tint and full-screen opening stay outside this import slice.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/re-notes/menu-panel-navigation.md",
+          "note": "Panel admission is integrated; native visual parity is not."
+        }
+      ],
+      "order": 43,
+      "depends_on": []
+    },
+    {
+      "id": "T0582",
+      "line": 582,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / Browser / wasm render path (verified) / Original main menu (M7 entry screen) \u2014 WC3-styled, interactive",
+      "text": "Blue inner fill geometry is now parsed from FDF; browser integration proof and authored hover/pushed/disabled state rendering remain open.",
+      "domain": "browser",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Render authored hover, pushed and disabled button states.",
+      "owner_lane": "unassigned:menu-fidelity",
+      "next_slice": "Render authored hover, pushed and disabled button states.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/peacecraft3/src/launch_gui.rs",
+          "note": "FDF fill geometry is in the menu path. State art remains the open half of this item."
+        }
+      ],
+      "order": 44,
+      "depends_on": []
+    },
+    {
+      "id": "T0584",
+      "line": 584,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / Browser / wasm render path (verified) / Original main menu (M7 entry screen) \u2014 WC3-styled, interactive",
+      "text": "Labels use centered relative text layout and native frame normalization; full FDF-driven style/text/anchor migration and fidelity remain open.",
+      "domain": "ui",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Finish FDF style, text and anchor migration.",
+      "owner_lane": "unassigned:menu-fidelity",
+      "next_slice": "Finish FDF style, text and anchor migration.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/peacecraft3/src/menu_screens.rs",
+          "note": "Relative label layout exists. The checkbox keeps full FDF fidelity open."
+        }
+      ],
+      "order": 45,
+      "depends_on": []
+    },
+    {
+      "id": "T0918",
+      "line": 918,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M9 \u2014 Campaign playthrough gate (Tier A + B) / Tier B \u2014 completion",
+      "text": "All quest objectives satisfied and tracked",
+      "domain": "campaign",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Track quest and quest-item state from declared natives before this completion gate.",
+      "owner_lane": "06-quests",
+      "next_slice": "Track quest and quest-item state from declared natives before this completion gate.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "crates/pcx-play/src",
+          "note": "No quest-state module is present."
+        }
+      ],
+      "order": 45,
+      "depends_on": [
+        "T0849"
+      ]
+    },
+    {
+      "id": "T0586",
+      "line": 586,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / Browser / wasm render path (verified) / Original main menu (M7 entry screen) \u2014 WC3-styled, interactive",
+      "text": "Source-derived hanging-panel Main/Options/Single Player phase animation is integrated and locally browser-checked. Native composited tint/render parity and the full-screen opening remain open.",
+      "domain": "ui",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Native composited tint and the full-screen opening remain open.",
+      "owner_lane": "unassigned:menu-panel",
+      "next_slice": "Native composited tint and the full-screen opening remain open.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/re-notes/menu-panel-navigation.md",
+          "note": "Phase animation is integrated and locally browser-checked."
+        }
+      ],
+      "order": 46,
+      "depends_on": []
+    },
+    {
+      "id": "T0919",
+      "line": 919,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M9 \u2014 Campaign playthrough gate (Tier A + B) / Tier B \u2014 completion",
+      "text": "Win condition triggers; end-of-movie / `endGame` entered",
+      "domain": "campaign",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Enter endGame only from an authored win condition.",
+      "owner_lane": "06-quests",
+      "next_slice": "Enter endGame only from an authored win condition.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "crates/pcx-play/src/campaign.rs",
+          "note": "Chapter outcomes are host reports, not an end-of-movie transition."
+        }
+      ],
+      "order": 46,
+      "depends_on": [
+        "T0918"
+      ]
+    },
+    {
+      "id": "T0886",
+      "line": 886,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M8 \u2014 Full campaign + polish",
+      "text": "Cinematic playback",
+      "domain": "ui",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Play transmissions from the existing FDF catalog. Declaration ingest is a separate closed item.",
+      "owner_lane": "05-cinematics",
+      "next_slice": "Play transmissions from the existing FDF catalog. Declaration ingest is a separate closed item.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-play/src/cinematics.rs",
+          "note": "FDF declaration ingestion is not playback."
+        }
+      ],
+      "order": 47,
+      "depends_on": [
+        "T0849"
+      ]
+    },
+    {
+      "id": "T0920",
+      "line": 920,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M9 \u2014 Campaign playthrough gate (Tier A + B) / Tier B \u2014 completion",
+      "text": "Custom-map smoke set: all shipped `Maps/*.w3m` load and run their init script",
+      "domain": "maps",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Load shipped maps and run their init scripts after the host can start.",
+      "owner_lane": "01-campaign",
+      "next_slice": "Load shipped maps and run their init scripts after the host can start.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-map/src/lib.rs",
+          "note": "Container parsing is not init-script execution."
+        }
+      ],
+      "order": 47,
+      "depends_on": [
+        "T0849",
+        "T0631"
+      ]
+    },
+    {
+      "id": "T0885",
+      "line": 885,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M8 \u2014 Full campaign + polish",
+      "text": "Campaign AI behaviour parity",
+      "domain": "campaign",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Run one selected campaign AI entry and record the next missing interface before any parity claim.",
+      "owner_lane": "09-ai",
+      "next_slice": "Run one selected campaign AI entry and record the next missing interface before any parity claim.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "crates/pcx-play/src",
+          "note": "No campaign AI behavior module is present beside script hosting."
+        }
+      ],
+      "order": 48,
+      "depends_on": [
+        "T0849",
+        "T0738"
+      ]
+    },
+    {
+      "id": "T0917",
+      "line": 917,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M9 \u2014 Campaign playthrough gate (Tier A + B) / Tier B \u2014 completion",
+      "text": "Intro dialogue gates fire in order, per chapter",
+      "domain": "campaign",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Assert ordered intro dialogue per chapter after transmission state exists.",
+      "owner_lane": "05-cinematics",
+      "next_slice": "Assert ordered intro dialogue per chapter after transmission state exists.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "tests/play",
+          "note": "No chapter dialogue expectation file exists."
+        }
+      ],
+      "order": 49,
+      "depends_on": [
+        "T0886"
+      ]
+    },
+    {
+      "id": "T0751",
+      "line": 751,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M6 \u2014 Game-loop parity",
+      "text": "RE-Q5: exact sim tick rate and frame relationship",
+      "domain": "sim",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Resolve render coupling and gameplay subscribers. TICK_MS is a project convention.",
+      "owner_lane": "unassigned:sim-clock",
+      "next_slice": "Resolve render coupling and gameplay subscribers. TICK_MS is a project convention.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/re-notes/legacy-simulation-clock.md",
+          "note": "The Legacy scheduler chain is traced and the note says RE-Q5 is not closed. pcx_sim::TICK_MS is 25 and is not that result."
+        }
+      ],
+      "order": 50,
+      "depends_on": []
+    },
+    {
+      "id": "T0752",
+      "line": 752,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M6 \u2014 Game-loop parity",
+      "text": "RE-Q6: RNG generator + call-site ordering",
+      "domain": "rng",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Identify the generator and call-site order. A matching Wine probe is not recreation parity.",
+      "owner_lane": "unassigned:rng",
+      "next_slice": "Identify the generator and call-site order. A matching Wine probe is not recreation parity.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/re-notes/original-rng-control.md",
+          "note": "Two Wine runs match each other on an authored seed probe. The note refuses recreation parity."
+        },
+        {
+          "kind": "source",
+          "path": "crates/pcx-sim/src/lib.rs",
+          "note": "pcx_sim::Rng is a project-convention RNG. It is not the game RNG, and its recurrence is not standard SplitMix64."
+        }
+      ],
+      "order": 51,
+      "depends_on": [
+        "T0751"
+      ]
+    },
+    {
+      "id": "T0753",
+      "line": 753,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M6 \u2014 Game-loop parity",
+      "text": "Event ordering across systems",
+      "domain": "scripts",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Order gameplay events after the campaign host can run past startup.",
+      "owner_lane": "01-campaign",
+      "next_slice": "Order gameplay events after the campaign host can run past startup.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-play/src/runner.rs",
+          "note": "Harness timers follow declaration order. That is not cross-system game event order."
+        }
+      ],
+      "order": 52,
+      "depends_on": [
+        "T0751",
+        "T0862"
+      ]
+    },
+    {
+      "id": "T0754",
+      "line": 754,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M6 \u2014 Game-loop parity",
+      "text": "Effect / sound scheduling parity",
+      "domain": "audio",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Schedule effects and sounds on the sim clock rather than the startup queue alone.",
+      "owner_lane": "unassigned:audio",
+      "next_slice": "Schedule effects and sounds on the sim clock rather than the startup queue alone.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-play/src/sound_host.rs",
+          "note": "Startup sound requests are retained. The checkbox's scheduling parity is not claimed there."
+        }
+      ],
+      "order": 53,
+      "depends_on": [
+        "T0751"
+      ]
+    },
+    {
+      "id": "T0755",
+      "line": 755,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M6 \u2014 Game-loop parity",
+      "text": "`.w3s` save/load round-trip",
+      "domain": "sim",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Round-trip the savegame format. war3map.w3s in pcx-map is map sound records, not that format.",
+      "owner_lane": "unassigned:savegames",
+      "next_slice": "Round-trip the savegame format. war3map.w3s in pcx-map is map sound records, not that format.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-map/src/sounds.rs",
+          "note": "The module documents that map sound records share the .w3s suffix with savegames and are not the save format."
+        }
+      ],
+      "order": 54,
+      "depends_on": [
+        "T0738"
+      ]
+    },
+    {
+      "id": "T0305",
+      "line": 305,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M1b \u2014 Play-test harness skeleton (new)",
+      "text": "Gate: one trace byte-identical across 100 consecutive runs, and `unchanged` vs baseline",
+      "domain": "rng",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "One trace byte-identical across 100 consecutive runs, and unchanged vs an original-game baseline. Synthetic harness and RPL self-repeats do not meet that 100 consecutive runs requirement.",
+      "owner_lane": "unassigned:play-baseline",
+      "next_slice": "One trace byte-identical across 100 consecutive runs, and unchanged vs an original-game baseline. Synthetic harness and RPL self-repeats do not meet that 100 consecutive runs requirement.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-play/src/rpl.rs",
+          "note": "declaration_order_assertions_and_100_independent_runs repeats a synthetic RPL. That is not an original baseline."
+        }
+      ],
+      "order": 55,
+      "depends_on": [
+        "T0752"
+      ]
+    },
+    {
+      "id": "T0756",
+      "line": 756,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M6 \u2014 Game-loop parity",
+      "text": "**Gate:** 10-minute scripted match bit-reproducible over 100 runs",
+      "domain": "rng",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Require 100 bit-identical original-scripted runs after tick and RNG parity.",
+      "owner_lane": "unassigned:determinism",
+      "next_slice": "Require 100 bit-identical original-scripted runs after tick and RNG parity.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "tests/play",
+          "note": "Synthetic movement repeats exist. No 10-minute original match baseline exists."
+        }
+      ],
+      "order": 56,
+      "depends_on": [
+        "T0751",
+        "T0752",
+        "T0305"
+      ]
+    },
+    {
+      "id": "T0923",
+      "line": 923,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M9 \u2014 Campaign playthrough gate (Tier A + B) / Tier C \u2014 differential fuzzing",
+      "text": "Seeded movement-v1 generator and `playgen` emit checked synthetic RPLs from explicit domains/limits. Unit-type/combat compositions, terrain and native RNG generation remain open; see `docs/playtest-generation.md`.",
+      "domain": "rng",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Combat, terrain and native RNG generation remain open.",
+      "owner_lane": "unassigned:play-baseline",
+      "next_slice": "Combat, terrain and native RNG generation remain open.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-play/src/generator.rs",
+          "note": "playgen emits movement RPLs. The checkbox names the missing compositions."
+        }
+      ],
+      "order": 57,
+      "depends_on": [
+        "T0752"
+      ]
+    },
+    {
+      "id": "T0926",
+      "line": 926,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M9 \u2014 Campaign playthrough gate (Tier A + B) / Tier C \u2014 differential fuzzing",
+      "text": "Three synthetic movement seeds are checked in, regenerated byte-for-byte and independently repeated 100 times. Native differential corpus remains open.",
+      "domain": "rng",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Keep the native differential corpus open.",
+      "owner_lane": "unassigned:play-baseline",
+      "next_slice": "Keep the native differential corpus open.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "tests/play/synthetic/generated-movement/seed-0.rpl",
+          "note": "Three generated movement seeds are checked in. They are not original-game differentials."
+        }
+      ],
+      "order": 58,
+      "depends_on": [
+        "T0923"
+      ]
+    },
+    {
+      "id": "T0329",
+      "line": 329,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M1c \u2014 Reforged asset pipeline (new)",
+      "text": "Asset modes: `vanilla` (default) / `reforged` / `reforged-hd` / `reforged-fixes`",
+      "domain": "assets",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Keep the four literal mode names open until a caller-facing alias is specified. Do not treat GameMode as those names.",
+      "owner_lane": "unassigned:assets",
+      "next_slice": "Keep the four literal mode names open until a caller-facing alias is specified. Do not treat GameMode as those names.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-assets/src/mode.rs",
+          "note": "GameMode parses four axes. Assets are vanilla/hd/reforged. Behaviour includes fixes. Strings such as reforged-hd are rejected."
+        }
+      ],
+      "order": 59,
+      "depends_on": []
+    },
+    {
+      "id": "T0325",
+      "line": 325,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M1c \u2014 Reforged asset pipeline (new)",
+      "text": "`pcx-assets`: caller-ordered source layers and real `override/` resolution retain provenance and produce deterministic indexes. Concrete MPQ/CASC adapters read explicitly mapped members and retain their identities; application mode selection and exact-target archive priority remain open.",
+      "domain": "assets",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Select the application mode and measure exact-target archive priority.",
+      "owner_lane": "unassigned:assets",
+      "next_slice": "Select the application mode and measure exact-target archive priority.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-assets/src/lib.rs",
+          "note": "Layering and override resolution exist. Application mode selection remains open in the checkbox."
+        }
+      ],
+      "order": 60,
+      "depends_on": [
+        "T0329"
+      ]
+    },
+    {
+      "id": "T0707",
+      "line": 707,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M4 \u2014 Object data",
+      "text": "`pcx-objects`: `game.dll`-derived default tables",
+      "domain": "assets",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Derive engine defaults from game.dll. The closed SLK stock tables are a different source.",
+      "owner_lane": "unassigned:object-defaults",
+      "next_slice": "Derive engine defaults from game.dll. The closed SLK stock tables are a different source.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-objects/src/editor/defaults.rs",
+          "note": "DefaultTables read supplied SLK and profile cells. They do not read game.dll."
+        }
+      ],
+      "order": 61,
+      "depends_on": []
+    },
+    {
+      "id": "T1031",
+      "line": 1031,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / WASM build",
+      "text": "Original menu feel/sound: animated background, correct button states and original music/clicks, verified in the running browser. Local audio files are extracted and playback wired; complete visual fidelity remains open.",
+      "domain": "audio",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Complete visual fidelity and original button-state sound remain open.",
+      "owner_lane": "unassigned:menu-audio",
+      "next_slice": "Complete visual fidelity and original button-state sound remain open.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/re-notes/menu-audio.md",
+          "note": "The checkbox body says local playback is wired and visual fidelity remains open."
+        }
+      ],
+      "order": 63,
+      "depends_on": []
+    },
+    {
+      "id": "T0893",
+      "line": 893,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M8 \u2014 Full campaign + polish",
+      "text": "Netcode surface (loopback first)",
+      "domain": "multiplayer",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Connect gameplay to the existing movement lockstep server. Discovery loopback is not this surface.",
+      "owner_lane": "unassigned:multiplayer",
+      "next_slice": "Connect gameplay to the existing movement lockstep server. Discovery loopback is not this surface.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-net/src/lib.rs",
+          "note": "Server and Client implement movement lockstep. The M8 surface is still unchecked because gameplay is not attached."
+        }
+      ],
+      "order": 64,
+      "depends_on": [
+        "T0985",
+        "T0738"
+      ]
+    },
+    {
+      "id": "T0900",
+      "line": 900,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M8 \u2014 Full campaign + polish",
+      "text": "Audio parity (`.slk` sound-list channels, 3D positioning)",
+      "domain": "audio",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Bind sound-list channels and 3D positioning from authored SLK rows.",
+      "owner_lane": "unassigned:audio",
+      "next_slice": "Bind sound-list channels and 3D positioning from authored SLK rows.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-slq/src/lib.rs",
+          "note": "SYLK parsing exists. 3D sound positioning is not implemented in the sim."
+        }
+      ],
+      "order": 65,
+      "depends_on": [
+        "T0754"
+      ]
+    },
+    {
+      "id": "T0901",
+      "line": 901,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M8 \u2014 Full campaign + polish",
+      "text": "Deterministic movement work/allocation/state gate exists; extend fixed-work gates to gameplay/rendering as implemented. Report 4v4 1080p FPS observationally, never as a load-dependent pass/fail test.",
+      "domain": "performance",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Extend fixed-work gates as gameplay and rendering land. Report FPS observationally.",
+      "owner_lane": "unassigned:performance",
+      "next_slice": "Extend fixed-work gates as gameplay and rendering land. Report FPS observationally.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/performance-testing.md",
+          "note": "Movement allocation gates exist. The checkbox forbids FPS pass/fail thresholds."
+        }
+      ],
+      "order": 66,
+      "depends_on": []
+    },
+    {
+      "id": "T0928",
+      "line": 928,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M9 \u2014 Campaign playthrough gate (Tier A + B) / Tier C \u2014 differential fuzzing",
+      "text": "Divergences auto-filed into *Open unknowns* with minimal reproducing seed",
+      "domain": "rng",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "File a minimal seed into Open unknowns when a native differential exists.",
+      "owner_lane": "unassigned:play-baseline",
+      "next_slice": "File a minimal seed into Open unknowns when a native differential exists.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "crates/pcx-play/src/diff.rs",
+          "note": "pcx-diff reports divergence. It does not file tracker unknowns."
+        }
+      ],
+      "order": 67,
+      "depends_on": [
+        "T0926"
+      ]
+    },
+    {
+      "id": "T1015",
+      "line": 1015,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / WASM build",
+      "text": "Complete original resolution parity: full-window background and conditional authored UI branch are traced and implemented; portrait containment is an extension, live expansion flags remain unmeasured.",
+      "domain": "browser",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Measure live expansion flags. Portrait containment stays an extension.",
+      "owner_lane": "unassigned:browser",
+      "next_slice": "Measure live expansion flags. Portrait containment stays an extension.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/peacecraft3/src/menu_screens.rs",
+          "note": "The checkbox body already says the background and authored UI branch are implemented."
+        }
+      ],
+      "order": 68,
+      "depends_on": []
+    },
+    {
+      "id": "T1020",
+      "line": 1020,
+      "mark": " ",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / WASM build",
+      "text": "Browser-only ISO import: local File/Blob reads, filesystem discovery, validated Warcraft III archive selection and in-memory asset loading. **No server upload or remote extraction.** Track unsupported repacked installers explicitly; bounded memory, progress/cancel, and a network capture proving content stays local are acceptance checks (PLAN M11).",
+      "domain": "browser",
+      "disposition": "partial_unmarked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Patched installers, retail discs and full installed-game equivalence stay open.",
+      "owner_lane": "unassigned:browser-iso",
+      "next_slice": "Patched installers, retail discs and full installed-game equivalence stay open.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/re-notes/original-iso-installers.md",
+          "note": "Bounded local ISO discovery and a stored-base import are recorded. The checkbox was still unmarked."
+        }
+      ],
+      "order": 69,
+      "depends_on": []
+    },
+    {
+      "id": "T0254",
+      "line": 254,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M1 \u2014 MPQ layer (first shippable milestone) \u2014 **done**",
+      "text": "`pcx-mpq`: other compression chains and original sparse-member acceptance The standalone sparse reader is exposed and passes 13 checked public-API tests, a 172-case synthetic primary-source differential, strict Clippy and a warning-denied WASM check. Other sparse combinations, BZIP2/LZMA and target-native codec acceptance remain open; see `mpq-sparse.md`.",
+      "domain": "assets",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Accept remaining sparse combinations and BZIP2/LZMA only from measured bytes.",
+      "owner_lane": "unassigned:mpq-codecs",
+      "next_slice": "Accept remaining sparse combinations and BZIP2/LZMA only from measured bytes.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-mpq/src/payload.rs",
+          "note": "Masks 0x20 and 0x22 are admitted. Other chains still return an unsupported-mask error."
+        }
+      ],
+      "order": 70,
+      "depends_on": []
+    },
+    {
+      "id": "T0259",
+      "line": 259,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M1 \u2014 MPQ layer (first shippable milestone) \u2014 **done**",
+      "text": "`pcx-mpq`: archive priority resolution (`DEFAULT_PRIORITY` exists but is still assumed \u2014 see M0 open)",
+      "domain": "assets",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Replace the assumed DEFAULT_PRIORITY with a measured game.dll open sequence.",
+      "owner_lane": "unassigned:mpq-priority",
+      "next_slice": "Replace the assumed DEFAULT_PRIORITY with a measured game.dll open sequence.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-mpq/src/lib.rs",
+          "note": "open_wc3 walks DEFAULT_PRIORITY. RE-Q9 still calls that order assumed."
+        }
+      ],
+      "order": 71,
+      "depends_on": []
+    },
+    {
+      "id": "T0319",
+      "line": 319,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M1c \u2014 Reforged asset pipeline (new)",
+      "text": "`pcx-casc`: local EKey spans, BLTE N/Z chunks and ENCODING CKey joins yield verified bytes. The original-install gate checks 74,500 index entries and 112 configured manifest aliases; unsupported codecs/ESpec remain explicit.",
+      "domain": "assets",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Keep unsupported BLTE codecs and ESpec explicit.",
+      "owner_lane": "unassigned:casc",
+      "next_slice": "Keep unsupported BLTE codecs and ESpec explicit.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-casc/src/lib.rs",
+          "note": "Checked local EKey/BLTE/encoding joins exist; the checkbox still names unsupported codecs."
+        }
+      ],
+      "order": 72,
+      "depends_on": []
+    },
+    {
+      "id": "T0331",
+      "line": 331,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M1c \u2014 Reforged asset pipeline (new)",
+      "text": "Gate: Reforged Footman geometry loads through the same `pcx-gfx` path as vanilla. The checked version-1800 LoD trailer yields five geosets and 582 vertices from the verified 105,602-byte CASC asset. Bevy mesh construction passes; explicit stored material parsing also passes. Shader semantics, TANG/SKIN and actual rendering remain unsupported/unverified. Stored-only v1800 TANG/SKIN readers now retain the HD Footman's 40,142 records and wide joint/weight words; strict mesh import still refuses weighted HD. Borrowed BPOS rows and an explicit primary-convention SKIN \u2192 MATS \u2192 BONE-object-ID/BPOS join now pass ten synthetic tests and keyed Altar/Footman fixtures. Every integer lane remains unchanged; native joint selection, pose interpretation, conversion and GPU behavior remain open. Raw FAFX records now expose borrowed 80-byte names and 260-byte paths with exact 340-byte tiling and source offsets. Eight synthetic tests, the keyed HD Footman fixture and WASM check pass; FaceFX behavior is not implemented.",
+      "domain": "assets",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Rendering, shader semantics and native joint selection stay open.",
+      "owner_lane": "unassigned:gfx-hd",
+      "next_slice": "Rendering, shader semantics and native joint selection stay open.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-gfx/src/lib.rs",
+          "note": "Version-1800 mesh import is checked. The checkbox still withholds rendering parity."
+        }
+      ],
+      "order": 73,
+      "depends_on": [
+        "T0319"
+      ]
+    },
+    {
+      "id": "T0364",
+      "line": 364,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M1c \u2014 Reforged asset pipeline (new)",
+      "text": "`docs/reforged-fixes.md` fix ledger; rows default to `defer`",
+      "domain": "assets",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Add the fix ledger with rows defaulting to defer. Behaviour::Fixes is not that ledger.",
+      "owner_lane": "unassigned:reforged-fixes",
+      "next_slice": "Add the fix ledger with rows defaulting to defer. Behaviour::Fixes is not that ledger.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "docs/reforged-fixes.md",
+          "note": "The ledger file is absent. Behaviour::Fixes exists in pcx-assets and does not supply ledger rows."
+        }
+      ],
+      "order": 74,
+      "depends_on": [
+        "T0329"
+      ]
+    },
+    {
+      "id": "T0484",
+      "line": 484,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M2 \u2014 Asset decoders + first Bevy render \u2014 **render smoke passed; full material fidelity open**",
+      "text": "`pcx-gfx`: Bevy loader plugins (asset cache, async decode)",
+      "domain": "assets",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Implement asset-cache and async decode inside PcxGfxPlugin. The plugin type exists and its build method is empty.",
+      "owner_lane": "unassigned:gfx-loaders",
+      "next_slice": "Implement asset-cache and async decode inside PcxGfxPlugin. The plugin type exists and its build method is empty.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-gfx/src/lib.rs",
+          "note": "PcxGfxPlugin::build ignores the app. load_image is synchronous."
+        }
+      ],
+      "order": 75,
+      "depends_on": []
+    },
+    {
+      "id": "T1061",
+      "line": 1061,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / WASM build",
+      "text": "`pcx-gfx` cache is async \u2014 no synchronous file I/O on a shared path *(the only \u00a73.8 constraint still unimplemented rather than impossible)*",
+      "domain": "browser",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Remove synchronous shared-path file I/O from the graphics cache.",
+      "owner_lane": "unassigned:gfx-loaders",
+      "next_slice": "Remove synchronous shared-path file I/O from the graphics cache.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-gfx/src/lib.rs",
+          "note": "load_image reads bytes synchronously. PcxGfxPlugin does not install an async cache."
+        }
+      ],
+      "order": 76,
+      "depends_on": [
+        "T0484"
+      ]
+    },
+    {
+      "id": "T1088",
+      "line": 1088,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / Desktop builds",
+      "text": "Menu GPU rendering and audio verified on both desktop operating systems. Run `38439725394` at `d31dc67` succeeded on all four targets. Downloaded artifact checksums and PE/Mach-O architectures were independently verified, including executable permissions on macOS. These artifacts include movie/layout changes but predate the new FDF/FPS/parser integration. Commands and limitations are recorded in `docs/build-desktop.md`.",
+      "domain": "desktop",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Verify menu GPU rendering and audio on Windows and macOS. Compile artifacts do not close this.",
+      "owner_lane": "unassigned:desktop",
+      "next_slice": "Verify menu GPU rendering and audio on Windows and macOS. Compile artifacts do not close this.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/build-desktop.md",
+          "note": "Four-target artifacts were verified as binaries. The checkbox says they predate current FDF integration and do not prove live GPU and audio."
+        }
+      ],
+      "order": 77,
+      "depends_on": []
+    },
+    {
+      "id": "T1338",
+      "line": 1338,
+      "mark": "!",
+      "recommended_mark": "!",
+      "section": "PeaceCraft3 \u2014 Tracker / Integration audit and performance / Current implemented slices (2026-10-14)",
+      "text": "Latest checked four-target CI at `db9e387` (run `38496520451`) did not start: GitHub reports failed account payments or an insufficient spending limit. Local strict/native/WASM checks are distinct from this runner blocker; verified Windows/macOS artifacts remain at `d31dc67`. No repeated retries.",
+      "domain": "desktop",
+      "disposition": "accurate_blocked",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Do not retry the unpaid four-target run. Local checks stay separate from that runner.",
+      "owner_lane": "unassigned:ci",
+      "next_slice": "Do not retry the unpaid four-target run. Local checks stay separate from that runner.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/build-desktop.md",
+          "note": "The checkbox records GitHub billing as the runner blocker. This reconciliation did not query GitHub."
+        }
+      ],
+      "order": 78,
+      "depends_on": []
+    },
+    {
+      "id": "T0230",
+      "line": 230,
+      "mark": "?",
+      "recommended_mark": "?",
+      "section": "PeaceCraft3 \u2014 Tracker / M0 \u2014 RE harness and evidence base",
+      "text": "Header words `0x20`/`0x24` still unattributed; nothing depends on them yet",
+      "domain": "assets",
+      "disposition": "accurate_unknown",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Attribute the two header words before any reader depends on them.",
+      "owner_lane": "unassigned:mpq-re",
+      "next_slice": "Attribute the two header words before any reader depends on them.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/re-notes/000-mpq.md",
+          "note": "RE-Q7 remains open and non-blocking."
+        }
+      ],
+      "order": 80,
+      "depends_on": []
+    },
+    {
+      "id": "T0233",
+      "line": 233,
+      "mark": "?",
+      "recommended_mark": "?",
+      "section": "PeaceCraft3 \u2014 Tracker / M0 \u2014 RE harness and evidence base",
+      "text": "Storm's live table at `+0x4C2E4` differs from the fixed table the archives use (all 1280 words). `FUN_15017650` builds it lazily. Recorded, not blocking.",
+      "domain": "assets",
+      "disposition": "accurate_unknown",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Keep the live-table difference recorded; archives use the fixed table.",
+      "owner_lane": "unassigned:mpq-re",
+      "next_slice": "Keep the live-table difference recorded; archives use the fixed table.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/re-notes/000-mpq.md",
+          "note": "RE-Q8 is recorded and not blocking extraction."
+        }
+      ],
+      "order": 81,
+      "depends_on": []
+    },
+    {
+      "id": "T0668",
+      "line": 668,
+      "mark": "?",
+      "recommended_mark": "?",
+      "section": "PeaceCraft3 \u2014 Tracker / M4 \u2014 Object data",
+      "text": "`pcx-objects` refused semantics, recorded not guessed: per-fourcc int width and signedness (a four-byte slot holding small values is indistinguishable from a `u8` field, so `Value::Int` hands out the raw word); what `real` and `unreal` do differently; and the **end word** \u2014 0 in 5,690 of 5,975 entries, 285 exceptions: 106 repeat their record's own original id (`DemoCampaign.w3n`'s `war3campaign.w3u`) and **179 sit next to an `umdl`/`uico` art path carrying what reads like the owning unit's rawcode** (`\"hcth\"` beside `units\\human\\TheCaptain\\TheCaptain`). Recorded as a hypothesis, not a proof, so the word is handed out as bytes",
+      "domain": "assets",
+      "disposition": "accurate_unknown",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Leave int width, real versus unreal, and the end word uninterpreted.",
+      "owner_lane": "unassigned:object-wire",
+      "next_slice": "Leave int width, real versus unreal, and the end word uninterpreted.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-objects/src/lib.rs",
+          "note": "Value::Int retains the raw word. The end word is not assigned a meaning in source."
+        }
+      ],
+      "order": 82,
+      "depends_on": []
+    },
+    {
+      "id": "T0794",
+      "line": 794,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M7 \u2014 Scripting (JASS + triggers) / `pcx-trig` \u2014 the trigger-graph containers",
+      "text": "**Framing decoded and sweeping green; the `wts` expectation tests were still being finalised during this wave and are now green.** ~2,668 lines of decoder plus the `wts` module, every test passing as of this write (`pcx-trig` is being edited concurrently, so re-run before trusting the count). While this wave was being written up, six exact-value expectations in the `wts` module were failing \u2014 a `2632 vs 2631` record count, a BOM-present assertion, a `23 vs 21` trailing-byte count, a body that ends with a blank line, and two refusals counted as failures. **A concurrent agent fixed them mid-wave**; the fix also picked up `DemoCampaign.w3n`'s `war3campaign.wts`, which is what the record-count delta was. Verified here after the fix: `cargo test -p pcx-trig` green, both sweeps `failed=0`",
+      "domain": "scripts",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Treat the historical wave note as partial until a fresh sweep is the acceptance record.",
+      "owner_lane": "unassigned:wts",
+      "next_slice": "Treat the historical wave note as partial until a fresh sweep is the acceptance record.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-trig/src/lib.rs",
+          "note": "WTS framing is implemented. This checkbox is a wave narrative, not a new feature gate."
+        }
+      ],
+      "order": 83,
+      "depends_on": []
+    },
+    {
+      "id": "T0805",
+      "line": 805,
+      "mark": "~",
+      "recommended_mark": "~",
+      "section": "PeaceCraft3 \u2014 Tracker / M7 \u2014 Scripting (JASS + triggers) / `pcx-trig` \u2014 the trigger-graph containers",
+      "text": "One community file is **refused as unprovable** by the `wts` walk: `Maps\\Siege\\X Hero Siege 3.08.w3x` opens `3F 53 54 52 49 4E 47` \u2014 `?STRING 1`, a stray byte ahead of the first header. It is in no other file, it is not a documented construct, and guessing what it means would be a plausible-looking lie (`Unsupported::NotAHeader`). The sweep reports it as a typed refusal, not a framing failure",
+      "domain": "scripts",
+      "disposition": "accurate_partial",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": false,
+      "acceptance_gate": "Keep the stray-byte community file refused until a measured construct exists.",
+      "owner_lane": "unassigned:wts",
+      "next_slice": "Keep the stray-byte community file refused until a measured construct exists.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-trig/src/lib.rs",
+          "note": "Unsupported::NotAHeader is the intended refusal, not a silent skip."
+        }
+      ],
+      "order": 84,
+      "depends_on": []
+    },
+    {
+      "id": "T0873",
+      "line": 873,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M7 \u2014 Scripting (JASS + triggers) / What M7 still is",
+      "text": "**Gate:** **DotA** joins, creates units, runs its timers and completes a match with no script error; observable behaviour matches the original under `compare-process_captures`",
+      "domain": "scripts",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "DotA remains a broad gate after timers, natives and unit creation.",
+      "owner_lane": "unassigned:script-vm",
+      "next_slice": "DotA remains a broad gate after timers, natives and unit creation.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "tests/play",
+          "note": "No DotA scenario is checked in."
+        }
+      ],
+      "order": 90,
+      "depends_on": [
+        "T0865",
+        "T0862"
+      ]
+    },
+    {
+      "id": "T0876",
+      "line": 876,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M7 \u2014 Scripting (JASS + triggers) / What M7 still is",
+      "text": "**Gate:** **Athena** runs \u2014 proves the `WTG` path, not just the script path",
+      "domain": "scripts",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Athena stays open until WTG desugar executes.",
+      "owner_lane": "unassigned:wtg-desugar",
+      "next_slice": "Athena stays open until WTG desugar executes.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "crates/pcx-trig/src/wtg.rs",
+          "note": "Framing is not execution."
+        }
+      ],
+      "order": 91,
+      "depends_on": [
+        "T0850"
+      ]
+    },
+    {
+      "id": "T0877",
+      "line": 877,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M7 \u2014 Scripting (JASS + triggers) / What M7 still is",
+      "text": "**Gate:** **Footman Frenzy** runs \u2014 proves pre-1.20 API tolerance",
+      "domain": "scripts",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Footman Frenzy stays open as the pre-1.20 tolerance gate.",
+      "owner_lane": "unassigned:script-vm",
+      "next_slice": "Footman Frenzy stays open as the pre-1.20 tolerance gate.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "tests/play",
+          "note": "No Footman Frenzy scenario is checked in."
+        }
+      ],
+      "order": 92,
+      "depends_on": [
+        "T0870"
+      ]
+    },
+    {
+      "id": "T0878",
+      "line": 878,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M7 \u2014 Scripting (JASS + triggers) / What M7 still is",
+      "text": "**Gate:** all stock maps load; Human campaign completes",
+      "domain": "campaign",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Human campaign completion stays open. Startup progress does not close it.",
+      "owner_lane": "01-campaign",
+      "next_slice": "Human campaign completion stays open. Startup progress does not close it.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-play/src/campaign.rs",
+          "note": "Chapter plans can stop on an unsupported call. That is not campaign completion."
+        }
+      ],
+      "order": 93,
+      "depends_on": [
+        "T1133",
+        "T0919"
+      ]
+    },
+    {
+      "id": "T0910",
+      "line": 910,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M9 \u2014 Campaign playthrough gate (Tier A + B) / Tier A \u2014 scripted scenarios",
+      "text": "`tests/play/roc/` \u2014 5 chapters (Reign of Chaos) + 3 (Frozen Throne)",
+      "domain": "campaign",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Add Reign of Chaos and Frozen Throne chapter scenarios after one chapter starts.",
+      "owner_lane": "07-progression",
+      "next_slice": "Add Reign of Chaos and Frozen Throne chapter scenarios after one chapter starts.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "tests/play/roc",
+          "note": "The directory is absent."
+        }
+      ],
+      "order": 94,
+      "depends_on": [
+        "T1133"
+      ]
+    },
+    {
+      "id": "T0911",
+      "line": 911,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M9 \u2014 Campaign playthrough gate (Tier A + B) / Tier A \u2014 scripted scenarios",
+      "text": "`tests/play/orc/`, `undead/`, `nightelf/` \u2014 chapters + 3/1/1",
+      "domain": "campaign",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Add orc, undead and night-elf chapter scenarios after the human path.",
+      "owner_lane": "07-progression",
+      "next_slice": "Add orc, undead and night-elf chapter scenarios after the human path.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "tests/play/orc",
+          "note": "The directory is absent."
+        }
+      ],
+      "order": 95,
+      "depends_on": [
+        "T0910"
+      ]
+    },
+    {
+      "id": "T0912",
+      "line": 912,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M9 \u2014 Campaign playthrough gate (Tier A + B) / Tier A \u2014 scripted scenarios",
+      "text": "`tests/play/demo/DemoCampaign.rpl`",
+      "domain": "campaign",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Capture DemoCampaign expectations from play, not from the object-file census.",
+      "owner_lane": "07-progression",
+      "next_slice": "Capture DemoCampaign expectations from play, not from the object-file census.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "tests/play/demo/DemoCampaign.rpl",
+          "note": "The scenario file is absent."
+        }
+      ],
+      "order": 96,
+      "depends_on": [
+        "T0304"
+      ]
+    },
+    {
+      "id": "T0913",
+      "line": 913,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M9 \u2014 Campaign playthrough gate (Tier A + B) / Tier A \u2014 scripted scenarios",
+      "text": "Gate: every scenario's expectations met, traces byte-identical across 100 runs",
+      "domain": "campaign",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Require 100 identical runs only after the scenario files exist.",
+      "owner_lane": "07-progression",
+      "next_slice": "Require 100 identical runs only after the scenario files exist.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "tests/play/roc",
+          "note": "There are no chapter scenarios whose expectations could pass."
+        }
+      ],
+      "order": 97,
+      "depends_on": [
+        "T0910",
+        "T0752"
+      ]
+    },
+    {
+      "id": "T0914",
+      "line": 914,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M9 \u2014 Campaign playthrough gate (Tier A + B) / Tier A \u2014 scripted scenarios",
+      "text": "Baselines captured from the original under Wine, each pinned to an `ev_\u2026` id",
+      "domain": "campaign",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Pin each original baseline to an evidence id. Wine menu captures are not chapter baselines.",
+      "owner_lane": "unassigned:play-baseline",
+      "next_slice": "Pin each original baseline to an evidence id. Wine menu captures are not chapter baselines.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/re-notes/original-game-vm.md",
+          "note": "The VM note covers menu reference captures, not campaign chapter baselines."
+        }
+      ],
+      "order": 98,
+      "depends_on": [
+        "T0910"
+      ]
+    },
+    {
+      "id": "T0929",
+      "line": 929,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / M9 \u2014 Campaign playthrough gate (Tier A + B) / Tier C \u2014 differential fuzzing",
+      "text": "Gate: zero unexplained divergences over the corpus",
+      "domain": "rng",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "This corpus gate stays open until native differentials exist.",
+      "owner_lane": "unassigned:play-baseline",
+      "next_slice": "This corpus gate stays open until native differentials exist.",
+      "evidence": [
+        {
+          "kind": "absence",
+          "path": "tests/play",
+          "note": "The synthetic movement corpus cannot certify zero original-game divergences."
+        }
+      ],
+      "order": 99,
+      "depends_on": [
+        "T0928",
+        "T0914"
+      ]
+    },
+    {
+      "id": "T0991",
+      "line": 991,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / Multiplayer",
+      "text": "Gate: a real 1.29b LAN client joins a game we host",
+      "domain": "multiplayer",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "A real 1.29b client joining remains open. Ephemeral discovery loopback is not that join.",
+      "owner_lane": "unassigned:multiplayer",
+      "next_slice": "A real 1.29b client joining remains open. Ephemeral discovery loopback is not that join.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/re-notes/lan-discovery-collection.md",
+          "note": "Discovery loopback is checked. A retail LAN join is not."
+        }
+      ],
+      "order": 100,
+      "depends_on": [
+        "T0893"
+      ]
+    },
+    {
+      "id": "T0992",
+      "line": 992,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / Multiplayer",
+      "text": "Classic Battle.net client through an emulator realm",
+      "domain": "multiplayer",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Emulator-realm login stays open.",
+      "owner_lane": "unassigned:multiplayer",
+      "next_slice": "Emulator-realm login stays open.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "crates/pcx-net/src/bnet.rs",
+          "note": "A bnet module exists and does not complete a classic client realm session."
+        }
+      ],
+      "order": 101,
+      "depends_on": [
+        "T0991"
+      ]
+    },
+    {
+      "id": "T1018",
+      "line": 1018,
+      "mark": " ",
+      "recommended_mark": " ",
+      "section": "PeaceCraft3 \u2014 Tracker / WASM build",
+      "text": "Actual gameplay/lobby integration and public multiplayer service; see `docs/browser-online.md` for the current limits.",
+      "domain": "browser",
+      "disposition": "accurate_open",
+      "false_open": false,
+      "false_closed": false,
+      "broad_gate": true,
+      "acceptance_gate": "Public multiplayer and gameplay lobby stay open.",
+      "owner_lane": "unassigned:browser",
+      "next_slice": "Public multiplayer and gameplay lobby stay open.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "docs/browser-online.md",
+          "note": "The movement websocket path is a separate closed item. This gate is the gameplay service."
+        }
+      ],
+      "order": 102,
+      "depends_on": [
+        "T0893"
+      ]
+    }
+  ],
+  "dependency_order": [
+    "T0788",
+    "T0985",
+    "T0849",
+    "T0862",
+    "T0852",
+    "T0867",
+    "T0738",
+    "T0631",
+    "T0632",
+    "T1133",
+    "T1045",
+    "T0633",
+    "T0634",
+    "T0894",
+    "T0630",
+    "T0638",
+    "T0290",
+    "T0742",
+    "T0485",
+    "T0743",
+    "T0712",
+    "T0304",
+    "T0639",
+    "T0640",
+    "T0850",
+    "T0864",
+    "T0869",
+    "T0870",
+    "T0088",
+    "T0097",
+    "T0108",
+    "T0194",
+    "T0582",
+    "T0584",
+    "T0918",
+    "T0586",
+    "T0919",
+    "T0886",
+    "T0920",
+    "T0885",
+    "T0917",
+    "T0751",
+    "T0865",
+    "T0752",
+    "T0753",
+    "T0754",
+    "T0755",
+    "T0305",
+    "T0756",
+    "T0923",
+    "T0926",
+    "T0329",
+    "T0325",
+    "T0707",
+    "T0713",
+    "T0739",
+    "T0714",
+    "T0715",
+    "T0716",
+    "T0306",
+    "T0740",
+    "T0741",
+    "T0744",
+    "T0745",
+    "T0746",
+    "T0721",
+    "T0747",
+    "T1031",
+    "T0893",
+    "T0900",
+    "T0901",
+    "T0928",
+    "T1015",
+    "T1020",
+    "T0254",
+    "T0259",
+    "T0319",
+    "T0331",
+    "T0364",
+    "T0484",
+    "T1061",
+    "T1088",
+    "T1338",
+    "T0230",
+    "T0233",
+    "T0668",
+    "T0794",
+    "T0805",
+    "T0873",
+    "T0876",
+    "T0877",
+    "T0878",
+    "T0910",
+    "T0911",
+    "T0912",
+    "T0913",
+    "T0914",
+    "T0929",
+    "T0991",
+    "T0992",
+    "T1018"
+  ],
+  "implementation_order": [
+    "T0788",
+    "T0985",
+    "T1133",
+    "T0849",
+    "T0862",
+    "T0852",
+    "T0867",
+    "T0738",
+    "T0631",
+    "T0632",
+    "T1045",
+    "T0633",
+    "T0634",
+    "T0894",
+    "T0630",
+    "T0638",
+    "T0290",
+    "T0742",
+    "T0485",
+    "T0743",
+    "T0712",
+    "T0739",
+    "T0713",
+    "T0714",
+    "T0715",
+    "T0716",
+    "T0306",
+    "T0740",
+    "T0741",
+    "T0744",
+    "T0745",
+    "T0746",
+    "T0304",
+    "T0639",
+    "T0640",
+    "T0721",
+    "T0747",
+    "T0850",
+    "T0864",
+    "T0865",
+    "T0869",
+    "T0870",
+    "T0088",
+    "T0097",
+    "T0108",
+    "T0194",
+    "T0582",
+    "T0584",
+    "T0918",
+    "T0586",
+    "T0919",
+    "T0886",
+    "T0920",
+    "T0885",
+    "T0917",
+    "T0751",
+    "T0752",
+    "T0753",
+    "T0754",
+    "T0755",
+    "T0305",
+    "T0756",
+    "T0923",
+    "T0926",
+    "T0329",
+    "T0325",
+    "T0707",
+    "T1031",
+    "T0893",
+    "T0900",
+    "T0901",
+    "T0928",
+    "T1015",
+    "T1020",
+    "T0254",
+    "T0259",
+    "T0319",
+    "T0331",
+    "T0364",
+    "T0484",
+    "T1061",
+    "T1088",
+    "T1338",
+    "T0230",
+    "T0233",
+    "T0668",
+    "T0794",
+    "T0805",
+    "T0873",
+    "T0876",
+    "T0877",
+    "T0878",
+    "T0910",
+    "T0911",
+    "T0912",
+    "T0913",
+    "T0914",
+    "T0929",
+    "T0991",
+    "T0992",
+    "T1018"
+  ],
+  "false_closed_audit": [
+    {
+      "subject": "M1 ADPCM checkbox",
+      "verdict": "not_reopened",
+      "note": "The checked ADPCM item states supplied-Storm agreement and leaves target-native parity open. RE-Q10's table row still says it is the only M1 gap. The row is stale. The checkbox was not reopened because this lane did not re-run the decoder."
+    },
+    {
+      "subject": "M1 list and extract gate",
+      "verdict": "not_reopened",
+      "note": "The closed four-archive extract gate sits beside the still-open other-compression item. The gate text is narrower than every chain."
+    },
+    {
+      "subject": "Custom object rawcode gate",
+      "verdict": "not_reopened",
+      "note": "The closed item names the unresolved Nwar rawcode in its own body."
+    }
+  ],
+  "non_checkbox": [
+    {
+      "domain": "cli",
+      "owner_lane": "unassigned:cli",
+      "acceptance_gate": "Structured output and offline schemas for the existing binaries remain open. No conformance claim is made for the v0.3 candidate.",
+      "evidence": "Current implemented slices in TRACKER.md, CLI Spec paragraph."
+    },
+    {
+      "domain": "assets",
+      "owner_lane": "unassigned:mpq-codecs",
+      "acceptance_gate": "RE-Q10 table status must stop calling ADPCM the only M1 gap.",
+      "evidence": "TRACKER.md open-unknowns row RE-Q10 versus the checked ADPCM checkbox."
+    },
+    {
+      "domain": "rng",
+      "owner_lane": "unassigned:rng",
+      "acceptance_gate": "RE-Q6 stays open after the Wine seed probe. Recreation parity is not established.",
+      "evidence": "docs/re-notes/original-rng-control.md"
+    }
+  ]
+}
