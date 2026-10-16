@@ -72,9 +72,35 @@ Reconnect extensions such as GProxy require separate negotiation and evidence.
 
 ## Local reference realm
 
-Build from pinned upstream source in Docker, disable tracking, expose only a
-loopback test endpoint, and use an isolated internal runtime network. Retain
-source/base/image digests, effective configuration, command exit codes and a
-bounded real BNCS response probe. Runtime success must be added here only after
-root review of actual logs. A listening socket alone does not close NET-C01;
-a BNCS response alone does not close login, W3GS join or crossplay gates.
+The local reference realm was built from the pinned PvPGN source above and
+verified on 2026-10-16:
+
+| Item | Observed value |
+|---|---|
+| Container / internal network | `pcx-classic-realm-20261016` |
+| Image | `sha256:bb560435c5d51ca528326beb7a463fd00ced0e097483d4c0ef8a801e880fa207` |
+| Debian bookworm-slim amd64 base | `sha256:a4672c0cb26fbdde88e38fa2dfb6c681942306680e41e4378b28770b6e79ee91` |
+| Local test endpoint | `127.0.0.1:34369` |
+
+Tracking and account creation are disabled. The container has no default route.
+Docker did not publish a port on the internal bridge; a loopback-only host
+forwarder supplies the endpoint. Its concurrent connections, per-connection
+bytes and absolute lifetime are capped, including blocking socket I/O.
+The port is a local runtime observation, not an application default.
+
+Independent root verification passed 12 local source/bounds/I/O tests and a live
+synthetic BNCS init/auth-info probe. The valid init received the expected echo
+and authentication challenge; omitting the init byte received no response.
+Challenge expectations are derived from the selected upstream configuration
+and handler source. No account, password, key or original client was used.
+
+The private build recipe is `.scratch/classic-network-20261016/realm/Dockerfile`;
+the corrected probe and forwarder are under `realm/followup-bounds/scripts`.
+Root commands, complete logs, current script hashes and acceptance are in
+`.scratch/classic-network-20261016/root-verification/`. Earlier failed builds
+and the initial unbounded probe evidence are retained separately; the root
+receipt is the accepted scope. These private scripts are not a published CLI
+or a CLI conformance claim.
+
+This closes NET-C01 only. Login, W3GS negotiation, original 1.29b LAN joins and
+mixed-client matches still need their own implementation and runtime evidence.

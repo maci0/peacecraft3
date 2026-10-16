@@ -1000,8 +1000,10 @@ Format: `date — subsystem — symptom — root cause — status`
 - [x] `LanSession`: lobby states, ordered inbox, tick gated on input arrival
 - [ ] Gate: a real 1.29b LAN client joins a game we host
 - [ ] Classic Battle.net client through an emulator realm
-- [ ] NET-C01: Pinned local PvPGN Docker realm with tracking disabled and a real
-      bounded BNCS response probe; retain source/image/config identities.
+- [x] NET-C01: Pinned local PvPGN Docker realm with tracking disabled and a real
+      bounded BNCS response probe; source/image/config identities retained.
+      Root verified 12 bounds tests and live valid-init/invalid-init responses.
+      This is a reference server, not original-client login or gameplay.
 - [ ] NET-C02: BNCS and W3GS codecs, fragmented streams and malformed/count/size
       refusals; the project codec is a separate protocol.
 - [ ] NET-C03: PeaceCraft discovers and joins an original Legacy 1.29b LAN host
