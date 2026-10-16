@@ -171,3 +171,18 @@ are retained only as identities/counts/validation metadata. Evidence is in
 `.scratch/options-display-augmentation-20261016/`, with separate root reviews.
 These checks do not enumerate a live original display list, select a first-run
 mode or apply a display change.
+
+## Startup-selector boundary
+
+A subsequent single direct-call instruction scan for `0x7d0af0` finds candidates
+at `0x42e6d3`, `0x531e68` and `0x7d1156`. Independent objdump checks agree on
+those local CALL instructions. Their retained contexts pass a caller argument
+or a result of an unread call; none establishes a literal startup selector.
+Nearest-prologue candidates do not prove complete function boundaries or
+startup execution. The multiple-candidate stop was observed, with no caller
+body or delegate expansion. The exact Legacy image hash is unchanged.
+
+Receipt: `.scratch/options-mode-selector-caller-20261016/HANDOFF.md` and
+`xref.json`. This bounded result does not select an original default or activate
+a production profile. Source fallbacks, saved state, host capabilities and the
+final effective first-run mode remain distinct inputs.

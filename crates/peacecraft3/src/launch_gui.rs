@@ -350,7 +350,8 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     );
     #[cfg(target_arch = "wasm32")]
     {
-        app.add_systems(Update, synchronize_local_demo.before(colour_picks));
+        app.init_resource::<MenuActionSnapshot>()
+            .add_systems(Update, synchronize_local_demo.before(colour_picks));
         app.add_systems(
             PostUpdate,
             publish_menu_snapshot
@@ -362,14 +363,36 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
 }
 
 #[cfg(target_arch = "wasm32")]
+#[derive(Resource, Default)]
+struct MenuActionSnapshot(Option<serde_json::Value>);
+
+#[cfg(target_arch = "wasm32")]
+#[derive(SystemParam)]
+struct DiagnosticInput<'w> {
+    action: Res<'w, MenuActionSnapshot>,
+    press: Res<'w, Messages<bevy::picking::events::PointerPress>>,
+    release: Res<'w, Messages<bevy::picking::events::PointerRelease>>,
+    click: Res<'w, Messages<bevy::picking::events::PointerClick>>,
+    cancel: Res<'w, Messages<bevy::picking::events::PointerCancel>>,
+    drag_end: Res<'w, Messages<bevy::picking::events::PointerDragEnd>>,
+    state: Res<'w, bevy::picking::events::PointerState>,
+    hover: Res<'w, bevy::picking::hover::HoverMap>,
+    previous: Res<'w, bevy::picking::hover::PreviousHoverMap>,
+}
+
+#[cfg(target_arch = "wasm32")]
 type DiagnosticControlData = (
     &'static ComputedNode,
     &'static bevy::ui::UiGlobalTransform,
     &'static InheritedVisibility,
     Option<&'static crate::glue_menu::GlueButton>,
     Option<&'static ResolutionChoice>,
+    Option<&'static crate::menu_screens::SettingControl>,
+    Option<&'static bevy::ui_widgets::SliderValue>,
     Has<SettingsCog>,
     Has<InteractionDisabled>,
+    Has<bevy::ui::Pressed>,
+    Option<&'static bevy::picking::hover::Hovered>,
 );
 
 #[cfg(target_arch = "wasm32")]
@@ -379,13 +402,22 @@ type DiagnosticLabelData = (
     &'static ComputedNode,
     &'static bevy::ui::UiGlobalTransform,
     &'static InheritedVisibility,
+    Option<&'static Children>,
+    Option<&'static bevy::text::TextLayoutInfo>,
+    Option<&'static bevy::ui::CalculatedClip>,
+    Has<MenuTextFilled>,
 );
 
 #[cfg(target_arch = "wasm32")]
 fn publish_menu_snapshot(
     navigation: Res<crate::menu_screens::Navigation>,
     controls: Query<DiagnosticControlData>,
-    labels: Query<DiagnosticLabelData>,
+    text: (
+        Query<DiagnosticLabelData>,
+        Query<&TextSpan>,
+        Query<&ChildOf>,
+    ),
+    input: DiagnosticInput,
     menu: Query<(), With<MenuLayer>>,
     windows: Query<&Window>,
     camera: Query<&Camera, With<bevy::ui::IsDefaultUiCamera>>,
@@ -393,29 +425,65 @@ fn publish_menu_snapshot(
     if !crate::browser::take_menu_snapshot_request() {
         return;
     }
+    let (labels, spans, parents) = text;
+    let target = |entity| {
+        let owner = std::iter::once(entity)
+            .chain(parents.iter_ancestors(entity))
+            .take(64)
+            .find_map(|entity| controls.get(entity).ok()?.3.map(|button| &button.frame));
+        serde_json::json!({"entity":format!("{entity:?}"),"owner":owner,"textSpan":spans.contains(entity)})
+    };
+    let mouse = bevy::picking::pointer::PointerId::Mouse;
+    let button = bevy::picking::pointer::PointerButton::Primary;
+    let mouse_state = input.state.get(mouse, button);
+    let picking = serde_json::json!({
+        "press":input.press.iter_current_update_messages().take(16).map(|event|target(event.entity)).collect::<Vec<_>>(),
+        "release":input.release.iter_current_update_messages().take(16).map(|event|target(event.entity)).collect::<Vec<_>>(),
+        "click":input.click.iter_current_update_messages().take(16).map(|event|target(event.entity)).collect::<Vec<_>>(),
+        "cancel":input.cancel.iter_current_update_messages().take(16).map(|event|target(event.entity)).collect::<Vec<_>>(),
+        "dragEnd":input.drag_end.iter_current_update_messages().take(16).map(|event|target(event.entity)).collect::<Vec<_>>(),
+        "pressing":mouse_state.map(|state|state.pressing.keys().take(16).copied().map(target).collect::<Vec<_>>()),
+        "dragging":mouse_state.map(|state|state.dragging.keys().take(16).copied().map(target).collect::<Vec<_>>()),
+        "hover":input.hover.get(&mouse).map(|hits|hits.keys().take(16).copied().map(target).collect::<Vec<_>>()),
+        "previousHover":input.previous.get(&mouse).map(|hits|hits.keys().take(16).copied().map(target).collect::<Vec<_>>()),
+        "recordLimit":16,
+    });
     let offset = camera
         .iter()
         .next()
         .and_then(|c| c.viewport.as_ref())
         .map_or(Vec2::ZERO, |v| v.physical_position.as_vec2());
-    let controls:Vec<_>=controls.iter().filter_map(|(node,transform,visible,button,choice,cog,disabled)| {
+    let controls:Vec<_>=controls.iter().filter_map(|(node,transform,visible,button,choice,setting,value,cog,disabled,pressed,hovered)| {
         if !visible.get() || node.size().min_element()<=0.0 {return None;}
         let name=if let Some(button)=button {button.frame.clone()}else if let Some(choice)=choice {format!("ResolutionChoice:{}x{}",choice.0,choice.1)}else if cog {"PeaceCraftSettings".into()}else{return None;};
         let min=transform.transform_point2(-node.size()/2.0)+offset;
         let max=transform.transform_point2(node.size()/2.0)+offset;
-        Some(serde_json::json!({"name":name,"disabled":disabled,"physicalCanvasRect":[min.x,min.y,max.x-min.x,max.y-min.y]}))
+        let slider=setting.and_then(|setting|match setting.widget {
+            crate::menu_screens::Widget::Slider{min,max,step,..}=>Some(serde_json::json!({"min":min,"max":max,"step":step,"value":value.map(|v|v.0)})),
+            _=>None,
+        });
+        Some(serde_json::json!({"name":name,"disabled":disabled,"pressed":pressed,"hovered":hovered.map(bevy::picking::hover::Hovered::get),"physicalCanvasRect":[min.x,min.y,max.x-min.x,max.y-min.y],"slider":slider}))
     }).collect();
-    let labels: Vec<_> = labels.iter().filter_map(|(label,text,node,transform,visible)| {
-        if !visible.get() || node.size().min_element() <= 0.0 { return None; }
+    let labels: Vec<_> = labels.iter().map(|(label,text,node,transform,visible,children,layout,clip,filled)| {
+        let mut runs=vec![text.0.as_str()];
+        if let Some(children)=children {
+            runs.extend(children.iter().filter_map(|entity|spans.get(entity).ok().map(|span|span.0.as_str())));
+        }
         let min = transform.transform_point2(-node.size()/2.0) + offset;
         let max = transform.transform_point2(node.size()/2.0) + offset;
-        Some(serde_json::json!({"name":label.frame,"text":text.0,"physicalCanvasRect":[min.x,min.y,max.x-min.x,max.y-min.y]}))
+        serde_json::json!({"name":label.frame,"text":runs.concat(),"runs":runs.len(),"filled":filled,"visible":visible.get(),"glyphs":layout.map(|l|l.glyphs.len()),"layoutPixels":layout.map(|l|[l.size.x,l.size.y]),"clip":clip.map(|c|format!("{c:?}")),"physicalCanvasRect":[min.x,min.y,max.x-min.x,max.y-min.y]})
     }).collect();
     let canvas = windows
         .iter()
         .next()
         .map(|w| [w.physical_width(), w.physical_height()]);
-    crate::browser::publish_menu_snapshot(serde_json::json!({"screen":format!("{:?}",navigation.screen),"transitionActive":navigation.transition_active,"menuVisible":!menu.is_empty(),"draft":navigation.draft,"applied":navigation.applied,"notice":navigation.notice,"controls":controls,"labels":labels,"canvasPixels":canvas}).to_string());
+    let viewport = camera
+        .iter()
+        .next()
+        .and_then(Camera::physical_viewport_rect)
+        .map(|rect| [rect.min.x, rect.min.y, rect.width(), rect.height()]);
+    let pointer = windows.iter().next().map(|w|serde_json::json!({"scale":w.resolution.scale_factor(),"logical":w.cursor_position().map(|p|[p.x,p.y]),"physical":w.physical_cursor_position().map(|p|[p.x,p.y])}));
+    crate::browser::publish_menu_snapshot(serde_json::json!({"screen":format!("{:?}",navigation.screen),"transitionActive":navigation.transition_active,"menuVisible":!menu.is_empty(),"draft":navigation.draft,"applied":navigation.applied,"notice":navigation.notice,"controls":controls,"labels":labels,"canvasPixels":canvas,"uiViewportPixels":viewport,"pointer":pointer,"lastAction":input.action.0.as_ref(),"picking":picking}).to_string());
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1585,6 +1653,7 @@ fn apply_menu_art(
     } = queries;
     let selection = format!("{}:{:?}", launcher.source, launcher.mode.assets);
     if cache.selection.as_ref() != Some(&selection) {
+        navigation.options_entry = None;
         let install = selected_install(&launcher);
         if cache.install != install || glue.install != install {
             *cache = MenuArtCache {
@@ -1647,20 +1716,8 @@ fn apply_menu_art(
                     if matches!(navigation.screen, crate::menu_screens::Screen::Options(_))
                         && navigation.options_entry.is_none()
                     {
-                        let pages: Vec<_> = [
-                            ("GameplayButton", crate::menu_screens::Page::Gameplay),
-                            ("VideoButton", crate::menu_screens::Page::Video),
-                            ("SoundButton", crate::menu_screens::Page::Sound),
-                        ]
-                        .into_iter()
-                        .filter(|(name, _)| fdf.flag(name, "TabFocusDefault"))
-                        .map(|(_, page)| page)
-                        .collect();
-                        if let [page] = pages.as_slice() {
-                            navigation.options_entry = Some(*page);
-                            navigation.screen = crate::menu_screens::Screen::Options(*page);
-                            cache.screen = navigation.screen;
-                        }
+                        let (_, entry) = navigation.options_target(&fdf, navigation.screen);
+                        navigation.options_entry = entry;
                     }
                     cache.fdf = Some(fdf);
                 }
@@ -1713,6 +1770,7 @@ fn process_panel_navigation(
     let install = selected_install(&launcher);
     let result = (|| -> Result<_, String> {
         let (fdf, menu) = read_screen_fdf(install.as_deref(), target)?;
+        let (target, entry) = navigation.options_target(&fdf, target);
         let (items, _) = crate::glue_menu::control_items_for(
             &fdf,
             target.root(),
@@ -1734,10 +1792,11 @@ fn process_panel_navigation(
                 "original menu panels are unavailable".into(),
             ),
         };
-        Ok((fdf, menu, transition))
+        Ok((target, entry, fdf, menu, transition))
     })();
     match result {
-        Ok((fdf, menu, transition)) => {
+        Ok((target, entry, fdf, menu, transition)) => {
+            navigation.options_entry = entry;
             cache.pending_fdf = Some((target, fdf, menu));
             match transition {
                 crate::menu_sprites::Transition::Animated => {
@@ -2125,6 +2184,8 @@ fn apply_menu_text(
             let child = commands
                 .spawn((
                     TextSpan::new(run.text.clone()),
+                    // UI text picking targets spans independently of their root.
+                    Pickable::IGNORE,
                     TextFont {
                         font: font.clone(),
                         font_size: size,
@@ -2683,6 +2744,8 @@ pub(crate) struct MenuClickQueries<'w, 's> {
     popups: Query<'w, 's, Entity, With<ResolutionPopup>>,
     roots: Query<'w, 's, Entity, With<ControlRoot>>,
     cache: Res<'w, MenuArtCache>,
+    #[cfg(target_arch = "wasm32")]
+    diagnostic: Option<ResMut<'w, MenuActionSnapshot>>,
     _main_thread: bevy::ecs::system::NonSendMarker,
 }
 
@@ -2694,6 +2757,22 @@ pub(crate) fn apply_menu_clicks(
     queries: MenuClickQueries,
     #[cfg(not(target_arch = "wasm32"))] mut exit: MessageWriter<AppExit>,
 ) {
+    #[cfg(target_arch = "wasm32")]
+    let mut queries = queries;
+    #[cfg(target_arch = "wasm32")]
+    if !actions.entities.is_empty()
+        && let Some(trace) = queries.diagnostic.as_deref_mut()
+    {
+        trace.0 = Some(serde_json::json!({
+            "frames":actions.entities.iter().take(16).map(|entity|queries.buttons.get(*entity).map_or_else(|_|format!("{entity:?}"),|button|button.frame.clone())).collect::<Vec<_>>(),
+            "truncated":actions.entities.len()>16,
+            "screen":format!("{:?}",navigation.screen),
+            "requested":navigation.requested.map(|screen|format!("{screen:?}")),
+            "transitionActive":navigation.transition_active,
+            "resolutionPending":queries.backend.applying_resolution(),
+            "windowCount":queries.windows.iter().count(),
+        }));
+    }
     if navigation.transition_active || navigation.requested.is_some() {
         return;
     }
@@ -2707,6 +2786,8 @@ pub(crate) fn apply_menu_clicks(
         popups,
         roots,
         cache,
+        #[cfg(target_arch = "wasm32")]
+            diagnostic: _,
         _main_thread: _,
     } = queries;
     for entity in &actions.entities {
@@ -3429,6 +3510,251 @@ KEY_EXIT                 "E|Cffffffffx|Rit",
             .id();
         world.entity_mut(container).add_child(label);
         label
+    }
+
+    #[test]
+    fn generated_spans_preserve_click_when_pressed_text_moves() {
+        use bevy::{
+            app::{HierarchyPropagatePlugin, PropagateSet},
+            camera::{ComputedCameraValues, RenderTarget, RenderTargetInfo, Viewport},
+            ecs::{message::MessageCursor, system::RunSystemOnce},
+            input::{ButtonState, InputPlugin, mouse::MouseButtonInput},
+            picking::{DefaultPickingPlugins, events::PointerClick},
+            text::{
+                ComputedTextBlock, DEFAULT_FONT_DATA, FontAtlasSet, FontCx, FontHinting, LayoutCx,
+                RemSize, ScaleCx, TextBounds, TextElement, TextLayoutInfo, TextPipeline,
+            },
+            ui::{
+                ComputedUiRenderTargetInfo, ComputedUiTargetCamera, UiGlobalTransform, UiStack,
+                picking_backend::UiPickingPlugin,
+            },
+            ui_widgets::ButtonPlugin,
+            window::{CursorMoved, PrimaryWindow, WindowEvent, WindowRef},
+        };
+        for scale in [1.0, 2.0] {
+            let mut app = App::new();
+            app.add_plugins((
+                MinimalPlugins,
+                InputPlugin,
+                DefaultPickingPlugins,
+                UiPickingPlugin,
+                ButtonPlugin,
+                HierarchyPropagatePlugin::<ComputedUiTargetCamera>::new(PostUpdate),
+                HierarchyPropagatePlugin::<ComputedUiRenderTargetInfo>::new(PostUpdate),
+            ));
+            app.add_message::<WindowEvent>()
+                .init_resource::<UiStack>()
+                .init_resource::<UiScale>()
+                .init_resource::<FontCx>();
+            app.add_systems(
+                PostUpdate,
+                bevy::ui::update::propagate_ui_target_cameras
+                    .before(PropagateSet::<ComputedUiTargetCamera>::default())
+                    .before(PropagateSet::<ComputedUiRenderTargetInfo>::default()),
+            );
+            crate::button_actions::install(&mut app);
+            let mut fonts = Assets::<Font>::default();
+            let font = fonts.add(Font::from_bytes(DEFAULT_FONT_DATA.to_vec()));
+            app.insert_resource(fonts).insert_resource(MenuArtCache {
+                fdf: Some(crate::fdf::Fdf::parse(FDF_FACES).unwrap()),
+                main_menu: Some(FDF_FACES.into()),
+                strings: Some(STRINGS_FACES.into()),
+                fonts: [("FaceCommon".to_owned(), font)].into_iter().collect(),
+                ..default()
+            });
+            let window = app
+                .world_mut()
+                .spawn((Window::default(), PrimaryWindow))
+                .id();
+            let camera = app
+                .world_mut()
+                .spawn((
+                    Camera {
+                        viewport: Some(Viewport {
+                            physical_position: UVec2::new(37, 23),
+                            physical_size: UVec2::new(400, 300),
+                            ..default()
+                        }),
+                        computed: ComputedCameraValues {
+                            target_info: Some(RenderTargetInfo {
+                                physical_size: UVec2::new(600, 450),
+                                scale_factor: scale,
+                            }),
+                            ..default()
+                        },
+                        ..default()
+                    },
+                    RenderTarget::Window(WindowRef::Entity(window)),
+                ))
+                .id();
+            let text = label(app.world_mut(), "OptionsButtonText");
+            let button = app
+                .world()
+                .get::<crate::glue_menu::GlueLabel>(text)
+                .unwrap()
+                .button;
+            let container = app.world().get::<ChildOf>(text).unwrap().parent();
+            app.world_mut()
+                .entity_mut(button)
+                .insert((
+                    Node::default(),
+                    Button,
+                    Hovered::default(),
+                    ComputedNode {
+                        size: Vec2::new(120.0, 50.0),
+                        inverse_scale_factor: 1.0 / scale,
+                        ..default()
+                    },
+                    UiGlobalTransform::from_translation(Vec2::new(180.0, 90.0)),
+                    InheritedVisibility::VISIBLE,
+                    UiTargetCamera(camera),
+                ))
+                .add_child(container);
+            app.world_mut()
+                .entity_mut(text)
+                .insert((Pickable::IGNORE, InheritedVisibility::VISIBLE));
+            app.world_mut().run_system_once(apply_menu_text).unwrap();
+            app.world_mut().flush();
+            let spans: Vec<_> = app.world().get::<Children>(text).unwrap().iter().collect();
+            assert_eq!(spans.len(), 2);
+            app.world_mut()
+                .run_system_once(bevy::text::load_font_assets_into_font_collection)
+                .unwrap();
+            let mut font_cx = app.world_mut().remove_resource::<FontCx>().unwrap();
+            let (block, layout) = {
+                let world = app.world();
+                let mut block = ComputedTextBlock::default();
+                let mut layout = TextLayoutInfo::default();
+                let mut pipeline = TextPipeline::default();
+                let root = (
+                    text,
+                    0,
+                    TextElement::Text {
+                        text: "",
+                        font: world.get::<TextFont>(text).unwrap(),
+                        color: Color::WHITE,
+                        line_height: default(),
+                        letter_spacing: default(),
+                    },
+                );
+                let runs = spans.iter().map(|&entity| {
+                    (
+                        entity,
+                        1,
+                        TextElement::Text {
+                            text: &world.get::<TextSpan>(entity).unwrap().0,
+                            font: world.get::<TextFont>(entity).unwrap(),
+                            color: world.get::<TextColor>(entity).unwrap().0,
+                            line_height: default(),
+                            letter_spacing: default(),
+                        },
+                    )
+                });
+                let bounds = TextBounds::UNBOUNDED;
+                pipeline
+                    .update_buffer(
+                        world.resource::<Assets<Font>>(),
+                        std::iter::once(root).chain(runs),
+                        bevy::text::LineBreak::NoWrap,
+                        bevy::text::Justify::Left,
+                        bounds,
+                        1.0,
+                        &mut block,
+                        &mut font_cx,
+                        &mut LayoutCx::default(),
+                        Vec2::new(400.0, 300.0),
+                        RemSize::default(),
+                    )
+                    .unwrap();
+                pipeline
+                    .update_text_layout_info(
+                        &mut layout,
+                        &mut FontAtlasSet::default(),
+                        &mut Assets::<Image>::default(),
+                        &mut block,
+                        &mut ScaleCx::default(),
+                        bounds,
+                        bevy::text::Justify::Left,
+                        FontHinting::default(),
+                    )
+                    .unwrap();
+                (block, layout)
+            };
+            assert_eq!(layout.run_geometry.len(), 2);
+            let first = layout.run_geometry[0].bounds.center();
+            let second = layout.run_geometry[1].bounds.center();
+            let idle = Vec2::new(180.0, 90.0);
+            let pointer = (Vec2::new(37.0, 23.0) + idle + second - layout.size / 2.0) / scale;
+            app.world_mut().entity_mut(text).insert((
+                ComputedNode {
+                    size: layout.size,
+                    inverse_scale_factor: 1.0 / scale,
+                    ..default()
+                },
+                UiGlobalTransform::from_translation(idle),
+                block,
+                layout,
+            ));
+            {
+                let mut stack = app.world_mut().resource_mut::<UiStack>();
+                stack.uinodes = vec![button, text];
+                stack.partition = std::iter::once(0..2).collect();
+            }
+            app.update();
+            app.update();
+            app.world_mut()
+                .write_message(WindowEvent::CursorMoved(CursorMoved {
+                    window,
+                    position: pointer,
+                    delta: None,
+                }));
+            app.update();
+            assert!(app.world().get::<Hovered>(button).unwrap().get());
+            let mut clicks = MessageCursor::<PointerClick>::default();
+            app.world_mut()
+                .write_message(WindowEvent::MouseButtonInput(MouseButtonInput {
+                    window,
+                    button: MouseButton::Left,
+                    state: ButtonState::Pressed,
+                }));
+            app.update();
+            assert!(app.world().entity(button).contains::<bevy::ui::Pressed>());
+            // Move only the label by a synthetic distance derived from its shaped runs.
+            *app.world_mut().get_mut::<UiGlobalTransform>(text).unwrap() =
+                UiGlobalTransform::from_translation(idle + second - first);
+            app.update();
+            assert!(app.world().get::<Hovered>(button).unwrap().get());
+            app.world_mut()
+                .write_message(WindowEvent::MouseButtonInput(MouseButtonInput {
+                    window,
+                    button: MouseButton::Left,
+                    state: ButtonState::Released,
+                }));
+            app.update();
+            let click_targets: Vec<_> = clicks
+                .read(app.world().resource::<Messages<PointerClick>>())
+                .map(|event| event.entity)
+                .collect();
+            assert_eq!(
+                app.world()
+                    .resource::<crate::button_actions::ButtonActions>()
+                    .entities,
+                [button],
+                "scale={scale}, click={click_targets:?}"
+            );
+            assert_eq!(click_targets, [button]);
+            assert!(!app.world().entity(button).contains::<bevy::ui::Pressed>());
+            app.world_mut()
+                .run_system_once(crate::button_actions::clear)
+                .unwrap();
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<crate::button_actions::ButtonActions>()
+                    .entities
+                    .is_empty()
+            );
+        }
     }
 
     /// Each label takes **its own** text frame's face, on the root and on every

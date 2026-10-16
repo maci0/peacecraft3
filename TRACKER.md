@@ -105,6 +105,18 @@ issues*.
       source-qualified first-run choices
       and remaining renderer/gameplay setting consumers stay open. See
       `docs/re-notes/original-options-resolution-apply.md` for checks and scope.
+      Centered-viewport slider presses now use the UI camera's local coordinate
+      space, explicit Options tab choices survive entry discovery, and generated
+      decorative text spans no longer lose mouse activation when pressed labels
+      move. Seven widget regressions and a production-text/picking regression
+      pass; removing the span fix reproduces zero clicks/actions. The complete
+      suite passes 281 app tests with 13 explicit ignores, four library and 83
+      integration tests, with strict native/WASM checks. A fresh local packaged
+      browser passes both source sliders at two viewport layouts, mouse Apply
+      and Cancel preservation, with four reviewed captures and zero uploads,
+      sockets or page errors. Same-frame pointer batching and older larger-view
+      caption disappearance remain separate open defects. See
+      `docs/re-notes/options-slider-input.md`.
 - [x] Menu geometry now preserves source ONE/ONE additive RGB instead of
       premultiplying it by alpha. Actual Bevy draws pass 72 channel checks on
       software and Radeon Vulkan; the old-Add negative fails the expected cases.

@@ -151,6 +151,33 @@ pub struct Settings {
 }
 
 impl Navigation {
+    pub(crate) fn options_target(&self, fdf: &Fdf, target: Screen) -> (Screen, Option<Page>) {
+        if !matches!(target, Screen::Options(_)) {
+            return (target, self.options_entry);
+        }
+        let entry = self.options_entry.or_else(|| {
+            let mut pages = [
+                ("GameplayButton", Page::Gameplay),
+                ("VideoButton", Page::Video),
+                ("SoundButton", Page::Sound),
+            ]
+            .into_iter()
+            .filter(|(name, _)| fdf.flag(name, "TabFocusDefault"))
+            .map(|(_, page)| page);
+            match (pages.next(), pages.next()) {
+                (Some(page), None) => Some(page),
+                _ => None,
+            }
+        });
+        // Entry discovery must not replace an explicit choice inside Options.
+        let target = if self.screen == Screen::Main {
+            entry.map_or(target, Screen::Options)
+        } else {
+            target
+        };
+        (target, entry)
+    }
+
     pub fn open(&mut self, screen: Screen) {
         if self.transition_active || self.requested.is_some() {
             return;
@@ -623,6 +650,60 @@ Frame "FRAME" "A" {
         assert!(n.action("CancelButton"));
         assert_eq!(n.screen, Screen::Options(Page::Sound));
         assert_eq!(n.requested, Some(Screen::Main));
+    }
+    #[test]
+    fn options_entry_is_admitted_before_the_owner_changes() {
+        let fdf =
+            Fdf::parse("Frame \"BUTTON\" \"GameplayButton\" {\n TabFocusDefault,\n}\n").unwrap();
+        let nav = Navigation::default();
+        assert_eq!(
+            nav.options_target(&fdf, Screen::Options(Page::Video)),
+            (Screen::Options(Page::Gameplay), Some(Page::Gameplay))
+        );
+        assert_eq!(nav.screen, Screen::Main);
+        assert_eq!(nav.options_entry, None);
+    }
+    #[test]
+    fn late_entry_discovery_preserves_an_explicit_tab_and_draft() {
+        let fdf =
+            Fdf::parse("Frame \"BUTTON\" \"GameplayButton\" {\n TabFocusDefault,\n}\n").unwrap();
+        let mut nav = Navigation {
+            screen: Screen::Options(Page::Video),
+            ..Default::default()
+        };
+        nav.draft.values.insert("synthetic".into(), 37.0);
+        assert_eq!(
+            nav.options_target(&fdf, Screen::Options(Page::Sound)),
+            (Screen::Options(Page::Sound), Some(Page::Gameplay))
+        );
+        assert_eq!(nav.screen, Screen::Options(Page::Video));
+        assert_eq!(nav.draft.values["synthetic"], 37.0);
+    }
+    #[test]
+    fn options_entry_requires_one_source_flag_and_respects_the_admitted_entry() {
+        let fdf = Fdf::parse("Frame \"BUTTON\" \"SoundButton\" {\n TabFocusDefault,\n}\n").unwrap();
+        let nav = Navigation::default();
+        assert_eq!(
+            nav.options_target(&fdf, Screen::Options(Page::Video)),
+            (Screen::Options(Page::Sound), Some(Page::Sound))
+        );
+        let ambiguous = Fdf::parse("Frame \"BUTTON\" \"SoundButton\" {\n TabFocusDefault,\n}\nFrame \"BUTTON\" \"VideoButton\" {\n TabFocusDefault,\n}\n").unwrap();
+        assert_eq!(
+            nav.options_target(&ambiguous, Screen::Options(Page::Video)),
+            (Screen::Options(Page::Video), None)
+        );
+        let admitted = Navigation {
+            options_entry: Some(Page::Gameplay),
+            ..Default::default()
+        };
+        assert_eq!(
+            admitted.options_target(&fdf, Screen::Options(Page::Video)),
+            (Screen::Options(Page::Gameplay), Some(Page::Gameplay))
+        );
+        assert_eq!(
+            nav.options_target(&fdf, Screen::SinglePlayer),
+            (Screen::SinglePlayer, None)
+        );
     }
     #[test]
     fn options_owner_request_preserves_selected_page_and_tab_draft() {

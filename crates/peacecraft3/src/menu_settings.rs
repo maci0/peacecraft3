@@ -15,6 +15,9 @@ use std::collections::BTreeMap;
 #[path = "menu_resolution.rs"]
 mod resolution;
 
+#[path = "menu_slider.rs"]
+mod slider;
+
 #[cfg(any(test, not(target_arch = "wasm32")))]
 #[path = "original_options_audio.rs"]
 mod original;
@@ -668,6 +671,7 @@ fn attach_controls(
                     SliderStep(*step),
                     SliderValue(*draft),
                 ));
+                slider::attach(&mut commands, entity);
             }
             Widget::Checkbox
                 if matches!(control.name.as_str(), "MusicCheckBox" | "SoundCheckBox") =>
