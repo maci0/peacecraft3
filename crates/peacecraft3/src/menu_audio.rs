@@ -507,7 +507,13 @@ mod tests {
         settings.set_test_preferences(true);
         world.insert_resource(settings);
         let mut nav = crate::menu_screens::Navigation::default();
+        nav.applied.values.insert("MusicVolumeSlider".into(), 30.0);
+        nav.applied.values.insert("SoundVolumeSlider".into(), 42.0);
+        nav.applied.toggles.insert("MusicCheckBox".into(), true);
+        nav.applied.toggles.insert("SoundCheckBox".into(), true);
+        nav.draft = nav.applied.clone();
         nav.draft.values.insert("MusicVolumeSlider".into(), 17.0);
+        let before_applied = nav.applied.clone();
         let before = nav.draft.clone();
         world.insert_resource(nav);
         world.insert_resource(MenuSounds {
@@ -543,16 +549,14 @@ mod tests {
                 .resource::<crate::menu_settings::Backend>()
                 .source_matches(world.resource::<crate::launch_gui::Launcher>())
         );
+        assert!(!before_applied.values.is_empty());
+        assert_eq!(
+            world.resource::<crate::menu_screens::Navigation>().applied,
+            before_applied
+        );
         assert_eq!(
             world.resource::<crate::menu_screens::Navigation>().draft,
             before
-        );
-        assert!(
-            world
-                .resource::<crate::menu_screens::Navigation>()
-                .applied
-                .values
-                .is_empty()
         );
     }
 
