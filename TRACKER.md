@@ -50,6 +50,25 @@ issues*.
 
 ## Current recreation work (2026-10-16)
 
+### Campaign and gameplay implementation queue
+
+Each slice below needs a reviewed implementation, real tests and application
+integration. A completed prototype does not close its broader milestone.
+
+| Slice | Concrete next acceptance gate | Depends on |
+| --- | --- | --- |
+| Campaign startup | Selected original chapter executes `config`/`main` through the first live objective; unsupported calls retain source diagnostics | Map admission, composed gameplay Host |
+| In-game HUD | Authored FDF relationships reach viewport-relative HUD components with checked resource bindings | Admitted map and selected UI assets |
+| Terrain and camera | Selected map terrain, pathing and authored camera initialize one coherent scene | Map admission, terrain/material resources |
+| Selection and orders | Selected owned units send supported orders to the existing simulation without losing command batches | World/entity identity and gameplay input |
+| Transmissions and dialogs | Script calls create bounded visible state and correctly route skip/dialog events | Gameplay Host, source-derived UI |
+| Quests and victory | Quest/quest-item handles preserve state and drive explicit objective/victory events | Gameplay Host and ordered callbacks |
+| Campaign progression | Authored chapter identity and completion select the correct next chapter without enabling TFT on base-game inputs | Campaign metadata and outcome events |
+| Combat data consumer | Required authored stat fields reach an existing entity consumer with explicit conversions/refusals | Object catalog, world and orders |
+| AI startup | Selected campaign AI entrypoint executes one supported behavior with the next missing interface identified | Script ownership, world and gameplay Host |
+| Remaining-work reconciliation | Every open/partial checkbox maps to a concrete acceptance gate and dependency, with stale claims corrected | Current source and retained verification |
+
+
 - [x] Shared BLP JPEG color conversion now respects BGR component order. Both
       retained logo alpha planes are unchanged; fixed public-decoder colors
       agree with an independent decoder within one intensity level on opaque
