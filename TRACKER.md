@@ -1000,6 +1000,27 @@ Format: `date — subsystem — symptom — root cause — status`
 - [x] `LanSession`: lobby states, ordered inbox, tick gated on input arrival
 - [ ] Gate: a real 1.29b LAN client joins a game we host
 - [ ] Classic Battle.net client through an emulator realm
+- [ ] NET-C01: Pinned local PvPGN Docker realm with tracking disabled and a real
+      bounded BNCS response probe; retain source/image/config identities.
+- [ ] NET-C02: BNCS and W3GS codecs, fragmented streams and malformed/count/size
+      refusals; the project codec is a separate protocol.
+- [ ] NET-C03: PeaceCraft discovers and joins an original Legacy 1.29b LAN host
+      over its original UDP discovery / TCP game path.
+- [ ] NET-C04: Original unmodified Legacy 1.29b client discovers and joins a
+      PeaceCraft host; record exact executable identity and both directions.
+- [ ] NET-C05: Original-compatible lobby slots, map fingerprints, readiness and
+      start/seed exchange; mismatched local edition/build/map refuses before play.
+- [ ] NET-C06: Ordered actions and checksum/RNG agreement, followed by a ten-minute
+      mixed-client match without divergence; lobby-only success is insufficient.
+- [ ] NET-C07: Classic realm version checks, authentication and negative cases,
+      channel/chat, game advertisement/list/join; unmodified and loader profiles
+      have separate results, including the unresolved 1.29.2 authentication path.
+- [ ] NET-C08: Disconnect, timeout, lag and cancellation; prove any optional
+      reconnect extension separately from original-client support.
+- [ ] NET-C09: Reproducible original/PeaceCraft network comparison harness using
+      local assets, the same admitted map and captured inputs/seed; no proprietary
+      asset transfers, credentials or key material in committed evidence.
+      Reference sources and dependencies: `docs/re-notes/classic-network-interoperability.md`.
 - [x] Own low-latency protocol (lockstep + prediction/**rollback**)
       — **rollback is implemented**: `Client` keeps a bounded `TickHistory` ring of
       `(state-before-tick, Rng)` plus its own unacknowledged inputs and the server's
@@ -1014,7 +1035,7 @@ Format: `date — subsystem — symptom — root cause — status`
       a lost-input divergence test that ends equal to a genuine authoritative server run.
       Frames on the replayed path are overwritten and everything past the new head is
       truncated, so a later rollback cannot resurrect an abandoned trajectory.
-- [x] Rule enforced everywhere: **server holds state, client only proposes** — the rollback
+- [x] Project protocol: **server holds state, client only proposes** — the rollback
       base is always a state the server sent; replay only re-applies the client's *intent*
 
 ## WASM build

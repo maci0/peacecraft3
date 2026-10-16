@@ -518,63 +518,55 @@ rather than being redesigned around it afterwards.
 
 ### 3.7 Multiplayer
 
-Three separate protocols, and they are separate on purpose. Conflating them means
-supporting none of them properly.
+Support three distinct network paths:
 
-| Protocol | What it must be | Why it exists |
+| Path | Compatibility target | State and transport |
 |---|---|---|
-| **Classic LAN** | Wire-compatible with 1.29b's LAN discovery and game protocol | Playing on a LAN or over Hamachi with people using the real client |
-| **Classic Battle.net** | Wire-compatible with the 1.29b BNet protocol, through an emulator | PvP on community realms; we are a *client*, the emulator is the authority |
-| **Modern (ours)** | Our own low-latency protocol | Not constrained by 1998 assumptions; this is what we'd want to play on |
+| Classic LAN / TCP/IP | Original Legacy 1.29b client, in both host directions | W3GS discovery, lobby and ordered game actions; clients simulate the same game |
+| Classic Battle.net | Classic BNCS community realm plus its W3GS game hosts | Realm authentication, channels and game advertisements, then the game connection |
+| Project multiplayer | Native/browser PeaceCraft peers | Existing authoritative movement world, binary commands and prediction/rollback |
 
-The compatibility targets are the *classic* ones because that is where the players
-are. The modern one is ours to design and is where the engineering goes.
+Original-client interoperability is a product requirement. The project UDP
+lobby and browser WebSocket session do not implement BNCS or W3GS. A classic
+realm does not replace the simulation running on each game client with our
+movement snapshots. Hosts must validate admission and inputs, while classic
+turn ordering, checksums, random state and game data must agree between clients.
+Our authoritative snapshot correction remains the project protocol's design.
 
-The gateway list is already measured and lives at
-`docs/re-notes/005-battle-net-gateways.md`: the classic realms ship *inside* the
-game archive at `BattleNet\bnserver-WAR3.ini`, both installs have one, and they
-differ — `*.battle.net` on 1.28c (`VER=1001`), `*.classic.blizzard.com` on 1.29b
-(`VER=1014`), same four zones in the same order. The hostnames are not stable, so
-the test in `crates/pcx-net/src/bnet.rs` asserts the zones and refuses to pin
-them. That note also records what is *not* known: the wire protocol, because
-1.29b's Battle.net is encapsulated inside `Warcraft III Launcher.exe` and the
-packets cannot be observed from this machine.
+Use public implementations as protocol references: PvPGN-PRO for BNCS,
+BNCSUtil for authentication/version checking, and GHost++ for W3GS hosting.
+Eurobattle.net also publishes its realm fork. Their existence supersedes the
+previous claim that the classic protocol cannot be investigated locally.
+Version support is explicit: upstream PvPGN lists through 1.28.5; its open
+1.29.2 proposal requires client changes. Neither establishes compatibility
+with the unmodified supplied 1.29.2.9231 executable.
+See [the reference matrix and staged gates](docs/re-notes/classic-network-interoperability.md)
+and the [asset-derived gateway list](docs/re-notes/005-battle-net-gateways.md).
 
-#### Server holds state — never trust the client
+#### Acceptance order
 
-This is a rule, not a preference, and it applies to all three protocols:
+1. Pin source/build identities and run an isolated local PvPGN Docker realm.
+   Check real bounded protocol responses separately from container readiness.
+2. Implement bounded BNCS/W3GS framing and malformed/fragmented packet tests.
+   Keep product/version, endpoint and local asset identities explicit.
+3. Discover and join an original LAN host; allow an original client to discover
+   and join a PeaceCraft host. Prove both directions on the exact client build.
+4. Complete slot, map identity, readiness and game-start negotiation with maps
+   already installed locally. Refuse mismatched edition/build/map before start;
+   proprietary asset transfer is not part of the test harness.
+5. Execute ordered actions with matching seed and simulation/checksum results,
+   then a ten-minute mixed-client match without divergence. A shared requested
+   seed alone does not prove equal random streams or game behavior.
+6. Connect PeaceCraft to the local classic realm: version/authentication failures,
+   successful login, channels/chat, game advertisement, listing and joining.
+   Distinguish native authentication from any separately tested community-loader
+   profile. Local realm success precedes public community-realm validation.
+7. Exercise disconnect, timeout, lag and cancellation with bounded work. Rejoin
+   extensions such as GProxy require their own negotiated profile and tests.
 
-- **The client sends intent, the server decides.** A move order is a request
-  with coordinates and a target; the server validates it against its own world and
-  either accepts and broadcasts or rejects. The client never advances its own
-  simulation of another player's unit from that player's input.
-- **Every accepted command is re-simulated on the server.** The server's world is
-  the world; a client that disagrees is corrected by the server, not the other way
-  round.
-- **The client's simulation is a prediction of the server's.** It runs the same
-  deterministic step on the same seed so that what the player sees matches what the
-  server will confirm, and it reconciles on divergence. It does not author.
-- **Input is exactly what §6 fidelity already demands.** If the simulation is not a
-  pure function of seed plus input, this whole design collapses, which is another
-  reason the deterministic-tick work is not optional.
-
-The practical consequence: our own protocol can be low-latency because it is
-lockstep-with-prediction and rollback rather than "client tells server where the
-unit is". The classical protocols are effectively lockstep with no prediction, which
-is why they feel bad on real latency — and reproducing that feel *is* fidelity for
-them, so we do not "improve" it.
-
-#### What gates this milestone
-
-1. `pcx-net`: transport traits, a deterministic command codec, and a lockstep
-   server that owns the authoritative world.
-2. Classic LAN discovery (UDP broadcast) plus enough of the game protocol for a
-   1.29b client to join a game we host — that is the compatibility proof, and it
-   is the milestone's gate.
-3. BNet client path against an emulator, with checksums and archive verification
-   behaving the way the realm expects.
-4. The modern protocol, measured against the classical one on latency and
-   divergence.
+Gameplay, script/timer execution, object rules and native RNG fidelity remain
+prerequisites for full crossplay even after a successful lobby join. Preserve
+those open gates in TRACKER.md; network framing alone cannot close them.
 
 ---
 

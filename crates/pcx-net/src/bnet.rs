@@ -6,15 +6,13 @@
 //! `BattleNet\bnserver-WAR3.ini`. Four gateways, each with a zone number and a
 //! display name. That file is parsed and tested below.
 //!
-//! Not real: the wire protocol. 1.29b's Battle.net is encapsulated in
-//! `Warcraft III Launcher.exe` and there is no user-run PvPGN-style realm for it,
-//! so the bytes cannot be observed from this machine and are not written down
-//! here. Guessing them would be inventing a protocol, which is the
-//! wrong-skeleton-shaped error this project keeps having to revert.
+//! Not implemented here: BNCS packets, authentication and W3GS game traffic.
+//! Public PvPGN, BNCSUtil and GHost++ sources provide protocol references; exact
+//! Legacy 1.29b interoperability still needs version-specific runtime tests.
+//! See `docs/re-notes/classic-network-interoperability.md`.
 //!
-//! What is modelled is the *authority*, which is protocol-independent and is the
-//! part the design depends on: a Battle.net client is never the authority. It
-//! proposes; the realm decides.
+//! This session model gates realm transitions on realm responses. It does not
+//! model authority over a game's simulation or implement a network client.
 
 use std::collections::BTreeMap;
 

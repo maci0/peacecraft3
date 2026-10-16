@@ -39,16 +39,16 @@ parts; the hostnames and version are not, which is why the test in
 
 ## What is not here
 
-The wire protocol. 1.29b's Battle.net is encapsulated inside
-`Warcraft III Launcher.exe`; the game does not connect to a realm directly, and
-there is no user-run PvPGN-style realm for this build to talk to. The bytes
-cannot be observed from this machine, so they are not written down here.
+This note measures gateway data, not the wire protocol. The previous claim
+that no suitable server or observable classic protocol exists was incorrect.
+PvPGN and GHost++ publish BNCS and W3GS implementations. Exact 1.29b support,
+including authentication differences and any required client modifications,
+still needs a version-specific test.
 
-`crates/pcx-net/src/bnet.rs` models the gateway list and the client session's
-state machine (connect, handshake, version token, check-revision token, lobby,
-game), with every transition gated on the realm granting it. That is the
-authority model, which is protocol-independent; the packets that would drive it
-across the wire remain open.
+`crates/pcx-net/src/bnet.rs` models gateway parsing and response-gated session
+transitions. It does not send BNCS packets or implement an original-compatible
+game session. See [classic network interoperability](classic-network-interoperability.md)
+for primary sources, local reference testing and the open crossplay gates.
 
 ## Format notes
 
