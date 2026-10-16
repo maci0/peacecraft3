@@ -82,3 +82,21 @@ WASI. Native and browser-target compilation are separate checks.
 Dialog requests are retained events, not a rendered quest window. No campaign
 win/defeat decision, UI adapter, hashtable quest save/load, or complete campaign
 playthrough is established by this slice.
+
+## Read-only objective state
+
+`ObjectHost::quest_session` exposes the admitted session without a second quest
+store. `quest_view::project` returns live quests in creation order and each
+quest's live items in their authored creation order. Title, description and
+icon text are borrowed from the executed state; absent text stays `None` and
+an assigned empty string stays `Some("")`. Flags and item completion are read
+from that same session. Destroyed parents and items are absent, and a direct
+query of either identity refuses. Projection reserves its output fallibly and
+does not copy temporary identity lists or text buffers.
+
+An owned-VM test executes synthetic quest creation, text/flag mutations, dialog
+update and destruction through the composed `ObjectHost`, interleaved with
+timers in the same arena. The view reflects those executed changes, preserves
+the surviving quest and refuses destroyed identities without disturbing the
+timers. This is a display-data boundary; grouping, screen layout, rendered
+objectives and campaign victory decisions remain open.

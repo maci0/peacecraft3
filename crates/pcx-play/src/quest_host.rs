@@ -95,6 +95,11 @@ impl ObjectHost {
         self.quests.as_ref().map(QuestSession::events)
     }
 
+    /// Live session the quest natives mutate. Absent until `with_quests`.
+    pub fn quest_session(&self) -> Option<&QuestSession> {
+        self.quests.as_ref()
+    }
+
     pub(super) fn quest_native(
         &mut self,
         name: &str,
@@ -126,3 +131,7 @@ impl ObjectHost {
 #[cfg(test)]
 #[path = "quest_host_tests.rs"]
 mod integration;
+
+#[cfg(test)]
+#[path = "quest_owned_vm_tests.rs"]
+mod owned_vm;

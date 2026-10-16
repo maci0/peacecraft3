@@ -269,12 +269,40 @@ impl QuestSession {
         self.items.len()
     }
 
+    pub fn quest_ids(&self) -> impl Iterator<Item = HandleId> + '_ {
+        self.quests.iter().map(|(id, _)| *id)
+    }
+
     pub fn quest_title(&self, id: HandleId) -> Result<Option<&str>, QuestFailure> {
         Ok(self.quest_ref(id)?.title.as_deref())
     }
 
+    pub fn quest_description(&self, id: HandleId) -> Result<Option<&str>, QuestFailure> {
+        Ok(self.quest_ref(id)?.description.as_deref())
+    }
+
+    pub fn quest_icon_path(&self, id: HandleId) -> Result<Option<&str>, QuestFailure> {
+        Ok(self.quest_ref(id)?.icon_path.as_deref())
+    }
+
     pub fn quest_flag(&self, id: HandleId, flag: QuestFlag) -> Result<bool, QuestFailure> {
         Ok(flag_value(self.quest_ref(id)?, flag))
+    }
+
+    pub fn quest_items(&self, id: HandleId) -> Result<&[HandleId], QuestFailure> {
+        Ok(&self.quest_ref(id)?.items)
+    }
+
+    pub fn item_owner(&self, id: HandleId) -> Result<HandleId, QuestFailure> {
+        Ok(self.item_ref(id)?.quest)
+    }
+
+    pub fn item_description(&self, id: HandleId) -> Result<Option<&str>, QuestFailure> {
+        Ok(self.item_ref(id)?.description.as_deref())
+    }
+
+    pub fn item_completed(&self, id: HandleId) -> Result<bool, QuestFailure> {
+        Ok(self.item_ref(id)?.completed)
     }
 
     pub fn call<A: QuestArena>(

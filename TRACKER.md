@@ -921,7 +921,10 @@ See `PLAN.md` §3.5 for the harness design. Each chapter asserts specific outcom
       Explicit quest/quest-item state now shares the gameplay handle arena;
       creation, setters/queries, destruction, budgets and stale/cross-kind
       refusals execute in native and WASI tests. Initial flags follow the pinned
-      original runtime probe, not guessed false values. Campaign objectives and
+      original runtime probe, not guessed false values. A read-only view now
+      exposes live text, flags and owned items from the same session; real
+      owned-VM tests cover changes and destruction interleaved with timers.
+      Campaign objectives and
       the rendered quest window remain open; see `docs/re-notes/script-quests.md`.
 - [ ] Win condition triggers; end-of-movie / `endGame` entered
 - [ ] Custom-map smoke set: all shipped `Maps/*.w3m` load and run their init script
