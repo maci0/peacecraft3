@@ -533,6 +533,6 @@ mod objects;
 pub use objects::{
     CameraState, DayNightState, FileSoundState, MapConfig, MapConfigBudget, MapMusicSelection,
     ObjectHost, PlayerAdmissionError, PlayerBudget, PlayerSettings, QuestBudget, QuestEvent,
-    QuestFlag, SoundProperties, SoundState, StartLocation, StartPriorities, StartPriority,
-    StartupClockState, TimerHost,
+    QuestFlag, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest, StartLocation,
+    StartPriorities, StartPriority, StartupClockState, TimerHost,
 };

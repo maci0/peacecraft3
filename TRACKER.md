@@ -1169,12 +1169,14 @@ Format: `date — subsystem — symptom — root cause — status`
       resources alongside PCM: the pinned Human01 VM admits all 58 direct file
       bindings and 51 distinct parameter labels, then executes all 58 creations,
       label assignments and duration assignments. Shared-arena rectangles now
-      retain all 98 executed region bounds with exact coordinate-bit checks;
+      retain executed region bounds with exact coordinate-bit checks;
       direct-file and label sound identities now retain explicit numeric
       properties without inferring mixer defaults. Executed 3D sound position
-      matches the script's coordinate bits; the next refusal is
-      `RegisterStackedSound` during initialization. This probe
-      still uses the explicitly identified compatibility object catalog;
+      matches the script's coordinate bits. Bounded register/unregister
+      requests now preserve their sound identities,
+      dimensions and position snapshots. The same gate reaches 142 rectangles
+      and seven stacked registrations; its next refusal is `CreateCameraSetup`.
+      This probe still uses the explicitly identified compatibility object catalog;
       launcher bank preparation remains open.
       Raw table flags remain separate from effective settings.
       Explicit parameter collections now retain each assigned table/row/source,
@@ -1194,7 +1196,8 @@ Format: `date — subsystem — symptom — root cause — status`
       `script-day-night-models.md`/`script-label-sounds.md`/`script-startup-clock.md`/
       `script-map-music-selection.md`/`script-file-sounds.md`/`script-sound-parameters.md`/
       `script-sound-parameter-banks.md`/`script-pcm-decoder.md`/
-      `script-mp3-sounds.md`/`script-rectangles.md`/`script-sound-properties.md`.
+      `script-mp3-sounds.md`/`script-rectangles.md`/`script-sound-properties.md`/
+      `script-stacked-sounds.md`.
 
 ### Current implemented slices (2026-10-14)
 

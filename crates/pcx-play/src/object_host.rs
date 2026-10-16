@@ -20,6 +20,8 @@ pub struct ObjectHost {
     sound_duration: bool,
     sound_properties: bool,
     sound_starts: Vec<HandleId>,
+    stacked_sound_limit: Option<usize>,
+    stacked_sound_requests: Vec<StackedSoundRequest>,
     startup_clock: Option<clock::StartupClockState>,
     map_music: Option<music::State>,
     quests: Option<crate::quest_session::QuestSession>,
@@ -49,6 +51,8 @@ impl ObjectHost {
             sound_duration: false,
             sound_properties: false,
             sound_starts: Vec::new(),
+            stacked_sound_limit: None,
+            stacked_sound_requests: Vec::new(),
             startup_clock: None,
             map_music: None,
             quests: None,
@@ -271,6 +275,9 @@ impl ObjectHost {
 }
 impl Host for ObjectHost {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.stacked_sound_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.sound_properties_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -385,3 +392,7 @@ mod rectangles;
 #[path = "sound_properties_host.rs"]
 mod sound_properties;
 pub use sound_properties::SoundProperties;
+
+#[path = "stacked_sound_host.rs"]
+mod stacked_sounds;
+pub use stacked_sounds::{StackedSoundAction, StackedSoundRequest};

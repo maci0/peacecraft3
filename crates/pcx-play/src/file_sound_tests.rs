@@ -99,6 +99,224 @@ fn property_host(map: &str) -> ObjectHost {
         .unwrap()
 }
 
+const STACKED_DECLARATIONS: &str =
+    "native RegisterStackedSound takes sound s, boolean positional, real w, real h returns nothing
+native UnregisterStackedSound takes sound s, boolean positional, real w, real h returns nothing
+";
+
+fn stacked_host(map: &str, limit: usize) -> ObjectHost {
+    let common = format!(
+        "{COMMON}{PROPERTY_DECLARATIONS}{STACKED_DECLARATIONS}native Next takes nothing returns nothing\n"
+    );
+    host(&common, map, 16)
+        .with_file_sounds(mixed_assets(), 64)
+        .unwrap()
+        .with_label_sounds(bank())
+        .unwrap()
+        .with_sound_properties()
+        .unwrap()
+        .with_stacked_sounds(limit)
+        .unwrap()
+}
+
+#[test]
+fn stacked_sound_requests_keep_order_duplicates_and_position_snapshots() {
+    use crate::playercolor_host::StackedSoundAction;
+    let mut host = stacked_host("", 4);
+    let mut creation = args();
+    creation[0] = Value::Str(r"Media\tone.bin".into());
+    creation[2] = Value::Bool(true);
+    let sound = host.native("CreateSound", &creation).unwrap();
+    let Value::Handle(id) = sound else {
+        panic!("sound");
+    };
+    host.native(
+        "SetSoundPosition",
+        &[sound.clone(), Value::Int(3), Value::Int(-4), Value::Int(5)],
+    )
+    .unwrap();
+    let call = [
+        sound.clone(),
+        Value::Bool(true),
+        Value::Real(13.5),
+        Value::Int(29),
+    ];
+    host.native("RegisterStackedSound", &call).unwrap();
+    host.native("RegisterStackedSound", &call).unwrap();
+    host.native(
+        "SetSoundPosition",
+        &[sound.clone(), Value::Int(17), Value::Int(31), Value::Int(7)],
+    )
+    .unwrap();
+    host.native("UnregisterStackedSound", &call).unwrap();
+    let requests = host.pending_stacked_sound_requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0], requests[1]);
+    assert_eq!(requests[0].action, StackedSoundAction::Register);
+    assert_eq!(requests[0].sound, id);
+    assert!(requests[0].by_position);
+    assert_eq!(
+        (requests[0].rect_width, requests[0].rect_height),
+        (13.5, 29.0)
+    );
+    assert_eq!(requests[0].position, Some([3.0, -4.0, 5.0]));
+    assert_eq!(requests[2].action, StackedSoundAction::Unregister);
+    assert_eq!(requests[2].position, Some([17.0, 31.0, 7.0]));
+    let issued = host.inner().handles();
+    let transferred = host.take_stacked_sound_requests();
+    assert_eq!(transferred.len(), 3);
+    assert!(host.pending_stacked_sound_requests().is_empty());
+    assert_eq!(host.inner().handles(), issued);
+    assert_eq!(host.file_mp3_state(id).unwrap().resource.bytes(), MPEG);
+    host.native("RegisterStackedSound", &call).unwrap();
+    assert_eq!(
+        host.pending_stacked_sound_requests()[0].position,
+        Some([17.0, 31.0, 7.0])
+    );
+}
+
+#[test]
+fn stacked_sound_limits_and_invalid_calls_leave_pending_work_unchanged() {
+    let mut host = stacked_host("", 1);
+    let sound = host.native("CreateSound", &args()).unwrap();
+    let call = [
+        sound.clone(),
+        Value::Bool(false),
+        Value::Int(0),
+        Value::Int(7),
+    ];
+    let missing = host
+        .native(
+            "RegisterStackedSound",
+            &[
+                sound.clone(),
+                Value::Bool(true),
+                Value::Int(1),
+                Value::Int(2),
+            ],
+        )
+        .unwrap_err();
+    assert!(missing.contains("explicit position"), "{missing}");
+    assert!(host.pending_stacked_sound_requests().is_empty());
+    let timer = host.native("CreateTimer", &[]).unwrap();
+    for args in [
+        vec![
+            sound.clone(),
+            Value::Bool(false),
+            Value::Real(f32::INFINITY),
+            Value::Int(2),
+        ],
+        vec![
+            sound.clone(),
+            Value::Bool(false),
+            Value::Int(-1),
+            Value::Int(2),
+        ],
+        vec![sound.clone(), Value::Int(0), Value::Int(1), Value::Int(2)],
+        vec![timer, Value::Bool(false), Value::Int(1), Value::Int(2)],
+        vec![
+            Value::Null,
+            Value::Bool(false),
+            Value::Int(1),
+            Value::Int(2),
+        ],
+    ] {
+        assert!(host.native("RegisterStackedSound", &args).is_err());
+        assert!(host.pending_stacked_sound_requests().is_empty());
+    }
+    host.native("RegisterStackedSound", &call).unwrap();
+    let before = host.pending_stacked_sound_requests().to_vec();
+    let error = host.native("UnregisterStackedSound", &call).unwrap_err();
+    assert!(error.contains("pending stacked sound requests"), "{error}");
+    assert_eq!(host.pending_stacked_sound_requests(), before);
+    assert_eq!(host.pending_stacked_sound_requests()[0].position, None);
+    host.take_stacked_sound_requests();
+    host.native("UnregisterStackedSound", &call).unwrap();
+    let mut zero = stacked_host("", 0);
+    let s = zero.native("CreateSound", &args()).unwrap();
+    assert!(
+        zero.native(
+            "RegisterStackedSound",
+            &[s, Value::Bool(false), Value::Int(0), Value::Int(0)]
+        )
+        .is_err()
+    );
+    assert!(zero.pending_stacked_sound_requests().is_empty());
+}
+
+#[test]
+fn stacked_sound_admission_checks_layout_resources_and_both_signatures() {
+    let common = format!("{COMMON}{STACKED_DECLARATIONS}");
+    assert!(host(&common, "", 8).with_stacked_sounds(1).is_err());
+    assert!(
+        host(&common, "", 8)
+            .with_file_sounds(assets(), 64)
+            .unwrap()
+            .with_stacked_sounds(usize::MAX)
+            .is_err()
+    );
+    let mut disabled = host(&common, "", 8).with_file_sounds(assets(), 64).unwrap();
+    let sound = disabled.native("CreateSound", &args()).unwrap();
+    assert!(
+        disabled
+            .native(
+                "RegisterStackedSound",
+                &[sound, Value::Bool(false), Value::Int(1), Value::Int(2)]
+            )
+            .unwrap_err()
+            .contains("unsupported")
+    );
+    let Err(error) = stacked_host("", 1).with_stacked_sounds(1) else {
+        panic!("admitted twice");
+    };
+    assert!(error.to_string().contains("admitted once"));
+    for common in [
+        common.replace(
+            "native UnregisterStackedSound",
+            "constant native UnregisterStackedSound",
+        ),
+        common.replace(
+            "boolean positional, real w, real h returns nothing",
+            "boolean positional, real w, real h returns sound",
+        ),
+    ] {
+        assert!(
+            host(&common, "", 8)
+                .with_file_sounds(assets(), 64)
+                .unwrap()
+                .with_stacked_sounds(1)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn stacked_sound_requests_execute_in_the_same_vm_without_minting_new_handles() {
+    use crate::playercolor_host::StackedSoundAction;
+    let script = "globals\nsound sceneSound=null\nendglobals\nfunction main takes nothing returns nothing\nset sceneSound=CreateSound(\"Media\\\\a.wav\",true,true,true,-7,91,\"AuthoredProfile\")\ncall SetSoundPosition(sceneSound,3.0,-7.5,11.0)\ncall RegisterStackedSound(sceneSound,true,19.0,27.0)\ncall UnregisterStackedSound(sceneSound,true,19.0,27.0)\ncall Next()\nendfunction\n";
+    let mut vm = stacked_host(script, 2).into_vm();
+    assert!(
+        vm.call("main", &[])
+            .unwrap_err()
+            .to_string()
+            .contains("Next")
+    );
+    let Value::Handle(id) = vm.global("sceneSound") else {
+        panic!("sound");
+    };
+    let requests = vm.host().take_stacked_sound_requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].action, StackedSoundAction::Register);
+    assert_eq!(requests[1].action, StackedSoundAction::Unregister);
+    assert_eq!(requests[0].sound, id);
+    assert_eq!(requests[1].sound, id);
+    assert_eq!(requests[0].position, Some([3.0, -7.5, 11.0]));
+    assert_eq!(
+        vm.host().file_sound_state(id).unwrap().resource.bytes(),
+        wave()
+    );
+}
+
 #[test]
 fn sound_properties_preserve_pcm_and_mpeg_identity_and_raw_assignments() {
     use crate::playercolor_host::SoundProperties;
