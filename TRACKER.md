@@ -114,8 +114,10 @@ issues*.
       integration tests, with strict native/WASM checks. A fresh local packaged
       browser passes both source sliders at two viewport layouts, mouse Apply
       and Cancel preservation, with four reviewed captures and zero uploads,
-      sockets or page errors. Same-frame pointer batching and older larger-view
-      caption disappearance remain separate open defects. See
+      sockets or page errors. Same-frame pointer batching remains open. The
+      earlier larger-view caption-disappearance claim is withdrawn: exact
+      runtime-bounded image regions are unchanged between entry and Sound in
+      both the old and fresh large-view runs. No rendering repair is claimed. See
       `docs/re-notes/options-slider-input.md`.
 - [x] Menu geometry now preserves source ONE/ONE additive RGB instead of
       premultiplying it by alpha. Actual Bevy draws pass 72 channel checks on

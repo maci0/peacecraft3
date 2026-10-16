@@ -88,10 +88,28 @@ checks; private fixture insertion of the marker cannot make this gate pass.
 
 The failed full browser runs and the focused diagnostic runs remain separate.
 Keyboard activation in a diagnostic successfully saved the candidate, but did
-not count as mouse Apply acceptance. An older larger centered viewport also
-showed missing tab captions after a rebuild; their recovery on resize and their
-visibility at a smaller centered viewport do not establish a repair. That
-rendering issue remains open independently of the input corrections.
+not count as mouse Apply acceptance.
+
+## Caption review correction
+
+The earlier report of captions disappearing in a larger centered viewport was
+a visual-review error. A fresh run on the final release retains all three
+captions. Comparing the saved image regions at their own runtime label bounds
+also disproves the earlier report: in old browser run 6, Gameplay, Video and
+Sound are byte-identical between Options entry and the later centered Sound
+screen. The new run's Gameplay and Video regions match those same old regions;
+the hovered Sound region changes without losing its text. Nonzero caption-color
+pixels independently corroborate the exact comparisons. No caption repair is
+attributed to the span-picking fix, and no rendering workaround was added.
+
+The fresh large-centered entry/Sound/origin-zero resize run passes with three
+captures, no saved preferences, unexpected requests, page errors or sockets.
+The comparison records the screenshot raster/bitmap boundary explicitly and
+does not assume they have identical dimensions. Its image regions come from
+runtime diagnostics, not fitted screenshot coordinates. Evidence and exact
+comparison hashes remain local in
+`.scratch/options-large-caption-rootcause-20261016/`. This corrects the specific
+caption claim; it does not establish full menu or native-rendering fidelity.
 
 ## Actual browser acceptance
 
