@@ -22,6 +22,12 @@ saving and publication, followed by the normal Main-menu transition. Unchanged
 sizes and audio-only changes retain the direct validated path. Source/window
 replacement and changed drafts cannot publish a stale candidate.
 
+If Winit recreates the native window for the same Bevy entity, abandoning a
+pending request restores that component's prior size and canvas-sizing flag.
+A different replacement entity keeps its own settings. Both cases discard the
+old size observation so the next host report refreshes applied state; abandoning
+the request does not save preferences or claim that restoration was confirmed.
+
 Cancel, unavailable confirmation, a bounded operation deadline or save failure
 request restoration. Success is reported only when the previous client extent
 is reported. For an initially parent-sized browser canvas, the existing JS owner

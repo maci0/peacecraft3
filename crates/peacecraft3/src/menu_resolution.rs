@@ -176,11 +176,15 @@ pub(super) fn cancel(backend: &mut Backend) -> bool {
     }
 }
 
-fn restore(pending: &mut Pending, window: &mut Window, reason: String, cancel: bool) {
+fn restore_window(pending: &Pending, window: &mut Window) {
     window.fit_canvas_to_parent = pending.fit_canvas;
     window
         .resolution
         .set_physical_resolution(pending.host.size.0, pending.host.size.1);
+}
+
+fn restore(pending: &mut Pending, window: &mut Window, reason: String, cancel: bool) {
+    restore_window(pending, window);
     pending.started = Instant::now();
     pending.phase = Phase::Restore { reason, cancel };
 }
@@ -197,7 +201,13 @@ fn step(
     let Some(mut pending) = backend.resize.take() else {
         return;
     };
-    if observation.is_some_and(|h| h.entity != pending.host.entity || h.id != pending.host.id) {
+    if let Some(current) =
+        observation.filter(|h| h.entity != pending.host.entity || h.id != pending.host.id)
+    {
+        if current.entity == pending.host.entity {
+            restore_window(&pending, window);
+        }
+        backend.observed_resolution = None;
         nav.notice =
             "The window changed; the render-size request was abandoned without saving settings"
                 .into();
@@ -662,23 +672,55 @@ mod tests {
     }
     #[test]
     fn replacement_window_is_not_an_acknowledgement() {
-        let (mut nav, mut window, mut backend, _, source) = setup();
-        let replacement = Host {
-            id: 99,
-            ..requested(&backend)
-        };
-        step(
-            &mut nav,
-            &mut window,
-            &mut backend,
-            Some(replacement),
-            &source,
-            false,
-            no_save,
-        );
-        assert!(backend.resize.is_none());
-        assert!(nav.notice.contains("window changed"));
-        assert!(backend.audio.music_enabled);
+        for same_entity in [true, false] {
+            let (mut nav, mut window, mut backend, old, source) = setup();
+            let target = requested(&backend);
+            let dirty = nav.draft.clone();
+            let replacement = Host {
+                entity: if same_entity {
+                    old.entity
+                } else {
+                    World::new().spawn_empty().id()
+                },
+                id: 99,
+                ..target
+            };
+            window.fit_canvas_to_parent = !backend.resize.as_ref().unwrap().fit_canvas;
+            let replacement_fit = window.fit_canvas_to_parent;
+            step(
+                &mut nav,
+                &mut window,
+                &mut backend,
+                Some(replacement),
+                &source,
+                false,
+                no_save,
+            );
+            assert!(backend.resize.is_none());
+            assert!(
+                backend.observed_resolution.is_none(),
+                "the old window observation is stale"
+            );
+            assert_eq!(
+                (window.physical_width(), window.physical_height()),
+                if same_entity { old.size } else { target.size }
+            );
+            assert_eq!(
+                window.fit_canvas_to_parent,
+                if same_entity {
+                    !replacement_fit
+                } else {
+                    replacement_fit
+                }
+            );
+            assert_eq!(nav.applied.resolution, Some(old.size));
+            assert_eq!(nav.draft, dirty);
+            assert!(nav.notice.contains("window changed"));
+            assert!(backend.audio.music_enabled);
+            observe_resolution(&mut nav, &mut backend, replacement.size);
+            assert_eq!(nav.applied.resolution, Some(replacement.size));
+            assert_eq!(nav.draft, dirty);
+        }
     }
     #[test]
     fn startup_uses_the_same_observation_without_writing_preferences() {
