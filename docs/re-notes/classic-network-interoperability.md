@@ -406,3 +406,37 @@ builds. Private commands, packet streams and original UI captures are under
 `.scratch/classic-network-20261016/root-live-join/`. The first integrated probe
 completed the handshake but reported its planned expiry as an error; that run
 is retained separately from the corrected completion handling.
+
+## Generated 1.29 IPv4 join address
+
+Pinned GoWarcraft3
+[`Join.Serialize`](https://github.com/nielsAD/gowarcraft3/blob/bfda02e6ef6481fd41f4009f730ac7b7723d5883/protocol/w3gs/packets.go)
+and [`WriteSockAddr`](https://github.com/nielsAD/gowarcraft3/blob/bfda02e6ef6481fd41f4009f730ac7b7723d5883/protocol/buffer.go)
+explain the longer native tail: a counted reserved block precedes an IPv4
+socket record. This sender profile has two reserved bytes, little-endian
+AF_INET, network-order port/address and zero padding. It matches the retained
+original request when supplied the original container IP and the request's
+listen port. This is source-profile and captured-byte evidence, without a
+claim about identical native implementation internals.
+
+`join_ipv4_tail_129` now constructs that profile from an explicit `SocketAddrV4`
+without allocating. It neither infers an edition/version nor binds or discovers
+an endpoint. The existing raw-tail API remains available for other explicitly
+selected profiles. No original endpoint or asset data is stored as a default.
+
+The live probe selects its routed IPv4 address, binds its own TCP listener and
+uses that assigned port for both listen-port fields. It generates the tail with
+the production helper and does not read the retained REQJOIN. The original host
+accepts it, assigns its slot, marks the verified map at 100 and exchanges a
+ping/pong before the probe's bounded disconnect. An initial attempt immediately
+after asking the native peer to leave received `Full`; that refusal is retained.
+The successful attempt followed a fresh UI observation of an open host slot,
+without changing the encoder or relaxing admission checks.
+
+Synthetic mixed-byte-order and boundary endpoint checks pass, along with all
+135 native checks and 35 actual WASI classic-codec tests. Strict native/browser-
+WASM Clippy, rustdoc, formatting and both library builds pass. Evidence is under
+`.scratch/classic-network-20261016/root-join-address/`.
+Listening on the advertised endpoint is not proof of peer-to-peer exchange.
+Persistent application lobby transport, launcher integration, countdown and
+gameplay remain open; NET-C03 is still not closed.

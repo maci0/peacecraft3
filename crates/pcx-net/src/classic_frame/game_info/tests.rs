@@ -44,6 +44,43 @@ fn with_stat(stat: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+fn join_ipv4_tail_129_keeps_endpoint_and_mixed_wire_byte_order() {
+    use std::net::{Ipv4Addr, SocketAddrV4};
+    let address = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 9), 0x1234);
+    let tail = join_ipv4_tail_129(address);
+    assert_eq!(
+        tail,
+        [
+            2, 0, 0, 2, 0, 0x12, 0x34, 203, 0, 113, 9, 0, 0, 0, 0, 0, 0, 0, 0
+        ]
+    );
+    let other = join_ipv4_tail_129(SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 14), u16::MAX));
+    assert_eq!(&other[5..11], &[0xFF, 0xFF, 198, 51, 100, 14]);
+    let zero = join_ipv4_tail_129(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
+    assert_eq!(&zero[3..11], &[2, 0, 0, 0, 0, 0, 0, 0]);
+    let wire = fixture();
+    let game = decode_one(&wire, wire.len())
+        .unwrap()
+        .game_info(profile(), 18)
+        .unwrap();
+    let request = game
+        .join_request(
+            JoinRequest {
+                unknown: 0,
+                listen_port: address.port(),
+                peer_key: 7,
+                player_name: b"client",
+                address_tail: &tail,
+            },
+            128,
+        )
+        .unwrap();
+    assert_eq!(request.len(), 39 + b"client".len());
+    assert_eq!(&request[13..15], &[0x34, 0x12]);
+    assert_eq!(&request[request.len() - tail.len()..], &tail);
+}
+
+#[test]
 fn join_request_uses_selected_advertisement_and_explicit_client_fields() {
     let wire = fixture();
     let game = decode_one(&wire, wire.len())

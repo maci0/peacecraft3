@@ -13,6 +13,22 @@ pub const GAMEINFO_ID: u8 = 48;
 /// Pinned `W3GS_REQJOIN` identifier.
 pub const REQJOIN_ID: u8 = 30;
 
+/// IPv4 tail of the pinned 1.29 join sender profile, without allocating.
+///
+/// GoWarcraft3 `bfda02e6ef6481fd41f4009f730ac7b7723d5883` `Join.Serialize`
+/// and `WriteSockAddr`: two reserved bytes, then an IPv4 sockaddr with a
+/// little-endian family and network-order port/address. Reserved bytes are
+/// protocol zeros. The caller supplies the endpoint; this does not bind it,
+/// infer a route, select a version, or establish peer reachability.
+pub fn join_ipv4_tail_129(endpoint: std::net::SocketAddrV4) -> [u8; 19] {
+    let mut tail = [0; 19];
+    tail[0] = 2;
+    tail[3..5].copy_from_slice(&2u16.to_le_bytes());
+    tail[5..7].copy_from_slice(&endpoint.port().to_be_bytes());
+    tail[7..11].copy_from_slice(&endpoint.ip().octets());
+    tail
+}
+
 /// Explicit client fields for a join request; no native address defaults.
 #[derive(Debug, Clone, Copy)]
 pub struct JoinRequest<'a> {

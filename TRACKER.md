@@ -1020,10 +1020,11 @@ Format: `date — subsystem — symptom — root cause — status`
       checksum, port and opaque stat extension. Synthetic native/WASI and
       loopback checks pass. A bounded Rust probe now uses the integrated join
       encoder and map validator/reply to reach the original lobby, receive map
-      status 100 and answer pings. Its native address tail is explicitly replayed
-      from the reference capture. Broadcast collection, launcher integration,
-      generated client address records and persistent lobby transport remain
-      open; see `docs/re-notes/classic-network-interoperability.md`.
+      status 100 and answer pings. The later run generates its 1.29 IPv4 address
+      tail from a route-selected IP and its own bound listener port, with no
+      REQJOIN capture input. Broadcast collection, launcher integration,
+      persistent lobby transport and peer-to-peer reachability remain open;
+      see `docs/re-notes/classic-network-interoperability.md`.
 - [ ] NET-C04: Original unmodified Legacy 1.29b client discovers and joins a
       PeaceCraft host; record exact executable identity and both directions.
 - [ ] NET-C05: Original-compatible lobby slots, map fingerprints, readiness and
