@@ -153,3 +153,21 @@ under WASI, including inheritance, explicit zero, absence and malformed parent
 records. This is style/component-path verification; no new original-game or
 rendered pixel comparison was run. Root evidence is in
 `.scratch/cursor50-extra-20261016/root-034/`.
+
+## Popup title vertical alignment (2026-10-17)
+
+Popup values now use middle alignment when their selected text frame omits
+`FontJustificationV` along its inheritance chain. An authored value still wins;
+malformed values keep the existing style error. Ordinary labels and horizontal
+alignment are unchanged. This class default follows the pinned
+[reference TEXT implementation](https://github.com/Retera/WarsmashModEngine/blob/f9e0aeed4be372d6016519d0e97b384aa873f374/core/src/com/etheller/warsmash/parsers/fdf/GameUI.java#L536),
+not a measured native dispatcher. No inset or screenshot coordinate was copied.
+
+The component regression covers omission, inherited top alignment, ordinary
+labels and malformed input. All 356 application tests, strict native/browser
+Clippy and the browser build pass. An actual browser import of the selected
+original panel/FDF inputs places the resolution value exactly at its control's
+vertical center. Cancel returns to Main. The same capture exposes a separate
+category-animation regression that hides the right panel, so it is not accepted
+as overall Options parity. Typography and native rasterization remain open.
+Evidence: `.scratch/options-category-root-20261017/`.

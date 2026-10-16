@@ -2430,7 +2430,13 @@ fn apply_menu_text(
         let normal = srgba(if dim { style.disabled } else { style.colour });
         let hot = srgba(if dim { style.disabled } else { style.highlight });
         if let Ok(mut node) = nodes.get_mut(parent.parent()) {
-            node.justify_content = justify_v(style.justify_v);
+            // Popup title, FontJustificationV absent along INHERITS: TEXT default MIDDLE.
+            node.justify_content =
+                if font_parent.is_some() && fdf.record(frame, "FontJustificationV").is_none() {
+                    JustifyContent::Center
+                } else {
+                    justify_v(style.justify_v)
+                };
             node.align_items = align_h(style.justify_h);
             if let Ok(Some(offset)) = fdf.numbers(frame, "FontJustificationOffset")
                 && let [x, y] = offset.as_slice()
@@ -4305,6 +4311,74 @@ KEY_EXIT                 "E|Cffffffffx|Rit",
         world.run_system_once(apply_menu_text).expect("runs");
         assert!(world.get::<MenuTextFilled>(exit).is_none());
         assert!(world.get::<Children>(exit).is_none_or(|c| c.is_empty()));
+    }
+
+    #[test]
+    fn popup_title_omitted_vertical_is_middle_and_authored_vertical_wins() {
+        let fdf = crate::fdf::Fdf::parse(
+            r#"
+Frame "TEXT" "Bare" {
+    FrameFont "FaceA", 0.025, "",
+    Text "KEY_EXIT",
+}
+Frame "TEXT" "TopParent" INHERITS "Bare" {
+    FontJustificationV JUSTIFYTOP,
+}
+Frame "TEXT" "Pinned" INHERITS "TopParent" {
+}
+Frame "TEXT" "Broken" INHERITS "Bare" {
+    FontJustificationV SIDEWAYS,
+}
+"#,
+        )
+        .unwrap();
+        let mut faces = Assets::<Font>::default();
+        let face = faces.add(Font::from_bytes(Vec::new()));
+        let mut world = World::new();
+        let cases = [
+            ("Bare", true, JustifyContent::Center),
+            ("Pinned", true, JustifyContent::FlexStart),
+            ("Bare", false, JustifyContent::FlexStart),
+            ("Broken", true, JustifyContent::Default),
+        ]
+        .map(|(frame, popup, expected)| {
+            let entity = label(&mut world, frame);
+            if popup {
+                world
+                    .entity_mut(entity)
+                    .insert(crate::menu_screens::LabelFontParent("Title".into()));
+            }
+            (frame, entity, expected)
+        });
+        world.insert_resource(faces);
+        world.insert_resource(MenuArtCache {
+            fdf: Some(fdf),
+            strings: Some(STRINGS_FACES.to_string()),
+            fonts: std::collections::HashMap::from([("FaceA".into(), face.clone())]),
+            screen: crate::menu_screens::Screen::Options(crate::menu_screens::Page::Video),
+            ..Default::default()
+        });
+        world.run_system_once(apply_menu_text).unwrap();
+        for (frame, entity, expected) in cases {
+            let parent = world.get::<ChildOf>(entity).unwrap().parent();
+            assert_eq!(
+                world.get::<Node>(parent).unwrap().justify_content,
+                expected,
+                "{frame}"
+            );
+            let font = &world.get::<TextFont>(entity).unwrap().font;
+            if frame == "Broken" {
+                assert_eq!(*font, TextFont::default().font);
+                assert!(
+                    world
+                        .get::<Children>(entity)
+                        .is_none_or(|children| children.is_empty())
+                );
+            } else {
+                assert_eq!(*font, bevy::text::FontSource::Handle(face.clone()));
+            }
+            assert!(world.get::<MenuTextFilled>(entity).is_some());
+        }
     }
 }
 
