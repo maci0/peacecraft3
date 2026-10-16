@@ -134,6 +134,7 @@ enum Entry {
     },
     FileSound {
         resource: usize,
+        mp3: bool,
         parameters: Option<crate::sound_parameters::ParameterKey>,
         duration: Option<i32>,
         looping: bool,

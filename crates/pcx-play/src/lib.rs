@@ -65,6 +65,7 @@ pub mod label_sounds;
 pub mod map_admission;
 pub mod map_scripts_import;
 pub mod minimize;
+pub mod mp3_frame;
 pub mod neutral_player;
 mod neutral_rule_input;
 pub mod options_defaults;

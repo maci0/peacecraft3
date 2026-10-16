@@ -49,6 +49,206 @@ fn input(d: &[u8]) -> SoundInput<'_> {
 fn assets() -> Assets {
     Assets::read(&[input(&wave())], budget()).unwrap()
 }
+
+const MPEG: &[u8] = include_bytes!("../tests/fixtures/synthetic-mp3/mono-xing.mp3");
+fn mp3_budget() -> Mp3Budget {
+    Mp3Budget {
+        max_input_allocation_bytes: MPEG.len() + crate::mp3_frame::DECODER_RING_BYTES,
+        max_decoder_steps: 512,
+        max_packets: 128,
+        max_frames: 200_000,
+        max_samples: 400_000,
+    }
+}
+fn mixed_assets() -> Assets {
+    let pcm = wave();
+    let mut encoded = input(MPEG);
+    encoded.member = r"Media\tone.bin";
+    Assets::read_encoded(
+        &[input(&pcm), encoded],
+        Budget {
+            resources: 2,
+            resource_bytes: MPEG.len().max(pcm.len()),
+            total_bytes: MPEG.len() + pcm.len(),
+            ..budget()
+        },
+        mp3_budget(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn encoded_bank_preserves_pcm_and_mp3_sources_without_extension_inference() {
+    let legacy = Assets::read(
+        &[input(MPEG)],
+        Budget {
+            resource_bytes: MPEG.len(),
+            total_bytes: MPEG.len(),
+            ..budget()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(legacy.problem, Problem::Wave(_)));
+    let assets = mixed_assets();
+    let [pcm] = assets.resources() else {
+        panic!("one PCM")
+    };
+    let [mp3] = assets.mp3_resources() else {
+        panic!("one MP3")
+    };
+    assert_eq!(pcm.bytes(), wave());
+    assert_eq!(mp3.member(), r"Media\tone.bin");
+    assert_eq!(mp3.bytes(), MPEG);
+    assert_eq!(mp3.sha256(), sha256(MPEG));
+    assert_eq!(mp3.origin(), &origin());
+    assert_eq!(mp3.source_label(), input(MPEG).asset.label);
+    assert_eq!(mp3.frames().channels, 1);
+    assert!(mp3.frames().decoded_frames > 0);
+}
+
+#[test]
+fn encoded_preflight_and_decode_limits_keep_source_context() {
+    assert!(matches!(
+        Assets::read_encoded(&[input(b"invalid"), input(MPEG)], budget(), mp3_budget())
+            .unwrap_err()
+            .problem,
+        Problem::Duplicate
+    ));
+    let mut later = input(MPEG);
+    later.member = "later";
+    let error = Assets::read_encoded(
+        &[input(b"invalid"), later],
+        Budget {
+            total_bytes: 0,
+            ..budget()
+        },
+        mp3_budget(),
+    )
+    .unwrap_err();
+    assert!(matches!(error.problem, Problem::Budget));
+    let error = Assets::read_encoded(
+        &[input(MPEG)],
+        Budget {
+            resource_bytes: MPEG.len(),
+            total_bytes: MPEG.len(),
+            ..budget()
+        },
+        Mp3Budget {
+            max_frames: 0,
+            ..mp3_budget()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.source_context, input(MPEG).asset.label);
+    assert!(matches!(
+        error.problem,
+        Problem::Mp3(crate::mp3_frame::DecodeError::FrameLimit { .. })
+    ));
+}
+
+#[test]
+fn mixed_host_keeps_creation_inputs_duration_and_start_identity() {
+    let mut host = host(COMMON, "", 8)
+        .with_file_sounds(mixed_assets(), 64)
+        .unwrap()
+        .with_sound_starts(3)
+        .unwrap()
+        .with_sound_duration()
+        .unwrap();
+    let pcm = host.native("CreateSound", &args()).unwrap();
+    let mut call = args();
+    call[0] = Value::Str(r"Media\tone.bin".into());
+    let mp3 = host.native("CreateSound", &call).unwrap();
+    let Value::Handle(id) = mp3 else {
+        panic!("MP3 sound")
+    };
+    let Value::Handle(pcm_id) = pcm else {
+        panic!("PCM sound")
+    };
+    assert_ne!(id, pcm_id);
+    host.native("SetSoundDuration", &[Value::Handle(id), Value::Int(-11)])
+        .unwrap();
+    let state = host.file_mp3_state(id).unwrap();
+    assert_eq!(state.resource.bytes(), MPEG);
+    assert_eq!(
+        (
+            state.duration,
+            state.looping,
+            state.is_3d,
+            state.stop_when_out_of_range,
+            state.fade_in_rate,
+            state.fade_out_rate,
+            state.eax_setting
+        ),
+        (Some(-11), true, false, true, -7, 91, "AuthoredProfile")
+    );
+    assert!(host.sound_resource(id).is_err());
+    assert!(host.file_sound_state(id).is_err());
+    assert!(host.file_mp3_state(pcm_id).is_err());
+    for handle in [pcm_id, id, id] {
+        host.native("StartSound", &[Value::Handle(handle)]).unwrap();
+    }
+    assert_eq!(host.take_sound_starts(), [pcm_id, id, id]);
+    assert_eq!(host.sound_resource(pcm_id).unwrap().bytes(), wave());
+}
+
+#[test]
+#[ignore = "requires PCX_MP3_ARCHIVE, MEMBER, EDITION, VERSION and EXPECTED_SHA256"]
+fn original_mp3_is_admitted_from_one_explicit_local_archive() {
+    let archive_path = std::env::var("PCX_MP3_ARCHIVE").expect("PCX_MP3_ARCHIVE");
+    let member = std::env::var("PCX_MP3_MEMBER").expect("PCX_MP3_MEMBER");
+    let expected = std::env::var("PCX_MP3_EXPECTED_SHA256").expect("PCX_MP3_EXPECTED_SHA256");
+    let origin = AssetIdentity {
+        source: archive_path.clone(),
+        edition: std::env::var("PCX_MP3_EDITION").expect("PCX_MP3_EDITION"),
+        version: std::env::var("PCX_MP3_VERSION").expect("PCX_MP3_VERSION"),
+    };
+    let mut archive = pcx_mpq::MpqArchive::open(&archive_path).unwrap();
+    // Test resource policy; neither packed nor decoded bytes can exceed it.
+    let limit = 8 * 1024 * 1024;
+    let bytes = archive
+        .extract_bounded(
+            &member,
+            pcx_mpq::ExtractionBudget {
+                max_raw_packed_bytes: limit,
+                max_decoded_bytes: limit,
+            },
+            None,
+        )
+        .unwrap();
+    let hash = sha256(&bytes);
+    let actual: String = hash.iter().map(|byte| format!("{byte:02x}")).collect();
+    assert_eq!(actual, expected);
+    let files = Assets::read_encoded(
+        &[SoundInput {
+            member: &member,
+            asset: ScriptAsset {
+                label: &archive_path,
+                bytes: &bytes,
+            },
+            origin,
+        }],
+        Budget {
+            resources: 1,
+            resource_bytes: limit,
+            total_bytes: limit,
+            metadata_bytes: 4096,
+        },
+        Mp3Budget {
+            max_input_allocation_bytes: limit + crate::mp3_frame::DECODER_RING_BYTES,
+            max_decoder_steps: 40_000,
+            max_packets: 20_000,
+            max_frames: 5_000_000,
+            max_samples: 10_000_000,
+        },
+    )
+    .unwrap();
+    let report = files.mp3_resources()[0].frames();
+    assert_eq!(report.encoded_sha256, hash);
+    assert_eq!(files.mp3_resources()[0].bytes(), bytes);
+    assert!(report.decoded_frames > 0);
+    eprintln!("source={archive_path} member={member} encoded_sha256={actual} report={report:?}");
+}
 #[test]
 fn complete_pcm_and_exact_filename_provenance_are_retained_without_a_table() {
     let d = wave();

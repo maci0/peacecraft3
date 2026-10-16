@@ -416,6 +416,69 @@ fn contract_and_explicit_admission_do_not_turn_unsupported_calls_into_noops() {
     assert!(host(COMMON,"function SetSoundParamsFromLabel takes sound s, string label returns nothing\nendfunction\n").with_sound_parameters(bank()).is_err());
 }
 #[test]
+fn mp3_voice_keeps_parameter_duration_and_start_state_in_the_actual_vm() {
+    let bytes = include_bytes!("../tests/fixtures/synthetic-mp3/mono-xing.mp3");
+    let files = file_sounds::Assets::read_encoded(
+        &[file_sounds::SoundInput {
+            member: "encoded.bin",
+            asset: ScriptAsset {
+                label: "synthetic:MPEG",
+                bytes,
+            },
+            origin: origin(),
+        }],
+        file_sounds::Budget {
+            resources: 1,
+            resource_bytes: bytes.len(),
+            total_bytes: bytes.len(),
+            metadata_bytes: 256,
+        },
+        file_sounds::Mp3Budget {
+            max_input_allocation_bytes: bytes.len() + crate::mp3_frame::DECODER_RING_BYTES,
+            max_decoder_steps: 512,
+            max_packets: 128,
+            max_frames: 200_000,
+            max_samples: 400_000,
+        },
+    )
+    .unwrap();
+    let common = format!("{COMMON}native Next takes nothing returns nothing\n");
+    let map = "globals\nsound voice=null\nendglobals\nfunction main takes nothing returns nothing\nset voice=CreateSound(\"encoded.bin\",true,false,true,-7,91,\"CreationEAX\")\ncall SetSoundParamsFromLabel(voice,\"Voice\")\ncall SetSoundDuration(voice,673)\ncall StartSound(voice)\ncall Next()\nendfunction\n";
+    let mut vm = ObjectHost::checked(enums(&common, map))
+        .unwrap()
+        .with_file_sounds(files, 32)
+        .unwrap()
+        .with_sound_parameters(bank())
+        .unwrap()
+        .with_sound_starts(2)
+        .unwrap()
+        .with_sound_duration()
+        .unwrap()
+        .into_vm();
+    vm.init_globals().unwrap();
+    let error = vm.call("main", &[]).unwrap_err();
+    assert!(error.message.contains("Next"), "{error}");
+    let Value::Handle(id) = vm.global("voice") else {
+        panic!("retained voice")
+    };
+    assert_eq!(
+        vm.host().file_mp3_state(id).unwrap().resource.bytes(),
+        bytes
+    );
+    assert_eq!(vm.host().sound_duration(id).unwrap(), Some(673));
+    assert_eq!(
+        vm.host()
+            .sound_parameters(id)
+            .unwrap()
+            .unwrap()
+            .values
+            .volume,
+        83
+    );
+    assert_eq!(vm.host().pending_sound_starts(), [id]);
+}
+
+#[test]
 fn actual_vm_retains_parameter_assignment_at_a_later_failure() {
     let c = format!("{COMMON}native Next takes nothing returns nothing\n");
     let map = "globals\nsound voice=null\nendglobals\nfunction main takes nothing returns nothing\nset voice=CreateSound(\"existing.wav\",true,false,true,-7,91,\"CreationEAX\")\ncall SetSoundParamsFromLabel(voice,\"Voice\")\ncall StartSound(voice)\ncall Next()\nendfunction\n";

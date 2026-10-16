@@ -52,7 +52,7 @@ impl ObjectHost {
         id: HandleId,
     ) -> Result<Option<Assignment<'_>>, Error> {
         let name = "SetSoundParamsFromLabel";
-        self.sound_resource(id)
+        self.sound_admitted(id)
             .map_err(|e| self.inner.error(name, e.failure))?;
         let (Entry::Sound { parameters, .. } | Entry::FileSound { parameters, .. }) =
             self.inner.entry(id)?
@@ -84,7 +84,7 @@ impl ObjectHost {
                     "expected sound identity and label",
                 )));
             };
-            self.sound_resource(*id).map_err(|e| fail(e.failure))?;
+            self.sound_admitted(*id).map_err(|e| fail(e.failure))?;
             let bank = self
                 .sound_parameters
                 .as_ref()

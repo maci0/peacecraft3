@@ -1,5 +1,5 @@
 use super::{Entry, Error, Failure, ObjectHost};
-use crate::file_sounds::Assets;
+use crate::file_sounds::{Assets, Mp3Resource};
 use crate::label_sounds::PcmResource;
 use pcx_script::{HandleId, Value};
 pub(super) struct State {
@@ -8,11 +8,11 @@ pub(super) struct State {
 }
 /// Exact creation inputs, without effective fade/channel/EAX or playback guesses.
 #[derive(Debug)]
-pub struct FileSoundState<'a> {
+pub struct FileSoundState<'a, R = PcmResource> {
     pub identity: HandleId,
     /// Exact last SetSoundDuration argument; unset until explicitly assigned.
     pub duration: Option<i32>,
-    pub resource: &'a PcmResource,
+    pub resource: &'a R,
     pub looping: bool,
     pub is_3d: bool,
     pub stop_when_out_of_range: bool,
@@ -57,6 +57,7 @@ impl ObjectHost {
             .ok_or_else(|| fail(Failure::SoundState("file sounds not admitted")))?;
         let Entry::FileSound {
             resource,
+            mp3,
             looping,
             is_3d,
             stop_when_out_of_range,
@@ -68,6 +69,9 @@ impl ObjectHost {
         else {
             return Err(fail(Failure::WrongFamily));
         };
+        if *mp3 {
+            return Err(fail(Failure::SoundState("integer PCM required")));
+        }
         Ok(FileSoundState {
             identity,
             duration: self.sound_duration(identity)?,
@@ -76,6 +80,50 @@ impl ObjectHost {
                 .resources()
                 .get(*resource)
                 .ok_or_else(|| fail(Failure::Identity))?,
+            looping: *looping,
+            is_3d: *is_3d,
+            stop_when_out_of_range: *stop_when_out_of_range,
+            fade_in_rate: *fade_in_rate,
+            fade_out_rate: *fade_out_rate,
+            eax_setting,
+        })
+    }
+    pub fn file_mp3_state(
+        &self,
+        identity: HandleId,
+    ) -> Result<FileSoundState<'_, Mp3Resource>, Error> {
+        let fail = |reason| self.inner.error("CreateSound", reason);
+        let duration = self.sound_duration(identity)?;
+        let state = self
+            .file_sounds
+            .as_ref()
+            .ok_or_else(|| fail(Failure::SoundState("file sounds not admitted")))?;
+        let Entry::FileSound {
+            resource,
+            mp3,
+            looping,
+            is_3d,
+            stop_when_out_of_range,
+            fade_in_rate,
+            fade_out_rate,
+            eax_setting,
+            ..
+        } = self.inner.entry(identity)?
+        else {
+            return Err(fail(Failure::WrongFamily));
+        };
+        if !*mp3 {
+            return Err(fail(Failure::SoundState("MPEG audio required")));
+        }
+        let mp3 = state
+            .assets
+            .mp3_resources()
+            .get(*resource)
+            .ok_or_else(|| fail(Failure::Identity))?;
+        Ok(FileSoundState {
+            identity,
+            duration,
+            resource: mp3,
             looping: *looping,
             is_3d: *is_3d,
             stop_when_out_of_range: *stop_when_out_of_range,
@@ -117,12 +165,23 @@ impl ObjectHost {
                     "embedded NUL in EAX text is unsupported",
                 )));
             }
-            let resource = state
+            let (resource, mp3) = if let Some(index) = state
                 .assets
                 .resources()
                 .iter()
                 .position(|r| r.member() == member)
-                .ok_or_else(|| fail(Failure::MissingSoundFile(member.clone())))?;
+            {
+                (index, false)
+            } else if let Some(index) = state
+                .assets
+                .mp3_resources()
+                .iter()
+                .position(|r| r.member() == member)
+            {
+                (index, true)
+            } else {
+                return Err(fail(Failure::MissingSoundFile(member.clone())));
+            };
             let mut eax_setting = String::new();
             eax_setting
                 .try_reserve_exact(eax.len())
@@ -132,6 +191,7 @@ impl ObjectHost {
                 .allocate(
                     Entry::FileSound {
                         resource,
+                        mp3,
                         parameters: None,
                         duration: None,
                         looping: *looping,

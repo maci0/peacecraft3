@@ -1165,8 +1165,13 @@ Format: `date — subsystem — symptom — root cause — status`
       creates the first authored voice object. Selected source-label parameters
       now bind to that same sound identity while preserving its PCM/creation inputs,
       and explicit executed duration state now retains the authored integer on
-      that same identity. The next `CreateSound` lacks its caller-provided file
-      binding. Raw table flags remain separate from effective settings.
+      that same identity. Bounded MPEG admission now retains original encoded
+      resources alongside PCM: the pinned Human01 VM admits all 58 direct file
+      bindings and 51 distinct parameter labels, then executes all 58 creations,
+      label assignments and duration assignments. Its next refusal is `Rect` in
+      region initialization. This probe still uses the explicitly identified
+      compatibility object catalog; launcher bank preparation remains open.
+      Raw table flags remain separate from effective settings.
       Explicit parameter collections now retain each assigned table/row/source,
       reject cross-table label ambiguity and preserve a separate dialogue schema
       without fabricating the absent full-profile fields. A bounded PCM decoder
@@ -1183,7 +1188,8 @@ Format: `date — subsystem — symptom — root cause — status`
       `script-player-setup.md`/`script-start-priorities.md`/`script-camera-input.md`/
       `script-day-night-models.md`/`script-label-sounds.md`/`script-startup-clock.md`/
       `script-map-music-selection.md`/`script-file-sounds.md`/`script-sound-parameters.md`/
-      `script-sound-parameter-banks.md`/`script-pcm-decoder.md`.
+      `script-sound-parameter-banks.md`/`script-pcm-decoder.md`/
+      `script-mp3-sounds.md`.
 
 ### Current implemented slices (2026-10-14)
 

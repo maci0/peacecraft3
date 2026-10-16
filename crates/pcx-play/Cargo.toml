@@ -16,6 +16,7 @@ pcx-mdl.workspace = true
 pcx-slq.workspace = true
 thiserror.workspace = true
 sha2.workspace = true
+symphonia = { version = "0.6.1", default-features = false, features = ["mp3"] }
 
 [lints]
 workspace = true

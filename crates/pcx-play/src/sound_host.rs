@@ -54,7 +54,7 @@ impl ObjectHost {
                     "expected sound identity and integer duration",
                 )));
             };
-            self.sound_resource(*id).map_err(|e| fail(e.failure))?;
+            self.sound_admitted(*id).map_err(|e| fail(e.failure))?;
             let at = usize::try_from(id.token() - 1).map_err(|_| fail(Failure::Identity))?;
             let (Entry::Sound { duration, .. } | Entry::FileSound { duration, .. }) =
                 &mut self.inner.arena[at]
@@ -144,6 +144,15 @@ impl ObjectHost {
             fade_out_rate: *fade_out_rate,
         })
     }
+    pub(crate) fn sound_admitted(&self, identity: HandleId) -> Result<(), Error> {
+        match self.inner.entry(identity)? {
+            Entry::FileSound { mp3: true, .. } => self.file_mp3_state(identity).map(|_| ()),
+            Entry::Sound { .. } | Entry::FileSound { mp3: false, .. } => {
+                self.sound_resource(identity).map(|_| ())
+            }
+            _ => Err(self.inner.error("sound resource", Failure::WrongFamily)),
+        }
+    }
     /// Common checked PCM access for both label and direct-file sound objects.
     pub fn sound_resource(&self, identity: HandleId) -> Result<&PcmResource, Error> {
         match self.inner.entry(identity)? {
@@ -165,7 +174,7 @@ impl ObjectHost {
                         .inner
                         .error(name, Failure::SoundState("expected sound identity")));
                 };
-                self.sound_resource(*id)
+                self.sound_admitted(*id)
                     .map_err(|e| self.inner.error(name, e.failure))?;
                 if self.sound_starts.len() >= limit {
                     return Err(self
