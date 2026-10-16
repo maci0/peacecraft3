@@ -44,6 +44,99 @@ fn with_stat(stat: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+fn join_request_uses_selected_advertisement_and_explicit_client_fields() {
+    let wire = fixture();
+    let game = decode_one(&wire, wire.len())
+        .unwrap()
+        .game_info(profile(), 18)
+        .unwrap();
+    let fields = JoinRequest {
+        unknown: 0xFE,
+        listen_port: 0x9922,
+        peer_key: 0xAABB_CCDD,
+        player_name: &[b'p', 0xFF, b'x'],
+        address_tail: &[9, 8, 0, 6, 5, 0, 3, 2, 1, 0, 0x93],
+    };
+    let request = game.join_request(fields, 34).unwrap();
+    let frame = decode_one(&request, request.len()).unwrap();
+    assert_eq!((frame.family(), frame.id()), (0xF7, 30));
+    assert_eq!(request.len(), 34);
+    assert_eq!(&request[4..12], &[2, 0, 0, 0, 3, 0, 0, 0]);
+    assert_eq!(
+        &request[12..19],
+        &[0xFE, 0x22, 0x99, 0xDD, 0xCC, 0xBB, 0xAA]
+    );
+    assert_eq!(&request[19..23], &[b'p', 0xFF, b'x', 0]);
+    assert_eq!(&request[23..], fields.address_tail);
+    assert!(matches!(
+        game.join_request(fields, 33),
+        Err(JoinRequestError::Frame(FrameError::Oversize {
+            declared: 34,
+            limit: 33
+        }))
+    ));
+    for name in [&b""[..], &b"a\0b"[..]] {
+        assert!(matches!(
+            game.join_request(
+                JoinRequest {
+                    player_name: name,
+                    ..fields
+                },
+                4096
+            ),
+            Err(JoinRequestError::Fields(_))
+        ));
+    }
+    assert!(matches!(
+        game.join_request(
+            JoinRequest {
+                address_tail: &[0; 9],
+                ..fields
+            },
+            4096
+        ),
+        Err(JoinRequestError::Fields(_))
+    ));
+}
+
+#[test]
+fn join_request_checks_wire_length_before_copying_name_or_tail() {
+    let wire = fixture();
+    let game = decode_one(&wire, wire.len())
+        .unwrap()
+        .game_info(profile(), 18)
+        .unwrap();
+    let name = vec![b'x'; usize::from(u16::MAX) - 30];
+    let fields = JoinRequest {
+        unknown: 0,
+        listen_port: 0,
+        peer_key: 0,
+        player_name: &name,
+        address_tail: &[0; 10],
+    };
+    let request = game.join_request(fields, usize::MAX).unwrap();
+    assert_eq!(request.len(), usize::from(u16::MAX));
+    decode_one(&request, request.len()).unwrap();
+    assert!(matches!(
+        game.join_request(
+            JoinRequest {
+                address_tail: &[0; 11],
+                ..fields
+            },
+            usize::MAX
+        ),
+        Err(JoinRequestError::Frame(FrameError::Oversize {
+            declared: 65536,
+            limit: 65535
+        }))
+    ));
+    assert!(matches!(
+        game.join_request(fields, 3),
+        Err(JoinRequestError::Frame(FrameError::Limit))
+    ));
+}
+
+#[test]
 fn gameinfo_keeps_selected_product_version_and_map() {
     let wire = fixture();
     let info = decode_one(&wire, wire.len())

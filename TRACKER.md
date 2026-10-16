@@ -1018,8 +1018,12 @@ Format: `date — subsystem — symptom — root cause — status`
       A bounded production unicast query now reads a live original-host
       GAMEINFO using its observed product/version, preserving the map path,
       checksum, port and opaque stat extension. Synthetic native/WASI and
-      loopback checks pass. Broadcast collection, launcher integration and TCP
-      join remain open; see `docs/re-notes/classic-network-interoperability.md`.
+      loopback checks pass. A bounded Rust probe now uses the integrated join
+      encoder and map validator/reply to reach the original lobby, receive map
+      status 100 and answer pings. Its native address tail is explicitly replayed
+      from the reference capture. Broadcast collection, launcher integration,
+      generated client address records and persistent lobby transport remain
+      open; see `docs/re-notes/classic-network-interoperability.md`.
 - [ ] NET-C04: Original unmodified Legacy 1.29b client discovers and joins a
       PeaceCraft host; record exact executable identity and both directions.
 - [ ] NET-C05: Original-compatible lobby slots, map fingerprints, readiness and
@@ -1042,7 +1046,9 @@ Format: `date — subsystem — symptom — root cause — status`
       A successful `MapMatch` now constructs a MAPSIZE "have map" reply from
       its verified size and an explicit caller prefix; it equals the captured
       original reply offline. Five map checks pass under WASI. Sending that
-      reply and publishing revision-bound readiness remain unimplemented.
+      reply from the live Rust probe produces map status 100 on the original
+      host. A mutated local map refuses before the probe sends MAPSIZE.
+      Publishing revision-bound application readiness remains unimplemented.
 - [ ] NET-C06: Ordered actions and checksum/RNG agreement, followed by a ten-minute
       mixed-client match without divergence; lobby-only success is insufficient.
       Bounded source-profile action-body readers now preserve player ids,

@@ -370,3 +370,39 @@ checks, including those four socket tests. The same five WASI tests, strict
 native/browser-WASM checks, rustdoc, formatting and both library builds passed
 again. These later logs are in `followup-unrestricted/`; the earlier permission
 failures remain intact. This still does not establish a live PeaceCraft join.
+
+## Explicit join request and live Rust lobby probe
+
+`GameInfo::join_request` now builds REQJOIN using the checked advertisement's
+host counter and entry key. The caller supplies the client listen port, peer
+key, name, unspecified byte and address tail. The pinned GHost++ receiver
+requires a nonempty name and at least ten tail bytes. The longer native tail
+stays opaque; no address, count or unknown-word default is embedded in code.
+The name remains bytes, without UTF-8 conversion. Empty/embedded-NUL names,
+short tails and caller/wire length overflow refuse before the fallible packet
+allocation and copy.
+
+A bounded private Rust caller uses that encoder, the production discovery and
+frame/slot readers, `bind_selected_map` and `map_size_reply` against the original
+host. The host assigns player 2, displays the probe in its lobby and updates its
+download status to 100 after the verified size reply. The probe answers the
+host's pings and disconnects at its explicit stop time. It does not start the
+game or receive map parts. A separate run with a one-byte mutation of the local
+map refuses at CRC-32 comparison before sending MAPSIZE or publishing readiness.
+The original local map is unchanged.
+
+This probe replays the explicit unspecified/address-tail fields and MAPSIZE
+prefix from the same-build native capture. It does not generate a new native
+address record for the probe's own internal endpoint. Peer-to-peer reachability,
+persistent application lobby transport, launcher integration, the reverse host
+direction and gameplay therefore remain open. It is a measured protocol
+handshake, not full NET-C03 or NET-C05 acceptance.
+
+Two synthetic encoder groups cover byte order, raw client fields, non-UTF-8
+names, malformed input, exact/short caller limits and the full 16-bit frame
+boundary. All 134 native checks and 34 actual WASI classic-codec tests pass,
+with strict native/browser-WASM Clippy, rustdoc, formatting and both library
+builds. Private commands, packet streams and original UI captures are under
+`.scratch/classic-network-20261016/root-live-join/`. The first integrated probe
+completed the handshake but reported its planned expiry as an error; that run
+is retained separately from the corrected completion handling.

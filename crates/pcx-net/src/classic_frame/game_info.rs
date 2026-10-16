@@ -4,12 +4,43 @@
 //! Those bytes remain opaque. Product/version are selected by the caller, not
 //! inferred from a map or a project advertisement. This is not player admission.
 
-use super::{Frame, OwnedFrame, W3GS_FAMILY};
+use super::{Frame, FrameError, OwnedFrame, W3GS_FAMILY};
 
 /// Pinned `W3GS_SEARCHGAME` identifier.
 pub const SEARCHGAME_ID: u8 = 47;
 /// Pinned `W3GS_GAMEINFO` identifier.
 pub const GAMEINFO_ID: u8 = 48;
+/// Pinned `W3GS_REQJOIN` identifier.
+pub const REQJOIN_ID: u8 = 30;
+
+/// Explicit client fields for a join request; no native address defaults.
+#[derive(Debug, Clone, Copy)]
+pub struct JoinRequest<'a> {
+    /// Unspecified byte before the listen port, preserved as supplied.
+    pub unknown: u8,
+    /// Client's listen port, encoded little-endian, not the host's port.
+    pub listen_port: u16,
+    /// Caller-selected peer key, not a project player id.
+    pub peer_key: u32,
+    /// Nonempty byte name without a NUL terminator; no UTF-8 conversion.
+    pub player_name: &'a [u8],
+    /// Source-profile bytes after the name terminator, kept opaquely.
+    ///
+    /// The pinned receiver requires at least ten bytes here. Original 1.29.2
+    /// supplies a longer tail; this API does not infer its address layout.
+    pub address_tail: &'a [u8],
+}
+
+/// Client-field or frame-size refusal before constructing a join request.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum JoinRequestError {
+    /// Missing name, embedded terminator or an incomplete address tail.
+    #[error("W3GS REQJOIN: {0}")]
+    Fields(&'static str),
+    /// Caller/wire size ceiling or allocation failure.
+    #[error(transparent)]
+    Frame(#[from] FrameError),
+}
 
 /// Caller-selected protocol identity; no edition mapping or default version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +93,64 @@ pub struct GameInfo<'a> {
 }
 
 impl GameInfo<'_> {
+    /// Encode REQJOIN using this checked advertisement's counter and entry key.
+    ///
+    /// All client fields remain explicit. This constructs bytes only; it does
+    /// not open a socket, admit a player or compare the selected local map.
+    pub fn join_request(
+        &self,
+        fields: JoinRequest<'_>,
+        max_frame_bytes: usize,
+    ) -> Result<Vec<u8>, JoinRequestError> {
+        if max_frame_bytes < 4 {
+            return Err(FrameError::Limit.into());
+        }
+        if fields.player_name.is_empty() || fields.player_name.contains(&0) {
+            return Err(JoinRequestError::Fields(
+                "nonempty unterminated name required",
+            ));
+        }
+        if fields.address_tail.len() < 10 {
+            return Err(JoinRequestError::Fields(
+                "address tail is shorter than ten bytes",
+            ));
+        }
+        let limit = max_frame_bytes.min(usize::from(u16::MAX));
+        let len = 20usize
+            .checked_add(fields.player_name.len())
+            .and_then(|len| len.checked_add(fields.address_tail.len()))
+            .ok_or(FrameError::Oversize {
+                declared: usize::MAX,
+                limit,
+            })?;
+        if len > limit {
+            return Err(FrameError::Oversize {
+                declared: len,
+                limit,
+            }
+            .into());
+        }
+        let mut packet = Vec::new();
+        packet
+            .try_reserve(len)
+            .map_err(|_| FrameError::Allocation)?;
+        packet.extend([W3GS_FAMILY, REQJOIN_ID]);
+        packet.extend(
+            u16::try_from(len)
+                .expect("checked frame length")
+                .to_le_bytes(),
+        );
+        packet.extend(self.host_counter.to_le_bytes());
+        packet.extend(self.entry_key.to_le_bytes());
+        packet.push(fields.unknown);
+        packet.extend(fields.listen_port.to_le_bytes());
+        packet.extend(fields.peer_key.to_le_bytes());
+        packet.extend(fields.player_name);
+        packet.push(0);
+        packet.extend(fields.address_tail);
+        Ok(packet)
+    }
+
     /// Map flags in decoded source order.
     pub fn map_flags(&self) -> [u8; 4] {
         self.stat[..4].try_into().expect("checked stat")
