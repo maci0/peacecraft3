@@ -186,3 +186,29 @@ Receipt: `.scratch/options-mode-selector-caller-20261016/HANDOFF.md` and
 `xref.json`. This bounded result does not select an original default or activate
 a production profile. Source fallbacks, saved state, host capabilities and the
 final effective first-run mode remain distinct inputs.
+
+### Complete local caller
+
+A later, separately bounded read closes `0x42e630..0x42e6e0`: 176 bytes and
+60 instructions, with independent decoders agreeing on all reached instructions.
+Its call at `0x42e6d3` forwards the first incoming argument directly as the
+provider selector and returns the target's EAX unchanged. This is a dynamic
+input, not a locally selected startup backend. Another argument affects query
+fields through a conditional move; its enum meaning is not established.
+
+The wrapper reads `reswidth`, `resheight`, `colordepth`, `refreshrate` and
+`adapter` through the already-qualified word getter. Same-image retained
+descriptor metadata supplies those names. Width, height, depth and refresh
+enter the query; the adapter output local is not read again in this body.
+Getter return statuses are not tested. This refresh-bearing wrapper is distinct
+from the previously checked ResolutionMenu selection query, which supplies zero
+refresh. Literal additional dimension operands are query construction data,
+not proof of a selected default resolution or a preset list.
+
+Only the authorized 512-byte code window was read; no delegate, new data or
+outside caller was followed. Static source/control flow still does not identify
+startup invocation, saved-versus-fallback inputs or the host-adjusted result.
+The three synthetic analyzer groups and retained-metadata root replay pass.
+Evidence: `.scratch/options-mode-caller-body-20261016/` and
+`.scratch/options-caller-root-review-20261016/`. No runtime mode policy or
+hard-coded default was introduced.
