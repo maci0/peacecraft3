@@ -18,6 +18,7 @@ pub struct ObjectHost {
     sound_parameters: Option<crate::sound_parameters::Banks>,
     sound_start_limit: Option<usize>,
     sound_duration: bool,
+    sound_properties: bool,
     sound_starts: Vec<HandleId>,
     startup_clock: Option<clock::StartupClockState>,
     map_music: Option<music::State>,
@@ -46,6 +47,7 @@ impl ObjectHost {
             sound_parameters: None,
             sound_start_limit: None,
             sound_duration: false,
+            sound_properties: false,
             sound_starts: Vec::new(),
             startup_clock: None,
             map_music: None,
@@ -269,6 +271,9 @@ impl ObjectHost {
 }
 impl Host for ObjectHost {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.sound_properties_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.sound_duration_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -376,3 +381,7 @@ pub use quests::{QuestBudget, QuestEvent, QuestFlag};
 
 #[path = "rect_host.rs"]
 mod rectangles;
+
+#[path = "sound_properties_host.rs"]
+mod sound_properties;
+pub use sound_properties::SoundProperties;

@@ -214,6 +214,7 @@ impl ObjectHost {
                 .allocate(
                     Entry::Sound {
                         resource,
+                        properties: super::SoundProperties::default(),
                         parameters: None,
                         duration: None,
                         fade_in_rate: *fade_in_rate,

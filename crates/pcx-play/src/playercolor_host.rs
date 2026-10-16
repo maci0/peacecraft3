@@ -129,6 +129,7 @@ enum Entry {
     },
     Sound {
         resource: usize,
+        properties: objects::SoundProperties,
         parameters: Option<crate::sound_parameters::ParameterKey>,
         duration: Option<i32>,
         fade_in_rate: i32,
@@ -136,6 +137,7 @@ enum Entry {
     },
     FileSound {
         resource: usize,
+        properties: objects::SoundProperties,
         mp3: bool,
         parameters: Option<crate::sound_parameters::ParameterKey>,
         duration: Option<i32>,
@@ -531,6 +533,6 @@ mod objects;
 pub use objects::{
     CameraState, DayNightState, FileSoundState, MapConfig, MapConfigBudget, MapMusicSelection,
     ObjectHost, PlayerAdmissionError, PlayerBudget, PlayerSettings, QuestBudget, QuestEvent,
-    QuestFlag, SoundState, StartLocation, StartPriorities, StartPriority, StartupClockState,
-    TimerHost,
+    QuestFlag, SoundProperties, SoundState, StartLocation, StartPriorities, StartPriority,
+    StartupClockState, TimerHost,
 };

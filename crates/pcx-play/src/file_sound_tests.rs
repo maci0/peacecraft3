@@ -77,6 +77,260 @@ fn mixed_assets() -> Assets {
     .unwrap()
 }
 
+const PROPERTY_DECLARATIONS: &str =
+    "native SetSoundChannel takes sound s, integer c returns nothing
+native SetSoundVolume takes sound s, integer v returns nothing
+native SetSoundPitch takes sound s, real p returns nothing
+native SetSoundDistanceCutoff takes sound s, real c returns nothing
+native SetSoundDistances takes sound s, real a, real b returns nothing
+native SetSoundConeAngles takes sound s, real a, real b, integer v returns nothing
+native SetSoundConeOrientation takes sound s, real x, real y, real z returns nothing
+native SetSoundPosition takes sound s, real x, real y, real z returns nothing
+native SetSoundVelocity takes sound s, real x, real y, real z returns nothing
+";
+
+fn property_host(map: &str) -> ObjectHost {
+    host(&format!("{COMMON}{PROPERTY_DECLARATIONS}"), map, 16)
+        .with_file_sounds(mixed_assets(), 64)
+        .unwrap()
+        .with_label_sounds(bank())
+        .unwrap()
+        .with_sound_properties()
+        .unwrap()
+}
+
+#[test]
+fn sound_properties_preserve_pcm_and_mpeg_identity_and_raw_assignments() {
+    use crate::playercolor_host::SoundProperties;
+    let mut host = property_host("");
+    for member in [r"Media\a.wav", r"Media\tone.bin"] {
+        let mut creation = args();
+        creation[0] = Value::Str(member.into());
+        creation[2] = Value::Bool(true);
+        let Value::Handle(id) = host.native("CreateSound", &creation).unwrap() else {
+            panic!("sound handle");
+        };
+        assert_eq!(
+            host.sound_properties(id).unwrap(),
+            &SoundProperties::default()
+        );
+        for (name, tail) in [
+            ("SetSoundChannel", vec![Value::Int(-5)]),
+            ("SetSoundVolume", vec![Value::Int(233)]),
+            ("SetSoundPitch", vec![Value::Real(-0.25)]),
+            ("SetSoundDistanceCutoff", vec![Value::Real(937.5)]),
+            ("SetSoundDistances", vec![Value::Int(19), Value::Real(81.5)]),
+            (
+                "SetSoundConeAngles",
+                vec![Value::Real(13.5), Value::Real(95.0), Value::Int(-11)],
+            ),
+            (
+                "SetSoundConeOrientation",
+                vec![Value::Int(1), Value::Int(-2), Value::Int(3)],
+            ),
+            (
+                "SetSoundPosition",
+                vec![Value::Real(-0.0), Value::Real(f32::MAX), Value::Real(-9.25)],
+            ),
+            (
+                "SetSoundVelocity",
+                vec![Value::Real(-7.5), Value::Int(0), Value::Real(0.25)],
+            ),
+        ] {
+            let mut call = vec![Value::Handle(id)];
+            call.extend(tail);
+            assert_eq!(host.native(name, &call).unwrap(), Value::Null);
+        }
+        assert_eq!(
+            *host.sound_properties(id).unwrap(),
+            SoundProperties {
+                channel: Some(-5),
+                volume: Some(233),
+                pitch: Some(-0.25),
+                distance_cutoff: Some(937.5),
+                distances: Some([19.0, 81.5]),
+                cone_angles: Some((13.5, 95.0, -11)),
+                cone_orientation: Some([1.0, -2.0, 3.0]),
+                position: Some([-0.0, f32::MAX, -9.25]),
+                velocity: Some([-7.5, 0.0, 0.25]),
+            }
+        );
+        assert_eq!(
+            host.sound_properties(id).unwrap().position.unwrap()[0].to_bits(),
+            (-0.0_f32).to_bits()
+        );
+        let mut changed = creation.clone();
+        changed[2] = Value::Bool(false);
+        let Value::Handle(other) = host.native("CreateSound", &changed).unwrap() else {
+            panic!("sound");
+        };
+        assert_ne!(id, other);
+        assert_eq!(
+            *host.sound_properties(other).unwrap(),
+            SoundProperties::default()
+        );
+        assert!(
+            host.native(
+                "SetSoundPosition",
+                &[
+                    Value::Handle(other),
+                    Value::Int(0),
+                    Value::Int(0),
+                    Value::Int(0)
+                ]
+            )
+            .unwrap_err()
+            .contains("explicit 3D")
+        );
+        assert_eq!(host.inner().kind(id).unwrap(), "sound");
+        if member.ends_with(".bin") {
+            assert_eq!(host.file_mp3_state(id).unwrap().resource.bytes(), MPEG);
+        } else {
+            assert_eq!(host.file_sound_state(id).unwrap().resource.bytes(), wave());
+        }
+    }
+}
+
+#[test]
+fn sound_property_errors_do_not_mutate_state_or_cross_handle_families() {
+    let mut host = property_host("");
+    let mut creation = args();
+    creation[2] = Value::Bool(true);
+    let sound = host.native("CreateSound", &creation).unwrap();
+    let Value::Handle(id) = sound else {
+        panic!("sound");
+    };
+    host.native(
+        "SetSoundPosition",
+        &[sound.clone(), Value::Int(4), Value::Int(5), Value::Int(6)],
+    )
+    .unwrap();
+    let before = *host.sound_properties(id).unwrap();
+    for (name, tail) in [
+        (
+            "SetSoundPosition",
+            vec![Value::Int(1), Value::Real(f32::NAN), Value::Int(3)],
+        ),
+        (
+            "SetSoundVelocity",
+            vec![Value::Real(f32::INFINITY), Value::Int(1), Value::Int(0)],
+        ),
+        (
+            "SetSoundConeAngles",
+            vec![Value::Int(1), Value::Int(2), Value::Real(3.0)],
+        ),
+        ("SetSoundVolume", vec![Value::Real(7.0)]),
+        ("SetSoundDistances", vec![Value::Int(1)]),
+        ("SetSoundPitch", vec![Value::Str("not a real".into())]),
+    ] {
+        let mut call = vec![sound.clone()];
+        call.extend(tail);
+        let error = host.native(name, &call).unwrap_err();
+        assert!(error.contains("synthetic:common"), "{error}");
+        assert_eq!(*host.sound_properties(id).unwrap(), before);
+    }
+    let timer = host.native("CreateTimer", &[]).unwrap();
+    assert!(
+        host.native("SetSoundVolume", &[timer, Value::Int(1)])
+            .unwrap_err()
+            .contains("another family")
+    );
+    assert!(
+        host.native("SetSoundPitch", &[Value::Null, Value::Int(1)])
+            .is_err()
+    );
+    let label = host
+        .native(
+            "CreateMIDISound",
+            &[Value::Str("Breeze".into()), Value::Int(1), Value::Int(2)],
+        )
+        .unwrap();
+    host.native("SetSoundVolume", &[label.clone(), Value::Int(29)])
+        .unwrap();
+    assert!(
+        host.native(
+            "SetSoundPosition",
+            &[label.clone(), Value::Int(1), Value::Int(2), Value::Int(3)]
+        )
+        .unwrap_err()
+        .contains("label flags")
+    );
+    let Value::Handle(label) = label else {
+        panic!("label");
+    };
+    assert_eq!(host.sound_properties(label).unwrap().volume, Some(29));
+    assert_eq!(host.sound_properties(label).unwrap().position, None);
+    assert_eq!(*host.sound_properties(id).unwrap(), before);
+}
+
+#[test]
+fn sound_property_contracts_and_admission_are_checked() {
+    let common = format!("{COMMON}{PROPERTY_DECLARATIONS}");
+    assert!(host(&common, "", 8).with_sound_properties().is_err());
+    let mut unadmitted = host(&common, "", 8).with_file_sounds(assets(), 64).unwrap();
+    let sound = unadmitted.native("CreateSound", &args()).unwrap();
+    assert!(
+        unadmitted
+            .native("SetSoundVolume", &[sound, Value::Int(31)])
+            .unwrap_err()
+            .contains("unsupported")
+    );
+    let Err(error) = property_host("").with_sound_properties() else {
+        panic!("second admission");
+    };
+    assert!(error.to_string().contains("admitted once"));
+    for bad in [
+        common.replace("native SetSoundPitch", "constant native SetSoundPitch"),
+        common.replace(
+            "real x, real y, real z returns nothing",
+            "real x, real y, real z returns sound",
+        ),
+        common.replace(
+            "sound s, integer v returns nothing",
+            "sound s, real v returns nothing",
+        ),
+    ] {
+        assert!(
+            host(&bad, "", 8)
+                .with_file_sounds(assets(), 64)
+                .unwrap()
+                .with_sound_properties()
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn sound_properties_run_in_actual_vm_and_survive_the_next_refusal() {
+    let map = "globals\nsound sceneSound=null\nendglobals\nfunction main takes nothing returns nothing\nset sceneSound=CreateSound(\"Media\\\\a.wav\",true,true,true,-7,91,\"AuthoredProfile\")\ncall SetSoundPosition(sceneSound,7.5,-3.0,11.0)\ncall SetSoundVolume(sceneSound,220)\ncall SetSoundPitch(sceneSound,0.75)\ncall Next()\nendfunction\n";
+    let common =
+        format!("{COMMON}{PROPERTY_DECLARATIONS}native Next takes nothing returns nothing\n");
+    let mut vm = host(&common, map, 8)
+        .with_file_sounds(assets(), 64)
+        .unwrap()
+        .with_sound_properties()
+        .unwrap()
+        .into_vm();
+    assert!(
+        vm.call("main", &[])
+            .unwrap_err()
+            .to_string()
+            .contains("Next")
+    );
+    let Value::Handle(id) = vm.global("sceneSound") else {
+        panic!("sound");
+    };
+    let properties = *vm.host().sound_properties(id).unwrap();
+    assert_eq!(properties.position, Some([7.5, -3.0, 11.0]));
+    assert_eq!(properties.volume, Some(220));
+    assert_eq!(properties.pitch, Some(0.75));
+    assert_eq!(properties.velocity, None);
+    assert_eq!(
+        vm.host().file_sound_state(id).unwrap().eax_setting,
+        "AuthoredProfile"
+    );
+}
+
 #[test]
 fn encoded_bank_preserves_pcm_and_mp3_sources_without_extension_inference() {
     let legacy = Assets::read(

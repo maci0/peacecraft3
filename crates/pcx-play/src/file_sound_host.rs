@@ -191,6 +191,7 @@ impl ObjectHost {
                 .allocate(
                     Entry::FileSound {
                         resource,
+                        properties: super::SoundProperties::default(),
                         mp3,
                         parameters: None,
                         duration: None,
