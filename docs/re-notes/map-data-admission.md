@@ -21,8 +21,12 @@ initialize a VM, instantiate game entities or replace missing game rules.
 
 `MapRequests::replace_selected` prepares a candidate binding and context before
 publishing them with their receipts. Failed candidates preserve the old
-publication. Requests validate binding revision, declared edition/version and
-exact equality with the map used for object binding. Shared-byte requests avoid
+publication. Requests retain the selected resolver receipt’s typed `AssetPath`
+map member independently of the diagnostic label. They validate binding revision,
+declared edition/version and that member before payload I/O or parsing, then
+validate exact equality with the map used for object binding. A changed member
+returns `RequestFailure::MemberMismatch`, including both requested and bound
+paths, even if its offered bytes are identical. Shared-byte requests avoid
 another full map copy. Native file drops check metadata and reserve fallibly
 before reading; missing configuration refuses before opening the dropped path.
 

@@ -1,7 +1,8 @@
 use crate::fixtures;
 use bevy::prelude::*;
 use pcx_assets::{
-    ArchiveLayer, ContentSource, LayerKind, Resolver, SourceContent, SourceError, SourceInfo,
+    ArchiveLayer, AssetPath, ContentSource, LayerKind, Resolver, SourceContent, SourceError,
+    SourceInfo,
 };
 use pcx_objects::editor::path::SlkId;
 use pcx_play::{
@@ -363,6 +364,7 @@ pub fn resolver_to_installed_app_and_receipts() {
     peacecraft3::map_requests::install(&mut app);
     app.world_mut().write_message(MapRequest {
         label: "chosen map label".into(),
+        map_member: AssetPath::new("selected map.w3m").unwrap(),
         identity: f.map_id.clone(),
         binding_revision: 7,
         payload: MapPayload::Shared(raw),
@@ -487,6 +489,7 @@ pub fn stale_and_different_map_refuse() {
     let receipts = state.published_receipts.as_ref().unwrap().clone();
     state.deliver(MapRequest {
         label: "stale caller".into(),
+        map_member: AssetPath::new("selected map.w3m").unwrap(),
         identity: f.map_id.clone(),
         binding_revision: 6,
         payload: MapPayload::Bytes(f.raw.clone()),
@@ -499,6 +502,7 @@ pub fn stale_and_different_map_refuse() {
     let other = Fixture::new(234);
     state.deliver(MapRequest {
         label: "different map".into(),
+        map_member: AssetPath::new("selected map.w3m").unwrap(),
         identity: other.map_id.clone(),
         binding_revision: 7,
         payload: MapPayload::Bytes(other.raw.clone()),
@@ -509,6 +513,81 @@ pub fn stale_and_different_map_refuse() {
     ));
     assert_old(&state, old, &receipts);
 }
+#[cfg_attr(test, test)]
+pub fn map_member_is_bound_before_payload_reads() {
+    let f = Fixture::new(235);
+    let mut app = App::new();
+    peacecraft3::map_requests::install(&mut app);
+    assert!(
+        app.world_mut()
+            .resource_mut::<MapRequests>()
+            .replace_selected(&f.resolver(), f.input(7), f.limits())
+            .result
+            .is_ok()
+    );
+    let state = app.world().resource::<MapRequests>();
+    let receipts = state.published_receipts.as_ref().unwrap().clone();
+    let mut valid = state.selected_map_request().unwrap();
+    assert_eq!(valid.map_member, receipts.map.path);
+    valid.label = "different diagnostic label".into();
+    valid.map_member = AssetPath::new("SELECTED MAP.W3M").unwrap();
+    let MapPayload::Shared(bytes) = &valid.payload else {
+        panic!("shared request");
+    };
+    assert!(Arc::ptr_eq(
+        bytes,
+        &state.bindings.as_ref().unwrap().catalog_map_bytes
+    ));
+    app.world_mut().write_message(valid);
+    app.update();
+    let state = app.world().resource::<MapRequests>();
+    assert!(state.last_outcome.as_ref().unwrap().result.is_ok());
+    assert_eq!(
+        state.last_outcome.as_ref().unwrap().label,
+        "different diagnostic label"
+    );
+    let old = state.admission.context().unwrap() as *const _;
+    for payload in [
+        MapPayload::Shared(Arc::from(f.raw.clone())),
+        MapPayload::Bytes(Vec::new()),
+    ] {
+        let mut forged = app
+            .world()
+            .resource::<MapRequests>()
+            .selected_map_request()
+            .unwrap();
+        forged.map_member = AssetPath::new("another map.w3m").unwrap();
+        forged.payload = payload;
+        app.world_mut().write_message(forged);
+        app.update();
+        let state = app.world().resource::<MapRequests>();
+        assert!(matches!(
+            &state.last_outcome.as_ref().unwrap().result,
+            Err(RequestFailure::MemberMismatch { requested, bound })
+                if requested.as_str() == "another map.w3m" && *bound == receipts.map.path
+        ));
+        assert_old(state, old, &receipts);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut forged = app
+            .world()
+            .resource::<MapRequests>()
+            .selected_map_request()
+            .unwrap();
+        forged.map_member = AssetPath::new("another map.w3m").unwrap();
+        forged.payload = MapPayload::File(std::path::PathBuf::new());
+        app.world_mut().write_message(forged);
+        app.update();
+        let state = app.world().resource::<MapRequests>();
+        assert!(matches!(
+            state.last_outcome.as_ref().unwrap().result,
+            Err(RequestFailure::MemberMismatch { .. })
+        ));
+        assert_old(state, old, &receipts);
+    }
+}
+
 #[cfg_attr(test, test)]
 pub fn missing_ambiguous_malformed_sources_distinct() {
     let f = Fixture::new(235);
@@ -749,6 +828,7 @@ pub fn message_order_keeps_last_success_and_reports_last_refusal() {
     ] {
         app.world_mut().write_message(MapRequest {
             label: label.into(),
+            map_member: AssetPath::new("selected map.w3m").unwrap(),
             identity: f.map_id.clone(),
             binding_revision: revision,
             payload: MapPayload::Shared(bytes.clone()),
@@ -931,6 +1011,11 @@ pub fn actual_source_card_click_preserves_configured_identity() {
         .unwrap();
     assert_eq!(request.identity, f.map_id);
     assert_eq!(request.label, "chosen map label");
+    assert_eq!(
+        request.map_member,
+        AssetPath::new("selected map.w3m").unwrap()
+    );
+    assert_ne!(request.map_member.as_str(), request.label);
     assert_eq!(request.binding_revision, 13);
     let MapPayload::Shared(bytes) = request.payload else {
         panic!("unexpected full-copy payload")

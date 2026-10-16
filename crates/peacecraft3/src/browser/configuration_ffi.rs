@@ -69,6 +69,7 @@ fn request_kind(error: &RequestFailure) -> &'static str {
         RequestFailure::MissingBindings => "map-missing-bindings",
         RequestFailure::StaleBindings { .. } => "map-stale-bindings",
         RequestFailure::IdentityMismatch => "map-identity-mismatch",
+        RequestFailure::MemberMismatch { .. } => "map-member-mismatch",
         RequestFailure::CatalogMapMismatch => "map-catalog-mismatch",
         RequestFailure::FileBudget { .. } => "map-file-budget",
         RequestFailure::Container(_) => "map-container",

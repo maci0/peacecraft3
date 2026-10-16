@@ -39,6 +39,8 @@ pub struct MapBindings {
 #[derive(Message)]
 pub struct MapRequest {
     pub label: String,
+    /// Resolver member identity, independent of the display label and local filename.
+    pub map_member: pcx_assets::AssetPath,
     pub identity: AssetIdentity,
     pub binding_revision: u64,
     pub payload: MapPayload,
@@ -59,6 +61,11 @@ pub enum RequestFailure {
     StaleBindings { requested: u64, current: u64 },
     #[error("selected map edition/version differs from the supplied binding")]
     IdentityMismatch,
+    #[error("selected map member {requested} differs from the bound member {bound}")]
+    MemberMismatch {
+        requested: pcx_assets::AssetPath,
+        bound: pcx_assets::AssetPath,
+    },
     #[error("selected map bytes differ from the map used for object bindings")]
     CatalogMapMismatch,
     #[error("selected file has {actual} bytes; caller limit is {limit}")]
@@ -137,6 +144,7 @@ impl MapRequests {
             .ok_or(RequestFailure::MissingBindings)?;
         Ok(MapRequest {
             label: binding.map_label.clone(),
+            map_member: binding.receipts.map.path.clone(),
             identity: binding.map_identity.clone(),
             binding_revision: binding.revision,
             payload: MapPayload::Shared(binding.catalog_map_bytes.clone()),
@@ -166,17 +174,12 @@ impl MapRequests {
                 return self.last_outcome.as_ref().expect("binding outcome");
             }
         };
-        let payload = MapPayload::Shared(bindings.catalog_map_bytes.clone());
         let mut candidate = Self {
             bindings: Some(bindings),
             ..Default::default()
         };
-        candidate.deliver(MapRequest {
-            label,
-            identity,
-            binding_revision: revision,
-            payload,
-        });
+        let request = candidate.selected_map_request().expect("candidate binding");
+        candidate.deliver(request);
         let accepted = candidate
             .last_outcome
             .as_ref()
@@ -216,6 +219,12 @@ impl MapRequests {
             || request.identity.version != bindings.map_identity.version
         {
             return Err(RequestFailure::IdentityMismatch);
+        }
+        if request.map_member != bindings.receipts.map.path {
+            return Err(RequestFailure::MemberMismatch {
+                requested: request.map_member.clone(),
+                bound: bindings.receipts.map.path.clone(),
+            });
         }
         #[cfg(not(target_arch = "wasm32"))]
         let file;
@@ -331,6 +340,7 @@ fn dropped_files(mut drops: MessageReader<FileDragAndDrop>, mut state: ResMut<Ma
             };
             let request = MapRequest {
                 label: path_buf.display().to_string(),
+                map_member: bindings.receipts.map.path.clone(),
                 identity: AssetIdentity {
                     source: path_buf.display().to_string(),
                     edition: bindings.map_identity.edition.clone(),
