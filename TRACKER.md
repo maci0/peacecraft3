@@ -965,7 +965,7 @@ See `PLAN.md` §3.5 for the harness design. Each chapter asserts specific outcom
 | RE-Q3 | Table cipher + file keys | resolved — §2.3 items 4–5, `ev_703ee25f…` | **closed** |
 | RE-Q4 | Compressors | resolved — implode + zlib working | **closed** |
 | RE-Q5 | Sim tick rate / frame relationship | Exact Legacy scheduler/timer chain traced; QPC calibration, gameplay subscribers and render coupling unresolved. See `docs/re-notes/legacy-simulation-clock.md`. | open |
-| RE-Q6 | RNG generator + call order | Explicit seeded Host/factory behavior matches selected-code references on native/WASI and retained original 80 integer/16 formatted real observations. Twelve raw Human01 loading-time real results across three fresh unmodified Wine runs match direct Host history replay. Captured race inputs and ordered fresh wander units qualify one primary prefix. The separate owned-factory four-result gate fails after one exact result at unsupported `TriggerRegisterTimerEvent` on native/WASI; its private warmup adapter is not production engine initialization. Engine/secondary initialization, consumer integration and broader real-bit parity remain open. See `docs/re-notes/original-rng-control.md`. | open |
+| RE-Q6 | RNG generator + call order | Explicit seeded Host/factory behavior matches selected-code references on native/WASI and retained original 80 integer/16 formatted real observations. Twelve raw Human01 loading-time real results across three fresh unmodified Wine runs match direct Host history replay. Captured race inputs and ordered fresh wander units qualify one primary prefix. The owned timed-trigger consumer removes the registration boundary; the separate factory four-result gate still fails after one exact result at unsupported `TriggerRegisterUnitInRange` on native/WASI. Its private warmup adapter is not production engine initialization. Engine/secondary initialization, consumer integration and broader real-bit parity remain open. See `docs/re-notes/original-rng-control.md`. | open |
 | RE-Q7 | Header words `0x20`/`0x24` | REA: `Storm.dll` open path; nothing depends on them | open |
 | RE-Q8 | Storm's live table at `+0x4C2E4` ≠ fixed table | REA: `FUN_15017650`; archives use the fixed table | open, not blocking |
 | RE-Q9 | Archive priority order | REA: `game.dll` archive-open sequence; `DEFAULT_PRIORITY` assumed | open |
@@ -2340,3 +2340,22 @@ repeated, and the public site package was not rebuilt.
   exceptional native reals, original real bits, ordered paired gameplay and the
   100-consecutive original baseline remain open. The public site was not rebuilt.
   See [the supported scope](docs/re-notes/original-rng-control.md#explicit-seeded-production-host-2026-10-18).
+
+### 2026-10-18 — owned timed-trigger delivery
+
+- [~] Explicit trigger runtime input now admits timed-event registration,
+  destruction and non-yielding condition/action delivery on the existing arena,
+  clock and published VM. Event identity derives from the selected constant;
+  the initial enabled state is an explicit caller observation. Omission preserves
+  unsupported behavior. Disabled periodic phase, active action tails and context
+  cleanup follow the qualified reference cases.
+- [~] Native and actual WASI pass 446 Host tests; native application-library and
+  map-loading suites pass 19 and 107 cases. Actual Cargo browser WASM executes
+  four new timed-trigger and six existing timer cases. Strict native/browser
+  Clippy and formatting pass. The unchanged Human01 factory passes registration
+  and reaches `TriggerRegisterUnitInRange`; the four-result RNG gate remains
+  failed after one exact result on native/WASI.
+- [ ] Unit/world range-event delivery, engine RNG initialization, yielding and
+  callback-list mutation semantics, native timing precision, application clock,
+  rendered gameplay and the 100-consecutive baseline remain open. See
+  [the scope and evidence](docs/re-notes/legacy-timer-start.md#owned-timed-trigger-consumer-2026-10-18).

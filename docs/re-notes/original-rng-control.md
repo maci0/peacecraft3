@@ -1,6 +1,6 @@
 # Original seeded RNG probe
 
-Current implementation: [explicit seeded host and factory](#explicit-seeded-production-host-2026-10-18). [Startup input observations and the owned-factory experiment](#startup-inputs-and-owned-factory-boundary-2026-10-18) qualify one primary-stream prefix, but the required four-checkpoint factory gate fails at an unsupported timed-trigger registration. Production engine initialization and full consumer parity remain open. Earlier sections retain their historical scope.
+Current implementation: [explicit seeded host and factory](#explicit-seeded-production-host-2026-10-18). [Startup input observations and the owned-factory experiment](#startup-inputs-and-owned-factory-boundary-2026-10-18) qualify one primary-stream prefix. The [timed-trigger consumer](legacy-timer-start.md#owned-timed-trigger-consumer-2026-10-18) removes the registration boundary; the required four-checkpoint factory gate still fails after one match at unsupported `TriggerRegisterUnitInRange`. Production engine initialization and full consumer parity remain open. Earlier sections retain their historical scope.
 
 Two fresh isolated Wine runs loaded the same private, intentionally modified
 map and emitted identical measured results. This establishes a working seed
@@ -398,3 +398,12 @@ lifetime, conditions/actions, periodic ordering, bounded work and context cleanu
 A registration-only stub would conceal that missing behavior. Proper engine RNG
 initialization, secondary consumers, broader wander states, paired gameplay,
 public-site validation and the 100-consecutive original baseline remain open.
+
+The subsequent owned timed-trigger implementation passes registration and tests
+condition/action delivery in the published VM. Repeating the unchanged-map
+factory experiment on native and actual WASI reaches a later unsupported call,
+`TriggerRegisterUnitInRange`, at Blizzard span `82885..82941`. The required RNG
+gate still fails after one of four exact real results; neither exit 101 nor exit
+134 is accepted as a passing gate. The private primary-only initialization and
+compatibility catalog are unchanged. This advances the missing-native boundary
+without qualifying engine initialization or complete RNG consumer parity.

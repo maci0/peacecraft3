@@ -185,7 +185,8 @@ The actual owned-factory Human01 RNG experiment now stops at
 `TriggerRegisterTimerEvent`; its required four-result gate fails after one exact
 original result. Registration alone would hide the missing scheduler and trigger
 consumer. This section qualifies additional behavior before implementing that
-consumer; production timer and trigger code are unchanged.
+consumer. Production timer and trigger code were unchanged at that reference step;
+the implementation follow-up is below.
 
 Static decoding of the same fingerprinted executable links the functional
 registration to an event-owned scheduling subobject. Its configuration forwards
@@ -229,3 +230,59 @@ registered conditions before deciding whether to run actions; retain the active
 action tail across self-destruction; and restore event context before a direct
 handler. Admission, work bounds, failure cleanup and replacement lifetime still
 need actual native/WASM consumer tests. The RNG factory gate remains failed.
+
+## Owned timed-trigger consumer (2026-10-18)
+
+`MapStartupInputs::trigger_runtime` now separately opts the existing object host
+into `TriggerRegisterTimerEvent`, trigger destruction and timer-trigger callback
+delivery. It requires the existing timer runtime. The caller supplies an explicit
+initial enabled state, a reviewed constant `gameevent` global name and a retained
+timed-event limit. The host validates the native signatures, declaration sources,
+selected conversion and global initializer, then derives the event identity from
+that initializer. No measured event number or enabled default is embedded in
+production code. Omission preserves the previous unsupported paths.
+
+Timed events retain their runs on event records in the same bounded arena and
+use the existing game-time clock and sequence ordering. They do not allocate a
+script timer. Finite positive deadlines are required, and registration/capacity
+refusals preserve prior runs and identities. Disabled periodic events consume
+their scheduled deadlines without callbacks, retaining their phase. Destroying a
+trigger prevents future delivery without recycling its token.
+
+The scheduler prepares bounded callback snapshots before consuming a deadline.
+`MapScriptSession::advance_timers` enters every registered condition in order
+through the current session's callback tickets and VM. It combines their results
+after evaluating them all, then executes the ordered action list when accepted.
+The active action tail survives trigger self-destruction. Timer-expiry
+subscriptions run before a direct timer handler, and trigger/event context is
+cleared before that handler. Automatic timed events have no expired timer.
+Callback failure clears context while preserving prior script effects; failed
+replacement retains the previous published VM, arena and clock.
+
+The caller bounds expiries; snapshot preparation is bounded by arena size and
+retained subscriptions, and execution retains the VM's cumulative step limit.
+Callback-list edits take effect on the next firing under the current snapshot
+policy. Mid-firing edits, yielding/nested delivery, native precision/long-timeout
+segmentation, equal-deadline fidelity and an automatic application clock remain
+unqualified. Other event families remain registrations without world delivery.
+
+Validation passes 446 Host tests on native and actual WASI, with six explicit
+local-input gates ignored; 19 application-library and 107 map-loading tests,
+with one explicit local-input gate ignored; four new timed-trigger cases plus
+the six existing timer cases executed from the actual Cargo browser-WASM artifact;
+strict native/browser all-target Clippy and formatting. Cases cover refusal
+atomicity, declaration/default inputs, condition ordering, active action lifetime,
+disabled phase, context cleanup and successful/failed session replacement.
+
+The unchanged Human01 factory prefix now passes timed-event registration and
+stops later at unsupported `TriggerRegisterUnitInRange`, Blizzard span
+`82885..82941`. The required four-result RNG gate still fails after one match on
+native and actual WASI (exits 101 and 134). Its private primary-only warmup adapter
+and explicit compatibility catalog remain experiment limitations; production
+engine RNG initialization is unchanged. No placeholder range-event registration
+was added to conceal the missing world consumer.
+
+Commands, failed checks and final validation remain local in
+`.scratch/timed-trigger-root-20261018/implementation/`. Original payloads are not
+published. No additional original-client run was needed for this implementation,
+and no rendered gameplay, public-site or 100-consecutive baseline gate is closed.

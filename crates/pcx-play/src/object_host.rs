@@ -41,6 +41,7 @@ pub struct ObjectHost {
     stock: Option<stock::State>,
     timers: Option<timers::State>,
     random: Option<random::Random>,
+    trigger_runtime: Option<trigger_runtime::State>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -87,6 +88,7 @@ impl ObjectHost {
             stock: None,
             timers: None,
             random: None,
+            trigger_runtime: None,
         })
     }
     fn checked_boolean_wrapper(&self, id: HandleId, native: &str) -> Result<(), Error> {
@@ -343,6 +345,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.random_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.trigger_runtime_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.timer_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -570,3 +575,10 @@ pub use timers::TimerExpiry;
 #[cfg(test)]
 #[path = "timer_runtime_tests.rs"]
 mod timer_runtime_tests;
+
+#[path = "trigger_runtime_host.rs"]
+mod trigger_runtime;
+pub use trigger_runtime::{TriggerDelivery, TriggerRuntimeInput};
+#[cfg(test)]
+#[path = "trigger_runtime_tests.rs"]
+mod trigger_runtime_tests;

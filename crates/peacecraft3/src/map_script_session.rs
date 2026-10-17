@@ -224,6 +224,8 @@ fn execution_failure<H: Host>(
 
 #[derive(Debug, thiserror::Error)]
 pub enum TimerSessionError {
+    #[error("trigger condition {id:?} did not return boolean")]
+    ConditionResult { id: FunctionId },
     #[error(transparent)]
     Session(#[from] ScriptSessionError),
     #[error(transparent)]
@@ -249,10 +251,46 @@ impl MapScriptSession<pcx_play::map_startup_host::MapStartupHost> {
             let Some(expiry) = expiry else {
                 return Ok(delivered);
             };
-            let result = expiry.callback.map_or(Ok(Value::Null), |id| {
-                self.callback_ticket(id)
-                    .and_then(|ticket| self.call_callback(&ticket, &[]))
-            });
+            let result = (|| -> Result<(), TimerSessionError> {
+                for (index, trigger) in expiry.triggers().iter().enumerate() {
+                    if !self
+                        .host()
+                        .ok_or(ScriptSessionError::NoSession)?
+                        .objects_mut()
+                        .begin_timer_trigger(&expiry, index)?
+                    {
+                        continue;
+                    }
+                    let result = (|| -> Result<(), TimerSessionError> {
+                        let mut accepted = true;
+                        for &id in &trigger.conditions {
+                            let ticket = self.callback_ticket(id)?;
+                            let value = self.call_callback(&ticket, &[])?;
+                            let Value::Bool(value) = value else {
+                                return Err(TimerSessionError::ConditionResult { id });
+                            };
+                            accepted &= value;
+                        }
+                        if accepted {
+                            for &id in &trigger.actions {
+                                let ticket = self.callback_ticket(id)?;
+                                self.call_callback(&ticket, &[])?;
+                            }
+                        }
+                        Ok(())
+                    })();
+                    self.host()
+                        .ok_or(ScriptSessionError::NoSession)?
+                        .objects_mut()
+                        .finish_timer_trigger();
+                    result?;
+                }
+                if let Some(id) = expiry.callback {
+                    let ticket = self.callback_ticket(id)?;
+                    self.call_callback(&ticket, &[])?;
+                }
+                Ok(())
+            })();
             self.host()
                 .ok_or(ScriptSessionError::NoSession)?
                 .objects_mut()

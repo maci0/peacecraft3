@@ -174,6 +174,8 @@ pub struct MapStartupInputs {
     pub clock: StartupClockInput,
     /// Explicit game time for positive-timeout timers; absent keeps TimerStart unsupported.
     pub timer_time: Option<f64>,
+    /// Explicit trigger defaults and loaded timer event for callback delivery.
+    pub trigger_runtime: Option<crate::playercolor_host::TriggerRuntimeInput>,
     /// Source-qualified parameters without an invented initial engine seed.
     pub random: Option<RandomInput>,
     pub catalog: Arc<dyn ObjectCatalog + Send + Sync>,
@@ -336,6 +338,7 @@ pub fn assemble(
         sound_parameters,
         clock,
         timer_time,
+        trigger_runtime,
         random,
         catalog,
         defend,
@@ -419,6 +422,9 @@ pub fn assemble(
     }
     if let Some(now) = timer_time {
         object = object.with_timer_runtime(now)?;
+    }
+    if let Some(input) = trigger_runtime {
+        object = object.with_trigger_runtime(input)?;
     }
     if let Some(input) = random {
         object = object.with_script_random(input.policy, input.max_secondary)?;

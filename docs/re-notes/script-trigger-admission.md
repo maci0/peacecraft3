@@ -9,7 +9,10 @@ budgets; arena capacity is also checked before allocating a token.
 A registration retains its trigger, executed unit, symbolic unit-event handle
 and enumerand. Its returned `event` token comes from that same arena. It does not
 run a callback. Explicit enable/disable assignments are retained as described
-below. Destruction, condition evaluation and event delivery remain unsupported.
+below. Destruction, condition evaluation and event delivery require a separate
+consumer. The later [timed-trigger consumer](legacy-timer-start.md#owned-timed-trigger-consumer-2026-10-18)
+admits positive-timeout delivery on this same arena and published VM; other event
+families still have no world-driven delivery.
 No enabled-state default is inferred from
 creating a trigger or from a WTG record.
 

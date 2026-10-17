@@ -673,6 +673,7 @@ fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) ->
         defend: defend(),
         current_research: None::<CurrentResearchInput>,
         timer_time: None,
+        trigger_runtime: None,
         post_config: PostConfigObservations::default(),
     }
 }
@@ -1220,3 +1221,6 @@ mod item_factory_cases;
 
 #[path = "random_factory_cases.rs"]
 mod random_factory_cases;
+
+#[path = "timed_trigger_cases.rs"]
+mod timed_trigger_cases;

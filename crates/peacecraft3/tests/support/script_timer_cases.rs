@@ -36,20 +36,44 @@ call TimerStart(t, 0.5, true, function fire)
 endfunction
 ";
 
-fn timer_app() -> App {
+pub(super) fn timer_app() -> App {
     let mut app = App::new();
     peacecraft3::map_requests::install(&mut app);
     peacecraft3::campaign_startup::install(&mut app);
     app
 }
 fn deliver_timer(app: &mut App, script: &str, revision: u64) {
+    deliver_timer_mode(app, script, revision, false);
+}
+pub(super) fn deliver_timed_trigger(app: &mut App, script: &str, revision: u64) {
+    deliver_timer_mode(app, script, revision, true);
+}
+fn deliver_timer_mode(app: &mut App, script: &str, revision: u64, timed: bool) {
     let mut map = fixture(script);
     map.common.extend_from_slice(TIMER_COMMON.as_bytes());
+    if timed {
+        map.common
+            .extend_from_slice(super::timed_trigger_cases::COMMON.as_bytes());
+    }
     map.rebuild();
     let resolver = map.resolver();
     let bound = bind_map(&resolver, map.input(revision), map.limits()).unwrap();
     let mut inputs = host_inputs(Arc::clone(&bound.catalog.0));
     inputs.timer_time = Some(10.0);
+    if timed {
+        inputs.trigger_runtime = Some(pcx_play::playercolor_host::TriggerRuntimeInput {
+            initial_enabled: true,
+            timer_event_global: "TEST_TIMER_EVENT".into(),
+            max_timed_events: 16,
+        });
+        inputs.enumeration.names.push("ConvertGameEvent".into());
+        inputs.enumeration.limits.max_handles = 256;
+        inputs.budgets.triggers.max_triggers = 16;
+        inputs.budgets.triggers.max_actions = 32;
+        inputs.budgets.conditions =
+            Some(pcx_play::playercolor_host::ConditionBudget { max_records: 16 });
+        inputs.budgets.trigger_conditions = Some(16);
+    }
     let bytes = Arc::clone(&bound.catalog_map_bytes);
     app.insert_resource(MapRequests {
         bindings: Some(bound),

@@ -218,9 +218,14 @@ enum Entry {
     Item {
         record: objects::ExecutedItem,
     },
-    /// Trigger identity, without an inferred enabled-state default.
+    /// Trigger identity, with no enabled default unless a runtime input supplies it.
     Trigger {
         enabled: Option<bool>,
+    },
+    DeadTrigger,
+    RegisteredTimedEvent {
+        trigger: HandleId,
+        run: objects::timers::Run,
     },
     /// One `event` handle for a loaded `TriggerRegisterUnitEvent` call.
     RegisteredUnitEvent {
@@ -569,12 +574,13 @@ impl EnumHost {
             Entry::Destructable { .. } => "destructable",
             Entry::Item { .. } => "item",
             Entry::Unit { .. } => "unit",
-            Entry::Trigger { .. } => "trigger",
+            Entry::Trigger { .. } | Entry::DeadTrigger => "trigger",
             Entry::RegisteredUnitEvent { .. }
             | Entry::RegisteredPlayerUnitEvent(_)
             | Entry::RegisteredPlayerEvent(_)
             | Entry::RegisteredDeathEvent(_)
             | Entry::RegisteredRegionEvent(_)
+            | Entry::RegisteredTimedEvent { .. }
             | Entry::RegisteredTimerEvent { .. }
             | Entry::RegisteredGameStateEvent { .. } => "event",
             Entry::TriggerAction { .. } => "triggeraction",
@@ -689,6 +695,6 @@ pub use objects::{
     RegionRectRequest, ResearchObservation, SoundProperties, SoundState, StackedSoundAction,
     StackedSoundRequest, StartLocation, StartPriorities, StartPriority, StartupClockState,
     StartupSettings, StockBudget, TechLimitBudget, TimerEventRegistration, TimerExpiry, TimerHost,
-    TriggerActionRecord, TriggerBudget, TriggerConditionRegistration, UnitBudget,
-    UnitEventRegistration, UnitStateBudget,
+    TriggerActionRecord, TriggerBudget, TriggerConditionRegistration, TriggerDelivery,
+    TriggerRuntimeInput, UnitBudget, UnitEventRegistration, UnitStateBudget,
 };

@@ -1,7 +1,7 @@
 //! Shared-arena trigger creation, event subscriptions and action registration.
 //!
-//! Enabled state is known only after an explicit enable or disable request.
-//! Condition evaluation and event delivery stay unsupported.
+//! Enabled state needs an explicit runtime input or an enable/disable request.
+//! Timed delivery is separately admitted; other event families remain registrations.
 //! `TriggerAddAction` retains the loaded callback and does not run it.
 use super::super::{Entry, Error, Failure, below};
 use super::ObjectHost;
@@ -324,9 +324,12 @@ impl ObjectHost {
         if self.inner.handles() >= self.inner.max_handles {
             return Err(fail(Failure::Capacity));
         }
-        let id = self
-            .inner
-            .allocate(Entry::Trigger { enabled: None }, CREATE)?;
+        let id = self.inner.allocate(
+            Entry::Trigger {
+                enabled: self.trigger_runtime.as_ref().map(|s| s.initial_enabled),
+            },
+            CREATE,
+        )?;
         let admitted = self.triggers.as_mut().ok_or_else(|| {
             self.inner
                 .error(CREATE, Failure::TriggerState("not admitted"))
@@ -471,7 +474,7 @@ impl ObjectHost {
         Ok(Value::Handle(id))
     }
 
-    /// Last explicit enable/disable assignment; creation does not establish a value.
+    /// Assigned state, or the explicit runtime input supplied before creation.
     pub fn trigger_enabled(&self, id: HandleId) -> Result<Option<bool>, Error> {
         self.admitted_triggers()?;
         match self
@@ -480,6 +483,7 @@ impl ObjectHost {
             .map_err(|e| self.inner.error(IS_ENABLED, e.failure))?
         {
             Entry::Trigger { enabled } => Ok(*enabled),
+            Entry::DeadTrigger => Err(self.inner.error(IS_ENABLED, Failure::Identity)),
             _ => Err(self.inner.error(IS_ENABLED, Failure::WrongFamily)),
         }
     }

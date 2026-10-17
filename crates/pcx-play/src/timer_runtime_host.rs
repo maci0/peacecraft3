@@ -21,7 +21,8 @@ pub(super) struct State {
 
 #[derive(Clone, Copy)]
 struct Expired {
-    timer: HandleId,
+    source: HandleId,
+    timer: Option<HandleId>,
     sequence: u64,
     timeout: f64,
 }
@@ -29,9 +30,16 @@ struct Expired {
 /// One prepared expiry. Finish it even when its callback fails.
 #[derive(Debug)]
 pub struct TimerExpiry {
-    timer: HandleId,
+    source: HandleId,
     sequence: u64,
     pub callback: Option<FunctionId>,
+    triggers: Vec<super::TriggerDelivery>,
+}
+
+impl TimerExpiry {
+    pub fn triggers(&self) -> &[super::TriggerDelivery] {
+        &self.triggers
+    }
 }
 
 impl ObjectHost {
@@ -188,6 +196,22 @@ impl ObjectHost {
             }
             _ => return Err(fail(Failure::TimerArguments)),
         };
+        let run = self.new_timer_run(timeout, *periodic, handler, name)?;
+        if let Entry::Timer { run: slot, .. } = self.inner.entry_mut(*timer)? {
+            *slot = Some(run);
+        }
+        self.commit_timer_sequence(&run);
+        Ok(Value::Null)
+    }
+
+    pub(super) fn new_timer_run(
+        &self,
+        timeout: f64,
+        periodic: bool,
+        handler: Option<FunctionId>,
+        name: &str,
+    ) -> Result<Run, Error> {
+        let fail = |why| self.inner.error(name, why);
         let state = self
             .timers
             .as_ref()
@@ -201,19 +225,18 @@ impl ObjectHost {
             .sequence
             .checked_add(1)
             .ok_or_else(|| fail(Failure::Capacity))?;
-        let run = Run {
+        Ok(Run {
             timeout,
             start: state.now,
             deadline: Some(deadline),
-            periodic: *periodic,
+            periodic,
             handler,
             sequence,
-        };
-        if let Entry::Timer { run: slot, .. } = self.inner.entry_mut(*timer)? {
-            *slot = Some(run);
-        }
-        self.timers.as_mut().expect("admitted above").sequence = sequence;
-        Ok(Value::Null)
+        })
+    }
+
+    pub(super) fn commit_timer_sequence(&mut self, run: &Run) {
+        self.timers.as_mut().expect("admitted above").sequence = run.sequence;
     }
 
     fn timer_query(&self, name: &str, args: &[Value]) -> Result<Value, Error> {
@@ -229,8 +252,11 @@ impl ObjectHost {
             let active = state
                 .active
                 .ok_or_else(|| fail(Failure::TimerState("no expiry callback")))?;
-            self.timer_run(active.timer, name)?;
-            return Ok(Value::Handle(active.timer));
+            let Some(timer) = active.timer else {
+                return Ok(Value::Null);
+            };
+            self.timer_run(timer, name)?;
+            return Ok(Value::Handle(timer));
         }
         let [Value::Handle(timer)] = args else {
             return Err(fail(Failure::TimerArguments));
@@ -242,7 +268,7 @@ impl ObjectHost {
             run.timeout
         } else if let Some(active) = state
             .active
-            .filter(|active| active.timer == *timer && active.sequence == run.sequence)
+            .filter(|active| active.timer == Some(*timer) && active.sequence == run.sequence)
         {
             active.timeout
         } else {
@@ -257,9 +283,9 @@ impl ObjectHost {
     }
 
     /// Prepare at most one firing, in deadline/start order (a recreation tie policy).
-    /// Work is at most two arena scans per firing plus one final scan. A budget
+    /// Work is bounded by the arena and retained registration counts per firing. A budget
     /// refusal preserves the next firing; previously delivered effects remain.
-    /// Registered expiry-trigger delivery is unsupported and refuses before mutation.
+    /// Trigger snapshots are prepared before consuming the deadline.
     pub fn next_timer_expiry(
         &mut self,
         until: f64,
@@ -281,28 +307,32 @@ impl ObjectHost {
             .iter()
             .enumerate()
             .filter_map(|(index, entry)| {
-                if let Entry::Timer {
-                    live: true,
-                    run: Some(run),
-                } = entry
-                    && let Some(at) = run.deadline.filter(|at| *at <= until)
-                {
-                    return Some((index, *run, at));
-                }
-                None
+                let (run, timed) = match entry {
+                    Entry::Timer {
+                        live: true,
+                        run: Some(run),
+                    } => (*run, false),
+                    Entry::RegisteredTimedEvent { trigger, run }
+                        if matches!(self.inner.entry(*trigger), Ok(Entry::Trigger { .. })) =>
+                    {
+                        (*run, true)
+                    }
+                    _ => return None,
+                };
+                run.deadline
+                    .filter(|at| *at <= until)
+                    .map(|at| (index, run, at, timed))
             })
             .min_by(|a, b| a.2.total_cmp(&b.2).then(a.1.sequence.cmp(&b.1.sequence)));
-        let Some((index, mut run, at)) = next else {
+        let Some((index, mut run, at, timed)) = next else {
             self.timers.as_mut().expect("admitted above").now = until;
             return Ok(None);
         };
-        let timer = self.inner.id(index, "timer delivery")?;
-        if self.inner.arena.iter().any(|entry| matches!(entry, Entry::RegisteredTimerEvent { timer: registered, .. } if *registered == timer)) {
-            return Err(fail(Failure::TimerState("expiry-trigger execution is unsupported")));
-        }
+        let source = self.inner.id(index, "timer delivery")?;
         if *budget == 0 {
             return Err(fail(Failure::Budget("timer delivery")));
         }
+        let triggers = self.prepare_timer_triggers(source, timed)?;
         let sequence = state
             .sequence
             .checked_add(1)
@@ -321,37 +351,45 @@ impl ObjectHost {
         state.now = at;
         state.sequence = sequence;
         state.active = Some(Expired {
-            timer,
+            source,
+            timer: (!timed).then_some(source),
             sequence,
             timeout: run.timeout,
         });
-        self.inner.arena[index] = Entry::Timer {
-            live: true,
-            run: Some(run),
-        };
+        match &mut self.inner.arena[index] {
+            Entry::Timer { run: slot, .. } => *slot = Some(run),
+            Entry::RegisteredTimedEvent { run: slot, .. } => *slot = run,
+            _ => unreachable!("selected a timer run"),
+        }
         *budget -= 1;
         Ok(Some(TimerExpiry {
-            timer,
+            source,
             sequence,
             callback: run.handler,
+            triggers,
         }))
     }
 
-    /// Clear callback context without overwriting a callback's restart or destroy.
-    pub fn finish_timer_expiry(&mut self, expiry: TimerExpiry) -> Result<(), Error> {
-        let state = self.timers.as_mut().ok_or_else(|| {
-            self.inner
-                .error("timer delivery", Failure::TimerState("not admitted"))
-        })?;
-        if !state.active.is_some_and(|active| {
-            active.timer == expiry.timer && active.sequence == expiry.sequence
-        }) {
+    pub(super) fn check_timer_expiry(&self, expiry: &TimerExpiry) -> Result<(), Error> {
+        if !self
+            .timers
+            .as_ref()
+            .and_then(|s| s.active)
+            .is_some_and(|a| a.source == expiry.source && a.sequence == expiry.sequence)
+        {
             return Err(self.inner.error(
                 "timer delivery",
                 Failure::TimerState("expiry context mismatch"),
             ));
         }
-        state.active = None;
+        Ok(())
+    }
+
+    /// Clear callback context without overwriting a callback's restart or destroy.
+    pub fn finish_timer_expiry(&mut self, expiry: TimerExpiry) -> Result<(), Error> {
+        self.check_timer_expiry(&expiry)?;
+        self.finish_timer_trigger();
+        self.timers.as_mut().expect("checked above").active = None;
         Ok(())
     }
 }
