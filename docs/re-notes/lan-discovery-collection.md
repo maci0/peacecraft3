@@ -13,11 +13,13 @@ returns `DiscoveryRestore`, preserving the restoration error and any collection
 error. This does not guarantee a usable mode after an OS restoration failure.
 
 The fresh ephemeral loopback test executes request, host response, collection,
-peer registration and subsequent game-packet polling. Private deterministic
-socket/clock substitutions exercise delayed responses, malformed input, timeout
-configuration, receive failures and simultaneous restoration/collection failures
-without depending on elapsed-time performance thresholds. The receive/send span
-fix and shared datagram codec retain their existing paths.
+peer registration and subsequent game-packet polling. Collection in that test
+returns on the first valid advertisement. `Finder::find` still waits the full
+production window so a later host is not dropped. A zero window returns without
+reading. Loopback datagram and advertisement waits are hang guards: they yield
+until the packet is queued and fail only if it never arrives. They are not
+elapsed-time speed gates. The receive/send span fix and shared datagram codec
+retain their existing paths.
 
 This is the project protocol, not classic Warcraft III LAN compatibility or
 source authentication. Broadcast routing and application lobby wiring remain

@@ -100,18 +100,29 @@ impl UdpTransport {
         Ok(())
     }
 
-    /// Collects discovery responses until the timeout expires.
+    /// Collects discovery responses until [`DISCOVERY_TIMEOUT`] expires.
     ///
     /// Responses are bound to their UDP source; the payload carries no address.
     /// Collection temporarily blocks, then restores nonblocking game polling on
     /// both success and error. A restoration failure retains any collection error.
+    /// The window stays open after the first reply so a later host is not dropped.
     pub fn collect_hosts(&mut self) -> Result<Vec<Host>, TransportError> {
+        self.collect_until(DISCOVERY_TIMEOUT, false)
+    }
+
+    /// `stop_after_first` is for tests that already know which reply they expect.
+    /// Production browsing passes `false` and waits out the full window.
+    fn collect_until(
+        &mut self,
+        window: Duration,
+        stop_after_first: bool,
+    ) -> Result<Vec<Host>, TransportError> {
         let Some(socket) = self.socket.as_ref() else {
             return Err(TransportError::Io(std::io::Error::other("not bound")));
         };
         socket.set_nonblocking(false)?;
         let collected = (|| {
-            let deadline = Instant::now() + DISCOVERY_TIMEOUT;
+            let deadline = Instant::now() + window;
             let mut out = Vec::new();
             let mut buf = [0u8; 2048];
             loop {
@@ -124,6 +135,9 @@ impl UdpTransport {
                     Ok((n, from)) => {
                         if let Some(host) = Host::parse(&buf[..n]) {
                             out.push(Host { addr: from, ..host });
+                            if stop_after_first {
+                                break;
+                            }
                         }
                     }
                     Err(e)
@@ -286,16 +300,18 @@ mod tests {
         let payload = super::super::encode(&crate::Datagram::InputAck { tick: 42 });
         a.send(b_peer, &payload).expect("send");
 
-        // Loopback is immediate but not synchronous, so drain with a bound.
-        let mut got = None;
-        for _ in 0..200 {
-            if let Some((peer, bytes)) = b.poll() {
-                got = Some((peer, bytes));
-                break;
+        // Loopback delivery is not a speed budget. The deadline only stops a hang.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let (peer, bytes) = loop {
+            if let Some(packet) = b.poll() {
+                break packet;
             }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let (peer, bytes) = got.expect("loopback datagram");
+            assert!(
+                Instant::now() < deadline,
+                "loopback datagram did not arrive"
+            );
+            std::thread::yield_now();
+        };
         assert_eq!(peer, a_peer);
         assert_eq!(
             super::super::decode(&bytes).unwrap(),
@@ -316,6 +332,19 @@ mod tests {
             ),
             "an unknown peer must be refused, not silently dropped"
         );
+    }
+
+    #[test]
+    fn an_empty_collection_window_returns_without_reading() {
+        let Ok(mut client) = UdpTransport::bind("127.0.0.1:0") else {
+            eprintln!("skipping: no loopback");
+            return;
+        };
+        let found = client
+            .collect_until(Duration::ZERO, false)
+            .expect("zero window");
+        assert!(found.is_empty());
+        assert!(client.poll().is_none(), "polling must be nonblocking again");
     }
 
     #[test]
@@ -434,54 +463,116 @@ impl Finder {
 mod lan_tests {
     use super::*;
 
-    /// A host advertises itself and a client discovers it. mDNS is not involved
-    /// and there is no rendezvous server, which is the whole point of LAN.
+    /// `LanHost::bind` always takes the LAN port; parallel tests would steal it.
+    fn lan_port() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    fn serve_n(host: &mut LanHost, count: usize) -> Vec<SocketAddr> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut answered = Vec::new();
+        loop {
+            answered.extend(host.serve_discovery().expect("serve"));
+            if answered.len() == count {
+                return answered;
+            }
+            assert!(
+                answered.len() < count,
+                "answered more discoverers than were sent"
+            );
+            assert!(
+                Instant::now() < deadline,
+                "loopback discovery request did not arrive"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    fn recv_advertisement(socket: &UdpSocket) -> Host {
+        socket.set_nonblocking(true).expect("loopback socket");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut buf = [0u8; 2048];
+        loop {
+            match socket.recv_from(&mut buf) {
+                Ok((n, _)) => return Host::parse(&buf[..n]).expect("advertisement"),
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || error.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    assert!(
+                        Instant::now() < deadline,
+                        "loopback advertisement did not arrive"
+                    );
+                    std::thread::yield_now();
+                }
+                Err(error) => panic!("loopback advertisement: {error}"),
+            }
+        }
+    }
+
+    /// A host advertises itself and a client discovers it over loopback.
+    /// Broadcast routing is a machine fact, so this does not use it or the
+    /// production collection window.
     #[test]
     fn a_client_discovers_a_host() {
-        let Ok(host) = LanHost::bind("maci's game", r"Maps\BootyBay.w3m", 4) else {
+        let _port = lan_port();
+        let Ok(mut host) = LanHost::bind("maci's game", r"Maps\BootyBay.w3m", 4) else {
             eprintln!("skipping: cannot bind LAN port");
             return;
         };
         assert_ne!(host.game_port(), 0, "a host must bind a real port");
-
-        let Ok(mut client) = Finder::bind() else {
+        let Ok(mut client) = UdpTransport::bind("127.0.0.1:0") else {
+            eprintln!("skipping: no loopback");
             return;
         };
-        let found = match client.find() {
-            Ok(f) => f,
-            Err(_) => return,
-        };
-        let Some(found_host) = found.iter().find(|h| h.name == "maci's game") else {
-            // Without a routable broadcast interface a host can bind and still
-            // never see its own broadcast; that is a network fact, not a bug.
-            eprintln!("skipping: broadcast not routable here");
-            return;
-        };
-        assert_eq!(found_host.map, r"Maps\BootyBay.w3m");
-        assert_eq!(found_host.players, (1, 4));
+        let destination = SocketAddr::from(([127, 0, 0, 1], host.game_port()));
+        client
+            .socket
+            .as_ref()
+            .unwrap()
+            .send_to(DISCOVERY_REQUEST, destination)
+            .expect("request");
+        assert_eq!(serve_n(&mut host, 1).len(), 1);
+        let found = client
+            .collect_until(Duration::from_secs(2), true)
+            .expect("collection");
+        assert_eq!(found.len(), 1, "the queued advertisement must arrive");
+        assert_eq!(found[0].name, "maci's game");
+        assert_eq!(found[0].map, r"Maps\BootyBay.w3m");
+        assert_eq!(found[0].players, (1, 4));
+        assert_eq!(found[0].addr, destination);
     }
 
     /// A host answers every discoverer, because dropping everyone after the
     /// first is a silent failure in a four-player game.
     #[test]
     fn a_host_answers_every_discoverer() {
+        let _port = lan_port();
         let Ok(mut host) = LanHost::bind("busy", "map", 4) else {
+            eprintln!("skipping: cannot bind LAN port");
             return;
         };
-        let mut sent = 0;
+        let destination = SocketAddr::from(([127, 0, 0, 1], host.game_port()));
+        let mut clients = Vec::new();
         for _ in 0..3 {
-            if let Ok(mut c) = Finder::bind()
-                && c.find().is_ok()
-            {
-                sent += 1;
-            }
+            let socket = UdpSocket::bind("127.0.0.1:0").expect("loopback discoverer");
+            socket
+                .send_to(DISCOVERY_REQUEST, destination)
+                .expect("request");
+            clients.push(socket);
         }
-        let _ = sent;
-        let answered = host.serve_discovery().unwrap_or_default();
-        assert!(
-            !answered.is_empty(),
-            "no discovery request reached the host"
+        assert_eq!(
+            serve_n(&mut host, 3).len(),
+            3,
+            "each discoverer is answered"
         );
+        for socket in &clients {
+            let advertisement = recv_advertisement(socket);
+            assert_eq!(advertisement.name, "busy");
+            assert_eq!(advertisement.map, "map");
+            assert_eq!(advertisement.players, (1, 4));
+        }
     }
 }
 
@@ -729,8 +820,7 @@ mod discovery_loopback {
             .send_to(DISCOVERY_REQUEST, host_addr)
             .unwrap();
         let responder = std::thread::spawn(move || {
-            // Scheduling delay and deadline are bounded liveness fixtures, not speed gates.
-            std::thread::sleep(Duration::from_millis(10));
+            // Hang guard only. The reply is returned as soon as it is queued.
             let deadline = Instant::now() + Duration::from_secs(2);
             loop {
                 let answered = host.serve_discovery().unwrap();
@@ -744,7 +834,7 @@ mod discovery_loopback {
             host
         });
         let found = client
-            .collect_hosts()
+            .collect_until(Duration::from_secs(2), true)
             .expect("collection must preserve socket failures");
         let mut host = responder.join().unwrap();
         assert_eq!(
