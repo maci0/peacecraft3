@@ -1,4 +1,5 @@
 //! Explicit map requests publish parsed data, without starting script execution.
+use crate::browser_configuration::SelectedMapSources;
 use crate::map_admission::MapAdmission;
 use bevy::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
@@ -25,6 +26,8 @@ pub struct MapBindings {
     pub map_identity: AssetIdentity,
     pub map_label: String,
     pub receipts: Arc<crate::map_binding::BindingReceipts>,
+    /// Resolver that produced `receipts`. Absent when the caller bound without retaining one.
+    pub resolver: Option<Arc<pcx_assets::Resolver>>,
     /// Exact selected map backing the supplied overlays/catalog; shared with caller asset storage.
     pub catalog_map_bytes: Arc<[u8]>,
     pub revision: u64,
@@ -153,27 +156,32 @@ impl MapRequests {
 
     /// Candidate binding, receipts and parsed context commit together.
     /// Selected sources must enforce caller budgets before payload reads/decode.
+    ///
+    /// On success, `sources` stores this resolver with the exact published
+    /// receipt arc. A refused candidate leaves both unchanged.
     pub fn replace_selected(
         &mut self,
-        resolver: &pcx_assets::Resolver,
+        sources: &mut SelectedMapSources,
+        resolver: Arc<pcx_assets::Resolver>,
         input: crate::map_binding::BindingInputs<'_>,
         limits: crate::map_binding::BindingLimits,
     ) -> &MapOutcome {
         let label = input.map.label.to_owned();
         let identity = input.map.identity.clone();
         let revision = input.revision;
-        let bindings = match crate::map_binding::bind_map_bounded(resolver, input, limits) {
-            Ok(bindings) => bindings,
-            Err(source) => {
-                self.last_outcome = Some(MapOutcome {
-                    label,
-                    identity: Some(identity),
-                    binding_revision: Some(revision),
-                    result: Err(RequestFailure::Binding(Box::new(source))),
-                });
-                return self.last_outcome.as_ref().expect("binding outcome");
-            }
-        };
+        let bindings =
+            match crate::map_binding::bind_map_bounded(Arc::clone(&resolver), input, limits) {
+                Ok(bindings) => bindings,
+                Err(source) => {
+                    self.last_outcome = Some(MapOutcome {
+                        label,
+                        identity: Some(identity),
+                        binding_revision: Some(revision),
+                        result: Err(RequestFailure::Binding(Box::new(source))),
+                    });
+                    return self.last_outcome.as_ref().expect("binding outcome");
+                }
+            };
         let mut candidate = Self {
             bindings: Some(bindings),
             ..Default::default()
@@ -188,9 +196,14 @@ impl MapRequests {
             .is_ok();
         self.last_outcome = candidate.last_outcome;
         if accepted {
+            let receipts = candidate
+                .published_receipts
+                .clone()
+                .expect("accepted delivery publishes receipts");
             self.bindings = candidate.bindings;
             self.admission = candidate.admission;
             self.published_receipts = candidate.published_receipts;
+            drop(sources.publish(receipts, resolver));
         }
         self.last_outcome.as_ref().expect("delivered outcome")
     }
@@ -312,10 +325,15 @@ fn read_map_file(path: &std::path::Path, limit: usize) -> Result<Vec<u8>, Reques
     }
     Ok(bytes)
 }
-fn deliver_requests(mut requests: MessageReader<MapRequest>, mut state: ResMut<MapRequests>) {
+fn deliver_requests(
+    mut requests: MessageReader<MapRequest>,
+    mut state: ResMut<MapRequests>,
+    mut sources: ResMut<SelectedMapSources>,
+) {
     // Process every authored request in arrival order; each publication is atomic.
     for request in requests.read() {
         let result = state.prepare(request);
+        publish_retained_reader(&state, &mut sources, result.is_ok());
         state.last_outcome = Some(MapOutcome {
             label: request.label.clone(),
             identity: Some(request.identity.clone()),
@@ -325,7 +343,11 @@ fn deliver_requests(mut requests: MessageReader<MapRequest>, mut state: ResMut<M
     }
 }
 #[cfg(not(target_arch = "wasm32"))]
-fn dropped_files(mut drops: MessageReader<FileDragAndDrop>, mut state: ResMut<MapRequests>) {
+fn dropped_files(
+    mut drops: MessageReader<FileDragAndDrop>,
+    mut state: ResMut<MapRequests>,
+    mut sources: ResMut<SelectedMapSources>,
+) {
     for event in drops.read() {
         if let FileDragAndDrop::DroppedFile { path_buf, .. } = event {
             let Some(bindings) = state.bindings.as_ref() else {
@@ -350,11 +372,33 @@ fn dropped_files(mut drops: MessageReader<FileDragAndDrop>, mut state: ResMut<Ma
                 payload: MapPayload::File(path_buf.clone()),
             };
             state.deliver(request);
+            let accepted = state
+                .last_outcome
+                .as_ref()
+                .is_some_and(|outcome| outcome.result.is_ok());
+            publish_retained_reader(&state, &mut sources, accepted);
         }
     }
 }
+fn publish_retained_reader(state: &MapRequests, sources: &mut SelectedMapSources, accepted: bool) {
+    if !accepted {
+        return;
+    }
+    let Some(receipts) = state.published_receipts.clone() else {
+        return;
+    };
+    let Some(resolver) = state.bindings.as_ref().and_then(|bindings| {
+        Arc::ptr_eq(&bindings.receipts, &receipts)
+            .then(|| bindings.resolver.clone())
+            .flatten()
+    }) else {
+        return;
+    };
+    drop(sources.publish(receipts, resolver));
+}
 pub fn install(app: &mut App) {
     app.init_resource::<MapRequests>()
+        .init_resource::<SelectedMapSources>()
         .add_message::<MapRequest>();
     #[cfg(not(target_arch = "wasm32"))]
     app.add_message::<FileDragAndDrop>().add_systems(

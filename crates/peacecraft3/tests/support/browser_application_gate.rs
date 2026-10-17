@@ -3,6 +3,7 @@ use crate::{binding, browser, fixtures};
 use pcx_assets::{ArchiveLayer, ContentSource, NamedMember, Resolver, SourceError, SourceInfo};
 use pcx_mpq::{ExtractionBudget, ExtractionCause, checked::ReadError};
 use peacecraft3::{
+    browser_configuration::SelectedMapSources,
     map_binding::BindingError,
     map_requests::{MapRequests, RequestFailure},
 };
@@ -110,17 +111,31 @@ pub fn browser_application_source_gate() -> u32 {
             )),
         })
         .collect();
-    let resolver =
-        Resolver::new("1.29b-tft-vanilla-vanilla".parse().unwrap(), None, layers).unwrap();
+    let resolver = Arc::new(
+        Resolver::new("1.29b-tft-vanilla-vanilla".parse().unwrap(), None, layers).unwrap(),
+    );
     let mut app = bevy::prelude::App::new();
     peacecraft3::map_requests::install(&mut app);
-    assert!(
-        app.world_mut()
-            .resource_mut::<MapRequests>()
-            .replace_selected(&resolver, f.input(31), f.limits())
-            .result
-            .is_ok()
-    );
+    {
+        let mut state = app.world_mut().remove_resource::<MapRequests>().unwrap();
+        let mut selected = app
+            .world_mut()
+            .remove_resource::<SelectedMapSources>()
+            .unwrap();
+        assert!(
+            state
+                .replace_selected(
+                    &mut selected,
+                    Arc::clone(&resolver),
+                    f.input(31),
+                    f.limits(),
+                )
+                .result
+                .is_ok()
+        );
+        app.world_mut().insert_resource(state);
+        app.world_mut().insert_resource(selected);
+    }
     let old = app
         .world()
         .resource::<MapRequests>()
@@ -142,13 +157,24 @@ pub fn browser_application_source_gate() -> u32 {
     assert_ne!(browser::asset_revision(), revision);
     assert!(browser::committed_archive_selection(0, revision).is_err());
     {
-        let mut state = app.world_mut().resource_mut::<MapRequests>();
-        let refused = state.replace_selected(&resolver, f.input(32), f.limits());
+        let mut state = app.world_mut().remove_resource::<MapRequests>().unwrap();
+        let mut sources = app
+            .world_mut()
+            .remove_resource::<SelectedMapSources>()
+            .unwrap();
         assert!(
-            matches!(&refused.result, Err(RequestFailure::Binding(error)) if matches!(error.as_ref(), BindingError::Resolve { source: pcx_assets::Error::Source { source: SourceError::Unavailable { .. }, .. }, .. }))
+            state
+                .replace_selected(&mut sources, Arc::clone(&resolver), f.input(32), f.limits(),)
+                .result
+                .is_err()
         );
+        app.world_mut().insert_resource(state);
+        app.world_mut().insert_resource(sources);
     }
     let state = app.world().resource::<MapRequests>();
+    assert!(
+        matches!(&state.last_outcome.as_ref().unwrap().result, Err(RequestFailure::Binding(error)) if matches!(error.as_ref(), BindingError::Resolve { source: pcx_assets::Error::Source { source: SourceError::Unavailable { .. }, .. }, .. }))
+    );
     assert!(Arc::ptr_eq(
         &old,
         &state.admission.shared_context().unwrap()

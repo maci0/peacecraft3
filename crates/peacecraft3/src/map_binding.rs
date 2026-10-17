@@ -244,19 +244,26 @@ pub fn bind_map(
     input: BindingInputs<'_>,
     limits: BindingLimits,
 ) -> Result<MapBindings, BindingError> {
-    bind_map_with_budget(resolver, input, limits, false)
+    bind_retained(resolver, None, input, limits, false)
 }
 /// Require source preallocation budgets as well as existing parser/input ceilings.
 /// Sources without that read contract refuse; no unbounded fallback is performed.
 pub fn bind_map_bounded(
-    resolver: &Resolver,
+    resolver: Arc<Resolver>,
     input: BindingInputs<'_>,
     limits: BindingLimits,
 ) -> Result<MapBindings, BindingError> {
-    bind_map_with_budget(resolver, input, limits, true)
+    bind_retained(
+        resolver.as_ref(),
+        Some(Arc::clone(&resolver)),
+        input,
+        limits,
+        true,
+    )
 }
-fn bind_map_with_budget(
+fn bind_retained(
     resolver: &Resolver,
+    retained: Option<Arc<Resolver>>,
     input: BindingInputs<'_>,
     limits: BindingLimits,
     bounded: bool,
@@ -523,6 +530,7 @@ fn bind_map_with_budget(
         map_label: input.map.label.to_owned(),
         catalog_map_bytes: Arc::from(map.bytes),
         receipts,
+        resolver: retained,
         revision: input.revision,
         common: BoundScript {
             identity: input.common.identity.clone(),

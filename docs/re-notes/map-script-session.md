@@ -33,11 +33,14 @@ budgets, banks, camera input, catalog, neutral rules and optional research
 observations. Post-config startup observations run on that candidate, after
 `config` returns and before `main`. Factory failure and an unsupported native
 leave the previous session in place. Absent host inputs do not publish a
-session. `SelectedMapSources` remains the browser reader owner and is not
-written by startup. Stock slot assignment admission is optional and caller-bounded.
+session. `SelectedMapSources` is not written by startup. Native
+`replace_selected`, resolver-backed message delivery and file drop publish the
+exact receipt arc with the resolver that produced it. A binding made without
+retaining that resolver, and every refused candidate, leave the previous pair
+unchanged. Stock slot assignment admission is optional and caller-bounded.
 The launcher still has no automatic producer for the qualified rules, banks, catalog and
 runtime observations in `CampaignHostSupply`; importing assets alone does not
-supply them. Native delivery does not populate `SelectedMapSources` either.
+supply them.
 Without explicit timer-runtime inputs, the qualified Human01 continuation still
 refuses `TimerStart`; automatic timer scheduling,
 world rendering and a completed chapter remain open. Execution inherits the VM's

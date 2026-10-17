@@ -9,6 +9,7 @@ use pcx_play::{
     map_admission::MapAdmissionBudget, map_scripts_import::MapScriptBudget, scripts::AssetIdentity,
 };
 use pcx_sim::world::{FieldValue, ObjectCatalog};
+use peacecraft3::browser_configuration::SelectedMapSources;
 use peacecraft3::{map_binding::*, map_requests::*};
 use std::{
     collections::BTreeMap,
@@ -402,25 +403,37 @@ pub fn resolver_to_installed_app_and_receipts() {
 #[cfg_attr(test, test)]
 pub fn atomic_failed_binding_and_admission() {
     let f = Fixture::new(232);
-    let resolver = f.resolver();
+    let resolver = Arc::new(f.resolver());
     let mut state = MapRequests::default();
+    let mut sources = SelectedMapSources::default();
     assert!(
         state
-            .replace_selected(&resolver, f.input(7), f.limits())
+            .replace_selected(&mut sources, Arc::clone(&resolver), f.input(7), f.limits())
             .result
             .is_ok()
     );
     let old = state.admission.context().unwrap() as *const _;
     let receipts = state.published_receipts.as_ref().unwrap().clone();
+    let reader = sources.for_receipts(&receipts).unwrap();
+    assert!(Arc::ptr_eq(&reader, &resolver));
     let mut failed = Fixture::new(900);
     failed.override_reply = Some(("chosen common.j".into(), Reply::Missing));
     assert!(
         state
-            .replace_selected(&failed.resolver(), failed.input(8), failed.limits())
+            .replace_selected(
+                &mut sources,
+                Arc::new(failed.resolver()),
+                failed.input(8),
+                failed.limits(),
+            )
             .result
             .is_err()
     );
     assert_old(&state, old, &receipts);
+    assert!(Arc::ptr_eq(
+        &sources.for_receipts(&receipts).unwrap(),
+        &reader
+    ));
     assert!(
         matches!(&state.last_outcome.as_ref().unwrap().result,Err(RequestFailure::Binding(error)) if matches!(error.as_ref(),BindingError::Resolve{source:pcx_assets::Error::MissingContent{..},..}))
     );
@@ -429,14 +442,19 @@ pub fn atomic_failed_binding_and_admission() {
     assert!(
         state
             .replace_selected(
-                &malformed.resolver(),
+                &mut sources,
+                Arc::new(malformed.resolver()),
                 malformed.input(8),
-                malformed.limits()
+                malformed.limits(),
             )
             .result
             .is_err()
     );
     assert_old(&state, old, &receipts);
+    assert!(Arc::ptr_eq(
+        &sources.for_receipts(&receipts).unwrap(),
+        &reader
+    ));
     assert!(matches!(
         state.last_outcome.as_ref().unwrap().result,
         Err(RequestFailure::Admission(_))
@@ -455,9 +473,10 @@ pub fn atomic_failed_binding_and_admission() {
     assert!(
         state
             .replace_selected(
-                &replacement.resolver(),
+                &mut sources,
+                Arc::new(replacement.resolver()),
                 replacement.input(8),
-                replacement.limits()
+                replacement.limits(),
             )
             .result
             .is_ok()
@@ -478,14 +497,35 @@ pub fn atomic_failed_binding_and_admission() {
             .hash,
         pcx_mpq::fnv1a64(replacement.member("war3map.w3u"))
     );
+    let published = state.published_receipts.as_ref().unwrap();
+    let reader = sources.for_receipts(published).unwrap();
+    assert!(Arc::ptr_eq(
+        &reader,
+        state.bindings.as_ref().unwrap().resolver.as_ref().unwrap()
+    ));
+    assert!(!Arc::ptr_eq(&reader, &resolver));
+    assert_eq!(
+        reader
+            .resolve_bounded("selected map.w3m", replacement.raw.len() as u64)
+            .unwrap()
+            .bytes,
+        replacement.raw
+    );
+    assert!(sources.for_receipts(&receipts).is_none());
+    assert!(
+        sources
+            .for_receipts(&Arc::new((**published).clone()))
+            .is_none()
+    );
 }
 #[cfg_attr(test, test)]
 pub fn stale_and_different_map_refuse() {
     let f = Fixture::new(233);
     let mut state = MapRequests::default();
+    let mut sources = SelectedMapSources::default();
     assert!(
         state
-            .replace_selected(&f.resolver(), f.input(7), f.limits())
+            .replace_selected(&mut sources, Arc::new(f.resolver()), f.input(7), f.limits(),)
             .result
             .is_ok()
     );
@@ -522,13 +562,26 @@ pub fn map_member_is_bound_before_payload_reads() {
     let f = Fixture::new(235);
     let mut app = App::new();
     peacecraft3::map_requests::install(&mut app);
-    assert!(
-        app.world_mut()
-            .resource_mut::<MapRequests>()
-            .replace_selected(&f.resolver(), f.input(7), f.limits())
-            .result
-            .is_ok()
-    );
+    {
+        let mut state = app.world_mut().remove_resource::<MapRequests>().unwrap();
+        let mut selected = app
+            .world_mut()
+            .remove_resource::<SelectedMapSources>()
+            .unwrap();
+        assert!(
+            state
+                .replace_selected(
+                    &mut selected,
+                    Arc::new(f.resolver()),
+                    f.input(7),
+                    f.limits(),
+                )
+                .result
+                .is_ok()
+        );
+        app.world_mut().insert_resource(state);
+        app.world_mut().insert_resource(selected);
+    }
     let state = app.world().resource::<MapRequests>();
     let receipts = state.published_receipts.as_ref().unwrap().clone();
     let mut valid = state.selected_map_request().unwrap();
@@ -815,6 +868,79 @@ pub fn exact_limits_and_deterministic_stop() {
 }
 
 #[cfg_attr(test, test)]
+pub fn delivered_message_publishes_the_retained_resolver_and_keeps_it_on_refusal() {
+    let f = Fixture::new(239);
+    let resolver = Arc::new(f.resolver());
+    let bindings = bind_map_bounded(Arc::clone(&resolver), f.input(7), f.limits()).unwrap();
+    let bytes = bindings.catalog_map_bytes.clone();
+    let mut app = App::new();
+    peacecraft3::map_requests::install(&mut app);
+    app.insert_resource(MapRequests {
+        bindings: Some(bindings),
+        ..Default::default()
+    });
+    app.world_mut().write_message(MapRequest {
+        label: "chosen map label".into(),
+        map_member: AssetPath::new("selected map.w3m").unwrap(),
+        identity: f.map_id.clone(),
+        binding_revision: 7,
+        payload: MapPayload::Shared(bytes.clone()),
+    });
+    app.update();
+    let state = app.world().resource::<MapRequests>();
+    assert!(state.last_outcome.as_ref().unwrap().result.is_ok());
+    let receipts = state.published_receipts.as_ref().unwrap().clone();
+    let context = state.admission.shared_context().unwrap();
+    let reader = app
+        .world()
+        .resource::<SelectedMapSources>()
+        .for_receipts(&receipts)
+        .unwrap();
+    assert!(Arc::ptr_eq(&reader, &resolver));
+    assert!(
+        app.world()
+            .resource::<SelectedMapSources>()
+            .for_receipts(&Arc::new((*receipts).clone()))
+            .is_none()
+    );
+    assert_eq!(
+        reader
+            .resolve_bounded("selected map.w3m", f.raw.len() as u64)
+            .unwrap()
+            .bytes,
+        f.raw
+    );
+    app.world_mut().write_message(MapRequest {
+        label: "stale after publication".into(),
+        map_member: AssetPath::new("selected map.w3m").unwrap(),
+        identity: f.map_id.clone(),
+        binding_revision: 8,
+        payload: MapPayload::Shared(bytes),
+    });
+    app.update();
+    let state = app.world().resource::<MapRequests>();
+    assert!(matches!(
+        state.last_outcome.as_ref().unwrap().result,
+        Err(RequestFailure::StaleBindings { .. })
+    ));
+    assert!(Arc::ptr_eq(
+        &state.admission.shared_context().unwrap(),
+        &context
+    ));
+    assert!(Arc::ptr_eq(
+        state.published_receipts.as_ref().unwrap(),
+        &receipts
+    ));
+    assert!(Arc::ptr_eq(
+        &app.world()
+            .resource::<SelectedMapSources>()
+            .for_receipts(&receipts)
+            .unwrap(),
+        &resolver
+    ));
+}
+
+#[cfg_attr(test, test)]
 pub fn message_order_keeps_last_success_and_reports_last_refusal() {
     let f = Fixture::new(240);
     let bindings = bind_map(&f.resolver(), f.input(7), f.limits()).unwrap();
@@ -900,13 +1026,27 @@ pub fn native_file_drop_uses_exact_bytes_and_preserves_failed_publication() {
             .result,
         Err(RequestFailure::MissingBindings)
     ));
+    let resolver = Arc::new(f.resolver());
     app.world_mut().resource_mut::<MapRequests>().bindings =
-        Some(bind_map(&f.resolver(), f.input(7), f.limits()).unwrap());
+        Some(bind_map_bounded(Arc::clone(&resolver), f.input(7), f.limits()).unwrap());
     emit(&mut app, &path);
     let state = app.world().resource::<MapRequests>();
     assert!(state.last_outcome.as_ref().unwrap().result.is_ok());
     let previous = state.admission.shared_context().unwrap();
     let receipts = state.published_receipts.as_ref().unwrap().clone();
+    let published = app
+        .world()
+        .resource::<SelectedMapSources>()
+        .for_receipts(&receipts)
+        .unwrap();
+    assert!(Arc::ptr_eq(&published, &resolver));
+    assert_eq!(
+        published
+            .resolve_bounded("selected map.w3m", f.raw.len() as u64)
+            .unwrap()
+            .bytes,
+        f.raw
+    );
     app.world_mut()
         .resource_mut::<MapRequests>()
         .bindings
@@ -926,6 +1066,13 @@ pub fn native_file_drop_uses_exact_bytes_and_preserves_failed_publication() {
     assert!(Arc::ptr_eq(
         state.published_receipts.as_ref().unwrap(),
         &receipts
+    ));
+    assert!(Arc::ptr_eq(
+        &app.world()
+            .resource::<SelectedMapSources>()
+            .for_receipts(&receipts)
+            .unwrap(),
+        &resolver
     ));
     app.world_mut()
         .resource_mut::<MapRequests>()
@@ -1110,13 +1257,27 @@ pub fn configured_source_card_failure_retains_context_and_receipts() {
     let f = Fixture::new(802);
     let mut app = App::new();
     app.insert_resource(MapRequests::default());
-    assert!(
-        app.world_mut()
-            .resource_mut::<MapRequests>()
-            .replace_selected(&f.resolver(), f.input(7), f.limits())
-            .result
-            .is_ok()
-    );
+    app.init_resource::<SelectedMapSources>();
+    {
+        let mut state = app.world_mut().remove_resource::<MapRequests>().unwrap();
+        let mut selected = app
+            .world_mut()
+            .remove_resource::<SelectedMapSources>()
+            .unwrap();
+        assert!(
+            state
+                .replace_selected(
+                    &mut selected,
+                    Arc::new(f.resolver()),
+                    f.input(7),
+                    f.limits(),
+                )
+                .result
+                .is_ok()
+        );
+        app.world_mut().insert_resource(state);
+        app.world_mut().insert_resource(selected);
+    }
     peacecraft3::map_requests::install(&mut app);
     install_source_controls(&mut app);
     let (button, text) = spawn_source_control_nodes(app.world_mut());
@@ -1176,7 +1337,7 @@ pub fn bound_catalog_is_shared_with_executed_unit_admission() {
     use pcx_play::playercolor_host::{EnumHost, Limits, ObjectHost, UnitBudget};
     let mut f = Fixture::new(236);
     f.common.extend_from_slice(b"type agent extends handle\ntype widget extends agent\ntype unit extends widget\ntype player extends agent\ntype timer extends agent\nnative CreateTimer takes nothing returns timer\nnative DestroyTimer takes timer t returns nothing\nnative CreateUnit takes player p, integer id, real x, real y, real face returns unit\n");
-    let bindings = bind_map_bounded(&f.resolver(), f.input(1), f.limits()).unwrap();
+    let bindings = bind_map_bounded(Arc::new(f.resolver()), f.input(1), f.limits()).unwrap();
     let mut state = MapRequests {
         bindings: Some(bindings),
         ..Default::default()

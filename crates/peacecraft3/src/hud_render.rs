@@ -1546,6 +1546,7 @@ mod tests {
                 map_identity: identity.clone(),
                 map_label: "fixture".into(),
                 receipts: std::sync::Arc::new(receipts.clone()),
+                resolver: None,
                 catalog_map_bytes: Arc::<[u8]>::from([]),
                 revision,
                 common: BoundScript {
@@ -2047,6 +2048,7 @@ mod tests {
                 map_identity: map_identity.clone(),
                 map_label: "fixture".into(),
                 receipts: Arc::clone(&receipts),
+                resolver: None,
                 catalog_map_bytes: Arc::<[u8]>::from(raw),
                 revision,
                 common: BoundScript {

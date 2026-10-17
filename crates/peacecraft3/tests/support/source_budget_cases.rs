@@ -1,5 +1,6 @@
 use crate::binding::{Fixture, Reply, SyntheticSource, info};
 use pcx_assets::{ArchiveLayer, ContentSource, Resolver, SourceContent, SourceError, SourceInfo};
+use peacecraft3::browser_configuration::SelectedMapSources;
 use peacecraft3::map_binding::*;
 use std::{
     collections::BTreeMap,
@@ -43,7 +44,7 @@ pub fn bounded_binder_retains_selected_receipts_and_contents() {
     let f = Fixture::new(231);
     let resolver = f.resolver();
     let legacy = bind_map(&resolver, f.input(7), f.limits()).unwrap();
-    let bounded = bind_map_bounded(&resolver, f.input(7), f.limits()).unwrap();
+    let bounded = bind_map_bounded(Arc::new(resolver), f.input(7), f.limits()).unwrap();
     assert_eq!(legacy.receipts.as_ref(), bounded.receipts.as_ref());
     assert_eq!(legacy.catalog_map_bytes, bounded.catalog_map_bytes);
     assert_eq!(bounded.receipts.map.provenance.source, f.map_info);
@@ -68,7 +69,7 @@ pub fn map_prelude_catalog_and_remaining_caps_precede_payload_clones() {
     let resolver = f.resolver();
     let mut limits = f.limits();
     limits.max_map_file_bytes = f.raw.len() - 1;
-    let error = bind_map_bounded(&resolver, f.input(7), limits)
+    let error = bind_map_bounded(Arc::new(resolver), f.input(7), limits)
         .err()
         .expect("expected refusal");
     assert!(source_limit(&error), "{error:?}");
@@ -78,7 +79,7 @@ pub fn map_prelude_catalog_and_remaining_caps_precede_payload_clones() {
     let resolver = f.resolver();
     let mut limits = f.limits();
     limits.admission.scripts.max_prelude_bytes = f.common.len() - 1;
-    let error = bind_map_bounded(&resolver, f.input(7), limits)
+    let error = bind_map_bounded(Arc::new(resolver), f.input(7), limits)
         .err()
         .expect("expected refusal");
     assert!(source_limit(&error), "{error:?}");
@@ -88,7 +89,7 @@ pub fn map_prelude_catalog_and_remaining_caps_precede_payload_clones() {
     let resolver = f.resolver();
     let mut limits = f.limits();
     limits.admission.scripts.max_prelude_bytes = f.common.len() + f.bj.len() - 1;
-    let error = bind_map_bounded(&resolver, f.input(7), limits)
+    let error = bind_map_bounded(Arc::new(resolver), f.input(7), limits)
         .err()
         .expect("expected refusal");
     assert!(source_limit(&error), "{error:?}");
@@ -98,7 +99,7 @@ pub fn map_prelude_catalog_and_remaining_caps_precede_payload_clones() {
     let resolver = f.resolver();
     let mut limits = f.limits();
     limits.reader.max_asset_bytes = f.unit_data.len() - 1;
-    let error = bind_map_bounded(&resolver, f.input(7), limits)
+    let error = bind_map_bounded(Arc::new(resolver), f.input(7), limits)
         .err()
         .expect("expected refusal");
     assert!(source_limit(&error), "{error:?}");
@@ -107,7 +108,7 @@ pub fn map_prelude_catalog_and_remaining_caps_precede_payload_clones() {
     let resolver = f.resolver();
     let mut limits = f.limits();
     limits.reader.max_aggregate_input_bytes = f.unit_data.len() + f.metadata.len() - 1;
-    let error = bind_map_bounded(&resolver, f.input(7), limits)
+    let error = bind_map_bounded(Arc::new(resolver), f.input(7), limits)
         .err()
         .expect("expected refusal");
     assert!(source_limit(&error), "{error:?}");
@@ -121,7 +122,7 @@ pub fn map_prelude_catalog_and_remaining_caps_precede_payload_clones() {
         + f.bj.len()
         + f.unit_data.len().min(f.metadata.len())
         - 1;
-    let error = bind_map_bounded(&resolver, f.input(7), limits)
+    let error = bind_map_bounded(Arc::new(resolver), f.input(7), limits)
         .err()
         .expect("expected refusal");
     assert!(source_limit(&error), "{error:?}");
@@ -236,7 +237,7 @@ pub fn bounded_missing_malformed_and_source_mismatch_remain_distinct() {
     let mut f = Fixture::new(1);
     f.override_reply = Some(("chosen common.j".into(), Reply::Missing));
     assert!(matches!(
-        bind_map_bounded(&f.resolver(), f.input(7), f.limits()),
+        bind_map_bounded(Arc::new(f.resolver()), f.input(7), f.limits()),
         Err(BindingError::Resolve {
             source: pcx_assets::Error::MissingContent { .. },
             ..
@@ -245,7 +246,7 @@ pub fn bounded_missing_malformed_and_source_mismatch_remain_distinct() {
     let mut f = Fixture::new(1);
     f.override_reply = Some(("chosen common.j".into(), Reply::Invalid));
     assert!(matches!(
-        bind_map_bounded(&f.resolver(), f.input(7), f.limits()),
+        bind_map_bounded(Arc::new(f.resolver()), f.input(7), f.limits()),
         Err(BindingError::Resolve {
             source: pcx_assets::Error::Source {
                 source: SourceError::InvalidInput { .. },
@@ -259,7 +260,7 @@ pub fn bounded_missing_malformed_and_source_mismatch_remain_distinct() {
     let mut input = f.input(7);
     input.map.source = &wrong;
     assert!(matches!(
-        bind_map_bounded(&f.resolver(), input, f.limits()),
+        bind_map_bounded(Arc::new(f.resolver()), input, f.limits()),
         Err(BindingError::SourceMismatch { .. })
     ));
 }
@@ -340,14 +341,22 @@ pub fn mounted_mpq_sources_bind_into_the_actual_app_and_preserve_failed_publicat
     let f = Fixture::new(231);
     let mut app = bevy::prelude::App::new();
     peacecraft3::map_requests::install(&mut app);
-    let resolver = sources(&f, f.raw.len());
-    assert!(
-        app.world_mut()
-            .resource_mut::<MapRequests>()
-            .replace_selected(&resolver, f.input(7), f.limits())
-            .result
-            .is_ok()
-    );
+    let resolver = Arc::new(sources(&f, f.raw.len()));
+    {
+        let mut state = app.world_mut().remove_resource::<MapRequests>().unwrap();
+        let mut selected = app
+            .world_mut()
+            .remove_resource::<SelectedMapSources>()
+            .unwrap();
+        assert!(
+            state
+                .replace_selected(&mut selected, Arc::clone(&resolver), f.input(7), f.limits(),)
+                .result
+                .is_ok()
+        );
+        app.world_mut().insert_resource(state);
+        app.world_mut().insert_resource(selected);
+    }
     let old = app
         .world()
         .resource::<MapRequests>()
@@ -387,12 +396,30 @@ pub fn mounted_mpq_sources_bind_into_the_actual_app_and_preserve_failed_publicat
         .admission
         .shared_context()
         .unwrap();
-    let mut state = app.world_mut().resource_mut::<MapRequests>();
-    let error = &state
-        .replace_selected(&sources(&f, f.raw.len() - 1), f.input(8), f.limits())
-        .result;
+    {
+        let mut state = app.world_mut().remove_resource::<MapRequests>().unwrap();
+        let mut selected = app
+            .world_mut()
+            .remove_resource::<SelectedMapSources>()
+            .unwrap();
+        assert!(
+            state
+                .replace_selected(
+                    &mut selected,
+                    Arc::new(sources(&f, f.raw.len() - 1)),
+                    f.input(8),
+                    f.limits(),
+                )
+                .result
+                .is_err()
+        );
+        app.world_mut().insert_resource(state);
+        app.world_mut().insert_resource(selected);
+    }
+    let state = app.world().resource::<MapRequests>();
+    let error = state.last_outcome.as_ref().unwrap();
     assert!(
-        matches!(error, Err(RequestFailure::Binding(error)) if matches!(error.as_ref(), BindingError::Resolve { source: pcx_assets::Error::Source { source: SourceError::MpqExtraction(error), .. }, .. } if matches!(error.cause.as_ref(), pcx_mpq::ExtractionCause::Preflight(pcx_mpq::checked::ReadError::BudgetExceeded { member: "packed member", .. }))))
+        matches!(&error.result, Err(RequestFailure::Binding(error)) if matches!(error.as_ref(), BindingError::Resolve { source: pcx_assets::Error::Source { source: SourceError::MpqExtraction(error), .. }, .. } if matches!(error.cause.as_ref(), pcx_mpq::ExtractionCause::Preflight(pcx_mpq::checked::ReadError::BudgetExceeded { member: "packed member", .. }))))
     );
     assert!(Arc::ptr_eq(
         &kept,

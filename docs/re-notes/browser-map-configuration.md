@@ -94,10 +94,13 @@ existing consumer are not rewritten by later selections.
 
 This ownership does not freeze external sources. In particular, a committed
 browser archive still refuses reads after its generation changes. Read budgets,
-archive policy and provenance remain on the existing resolver path. The borrowed
-`MapRequests::replace_selected` API does not transfer resolver ownership; an owned
-configuration or an explicitly retained caller reader is still required for
-runtime reads. No Host construction or `config`/`main` execution is added here.
+archive policy and provenance remain on the existing resolver path.
+`MapRequests::replace_selected` publishes the same receipt arc with the supplied
+resolver. Message delivery and native file drop do the same when the active
+binding retained that resolver. `bind_map` does not retain one, so a later
+delivery of that binding leaves `SelectedMapSources` unchanged. A refused
+candidate never replaces the previous pair. No Host construction or
+`config`/`main` execution is added here.
 
 The UTF-8 text ceiling is checked before serde allocation, after wasm-bindgen has
 already copied the JavaScript string into Rust. It is not a total-memory bound.

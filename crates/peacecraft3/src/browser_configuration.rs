@@ -37,21 +37,6 @@ pub struct Configuration {
     pub revision: u64,
     pub limits: BindingLimits,
 }
-impl Configuration {
-    fn input(&self) -> BindingInputs<'_> {
-        BindingInputs {
-            map: self.map.borrowed(),
-            common: self.common.borrowed(),
-            blizzard: self.blizzard.borrowed(),
-            catalog_identity: &self.catalog_identity,
-            catalog_label: &self.catalog_label,
-            catalog_sources: &self.catalog_sources,
-            required_catalog_tables: &self.required_catalog_tables,
-            required_fields: &self.required_fields,
-            revision: self.revision,
-        }
-    }
-}
 /// The selected reader survives configuration for gameplay asset preparation.
 /// Retaining a reader does not bypass its source-generation checks or read budgets.
 #[derive(Resource, Default)]
@@ -63,6 +48,27 @@ impl SelectedMapSources {
     pub fn for_receipts(&self, receipts: &Arc<BindingReceipts>) -> Option<Arc<Resolver>> {
         let (published, resolver) = self.published.as_ref()?;
         Arc::ptr_eq(published, receipts).then(|| Arc::clone(resolver))
+    }
+
+    /// Publish one receipt arc with the resolver that produced it.
+    /// A later success replaces the pair; callers drop the returned pair
+    /// themselves so retired source `Drop` does not run under a lock.
+    pub(crate) fn publish(
+        &mut self,
+        receipts: Arc<BindingReceipts>,
+        resolver: Arc<Resolver>,
+    ) -> Option<(Arc<BindingReceipts>, Arc<Resolver>)> {
+        self.published.replace((receipts, resolver))
+    }
+
+    /// Move a staged pair here.
+    /// `None` means the stage was empty. `Some(None)` is a first publication.
+    pub(crate) fn commit(
+        &mut self,
+        staged: &mut Self,
+    ) -> Option<Option<(Arc<BindingReceipts>, Arc<Resolver>)>> {
+        let (receipts, resolver) = staged.published.take()?;
+        Some(self.publish(receipts, resolver))
     }
 }
 #[derive(Debug, thiserror::Error)]
@@ -146,7 +152,33 @@ fn consume(
         (id, request)
     };
     let mut candidate = MapRequests::default();
-    candidate.replace_selected(&request.resolver, request.input(), request.limits);
+    let mut staged = SelectedMapSources::default();
+    let crate::browser_configuration::Configuration {
+        resolver,
+        map,
+        common,
+        blizzard,
+        catalog_identity,
+        catalog_label,
+        catalog_sources,
+        required_catalog_tables,
+        required_fields,
+        revision,
+        limits,
+    } = request;
+    let resolver = Arc::new(resolver);
+    let input = BindingInputs {
+        map: map.borrowed(),
+        common: common.borrowed(),
+        blizzard: blizzard.borrowed(),
+        catalog_identity: &catalog_identity,
+        catalog_label: &catalog_label,
+        catalog_sources: &catalog_sources,
+        required_catalog_tables: &required_catalog_tables,
+        required_fields: &required_fields,
+        revision,
+    };
+    candidate.replace_selected(&mut staged, resolver, input, limits);
     let outcome = candidate
         .last_outcome
         .take()
@@ -162,16 +194,12 @@ fn consume(
     // Failure preserves every old active field, including the old last_outcome.
     let mut queue = inbox.0.lock().map_err(|_| InboxError::Poisoned)?;
     let (previous, retired_sources) = if outcome.result.is_ok() {
-        let receipts = candidate
-            .published_receipts
-            .as_ref()
-            .expect("successful configuration publishes receipts")
-            .clone();
-        let reader = Arc::new(request.resolver);
-        let retired = sources.published.replace((receipts, reader));
+        let retired = sources
+            .commit(&mut staged)
+            .expect("successful configuration publishes a reader");
         (Some(std::mem::replace(&mut *active, candidate)), retired)
     } else {
-        (None, None)
+        (None, None::<(Arc<BindingReceipts>, Arc<Resolver>)>)
     };
     queue.completed = Some((id, Box::new(outcome)));
     queue.in_flight = None;

@@ -20,8 +20,10 @@ scripts. Unresolved object records retain their problems. Admission does not
 initialize a VM, instantiate game entities or replace missing game rules.
 
 `MapRequests::replace_selected` prepares a candidate binding and context before
-publishing them with their receipts. Failed candidates preserve the old
-publication. Requests retain the selected resolver receipt’s typed `AssetPath`
+publishing them with their receipts and the resolver that produced them.
+`SelectedMapSources` stores that pair by receipt-arc identity. Failed candidates
+preserve the old publication and the previous reader. Requests retain the
+selected resolver receipt’s typed `AssetPath`
 map member independently of the diagnostic label. They validate binding revision,
 declared edition/version and that member before payload I/O or parsing, then
 validate exact equality with the map used for object binding. A changed member
