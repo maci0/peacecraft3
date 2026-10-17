@@ -100,3 +100,14 @@ timers in the same arena. The view reflects those executed changes, preserves
 the surviving quest and refuses destroyed identities without disturbing the
 timers. This is a display-data boundary; grouping, screen layout, rendered
 objectives and campaign victory decisions remain open.
+
+## Campaign factory admission
+
+`MapStartupBudgets.quests` is `Option<QuestBudget>`. `map_startup_host::assemble`
+passes `Some` to the existing `ObjectHost::with_quests` and leaves `None`
+unadmitted. There is no second arena, no default budget and no invented flag.
+A delivered-map test supplies the selected native declarations and script text,
+then reads the published session. The untouched quest keeps absent text and the
+probed initial flags. Omitting the budget refuses `CreateQuest` as unsupported.
+A quest-object budget of one refuses the map's second creation. Both refusals
+leave the previously published session, its title and its witness in place.
