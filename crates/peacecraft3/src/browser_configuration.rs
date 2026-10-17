@@ -1,5 +1,5 @@
 //! Owned caller configuration delivered to the existing bounded map consumer.
-use crate::map_binding::{BindingInputs, BindingLimits, IdentifiedMember};
+use crate::map_binding::{BindingInputs, BindingLimits, BindingReceipts, IdentifiedMember};
 use crate::map_requests::{MapOutcome, MapRequests};
 use bevy::prelude::*;
 use pcx_assets::{Resolver, SourceInfo};
@@ -50,6 +50,19 @@ impl Configuration {
             required_fields: &self.required_fields,
             revision: self.revision,
         }
+    }
+}
+/// The selected reader survives configuration for gameplay asset preparation.
+/// Retaining a reader does not bypass its source-generation checks or read budgets.
+#[derive(Resource, Default)]
+pub struct SelectedMapSources {
+    published: Option<(Arc<BindingReceipts>, Arc<Resolver>)>,
+}
+impl SelectedMapSources {
+    /// Only the receipts from this publication can select its reader.
+    pub fn for_receipts(&self, receipts: &Arc<BindingReceipts>) -> Option<Arc<Resolver>> {
+        let (published, resolver) = self.published.as_ref()?;
+        Arc::ptr_eq(published, receipts).then(|| Arc::clone(resolver))
     }
 }
 #[derive(Debug, thiserror::Error)]
@@ -112,11 +125,14 @@ impl ConfigurationInbox {
     }
 }
 pub fn install(app: &mut App, inbox: ConfigurationInbox) {
-    app.insert_resource(inbox).add_systems(PreUpdate, consume);
+    app.insert_resource(inbox)
+        .init_resource::<SelectedMapSources>()
+        .add_systems(PreUpdate, consume);
 }
 fn consume(
     inbox: Res<ConfigurationInbox>,
     mut active: ResMut<MapRequests>,
+    mut sources: ResMut<SelectedMapSources>,
 ) -> bevy::ecs::error::Result {
     let (id, request) = {
         let mut queue = inbox.0.lock().map_err(|_| InboxError::Poisoned)?;
@@ -145,17 +161,24 @@ fn consume(
     }
     // Failure preserves every old active field, including the old last_outcome.
     let mut queue = inbox.0.lock().map_err(|_| InboxError::Poisoned)?;
-    let previous = if outcome.result.is_ok() {
-        Some(std::mem::replace(&mut *active, candidate))
+    let (previous, retired_sources) = if outcome.result.is_ok() {
+        let receipts = candidate
+            .published_receipts
+            .as_ref()
+            .expect("successful configuration publishes receipts")
+            .clone();
+        let reader = Arc::new(request.resolver);
+        let retired = sources.published.replace((receipts, reader));
+        (Some(std::mem::replace(&mut *active, candidate)), retired)
     } else {
-        None
+        (None, None)
     };
     queue.completed = Some((id, Box::new(outcome)));
     queue.in_flight = None;
     drop(queue);
     // Retiring caller-owned catalogs/sources can itself run external Drop code.
     drop(previous);
-    drop(request);
+    drop(retired_sources);
     Ok(())
 }
 

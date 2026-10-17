@@ -12,8 +12,8 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU32, AtomicUsize, Ordering},
 };
-fn fixture() -> binding::Fixture {
-    let mut f = binding::Fixture::new(235);
+fn fixture(value: u32) -> binding::Fixture {
+    let mut f = binding::Fixture::new(value);
     for info in [
         &mut f.map_info,
         &mut f.common_info,
@@ -63,7 +63,7 @@ fn app(inbox: &ConfigurationInbox) -> bevy::prelude::App {
 }
 #[cfg_attr(test, test)]
 pub fn pending_publication_and_acknowledgement() {
-    let f = fixture();
+    let f = fixture(235);
     let inbox = ConfigurationInbox::default();
     let mut app = app(&inbox);
     let id = inbox.enqueue(request(&f, f.resolver())).unwrap();
@@ -105,7 +105,7 @@ pub fn pending_publication_and_acknowledgement() {
 }
 #[cfg_attr(test, test)]
 pub fn failed_configuration_preserves_entire_active_state() {
-    let f = fixture();
+    let f = fixture(235);
     let inbox = ConfigurationInbox::default();
     let mut app = app(&inbox);
     let id = inbox.enqueue(request(&f, f.resolver())).unwrap();
@@ -116,7 +116,7 @@ pub fn failed_configuration_preserves_entire_active_state() {
     let receipts = active.published_receipts.as_ref().unwrap().clone();
     let bindings_revision = active.bindings.as_ref().unwrap().revision;
     let outcome_label = active.last_outcome.as_ref().unwrap().label.clone();
-    let mut failed = fixture();
+    let mut failed = fixture(235);
     failed.override_reply = Some(("chosen common.j".into(), binding::Reply::Invalid));
     let id = inbox.enqueue(request(&failed, failed.resolver())).unwrap();
     app.update();
@@ -141,8 +141,112 @@ pub fn failed_configuration_preserves_entire_active_state() {
     assert!(active.last_outcome.as_ref().unwrap().result.is_ok());
 }
 #[cfg_attr(test, test)]
+pub fn runtime_sources_follow_successful_publication_and_receipt_identity() {
+    let first = fixture(235);
+    let inbox = ConfigurationInbox::default();
+    let mut app = app(&inbox);
+    let id = inbox.enqueue(request(&first, first.resolver())).unwrap();
+    app.update();
+    let receipts = app
+        .world()
+        .resource::<MapRequests>()
+        .published_receipts
+        .clone()
+        .unwrap();
+    let sources = app.world().resource::<SelectedMapSources>();
+    let reader = sources.for_receipts(&receipts).unwrap();
+    assert!(
+        sources
+            .for_receipts(&Arc::new((*receipts).clone()))
+            .is_none()
+    );
+    assert_eq!(
+        reader
+            .resolve_bounded("selected map.w3m", first.raw.len() as u64)
+            .unwrap()
+            .bytes,
+        first.raw
+    );
+    assert!(matches!(inbox.poll(id).unwrap(), Poll::Completed(_)));
+
+    let reload = app
+        .world()
+        .resource::<MapRequests>()
+        .selected_map_request()
+        .unwrap();
+    app.world_mut().write_message(reload);
+    app.update();
+    assert!(Arc::ptr_eq(
+        &receipts,
+        app.world()
+            .resource::<MapRequests>()
+            .published_receipts
+            .as_ref()
+            .unwrap()
+    ));
+    assert!(Arc::ptr_eq(
+        &reader,
+        &app.world()
+            .resource::<SelectedMapSources>()
+            .for_receipts(&receipts)
+            .unwrap()
+    ));
+
+    let mut failed = fixture(235);
+    failed.override_reply = Some(("chosen common.j".into(), binding::Reply::Invalid));
+    let id = inbox.enqueue(request(&failed, failed.resolver())).unwrap();
+    app.update();
+    let Poll::Completed(outcome) = inbox.poll(id).unwrap() else {
+        panic!("missing refusal")
+    };
+    assert!(outcome.result.is_err());
+    assert!(Arc::ptr_eq(
+        &reader,
+        &app.world()
+            .resource::<SelectedMapSources>()
+            .for_receipts(&receipts)
+            .unwrap()
+    ));
+
+    let next = fixture(236);
+    assert_ne!(first.raw, next.raw);
+    let id = inbox.enqueue(request(&next, next.resolver())).unwrap();
+    app.update();
+    let current = app
+        .world()
+        .resource::<MapRequests>()
+        .published_receipts
+        .as_ref()
+        .unwrap();
+    let sources = app.world().resource::<SelectedMapSources>();
+    assert!(sources.for_receipts(&receipts).is_none());
+    let replacement = sources.for_receipts(current).unwrap();
+    assert!(!Arc::ptr_eq(&reader, &replacement));
+    assert_eq!(
+        replacement
+            .resolve_bounded("selected map.w3m", next.raw.len() as u64)
+            .unwrap()
+            .bytes,
+        next.raw
+    );
+    // A running consumer may retain its old reader; selection never rewrites it.
+    assert_eq!(
+        reader
+            .resolve_bounded("selected map.w3m", first.raw.len() as u64)
+            .unwrap()
+            .bytes,
+        first.raw
+    );
+    assert!(matches!(inbox.poll(id).unwrap(), Poll::Completed(_)));
+}
+
+#[cfg_attr(test, test)]
 pub fn actual_archive_generation_changes_before_consume_refuse() {
-    let mut f = fixture();
+    archive_generation_case(true);
+    archive_generation_case(false);
+}
+fn archive_generation_case(change_before: bool) {
+    let mut f = fixture(235);
     for (info, identity) in [
         &mut f.map_info,
         &mut f.common_info,
@@ -217,8 +321,39 @@ pub fn actual_archive_generation_changes_before_consume_refuse() {
     let inbox = ConfigurationInbox::default();
     let mut app = app(&inbox);
     let id = inbox.enqueue(request(&f, resolver)).unwrap();
-    *revision.lock().unwrap() = 8;
+    if change_before {
+        *revision.lock().unwrap() = 8;
+    }
     app.update();
+    if !change_before {
+        let Poll::Completed(outcome) = inbox.poll(id).unwrap() else {
+            panic!("not completed")
+        };
+        assert!(outcome.result.is_ok());
+        let active = app.world().resource::<MapRequests>();
+        let receipts = active.published_receipts.as_ref().unwrap();
+        let reader = app
+            .world()
+            .resource::<SelectedMapSources>()
+            .for_receipts(receipts)
+            .unwrap();
+        assert_eq!(
+            reader
+                .resolve_bounded("selected map.w3m", f.raw.len() as u64)
+                .unwrap()
+                .bytes,
+            f.raw
+        );
+        *revision.lock().unwrap() = 8;
+        assert!(matches!(
+            reader.resolve_bounded("selected map.w3m", f.raw.len() as u64),
+            Err(pcx_assets::Error::Source {
+                source: SourceError::Unavailable { .. },
+                ..
+            })
+        ));
+        return;
+    }
     let Poll::Completed(outcome) = inbox.poll(id).unwrap() else {
         panic!("not completed")
     };
@@ -320,7 +455,7 @@ fn reentrant_resolver(f: &binding::Fixture, callback: Arc<dyn Fn() + Send + Sync
 }
 #[cfg_attr(test, test)]
 pub fn source_reenters_poll_enqueue_and_second_consumer() {
-    let f = fixture();
+    let f = fixture(235);
     let inbox = ConfigurationInbox::default();
     let calls = Arc::new(AtomicUsize::new(0));
     let job = Arc::new(AtomicU32::new(0));
@@ -408,7 +543,7 @@ impl Drop for CatalogDrop {
 }
 #[cfg_attr(test, test)]
 pub fn retired_active_catalog_drops_outside_mutex() {
-    let f = fixture();
+    let f = fixture(235);
     let inbox = ConfigurationInbox::default();
     let mut app = app(&inbox);
     let id = inbox.enqueue(request(&f, f.resolver())).unwrap();
@@ -441,5 +576,6 @@ pub fn browser_configuration_consumer_gate() -> u32 {
     actual_archive_generation_changes_before_consume_refuse();
     source_reenters_poll_enqueue_and_second_consumer();
     retired_active_catalog_drops_outside_mutex();
-    5
+    runtime_sources_follow_successful_publication_and_receipt_identity();
+    6
 }

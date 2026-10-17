@@ -1620,3 +1620,15 @@ native/browser checks, browser build and formatting pass. Evidence:
 `.scratch/options-text-anchors-20261017/`. One-font-size line boxes are a
 recreation layout convention; original font metrics, multiline spacing,
 rasterization, shading and full native Options parity remain open. No publication.
+
+Owned map configuration now retains its selected resolver in `SelectedMapSources`
+with the exact published receipt arc, so gameplay asset preparation can keep the
+same reader after the request retires. Failed replacement preserves the reader;
+copied or replaced receipts cannot select it. Reloading the same bindings keeps
+that association. Actual committed-archive generation changes still refuse reads.
+All 78 map-loading tests, four library tests, strict native/browser checks and
+browser build pass. Generated 32-bit WebAssembly executes seven JSON and six
+consumer groups, including these ownership cases. Evidence:
+`.scratch/map-runtime-source-owner-20261017/`. This supplies owned readers through
+the existing configuration path; it does not construct a gameplay Host, execute
+chapters, freeze external sources or complete terrain/HUD integration.

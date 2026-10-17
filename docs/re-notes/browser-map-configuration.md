@@ -84,6 +84,21 @@ binding replaces the active `MapRequests` state. A refusal retains the previous
 context, receipts, bindings and active outcome, while the separate reply owns the
 new failure. This is normal-return behavior, not panic recovery or cancellation.
 
+`SelectedMapSources` retains the owned configuration's resolver alongside the
+exact published `BindingReceipts` arc. Runtime asset preparation can obtain a
+reader through `for_receipts`; copied equal-content receipts and receipts from a
+replaced configuration cannot select it. A failed configuration preserves the
+previous reader, and reloading the same bindings keeps that receipt association.
+Retired readers are dropped outside the inbox lock. Readers retained by an
+existing consumer are not rewritten by later selections.
+
+This ownership does not freeze external sources. In particular, a committed
+browser archive still refuses reads after its generation changes. Read budgets,
+archive policy and provenance remain on the existing resolver path. The borrowed
+`MapRequests::replace_selected` API does not transfer resolver ownership; an owned
+configuration or an explicitly retained caller reader is still required for
+runtime reads. No Host construction or `config`/`main` execution is added here.
+
 The UTF-8 text ceiling is checked before serde allocation, after wasm-bindgen has
 already copied the JavaScript string into Rust. It is not a total-memory bound.
 Mounted archive tables, inventory metadata, decoder/compiler working memory,
