@@ -8,12 +8,13 @@ budgets; arena capacity is also checked before allocating a token.
 
 A registration retains its trigger, executed unit, symbolic unit-event handle
 and enumerand. Its returned `event` token comes from that same arena. It does not
-run a callback. Trigger enable/disable, destruction, condition evaluation and event delivery
-remain unsupported. No enabled-state default is inferred from
+run a callback. Explicit enable/disable assignments are retained as described
+below. Destruction, condition evaluation and event delivery remain unsupported.
+No enabled-state default is inferred from
 creating a trigger or from a WTG record.
 
 This is recreation state, not evidence of identical native storage or queues.
-The application still needs its gameplay Host factory and event-delivery caller.
+The application still needs its gameplay world and event-delivery caller.
 
 ## Checks
 
@@ -246,7 +247,7 @@ association destruction, predicate evaluation and trigger-event dispatch remain
 unsupported. Repeated successful creations/registrations receive distinct tokens
 under the recreation arena policy; native repeated-code interning is unmeasured.
 
-The same unchanged Human01 Program now passes two Condition constructors and two
+At the condition-association slice, the unchanged Human01 Program passed two Condition constructors and two
 TriggerAddCondition calls through the production factory. Every wrapper matches
 its executed loaded function, declaration source and span; every association
 matches its actual trigger and wrapper. Globals and `config` finish. With the
@@ -261,4 +262,41 @@ conditions of that verifier. This is recreated retention and script-execution
 evidence, not native predicate behavior, timer timing, a rendered chapter or the
 100-consecutive original baseline gate. Local commands, source/artifact hashes
 and original-input receipts are in `.scratch/trigger-condition-root-20261017/`.
+No original client, new render or site publication was run for this slice.
+
+## Explicit trigger enabled state
+
+The existing trigger admission also checks any loaded `EnableTrigger`,
+`DisableTrigger` and `IsTriggerEnabled` declarations. Each must be non-constant,
+take one scalar trigger, return the matching `nothing` or `boolean` type, have
+no script override and share the selected `CreateTrigger` source. An absent
+declaration stays unsupported. No extra factory option or state budget is added.
+
+Each created trigger stores an optional enabled value on its existing arena
+entry. Creation leaves it unknown. A successful `EnableTrigger` or
+`DisableTrigger` sets only that trigger's value, and a repeated assignment
+allocates nothing. `trigger_enabled` exposes the optional value. The native
+query returns a boolean only after an explicit assignment; an unknown initial
+state refuses instead of becoming a guessed default. A reserved identity whose
+family name is `trigger` is insufficient. Invalid arguments and handles preserve
+all previously assigned state and retained registrations.
+
+The owned-VM checks cover both assignments, repeated calls, independent triggers,
+unknown state, malformed/reserved handles, optional and conflicting contracts,
+and unchanged unit-event/action registrations. Neither assignment evaluates a
+condition nor runs an action. Event delivery and destruction remain unsupported;
+this state alone does not make a subscription deliverable.
+
+With the same unchanged Human01 Program, production factory, compatibility
+catalog, qualified startup inputs and explicit verifier time origin, one
+`DisableTrigger` succeeds. Its retained value matches the executed request;
+every other created trigger remains unknown. Globals and `config` finish.
+`main` next refuses `TriggerRegisterPlayerEvent`, Blizzard span `80853..80926`,
+common declaration `75025..75150`. The same arena still holds 932 identities,
+155 units, 15 triggers, two condition wrappers and two condition associations.
+
+This is reconstructed state retention and script-execution evidence. Initial
+native state, event behavior, timing, rendered gameplay, chapter completion and
+the 100-consecutive original baseline remain open. Local commands, immutable
+source/input hashes and results are in `.scratch/trigger-state-root-20261017/`.
 No original client, new render or site publication was run for this slice.

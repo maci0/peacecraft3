@@ -110,7 +110,7 @@ impl ObjectHost {
         };
         if !matches!(
             self.inner.entry(*trigger).map_err(|e| fail(e.failure))?,
-            Entry::Trigger
+            Entry::Trigger { .. }
         ) {
             return Err(fail(Failure::WrongFamily));
         }

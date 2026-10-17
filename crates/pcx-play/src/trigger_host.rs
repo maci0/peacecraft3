@@ -1,7 +1,7 @@
 //! Shared-arena trigger creation, event subscriptions and action registration.
 //!
-//! Enabled state is not stored. `EnableTrigger`, `DisableTrigger`,
-//! `IsTriggerEnabled`, condition evaluation and event delivery stay unsupported.
+//! Enabled state is known only after an explicit enable or disable request.
+//! Condition evaluation and event delivery stay unsupported.
 //! `TriggerAddAction` retains the loaded callback and does not run it.
 use super::super::{Entry, Error, Failure, below};
 use super::ObjectHost;
@@ -29,6 +29,9 @@ const CREATE: &str = "CreateTrigger";
 const REGISTER: &str = "TriggerRegisterUnitEvent";
 const CONVERT: &str = "ConvertUnitEvent";
 const ADD: &str = "TriggerAddAction";
+const ENABLE: &str = "EnableTrigger";
+const DISABLE: &str = "DisableTrigger";
+const IS_ENABLED: &str = "IsTriggerEnabled";
 
 /// Caller bounds for retained identities. Not a firing or population limit.
 #[derive(Clone, Copy, Debug)]
@@ -83,7 +86,8 @@ impl ObjectHost {
     ///
     /// Both natives, `ConvertUnitEvent`, and the `trigger`, `event`, `eventid`,
     /// `unitevent`, and `unit` types must share one declaration source. Programs
-    /// that never call this keep those natives unsupported.
+    /// that never call this keep those natives unsupported. Present enable/disable
+    /// and enabled-query declarations must also match that source and signature.
     pub fn with_trigger_admission(mut self, budget: TriggerBudget) -> Result<Self, Error> {
         let fail = |reason| self.inner.error(CREATE, reason);
         if self.triggers.is_some() {
@@ -177,6 +181,18 @@ impl ObjectHost {
             }
             loaded_type(&self.inner, ADD, "triggeraction", "handle", &source)?;
         }
+        for (name, result) in [
+            (ENABLE, "nothing"),
+            (DISABLE, "nothing"),
+            (IS_ENABLED, "boolean"),
+        ] {
+            if let Some(native) = self.inner.program.natives().get(name) {
+                Self::contract(&self.inner, name, &["trigger"], result, false, None)?;
+                if native.source != source {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
+            }
+        }
         self.triggers = Some(Admission {
             max_triggers: budget.max_triggers,
             max_unit_events: budget.max_unit_events,
@@ -255,6 +271,9 @@ impl ObjectHost {
                 Some(self.add_trigger_condition(args))
             }
             ADD if self.inner.program.natives().get(ADD).is_some() => Some(self.add_action(args)),
+            ENABLE | DISABLE | IS_ENABLED if self.inner.program.natives().get(name).is_some() => {
+                Some(self.trigger_state_native(name, args))
+            }
             _ => None,
         }
     }
@@ -283,7 +302,9 @@ impl ObjectHost {
         if self.inner.handles() >= self.inner.max_handles {
             return Err(fail(Failure::Capacity));
         }
-        let id = self.inner.allocate(Entry::Trigger, CREATE)?;
+        let id = self
+            .inner
+            .allocate(Entry::Trigger { enabled: None }, CREATE)?;
         let admitted = self.triggers.as_mut().ok_or_else(|| {
             self.inner
                 .error(CREATE, Failure::TriggerState("not admitted"))
@@ -310,7 +331,7 @@ impl ObjectHost {
                 .entry(*trigger)
                 .map_err(|error| self.inner.error(REGISTER, error.failure))?
             {
-                Entry::Trigger => {}
+                Entry::Trigger { .. } => {}
                 _ => return Err(fail(Failure::WrongFamily)),
             }
             match self
@@ -397,7 +418,7 @@ impl ObjectHost {
                 .entry(*trigger)
                 .map_err(|error| self.inner.error(ADD, error.failure))?
             {
-                Entry::Trigger => {}
+                Entry::Trigger { .. } => {}
                 _ => return Err(fail(Failure::WrongFamily)),
             }
             callback(&self.inner.program, *function_id).map_err(fail)?;
@@ -426,6 +447,42 @@ impl ObjectHost {
             .ok_or_else(|| self.inner.error(ADD, Failure::TriggerState("not admitted")))?;
         admitted.retained_actions += 1;
         Ok(Value::Handle(id))
+    }
+
+    /// Last explicit enable/disable assignment; creation does not establish a value.
+    pub fn trigger_enabled(&self, id: HandleId) -> Result<Option<bool>, Error> {
+        self.admitted_triggers()?;
+        match self
+            .inner
+            .entry(id)
+            .map_err(|e| self.inner.error(IS_ENABLED, e.failure))?
+        {
+            Entry::Trigger { enabled } => Ok(*enabled),
+            _ => Err(self.inner.error(IS_ENABLED, Failure::WrongFamily)),
+        }
+    }
+
+    fn trigger_state_native(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let [Value::Handle(id)] = args else {
+            return Err(self
+                .inner
+                .error(name, Failure::TriggerState("expected one created trigger")));
+        };
+        let state = self
+            .trigger_enabled(*id)
+            .map_err(|e| self.inner.error(name, e.failure))?;
+        if name == IS_ENABLED {
+            return state.map(Value::Bool).ok_or_else(|| {
+                self.inner
+                    .error(name, Failure::TriggerState("enabled state is not assigned"))
+            });
+        }
+        let Entry::Trigger { enabled } = self.inner.entry_mut(*id).expect("validated trigger")
+        else {
+            unreachable!("validated trigger")
+        };
+        *enabled = Some(name == ENABLE);
+        Ok(Value::Null)
     }
 }
 

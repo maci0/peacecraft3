@@ -199,7 +199,9 @@ enum Entry {
         record: objects::ExecutedUnit,
     },
     /// Trigger identity, without an inferred enabled-state default.
-    Trigger,
+    Trigger {
+        enabled: Option<bool>,
+    },
     /// One `event` handle for a loaded `TriggerRegisterUnitEvent` call.
     RegisteredUnitEvent {
         trigger: HandleId,
@@ -543,7 +545,7 @@ impl EnumHost {
             Entry::CameraSetup { .. } => "camerasetup",
             Entry::Destructable { .. } => "destructable",
             Entry::Unit { .. } => "unit",
-            Entry::Trigger => "trigger",
+            Entry::Trigger { .. } => "trigger",
             Entry::RegisteredUnitEvent { .. }
             | Entry::RegisteredPlayerUnitEvent(_)
             | Entry::RegisteredTimerEvent { .. }

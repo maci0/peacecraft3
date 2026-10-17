@@ -9,9 +9,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const EXTRAS: &str = "type widget extends agent\ntype unit extends widget\ntype event extends agent\ntype eventid extends handle\ntype unitevent extends eventid\ntype trigger extends agent\ntype triggeraction extends handle\nnative CreateUnit takes player id, integer unitid, real x, real y, real face returns unit\nnative CreateTrigger takes nothing returns trigger\nnative TriggerRegisterUnitEvent takes trigger whichTrigger, unit whichUnit, unitevent whichEvent returns event\nnative TriggerAddAction takes trigger whichTrigger, code actionFunc returns triggeraction\nnative EnableTrigger takes trigger whichTrigger returns nothing\nnative IsTriggerEnabled takes trigger whichTrigger returns boolean\nconstant native ConvertUnitEvent takes integer i returns unitevent\n";
+const EXTRAS: &str = "type widget extends agent\ntype unit extends widget\ntype event extends agent\ntype eventid extends handle\ntype unitevent extends eventid\ntype trigger extends agent\ntype triggeraction extends handle\nnative CreateUnit takes player id, integer unitid, real x, real y, real face returns unit\nnative CreateTrigger takes nothing returns trigger\nnative TriggerRegisterUnitEvent takes trigger whichTrigger, unit whichUnit, unitevent whichEvent returns event\nnative TriggerAddAction takes trigger whichTrigger, code actionFunc returns triggeraction\nnative EnableTrigger takes trigger whichTrigger returns nothing\nnative DisableTrigger takes trigger whichTrigger returns nothing\nnative IsTriggerEnabled takes trigger whichTrigger returns boolean\nconstant native ConvertUnitEvent takes integer i returns unitevent\n";
 
-const MAP: &str = "globals\nplayer P = null\nunit U = null\ntrigger G = null\nevent E = null\ntimer T = null\ninteger hits = 0\ntriggeraction A = null\ntriggeraction B = null\nendglobals\nfunction main takes nothing returns nothing\ncall prepare()\nset E = TriggerRegisterUnitEvent(G, U, SAMPLE)\nendfunction\nfunction prepare takes nothing returns nothing\nset P = Player(4)\nset U = CreateUnit(P, 'hfoo', 1.5, -2.25, 90.0)\nset T = CreateTimer()\nset G = CreateTrigger()\nendfunction\nfunction bare takes nothing returns trigger\nreturn CreateTrigger()\nendfunction\nfunction register_only takes nothing returns event\nreturn TriggerRegisterUnitEvent(G, U, SAMPLE)\nendfunction\nfunction wrong_unit takes nothing returns event\nreturn TriggerRegisterUnitEvent(G, T, SAMPLE)\nendfunction\nfunction wrong_event takes nothing returns event\nreturn TriggerRegisterUnitEvent(G, U, C)\nendfunction\nfunction action takes nothing returns nothing\nset hits = hits + 1\nendfunction\nfunction other takes nothing returns nothing\nendfunction\nfunction bad takes integer i returns nothing\nendfunction\nfunction add takes nothing returns triggeraction\nset A = TriggerAddAction(G, function action)\nreturn A\nendfunction\nfunction add_other takes nothing returns triggeraction\nset B = TriggerAddAction(G, function other)\nreturn B\nendfunction\nfunction add_bad takes nothing returns triggeraction\nreturn TriggerAddAction(G, function bad)\nendfunction\nfunction add_timer takes nothing returns triggeraction\nreturn TriggerAddAction(T, function action)\nendfunction\nfunction enable takes nothing returns nothing\ncall EnableTrigger(G)\nendfunction\nfunction enabled takes nothing returns boolean\nreturn IsTriggerEnabled(G)\nendfunction\n";
+const MAP: &str = "globals\nplayer P = null\nunit U = null\ntrigger G = null\nevent E = null\ntimer T = null\ninteger hits = 0\ntriggeraction A = null\ntriggeraction B = null\nendglobals\nfunction main takes nothing returns nothing\ncall prepare()\nset E = TriggerRegisterUnitEvent(G, U, SAMPLE)\nendfunction\nfunction prepare takes nothing returns nothing\nset P = Player(4)\nset U = CreateUnit(P, 'hfoo', 1.5, -2.25, 90.0)\nset T = CreateTimer()\nset G = CreateTrigger()\nendfunction\nfunction bare takes nothing returns trigger\nreturn CreateTrigger()\nendfunction\nfunction register_only takes nothing returns event\nreturn TriggerRegisterUnitEvent(G, U, SAMPLE)\nendfunction\nfunction wrong_unit takes nothing returns event\nreturn TriggerRegisterUnitEvent(G, T, SAMPLE)\nendfunction\nfunction wrong_event takes nothing returns event\nreturn TriggerRegisterUnitEvent(G, U, C)\nendfunction\nfunction action takes nothing returns nothing\nset hits = hits + 1\nendfunction\nfunction other takes nothing returns nothing\nendfunction\nfunction bad takes integer i returns nothing\nendfunction\nfunction add takes nothing returns triggeraction\nset A = TriggerAddAction(G, function action)\nreturn A\nendfunction\nfunction add_other takes nothing returns triggeraction\nset B = TriggerAddAction(G, function other)\nreturn B\nendfunction\nfunction add_bad takes nothing returns triggeraction\nreturn TriggerAddAction(G, function bad)\nendfunction\nfunction add_timer takes nothing returns triggeraction\nreturn TriggerAddAction(T, function action)\nendfunction\nfunction enable takes nothing returns nothing\ncall EnableTrigger(G)\nendfunction\nfunction enabled takes nothing returns boolean\nreturn IsTriggerEnabled(G)\nendfunction\nfunction disable takes nothing returns nothing\ncall DisableTrigger(G)\nendfunction\n";
 
 struct Counting {
     hits: Arc<AtomicUsize>,
@@ -77,7 +77,7 @@ fn action_limits(max_triggers: usize, max_unit_events: usize, max_actions: usize
     }
 }
 
-fn enumerated(common: &str, map: &str, max_handles: usize) -> (Arc<ParsedMapContext>, ObjectHost) {
+fn enum_input(common: &str, map: &str, max_handles: usize) -> (Arc<ParsedMapContext>, EnumHost) {
     let ctx = context(300, common, map, "trigger-admission");
     let program = ctx.scripts.shared_program();
     let inner = EnumHost::checked_selected(
@@ -98,6 +98,11 @@ fn enumerated(common: &str, map: &str, max_handles: usize) -> (Arc<ParsedMapCont
         },
     )
     .unwrap();
+    (ctx, inner)
+}
+
+fn enumerated(common: &str, map: &str, max_handles: usize) -> (Arc<ParsedMapContext>, ObjectHost) {
+    let (ctx, inner) = enum_input(common, map, max_handles);
     let host = ObjectHost::checked(inner)
         .unwrap()
         .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
@@ -204,10 +209,17 @@ fn owned_vm_retains_live_trigger_loaded_unit_event_and_prior_state() {
     assert_eq!(vm.host().inner.inner().handles(), handles);
     assert_eq!(vm.host().inner.retained_triggers().unwrap(), 1);
     assert_eq!(vm.host().inner.retained_unit_events().unwrap(), 1);
-    let enable = vm.call("enable", &[]).unwrap_err().to_string();
-    assert!(enable.contains("unsupported"), "{enable}");
+    assert_eq!(vm.host().inner.trigger_enabled(trigger).unwrap(), None);
     let enabled = vm.call("enabled", &[]).unwrap_err().to_string();
-    assert!(enabled.contains("unsupported"), "{enabled}");
+    assert!(enabled.contains("not assigned"), "{enabled}");
+    vm.call("enable", &[]).unwrap();
+    assert_eq!(vm.call("enabled", &[]).unwrap(), Value::Bool(true));
+    vm.call("disable", &[]).unwrap();
+    assert_eq!(vm.call("enabled", &[]).unwrap(), Value::Bool(false));
+    assert_eq!(
+        vm.host().inner.unit_event_registration(event).unwrap(),
+        registration
+    );
     assert_eq!(vm.host().inner.inner().handles(), handles);
 }
 
@@ -415,8 +427,15 @@ fn owned_vm_registers_callback_without_running_it_until_an_explicit_call() {
     );
     assert_eq!(vm.host().inner.inner().handles(), handles);
     assert_eq!(vm.global("hits"), Value::Int(1));
-    let enable = vm.call("enable", &[]).unwrap_err().to_string();
-    assert!(enable.contains("unsupported"), "{enable}");
+    vm.call("disable", &[]).unwrap();
+    vm.call("enable", &[]).unwrap();
+    assert_eq!(vm.call("enabled", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(vm.global("hits"), Value::Int(1));
+    assert_eq!(
+        vm.host().inner.trigger_action(first).unwrap().trigger,
+        trigger
+    );
+    assert_eq!(vm.host().inner.inner().handles(), handles);
 }
 
 #[test]
@@ -553,3 +572,115 @@ mod player_unit_event_tests;
 
 #[path = "trigger_condition_tests.rs"]
 mod trigger_conditions;
+
+#[test]
+fn trigger_state_is_explicit_per_identity_and_bad_calls_preserve_it() {
+    let (ctx, mut inner) = enum_input(&common_source(EXTRAS), MAP, 24);
+    let reserved = inner.reserve_identity("trigger").unwrap();
+    let host = ObjectHost::checked(inner)
+        .unwrap()
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(
+            Arc::new(Counting {
+                hits: Arc::new(AtomicUsize::new(0)),
+            }),
+            source(),
+            unit_limits(),
+        )
+        .unwrap()
+        .with_trigger_admission(trigger_limits(2, 0))
+        .unwrap();
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
+    vm.init_globals().unwrap();
+    vm.call("prepare", &[]).unwrap();
+    let Value::Handle(first) = vm.global("G") else {
+        panic!("trigger")
+    };
+    let Value::Handle(second) = vm.call("bare", &[]).unwrap() else {
+        panic!("trigger")
+    };
+    let handles = vm.host().inner.inner().handles();
+    assert_eq!(vm.host().inner.trigger_enabled(first).unwrap(), None);
+    assert_eq!(vm.host().inner.trigger_enabled(second).unwrap(), None);
+    vm.call("disable", &[]).unwrap();
+    vm.call("disable", &[]).unwrap();
+    assert_eq!(vm.call("enabled", &[]).unwrap(), Value::Bool(false));
+    assert_eq!(vm.host().inner.trigger_enabled(second).unwrap(), None);
+    vm.host()
+        .native("EnableTrigger", &[Value::Handle(second)])
+        .unwrap();
+    assert_eq!(vm.host().inner.trigger_enabled(second).unwrap(), Some(true));
+    let timer = vm.global("T");
+    let unknown = Value::Handle(pcx_script::HandleId::new(
+        std::num::NonZeroU64::new(9_999).unwrap(),
+    ));
+    for name in ["EnableTrigger", "DisableTrigger", "IsTriggerEnabled"] {
+        for args in [
+            vec![],
+            vec![Value::Null],
+            vec![timer.clone()],
+            vec![unknown.clone()],
+            vec![Value::Handle(reserved)],
+            vec![Value::Handle(first), Value::Bool(true)],
+        ] {
+            let error = vm.host().native(name, &args).unwrap_err();
+            assert!(error.contains(name), "{error}");
+            assert_eq!(vm.host().inner.trigger_enabled(first).unwrap(), Some(false));
+            assert_eq!(vm.host().inner.trigger_enabled(second).unwrap(), Some(true));
+            assert_eq!(vm.host().inner.inner().handles(), handles);
+        }
+    }
+    vm.call("enable", &[]).unwrap();
+    vm.call("enable", &[]).unwrap();
+    assert_eq!(vm.call("enabled", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(vm.global("hits"), Value::Int(0));
+}
+
+#[test]
+fn trigger_state_contracts_are_selected_and_optional() {
+    let map = "function main takes nothing returns trigger\nreturn CreateTrigger()\nendfunction\n";
+    let mut without = EXTRAS.to_string();
+    for (name, result) in [
+        ("EnableTrigger", "nothing"),
+        ("DisableTrigger", "nothing"),
+        ("IsTriggerEnabled", "boolean"),
+    ] {
+        let declaration = format!("native {name} takes trigger whichTrigger returns {result}\n");
+        for replacement in [
+            format!("constant {declaration}"),
+            declaration.replace("trigger whichTrigger", "integer whichTrigger"),
+            declaration.replace(&format!("returns {result}"), "returns trigger"),
+        ] {
+            let extras = EXTRAS.replace(&declaration, &replacement);
+            let (_, host) = enumerated(&common_source(&extras), map, 16);
+            let error = match host.with_trigger_admission(trigger_limits(1, 0)) {
+                Err(e) => e,
+                Ok(_) => panic!("invalid {name} admitted"),
+            };
+            assert_eq!(error.native, name);
+            assert_eq!(error.failure, Failure::Signature);
+        }
+        let extras = EXTRAS.replace(&declaration, "");
+        let (_, host) = enumerated(&common_source(&extras), &format!("{declaration}{map}"), 16);
+        let error = match host.with_trigger_admission(trigger_limits(1, 0)) {
+            Err(e) => e,
+            Ok(_) => panic!("foreign {name} admitted"),
+        };
+        assert_eq!(error.native, name);
+        assert_eq!(error.failure, Failure::Source);
+        without = without.replace(&declaration, "");
+    }
+    let (ctx, host) = enumerated(&common_source(&without), map, 16);
+    let host = host.with_trigger_admission(trigger_limits(1, 0)).unwrap();
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
+    let trigger = vm.call("main", &[]).unwrap();
+    for name in ["EnableTrigger", "DisableTrigger", "IsTriggerEnabled"] {
+        assert!(
+            vm.host()
+                .native(name, std::slice::from_ref(&trigger))
+                .unwrap_err()
+                .contains("unsupported")
+        );
+    }
+}

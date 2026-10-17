@@ -1965,3 +1965,15 @@ actions, repeated-run stability and scheduler/world integration remain open.
 - [ ] Trigger state/evaluation, event delivery, the application clock/world,
   rendered gameplay and the 100-consecutive original baseline remain open.
   See [the supported condition slice](docs/re-notes/script-trigger-admission.md#condition-wrappers-and-trigger-associations).
+
+### 2026-10-17 — explicit trigger enabled state
+
+- [~] Loaded enable/disable/query contracts use the existing trigger admission
+  and arena. Only executed assignments establish a value; creation leaves the
+  initial state unknown. State changes allocate nothing and run no callbacks.
+- [~] Unchanged Human01 passes one `DisableTrigger` through the production factory.
+  Globals and `config` finish; `main` next refuses `TriggerRegisterPlayerEvent`
+  at Blizzard span `80853..80926`.
+- [ ] Initial native enabled state, event delivery, the application world/clock,
+  rendered gameplay and the 100-consecutive original baseline remain open.
+  See [the explicit-state scope](docs/re-notes/script-trigger-admission.md#explicit-trigger-enabled-state).
