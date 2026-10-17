@@ -586,8 +586,8 @@ pub use objects::{
     CameraDestination, CameraFieldRecord, CameraState, DayNightState, DestructableBudget,
     DestructableCreation, ExecutedUnit, ExecutedUnitState, FileSoundState, MapConfig,
     MapConfigBudget, MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget,
-    PlayerBudget, PlayerSettings, QuestBudget, QuestEvent, QuestFlag, SoundProperties, SoundState,
-    StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
-    StartupClockState, TechLimitBudget, TimerHost, TriggerActionRecord, TriggerBudget, UnitBudget,
-    UnitEventRegistration, UnitStateBudget,
+    PlayerBudget, PlayerSettings, PlayerStateRequestBudget, QuestBudget, QuestEvent, QuestFlag,
+    SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest, StartLocation,
+    StartPriorities, StartPriority, StartupClockState, TechLimitBudget, TimerHost,
+    TriggerActionRecord, TriggerBudget, UnitBudget, UnitEventRegistration, UnitStateBudget,
 };

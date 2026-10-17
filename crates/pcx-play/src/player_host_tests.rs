@@ -480,3 +480,6 @@ mod trigger_admission;
 
 #[path = "player_alliance_tests.rs"]
 mod player_alliance;
+
+#[path = "player_state_request_tests.rs"]
+mod player_state_requests;

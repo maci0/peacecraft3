@@ -1306,6 +1306,11 @@ Format: `date — subsystem — symptom — root cause — status`
       The next refusal is `SetPlayerState` in `Blizzard.j` at `225072..225136`, with
       843 shared identities and 155 units. Getter/default policy and alliance
       gameplay remain open; see `script-player-setup.md`.
+      Setter-only player-state request admission then retains the exact executed
+      bounty-setting integer and advances to `Filter` in `Blizzard.j` at
+      `436855..436900` (common declaration `71869..71927`). All previous state
+      checks still pass. Effective balances/defaults, `GetPlayerState`, bounty
+      effects and the application consumer remain open.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or
       upgrade effects. Applied camera motion remains open. See

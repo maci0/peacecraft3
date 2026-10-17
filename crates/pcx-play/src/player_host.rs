@@ -42,6 +42,9 @@ pub struct PlayerSettings {
     /// Executed directed `(other player, alliance setting, value)` assignments.
     /// Absence is unset; `false` is an explicit assignment, never a mirrored default.
     pub alliances: Vec<(HandleId, HandleId, bool)>,
+    /// Last executed `SetPlayerState` request for each symbolic setting.
+    /// These signed inputs are not effective resource balances or fabricated defaults.
+    pub state_requests: Vec<(HandleId, i32)>,
 }
 /// Caller bound on stored `(player, techid)` records. Not a native or build limit.
 #[derive(Clone, Copy, Debug)]
@@ -63,6 +66,11 @@ pub(super) enum TechRead {
 pub struct PlayerAllianceBudget {
     pub max_records: usize,
 }
+/// Aggregate caller bound on distinct player-state request pairs.
+#[derive(Clone, Copy, Debug)]
+pub struct PlayerStateRequestBudget {
+    pub max_records: usize,
+}
 struct RecordLimits {
     max_records: usize,
     records: usize,
@@ -74,8 +82,12 @@ pub(super) struct Players {
     tech: Option<RecordLimits>,
     research: Option<RecordLimits>,
     alliance: Option<RecordLimits>,
+    state_requests: Option<RecordLimits>,
     rows: Vec<PlayerSettings>,
 }
+const SET_PLAYER_STATE: &str = "SetPlayerState";
+const CONVERT_PLAYER_STATE: &str = "ConvertPlayerState";
+const PLAYER_STATE_KIND: &str = "playerstate";
 const SET_ALLIANCE: &str = "SetPlayerAlliance";
 const CONVERT_ALLIANCE: &str = "ConvertAllianceType";
 const ALLIANCE_KIND: &str = "alliancetype";
@@ -189,6 +201,7 @@ impl ObjectHost {
             tech: None,
             research: None,
             alliance: None,
+            state_requests: None,
             rows: Vec::new(),
         });
         Ok(self)
@@ -396,6 +409,129 @@ impl ObjectHost {
         limits.records += 1;
         Ok(Value::Null)
     }
+    /// Retain executed state requests on the existing shared player identities.
+    ///
+    /// The selected `ConvertPlayerState` domain and setter share `Player`'s
+    /// declaration source. A new pair respects the aggregate caller bound before
+    /// allocation; updates reuse a retained pair. Signed inputs, including zero,
+    /// stay distinct from absent requests. Resource limits, clamps, effective
+    /// balances and `GetPlayerState` are not inferred from these requests.
+    pub fn with_player_state_requests(
+        mut self,
+        budget: PlayerStateRequestBudget,
+    ) -> Result<Self, Error> {
+        let fail = |reason| self.inner.error(SET_PLAYER_STATE, reason);
+        let players = self
+            .players
+            .as_ref()
+            .ok_or_else(|| fail(Failure::PlayerState("not admitted")))?;
+        if players.state_requests.is_some() {
+            return Err(fail(Failure::PlayerState(
+                "state requests already admitted",
+            )));
+        }
+        Self::contract(
+            &self.inner,
+            SET_PLAYER_STATE,
+            &["player", PLAYER_STATE_KIND, "integer"],
+            "nothing",
+            false,
+            Some("player"),
+        )?;
+        Self::contract(
+            &self.inner,
+            CONVERT_PLAYER_STATE,
+            &["integer"],
+            PLAYER_STATE_KIND,
+            true,
+            None,
+        )?;
+        let player = self
+            .inner
+            .program
+            .natives()
+            .get("Player")
+            .ok_or_else(|| fail(Failure::Signature))?;
+        for name in [SET_PLAYER_STATE, CONVERT_PLAYER_STATE] {
+            let native = self
+                .inner
+                .program
+                .natives()
+                .get(name)
+                .ok_or_else(|| fail(Failure::Signature))?;
+            if native.source != player.source {
+                return Err(fail(Failure::Source));
+            }
+        }
+        let conversion = self
+            .inner
+            .conversions
+            .get(CONVERT_PLAYER_STATE)
+            .ok_or_else(|| fail(Failure::Signature))?;
+        if conversion.source != player.source {
+            return Err(fail(Failure::Source));
+        }
+        if conversion.kind != PLAYER_STATE_KIND
+            || !below(&self.inner.program, PLAYER_STATE_KIND, "handle")
+        {
+            return Err(fail(Failure::Signature));
+        }
+        if conversion.domain.is_empty() {
+            return Err(fail(Failure::EmptyDomain));
+        }
+        std::alloc::Layout::array::<(HandleId, i32)>(budget.max_records)
+            .map_err(|_| fail(Failure::Capacity))?;
+        let players = self
+            .players
+            .as_mut()
+            .ok_or_else(|| fail(Failure::PlayerState("not admitted")))?;
+        players.state_requests = Some(RecordLimits {
+            max_records: budget.max_records,
+            records: 0,
+        });
+        Ok(self)
+    }
+    fn request_player_state(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let fail = |reason| self.inner.error(SET_PLAYER_STATE, reason);
+        let [player, Value::Handle(setting), Value::Int(value)] = args else {
+            return Err(fail(Failure::PlayerArguments));
+        };
+        let at = self.player_index(player, SET_PLAYER_STATE)?;
+        let enumerand = self
+            .inner
+            .symbolic_value(*setting, PLAYER_STATE_KIND)
+            .map_err(|e| fail(e.failure))?;
+        if !self
+            .inner
+            .conversions
+            .get(CONVERT_PLAYER_STATE)
+            .is_some_and(|conversion| conversion.domain.contains(&enumerand))
+        {
+            return Err(fail(Failure::OutsideDomain(enumerand)));
+        }
+        let players = self
+            .players
+            .as_mut()
+            .ok_or_else(|| fail(Failure::PlayerState("not admitted")))?;
+        let limits = players
+            .state_requests
+            .as_mut()
+            .ok_or_else(|| fail(Failure::PlayerState("state requests not admitted")))?;
+        let requests = &mut players.rows[at].state_requests;
+        if let Some(stored) = requests.iter_mut().find(|(state, _)| *state == *setting) {
+            stored.1 = *value;
+            return Ok(Value::Null);
+        }
+        if limits.records >= limits.max_records {
+            return Err(fail(Failure::Budget("player-state requests")));
+        }
+        requests
+            .try_reserve(1)
+            .map_err(|_| fail(Failure::Capacity))?;
+        requests.push((*setting, *value));
+        limits.records += 1;
+        Ok(Value::Null)
+    }
     pub fn player_slots(&self) -> Option<usize> {
         self.players.as_ref().map(|p| p.slots)
     }
@@ -480,6 +616,10 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         let players = self.players.as_ref()?;
+        if name == SET_PLAYER_STATE {
+            players.state_requests.as_ref()?;
+            return Some(self.request_player_state(args));
+        }
         if name == SET_ALLIANCE {
             players.alliance.as_ref()?;
             return Some(self.set_player_alliance(args));
@@ -536,6 +676,7 @@ impl ObjectHost {
                 tech_max: Vec::new(),
                 tech_researched: Vec::new(),
                 alliances: Vec::new(),
+                state_requests: Vec::new(),
             });
             return Ok(Value::Handle(id));
         }

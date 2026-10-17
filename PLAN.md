@@ -1207,9 +1207,10 @@ technology, destructable and source-bound unit state. Human01 globals and `confi
 complete in the retained local probe; `main` now retains the executed
 `SetHeroLevel` request and `SetUnitState` assignment. Explicit source-bound Defend
 admission passes both fresh-unit off requests as false; `main` retains 155 units
-and then retains 26 explicit directed alliance assignments before reaching
-unsupported `SetPlayerState`. These assignments do not enforce alliance gameplay,
-and on/off activation is separate from combat modifiers and animation. This is
+and then retains 26 explicit directed alliance assignments and one player-state
+request before reaching unsupported `Filter` in `Blizzard.j`. These assignments
+do not enforce alliance gameplay or effective resource balances, and on/off
+activation is separate from combat modifiers and animation. This is
 execution evidence for that selected source profile, not a playable chapter.
 No application gameplay-session factory connects the Host, simulation, terrain
 and HUD yet. See

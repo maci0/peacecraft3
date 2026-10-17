@@ -343,3 +343,42 @@ updates at capacity and atomic failure of a new tuple. Host-boundary cases cover
 zero budget, malformed arguments, unknown handles and wrong families. This is executed assignment state;
 `GetPlayerAlliance`, initial-state policy, shared vision/control, targeting rules,
 multiplayer enforcement and the application Host factory remain open.
+
+## Executed player-state requests
+
+`ObjectHost::with_player_state_requests(PlayerStateRequestBudget)` admits the
+loaded non-constant `SetPlayerState(player, playerstate, integer)` contract on
+existing player identities. The setter and selected constant `ConvertPlayerState`
+share `Player`'s declaration source. Symbolic kind and source-derived domain
+membership are checked; state ordinals and starting balances are not embedded.
+
+Each player row retains the last executed signed integer request for each setting
+handle. A stored zero is an executed input; absence means no request. Distinct
+players and settings stay independent. New pairs respect the aggregate caller
+bound before allocation, while updates at capacity reuse the existing pair.
+Malformed calls, wrong/unknown handles and settings outside the selected domain
+leave prior records unchanged. The setter allocates no arena identity.
+
+These are requests, not effective balances. State-specific clamps, resource
+limits, bounty effects and initial values remain unimplemented. `GetPlayerState`
+stays unsupported rather than returning a request as an effective value. Its
+declaration is not required by this setter-only admission. The earlier broad
+assignment/query planning lease is not evidence that those behaviors work.
+
+The unchanged Human01 retains its one bounty-setting request with the exact
+executed integer, along with all 26 directed alliance tuples. Globals and `config`
+complete. Previous checks still retain 843 identities, 155 units, 142 rectangles,
+three unit events and seven stacked sound requests on the same Host/context.
+The next refusal is `Filter` in `Blizzard.j` at `436855..436900`, with selected
+`common.j` declaration `71869..71927`. Local source/input stability receipts and
+commands are in `.scratch/player-state-root-20261017/`. This remains the explicit
+compatibility catalog, not proof of native Legacy archive priority or a playable
+chapter.
+
+The owned-VM regression drops input owners and checks zero versus absence, signed
+request preservation, alias identity, independent rows, updates at capacity and
+atomic new-key refusal. Host-boundary cases distinguish a state handle from a
+color with the same enumerand, reject another conversion's out-of-domain state,
+and preserve records on malformed/unknown handles. Native and actual WASI tests
+exercise the same request path. Application Host construction and the effective
+resource consumer remain open.
