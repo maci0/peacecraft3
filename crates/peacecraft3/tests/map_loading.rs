@@ -45,3 +45,6 @@ mod browser_configuration_json_cases;
 
 #[path = "support/campaign_startup_cases.rs"]
 mod campaign_startup_cases;
+
+#[path = "support/map_ground_cases.rs"]
+mod map_ground_cases;

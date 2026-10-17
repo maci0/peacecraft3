@@ -160,7 +160,7 @@ fn resolve(
         source,
     })
 }
-fn receipt(asset: &ResolvedAsset) -> AssetReceipt {
+pub(crate) fn receipt(asset: &ResolvedAsset) -> AssetReceipt {
     AssetReceipt {
         path: asset.path.clone(),
         provenance: asset.provenance.clone(),

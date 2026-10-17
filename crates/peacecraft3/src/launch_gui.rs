@@ -355,6 +355,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
             .after(initialize_menu_logo)
             .run_if(menu_is_visible),
     );
+    peacecraft3::map_ground::install(&mut app);
     crate::intro::install(&mut app);
     app.configure_sets(
         Update,

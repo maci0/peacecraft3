@@ -78,9 +78,11 @@
 //! (measured: 1 distinct on 1 052 223 tiles, 2 on 462 297, 3 on 86 065, 4 on
 //! 5 047 of the 1.28c corpus).
 //!
-//! What the bytes do **not** say is how those four are weighted across the
-//! quad. That is refused — [`Unsupported::BlendWeights`] — rather than answered
-//! with a bilinear guess, because a wrong weight is a whole-terrain error that
+//! What the bytes do **not** say is a numeric weight for those four slots.
+//! [`GroundTiles::blend`] stays [`Unsupported::BlendWeights`]. A ground
+//! renderer samples the alpha stored in the variation cells.
+//! [`ground::tile_texture_selectors`] packs the slot and that cell. It does
+//! not invent a weight, and a wrong weight would be a whole-terrain error that
 //! looks fine on flat ground.
 //!
 //! # Cliff detection is refused, and here is the measurement that refuses it
@@ -131,7 +133,10 @@ mod tests;
 
 pub use cliff::{CliffClass, TileProfile, cliff_class};
 pub use cliff_wall::{WallGeometryError, WallQuad, cliff_wall, cliff_walls};
-pub use ground::{GroundSlot, GroundTiles, select_slot, slot_fourcc};
+pub use ground::{
+    EMPTY_SELECTOR, GroundSelectError, GroundSlot, GroundTiles, ground_variation, reference_layer,
+    select_slot, slot_fourcc, tile_texture_selectors,
+};
 pub use mesh::{ManifoldReport, TerrainMesh};
 pub use tiles::{TileCatalog, TilesetError};
 pub use water::{

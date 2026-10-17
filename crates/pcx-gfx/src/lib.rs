@@ -14,6 +14,7 @@ use bevy::asset::RenderAssetUsages;
 
 pub mod dds;
 pub mod dds_gpu;
+pub mod ground;
 pub mod mdx_opacity;
 pub mod mdx_particle_render;
 pub mod mdx_particles;
@@ -24,6 +25,11 @@ pub mod performance;
 pub mod viewer;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
+
+pub use ground::{
+    DecodedGround, GroundDraw, GroundError, GroundMaterial, GroundMaterialPlugin, GroundMemory,
+    SelectedGroundBlp, decode_ground_slots, spawn_admitted_ground,
+};
 
 /// A texture ready for the GPU.
 #[derive(Debug, Clone)]

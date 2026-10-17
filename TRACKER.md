@@ -630,12 +630,17 @@ The list below is the measured part; the rest of the container surface is tracke
 - [~] `pcx-map`: versioned `war3map.w3r` bounds parse. Circle and polygon regions, and runtime region handles, remain open.
 - [~] `pcx-map`: `war3map.w3i` MapInfo parser exists; complete slot/object semantics and runtime integration remain open
 - [~] `pcx-map`: `war3mapUnits.doo` placements, item-set groups and random-selection payloads parse. Spawning them into the simulation remains open.
-- [~] `pcx-tera`: corner terrain meshes exist; slot texture blending and world runtime integration remain open
+- [~] Admitted ground now resolves the selected Terrain.slk/BLPs and draws isolated
+      variation-array cells with alpha composition under a pinned reconstruction
+      profile. Actual Vulkan edge/minification and failed-publication checks pass;
+      original appearance and coherent gameplay-world integration remain open.
+      See `docs/re-notes/admitted-ground-rendering.md`.
 - [~] `pcx-tera`: caller-selected cliff wall geometry and source-selected water
       surface geometry are implemented and tested. Water levels use the loaded
       `Water.slk` row and W3E words under the pinned recreation profile.
-      Original cliff placement/threshold and water rendering remain open; the
-      proposed ground material still needs correct filtering and mip behavior.
+      Original cliff placement/threshold and water rendering remain open.
+      Ground filtering/mips have a synthetic GPU gate; original mip/filter
+      equality remains open.
       `WaterData` preserves source records and reports unproven level/geometry
       explicitly; see `crates/pcx-tera/WATER_EVIDENCE.md`.
 - [ ] Camera: bounds, pitch, pan speed, zoom steps — values from RE

@@ -1019,6 +1019,15 @@ it cannot pass vacuously. It is proven non-vacuous by construction: returning
 4-corner blending and cliff rules, place doodads, wire the camera to the original's
 limits/pitch behaviour.
 
+The admitted-map ground publisher now uses the selected catalog and sheet bytes,
+source corner selectors, isolated variation-array layers and linear mip sampling.
+Publication keeps the prior draw and provenance when a replacement fails. A local
+Vulkan pixel gate verifies cell-edge isolation and actual minification; it does
+not establish native terrain appearance. Explicit budgets and the matching source
+reader are required. Gameplay camera/world activation, cliffs, water, lighting,
+shadows, fog and original filter equality remain open. See
+`docs/re-notes/admitted-ground-rendering.md`.
+
 **Measured, and it overturned the assumed framing.** There is no `TERRAIN` chunk in a
 `.w3m` and no chunk table. Both builds write `HM3W` + a fixed `0x200` header + an
 **embedded MPQ archive**, with `archive_size == file_len - 0x200` on all 133 shipped maps,

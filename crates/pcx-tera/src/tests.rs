@@ -882,3 +882,130 @@ fn sweep_every_shipped_terrain() {
         failures.len()
     );
 }
+
+fn selector_terrain(slots: &[[u8; 4]], corners: &[(u8, u8)]) -> Terrain {
+    assert_eq!(corners.len(), 4);
+    let mut bytes = pcx_map::TERRAIN_MAGIC.to_vec();
+    bytes.extend(pcx_map::TERRAIN_VERSION.to_le_bytes());
+    bytes.push(0);
+    bytes.extend(0u32.to_le_bytes());
+    bytes.extend((slots.len() as u32).to_le_bytes());
+    for slot in slots {
+        bytes.extend_from_slice(slot);
+    }
+    bytes.extend(0u32.to_le_bytes());
+    bytes.extend(2u32.to_le_bytes());
+    bytes.extend(2u32.to_le_bytes());
+    bytes.extend(0.0f32.to_le_bytes());
+    bytes.extend(0.0f32.to_le_bytes());
+    for &(nibble, byte5) in corners {
+        bytes.extend(8192u16.to_le_bytes());
+        bytes.extend(0u16.to_le_bytes());
+        bytes.push(nibble & 0x0F);
+        bytes.push(byte5);
+        bytes.push(0);
+    }
+    Terrain::from_bytes(bytes).unwrap()
+}
+
+#[test]
+fn ground_variation_keeps_the_low_five_bits() {
+    let terrain = selector_terrain(&[*b"Ldrt"], &[(0, 0xE3), (0, 0), (0, 0), (0, 0)]);
+    let corner = terrain.corner(0, 0).unwrap();
+    assert_eq!(crate::ground_variation(corner), 3);
+    assert_eq!(crate::ground_variation(terrain.corner(1, 0).unwrap()), 0);
+}
+
+#[test]
+fn reference_layer_follows_the_sheet_flag() {
+    assert_eq!(crate::reference_layer(true, 0), 16);
+    assert_eq!(crate::reference_layer(true, 15), 31);
+    assert_eq!(crate::reference_layer(true, 16), 15);
+    assert_eq!(crate::reference_layer(true, 17), 0);
+    assert_eq!(crate::reference_layer(true, 31), 0);
+    assert_eq!(crate::reference_layer(false, 0), 0);
+    assert_eq!(crate::reference_layer(false, 1), 15);
+    assert_eq!(crate::reference_layer(false, 31), 15);
+}
+
+#[test]
+fn one_slot_uses_the_bottom_left_variation_and_leaves_the_rest_empty() {
+    let terrain = selector_terrain(&[*b"Ldrt"], &[(0, 0), (0, 5), (0, 9), (0, 9)]);
+    let selectors = crate::tile_texture_selectors(&terrain, &[false], 0, 0).unwrap();
+    assert_eq!(
+        selectors,
+        [
+            0,
+            crate::EMPTY_SELECTOR,
+            crate::EMPTY_SELECTOR,
+            crate::EMPTY_SELECTOR
+        ]
+    );
+}
+
+#[test]
+fn lowest_slot_uses_the_bottom_left_variation_even_when_that_corner_differs() {
+    let terrain = selector_terrain(&[*b"AAAA", *b"BBBB"], &[(1, 1), (0, 5), (1, 9), (0, 9)]);
+    let plain = crate::tile_texture_selectors(&terrain, &[false, true], 0, 0).unwrap();
+    assert_eq!(plain[0], 15 << 5);
+    let extended_lowest = crate::tile_texture_selectors(&terrain, &[true, false], 0, 0).unwrap();
+    assert_eq!(extended_lowest[0], 17 << 5);
+}
+
+#[test]
+fn later_slots_use_the_pinned_corner_mask_order() {
+    let terrain = selector_terrain(&[*b"AAAA", *b"BBBB"], &[(1, 0), (0, 0), (1, 0), (0, 0)]);
+    let selectors = crate::tile_texture_selectors(&terrain, &[false, false], 0, 0).unwrap();
+    assert_eq!(
+        selectors,
+        [
+            0,
+            1 + (0b1010 << 5),
+            crate::EMPTY_SELECTOR,
+            crate::EMPTY_SELECTOR
+        ]
+    );
+
+    let bottom_right = selector_terrain(&[*b"AAAA", *b"BBBB"], &[(0, 0), (1, 0), (0, 0), (0, 0)]);
+    assert_eq!(
+        crate::tile_texture_selectors(&bottom_right, &[false, false], 0, 0).unwrap()[1],
+        1 + (1 << 5)
+    );
+    let top_right = selector_terrain(&[*b"AAAA", *b"BBBB"], &[(0, 0), (0, 0), (0, 0), (1, 0)]);
+    assert_eq!(
+        crate::tile_texture_selectors(&top_right, &[false, false], 0, 0).unwrap()[1],
+        1 + (1 << 7)
+    );
+    let top_left = selector_terrain(&[*b"AAAA", *b"BBBB"], &[(0, 0), (0, 0), (1, 0), (0, 0)]);
+    assert_eq!(
+        crate::tile_texture_selectors(&top_left, &[false, false], 0, 0).unwrap()[1],
+        1 + (1 << 8)
+    );
+}
+
+#[test]
+fn a_nibble_outside_the_slot_list_is_not_clamped() {
+    let terrain = selector_terrain(&[*b"Ldrt"], &[(1, 0), (0, 0), (0, 0), (0, 0)]);
+    assert_eq!(
+        crate::tile_texture_selectors(&terrain, &[false], 0, 0),
+        Err(crate::GroundSelectError::SlotRange {
+            nibble: 1,
+            slot_count: 1
+        })
+    );
+    assert_eq!(
+        crate::tile_texture_selectors(&terrain, &[], 0, 0),
+        Err(crate::GroundSelectError::ExtendedLen {
+            slots: 1,
+            extended: 0
+        })
+    );
+    assert!(matches!(
+        crate::tile_texture_selectors(&terrain, &[false], 1, 0),
+        Err(crate::GroundSelectError::TileRange { tx: 1, ty: 0 })
+    ));
+    assert_eq!(
+        crate::GroundTiles::of(&terrain).blend(&terrain, 0, 0),
+        Err(crate::Unsupported::BlendWeights)
+    );
+}

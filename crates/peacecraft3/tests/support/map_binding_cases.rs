@@ -152,6 +152,9 @@ impl Fixture {
             .map_or(&[], |(_, b)| b)
     }
     pub(crate) fn resolver(&self) -> Resolver {
+        self.resolver_with_assets(BTreeMap::new())
+    }
+    pub(crate) fn resolver_with_assets(&self, assets: BTreeMap<String, Reply>) -> Resolver {
         let mode = pcx_assets::GameMode {
             build: pcx_assets::Build::V1_29b,
             addon: pcx_assets::Addon::Tft,
@@ -168,6 +171,7 @@ impl Fixture {
                 Reply::Bytes(self.metadata.clone()),
             ),
         ]);
+        stock.extend(assets);
         let mut common = BTreeMap::from([(
             "chosen common.j".to_owned(),
             Reply::Bytes(self.common.clone()),

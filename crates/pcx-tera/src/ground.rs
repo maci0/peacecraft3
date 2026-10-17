@@ -3,8 +3,8 @@
 //!
 //! **Proven: the nibble is the slot index, directly.** Across 88 terrains on
 //! 1.28c and 44 on 1.29b, not one corner carries a nibble `>= N` where `N` is
-//! the map's own ground-slot count. The competing reading — the game's reader
-//! recovers `0xF ^ nibble` and clamps anything `>= N` to 0 — disagrees with the
+//! the map's own ground-slot count. The competing reading (the game's reader
+//! recovers `0xF ^ nibble` and clamps anything `>= N` to 0) disagrees with the
 //! writer on 1 343 225 corners (1.28c) and 547 800 (1.29b) and would collapse
 //! almost every corner to slot 0, which no map's appearance supports. The test
 //! suite pins the zero-out-of-range census, which is what makes this a proof
@@ -14,8 +14,14 @@
 //! **Refused: the blend weights.** A tile's four corners may carry up to four
 //! different slot indices (measured: 1 distinct on 1 052 223 tiles, 2 on
 //! 462 297, 3 on 86 065, 4 on 5 047 of the 1.28c corpus). How the renderer
-//! weights those four across the quad is not in the file, so it is refused —
-//! see [`Unsupported::BlendWeights`].
+//! weights those four across the quad is not in the file, so it is refused.
+//! See [`Unsupported::BlendWeights`].
+//!
+//! [`tile_texture_selectors`] packs each tile for a ground renderer. The low
+//! five bits are the slot. The next five bits are the variation cell of the
+//! lowest slot, or the corner mask of a later slot. Empty components stay
+//! [`EMPTY_SELECTOR`]. The cell alpha is the blend. This does not store a
+//! numeric weight, and [`GroundTiles::blend`] stays refused.
 
 use pcx_map::{Corner, Terrain};
 
@@ -49,6 +55,132 @@ pub fn select_slot(terrain: &Terrain, corner: &Corner) -> Option<GroundSlot> {
 #[must_use]
 pub fn slot_fourcc(terrain: &Terrain, nibble: u8) -> Option<[u8; 4]> {
     terrain.slots().get(nibble as usize).copied()
+}
+
+/// Selector component that does not name a slot. The renderer samples nothing.
+pub const EMPTY_SELECTOR: u16 = 17;
+
+/// Low five bits of the corner's fifth byte.
+///
+/// The pinned loader calls this `groundVariation`. Bits above that stay unused
+/// here, including the cliff variation in the top three bits.
+#[must_use]
+pub fn ground_variation(corner: &Corner) -> u8 {
+    corner.byte5 & 0x1F
+}
+
+/// Variation cell inside one slot's sheet.
+///
+/// `extended` is that slot's own sheet (`width / tile == 8`), not a property
+/// of the corner. The mapping is the pinned `Terrain.getVariation`.
+#[must_use]
+pub fn reference_layer(extended: bool, variation: u8) -> u8 {
+    if extended {
+        if variation <= 15 {
+            16 + variation
+        } else if variation == 16 {
+            15
+        } else {
+            0
+        }
+    } else if variation == 0 {
+        0
+    } else {
+        15
+    }
+}
+
+/// Why a tile cannot be packed into four selectors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum GroundSelectError {
+    /// `extended_by_slot` is not one flag per terrain slot.
+    #[error("extended flags {extended} do not match slot count {slots}")]
+    ExtendedLen { slots: usize, extended: usize },
+    /// `(tx, ty)` is outside the tile grid.
+    #[error("tile {tx},{ty} is outside the terrain")]
+    TileRange { tx: u32, ty: u32 },
+    /// A corner nibble is outside `terrain.slots()`. Not clamped to slot 0.
+    #[error("corner nibble {nibble} is outside {slot_count} ground slots")]
+    SlotRange { nibble: u8, slot_count: usize },
+}
+
+/// Four ground selectors for the tile at `(tx, ty)`, mesh corner order.
+///
+/// Order is bottom-left, bottom-right, top-left, top-right. Distinct slots are
+/// written in ascending id. Component 0 uses the bottom-left corner's variation
+/// and the lowest slot's sheet flag, even when that slot is not the bottom-left
+/// corner's slot. Later components use the corner mask: bit 0 bottom-right,
+/// bit 1 bottom-left, bit 2 top-right, bit 3 top-left.
+pub fn tile_texture_selectors(
+    terrain: &Terrain,
+    extended_by_slot: &[bool],
+    tx: u32,
+    ty: u32,
+) -> Result<[u16; 4], GroundSelectError> {
+    if extended_by_slot.len() != terrain.slots().len() {
+        return Err(GroundSelectError::ExtendedLen {
+            slots: terrain.slots().len(),
+            extended: extended_by_slot.len(),
+        });
+    }
+    if tx >= terrain.width() || ty >= terrain.height() {
+        return Err(GroundSelectError::TileRange { tx, ty });
+    }
+    let corners = [
+        terrain.corner(tx, ty),
+        terrain.corner(tx + 1, ty),
+        terrain.corner(tx, ty + 1),
+        terrain.corner(tx + 1, ty + 1),
+    ];
+    let mut nibbles = [0u8; 4];
+    for (index, corner) in corners.iter().enumerate() {
+        let corner = corner.ok_or(GroundSelectError::TileRange { tx, ty })?;
+        let nibble = corner.slot_nibble;
+        if nibble as usize >= terrain.slots().len() {
+            return Err(GroundSelectError::SlotRange {
+                nibble,
+                slot_count: terrain.slots().len(),
+            });
+        }
+        nibbles[index] = nibble;
+    }
+    let mut ids = nibbles;
+    ids.sort_unstable();
+    let mut unique = [0u8; 4];
+    let mut count = 0usize;
+    for id in ids {
+        if count == 0 || unique[count - 1] != id {
+            unique[count] = id;
+            count += 1;
+        }
+    }
+    let mut out = [EMPTY_SELECTOR; 4];
+    let Some(lowest) = unique.first().copied().filter(|_| count > 0) else {
+        return Ok(out);
+    };
+    let bottom_left = corners[0].ok_or(GroundSelectError::TileRange { tx, ty })?;
+    let layer = reference_layer(
+        extended_by_slot[usize::from(lowest)],
+        ground_variation(bottom_left),
+    );
+    out[0] = u16::from(lowest) + (u16::from(layer) << 5);
+    for (component, id) in unique[1..count].iter().copied().enumerate() {
+        let mut mask = 0u16;
+        if nibbles[1] == id {
+            mask |= 1 << 0;
+        }
+        if nibbles[0] == id {
+            mask |= 1 << 1;
+        }
+        if nibbles[3] == id {
+            mask |= 1 << 2;
+        }
+        if nibbles[2] == id {
+            mask |= 1 << 3;
+        }
+        out[component + 1] = u16::from(id) + (mask << 5);
+    }
+    Ok(out)
 }
 
 /// A terrain's whole ground texture set, in the file's own order.

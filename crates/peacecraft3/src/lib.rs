@@ -6,6 +6,7 @@
 pub mod campaign_startup;
 pub mod map_admission;
 pub mod map_binding;
+pub mod map_ground;
 pub mod map_requests;
 pub mod map_script_session;
 

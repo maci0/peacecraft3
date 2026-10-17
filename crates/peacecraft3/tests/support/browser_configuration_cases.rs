@@ -12,7 +12,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU32, AtomicUsize, Ordering},
 };
-fn fixture(value: u32) -> binding::Fixture {
+pub(crate) fn fixture(value: u32) -> binding::Fixture {
     let mut f = binding::Fixture::new(value);
     for info in [
         &mut f.map_info,
@@ -33,7 +33,7 @@ fn fixture(value: u32) -> binding::Fixture {
     }
     f
 }
-fn request(f: &binding::Fixture, resolver: Resolver) -> Configuration {
+pub(crate) fn request(f: &binding::Fixture, resolver: Resolver) -> Configuration {
     let input = f.input(73);
     let member = |m: peacecraft3::map_binding::IdentifiedMember<'_>| Member {
         path: m.path.into(),
@@ -55,7 +55,7 @@ fn request(f: &binding::Fixture, resolver: Resolver) -> Configuration {
         limits: f.limits(),
     }
 }
-fn app(inbox: &ConfigurationInbox) -> bevy::prelude::App {
+pub(crate) fn app(inbox: &ConfigurationInbox) -> bevy::prelude::App {
     let mut app = bevy::prelude::App::new();
     peacecraft3::map_requests::install(&mut app);
     install(&mut app, inbox.clone());

@@ -15,12 +15,14 @@ pcx-mpq.workspace = true
 pcx-blp.workspace = true
 pcx-tga.workspace = true
 pcx-mdl.workspace = true
+pcx-map.workspace = true
+pcx-tera.workspace = true
 pcx-slq.workspace = true
 thiserror.workspace = true
 image = { version = "0.25.10", default-features = false, features = ["dds"] }
 
 [dev-dependencies]
-image = "0.25"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 pcx-casc.workspace = true
 
 [lints]
