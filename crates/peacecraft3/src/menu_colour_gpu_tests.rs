@@ -461,3 +461,116 @@ fn depth_flags_change_overlapping_opaque_and_blend_visibility() {
         readback.completed
     );
 }
+
+#[test]
+#[ignore = "requires a local Vulkan adapter; synthetic HUD texture readback"]
+fn authored_hud_texture_ranges_and_alpha_reach_the_ui_render_graph() {
+    use crate::hud_assets::{HudBudgets, HudInput, HudMarkup, NamedBytes, RootRole, SourceId};
+    use crate::hud_render::{HudAnchor, HudMount, HudSubmit};
+
+    let mut app = vulkan_menu_app("HUD texture ranges");
+    crate::hud_render::install(&mut app);
+    let target = spawn_readback_camera(&mut app);
+    let camera = app
+        .world_mut()
+        .query_filtered::<Entity, With<Camera3d>>()
+        .single(app.world())
+        .unwrap();
+    let parent = app
+        .world_mut()
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            UiTargetCamera(camera),
+        ))
+        .id();
+    app.world_mut().resource_mut::<HudAnchor>().parent = Some(parent);
+    let mut fdf = String::from("Frame \"SIMPLEFRAME\" \"Console\" {\n");
+    for (index, uv) in ["0,1,0,1", "1,0,0,1", "0,1,1,0", "1,0,1,0"]
+        .iter()
+        .enumerate()
+    {
+        fdf.push_str(&format!(
+            "Texture {{\n File \"checker.tga\",\n Width 0.25,\n Height 1,\n TexCoord {uv},\n AlphaMode \"ALPHAKEY\",\n Anchor TOPLEFT,{},0,\n }}\n",
+            index as f32 * 0.25,
+        ));
+    }
+    fdf.push('}');
+    let mut image = vec![0u8; 18];
+    image[2] = 2;
+    image[12..14].copy_from_slice(&2u16.to_le_bytes());
+    image[14..16].copy_from_slice(&2u16.to_le_bytes());
+    image[16] = 32;
+    image[17] = 0x28;
+    for bgra in [
+        [0, 0, 255, 0],
+        [0, 255, 0, 255],
+        [255, 0, 0, 255],
+        [255, 255, 255, 255],
+    ] {
+        image.extend(bgra);
+    }
+    app.world_mut().write_message(HudSubmit {
+        input: HudInput {
+            source: SourceId {
+                identity: "synthetic-gpu".into(),
+            },
+            fdf_texts: vec![fdf],
+            skin_text: String::new(),
+            race_sections: vec![],
+            roots: vec![RootRole {
+                role: "console".into(),
+                frame: "Console".into(),
+            }],
+            viewport: (1.0, 1.0),
+            global_strings: String::new(),
+            decorate_suffixes: vec![],
+            images: vec![NamedBytes {
+                path: "checker.tga".into(),
+                bytes: image,
+            }],
+            fonts: vec![],
+            budgets: HudBudgets {
+                max_input_bytes: 4096,
+                max_image_input_bytes: 64,
+                max_font_bytes: 0,
+                max_font_aggregate_bytes: 0,
+                max_image_decoded_bytes: 16,
+                max_decoded_bytes: 16,
+                max_retained_bytes: 16,
+                max_transient_bytes: 4112,
+            },
+            markup: HudMarkup::Plain,
+            source_member: "synthetic.fdf".into(),
+            receipt_path: String::new(),
+            binding_revision: 0,
+        },
+    });
+    let readback = drive_readback(&mut app, target);
+    assert_eq!(app.world().resource::<HudMount>().generation, 1);
+    let colours = [
+        [0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 1.0, 1.0],
+    ];
+    for column in 0..4 {
+        for (pixel, (dx, dy)) in [(8, 8), (24, 8), (8, 24), (24, 24)].into_iter().enumerate() {
+            let reflected = pixel ^ column;
+            for (channel, expected) in colours[reflected].iter().enumerate() {
+                let actual = channel_at(&readback.bytes, readback.stride, column, dx, dy, channel);
+                assert!(
+                    (actual - expected).abs() < 0.08,
+                    "column={column} pixel={pixel} channel={channel}: {actual}"
+                );
+            }
+        }
+    }
+    println!(
+        "HUD texture checks=48 completed_readbacks={}",
+        readback.completed
+    );
+}

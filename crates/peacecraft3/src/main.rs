@@ -10,8 +10,9 @@ mod import_assets;
 mod button_actions;
 mod fdf;
 mod glue_menu;
-#[cfg(test)]
-mod hud;
+pub mod hud;
+pub mod hud_assets;
+pub mod hud_render;
 mod intro;
 mod launch;
 mod launch_gui;

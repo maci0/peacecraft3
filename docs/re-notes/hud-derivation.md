@@ -1,6 +1,7 @@
 # HUD frame derivation
 
-Bounded source-leaf module `crates/peacecraft3/src/hud.rs`.
+Bounded derivation in `crates/peacecraft3/src/hud.rs`, with resource planning in
+`hud_assets.rs` and Bevy mounting in `hud_render.rs`.
 
 Inputs:
 - parsed FDF from `crates/peacecraft3/src/fdf.rs`
@@ -43,8 +44,45 @@ WASM run separately checks six malformed refusals and one valid layout. The
 private baseline/review evidence remains in `.scratch/catjam-supervision/`.
 
 Unresolved:
-- Production integration and Bevy spawning are out of scope for this slice.
-- Original console FDF traversal has not yet been connected to a live asset;
-  synthetic fixtures exercise parser and derivation behavior.
+- The renderer is installed in the application, but no automatic map-to-HUD
+  policy producer supplies its roots, race order, member names or budgets yet.
+  An installed renderer alone does not display an in-game HUD.
 - Native HUD behavior beyond anchor/extent derivation is not established by
   parser or layout data.
+
+## Resource planning and mounting
+
+`HudSubmit` accepts explicit source-qualified inputs. The admitted-map path uses
+`HudSourcePolicy`: named FDF, skin, image and font reads through the resolver for
+the exact published receipt `Arc`, after `MapRequestSet::Deliver`. A successful
+outcome alone does not identify a parsed context. Revision, outcome identity,
+edition/version and receipt ownership are checked before reading. A changed
+policy remounts; unchanged accepted or refused input is not read again.
+
+Caller limits bound input files, decoded image buffers, retained payloads and
+the input-plus-decoded staging sum. These are payload limits, not a bound on
+parser, font backend, metadata or total GPU memory. Images are header-checked
+before decoding; font registration precedes font asset insertion. A failed
+candidate leaves the mounted tree and its handles intact. A successful candidate
+replaces both. Frame placement stays relative to its parent; shadow offsets use
+the caller's logical surface size. Text does not interpret menu access-key runs.
+
+Texture records retain authored order, dimensions, anchors and `TexCoord` ranges.
+Descending ranges use image flips. `BLEND` and `ALPHAKEY` use the ordinary image
+path supported by the pinned viewer reconstruction; no colour key or alpha
+cutoff is invented. `ADD`, unsupported records, missing bindings, ambiguous skin
+keys and `FIXEDSIZE` text refuse the candidate. Treating v=0 as the decoded top
+row remains an interpretation awaiting a native texel comparison.
+
+Synthetic checks cover ownership, changed viewport, unchanged-frame read counts,
+font limits before copying, malformed fonts, image failure and mounted-tree
+rollback. These checks establish resource handling, not native texture sampling,
+text rasterization, rendered composition or a playable chapter.
+
+A local Vulkan readback on a Radeon RX 7900 XTX passes 48 channel checks for
+normal and descending texture ranges, image orientation and decoded transparent
+pixels. Explicit compatibility and Legacy ConsoleUI inputs also pass the mount
+gate. The Legacy input selects the base FDF, expansion-locale skin and named
+base/expansion textures explicitly; this does not establish native archive
+precedence. Source hashes and bounded read receipts remain in local evidence.
+These are resource and renderer checks, not a native screenshot comparison.

@@ -6,8 +6,8 @@
 //! records ("styles") and frame-to-frame dependencies without inlining any of
 //! those values as constants.
 //!
-//! No production integration exists yet: this module is a source-leaf
-//! derivation utility and does not spawn Bevy entities or choose frame roles.
+//! [`crate::hud_render`] spawns this layout. Callers still supply root roles
+//! and source identity; this module does not assign them.
 
 use std::collections::HashSet;
 

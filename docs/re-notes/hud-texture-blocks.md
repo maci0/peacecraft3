@@ -36,5 +36,6 @@ ignores. All-target/all-feature scoped Clippy with warnings denied, the WASM
 application compile check and formatting pass.
 
 This establishes parsing and compatibility, not a rendered HUD, native texture
-sampling or pixel-perfect output. The HUD placement adapter remains private and
-is not called by the running game.
+sampling or pixel-perfect output. The application now installs a caller-qualified HUD renderer; see
+[hud-derivation.md](hud-derivation.md). Automatic source policy and rendered
+HUD parity remain open.
