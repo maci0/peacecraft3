@@ -48,3 +48,6 @@ delivery remain open. The first later source consumer is
 `GroupEnumUnitsInRangeOfLoc` in `IssueHauntOrderAtLocBJ`; its predicate also needs
 `GetUnitTypeId`. Wrapper retention does not implement those operations or the
 application gameplay Host factory.
+
+The subsequent [explicit force slice](script-force-memberships.md) now passes
+that constructor boundary. Predicate contexts remain unsupported.

@@ -1317,6 +1317,14 @@ Format: `date — subsystem — symptom — root cause — status`
       `65813..65872`), retaining 850 identities and 155 units. Predicate execution,
       candidate context, destruction and repeated-code identity remain open;
       see `script-filter-wrappers.md`.
+      Explicit shared-arena force admission then creates 17 force identities and
+      retains 16 player memberships, matching the initialized source slot bound
+      and each singleton's actual player row. The final all-players force stays
+      unpopulated. The same gate retains 868 identities and reaches
+      `ForceEnumPlayers` in `Blizzard.j` at `437759..437808`, selected common
+      `66202..66289`. Enumeration candidates, callback contexts, destruction and
+      native duplicate-input behavior remain open. See
+      `docs/re-notes/script-force-memberships.md`.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or
       upgrade effects. Applied camera motion remains open. See
@@ -1351,6 +1359,7 @@ Format: `date — subsystem — symptom — root cause — status`
       `script-stacked-sounds.md`.
 
 ### Current implemented slices (2026-10-14)
+
 
 - Menu PRE2 now has bounded source-driven persistent simulation, image admission,
   geometry/particle ordering and a particle-only additive black-fog material.

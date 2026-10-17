@@ -85,6 +85,8 @@ pub enum Failure {
     TriggerState(&'static str),
     #[error("filter wrapper: {0}")]
     FilterState(&'static str),
+    #[error("force container: {0}")]
+    ForceState(&'static str),
     #[error("host identity capacity or allocation exceeded")]
     Capacity,
 }
@@ -129,6 +131,9 @@ pub struct Conversion {
 }
 #[derive(Debug)]
 enum Entry {
+    Force {
+        members: Vec<HandleId>,
+    },
     Symbolic {
         kind: String,
         enumerand: i32,
@@ -513,6 +518,14 @@ impl EnumHost {
             Entry::Trigger => "trigger",
             Entry::RegisteredUnitEvent { .. } => "event",
             Entry::TriggerAction { .. } => "triggeraction",
+            Entry::Force { .. } => self
+                .program
+                .natives()
+                .get("CreateForce")
+                .ok_or_else(|| self.error("CreateForce", Failure::Signature))?
+                .ret
+                .kind
+                .name(),
             Entry::Filter { .. } => self
                 .program
                 .natives()
@@ -599,7 +612,7 @@ mod objects;
 pub use objects::{
     CameraDestination, CameraFieldRecord, CameraState, DayNightState, DestructableBudget,
     DestructableCreation, ExecutedUnit, ExecutedUnitState, FileSoundState, FilterBudget,
-    FilterCallback, MapConfig, MapConfigBudget, MapMusicSelection, ObjectHost,
+    FilterCallback, ForceBudget, MapConfig, MapConfigBudget, MapMusicSelection, ObjectHost,
     PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerSettings,
     PlayerStateRequestBudget, QuestBudget, QuestEvent, QuestFlag, SoundProperties, SoundState,
     StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,

@@ -483,3 +483,6 @@ mod player_alliance;
 
 #[path = "player_state_request_tests.rs"]
 mod player_state_requests;
+
+#[path = "force_host_tests.rs"]
+mod forces;

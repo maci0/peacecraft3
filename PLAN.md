@@ -1208,8 +1208,10 @@ complete in the retained local probe; `main` now retains the executed
 `SetHeroLevel` request and `SetUnitState` assignment. Explicit source-bound Defend
 admission passes both fresh-unit off requests as false; `main` retains 155 units
 and then retains 26 explicit directed alliance assignments and one player-state
-request, then creates seven source-qualified `Filter` wrappers before reaching
-unsupported `CreateForce` in `Blizzard.j`. Wrapping does not evaluate predicates.
+request, then creates seven source-qualified `Filter` wrappers and retains
+explicit force memberships. The selected script creates 17 forces and 16
+memberships, then reaches unsupported `ForceEnumPlayers` in `Blizzard.j`.
+Wrapping does not evaluate predicates; force creation does not infer players.
 These assignments do not enforce alliance gameplay or effective resource balances,
 and on/off activation is separate from combat modifiers and animation. This is
 execution evidence for that selected source profile, not a playable chapter.

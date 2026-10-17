@@ -31,6 +31,7 @@ pub struct ObjectHost {
     units: Option<unit_creation::Admission>,
     triggers: Option<trigger_admission::Admission>,
     filters: Option<filters::Admission>,
+    forces: Option<forces::Admission>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -67,6 +68,7 @@ impl ObjectHost {
             units: None,
             triggers: None,
             filters: None,
+            forces: None,
         })
     }
     fn contract(
@@ -349,6 +351,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.unit_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.force_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.filter_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -461,3 +466,7 @@ mod filter_tests;
 #[path = "filter_host.rs"]
 mod filters;
 pub use filters::{FilterBudget, FilterCallback};
+
+#[path = "force_host.rs"]
+mod forces;
+pub use forces::ForceBudget;
