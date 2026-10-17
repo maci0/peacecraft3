@@ -304,6 +304,7 @@ fn budgets() -> MapStartupBudgets {
         timer_events: 4,
         game_state_events: 4,
         stock: None,
+        quests: None,
     }
 }
 
@@ -1197,6 +1198,9 @@ mod region_cases;
 
 #[path = "death_event_cases.rs"]
 mod death_event_cases;
+
+#[path = "quest_factory_cases.rs"]
+mod quest_factory_cases;
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]

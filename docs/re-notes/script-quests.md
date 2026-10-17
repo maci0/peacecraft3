@@ -19,6 +19,20 @@ value. A full observation log refuses a mutation before it changes state. These
 limits are resource policy, not original game limits. Titles, descriptions and
 icon paths come from executed script arguments; they are not copied defaults.
 
+The production `map_startup_host::assemble` can admit this same session through
+`MapStartupBudgets::quests`. `None` leaves quest natives unsupported and does not
+require quest declarations on maps that do not use them. `Some(QuestBudget)`
+validates the selected declarations before running globals, `config` and `main`.
+It adds no second VM, arena or quest store. The constructor behavior retains the
+Legacy observation scope below; opting in does not verify another executable.
+
+Delivered-map App tests interleave timers, quests and items, execute assigned
+text and flags, then destroy a quest through a published callback. An omitted
+budget, exhausted object/item/text/event budget or missing declaration refuses
+the candidate while preserving the published quest state, timers and callback.
+A successful replacement retires the old callback ticket. Handle tokens remain
+session-local; raw numeric tokens are not cross-session capabilities.
+
 ## Original runtime observation
 
 The local executable's VERSIONINFO is `1.29.2.9231`, SHA-256

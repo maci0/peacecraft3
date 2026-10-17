@@ -2168,3 +2168,27 @@ failures are preserved separately; no product code changed. This does not prove
 original-map startup, gameplay/world/HUD behavior or full hydration across source
 sets. Public-site freshness, 4K and the original baseline remain open. Evidence:
 `.scratch/browser-map-form-root-20261018/review-3/acceptance.json`.
+
+
+### 2026-10-18 — bounded quests in the production startup factory
+
+The caller can opt into the existing quest session with
+`MapStartupBudgets::quests`. Quest, item and timer identities share the factory
+Host's existing arena; globals, `config`, `main` and later callbacks use the same
+published VM. Omitting the budget leaves quest natives unsupported. Exhausted
+quest/item/text/event budgets and missing declarations refuse replacement while
+preserving the active quest state, timers and callback. Successful replacement
+retires the previous callback ticket; raw handle tokens remain session-local.
+
+Two delivered-map cases fail before the factory wiring and pass afterward,
+including execution from the actual browser-target Cargo WASM artifact. All 101
+native map-loading tests, 19 app-library tests, 423 native and 423 actual WASI play
+tests pass; each play run retains six explicit local-original-input ignores.
+Strict native/browser Clippy, affected native/WASM compilation and formatting
+pass. Evidence: `.scratch/quest-factory-root-20261018/review-1/acceptance.json`.
+
+The existing constructor flags retain their documented Legacy runtime scope;
+this change assigns no new defaults and verifies no additional executable. No
+original runtime or rendered comparison was repeated. Automatic Host-input
+preparation, quest-window rendering, campaign completion and the original-map
+acceptance gate remain open.

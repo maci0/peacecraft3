@@ -9,8 +9,8 @@ use crate::neutral_player::{NeutralError, SelectedMapNeutralHost, VerifiedNeutra
 use crate::playercolor_host::{
     ConditionBudget, DestructableBudget, EnumHost, Error as HostError, FilterBudget, ForceBudget,
     Limits, MapConfigBudget, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget,
-    PlayerStateRequestBudget, RegionBudget, ResearchObservation, StartupSettings, StockBudget,
-    TechLimitBudget, TimerHost, TriggerBudget, UnitBudget, UnitStateBudget,
+    PlayerStateRequestBudget, QuestBudget, RegionBudget, ResearchObservation, StartupSettings,
+    StockBudget, TechLimitBudget, TimerHost, TriggerBudget, UnitBudget, UnitStateBudget,
 };
 use crate::sound_parameters::Banks;
 use crate::startup_clock::StartupClock;
@@ -79,6 +79,8 @@ pub struct MapStartupBudgets {
     pub game_state_events: usize,
     /// None keeps stock slot natives unsupported.
     pub stock: Option<StockBudget>,
+    /// None keeps quest and quest-item natives unsupported.
+    pub quests: Option<QuestBudget>,
 }
 
 pub struct EnumContracts {
@@ -405,6 +407,9 @@ pub fn assemble(
     }
     if let Some(stock) = budgets.stock {
         object = object.with_stock(stock)?;
+    }
+    if let Some(quests) = budgets.quests {
+        object = object.with_quests(quests)?;
     }
     let slots = SelectedMapNeutralHost::try_new(Arc::clone(&context), rules.slots, object)?;
     let extra = SelectedMapNeutralHost::try_new(Arc::clone(&context), rules.extra, slots)?;
