@@ -14,6 +14,7 @@ use std::sync::{Arc, Weak};
 struct AttemptKey {
     context: Weak<ParsedMapContext>,
     revision: u64,
+    retryable: bool,
 }
 
 #[derive(Resource, Default)]
@@ -103,12 +104,15 @@ fn start_admitted_map(
     {
         return;
     }
-    let key = AttemptKey {
+    let mut key = AttemptKey {
         context: Arc::downgrade(&context),
         revision: bindings.revision,
+        retryable: false,
     };
     if startup.attempted.as_ref().is_some_and(|previous| {
-        previous.revision == key.revision && Weak::ptr_eq(&previous.context, &key.context)
+        previous.revision == key.revision
+            && Weak::ptr_eq(&previous.context, &key.context)
+            && (!previous.retryable || supply.inputs.is_none())
     }) {
         return;
     }
@@ -149,6 +153,7 @@ fn start_admitted_map(
         &[config, main],
         move |vm, completed| apply_after_config(vm, &admitted, completed, &post),
     );
+    key.retryable = result.is_err();
     startup.attempted = Some(key);
     startup.last_error = result.err().map(StartupError::Session);
 }

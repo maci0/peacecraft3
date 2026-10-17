@@ -2121,3 +2121,18 @@ publication cases executed from actual Cargo WebAssembly, strict native/browser
 Clippy and formatting. Automatic launcher budgets, gameplay world/camera wiring,
 native/render parity and the 100-consecutive original baseline remain open.
 Evidence: `.scratch/terrain-budget-root-20261018/review-1/acceptance.json`.
+
+### 2026-10-18 — explicit recovery from campaign startup refusal
+
+Fresh caller host inputs can retry a failed factory, post-config or execution
+candidate on the same admitted map. Stale revisions preserve those inputs and
+the previous session. Ordinary updates retain the failure without replay, and
+inputs alone do not restart a successful session. Successful recovery retires
+the previous callback tickets.
+
+Validation passes 99 native map-loading tests, five production-startup cases
+executed from actual Cargo WebAssembly, strict native/browser Clippy and
+formatting. No original-client runtime or rendered comparison was repeated;
+automatic host-input production, chapter completion and the 100-consecutive
+original baseline remain open. Evidence:
+`.scratch/startup-retry-root-20261018/review-1/acceptance.json`.

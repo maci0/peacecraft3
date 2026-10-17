@@ -1052,6 +1052,135 @@ fn failed_post_config_observation_keeps_the_published_session() {
         Value::Null
     );
     assert_eq!(session_marker(&mut app), Value::Int(1));
+    let (admitted, catalog) = {
+        let requests = app.world().resource::<MapRequests>();
+        (
+            requests.admission.shared_context().unwrap(),
+            Arc::clone(&requests.bindings.as_ref().unwrap().catalog.0),
+        )
+    };
+    app.insert_resource(CampaignHostSupply {
+        revision: 7,
+        inputs: Some(host_inputs(catalog)),
+    });
+    app.update();
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none()
+    );
+    assert!(Arc::ptr_eq(
+        app.world()
+            .resource::<MapScriptSession<MapStartupHost>>()
+            .context()
+            .unwrap(),
+        &admitted
+    ));
+    assert!(
+        app.world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .call_callback(&ticket, &[])
+            .is_err()
+    );
+}
+
+#[test]
+fn corrected_host_inputs_retry_a_refused_candidate_without_redelivery() {
+    let mut app = App::new();
+    peacecraft3::map_requests::install(&mut app);
+    peacecraft3::campaign_startup::install(&mut app);
+    deliver(&mut app, MAP_OK, 7);
+    let previous = app
+        .world()
+        .resource::<MapScriptSession<MapStartupHost>>()
+        .session_witness()
+        .unwrap();
+    deliver(&mut app, MAP_REFUSED, 8);
+    let (context, catalog) = {
+        let requests = app.world().resource::<MapRequests>();
+        (
+            requests.admission.shared_context().unwrap(),
+            Arc::clone(&requests.bindings.as_ref().unwrap().catalog.0),
+        )
+    };
+    app.update();
+    assert!(matches!(
+        app.world().resource::<CampaignStartup>().last_error,
+        Some(StartupError::Session(ScriptSessionError::Execution(_)))
+    ));
+    assert!(
+        app.world()
+            .resource::<CampaignHostSupply>()
+            .inputs
+            .is_none()
+    );
+    assert!(previous.upgrade().is_some());
+
+    let mut inputs = host_inputs(Arc::clone(&catalog));
+    inputs.budgets.stock = Some(StockBudget {
+        max_unit_records: 0,
+    });
+    app.insert_resource(CampaignHostSupply {
+        revision: 7,
+        inputs: Some(inputs),
+    });
+    app.update();
+    assert!(matches!(
+        app.world().resource::<CampaignStartup>().last_error,
+        Some(StartupError::InputRevision {
+            supply: 7,
+            binding: 8
+        })
+    ));
+    assert!(
+        app.world()
+            .resource::<CampaignHostSupply>()
+            .inputs
+            .is_some()
+    );
+    assert!(previous.upgrade().is_some());
+    app.world_mut()
+        .resource_mut::<CampaignHostSupply>()
+        .revision = 8;
+    app.update();
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none()
+    );
+    assert!(
+        app.world()
+            .resource::<CampaignHostSupply>()
+            .inputs
+            .is_none()
+    );
+    assert!(previous.upgrade().is_none());
+    assert!(Arc::ptr_eq(
+        app.world()
+            .resource::<MapScriptSession<MapStartupHost>>()
+            .context()
+            .unwrap(),
+        &context
+    ));
+    assert_eq!(session_marker(&mut app), Value::Int(2));
+
+    let published = app
+        .world()
+        .resource::<MapScriptSession<MapStartupHost>>()
+        .session_witness()
+        .unwrap();
+    app.world_mut().resource_mut::<CampaignHostSupply>().inputs = Some(host_inputs(catalog));
+    app.update();
+    assert!(published.upgrade().is_some());
+    assert!(
+        app.world()
+            .resource::<CampaignHostSupply>()
+            .inputs
+            .is_some()
+    );
+    assert_eq!(session_marker(&mut app), Value::Int(2));
 }
 
 #[path = "script_timer_cases.rs"]
@@ -1068,3 +1197,14 @@ mod region_cases;
 
 #[path = "death_event_cases.rs"]
 mod death_event_cases;
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn browser_campaign_startup_recovery_gate() -> u32 {
+    delivered_maps_publish_one_session_and_keep_it_on_refusal_or_stale_bindings();
+    binding_revision_bump_abandons_pending_startup_without_session_replace();
+    local_file_source_label_and_explicit_stock_profile_reach_the_same_session();
+    failed_post_config_observation_keeps_the_published_session();
+    corrected_host_inputs_retry_a_refused_candidate_without_redelivery();
+    5
+}

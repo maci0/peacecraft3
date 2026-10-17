@@ -54,6 +54,11 @@ association. The attempt witness is a weak context pointer: it prevents address
 reuse from suppressing a later attempt while retaining no discarded map contents.
 Missing inputs can be supplied later; a factory, post-config or execution refusal
 consumes that candidate's inputs and preserves the previously published session.
+Fresh caller inputs may retry that refused candidate without another map delivery.
+The revision guard still runs before consuming them. Ordinary updates retain the
+failure without retrying; supplying inputs alone does not restart a successful
+session or an admission with an invalid entrypoint. Successful replacement retires
+the previous session and its callback tickets.
 
 The root Human01 verifier now constructs this production factory, resolves and
 applies its captured post-config inputs through the same public helpers, and
