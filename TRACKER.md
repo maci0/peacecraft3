@@ -1285,6 +1285,14 @@ Format: `date — subsystem — symptom — root cause — status`
       Both preload outputs match byte for byte. This instrumented probe does
       not implement the order native or advance that VM frontier; see
       `docs/re-notes/script-immediate-orders.md`.
+      The source-composed native Rust gate has now been recovered against current
+      libraries after loss of the earlier advanced harness directory. Its
+      source-derived 58-file bank (23 PCM/35 MPEG), 51 parameter labels and shared
+      Host reach the same `IssueImmediateOrder` span after globals/config and
+      154 unit creations. Six collector tests and 324 play-library tests pass
+      (five library ignores). The source/artifact and external-input hashes stay
+      unchanged through the qualified run. This restores the acceptance gate;
+      application Host construction, chapter execution and rendering stay open.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or
       upgrade effects. Applied camera motion remains open. See

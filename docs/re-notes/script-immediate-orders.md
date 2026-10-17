@@ -5,6 +5,24 @@ VM completes globals and `config`, then refuses the call at map span
 `67827..67884`; its selected `common.j` declaration is at `106038..106124`.
 No campaign frontier advancement or playable chapter is claimed here.
 
+The current source-composed gate was rebuilt against the selected reader lifetime
+change (`00cec4f`). It derives all 58 direct `InitSounds` file bindings from that
+same admitted Program, admits 23 PCM and 35 MPEG resources, and binds 51 parameter
+labels to explicitly selected tables. It completes globals and `config`, executes
+154 unit creations, and reaches the same order declaration and map span above.
+The arena, context and localization are shared throughout; repeated global
+initialization makes no further native calls. Six dependency-collector tests and
+324 play-library tests pass, with five library tests explicitly ignored.
+
+The recovered source, exact commands, input/artifact hashes and failures are local
+under `.scratch/campaign-host-recovery-20261017/`. This is a native Rust Host gate,
+not a fresh original-client run, browser/WASI execution, application host factory,
+playback or rendering. Its object catalog remains the explicitly selected
+compatibility catalog; its parameter-table choices do not establish the native
+Legacy archive winner. The earlier advanced private harness directory below is
+historical and is no longer available; the surviving runtime captures remain
+separate evidence.
+
 ## Source association
 
 The refused unit already retains its resolved `Definition`, including map unit
