@@ -2,7 +2,7 @@
 use pcx_assets::{
     AssetPath, ContentSource, LayerKind, NamedMember, SourceContent, SourceError, SourceInfo,
 };
-use pcx_mpq::{ExtractionBudget, Header, MpqArchive};
+use pcx_mpq::{BlockEntry, ExtractionBudget, HashEntry, Header, MpqArchive};
 use std::{
     collections::BTreeMap,
     sync::{Mutex, MutexGuard},
@@ -15,6 +15,10 @@ pub struct ArchiveSelection {
     pub archive_name: String,
     pub archive_bytes: u64,
     pub header: Header,
+    /// Opened tables of the instance observed by [`ArchiveSelection::inspect`].
+    /// Path, length and header can stay identical across a committed replacement.
+    hash_entries: Vec<HashEntry>,
+    block_entries: Vec<BlockEntry>,
 }
 impl ArchiveSelection {
     /// Observe the selected actual instance under the same generation locks.
@@ -53,6 +57,8 @@ impl ArchiveSelection {
                 .into(),
             archive_bytes: archive.byte_len(),
             header: archive.header,
+            hash_entries: archive.hash_entries().to_vec(),
+            block_entries: archive.block_entries().to_vec(),
         })
     }
 }
@@ -166,6 +172,8 @@ impl CommittedArchiveSource {
         if archive.path().to_str() != Some(self.selected.archive_name.as_str())
             || archive.byte_len() != self.selected.archive_bytes
             || archive.header != self.selected.header
+            || archive.hash_entries() != self.selected.hash_entries
+            || archive.block_entries() != self.selected.block_entries
         {
             return Err(SourceError::Unavailable {
                 detail: format!(

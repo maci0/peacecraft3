@@ -369,6 +369,282 @@ fn archive_generation_case(change_before: bool) {
     );
 }
 
+struct ArchiveStore {
+    archives: &'static Mutex<Vec<MpqArchive>>,
+    revision: &'static Mutex<u32>,
+}
+fn archive_resolver(f: &binding::Fixture, store: &ArchiveStore, generation: u32) -> Resolver {
+    let files = [
+        ("selected map.w3m", f.raw.as_slice()),
+        ("chosen common.j", f.common.as_slice()),
+        ("chosen Blizzard.j", f.bj.as_slice()),
+        (
+            pcx_objects::editor::path::SlkId::UnitData.path(),
+            f.unit_data.as_slice(),
+        ),
+        (
+            pcx_objects::editor::path::SlkId::UnitMetaData.path(),
+            f.metadata.as_slice(),
+        ),
+    ];
+    let subsets = [&files[..1], &files[1..2], &files[2..3], &files[3..]];
+    let infos = [
+        f.map_info.clone(),
+        f.common_info.clone(),
+        f.bj_info.clone(),
+        f.catalog_infos[0].clone(),
+    ];
+    let layers = infos
+        .into_iter()
+        .zip(subsets)
+        .enumerate()
+        .map(|(i, (info, files))| {
+            let source = CommittedArchiveSource::mount_no_huffman(
+                store.archives,
+                store.revision,
+                ArchiveSelection::inspect(store.archives, store.revision, 0, generation).unwrap(),
+                info,
+                files
+                    .iter()
+                    .map(|(name, _)| NamedMember {
+                        asset: (*name).into(),
+                        member: (*name).into(),
+                    })
+                    .collect(),
+                ExtractionBudget {
+                    max_raw_packed_bytes: 1 << 20,
+                    max_decoded_bytes: 1 << 20,
+                },
+            )
+            .unwrap();
+            ArchiveLayer {
+                priority: 10 - i as u32,
+                source: Box::new(source),
+            }
+        })
+        .collect();
+    Resolver::new("1.29b-tft-vanilla-vanilla".parse().unwrap(), None, layers).unwrap()
+}
+fn archive_store(f: &binding::Fixture, generation: u32) -> ArchiveStore {
+    let files = [
+        ("selected map.w3m", f.raw.as_slice()),
+        ("chosen common.j", f.common.as_slice()),
+        ("chosen Blizzard.j", f.bj.as_slice()),
+        (
+            pcx_objects::editor::path::SlkId::UnitData.path(),
+            f.unit_data.as_slice(),
+        ),
+        (
+            pcx_objects::editor::path::SlkId::UnitMetaData.path(),
+            f.metadata.as_slice(),
+        ),
+    ];
+    let mut raw = fixtures::build_synthetic_map("config archive", &files);
+    ArchiveStore {
+        archives: Box::leak(Box::new(Mutex::new(vec![
+            MpqArchive::from_bytes(raw.split_off(0x200), "config-source").unwrap(),
+        ]))),
+        revision: Box::leak(Box::new(Mutex::new(generation))),
+    }
+}
+fn archive_files(f: &binding::Fixture) -> [(&str, &[u8]); 5] {
+    [
+        ("selected map.w3m", f.raw.as_slice()),
+        ("chosen common.j", f.common.as_slice()),
+        ("chosen Blizzard.j", f.bj.as_slice()),
+        (
+            pcx_objects::editor::path::SlkId::UnitData.path(),
+            f.unit_data.as_slice(),
+        ),
+        (
+            pcx_objects::editor::path::SlkId::UnitMetaData.path(),
+            f.metadata.as_slice(),
+        ),
+    ]
+}
+fn same_metadata_archive(previous: &binding::Fixture, distinguish: bool) -> MpqArchive {
+    let files = archive_files(previous);
+    let mut raw = fixtures::build_synthetic_map("replacement archive", &files);
+    if distinguish {
+        fixtures::mark_unused_hash_slot(&mut raw);
+    }
+    MpqArchive::from_bytes(raw.split_off(0x200), "config-source").unwrap()
+}
+struct StagedImport {
+    archives: Option<Vec<MpqArchive>>,
+    revision: u32,
+    image: Option<Vec<u8>>,
+}
+impl StagedImport {
+    fn begin(&mut self) {
+        self.archives = Some(Vec::new());
+        self.image = None;
+    }
+    fn cancel(&mut self) {
+        self.archives = None;
+        self.image = None;
+    }
+    fn stage(&mut self, archive: MpqArchive) {
+        self.archives
+            .as_mut()
+            .expect("an open import")
+            .push(archive);
+    }
+    fn commit(&mut self, published: &Mutex<Vec<MpqArchive>>, revision: &Mutex<u32>) -> u32 {
+        let next = self.revision.checked_add(1).expect("revision");
+        *published.lock().unwrap() = self.archives.take().expect("an open import");
+        self.image = None;
+        *revision.lock().unwrap() = next;
+        self.revision = next;
+        next
+    }
+}
+fn published_pair(
+    app: &App,
+) -> (
+    Arc<peacecraft3::map_binding::BindingReceipts>,
+    Arc<Resolver>,
+) {
+    let active = app.world().resource::<MapRequests>();
+    let receipts = active.published_receipts.as_ref().unwrap().clone();
+    let reader = app
+        .world()
+        .resource::<SelectedMapSources>()
+        .for_receipts(&receipts)
+        .unwrap();
+    (receipts, reader)
+}
+#[cfg_attr(test, test)]
+pub fn committed_revision_replacement_invalidates_the_published_reader() {
+    let mut first = fixture(235);
+    for (info, identity) in [
+        &mut first.map_info,
+        &mut first.common_info,
+        &mut first.bj_info,
+        &mut first.catalog_infos[0],
+    ]
+    .into_iter()
+    .zip([
+        &mut first.map_id,
+        &mut first.common_id,
+        &mut first.bj_id,
+        &mut first.catalog_id,
+    ]) {
+        info.origin = "config-source".into();
+        identity.source = "config-source".into();
+    }
+    let store = archive_store(&first, 7);
+    let inbox = ConfigurationInbox::default();
+    let mut app = app(&inbox);
+    let id = inbox
+        .enqueue(request(&first, archive_resolver(&first, &store, 7)))
+        .unwrap();
+    app.update();
+    assert!(matches!(inbox.poll(id).unwrap(), Poll::Completed(_)));
+    let (receipts, reader) = published_pair(&app);
+    let before_len = store.archives.lock().unwrap()[0].byte_len();
+    let before_header = store.archives.lock().unwrap()[0].header;
+    let before = store.archives.lock().unwrap()[0].hash_entries().to_vec();
+    assert_eq!(
+        reader
+            .resolve_bounded("selected map.w3m", first.raw.len() as u64)
+            .unwrap()
+            .bytes,
+        first.raw
+    );
+
+    let mut staged = StagedImport {
+        archives: None,
+        revision: 7,
+        image: Some(b"pending client image".to_vec()),
+    };
+    staged.begin();
+    staged.stage(same_metadata_archive(&first, false));
+    staged.cancel();
+    assert!(staged.archives.is_none() && staged.image.is_none());
+    assert_eq!(*store.revision.lock().unwrap(), 7);
+    assert_eq!(store.archives.lock().unwrap()[0].hash_entries(), before);
+    assert!(Arc::ptr_eq(
+        &reader,
+        &app.world()
+            .resource::<SelectedMapSources>()
+            .for_receipts(&receipts)
+            .unwrap()
+    ));
+
+    let mut failed = fixture(235);
+    failed.override_reply = Some(("chosen common.j".into(), binding::Reply::Invalid));
+    let id = inbox.enqueue(request(&failed, failed.resolver())).unwrap();
+    app.update();
+    let Poll::Completed(outcome) = inbox.poll(id).unwrap() else {
+        panic!("missing refusal")
+    };
+    assert!(outcome.result.is_err());
+    staged.cancel();
+    let (kept_receipts, kept_reader) = published_pair(&app);
+    assert!(Arc::ptr_eq(&receipts, &kept_receipts));
+    assert!(Arc::ptr_eq(&reader, &kept_reader));
+    assert_eq!(
+        kept_reader
+            .resolve_bounded("selected map.w3m", first.raw.len() as u64)
+            .unwrap()
+            .bytes,
+        first.raw
+    );
+    drop(kept_reader);
+
+    staged.begin();
+    staged.stage(same_metadata_archive(&first, true));
+    let generation = staged.commit(store.archives, store.revision);
+    assert_eq!(generation, 8);
+    let committed = &store.archives.lock().unwrap()[0];
+    assert_eq!(committed.path().to_str(), Some("config-source"));
+    assert_eq!(committed.byte_len(), before_len);
+    assert_eq!(committed.header, before_header);
+    assert_ne!(committed.hash_entries(), before);
+    assert!(matches!(
+        reader.resolve_bounded("selected map.w3m", first.raw.len() as u64),
+        Err(pcx_assets::Error::Source {
+            source: SourceError::Unavailable { .. },
+            ..
+        })
+    ));
+    drop(reader);
+    let id = inbox
+        .enqueue(request(
+            &first,
+            archive_resolver(&first, &store, generation),
+        ))
+        .unwrap();
+    app.update();
+    let current = app
+        .world()
+        .resource::<MapRequests>()
+        .published_receipts
+        .as_ref()
+        .unwrap()
+        .clone();
+    assert!(
+        app.world()
+            .resource::<SelectedMapSources>()
+            .for_receipts(&receipts)
+            .is_none()
+    );
+    let replacement = app
+        .world()
+        .resource::<SelectedMapSources>()
+        .for_receipts(&current)
+        .unwrap();
+    assert_eq!(
+        replacement
+            .resolve_bounded("selected map.w3m", first.raw.len() as u64)
+            .unwrap()
+            .bytes,
+        first.raw
+    );
+    assert!(matches!(inbox.poll(id).unwrap(), Poll::Completed(_)));
+}
+
 struct Reentrant {
     base: binding::SyntheticSource,
     callback: Arc<dyn Fn() + Send + Sync>,
@@ -577,5 +853,6 @@ pub fn browser_configuration_consumer_gate() -> u32 {
     source_reenters_poll_enqueue_and_second_consumer();
     retired_active_catalog_drops_outside_mutex();
     runtime_sources_follow_successful_publication_and_receipt_identity();
-    6
+    committed_revision_replacement_invalidates_the_published_reader();
+    7
 }

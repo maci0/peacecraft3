@@ -181,6 +181,69 @@ pub fn malformed_is_not_missing_or_cache() {
     ));
 }
 #[cfg_attr(test, test)]
+pub fn same_metadata_replacement_is_not_the_selected_instance() {
+    let payload = [2u8, 3];
+    let store = store(&[("fixture", &payload)], "selected archive");
+    let source = mount(
+        &store,
+        unknown("selected archive", "selected"),
+        vec![NamedMember {
+            asset: "logical".into(),
+            member: "fixture".into(),
+        }],
+        2,
+        2,
+    );
+    let selected = ArchiveSelection::inspect(store.archives, store.revision, 0, 17).unwrap();
+    let mut replacement = fixtures::build_synthetic_map("same metadata", &[("fixture", &payload)]);
+    fixtures::mark_unused_hash_slot(&mut replacement);
+    let replacement =
+        MpqArchive::from_bytes(replacement.split_off(0x200), "selected archive").unwrap();
+    assert_eq!(
+        replacement.path().to_str(),
+        Some(selected.archive_name.as_str())
+    );
+    assert_eq!(replacement.byte_len(), selected.archive_bytes);
+    assert_eq!(replacement.header, selected.header);
+    assert_ne!(
+        replacement.hash_entries(),
+        store.archives.lock().unwrap()[0].hash_entries()
+    );
+    assert_eq!(
+        replacement.block_entries()[0].file_size,
+        store.archives.lock().unwrap()[0].block_entries()[0].file_size
+    );
+    store.archives.lock().unwrap()[0] = replacement;
+    assert!(matches!(
+        source.read("logical"),
+        Err(SourceError::Unavailable { .. })
+    ));
+    let observed = ArchiveSelection::inspect(store.archives, store.revision, 0, 17).unwrap();
+    assert_ne!(observed, selected);
+    *store.revision.lock().unwrap() = 18;
+    let committed = ArchiveSelection::inspect(store.archives, store.revision, 0, 18).unwrap();
+    let current = CommittedArchiveSource::mount_no_huffman(
+        store.archives,
+        store.revision,
+        committed,
+        unknown("selected archive", "selected"),
+        vec![NamedMember {
+            asset: "logical".into(),
+            member: "fixture".into(),
+        }],
+        ExtractionBudget {
+            max_raw_packed_bytes: 2,
+            max_decoded_bytes: 2,
+        },
+    )
+    .unwrap();
+    assert_eq!(current.read("logical").unwrap().unwrap().bytes, payload);
+    assert!(matches!(
+        source.read("logical"),
+        Err(SourceError::Unavailable { .. })
+    ));
+}
+#[cfg_attr(test, test)]
 pub fn resolver_to_actual_app_and_stale_rollback() {
     let mut f = binding::Fixture::new(231);
     for info in [

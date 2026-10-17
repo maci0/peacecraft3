@@ -177,6 +177,7 @@ fn consume(
     queue.in_flight = None;
     drop(queue);
     // Retiring caller-owned catalogs/sources can itself run external Drop code.
+    // The published resolver is dropped here too, after the inbox lock is gone.
     drop(previous);
     drop(retired_sources);
     Ok(())

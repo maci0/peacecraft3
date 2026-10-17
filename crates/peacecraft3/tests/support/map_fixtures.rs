@@ -89,7 +89,27 @@ pub(crate) fn definition(rawcode: Fourcc, kind: ObjectKind) -> Definition {
         modifications: vec![],
     }
 }
-fn encrypt_mpq_block(data: &mut [u8], key: u32) {
+pub(crate) fn mark_unused_hash_slot(map: &mut [u8]) {
+    let mpq = &mut map[0x200..];
+    let hash_pos = u32::from_le_bytes(mpq[0x10..0x14].try_into().unwrap()) as usize;
+    let entries = u32::from_le_bytes(mpq[0x18..0x1C].try_into().unwrap()) as usize;
+    let mut table = mpq[hash_pos..hash_pos + entries * 16].to_vec();
+    pcx_mpq::crypt::decrypt(
+        &mut table,
+        pcx_mpq::hash::hash_table_key(),
+        &pcx_mpq::crypt::table(),
+    );
+    let spare = table
+        .chunks_exact(16)
+        .position(|entry| entry[12..16] == [0xFF, 0xFF, 0xFF, 0xFF])
+        .expect("synthetic hash table has an unused slot");
+    let row = &mut table[spare * 16..spare * 16 + 16];
+    row[0..4].copy_from_slice(&0x0102_0304u32.to_le_bytes());
+    row[4..8].copy_from_slice(&0x0506_0708u32.to_le_bytes());
+    encrypt_mpq_block(&mut table, pcx_mpq::hash::hash_table_key());
+    mpq[hash_pos..hash_pos + table.len()].copy_from_slice(&table);
+}
+pub(crate) fn encrypt_mpq_block(data: &mut [u8], key: u32) {
     let table = pcx_mpq::crypt::table();
     let mut seed1 = key;
     let mut seed2 = 0xEEEE_EEEEu32;
