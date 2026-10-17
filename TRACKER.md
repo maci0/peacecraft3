@@ -1889,3 +1889,16 @@ warning-denied docs and formatting pass. Evidence:
 mapping, unit footprints/classes, sliding/path search, dynamic pathing and the
 application unit world/session clock remain open. This is a tested point-movement
 policy, not original-game movement or playable-campaign acceptance.
+
+
+A fresh local browser package of accepted source `dfd6c02` now passes the bounded
+1280×960 Main → blank Options landing → Video → open resolution-list check.
+The matching generated WebAssembly and allowlisted static package were rebuilt;
+reviewed captures show the left Video plate, both right housings and chains, and
+the blue dropdown. The closed resolution value has zero vertical-center error.
+The browser reports no errors or request overflow; original MPQ/client inputs
+remain local and are absent from the package. Evidence:
+`.scratch/browser-refresh-root-20261017/acceptance.json`. This check does not
+exercise HUD/tooltips or establish native appearance, physical mode switching,
+or resolution offerings beyond this supplied image and screen bound. The public
+site was not changed, and the earlier 4K timeout remains open.
