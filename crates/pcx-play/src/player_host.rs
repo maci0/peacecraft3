@@ -45,6 +45,16 @@ pub struct PlayerSettings {
 pub struct TechLimitBudget {
     pub max_records: usize,
 }
+/// One stored research pair. Absence is not a numeric level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TechRead {
+    /// Player rows were not admitted, or research was not admitted.
+    Unavailable,
+    /// The player row or the tech pair is unset.
+    Absent,
+    /// The executed `setToLevel`, including an executed 0.
+    Level(i32),
+}
 struct TechLimits {
     max_records: usize,
     records: usize,
@@ -263,6 +273,30 @@ impl ObjectHost {
             .as_ref()
             .and_then(|p| p.rows.get(at))
             .ok_or_else(|| self.inner.error("players", Failure::Identity))
+    }
+    /// Stored `SetPlayerTechResearched` level for one player number.
+    ///
+    /// [`TechRead::Absent`] is an unset pair. It is not level 0.
+    /// [`TechRead::Unavailable`] means player rows or research admission are
+    /// absent. This does not implement `specificonly`.
+    pub(super) fn stored_tech_level(&self, number: i32, techid: i32) -> TechRead {
+        let Some(players) = &self.players else {
+            return TechRead::Unavailable;
+        };
+        if players.research.is_none() {
+            return TechRead::Unavailable;
+        }
+        let Some(row) = players.rows.iter().find(|row| row.number == number) else {
+            return TechRead::Absent;
+        };
+        match row
+            .tech_researched
+            .iter()
+            .find(|(stored, _)| *stored == techid)
+        {
+            Some((_, level)) => TechRead::Level(*level),
+            None => TechRead::Absent,
+        }
     }
     pub fn start_location_occupied(&self, index: i32) -> Result<bool, Error> {
         let players = self.players.as_ref().ok_or_else(|| {

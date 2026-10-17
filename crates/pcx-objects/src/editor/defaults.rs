@@ -10,7 +10,9 @@ use std::path::Path;
 
 use pcx_mpq::MpqSet;
 
-use super::{Editor, FieldDef, FieldKind, FieldSource, SlkId, meta::METADATA_SLK};
+use super::{
+    Editor, EditorReadLimits, FieldDef, FieldKind, FieldSource, SlkId, meta::METADATA_SLK,
+};
 use crate::Fourcc;
 
 /// Caller-supplied edition/version claim; archive fingerprints are independent.
@@ -349,6 +351,131 @@ impl DefaultTables {
             }
         }
         Self::assemble(editor, identity, assets, profiles, unresolved)
+    }
+
+    /// Decode caller-supplied table and profile bytes.
+    ///
+    /// The editor reads only those bytes. Archive priority and listfile
+    /// selection stay with the caller. Profile members use the same family
+    /// names as an install read. Counts and aggregate bytes (including member
+    /// names and copied provenance) are checked before parsing or copying inputs.
+    pub fn from_bytes(
+        identity: Identity,
+        tables: &[(&str, &[u8])],
+        profiles: &[(&str, &[u8])],
+        limits: EditorReadLimits,
+    ) -> Result<Self, Unresolved> {
+        if identity.install.trim().is_empty() || identity.edition_version.trim().is_empty() {
+            return Err(Unresolved::Identity);
+        }
+        let fail = || Unresolved::Asset {
+            member: identity.install.clone(),
+            detail: "supplied table/profile input budget exceeded".into(),
+        };
+        let count = tables.len().checked_add(profiles.len()).ok_or_else(fail)?;
+        if count > limits.max_listed_paths {
+            return Err(fail());
+        }
+        let mut total = identity
+            .install
+            .len()
+            .checked_add(identity.edition_version.len())
+            .ok_or_else(fail)?;
+        for &(member, bytes) in tables.iter().chain(profiles) {
+            if bytes.len() > limits.max_asset_bytes || member.len() > limits.max_asset_bytes {
+                return Err(fail());
+            }
+            total = total
+                .checked_add(bytes.len())
+                .and_then(|n| n.checked_add(member.len()))
+                .and_then(|n| n.checked_add(identity.install.len()))
+                .ok_or_else(fail)?;
+            if total > limits.max_aggregate_input_bytes {
+                return Err(fail());
+            }
+        }
+        if total > limits.max_aggregate_input_bytes {
+            return Err(fail());
+        }
+        let mut supplied: BTreeMap<String, &[u8]> = BTreeMap::new();
+        let mut listed = Vec::new();
+        for &(member, bytes) in tables {
+            if supplied.insert(member.to_string(), bytes).is_some() {
+                return Err(Unresolved::Asset {
+                    member: member.into(),
+                    detail: "duplicate supplied member".into(),
+                });
+            }
+            if !SlkId::ALL.iter().any(|id| id.path() == member) {
+                return Err(Unresolved::Asset {
+                    member: member.into(),
+                    detail: "not a stock table path".into(),
+                });
+            }
+            listed.push(member.to_string());
+        }
+        let editor = Editor::from_reader(
+            Path::new(&identity.install),
+            &listed,
+            limits,
+            |member| -> Result<Option<Vec<u8>>, std::io::Error> {
+                Ok(supplied.get(member).map(|bytes| bytes.to_vec()))
+            },
+        )
+        .map_err(|error| Unresolved::Asset {
+            member: identity.install.clone(),
+            detail: error.to_string(),
+        })?;
+        let mut assets = BTreeMap::new();
+        for id in SlkId::ALL {
+            let Some(bytes) = supplied.get(id.path()) else {
+                continue;
+            };
+            if editor.table(*id).is_none() {
+                continue;
+            }
+            assets.insert(
+                id.path().to_string(),
+                Asset {
+                    member: id.path().into(),
+                    archive: identity.install.clone(),
+                    fnv1a64: pcx_mpq::fnv1a64(bytes),
+                },
+            );
+        }
+        let mut unresolved = Vec::new();
+        let mut decoded = Vec::new();
+        for &(member, bytes) in profiles {
+            let families = profile_families(member);
+            if families.is_empty() {
+                return Err(Unresolved::Asset {
+                    member: member.into(),
+                    detail: "not a unit, item, ability, or upgrade profile".into(),
+                });
+            }
+            if assets.contains_key(member) {
+                return Err(Unresolved::Asset {
+                    member: member.into(),
+                    detail: "duplicate supplied member".into(),
+                });
+            }
+            assets.insert(
+                member.to_string(),
+                Asset {
+                    member: member.into(),
+                    archive: identity.install.clone(),
+                    fnv1a64: pcx_mpq::fnv1a64(bytes),
+                },
+            );
+            let parsed = parse_profile(bytes, member)?;
+            unresolved.extend(parsed.unresolved);
+            decoded.push(Profile {
+                member: member.to_string(),
+                families,
+                sections: parsed.sections,
+            });
+        }
+        Self::assemble(editor, identity, assets, decoded, unresolved)
     }
 
     fn assemble(

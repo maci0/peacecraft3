@@ -1,6 +1,9 @@
 use super::{COMMON, budget, context, object, slots_rule};
-use crate::playercolor_host::{EnumHost, Failure, Limits, ObjectHost, UnitBudget, UnitStateBudget};
-use pcx_objects::editor::ObjectKind;
+use crate::playercolor_host::{
+    EnumHost, Failure, Limits, ObjectHost, TechLimitBudget, UnitBudget, UnitStateBudget,
+};
+use pcx_objects::editor::defaults::{DefaultTables, Identity};
+use pcx_objects::editor::{FieldDef, FieldKind, FieldSource, ObjectKind, SlkId};
 use pcx_script::{Host, Value};
 use pcx_sim::world::{
     Definition, FieldValue, ObjectCatalog, ObjectField, ResolutionProblem, Source,
@@ -1394,4 +1397,399 @@ fn root_zero_state_budget_leaves_units_and_assignments_unchanged() {
     assert!(error.contains("unit state assignments"), "{error}");
     assert_eq!(vm.host().inner.executed_unit(unit).unwrap(), &before);
     assert_eq!(hits.load(Ordering::SeqCst), 2);
+}
+
+const ORDER_HEADERS: &[&str] = &[
+    "alias",
+    "code",
+    "hero",
+    "item",
+    "checkDep",
+    "levels",
+    "reqLevel",
+    "levelSkip",
+    "Cool1",
+    "Cost1",
+];
+
+fn sylk(headers: &[&str], rows: &[&[&str]]) -> Vec<u8> {
+    let mut text = String::from("ID;PWXL;N;E\r\n");
+    for (y, row) in std::iter::once(headers)
+        .chain(rows.iter().copied())
+        .enumerate()
+    {
+        for (x, value) in row.iter().enumerate() {
+            text.push_str(&format!("C;X{};Y{};K\"{}\"\r\n", x + 1, y + 1, value));
+        }
+    }
+    text.push_str("E\r\n");
+    text.into_bytes()
+}
+
+fn order_tables(headers: &[&str], row: &[&str], amount: &str, maximum: &str) -> DefaultTables {
+    let bytes = sylk(headers, &[row]);
+    let upgrade = sylk(&["upgradeid", "maxlevel"], &[&["Qtec", maximum]]);
+    let profile = format!("[Qord]\r\nOrder=engage\r\nUnorder=release\r\nRequires=Qtec\r\n{amount}");
+    DefaultTables::from_bytes(
+        Identity {
+            install: "synthetic".into(),
+            edition_version: "fixture edition/version".into(),
+        },
+        &[
+            (SlkId::AbilityData.path(), bytes.as_slice()),
+            (SlkId::UpgradeData.path(), upgrade.as_slice()),
+        ],
+        &[("Units\\QAbilityFunc.txt", profile.as_bytes())],
+        pcx_objects::editor::EditorReadLimits {
+            max_listed_paths: 3,
+            max_asset_bytes: 64 << 10,
+            max_aggregate_input_bytes: 128 << 10,
+        },
+    )
+    .unwrap_or_else(|error| panic!("synthetic tables: {error}"))
+}
+
+fn ability_field(column: &str, text: &str) -> pcx_sim::world::ObjectField {
+    pcx_sim::world::ObjectField {
+        metadata: Some(FieldDef {
+            fourcc: *b"uabi",
+            from: SlkId::UnitMetaData,
+            field: column.into(),
+            slk: "UnitAbilities".into(),
+            index: -1,
+            declared: "abilityList".into(),
+            kind: FieldKind::Token,
+            category: "abil".into(),
+            source: FieldSource::Column {
+                slk: SlkId::UnitAbilities,
+                column: column.into(),
+            },
+            measured: true,
+        }),
+        value: Ok(FieldValue::Cell(text.into())),
+    }
+}
+
+struct OrderCatalog {
+    hits: Arc<AtomicUsize>,
+}
+
+impl ObjectCatalog for OrderCatalog {
+    fn resolve(&self, rawcode: [u8; 4]) -> Result<Definition, ResolutionProblem> {
+        self.hits.fetch_add(1, Ordering::SeqCst);
+        let list = match &rawcode {
+            b"u001" => "Qord",
+            b"u002" => "Zzzz, Qord",
+            b"u003" => "qord",
+            _ => {
+                return Err(ResolutionProblem::MissingRawcode(pcx_objects::fourcc_text(
+                    rawcode,
+                )));
+            }
+        };
+        let mut fields = BTreeMap::new();
+        let mut ability = ability_field("abilList", list);
+        if rawcode == *b"u002" {
+            ability.value = Ok(FieldValue::Override(pcx_objects::Value::Str(
+                list.as_bytes().to_vec(),
+            )));
+        }
+        fields.insert(*b"uabi", ability);
+        if rawcode == *b"u003" {
+            fields.insert(*b"uhab", ability_field("heroAbilList", "Qord"));
+        }
+        Ok(definition(
+            rawcode,
+            pcx_objects::fourcc_text(rawcode),
+            ObjectKind::Unit,
+            fields,
+        ))
+    }
+}
+
+fn order_common() -> String {
+    let mut common = script_common("widget", true);
+    let globals = common.find("\nglobals\n").expect("globals");
+    common.insert_str(
+        globals + 1,
+        "native IssueImmediateOrder takes unit whichUnit, string order returns boolean\n\
+constant native SetPlayerTechResearched takes player whichPlayer, integer techid, integer setToLevel returns nothing\n",
+    );
+    common
+}
+
+type OrderVm = pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>;
+
+fn order_vm(tables: &DefaultTables, research: bool) -> (OrderVm, Arc<AtomicUsize>) {
+    let common = order_common();
+    let map = "globals\nplayer P = null\nunit A = null\nunit B = null\nunit C = null\nendglobals\n\
+function main takes nothing returns nothing\n\
+set P = Player(4)\n\
+set A = CreateUnit(P, 'u001', 1.0, 2.0, 3.0)\n\
+set B = CreateUnit(P, 'u002', 4.0, 5.0, 6.0)\n\
+set C = CreateUnit(P, 'u003', 7.0, 8.0, 9.0)\n\
+endfunction\n\
+function issue takes unit target, string text returns boolean\n\
+return IssueImmediateOrder(target, text)\n\
+endfunction\n\
+function research takes integer tech, integer level returns nothing\n\
+call SetPlayerTechResearched(P, tech, level)\n\
+endfunction\n";
+    let ctx = context(300, &common, map, "unit-catalog");
+    let hits = Arc::new(AtomicUsize::new(0));
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = Arc::new(OrderCatalog {
+        hits: Arc::clone(&hits),
+    });
+    let mut host = object(&ctx, 16)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(Arc::clone(&shared), source(), limits(3))
+        .unwrap();
+    if research {
+        host = host
+            .with_player_tech_researched(TechLimitBudget { max_records: 2 })
+            .unwrap();
+    }
+    let host = host.with_defend_ability(tables, "Qord").unwrap();
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    (vm, hits)
+}
+
+fn order_bit(vm: &mut OrderVm, name: &str) -> Option<([u8; 4], bool)> {
+    let Value::Handle(unit) = vm.global(name) else {
+        panic!("unit");
+    };
+    vm.host().inner.executed_unit(unit).unwrap().admitted_order
+}
+
+fn issue(vm: &mut OrderVm, name: &str, text: &str) -> Result<Value, String> {
+    let Value::Handle(unit) = vm.global(name) else {
+        panic!("unit");
+    };
+    vm.call("issue", &[Value::Handle(unit), Value::Str(text.into())])
+        .map_err(|error| error.to_string())
+}
+
+fn research(vm: &mut OrderVm, tech: [u8; 4], level: i32) {
+    vm.call(
+        "research",
+        &[Value::Int(i32::from_be_bytes(tech)), Value::Int(level)],
+    )
+    .unwrap();
+}
+
+fn refused_order(headers: &[&str], row: &[&str], amount: &str) -> String {
+    let tables = order_tables(headers, row, amount, "1");
+    refused_tables(&tables)
+}
+
+fn refused_tables(tables: &DefaultTables) -> String {
+    let common = order_common();
+    let ctx = context(
+        300,
+        &common,
+        "function main takes nothing returns nothing\nendfunction\n",
+        "unit-catalog",
+    );
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = Arc::new(OrderCatalog {
+        hits: Arc::new(AtomicUsize::new(0)),
+    });
+    object(&ctx, 8)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(1))
+        .unwrap()
+        .with_defend_ability(tables, "Qord")
+        .map(|_| String::new())
+        .unwrap_or_else(|error| error.to_string())
+}
+
+#[test]
+fn owned_vm_defend_tracks_selected_ability_and_owner_research() {
+    let good = &["Qord", "Qcls", "0", "0", "1", "1", "0", "0", "0", "0"];
+    let absent = order_tables(ORDER_HEADERS, good, "", "1");
+    let (mut cold, _) = order_vm(&absent, false);
+    assert_eq!(order_bit(&mut cold, "A"), Some((*b"Qcls", false)));
+    assert_eq!(
+        issue(&mut cold, "A", "release").unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(order_bit(&mut cold, "A"), Some((*b"Qcls", false)));
+    let before_research = issue(&mut cold, "A", "engage").unwrap_err();
+    assert!(before_research.contains("unsupported"), "{before_research}");
+    assert_eq!(order_bit(&mut cold, "A"), Some((*b"Qcls", false)));
+
+    let (mut vm, hits) = order_vm(&absent, true);
+    assert_eq!(hits.load(Ordering::SeqCst), 3);
+    assert_eq!(order_bit(&mut vm, "A"), Some((*b"Qcls", false)));
+    assert_eq!(order_bit(&mut vm, "B"), Some((*b"Qcls", false)));
+    assert_eq!(order_bit(&mut vm, "C"), None);
+    assert_eq!(issue(&mut vm, "A", "release").unwrap(), Value::Bool(false));
+    assert_eq!(order_bit(&mut vm, "A"), Some((*b"Qcls", false)));
+    let unsupported = issue(&mut vm, "A", "engage").unwrap_err();
+    assert!(unsupported.contains("unsupported"), "{unsupported}");
+    let early_other = issue(&mut vm, "A", "other").unwrap_err();
+    assert!(early_other.contains("unsupported"), "{early_other}");
+    assert_eq!(order_bit(&mut vm, "A"), Some((*b"Qcls", false)));
+    research(&mut vm, *b"Qoth", 1);
+    let other_tech = issue(&mut vm, "A", "engage").unwrap_err();
+    assert!(other_tech.contains("unsupported"), "{other_tech}");
+    research(&mut vm, *b"Qtec", 0);
+    let explicit_zero = issue(&mut vm, "A", "engage").unwrap_err();
+    assert!(explicit_zero.contains("unsupported"), "{explicit_zero}");
+    research(&mut vm, *b"Qtec", 2);
+    let unobserved = issue(&mut vm, "A", "engage").unwrap_err();
+    assert!(unobserved.contains("unsupported"), "{unobserved}");
+    assert_eq!(order_bit(&mut vm, "A"), Some((*b"Qcls", false)));
+    research(&mut vm, *b"Qtec", 1);
+    assert_eq!(issue(&mut vm, "A", "engage").unwrap(), Value::Bool(true));
+    assert_eq!(order_bit(&mut vm, "A"), Some((*b"Qcls", true)));
+    assert_eq!(order_bit(&mut vm, "B"), Some((*b"Qcls", false)));
+    assert_eq!(issue(&mut vm, "A", "engage").unwrap(), Value::Bool(false));
+    assert_eq!(order_bit(&mut vm, "A"), Some((*b"Qcls", true)));
+    assert_eq!(issue(&mut vm, "A", "release").unwrap(), Value::Bool(true));
+    assert_eq!(order_bit(&mut vm, "A"), Some((*b"Qcls", false)));
+    assert_eq!(issue(&mut vm, "A", "release").unwrap(), Value::Bool(false));
+    assert_eq!(order_bit(&mut vm, "A"), Some((*b"Qcls", false)));
+    assert!(
+        issue(&mut vm, "A", "other")
+            .unwrap_err()
+            .contains("unsupported")
+    );
+    assert_eq!(order_bit(&mut vm, "A"), Some((*b"Qcls", false)));
+    assert_eq!(issue(&mut vm, "B", "engage").unwrap(), Value::Bool(true));
+    assert_eq!(order_bit(&mut vm, "A"), Some((*b"Qcls", false)));
+    assert_eq!(order_bit(&mut vm, "B"), Some((*b"Qcls", true)));
+    assert_eq!(issue(&mut vm, "B", "release").unwrap(), Value::Bool(true));
+    assert_eq!(order_bit(&mut vm, "B"), Some((*b"Qcls", false)));
+    let without = issue(&mut vm, "C", "engage").unwrap_err();
+    assert!(without.contains("unsupported"), "{without}");
+    let without_off = issue(&mut vm, "C", "release").unwrap_err();
+    assert!(without_off.contains("unsupported"), "{without_off}");
+    assert_eq!(order_bit(&mut vm, "C"), None);
+    let bad_args = vm
+        .host()
+        .native("IssueImmediateOrder", &[Value::Int(1)])
+        .unwrap_err();
+    assert!(
+        bad_args.contains("arguments do not match the unit native declaration"),
+        "{bad_args}"
+    );
+    assert_eq!(order_bit(&mut vm, "A"), Some((*b"Qcls", false)));
+    let Value::Handle(player) = vm.global("P") else {
+        panic!("player");
+    };
+    let wrong_family = vm
+        .host()
+        .native(
+            "IssueImmediateOrder",
+            &[Value::Handle(player), Value::Str("engage".into())],
+        )
+        .unwrap_err();
+    assert!(
+        wrong_family.contains("handle identifies another family"),
+        "{wrong_family}"
+    );
+    assert_eq!(order_bit(&mut vm, "A"), Some((*b"Qcls", false)));
+
+    let blank = order_tables(ORDER_HEADERS, good, "Requiresamount=\r\n", "1");
+    let (mut blank_vm, _) = order_vm(&blank, true);
+    let blank_before = issue(&mut blank_vm, "A", "engage").unwrap_err();
+    assert!(blank_before.contains("unsupported"), "{blank_before}");
+    research(&mut blank_vm, *b"Qtec", 1);
+    assert_eq!(
+        issue(&mut blank_vm, "A", "engage").unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(order_bit(&mut blank_vm, "A"), Some((*b"Qcls", true)));
+
+    let missing_cool = refused_order(
+        &[
+            "alias",
+            "code",
+            "hero",
+            "item",
+            "checkDep",
+            "levels",
+            "reqLevel",
+            "levelSkip",
+            "Cost1",
+        ],
+        &["Qord", "Qcls", "0", "0", "1", "1", "0", "0", "0"],
+        "",
+    );
+    assert!(missing_cool.contains("missing Cool1"), "{missing_cool}");
+    let blank_cool = refused_order(
+        ORDER_HEADERS,
+        &["Qord", "Qcls", "0", "0", "1", "1", "0", "0", "", "0"],
+        "",
+    );
+    assert!(blank_cool.contains("blank Cool1"), "{blank_cool}");
+    let marker_cool = refused_order(
+        ORDER_HEADERS,
+        &["Qord", "Qcls", "0", "0", "1", "1", "0", "0", "-", "0"],
+        "",
+    );
+    assert!(marker_cool.contains("marker Cool1"), "{marker_cool}");
+    let paid = refused_order(
+        ORDER_HEADERS,
+        &["Qord", "Qcls", "0", "0", "1", "1", "0", "0", "0", "4"],
+        "",
+    );
+    assert!(paid.contains("Cost1 is not authored zero"), "{paid}");
+    let amount = refused_order(ORDER_HEADERS, good, "Requiresamount=2\r\n");
+    assert!(
+        amount.contains("Requiresamount is not an absent or blank level"),
+        "{amount}"
+    );
+}
+
+#[test]
+fn defend_requires_one_authored_upgrade_level_before_any_unit_creation() {
+    let good = &["Qord", "Qcls", "0", "0", "1", "1", "0", "0", "0", "0"];
+    for maximum in ["", "-", "0", "2"] {
+        let tables = order_tables(ORDER_HEADERS, good, "", maximum);
+        assert!(
+            !refused_tables(&tables).is_empty(),
+            "accepted maxlevel {maximum:?}"
+        );
+    }
+    let tables = order_tables(ORDER_HEADERS, good, "", "1");
+    let common = order_common();
+    let ctx = context(
+        300,
+        &common,
+        "function main takes nothing returns nothing\nendfunction\n",
+        "unit-catalog",
+    );
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = Arc::new(OrderCatalog {
+        hits: Arc::new(AtomicUsize::new(0)),
+    });
+    let mut host = object(&ctx, 16)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(1))
+        .unwrap();
+    let player = host.native("Player", &[Value::Int(4)]).unwrap();
+    host.native(
+        "CreateUnit",
+        &[
+            player,
+            Value::Int(i32::from_be_bytes(*b"u001")),
+            Value::Real(0.0),
+            Value::Real(0.0),
+            Value::Real(0.0),
+        ],
+    )
+    .unwrap();
+    let Err(error) = host.with_defend_ability(&tables, "Qord") else {
+        panic!("late admission succeeded");
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("admit Defend before creating units")
+    );
 }

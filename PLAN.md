@@ -1205,9 +1205,11 @@ semantics.
 The current campaign Host retains executed player, sound, camera, rectangle,
 technology, destructable and source-bound unit state. Human01 globals and `config`
 complete in the retained local probe; `main` now retains the executed
-`SetHeroLevel` request and `SetUnitState` assignment, then reaches unsupported
-`IssueImmediateOrder`. This is execution evidence for that selected source profile,
-not a playable chapter. No application gameplay-session factory connects the
+`SetHeroLevel` request and `SetUnitState` assignment. Explicit source-bound Defend
+admission passes both fresh-unit off requests as false; `main` retains 155 units
+and then reaches unsupported `SetPlayerAlliance`. The supported on/off activation
+state is separate from combat modifiers and animation. This is execution evidence
+for that selected source profile, not a playable chapter. No application gameplay-session factory connects the
 Host, simulation, terrain and HUD yet. See
 [map admission](docs/re-notes/map-data-admission.md) and
 [executed Host state](docs/re-notes/script-player-setup.md).

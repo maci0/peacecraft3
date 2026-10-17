@@ -1,27 +1,24 @@
 # Immediate order behavior
 
-`IssueImmediateOrder` remains unsupported by `ObjectHost`. The retained Human01
-VM completes globals and `config`, then refuses the call at map span
-`67827..67884`; its selected `common.j` declaration is at `106038..106124`.
-No campaign frontier advancement or playable chapter is claimed here.
+`ObjectHost::with_defend_ability` admits the Defend activation state for one
+caller-selected ability alias. Programs without that admission keep the explicit
+unsupported order path. The selected alias, code, on/off strings, requirement and
+cost/cooldown cells come from the caller's `DefaultTables`; no order table is
+embedded in the host.
 
-The current source-composed gate was rebuilt against the selected reader lifetime
-change (`00cec4f`). It derives all 58 direct `InitSounds` file bindings from that
-same admitted Program, admits 23 PCM and 35 MPEG resources, and binds 51 parameter
-labels to explicitly selected tables. It completes globals and `config`, executes
-154 unit creations, and reaches the same order declaration and map span above.
-The arena, context and localization are shared throughout; repeated global
-initialization makes no further native calls. Six dependency-collector tests and
-324 play-library tests pass, with five library tests explicitly ignored.
+The unchanged selected Human01 now completes globals and `config`, executes both
+fresh-unit off requests as `false`, and reaches `SetPlayerAlliance` at map span
+`224476..224550` (selected `common.j` declaration `60256..60399`). It retains 155
+source-bound units on the same arena, context and localization. This advances the
+previous `IssueImmediateOrder` boundary at `67827..67884`. The object catalog is
+still the explicitly selected compatibility catalog; native Legacy archive
+priority is unproved. No playable chapter or rendered combat is claimed.
 
-The recovered source, exact commands, input/artifact hashes and failures are local
-under `.scratch/campaign-host-recovery-20261017/`. This is a native Rust Host gate,
-not a fresh original-client run, browser/WASI execution, application host factory,
-playback or rendering. Its object catalog remains the explicitly selected
-compatibility catalog; its parameter-table choices do not establish the native
-Legacy archive winner. The earlier advanced private harness directory below is
-historical and is no longer available; the surviving runtime captures remain
-separate evidence.
+The recovered baseline gate and the integration evidence remain local under
+`.scratch/campaign-host-recovery-20261017/` and
+`.scratch/defend-order-root-20261017/`. The earlier advanced private harness
+path below is historical and no longer available. Original-client captures
+remain separate evidence from executing this map in the Rust VM.
 
 ## Source association
 
@@ -84,20 +81,48 @@ requirement, damage, animation, clock or network behavior. In particular, the
 pre-research off results do not isolate the effect of the research requirement.
 The output is read as data; the generated preload script is never executed.
 
-## Implementation boundary
+## Implementation and remaining behavior
 
-Returning true merely because a string was retained would contradict this
-control. An order consumer must join the actual unit and ability, apply the
-supported ability's state transition, and preserve unsuccessful orders as false.
-Unknown behavior must remain an explicit unsupported path. Profile `Order` and
-`Unorder` assignments alone do not establish mana, cooldown, research, effects
-or the behavior of every ability with such assignments.
+Admission is explicit before any unit creation. It checks the loaded
+non-constant `unit, string -> boolean` contract against `CreateUnit`'s source,
+then reads one alias row and its exact code. The supported shape is a single-level,
+non-hero, non-item ability with authored zero cost, cooldown, required hero level
+and level skip, and dependency checking enabled. Missing, blank, marker and
+unsupported numeric cells refuse. `Requires` must name one upgrade with exactly
+one authored `maxlevel`; an absent or blank `Requiresamount` is supported for
+that shape. The required level is read from the upgrade row. Other requirement
+shapes remain unsupported. This does not copy an implicit level from a different
+parser or infer a missing cost/cooldown as zero.
 
-The pinned reconstruction source provides a separate implementation reference:
+Creation binds the alias through that unit's metadata-associated `abilList`,
+including string map overrides. Alias spelling stays exact. The code is retained
+separately from the alias. A unit without that association receives no Defend
+state. Each associated unit starts inactive, matching the fresh-unit control.
+An inactive off request returns false without a write. For the other supported
+transitions, the owner's executed research pair must equal the source-bound
+single level. On changes inactive to active; off changes active to inactive.
+Those transitions return true. Repeating the current state returns false.
+Missing research stays unset, and unsupported levels refuse without a write.
+Units remain independent and orders do not resolve or copy the unit catalog.
+
+Unmatched strings stay unsupported until the order registry is bound. In
+particular, the original control's invalid-string false result is still an open
+part of the general order native. A different valid order must not silently be
+classified as a failed Defend request. Damage, speed, animation, mana spending,
+cooldown progression, dead-unit admission and event delivery remain open; the
+activation bit alone does not apply those effects.
+
+`DefaultTables::from_bytes` supplies the same table/profile reader for explicitly
+provided bytes, with caller count, per-input and aggregate limits checked before
+parsing/copying. It preserves source identity, member fingerprints and profile
+occurrences. Archive priority remains caller policy. Synthetic tests use their
+own alias, class, requirement and order strings. They exercise script functions
+in an owned VM, with separate malformed-call checks at the host boundary.
+
+The pinned reconstruction source remains a separate implementation reference:
 [Warsmash Jass2](https://github.com/Retera/WarsmashModEngine/blob/f9e0aeed4be372d6016519d0e97b384aa873f374/core/src/com/etheller/warsmash/parsers/jass/Jass2.java)
 checks unit abilities for use and no-target admission before dispatching an
 immediate order. Its
 [active toggle](https://github.com/Retera/WarsmashModEngine/blob/f9e0aeed4be372d6016519d0e97b384aa873f374/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/abilitybuilder/ability/CAbilityAbilityBuilderActiveToggle.java)
-also checks active state, mana and cooldown. Those sources are not native-code
-evidence or proof that every profile uses that class. Their pinned hashes remain
-in the local `root-immediate-orders/warsmash/sources.json` receipt.
+also checks active state, mana and cooldown. These are reconstruction-source
+references, not native-code evidence or proof that every profile uses that class.

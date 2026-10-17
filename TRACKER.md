@@ -1293,6 +1293,14 @@ Format: `date — subsystem — symptom — root cause — status`
       (five library ignores). The source/artifact and external-input hashes stay
       unchanged through the qualified run. This restores the acceptance gate;
       application Host construction, chapter execution and rendering stay open.
+      Explicit Defend activation admission now reads the selected ability row,
+      exact alias/code, on/off strings and single-level upgrade requirement. Its
+      per-unit bit returns the observed on/off transition results without a
+      fabricated resource default. Unmatched order strings stay unsupported.
+      The unchanged Human01 passes both fresh off requests and reaches
+      `SetPlayerAlliance` at map span `224476..224550`, retaining 155 units on
+      the same Host/context. Combat modifiers, animation and the application
+      startup caller remain open; see `script-immediate-orders.md`.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or
       upgrade effects. Applied camera motion remains open. See
