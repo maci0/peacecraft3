@@ -1,6 +1,6 @@
 # Original seeded RNG probe
 
-Current implementation: [explicit seeded host and factory](#explicit-seeded-production-host-2026-10-18). Human01 initial-state qualification and full consumer parity remain open.
+Current implementation: [explicit seeded host and factory](#explicit-seeded-production-host-2026-10-18). [Startup input observations and the owned-factory experiment](#startup-inputs-and-owned-factory-boundary-2026-10-18) qualify one primary-stream prefix, but the required four-checkpoint factory gate fails at an unsupported timed-trigger registration. Production engine initialization and full consumer parity remain open. Earlier sections retain their historical scope.
 
 Two fresh isolated Wine runs loaded the same private, intentionally modified
 map and emitted identical measured results. This establishes a working seed
@@ -344,3 +344,57 @@ Production behavior is unchanged. Fresh-unit flag/component conditions, wander
 expiry and movement, engine seed inputs and the complete race-preference view
 still need integration. The source association does not authorize an unconditional
 draw for every unit or replace the remaining gameplay and baseline gates.
+
+## Startup inputs and owned-factory boundary (2026-10-18)
+
+A third fresh, unchanged Human01 run captures the complete race-preference view
+at the observed resolver entry and the fresh component/unit fields at each
+wander entry. The source loop processes 24 rows within the captured engine array
+bound of 28; 19 rows take the random-race path. The reset method's field stores
+agree with the registered preference setter and race getter. Its RTTI identifies
+a player class, but its virtual reset path is not established as a constructor.
+The observed script-player contract exposes 16 slots: that domain must not be
+used to infer the engine race-loop extent or mint extra script player handles.
+
+All 18 captured wander entries have the expected class vtable. Their unit
+rawcodes, read through the registered type getter's field relation, match the
+source-derived ability join in order. The captured counter and branch fields
+permit the fresh-unit draw path. This qualifies those entries, not the meaning
+of every unit flag, later movement/expiry behavior or other initial unit states.
+No resolved-race results after the complete loop were captured.
+
+The four additional raw real results and primary states match selected-code
+execution and the existing production-host history replay on native and actual
+WASI, with 2,883 replay rows per target. There are now **12 raw real checkpoints
+across three fresh unmodified Wine runs**. These checks supply explicit private
+history; they do not execute the complete map through the startup factory.
+
+A separate private experiment does execute the unchanged map through the real
+startup factory, VM and single owned object host. Source-qualified race inputs
+and the actual retained unit definitions drive the ordered consumers. It checks
+19 race and 18 wander primary-state checkpoints, then matches the first recorded
+original script real result and its state. It does not use a fixed draw skip.
+However, the required four-result gate **fails after one match** on both native
+and actual WASI: execution refuses `TriggerRegisterTimerEvent` in Blizzard.j.
+The native process exits 101 and the WASI process exits 134. Neither is a passing
+factory gate. A missing-seed fixture also refuses before initialization.
+
+The private adapter compensates for the script seed setter's warmup by reusing
+its first draw for race resolution. It does not reproduce engine secondary-state
+setup and is **not a production engine initializer**. Its other unit catalog is
+an explicitly selected compatibility input, not proof of target catalog fidelity.
+Production startup remains unseeded; no captured seed, state tuple, source table
+or output sequence is published.
+
+Commands, immutable failed gates, source fingerprints and the review receipt
+remain local in `.scratch/script-rng-startup-inputs-root-20261018/`. The debugger
+detaches cleanly and the reference container is stopped and preserved. The
+chapter-loading capture supplies no rendered gameplay claim. These are intrusive
+Wine observations, without native Windows or complete thread coverage.
+
+The next actual factory boundary needs timed-trigger registration, scheduling
+and callback delivery through the existing arena, clock and VM, including
+lifetime, conditions/actions, periodic ordering, bounded work and context cleanup.
+A registration-only stub would conceal that missing behavior. Proper engine RNG
+initialization, secondary consumers, broader wander states, paired gameplay,
+public-site validation and the 100-consecutive original baseline remain open.
