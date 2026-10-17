@@ -492,3 +492,6 @@ mod startup_settings;
 
 #[path = "player_slots_tests.rs"]
 mod slot_states;
+
+#[path = "player_controllers_tests.rs"]
+mod current_controllers;

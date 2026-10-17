@@ -1355,6 +1355,14 @@ Format: `date — subsystem — symptom — root cause — status`
       existing `GetPlayerController` getter in Blizzard at `438445..438479`
       (common `61313..61388`). No controller/occupancy defaults or completed
       single-player check are inferred. See `docs/re-notes/script-player-slots.md`.
+      A separate explicit current-controller snapshot now supplies all captured
+      source slot numbers without minting players or overwriting executed setup.
+      The unchanged source completes the single-player loop (`bj_isSinglePlayer`
+      true) and next refuses `CreateSoundFromLabel` for Rescue in Blizzard at
+      `438917..438982` (common `155708..155881`). Current input omissions and
+      invalidation refuse instead of falling back to assigned setup. This is not
+      a live lobby provider, completed sound initialization or playable chapter;
+      see `docs/re-notes/script-player-controllers.md`.
       Live participation, application provider and general eligibility remain open.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or

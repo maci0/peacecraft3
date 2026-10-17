@@ -48,6 +48,8 @@ ambiguity and function overrides are checked before admission.
 
 Current slot state has a separate [explicit startup input](script-player-slots.md).
 It does not turn omitted controller assignments into defaults or infer occupancy.
+A separate [current-controller view](script-player-controllers.md) can supply
+qualified current values while keeping executed controller assignments intact.
 
 ## Verification
 

@@ -1213,13 +1213,16 @@ explicit force memberships. The selected script creates 17 forces and 16
 memberships. With explicitly supplied, locally captured startup participation,
 null-filter force enumeration replaces the all-player force. Explicit startup
 speed/fog/mask input passes the three getters. Explicit captured slot-state
-input then passes `GetPlayerSlotState`; the next missing input is an unset
-controller on a later player row in `Blizzard.j`. That existing getter refuses
-unassigned state. Fog/mask setters retain independent booleans;
+input passes `GetPlayerSlotState`. A separate explicit current-controller
+view serves later source player rows without overwriting executed setup; the
+single-player counting loop completes and reaches unsupported
+`CreateSoundFromLabel` for Rescue in `Blizzard.j`. Fog/mask setters retain
+independent booleans;
 speed writes remain unsupported because original requests do not always read
 back as requested. No participation or settings default is inferred. Wrapping
 does not evaluate predicates. See `docs/re-notes/script-startup-settings.md` and
-`docs/re-notes/script-player-slots.md`.
+`docs/re-notes/script-player-slots.md` and
+`docs/re-notes/script-player-controllers.md`.
 These assignments do not enforce alliance gameplay or effective resource balances,
 and on/off activation is separate from combat modifiers and animation. This is
 execution evidence for that selected source profile, not a playable chapter.

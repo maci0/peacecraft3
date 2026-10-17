@@ -66,6 +66,8 @@ are fixture data, not copied original values. Native and actual WASI execute the
 same tests. Commands, source-stability checks and unchanged-map receipts are
 local under `.scratch/player-slots-root-20261017/`.
 
+The later [current-controller input](script-player-controllers.md) resolves that
+controller refusal from the same census while keeping setup assignments separate.
 A production current-player provider, application Host factory, live lobby and
 join/leave behavior, completed chapter initialization and rendered gameplay remain
 open. No original assets or generated payloads are committed or uploaded.

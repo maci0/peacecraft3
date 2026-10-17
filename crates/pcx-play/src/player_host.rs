@@ -86,6 +86,7 @@ pub(super) struct Players {
     alliance: Option<RecordLimits>,
     state_requests: Option<RecordLimits>,
     slot_states_admitted: bool,
+    controllers: Option<controllers::Controllers>,
     rows: Vec<PlayerSettings>,
 }
 const SET_PLAYER_STATE: &str = "SetPlayerState";
@@ -206,6 +207,7 @@ impl ObjectHost {
             alliance: None,
             state_requests: None,
             slot_states_admitted: false,
+            controllers: None,
             rows: Vec::new(),
         });
         Ok(self)
@@ -742,6 +744,7 @@ impl ObjectHost {
                         players.rows[at].controller = Some(*id);
                         self.invalidate_force_enumeration();
                         self.invalidate_startup_player_slots();
+                        self.invalidate_startup_controllers();
                     }
                 }
                 Ok(Value::Null)
@@ -792,10 +795,19 @@ impl ObjectHost {
                 .slot_state
                 .map(Value::Handle)
                 .ok_or_else(|| fail(Failure::PlayerState("slot state is unset"))),
-            ("GetPlayerController", []) => players.rows[at]
-                .controller
-                .map(Value::Handle)
-                .ok_or_else(|| fail(Failure::PlayerState("controller is unset"))),
+            ("GetPlayerController", []) => {
+                if let Some(input) = &players.controllers {
+                    input
+                        .get(players.rows[at].number)
+                        .map(Value::Handle)
+                        .map_err(fail)
+                } else {
+                    players.rows[at]
+                        .controller
+                        .map(Value::Handle)
+                        .ok_or_else(|| fail(Failure::PlayerState("controller is unset")))
+                }
+            }
             ("GetPlayerName", []) => players.rows[at]
                 .name
                 .as_ref()
@@ -896,3 +908,6 @@ const RESEARCH_CONTRACTS: &[(&str, &[&str], &str, bool)] = &[(
 
 #[path = "player_slots_host.rs"]
 mod slots;
+
+#[path = "player_controllers_host.rs"]
+mod controllers;
