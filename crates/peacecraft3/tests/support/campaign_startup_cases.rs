@@ -305,6 +305,7 @@ fn budgets() -> MapStartupBudgets {
         game_state_events: 4,
         stock: None,
         quests: None,
+        items: None,
     }
 }
 
@@ -1212,3 +1213,6 @@ pub fn browser_campaign_startup_recovery_gate() -> u32 {
     corrected_host_inputs_retry_a_refused_candidate_without_redelivery();
     5
 }
+
+#[path = "item_factory_cases.rs"]
+mod item_factory_cases;

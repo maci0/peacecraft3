@@ -2233,3 +2233,31 @@ targets/features, the browser-target build and formatting pass. Evidence:
 movement-harness diagnostic/correction repair, not original map extent, movement,
 protocol, gameplay or rendered parity evidence. Original runtime/browser visual
 runs and the 100-consecutive original baseline gate remain open.
+
+
+### 2026-10-18 — bounded catalog-backed script item creation
+
+`MapStartupBudgets::items` now opts the production factory into `CreateItem`.
+The call resolves the selected catalog's item definition and retains its
+metadata/modifications, explicit map Source and executed coordinates on the same
+handle arena as timers and units. Omitting the budget preserves unsupported
+behavior. No item owner, life, inventory or world/render defaults are inferred.
+Catalog/family and record/handle/field/modification refusals allocate no item;
+failed startup candidates preserve the previous published session.
+
+Five core cases and two delivered-map App cases pass. The latter parse synthetic
+ItemData and metadata tables through the real selected resolver/binding path,
+check the retained item cell, interleave timer handles, exercise refusals and
+retire the old session on valid replacement. Both cases also execute from the
+actual browser-target Cargo WASM artifact. All 103 native map-loading tests,
+19 app-library tests and 428 native plus 428 actual WASI play tests pass; each
+play run retains six explicit local-original-input ignores. Strict native/browser
+Clippy, affected native/WASM compilation and formatting pass. Evidence:
+`.scratch/item-creation-root-20261018/review-1/acceptance.json`; scope:
+`docs/re-notes/script-items.md`.
+
+This establishes admission and executed item records. Other item natives,
+inventory, death events, world publication, rendered items, original behavior
+comparison, playable campaigns and the 100-consecutive original baseline gate
+remain open. No original runtime or browser visual run was repeated; the public
+site package was not rebuilt or changed.

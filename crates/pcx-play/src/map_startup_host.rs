@@ -8,9 +8,10 @@ use crate::map_admission::ParsedMapContext;
 use crate::neutral_player::{NeutralError, SelectedMapNeutralHost, VerifiedNeutralRule};
 use crate::playercolor_host::{
     ConditionBudget, DestructableBudget, EnumHost, Error as HostError, FilterBudget, ForceBudget,
-    Limits, MapConfigBudget, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget,
-    PlayerStateRequestBudget, QuestBudget, RegionBudget, ResearchObservation, StartupSettings,
-    StockBudget, TechLimitBudget, TimerHost, TriggerBudget, UnitBudget, UnitStateBudget,
+    ItemBudget, Limits, MapConfigBudget, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget,
+    PlayerBudget, PlayerStateRequestBudget, QuestBudget, RegionBudget, ResearchObservation,
+    StartupSettings, StockBudget, TechLimitBudget, TimerHost, TriggerBudget, UnitBudget,
+    UnitStateBudget,
 };
 use crate::sound_parameters::Banks;
 use crate::startup_clock::StartupClock;
@@ -81,6 +82,8 @@ pub struct MapStartupBudgets {
     pub stock: Option<StockBudget>,
     /// None keeps quest and quest-item natives unsupported.
     pub quests: Option<QuestBudget>,
+    /// None keeps `CreateItem` unsupported.
+    pub items: Option<ItemBudget>,
 }
 
 pub struct EnumContracts {
@@ -381,7 +384,11 @@ pub fn assemble(
         .with_player_tech_limits(budgets.tech_limits)?
         .with_player_tech_researched(budgets.tech_researched)?
         .with_destructables(budgets.destructables)?
-        .with_unit_catalog(catalog, context.world.source.clone(), budgets.units)?
+        .with_unit_catalog(
+            Arc::clone(&catalog),
+            context.world.source.clone(),
+            budgets.units,
+        )?
         .with_unit_states(budgets.unit_states)?
         .with_defend_ability(&defend.tables, &defend.alias)?
         .with_trigger_admission(budgets.triggers)?
@@ -410,6 +417,9 @@ pub fn assemble(
     }
     if let Some(quests) = budgets.quests {
         object = object.with_quests(quests)?;
+    }
+    if let Some(items) = budgets.items {
+        object = object.with_item_catalog(catalog, context.world.source.clone(), items)?;
     }
     let slots = SelectedMapNeutralHost::try_new(Arc::clone(&context), rules.slots, object)?;
     let extra = SelectedMapNeutralHost::try_new(Arc::clone(&context), rules.extra, slots)?;

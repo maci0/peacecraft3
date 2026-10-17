@@ -82,6 +82,13 @@ pub enum Failure {
     DestructableState(&'static str),
     #[error("unit creation: {0}")]
     UnitState(&'static str),
+    #[error("item creation: {0}")]
+    ItemState(&'static str),
+    #[error("item catalog {requested:?}: {problem:?}")]
+    ItemCatalog {
+        requested: [u8; 4],
+        problem: Box<pcx_sim::world::ResolutionProblem>,
+    },
     #[error("stock configuration: {0}")]
     StockState(&'static str),
     #[error("unit catalog {requested:?}: {problem:?}")]
@@ -203,6 +210,9 @@ enum Entry {
     },
     Unit {
         record: objects::ExecutedUnit,
+    },
+    Item {
+        record: objects::ExecutedItem,
     },
     /// Trigger identity, without an inferred enabled-state default.
     Trigger {
@@ -553,6 +563,7 @@ impl EnumHost {
             }
             Entry::CameraSetup { .. } => "camerasetup",
             Entry::Destructable { .. } => "destructable",
+            Entry::Item { .. } => "item",
             Entry::Unit { .. } => "unit",
             Entry::Trigger { .. } => "trigger",
             Entry::RegisteredUnitEvent { .. }
@@ -665,15 +676,15 @@ mod tests;
 mod objects;
 pub use objects::{
     CameraDestination, CameraFieldRecord, CameraState, ConditionBudget, ConditionCallback,
-    DayNightState, DeathEventRegistration, DestructableBudget, DestructableCreation, ExecutedUnit,
-    ExecutedUnitState, FileSoundState, FilterBudget, FilterCallback, ForceBudget,
-    GameStateEventRegistration, LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection,
-    ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
-    PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration, QuestBudget, QuestEvent,
-    QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration, RegionRectRequest,
-    ResearchObservation, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest,
-    StartLocation, StartPriorities, StartPriority, StartupClockState, StartupSettings, StockBudget,
-    TechLimitBudget, TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord,
-    TriggerBudget, TriggerConditionRegistration, UnitBudget, UnitEventRegistration,
-    UnitStateBudget,
+    DayNightState, DeathEventRegistration, DestructableBudget, DestructableCreation, ExecutedItem,
+    ExecutedUnit, ExecutedUnitState, FileSoundState, FilterBudget, FilterCallback, ForceBudget,
+    GameStateEventRegistration, ItemBudget, LabelSoundFlags, MapConfig, MapConfigBudget,
+    MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget,
+    PlayerEventRegistration, PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration,
+    QuestBudget, QuestEvent, QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration,
+    RegionRectRequest, ResearchObservation, SoundProperties, SoundState, StackedSoundAction,
+    StackedSoundRequest, StartLocation, StartPriorities, StartPriority, StartupClockState,
+    StartupSettings, StockBudget, TechLimitBudget, TimerEventRegistration, TimerExpiry, TimerHost,
+    TriggerActionRecord, TriggerBudget, TriggerConditionRegistration, UnitBudget,
+    UnitEventRegistration, UnitStateBudget,
 };
