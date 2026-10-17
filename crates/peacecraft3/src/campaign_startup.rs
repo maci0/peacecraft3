@@ -42,11 +42,19 @@ pub enum StartupError {
     Session(#[from] ScriptSessionError),
 }
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CampaignStartupSet;
+
 pub fn install(app: &mut App) {
     app.init_resource::<CampaignStartup>()
         .init_resource::<CampaignHostSupply>()
         .init_resource::<MapScriptSession<MapStartupHost>>()
-        .add_systems(Update, start_admitted_map.after(MapRequestSet::Deliver));
+        .add_systems(
+            Update,
+            start_admitted_map
+                .in_set(CampaignStartupSet)
+                .after(MapRequestSet::Deliver),
+        );
 }
 
 fn entry_id(context: &ParsedMapContext, name: &'static str) -> Result<FunctionId, StartupError> {

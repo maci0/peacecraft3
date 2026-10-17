@@ -364,6 +364,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
             .before(finish_intro),
     );
     crate::menu_audio::install(&mut app);
+    peacecraft3::script_audio::install(&mut app);
     crate::glue_menu::install(&mut app);
     crate::menu_settings::install(&mut app);
     #[cfg(not(target_arch = "wasm32"))]

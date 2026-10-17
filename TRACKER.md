@@ -1456,7 +1456,9 @@ Format: `date — subsystem — symptom — root cause — status`
       view preserves source receipts and exact samples while placing fmt/data
       chunks before opaque ancillary chunks for the installed WAV decoder.
       The snapshot does not advance time or replace a running game clock, and
-      queued audio/music selection is not yet consumed by a playback backend. All 305 play tests
+      queued music selection is not yet consumed by a playback backend.
+      A bounded native script-sound consumer now handles the explicitly supported
+      non-spatial profile; see `docs/re-notes/script-audio-playback.md`. All 305 play tests
       pass with five explicit ignores; strict native/WASM Clippy, WASM generation
       and actual 32-bit lifecycle/config/player/priority/camera/model/clock/sound checks pass. These are bounded Host/data
       checks, not campaign or native gameplay proof.
@@ -1823,3 +1825,22 @@ Blizzard.j `447183..447286`. Evidence:
 `docs/re-notes/script-continuations.md`. Current ObjectHost timer admission,
 expiry order, cooperative scheduler, native timing and playable chapters remain
 open. No fresh gameplay or rendered comparison is claimed.
+
+
+Published script-sound starts now have a bounded native Bevy consumer on the same
+`MapScriptSession<MapStartupHost>`. Distinct sound handles can share their
+encoded source. A failed replacement keeps the current voices and queue;
+successful replacement or clear retires that session's voices. Finished
+one-shots release their source and can start again. Active-handle repeats are
+reported as unsupported until restart-versus-mix behavior is qualified. The
+existing effects gain and mute control applies before sink creation. Unsupported
+spatial, EAX, fade, duration, channel, volume, pitch and parameter profiles remain
+explicit refusals. Browser requests remain queued without a decoder backend.
+All 364 app tests, 19 library tests, 85 map-loading and 92 factory/audio integration
+tests pass, alongside strict native/browser Clippy, the full browser build,
+warning-denied docs and formatting. Installed-decoder tests consume synthetic
+PCM and MP3 samples without a device. Evidence:
+`.scratch/script-audio-root-20261017/`; see
+`docs/re-notes/script-audio-playback.md`. Audio device output, native timing and
+mixing, automatic qualified Host inputs, timer scheduling and full campaign
+playback remain open. No fresh rendered or audible comparison is claimed.

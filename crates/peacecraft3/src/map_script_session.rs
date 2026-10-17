@@ -61,6 +61,14 @@ impl<H: Host + Send + Sync + 'static> MapScriptSession<H> {
     pub fn context(&self) -> Option<&Arc<ParsedMapContext>> {
         self.active.as_ref().map(|active| &active.context)
     }
+    /// Published-session witness. [`CallbackTicket`] stores this same `Arc`.
+    /// Successful `replace` allocates the next witness before the previous one drops.
+    /// `clear` drops it.
+    pub fn session_witness(&self) -> Option<Weak<()>> {
+        self.active
+            .as_ref()
+            .map(|active| Arc::downgrade(&active.witness))
+    }
     pub fn host(&mut self) -> Option<&mut H> {
         self.active
             .as_mut()
