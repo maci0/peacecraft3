@@ -221,15 +221,27 @@ limits are checked on the returned definition; they do not bound the catalog's
 internal allocation or work.
 
 A successful call retains the checked definition, executed player number,
-source identity, and finite x/y/facing values on the shared handle arena. Integer
-rawcodes pass through as four big-endian bytes. Catalog failures keep their typed
-reason and declaration context. Finite-real refusal is a recreation policy.
-No life, stats, model, movement-world id or rendering defaults are assigned.
+the existing player handle, source identity, and finite x/y/facing values on
+the shared handle arena. Integer rawcodes pass through as four big-endian bytes.
+Catalog failures keep their typed reason and declaration context. Finite-real
+refusal is a recreation policy. No life, stats, model, movement-world id or
+rendering defaults are assigned.
 
-The same retained Human01 program now creates 53 unit records. Their definitions
-match the same selected catalog, and their owners and coordinate/facing bits
-match the executed calls. Globals and `config` still complete. The next refusal
-is `SetUnitAcquireRange`, map span `68392..68428`, declared in the selected
+Both constant and non-constant loaded declarations are admitted for these read-only
+getters; parameter/result kinds, family and source still have to match.
+When declared on `CreateUnit`'s source, `GetUnitTypeId` returns that definition's
+rawcode as an integer and `GetOwningPlayer` returns the retained player handle.
+Neither call allocates, resolves the catalog again, or reads a requested level,
+state, position, facing, or order. A reserved unit token and a handle of another
+family are refused. Programs that omit either declaration leave that getter
+unsupported. Owner changes remain unsupported: there is no admitted setter that
+replaces the retained handle.
+
+At the initial creation-only checkpoint, the retained Human01 program created
+53 unit records. Their definitions
+matched the same selected catalog, and their owners and coordinate/facing bits
+matched the executed calls. Globals and `config` completed. The next refusal
+was `SetUnitAcquireRange`, map span `68392..68428`, declared in the selected
 `common.j` at `92262..92356`. Previous camera, rectangle, technology,
 destructable and sound checks remain intact. This uses the explicitly qualified
 compatibility catalog from the preceding probes, not established native Legacy
@@ -237,9 +249,21 @@ archive priority.
 
 Strict native/WASM Clippy and rustdoc, the play library and application tests,
 nine unit-creation cases executed under WASI, and an actual WASM application
-catalog-binding case pass. There is still no application gameplay session
-factory calling this admission helper. These results establish executed creation
-records, not spawned game entities, rendering or a playable campaign.
+catalog-binding case passed at that checkpoint, before the application gameplay
+Host factory was added. Those results established executed creation records,
+not spawned game entities, rendering or a playable campaign.
+
+The unit identity follow-up (2026-10-18) passes 29 unit-creation tests, 423 native
+and 423 actual WASI play tests (six explicit ignores per target), and 95 map-loading
+tests. Strict native/browser Clippy, the browser application build, rustdoc and
+formatting pass. The original Human01 production factory admits the selected
+`common.j`'s constant getters. Both getters return the exact executed rawcode and
+original owner handle for all 155 created units, without issuing another identity.
+Globals and `config` complete; `main` still refuses `GetRandomReal` at
+`186558..186584`. This uses the retained compatibility catalog and explicit startup
+observations, with no original-client launch or automatic clock advance. Native
+Legacy archive priority, world association and gameplay/render parity remain open.
+Evidence: `.scratch/unit-identities-root-20261018/review-1/acceptance.json`.
 
 ## Executed unit acquire range
 

@@ -2057,3 +2057,22 @@ Clippy, browser build, docs and formatting pass. The 21 explicitly ignored app
 tests, native visual/gameplay comparison, world/HUD integration, chapter completion
 and the 100-consecutive unmodified-original baseline remain open. Evidence:
 `.scratch/native-resolver-root-20261018/review-3/acceptance.json`.
+
+
+### 2026-10-18 — executed unit identity getters
+
+`GetUnitTypeId` and `GetOwningPlayer` now read admitted `CreateUnit` records on
+the existing arena. Loaded declarations must match the source and signature;
+constant and non-constant declarations are supported. Omitted declarations remain
+unsupported. Getters neither allocate identities nor query the catalog again.
+
+Validation passes 29 unit-creation tests, 423 native and 423 actual WASI play
+tests (six explicit ignores per target), and 95 map-loading tests. Strict
+native/browser Clippy, browser application build, docs and formatting pass. The
+original Human01 factory returns the executed rawcode and original owner handle
+for all 155 created units. Globals and `config` complete; `main` still stops at
+`GetRandomReal`. The retained compatibility catalog and explicit observations do
+not establish native Legacy archive priority. Owner changes, world association,
+chapter completion, native/render parity and the 100-consecutive unmodified-original
+baseline remain open. Evidence:
+`.scratch/unit-identities-root-20261018/review-1/acceptance.json`.

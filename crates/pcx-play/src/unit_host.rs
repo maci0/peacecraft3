@@ -27,6 +27,8 @@ use pcx_sim::world::{
 use std::sync::Arc;
 
 const NATIVE: &str = "CreateUnit";
+const GET_TYPE: &str = "GetUnitTypeId";
+const GET_OWNER: &str = "GetOwningPlayer";
 const SET_RANGE: &str = "SetUnitAcquireRange";
 const SET_HERO_LEVEL: &str = "SetHeroLevel";
 const SET_STATE: &str = "SetUnitState";
@@ -66,6 +68,7 @@ pub struct ExecutedUnitState {
 
 /// Checked catalog result plus the executed call. `executed_owner` is the
 /// player number from this call, not a preplaced control word.
+/// `owner` is that call's existing player handle, not a newly issued identity.
 ///
 /// `requested_hero_level` and `requested_show_eye_candy` record one executed
 /// `SetHeroLevel` call. They are not derived experience, hero stats, or
@@ -74,6 +77,8 @@ pub struct ExecutedUnitState {
 pub struct ExecutedUnit {
     pub definition: Definition,
     pub executed_owner: i32,
+    /// Player handle passed to the executed `CreateUnit` call.
+    pub owner: HandleId,
     pub source: Source,
     pub x: f32,
     pub y: f32,
@@ -123,6 +128,10 @@ pub(super) struct Admission {
     max_retained_fields: usize,
     max_modifications: usize,
     records: usize,
+    /// Present when this program declares `GetUnitTypeId` on the same source.
+    type_span: Option<Span>,
+    /// Present when this program declares `GetOwningPlayer` on the same source.
+    owner_span: Option<Span>,
     /// Present when this program declares `SetUnitAcquireRange` on the same source.
     acquire_span: Option<Span>,
     /// Present when this program declares `SetHeroLevel` on the same source.
@@ -176,6 +185,8 @@ impl ObjectHost {
             .try_reserve_exact(native.source.len())
             .map_err(|_| fail(Failure::Capacity))?;
         declaration_source.push_str(&native.source);
+        let type_span = self.optional_unit_getter(&declaration_source, GET_TYPE, "integer")?;
+        let owner_span = self.optional_unit_getter(&declaration_source, GET_OWNER, "player")?;
         let acquire_span = self.acquire_declaration(&declaration_source)?;
         let hero_level_span = self.hero_level_declaration(&declaration_source)?;
         self.units = Some(Admission {
@@ -187,6 +198,8 @@ impl ObjectHost {
             max_retained_fields: budget.max_retained_fields,
             max_modifications: budget.max_modifications,
             records: 0,
+            type_span,
+            owner_span,
             acquire_span,
             hero_level_span,
             unit_state: None,
@@ -377,6 +390,12 @@ impl ObjectHost {
         if name == NATIVE {
             return Some(self.create_unit(args));
         }
+        if name == GET_TYPE && self.admitted_units().ok()?.type_span.is_some() {
+            return Some(self.unit_type_id(args));
+        }
+        if name == GET_OWNER && self.admitted_units().ok()?.owner_span.is_some() {
+            return Some(self.owning_player(args));
+        }
         if name == SET_RANGE && self.admitted_units().ok()?.acquire_span.is_some() {
             return Some(self.set_acquire_range(args));
         }
@@ -396,6 +415,77 @@ impl ObjectHost {
         self.units
             .as_ref()
             .ok_or_else(|| self.inner.error(NATIVE, Failure::UnitState("not admitted")))
+    }
+
+    /// `Ok(None)` when the program does not declare `name`. A present
+    /// declaration must take one `unit` and return `result`, and share
+    /// `CreateUnit`'s source. Omitting the native leaves that getter unsupported.
+    fn optional_unit_getter(
+        &self,
+        create_source: &str,
+        name: &str,
+        result: &str,
+    ) -> Result<Option<Span>, Error> {
+        let Some(native) = self.inner.program.natives().get(name) else {
+            return Ok(None);
+        };
+        // Both declaration forms describe the same read-only operation.
+        Self::contract(
+            &self.inner,
+            name,
+            &[KIND],
+            result,
+            native.is_constant,
+            Some(KIND),
+        )?;
+        if native.source != create_source {
+            return Err(self.inner.error(name, Failure::Source));
+        }
+        Ok(Some(native.span))
+    }
+
+    fn created_unit(&self, id: HandleId, name: &str) -> Result<&ExecutedUnit, Error> {
+        self.executed_unit(id)
+            .map_err(|error| self.inner.error(name, error.failure))
+    }
+
+    /// Rawcode integer from the admitted unit's resolved definition.
+    ///
+    /// This is `i32::from_be_bytes` of that definition's rawcode, the inverse of
+    /// the `CreateUnit` argument conversion. It is not a life, level, or state.
+    fn unit_type_id(&self, args: &[Value]) -> Result<Value, Error> {
+        let fail = |reason| self.inner.error(GET_TYPE, reason);
+        let [Value::Handle(unit)] = args else {
+            return Err(fail(Failure::UnitState(
+                "arguments do not match the unit native declaration",
+            )));
+        };
+        let rawcode = self.created_unit(*unit, GET_TYPE)?.definition.rawcode;
+        Ok(Value::Int(i32::from_be_bytes(rawcode)))
+    }
+
+    /// The player handle retained from the executed `CreateUnit` call.
+    ///
+    /// The handle is not allocated here. It must still be that call's player.
+    fn owning_player(&self, args: &[Value]) -> Result<Value, Error> {
+        let fail = |reason| self.inner.error(GET_OWNER, reason);
+        let [Value::Handle(unit)] = args else {
+            return Err(fail(Failure::UnitState(
+                "arguments do not match the unit native declaration",
+            )));
+        };
+        let record = self.created_unit(*unit, GET_OWNER)?;
+        let owner = record.owner;
+        match self
+            .inner
+            .entry(owner)
+            .map_err(|error| fail(error.failure))?
+        {
+            Entry::Player { number } if *number == record.executed_owner => {
+                Ok(Value::Handle(owner))
+            }
+            _ => Err(fail(Failure::Identity)),
+        }
     }
 
     /// `Ok(None)` when the program does not declare the setter. A present
@@ -607,7 +697,7 @@ impl ObjectHost {
             let y = finite_real(y).map_err(fail)?;
             let face = finite_real(face).map_err(fail)?;
             let rawcode = unitid.to_be_bytes();
-            let owner = match self
+            let owner_number = match self
                 .inner
                 .entry(*player)
                 .map_err(|error| self.inner.error(NATIVE, error.failure))?
@@ -615,6 +705,7 @@ impl ObjectHost {
                 Entry::Player { number } => *number,
                 _ => return Err(fail(Failure::WrongFamily)),
             };
+            let owner = *player;
             let (records, max_records) = {
                 let admitted = self.admitted_units()?;
                 (admitted.records, admitted.max_records)
@@ -677,7 +768,8 @@ impl ObjectHost {
                 });
             ExecutedUnit {
                 definition,
-                executed_owner: owner,
+                executed_owner: owner_number,
+                owner,
                 source,
                 x,
                 y,
