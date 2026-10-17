@@ -21,6 +21,10 @@ pub use game_state_events::GameStateEventRegistration;
 mod player_unit_events;
 pub use player_unit_events::PlayerUnitEventRegistration;
 
+#[path = "player_event_host.rs"]
+mod player_events;
+pub use player_events::PlayerEventRegistration;
+
 #[path = "trigger_condition_host.rs"]
 mod trigger_conditions;
 pub use trigger_conditions::TriggerConditionRegistration;
@@ -75,6 +79,8 @@ pub(super) struct Admission {
     retained_conditions: usize,
     player_unit_event_limit: Option<usize>,
     retained_player_unit_events: usize,
+    player_event_limit: Option<usize>,
+    retained_player_events: usize,
     timer_event_limit: Option<usize>,
     retained_timer_events: usize,
     game_state_event_limit: Option<usize>,
@@ -204,6 +210,8 @@ impl ObjectHost {
             retained_conditions: 0,
             player_unit_event_limit: None,
             retained_player_unit_events: 0,
+            player_event_limit: None,
+            retained_player_events: 0,
             timer_event_limit: None,
             retained_timer_events: 0,
             game_state_event_limit: None,
@@ -254,6 +262,9 @@ impl ObjectHost {
         match name {
             CREATE => Some(self.create_trigger(args)),
             REGISTER => Some(self.register_unit_event(args)),
+            player_events::REGISTER if self.triggers.as_ref()?.player_event_limit.is_some() => {
+                Some(self.register_player_event(args))
+            }
             player_unit_events::REGISTER
                 if self.triggers.as_ref()?.player_unit_event_limit.is_some() =>
             {

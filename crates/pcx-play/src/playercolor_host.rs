@@ -210,6 +210,7 @@ enum Entry {
         enumerand: i32,
     },
     RegisteredPlayerUnitEvent(objects::PlayerUnitEventRegistration),
+    RegisteredPlayerEvent(objects::PlayerEventRegistration),
     TriggerCondition(objects::TriggerConditionRegistration),
     /// One retained timer-expiry subscription; no clock or pending firing.
     RegisteredTimerEvent {
@@ -548,6 +549,7 @@ impl EnumHost {
             Entry::Trigger { .. } => "trigger",
             Entry::RegisteredUnitEvent { .. }
             | Entry::RegisteredPlayerUnitEvent(_)
+            | Entry::RegisteredPlayerEvent(_)
             | Entry::RegisteredTimerEvent { .. }
             | Entry::RegisteredGameStateEvent { .. } => "event",
             Entry::TriggerAction { .. } => "triggeraction",
@@ -656,11 +658,11 @@ pub use objects::{
     DayNightState, DestructableBudget, DestructableCreation, ExecutedUnit, ExecutedUnitState,
     FileSoundState, FilterBudget, FilterCallback, ForceBudget, GameStateEventRegistration,
     LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection, ObjectHost,
-    PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerSettings,
-    PlayerStateRequestBudget, PlayerUnitEventRegistration, QuestBudget, QuestEvent, QuestFlag,
-    ResearchObservation, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest,
-    StartLocation, StartPriorities, StartPriority, StartupClockState, StartupSettings, StockBudget,
-    TechLimitBudget, TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord,
-    TriggerBudget, TriggerConditionRegistration, UnitBudget, UnitEventRegistration,
-    UnitStateBudget,
+    PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
+    PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration, QuestBudget, QuestEvent,
+    QuestFlag, ResearchObservation, SoundProperties, SoundState, StackedSoundAction,
+    StackedSoundRequest, StartLocation, StartPriorities, StartPriority, StartupClockState,
+    StartupSettings, StockBudget, TechLimitBudget, TimerEventRegistration, TimerExpiry, TimerHost,
+    TriggerActionRecord, TriggerBudget, TriggerConditionRegistration, UnitBudget,
+    UnitEventRegistration, UnitStateBudget,
 };

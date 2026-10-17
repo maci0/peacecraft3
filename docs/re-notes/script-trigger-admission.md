@@ -247,7 +247,8 @@ association destruction, predicate evaluation and trigger-event dispatch remain
 unsupported. Repeated successful creations/registrations receive distinct tokens
 under the recreation arena policy; native repeated-code interning is unmeasured.
 
-At the condition-association slice, the unchanged Human01 Program passed two Condition constructors and two
+At the condition-association slice, the unchanged Human01 Program passed two
+Condition constructors and two
 TriggerAddCondition calls through the production factory. Every wrapper matches
 its executed loaded function, declaration source and span; every association
 matches its actual trigger and wrapper. Globals and `config` finish. With the
@@ -287,9 +288,9 @@ and unchanged unit-event/action registrations. Neither assignment evaluates a
 condition nor runs an action. Event delivery and destruction remain unsupported;
 this state alone does not make a subscription deliverable.
 
-With the same unchanged Human01 Program, production factory, compatibility
-catalog, qualified startup inputs and explicit verifier time origin, one
-`DisableTrigger` succeeds. Its retained value matches the executed request;
+The explicit-state slice used the unchanged Human01 Program, production factory,
+compatibility catalog, qualified startup inputs and explicit verifier time
+origin. One `DisableTrigger` succeeds. Its retained value matches the executed request;
 every other created trigger remains unknown. Globals and `config` finish.
 `main` next refuses `TriggerRegisterPlayerEvent`, Blizzard span `80853..80926`,
 common declaration `75025..75150`. The same arena still holds 932 identities,
@@ -300,3 +301,50 @@ native state, event behavior, timing, rendered gameplay, chapter completion and
 the 100-consecutive original baseline remain open. Local commands, immutable
 source/input hashes and results are in `.scratch/trigger-state-root-20261017/`.
 No original client, new render or site publication was run for this slice.
+
+## Player-event subscriptions
+
+`ObjectHost::with_player_events(max_records)` independently admits the loaded
+non-constant `TriggerRegisterPlayerEvent(trigger, player, playerevent) -> event`
+interface after trigger admission. The selected `Player` and `ConvertPlayerEvent`
+contracts, declaration sources, type ancestry and selected conversion domain
+must match. The factory's `MapStartupBudgets.player_events` is optional; `None`
+keeps registration unsupported. No event number or player slot is copied from a
+capture into the implementation.
+
+A successful call requires an actual created trigger, an existing player and a
+selected symbolic player-event value. One returned event token on the existing
+arena retains those identities and the loaded enumerand.
+`player_event_registration` exposes that record; `retained_player_events` counts
+it separately from unit, player-unit, timer and game-state subscriptions.
+Repeated pairs receive distinct tokens under the existing recreation resource
+policy. The caller's record limit and shared arena capacity are checked before
+allocation and counter changes. Invalid arguments, reserved identities, unknown
+handles and wrong families preserve prior records.
+
+Registration neither changes enabled state nor executes an action. A disabled
+trigger can retain a subscription. Native duplicate-registration identity,
+unregistration, event context, dispatch and event ordering remain unverified or
+unsupported. This record alone does not make the event deliverable.
+
+Synthetic owned-VM tests cover distinct pairs and repeated pairs, disabled-state
+preservation, unexecuted actions, source/signature/domain refusals, separate
+budgets and exhausted shared capacity. The application regression drives actual
+map delivery through the production factory and published session. A missing
+opt-in or exhausted record budget on a replacement keeps the previous session,
+its context, lifetime witness and retained event records.
+
+The unchanged Human01 Program now passes one player-event registration through
+that factory. The event retains its executed trigger, player and selected
+enumerand, and the earlier explicit disabled state stays intact. Globals and
+`config` finish. `main` next refuses `CreateRegion`, Blizzard span
+`81939..81953`, common declaration `67878..67938`. The same arena holds 945
+identities, 155 units, 20 triggers, three condition wrappers/associations and one
+player-event subscription. Earlier source, timer and startup checks still pass.
+
+The retained compatibility catalog, qualified startup inputs and explicit
+verifier clock remain conditions of that run. It does not prove native event
+behavior, rendered gameplay, chapter completion or the 100-consecutive original
+baseline. Local commands, immutable input/source hashes and results are in
+`.scratch/player-event-root-20261017/`. No original client, new render or site
+publication was run for this slice.

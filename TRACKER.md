@@ -1977,3 +1977,15 @@ actions, repeated-run stability and scheduler/world integration remain open.
 - [ ] Initial native enabled state, event delivery, the application world/clock,
   rendered gameplay and the 100-consecutive original baseline remain open.
   See [the explicit-state scope](docs/re-notes/script-trigger-admission.md#explicit-trigger-enabled-state).
+
+### 2026-10-17 — retained player-event subscriptions
+
+- [~] Source-bound `TriggerRegisterPlayerEvent` records now use the existing
+  trigger/player/enum arena and an independent caller budget. Registration
+  preserves explicit disabled state and runs no action.
+- [~] Unchanged Human01 passes one player-event registration through the production
+  factory. Globals and `config` finish; `main` next refuses `CreateRegion` at
+  Blizzard span `81939..81953`.
+- [ ] Event context/delivery, native duplicate-registration identity, the
+  application world/clock, rendered gameplay and the 100-consecutive original
+  baseline remain open. See [the subscription scope](docs/re-notes/script-trigger-admission.md#player-event-subscriptions).
