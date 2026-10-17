@@ -489,3 +489,6 @@ mod forces;
 
 #[path = "startup_settings_tests.rs"]
 mod startup_settings;
+
+#[path = "player_slots_tests.rs"]
+mod slot_states;

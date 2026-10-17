@@ -46,6 +46,9 @@ from `SetTeams`. Invalid inputs refuse; native exceptional-input behavior is
 unverified. Exact declarations/constant flags, type ancestry, declaration-source
 ambiguity and function overrides are checked before admission.
 
+Current slot state has a separate [explicit startup input](script-player-slots.md).
+It does not turn omitted controller assignments into defaults or infer occupancy.
+
 ## Verification
 
 Fourteen synthetic tests cover both source-rule branches and unsigned metadata,

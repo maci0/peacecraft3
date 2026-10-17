@@ -84,6 +84,8 @@ source/type/interface changes and speed writes. Native and actual WASI execute
 the same tests. Command and source-stability receipts remain in the local root
 evidence directory.
 
-The application Host factory, current settings provider, player-slot getter,
-speed writes/rates and rendered fog remain open. This continuation is not a
-playable chapter or campaign completion claim.
+The later [explicit slot-state input](script-player-slots.md) passes that slot
+getter without providing defaults or a live player provider. The application
+Host factory, current settings provider, speed writes/rates and rendered fog
+remain open. This continuation is not a playable chapter or campaign completion
+claim.

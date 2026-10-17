@@ -1348,6 +1348,13 @@ Format: `date — subsystem — symptom — root cause — status`
       unsupported: Fast/Fastest requested during the probe read back Normal.
       No startup defaults, speed rates or rendered fog behavior are inferred;
       see `docs/re-notes/script-startup-settings.md`.
+      Explicit startup slot-state input now passes `GetPlayerSlotState` on that
+      unchanged context. Only the five existing post-config rows receive input;
+      omitted/later rows remain unset, and controller writes retire the snapshot.
+      The next missing input is player 3's unset controller, reached through the
+      existing `GetPlayerController` getter in Blizzard at `438445..438479`
+      (common `61313..61388`). No controller/occupancy defaults or completed
+      single-player check are inferred. See `docs/re-notes/script-player-slots.md`.
       Live participation, application provider and general eligibility remain open.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or

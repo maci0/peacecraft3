@@ -20,7 +20,7 @@ pub enum PlayerAdmissionError {
     #[error(transparent)]
     Contract(#[from] Error),
 }
-/// Script-assigned state only. No lobby names, colors, controllers or races are invented.
+/// Explicit player setup and caller-qualified slot state; no implicit lobby defaults.
 #[derive(Debug)]
 pub struct PlayerSettings {
     pub identity: HandleId,
@@ -33,6 +33,8 @@ pub struct PlayerSettings {
     pub race_preference: Option<HandleId>,
     pub race_selectable: Option<bool>,
     pub controller: Option<HandleId>,
+    /// Caller-qualified current slot state; absence is unset, not empty.
+    pub slot_state: Option<HandleId>,
     pub name: Option<String>,
     pub on_score_screen: Option<bool>,
     /// Executed `SetPlayerTechMaxAllowed` pairs. Absence is unset, not a default limit.
@@ -83,6 +85,7 @@ pub(super) struct Players {
     research: Option<RecordLimits>,
     alliance: Option<RecordLimits>,
     state_requests: Option<RecordLimits>,
+    slot_states_admitted: bool,
     rows: Vec<PlayerSettings>,
 }
 const SET_PLAYER_STATE: &str = "SetPlayerState";
@@ -202,6 +205,7 @@ impl ObjectHost {
             research: None,
             alliance: None,
             state_requests: None,
+            slot_states_admitted: false,
             rows: Vec::new(),
         });
         Ok(self)
@@ -624,6 +628,12 @@ impl ObjectHost {
             players.alliance.as_ref()?;
             return Some(self.set_player_alliance(args));
         }
+        if name == "GetPlayerSlotState" {
+            if !players.slot_states_admitted {
+                return None;
+            }
+            return Some(self.apply_player(name, args));
+        }
         let tech = TECH_CONTRACTS.iter().any(|c| c.0 == name);
         let research = RESEARCH_CONTRACTS.iter().any(|c| c.0 == name);
         if tech {
@@ -671,6 +681,7 @@ impl ObjectHost {
                 race_preference: None,
                 race_selectable: None,
                 controller: None,
+                slot_state: None,
                 name: None,
                 on_score_screen: None,
                 tech_max: Vec::new(),
@@ -730,6 +741,7 @@ impl ObjectHost {
                     _ => {
                         players.rows[at].controller = Some(*id);
                         self.invalidate_force_enumeration();
+                        self.invalidate_startup_player_slots();
                     }
                 }
                 Ok(Value::Null)
@@ -776,6 +788,10 @@ impl ObjectHost {
                 .race_selectable
                 .map(Value::Bool)
                 .ok_or_else(|| fail(Failure::PlayerState("selectability is unset"))),
+            ("GetPlayerSlotState", []) => players.rows[at]
+                .slot_state
+                .map(Value::Handle)
+                .ok_or_else(|| fail(Failure::PlayerState("slot state is unset"))),
             ("GetPlayerController", []) => players.rows[at]
                 .controller
                 .map(Value::Handle)
@@ -877,3 +893,6 @@ const RESEARCH_CONTRACTS: &[(&str, &[&str], &str, bool)] = &[(
     "nothing",
     true,
 )];
+
+#[path = "player_slots_host.rs"]
+mod slots;
