@@ -38,6 +38,8 @@ pub enum Failure {
     CameraState(&'static str),
     #[error("camera setup object: {0}")]
     CameraSetupObject(&'static str),
+    #[error("startup settings: {0}")]
+    SettingsState(&'static str),
     #[error("startup clock: {0}")]
     ClockState(&'static str),
     #[error("map music selection: {0}")]
@@ -616,6 +618,6 @@ pub use objects::{
     PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerSettings,
     PlayerStateRequestBudget, QuestBudget, QuestEvent, QuestFlag, SoundProperties, SoundState,
     StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
-    StartupClockState, TechLimitBudget, TimerHost, TriggerActionRecord, TriggerBudget, UnitBudget,
-    UnitEventRegistration, UnitStateBudget,
+    StartupClockState, StartupSettings, TechLimitBudget, TimerHost, TriggerActionRecord,
+    TriggerBudget, UnitBudget, UnitEventRegistration, UnitStateBudget,
 };

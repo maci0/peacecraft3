@@ -1211,9 +1211,12 @@ and then retains 26 explicit directed alliance assignments and one player-state
 request, then creates seven source-qualified `Filter` wrappers and retains
 explicit force memberships. The selected script creates 17 forces and 16
 memberships. With explicitly supplied, locally captured startup participation,
-null-filter force enumeration replaces the all-player force and reaches
-unsupported `GetGameSpeed` in `Blizzard.j`. No participation default or discovery
-policy is inferred. Wrapping does not evaluate predicates.
+null-filter force enumeration replaces the all-player force. Explicit startup
+speed/fog/mask input then passes the three getters and reaches unsupported
+`GetPlayerSlotState` in `Blizzard.j`. Fog/mask setters retain independent booleans;
+speed writes remain unsupported because original requests do not always read
+back as requested. No participation or settings default is inferred. Wrapping
+does not evaluate predicates. See `docs/re-notes/script-startup-settings.md`.
 These assignments do not enforce alliance gameplay or effective resource balances,
 and on/off activation is separate from combat modifiers and animation. This is
 execution evidence for that selected source profile, not a playable chapter.

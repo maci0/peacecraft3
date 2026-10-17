@@ -486,3 +486,6 @@ mod player_state_requests;
 
 #[path = "force_host_tests.rs"]
 mod forces;
+
+#[path = "startup_settings_tests.rs"]
+mod startup_settings;

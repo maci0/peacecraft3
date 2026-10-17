@@ -32,6 +32,7 @@ pub struct ObjectHost {
     triggers: Option<trigger_admission::Admission>,
     filters: Option<filters::Admission>,
     forces: Option<forces::Admission>,
+    startup_settings: Option<StartupSettings>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -69,6 +70,7 @@ impl ObjectHost {
             triggers: None,
             filters: None,
             forces: None,
+            startup_settings: None,
         })
     }
     fn contract(
@@ -351,6 +353,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.unit_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.startup_settings_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.force_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -470,3 +475,7 @@ pub use filters::{FilterBudget, FilterCallback};
 #[path = "force_host.rs"]
 mod forces;
 pub use forces::ForceBudget;
+
+#[path = "startup_settings_host.rs"]
+mod settings;
+pub use settings::StartupSettings;

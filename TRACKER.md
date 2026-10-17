@@ -1340,6 +1340,14 @@ Format: `date — subsystem — symptom — root cause — status`
       input. Loading the preserved original startup set in the unchanged Human01
       gate yields one all-force member, 868 identities and the next refusal
       `GetGameSpeed` in `Blizzard.j` at `437880..437894` (common `59055..59114`).
+      A fresh original-client settings probe now qualifies explicit speed/fog/mask
+      input for that context. The unchanged gate passes all three getters and
+      stores their values in the Blizzard globals; the next refusal is
+      `GetPlayerSlotState` in Blizzard at `438504..438537` (common `61390..61470`).
+      Independent fog/mask setters retain boolean state. `SetGameSpeed` stays
+      unsupported: Fast/Fastest requested during the probe read back Normal.
+      No startup defaults, speed rates or rendered fog behavior are inferred;
+      see `docs/re-notes/script-startup-settings.md`.
       Live participation, application provider and general eligibility remain open.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or
