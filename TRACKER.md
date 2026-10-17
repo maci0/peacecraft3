@@ -965,7 +965,7 @@ See `PLAN.md` §3.5 for the harness design. Each chapter asserts specific outcom
 | RE-Q3 | Table cipher + file keys | resolved — §2.3 items 4–5, `ev_703ee25f…` | **closed** |
 | RE-Q4 | Compressors | resolved — implode + zlib working | **closed** |
 | RE-Q5 | Sim tick rate / frame relationship | Exact Legacy scheduler/timer chain traced; QPC calibration, gameplay subscribers and render coupling unresolved. See `docs/re-notes/legacy-simulation-clock.md`. | open |
-| RE-Q6 | RNG generator + call order | Explicit seeded Host/factory behavior matches selected-code references on native/WASI and retained original 80 integer/16 formatted real observations. Human01 initial state, ordered engine consumers and original real bits remain open. See `docs/re-notes/original-rng-control.md`. | open |
+| RE-Q6 | RNG generator + call order | Explicit seeded Host/factory behavior matches selected-code references on native/WASI and retained original 80 integer/16 formatted real observations. Four additional unmodified Human01 loading-time real results and primary states observed under Wine match a recorded-history replay on native/WASI. Engine seed provenance, complete consumer ordering and general original real-bit parity remain open. See `docs/re-notes/original-rng-control.md`. | open |
 | RE-Q7 | Header words `0x20`/`0x24` | REA: `Storm.dll` open path; nothing depends on them | open |
 | RE-Q8 | Storm's live table at `+0x4C2E4` ≠ fixed table | REA: `FUN_15017650`; archives use the fixed table | open, not blocking |
 | RE-Q9 | Archive priority order | REA: `game.dll` archive-open sequence; `DEFAULT_PRIORITY` assumed | open |

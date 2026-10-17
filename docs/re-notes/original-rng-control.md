@@ -220,3 +220,55 @@ that unchanged map. Automatic source-profile selection, secondary game users,
 exceptional native real behavior, original bit-exact real observations, ordered
 all-consumer playback, paired gameplay and the 100-consecutive original baseline
 remain open. No new original runtime run was needed for this implementation.
+
+## Unmodified Human01 startup checkpoints (2026-10-18)
+
+A bounded debugger observation of the selected 1.29b executable now captures
+four real-return bit patterns and their primary pre/post states while the
+unchanged Human01 map loads. The first three calls have the argument pair from
+the retained recreation frontier. Their bridge backtraces are retained, but an
+argument match alone does not identify an exact runtime JASS source span. The
+checkpoint image still shows the chapter loading screen; this is not a rendered
+gameplay or chapter-completion result.
+
+The frontend primary state matches the constructor's source-derived seed
+packing, without the script seed setter's warmup. Starting the selected map
+replaces the owner twice, then an engine caller invokes the primary seed helper.
+Static decoding of that observed caller shows a branch between a loaded seed
+and an instruction immediate, followed by secondary initialization. The observed
+run takes the loaded-seed path. No JASS seed setter or integer wrapper is recorded
+before these four real calls. That does not mean the engine has made no draws.
+
+After the reseed, 37 primary draw writes precede the first recorded real entry.
+Executing the selected seed/draw instructions reproduces those primary states,
+then each captured real result and post-state exactly. The writer stops occur
+inside the draw helper, so their saved stack words are not function-entry
+arguments or caller return addresses. The consuming engine calls still need
+qualification. In particular, 37 is an observed history for this run, not a
+universal warmup count or a production initialization rule.
+
+The existing production `ObjectHost` checkpoint test also passes on native and
+actual WASI with this private history. Its reference retains the previous 2,842
+selected-code checkpoints and adds 41 replay rows: a synthetic explicit seed
+call sharing the first observed primary draw, 36 synthetic integer advances
+checked against the remaining observed draw states, and the four native real
+results and post-states. These advances reproduce primary state; they do not
+claim that the original called the integer wrapper. Replay secondary setup is
+synthetic and does not establish the original secondary owners or state.
+
+The debugger fixture first checks pointer arguments, state writes, returned
+register bits and clean detach. Runtime observations verify the complete image
+identity, loaded image span and selected entry bytes before arming traps. Earlier
+failed attempts, commands, bounded logs, unchanged-map provenance, source windows,
+captures and native/WASI exit receipts remain local in
+`.scratch/script-rng-initial-state-root-20261018/`. The successful observation
+detaches cleanly and its isolated container is deliberately stopped and preserved.
+It runs under Wine/Xvfb/software Mesa and is not native Windows ground truth;
+debugger intrusion and incomplete thread/watch coverage remain limitations.
+
+This closes the absence of original real bits for these four checkpoints only.
+It changes no production initialization behavior and commits no original seed,
+state tuple, table, output sequence or asset. Engine seed provenance, complete
+consumer ordering, secondary consumers, repeated unmodified runs, native Windows
+comparison, paired gameplay and the 100-consecutive original baseline remain
+open. The public site was not rebuilt.
