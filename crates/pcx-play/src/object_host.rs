@@ -40,6 +40,7 @@ pub struct ObjectHost {
     startup_version: Option<HandleId>,
     stock: Option<stock::State>,
     timers: Option<timers::State>,
+    random: Option<random::Random>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -85,6 +86,7 @@ impl ObjectHost {
             startup_version: None,
             stock: None,
             timers: None,
+            random: None,
         })
     }
     fn checked_boolean_wrapper(&self, id: HandleId, native: &str) -> Result<(), Error> {
@@ -338,6 +340,9 @@ impl ObjectHost {
 }
 impl Host for ObjectHost {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.random_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.timer_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -441,6 +446,9 @@ impl Host for ObjectHost {
 #[cfg(test)]
 #[path = "timer_host_tests.rs"]
 mod timer_tests;
+
+#[path = "script_random_host.rs"]
+mod random;
 
 #[cfg(test)]
 #[path = "group_host_tests.rs"]

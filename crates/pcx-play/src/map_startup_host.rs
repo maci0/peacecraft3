@@ -109,6 +109,11 @@ pub struct StartupClockInput {
     pub expression_work: usize,
 }
 
+pub struct RandomInput {
+    pub policy: Arc<crate::script_random::profile::Policy>,
+    pub max_secondary: usize,
+}
+
 pub struct DefendSelection {
     pub tables: DefaultTables,
     pub alias: String,
@@ -169,6 +174,8 @@ pub struct MapStartupInputs {
     pub clock: StartupClockInput,
     /// Explicit game time for positive-timeout timers; absent keeps TimerStart unsupported.
     pub timer_time: Option<f64>,
+    /// Source-qualified parameters without an invented initial engine seed.
+    pub random: Option<RandomInput>,
     pub catalog: Arc<dyn ObjectCatalog + Send + Sync>,
     pub defend: DefendSelection,
     pub current_research: Option<CurrentResearchInput>,
@@ -329,6 +336,7 @@ pub fn assemble(
         sound_parameters,
         clock,
         timer_time,
+        random,
         catalog,
         defend,
         current_research,
@@ -411,6 +419,9 @@ pub fn assemble(
     }
     if let Some(now) = timer_time {
         object = object.with_timer_runtime(now)?;
+    }
+    if let Some(input) = random {
+        object = object.with_script_random(input.policy, input.max_secondary)?;
     }
     if let Some(stock) = budgets.stock {
         object = object.with_stock(stock)?;

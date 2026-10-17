@@ -965,7 +965,7 @@ See `PLAN.md` §3.5 for the harness design. Each chapter asserts specific outcom
 | RE-Q3 | Table cipher + file keys | resolved — §2.3 items 4–5, `ev_703ee25f…` | **closed** |
 | RE-Q4 | Compressors | resolved — implode + zlib working | **closed** |
 | RE-Q5 | Sim tick rate / frame relationship | Exact Legacy scheduler/timer chain traced; QPC calibration, gameplay subscribers and render coupling unresolved. See `docs/re-notes/legacy-simulation-clock.md`. | open |
-| RE-Q6 | RNG generator + call order | Two fresh exact-Legacy Wine runs reproduce an authored A/A/B/A seed probe with identical local output; generator, other consumers and recreation parity remain unproved. See `docs/re-notes/original-rng-control.md`. | open |
+| RE-Q6 | RNG generator + call order | Explicit seeded Host/factory behavior matches selected-code references on native/WASI and retained original 80 integer/16 formatted real observations. Human01 initial state, ordered engine consumers and original real bits remain open. See `docs/re-notes/original-rng-control.md`. | open |
 | RE-Q7 | Header words `0x20`/`0x24` | REA: `Storm.dll` open path; nothing depends on them | open |
 | RE-Q8 | Storm's live table at `+0x4C2E4` ≠ fixed table | REA: `FUN_15017650`; archives use the fixed table | open, not blocking |
 | RE-Q9 | Archive priority order | REA: `game.dll` archive-open sequence; `DEFAULT_PRIORITY` assumed | open |
@@ -2316,3 +2316,21 @@ Physical audibility, original mixing/timing and sound levels, unsupported sound
 profiles, playable campaigns, rendered parity and the 100-consecutive original
 baseline gate remain open. No original runtime or browser visual comparison was
 repeated, and the public site package was not rebuilt.
+
+
+### 2026-10-18 — source-bound explicit script random state
+
+- [~] The production object host and startup factory accept an optional reviewed
+  local-image policy and bounded secondary storage. Exact declarations, seed
+  packing, draw lanes/table, real parameters and direct-call relationships are
+  checked. No initial seed is supplied; ordinary unseeded draws refuse.
+- [~] Native and actual WASI each pass 443 unit cases and four explicit local
+  RNG gates: 1,815 selected-code arithmetic cases, profile refusal mutants,
+  2,842 host checkpoints, and the retained 80 integer/16 formatted original real
+  observations. Native map loading passes 103 cases. Actual Chromium runs four
+  factory publication/replacement cases from Cargo WebAssembly. Strict
+  native/browser Clippy and formatting pass.
+- [ ] Human01's initial engine state, prior/secondary engine consumers,
+  exceptional native reals, original real bits, ordered paired gameplay and the
+  100-consecutive original baseline remain open. The public site was not rebuilt.
+  See [the supported scope](docs/re-notes/original-rng-control.md#explicit-seeded-production-host-2026-10-18).

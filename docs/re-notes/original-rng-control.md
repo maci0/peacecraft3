@@ -1,5 +1,7 @@
 # Original seeded RNG probe
 
+Current implementation: [explicit seeded host and factory](#explicit-seeded-production-host-2026-10-18). Human01 initial-state qualification and full consumer parity remain open.
+
 Two fresh isolated Wine runs loaded the same private, intentionally modified
 map and emitted identical measured results. This establishes a working seed
 experiment and output channel; it does not establish recreation RNG parity.
@@ -156,3 +158,65 @@ model. They do not close bit-exact original real outputs, paired recreation
 execution, full campaign behavior or the 100-consecutive original baseline.
 No new original-client, rendered gameplay, public-site or production build was
 run for this documentation-only update.
+
+## Explicit seeded production host (2026-10-18)
+
+`ObjectHost::with_script_random` now admits the three exact, non-constant
+`common.j` declarations together. The startup factory accepts an optional
+`RandomInput` containing a shared source policy and an explicit secondary-state
+allocation ceiling. Omission keeps those natives unsupported. Admission supplies
+no initial seed: an executed `SetRandomSeed` creates the primary state, discards
+the source-prescribed warmup draw, and initializes a retained secondary block.
+An ordinary draw before that call refuses. Equal integer bounds and real bounds
+strictly inside the loaded tolerance preserve the source's early return.
+
+The policy reader uses twelve caller-reviewed code windows in one complete,
+fingerprinted local PE. It derives the packing relations, lane periods, index
+adjustments, rotations, indexed table span, real mask/base, initializer operand,
+loaded tolerance and secondary count. It checks initialized readable/executable
+ranges, selection budgets, window identity and overlap, shared primary-pointer
+references, direct-call targets, and agreement between the standalone and
+inlined secondary draw. Arithmetic-window checks recognize critical shapes;
+the caller must still establish their reviewed roles. A digest establishes byte
+identity, not semantic proof or automatic discovery of another executable.
+No original address, table or output sequence is a production lookup constant.
+
+The portable real helper preserves the selected integer arithmetic rather than
+host round-to-nearest interpolation. Its admitted domain is finite normal
+operands and signed zero, with unsupported intermediate/result classes refusing.
+NaNs, infinities and denormals have no invented fallback. Refused calls leave the
+retained state unchanged. Reversed integer bounds keep the original lower
+argument as the anchor, and full signed-span reduction retains the selected
+wrapping behavior and draw consumption. These are compatibility behaviors,
+not a newly specified general-purpose random API.
+
+The retained secondary block is a recreation-owned representation. Offline
+comparison executes the selected loop with a synthetic non-null owner pointer;
+it does not establish original owner availability or connect secondary streams
+to game consumers. State belongs to the actual object host, survives `config`
+into `main`, and is isolated from replacement candidates. A failed replacement
+preserves the published VM/state and its witness; a successful replacement
+retires it and starts without an inherited seed. No handle arena is added.
+
+Validation runs 443 unit cases on native and actual WASI, with six unrelated
+explicit local-asset gates ignored. Four explicit local RNG gates run on both:
+1,815 selected-code arithmetic cases; a twelve-role profile with refusal
+mutants; 2,842 host state/result checkpoints across seven synthetic seeds; and
+all 80 integer plus 16 formatted real observations from the retained two
+original runs. The local checkpoint inputs, including the synthetic secondary
+owner setup, remain private. Formatted observations do not establish original
+real bits. Native map loading passes 103 cases, and the explicit factory gate
+passes separately. Strict native/browser all-target Clippy and formatting pass.
+
+Actual Chromium also executes four publication/replacement cases from the Cargo
+WebAssembly factory artifact with the local selected image. This is execution of
+the production factory, not a rendered-game or public-site package comparison.
+Private commands, exit receipts, source hashes and reference provenance are in
+`.scratch/script-rng-implementation-root-20261018/`.
+
+Human01's first random call still has no qualified initial engine state or
+preceding engine-consumer history. This change therefore does not silently seed
+that unchanged map. Automatic source-profile selection, secondary game users,
+exceptional native real behavior, original bit-exact real observations, ordered
+all-consumer playback, paired gameplay and the 100-consecutive original baseline
+remain open. No new original runtime run was needed for this implementation.

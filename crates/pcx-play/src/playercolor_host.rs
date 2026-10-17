@@ -12,6 +12,10 @@ pub const NATIVE: &str = "ConvertPlayerColor";
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Failure {
+    #[error("script random admission or arguments: {0}")]
+    RandomSetup(&'static str),
+    #[error("script random: {0}")]
+    RandomState(#[source] crate::script_random::state::StateError),
     #[error("missing or incompatible native/type declaration")]
     Signature,
     #[error("multiple declaration sources require qualification")]

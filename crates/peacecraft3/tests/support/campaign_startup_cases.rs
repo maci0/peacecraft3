@@ -595,6 +595,7 @@ fn rule(kind: RuleKind) -> Arc<VerifiedNeutralRule> {
 
 fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) -> MapStartupInputs {
     MapStartupInputs {
+        random: None,
         enumeration: EnumContracts {
             context: "synthetic admitted map enumeration".into(),
             names: [
@@ -1216,3 +1217,6 @@ pub fn browser_campaign_startup_recovery_gate() -> u32 {
 
 #[path = "item_factory_cases.rs"]
 mod item_factory_cases;
+
+#[path = "random_factory_cases.rs"]
+mod random_factory_cases;

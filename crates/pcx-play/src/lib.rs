@@ -77,6 +77,7 @@ pub mod quest_session;
 pub mod quest_view;
 pub mod rpl;
 pub mod runner;
+pub mod script_random;
 pub use rpl::{Expectation, Rpl, RplError};
 pub mod scenario;
 pub mod script_trace;
