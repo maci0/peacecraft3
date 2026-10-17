@@ -1408,6 +1408,18 @@ Format: `date — subsystem — symptom — root cause — status`
       native/actual WASI play tests and strict native/browser Clippy pass.
       Rotated bounds, missing research state and rendered-camera parity remain
       open; see `docs/re-notes/script-camera-input.md`.
+      Explicit current boolean research observations now serve full source
+      player/tech/specificonly query keys without interpreting retained levels.
+      A readonly original Wine probe records 24 identical before/after answers;
+      the same VM refreshes after its early setter, consumes all 24 queries and
+      completes `InitSummonableCaps`. Successful research setters retire that
+      player's current answers; failed writes and invalid admissions preserve
+      prior input. Cumulative tech-max calls reach 101; the 903 identities and
+      prior shared-arena checks remain intact. Next refusal:
+      `SetAllItemTypeSlots`, Blizzard `446992..447041`, common `109983..110054`.
+      All 373 native/actual WASI play tests and strict native/browser Clippy pass.
+      Counts, missing research defaults, live provider, item-stock behavior and
+      playable chapter remain open; see `docs/re-notes/script-player-setup.md`.
       Live participation, application provider and general eligibility remain open.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or

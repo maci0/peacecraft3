@@ -87,6 +87,7 @@ pub(super) struct Players {
     state_requests: Option<RecordLimits>,
     slot_states_admitted: bool,
     controllers: Option<controllers::Controllers>,
+    current_research: Option<Vec<ResearchObservation>>,
     rows: Vec<PlayerSettings>,
 }
 const SET_PLAYER_STATE: &str = "SetPlayerState";
@@ -208,6 +209,7 @@ impl ObjectHost {
             state_requests: None,
             slot_states_admitted: false,
             controllers: None,
+            current_research: None,
             rows: Vec::new(),
         });
         Ok(self)
@@ -257,10 +259,9 @@ impl ObjectHost {
     /// that player identity. The pair is written together: a refused new key
     /// leaves the row unchanged. Replacing an existing key updates the level in
     /// place and does not allocate. The integers are not rawcodes, categories,
-    /// clamps, or upgrade effects. `GetPlayerTechResearched` and
-    /// `GetPlayerTechCount` stay unsupported because their `specificonly`
-    /// aggregate-versus-exact behavior is not established; an absent pair is
-    /// not level 0. Argument-shape refusals are this recreation's contract
+    /// clamps, or upgrade effects. Current research answers require separate
+    /// explicit admission; `GetPlayerTechCount` remains unsupported. An absent
+    /// pair is not level 0. Argument-shape refusals are this recreation's contract
     /// checks, not a claim about native exceptional inputs.
     pub fn with_player_tech_researched(mut self, budget: TechLimitBudget) -> Result<Self, Error> {
         let fail = |reason| self.inner.error("SetPlayerTechResearched", reason);
@@ -636,6 +637,10 @@ impl ObjectHost {
             }
             return Some(self.apply_player(name, args));
         }
+        if name == "GetPlayerTechResearched" {
+            players.current_research.as_ref()?;
+            return Some(self.current_research_query(args));
+        }
         let tech = TECH_CONTRACTS.iter().any(|c| c.0 == name);
         let research = RESEARCH_CONTRACTS.iter().any(|c| c.0 == name);
         if tech {
@@ -856,27 +861,32 @@ impl ObjectHost {
                     .find(|(id, _)| *id == *techid)
                 {
                     stored.1 = *level;
-                    return Ok(Value::Null);
-                }
-                let (records, max_records) = match players.research.as_ref() {
-                    Some(research) => (research.records, research.max_records),
-                    None => {
-                        return Err(fail(Failure::PlayerState("tech research is not admitted")));
+                } else {
+                    let (records, max_records) = match players.research.as_ref() {
+                        Some(research) => (research.records, research.max_records),
+                        None => {
+                            return Err(fail(Failure::PlayerState(
+                                "tech research is not admitted",
+                            )));
+                        }
+                    };
+                    if records >= max_records {
+                        return Err(fail(Failure::Budget("player tech research")));
                     }
-                };
-                if records >= max_records {
-                    return Err(fail(Failure::Budget("player tech research")));
+                    players.rows[at]
+                        .tech_researched
+                        .try_reserve(1)
+                        .map_err(|_| fail(Failure::Capacity))?;
+                    players.rows[at].tech_researched.push((*techid, *level));
+                    let research = players.research.as_mut().ok_or_else(|| {
+                        fail(Failure::PlayerState("tech research is not admitted"))
+                    })?;
+                    research.records += 1;
                 }
-                players.rows[at]
-                    .tech_researched
-                    .try_reserve(1)
-                    .map_err(|_| fail(Failure::Capacity))?;
-                players.rows[at].tech_researched.push((*techid, *level));
-                let research = players
-                    .research
-                    .as_mut()
-                    .ok_or_else(|| fail(Failure::PlayerState("tech research is not admitted")))?;
-                research.records += 1;
+                let number = players.rows[at].number;
+                if let Some(entries) = players.current_research.as_mut() {
+                    entries.retain(|entry| entry.player_number != number);
+                }
                 Ok(Value::Null)
             }
             _ => Err(fail(Failure::PlayerArguments)),
@@ -911,3 +921,7 @@ mod slots;
 
 #[path = "player_controllers_host.rs"]
 mod controllers;
+
+#[path = "player_current_research_host.rs"]
+mod current_research;
+pub use current_research::ResearchObservation;

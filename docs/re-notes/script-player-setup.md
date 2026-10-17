@@ -138,8 +138,10 @@ FourCC values.
 `GetPlayerTechResearched` returns boolean and `GetPlayerTechCount` returns
 integer. Both take `specificonly`. `GetPlayerTechCountSimple` passes `true`,
 which does not establish whether that flag is an exact id, a category rollup,
-or something else. Those getters, and `AddPlayerTechResearched`, stay
-unsupported. An absent researched pair is not reported as level 0.
+or something else. `GetPlayerTechCount` and `AddPlayerTechResearched` stay
+unsupported. The boolean getter can separately consume explicit current answers
+as described below; it does not interpret these retained setter levels. An
+absent researched pair is not reported as level 0.
 
 The same retained Human01 Program completes globals and `config`, then stores
 one researched-level record and 65 technology maxima on the existing source
@@ -387,3 +389,78 @@ color with the same enumerand, reject another conversion's out-of-domain state,
 and preserve records on malformed/unknown handles. Native and actual WASI tests
 exercise the same request path. Application Host construction and the effective
 resource consumer remain open.
+
+
+## Explicit current boolean research answers
+
+`ObjectHost::admit_current_research` accepts caller-qualified
+`ResearchObservation` records on the exact admitted `ParsedMapContext` Arc.
+Each record contains a source player number, signed tech id, `specific_only`
+flag and boolean answer. The complete query triple is the key. A true answer
+for one flag does not provide an answer for the other flag. No numeric level
+predicate, category equivalence, clamp, default or upgrade effect is inferred.
+
+Admission checks the exact constant boolean getter and constant research setter
+contracts, rejects script overrides and ambiguous source declarations, and
+requires their source to match `Player` and `CreateTimer`. The explicit
+`TechLimitBudget.max_records` bounds current query records independently of
+retained setter records. Source player-domain, duplicate-key and capacity checks
+precede publication. The owned vector is sorted without another allocation.
+Invalid admission leaves the previous answers intact; admission does not create
+player identities and can provide answers for later lazy `Player` calls.
+
+Missing queries refuse, including after an explicitly empty admission.
+`invalidate_current_research` clears answers without falling back to setter
+inputs. A successful `SetPlayerTechResearched` keeps its existing signed input
+record and invalidates all current query answers for that player. Other players'
+answers survive. The whole player is retired because cross-tech/category rules
+remain unknown. Failed setters preserve current answers. Refresh and invalidation
+are the caller's responsibility for external runtime changes; context identity
+does not authenticate an observation. Without this opt-in the getter remains
+unsupported. Counts, additional research, simulation effects and a live provider
+remain unsupported.
+
+### Qualified original startup observation
+
+A bounded local Wine/Xvfb probe uses the same qualified Legacy executable
+`1.29.2.9231` (SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`),
+Human01, common and Blizzard inputs retained by the campaign gate. Its readonly
+queries come from the selected `InitSummonableCaps` body, and its player range
+comes from the source's `bj_MAX_PLAYERS`; there is no measured query/player list
+in production code. Instrumentation adds calls before and after the original
+`InitBlizzard`, preserving the complete original main/config and all other map
+members. The early authored research assignment has already run at this point.
+
+The complete output contains 50 probe records: begin, 24 queries before
+initialization, the same 24 after initialization, and end. All answers are false
+for these two exact technology queries across these 12 source players. Their
+before/after equality is an observation for this run, not a false default or
+proof about other technology ids, flags, clients or saved state. No setter,
+level conversion, cost or equivalence behavior was measured by this probe.
+The private reference container was stopped and preserved; no assets were
+uploaded.
+
+The unchanged Human01 VM refreshes this source-bound input once at the first
+research query, after its actual early research setter. Refresh allocates no
+identities and is followed by the ordinary production Host dispatch, with no
+fabricated native success or second VM. All 24 executed query keys and booleans
+match the original observation. The loop completes and cumulative
+`SetPlayerTechMaxAllowed` calls reach 101. The prior eight bound getter results,
+both BJ rectangles and all earlier shared-arena assertions remain intact:
+903 identities, 144 rectangles, 155 units, nine triggers, three unit events,
+one timer subscription and six game-state subscriptions. The next refusal is
+`SetAllItemTypeSlots`, Blizzard span `446992..447041`, common declaration
+`109983..110054`, with one executed integer argument. No item-stock state is
+invented.
+
+Three new synthetic regression groups cover owned-VM reads and lazy players,
+independent booleans/flags and signed ids, no handle allocation, retained setter
+levels, empty/invalidation behavior, malformed/wrong-family/unknown handles,
+atomic admission/budget/context/source failures, and successful versus failed
+setter invalidation. All 373 native and 373 actual WASI play tests pass, with
+five explicit original-input ignores; strict native/browser Clippy passes.
+Evidence and command receipts remain local under
+`.scratch/player-current-research-root-20261017/`. This does not provide an
+application Host factory, live research simulation, item-stock behavior or a
+playable campaign.

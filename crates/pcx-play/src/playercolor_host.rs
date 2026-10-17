@@ -632,8 +632,8 @@ pub use objects::{
     FilterCallback, ForceBudget, GameStateEventRegistration, LabelSoundFlags, MapConfig,
     MapConfigBudget, MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget,
     PlayerBudget, PlayerSettings, PlayerStateRequestBudget, QuestBudget, QuestEvent, QuestFlag,
-    SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest, StartLocation,
-    StartPriorities, StartPriority, StartupClockState, StartupSettings, TechLimitBudget,
-    TimerEventRegistration, TimerHost, TriggerActionRecord, TriggerBudget, UnitBudget,
-    UnitEventRegistration, UnitStateBudget,
+    ResearchObservation, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest,
+    StartLocation, StartPriorities, StartPriority, StartupClockState, StartupSettings,
+    TechLimitBudget, TimerEventRegistration, TimerHost, TriggerActionRecord, TriggerBudget,
+    UnitBudget, UnitEventRegistration, UnitStateBudget,
 };

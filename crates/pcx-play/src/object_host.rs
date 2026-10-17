@@ -407,7 +407,7 @@ pub use map_config::{MapConfig, MapConfigBudget, StartLocation, StartPriorities,
 mod players;
 pub use players::{
     PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerSettings,
-    PlayerStateRequestBudget, TechLimitBudget,
+    PlayerStateRequestBudget, ResearchObservation, TechLimitBudget,
 };
 
 #[path = "camera_host.rs"]

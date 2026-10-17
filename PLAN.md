@@ -1226,8 +1226,11 @@ trigger/state/comparison/threshold associations on that arena. Separately admitt
 camera-bound getters now derive all four coordinate extrema from the executed
 corners in a caller-qualified unrotated profile. Eight reads match the corrected
 original-client observation; both source BJ rectangles are retained. The next
-unsupported call is `GetPlayerTechResearched` in `Blizzard.j` (`441600..441652`),
-whose selected declaration returns boolean. Unset research is not defaulted.
+unsupported call was the boolean `GetPlayerTechResearched`. Explicit current
+research observations now pass its 24 exact startup queries after the authored
+early setter; retained setter levels remain separate and missing answers refuse.
+The next unsupported call is `SetAllItemTypeSlots` in `Blizzard.j`
+(`446992..447041`). Item-stock behavior is not inferred.
 Comparison evaluation, timer start, expiry and callback delivery remain unsupported. Fog/mask setters retain
 independent booleans;
 speed writes remain unsupported because original requests do not always read

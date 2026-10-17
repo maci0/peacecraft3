@@ -495,3 +495,6 @@ mod slot_states;
 
 #[path = "player_controllers_tests.rs"]
 mod current_controllers;
+
+#[path = "player_current_research_tests.rs"]
+mod current_research;
