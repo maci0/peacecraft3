@@ -108,3 +108,51 @@ arithmetic and degeneracy rules, secondary-state effects and a checked ordered
 consumer. Native all-consumer behavior, paired recreation execution, the
 100-consecutive baseline and crossplay parity remain open. `GetRandomReal` stays
 unsupported on the production Host; no guessed seed or algorithm was installed.
+
+## Selected real-wrapper arithmetic follow-up
+
+The same fingerprinted image's real wrapper has now been followed through its
+constant initializer, integer arithmetic helpers and primary draw. A bounded
+offline interpreter executes those selected instructions rather than replacing
+them with an assumed float formula. The initializer is read from the image;
+its runtime constant is not taken from an uninitialized file-backed location.
+The interpreter accepts only its implemented instruction subset, bounds work
+and call depth, restricts memory writes and refuses unknown instructions or
+unmapped reads. Six self-authored checks cover arithmetic, stack/return,
+rotation, signed comparison and zero-input bit scanning.
+
+The complete serial wrapper check preserves all 80 integer checkpoints and
+matches all **16 formatted real observations** across the retained two runs and
+eight seed blocks. Original real output is still only `R2S` text. Locally derived
+result bits are emulation results, not newly captured original float bits.
+Only the two original caller-selected seeds and their probe bounds are covered
+by this runtime-observation comparison.
+
+A separate check derives its bounds from the qualified Human01 frontier receipt
+and uses 64 synthetic seeds. Ordinary round-to-nearest `f32` multiplication
+followed by addition differs from the selected wrapper in **32 cases**. The
+reference uses the same source-derived random fraction. This is a selected-code
+counterexample to substituting ordinary float interpolation; it is not a new
+original-client observation or proof for every bound/seed shape.
+
+Eleven additional synthetic checks exercise equal integer/real bounds,
+adjacent real bounds, the loaded tolerance boundary, and interpreter refusal
+for unknown instructions, unbounded loops and unmapped reads. On these selected
+paths equal/near-equal bounds preserve the primary state, while the tolerance
+boundary consumes a draw. NaNs, infinities, denormals, all signed-zero cases and
+native exceptional-input behavior remain outside this evidence.
+
+The selected primary-owner constructor prefix forwards a caller argument to
+the seed helper. That static path supplies no justified constant for Human01's
+initial state. Its later engine consumption and secondary streams still need
+an explicit caller-qualified checkpoint. The production Host therefore still
+refuses `GetRandomReal`; neither a guessed seed nor the synthetic simulation RNG
+has been substituted.
+
+Private source/input fingerprints, complete decoder windows, preserved checks
+and their actual exit receipts are in
+`.scratch/script-rng-real-root-20261017/`. These results extend the selected-code
+model. They do not close bit-exact original real outputs, paired recreation
+execution, full campaign behavior or the 100-consecutive original baseline.
+No new original-client, rendered gameplay, public-site or production build was
+run for this documentation-only update.

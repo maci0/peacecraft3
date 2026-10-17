@@ -2027,3 +2027,17 @@ actions, repeated-run stability and scheduler/world integration remain open.
   secondary-state effects, initial-state admission, paired recreation execution
   and the 100-consecutive original baseline remain open. See
   [the evidence boundaries](docs/re-notes/original-rng-control.md#selected-primary-generator-static-and-retained-output-checks).
+
+### 2026-10-17 — selected random-real arithmetic evidence
+
+- [~] Offline selected-wrapper execution matches 16 retained formatted real
+  observations and preserves the 80 integer checkpoints. Original real bits
+  remain unobserved. Six interpreter self-checks and eleven synthetic
+  edge/refusal checks pass.
+- [~] At bounds derived from the Human01 receipt, ordinary `f32` multiply/add
+  differs from the selected wrapper for 32 of 64 synthetic seeds. The selected
+  arithmetic must be preserved rather than assumed equivalent.
+- [ ] Original initial state, prior engine consumption and secondary streams
+  remain open; production `GetRandomReal` stays unsupported. Paired execution,
+  native bit-exact real output and the 100-consecutive baseline are not certified.
+  See [the real-wrapper scope](docs/re-notes/original-rng-control.md#selected-real-wrapper-arithmetic-follow-up).
