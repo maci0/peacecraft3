@@ -1398,6 +1398,16 @@ Format: `date — subsystem — symptom — root cause — status`
       WASI play tests pass; strict native/browser Clippy passes. No comparator,
       running clock, initial notification or callback delivery is inferred. See
       `docs/re-notes/script-trigger-admission.md`.
+      Camera-bound getters now separately admit exact source-matching contracts
+      and read coordinate extrema of all four executed corners in the qualified
+      unrotated startup profile. A corrected original Wine probe verifies
+      reordered/irregular corners and restored authored bounds. The unchanged VM
+      matches eight reads and both BJ rectangles, reaching 903 identities and
+      144 rectangles before `GetPlayerTechResearched` in Blizzard at
+      `441600..441652` (common `113417..113526`, boolean return). All 370
+      native/actual WASI play tests and strict native/browser Clippy pass.
+      Rotated bounds, missing research state and rendered-camera parity remain
+      open; see `docs/re-notes/script-camera-input.md`.
       Live participation, application provider and general eligibility remain open.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or

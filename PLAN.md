@@ -1222,8 +1222,12 @@ the actual existing trigger and live timer through an event on that arena; its
 following action is retained without running it. Explicit source-qualified
 runtime version input now passes `VersionGet` without allocating or guessing an
 edition. Source/domain-bound game-state subscriptions now retain six executed
-trigger/state/comparison/threshold associations on that arena. The next
-unsupported call is `GetCameraBoundMinX` in `Blizzard.j` (`440924..440944`).
+trigger/state/comparison/threshold associations on that arena. Separately admitted
+camera-bound getters now derive all four coordinate extrema from the executed
+corners in a caller-qualified unrotated profile. Eight reads match the corrected
+original-client observation; both source BJ rectangles are retained. The next
+unsupported call is `GetPlayerTechResearched` in `Blizzard.j` (`441600..441652`),
+whose selected declaration returns boolean. Unset research is not defaulted.
 Comparison evaluation, timer start, expiry and callback delivery remain unsupported. Fog/mask setters retain
 independent booleans;
 speed writes remain unsupported because original requests do not always read
@@ -1232,7 +1236,8 @@ does not evaluate predicates. See `docs/re-notes/script-startup-settings.md` and
 `docs/re-notes/script-player-slots.md` and
 `docs/re-notes/script-player-controllers.md` and
 `docs/re-notes/script-label-sounds.md` and
-`docs/re-notes/script-trigger-admission.md`.
+`docs/re-notes/script-trigger-admission.md` and
+`docs/re-notes/script-camera-input.md`.
 These assignments do not enforce alliance gameplay or effective resource balances,
 and on/off activation is separate from combat modifiers and animation. This is
 execution evidence for that selected source profile, not a playable chapter.

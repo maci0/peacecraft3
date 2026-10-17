@@ -257,3 +257,166 @@ fn owned_vm_uses_the_derived_values_and_retains_the_authored_bounds() {
         [47.5, -17.5, 0.0, 7.5, -1.0, 2.0, 3.0, 4.0]
     );
 }
+
+const BOUND_NAMES: [&str; 4] = [
+    "GetCameraBoundMinX",
+    "GetCameraBoundMinY",
+    "GetCameraBoundMaxX",
+    "GetCameraBoundMaxY",
+];
+fn bound_common() -> String {
+    format!(
+        "{COMMON}{}",
+        BOUND_NAMES
+            .map(|name| format!("constant native {name} takes nothing returns real\n"))
+            .join("")
+    )
+}
+#[test]
+fn bound_getters_require_admission_assignment_and_keep_failed_bounds() {
+    let common = bound_common();
+    assert!(host(&common, "").with_camera_bound_getters().is_err());
+    let mut h = host(&common, "").with_camera(margins()).unwrap();
+    for name in BOUND_NAMES {
+        assert!(h.native(name, &[]).is_err());
+    }
+    let mut h = h.with_camera_bound_getters().unwrap();
+    for name in BOUND_NAMES {
+        assert!(h.native(name, &[]).is_err());
+    }
+    // Every extreme belongs to a different corner; paired endpoints are insufficient.
+    let assigned = [
+        -900.25, 500.5, 100.125, 1000.75, -1200.5, -300.25, 800.75, -50.125,
+    ];
+    h.native("SetCameraBounds", &assigned.map(Value::Real))
+        .unwrap();
+    let check = |h: &mut ObjectHost| {
+        for (name, expected) in BOUND_NAMES
+            .into_iter()
+            .zip([-1200.5, -300.25, 800.75, 1000.75])
+        {
+            assert_eq!(h.native(name, &[]).unwrap(), Value::Real(expected));
+            assert!(h.native(name, &[Value::Int(0)]).is_err());
+        }
+    };
+    check(&mut h);
+    for index in 0..8 {
+        for value in [
+            Value::Real(f32::NAN),
+            Value::Real(f32::INFINITY),
+            Value::Real(f32::NEG_INFINITY),
+            Value::Bool(false),
+        ] {
+            let mut bad = assigned.map(Value::Real);
+            bad[index] = value;
+            assert!(h.native("SetCameraBounds", &bad).is_err());
+            check(&mut h);
+            assert_eq!(
+                h.camera_state().unwrap().bounds.unwrap().map(f32::to_bits),
+                assigned.map(f32::to_bits)
+            );
+        }
+    }
+    let reordered = [
+        800.75, -50.125, -1200.5, -300.25, 100.125, 1000.75, -900.25, 500.5,
+    ];
+    h.native("SetCameraBounds", &reordered.map(Value::Real))
+        .unwrap();
+    check(&mut h);
+    assert!(h.with_camera_bound_getters().is_err());
+}
+#[test]
+fn bound_getter_contracts_flags_sources_and_overrides_are_checked() {
+    let common = bound_common();
+    for name in BOUND_NAMES {
+        for bad in [
+            common.replace(
+                &format!("constant native {name}"),
+                &format!("native {name}"),
+            ),
+            common.replace(
+                &format!("{name} takes nothing returns real"),
+                &format!("{name} takes integer x returns real"),
+            ),
+            common.replace(
+                &format!("{name} takes nothing returns real"),
+                &format!("{name} takes nothing returns integer"),
+            ),
+            common.replace(
+                &format!("constant native {name} takes nothing returns real\n"),
+                "",
+            ),
+        ] {
+            assert!(
+                host(&bad, "")
+                    .with_camera(margins())
+                    .unwrap()
+                    .with_camera_bound_getters()
+                    .is_err()
+            );
+        }
+        let map = format!("function {name} takes nothing returns real\nreturn 1.0\nendfunction\n");
+        assert!(
+            host(&common, &map)
+                .with_camera(margins())
+                .unwrap()
+                .with_camera_bound_getters()
+                .is_err()
+        );
+    }
+    let common_ast = pcx_script::parse_script(COMMON).unwrap();
+    let foreign = pcx_script::parse_script(&common[COMMON.len()..]).unwrap();
+    let map = pcx_script::parse_script("").unwrap();
+    let program = Arc::new(
+        pcx_script::resolve_with(
+            &map,
+            &[
+                Prelude::new("synthetic:common", &common_ast),
+                Prelude::new("synthetic:foreign", &foreign),
+            ],
+        )
+        .unwrap(),
+    );
+    let enums = EnumHost::checked_selected(
+        program,
+        "synthetic:camera",
+        &["ConvertPlayerColor"],
+        Limits {
+            max_handles: 4,
+            admission_steps: 100,
+            expression_depth: 16,
+            expression_work: 100,
+        },
+    )
+    .unwrap();
+    assert!(
+        ObjectHost::checked(enums)
+            .unwrap()
+            .with_camera(margins())
+            .unwrap()
+            .with_camera_bound_getters()
+            .is_err()
+    );
+}
+#[test]
+fn owned_vm_derives_all_four_bounds_without_margin_adjustment_or_allocation() {
+    let common = bound_common();
+    let map = "globals\nreal a = 0.0\nreal b = 0.0\nreal c = 0.0\nreal d = 0.0\nendglobals\nfunction main takes nothing returns nothing\ncall SetCameraBounds(-1,2,3,-4,5,6,-7,-8)\nset a = GetCameraBoundMinX()\nset b = GetCameraBoundMinY()\nset c = GetCameraBoundMaxX()\nset d = GetCameraBoundMaxY()\nendfunction\n";
+    let mut vm = host(&common, map)
+        .with_camera(margins())
+        .unwrap()
+        .with_camera_bound_getters()
+        .unwrap()
+        .into_vm();
+    vm.init_globals().unwrap();
+    let before = vm.host().inner().handles();
+    vm.call("main", &[]).unwrap();
+    for (name, value) in [("a", -7.0), ("b", -8.0), ("c", 5.0), ("d", 6.0)] {
+        assert_eq!(vm.global(name), Value::Real(value));
+    }
+    assert_eq!(vm.host().inner().handles(), before);
+    assert_eq!(
+        vm.host().camera_state().unwrap().bounds.unwrap(),
+        [-1.0, 2.0, 3.0, -4.0, 5.0, 6.0, -7.0, -8.0]
+    );
+}

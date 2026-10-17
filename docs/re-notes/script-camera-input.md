@@ -85,3 +85,69 @@ payload is saved or published by this gate. Evidence, exact commands, immutable
 failed attempts and successful receipts are local in
 `.scratch/camera-margin-root/`. Launcher/default Host admission, rendered-camera
 behavior, day/night model loading and campaign completion remain open.
+
+
+## Executed bound getters in the startup coordinate profile
+
+`ObjectHost::with_camera_bound_getters()` is a separate opt-in after
+`with_camera`. It checks the four exact constant no-argument real-returning
+getter declarations, rejects script overrides and duplicate-source declarations,
+and requires their source to match `SetCameraBounds`, `GetCameraMargin` and
+`CreateTimer`. Existing callers without the opt-in retain their prior behavior.
+No initial bounds are supplied. A getter before a successful executed assignment,
+or with arguments, refuses. Invalid later bounds assignments preserve the prior
+complete eight-value record and its getter results.
+
+The admitted profile takes the coordinate extrema over all four executed corner
+pairs. It neither assumes a corner ordering nor reapplies the camera margins;
+the map already used those margins in its assignment. Reads allocate no handles
+and leave the original eight float values intact. This profile is for an
+unrotated bound coordinate frame, qualified by the caller. Camera rotation,
+movement, projection, viewport cropping and rendered bounds remain unsupported.
+
+### Evidence and limits
+
+The local Legacy image identified above has complete getter bodies at
+`0x491320..0x49135f`, `0x491360..0x49139f`, `0x4912a0..0x4912df` and
+`0x4912e0..0x49131f` (exclusive ends). Their non-null paths return stored fields.
+`SetCameraBounds` at `0x4a70a0..0x4a719c` forwards four corner pairs to
+`0x5e2c30..0x5e30d1`. That routine transforms corners before taking extrema.
+The transform builder at `0x5e5520..0x5e5604` depends on camera state, so raw
+coordinate extrema are not claimed to reproduce rotated bounds. Capstone and
+GNU objdump independently decode the selected ranges; nested transform/trig
+helpers and the active registration family were not fully established.
+
+A corrected bounded Wine/Xvfb probe of that exact original executable records
+nine probe entries: begin, the executed source assignment, six getter snapshots,
+and end. At the unchanged initial orientation, all four getter results match
+coordinate extrema for the authored assignment, an irregular synthetic set of
+corners, the same corners in reverse order, and a smaller synthetic set. The
+probe restores the complete authored assignment and verifies identical getters
+before and after the original `InitBlizzard`. Decimal `R2SW` output is evidence
+for those exactly representable values, not a native raw-bit transport. The first
+attempt wrapped the wrong call and restored zero bounds; it is preserved and
+rejected. Only the corrected attempt is accepted. Neither run uploaded assets.
+
+The pinned [Warsmash Jass2 reconstruction source](https://raw.githubusercontent.com/Retera/WarsmashModEngine/f9e0aeed4be372d6016519d0e97b384aa873f374/core/src/com/etheller/warsmash/parsers/jass/Jass2.java)
+also implements four-corner coordinate extrema. That is supporting reconstruction
+source evidence, not original runtime proof or proof for camera rotation.
+No observed map dimensions, margins, orientation or bounds become implementation
+constants. Synthetic tests exercise admission and source/contract failures,
+unset reads, every nonfinite/invalid setter position, reordered corners,
+integer promotion, owned-VM globals and unchanged arena size.
+
+The unchanged Human01 gate now checks eight successful getter results against
+the corrected original observation, including float-bit equality after parsing
+the exact decimal values. It retains `bj_mapInitialPlayableArea` and
+`bj_mapInitialCameraBounds` with the source's margin arithmetic, reaching 903
+identities and 144 rectangles with all prior unit/trigger/event checks intact.
+The next refusal is `GetPlayerTechResearched` in Blizzard at `441600..441652`,
+common declaration `113417..113526`; the selected declaration returns `boolean`.
+The observed arguments target source player 0 and tech `Rhrt`, with
+`specificonly` true. No missing research state is interpreted as false.
+
+All 370 native and 370 actual WASI play tests pass, with five explicit
+original-input ignores. Strict native/browser Clippy passes. Evidence, failed
+attempts and exact command receipts are local under
+`.scratch/camera-bounds-root-20261017/`. This is startup VM state, not an
+application Host factory, rendered-camera parity or a playable campaign.
