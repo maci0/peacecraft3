@@ -123,6 +123,11 @@ not moved or fitted. Capture validation checks actual DPR1, CSS/bitmap size,
 viewport and document offsets, and resulting PNG dimensions. An exact-size image
 with the wrong page crop is not a valid canvas capture.
 
+The browser capture preserves the page's emulated screen bounds: a clipped raw
+CDP screenshot can reset them and change subsequent source-derived mode choices.
+The real-browser adapter test checks unchanged screen dimensions alongside
+scrolled crop pixels and input delivery.
+
 The journal records both targets' actual operation times and scheduling lateness.
 Browser capture receipts retain snapshots before and after the screenshot and
 flag changes during capture. Slow rendering can advance the UI while a screenshot

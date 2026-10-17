@@ -57,8 +57,10 @@ test('real browser adapter preserves scrolled synthetic canvas crop and explicit
     assert.deepEqual(shifted.map(event => event.key), ['Shift','O','O','!','!','Shift']);
     assert.deepEqual(shifted.map(event => event.code), ['ShiftLeft','KeyO','KeyO','Digit1','Digit1','ShiftLeft']);
     assert.deepEqual(shifted.map(event => event.shift), [true,true,true,true,true,false]);
+    const screenBefore = await page.evaluate(() => [screen.width, screen.height, devicePixelRatio]);
     const path = join(output, 'canvas.png');
     const capture = await adapter.capture(path);
+    assert.deepEqual(await page.evaluate(() => [screen.width, screen.height, devicePixelRatio]), screenBefore);
     assert.equal(capture.geometry.clip.y, 320);
     assert.deepEqual(capture.state_before, {screen: 'Synthetic'});
     assert.deepEqual(capture.state_after, {screen: 'Synthetic'});
@@ -78,13 +80,14 @@ test('real browser adapter preserves scrolled synthetic canvas crop and explicit
     }, (await readFile(path)).toString('base64'));
     assert.deepEqual(pixelsMatch.extent, [80, 60]);
     assert.equal(pixelsMatch.incorrect, 0, JSON.stringify(pixelsMatch));
-    const realCdp = await page.context().newCDPSession(page);
-    const changing = createBrowserAdapter({page, cdp: {async send(name, args) {
-      const result = await realCdp.send(name, args);
-      if (name === 'Page.captureScreenshot')
+    const changing = createBrowserAdapter({page: {
+      evaluate: page.evaluate.bind(page),
+      async screenshot(options) {
+        const bytes = await page.screenshot(options);
         await page.evaluate(() => {globalThis.peacecraft3.menu_state = () => JSON.stringify({screen: 'Changed'});});
-      return result;
-    }}, width: 80, height: 60});
+        return bytes;
+      },
+    }, cdp: await page.context().newCDPSession(page), width: 80, height: 60});
     const changed = await changing.capture(join(output, 'changed.png'));
     assert.deepEqual(changed.state_before, {screen: 'Synthetic'});
     assert.deepEqual(changed.state_after, {screen: 'Changed'});

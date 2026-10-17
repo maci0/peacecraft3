@@ -128,8 +128,9 @@ export function createBrowserAdapter({page, cdp, width, height}) {
       const geometryBefore = await geometry();
       const stateBefore = await state();
       return bounded('capture', async () => {
-        const result = await cdp.send('Page.captureScreenshot', {format: 'png', clip: geometryBefore.clip, captureBeyondViewport: false, fromSurface: true});
-        const bytes = Buffer.from(result.data, 'base64');
+        // Playwright restores screen emulation after Chromium's clipped capture.
+        const clip = {...geometryBefore.origin, width, height};
+        const bytes = await page.screenshot({type: 'png', clip, caret: 'initial'});
         requireValue(bytes.length >= 24 && bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) && bytes.readUInt32BE(16) === extent[0] && bytes.readUInt32BE(20) === extent[1], 'CAPTURE_EXTENT_MISMATCH', 'Captured PNG does not match requested physical extent');
         const geometryAfter = await geometry();
         const stateAfter = await state();

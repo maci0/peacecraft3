@@ -1602,3 +1602,10 @@ The candidate's 365 passing tests do not close typography; the restored product
 retains its verified 363-test baseline. Evidence:
 `.scratch/menu-font-experiment-20261017/decision.json`. Font rasterization,
 spacing, archive selection and native visual parity stay open. No publication.
+
+The reference browser capture now preserves emulated screen bounds. A real
+scrolled-canvas regression fails on the old clipped CDP path (200x150 becomes
+800x600), then passes with the viewport-relative Playwright crop. Exact green
+pixels, document-offset receipts, physical inputs, change detection and existing
+file refusal still pass. Evidence: `.scratch/browser-capture-screen-20261017/`.
+This corrects the comparison harness; it does not establish game or UI parity.
