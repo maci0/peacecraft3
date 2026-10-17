@@ -9,8 +9,7 @@ impl ObjectHost {
     /// Install a completely preflighted, source-qualified collection once.
     pub fn with_sound_parameter_banks(mut self, banks: Banks) -> Result<Self, Error> {
         let name = "SetSoundParamsFromLabel";
-        if self.sound_parameters.is_some() || (self.sounds.is_none() && self.file_sounds.is_none())
-        {
+        if self.sound_parameters.is_some() || !self.has_sound_resources() {
             return Err(self.inner.error(
                 name,
                 Failure::SoundState("sound resources required; parameters must be admitted once"),

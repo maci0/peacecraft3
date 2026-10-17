@@ -34,7 +34,7 @@ const CONTRACTS: &[(&str, &[&str])] = &[
 
 impl ObjectHost {
     pub fn with_sound_properties(mut self) -> Result<Self, Error> {
-        if self.sound_properties || (self.sounds.is_none() && self.file_sounds.is_none()) {
+        if self.sound_properties || !self.has_sound_resources() {
             return Err(self.inner.error(
                 "SetSoundPosition",
                 Failure::SoundState("sound resources required; properties must be admitted once"),
@@ -89,11 +89,15 @@ impl ObjectHost {
                 | "SetSoundConeOrientation"
                 | "SetSoundPosition"
                 | "SetSoundVelocity"
-        ) && !matches!(self.inner.entry(*id)?, Entry::FileSound { is_3d: true, .. })
-        {
-            return Err(fail(
-                "explicit 3D creation required; label flags are not interpreted",
-            ));
+        ) && !matches!(
+            self.inner.entry(*id)?,
+            Entry::FileSound { is_3d: true, .. }
+                | Entry::Sound {
+                    creation_flags: Some(super::LabelSoundFlags { is_3d: true, .. }),
+                    ..
+                }
+        ) {
+            return Err(fail("explicit 3D creation required"));
         }
         let mut next = *self.sound_properties(*id)?;
         let bad = || fail("arguments do not match the finite sound-property declaration");

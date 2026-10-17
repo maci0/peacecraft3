@@ -21,9 +21,7 @@ pub struct StackedSoundRequest {
 
 impl ObjectHost {
     pub fn with_stacked_sounds(mut self, max_pending: usize) -> Result<Self, Error> {
-        if self.stacked_sound_limit.is_some()
-            || (self.sounds.is_none() && self.file_sounds.is_none())
-        {
+        if self.stacked_sound_limit.is_some() || !self.has_sound_resources() {
             return Err(self.inner.error(
                 "RegisterStackedSound",
                 Failure::SoundState(

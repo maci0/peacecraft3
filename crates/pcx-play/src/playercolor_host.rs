@@ -152,6 +152,7 @@ enum Entry {
     },
     Sound {
         resource: usize,
+        creation_flags: Option<objects::LabelSoundFlags>,
         properties: objects::SoundProperties,
         parameters: Option<crate::sound_parameters::ParameterKey>,
         duration: Option<i32>,
@@ -614,8 +615,8 @@ mod objects;
 pub use objects::{
     CameraDestination, CameraFieldRecord, CameraState, DayNightState, DestructableBudget,
     DestructableCreation, ExecutedUnit, ExecutedUnitState, FileSoundState, FilterBudget,
-    FilterCallback, ForceBudget, MapConfig, MapConfigBudget, MapMusicSelection, ObjectHost,
-    PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerSettings,
+    FilterCallback, ForceBudget, LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection,
+    ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerSettings,
     PlayerStateRequestBudget, QuestBudget, QuestEvent, QuestFlag, SoundProperties, SoundState,
     StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
     StartupClockState, StartupSettings, TechLimitBudget, TimerHost, TriggerActionRecord,

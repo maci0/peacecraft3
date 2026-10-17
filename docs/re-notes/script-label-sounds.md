@@ -154,3 +154,66 @@ Commands, immutable failed strict-lint attempts and actual corrected native/WASM
 results are local in `.scratch/sound-start-root/`. Neither an audio device nor a
 browser was used. Audible/native parity, running-clock behavior, renderer/backend
 consumption, default launcher admission and campaign completion remain open.
+
+### Explicit label-constructor resources
+
+`ObjectHost::with_label_sound_creation` separately admits caller-selected
+`Vec<SoundBank>` inputs for the loaded non-constant `CreateSoundFromLabel`
+interface (`string, boolean, boolean, boolean, integer, integer -> sound`).
+Each bank has already passed its source, table, resource and metadata budgets.
+Empty bank lists and duplicate labels across selected banks refuse. The native
+and the entire authored sound ancestry must share the admitted `CreateTimer`
+source; a function override, wrong declaration or foreign type source refuses.
+The Host does not choose archives, tables or fallback resources.
+
+Each successful constructor allocates one real sound on the existing bounded
+arena and binds the exact label to its selected table row and PCM resource.
+`SoundState.bank` exposes that source table; `resource` retains the exact source
+member and fingerprint. Repeated creation produces distinct identities sharing
+the immutable binding. `creation_flags: Some(LabelSoundFlags)` retains all three
+executed booleans, including false, while `None` identifies MIDI creation's
+absent inputs. Signed fade integers remain unchanged. The MIDI bank stays
+independent, including when it contains the same label with a different resource.
+
+Duration, start queues, parameter assignments, property setters and stacked
+requests use this same resource-backed identity. Spatial setters require an
+explicit true creation `is_3d` input from either constructor; MIDI creation has
+no such boolean. Property fields still describe executed setters, not inferred
+effective values from the retained table. Table settings, mixer precedence,
+looping, range stopping, fades and audible playback need an audio consumer and
+remain separate fidelity gates.
+
+The current selected-program qualifier scans all loaded function bodies and global
+initializers with bounded work, depth and label storage. It finds 11 distinct
+literal labels and no nonliteral constructor sites. The explicit local Legacy
+input set binds nine labels through `War3.mpq::UI\SoundInfo\UISounds.slk` and two
+through `War3.mpq::UI\SoundInfo\AmbienceSounds.slk`. Their SHA-256 fingerprints
+are `6e9732d982610e16ad9b9e7f88f5444f7cb133cf6ab4ecf56c0185c40b1ceeff`
+and `22cfa5a88ee69210c3c7f3a8417d465286f507fcb93fd551015a9e4ad6f59d42`.
+All 11 single-file bindings pass the existing bounded PCM reader. The Warning
+member is present in the explicitly selected expansion archive, not the base
+archive. Archive candidates are checked for unequal copies rather than selecting
+an assumed precedence. This is a recreation source selection, not proof of the
+native lookup winner or an archive's release inferred from its filename.
+
+Using the same unchanged Human01 Program, admission and captured startup inputs,
+globals and `config` complete. `main` executes 11 constructor calls across nine
+labels, including repeated quest notifications. Every resulting record's label,
+source row/resource, three booleans and both fade integers match the executed
+arguments. The two ambience resources are admitted but not created before the
+next refusal. Previous player, unit, force, sound and source-context checks still
+pass; the shared arena contains 880 identities, 155 units and four triggers.
+The next unsupported native is `TriggerRegisterTimerExpireEvent`, Blizzard span
+`143744..143837`, common declaration `72705..72793`. The timer and trigger are
+existing identities; no registration or callback delivery is fabricated.
+
+Four synthetic regressions cover actual owned-VM creation, distinct MIDI/source
+banks, nonzero bank selection, exact flags and signed fades, duration/start
+consumers, 3D assignment, source/contract/type ancestry, duplicates and atomic
+argument/label/arena refusals. All 357 play tests pass natively and through actual
+WASI execution, with five explicit original-input ignores. Strict native/browser
+Clippy checks pass. Immutable qualification attempts, source/artifact hashes and
+the successful selected-program gate are local in
+`.scratch/label-constructor-root-20261017/`. No original payload is committed.
+The application Host factory, audio playback, callback scheduling, campaign
+completion and rendered/native parity remain open.

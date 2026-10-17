@@ -11,7 +11,7 @@ Each sound's existing shared-arena entry now owns `SoundProperties`. Its fields
 are absent until these calls assign them. Repeated calls replace only the named
 property on that identity. Label parameters, duration, encoded/PCM resources,
 creation flags, fade inputs and EAX text remain intact. This applies to both PCM
-and MPEG direct-file resources, and to non-spatial properties of label sounds.
+and MPEG direct-file resources and source-backed label sounds.
 The getter exposes the last explicit assignments for a future audio consumer.
 
 No defaults, channel mapping, volume clamp, pitch range, distance units, cone
@@ -23,10 +23,11 @@ arena; no replacement sound or handle pool is created.
 
 The selected `common.j` comments mark distances, cone angles/orientation,
 position and velocity as valid only for sounds created with 3D enabled. These
-calls require that explicit `CreateSound` boolean. Two-dimensional file sounds
-and label sounds without an established 3D flag interpretation refuse spatial
-assignment. This does not guess a bit in a label table or claim native behavior
-for invalid calls.
+calls require an explicit true `is_3d` input from `CreateSound` or
+`CreateSoundFromLabel`. Two-dimensional sounds and MIDI creation, whose interface
+supplies no such boolean, refuse spatial assignment. This does not guess a bit
+in a label table or claim native behavior for invalid calls. See
+[explicit label-constructor resources](script-label-sounds.md#explicit-label-constructor-resources).
 
 ## Checks and original execution
 

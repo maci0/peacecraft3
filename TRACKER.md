@@ -1363,6 +1363,15 @@ Format: `date — subsystem — symptom — root cause — status`
       invalidation refuse instead of falling back to assigned setup. This is not
       a live lobby provider, completed sound initialization or playable chapter;
       see `docs/re-notes/script-player-controllers.md`.
+      Explicit label-constructor banks now qualify all 11 literal labels from the
+      unchanged Program against two selected sound tables and their PCM members.
+      The same arena retains 11 executed creations across nine labels, with exact
+      booleans, signed fades and source-bound resources. It now contains 880
+      identities and next refuses `TriggerRegisterTimerExpireEvent` in Blizzard
+      at `143744..143837` (common `72705..72793`). Four new regressions and all
+      357 native/actual WASI play tests pass; strict native/browser Clippy passes.
+      This is resource/creation state, not playback, timer scheduling or a chapter
+      completion. See `docs/re-notes/script-label-sounds.md`.
       Live participation, application provider and general eligibility remain open.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or

@@ -689,3 +689,6 @@ fn retained_vm_start_requests_survive_later_failure_without_reinitialization() {
         7
     );
 }
+
+#[path = "label_constructor_tests.rs"]
+mod constructor;

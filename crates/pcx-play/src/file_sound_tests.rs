@@ -471,7 +471,7 @@ fn sound_property_errors_do_not_mutate_state_or_cross_handle_families() {
             &[label.clone(), Value::Int(1), Value::Int(2), Value::Int(3)]
         )
         .unwrap_err()
-        .contains("label flags")
+        .contains("explicit 3D creation required")
     );
     let Value::Handle(label) = label else {
         panic!("label");

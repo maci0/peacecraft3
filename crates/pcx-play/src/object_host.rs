@@ -14,6 +14,7 @@ pub struct ObjectHost {
     camera: Option<camera::CameraState>,
     day_night: Option<environment::DayNightState>,
     sounds: Option<crate::label_sounds::SoundBank>,
+    label_sound_creation: Option<Vec<crate::label_sounds::SoundBank>>,
     file_sounds: Option<files::State>,
     sound_parameters: Option<crate::sound_parameters::Banks>,
     sound_start_limit: Option<usize>,
@@ -52,6 +53,7 @@ impl ObjectHost {
             camera: None,
             day_night: None,
             sounds: None,
+            label_sound_creation: None,
             file_sounds: None,
             sound_parameters: None,
             sound_start_limit: None,
@@ -416,7 +418,7 @@ pub use environment::DayNightState;
 
 #[path = "sound_host.rs"]
 mod sounds;
-pub use sounds::SoundState;
+pub use sounds::{LabelSoundFlags, SoundState};
 
 #[path = "startup_clock_host.rs"]
 mod clock;
