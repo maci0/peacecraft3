@@ -2041,3 +2041,19 @@ actions, repeated-run stability and scheduler/world integration remain open.
   remain open; production `GetRandomReal` stays unsupported. Paired execution,
   native bit-exact real output and the 100-consecutive baseline are not certified.
   See [the real-wrapper scope](docs/re-notes/original-rng-control.md#selected-real-wrapper-arithmetic-follow-up).
+
+
+### 2026-10-18 — receipt-bound native source readers
+
+Resolver-backed native requests and file drops now publish the same reader with
+its exact receipt arc. Refused candidates preserve the previous publication;
+copied receipts cannot select a reader. `bind_map` does not retain a resolver,
+so automatic native input preparation remains open for that path. Browser inbox
+first publication and replacement retain their atomic commit and retirement rules.
+
+Validation passes 95 map-loading, 19 library and 394 application tests, plus 13
+configuration checks executed from actual Cargo WebAssembly. Strict native/browser
+Clippy, browser build, docs and formatting pass. The 21 explicitly ignored app
+tests, native visual/gameplay comparison, world/HUD integration, chapter completion
+and the 100-consecutive unmodified-original baseline remain open. Evidence:
+`.scratch/native-resolver-root-20261018/review-3/acceptance.json`.
