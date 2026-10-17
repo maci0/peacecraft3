@@ -257,6 +257,8 @@ pub struct ImportedRecord {
 pub struct ImportedWorld {
     pub source: Source,
     pub info: MapInfo,
+    /// Authored WPM bytes. The fixed-tick step reads them only after
+    /// [`crate::admit_movement`] installs an explicit profile on the sim world.
     pub pathing: Pathing,
     pub definitions: Vec<Definition>,
     pub records: Vec<ImportedRecord>,

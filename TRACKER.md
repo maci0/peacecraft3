@@ -1859,3 +1859,23 @@ browser build, warning-denied docs and formatting also pass. Evidence:
 ceilings, not a total backend decoder/voice memory bound. Native mixing, device
 output, automatic qualified Host input preparation and full campaign playback
 remain open.
+
+
+The deterministic point-movement harness can now clamp its existing step against
+an explicitly caller-admitted WPM raster. Grid scale is derived from both input
+dimensions; origin, tile extent and blocking mask remain explicit caller inputs.
+Snapshots share one immutable profile/raster. Existing wire payloads stay the
+same, and client reconciliation restores the selected profile before subsequent
+steps instead of silently reverting to unadmitted movement. Different explicit
+profiles refuse without changing client state. Shared-identity comparisons avoid
+raster scans on the usual path, and admission makes one bounded raster copy.
+All 44 native simulation and 142 native network tests pass. Fourteen movement
+and four reconciliation cases also execute successfully on actual WASI, alongside
+379 play tests on native and actual WASI. All 364 app, 19 library, 85 map-loading
+and 92 audio/factory tests, strict native/browser Clippy, full browser build,
+warning-denied docs and formatting pass. Evidence:
+`.scratch/pathing-root-20261017/`; see
+`docs/re-notes/admitted-pathing-movement.md`. Original blocking bits, world-axis
+mapping, unit footprints/classes, sliding/path search, dynamic pathing and the
+application unit world/session clock remain open. This is a tested point-movement
+policy, not original-game movement or playable-campaign acceptance.

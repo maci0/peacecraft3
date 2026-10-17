@@ -500,10 +500,15 @@ pub fn decode_world_payload(tick: u64, bytes: &[u8]) -> Result<pcx_sim::World, C
         }
         units.push(unit);
     }
+    // Movement admission is match context, not a per-snapshot payload. Decode
+    // leaves it empty; [`Client::reconcile_detailed`] binds the client's context
+    // back before any later step. An admitted client does not keep stepping
+    // this world with the harness rule.
     Ok(pcx_sim::World {
         tick,
         units,
         next_unit_id,
+        movement: None,
     })
 }
 
@@ -799,8 +804,16 @@ impl Client {
     ///    cost unbounded work.
     /// 6. Otherwise: authority becomes the base, the recorded stream is restored
     ///    beside it, and the client's unacknowledged inputs are replayed.
-    pub fn reconcile_detailed(&mut self, snapshot: World) -> rollback::Reconciliation {
+    pub fn reconcile_detailed(&mut self, mut snapshot: World) -> rollback::Reconciliation {
         let tick = snapshot.tick;
+        if !self.bind_admission(&mut snapshot) {
+            return rollback::Reconciliation {
+                snapshot,
+                divergence: 0,
+                correction: rollback::Correction::AdmissionMismatch { tick },
+                predicted_tick: self.predicted.tick,
+            };
+        }
         // A late duplicate is not a disagreement, and there are two ways to get
         // one. Either the tick is behind authority this client already accepted,
         // or it is behind the server's acknowledged clock — in which case the
@@ -906,6 +919,41 @@ impl Client {
         self.pending.clear();
         self.history.truncate_after(tick);
         rollback::Correction::Snapped { tick, reason }
+    }
+
+    /// Restores this client's movement admission onto a decoded snapshot.
+    ///
+    /// The wire payload has no raster. A decoded world therefore arrives without
+    /// admission; leaving it that way would step the harness rule through a wall.
+    /// The same admission is attached. A different admission is refused, and the
+    /// caller does not step.
+    fn bind_admission(&self, snapshot: &mut World) -> bool {
+        if let (Some(predicted), Some(authoritative)) =
+            (&self.predicted.movement, &self.authoritative.movement)
+            && !std::sync::Arc::ptr_eq(predicted, authoritative)
+            && predicted.as_ref() != authoritative.as_ref()
+        {
+            return false;
+        }
+        let Some(authority) = self
+            .predicted
+            .movement
+            .clone()
+            .or_else(|| self.authoritative.movement.clone())
+        else {
+            return true;
+        };
+        let accept = match snapshot.movement.as_ref() {
+            None => true,
+            Some(incoming) => {
+                std::sync::Arc::ptr_eq(incoming, &authority)
+                    || incoming.as_ref() == authority.as_ref()
+            }
+        };
+        if accept {
+            snapshot.movement = Some(authority);
+        }
+        accept
     }
 
     pub fn predicted(&self) -> &World {

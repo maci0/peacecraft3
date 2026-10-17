@@ -18,7 +18,13 @@
 //! - **Input is data, not behaviour.** The server decides; the client sends
 //!   intent.
 
+pub mod pathing;
 pub mod world;
+
+pub use pathing::{
+    AdmitError, AdmittedMovement, CellQuery, MovementProfile, StepClamp, admit_aligned_movement,
+    admit_movement,
+};
 
 /// Simulation tick duration in milliseconds.
 ///
@@ -35,6 +41,9 @@ pub const FX_ONE: i32 = 1 << FX_SHIFT;
 
 /// A fixed-point scalar.
 pub type Fx = i32;
+
+/// Per-axis harness step. This is the existing movement clamp, not an original speed.
+pub const MOVE_SPEED: Fx = FX_ONE / 10;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -108,6 +117,9 @@ pub struct World {
     /// Monotonic id source. Never reused, so a reconnecting client cannot
     /// confuse a new unit with a dead one.
     pub next_unit_id: u32,
+    /// Shared admission for this match. Absent movement keeps the harness step.
+    /// Cloning a world retains the same raster; the wire codec does not carry it.
+    pub movement: Option<std::sync::Arc<pathing::AdmittedMovement>>,
 }
 
 impl World {
@@ -117,6 +129,7 @@ impl World {
             tick: 0,
             units: Vec::new(),
             next_unit_id: 1,
+            movement: None,
         }
     }
 
@@ -190,7 +203,13 @@ pub fn step(world: &mut World, input: &Input, rng: &mut Rng) {
     // Movement is resolved after all commands, so a unit that is issued a move
     // and a stop in the same tick ends where "stop wins" says it should,
     // independent of array order.
-    for unit in &mut world.units {
+    advance_units(&mut world.units, world.movement.as_deref());
+
+    world.tick += 1;
+}
+
+fn advance_units(units: &mut [Unit], movement: Option<&pathing::AdmittedMovement>) {
+    for unit in units {
         let Some((tx, ty)) = unit.move_target else {
             continue;
         };
@@ -205,18 +224,20 @@ pub fn step(world: &mut World, input: &Input, rng: &mut Rng) {
         }
         // Fixed speed, fixed step: this is the deterministic part. No
         // normalising by `hypot`, because that would need a square root and a
-        // rounding mode.
-        const SPEED: i32 = FX_ONE / 10;
-        // Each clamped delta fits Fx; adding it stays between the current
-        // coordinate and the representable target, so cannot overflow.
-        let limit = i64::from(SPEED);
+        // rounding mode. Each clamped delta fits Fx; adding it stays between
+        // the current coordinate and the representable target.
+        let limit = i64::from(MOVE_SPEED);
         let step_x = dx.clamp(-limit, limit) as Fx;
         let step_y = dy.clamp(-limit, limit) as Fx;
-        unit.x += step_x;
-        unit.y += step_y;
+        if let Some(movement) = movement {
+            let clamped = movement.clamp_step(unit.x, unit.y, step_x, step_y);
+            unit.x = clamped.x;
+            unit.y = clamped.y;
+        } else {
+            unit.x += step_x;
+            unit.y += step_y;
+        }
     }
-
-    world.tick += 1;
 }
 
 /// Whether an owned unit is inside the harness selection test.

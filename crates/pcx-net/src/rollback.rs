@@ -221,6 +221,9 @@ pub enum Correction {
     /// The correction was older than authority already accepted, so it was
     /// ignored. A late duplicate is not a disagreement.
     Stale { tick: u64 },
+    /// The snapshot names a different movement admission from this client.
+    /// Prediction was left as it was, and no step ran.
+    AdmissionMismatch { tick: u64 },
 }
 
 impl Correction {
@@ -238,7 +241,7 @@ impl Correction {
 /// The outcome of one reconciliation.
 #[derive(Debug, Clone)]
 pub struct Reconciliation {
-    /// The authoritative world the server sent, verbatim.
+    /// The received world, with this client's movement admission restored when compatible.
     pub snapshot: World,
     /// Positional distance between the client's prediction and that world.
     pub divergence: u64,
