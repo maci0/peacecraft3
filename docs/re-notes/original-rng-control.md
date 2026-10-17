@@ -310,3 +310,37 @@ observations, with no native Windows, complete thread coverage or gameplay claim
 The next integration needs the source-bound race inputs and the executed units'
 ability associations and branch conditions. A generic startup skip or an
 unconditional `CreateUnit` consumption rule would discard those relationships.
+
+## Wander ability source association (2026-10-18)
+
+The native binding is now more specific than a class-name match. The selected
+`CAbilityWander` RTTI vtable contains both the observed range method and a code
+getter returning `Awan`. The supplied ability table carries that alias/code pair.
+A separate wander-related row remains a different code; a text search for
+"wander" is not sufficient to choose the native class.
+
+The production map, object-table, overlay and script readers join the unchanged
+Human01 inputs. Four named ability/unit table members are independently extracted
+from the supplied base and expansion archives and are byte-identical between
+them. This establishes equality for those members, not a general archive-priority
+rule or proof of either archive's release. The map's actual unit overrides must
+be applied: stock-only lookup refuses a custom rawcode instead of resolving it.
+
+Across the script's 155 literal `CreateUnit` sites and 53 distinct unit rawcodes,
+18 resulting ability lists contain `Awan`, all in `CreateNeutralPassive`. The
+metadata identifies the list as an `abilityList` column, and the existing overlay
+reader preserves the map's authored values and bases. This source count agrees
+with the 18 recorded native wander draws. It is a static source association,
+not a captured mapping from every native runtime handle to its rawcode.
+
+The same source join and a synthetic scanner check pass on native and actual
+WASI, with warning-denied harness builds and identical join rows. Failed
+stock-only lookup, the raw archive CLI's refusal of the map wrapper, and a
+standalone WASI dependency-path correction are retained alongside the successful
+receipts in `.scratch/script-rng-wander-source-root-20261018/`. No new original
+runtime run was needed, and no original payload is published.
+
+Production behavior is unchanged. Fresh-unit flag/component conditions, wander
+expiry and movement, engine seed inputs and the complete race-preference view
+still need integration. The source association does not authorize an unconditional
+draw for every unit or replace the remaining gameplay and baseline gates.
