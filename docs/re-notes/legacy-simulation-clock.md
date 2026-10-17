@@ -114,7 +114,8 @@ Each step was read from disassembly of the pinned file.
   index maps to which UI game speed is not proved.
 - Queue `+0x48` advances by raw elapsed real time, unquantized and pausable. The
   timer flag bit `0x4` therefore selects real time versus the quantized game clock
-  for `TimerGetElapsed`. Which flag JASS `TimerStart` passes was not read.
+  for `TimerGetElapsed`. The later [TimerStart binding](legacy-timer-start.md)
+  traces its zero selector to game-time queue `+0x44`; live timing remains open.
 - Timer-queue updates can repeat inside one scheduler call. A single call can
   run many quanta, subject to its budget and bailout. This does not establish
   how all simulation work relates to a render frame; the subscribers and render
@@ -133,7 +134,7 @@ Each step was read from disassembly of the pinned file.
 4. The bit-exact `[0x113cb40]` after soft reciprocal, and the rounding mode of the
    float-to-int conversion `0xa56bf0` used for `N`.
 5. Runtime confirmation (traced `[+0x2618]`, `[+0x3c4]`, `N` and `[0x113cb40]` in a
-   live single-player game) once runtime tracing is authorized.
+   live single-player game) remains uncollected.
 6. The producer of QPC scale `[0x1140630]`, including its relationship to the
    performance-counter frequency. No calibration/default value is inferred.
 

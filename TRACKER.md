@@ -1902,3 +1902,13 @@ remain local and are absent from the package. Evidence:
 exercise HUD/tooltips or establish native appearance, physical mode switching,
 or resolution offerings beyond this supplied image and screen bound. The public
 site was not changed, and the earlier 4K timeout remains open.
+
+The selected Legacy `TimerStart` functional native path is now statically linked
+to the game-time queue: its zero selector is forwarded through the timer vtable
+to `AGILE_DATA+0x44`. The callback store and timer-message dispatch into the
+script executor are also traced. Fourteen checked raw-range digests and operand
+checks bind these findings to the selected executable. See
+`docs/re-notes/legacy-timer-start.md`. This closes an unread clock-selector
+question, not RE-Q5 or timer execution. `ObjectHost` still refuses `TimerStart`;
+callback ordering/mutation, scheduler integration, native timing and playable
+campaigns remain open. No original runtime or new rendering check was run.
