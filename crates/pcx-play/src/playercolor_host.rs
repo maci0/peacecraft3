@@ -585,8 +585,8 @@ mod objects;
 pub use objects::{
     CameraDestination, CameraFieldRecord, CameraState, DayNightState, DestructableBudget,
     DestructableCreation, ExecutedUnit, ExecutedUnitState, FileSoundState, MapConfig,
-    MapConfigBudget, MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerBudget,
-    PlayerSettings, QuestBudget, QuestEvent, QuestFlag, SoundProperties, SoundState,
+    MapConfigBudget, MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget,
+    PlayerBudget, PlayerSettings, QuestBudget, QuestEvent, QuestFlag, SoundProperties, SoundState,
     StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
     StartupClockState, TechLimitBudget, TimerHost, TriggerActionRecord, TriggerBudget, UnitBudget,
     UnitEventRegistration, UnitStateBudget,

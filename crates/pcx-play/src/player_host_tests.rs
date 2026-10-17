@@ -477,3 +477,6 @@ mod unit_creation;
 
 #[path = "trigger_host_tests.rs"]
 mod trigger_admission;
+
+#[path = "player_alliance_tests.rs"]
+mod player_alliance;

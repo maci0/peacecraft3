@@ -6,13 +6,15 @@ unsupported order path. The selected alias, code, on/off strings, requirement an
 cost/cooldown cells come from the caller's `DefaultTables`; no order table is
 embedded in the host.
 
-The unchanged selected Human01 now completes globals and `config`, executes both
+With this admission, the unchanged selected Human01 completes globals and `config`, executes both
 fresh-unit off requests as `false`, and reaches `SetPlayerAlliance` at map span
 `224476..224550` (selected `common.j` declaration `60256..60399`). It retains 155
 source-bound units on the same arena, context and localization. This advances the
 previous `IssueImmediateOrder` boundary at `67827..67884`. The object catalog is
 still the explicitly selected compatibility catalog; native Legacy archive
 priority is unproved. No playable chapter or rendered combat is claimed.
+The subsequent [directed-alliance slice](script-player-setup.md#executed-directed-alliance-assignments)
+advances the same map to `SetPlayerState`; alliance gameplay remains open.
 
 The recovered baseline gate and the integration evidence remain local under
 `.scratch/campaign-host-recovery-20261017/` and

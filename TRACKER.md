@@ -1301,6 +1301,11 @@ Format: `date — subsystem — symptom — root cause — status`
       `SetPlayerAlliance` at map span `224476..224550`, retaining 155 units on
       the same Host/context. Combat modifiers, animation and the application
       startup caller remain open; see `script-immediate-orders.md`.
+      Explicit directed alliance admission subsequently retains 26 tuples from
+      the same map's executed calls, preserving false and separate directions.
+      The next refusal is `SetPlayerState`, map span `225072..225136`, with
+      843 shared identities and 155 units. Getter/default policy and alliance
+      gameplay remain open; see `script-player-setup.md`.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or
       upgrade effects. Applied camera motion remains open. See

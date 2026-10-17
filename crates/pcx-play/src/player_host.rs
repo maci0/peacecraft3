@@ -1,4 +1,4 @@
-use super::{Entry, Error, Failure, ObjectHost};
+use super::{Entry, Error, Failure, ObjectHost, below};
 use crate::map_admission::ParsedMapContext;
 use crate::neutral_player::{
     BJ_MAX_PLAYER_SLOTS_NATIVE_NAME, NeutralError, RuleProblem, SelectedMapNeutralHost,
@@ -39,6 +39,9 @@ pub struct PlayerSettings {
     pub tech_max: Vec<(i32, i32)>,
     /// Executed `SetPlayerTechResearched` pairs. Absence is unset, not level 0.
     pub tech_researched: Vec<(i32, i32)>,
+    /// Executed directed `(other player, alliance setting, value)` assignments.
+    /// Absence is unset; `false` is an explicit assignment, never a mirrored default.
+    pub alliances: Vec<(HandleId, HandleId, bool)>,
 }
 /// Caller bound on stored `(player, techid)` records. Not a native or build limit.
 #[derive(Clone, Copy, Debug)]
@@ -55,7 +58,12 @@ pub(super) enum TechRead {
     /// The executed `setToLevel`, including an executed 0.
     Level(i32),
 }
-struct TechLimits {
+/// Caller bound on distinct directed alliance assignments across all player rows.
+#[derive(Clone, Copy, Debug)]
+pub struct PlayerAllianceBudget {
+    pub max_records: usize,
+}
+struct RecordLimits {
     max_records: usize,
     records: usize,
 }
@@ -63,10 +71,14 @@ pub(super) struct Players {
     source: SelectedMapNeutralHost<()>,
     slots: usize,
     budget: PlayerBudget,
-    tech: Option<TechLimits>,
-    research: Option<TechLimits>,
+    tech: Option<RecordLimits>,
+    research: Option<RecordLimits>,
+    alliance: Option<RecordLimits>,
     rows: Vec<PlayerSettings>,
 }
+const SET_ALLIANCE: &str = "SetPlayerAlliance";
+const CONVERT_ALLIANCE: &str = "ConvertAllianceType";
+const ALLIANCE_KIND: &str = "alliancetype";
 const CONTRACTS: &[(&str, &[&str], &str, bool)] = &[
     ("Player", &["integer"], "player", true),
     ("GetPlayerId", &["player"], "integer", true),
@@ -176,6 +188,7 @@ impl ObjectHost {
             budget,
             tech: None,
             research: None,
+            alliance: None,
             rows: Vec::new(),
         });
         Ok(self)
@@ -213,7 +226,7 @@ impl ObjectHost {
             .players
             .as_mut()
             .ok_or_else(|| fail(Failure::PlayerState("not admitted")))?;
-        players.tech = Some(TechLimits {
+        players.tech = Some(RecordLimits {
             max_records: budget.max_records,
             records: 0,
         });
@@ -255,11 +268,133 @@ impl ObjectHost {
             .players
             .as_mut()
             .ok_or_else(|| fail(Failure::PlayerState("not admitted")))?;
-        players.research = Some(TechLimits {
+        players.research = Some(RecordLimits {
             max_records: budget.max_records,
             records: 0,
         });
         Ok(self)
+    }
+    /// Admit executed alliance assignments on the existing shared player identities.
+    ///
+    /// The symbolic setting comes from the selected `ConvertAllianceType` domain
+    /// and the same declaration source as `Player`. Records are directed: no
+    /// reverse assignment, self restriction or team/default relationship is inferred.
+    /// Updating a retained key does not allocate. New keys respect the aggregate
+    /// caller bound before allocation. This does not enforce alliance gameplay;
+    /// `GetPlayerAlliance` stays unsupported until its initial-state policy is bound.
+    pub fn with_player_alliances(mut self, budget: PlayerAllianceBudget) -> Result<Self, Error> {
+        let fail = |reason| self.inner.error(SET_ALLIANCE, reason);
+        let players = self
+            .players
+            .as_ref()
+            .ok_or_else(|| fail(Failure::PlayerState("not admitted")))?;
+        if players.alliance.is_some() {
+            return Err(fail(Failure::PlayerState("alliances already admitted")));
+        }
+        Self::contract(
+            &self.inner,
+            SET_ALLIANCE,
+            &["player", "player", ALLIANCE_KIND, "boolean"],
+            "nothing",
+            false,
+            Some("player"),
+        )?;
+        Self::contract(
+            &self.inner,
+            CONVERT_ALLIANCE,
+            &["integer"],
+            ALLIANCE_KIND,
+            true,
+            None,
+        )?;
+        let player = self
+            .inner
+            .program
+            .natives()
+            .get("Player")
+            .ok_or_else(|| fail(Failure::Signature))?;
+        for name in [SET_ALLIANCE, CONVERT_ALLIANCE] {
+            let native = self
+                .inner
+                .program
+                .natives()
+                .get(name)
+                .ok_or_else(|| fail(Failure::Signature))?;
+            if native.source != player.source {
+                return Err(fail(Failure::Source));
+            }
+        }
+        let conversion = self
+            .inner
+            .conversions
+            .get(CONVERT_ALLIANCE)
+            .ok_or_else(|| fail(Failure::Signature))?;
+        if conversion.source != player.source {
+            return Err(fail(Failure::Source));
+        }
+        if conversion.kind != ALLIANCE_KIND || !below(&self.inner.program, ALLIANCE_KIND, "handle")
+        {
+            return Err(fail(Failure::Signature));
+        }
+        if conversion.domain.is_empty() {
+            return Err(fail(Failure::EmptyDomain));
+        }
+        std::alloc::Layout::array::<(HandleId, HandleId, bool)>(budget.max_records)
+            .map_err(|_| fail(Failure::Capacity))?;
+        self.players
+            .as_mut()
+            .ok_or_else(|| fail(Failure::PlayerState("not admitted")))?
+            .alliance = Some(RecordLimits {
+            max_records: budget.max_records,
+            records: 0,
+        });
+        Ok(self)
+    }
+    fn set_player_alliance(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let fail = |reason| self.inner.error(SET_ALLIANCE, reason);
+        let [source, target, Value::Handle(setting), Value::Bool(value)] = args else {
+            return Err(fail(Failure::PlayerArguments));
+        };
+        let source = self.player_index(source, SET_ALLIANCE)?;
+        let target = self.player_index(target, SET_ALLIANCE)?;
+        let enumerand = self
+            .inner
+            .symbolic_value(*setting, ALLIANCE_KIND)
+            .map_err(|e| fail(e.failure))?;
+        if !self
+            .inner
+            .conversions
+            .get(CONVERT_ALLIANCE)
+            .is_some_and(|conversion| conversion.domain.contains(&enumerand))
+        {
+            return Err(fail(Failure::OutsideDomain(enumerand)));
+        }
+        let players = self
+            .players
+            .as_mut()
+            .ok_or_else(|| fail(Failure::PlayerState("not admitted")))?;
+        let target = players.rows[target].identity;
+        let limits = players
+            .alliance
+            .as_mut()
+            .ok_or_else(|| fail(Failure::PlayerState("alliances not admitted")))?;
+        let assignments = &mut players.rows[source].alliances;
+        if let Some(stored) = assignments
+            .iter_mut()
+            .find(|(other, kind, _)| *other == target && *kind == *setting)
+        {
+            stored.2 = *value;
+            return Ok(Value::Null);
+        }
+        if limits.records >= limits.max_records {
+            return Err(fail(Failure::Budget("player alliance assignments")));
+        }
+        assignments
+            .try_reserve(1)
+            .map_err(|_| fail(Failure::Capacity))?;
+        assignments.push((target, *setting, *value));
+        limits.records += 1;
+        Ok(Value::Null)
     }
     pub fn player_slots(&self) -> Option<usize> {
         self.players.as_ref().map(|p| p.slots)
@@ -345,6 +480,10 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         let players = self.players.as_ref()?;
+        if name == SET_ALLIANCE {
+            players.alliance.as_ref()?;
+            return Some(self.set_player_alliance(args));
+        }
         let tech = TECH_CONTRACTS.iter().any(|c| c.0 == name);
         let research = RESEARCH_CONTRACTS.iter().any(|c| c.0 == name);
         if tech {
@@ -396,6 +535,7 @@ impl ObjectHost {
                 on_score_screen: None,
                 tech_max: Vec::new(),
                 tech_researched: Vec::new(),
+                alliances: Vec::new(),
             });
             return Ok(Value::Handle(id));
         }
