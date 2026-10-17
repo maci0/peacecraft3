@@ -2001,3 +2001,15 @@ actions, repeated-run stability and scheduler/world integration remain open.
 - [ ] Native cell geometry, membership, event delivery, the application world/clock,
   rendered gameplay, chapter completion and the 100-consecutive original baseline
   remain open. See [the supported region slice](docs/re-notes/script-regions.md).
+
+### 2026-10-17 — retained widget death subscriptions
+
+- [~] Source-bound `TriggerRegisterDeathEvent` records use the existing arena for
+  actual units and destructables with a separate caller limit. Registration
+  preserves disabled state and runs no callback. Item widgets remain unsupported.
+- [~] Unchanged Human01 passes three destructable death subscriptions through the
+  production factory. Globals and `config` finish; `main` next refuses
+  `GetRandomReal` at map span `186558..186584`.
+- [ ] Death detection/context/delivery, native random-stream fidelity, the
+  application world/clock, rendered gameplay and the 100-consecutive original
+  baseline remain open. See [the subscription scope](docs/re-notes/script-trigger-admission.md#widget-death-subscriptions).

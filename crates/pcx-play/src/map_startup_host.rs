@@ -69,6 +69,8 @@ pub struct MapStartupBudgets {
     pub trigger_conditions: Option<usize>,
     /// None keeps player-unit event registration unsupported.
     pub player_unit_events: Option<usize>,
+    /// None keeps widget death-event registration unsupported.
+    pub death_events: Option<usize>,
     /// None keeps player-event registration unsupported.
     pub player_events: Option<usize>,
     /// None keeps region creation, rectangle requests and subscriptions unsupported.
@@ -388,6 +390,9 @@ pub fn assemble(
     }
     if let Some(limit) = budgets.player_unit_events {
         object = object.with_player_unit_events(limit)?;
+    }
+    if let Some(limit) = budgets.death_events {
+        object = object.with_death_events(limit)?;
     }
     if let Some(limit) = budgets.player_events {
         object = object.with_player_events(limit)?;

@@ -348,3 +348,52 @@ behavior, rendered gameplay, chapter completion or the 100-consecutive original
 baseline. Local commands, immutable input/source hashes and results are in
 `.scratch/player-event-root-20261017/`. No original client, new render or site
 publication was run for this slice.
+
+## Widget death subscriptions
+
+`ObjectHost::with_death_events(max_records)` admits the selected non-constant
+`TriggerRegisterDeathEvent(trigger, widget) -> event` contract after trigger
+admission. The selected creation declarations and widget/unit/destructable type
+ancestry must share its source. Missing or incompatible contracts, script
+overrides, duplicate admission and impossible platform capacities refuse.
+`MapStartupBudgets.death_events` is optional; absence keeps the native unsupported.
+
+A successful call requires an actual created trigger and an existing unit or
+destructable entry. Reserved identities with a matching family name, nulls,
+unknown identities and other families refuse. One event token on the existing
+arena retains the exact trigger and widget. `death_event_registration` exposes
+that pair; `retained_death_events` counts these records independently of unit,
+player, timer and other subscriptions. Repeated pairs get distinct tokens under
+the same recreation resource policy as other retained subscriptions. Record
+limits and arena capacity are checked before counters change, preserving prior
+records on failure. The path introduces no second arena, world, VM or clock.
+
+Registration does not change explicit trigger-enabled state, infer a life total,
+kill or resurrect a widget, evaluate conditions or run actions. A destructable's
+creation-time dead-form flag is retained separately and is not interpreted as a
+new death transition. Item widgets are unsupported because this arena has no
+created item entries. Death detection, already-dead behavior, native duplicate
+identity, unregistration, event context/order and action delivery remain open.
+
+Synthetic owned-VM checks cover actual unit and destructable associations,
+repeated pairs, disabled state and unexecuted actions. Invalid-input checks leave
+capacity available so exhaustion cannot conceal missing handle validation.
+Separate record/arena limits, source/type/signature checks and optional admission
+are exercised. The application regression delivers a real synthetic map through
+the production factory; replacement without opt-in or with an exhausted limit
+keeps the previously published context, lifetime witness and event record.
+
+The unchanged Human01 Program now passes three death subscriptions through the
+production factory. Each returned event retains its actual existing trigger and
+destructable identity; all earlier source, startup, timer and region checks still
+pass. Globals and `config` finish. `main` next refuses `GetRandomReal` at map span
+`186558..186584`, common declaration `134223..134292`. The same arena holds
+1016 identities, 144 rectangles, 155 units and 36 triggers. The explicit verifier
+clock remains unchanged. The retained compatibility catalog and qualified startup
+observations are conditions of this check, not inferred original defaults.
+
+Commands, preserved failed fixture runs and successful source/input/artifact
+hashes are local in `.scratch/death-event-root-20261017/`. No new original-client,
+render or public-site run was performed. Original random-stream behavior, event
+delivery, the application world/clock, full chapter completion and the
+100-consecutive original baseline remain open.

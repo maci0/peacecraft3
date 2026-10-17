@@ -217,6 +217,7 @@ enum Entry {
     },
     RegisteredPlayerUnitEvent(objects::PlayerUnitEventRegistration),
     RegisteredPlayerEvent(objects::PlayerEventRegistration),
+    RegisteredDeathEvent(objects::DeathEventRegistration),
     TriggerCondition(objects::TriggerConditionRegistration),
     /// One retained timer-expiry subscription; no clock or pending firing.
     RegisteredTimerEvent {
@@ -557,6 +558,7 @@ impl EnumHost {
             Entry::RegisteredUnitEvent { .. }
             | Entry::RegisteredPlayerUnitEvent(_)
             | Entry::RegisteredPlayerEvent(_)
+            | Entry::RegisteredDeathEvent(_)
             | Entry::RegisteredRegionEvent(_)
             | Entry::RegisteredTimerEvent { .. }
             | Entry::RegisteredGameStateEvent { .. } => "event",
@@ -663,10 +665,10 @@ mod tests;
 mod objects;
 pub use objects::{
     CameraDestination, CameraFieldRecord, CameraState, ConditionBudget, ConditionCallback,
-    DayNightState, DestructableBudget, DestructableCreation, ExecutedUnit, ExecutedUnitState,
-    FileSoundState, FilterBudget, FilterCallback, ForceBudget, GameStateEventRegistration,
-    LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection, ObjectHost,
-    PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
+    DayNightState, DeathEventRegistration, DestructableBudget, DestructableCreation, ExecutedUnit,
+    ExecutedUnitState, FileSoundState, FilterBudget, FilterCallback, ForceBudget,
+    GameStateEventRegistration, LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection,
+    ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
     PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration, QuestBudget, QuestEvent,
     QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration, RegionRectRequest,
     ResearchObservation, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest,
