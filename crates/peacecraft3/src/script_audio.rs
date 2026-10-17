@@ -32,8 +32,9 @@ use pcx_script::HandleId;
 use std::{collections::HashSet, sync::Weak};
 use tracing::warn;
 
-/// Caller aggregate caps for one playback batch and the retained source cache.
-/// Absence refuses playback. No limit is invented here.
+/// Optional caller caps for one batch and the retained source cache.
+/// Without an override, both ceilings come from the published Host's admitted
+/// encoded bank bytes. This does not bound backend decoder or total heap usage.
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct ScriptAudioLimits {
     pub max_staged_bytes: usize,
@@ -125,12 +126,18 @@ fn play_published_script_sounds(
     if objects.pending_sound_starts().is_empty() {
         return;
     }
-    let Some(limits) = limits.as_deref().copied() else {
-        remember(
-            &mut report,
-            "script audio staging and live limits were not supplied",
-        );
-        return;
+    let limits = match limits.as_deref().copied() {
+        Some(limits) => limits,
+        None => match objects.sound_resource_bytes() {
+            Ok(bytes) => ScriptAudioLimits {
+                max_staged_bytes: bytes,
+                max_live_bytes: bytes,
+            },
+            Err(error) => {
+                remember(&mut report, &error.to_string());
+                return;
+            }
+        },
     };
     if let Err(error) = publish_queued_starts(
         objects,
@@ -1257,6 +1264,7 @@ endglobals
             &create(r"Media\tone.bin", false, false, false, 0, 0, ""),
         );
         let digest = object_host.file_mp3_state(id).unwrap().resource.sha256();
+        assert_eq!(object_host.sound_resource_bytes().unwrap(), encoded.len());
         let mut world = world_for(object_host, limits_for(encoded.len()));
         publish(&mut world).unwrap();
         let mut voices = world.query::<(&AudioPlayer, &ScriptVoice)>();
@@ -1405,6 +1413,7 @@ E\r\n";
         )
         .unwrap();
         let mut object_host = host(assets).with_label_sounds(bank).unwrap();
+        assert_eq!(object_host.sound_resource_bytes().unwrap(), bytes.len() * 2);
         let value = object_host
             .native(
                 "CreateMIDISound",

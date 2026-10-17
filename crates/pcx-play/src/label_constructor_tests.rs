@@ -302,3 +302,30 @@ fn label_spatial_assignments_require_the_executed_creation_flag() {
         Some("71")
     );
 }
+
+#[test]
+fn admitted_sound_byte_ceiling_counts_banks_without_counting_handle_repeats() {
+    let c = common();
+    let h = host(
+        &c,
+        "function main takes nothing returns nothing\nendfunction\n",
+        8,
+    );
+    assert_eq!(h.sound_resource_bytes().unwrap(), 0);
+    let midi = bank();
+    let creation = vec![named_bank("Remote"), ui_bank()];
+    let expected = std::iter::once(&midi)
+        .chain(&creation)
+        .flat_map(SoundBank::sounds)
+        .map(|sound| sound.bytes().len())
+        .sum::<usize>();
+    let mut h = h
+        .with_label_sounds(midi)
+        .unwrap()
+        .with_label_sound_creation(creation)
+        .unwrap();
+    assert_eq!(h.sound_resource_bytes().unwrap(), expected);
+    create(&mut h, [false; 3], [0; 2]).unwrap();
+    create(&mut h, [false; 3], [0; 2]).unwrap();
+    assert_eq!(h.sound_resource_bytes().unwrap(), expected);
+}

@@ -168,6 +168,35 @@ impl ObjectHost {
     pub fn sound_bank(&self) -> Option<&SoundBank> {
         self.sounds.as_ref()
     }
+    /// Encoded bytes already retained by the admitted sound banks, without copying.
+    /// Repeated labels or equal files are conservatively counted separately.
+    pub fn sound_resource_bytes(&self) -> Result<usize, Error> {
+        let labels = self
+            .sounds
+            .iter()
+            .chain(self.label_sound_creation.iter().flatten())
+            .flat_map(SoundBank::sounds)
+            .map(|sound| sound.bytes().len());
+        let files = self.file_sound_assets();
+        let pcm = files
+            .into_iter()
+            .flat_map(|bank| bank.resources())
+            .map(|sound| sound.bytes().len());
+        let mp3 = files
+            .into_iter()
+            .flat_map(|bank| bank.mp3_resources())
+            .map(|sound| sound.bytes().len());
+        labels
+            .chain(pcm)
+            .chain(mp3)
+            .try_fold(0usize, |total, bytes| {
+                total.checked_add(bytes).ok_or_else(|| {
+                    self.inner
+                        .error("StartSound", Failure::Budget("admitted sound bytes"))
+                })
+            })
+    }
+
     /// Queues sound starts for an explicit audio consumer. Admission does not
     /// install a playback device or infer channel, fade, looping or restart rules.
     pub fn with_sound_starts(mut self, max_pending: usize) -> Result<Self, Error> {

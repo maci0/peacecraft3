@@ -19,12 +19,16 @@ handle, including twice in one batch, is also reported: native restart versus
 mix behavior remains unqualified. A finished one-shot handle can start again.
 Distinct sound handles with the same digest share one source buffer.
 
-`ScriptAudioLimits` must be supplied. A non-empty queue stays queued if limits
-are absent or staging admission fails. `max_staged_bytes` bounds source bytes
-copied in one batch; `max_live_bytes` bounds the retained encoded source cache.
-Both are checked before `DecoderWave` or MP3 copies. These are not total renderer,
-backend decoder or voice metadata memory limits. A failed attempt releases its
-new source references and leaves the queue unchanged.
+The default staging and live encoded-byte ceiling is the checked sum of the
+published Host's already admitted MIDI-label, creation-label, PCM-file and
+MP3-file banks. This reads retained inventory without cloning it. Repeated
+labels/files count separately, making the ceiling conservative. Repeated handles
+do not increase it. The queue can only name resources from those immutable banks;
+source sharing therefore cannot grow the cache beyond that inventory.
+`ScriptAudioLimits` is an optional caller override for a tighter quota. A failed
+staging attempt releases its new references and leaves the queue unchanged.
+These ceilings bound encoded source copies, not total renderer, backend decoder
+or voice metadata memory. No measured game budget is copied into a constant.
 
 A playable request spawns an `AudioPlayer`. The recorded looping flag selects
 `PlaybackSettings::LOOP`; a one-shot uses `PlaybackSettings::REMOVE`. An empty

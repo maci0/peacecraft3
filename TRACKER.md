@@ -1844,3 +1844,18 @@ PCM and MP3 samples without a device. Evidence:
 `docs/re-notes/script-audio-playback.md`. Audio device output, native timing and
 mixing, automatic qualified Host inputs, timer scheduling and full campaign
 playback remain open. No fresh rendered or audible comparison is claimed.
+
+The script-sound consumer now derives its default staging/cache byte ceilings
+from the published Host's already admitted immutable sound banks, including
+MIDI labels, creation labels, PCM files and MP3 files. No separate limit resource
+or hard-coded default is required on the installed path. An explicit caller
+quota remains an override. Inventory reads do not clone sound bytes; repeated
+handles cannot enlarge the ceiling. A production-factory regression now omits
+the limit resource and verifies two sound handles share one source without
+replay. All 379 play tests pass on native and actual WASI. The 364 app, 19 library,
+85 map-loading and 92 factory/audio tests, strict native/browser Clippy, full
+browser build, warning-denied docs and formatting also pass. Evidence:
+`.scratch/script-audio-root-20261017/bank-ceiling-1/`. These are encoded-copy
+ceilings, not a total backend decoder/voice memory bound. Native mixing, device
+output, automatic qualified Host input preparation and full campaign playback
+remain open.

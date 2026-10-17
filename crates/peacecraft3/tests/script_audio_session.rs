@@ -416,55 +416,34 @@ endfunction
         assert!(error.contains("staging limit"), "{error}");
     }
     #[test]
-    fn missing_limits_only_report_when_a_start_is_queued() {
+    fn production_factory_derives_playback_ceiling_from_its_admitted_bank() {
         let pcm = tone();
         let mut app = app(ScriptAudioLimits {
             max_staged_bytes: 0,
             max_live_bytes: 0,
         });
         app.world_mut().remove_resource::<ScriptAudioLimits>();
-        let silent = SOUND_SCRIPT
-            .replace("call StartSound(voice)", "")
-            .replace("call StartSound(looped)", "");
-        deliver_sound(&mut app, &silent, &pcm, 7);
+        deliver_sound(&mut app, SOUND_SCRIPT, &pcm, 7);
+        let bytes = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host()
+            .unwrap()
+            .objects_mut()
+            .sound_resource_bytes()
+            .unwrap();
+        assert_eq!(bytes, pcm.len());
+        assert_eq!(voices(&mut app).len(), 2);
+        assert_eq!(app.world().resource::<ScriptAudioReport>().played, 2);
         assert!(
             app.world()
                 .resource::<ScriptAudioReport>()
                 .admission_error
                 .is_none()
         );
-        let sound = app
-            .world()
-            .resource::<MapScriptSession<MapStartupHost>>()
-            .global("voice")
-            .unwrap();
-        app.world_mut()
-            .resource_mut::<MapScriptSession<MapStartupHost>>()
-            .host()
-            .unwrap()
-            .objects_mut()
-            .native("StartSound", &[sound])
-            .unwrap();
+        assert_eq!(app.world().resource::<Assets<AudioSource>>().len(), 1);
         app.update();
-        assert!(
-            app.world()
-                .resource::<ScriptAudioReport>()
-                .admission_error
-                .as_deref()
-                .unwrap()
-                .contains("not supplied")
-        );
-        assert_eq!(
-            app.world_mut()
-                .resource_mut::<MapScriptSession<MapStartupHost>>()
-                .host()
-                .unwrap()
-                .objects_mut()
-                .pending_sound_starts()
-                .len(),
-            1
-        );
-        assert!(voices(&mut app).is_empty());
+        assert_eq!(app.world().resource::<ScriptAudioReport>().played, 2);
     }
 
     #[test]
