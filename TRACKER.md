@@ -1389,6 +1389,15 @@ Format: `date — subsystem — symptom — root cause — status`
       (common `72797..72927`). All 364 native/actual WASI play tests and strict
       native/browser Clippy pass. No edition/default or archive precedence is
       inferred; see `docs/re-notes/script-startup-settings.md`.
+      Game-state subscriptions now validate selected integer/float state and
+      limitop domains and retain the exact trigger/state/comparison identities
+      and finite real threshold bits on the same arena. The unchanged gate passes
+      six registrations, reaching 901 identities and nine triggers before
+      `GetCameraBoundMinX` in Blizzard at `440924..440944`
+      (common `154188..154249`). Three new regressions and all 367 native/actual
+      WASI play tests pass; strict native/browser Clippy passes. No comparator,
+      running clock, initial notification or callback delivery is inferred. See
+      `docs/re-notes/script-trigger-admission.md`.
       Live participation, application provider and general eligibility remain open.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or

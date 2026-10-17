@@ -1221,9 +1221,10 @@ labels on the same arena. A separately admitted timer-expiry subscription links
 the actual existing trigger and live timer through an event on that arena; its
 following action is retained without running it. Explicit source-qualified
 runtime version input now passes `VersionGet` without allocating or guessing an
-edition. The next unsupported call is `TriggerRegisterGameStateEvent` in
-`Blizzard.j` (`435358..435454`). Timer start, expiry and callback delivery remain
-unsupported. Fog/mask setters retain
+edition. Source/domain-bound game-state subscriptions now retain six executed
+trigger/state/comparison/threshold associations on that arena. The next
+unsupported call is `GetCameraBoundMinX` in `Blizzard.j` (`440924..440944`).
+Comparison evaluation, timer start, expiry and callback delivery remain unsupported. Fog/mask setters retain
 independent booleans;
 speed writes remain unsupported because original requests do not always read
 back as requested. No participation or settings default is inferred. Wrapping

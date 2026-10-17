@@ -205,6 +205,13 @@ enum Entry {
         trigger: HandleId,
         timer: HandleId,
     },
+    /// One source-bound game-state subscription; no evaluated comparison.
+    RegisteredGameStateEvent {
+        trigger: HandleId,
+        state: HandleId,
+        limitop: HandleId,
+        limit: f32,
+    },
     /// One loaded `Filter` callback; its body is not entered during wrapping.
     Filter {
         function: FunctionId,
@@ -524,7 +531,9 @@ impl EnumHost {
             Entry::Destructable { .. } => "destructable",
             Entry::Unit { .. } => "unit",
             Entry::Trigger => "trigger",
-            Entry::RegisteredUnitEvent { .. } | Entry::RegisteredTimerEvent { .. } => "event",
+            Entry::RegisteredUnitEvent { .. }
+            | Entry::RegisteredTimerEvent { .. }
+            | Entry::RegisteredGameStateEvent { .. } => "event",
             Entry::TriggerAction { .. } => "triggeraction",
             Entry::Force { .. } => self
                 .program
@@ -620,10 +629,11 @@ mod objects;
 pub use objects::{
     CameraDestination, CameraFieldRecord, CameraState, DayNightState, DestructableBudget,
     DestructableCreation, ExecutedUnit, ExecutedUnitState, FileSoundState, FilterBudget,
-    FilterCallback, ForceBudget, LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection,
-    ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerSettings,
-    PlayerStateRequestBudget, QuestBudget, QuestEvent, QuestFlag, SoundProperties, SoundState,
-    StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
-    StartupClockState, StartupSettings, TechLimitBudget, TimerEventRegistration, TimerHost,
-    TriggerActionRecord, TriggerBudget, UnitBudget, UnitEventRegistration, UnitStateBudget,
+    FilterCallback, ForceBudget, GameStateEventRegistration, LabelSoundFlags, MapConfig,
+    MapConfigBudget, MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget,
+    PlayerBudget, PlayerSettings, PlayerStateRequestBudget, QuestBudget, QuestEvent, QuestFlag,
+    SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest, StartLocation,
+    StartPriorities, StartPriority, StartupClockState, StartupSettings, TechLimitBudget,
+    TimerEventRegistration, TimerHost, TriggerActionRecord, TriggerBudget, UnitBudget,
+    UnitEventRegistration, UnitStateBudget,
 };

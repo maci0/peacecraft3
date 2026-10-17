@@ -13,6 +13,9 @@ use pcx_script::{HandleId, Value};
 #[path = "timer_event_host.rs"]
 mod timer_events;
 pub use timer_events::TimerEventRegistration;
+#[path = "game_state_event_host.rs"]
+mod game_state_events;
+pub use game_state_events::GameStateEventRegistration;
 
 const CREATE: &str = "CreateTrigger";
 const REGISTER: &str = "TriggerRegisterUnitEvent";
@@ -59,6 +62,8 @@ pub(super) struct Admission {
     retained_actions: usize,
     timer_event_limit: Option<usize>,
     retained_timer_events: usize,
+    game_state_event_limit: Option<usize>,
+    retained_game_state_events: usize,
 }
 
 impl ObjectHost {
@@ -169,6 +174,8 @@ impl ObjectHost {
             retained_actions: 0,
             timer_event_limit: None,
             retained_timer_events: 0,
+            game_state_event_limit: None,
+            retained_game_state_events: 0,
         });
         Ok(self)
     }
@@ -217,6 +224,11 @@ impl ObjectHost {
             REGISTER => Some(self.register_unit_event(args)),
             timer_events::REGISTER if self.triggers.as_ref()?.timer_event_limit.is_some() => {
                 Some(self.register_timer_event(args))
+            }
+            game_state_events::REGISTER
+                if self.triggers.as_ref()?.game_state_event_limit.is_some() =>
+            {
+                Some(self.register_game_state_event(args))
             }
             ADD if self.inner.program.natives().get(ADD).is_some() => Some(self.add_action(args)),
             _ => None,

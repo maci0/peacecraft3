@@ -107,3 +107,60 @@ script execution evidence. Original callback timing, native lifetime behavior,
 application Host construction, scheduler delivery, rendered gameplay and chapter
 completion remain open. No original-client run or original payload publication
 was performed for this change.
+
+## Game-state subscriptions
+
+`ObjectHost::with_game_state_events(max_records)` separately admits the loaded
+non-constant `TriggerRegisterGameStateEvent(trigger, gamestate, limitop, real) -> event`
+contract after trigger creation is admitted. It requires the selected
+`ConvertIGameState`, `ConvertFGameState` and `ConvertLimitOp` contracts, their
+source-defined domains and the trigger declaration source. The authored state
+ancestry must reach `gamestate`; all state/comparison ancestry is walked to
+`handle` with source checks. No state number, comparison number, threshold or
+parent chain is copied from a measured input into production.
+
+The call requires an actual created trigger, a symbolic integer or float state
+in its corresponding selected domain, a symbolic comparison in the selected
+limitop domain, and a finite real threshold. Integer threshold arguments use the
+existing VM's `i32 as f32` promotion. Each successful call allocates one event on
+the existing bounded arena and retains these identities and threshold bits.
+Repeated calls receive distinct records. Independent record limits and shared
+arena capacity are checked without changing prior records on failure.
+
+`game_state_event_registration` exposes the trigger, state identity, borrowed
+state type, comparison identity and real threshold. Its `state_value` and
+`limitop_value` are source enumerands, not sampled game-state values or an
+interpreted operator. The selected program and enum arena remain their authority.
+`retained_game_state_events` counts these records independently of unit and timer
+events. Nulls, unknown/wrong families, unselected/out-of-domain values, nonfinite
+thresholds, incompatible declarations and conflicting sources refuse.
+
+Registration does not query or change a game state, evaluate a comparison, invent
+an initial condition, advance time or deliver an action. The immutable startup
+clock is unchanged. Condition evaluation, crossing/initial-notification rules,
+clock integration, trigger-enabled semantics and callback context/delivery remain
+open; a future consumer must use the actual session and its callback tickets.
+No second clock, VM, handle pool or scheduler is added.
+
+Three new synthetic groups exercise owned-VM integer/float subscriptions,
+loaded enum identities, exact negative/signed-zero threshold bits and integer
+promotion, independent counters, unexecuted actions, interface/source/ancestry
+checks, zero/full record policies and arena exhaustion. Invalid-input tests keep
+one record slot available so exhaustion cannot mask missing validation. All 367
+play tests pass natively and through actual WASI execution, with five explicit
+original-input ignores. Strict native/browser Clippy checks pass.
+
+The unchanged Human01 Program, resources and qualified startup inputs now pass
+six game-state registrations. Every retained trigger/state/comparison identity,
+source enumerand and threshold bit matches the executed calls. Previous source,
+context, player, unit, force, sound, action, version and timer checks still pass.
+The same arena contains 901 identities, 155 units, nine triggers, three unit
+events, one timer subscription and six game-state subscriptions. Its next
+unsupported call is `GetCameraBoundMinX`, Blizzard span `440924..440944`, common
+declaration `154188..154249`. No camera-bound getter value is fabricated.
+
+The missing-API baseline, initial and strengthened tests, exact commands, stable
+source/artifact hashes and successful selected-program verifier stay local in
+`.scratch/game-state-event-root-20261017/`. This is retained registration and
+recreated script execution evidence, not proof of original event delivery or a
+playable chapter. No new original-client, browser, render or site run occurred.
