@@ -2013,3 +2013,17 @@ actions, repeated-run stability and scheduler/world integration remain open.
 - [ ] Death detection/context/delivery, native random-stream fidelity, the
   application world/clock, rendered gameplay and the 100-consecutive original
   baseline remain open. See [the subscription scope](docs/re-notes/script-trigger-admission.md#widget-death-subscriptions).
+
+### 2026-10-17 — selected primary random-generator evidence
+
+- [~] Static registration/handler tracing on the selected executable identifies
+  the shared primary draw helper and a separate secondary-state seed path.
+  Bounded offline selected-instruction emulation matches all 80 retained integer
+  observations from the two original probe runs, including post-real draws.
+- [~] The retained unchanged Human01 prefix has no executed JASS random call or
+  seed setter before its first `GetRandomReal` attempt. Engine-internal prior
+  consumption and original initial state are not observed by that trace.
+- [ ] Production `GetRandomReal` remains unsupported. Real arithmetic,
+  secondary-state effects, initial-state admission, paired recreation execution
+  and the 100-consecutive original baseline remain open. See
+  [the evidence boundaries](docs/re-notes/original-rng-control.md#selected-primary-generator-static-and-retained-output-checks).
