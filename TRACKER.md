@@ -2136,3 +2136,18 @@ formatting. No original-client runtime or rendered comparison was repeated;
 automatic host-input production, chapter completion and the 100-consecutive
 original baseline remain open. Evidence:
 `.scratch/startup-retry-root-20261018/review-1/acceptance.json`.
+
+### 2026-10-18 — current-source private browser smoke
+
+A private browser package rebuilt from `d6c837e` passes a bounded 1280×960 run
+with locally imported client/MPQ inputs. Reviewed captures cover Main, the blank
+Options landing, Video and the five-row resolution list. The closed resolution
+value has zero vertical-center error. All 17 requests stay local, with no page
+or console errors; four WebGL readback-stall warnings remain in the evidence.
+
+The 26-file package includes code and decoder files only. Original assets remain
+local and are neither packaged nor uploaded. No product code changed. This is
+not a performance, native-parity, full accessibility or gameplay/HUD acceptance.
+The public site and unresolved 4K capture remain unchanged, as does the
+100-consecutive original baseline gate. Evidence:
+`.scratch/browser-refresh-root-20261018/review-1/acceptance.json`.
