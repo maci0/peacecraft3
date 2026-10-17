@@ -74,8 +74,8 @@ existing unit-event records. Record limits and arena allocation fail before any
 counter changes, preserving prior records.
 
 These are retained subscriptions. Registration does not start the timer, infer a
-trigger-enabled default or run its actions. `TimerStart`, timeout/period queries,
-expiry delivery and callback context remain unsupported. `DestroyTimer` retains
+trigger-enabled default or run its actions. This registration slice alone does
+not admit `TimerStart`, time queries, expiry delivery or callback context. `DestroyTimer` retains
 its existing identity-revocation behavior. Historical subscription metadata stays
 inspectable, but no dead timer can be registered again; retaining that record is
 not evidence of native unregister semantics or a deliverable event. A future
@@ -164,3 +164,9 @@ source/artifact hashes and successful selected-program verifier stay local in
 `.scratch/game-state-event-root-20261017/`. This is retained registration and
 recreated script execution evidence, not proof of original event delivery or a
 playable chapter. No new original-client, browser, render or site run occurred.
+
+
+The later [positive-timeout timer consumer](legacy-timer-start.md#bounded-recreation-timer-consumer)
+admits non-yielding direct handlers on the same arena and published VM. An expiry
+with any matching retained subscription refuses before consuming that deadline;
+its direct handler is not run in place of the unresolved trigger actions.

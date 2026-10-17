@@ -4,7 +4,7 @@ use super::{Entry, EnumHost, Error, Failure, below};
 use pcx_script::{HandleId, Host, Value};
 use std::sync::Arc;
 /// Opt-in session objects and authored map/player setup in one bounded arena.
-/// Scheduling, world enumeration and callbacks remain explicit refusals.
+/// Timer delivery uses explicit game time; world enumeration remains unsupported.
 pub struct ObjectHost {
     inner: EnumHost,
     group_limit: Option<usize>,
@@ -36,6 +36,7 @@ pub struct ObjectHost {
     startup_settings: Option<StartupSettings>,
     startup_version: Option<HandleId>,
     stock: Option<stock::State>,
+    timers: Option<timers::State>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -77,6 +78,7 @@ impl ObjectHost {
             startup_settings: None,
             startup_version: None,
             stock: None,
+            timers: None,
         })
     }
     fn contract(
@@ -180,7 +182,7 @@ impl ObjectHost {
         self.inner
             .arena
             .iter()
-            .filter(|e| matches!(e, Entry::Timer { live: true }))
+            .filter(|e| matches!(e, Entry::Timer { live: true, .. }))
             .count()
     }
     pub fn live_groups(&self) -> usize {
@@ -286,7 +288,13 @@ impl ObjectHost {
             return Err(self.inner.error("CreateTimer", Failure::TimerArguments));
         }
         self.inner
-            .allocate(Entry::Timer { live: true }, "CreateTimer")
+            .allocate(
+                Entry::Timer {
+                    live: true,
+                    run: None,
+                },
+                "CreateTimer",
+            )
             .map(Value::Handle)
     }
     fn destroy(&mut self, args: &[Value]) -> Result<Value, Error> {
@@ -296,11 +304,12 @@ impl ObjectHost {
         let at = usize::try_from(id.token() - 1)
             .map_err(|_| self.inner.error("DestroyTimer", Failure::Identity))?;
         let failure = match self.inner.arena.get_mut(at) {
-            Some(Entry::Timer { live }) if *live => {
+            Some(Entry::Timer { live, run }) if *live => {
+                *run = None;
                 *live = false;
                 return Ok(Value::Null);
             }
-            Some(Entry::Timer { live: false }) | None => Failure::Identity,
+            Some(Entry::Timer { live: false, .. }) | None => Failure::Identity,
             _ => Failure::WrongFamily,
         };
         Err(self.inner.error("DestroyTimer", failure))
@@ -308,6 +317,9 @@ impl ObjectHost {
 }
 impl Host for ObjectHost {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.timer_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.stacked_sound_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -495,3 +507,11 @@ pub use settings::StartupSettings;
 #[path = "stock_host.rs"]
 mod stock;
 pub use stock::StockBudget;
+
+#[path = "timer_runtime_host.rs"]
+pub(super) mod timers;
+pub use timers::TimerExpiry;
+
+#[cfg(test)]
+#[path = "timer_runtime_tests.rs"]
+mod timer_runtime_tests;

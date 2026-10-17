@@ -221,3 +221,44 @@ fn execution_failure<H: Host>(
         diagnostic,
     }))
 }
+
+#[derive(Debug, thiserror::Error)]
+pub enum TimerSessionError {
+    #[error(transparent)]
+    Session(#[from] ScriptSessionError),
+    #[error(transparent)]
+    Timer(#[from] pcx_play::playercolor_host::Error),
+}
+
+impl MapScriptSession<pcx_play::map_startup_host::MapStartupHost> {
+    /// Deliver positive-timeout callbacks in this published VM using explicit game time.
+    /// Errors retain prior effects; the host clock records how far delivery reached.
+    /// This method supplies no application clock, pause policy or yielding continuation.
+    pub fn advance_timers(
+        &mut self,
+        until: f64,
+        mut budget: usize,
+    ) -> Result<usize, TimerSessionError> {
+        let mut delivered = 0;
+        loop {
+            let expiry = self
+                .host()
+                .ok_or(ScriptSessionError::NoSession)?
+                .objects_mut()
+                .next_timer_expiry(until, &mut budget)?;
+            let Some(expiry) = expiry else {
+                return Ok(delivered);
+            };
+            let result = expiry.callback.map_or(Ok(Value::Null), |id| {
+                self.callback_ticket(id)
+                    .and_then(|ticket| self.call_callback(&ticket, &[]))
+            });
+            self.host()
+                .ok_or(ScriptSessionError::NoSession)?
+                .objects_mut()
+                .finish_timer_expiry(expiry)?;
+            result?;
+            delivered += 1;
+        }
+    }
+}

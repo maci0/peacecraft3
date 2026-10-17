@@ -70,3 +70,10 @@ links an already live timer and an already created trigger through an event
 record on that same arena. It does not add running state or expiration. Timer
 start, scheduler integration and callback delivery remain open; the chapter
 runner's caller-supplied tick callback interface is not a JASS timer scheduler.
+
+
+A later [positive-timeout runtime](legacy-timer-start.md#bounded-recreation-timer-consumer)
+adds one optional run to these same timer entries. Caller-supplied game time and
+an explicit published-session advance enable bounded non-yielding callbacks;
+the timer-only constructor above still admits creation/destruction only.
+Expiry-trigger execution and an automatic application clock remain open.

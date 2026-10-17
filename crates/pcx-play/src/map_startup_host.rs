@@ -150,6 +150,8 @@ pub struct MapStartupInputs {
     pub file_sounds: file_sounds::Assets,
     pub sound_parameters: Banks,
     pub clock: StartupClockInput,
+    /// Explicit game time for positive-timeout timers; absent keeps TimerStart unsupported.
+    pub timer_time: Option<f64>,
     pub catalog: Arc<dyn ObjectCatalog + Send + Sync>,
     pub defend: DefendSelection,
     pub current_research: Option<CurrentResearchInput>,
@@ -309,6 +311,7 @@ pub fn assemble(
         file_sounds,
         sound_parameters,
         clock,
+        timer_time,
         catalog,
         defend,
         current_research,
@@ -366,6 +369,9 @@ pub fn assemble(
         .with_trigger_admission(budgets.triggers)?
         .with_timer_events(budgets.timer_events)?
         .with_game_state_events(budgets.game_state_events)?;
+    if let Some(now) = timer_time {
+        object = object.with_timer_runtime(now)?;
+    }
     if let Some(stock) = budgets.stock {
         object = object.with_stock(stock)?;
     }

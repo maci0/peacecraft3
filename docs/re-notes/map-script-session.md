@@ -24,7 +24,7 @@ spans, initialization count and owner release. The test Hosts implement explicit
 synthetic behavior; their values and effects are not game-native evidence.
 
 This resource does not choose entry names, create gameplay entities, implement
-native handlers or schedule timers. Parsed-data publication and executable-session
+native handlers or choose an application clock. Parsed-data publication and executable-session
 publication stay separate. After a successful `MapRequests` delivery,
 `campaign_startup` resolves map-script `config` and `main` by name and calls
 `replace_sequenced` with `map_startup_host::assemble`. The factory builds one
@@ -38,7 +38,8 @@ written by startup. Stock slot assignment admission is optional and caller-bound
 The launcher still has no automatic producer for the qualified rules, banks, catalog and
 runtime observations in `CampaignHostSupply`; importing assets alone does not
 supply them. Native delivery does not populate `SelectedMapSources` either.
-The qualified Human01 continuation still refuses `TimerStart`; timer scheduling,
+Without explicit timer-runtime inputs, the qualified Human01 continuation still
+refuses `TimerStart`; automatic timer scheduling,
 world rendering and a completed chapter remain open. Execution inherits the VM's
 existing stack and instruction-budget limits. This resource adds no total memory or fuel bound.
 
@@ -68,3 +69,11 @@ synchronous `call`: a suspending candidate is refused and is not published. Its
 current Host factory does not admit a suspending native. A future timer/event
 driver must retain and resume the same VM; it must not restart the entrypoint or
 replace suspension with a fabricated successful native result.
+
+
+The positive-timeout [timer consumer](legacy-timer-start.md#bounded-recreation-timer-consumer)
+opts the factory in through `timer_time` and delivers bounded expiries with
+`advance_timers` on this published session. It mints the callback ticket at
+expiry, after publication, and enters this same VM. It does not implement
+suspending callbacks or choose a default application game clock. A matching
+expiry-trigger subscription refuses before consuming the expiry.

@@ -663,6 +663,7 @@ fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) ->
         catalog,
         defend: defend(),
         current_research: None::<CurrentResearchInput>,
+        timer_time: None,
         post_config: PostConfigObservations::default(),
     }
 }
@@ -1046,3 +1047,6 @@ fn failed_post_config_observation_keeps_the_published_session() {
     );
     assert_eq!(session_marker(&mut app), Value::Int(1));
 }
+
+#[path = "script_timer_cases.rs"]
+mod script_timer_cases;

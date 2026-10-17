@@ -21,8 +21,8 @@ The borrowed and owned localized Hosts forward suspension. The selected-map
 neutral wrapper forwards only natives it does not own. The chapter trace wrapper
 also forwards the hook; its synchronous chapter driver still refuses suspension.
 The application startup factory, script session and current ObjectHost do not
-admit a suspending timer native or drive a scheduler. `TimerStart` remains the
-qualified Human01 refusal. No duration, expiry order, native thread policy or
+admit a suspending timer native or supply an automatic game clock. Without
+explicit timer-runtime inputs, `TimerStart` remains the qualified Human01 refusal. No duration, expiry order, native thread policy or
 `Sleep` behavior is supplied by this VM change.
 
 Each activation retains one body snapshot. Returning or resuming uses that
@@ -49,3 +49,8 @@ The first replay attempt stopped before execution because its historical
 preparation receipt also named a rebuilt `scriptx` tool. The accepted replay
 checks the unchanged native probe maps, source inputs and observation receipts;
 that retired tool is recorded separately and is not re-executed.
+
+
+The later [positive-timeout timer delivery](legacy-timer-start.md#bounded-recreation-timer-consumer)
+uses synchronous callbacks on the same published VM. It does not add `Sleep`,
+suspending timer natives or a continuation scheduler.

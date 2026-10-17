@@ -115,8 +115,8 @@ impl ObjectHost {
             return Err(fail(Failure::WrongFamily));
         }
         match self.inner.entry(*timer).map_err(|e| fail(e.failure))? {
-            Entry::Timer { live: true } => {}
-            Entry::Timer { live: false } => return Err(fail(Failure::Identity)),
+            Entry::Timer { live: true, .. } => {}
+            Entry::Timer { live: false, .. } => return Err(fail(Failure::Identity)),
             _ => return Err(fail(Failure::WrongFamily)),
         }
         let admitted = self

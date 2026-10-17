@@ -24,6 +24,8 @@ pub enum Failure {
     Arguments,
     #[error("arguments do not match the timer native declaration")]
     TimerArguments,
+    #[error("timer runtime: {0}")]
+    TimerState(&'static str),
     #[error("arguments do not match the group native declaration")]
     GroupArguments,
     #[error("arguments do not match the map configuration native declaration")]
@@ -145,6 +147,7 @@ enum Entry {
     Object(String),
     Timer {
         live: bool,
+        run: Option<objects::timers::Run>,
     },
     Group {
         live: bool,
@@ -513,11 +516,11 @@ impl EnumHost {
     pub fn kind(&self, id: HandleId) -> Result<&str, Error> {
         Ok(match self.entry(id)? {
             Entry::Symbolic { kind, .. } | Entry::Object(kind) => kind,
-            Entry::Timer { live: true } => "timer",
+            Entry::Timer { live: true, .. } => "timer",
             Entry::Group { live: true } => "group",
             Entry::Player { .. } => "player",
             Entry::Sound { .. } | Entry::FileSound { .. } => "sound",
-            Entry::Timer { live: false } | Entry::Group { live: false } => {
+            Entry::Timer { live: false, .. } | Entry::Group { live: false } => {
                 return Err(self.error("arena", Failure::Identity));
             }
             Entry::Quest { live: true } => "quest",
@@ -636,6 +639,6 @@ pub use objects::{
     PlayerBudget, PlayerSettings, PlayerStateRequestBudget, QuestBudget, QuestEvent, QuestFlag,
     ResearchObservation, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest,
     StartLocation, StartPriorities, StartPriority, StartupClockState, StartupSettings, StockBudget,
-    TechLimitBudget, TimerEventRegistration, TimerHost, TriggerActionRecord, TriggerBudget,
-    UnitBudget, UnitEventRegistration, UnitStateBudget,
+    TechLimitBudget, TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord,
+    TriggerBudget, UnitBudget, UnitEventRegistration, UnitStateBudget,
 };

@@ -1909,7 +1909,8 @@ to `AGILE_DATA+0x44`. The callback store and timer-message dispatch into the
 script executor are also traced. Fourteen checked raw-range digests and operand
 checks bind these findings to the selected executable. See
 `docs/re-notes/legacy-timer-start.md`. This closes an unread clock-selector
-question, not RE-Q5 or timer execution. `ObjectHost` still refuses `TimerStart`;
+question, not RE-Q5 or timer execution. At that static-evidence step,
+`ObjectHost` still refused `TimerStart`;
 callback ordering/mutation, scheduler integration, native timing and playable
 campaigns remain open. No original runtime or new rendering check was run.
 
@@ -1923,3 +1924,15 @@ See the bounded runtime section of `docs/re-notes/legacy-timer-start.md` and
 run, not the unmodified-map baseline gate, a native Windows check, universal timer
 ordering or a recreation timer implementation. Pause, edge delays, yielding
 actions, repeated-run stability and scheduler/world integration remain open.
+
+
+### 2026-10-17 — explicit positive-timeout timer delivery
+
+- [~] Timer runtime: caller-supplied game time now admits positive finite starts
+  on the existing ObjectHost arena. The existing published map VM delivers
+  bounded callbacks, retaining restart/destroy effects and clearing error context.
+  Factory input is opt-in; no default app clock or second VM is introduced.
+- [ ] Timer fidelity remains open: expiry-trigger execution, yielding callbacks,
+  pause/speed integration, edge delays, native rounding/tie order and full map
+  execution. The 100-consecutive unmodified-original baseline gate is unchanged.
+  See [the timer evidence and implementation limits](docs/re-notes/legacy-timer-start.md).

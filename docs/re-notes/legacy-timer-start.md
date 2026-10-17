@@ -74,7 +74,8 @@ runtime cases below do not settle those complete behavior spaces.
 
 The local verifier rechecks all fourteen ranges and the registration, forwarding,
 selector and callback relationships. These are static checks, not runtime parity.
-`ObjectHost` still refuses `TimerStart`; the Human01 startup refusal is unchanged.
+At the static-evidence step, `ObjectHost` still refused `TimerStart`; the
+default Human01 startup refusal remains unchanged without explicit timer inputs.
 No measured operand was copied into a simulation constant; `TICK_MS` is unchanged.
 A recreation may use a different queue architecture while preserving observable
 behavior. Delivery must share the existing session's VM and identities and
@@ -121,5 +122,46 @@ preserved. Both retained LAN containers were already stopped and remain unchange
 
 This is one bounded run. Pause/resume, zero/negative/non-finite delays, long-timeout
 segmentation, yielding trigger actions, arbitrary reentrancy and repeated-run
-stability remain unmeasured. No recreation timer implementation or callback
-scheduler was changed, and no native/recreation timing parity is claimed.
+stability remain unmeasured. That probe changed no recreation timer implementation or callback scheduler.
+No native/recreation timing parity is claimed.
+
+
+## Bounded recreation timer consumer
+
+`ObjectHost::with_timer_runtime` admits the selected program's timer contracts
+and a caller-supplied finite game time. `MapStartupInputs::timer_time` opts the
+existing factory into that path before globals and entrypoints execute. `None`
+keeps timer scheduling unsupported. There is no implicit application clock,
+frame rate, speed mapping or connection to the separate startup-clock input.
+
+`TimerStart` retains one run on the existing timer identity. Only a finite
+positive timeout that produces a strictly later finite deadline is supported.
+Restart replaces that run and its handler, including null. Destroy revokes the
+identity and clears the run. Fresh-timer queries and `GetExpiredTimer` outside
+an active live-timer callback refuse; no measured initial values are copied.
+Elapsed/remaining/timeout queries use the current run, including callback restart.
+The recreation uses double-precision deadlines and converts query results to
+JASS reals; native rounding and long-timeout segmentation are not reproduced.
+
+`MapScriptSession<MapStartupHost>::advance_timers(until, budget)` enters callbacks
+through the existing session's callback tickets and VM. It prepares the next
+periodic run or one-shot removal before dispatch, then clears expiry context on
+success or error without overwriting a callback's restart or destruction. Failed
+session replacement retains the prior VM and timers; successful replacement and
+clear retire them together. Null handlers consume an expiry without a script call.
+
+Delivery visits deadlines in order, using start/reschedule sequence to break
+exact ties. This is an explicit recreation policy, not proof of native tie order.
+The caller bounds the number of expiries. Work is bounded by two arena scans per
+expiry and a final scan, with arena size already bounded by the caller. A refused
+next expiry stays pending, earlier effects remain, and the host's game time records
+progress. A matching timer-expiry subscription refuses before consuming that
+expiry, so it also blocks later deadlines. Trigger enabled state, conditions and
+actions are not guessed or silently skipped.
+
+The tests exercise the actual factory, admitted-map delivery and published VM,
+including shared globals/aliases, restart, destroy, bounded catch-up, failed
+replacement, callback failure and trigger refusal. Synthetic success does not
+prove original timing parity. This API adds no automatic application advance,
+yielding callback continuation, pause/resume, zero/negative-delay behavior or
+complete Human01 gameplay.
