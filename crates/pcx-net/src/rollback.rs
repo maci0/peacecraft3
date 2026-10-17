@@ -132,8 +132,8 @@ impl TickHistory {
         self.frames.back().map(|f| f.tick)
     }
 
-    /// Retains the state at `tick`, replacing the newest frame when it already
-    /// describes that same tick.
+    /// Retains the state at `tick`, discarding newer frames and replacing any
+    /// frame that already describes that tick.
     ///
     /// Replacing rather than appending matters because a client at tick T that
     /// is corrected and re-simulated walks back over ticks it already recorded.
@@ -144,6 +144,7 @@ impl TickHistory {
         if self.window == 0 {
             return;
         }
+        self.truncate_after(tick);
         if let Some(newest) = self.frames.back_mut()
             && newest.tick == tick
         {
@@ -337,6 +338,24 @@ mod tests {
         assert_eq!(h.oldest(), Some(0));
         assert_eq!(h.newest(), Some(3));
         assert!(h.get(4).is_none(), "a stale frame must not survive");
+    }
+
+    #[test]
+    fn recording_an_earlier_tick_discards_the_abandoned_tail() {
+        let mut history = TickHistory::new(4);
+        let rng = Rng::new(1);
+        for tick in 0..4 {
+            history.record(tick, &frame_world(tick), &rng);
+        }
+        let mut corrected = frame_world(1);
+        corrected.units[0].x = -17;
+        history.record(1, &corrected, &rng);
+        assert_eq!(history.len(), 2);
+        assert_eq!(history.oldest(), Some(0));
+        assert_eq!(history.newest(), Some(1));
+        assert_eq!(history.get(1).unwrap().world(), &corrected);
+        assert!(history.get(2).is_none());
+        assert!(history.get(3).is_none());
     }
 
     #[test]

@@ -1,5 +1,5 @@
-use pcx_net::Client;
 use pcx_net::rollback::{Correction, RollbackLimits, SnapReason};
+use pcx_net::{Client, Server, decode_world_payload, encode_world_payload};
 use pcx_sim::{Command, FX_ONE, Input, PlayerInput, World};
 
 fn commands(tick: u64, commands: Vec<Command>) -> Input {
@@ -230,4 +230,74 @@ fn missing_ack_and_empty_history_snap_without_replaying_selection() {
     );
     assert_eq!(no_history.predicted(), &world);
     assert_eq!(no_history.pending_inputs(), 0);
+}
+
+#[test]
+fn successive_wire_corrections_keep_only_the_current_history_trajectory() {
+    for history_ticks in [4, 8] {
+        let (world, _, second) = two_units();
+        let mut server = Server::new(world.clone(), 7);
+        let mut client = Client::with_limits(
+            world,
+            7,
+            RollbackLimits {
+                history_ticks,
+                max_resim_ticks: 4,
+            },
+        );
+        server
+            .accept(commands(1, vec![Command::Select { x: 0, y: 0 }]))
+            .unwrap();
+        assert!(server.advance());
+        let movement = |tick| {
+            commands(
+                tick,
+                vec![Command::Move {
+                    x: 9 * FX_ONE,
+                    y: 0,
+                }],
+            )
+        };
+        for tick in 1..5 {
+            client.predict(movement(tick));
+        }
+        client.acknowledge(server.last_ack());
+        assert_ne!(client.predicted(), server.world());
+        for (tick, resimulated) in [(2, 3), (3, 2)] {
+            let snapshot =
+                decode_world_payload(server.world().tick, &encode_world_payload(server.world()))
+                    .unwrap();
+            assert_eq!(snapshot.tick, tick);
+            let report = client.reconcile_detailed(snapshot.clone());
+            assert_eq!(
+                report.correction,
+                Correction::RolledBack { tick, resimulated }
+            );
+            assert_eq!(report.predicted_tick, 5);
+            assert_eq!(client.authoritative(), &snapshot);
+            assert_eq!(client.history().get(tick).unwrap().world(), &snapshot);
+            let mut expected = snapshot;
+            let mut rng = pcx_sim::Rng::new(7);
+            for next in tick..5 {
+                pcx_sim::step(&mut expected, &movement(next), &mut rng);
+                assert_eq!(client.history().get(next + 1).unwrap().world(), &expected);
+            }
+            assert_eq!(client.predicted(), &expected);
+            assert_eq!(client.predicted().unit(second).unwrap().x, 4 * FX_ONE);
+            assert!(!client.predicted().unit(second).unwrap().selected);
+            assert!(client.history().len() <= history_ticks);
+            assert_eq!(
+                client.history().oldest(),
+                Some(if history_ticks == 4 { 2 } else { 1 })
+            );
+            assert_eq!(client.history().newest(), Some(5));
+            assert_eq!(
+                client.history().len(),
+                if history_ticks == 4 { 4 } else { 5 }
+            );
+            server.accept(movement(tick)).unwrap();
+            assert!(server.advance());
+            client.acknowledge(server.last_ack());
+        }
+    }
 }

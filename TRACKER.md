@@ -2192,3 +2192,26 @@ this change assigns no new defaults and verifies no additional executable. No
 original runtime or rendered comparison was repeated. Automatic Host-input
 preparation, quest-window rendering, campaign completion and the original-map
 acceptance gate remain open.
+
+
+### 2026-10-18 — chronological client rollback history
+
+The existing movement Client now records the authoritative correction base
+before replay, and recording an earlier history tick discards the abandoned
+newer tail. Previously replay appended duplicate, out-of-order frames, evicting
+still-replayable history and leaving old worlds available to later corrections.
+The repair uses the existing history ring and its retained RNG frame.
+
+A ring regression and an actual server/wire-codec/Client regression both fail
+before the fix. The latter checks two successive corrections under four- and
+eight-frame limits, including every retained world, selection, targets, exact
+replay counts and capacity. All 144 native and 113 actual WASI network tests pass,
+as do strict native/browser all-target/all-feature Clippy, the browser-target
+build and formatting. Evidence:
+`.scratch/reconcile-history-root-20261018/review-1/acceptance.json`.
+
+This repairs movement-harness reconciliation. It does not supply the pending
+selected-unit application caller or restore map VM, combat, economy or other
+omitted authoritative state. Original movement/protocol fidelity, rendered/HUD
+parity, full campaign completion and the 100-consecutive original baseline gate
+remain open. No original runtime or browser visual run was repeated.

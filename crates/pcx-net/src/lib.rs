@@ -879,6 +879,7 @@ impl Client {
         // missing frame above is a snap rather than a guess.
         self.predicted = snapshot;
         self.rng = frame.rng().clone();
+        self.history.record(tick, &self.predicted, &self.rng);
 
         // Replay every input the server has not consumed, from the tick the
         // snapshot describes forward. The world advances one tick per input, and

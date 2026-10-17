@@ -68,6 +68,15 @@ checkpoint tests alongside the corresponding gameplay features before claiming
 full-match rollback or reconnect. Native Warcraft LAN/Battle.net interoperability
 is a separate unverified protocol target.
 
+Movement-client rollback records the accepted authoritative base with its
+retained RNG frame before replay. Recording an earlier tick discards the newer
+history tail, so replay replaces the abandoned trajectory in chronological order
+without duplicate ticks evicting still-replayable frames. A synthetic server,
+wire encode/decode and the actual `Client` exercise two successive corrections
+with four- and eight-frame limits, checking every retained world, selection,
+movement target, replay count and history bound. These are deterministic harness
+checks, not original-game movement or protocol observations.
+
 The agreement slice needs paired synthetic-client tests for commands before
 readiness; every manifest mismatch; invalidation after ready; stale callbacks;
 wrong-match reconnect; and cancellation without unrelated menu mutation. Retain
