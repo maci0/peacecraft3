@@ -332,7 +332,7 @@ The unchanged Human01 completes globals and `config`, then retains 26 directed
 alliance tuples matching its executed calls. Previous state checks still pass:
 155 units, 142 rectangles, three unit events and seven stacked sound requests on
 the same Host/context. The arena contains 843 identities. The next refusal is
-`SetPlayerState`, map span `225072..225136`, selected `common.j` declaration
+`SetPlayerState` in `Blizzard.j` at `225072..225136`, selected `common.j` declaration
 `113953..114062`. The explicit compatibility catalog still does not establish
 native Legacy archive priority. Local commands and source/input stability receipts
 are in `.scratch/alliance-root-20261017/`.

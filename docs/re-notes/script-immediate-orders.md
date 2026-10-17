@@ -6,9 +6,9 @@ unsupported order path. The selected alias, code, on/off strings, requirement an
 cost/cooldown cells come from the caller's `DefaultTables`; no order table is
 embedded in the host.
 
-With this admission, the unchanged selected Human01 completes globals and `config`, executes both
-fresh-unit off requests as `false`, and reaches `SetPlayerAlliance` at map span
-`224476..224550` (selected `common.j` declaration `60256..60399`). It retains 155
+With this admission, the unchanged selected Human01 completes globals and `config`
+and executes both fresh-unit off requests as `false`. It reaches
+`SetPlayerAlliance` in `Blizzard.j` at `224476..224550` (selected `common.j` declaration `60256..60399`). It retains 155
 source-bound units on the same arena, context and localization. This advances the
 previous `IssueImmediateOrder` boundary at `67827..67884`. The object catalog is
 still the explicitly selected compatibility catalog; native Legacy archive
