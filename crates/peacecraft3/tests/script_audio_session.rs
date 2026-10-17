@@ -1,3 +1,4 @@
+#![cfg_attr(target_arch = "wasm32", no_main)]
 //! Registered playback against a host published by the production factory.
 use peacecraft3::map_requests;
 #[path = "support/map_admission_cases.rs"]
@@ -38,7 +39,6 @@ mod source_controls;
 #[path = "support/callback_ticket_cases.rs"]
 mod ticket_cases;
 
-#[cfg(not(target_arch = "wasm32"))]
 mod published_audio {
     include!("support/campaign_startup_cases.rs");
 
@@ -521,4 +521,23 @@ endfunction
         assert_eq!(app.world().resource::<ScriptAudioReport>().played, 3);
         assert_eq!(app.world().resource::<Assets<AudioSource>>().len(), 1);
     }
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn browser_session_cases() -> u32 {
+        published_factory_host_plays_reuses_and_does_not_replay();
+        same_context_replace_retires_only_the_previous_voices();
+        failed_replace_keeps_the_published_voices_and_queue();
+        clear_drops_script_voices_and_leaves_other_entities();
+        finished_oneshot_is_reclaimed_and_the_looping_voice_stays();
+        staged_limit_leaves_the_factory_queue_unpublished();
+        production_factory_derives_playback_ceiling_from_its_admitted_bank();
+        repeated_active_start_is_reported_until_its_playback_behavior_is_admitted();
+        a_finished_handle_can_start_again_in_the_same_reclaim_pass();
+        9
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn browser_script_audio_session_gate() -> u32 {
+    published_audio::browser_session_cases()
 }

@@ -18,15 +18,11 @@
 use crate::map_script_session::MapScriptSession;
 use bevy::audio::AudioSinkPlayback;
 use bevy::prelude::*;
-#[cfg(not(target_arch = "wasm32"))]
 use pcx_play::label_sounds::PcmResource;
 use pcx_play::map_startup_host::MapStartupHost;
-#[cfg(not(target_arch = "wasm32"))]
 use pcx_play::pcm_decoder::DecoderWave;
 use pcx_play::playercolor_host::ObjectHost;
-#[cfg(not(target_arch = "wasm32"))]
 use pcx_play::playercolor_host::SoundProperties;
-#[cfg(not(target_arch = "wasm32"))]
 use pcx_play::scripts::AssetIdentity;
 use pcx_script::HandleId;
 use std::{collections::HashSet, sync::Weak};
@@ -73,11 +69,8 @@ struct ScriptAudioMemory {
 }
 
 struct LiveSource {
-    #[cfg(not(target_arch = "wasm32"))]
     sha256: [u8; 32],
-    #[cfg(not(target_arch = "wasm32"))]
     encoded_mp3: bool,
-    #[cfg(not(target_arch = "wasm32"))]
     bytes: usize,
     handle: Handle<AudioSource>,
     voices: u32,
@@ -193,34 +186,11 @@ fn remember(report: &mut ScriptAudioReport, error: &str) {
     }
 }
 
-fn publish_queued_starts(
-    objects: &mut ObjectHost,
-    session: &Weak<()>,
-    limits: ScriptAudioLimits,
-    memory: &mut ScriptAudioMemory,
-    commands: &mut Commands,
-    assets: &mut Assets<AudioSource>,
-    report: &mut ScriptAudioReport,
-) -> Result<(), String> {
-    if objects.pending_sound_starts().is_empty() {
-        return Ok(());
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = (session, limits, memory, commands, assets, report);
-        Err("browser build has no Bevy wav or mp3 decoder; StartSound remains queued".to_string())
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    publish_desktop(objects, session, limits, memory, commands, assets, report)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 enum Classified {
     Play(PlayPlan),
     Refuse(HandleId, String),
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 struct PlayPlan {
     id: HandleId,
     encoded_mp3: bool,
@@ -231,14 +201,12 @@ struct PlayPlan {
     byte_len: usize,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl PlayPlan {
     fn key(&self) -> ([u8; 32], bool) {
         (self.sha256, self.encoded_mp3)
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 struct Observed<'a> {
     encoded_mp3: bool,
     byte_len: usize,
@@ -252,14 +220,12 @@ struct Observed<'a> {
     duration: Option<i32>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 struct Prepared {
     plan: PlayPlan,
     bytes: Option<Vec<u8>>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn publish_desktop(
+fn publish_queued_starts(
     objects: &mut ObjectHost,
     session: &Weak<()>,
     limits: ScriptAudioLimits,
@@ -268,6 +234,9 @@ fn publish_desktop(
     assets: &mut Assets<AudioSource>,
     report: &mut ScriptAudioReport,
 ) -> Result<(), String> {
+    if objects.pending_sound_starts().is_empty() {
+        return Ok(());
+    }
     let mut ids = Vec::new();
     ids.try_reserve_exact(objects.pending_sound_starts().len())
         .map_err(|_| "script audio start list allocation failed".to_string())?;
@@ -394,7 +363,6 @@ fn publish_desktop(
     Ok(())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn classify(objects: &ObjectHost, id: HandleId) -> Result<Classified, String> {
     if let Ok(state) = objects.file_mp3_state(id) {
         return plan_file(
@@ -457,7 +425,6 @@ fn classify(objects: &ObjectHost, id: HandleId) -> Result<Classified, String> {
     )
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn plan_file(
     objects: &ObjectHost,
     id: HandleId,
@@ -493,7 +460,6 @@ fn plan_file(
     }))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn creation_block(
     is_3d: bool,
     stop_when_out_of_range: bool,
@@ -520,7 +486,6 @@ fn creation_block(
     None
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn property_block(properties: &SoundProperties) -> Option<&'static str> {
     if properties.channel.is_some() {
         return Some("channel routing is not played");
@@ -543,7 +508,6 @@ fn property_block(properties: &SoundProperties) -> Option<&'static str> {
     None
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parameter_block(objects: &ObjectHost, id: HandleId) -> Result<Option<String>, String> {
     match objects
         .sound_parameter_assignment(id)
@@ -557,7 +521,6 @@ fn parameter_block(objects: &ObjectHost, id: HandleId) -> Result<Option<String>,
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn load_bytes(objects: &ObjectHost, plan: &PlayPlan) -> Result<Vec<u8>, String> {
     let bytes = if plan.encoded_mp3 {
         let state = objects
@@ -578,7 +541,6 @@ fn load_bytes(objects: &ObjectHost, plan: &PlayPlan) -> Result<Vec<u8>, String> 
     Ok(bytes)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn commit_source(
     objects: &ObjectHost,
     assets: &mut Assets<AudioSource>,
@@ -615,7 +577,6 @@ fn commit_source(
     })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn receipt(
     objects: &ObjectHost,
     plan: &PlayPlan,
@@ -647,7 +608,6 @@ fn receipt(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn text_receipt(
     member: &str,
     source_label: &str,
@@ -662,14 +622,12 @@ fn text_receipt(
     ))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn decoder_bytes(resource: &PcmResource) -> Result<Vec<u8>, String> {
     DecoderWave::read(resource, resource.bytes().len())
         .map(|view| view.into_bytes())
         .map_err(|error| error.to_string())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn copy_exact(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     out.try_reserve_exact(bytes.len())
@@ -678,7 +636,6 @@ fn copy_exact(bytes: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn owned(text: &str) -> Result<String, String> {
     let mut out = String::new();
     out.try_reserve_exact(text.len())
@@ -687,28 +644,24 @@ fn owned(text: &str) -> Result<String, String> {
     Ok(out)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn add_bytes(sum: usize, len: usize) -> Result<usize, String> {
     sum.checked_add(len)
         .ok_or_else(|| "script audio byte total overflowed".to_string())
 }
 
 impl ScriptAudioMemory {
-    #[cfg(not(target_arch = "wasm32"))]
     fn live_bytes(&self) -> Result<usize, String> {
         self.sources
             .iter()
             .try_fold(0usize, |sum, source| add_bytes(sum, source.bytes))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn reusable(&self, plan: &PlayPlan) -> bool {
         self.sources
             .iter()
             .any(|source| source.sha256 == plan.sha256 && source.encoded_mp3 == plan.encoded_mp3)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn insert_new(
         &mut self,
         sha256: [u8; 32],
@@ -725,7 +678,6 @@ impl ScriptAudioMemory {
         });
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn clone_existing(&mut self, key: ([u8; 32], bool)) -> Result<Handle<AudioSource>, String> {
         let slot = self
             .sources
@@ -756,7 +708,7 @@ impl ScriptAudioMemory {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use bevy::audio::PlaybackMode;
@@ -1501,5 +1453,21 @@ E\r\n";
             assert_eq!(decoder.next(), Some(f32::from(sample) / 32_768.0));
         }
         assert_eq!(decoder.next(), None);
+    }
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen]
+    pub fn browser_script_audio_decoder_gate() -> u32 {
+        oneshot_completion_ignores_looping_and_unfinished_players();
+        one_pcm_start_keeps_the_decoder_view_and_does_not_replay();
+        distinct_handles_share_one_source_inside_the_caller_limit();
+        staged_limit_does_not_copy_or_drain_a_playable_start();
+        unsupported_profile_does_not_need_staging_budget();
+        failed_pcm_admission_does_not_drain_or_publish_any_start();
+        removing_a_finished_player_reclaims_only_the_oneshot();
+        one_mp3_start_keeps_encoded_bytes_and_the_source_receipt();
+        parameter_assignment_and_midi_are_refused_without_a_player();
+        empty_published_session_retires_script_voices_and_leaves_other_entities();
+        canonical_pcm_uses_the_installed_decoder_without_a_device();
+        11
     }
 }

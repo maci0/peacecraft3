@@ -2261,3 +2261,32 @@ inventory, death events, world publication, rendered items, original behavior
 comparison, playable campaigns and the 100-consecutive original baseline gate
 remain open. No original runtime or browser visual run was repeated; the public
 site package was not rebuilt or changed.
+
+
+### 2026-10-18 — shared browser script-sound playback
+
+Browser `StartSound` requests now use the existing native playback consumer,
+source cache, quotas and published-session lifetime. Both targets enable the
+existing Bevy WAV/MP3 features. The existing effects gain/mute system and its
+effective-gain helpers now also run on browser script voices after settings and
+playback updates. Native menu loading and the browser menu audio path retain
+their existing behavior; no new decoder or dependency was added.
+
+The actual before-change browser WASM session gate loads, then fails because no
+voices are published. All 21 explicit WASM cases pass afterward: 11
+decoder/lifecycle cases, nine delivered-session cases and one registered gain
+case. All 19 native app-library tests, 109 native session tests and six native
+audio-control tests pass. One explicit original-install audio test remains
+ignored, and 408 other app tests were filtered out. Strict native/browser
+all-target Clippy, production browser compilation and formatting pass with
+unchanged source hashes during validation and an unchanged lockfile. Evidence:
+`.scratch/browser-script-audio-root-20261018/review-3/acceptance.json`;
+scope: `docs/re-notes/script-audio-playback.md`.
+
+Actual browser `AudioPlugin` output is unverified: loopback binding is denied,
+Chromium exits after a socket-permission error, and the connected browser
+inventory is empty. This acceptance remains tracked separately. No original
+runtime or browser visual run was repeated, and the public site package was not
+rebuilt. Original sound levels, mixing/timing, unsupported sound profiles,
+playable campaigns, rendered parity and the 100-consecutive original baseline
+gate remain open.

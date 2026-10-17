@@ -34,16 +34,45 @@ A playable request spawns an `AudioPlayer`. The recorded looping flag selects
 `PlaybackSettings::LOOP`; a one-shot uses `PlaybackSettings::REMOVE`. An empty
 one-shot sink or removed player retires the voice and releases its source.
 The existing effects volume and mute control applies before sink creation and
-to running script voices. Unmapped native volume, pitch and parameter assignments
-remain refused; backend gain and speed are recreation policy, not measured native
-levels.
+to running script voices on native and browser targets. Its registered system
+runs after settings updates and script playback. Unmapped native volume, pitch
+and parameter assignments remain refused; backend gain and speed are recreation
+policy, not measured native levels.
 
 PCM uses the fmt/data-first `DecoderWave` view. MP3 keeps its encoded bytes. The
 voice receipt retains the original SHA-256, member, source label and edition/version.
-Installed-decoder tests consume synthetic PCM and MP3 samples without an audio
-device. The browser build has no Bevy `wav` or `mp3` feature: playback reports a
-non-empty queue and leaves it queued.
+Both targets enable the existing Bevy `wav` and `mp3` features and use the same
+playback consumer, source cache, quotas and session retirement. Installed-decoder
+tests consume synthetic PCM and MP3 samples without an audio device.
+
+Browser test artifacts expose the existing decoder, published-session and gain
+cases through test-only exports. Their `no_main` attribute suppresses the standard
+test entrypoint on WASM so the explicit gates can run; native test harnesses and
+production entrypoints are unchanged. Generated WASM and binding code are not
+patched. Executing these artifacts in Node checks WASM behavior, not Web Audio
+device output.
+
+The browser consumer's before-change failure was reproduced after loading the
+actual Cargo WASM test artifact. After sharing playback and the existing effective
+gain helpers, 21 explicit WASM cases pass: 11 decoder/lifecycle cases, nine
+published-session cases and one case using the registered browser gain system.
+They cover decoded PCM samples, nonzero MP3 samples, source reuse, refusals,
+quotas, session replacement/clear, finished handles and effects gain/mute before
+sink creation. Evidence:
+`.scratch/browser-script-audio-root-20261018/review-3`; the before-change failure
+is retained in `review-2/explicit-regression-confirmed.json`.
+
+All 19 native app-library tests, 109 native session tests and six native
+audio-control tests pass. The latter retain one explicit local-original-install
+ignore; the rest of the app test suite was filtered out. Strict native/browser
+all-target Clippy, the production browser build and formatting pass on unchanged
+Rust/manifests throughout validation. The lockfile is unchanged.
 
 These checks do not establish audibility, device output, native timing or mixing
-parity. Chapter startup still needs caller-qualified inputs and currently stops
-at unsupported `TimerStart` on the retained Human01 gate.
+parity. Chapter startup still needs caller-qualified inputs. The original Human01
+startup frontier was not rerun for this browser change.
+
+The current review environment cannot verify browser output: loopback binding
+refuses with `Operation not permitted`, Chromium exits with `SIGTRAP` after the
+same socket error, and the connected browser inventory is empty. No permission
+or launch retry was made. Browser `AudioPlugin` output remains an acceptance gap.

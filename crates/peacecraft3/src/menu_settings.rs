@@ -59,7 +59,6 @@ impl Default for AudioSettings {
     }
 }
 impl AudioSettings {
-    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub fn effective_music(self) -> f32 {
         if self.music_enabled {
             self.music_gain
@@ -67,7 +66,6 @@ impl AudioSettings {
             0.0
         }
     }
-    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub fn effective_effects(self) -> f32 {
         if self.effects_enabled {
             self.effects_gain

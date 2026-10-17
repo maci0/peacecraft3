@@ -30,8 +30,16 @@ pub fn install(app: &mut App) {
     #[cfg(not(target_arch = "wasm32"))]
     app.add_systems(
         Update,
-        (pause_for_movie, apply_user_volume)
-            .chain()
+        pause_for_movie
+            .before(apply_user_volume)
+            .after(crate::intro::IntroUpdate)
+            .after(crate::launch_gui::MenuActions)
+            .after(peacecraft3::script_audio::ScriptAudioPlayback),
+    );
+    app.add_systems(
+        Update,
+        apply_user_volume
+            .after(crate::menu_settings::SettingsUpdate)
             .after(crate::intro::IntroUpdate)
             .after(crate::launch_gui::MenuActions)
             .after(peacecraft3::script_audio::ScriptAudioPlayback),
@@ -70,11 +78,9 @@ struct MenuSounds {
     attempted: Option<(String, crate::launch::GameMode, bool)>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Component)]
 pub(crate) struct AuthoredVolume(pub(crate) f32);
 
-#[cfg(not(target_arch = "wasm32"))]
 type UserVolumeQuery<'w, 's> = Query<
     'w,
     's,
@@ -90,7 +96,6 @@ type UserVolumeQuery<'w, 's> = Query<
     )>,
 >;
 
-#[cfg(not(target_arch = "wasm32"))]
 fn apply_user_volume(settings: Res<crate::menu_settings::Backend>, mut sinks: UserVolumeQuery) {
     use bevy::audio::AudioSinkPlayback;
     for (sink, mut playback, base, music) in &mut sinks {
@@ -164,7 +169,6 @@ fn click_descriptor(bytes: &[u8], maximum: f32) -> Result<(String, f32, bool), S
 #[derive(Component)]
 struct ClickSound;
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Component)]
 struct MenuMusic;
 
@@ -637,56 +641,6 @@ mod tests {
     }
 
     #[test]
-    fn script_voices_follow_effects_gain_and_mute_before_sink_creation() {
-        use peacecraft3::script_audio::ScriptVoice;
-        let mut world = World::new();
-        let mut settings = crate::menu_settings::Backend::default();
-        settings.audio.effects_enabled = true;
-        settings.audio.effects_gain = 0.25;
-        world.insert_resource(settings);
-        let voice = world
-            .spawn((
-                PlaybackSettings::LOOP,
-                ScriptVoice {
-                    session: std::sync::Weak::new(),
-                    handle: pcx_script::HandleId::new(std::num::NonZeroU64::new(1).unwrap()),
-                    looping: true,
-                    fade_in_rate: 0,
-                    fade_out_rate: 0,
-                    encoded_mp3: false,
-                    source: Handle::default(),
-                    member: "synthetic.wav".into(),
-                    source_label: "synthetic".into(),
-                    origin_source: "synthetic".into(),
-                    origin_edition: "synthetic".into(),
-                    origin_version: "synthetic".into(),
-                    sha256: [0; 32],
-                },
-            ))
-            .id();
-        let unrelated = world.spawn(PlaybackSettings::ONCE).id();
-        world.run_system_once(apply_user_volume).unwrap();
-        assert_eq!(
-            world.get::<PlaybackSettings>(voice).unwrap().volume,
-            bevy::audio::Volume::Linear(0.25)
-        );
-        world
-            .resource_mut::<crate::menu_settings::Backend>()
-            .audio
-            .effects_enabled = false;
-        world.run_system_once(apply_user_volume).unwrap();
-        assert_eq!(
-            world.get::<PlaybackSettings>(voice).unwrap().volume,
-            bevy::audio::Volume::Linear(0.0)
-        );
-        assert_eq!(
-            world.get::<PlaybackSettings>(unrelated).unwrap().volume,
-            PlaybackSettings::ONCE.volume
-        );
-        assert!(world.get::<AudioSink>(voice).is_none());
-    }
-
-    #[test]
     fn disabled_and_held_clicks_do_not_repeat_feedback() {
         let mut world = World::new();
         world.init_resource::<crate::intro::Intro>();
@@ -738,5 +692,77 @@ mod tests {
                 .count(),
             1
         );
+    }
+}
+
+#[cfg(test)]
+mod script_volume_tests {
+    use super::*;
+    #[test]
+    fn script_voices_follow_effects_gain_and_mute_before_sink_creation() {
+        use peacecraft3::script_audio::ScriptVoice;
+        let mut app = App::new();
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(Update, apply_user_volume);
+        #[cfg(target_arch = "wasm32")]
+        {
+            app.init_resource::<crate::intro::Intro>();
+            app.init_resource::<crate::button_actions::ButtonActions>();
+            install(&mut app);
+        }
+        let world = app.world_mut();
+        let mut settings = crate::menu_settings::Backend::default();
+        settings.audio.effects_enabled = true;
+        settings.audio.effects_gain = 0.25;
+        world.insert_resource(settings);
+        let voice = world
+            .spawn((
+                PlaybackSettings::LOOP,
+                ScriptVoice {
+                    session: std::sync::Weak::new(),
+                    handle: pcx_script::HandleId::new(std::num::NonZeroU64::new(1).unwrap()),
+                    looping: true,
+                    fade_in_rate: 0,
+                    fade_out_rate: 0,
+                    encoded_mp3: false,
+                    source: Handle::default(),
+                    member: "synthetic.wav".into(),
+                    source_label: "synthetic".into(),
+                    origin_source: "synthetic".into(),
+                    origin_edition: "synthetic".into(),
+                    origin_version: "synthetic".into(),
+                    sha256: [0; 32],
+                },
+            ))
+            .id();
+        let unrelated = world.spawn(PlaybackSettings::ONCE).id();
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(
+            world.get::<PlaybackSettings>(voice).unwrap().volume,
+            bevy::audio::Volume::Linear(0.25)
+        );
+        world
+            .resource_mut::<crate::menu_settings::Backend>()
+            .audio
+            .effects_enabled = false;
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(
+            world.get::<PlaybackSettings>(voice).unwrap().volume,
+            bevy::audio::Volume::Linear(0.0)
+        );
+        assert_eq!(
+            world.get::<PlaybackSettings>(unrelated).unwrap().volume,
+            PlaybackSettings::ONCE.volume
+        );
+        assert!(world.get::<AudioSink>(voice).is_none());
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen]
+    pub fn browser_script_audio_volume_gate() -> u32 {
+        script_voices_follow_effects_gain_and_mute_before_sink_creation();
+        1
     }
 }

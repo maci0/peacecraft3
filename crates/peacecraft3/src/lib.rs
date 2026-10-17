@@ -1,3 +1,4 @@
+#![cfg_attr(all(test, target_arch = "wasm32"), no_main)]
 //! Explicit selected-map admission for the application.
 //! Callers supply source identities, archive policy, field bindings and input limits.
 //! Parsed publication and script startup stay separate: startup runs only after a

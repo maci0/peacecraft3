@@ -1,3 +1,4 @@
+#![cfg_attr(all(test, target_arch = "wasm32"), no_main)]
 // A browser has no `std::env::args` and no process to exit, so it does not come
 // through here: wasm32 boots from `browser::start` instead.
 #[cfg(target_arch = "wasm32")]
