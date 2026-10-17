@@ -475,6 +475,9 @@ mod destructable_creation;
 #[path = "unit_host_tests.rs"]
 mod unit_creation;
 
+#[path = "item_host_tests.rs"]
+mod item_creation;
+
 #[path = "trigger_host_tests.rs"]
 mod trigger_admission;
 

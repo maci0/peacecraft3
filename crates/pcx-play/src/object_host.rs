@@ -31,6 +31,7 @@ pub struct ObjectHost {
     camera_setups: Option<camera_setup::Admission>,
     destructables: Option<destructables::Admission>,
     units: Option<unit_creation::Admission>,
+    items: Option<item_creation::Admission>,
     triggers: Option<trigger_admission::Admission>,
     filters: Option<filters::Admission>,
     conditions: Option<conditions::Admission>,
@@ -75,6 +76,7 @@ impl ObjectHost {
             camera_setups: None,
             destructables: None,
             units: None,
+            items: None,
             triggers: None,
             filters: None,
             conditions: None,
@@ -193,6 +195,9 @@ impl ObjectHost {
     }
     pub fn inner(&self) -> &EnumHost {
         &self.inner
+    }
+    pub fn inner_mut(&mut self) -> &mut EnumHost {
+        &mut self.inner
     }
     pub fn into_vm(self) -> pcx_script::OwnedVm<Self> {
         pcx_script::OwnedVm::new_owned(Arc::clone(&self.inner.program), self)
@@ -393,6 +398,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.unit_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.item_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.stock_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -505,6 +513,10 @@ pub use destructables::{DestructableBudget, DestructableCreation};
 #[path = "unit_host.rs"]
 mod unit_creation;
 pub use unit_creation::{ExecutedUnit, ExecutedUnitState, UnitBudget, UnitStateBudget};
+
+#[path = "item_host.rs"]
+mod item_creation;
+pub use item_creation::{ExecutedItem, ItemBudget};
 
 #[path = "trigger_host.rs"]
 mod trigger_admission;
