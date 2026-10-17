@@ -1380,6 +1380,15 @@ Format: `date — subsystem — symptom — root cause — status`
       and all 361 native/actual WASI play tests pass; strict native/browser Clippy
       passes. Timer start, expiry delivery, callback execution and native lifetime
       parity remain open. See `docs/re-notes/script-trigger-admission.md`.
+      Explicit runtime version input now resolves the preserved original-client
+      observation through the selected `ConvertVersion` domain and exact map
+      context. `VersionGet` returns that identity without allocating; absent,
+      invalidated, foreign or out-of-domain input refuses. The unchanged gate
+      reaches 888 identities and six triggers, then refuses
+      `TriggerRegisterGameStateEvent` in Blizzard at `435358..435454`
+      (common `72797..72927`). All 364 native/actual WASI play tests and strict
+      native/browser Clippy pass. No edition/default or archive precedence is
+      inferred; see `docs/re-notes/script-startup-settings.md`.
       Live participation, application provider and general eligibility remain open.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or

@@ -34,6 +34,7 @@ pub struct ObjectHost {
     filters: Option<filters::Admission>,
     forces: Option<forces::Admission>,
     startup_settings: Option<StartupSettings>,
+    startup_version: Option<HandleId>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -73,6 +74,7 @@ impl ObjectHost {
             filters: None,
             forces: None,
             startup_settings: None,
+            startup_version: None,
         })
     }
     fn contract(

@@ -1,4 +1,4 @@
-# Explicit startup speed, fog and mask state
+# Explicit startup settings and runtime version
 
 `ObjectHost::admit_startup_settings` installs caller-qualified current settings
 on the exact map-context Arc already admitted for players. It retains the actual
@@ -89,3 +89,48 @@ getter without providing defaults or a live player provider. The application
 Host factory, current settings provider, speed writes/rates and rendered fog
 remain open. This continuation is not a playable chapter or campaign completion
 claim.
+
+## Explicit runtime version identity
+
+`ObjectHost::admit_startup_version(context, version)` separately supplies the
+current `VersionGet` result for the exact context already admitted for players.
+The input is an actual symbolic arena identity in the selected `ConvertVersion`
+domain. The loaded non-constant `VersionGet` and constant `ConvertVersion`
+signatures, declaration sources, absence of overrides and authored version type
+ancestry are checked against the Player/CreateTimer source. Unknown, wrong-family,
+out-of-domain and wrong-context inputs refuse without changing a prior value.
+
+The getter returns that same identity without allocating or translating it into
+an executable version number. There is no default and no archive-name, display
+skin or expansion-availability inference. Successful re-admission replaces the
+input; `invalidate_startup_version` withdraws it. Version input and speed/fog/mask
+input have independent lifetimes. The context check binds the map but does not
+authenticate the caller's observation or install a live settings provider.
+`VersionSupported`, `VersionCompatible` and other version natives are untouched.
+
+The preserved original-client settings probe records the same
+`VERSION_FROZEN_THRONE` result immediately before and after initialization. The
+current private qualifier verifies both records, their generated-file hash and
+the observation's map/common/BJ/executable inputs before resolving the recorded
+name through the same initialized Program. The Host stores its loaded identity;
+no measured enum integer is copied into production. This observation belongs to
+that explicit launch/profile, not every map, archive set or client release.
+No new original-client run was needed or performed.
+
+The unchanged Human01 gate now passes its one executed `VersionGet`, creates two
+more triggers and reaches 888 shared-arena identities, including 155 units and
+six triggers. Prior source/context, player, force, sound, action and timer-event
+checks remain intact. The next unsupported call is
+`TriggerRegisterGameStateEvent`, Blizzard span `435358..435454`, common declaration
+`72797..72927`. No game-state event or callback delivery is fabricated.
+
+Three synthetic groups exercise actual owned-VM reads and source-global equality,
+no identity growth, replacement and independent invalidation, malformed queries,
+wrong family/domain/context, missing selected conversion, declarations, overrides
+and authored ancestry. All 364 play tests pass natively and through actual WASI
+execution, with five explicit original-input ignores. Strict native/browser
+Clippy checks pass. The missing-API baseline, exact commands, source/artifact
+hashes and source-observation-qualified gate stay local in
+`.scratch/startup-version-root-20261017/`. The application provider and composed
+Host factory, remaining event/scheduler semantics, rendered gameplay and campaign
+completion stay open. No original asset or generated payload is published.

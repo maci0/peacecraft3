@@ -267,3 +267,6 @@ fn settings_need_selected_conversion_matching_context_and_loaded_native_contract
         assert!(h.admit_startup_settings(&ctx, s).is_err());
     }
 }
+
+#[path = "startup_version_tests.rs"]
+mod version;

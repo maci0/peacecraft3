@@ -1219,9 +1219,11 @@ single-player counting loop completes. Explicit source-backed label-constructor
 banks qualify all 11 literal labels and retain 11 executed creations across nine
 labels on the same arena. A separately admitted timer-expiry subscription links
 the actual existing trigger and live timer through an event on that arena; its
-following action is retained without running it. The next unsupported call is
-`VersionGet` in `Blizzard.j` (`440139..440151`). Timer start, expiry and callback
-delivery remain unsupported; no version is inferred. Fog/mask setters retain
+following action is retained without running it. Explicit source-qualified
+runtime version input now passes `VersionGet` without allocating or guessing an
+edition. The next unsupported call is `TriggerRegisterGameStateEvent` in
+`Blizzard.j` (`435358..435454`). Timer start, expiry and callback delivery remain
+unsupported. Fog/mask setters retain
 independent booleans;
 speed writes remain unsupported because original requests do not always read
 back as requested. No participation or settings default is inferred. Wrapping
