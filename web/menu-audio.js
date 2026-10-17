@@ -1,4 +1,18 @@
 // Original TFT audio. Browsers require a gesture before audible playback.
+const scriptContexts = new Set();
+const BrowserAudioContext = globalThis.AudioContext;
+// Bevy's CPAL context is created before interaction and has no public resume handle.
+if (BrowserAudioContext) {
+  globalThis.AudioContext = class extends BrowserAudioContext {
+    constructor(...args) {
+      super(...args);
+      scriptContexts.add(this);
+      this.addEventListener('statechange', () => {
+        if (this.state === 'closed') scriptContexts.delete(this);
+      });
+    }
+  };
+}
 const localOnly = document.documentElement.dataset.localAssets === 'true' || new URLSearchParams(location.search).has('local');
 const music = localOnly ? new Audio() : new Audio('./assets/menu-music.mp3');
 music.loop = true;
@@ -88,6 +102,9 @@ window.addEventListener('pagehide', resetLocalAssets);
 const report = error => console.warn('Menu audio:', error.message);
 
 function unlock() {
+  for (const context of scriptContexts) {
+    if (context.state === 'suspended') context.resume().catch(report);
+  }
   if (unlocked || !enabled || introActive || (localMode && !localSources.music)) return;
   unlocked = true;
   music.play().catch(error => { unlocked = false; report(error); });

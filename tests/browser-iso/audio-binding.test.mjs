@@ -41,18 +41,54 @@ function playback() {
     removeAttribute(name) { if (name === 'src') this.src = ''; }
     addEventListener(name, callback) { (this.listeners ??= new Map()).set(name, callback); }
   }
+  class AudioContext {
+    constructor() { this.currentState = 'suspended'; this.resumes = 0; this.stateReads = 0; }
+    get state() { this.stateReads++; return this.currentState; }
+    resume() {
+      this.resumes++;
+      if (this.rejectResume) return Promise.reject(new Error('synthetic resume failure'));
+      this.currentState = 'running'; return Promise.resolve();
+    }
+    close() { this.currentState = 'closed'; this.changed?.(); }
+    addEventListener(name, callback) { assert.equal(name, 'statechange'); this.changed = callback; }
+  }
   const toggle = { textContent: '', setAttribute() {}, addEventListener(name, callback) { handlers.set(`toggle:${name}`, callback); } };
   const document = { documentElement: { dataset: { localAssets: 'true' } }, querySelector() { return toggle; }, addEventListener(name, callback) { handlers.set(`document:${name}`, callback); }, dispatchEvent() {} };
-  const context = vm.createContext({ Audio, Blob, Uint8Array, URLSearchParams, document, location: { search: '' },
+  const context = vm.createContext({ Audio, AudioContext, Blob, Uint8Array, URLSearchParams, document, location: { search: '' },
     window: { addEventListener(name, callback) { handlers.set(`window:${name}`, callback); } },
     URL: { createObjectURL(blob) { const url = `blob:synthetic-${++nextUrl}`; liveUrls.set(url, blob); return url; }, revokeObjectURL(url) { revoked.push(url); liveUrls.delete(url); } },
     console: { warn(...args) { warnings.push(args); } }, CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
   });
   vm.runInContext(playbackSource, context, { filename: 'web/menu-audio.js' });
   return { api: context.peacecraft3Audio, music: players[0], click: players[1], players, liveUrls, revoked, warnings,
+    webAudio() { return new context.AudioContext(); },
+    gesture(name) { handlers.get(`document:${name}`)(); },
     rejectNextPlay() { rejectNextPlay = true; },
     toggle() { handlers.get('toggle:click')(); }, pagehide() { handlers.get('window:pagehide')(); } };
 }
+
+test('gestures resume script contexts independently of menu media and release closed contexts', async () => {
+  const state = playback(), stream = state.webAudio();
+  state.api.pauseForIntro();
+  state.gesture('pointerdown');
+  assert.equal(stream.resumes, 1);
+  assert.equal(stream.state, 'running');
+  assert.equal(state.music.plays, 0);
+  state.gesture('keydown');
+  assert.equal(stream.resumes, 1);
+  stream.currentState = 'suspended'; stream.rejectResume = true;
+  state.gesture('keydown');
+  await Promise.resolve();
+  assert.equal(state.warnings.length, 1);
+  assert.match(state.warnings[0][1], /synthetic resume failure/);
+  stream.rejectResume = false;
+  state.gesture('pointerdown');
+  assert.equal(stream.resumes, 3);
+  stream.close();
+  const reads = stream.stateReads;
+  state.gesture('pointerdown');
+  assert.equal(stream.stateReads, reads, 'closed contexts leave the live-context collection');
+});
 
 test('empty authored directory binds the exact root-level member and retains raw settings', () => {
   const descriptor = source();

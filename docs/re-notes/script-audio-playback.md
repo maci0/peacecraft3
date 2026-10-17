@@ -72,7 +72,31 @@ These checks do not establish audibility, device output, native timing or mixing
 parity. Chapter startup still needs caller-qualified inputs. The original Human01
 startup frontier was not rerun for this browser change.
 
-The current review environment cannot verify browser output: loopback binding
-refuses with `Operation not permitted`, Chromium exits with `SIGTRAP` after the
-same socket error, and the connected browser inventory is empty. No permission
-or launch retry was made. Browser `AudioPlugin` output remains an acceptance gap.
+The initial restricted review could not launch Chromium or bind loopback. After
+an explicit environment permission change, Chromium 154 could run the actual
+factory/consumer with Bevy's `AudioPlugin`. Creating the plugin inside a click
+worked, but matching launcher startup exposed a failure: a context created before
+interaction stayed suspended after the click. The existing menu gesture handler
+only unlocked HTML media.
+
+`web/menu-audio.js` now retains live Web Audio contexts through a constructor
+subclass and resumes suspended contexts from its existing pointer/key handler,
+before the HTML-media guards. Both launcher pages load that module before the
+loader. Closed contexts leave the collection; resume failures use the existing
+diagnostic path. Native playback and sound gain/mute policy are unchanged.
+
+The browser regression loads the actual menu module and Cargo WASM test artifact
+over loopback, using only synthetic PCM/MP3. Each codec uses a fresh document and
+passive protocol reads with `userGesture: false`: the context is suspended and
+the document unactivated before a trusted mouse click. Before the fix it remains
+suspended with both voices active. Afterward the one-shot retires naturally and
+the remaining loop produces nonzero samples at the real Web Audio output graph.
+Session clear releases all voices and the shared source. Nine published-session
+cases also execute in each document. Eleven JavaScript audio tests, 109 native
+session tests, strict native/browser Clippy and formatting pass on unchanged
+sources during validation. Evidence:
+`.scratch/browser-script-audio-root-20261018/device-6-after/acceptance.json`;
+before-change state: `device-5-before/failure-pcm.json`.
+
+This verifies the browser output graph, not physical audibility or original
+sound levels, mixing and timing. The public site package was not rebuilt.

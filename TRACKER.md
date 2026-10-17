@@ -2290,3 +2290,29 @@ runtime or browser visual run was repeated, and the public site package was not
 rebuilt. Original sound levels, mixing/timing, unsupported sound profiles,
 playable campaigns, rendered parity and the 100-consecutive original baseline
 gate remain open.
+
+
+### 2026-10-18 — browser script-audio gesture unlock
+
+After the environment permissions changed, the shared playback change was
+published as `16adf4d` and confirmed on origin. A caller-faithful Chromium check
+then found that Bevy's audio context, created before interaction, stayed
+suspended after a click. The existing menu gesture handler now resumes live
+Web Audio contexts before its HTML-media guards and releases closed contexts.
+This changes no native playback, asset values or sound gain/mute policy.
+
+The actual before-change browser artifact/module stays suspended after a trusted
+click with two queued-to-player voices that cannot finish. With the fix, fresh
+PCM and MP3 documents begin unactivated with suspended contexts, then produce
+nonzero Web Audio output after a trusted click. The one-shot retires naturally,
+the loop keeps playing, and session clear leaves no voice or source. Passive
+pre-click reads explicitly avoid the automation driver's user-gesture behavior.
+Nine published-session cases execute in each document. Eleven JavaScript audio
+tests, 109 native session tests, strict native/browser Clippy and formatting pass
+with stable source hashes. Evidence:
+`.scratch/browser-script-audio-root-20261018/device-6-after/acceptance.json`.
+
+Physical audibility, original mixing/timing and sound levels, unsupported sound
+profiles, playable campaigns, rendered parity and the 100-consecutive original
+baseline gate remain open. No original runtime or browser visual comparison was
+repeated, and the public site package was not rebuilt.

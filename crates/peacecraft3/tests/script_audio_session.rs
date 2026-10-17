@@ -129,6 +129,15 @@ endfunction
         pcm: &[u8],
         revision: u64,
     ) -> Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync> {
+        deliver_sound_bank(app, script, sound_bank(pcm), revision)
+    }
+
+    fn deliver_sound_bank(
+        app: &mut App,
+        script: &str,
+        sounds: file_sounds::Assets,
+        revision: u64,
+    ) -> Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync> {
         let map = fixture(script);
         let resolver = map.resolver();
         let bound = bind_map(&resolver, map.input(revision), map.limits()).expect("bind");
@@ -136,7 +145,7 @@ endfunction
         let bytes = bound.catalog_map_bytes.clone();
         let identity = map.map_id.clone();
         let mut inputs = host_inputs(Arc::clone(&catalog));
-        inputs.file_sounds = sound_bank(pcm);
+        inputs.file_sounds = sounds;
         app.insert_resource(MapRequests {
             bindings: Some(bound),
             ..Default::default()
@@ -533,6 +542,11 @@ endfunction
         repeated_active_start_is_reported_until_its_playback_behavior_is_admitted();
         a_finished_handle_can_start_again_in_the_same_reclaim_pass();
         9
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    mod device {
+        include!("support/script_audio_device.rs");
     }
 }
 
