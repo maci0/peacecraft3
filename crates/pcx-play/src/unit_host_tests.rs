@@ -92,6 +92,10 @@ impl ObjectCatalog for Counting {
 }
 
 fn script_common(unit_parent: &str, declare_create: bool) -> String {
+    script_common_with(unit_parent, declare_create, "")
+}
+
+fn script_common_with(unit_parent: &str, declare_create: bool, extra: &str) -> String {
     let globals = COMMON.find("\nglobals\n").expect("globals");
     let mut common = COMMON.to_string();
     let native = if declare_create {
@@ -101,7 +105,7 @@ fn script_common(unit_parent: &str, declare_create: bool) -> String {
     };
     common.insert_str(
         globals + 1,
-        &format!("type widget extends agent\ntype unit extends {unit_parent}\n{native}"),
+        &format!("type widget extends agent\ntype unit extends {unit_parent}\n{native}{extra}"),
     );
     common
 }
@@ -153,6 +157,25 @@ fn open(max_records: usize, max_handles: usize, map: &str) -> VmHost {
     open_with(max_records, max_handles, map, "widget", true)
 }
 
+fn open_identity(max_records: usize, max_handles: usize, map: &str) -> VmHost {
+    let extra = "native GetUnitTypeId takes unit whichUnit returns integer\nnative GetOwningPlayer takes unit whichUnit returns player\n";
+    let common = script_common_with("widget", true, extra);
+    let ctx = context(300, &common, map, "unit-catalog");
+    let (catalog, hits, seen) = counting();
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+    let host = object(&ctx, max_handles)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(Arc::clone(&shared), source(), limits(max_records))
+        .unwrap();
+    VmHost {
+        vm: Arc::clone(&ctx.scripts).owned_vm(host),
+        hits,
+        seen,
+        catalog: shared,
+    }
+}
+
 fn open_with(
     max_records: usize,
     max_handles: usize,
@@ -182,7 +205,9 @@ fn open_with(
     }
 }
 
-const MAP: &str = "globals\nplayer P = null\nunit U = null\ntimer T = null\nendglobals\nfunction main takes nothing returns nothing\nset P = Player(4)\nset U = CreateUnit(P, 'hfoo', 1.5, -2.25, 90.0)\nendfunction\nfunction missing takes nothing returns unit\nreturn CreateUnit(P, 'zzzz', 0.0, 0.0, 0.0)\nendfunction\nfunction item takes nothing returns unit\nreturn CreateUnit(P, 'item', 0.0, 0.0, 0.0)\nendfunction\nfunction mismatched takes nothing returns unit\nreturn CreateUnit(P, 'bad!', 0.0, 0.0, 0.0)\nendfunction\nfunction wrong takes nothing returns unit\nset T = CreateTimer()\nreturn CreateUnit(T, 'hfoo', 0.0, 0.0, 0.0)\nendfunction\nfunction again takes nothing returns unit\nreturn CreateUnit(P, 'hfoo', 0.0, 0.0, 0.0)\nendfunction\nfunction zero takes nothing returns nothing\ncall SetUnitAcquireRange(U, 0.0)\nendfunction\nfunction negative takes nothing returns nothing\ncall SetUnitAcquireRange(U, -12.5)\nendfunction\nfunction wrong_range takes nothing returns nothing\nset T = CreateTimer()\ncall SetUnitAcquireRange(T, 4.0)\nendfunction\nfunction level_zero takes nothing returns nothing\ncall SetHeroLevel(U, 0, false)\nendfunction\nfunction level_signed takes nothing returns nothing\ncall SetHeroLevel(U, -7, true)\nendfunction\nfunction level_foreign takes nothing returns nothing\nset T = CreateTimer()\ncall SetHeroLevel(T, 4, false)\nendfunction\n";
+const MAP: &str = "globals\nplayer P = null\nunit U = null\ntimer T = null\ninteger type_id = 0\nplayer owner = null\nendglobals\nfunction main takes nothing returns nothing\nset P = Player(4)\nset U = CreateUnit(P, 'hfoo', 1.5, -2.25, 90.0)\nendfunction\nfunction missing takes nothing returns unit\nreturn CreateUnit(P, 'zzzz', 0.0, 0.0, 0.0)\nendfunction\nfunction item takes nothing returns unit\nreturn CreateUnit(P, 'item', 0.0, 0.0, 0.0)\nendfunction\nfunction mismatched takes nothing returns unit\nreturn CreateUnit(P, 'bad!', 0.0, 0.0, 0.0)\nendfunction\nfunction wrong takes nothing returns unit\nset T = CreateTimer()\nreturn CreateUnit(T, 'hfoo', 0.0, 0.0, 0.0)\nendfunction\nfunction again takes nothing returns unit\nreturn CreateUnit(P, 'hfoo', 0.0, 0.0, 0.0)\nendfunction\nfunction zero takes nothing returns nothing\ncall SetUnitAcquireRange(U, 0.0)\nendfunction\nfunction negative takes nothing returns nothing\ncall SetUnitAcquireRange(U, -12.5)\nendfunction\nfunction wrong_range takes nothing returns nothing\nset T = CreateTimer()\ncall SetUnitAcquireRange(T, 4.0)\nendfunction\nfunction level_zero takes nothing returns nothing\ncall SetHeroLevel(U, 0, false)\nendfunction\nfunction level_signed takes nothing returns nothing\ncall SetHeroLevel(U, -7, true)\nendfunction\nfunction level_foreign takes nothing returns nothing\nset T = CreateTimer()\ncall SetHeroLevel(T, 4, false)\nendfunction\n";
+
+const IDENTITY_MAP: &str = "globals\nplayer P = null\nunit U = null\ntimer T = null\ninteger type_id = 0\nplayer owner = null\nendglobals\nfunction main takes nothing returns nothing\nset P = Player(4)\nset U = CreateUnit(P, 'hfoo', 1.5, -2.25, 90.0)\nendfunction\nfunction identities takes nothing returns nothing\nset type_id = GetUnitTypeId(U)\nset owner = GetOwningPlayer(U)\nendfunction\nfunction identity_foreign takes nothing returns integer\nset T = CreateTimer()\nreturn GetUnitTypeId(T)\nendfunction\nfunction owner_foreign takes nothing returns player\nset T = CreateTimer()\nreturn GetOwningPlayer(T)\nendfunction\n";
 
 #[test]
 fn owned_vm_retains_catalog_result_and_typed_resolve_failures() {
@@ -242,6 +267,185 @@ fn owned_vm_retains_catalog_result_and_typed_resolve_failures() {
     }
     assert_eq!(session.vm.host().inner.inner().handles(), handles);
     assert_eq!(session.hits.load(Ordering::SeqCst), 4);
+}
+
+#[test]
+fn owned_vm_returns_the_admitted_rawcode_and_original_owner_handle() {
+    let mut session = open_identity(2, 16, IDENTITY_MAP);
+    session.vm.init_globals().unwrap();
+    session.vm.call("main", &[]).unwrap();
+    let Value::Handle(player) = session.vm.global("P") else {
+        panic!("player");
+    };
+    let Value::Handle(unit) = session.vm.global("U") else {
+        panic!("unit");
+    };
+    let handles = session.vm.host().inner.inner().handles();
+    let hits = session.hits.load(Ordering::SeqCst);
+    session.vm.call("identities", &[]).unwrap();
+    assert_eq!(
+        session.vm.global("type_id"),
+        Value::Int(i32::from_be_bytes(*b"hfoo"))
+    );
+    assert_eq!(session.vm.global("owner"), Value::Handle(player));
+    assert_eq!(session.vm.host().inner.player_identity(4), Some(player));
+    let executed = session.vm.host().inner.executed_unit(unit).unwrap();
+    assert_eq!(executed.owner, player);
+    assert_eq!(executed.executed_owner, 4);
+    assert_eq!(executed.requested_hero_level, None);
+    assert!(executed.unit_states.is_empty());
+    assert_eq!(session.vm.host().inner.inner().handles(), handles);
+    assert_eq!(session.hits.load(Ordering::SeqCst), hits);
+}
+
+#[test]
+fn identity_getters_refuse_another_family_and_a_reserved_unit_token() {
+    let mut session = open_identity(2, 16, IDENTITY_MAP);
+    session.vm.init_globals().unwrap();
+    session.vm.call("main", &[]).unwrap();
+    let type_error = session
+        .vm
+        .call("identity_foreign", &[])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        type_error.contains("handle identifies another family"),
+        "{type_error}"
+    );
+    assert!(type_error.contains("GetUnitTypeId"), "{type_error}");
+    let owner_error = session
+        .vm
+        .call("owner_foreign", &[])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        owner_error.contains("handle identifies another family"),
+        "{owner_error}"
+    );
+    assert!(owner_error.contains("GetOwningPlayer"), "{owner_error}");
+
+    let extra = "native GetUnitTypeId takes unit whichUnit returns integer\nnative GetOwningPlayer takes unit whichUnit returns player\n";
+    let common = script_common_with("widget", true, extra);
+    let ctx = context(300, &common, IDENTITY_MAP, "unit-catalog");
+    let (catalog, _, _) = counting();
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+    let mut inner = EnumHost::checked_selected(
+        ctx.scripts.shared_program(),
+        &ctx.map_digest.label,
+        &["ConvertPlayerColor"],
+        Limits {
+            max_handles: 16,
+            admission_steps: 1000,
+            expression_depth: 16,
+            expression_work: 1000,
+        },
+    )
+    .unwrap();
+    let reserved = inner.reserve_identity("unit").unwrap();
+    let mut host = ObjectHost::checked(inner)
+        .unwrap()
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(1))
+        .unwrap();
+    let player = host.native("Player", &[Value::Int(4)]).unwrap();
+    let unit = host
+        .native(
+            "CreateUnit",
+            &[
+                player.clone(),
+                Value::Int(i32::from_be_bytes(*b"hfoo")),
+                Value::Real(0.0),
+                Value::Real(0.0),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        host.native("GetOwningPlayer", std::slice::from_ref(&unit))
+            .unwrap(),
+        player
+    );
+    let reserved_type = host
+        .native("GetUnitTypeId", &[Value::Handle(reserved)])
+        .unwrap_err();
+    assert!(
+        reserved_type.contains("handle identifies another family"),
+        "{reserved_type}"
+    );
+    let reserved_owner = host
+        .native("GetOwningPlayer", &[Value::Handle(reserved)])
+        .unwrap_err();
+    assert!(
+        reserved_owner.contains("handle identifies another family"),
+        "{reserved_owner}"
+    );
+}
+
+#[test]
+fn identity_getters_from_another_source_are_refused() {
+    let primary = "type agent extends handle\ntype widget extends agent\ntype unit extends widget\ntype player extends agent\ntype timer extends agent\ntype playercolor extends handle\nconstant native ConvertPlayerColor takes integer i returns playercolor\nnative CreateTimer takes nothing returns timer\nnative DestroyTimer takes timer t returns nothing\nnative CreateUnit takes player id, integer unitid, real x, real y, real face returns unit\nglobals\nconstant playercolor C = ConvertPlayerColor(1)\nendglobals\n";
+    let other = "native GetUnitTypeId takes unit whichUnit returns integer\nnative GetOwningPlayer takes unit whichUnit returns player\n";
+    let map = pcx_script::parse_script("").unwrap();
+    let primary = pcx_script::parse_script(primary).unwrap();
+    let other = pcx_script::parse_script(other).unwrap();
+    let program = Arc::new(
+        pcx_script::resolve_with(
+            &map,
+            &[
+                pcx_script::Prelude::new("synthetic/common.j", &primary),
+                pcx_script::Prelude::new("synthetic/other.j", &other),
+            ],
+        )
+        .unwrap(),
+    );
+    let inner = crate::playercolor_host::EnumHost::checked_selected(
+        program,
+        "split-source",
+        &["ConvertPlayerColor"],
+        crate::playercolor_host::Limits {
+            max_handles: 4,
+            admission_steps: 100,
+            expression_depth: 16,
+            expression_work: 100,
+        },
+    )
+    .unwrap();
+    let (catalog, hits, _) = counting();
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+    let error = match crate::playercolor_host::ObjectHost::checked(inner)
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(1))
+    {
+        Err(error) => error,
+        Ok(_) => panic!("foreign identity getters were admitted"),
+    };
+    assert_eq!(error.failure, Failure::Source);
+    assert_eq!(error.native, "GetUnitTypeId");
+    assert_eq!(error.declaration_source, "synthetic/other.j");
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn omitted_identity_getters_stay_unsupported() {
+    let mut session = open(2, 8, MAP);
+    session.vm.init_globals().unwrap();
+    session.vm.call("main", &[]).unwrap();
+    let Value::Handle(unit) = session.vm.global("U") else {
+        panic!("unit");
+    };
+    let missing = session
+        .vm
+        .host()
+        .native("GetUnitTypeId", &[Value::Handle(unit)])
+        .unwrap_err();
+    assert!(missing.contains("unsupported"), "{missing}");
+    let missing_owner = session
+        .vm
+        .host()
+        .native("GetOwningPlayer", &[Value::Handle(unit)])
+        .unwrap_err();
+    assert!(missing_owner.contains("unsupported"), "{missing_owner}");
 }
 
 #[test]

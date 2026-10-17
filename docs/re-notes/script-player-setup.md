@@ -221,10 +221,19 @@ limits are checked on the returned definition; they do not bound the catalog's
 internal allocation or work.
 
 A successful call retains the checked definition, executed player number,
-source identity, and finite x/y/facing values on the shared handle arena. Integer
-rawcodes pass through as four big-endian bytes. Catalog failures keep their typed
-reason and declaration context. Finite-real refusal is a recreation policy.
-No life, stats, model, movement-world id or rendering defaults are assigned.
+the existing player handle, source identity, and finite x/y/facing values on
+the shared handle arena. Integer rawcodes pass through as four big-endian bytes.
+Catalog failures keep their typed reason and declaration context. Finite-real
+refusal is a recreation policy. No life, stats, model, movement-world id or
+rendering defaults are assigned.
+
+When declared on `CreateUnit`'s source, `GetUnitTypeId` returns that definition's
+rawcode as an integer and `GetOwningPlayer` returns the retained player handle.
+Neither call allocates, resolves the catalog again, or reads a requested level,
+state, position, facing, or order. A reserved unit token and a handle of another
+family are refused. Programs that omit either declaration leave that getter
+unsupported. Owner changes remain unsupported: there is no admitted setter that
+replaces the retained handle.
 
 The same retained Human01 program now creates 53 unit records. Their definitions
 match the same selected catalog, and their owners and coordinate/facing bits
