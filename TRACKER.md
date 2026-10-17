@@ -1609,3 +1609,14 @@ scrolled-canvas regression fails on the old clipped CDP path (200x150 becomes
 pixels, document-offset receipts, physical inputs, change detection and existing
 file refusal still pass. Evidence: `.scratch/browser-capture-screen-20261017/`.
 This corrects the comparison harness; it does not establish game or UI parity.
+
+Menu label line boxes now keep paragraph leading out of measured FDF anchor
+heights, on both roots and markup spans. A fresh same-source 1280x960 browser
+capture reduces the nine left Video label offsets from 6–39 pixels to at most
+one pixel against the Wine reference mask, while the static right-button ink
+masks remain unchanged. Main and Options captures are stable; the five-row
+conditional source list and centered value remain. All 363 app tests, strict
+native/browser checks, browser build and formatting pass. Evidence:
+`.scratch/options-text-anchors-20261017/`. One-font-size line boxes are a
+recreation layout convention; original font metrics, multiline spacing,
+rasterization, shading and full native Options parity remain open. No publication.

@@ -203,3 +203,31 @@ analysis only; no measured coordinates or font sizes were copied into product
 constants. A scheduled resize fixture was not run because the candidate was
 withheld. Typography, text rasterization, control spacing and full native visual
 parity remain open. Neither package nor original content was published.
+
+## Text line boxes and dependent anchors (2026-10-17)
+
+The measured TEXT height feeds FDF bottom-anchor chains. Bevy's default paragraph
+leading inflated that height, so the vertical error accumulated down Video
+Options. Menu label roots and every colour/hotkey span now use a one-font-size
+line box. The selected font size, face, colours, shadow and authored anchor
+relationships remain unchanged. This is a recreation layout convention, not a
+claim that the original font metrics or multiline algorithm use that ratio.
+No measured screen coordinate was added to the renderer.
+
+A fresh 1280x960 browser comparison against the retained Wine/Xvfb original frame
+moves the nine left gold labels from errors of 6–39 pixels to within one pixel
+vertically under the same analysis mask. Static right-button ink masks retain
+the baseline dimensions and counts. The Main menu was also visually reviewed;
+the popup value remains centered and its five source-derived rows still open.
+Both new captures report stable menu state. The run retains seventeen local
+code GETs, no page errors, no sockets and no uploads. The original runtime's
+winning font member and full typography parity remain unobserved.
+
+All 363 application tests pass (18 explicit gates ignored), along with strict
+native/browser Clippy, the browser build and formatting. The first comparison
+attempt failed after the old screenshot path reset the emulated screen bound;
+that harness defect was corrected separately, and the immutable failure remains.
+Evidence is in `.scratch/options-text-anchors-20261017/`, especially
+`browser-artifact-2/browser/`, `anchor-metrics.json` and
+`right-label-metrics.json`. Multiline native spacing, font rasterization, panel
+shading, unsupported settings and full Options parity remain open. No publication.

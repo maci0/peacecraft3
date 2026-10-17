@@ -2548,6 +2548,8 @@ fn apply_menu_text(
                 font_size: size,
                 ..default()
             },
+            // Keep paragraph leading out of the measured FDF anchor height.
+            bevy::text::LineHeight::RelativeToFont(1.0),
             TextColor(normal),
             TextLayout::new(
                 justify(style.justify_h),
@@ -2574,6 +2576,7 @@ fn apply_menu_text(
                         font_size: size,
                         ..default()
                     },
+                    bevy::text::LineHeight::RelativeToFont(1.0),
                     TextColor(if run.hotkey { hot } else { normal }),
                 ))
                 .id();
