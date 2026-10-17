@@ -272,3 +272,41 @@ state tuple, table, output sequence or asset. Engine seed provenance, complete
 consumer ordering, secondary consumers, repeated unmodified runs, native Windows
 comparison, paired gameplay and the 100-consecutive original baseline remain
 open. The public site was not rebuilt.
+
+## Startup consumer identities (2026-10-18)
+
+A second fresh, unchanged Human01 run records the actual return-address and
+argument slots from the draw helper's frame. Every captured draw call is checked
+against its direct-call bytes in the selected image, and one backtrace is retained
+per distinct caller. This run has a different engine seed from the preceding run.
+Its four real results and primary states also match the selected-code reference
+and the existing production-host replay on native and actual WASI. There are now
+eight raw real checkpoints across these two runs, not eight repeated observations
+of one seeded sequence.
+
+The 37 draws before the first recorded real entry split into two caller paths:
+
+- Nineteen come from the player-slot race-resolution loop. Its preference and
+  resolved-race fields match the registered `SetPlayerRacePreference` and
+  `GetPlayerRace` wrappers, and its random branch matches the explicit local
+  `common.j` random-race flag. Observed slot indices are retained privately.
+- Eighteen use a fraction/range helper reached through the registered
+  `CreateUnit` wrapper. The captured callback and virtual-method chain reaches
+  a method whose selected-image RTTI identifies `CAbilityWander`. The method has
+  a conditional early return; its caller also tests unit/component state before
+  reaching it. The retained recreation prefix executes 155 `CreateUnit` calls,
+  so one draw per created unit would not reproduce this observed history.
+
+Static analysis also follows the engine seed's local accumulator: initialization
+to zero, conditional combination with decoded per-slot values, and rotation before
+the later primary reseed. The semantic origin of those values remains unresolved.
+Neither a captured seed nor the 37-draw total becomes a production default.
+
+Private evidence, RTTI relations, bounded source windows, unchanged-map hashes,
+caller frames, captures and successful native/WASI replay receipts are in
+`.scratch/script-rng-consumer-order-root-20261018/`. The debugger detaches cleanly;
+the isolated container is stopped and preserved. These remain intrusive Wine
+observations, with no native Windows, complete thread coverage or gameplay claim.
+The next integration needs the source-bound race inputs and the executed units'
+ability associations and branch conditions. A generic startup skip or an
+unconditional `CreateUnit` consumption rule would discard those relationships.
