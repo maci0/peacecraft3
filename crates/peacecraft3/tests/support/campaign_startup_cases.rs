@@ -295,6 +295,7 @@ fn budgets() -> MapStartupBudgets {
             max_unit_events: 4,
             max_actions: 4,
         },
+        player_unit_events: None,
         timer_events: 4,
         game_state_events: 4,
         stock: None,
@@ -1050,3 +1051,6 @@ fn failed_post_config_observation_keeps_the_published_session() {
 
 #[path = "script_timer_cases.rs"]
 mod script_timer_cases;
+
+#[path = "player_unit_event_cases.rs"]
+mod player_unit_event_cases;

@@ -63,6 +63,8 @@ pub struct MapStartupBudgets {
     pub units: UnitBudget,
     pub unit_states: UnitStateBudget,
     pub triggers: TriggerBudget,
+    /// None keeps player-unit event registration unsupported.
+    pub player_unit_events: Option<usize>,
     pub timer_events: usize,
     pub game_state_events: usize,
     /// None keeps stock slot natives unsupported.
@@ -369,6 +371,9 @@ pub fn assemble(
         .with_trigger_admission(budgets.triggers)?
         .with_timer_events(budgets.timer_events)?
         .with_game_state_events(budgets.game_state_events)?;
+    if let Some(limit) = budgets.player_unit_events {
+        object = object.with_player_unit_events(limit)?;
+    }
     if let Some(now) = timer_time {
         object = object.with_timer_runtime(now)?;
     }

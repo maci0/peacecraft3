@@ -17,6 +17,10 @@ pub use timer_events::TimerEventRegistration;
 mod game_state_events;
 pub use game_state_events::GameStateEventRegistration;
 
+#[path = "player_unit_event_host.rs"]
+mod player_unit_events;
+pub use player_unit_events::PlayerUnitEventRegistration;
+
 const CREATE: &str = "CreateTrigger";
 const REGISTER: &str = "TriggerRegisterUnitEvent";
 const CONVERT: &str = "ConvertUnitEvent";
@@ -60,6 +64,8 @@ pub(super) struct Admission {
     retained_triggers: usize,
     retained_events: usize,
     retained_actions: usize,
+    player_unit_event_limit: Option<usize>,
+    retained_player_unit_events: usize,
     timer_event_limit: Option<usize>,
     retained_timer_events: usize,
     game_state_event_limit: Option<usize>,
@@ -172,6 +178,8 @@ impl ObjectHost {
             retained_triggers: 0,
             retained_events: 0,
             retained_actions: 0,
+            player_unit_event_limit: None,
+            retained_player_unit_events: 0,
             timer_event_limit: None,
             retained_timer_events: 0,
             game_state_event_limit: None,
@@ -222,6 +230,11 @@ impl ObjectHost {
         match name {
             CREATE => Some(self.create_trigger(args)),
             REGISTER => Some(self.register_unit_event(args)),
+            player_unit_events::REGISTER
+                if self.triggers.as_ref()?.player_unit_event_limit.is_some() =>
+            {
+                Some(self.register_player_unit_event(args))
+            }
             timer_events::REGISTER if self.triggers.as_ref()?.timer_event_limit.is_some() => {
                 Some(self.register_timer_event(args))
             }

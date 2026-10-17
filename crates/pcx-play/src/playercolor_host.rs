@@ -205,6 +205,7 @@ enum Entry {
         unitevent: HandleId,
         enumerand: i32,
     },
+    RegisteredPlayerUnitEvent(objects::PlayerUnitEventRegistration),
     /// One retained timer-expiry subscription; no clock or pending firing.
     RegisteredTimerEvent {
         trigger: HandleId,
@@ -537,6 +538,7 @@ impl EnumHost {
             Entry::Unit { .. } => "unit",
             Entry::Trigger => "trigger",
             Entry::RegisteredUnitEvent { .. }
+            | Entry::RegisteredPlayerUnitEvent(_)
             | Entry::RegisteredTimerEvent { .. }
             | Entry::RegisteredGameStateEvent { .. } => "event",
             Entry::TriggerAction { .. } => "triggeraction",
@@ -636,9 +638,10 @@ pub use objects::{
     DestructableCreation, ExecutedUnit, ExecutedUnitState, FileSoundState, FilterBudget,
     FilterCallback, ForceBudget, GameStateEventRegistration, LabelSoundFlags, MapConfig,
     MapConfigBudget, MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget,
-    PlayerBudget, PlayerSettings, PlayerStateRequestBudget, QuestBudget, QuestEvent, QuestFlag,
-    ResearchObservation, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest,
-    StartLocation, StartPriorities, StartPriority, StartupClockState, StartupSettings, StockBudget,
-    TechLimitBudget, TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord,
-    TriggerBudget, UnitBudget, UnitEventRegistration, UnitStateBudget,
+    PlayerBudget, PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration,
+    QuestBudget, QuestEvent, QuestFlag, ResearchObservation, SoundProperties, SoundState,
+    StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
+    StartupClockState, StartupSettings, StockBudget, TechLimitBudget, TimerEventRegistration,
+    TimerExpiry, TimerHost, TriggerActionRecord, TriggerBudget, UnitBudget, UnitEventRegistration,
+    UnitStateBudget,
 };

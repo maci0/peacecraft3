@@ -170,3 +170,46 @@ The later [positive-timeout timer consumer](legacy-timer-start.md#bounded-recrea
 admits non-yielding direct handlers on the same arena and published VM. An expiry
 with any matching retained subscription refuses before consuming that deadline;
 its direct handler is not run in place of the unresolved trigger actions.
+
+
+## Player-unit event subscriptions
+
+`ObjectHost::with_player_unit_events(max_records)` admits the selected
+`TriggerRegisterPlayerUnitEvent(trigger, player, playerunitevent, boolexpr) -> event`
+interface after trigger admission. The registration, `Player`,
+`ConvertPlayerUnitEvent` and `CreateTrigger` declarations must share a source.
+The selected conversion supplies the allowed enumerands; no event number or
+player slot is copied into the implementation. The authored parameter ancestry
+and the existing shared contract checks remain mandatory.
+
+A call requires a created trigger, an existing player, a selected symbolic event,
+and either null or an actual retained `Filter` wrapper from this ObjectHost.
+A successful call allocates one distinct event in the existing arena and retains
+those identities, the source enumerand and the optional filter identity.
+`player_unit_event_registration` exposes that association, and
+`retained_player_unit_events` counts it independently of other subscriptions.
+Invalid arguments, the caller's record limit and shared arena exhaustion refuse
+without changing prior records. No second arena or copied predicate is added.
+
+`MapStartupBudgets.player_unit_events` is an optional factory admission. `None`
+keeps the native unsupported. Registration does not evaluate the filter, infer
+trigger-enabled state, enumerate units or deliver an action. Conditions, event
+contexts, destruction/unregistration rules and world-driven event delivery remain
+open. The retained subscription alone is not evidence of native event behavior.
+
+The unchanged retained Human01 Program now passes this registration through the
+production startup factory. Each retained identity and enumerand matches the
+executed call. The verifier supplies an explicit synthetic game-time origin and
+does not advance timers. Two executed `TimerStart` calls succeed; their timeouts
+come from the selected scripts. Globals and `config` finish. `main` next refuses
+`Condition`, at map-script span `117660..117717`, with common declaration
+`71743..71804`. At that frontier the same arena has 922 identities, 155 units,
+12 triggers and one player-unit subscription. Earlier source, localization,
+player, unit, sound, force, action and timer checks still pass.
+
+This verifier retains its explicit compatibility object catalog and qualified
+startup observations; it does not establish target-catalog fidelity, complete
+chapter execution, timer timing or the 100-consecutive unmodified-map baseline.
+Commands, original-input fingerprints and actual refusal output remain local in
+`.scratch/player-unit-event-root-20261017/`. No original runtime, new render,
+public site or original payload upload was performed for this slice.

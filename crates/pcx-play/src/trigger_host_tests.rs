@@ -547,3 +547,6 @@ mod timer_events;
 
 #[path = "game_state_event_tests.rs"]
 mod game_state_events;
+
+#[path = "player_unit_event_tests.rs"]
+mod player_unit_event_tests;

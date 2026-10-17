@@ -484,8 +484,8 @@ pub use unit_creation::{ExecutedUnit, ExecutedUnitState, UnitBudget, UnitStateBu
 #[path = "trigger_host.rs"]
 mod trigger_admission;
 pub use trigger_admission::{
-    GameStateEventRegistration, TimerEventRegistration, TriggerActionRecord, TriggerBudget,
-    UnitEventRegistration,
+    GameStateEventRegistration, PlayerUnitEventRegistration, TimerEventRegistration,
+    TriggerActionRecord, TriggerBudget, UnitEventRegistration,
 };
 
 #[cfg(test)]

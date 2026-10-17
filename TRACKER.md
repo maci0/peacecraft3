@@ -1936,3 +1936,18 @@ actions, repeated-run stability and scheduler/world integration remain open.
   pause/speed integration, edge delays, native rounding/tie order and full map
   execution. The 100-consecutive unmodified-original baseline gate is unchanged.
   See [the timer evidence and implementation limits](docs/re-notes/legacy-timer-start.md).
+
+
+### 2026-10-17 — retained player-unit event associations
+
+- [~] The production startup factory can opt into bounded player-unit event
+  registrations on its existing ObjectHost arena. Records retain the executed
+  trigger, player, source event and optional real Filter identity; predicates
+  and actions are not evaluated by registration.
+- [~] Unchanged Human01 passes that registration and two positive timer starts
+  under an explicit verifier clock origin. Globals and `config` finish; `main`
+  next refuses `Condition`. The retained compatibility catalog and startup
+  observations remain explicit conditions of this check.
+- [ ] Condition/event execution, the application world and clock, rendered
+  gameplay, chapter completion and the 100-consecutive original baseline gate
+  remain open. See [the registration scope](docs/re-notes/script-trigger-admission.md#player-unit-event-subscriptions).
