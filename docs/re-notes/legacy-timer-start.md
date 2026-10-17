@@ -161,7 +161,11 @@ actions are not guessed or silently skipped.
 
 The tests exercise the actual factory, admitted-map delivery and published VM,
 including shared globals/aliases, restart, destroy, bounded catch-up, failed
-replacement, callback failure and trigger refusal. Synthetic success does not
+replacement, callback failure and trigger refusal. A callback may destroy the
+expired timer and start another with a null handler. That start keeps its own
+run. After its expiry, the published host queries that timer directly; the
+callback globals are not rewritten. The active expiry stays until finish.
+Synthetic success does not
 prove original timing parity. This API adds no automatic application advance,
 yielding callback continuation, pause/resume, zero/negative-delay behavior or
 complete Human01 gameplay.
