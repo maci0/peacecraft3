@@ -670,7 +670,7 @@ fn mount_resolved(
             spawn_art(commands, entity, art, &image_handles);
         }
         if let Some(text) = &frame.text {
-            spawn_text(commands, entity, text, &font_handles);
+            spawn_text(commands, entity, text, &font_handles[&text.font_path]);
         }
     }
     mount.source = Some(resolved.source);
@@ -819,13 +819,13 @@ fn spawn_art(
     commands.entity(parent).add_child(entity);
 }
 
-fn spawn_text(
+pub(crate) fn spawn_text(
     commands: &mut Commands,
     parent: Entity,
     text: &PlannedText,
-    fonts: &HashMap<String, Handle<Font>>,
-) {
-    let handle = fonts[&text.font_path].clone();
+    handle: &Handle<Font>,
+) -> Entity {
+    let handle = handle.clone();
     let font = bevy::text::FontSource::Handle(handle);
     let size = bevy::text::FontSize::Vh(text.height_vh);
     let entity = commands
@@ -883,20 +883,25 @@ fn spawn_text(
         commands.entity(entity).add_child(child);
     }
     commands.entity(parent).add_child(entity);
+    entity
 }
 
 fn frame_node(frame: &PlannedFrame) -> Node {
     let mut node = relative_node(frame.relative);
     if let Some(text) = &frame.text {
-        node.flex_direction = FlexDirection::Column;
-        node.justify_content = justify_content(text.justify_v);
-        node.align_items = align_items(text.justify_h);
-        if let Some([x, y]) = text.padding_vw_vh {
-            node.padding.left = Val::Vw(x);
-            node.padding.top = Val::Vh(y);
-        }
+        style_text_node(&mut node, text);
     }
     node
+}
+
+pub(crate) fn style_text_node(node: &mut Node, text: &PlannedText) {
+    node.flex_direction = FlexDirection::Column;
+    node.justify_content = justify_content(text.justify_v);
+    node.align_items = align_items(text.justify_h);
+    if let Some([x, y]) = text.padding_vw_vh {
+        node.padding.left = Val::Vw(x);
+        node.padding.top = Val::Vh(y);
+    }
 }
 
 fn relative_node(relative: RelativeBox) -> Node {

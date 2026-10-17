@@ -17,6 +17,8 @@ mod intro;
 mod launch;
 mod launch_gui;
 mod map_source_controls;
+pub mod rich_text;
+pub mod tooltip;
 use peacecraft3::map_requests;
 mod local_demo;
 mod mainmenu;

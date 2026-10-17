@@ -911,6 +911,12 @@ milestone, regardless of unit-test count.
       inputs mount, and a synthetic Vulkan check covers texture ranges and alpha.
       Native texture sampling/composition remain open; see
       `docs/re-notes/hud-texture-blocks.md`.
+      A caller-qualified tooltip text consumer now reuses the HUD's planned
+      font, justification, wrapping and shadow, with bounded markup parsing and
+      hover/keyboard focus on the same mounted surface. Synthetic application,
+      Vulkan and parser checks do not establish native tooltip parity. Runtime
+      field/picking publication and tooltip chrome remain open; see
+      `docs/re-notes/hud-tooltips.md`.
 - [ ] Audio parity (`.slk` sound-list channels, 3D positioning)
 - [~] Deterministic movement work/allocation/state gate exists; extend fixed-work gates to gameplay/rendering as implemented. Report 4v4 1080p FPS observationally, never as a load-dependent pass/fail test.
 

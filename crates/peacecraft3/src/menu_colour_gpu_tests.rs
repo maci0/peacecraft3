@@ -574,3 +574,147 @@ fn authored_hud_texture_ranges_and_alpha_reach_the_ui_render_graph() {
         readback.completed
     );
 }
+
+#[test]
+#[ignore = "requires a local Vulkan adapter; synthetic styled tooltip readback"]
+fn authored_tooltip_spans_reach_the_owners_ui_render_target() {
+    use crate::hud_assets::{HudMarkup, RelativeBox, sample_hud};
+    use crate::hud_render::{HudAnchor, HudMount, HudSourceAttachment, HudSubmit};
+    use crate::tooltip::{TooltipRecord, TooltipSupply, TooltipView};
+
+    let mut input = sample_hud(&["Default"]);
+    input.fdf_texts = vec![
+        r#"
+Frame "SIMPLEFRAME" "Console" {
+    Frame "TEXT" "Owner" {
+        Width 1,
+        Height 1,
+        SetPoint TOPLEFT, "Console", TOPLEFT, 0, 0,
+        FrameFont "MasterFont", 0.3, "",
+        FontColor 1 1 1 1,
+        FontHighlightColor 1 1 1 1,
+        FontDisabledColor 0.5 0.5 0.5 1,
+        FontShadowColor 0 0 0 0,
+        FontShadowOffset 0 0,
+        FontFlags "",
+        FontJustificationH JUSTIFYLEFT,
+        FontJustificationV JUSTIFYTOP,
+        Text "",
+    }
+}
+"#
+        .into(),
+    ];
+    input.roots.truncate(1);
+    input.viewport = (1.0, 1.0);
+    input.images.clear();
+    input.markup = HudMarkup::Adapter(crate::tooltip::hud_markup_adapter);
+    let style = crate::hud_assets::resolve(&input)
+        .unwrap()
+        .frames
+        .into_iter()
+        .find(|frame| frame.name == "Owner")
+        .unwrap()
+        .text
+        .unwrap();
+    let budget = input.budgets.max_input_bytes;
+    let mut app = vulkan_menu_app("Tooltip spans");
+    crate::hud_render::install(&mut app);
+    crate::tooltip::install(&mut app);
+    let target = spawn_readback_camera(&mut app);
+    let camera = app
+        .world_mut()
+        .query_filtered::<Entity, With<Camera3d>>()
+        .single(app.world())
+        .unwrap();
+    let parent = app
+        .world_mut()
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            UiTargetCamera(camera),
+        ))
+        .id();
+    app.world_mut().resource_mut::<HudAnchor>().parent = Some(parent);
+    app.world_mut().write_message(HudSubmit { input });
+    app.update();
+    assert!(app.world().resource::<HudMount>().error.is_none());
+    let owner = app
+        .world_mut()
+        .query::<(Entity, &HudSourceAttachment)>()
+        .iter(app.world())
+        .find(|(_, source)| source.frame == "Owner")
+        .map(|(entity, _)| entity)
+        .unwrap();
+    let attachment = app
+        .world()
+        .get::<HudSourceAttachment>(owner)
+        .unwrap()
+        .clone();
+    let text = app.world().get::<Children>(owner).unwrap()[0];
+    let bevy::text::FontSource::Handle(font) = &app.world().get::<TextFont>(text).unwrap().font
+    else {
+        panic!("expected resolved font handle")
+    };
+    let font = font.clone();
+    app.insert_resource(TooltipSupply {
+        field: "Tip".into(),
+        record: TooltipRecord {
+            source_label: attachment.source_label,
+            source_member: attachment.source_member,
+            frame: attachment.frame,
+            receipt_path: attachment.receipt_path,
+            binding_revision: attachment.binding_revision,
+            field: "Tip".into(),
+            text: "|cffff0000MM|r|n|cff00ff00MM|r".into(),
+        },
+        font,
+        style,
+        placement: Some(RelativeBox {
+            left: 0.0,
+            top: 0.0,
+            width: 100.0,
+            height: 100.0,
+        }),
+        max_input_bytes: budget,
+    });
+    app.insert_resource(bevy::input_focus::InputFocus::from_entity(owner));
+    app.insert_resource(bevy::input_focus::InputFocusVisible(true));
+    let readback = drive_readback(&mut app, target);
+    let view = app.world().resource::<TooltipView>().0;
+    assert_eq!(
+        app.world().get::<ChildOf>(view).unwrap().parent(),
+        app.world().resource::<HudMount>().root.unwrap()
+    );
+    let mut red = Vec::new();
+    let mut green = Vec::new();
+    for y in 0..READBACK_HEIGHT as usize {
+        for x in 0..READBACK_WIDTH as usize {
+            let offset = y * readback.stride + x * 8;
+            let r = half(&readback.bytes[offset..offset + 2]);
+            let g = half(&readback.bytes[offset + 2..offset + 4]);
+            let b = half(&readback.bytes[offset + 4..offset + 6]);
+            if r > 0.2 && g < 0.05 && b < 0.05 {
+                red.push(y);
+            }
+            if g > 0.2 && r < 0.05 && b < 0.05 {
+                green.push(y);
+            }
+        }
+    }
+    assert!(red.len() > 3, "red glyph pixels={}", red.len());
+    assert!(green.len() > 3, "green glyph pixels={}", green.len());
+    assert!(
+        red.iter().max().unwrap() < green.iter().min().unwrap(),
+        "newline did not separate the colour runs"
+    );
+    println!(
+        "tooltip readback red_pixels={} green_pixels={} completed={}",
+        red.len(),
+        green.len(),
+        readback.completed
+    );
+}
