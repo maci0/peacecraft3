@@ -193,6 +193,9 @@ impl<'a, H> LocalizedHost<'a, H> {
     }
 }
 impl<H: Host> Host for LocalizedHost<'_, H> {
+    fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
+        self.inner.suspend(name, args)
+    }
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         self.inner.native(name, args)
     }
@@ -220,6 +223,9 @@ impl<H> OwnedLocalizedHost<H> {
     }
 }
 impl<H: Host> Host for OwnedLocalizedHost<H> {
+    fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
+        self.inner.suspend(name, args)
+    }
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         self.inner.native(name, args)
     }
@@ -308,6 +314,49 @@ mod tests {
             }),
         )
     }
+    #[test]
+    fn both_localized_hosts_forward_a_park_without_executing_the_native() {
+        struct Park;
+        impl Host for Park {
+            fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
+                assert_eq!(name, "Park");
+                assert!(args.is_empty());
+                true
+            }
+            fn native(&mut self, _: &str, _: &[Value]) -> Result<Value, String> {
+                Err("a parked native must not run".into())
+            }
+        }
+        let scripts = Arc::new(
+            load(
+                b"native Park takes nothing returns integer\n",
+                b"function Inner takes nothing returns integer\nreturn Park()+1\nendfunction\n",
+                b"function main takes nothing returns integer\nreturn Inner()+2\nendfunction\n",
+                None,
+            )
+            .unwrap(),
+        );
+        let mut borrowed = scripts.vm(Park);
+        assert_eq!(
+            borrowed.invoke("main", &[]).unwrap(),
+            pcx_script::Exec::Suspended
+        );
+        assert_eq!(
+            borrowed.resume(Value::Int(4)).unwrap(),
+            pcx_script::Exec::Finished(Value::Int(7))
+        );
+        let mut owned = Arc::clone(&scripts).owned_vm(Park);
+        assert_eq!(
+            owned.invoke("main", &[]).unwrap(),
+            pcx_script::Exec::Suspended
+        );
+        assert_eq!(
+            owned.resume(Value::Int(4)).unwrap(),
+            pcx_script::Exec::Finished(Value::Int(7))
+        );
+        assert!(Arc::ptr_eq(owned.host().context(), &scripts));
+    }
+
     #[test]
     fn actual_supplied_prelude_body_runs_and_localization_keeps_bytes() {
         let scripts = load(b"native Capture takes string text returns nothing\n", b"function Message takes nothing returns nothing\ncall Capture(\"TRIGSTR_5\")\nendfunction\n", b"function config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\ncall Message()\nendfunction\n", Some(b"STRING 5\r\n{\r\n|cffff0000Authored|r|nText\r\n}\r\n")).unwrap();

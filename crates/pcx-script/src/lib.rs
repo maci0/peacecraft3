@@ -82,6 +82,9 @@
 //!   errors with the native's name, its declaration and the span of the call,
 //!   which is what `PLAN.md` requires of a missing native. The formatting
 //!   natives are refused because their exact output is not derivable here.
+//! - **Suspension.** [`Host::suspend`] parks one unimplemented native instead
+//!   of calling [`Host::native`]. [`Vm::invoke`] and [`Vm::resume`] keep that
+//!   thread. [`Vm::call`] still returns a value only when the call finishes.
 //! - **Handles.** Opaque non-null identity tokens can be supplied by the host.
 //!   Allocation, lifetime, recycling and native numeric IDs belong to the host;
 //!   the interpreter does not invent them.
@@ -121,7 +124,7 @@ mod tests_vm;
 
 pub use ast::*;
 pub use canon::fnv1a64;
-pub use eval::{Host, NullHost, OwnedVm, Vm, run_main};
+pub use eval::{Exec, Host, NullHost, OwnedVm, Vm, run_main};
 pub use lexer::{
     Comment, CommentKind, Directive, DirectiveRecord, Esc, Ident, IntBase, IntLit, Kw, Lexed,
     RawLit, RealLit, StrLit, StrPart, Tok, Token,

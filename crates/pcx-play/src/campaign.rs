@@ -155,6 +155,9 @@ impl<H> RecordingHost<H> {
     }
 }
 impl<H: Host> Host for RecordingHost<H> {
+    fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
+        self.inner.suspend(name, args)
+    }
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         let result = self.inner.native(name, args)?;
         let sequence = self.next_sequence();

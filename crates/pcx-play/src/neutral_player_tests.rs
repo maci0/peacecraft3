@@ -1109,3 +1109,30 @@ fn slot_getter_checks_independent_boundary_arguments_and_same_context_signature(
 
 #[path = "player_host_tests.rs"]
 mod player_objects;
+
+#[test]
+fn cooperative_delegate_cannot_park_the_owned_neutral_getter() {
+    struct Park {
+        names: Vec<String>,
+    }
+    impl Host for Park {
+        fn suspend(&mut self, name: &str, _: &[Value]) -> bool {
+            self.names.push(name.into());
+            true
+        }
+        fn native(&mut self, _: &str, _: &[Value]) -> Result<Value, String> {
+            Err("native must remain parked".into())
+        }
+    }
+    let ctx = context(256, COMMON, MAP, "cooperative delegate");
+    let mut host =
+        SelectedMapNeutralHost::try_new(ctx, rules(), Park { names: Vec::new() }).unwrap();
+    assert!(!host.suspend(NATIVE_NAME, &[]));
+    assert!(host.inner().names.is_empty());
+    assert!(matches!(
+        host.native(NATIVE_NAME, &[]).unwrap(),
+        Value::Int(_)
+    ));
+    assert!(host.suspend("SyntheticPark", &[Value::Int(4)]));
+    assert_eq!(host.inner().names, ["SyntheticPark"]);
+}

@@ -320,6 +320,9 @@ impl<H> SelectedMapNeutralHost<H> {
     }
 }
 impl<H: Host> Host for SelectedMapNeutralHost<H> {
+    fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
+        name != self.rule.native_name && self.inner.suspend(name, args)
+    }
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         if name != self.rule.native_name {
             return self.inner.native(name, args);

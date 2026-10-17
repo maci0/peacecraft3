@@ -1796,3 +1796,25 @@ refuses `TimerStart` at Blizzard.j `447183..447286`. Evidence:
 `.scratch/campaign-startup-host-root-20261017/`. Automatic launcher input preparation,
 native reader publication, timer scheduling, world/HUD integration and playable
 chapters remain open. No new rendered or native gameplay comparison is claimed.
+
+
+The existing script VM now retains expression continuations for an opt-in Host
+native, including partial arguments, operands, indexes, locals, assignments,
+returns and conditions. Resume supplies that native's result without repeating
+earlier effects. Short-circuit behavior, source diagnostics, cumulative steps and
+depth survive. Body snapshots and unfinished argument tails are shared across
+returns, with deterministic copy-work regressions and a bounded native-stack
+check for a wide call. Localized, neutral and trace wrappers forward the hook.
+The synchronous application session still refuses a suspended candidate and
+keeps the previous session and its callback tickets.
+All 112 native and 111 actual WASI script unit tests, 14 script integration tests
+on each target, 378 play unit tests and 65 selected play integration tests on each
+target pass. All 83 map-loading, 363 app and four app-library tests, strict
+native/browser Clippy, browser build, warning-denied docs and formatting pass.
+The qualified Human01 production-factory replay still completes globals/config,
+retains 904 identities, 144 rectangles and 155 units and refuses `TimerStart` at
+Blizzard.j `447183..447286`. Evidence:
+`.scratch/vm-continuation-root-20261017/`; see
+`docs/re-notes/script-continuations.md`. Current ObjectHost timer admission,
+expiry order, cooperative scheduler, native timing and playable chapters remain
+open. No fresh gameplay or rendered comparison is claimed.

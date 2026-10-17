@@ -5,11 +5,14 @@
 //! calls functions from it, so the value model is checked against code the game
 //! compiles rather than against a hand-written oracle.
 
+use crate::eval::MAX_STEPS;
 use crate::natives::{NativeTable, signature_of};
 use crate::resolve::{Prelude, resolve, resolve_with};
+use crate::span::Span;
 use crate::value::{Class, OpError, Value, binary, unary};
-use crate::{BinOp, NullHost, Script, UnOp, Vm, parse};
+use crate::{BinOp, Exec, NullHost, OwnedVm, Script, UnOp, Vm, parse};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 // ----- harness -----------------------------------------------------------
 
@@ -988,4 +991,709 @@ fn undeclared_prelude_calls_do_not_bypass_asset_defined_native_signatures() {
     assert!(error.message.contains("NotDeclared") && error.message.contains("not declared"));
     assert_eq!(vm.error_source(), Some("actual/Blizzard.j"));
     assert_eq!(vm.host().calls, 0);
+}
+
+// ----- suspension --------------------------------------------------------
+
+const SUSPEND_SRC: &str = "\
+native Mark takes nothing returns integer
+native Later takes nothing returns integer
+native Flag takes nothing returns boolean
+native Park takes nothing returns integer
+native ParkBool takes nothing returns boolean
+native Sleep takes real timeout returns nothing
+native Boom takes nothing returns nothing
+globals
+    integer g = 0
+    integer array a
+endglobals
+function side takes nothing returns boolean
+    call Mark()
+    return true
+endfunction
+function plain takes nothing returns integer
+    return 4
+endfunction
+function skip_and takes nothing returns boolean
+    return false and ParkBool()
+endfunction
+function skip_or takes nothing returns boolean
+    return true or ParkBool()
+endfunction
+function skip_user takes nothing returns boolean
+    return false and side()
+endfunction
+function or_user takes nothing returns boolean
+    return side() or Later()
+endfunction
+function left takes nothing returns integer
+    return Mark() + Park()
+endfunction
+function right takes nothing returns integer
+    return Park() + Mark()
+endfunction
+function neg takes nothing returns integer
+    return -(Mark() + Park())
+endfunction
+function prec takes nothing returns integer
+    return Mark() + Park() * Later()
+endfunction
+function args takes nothing returns integer
+    return tri(Mark(), Park(), Later())
+endfunction
+function tri takes integer a, integer b, integer c returns integer
+    return a + b + c
+endfunction
+function sc takes nothing returns boolean
+    return false or (Flag() and ParkBool())
+endfunction
+function slot takes nothing returns integer
+    set a[1] = 4
+    set a[2] = 7
+    return a[Mark() + Park()]
+endfunction
+function put takes nothing returns nothing
+    set a[Park()] = Mark()
+endfunction
+function keep takes nothing returns integer
+    local integer k = Mark() + Park()
+    set g = k
+    return k
+endfunction
+function leaf takes nothing returns integer
+    call Sleep(1.0)
+    return 10
+endfunction
+function mid takes nothing returns integer
+    return leaf()
+endfunction
+function nest takes nothing returns integer
+    set g = mid()
+    return g
+endfunction
+function wrap takes nothing returns integer
+    return leaf() + Later()
+endfunction
+function inner takes nothing returns nothing
+    set g = 1
+    call Sleep(1.0)
+    set g = g + 10
+endfunction
+function outer takes nothing returns nothing
+    local integer keep = 7
+    call inner()
+    set g = g + keep
+endfunction
+function boom takes nothing returns nothing
+    set g = 1
+    call Sleep(1.0)
+    call Boom()
+endfunction
+function branch takes nothing returns nothing
+    if ParkBool() then
+        call Mark()
+    else
+        call Later()
+    endif
+endfunction
+function spin takes nothing returns nothing
+    loop
+        exitwhen ParkBool()
+        call Mark()
+    endloop
+endfunction
+function budget takes nothing returns integer
+    set g = 1
+    return Park() + Mark()
+endfunction
+";
+
+#[derive(Default)]
+struct Probe {
+    log: Vec<String>,
+    sleep_args: Vec<Value>,
+}
+
+impl crate::Host for Probe {
+    fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
+        match name {
+            "Park" | "ParkBool" | "Sleep" => {
+                if name == "Sleep" {
+                    self.sleep_args.extend(args.iter().cloned());
+                }
+                self.log.push(format!("suspend {name}"));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn native(&mut self, name: &str, _args: &[Value]) -> Result<Value, String> {
+        self.log.push(format!("native {name}"));
+        match name {
+            "Mark" => Ok(Value::Int(2)),
+            "Later" => Ok(Value::Int(5)),
+            "Flag" => Ok(Value::Bool(true)),
+            "Boom" => Err("boom".into()),
+            "Park" | "ParkBool" | "Sleep" => Err("parked native must not run".into()),
+            _ => Err(format!("unexpected native {name}")),
+        }
+    }
+}
+
+fn vm_of(program: &crate::resolve::Program) -> Vm<'_, Probe> {
+    Vm::new(program, Probe::default())
+}
+
+#[test]
+fn expression_parks_keep_earlier_operands_and_resume_once() {
+    let program = program_of(SUSPEND_SRC);
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.call("skip_and", &[]).unwrap(), Value::Bool(false));
+    assert_eq!(vm.call("skip_or", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(vm.call("skip_user", &[]).unwrap(), Value::Bool(false));
+    assert_eq!(vm.call("or_user", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(vm.host().log, vec!["native Mark".to_string()]);
+    assert_eq!(vm.call("plain", &[]).unwrap(), Value::Int(4));
+
+    let mut vm = vm_of(&program);
+    let err = vm.call("left", &[]).unwrap_err();
+    assert!(err.message.contains("suspended"), "{}", err.message);
+    assert_eq!(
+        vm.host().log,
+        vec!["native Mark".to_string(), "suspend Park".to_string()]
+    );
+    assert!(vm.invoke("plain", &[]).is_err());
+    assert_eq!(
+        vm.resume(Value::Int(3)).unwrap(),
+        Exec::Finished(Value::Int(5))
+    );
+    assert_eq!(
+        vm.host().log,
+        vec!["native Mark".to_string(), "suspend Park".to_string()]
+    );
+    assert!(vm.resume(Value::Null).is_err());
+
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.invoke("right", &[]).unwrap(), Exec::Suspended);
+    assert!(vm.host().log.iter().all(|e| e.as_str() != "native Mark"));
+    assert_eq!(
+        vm.resume(Value::Int(3)).unwrap(),
+        Exec::Finished(Value::Int(5))
+    );
+    assert_eq!(
+        vm.host().log,
+        vec!["suspend Park".to_string(), "native Mark".to_string()]
+    );
+
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.invoke("neg", &[]).unwrap(), Exec::Suspended);
+    assert_eq!(
+        vm.host().log,
+        vec!["native Mark".to_string(), "suspend Park".to_string()]
+    );
+    assert_eq!(
+        vm.resume(Value::Int(3)).unwrap(),
+        Exec::Finished(Value::Int(-5))
+    );
+    assert_eq!(vm.host().log.len(), 2);
+
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.invoke("prec", &[]).unwrap(), Exec::Suspended);
+    assert_eq!(
+        vm.host().log,
+        vec!["native Mark".to_string(), "suspend Park".to_string()]
+    );
+    assert_eq!(
+        vm.resume(Value::Int(4)).unwrap(),
+        Exec::Finished(Value::Int(22))
+    );
+    assert_eq!(
+        vm.host().log,
+        vec![
+            "native Mark".to_string(),
+            "suspend Park".to_string(),
+            "native Later".to_string()
+        ]
+    );
+
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.invoke("args", &[]).unwrap(), Exec::Suspended);
+    assert_eq!(
+        vm.host().log,
+        vec!["native Mark".to_string(), "suspend Park".to_string()]
+    );
+    assert_eq!(vm.depth(), 1);
+    assert_eq!(
+        vm.resume(Value::Int(10)).unwrap(),
+        Exec::Finished(Value::Int(17))
+    );
+    assert_eq!(
+        vm.host().log,
+        vec![
+            "native Mark".to_string(),
+            "suspend Park".to_string(),
+            "native Later".to_string()
+        ]
+    );
+    assert_eq!(vm.depth(), 0);
+
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.invoke("sc", &[]).unwrap(), Exec::Suspended);
+    assert_eq!(
+        vm.host().log,
+        vec!["native Flag".to_string(), "suspend ParkBool".to_string()]
+    );
+    assert_eq!(
+        vm.resume(Value::Bool(false)).unwrap(),
+        Exec::Finished(Value::Bool(false))
+    );
+    assert_eq!(vm.host().log.len(), 2);
+
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.invoke("slot", &[]).unwrap(), Exec::Suspended);
+    assert_eq!(vm.global_at("a", 2), Value::Int(7));
+    assert_eq!(
+        vm.resume(Value::Int(0)).unwrap(),
+        Exec::Finished(Value::Int(7))
+    );
+    assert_eq!(
+        vm.host()
+            .log
+            .iter()
+            .filter(|e| e.as_str() == "native Mark")
+            .count(),
+        1
+    );
+
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.invoke("put", &[]).unwrap(), Exec::Suspended);
+    assert_eq!(vm.global_at("a", 1), Value::Null);
+    assert_eq!(
+        vm.host().log,
+        vec!["native Mark".to_string(), "suspend Park".to_string()]
+    );
+    assert_eq!(
+        vm.resume(Value::Int(1)).unwrap(),
+        Exec::Finished(Value::Null)
+    );
+    assert_eq!(vm.global_at("a", 1), Value::Int(2));
+    assert_eq!(vm.host().log.len(), 2);
+
+    let mut vm = vm_of(&program);
+    let before = {
+        assert_eq!(vm.invoke("keep", &[]).unwrap(), Exec::Suspended);
+        assert_eq!(vm.global("g"), Value::Int(0));
+        vm.steps()
+    };
+    assert!(before > 0);
+    assert_eq!(
+        vm.resume(Value::Int(3)).unwrap(),
+        Exec::Finished(Value::Int(5))
+    );
+    assert_eq!(vm.global("g"), Value::Int(5));
+    assert!(vm.steps() > before);
+
+    let owned = Arc::new(program_of(SUSPEND_SRC));
+    let mut vm = OwnedVm::new_owned(Arc::clone(&owned), Probe::default());
+    assert_eq!(
+        vm.invoke("plain", &[]).unwrap(),
+        Exec::Finished(Value::Int(4))
+    );
+}
+
+#[test]
+fn nested_calls_if_and_loop_resume_without_replaying() {
+    let program = program_of(SUSPEND_SRC);
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.invoke("nest", &[]).unwrap(), Exec::Suspended);
+    assert_eq!(vm.depth(), 3);
+    assert_eq!(vm.global("g"), Value::Int(0));
+    assert_eq!(vm.host().sleep_args, vec![Value::Real(1.0)]);
+    assert!(vm.host().log.iter().all(|e| e.starts_with("suspend")));
+    let steps = vm.steps();
+    assert_eq!(
+        vm.resume(Value::Int(99)).unwrap(),
+        Exec::Finished(Value::Int(10))
+    );
+    assert_eq!(vm.global("g"), Value::Int(10));
+    assert_eq!(vm.depth(), 0);
+    assert!(vm.steps() > steps);
+
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.invoke("wrap", &[]).unwrap(), Exec::Suspended);
+    assert!(vm.host().log.iter().all(|e| e.as_str() != "native Later"));
+    assert_eq!(
+        vm.resume(Value::Null).unwrap(),
+        Exec::Finished(Value::Int(15))
+    );
+    assert_eq!(
+        vm.host().log,
+        vec!["suspend Sleep".to_string(), "native Later".to_string()]
+    );
+
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.invoke("outer", &[]).unwrap(), Exec::Suspended);
+    assert_eq!(vm.global("g"), Value::Int(1));
+    let blocked = vm.call("plain", &[]).unwrap_err();
+    assert!(blocked.message.contains("suspended"), "{}", blocked.message);
+    assert_eq!(vm.global("g"), Value::Int(1));
+    assert_eq!(
+        vm.resume(Value::Int(99)).unwrap(),
+        Exec::Finished(Value::Null)
+    );
+    assert_eq!(vm.global("g"), Value::Int(18));
+    assert_eq!(vm.call("plain", &[]).unwrap(), Value::Int(4));
+
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.invoke("boom", &[]).unwrap(), Exec::Suspended);
+    let error = vm.resume(Value::Null).unwrap_err();
+    assert!(error.message.contains("Boom"), "{}", error.message);
+    assert_ne!(error.span, Span::EMPTY);
+    assert_eq!(vm.global("g"), Value::Int(1));
+    assert_eq!(vm.error_source(), Some("the map script"));
+    assert_eq!(vm.depth(), 0);
+    assert!(vm.resume(Value::Null).is_err());
+
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.invoke("branch", &[]).unwrap(), Exec::Suspended);
+    assert!(vm.host().log.iter().all(|e| !e.starts_with("native")));
+    assert_eq!(
+        vm.resume(Value::Bool(true)).unwrap(),
+        Exec::Finished(Value::Null)
+    );
+    assert_eq!(
+        vm.host().log,
+        vec!["suspend ParkBool".to_string(), "native Mark".to_string()]
+    );
+
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.invoke("branch", &[]).unwrap(), Exec::Suspended);
+    assert_eq!(
+        vm.resume(Value::Bool(false)).unwrap(),
+        Exec::Finished(Value::Null)
+    );
+    assert_eq!(
+        vm.host().log,
+        vec!["suspend ParkBool".to_string(), "native Later".to_string()]
+    );
+
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.invoke("spin", &[]).unwrap(), Exec::Suspended);
+    assert_eq!(vm.resume(Value::Bool(false)).unwrap(), Exec::Suspended);
+    assert_eq!(
+        vm.host().log,
+        vec![
+            "suspend ParkBool".to_string(),
+            "native Mark".to_string(),
+            "suspend ParkBool".to_string()
+        ]
+    );
+    assert_eq!(
+        vm.resume(Value::Bool(true)).unwrap(),
+        Exec::Finished(Value::Null)
+    );
+    assert_eq!(
+        vm.host().log.iter().filter(|e| *e == "native Mark").count(),
+        1
+    );
+}
+
+#[test]
+fn invalid_resume_reentry_budget_and_init_do_not_pretend_success() {
+    let program = program_of(SUSPEND_SRC);
+    let mut idle = vm_of(&program);
+    assert!(
+        idle.resume(Value::Null)
+            .unwrap_err()
+            .message
+            .contains("not suspended")
+    );
+
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.invoke("budget", &[]).unwrap(), Exec::Suspended);
+    assert_eq!(vm.global("g"), Value::Int(1));
+    assert!(vm.host().log.iter().all(|e| e.as_str() != "native Mark"));
+    let parked = vm.steps();
+    vm.set_steps_for_test(MAX_STEPS);
+    let error = vm.resume(Value::Int(1)).unwrap_err();
+    assert!(error.message.contains("steps"), "{}", error.message);
+    assert_ne!(error.span, Span::EMPTY);
+    assert_eq!(vm.global("g"), Value::Int(1));
+    assert_eq!(vm.depth(), 0);
+    assert!(vm.host().log.iter().all(|e| e.as_str() != "native Mark"));
+    assert!(vm.resume(Value::Null).is_err());
+    assert!(parked > 0);
+
+    let mut vm = vm_of(&program);
+    assert_eq!(vm.invoke("left", &[]).unwrap(), Exec::Suspended);
+    vm.set_busy_for_test(true);
+    assert!(
+        vm.resume(Value::Int(1))
+            .unwrap_err()
+            .message
+            .contains("reentrant")
+    );
+    assert!(
+        vm.invoke("plain", &[])
+            .unwrap_err()
+            .message
+            .contains("reentrant")
+    );
+    vm.set_busy_for_test(false);
+    assert_eq!(vm.global("g"), Value::Int(0));
+    assert_eq!(
+        vm.resume(Value::Int(3)).unwrap(),
+        Exec::Finished(Value::Int(5))
+    );
+
+    let bad = "\
+native Mark takes nothing returns integer
+native Park takes nothing returns integer
+globals
+    integer partial = 4
+    integer bad = Mark() + Park()
+endglobals
+function main takes nothing returns nothing
+endfunction
+";
+    let program = program_of(bad);
+    let mut vm = vm_of(&program);
+    let first = vm.init_globals().unwrap_err();
+    assert!(first.message.contains("suspended"), "{}", first.message);
+    assert_eq!(vm.init_globals().unwrap_err(), first);
+    assert_eq!(
+        vm.host().log,
+        vec!["native Mark".to_string(), "suspend Park".to_string()]
+    );
+    assert_eq!(vm.global("partial"), Value::Int(4));
+    assert_eq!(vm.global("bad"), Value::Null);
+    assert_eq!(vm.depth(), 0);
+    assert!(vm.resume(Value::Int(1)).is_err());
+    assert!(
+        vm.call("main", &[])
+            .unwrap_err()
+            .message
+            .contains("suspended")
+    );
+}
+
+#[test]
+fn returning_calls_copy_only_linear_statement_work() {
+    for calls in [32, 128] {
+        let mut source = "globals\ninteger total = 0\nendglobals\nfunction child takes nothing returns integer\nreturn 1\nendfunction\nfunction main takes nothing returns nothing\n".to_owned();
+        for _ in 0..calls {
+            source.push_str("set total = total + child()\n");
+        }
+        source.push_str("endfunction\n");
+        let program = program_of(&source);
+        let mut vm = Vm::new(&program, NullHost);
+        vm.call("main", &[]).unwrap();
+        assert_eq!(vm.global("total"), Value::Int(calls as i32));
+        assert!(
+            vm.copied_body_statements() <= 4 * (calls + 1),
+            "{calls} calls copied {} statements",
+            vm.copied_body_statements()
+        );
+    }
+}
+
+fn run_wide_argument_list() {
+    const ARGS: usize = 4096;
+    let params = (0..ARGS)
+        .map(|i| format!("integer a{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let args = vec!["1"; ARGS].join(", ");
+    let source = format!(
+        "native Wide takes {params} returns integer\nfunction main takes nothing returns integer\nreturn Wide({args})\nendfunction\n"
+    );
+    struct Wide;
+    impl crate::Host for Wide {
+        fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+            assert_eq!(name, "Wide");
+            assert!(args.iter().all(|v| *v == Value::Int(1)));
+            Ok(Value::Int(args.len() as i32))
+        }
+    }
+    let program = program_of(&source);
+    assert_eq!(
+        Vm::new(&program, Wide).call("main", &[]).unwrap(),
+        Value::Int(ARGS as i32)
+    );
+    println!("flat-arguments:{ARGS}");
+}
+
+#[test]
+fn flat_argument_lists_keep_the_native_stack_bounded() {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests_vm::wide_argument_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("PCX_WIDE_ARGUMENT_CHILD", "1")
+            .env("RUST_MIN_STACK", "262144")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "status={:?}\n{}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("flat-arguments:4096"));
+    }
+    #[cfg(target_arch = "wasm32")]
+    run_wide_argument_list();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn wide_argument_child() {
+    if std::env::var_os("PCX_WIDE_ARGUMENT_CHILD").is_some() {
+        run_wide_argument_list();
+    }
+}
+
+#[test]
+fn returning_arguments_share_the_unevaluated_tail() {
+    for count in [32, 128] {
+        let params = (0..count)
+            .map(|i| format!("integer a{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let args = vec!["child()"; count].join(",");
+        let source = format!(
+            "native Count takes {params} returns integer\nfunction child takes nothing returns integer\nreturn 1\nendfunction\nfunction main takes nothing returns integer\nreturn Count({args})\nendfunction\n"
+        );
+        struct Count;
+        impl crate::Host for Count {
+            fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+                assert_eq!(name, "Count");
+                Ok(Value::Int(args.len() as i32))
+            }
+        }
+        let program = program_of(&source);
+        let mut vm = Vm::new(&program, Count);
+        assert_eq!(vm.call("main", &[]).unwrap(), Value::Int(count as i32));
+        assert!(
+            vm.copied_argument_expressions() <= count,
+            "{count} arguments copied {} expressions",
+            vm.copied_argument_expressions()
+        );
+    }
+}
+
+#[test]
+fn parked_control_flow_matches_synchronous_effects_and_step_work() {
+    #[derive(Default)]
+    struct Effects {
+        park: bool,
+        pending: Option<Value>,
+        calls: Vec<(String, Vec<Value>)>,
+    }
+    impl crate::Host for Effects {
+        fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
+            if !self.park || name != "Hop" {
+                return false;
+            }
+            let [Value::Int(value)] = args else {
+                panic!("synthetic Hop args")
+            };
+            assert!(self.pending.is_none());
+            self.calls.push((name.into(), args.to_vec()));
+            self.pending = Some(Value::Int(value + 1));
+            true
+        }
+        fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+            let [Value::Int(value)] = args else {
+                panic!("synthetic value args")
+            };
+            assert!(!(self.park && name == "Hop"));
+            self.calls.push((name.into(), args.to_vec()));
+            match name {
+                "Hop" => Ok(Value::Int(value + 1)),
+                "Tag" => Ok(Value::Int(value + 2)),
+                _ => Err(name.into()),
+            }
+        }
+    }
+    let prefix = "native Hop takes integer n returns integer\nnative Tag takes integer n returns integer\nglobals\ninteger g=0\ninteger array a\nendglobals\nfunction inner takes integer n returns integer\nreturn Hop(n)+Tag(n)\nendfunction\nfunction choose takes integer n returns integer\nif Hop(n)>0 then\nreturn inner(n)\nelse\nreturn Hop(n)\nendif\nendfunction\n";
+    let bodies = [
+        "set g=Tag(1)+inner(Tag(2))+Hop(Tag(3))\nreturn g\n",
+        "set a[Hop(Tag(1))]=inner(Tag(5))\nreturn a[Hop(Tag(1))]\n",
+        "local integer k=inner(Hop(2))\nset g=Hop(k)+choose(Hop(0))\nreturn g\n",
+        "if Hop(0)>1 then\nset g=100\nelseif Hop(1)==2 then\nset g=choose(2)\nelse\nset g=200\nendif\nreturn g\n",
+        "loop\nexitwhen Hop(g)>2\nif Hop(g)>0 then\nset g=g+1\nendif\nendloop\nreturn inner(g)\n",
+        "debug if Hop(1)>0 then\ndebug set g=inner(1)\nendif\nreturn Hop(g)\n",
+        "loop\nif Hop(g)>0 then\nreturn inner(Hop(g))\nendif\nendloop\n",
+        "if (Hop(0)==1 and Hop(1)==2) or Hop(99)==0 then\nset g=Hop(2)\nendif\nreturn g\n",
+        "if false and Hop(99)==0 then\nset g=1\nendif\nif true or Hop(98)==0 then\nset g=Hop(0)\nendif\nreturn g\n",
+    ];
+    for body in bodies {
+        for debug in [false, true] {
+            let program = program_of(&format!(
+                "{prefix}function main takes nothing returns integer\n{body}endfunction\n"
+            ));
+            let mut sync = Vm::new(&program, Effects::default());
+            sync.set_debug(debug);
+            let expected = sync.invoke("main", &[]).unwrap();
+            assert!(matches!(expected, crate::Exec::Finished(_)));
+            let mut parked = Vm::new(
+                &program,
+                Effects {
+                    park: true,
+                    ..Default::default()
+                },
+            );
+            parked.set_debug(debug);
+            let mut result = parked.invoke("main", &[]).unwrap();
+            let mut parks = 0;
+            while result == crate::Exec::Suspended {
+                parks += 1;
+                assert!(parks < 128);
+                let value = parked.host().pending.take().unwrap();
+                result = parked.resume(value).unwrap();
+            }
+            assert_eq!(result, expected, "{body}");
+            assert!(parks > 0);
+            assert_eq!(
+                parked.host().calls,
+                sync.host().calls,
+                "effect order: {body}"
+            );
+            assert_eq!(parked.steps(), sync.steps(), "step work: {body}");
+            assert_eq!(parked.depth(), 0);
+            assert_eq!(parked.global("g"), sync.global("g"));
+            for index in 0..8 {
+                assert_eq!(parked.global_at("a", index), sync.global_at("a", index));
+            }
+        }
+    }
+}
+
+#[test]
+fn legacy_park_errors_keep_the_site_and_resume_relabels_later_errors() {
+    let prelude = "function Inner takes nothing returns integer\nreturn Park()+1\nendfunction\n";
+    let map = "native Park takes nothing returns integer\nnative Boom takes nothing returns integer\nfunction main takes nothing returns integer\nreturn Inner()+Boom()\nendfunction\n";
+    let prelude_ast = parse(prelude).unwrap();
+    let map_ast = parse(map).unwrap();
+    let program =
+        resolve_with(&map_ast, &[Prelude::new("synthetic/park.j", &prelude_ast)]).unwrap();
+    let mut vm = Vm::new(&program, Probe::default());
+    let parked = vm.call("main", &[]).unwrap_err();
+    assert!(parked.message.contains("suspended"));
+    let at = prelude.find("Park()").unwrap();
+    assert_eq!(parked.span, crate::Span::new(at, at + 6));
+    assert_eq!(vm.error_source(), Some("synthetic/park.j"));
+    let resumed = vm.resume(Value::Int(4)).unwrap_err();
+    let at = map.find("Boom()").unwrap();
+    assert_eq!(resumed.span, crate::Span::new(at, at + 6));
+    assert_eq!(vm.error_source(), Some("the map script"));
+    assert!(resumed.message.contains("Boom"));
 }

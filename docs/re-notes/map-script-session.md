@@ -61,3 +61,10 @@ catalog selection or playable startup. The real-App integration cases use
 synthetic assets and cover success, unsupported execution, a binding-only revision
 change, file-drop relabeling with explicit stock admission, and post-config failure.
 Local evidence is `.scratch/campaign-startup-host-root-20261017/`.
+
+The VM's cooperative `invoke`/`resume` API is described in
+[script-continuations.md](script-continuations.md). This session continues to use
+synchronous `call`: a suspending candidate is refused and is not published. Its
+current Host factory does not admit a suspending native. A future timer/event
+driver must retain and resume the same VM; it must not restart the entrypoint or
+replace suspension with a fabricated successful native result.

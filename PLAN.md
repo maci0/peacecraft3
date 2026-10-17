@@ -1189,6 +1189,12 @@ session now exist; they do not establish complete native or map behavior:
   source-bound Host factory and a delivery-to-session bridge: caller-qualified
   inputs run globals, `config` and `main` on one candidate before publication.
   Refusals preserve the prior session; stale deliveries cannot consume new inputs.
+  The same interpreter can now park an opt-in Host native inside expressions and
+  resume its result without repeating completed effects. Locals, source spans,
+  call depth and cumulative step work survive. Localized and neutral wrappers
+  forward that hook. The application session remains synchronous: a suspending
+  replacement refuses and preserves the old session and callback tickets.
+  See [cooperative continuations](docs/re-notes/script-continuations.md).
   Automatic preparation of those inputs, native coverage, scheduling and complete
   save state remain open. vJass `method`/`cast`/`delegate`, `.` member
   access, bare `!`, comma local lists and chained `a[i][j]` remain explicit refusals.
@@ -1253,8 +1259,8 @@ does not evaluate predicates. See `docs/re-notes/script-startup-settings.md` and
 These assignments do not enforce alliance gameplay or effective resource balances,
 and on/off activation is separate from combat modifiers and animation. This is
 execution evidence for that selected source profile, not a playable chapter.
-No application gameplay-session factory connects the Host, simulation, terrain
-and HUD yet. See
+The application Host factory does not yet connect execution to simulation,
+terrain and HUD. See
 [map admission](docs/re-notes/map-data-admission.md) and
 [executed Host state](docs/re-notes/script-player-setup.md).
 
