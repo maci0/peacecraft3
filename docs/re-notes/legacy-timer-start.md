@@ -4,16 +4,16 @@ Bounded static evidence for Legacy PE32 `Warcraft III.exe`, VERSIONINFO
 `1.29.2.9231`, SHA-256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
 This resolves the previously unread JASS selector in
-[legacy-simulation-clock.md](legacy-simulation-clock.md). It is not a live timer
-test or a scheduler implementation.
+[legacy-simulation-clock.md](legacy-simulation-clock.md). The static chain is not
+a runtime test or scheduler implementation; a bounded Wine follow-up is below.
 
 The session has no connected REA tools. A read-only CLI diagnostic reported
 missing Codex registration; no configuration or provider was changed. The
 investigation used the existing bounded `objdump` method, checked PE raw-section
 bounds, direct-call decoding and vtable reads. Commands, disassembly, fourteen
 range digests and a static verifier remain local under
-`.scratch/timer-start-source-root-20261017/`. No executable was launched and no
-original bytes or generated original contents are committed.
+`.scratch/timer-start-source-root-20261017/`. That static step launched no
+executable. No original bytes or generated original contents are committed.
 
 ## Observed native path
 
@@ -60,7 +60,8 @@ when subscribed trigger actions complete relative to the handler.
 The queue-fire path `0x7fc390` prepares one-shot removal or periodic rescheduling
 before invoking the retained object's dispatch slot. It also has a segmented
 timeout path using runtime data at `0x115ea08`. Callback restart/destroy/pause,
-long-timeout rounding and equal-expiry ordering still need behavioral checks.
+long-timeout rounding and general equal-expiry ordering remain open. The limited
+runtime cases below do not settle those complete behavior spaces.
 
 ## Verification and implementation limits
 
@@ -78,3 +79,47 @@ No measured operand was copied into a simulation constant; `TICK_MS` is unchange
 A recreation may use a different queue architecture while preserving observable
 behavior. Delivery must share the existing session's VM and identities and
 preserve callback time and lifetime changes, with timing/order differences explicit.
+
+## One bounded Wine lifecycle probe
+
+A fresh isolated run used that same executable under Wine 10, Xvfb at 1280×960
+and Mesa llvmpipe. It ran a retained Human01 map with reversible instrumentation
+around its authored `InitBlizzard` call. The original `main` and `config` remain;
+only `war3map.j` changes in the unsigned experiment, whose omitted attributes and
+signature do not claim authenticity. This is an instrumented reference, not an
+unmodified-map acceptance run or native Windows ground truth.
+
+The probe starts a clock timer and schedules synthetic positive-timeout cases.
+Those durations and operations are experiment conditions, not original defaults.
+It records timer queries and `GetExpiredTimer` from callbacks, then closes the
+log from its completion timer. The reviewed final capture shows Human01's opening
+cinematic; it is not a recreation rendering comparison.
+
+| Probe condition | Observation in this run |
+| --- | --- |
+| Query a fresh, unstarted timer | Elapsed, remaining and timeout each print zero. |
+| Start A, start B, restart A at the same nominal delay | B fires before A. This does not establish a universal equal-expiry rule. |
+| Replace an armed handler | Only the replacement handler appears before completion. |
+| Replace an armed handler with null | The old handler does not appear before completion. A separate null-handler timer still invokes its expiry-trigger action. |
+| Destroy an armed timer | Its handler does not appear before completion. |
+| Restart a periodic timer from its first callback as a shorter one-shot | The replacement fires once; no further old periodic callback appears before completion. |
+| Destroy a periodic timer from its third callback | Three callbacks appear, with no fourth before completion. |
+| Register an expiry-trigger action and a direct handler on one timer | The non-yielding action logs before the handler. Both observe the same expired timer identity. |
+
+The log has sixteen records, including fourteen timer snapshots/callbacks and
+explicit begin/completion markers. Periodic callbacks print elapsed equal to
+their configured period and remaining zero at the callback. Clock readings are
+formatted through JASS `R2SW` at six decimal places; they do not establish exact
+floating-point bits, wall-clock conversion, or equal deadlines below that precision.
+
+Local receipts in `.scratch/timer-runtime-root-20261017/attempt-1/` bind the
+probe script, reversible member checks, selected installation, staged map, launch,
+generated log and both inspected captures. The verifier reparses the log, checks
+all callback identities and suppression/count cases, and rejects missing completion,
+wrong-identity and wrong-handler mutations. The probe's container was stopped and
+preserved. Both retained LAN containers were already stopped and remain unchanged.
+
+This is one bounded run. Pause/resume, zero/negative/non-finite delays, long-timeout
+segmentation, yielding trigger actions, arbitrary reentrancy and repeated-run
+stability remain unmeasured. No recreation timer implementation or callback
+scheduler was changed, and no native/recreation timing parity is claimed.

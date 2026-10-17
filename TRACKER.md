@@ -1912,3 +1912,14 @@ checks bind these findings to the selected executable. See
 question, not RE-Q5 or timer execution. `ObjectHost` still refuses `TimerStart`;
 callback ordering/mutation, scheduler integration, native timing and playable
 campaigns remain open. No original runtime or new rendering check was run.
+
+A subsequent isolated Legacy/Wine timer probe completes with sixteen records.
+It observes handler replacement/clearing, armed-timer destruction, periodic
+self-restart and destruction, expired-timer identity, and a non-yielding expiry
+action before the direct handler. Source/staging/log/capture receipts and three
+rejected log mutations pass; the owned probe container is stopped and preserved.
+See the bounded runtime section of `docs/re-notes/legacy-timer-start.md` and
+`.scratch/timer-runtime-root-20261017/attempt-1/`. This is one instrumented Human01
+run, not the unmodified-map baseline gate, a native Windows check, universal timer
+ordering or a recreation timer implementation. Pause, edge delays, yielding
+actions, repeated-run stability and scheduler/world integration remain open.
