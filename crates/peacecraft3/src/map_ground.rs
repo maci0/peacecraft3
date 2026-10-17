@@ -35,6 +35,8 @@ const TERRAIN_SLK: &str = "TerrainArt\\Terrain.slk";
 struct AttemptKey {
     context: Weak<ParsedMapContext>,
     revision: u64,
+    read_limit: Option<u64>,
+    memory: Option<GroundMemory>,
 }
 
 /// Last admitted ground draw. `entity` is absent until a publication succeeds.
@@ -167,15 +169,21 @@ fn publish_admitted_ground(
     let key = AttemptKey {
         context: Arc::downgrade(&context),
         revision: bindings.revision,
+        read_limit: supply.read_limit,
+        memory: supply.memory,
     };
     if publication.attempted.as_ref().is_some_and(|previous| {
-        previous.revision == key.revision && Weak::ptr_eq(&previous.context, &key.context)
+        previous.revision == key.revision
+            && Weak::ptr_eq(&previous.context, &key.context)
+            && previous.read_limit == key.read_limit
+            && previous.memory == key.memory
     }) {
         return;
     }
     let (read_limit, memory) = match require_budget(&supply, bindings.revision) {
         Ok(budget) => budget,
         Err(error) => {
+            publication.attempted = None;
             publication.last_error = Some(error);
             return;
         }

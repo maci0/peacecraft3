@@ -17,6 +17,11 @@ the previous mounted entity, source context and catalog/BLP receipts. A
 successful replacement retires the previous entity. Asset handles are inserted
 only after selectors, geometry and every texture decode succeed.
 
+Attempt deduplication includes the caller's read and texture budgets. Correcting
+an insufficient budget retries the same admitted map; unchanged inputs do not
+rebuild it each update. Temporarily removing a required budget preserves the
+mounted draw and reports the missing input; restoring it permits publication.
+
 ## Evidence and profile
 
 W3E framing, ordered slot fourccs and corner words are shipped-byte evidence

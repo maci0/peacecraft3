@@ -224,3 +224,95 @@ fn stale_ground_delivery_and_missing_inputs_preserve_the_mounted_source() {
     assert!(app.world().get::<Mesh3d>(entity).is_some());
     assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 1);
 }
+
+#[test]
+fn corrected_ground_budgets_retry_the_same_admitted_map() {
+    for read_limit in [1, 4096] {
+        let inbox = ConfigurationInbox::default();
+        let mut app = ground_app(&inbox);
+        app.world_mut().resource_mut::<GroundSupply>().read_limit = Some(read_limit);
+        app.world_mut().resource_mut::<GroundSupply>().memory = Some(GroundMemory {
+            retained_bytes: 63,
+            transient_bytes: 128,
+        });
+        let f = ground_fixture();
+        let id = enqueue(&inbox, &f, ground_assets());
+        app.update();
+        assert!(matches!(inbox.poll(id).unwrap(), Poll::Completed(o) if o.result.is_ok()));
+        let publication = app.world().resource::<GroundPublication>();
+        assert!(publication.entity.is_none());
+        if read_limit == 1 {
+            assert!(matches!(
+                publication.last_error,
+                Some(MapGroundError::Read { .. })
+            ));
+            app.world_mut().resource_mut::<GroundSupply>().read_limit = Some(4096);
+            app.update();
+        }
+        assert!(matches!(
+            app.world().resource::<GroundPublication>().last_error,
+            Some(MapGroundError::Ground(
+                pcx_gfx::GroundError::RetainedBytes { .. }
+            ))
+        ));
+        assert_eq!(app.world().resource::<Assets<Image>>().len(), 0);
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 0);
+        app.world_mut()
+            .resource_mut::<GroundSupply>()
+            .memory
+            .as_mut()
+            .unwrap()
+            .retained_bytes = 64;
+        app.update();
+        let publication = app.world().resource::<GroundPublication>();
+        assert!(
+            publication.last_error.is_none(),
+            "{:?}",
+            publication.last_error
+        );
+        let entity = publication.entity.unwrap();
+        let context = Arc::clone(publication.context.as_ref().unwrap());
+        assert!(Arc::ptr_eq(
+            &context,
+            &app.world()
+                .resource::<MapRequests>()
+                .admission
+                .shared_context()
+                .unwrap()
+        ));
+        app.update();
+        assert_eq!(
+            app.world().resource::<GroundPublication>().entity,
+            Some(entity)
+        );
+        assert_eq!(app.world().resource::<Assets<Image>>().len(), 1);
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 1);
+        let memory = app.world_mut().resource_mut::<GroundSupply>().memory.take();
+        app.update();
+        assert!(matches!(
+            app.world().resource::<GroundPublication>().last_error,
+            Some(MapGroundError::MissingBudgets { .. })
+        ));
+        assert_eq!(
+            app.world().resource::<GroundPublication>().entity,
+            Some(entity)
+        );
+        app.world_mut().resource_mut::<GroundSupply>().memory = memory;
+        app.update();
+        assert!(
+            app.world()
+                .resource::<GroundPublication>()
+                .last_error
+                .is_none()
+        );
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn browser_ground_publication_gate() -> u32 {
+    delivered_ground_uses_the_selected_reader_and_keeps_its_draw_on_refusal();
+    stale_ground_delivery_and_missing_inputs_preserve_the_mounted_source();
+    corrected_ground_budgets_retry_the_same_admitted_map();
+    3
+}

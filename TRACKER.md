@@ -2108,3 +2108,16 @@ native/browser Clippy and formatting pass. Full successful UI hydration, browser
 interaction, campaign/HUD/world integration, native/render parity and the
 100-consecutive unmodified-original baseline remain open. Evidence:
 `.scratch/archive-reader-root-20261018/review-1/acceptance.json`.
+
+### 2026-10-18 — terrain publication after budget correction
+
+Terrain publication now retries the same admitted map when its caller corrects
+an insufficient read or texture budget. Unchanged inputs keep their draw; a
+temporarily missing budget preserves the mounted entity and can recover without
+another map delivery. Asset-derived terrain values and rendering are unchanged.
+
+Validation passes 98 native map-loading and 19 library tests, three terrain
+publication cases executed from actual Cargo WebAssembly, strict native/browser
+Clippy and formatting. Automatic launcher budgets, gameplay world/camera wiring,
+native/render parity and the 100-consecutive original baseline remain open.
+Evidence: `.scratch/terrain-budget-root-20261018/review-1/acceptance.json`.
