@@ -2151,3 +2151,20 @@ not a performance, native-parity, full accessibility or gameplay/HUD acceptance.
 The public site and unresolved 4K capture remain unchanged, as does the
 100-consecutive original baseline gate. Evidence:
 `.scratch/browser-refresh-root-20261018/review-1/acceptance.json`.
+
+### 2026-10-18 — browser configuration form admission
+
+The real browser form now has a verified successful path through local file
+selection, archive inspection, metadata decoding, the production WASM inbox and
+the App map-admission consumer. Five submissions cover an insufficient metadata
+byte limit, first admission, invalid UTF-8, JSON syntax failure and a second
+admission. Controls recover after each refusal; successful requests receive
+distinct IDs while the committed archive revision stays unchanged.
+
+The admitted map, common/BJ scripts and catalog are existing wholly synthetic
+fixtures. A pre-existing local menu closure supplies import hydration. All 17
+requests stay local, with no page or console errors. Two earlier harness setup
+failures are preserved separately; no product code changed. This does not prove
+original-map startup, gameplay/world/HUD behavior or full hydration across source
+sets. Public-site freshness, 4K and the original baseline remain open. Evidence:
+`.scratch/browser-map-form-root-20261018/review-3/acceptance.json`.
