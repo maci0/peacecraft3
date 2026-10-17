@@ -30,6 +30,7 @@ pub struct ObjectHost {
     destructables: Option<destructables::Admission>,
     units: Option<unit_creation::Admission>,
     triggers: Option<trigger_admission::Admission>,
+    filters: Option<filters::Admission>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -65,6 +66,7 @@ impl ObjectHost {
             destructables: None,
             units: None,
             triggers: None,
+            filters: None,
         })
     }
     fn contract(
@@ -347,6 +349,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.unit_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.filter_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.trigger_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -448,3 +453,11 @@ pub use unit_creation::{ExecutedUnit, ExecutedUnitState, UnitBudget, UnitStateBu
 #[path = "trigger_host.rs"]
 mod trigger_admission;
 pub use trigger_admission::{TriggerActionRecord, TriggerBudget, UnitEventRegistration};
+
+#[cfg(test)]
+#[path = "filter_host_tests.rs"]
+mod filter_tests;
+
+#[path = "filter_host.rs"]
+mod filters;
+pub use filters::{FilterBudget, FilterCallback};

@@ -1311,6 +1311,12 @@ Format: `date — subsystem — symptom — root cause — status`
       `436855..436900` (common declaration `71869..71927`). All previous state
       checks still pass. Effective balances/defaults, `GetPlayerState`, bounty
       effects and the application consumer remain open.
+      Filter admission then creates seven callback wrappers on that same arena,
+      with loaded ids, kinds and declaration provenance. The next refusal is
+      `CreateForce` in `Blizzard.j` at `437580..437593` (common declaration
+      `65813..65872`), retaining 850 identities and 155 units. Predicate execution,
+      candidate context, destruction and repeated-code identity remain open;
+      see `script-filter-wrappers.md`.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or
       upgrade effects. Applied camera motion remains open. See

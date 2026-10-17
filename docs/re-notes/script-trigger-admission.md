@@ -49,3 +49,7 @@ capacity without partial allocation. Raw function ids are meaningful within the
 current program; deferred application callbacks still need the existing session
 ticket rather than a bare id rebound after map replacement. The action integration
 evidence is in `.scratch/cursor-gameplay-20261016/root-trigger-actions/`.
+
+The later [Filter wrapper slice](script-filter-wrappers.md) retains boolean
+callbacks on the same arena without evaluating them. This does not add trigger
+conditions or predicate delivery; those remain separate consumers.

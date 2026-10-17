@@ -83,6 +83,8 @@ pub enum Failure {
     },
     #[error("trigger admission: {0}")]
     TriggerState(&'static str),
+    #[error("filter wrapper: {0}")]
+    FilterState(&'static str),
     #[error("host identity capacity or allocation exceeded")]
     Capacity,
 }
@@ -189,6 +191,10 @@ enum Entry {
         unit: HandleId,
         unitevent: HandleId,
         enumerand: i32,
+    },
+    /// One loaded `Filter` callback; its body is not entered during wrapping.
+    Filter {
+        function: FunctionId,
     },
     /// One `triggeraction` handle. The callback is not run at registration.
     TriggerAction {
@@ -507,6 +513,14 @@ impl EnumHost {
             Entry::Trigger => "trigger",
             Entry::RegisteredUnitEvent { .. } => "event",
             Entry::TriggerAction { .. } => "triggeraction",
+            Entry::Filter { .. } => self
+                .program
+                .natives()
+                .get("Filter")
+                .ok_or_else(|| self.error("Filter", Failure::Signature))?
+                .ret
+                .kind
+                .name(),
         })
     }
     pub fn symbolic_value(&self, id: HandleId, kind: &str) -> Result<i32, Error> {
@@ -584,10 +598,11 @@ mod tests;
 mod objects;
 pub use objects::{
     CameraDestination, CameraFieldRecord, CameraState, DayNightState, DestructableBudget,
-    DestructableCreation, ExecutedUnit, ExecutedUnitState, FileSoundState, MapConfig,
-    MapConfigBudget, MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget,
-    PlayerBudget, PlayerSettings, PlayerStateRequestBudget, QuestBudget, QuestEvent, QuestFlag,
-    SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest, StartLocation,
-    StartPriorities, StartPriority, StartupClockState, TechLimitBudget, TimerHost,
-    TriggerActionRecord, TriggerBudget, UnitBudget, UnitEventRegistration, UnitStateBudget,
+    DestructableCreation, ExecutedUnit, ExecutedUnitState, FileSoundState, FilterBudget,
+    FilterCallback, MapConfig, MapConfigBudget, MapMusicSelection, ObjectHost,
+    PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerSettings,
+    PlayerStateRequestBudget, QuestBudget, QuestEvent, QuestFlag, SoundProperties, SoundState,
+    StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
+    StartupClockState, TechLimitBudget, TimerHost, TriggerActionRecord, TriggerBudget, UnitBudget,
+    UnitEventRegistration, UnitStateBudget,
 };
