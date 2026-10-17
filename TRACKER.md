@@ -1325,6 +1325,14 @@ Format: `date — subsystem — symptom — root cause — status`
       `66202..66289`. Enumeration candidates, callback contexts, destruction and
       native duplicate-input behavior remain open. See
       `docs/re-notes/script-force-memberships.md`.
+      Two isolated original-client Wine controls now distinguish enumeration
+      from the full admitted slot domain: the original configuration includes
+      its active user; an explicit computer configuration adds that computer.
+      False filters empty populated destinations and selective filters keep
+      predicate acceptance separate from visits. Playing creep neutral slots
+      remain excluded. Controller/state causality and dynamic participation are
+      not fully qualified; enumeration stays unsupported pending a current
+      participation input. The 100-run baseline gate remains open.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or
       upgrade effects. Applied camera motion remains open. See

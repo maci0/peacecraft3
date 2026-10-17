@@ -49,3 +49,49 @@ actual WASI execute the same tests.
 membership-query natives remain unsupported. Enumeration needs a qualified
 candidate domain; callback iteration must execute on the same VM with an explicit
 candidate context. Neither operation follows from container retention.
+
+## Original enumeration controls
+
+Two fresh private runs of the supplied executable, VERSIONINFO `1.29.2.9231`
+(SHA-256 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`),
+loaded instrumented copies of the selected Human01 map at 1280×960 and 96 DPI.
+These are Wine/software-renderer observations, not native Windows ground truth.
+Map/archive release identity is separate from executable identity. The selected
+compile-prelude receipts do not independently establish runtime archive winners.
+
+All 17 retained map members were independently re-extracted; only the script
+changed. Reversing the edits restores the original script. New unsigned experiment
+archives omit attributes/signature metadata; no authenticity is claimed. The
+first probe preserves original configuration. The second changes one explicit
+configuration assignment from neutral to computer and adds a full source-slot
+controller/state census. Both record immediately before and after the original
+`InitBlizzard` call. Generated preload records are read as data, never executed.
+
+In the original-configuration run, null enumeration contains only the active
+user. With the computer stimulus, it contains that user and the computer.
+Null, repeated-null and always-true-filter membership agree within each run,
+before and after initialization, including the authored all-player force.
+False enumeration empties a populated destination, including a manually added
+neutral. The selective predicate retains only its chosen eligible player while
+still visiting the same candidates. Independent `IsPlayerInForce` checks agree
+with the recorded `ForForce` members. Callback visit order and final member order
+are retained separately; no general ordering rule is inferred.
+
+The second census excludes empty NONE/NEUTRAL slots and playing CREEP-controller
+neutral slots. Thus neither every admitted `Player()` identity nor every playing
+slot is a valid enumeration domain. The computer stimulus also changes EMPTY to
+PLAYING, so it does not isolate controller from slot-state effects. Reserved-id
+rules versus controller tests, nonplaying USER/COMPUTER, LEFT, RESCUABLE, runtime
+controller changes, join/leave and reentrant predicates remain unmeasured.
+Absent Host controller assignments must not become fabricated NONE defaults.
+
+The next useful consumer is null-filter replacement from an explicitly qualified
+current participation set. A captured startup set must stay bound to its exact
+map, executable, launch/configuration and initialization context; it cannot stand
+in for a changing lobby. Non-null predicates require same-VM candidate context.
+The current Host still refuses `ForceEnumPlayers`; no list of measured ids is
+embedded in production. These two different experiments do not meet the 100-run
+baseline gate or prove a general eligibility algorithm. Local receipts remain in
+`.scratch/force-enumeration-probe-20261017/` and
+`.scratch/force-enumeration-computer-probe-20261017/`; both containers were stopped
+and preserved. No original assets, modified maps or generated records are published.
