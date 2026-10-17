@@ -45,9 +45,9 @@ malformed/wrong-family/unknown/reserved identities, missing player admission,
 source/type/interface overrides and an extra authored ancestry edge. Native and
 actual WASI execute the same tests.
 
-`ForceEnumPlayers`, `ForForce`/`GetEnumPlayer`, destruction, removal, clear and
-membership-query natives remain unsupported. Enumeration needs a qualified
-candidate domain; callback iteration must execute on the same VM with an explicit
+`ForForce`/`GetEnumPlayer`, destruction, removal, clear and membership-query
+natives remain unsupported. `ForceEnumPlayers` requires the separately admitted
+startup participation described below; callback iteration must execute on the same VM with an explicit
 candidate context. Neither operation follows from container retention.
 
 ## Original enumeration controls
@@ -89,9 +89,56 @@ The next useful consumer is null-filter replacement from an explicitly qualified
 current participation set. A captured startup set must stay bound to its exact
 map, executable, launch/configuration and initialization context; it cannot stand
 in for a changing lobby. Non-null predicates require same-VM candidate context.
-The current Host still refuses `ForceEnumPlayers`; no list of measured ids is
-embedded in production. These two different experiments do not meet the 100-run
+Those controls alone do not admit a production participation policy. No list of
+measured ids is embedded in production. These two different experiments do not meet the 100-run
 baseline gate or prove a general eligibility algorithm. Local receipts remain in
 `.scratch/force-enumeration-probe-20261017/` and
 `.scratch/force-enumeration-computer-probe-20261017/`; both containers were stopped
 and preserved. No original assets, modified maps or generated records are published.
+
+## Explicit startup participation
+
+`admit_startup_force_players` opts the current ObjectHost into null-filter
+`ForceEnumPlayers` after its caller supplies qualified current participants.
+The caller passes the exact admitted `Arc<ParsedMapContext>` and existing player
+identities. A copied context or a generic reserved player token refuses. Every
+identity is validated, duplicates refuse, and the supplied count is bounded by
+`ForceBudget.max_memberships` before copying. Successful admission replaces the
+previous input; a failure leaves that input and all force state intact.
+Exact Arc identity binds the map, not capture provenance or lobby eligibility.
+Those remain the caller's responsibility; no controller defaults or discovery
+algorithm is inferred by this API.
+
+With this admission, a null filter replaces the destination with exactly those
+players in supplied order. The final aggregate count subtracts the old members
+before adding replacements. Capacity and allocation checks precede clearing;
+failed calls preserve every force and its accounting. Repeated calls do not
+accumulate duplicates. An admitted empty set clears a force, including manually
+added players. It is distinct from unavailable/invalidated participation.
+Non-null filters still refuse without evaluation or mutation.
+
+`invalidate_force_enumeration` makes subsequent enumeration unsupported while
+retaining the last force memberships. Accepted `SetPlayerController` writes
+invalidate automatically; rejected writes do not. External departures, lobby
+changes or other participation changes require explicit caller invalidation and
+fresh qualified input. This is a startup snapshot, not a live-session service.
+A stale external snapshot is a caller risk; immutable map identity alone cannot
+attest a changing lobby. No application participation provider was added.
+
+The local unchanged Human01 gate loads its startup players from the preserved
+original-configuration observation, checking map, selected compile-prelude,
+executable and observation hashes first. It does not compile captured ids into
+Rust or infer them from the Host's lazily interned player rows. After `config`,
+the same Host admits those existing identities and runs unchanged `main`.
+The all-player force now contains the one supplied participant; the 16 explicit
+singleton memberships, seven wrappers and earlier state still pass, with 868
+shared identities and 155 units. The next refusal is `GetGameSpeed` in selected
+`Blizzard.j` at `437880..437894`, common declaration `59055..59114`.
+This is controlled source execution with explicit captured startup input, not a
+playable chapter or general native eligibility policy. Evidence remains local in
+`.scratch/force-null-enumeration-root-20261017/`.
+
+Owned-VM tests exercise independent forces and aliases, exact aggregate limits,
+empty versus invalidated input, transactional re-admission, context/interface/
+identity refusal, controller invalidation and recovery. Non-null filters leave
+callback side effects untouched. Native and actual WASI execute the same tests.

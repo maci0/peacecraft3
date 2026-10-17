@@ -1210,8 +1210,10 @@ admission passes both fresh-unit off requests as false; `main` retains 155 units
 and then retains 26 explicit directed alliance assignments and one player-state
 request, then creates seven source-qualified `Filter` wrappers and retains
 explicit force memberships. The selected script creates 17 forces and 16
-memberships, then reaches unsupported `ForceEnumPlayers` in `Blizzard.j`.
-Wrapping does not evaluate predicates; force creation does not infer players.
+memberships. With explicitly supplied, locally captured startup participation,
+null-filter force enumeration replaces the all-player force and reaches
+unsupported `GetGameSpeed` in `Blizzard.j`. No participation default or discovery
+policy is inferred. Wrapping does not evaluate predicates.
 These assignments do not enforce alliance gameplay or effective resource balances,
 and on/off activation is separate from combat modifiers and animation. This is
 execution evidence for that selected source profile, not a playable chapter.

@@ -727,7 +727,10 @@ impl ObjectHost {
                 match name {
                     "SetPlayerColor" => players.rows[at].color = Some(*id),
                     "SetPlayerRacePreference" => players.rows[at].race_preference = Some(*id),
-                    _ => players.rows[at].controller = Some(*id),
+                    _ => {
+                        players.rows[at].controller = Some(*id);
+                        self.invalidate_force_enumeration();
+                    }
                 }
                 Ok(Value::Null)
             }

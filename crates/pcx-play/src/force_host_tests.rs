@@ -234,3 +234,6 @@ fn admission_requires_players_and_loaded_contracts_and_ancestry_sources() {
         assert!(host(&c, "// map", 8, true).with_forces(budget).is_err());
     }
 }
+
+#[path = "force_enumeration_tests.rs"]
+mod enumeration;

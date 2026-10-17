@@ -1333,6 +1333,14 @@ Format: `date — subsystem — symptom — root cause — status`
       remain excluded. Controller/state causality and dynamic participation are
       not fully qualified; enumeration stays unsupported pending a current
       participation input. The 100-run baseline gate remains open.
+      Null-filter enumeration now accepts an explicit caller-qualified startup
+      participant set on the same Host/context, with no controller or slot default.
+      Replacements check final aggregate capacity before mutation; non-null filters
+      refuse. Controller writes and explicit external invalidation retire the
+      input. Loading the preserved original startup set in the unchanged Human01
+      gate yields one all-force member, 868 identities and the next refusal
+      `GetGameSpeed` in `Blizzard.j` at `437880..437894` (common `59055..59114`).
+      Live participation, application provider and general eligibility remain open.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or
       upgrade effects. Applied camera motion remains open. See
