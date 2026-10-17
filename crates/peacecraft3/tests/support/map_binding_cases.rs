@@ -135,7 +135,7 @@ impl Fixture {
         );
         Self {files,raw,common:b"native FixtureHeld takes nothing returns integer\n".to_vec(),bj:b"// supplied BJ\n".to_vec(),unit_data:b"ID;PWXL;N;E\r\nB;Y2;X2\r\nC;X1;Y1;K\"unitID\"\r\nC;X2;Y1;K\"Score\"\r\nC;X1;Y2;K\"UNIT\"\r\nC;X2;Y2;K\"authored stock cell\"\r\nE\r\n".to_vec(),metadata:b"ID;PWXL;N;E\r\nB;Y2;X6\r\nC;X1;Y1;K\"ID\"\r\nC;X2;Y1;K\"field\"\r\nC;X3;Y1;K\"slk\"\r\nC;X4;Y1;K\"type\"\r\nC;X5;Y1;K\"index\"\r\nC;X6;Y1;K\"category\"\r\nC;X1;Y2;K\"STAT\"\r\nC;X2;Y2;K\"Score\"\r\nC;X3;Y2;K\"UnitData\"\r\nC;X4;Y2;K\"string\"\r\nC;X5;Y2;K\"-1\"\r\nC;X6;Y2;K\"synthetic category\"\r\nE\r\n".to_vec(),map_id:identity(&map_info),common_id:identity(&common_info),bj_id:identity(&bj_info),catalog_id:identity(&stock),map_info,common_info,bj_info,catalog_infos:vec![stock],override_reply:None,map_reads:Arc::new(AtomicUsize::new(0)),common_reads:Arc::new(AtomicUsize::new(0)),bj_reads:Arc::new(AtomicUsize::new(0)),catalog_reads:Arc::new(AtomicUsize::new(0))}
     }
-    fn rebuild(&mut self) {
+    pub(crate) fn rebuild(&mut self) {
         self.raw = fixtures::build_synthetic_map(
             "one selected synthetic map",
             &self

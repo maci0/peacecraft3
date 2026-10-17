@@ -82,6 +82,26 @@ impl<H: Host + Send + Sync + 'static> MapScriptSession<H> {
         F: FnOnce(Arc<ParsedMapContext>) -> Result<H, E>,
         E: std::error::Error + Send + Sync + 'static,
     {
+        self.replace_sequenced(context, create_host, entrypoints, |_, _| {
+            Ok::<(), std::convert::Infallible>(())
+        })
+    }
+    /// `between(vm, completed)` runs after globals (`completed == 0`) and after
+    /// each entrypoint that returned. A between-callback error is a factory
+    /// failure: the previous session stays published.
+    pub fn replace_sequenced<F, E, B, BE>(
+        &mut self,
+        context: Arc<ParsedMapContext>,
+        create_host: F,
+        entrypoints: &[FunctionId],
+        mut between: B,
+    ) -> Result<(), ScriptSessionError>
+    where
+        F: FnOnce(Arc<ParsedMapContext>) -> Result<H, E>,
+        E: std::error::Error + Send + Sync + 'static,
+        B: FnMut(&mut OwnedVm<OwnedLocalizedHost<H>>, usize) -> Result<(), BE>,
+        BE: std::error::Error + Send + Sync + 'static,
+    {
         for &id in entrypoints {
             function_name(&context, id)?;
         }
@@ -94,10 +114,22 @@ impl<H: Host + Send + Sync + 'static> MapScriptSession<H> {
         if let Err(error) = vm.init_globals() {
             return Err(execution_failure(&context, &mut vm, None, error));
         }
-        for &id in entrypoints {
+        if let Err(source) = between(&mut vm, 0) {
+            return Err(ScriptSessionError::Factory {
+                identity: context.sources.map.clone(),
+                source: Box::new(source),
+            });
+        }
+        for (index, &id) in entrypoints.iter().enumerate() {
             let name = function_name(&context, id)?;
             if let Err(error) = vm.call(&name, &[]) {
                 return Err(execution_failure(&context, &mut vm, Some(id), error));
+            }
+            if let Err(source) = between(&mut vm, index + 1) {
+                return Err(ScriptSessionError::Factory {
+                    identity: context.sources.map.clone(),
+                    source: Box::new(source),
+                });
             }
         }
         self.active = Some(ActiveSession {

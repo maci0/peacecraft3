@@ -1,7 +1,9 @@
 //! Explicit selected-map admission for the application.
 //! Callers supply source identities, archive policy, field bindings and input limits.
-//! Admission publishes parsed data; it does not initialize a gameplay Host.
+//! Parsed publication and script startup stay separate: startup runs only after a
+//! successful admission and caller-supplied host inputs.
 
+pub mod campaign_startup;
 pub mod map_admission;
 pub mod map_binding;
 pub mod map_requests;

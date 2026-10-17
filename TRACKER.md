@@ -1780,3 +1780,19 @@ consumer groups, including these ownership cases. Evidence:
 `.scratch/map-runtime-source-owner-20261017/`. This supplies owned readers through
 the existing configuration path; it does not construct a gameplay Host, execute
 chapters, freeze external sources or complete terrain/HUD integration.
+
+
+The admitted-map startup bridge now uses one reusable source-bound Host factory,
+with explicit caller-owned rules, banks, budgets, catalog and runtime observations.
+Successful delivery runs globals, map-script `config`, post-config admission and
+`main` before publishing the candidate session. Factory, post-config and native
+refusals preserve the old session. Revision, identity and exact receipt checks
+prevent stale outcomes from consuming fresh inputs; file-drop labels remain valid.
+Four new real-App cases pass, bringing map-loading coverage to 82 tests. All 376
+native and actual WASI play tests, 363 app tests, four app-library tests, strict
+native/browser Clippy, docs and formatting pass. The same qualified Human01 input
+now uses this production factory and post-config path, retains one arena and still
+refuses `TimerStart` at Blizzard.j `447183..447286`. Evidence:
+`.scratch/campaign-startup-host-root-20261017/`. Automatic launcher input preparation,
+native reader publication, timer scheduling, world/HUD integration and playable
+chapters remain open. No new rendered or native gameplay comparison is claimed.

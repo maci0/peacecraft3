@@ -43,6 +43,7 @@ web-sys = { version = "0.3", features = ["Window"] }
 
 [dev-dependencies]
 flate2.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

@@ -64,6 +64,7 @@ pub mod generator;
 pub mod label_sounds;
 pub mod map_admission;
 pub mod map_scripts_import;
+pub mod map_startup_host;
 pub mod minimize;
 pub mod mp3_frame;
 pub mod neutral_player;

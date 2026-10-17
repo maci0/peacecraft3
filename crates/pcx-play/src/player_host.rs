@@ -542,6 +542,16 @@ impl ObjectHost {
     pub fn player_slots(&self) -> Option<usize> {
         self.players.as_ref().map(|p| p.slots)
     }
+    /// Existing `Player` identity for a source slot, if that call has already run.
+    pub fn player_identity(&self, number: i32) -> Option<HandleId> {
+        self.players.as_ref().and_then(|players| {
+            players
+                .rows
+                .iter()
+                .find(|row| row.number == number)
+                .map(|row| row.identity)
+        })
+    }
     pub fn player_context(&self) -> Option<&Arc<ParsedMapContext>> {
         self.players.as_ref().map(|p| p.source.context())
     }

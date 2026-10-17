@@ -42,3 +42,6 @@ mod browser_archive_source_cases;
 mod browser_configuration_cases;
 #[path = "support/browser_configuration_json_cases.rs"]
 mod browser_configuration_json_cases;
+
+#[path = "support/campaign_startup_cases.rs"]
+mod campaign_startup_cases;

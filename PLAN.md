@@ -1185,8 +1185,12 @@ session now exist; they do not establish complete native or map behavior:
   Those corpus measurements are syntax evidence. Current code resolves names,
   evaluates typed values, arrays and functions, and dispatches caller-owned natives
   with source diagnostics. `MapScriptSession` owns one admitted VM and rejects
-  callbacks belonging to a replaced session. Native coverage, scheduling and
-  complete save state remain open. vJass `method`/`cast`/`delegate`, `.` member
+  callbacks belonging to a replaced session. The application now has a reusable
+  source-bound Host factory and a delivery-to-session bridge: caller-qualified
+  inputs run globals, `config` and `main` on one candidate before publication.
+  Refusals preserve the prior session; stale deliveries cannot consume new inputs.
+  Automatic preparation of those inputs, native coverage, scheduling and complete
+  save state remain open. vJass `method`/`cast`/`delegate`, `.` member
   access, bare `!`, comma local lists and chained `a[i][j]` remain explicit refusals.
 - **`pcx-trig` — the trigger-graph containers.** `war3map.wts` (table strings),
   `war3map.wtg` (the editor's trigger graph) and `war3map.wct` (a trigger's custom

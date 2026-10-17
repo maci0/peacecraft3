@@ -278,6 +278,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     let mut app = App::new();
     (configure)(&mut app);
     peacecraft3::map_requests::install(&mut app);
+    peacecraft3::campaign_startup::install(&mut app);
     crate::map_source_controls::install(&mut app);
     app.add_plugins(DefaultPlugins.set(window))
         .init_resource::<bevy::picking::ordered::OrderedPointerInput>()
