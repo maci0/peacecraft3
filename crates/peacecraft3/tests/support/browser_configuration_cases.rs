@@ -300,7 +300,7 @@ fn archive_generation_case(change_before: bool) {
     ];
     let subsets = [&files[..1], &files[1..2], &files[2..3], &files[3..]];
     let mut raw = fixtures::build_synthetic_map("config archive", &files);
-    let archives = Box::leak(Box::new(Mutex::new(vec![
+    let archives: &'static Mutex<Vec<MpqArchive>> = Box::leak(Box::new(Mutex::new(vec![
         MpqArchive::from_bytes(raw.split_off(0x200), "config-source").unwrap(),
     ])));
     let revision: &'static Mutex<u32> = Box::leak(Box::new(Mutex::new(7u32)));
@@ -310,39 +310,41 @@ fn archive_generation_case(change_before: bool) {
         f.bj_info.clone(),
         f.catalog_infos[0].clone(),
     ];
-    let layers = infos
-        .into_iter()
-        .zip(subsets)
-        .enumerate()
-        .map(|(i, (info, files))| ArchiveLayer {
-            priority: 10 - i as u32,
-            source: Box::new(
-                CommittedArchiveSource::mount_no_huffman(
-                    archives,
-                    revision,
-                    ArchiveSelection::inspect(archives, revision, 0, 7).unwrap(),
-                    info,
-                    files
-                        .iter()
-                        .map(|(n, _)| NamedMember {
-                            asset: (*n).into(),
-                            member: (*n).into(),
-                        })
-                        .collect(),
-                    ExtractionBudget {
-                        max_raw_packed_bytes: 1 << 20,
-                        max_decoded_bytes: 1 << 20,
-                    },
-                )
-                .unwrap(),
-            ),
-        })
-        .collect();
-    let resolver =
-        Resolver::new("1.29b-tft-vanilla-vanilla".parse().unwrap(), None, layers).unwrap();
+    let resolver = |generation| {
+        let layers = infos
+            .iter()
+            .cloned()
+            .zip(subsets)
+            .enumerate()
+            .map(|(i, (info, files))| ArchiveLayer {
+                priority: 10 - i as u32,
+                source: Box::new(
+                    CommittedArchiveSource::mount_no_huffman(
+                        archives,
+                        revision,
+                        ArchiveSelection::inspect(archives, revision, 0, generation).unwrap(),
+                        info,
+                        files
+                            .iter()
+                            .map(|(n, _)| NamedMember {
+                                asset: (*n).into(),
+                                member: (*n).into(),
+                            })
+                            .collect(),
+                        ExtractionBudget {
+                            max_raw_packed_bytes: 1 << 20,
+                            max_decoded_bytes: 1 << 20,
+                        },
+                    )
+                    .unwrap(),
+                ),
+            })
+            .collect();
+        Resolver::new("1.29b-tft-vanilla-vanilla".parse().unwrap(), None, layers).unwrap()
+    };
     let inbox = ConfigurationInbox::default();
     let mut app = app(&inbox);
-    let id = inbox.enqueue(request(&f, resolver)).unwrap();
+    let id = inbox.enqueue(request(&f, resolver(7))).unwrap();
     if change_before {
         *revision.lock().unwrap() = 8;
     }
@@ -353,11 +355,11 @@ fn archive_generation_case(change_before: bool) {
         };
         assert!(outcome.result.is_ok());
         let active = app.world().resource::<MapRequests>();
-        let receipts = active.published_receipts.as_ref().unwrap();
+        let receipts = active.published_receipts.as_ref().unwrap().clone();
         let reader = app
             .world()
             .resource::<SelectedMapSources>()
-            .for_receipts(receipts)
+            .for_receipts(&receipts)
             .unwrap();
         assert_eq!(
             reader
@@ -366,7 +368,23 @@ fn archive_generation_case(change_before: bool) {
                 .bytes,
             f.raw
         );
-        *revision.lock().unwrap() = 8;
+        let next = fixture(236);
+        let mut replacement_files = files;
+        replacement_files[0].1 = &next.raw;
+        let mut raw = fixtures::build_synthetic_map("config archive", &replacement_files);
+        let replacement = MpqArchive::from_bytes(raw.split_off(0x200), "config-source").unwrap();
+        {
+            let mut generation = revision.lock().unwrap();
+            let mut held = archives.lock().unwrap();
+            assert_eq!(replacement.path(), held[0].path());
+            assert_eq!(replacement.byte_len(), held[0].byte_len());
+            assert_eq!(replacement.header, held[0].header);
+            assert_eq!(replacement.hash_entries(), held[0].hash_entries());
+            assert_eq!(replacement.block_entries(), held[0].block_entries());
+            held[0] = replacement;
+            *generation = 8;
+        }
+
         assert!(matches!(
             reader.resolve_bounded("selected map.w3m", f.raw.len() as u64),
             Err(pcx_assets::Error::Source {
@@ -374,6 +392,34 @@ fn archive_generation_case(change_before: bool) {
                 ..
             })
         ));
+        let id = inbox.enqueue(request(&f, resolver(8))).unwrap();
+        app.update();
+        let Poll::Completed(outcome) = inbox.poll(id).unwrap() else {
+            panic!("not completed")
+        };
+        assert!(outcome.result.is_ok());
+        let sources = app.world().resource::<SelectedMapSources>();
+        assert!(sources.for_receipts(&receipts).is_none());
+        let current = app
+            .world()
+            .resource::<MapRequests>()
+            .published_receipts
+            .as_ref()
+            .unwrap();
+        let replacement = sources.for_receipts(current).unwrap();
+        assert!(!Arc::ptr_eq(&reader, &replacement));
+        assert_eq!(
+            replacement
+                .resolve_bounded("selected map.w3m", next.raw.len() as u64)
+                .unwrap()
+                .bytes,
+            next.raw
+        );
+        assert!(
+            reader
+                .resolve_bounded("selected map.w3m", f.raw.len() as u64)
+                .is_err()
+        );
         return;
     }
     let Poll::Completed(outcome) = inbox.poll(id).unwrap() else {
@@ -394,6 +440,14 @@ fn archive_generation_case(change_before: bool) {
 struct Reentrant {
     base: binding::SyntheticSource,
     callback: Arc<dyn Fn() + Send + Sync>,
+    retired: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+impl Drop for Reentrant {
+    fn drop(&mut self) {
+        if let Some(retired) = &self.retired {
+            retired();
+        }
+    }
 }
 impl ContentSource for Reentrant {
     fn info(&self) -> &SourceInfo {
@@ -411,7 +465,11 @@ impl ContentSource for Reentrant {
         self.base.read_bounded(path, limit)
     }
 }
-fn reentrant_resolver(f: &binding::Fixture, callback: Arc<dyn Fn() + Send + Sync>) -> Resolver {
+fn reentrant_resolver(
+    f: &binding::Fixture,
+    callback: Arc<dyn Fn() + Send + Sync>,
+    retired: Option<Arc<dyn Fn() + Send + Sync>>,
+) -> Resolver {
     let mk =
         |info: SourceInfo, assets: BTreeMap<String, binding::Reply>| binding::SyntheticSource {
             info,
@@ -433,6 +491,7 @@ fn reentrant_resolver(f: &binding::Fixture, callback: Arc<dyn Fn() + Send + Sync
                         )]),
                     ),
                     callback,
+                    retired,
                 }),
             },
             ArchiveLayer {
@@ -506,7 +565,7 @@ pub fn source_reenters_poll_enqueue_and_second_consumer() {
         })
     };
     let id = inbox
-        .enqueue(request(&f, reentrant_resolver(&f, callback)))
+        .enqueue(request(&f, reentrant_resolver(&f, callback, None)))
         .unwrap();
     job.store(id, Ordering::SeqCst);
     let mut primary = app(&inbox);
@@ -590,6 +649,38 @@ pub fn retired_active_catalog_drops_outside_mutex() {
     assert!(outcome.result.is_ok());
 }
 
+#[cfg_attr(test, test)]
+pub fn retired_resolver_source_drops_outside_mutex() {
+    let f = fixture(235);
+    let inbox = ConfigurationInbox::default();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let retired = {
+        let inbox = inbox.clone();
+        let drops = drops.clone();
+        Arc::new(move || {
+            assert!(matches!(inbox.poll(0), Err(InboxError::Unknown { id: 0 })));
+            drops.fetch_add(1, Ordering::SeqCst);
+        })
+    };
+    let mut app = app(&inbox);
+    let id = inbox
+        .enqueue(request(
+            &f,
+            reentrant_resolver(&f, Arc::new(|| {}), Some(retired)),
+        ))
+        .unwrap();
+    app.update();
+    assert!(matches!(inbox.poll(id).unwrap(), Poll::Completed(_)));
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    let id = inbox.enqueue(request(&f, f.resolver())).unwrap();
+    app.update();
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    let Poll::Completed(outcome) = inbox.poll(id).unwrap() else {
+        panic!("no completion")
+    };
+    assert!(outcome.result.is_ok());
+}
+
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn browser_configuration_consumer_gate() -> u32 {
@@ -599,5 +690,6 @@ pub fn browser_configuration_consumer_gate() -> u32 {
     source_reenters_poll_enqueue_and_second_consumer();
     retired_active_catalog_drops_outside_mutex();
     runtime_sources_follow_successful_publication_and_receipt_identity();
-    6
+    retired_resolver_source_drops_outside_mutex();
+    7
 }

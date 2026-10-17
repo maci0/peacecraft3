@@ -1510,6 +1510,12 @@ mod tests {
         );
     }
 
+    #[wasm_bindgen]
+    pub fn browser_import_cancel_failure_gate() -> u32 {
+        failed_commit_keeps_the_staged_image_off_the_store_and_revision();
+        1
+    }
+
     #[test]
     fn failed_commit_keeps_the_staged_image_off_the_store_and_revision() {
         let _ = drop_assets();

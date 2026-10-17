@@ -145,3 +145,24 @@ files match the checked package. Its private proof is in
 `.scratch/browser-configuration-ui-root-review/live-functional-main-app/`.
 These checks do not establish original-map execution, native behavior or full
 rendering fidelity.
+
+
+### Revision and reader retirement follow-up (2026-10-18)
+
+The generation fixture now replaces the selected archive after publication while
+keeping its path, byte length, header and opened hash/block tables equal. Only the
+payload differs. The retained reader refuses the new generation; fresh
+configuration publishes a new reader and retires the old receipt association.
+The owner still must advance revision when replacing archives. Table equality is
+not a payload identity check, and no table snapshots or extra read-time scans were
+added to production. A separate source destructor reenters the real inbox during
+replacement, confirming that the resolver's final retirement occurs outside its
+mutex. Existing configuration-failure checks preserve the published pair.
+
+All 97 native map-loading and 19 library tests pass. Actual Cargo WebAssembly
+executes seven public App consumer groups and seven JSON groups. An application
+WebAssembly test export also executes the real import begin/refused-commit/cancel
+path, retaining the committed client image and revision. Strict native/browser
+Clippy and formatting pass. Production behavior is unchanged. Successful full UI
+asset hydration, browser UI interaction and original runtime/render parity were
+not repeated. Evidence: `.scratch/archive-reader-root-20261018/review-1/acceptance.json`.

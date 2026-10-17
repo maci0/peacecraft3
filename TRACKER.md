@@ -2092,3 +2092,19 @@ rendering or timing comparison was repeated; automatic application clock, yieldi
 callbacks, matching expiry-trigger delivery and the 100-consecutive original
 baseline remain open. Evidence:
 `.scratch/timer-lifecycle-root-20261018/review-1/acceptance.json`.
+
+
+### 2026-10-18 — archive revision and reader retirement coverage
+
+A committed-generation fixture now swaps payloads with identical archive metadata
+and opened tables. The old reader refuses; a new publication selects the new
+reader and retires the old receipt association. Resolver-source destruction also
+reenters the actual inbox successfully. Production behavior is unchanged.
+
+Validation passes 97 native map-loading and 19 library tests, 14 configuration
+groups from actual Cargo WebAssembly, and the application's real import
+begin/refused-commit/cancel test from application WebAssembly. Strict
+native/browser Clippy and formatting pass. Full successful UI hydration, browser
+interaction, campaign/HUD/world integration, native/render parity and the
+100-consecutive unmodified-original baseline remain open. Evidence:
+`.scratch/archive-reader-root-20261018/review-1/acceptance.json`.
