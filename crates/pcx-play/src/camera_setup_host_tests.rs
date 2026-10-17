@@ -1,4 +1,4 @@
-use super::super::super::{EnumHost, Limits, ObjectHost};
+use super::super::super::{EnumHost, Failure, Limits, ObjectHost};
 use pcx_script::{HandleId, Host, Prelude, Value};
 use std::num::NonZeroU64;
 use std::sync::Arc;
@@ -428,4 +428,161 @@ endfunction
         (1.25, 0.5)
     );
     assert!(vm.host().camera_setup_destination(setup_id).is_err());
+}
+
+#[test]
+fn owned_vm_reads_a_written_field_and_refuses_the_other_setup() {
+    let mut vm = host_from(
+        DECLARATIONS,
+        "globals
+camerasetup First = null
+camerasetup Second = null
+real Read = 0.
+endglobals
+function main takes nothing returns nothing
+set First = CreateCameraSetup()
+set Second = CreateCameraSetup()
+call CameraSetupSetField(First, FIELD_NEAR, 1.25, 0.5)
+set Read = CameraSetupGetField(First, FIELD_NEAR)
+endfunction
+function other takes nothing returns real
+return CameraSetupGetField(Second, FIELD_NEAR)
+endfunction
+",
+        16,
+    )
+    .with_camera_setups(1)
+    .unwrap()
+    .into_vm();
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    let Value::Handle(first) = vm.global("First") else {
+        panic!("first setup");
+    };
+    let Value::Handle(second) = vm.global("Second") else {
+        panic!("second setup");
+    };
+    assert_ne!(first, second);
+    assert_eq!(vm.global("Read"), Value::Real(1.25));
+    assert!(
+        vm.call("other", &[])
+            .unwrap_err()
+            .to_string()
+            .contains("field is unset")
+    );
+}
+
+#[test]
+fn absent_getters_stay_unsupported_and_mismatched_ones_are_refused() {
+    let without = DECLARATIONS
+        .replace(
+            "native CameraSetupGetField takes camerasetup whichSetup, camerafield whichField returns real\n",
+            "",
+        )
+        .replace(
+            "native CameraSetupGetDestPositionX takes camerasetup whichSetup returns real\n",
+            "",
+        )
+        .replace(
+            "native CameraSetupGetDestPositionY takes camerasetup whichSetup returns real\n",
+            "",
+        );
+    let mut admitted = host_from(&without, "", 8).with_camera_setups(1).unwrap();
+    let setup = create(&mut admitted);
+    let near = field(&mut admitted, 9);
+    admitted
+        .native(
+            "CameraSetupSetField",
+            &[
+                setup.clone(),
+                near.clone(),
+                Value::Real(1.0),
+                Value::Real(2.0),
+            ],
+        )
+        .unwrap();
+    for (name, args) in [
+        ("CameraSetupGetField", vec![setup.clone(), near]),
+        ("CameraSetupGetDestPositionX", vec![setup.clone()]),
+        ("CameraSetupGetDestPositionY", vec![setup]),
+    ] {
+        assert!(
+            admitted
+                .native(name, &args)
+                .unwrap_err()
+                .contains("unsupported"),
+            "{name}"
+        );
+    }
+    for replacement in [
+        "constant native CameraSetupGetField takes camerasetup whichSetup, camerafield whichField returns real\n",
+        "native CameraSetupGetField takes integer whichSetup, camerafield whichField returns real\n",
+        "native CameraSetupGetField takes camerasetup whichSetup, camerafield whichField returns nothing\n",
+        "native CameraSetupGetDestPositionX takes camerasetup whichSetup, real extra returns real\n",
+    ] {
+        let declarations = if replacement.contains("GetField") {
+            DECLARATIONS.replace(
+                "native CameraSetupGetField takes camerasetup whichSetup, camerafield whichField returns real\n",
+                replacement,
+            )
+        } else {
+            DECLARATIONS.replace(
+                "native CameraSetupGetDestPositionX takes camerasetup whichSetup returns real\n",
+                replacement,
+            )
+        };
+        assert!(
+            host_from(&declarations, "", 8)
+                .with_camera_setups(1)
+                .is_err(),
+            "{replacement}"
+        );
+    }
+    let selected = pcx_script::parse_script(
+        "type camerafield extends handle
+type camerasetup extends handle
+constant native ConvertCameraField takes integer i returns camerafield
+native CreateCameraSetup takes nothing returns camerasetup
+native CameraSetupSetField takes camerasetup whichSetup, camerafield whichField, real value, real duration returns nothing
+native CameraSetupSetDestPosition takes camerasetup whichSetup, real x, real y, real duration returns nothing
+globals
+constant camerafield FIELD_NEAR = ConvertCameraField(4 + 5)
+endglobals
+",
+    )
+    .unwrap();
+    let foreign_getter = pcx_script::parse_script(
+        "native CameraSetupGetField takes camerasetup whichSetup, camerafield whichField returns real
+",
+    )
+    .unwrap();
+    let map = pcx_script::parse_script("").unwrap();
+    let program = Arc::new(
+        pcx_script::resolve_with(
+            &map,
+            &[
+                Prelude::new("synthetic:setup-namespace", &selected),
+                Prelude::new("synthetic:getter-namespace", &foreign_getter),
+            ],
+        )
+        .unwrap(),
+    );
+    let inner = EnumHost::checked_selected(
+        program,
+        "synthetic:selected-map",
+        &["ConvertCameraField"],
+        Limits {
+            max_handles: 8,
+            admission_steps: 200,
+            expression_depth: 16,
+            expression_work: 200,
+        },
+    )
+    .unwrap();
+    let error = ObjectHost::checked(inner)
+        .unwrap()
+        .with_camera_setups(1)
+        .unwrap_err();
+    assert_eq!(error.native, "CameraSetupGetField");
+    assert_eq!(error.failure, Failure::Source);
 }

@@ -62,36 +62,53 @@ impl ObjectHost {
                 &[SETUP_KIND, FIELD_KIND, "real", "real"][..],
                 "nothing",
             ),
-            ("CameraSetupGetField", &[SETUP_KIND, FIELD_KIND][..], "real"),
             (
                 "CameraSetupSetDestPosition",
                 &[SETUP_KIND, "real", "real", "real"][..],
                 "nothing",
             ),
+        ] {
+            self.bind_setup_native(name, parameters, result, &field_source)?;
+        }
+        for (name, parameters, result) in [
+            ("CameraSetupGetField", &[SETUP_KIND, FIELD_KIND][..], "real"),
             ("CameraSetupGetDestPositionX", &[SETUP_KIND][..], "real"),
             ("CameraSetupGetDestPositionY", &[SETUP_KIND][..], "real"),
         ] {
-            Self::contract_in(
-                &self.inner,
-                name,
-                parameters,
-                result,
-                false,
-                Some(SETUP_KIND),
-                false,
-            )?;
-            let native = self
-                .inner
-                .program
-                .natives()
-                .get(name)
-                .ok_or_else(|| self.inner.error(name, Failure::Signature))?;
-            if native.source != field_source {
-                return Err(self.inner.error(name, Failure::Source));
+            if self.inner.program.natives().get(name).is_some() {
+                self.bind_setup_native(name, parameters, result, &field_source)?;
             }
         }
         self.camera_setups = Some(Admission { max_fields });
         Ok(self)
+    }
+
+    fn bind_setup_native(
+        &self,
+        name: &str,
+        parameters: &[&str],
+        result: &str,
+        field_source: &str,
+    ) -> Result<(), Error> {
+        Self::contract_in(
+            &self.inner,
+            name,
+            parameters,
+            result,
+            false,
+            Some(SETUP_KIND),
+            false,
+        )?;
+        let native = self
+            .inner
+            .program
+            .natives()
+            .get(name)
+            .ok_or_else(|| self.inner.error(name, Failure::Signature))?;
+        if native.source != field_source {
+            return Err(self.inner.error(name, Failure::Source));
+        }
+        Ok(())
     }
 
     pub fn camera_setup_field(

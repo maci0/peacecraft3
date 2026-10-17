@@ -1,8 +1,10 @@
 # Executed camera-setup state
 
 `ObjectHost::with_camera_setups(max_fields)` admits `CreateCameraSetup`,
-`CameraSetupSetField`, `CameraSetupGetField`, `CameraSetupSetDestPosition` and
-the X/Y destination queries from the loaded declarations. Setup objects use
+`CameraSetupSetField`, `CameraSetupSetDestPosition` and, when present,
+`CameraSetupGetField` plus the X/Y destination queries. Getter declarations are
+optional. A present getter must match the selected source and signature; an
+absent getter stays unsupported and does not block setup storage. Setup objects use
 the existing bounded handle arena. `camerasetup` can extend `handle` directly
 or through `agent`; its identity cannot be retargeted to another handle family.
 The selected `ConvertCameraField` contract must produce `camerafield`, and
