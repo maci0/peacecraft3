@@ -56,8 +56,9 @@ extracted script is part of this change.
 
 ## Remaining work
 
-Location-based rectangle calls, world-bound admission, runtime regions,
-enumeration and event registration remain unsupported. The launcher still needs
-the composed gameplay Host factory and asset banks. This verifies execution and
-retained state, not spatial effects, rendered regions, sound playback, a live
-campaign objective or native game parity.
+Location-based rectangle calls, world-bound admission and enumeration remain
+unsupported. Explicit region creation, rectangle-addition requests and enter/leave
+subscriptions now use the composed Host factory; see [script regions](script-regions.md).
+That path does not establish cell geometry, membership or event delivery. This
+verifies execution and retained state, not spatial effects, rendered regions,
+a live campaign objective or native game parity.

@@ -27,6 +27,7 @@ pub struct ObjectHost {
     map_music: Option<music::State>,
     quests: Option<crate::quest_session::QuestSession>,
     rectangles: bool,
+    regions: Option<regions::Admission>,
     camera_setups: Option<camera_setup::Admission>,
     destructables: Option<destructables::Admission>,
     units: Option<unit_creation::Admission>,
@@ -70,6 +71,7 @@ impl ObjectHost {
             map_music: None,
             quests: None,
             rectangles: false,
+            regions: None,
             camera_setups: None,
             destructables: None,
             units: None,
@@ -382,6 +384,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.rect_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.region_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.destructable_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -516,6 +521,10 @@ mod filter_tests;
 #[path = "filter_host.rs"]
 mod filters;
 pub use filters::{FilterBudget, FilterCallback};
+
+#[path = "region_host.rs"]
+mod regions;
+pub use regions::{RegionBudget, RegionEventKind, RegionEventRegistration, RegionRectRequest};
 
 #[cfg(test)]
 #[path = "condition_host_tests.rs"]

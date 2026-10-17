@@ -299,6 +299,7 @@ fn budgets() -> MapStartupBudgets {
         trigger_conditions: None,
         player_unit_events: None,
         player_events: None,
+        regions: None,
         timer_events: 4,
         game_state_events: 4,
         stock: None,
@@ -1060,3 +1061,6 @@ mod player_unit_event_cases;
 
 #[path = "player_event_cases.rs"]
 mod player_event_cases;
+
+#[path = "region_cases.rs"]
+mod region_cases;

@@ -1989,3 +1989,15 @@ actions, repeated-run stability and scheduler/world integration remain open.
 - [ ] Event context/delivery, native duplicate-registration identity, the
   application world/clock, rendered gameplay and the 100-consecutive original
   baseline remain open. See [the subscription scope](docs/re-notes/script-trigger-admission.md#player-event-subscriptions).
+
+### 2026-10-17 — retained region requests and entry/leave subscriptions
+
+- [~] Source-bound region creation, rectangle-addition requests and entry/leave
+  subscriptions use the existing arena and independent caller limits. Call-time
+  bounds and real filter/condition identities are retained; callbacks stay idle.
+- [~] Unchanged Human01 passes six regions, additions and entry subscriptions
+  through the production factory. Globals and `config` finish; `main` next
+  refuses `TriggerRegisterDeathEvent` at map span `184271..184338`.
+- [ ] Native cell geometry, membership, event delivery, the application world/clock,
+  rendered gameplay, chapter completion and the 100-consecutive original baseline
+  remain open. See [the supported region slice](docs/re-notes/script-regions.md).

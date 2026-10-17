@@ -9,8 +9,8 @@ use crate::neutral_player::{NeutralError, SelectedMapNeutralHost, VerifiedNeutra
 use crate::playercolor_host::{
     ConditionBudget, DestructableBudget, EnumHost, Error as HostError, FilterBudget, ForceBudget,
     Limits, MapConfigBudget, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget,
-    PlayerStateRequestBudget, ResearchObservation, StartupSettings, StockBudget, TechLimitBudget,
-    TimerHost, TriggerBudget, UnitBudget, UnitStateBudget,
+    PlayerStateRequestBudget, RegionBudget, ResearchObservation, StartupSettings, StockBudget,
+    TechLimitBudget, TimerHost, TriggerBudget, UnitBudget, UnitStateBudget,
 };
 use crate::sound_parameters::Banks;
 use crate::startup_clock::StartupClock;
@@ -71,6 +71,8 @@ pub struct MapStartupBudgets {
     pub player_unit_events: Option<usize>,
     /// None keeps player-event registration unsupported.
     pub player_events: Option<usize>,
+    /// None keeps region creation, rectangle requests and subscriptions unsupported.
+    pub regions: Option<RegionBudget>,
     pub timer_events: usize,
     pub game_state_events: usize,
     /// None keeps stock slot natives unsupported.
@@ -389,6 +391,9 @@ pub fn assemble(
     }
     if let Some(limit) = budgets.player_events {
         object = object.with_player_events(limit)?;
+    }
+    if let Some(budget) = budgets.regions {
+        object = object.with_regions(budget)?;
     }
     if let Some(now) = timer_time {
         object = object.with_timer_runtime(now)?;

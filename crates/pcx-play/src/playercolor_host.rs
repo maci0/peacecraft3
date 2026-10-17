@@ -76,6 +76,8 @@ pub enum Failure {
     QuestState(&'static str),
     #[error("rectangle state: {0}")]
     RectState(&'static str),
+    #[error("region requests: {0}")]
+    RegionState(&'static str),
     #[error("destructable creation: {0}")]
     DestructableState(&'static str),
     #[error("unit creation: {0}")]
@@ -188,6 +190,10 @@ enum Entry {
     Rect {
         bounds: Option<[f32; 4]>,
     },
+    Region {
+        additions: Vec<objects::RegionRectRequest>,
+    },
+    RegisteredRegionEvent(objects::RegionEventRegistration),
     CameraSetup {
         fields: Vec<objects::CameraFieldRecord>,
         destination: Option<objects::CameraDestination>,
@@ -540,6 +546,7 @@ impl EnumHost {
                 return Err(self.error("arena", Failure::Identity));
             }
             Entry::Rect { bounds: Some(_) } => "rect",
+            Entry::Region { .. } => "region",
             Entry::Rect { bounds: None } => {
                 return Err(self.error("arena", Failure::Identity));
             }
@@ -550,6 +557,7 @@ impl EnumHost {
             Entry::RegisteredUnitEvent { .. }
             | Entry::RegisteredPlayerUnitEvent(_)
             | Entry::RegisteredPlayerEvent(_)
+            | Entry::RegisteredRegionEvent(_)
             | Entry::RegisteredTimerEvent { .. }
             | Entry::RegisteredGameStateEvent { .. } => "event",
             Entry::TriggerAction { .. } => "triggeraction",
@@ -660,9 +668,10 @@ pub use objects::{
     LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection, ObjectHost,
     PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
     PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration, QuestBudget, QuestEvent,
-    QuestFlag, ResearchObservation, SoundProperties, SoundState, StackedSoundAction,
-    StackedSoundRequest, StartLocation, StartPriorities, StartPriority, StartupClockState,
-    StartupSettings, StockBudget, TechLimitBudget, TimerEventRegistration, TimerExpiry, TimerHost,
-    TriggerActionRecord, TriggerBudget, TriggerConditionRegistration, UnitBudget,
-    UnitEventRegistration, UnitStateBudget,
+    QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration, RegionRectRequest,
+    ResearchObservation, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest,
+    StartLocation, StartPriorities, StartPriority, StartupClockState, StartupSettings, StockBudget,
+    TechLimitBudget, TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord,
+    TriggerBudget, TriggerConditionRegistration, UnitBudget, UnitEventRegistration,
+    UnitStateBudget,
 };

@@ -497,7 +497,7 @@ impl ObjectHost {
     }
 }
 
-fn loaded_type(
+pub(super) fn loaded_type(
     inner: &super::super::EnumHost,
     native: &str,
     type_name: &str,
