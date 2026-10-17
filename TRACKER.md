@@ -2215,3 +2215,21 @@ selected-unit application caller or restore map VM, combat, economy or other
 omitted authoritative state. Original movement/protocol fidelity, rendered/HUD
 parity, full campaign completion and the 100-consecutive original baseline gate
 remain open. No original runtime or browser visual run was repeated.
+
+
+### 2026-10-18 — full-range snapshot divergence arithmetic
+
+A valid decoded snapshot with opposite signed coordinate extremes previously
+panicked in Client correction while computing its positional divergence. The
+metric now uses full-range standard-library absolute differences, widens axis
+totals to `u64` before addition and saturates the aggregate report at `u64::MAX`.
+The existing snapshot format, coordinate domain and correction rules are kept.
+
+The real decode-then-Client regression fails before the repair and passes across
+four extreme-coordinate pairs, two units and reversed record order. All 145
+native and 114 actual WASI network tests, strict native/browser Clippy with all
+targets/features, the browser-target build and formatting pass. Evidence:
+`.scratch/reconcile-coordinate-root-20261018/review-1/acceptance.json`. This is a
+movement-harness diagnostic/correction repair, not original map extent, movement,
+protocol, gameplay or rendered parity evidence. Original runtime/browser visual
+runs and the 100-consecutive original baseline gate remain open.

@@ -77,6 +77,13 @@ with four- and eight-frame limits, checking every retained world, selection,
 movement target, replay count and history bound. These are deterministic harness
 checks, not original-game movement or protocol observations.
 
+The positional divergence report accepts the snapshot format's full `i32`
+coordinate range. Axis distances use `abs_diff` and widen to `u64` before adding;
+the aggregate saturates at `u64::MAX`. A valid extreme-coordinate snapshot must
+reach normal Client correction rather than panic during diagnostic arithmetic.
+The wire regression also checks identity-based matching with reversed unit
+record order. This sets no original map extent or movement rule.
+
 The agreement slice needs paired synthetic-client tests for commands before
 readiness; every manifest mismatch; invalidation after ready; stale callbacks;
 wrong-match reconnect; and cancellation without unrelated menu mutation. Retain

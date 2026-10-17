@@ -261,6 +261,7 @@ pub struct Reconciliation {
 /// missing from one side contributes nothing. Neither breaks the design, because
 /// movement is resolved after commands and so a mismatched target shows up as a
 /// positional divergence on a later correction.
+/// The aggregate saturates at `u64::MAX` if the distance cannot fit the report.
 pub fn positional_divergence(predicted: &World, authoritative: &World) -> u64 {
     predicted
         .units
@@ -268,9 +269,9 @@ pub fn positional_divergence(predicted: &World, authoritative: &World) -> u64 {
         .filter_map(|p| {
             authoritative
                 .unit(p.id)
-                .map(|a| ((p.x - a.x).unsigned_abs() + (p.y - a.y).unsigned_abs()) as u64)
+                .map(|a| u64::from(p.x.abs_diff(a.x)) + u64::from(p.y.abs_diff(a.y)))
         })
-        .sum()
+        .fold(0, u64::saturating_add)
 }
 
 #[cfg(test)]

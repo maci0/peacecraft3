@@ -29,6 +29,41 @@ fn deliver(client: &mut Client, tick: u64, bytes: &[u8]) -> Result<Reconciliatio
 }
 
 #[test]
+fn full_range_wire_coordinates_reconcile_without_arithmetic_overflow() {
+    for (from, to) in [
+        (i32::MIN, i32::MAX),
+        (i32::MAX, i32::MIN),
+        (i32::MIN, 0),
+        (0, i32::MIN),
+    ] {
+        let initial = decode_world_payload(
+            0,
+            &payload(8, &[(7, 1, from, from, None), (3, 2, from, from, None)]),
+        )
+        .unwrap();
+        let mut client = Client::from_world(initial, 17);
+        let bytes = payload(8, &[(3, 2, to, to, None), (7, 1, to, to, None)]);
+        let report = deliver(&mut client, 1, &bytes).unwrap();
+        assert_eq!(
+            report.divergence,
+            4 * (i64::from(from) - i64::from(to)).unsigned_abs()
+        );
+        assert_eq!(
+            report.correction,
+            Correction::Snapped {
+                tick: 1,
+                reason: SnapReason::Unconfirmed
+            }
+        );
+        assert_eq!(report.predicted_tick, 1);
+        assert_eq!(client.predicted(), &report.snapshot);
+        assert_eq!(client.authoritative(), &report.snapshot);
+        assert_eq!(encode_world_payload(client.predicted()), bytes);
+        assert_eq!(client.consensus_tick(), 1);
+    }
+}
+
+#[test]
 fn distinct_duplicate_records_report_tick_id_and_both_ordinals() {
     let bytes = payload(8, &[(7, 1, -31, 4, None), (7, 2, 59, 6, Some((9, -11)))]);
     let error = decode_world_payload(47, &bytes).expect_err("ambiguous identity must be refused");
