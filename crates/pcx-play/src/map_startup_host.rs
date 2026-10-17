@@ -7,8 +7,8 @@ use crate::label_sounds::SoundBank;
 use crate::map_admission::ParsedMapContext;
 use crate::neutral_player::{NeutralError, SelectedMapNeutralHost, VerifiedNeutralRule};
 use crate::playercolor_host::{
-    DestructableBudget, EnumHost, Error as HostError, FilterBudget, ForceBudget, Limits,
-    MapConfigBudget, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget,
+    ConditionBudget, DestructableBudget, EnumHost, Error as HostError, FilterBudget, ForceBudget,
+    Limits, MapConfigBudget, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget,
     PlayerStateRequestBudget, ResearchObservation, StartupSettings, StockBudget, TechLimitBudget,
     TimerHost, TriggerBudget, UnitBudget, UnitStateBudget,
 };
@@ -48,6 +48,8 @@ pub struct MapStartupBudgets {
     pub map_config: MapConfigBudget,
     pub players: PlayerBudget,
     pub filters: FilterBudget,
+    /// None keeps `Condition` unsupported.
+    pub conditions: Option<ConditionBudget>,
     pub forces: ForceBudget,
     pub state_requests: PlayerStateRequestBudget,
     pub alliances: PlayerAllianceBudget,
@@ -63,6 +65,8 @@ pub struct MapStartupBudgets {
     pub units: UnitBudget,
     pub unit_states: UnitStateBudget,
     pub triggers: TriggerBudget,
+    /// None keeps trigger-condition registration unsupported.
+    pub trigger_conditions: Option<usize>,
     /// None keeps player-unit event registration unsupported.
     pub player_unit_events: Option<usize>,
     pub timer_events: usize,
@@ -336,7 +340,11 @@ pub fn assemble(
             Arc::clone(&rules.slots),
             budgets.players,
         )?
-        .with_filters(budgets.filters)?
+        .with_filters(budgets.filters)?;
+    if let Some(budget) = budgets.conditions {
+        object = object.with_conditions(budget)?;
+    }
+    object = object
         .with_forces(budgets.forces)?
         .with_player_state_requests(budgets.state_requests)?
         .with_player_alliances(budgets.alliances)?
@@ -371,6 +379,9 @@ pub fn assemble(
         .with_trigger_admission(budgets.triggers)?
         .with_timer_events(budgets.timer_events)?
         .with_game_state_events(budgets.game_state_events)?;
+    if let Some(limit) = budgets.trigger_conditions {
+        object = object.with_trigger_conditions(limit)?;
+    }
     if let Some(limit) = budgets.player_unit_events {
         object = object.with_player_unit_events(limit)?;
     }

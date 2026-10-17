@@ -8,7 +8,7 @@ budgets; arena capacity is also checked before allocating a token.
 
 A registration retains its trigger, executed unit, symbolic unit-event handle
 and enumerand. Its returned `event` token comes from that same arena. It does not
-run a callback. Trigger enable/disable, destruction, conditions and event delivery
+run a callback. Trigger enable/disable, destruction, condition evaluation and event delivery
 remain unsupported. No enabled-state default is inferred from
 creating a trigger or from a WTG record.
 
@@ -183,7 +183,9 @@ player slot is copied into the implementation. The authored parameter ancestry
 and the existing shared contract checks remain mandatory.
 
 A call requires a created trigger, an existing player, a selected symbolic event,
-and either null or an actual retained `Filter` wrapper from this ObjectHost.
+and either null or an actual retained `Filter` or `Condition` wrapper from this
+ObjectHost. The two registration consumers share the same wrapper validation;
+a reserved boolean-expression token is insufficient.
 A successful call allocates one distinct event in the existing arena and retains
 those identities, the source enumerand and the optional filter identity.
 `player_unit_event_registration` exposes that association, and
@@ -193,11 +195,12 @@ without changing prior records. No second arena or copied predicate is added.
 
 `MapStartupBudgets.player_unit_events` is an optional factory admission. `None`
 keeps the native unsupported. Registration does not evaluate the filter, infer
-trigger-enabled state, enumerate units or deliver an action. Conditions, event
+trigger-enabled state, enumerate units or deliver an action. Event
 contexts, destruction/unregistration rules and world-driven event delivery remain
 open. The retained subscription alone is not evidence of native event behavior.
 
-The unchanged retained Human01 Program now passes this registration through the
+At the earlier player-unit slice, the unchanged retained Human01 Program passed
+this registration through the
 production startup factory. Each retained identity and enumerand matches the
 executed call. The verifier supplies an explicit synthetic game-time origin and
 does not advance timers. Two executed `TimerStart` calls succeed; their timeouts
@@ -213,3 +216,49 @@ chapter execution, timer timing or the 100-consecutive unmodified-map baseline.
 Commands, original-input fingerprints and actual refusal output remain local in
 `.scratch/player-unit-event-root-20261017/`. No original runtime, new render,
 public site or original payload upload was performed for this slice.
+
+
+## Condition wrappers and trigger associations
+
+`ObjectHost::with_conditions(ConditionBudget)` admits the loaded non-constant
+`Condition(code) -> conditionfunc` interface. The native and the complete authored
+return ancestry must share the source of `CreateTimer`. Only loaded functions
+taking nothing and returning scalar boolean are supported. Wrapping stores the
+function id in the existing arena and does not enter its body.
+`condition_callback` borrows the id, name, source and span from that same Program.
+Reserved handles and Filter entries are not adopted as Condition wrappers.
+
+`ObjectHost::with_trigger_conditions(max_records)` independently admits the
+selected `TriggerAddCondition(trigger, boolexpr) -> triggercondition` contract,
+its type ancestry and trigger declaration source. A call requires an actual
+created trigger and an actual retained Filter or Condition wrapper. A distinct
+arena registration retains those two identities. `trigger_condition_registration`
+returns that association; `retained_trigger_conditions` counts it separately
+from wrappers, actions and events. Registration does not evaluate the predicate
+or infer an enabled-state default. Record limits, shared arena allocation,
+source/signature failures and malformed identities preserve prior records.
+
+The factory takes two independent optional budgets: `conditions` and
+`trigger_conditions`. `None` keeps the corresponding operation unsupported.
+The shared boolean-wrapper validator also lets player-unit registrations retain
+a Condition identity as their filter argument. Boolean operators, wrapper or
+association destruction, predicate evaluation and trigger-event dispatch remain
+unsupported. Repeated successful creations/registrations receive distinct tokens
+under the recreation arena policy; native repeated-code interning is unmeasured.
+
+The same unchanged Human01 Program now passes two Condition constructors and two
+TriggerAddCondition calls through the production factory. Every wrapper matches
+its executed loaded function, declaration source and span; every association
+matches its actual trigger and wrapper. Globals and `config` finish. With the
+same explicit synthetic game-time origin and no timer advance, `main` next
+refuses `DisableTrigger`, map span `127485..127527`, common declaration
+`70027..70093`. The same arena holds 932 identities, 155 units, 15 triggers,
+two condition wrappers and two associations. Earlier source, context, player,
+unit, sound, force, action, registration and timer checks still pass.
+
+The compatibility catalog and qualified startup observations remain explicit
+conditions of that verifier. This is recreated retention and script-execution
+evidence, not native predicate behavior, timer timing, a rendered chapter or the
+100-consecutive original baseline gate. Local commands, source/artifact hashes
+and original-input receipts are in `.scratch/trigger-condition-root-20261017/`.
+No original client, new render or site publication was run for this slice.

@@ -91,6 +91,8 @@ pub enum Failure {
     TriggerState(&'static str),
     #[error("filter wrapper: {0}")]
     FilterState(&'static str),
+    #[error("condition wrapper: {0}")]
+    ConditionState(&'static str),
     #[error("force container: {0}")]
     ForceState(&'static str),
     #[error("host identity capacity or allocation exceeded")]
@@ -206,6 +208,7 @@ enum Entry {
         enumerand: i32,
     },
     RegisteredPlayerUnitEvent(objects::PlayerUnitEventRegistration),
+    TriggerCondition(objects::TriggerConditionRegistration),
     /// One retained timer-expiry subscription; no clock or pending firing.
     RegisteredTimerEvent {
         trigger: HandleId,
@@ -220,6 +223,10 @@ enum Entry {
     },
     /// One loaded `Filter` callback; its body is not entered during wrapping.
     Filter {
+        function: FunctionId,
+    },
+    /// One loaded `Condition` callback; its body is not entered during wrapping.
+    Condition {
         function: FunctionId,
     },
     /// One `triggeraction` handle. The callback is not run at registration.
@@ -542,6 +549,7 @@ impl EnumHost {
             | Entry::RegisteredTimerEvent { .. }
             | Entry::RegisteredGameStateEvent { .. } => "event",
             Entry::TriggerAction { .. } => "triggeraction",
+            Entry::TriggerCondition(_) => "triggercondition",
             Entry::Force { .. } => self
                 .program
                 .natives()
@@ -555,6 +563,14 @@ impl EnumHost {
                 .natives()
                 .get("Filter")
                 .ok_or_else(|| self.error("Filter", Failure::Signature))?
+                .ret
+                .kind
+                .name(),
+            Entry::Condition { .. } => self
+                .program
+                .natives()
+                .get("Condition")
+                .ok_or_else(|| self.error("Condition", Failure::Signature))?
                 .ret
                 .kind
                 .name(),
@@ -634,14 +650,15 @@ mod tests;
 #[path = "object_host.rs"]
 mod objects;
 pub use objects::{
-    CameraDestination, CameraFieldRecord, CameraState, DayNightState, DestructableBudget,
-    DestructableCreation, ExecutedUnit, ExecutedUnitState, FileSoundState, FilterBudget,
-    FilterCallback, ForceBudget, GameStateEventRegistration, LabelSoundFlags, MapConfig,
-    MapConfigBudget, MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget,
-    PlayerBudget, PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration,
-    QuestBudget, QuestEvent, QuestFlag, ResearchObservation, SoundProperties, SoundState,
-    StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
-    StartupClockState, StartupSettings, StockBudget, TechLimitBudget, TimerEventRegistration,
-    TimerExpiry, TimerHost, TriggerActionRecord, TriggerBudget, UnitBudget, UnitEventRegistration,
+    CameraDestination, CameraFieldRecord, CameraState, ConditionBudget, ConditionCallback,
+    DayNightState, DestructableBudget, DestructableCreation, ExecutedUnit, ExecutedUnitState,
+    FileSoundState, FilterBudget, FilterCallback, ForceBudget, GameStateEventRegistration,
+    LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection, ObjectHost,
+    PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerSettings,
+    PlayerStateRequestBudget, PlayerUnitEventRegistration, QuestBudget, QuestEvent, QuestFlag,
+    ResearchObservation, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest,
+    StartLocation, StartPriorities, StartPriority, StartupClockState, StartupSettings, StockBudget,
+    TechLimitBudget, TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord,
+    TriggerBudget, TriggerConditionRegistration, UnitBudget, UnitEventRegistration,
     UnitStateBudget,
 };

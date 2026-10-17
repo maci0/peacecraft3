@@ -240,3 +240,27 @@ fn duplicate_register_sources_are_rejected_by_the_shared_contract() {
         .unwrap();
     assert!(matches!(h.with_player_unit_events(1),Err(e) if e.failure==Failure::Source));
 }
+
+#[test]
+fn owned_vm_retains_a_condition_wrapper_as_the_player_unit_filter() {
+    let source = common().replace("type filterfunc extends boolexpr", "type filterfunc extends boolexpr\ntype conditionfunc extends boolexpr\nnative Condition takes code f returns conditionfunc");
+    let map = "globals\ninteger hits=0\nconditionfunc Pred=null\nevent E=null\nendglobals\nfunction predicate takes nothing returns boolean\nset hits=hits+1\nreturn true\nendfunction\nfunction main takes nothing returns nothing\nset Pred=Condition(function predicate)\nset E=TriggerRegisterPlayerUnitEvent(CreateTrigger(),Player(4),PLAYER_SAMPLE,Pred)\nendfunction\n";
+    let (ctx, h) = host(&source, map, 64);
+    let h = h
+        .with_conditions(crate::playercolor_host::ConditionBudget { max_records: 1 })
+        .unwrap()
+        .with_player_unit_events(1)
+        .unwrap();
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(h);
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    assert_eq!(vm.global("hits"), Value::Int(0));
+    let e = id(&vm.global("E"));
+    let pred = id(&vm.global("Pred"));
+    let h = &vm.host().inner;
+    assert_eq!(
+        h.player_unit_event_registration(e).unwrap().filter,
+        Some(pred)
+    );
+    assert_eq!(h.condition_callback(pred).unwrap().name, "predicate");
+}

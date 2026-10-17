@@ -1,7 +1,7 @@
 //! Shared-arena trigger creation, event subscriptions and action registration.
 //!
 //! Enabled state is not stored. `EnableTrigger`, `DisableTrigger`,
-//! `IsTriggerEnabled`, conditions and event delivery stay unsupported.
+//! `IsTriggerEnabled`, condition evaluation and event delivery stay unsupported.
 //! `TriggerAddAction` retains the loaded callback and does not run it.
 use super::super::{Entry, Error, Failure, below};
 use super::ObjectHost;
@@ -20,6 +20,10 @@ pub use game_state_events::GameStateEventRegistration;
 #[path = "player_unit_event_host.rs"]
 mod player_unit_events;
 pub use player_unit_events::PlayerUnitEventRegistration;
+
+#[path = "trigger_condition_host.rs"]
+mod trigger_conditions;
+pub use trigger_conditions::TriggerConditionRegistration;
 
 const CREATE: &str = "CreateTrigger";
 const REGISTER: &str = "TriggerRegisterUnitEvent";
@@ -64,6 +68,8 @@ pub(super) struct Admission {
     retained_triggers: usize,
     retained_events: usize,
     retained_actions: usize,
+    condition_limit: Option<usize>,
+    retained_conditions: usize,
     player_unit_event_limit: Option<usize>,
     retained_player_unit_events: usize,
     timer_event_limit: Option<usize>,
@@ -178,6 +184,8 @@ impl ObjectHost {
             retained_triggers: 0,
             retained_events: 0,
             retained_actions: 0,
+            condition_limit: None,
+            retained_conditions: 0,
             player_unit_event_limit: None,
             retained_player_unit_events: 0,
             timer_event_limit: None,
@@ -242,6 +250,9 @@ impl ObjectHost {
                 if self.triggers.as_ref()?.game_state_event_limit.is_some() =>
             {
                 Some(self.register_game_state_event(args))
+            }
+            trigger_conditions::ADD if self.triggers.as_ref()?.condition_limit.is_some() => {
+                Some(self.add_trigger_condition(args))
             }
             ADD if self.inner.program.natives().get(ADD).is_some() => Some(self.add_action(args)),
             _ => None,

@@ -550,3 +550,6 @@ mod game_state_events;
 
 #[path = "player_unit_event_tests.rs"]
 mod player_unit_event_tests;
+
+#[path = "trigger_condition_tests.rs"]
+mod trigger_conditions;

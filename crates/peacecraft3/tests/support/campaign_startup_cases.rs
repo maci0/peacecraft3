@@ -269,6 +269,7 @@ fn budgets() -> MapStartupBudgets {
             name_bytes: 256,
         },
         filters: FilterBudget { max_records: 4 },
+        conditions: None,
         forces: ForceBudget {
             max_records: 4,
             max_memberships: 8,
@@ -295,6 +296,7 @@ fn budgets() -> MapStartupBudgets {
             max_unit_events: 4,
             max_actions: 4,
         },
+        trigger_conditions: None,
         player_unit_events: None,
         timer_events: 4,
         game_state_events: 4,

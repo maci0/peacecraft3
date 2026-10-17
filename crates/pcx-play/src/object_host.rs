@@ -32,6 +32,7 @@ pub struct ObjectHost {
     units: Option<unit_creation::Admission>,
     triggers: Option<trigger_admission::Admission>,
     filters: Option<filters::Admission>,
+    conditions: Option<conditions::Admission>,
     forces: Option<forces::Admission>,
     startup_settings: Option<StartupSettings>,
     startup_version: Option<HandleId>,
@@ -74,6 +75,7 @@ impl ObjectHost {
             units: None,
             triggers: None,
             filters: None,
+            conditions: None,
             forces: None,
             startup_settings: None,
             startup_version: None,
@@ -81,6 +83,21 @@ impl ObjectHost {
             timers: None,
         })
     }
+    fn checked_boolean_wrapper(&self, id: HandleId, native: &str) -> Result<(), Error> {
+        let fail = |failure| self.inner.error(native, failure);
+        match self.inner.entry(id).map_err(|e| fail(e.failure))? {
+            Entry::Filter { .. } => self
+                .filter_callback(id)
+                .map(|_| ())
+                .map_err(|e| fail(e.failure)),
+            Entry::Condition { .. } => self
+                .condition_callback(id)
+                .map(|_| ())
+                .map_err(|e| fail(e.failure)),
+            _ => Err(fail(Failure::WrongFamily)),
+        }
+    }
+
     fn contract(
         inner: &EnumHost,
         name: &str,
@@ -380,6 +397,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.force_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.condition_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.filter_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -485,7 +505,7 @@ pub use unit_creation::{ExecutedUnit, ExecutedUnitState, UnitBudget, UnitStateBu
 mod trigger_admission;
 pub use trigger_admission::{
     GameStateEventRegistration, PlayerUnitEventRegistration, TimerEventRegistration,
-    TriggerActionRecord, TriggerBudget, UnitEventRegistration,
+    TriggerActionRecord, TriggerBudget, TriggerConditionRegistration, UnitEventRegistration,
 };
 
 #[cfg(test)]
@@ -495,6 +515,14 @@ mod filter_tests;
 #[path = "filter_host.rs"]
 mod filters;
 pub use filters::{FilterBudget, FilterCallback};
+
+#[cfg(test)]
+#[path = "condition_host_tests.rs"]
+mod condition_tests;
+
+#[path = "condition_host.rs"]
+mod conditions;
+pub use conditions::{ConditionBudget, ConditionCallback};
 
 #[path = "force_host.rs"]
 mod forces;

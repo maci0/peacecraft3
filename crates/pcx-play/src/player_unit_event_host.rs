@@ -157,7 +157,7 @@ impl ObjectHost {
         let filter = match filter {
             Value::Null => None,
             Value::Handle(id) => {
-                self.filter_callback(*id).map_err(|e| fail(e.failure))?;
+                self.checked_boolean_wrapper(*id, REGISTER)?;
                 Some(*id)
             }
             _ => {

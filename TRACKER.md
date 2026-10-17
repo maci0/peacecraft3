@@ -1951,3 +1951,17 @@ actions, repeated-run stability and scheduler/world integration remain open.
 - [ ] Condition/event execution, the application world and clock, rendered
   gameplay, chapter completion and the 100-consecutive original baseline gate
   remain open. See [the registration scope](docs/re-notes/script-trigger-admission.md#player-unit-event-subscriptions).
+
+
+### 2026-10-17 — retained boolean wrappers and trigger conditions
+
+- [~] Source-bound `Condition` wrappers and `TriggerAddCondition` associations now
+  use the existing ObjectHost arena and independent caller budgets. Player-unit
+  registrations accept either supported real boolean wrapper. None of these
+  operations evaluates a predicate or invents initial trigger-enabled state.
+- [~] Unchanged Human01 passes two wrappers and two condition associations through
+  the production factory under the retained verifier inputs. Globals and `config`
+  finish; `main` next refuses `DisableTrigger` at map span `127485..127527`.
+- [ ] Trigger state/evaluation, event delivery, the application clock/world,
+  rendered gameplay and the 100-consecutive original baseline remain open.
+  See [the supported condition slice](docs/re-notes/script-trigger-admission.md#condition-wrappers-and-trigger-associations).
