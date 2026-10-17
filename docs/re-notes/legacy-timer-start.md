@@ -161,7 +161,20 @@ actions are not guessed or silently skipped.
 
 The tests exercise the actual factory, admitted-map delivery and published VM,
 including shared globals/aliases, restart, destroy, bounded catch-up, failed
-replacement, callback failure and trigger refusal. Synthetic success does not
-prove original timing parity. This API adds no automatic application advance,
+replacement, callback failure and trigger refusal. A callback may destroy the
+expired timer and start another with a null handler. That start keeps its own
+run. After its expiry, the published host queries that timer directly; the
+callback globals are not rewritten. The active expiry stays until finish.
+Synthetic success does not prove original timing parity. This API adds no automatic application advance,
 yielding callback continuation, pause/resume, zero/negative-delay behavior or
 complete Human01 gameplay.
+
+
+The callback-lifetime follow-up (2026-10-18) executes all six timer-session cases
+natively and from the actual Cargo WebAssembly integration artifact under Node.
+All 96 native map-loading tests, strict native/browser Clippy and formatting pass.
+The new regression covers destroying the expired timer and starting another during
+the same callback, then querying that new timer after its null-handler expiry.
+This adds test coverage only; production timer and session code are unchanged.
+No new original-client run or native/recreation timing comparison was performed.
+Evidence: `.scratch/timer-lifecycle-root-20261018/review-1/acceptance.json`.

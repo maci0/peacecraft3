@@ -244,6 +244,54 @@ fn registered_expiry_refuses_before_clock_or_handler_mutation() {
 }
 
 #[test]
+fn destroyed_expired_timer_start_keeps_its_own_run() {
+    let script = "\
+globals
+timer expired = CreateTimer()
+timer next = null
+integer marker = 0
+real elapsed = -1.0
+real remaining = -1.0
+endglobals
+function fire takes nothing returns nothing
+set marker = marker + 1
+call DestroyTimer(expired)
+set next = CreateTimer()
+call TimerStart(next, 1.0, false, null)
+set elapsed = TimerGetElapsed(next)
+set remaining = TimerGetRemaining(next)
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TimerStart(expired, 0.5, false, function fire)
+endfunction
+";
+    let mut app = timer_app();
+    deliver_timer(&mut app, script, 1);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    assert_eq!(session.advance_timers(11.0, 1).unwrap(), 1);
+    assert_eq!(session.global("marker"), Some(Value::Int(1)));
+    assert_eq!(session.global("elapsed"), Some(Value::Real(0.0)));
+    assert_eq!(session.global("remaining"), Some(Value::Real(1.0)));
+    assert_eq!(session.advance_timers(12.0, 1).unwrap(), 1);
+    assert_eq!(session.global("marker"), Some(Value::Int(1)));
+    let next = session.global("next").unwrap();
+    use pcx_script::Host;
+    let objects = session.host().unwrap().objects_mut();
+    assert_eq!(
+        objects.native("TimerGetElapsed", std::slice::from_ref(&next)),
+        Ok(Value::Real(1.0))
+    );
+    assert_eq!(
+        objects.native("TimerGetRemaining", std::slice::from_ref(&next)),
+        Ok(Value::Real(0.0))
+    );
+}
+
+#[test]
 fn periodic_catch_up_spends_one_budget_per_callback_and_destruction_stops_it() {
     let script = RESTART.replace("if marker == 1 then\ncall TimerStart(retained, 0.125, false, function fire)\nelse\ncall DestroyTimer(retained)\nendif", "if marker == 3 then\ncall DestroyTimer(retained)\nendif");
     let mut app = timer_app();
@@ -261,4 +309,16 @@ fn periodic_catch_up_spends_one_budget_per_callback_and_destruction_stops_it() {
     assert_eq!(session.global("marker"), Some(Value::Int(3)));
     assert_eq!(session.global("elapsed"), Some(Value::Real(0.5)));
     assert_eq!(session.advance_timers(30.0, 0).unwrap(), 0);
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn browser_timer_callback_lifetime_gate() -> u32 {
+    published_timer_callbacks_restart_and_destroy_in_the_existing_vm();
+    failed_replacement_keeps_timers_success_and_clear_retire_them();
+    callback_failure_clears_expired_context_without_replaying_one_shot();
+    registered_expiry_refuses_before_clock_or_handler_mutation();
+    destroyed_expired_timer_start_keeps_its_own_run();
+    periodic_catch_up_spends_one_budget_per_callback_and_destruction_stops_it();
+    6
 }

@@ -2076,3 +2076,19 @@ not establish native Legacy archive priority. Owner changes, world association,
 chapter completion, native/render parity and the 100-consecutive unmodified-original
 baseline remain open. Evidence:
 `.scratch/unit-identities-root-20261018/review-1/acceptance.json`.
+
+
+### 2026-10-18 — published-session timer lifetime regression
+
+A new production-factory/session regression destroys the expired timer and starts
+another in the same callback. The new timer retains its own elapsed/remaining
+values; its later null-handler expiry consumes one delivery without rerunning the
+callback. Production timer and session code are unchanged.
+
+All six timer-session cases pass natively and execute from the actual Cargo
+WebAssembly integration artifact under Node. All 96 native map-loading tests,
+strict native/browser Clippy and formatting pass. No original-client runtime,
+rendering or timing comparison was repeated; automatic application clock, yielding
+callbacks, matching expiry-trigger delivery and the 100-consecutive original
+baseline remain open. Evidence:
+`.scratch/timer-lifecycle-root-20261018/review-1/acceptance.json`.
