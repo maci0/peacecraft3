@@ -1217,16 +1217,19 @@ input passes `GetPlayerSlotState`. A separate explicit current-controller
 view serves later source player rows without overwriting executed setup; the
 single-player counting loop completes. Explicit source-backed label-constructor
 banks qualify all 11 literal labels and retain 11 executed creations across nine
-labels on the same arena. The next unsupported call is
-`TriggerRegisterTimerExpireEvent` in `Blizzard.j` (`143744..143837`); no timer
-registration or callback delivery is fabricated. Fog/mask setters retain
+labels on the same arena. A separately admitted timer-expiry subscription links
+the actual existing trigger and live timer through an event on that arena; its
+following action is retained without running it. The next unsupported call is
+`VersionGet` in `Blizzard.j` (`440139..440151`). Timer start, expiry and callback
+delivery remain unsupported; no version is inferred. Fog/mask setters retain
 independent booleans;
 speed writes remain unsupported because original requests do not always read
 back as requested. No participation or settings default is inferred. Wrapping
 does not evaluate predicates. See `docs/re-notes/script-startup-settings.md` and
 `docs/re-notes/script-player-slots.md` and
 `docs/re-notes/script-player-controllers.md` and
-`docs/re-notes/script-label-sounds.md`.
+`docs/re-notes/script-label-sounds.md` and
+`docs/re-notes/script-trigger-admission.md`.
 These assignments do not enforce alliance gameplay or effective resource balances,
 and on/off activation is separate from combat modifiers and animation. This is
 execution evidence for that selected source profile, not a playable chapter.

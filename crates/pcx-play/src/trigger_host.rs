@@ -1,4 +1,4 @@
-//! Shared-arena `CreateTrigger` and `TriggerRegisterUnitEvent` admission.
+//! Shared-arena trigger creation, event subscriptions and action registration.
 //!
 //! Enabled state is not stored. `EnableTrigger`, `DisableTrigger`,
 //! `IsTriggerEnabled`, conditions and event delivery stay unsupported.
@@ -9,6 +9,10 @@ use pcx_script::resolve::Program;
 use pcx_script::span::Span;
 use pcx_script::value::FunctionId;
 use pcx_script::{HandleId, Value};
+
+#[path = "timer_event_host.rs"]
+mod timer_events;
+pub use timer_events::TimerEventRegistration;
 
 const CREATE: &str = "CreateTrigger";
 const REGISTER: &str = "TriggerRegisterUnitEvent";
@@ -53,6 +57,8 @@ pub(super) struct Admission {
     retained_triggers: usize,
     retained_events: usize,
     retained_actions: usize,
+    timer_event_limit: Option<usize>,
+    retained_timer_events: usize,
 }
 
 impl ObjectHost {
@@ -161,6 +167,8 @@ impl ObjectHost {
             retained_triggers: 0,
             retained_events: 0,
             retained_actions: 0,
+            timer_event_limit: None,
+            retained_timer_events: 0,
         });
         Ok(self)
     }
@@ -207,6 +215,9 @@ impl ObjectHost {
         match name {
             CREATE => Some(self.create_trigger(args)),
             REGISTER => Some(self.register_unit_event(args)),
+            timer_events::REGISTER if self.triggers.as_ref()?.timer_event_limit.is_some() => {
+                Some(self.register_timer_event(args))
+            }
             ADD if self.inner.program.natives().get(ADD).is_some() => Some(self.add_action(args)),
             _ => None,
         }

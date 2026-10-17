@@ -464,7 +464,9 @@ pub use unit_creation::{ExecutedUnit, ExecutedUnitState, UnitBudget, UnitStateBu
 
 #[path = "trigger_host.rs"]
 mod trigger_admission;
-pub use trigger_admission::{TriggerActionRecord, TriggerBudget, UnitEventRegistration};
+pub use trigger_admission::{
+    TimerEventRegistration, TriggerActionRecord, TriggerBudget, UnitEventRegistration,
+};
 
 #[cfg(test)]
 #[path = "filter_host_tests.rs"]

@@ -200,6 +200,11 @@ enum Entry {
         unitevent: HandleId,
         enumerand: i32,
     },
+    /// One retained timer-expiry subscription; no clock or pending firing.
+    RegisteredTimerEvent {
+        trigger: HandleId,
+        timer: HandleId,
+    },
     /// One loaded `Filter` callback; its body is not entered during wrapping.
     Filter {
         function: FunctionId,
@@ -519,7 +524,7 @@ impl EnumHost {
             Entry::Destructable { .. } => "destructable",
             Entry::Unit { .. } => "unit",
             Entry::Trigger => "trigger",
-            Entry::RegisteredUnitEvent { .. } => "event",
+            Entry::RegisteredUnitEvent { .. } | Entry::RegisteredTimerEvent { .. } => "event",
             Entry::TriggerAction { .. } => "triggeraction",
             Entry::Force { .. } => self
                 .program
@@ -619,6 +624,6 @@ pub use objects::{
     ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerSettings,
     PlayerStateRequestBudget, QuestBudget, QuestEvent, QuestFlag, SoundProperties, SoundState,
     StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
-    StartupClockState, StartupSettings, TechLimitBudget, TimerHost, TriggerActionRecord,
-    TriggerBudget, UnitBudget, UnitEventRegistration, UnitStateBudget,
+    StartupClockState, StartupSettings, TechLimitBudget, TimerEventRegistration, TimerHost,
+    TriggerActionRecord, TriggerBudget, UnitBudget, UnitEventRegistration, UnitStateBudget,
 };

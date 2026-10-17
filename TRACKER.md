@@ -1372,6 +1372,14 @@ Format: `date — subsystem — symptom — root cause — status`
       357 native/actual WASI play tests pass; strict native/browser Clippy passes.
       This is resource/creation state, not playback, timer scheduling or a chapter
       completion. See `docs/re-notes/script-label-sounds.md`.
+      Timer-expiry subscriptions now separately admit the loaded trigger/timer
+      contract, require both actual identities and retain their association on
+      the same bounded arena. The unchanged gate passes one registration and its
+      following action, reaching 882 identities before refusing `VersionGet` in
+      Blizzard at `440139..440151` (common `116044..116091`). Four new regressions
+      and all 361 native/actual WASI play tests pass; strict native/browser Clippy
+      passes. Timer start, expiry delivery, callback execution and native lifetime
+      parity remain open. See `docs/re-notes/script-trigger-admission.md`.
       Live participation, application provider and general eligibility remain open.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or

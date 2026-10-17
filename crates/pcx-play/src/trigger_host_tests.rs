@@ -541,3 +541,6 @@ fn trigger_action_signature_and_source_fail_before_admission() {
     assert_eq!(error.native, "TriggerAddAction");
     assert_eq!(error.declaration_source, "synthetic/other.j");
 }
+
+#[path = "timer_event_tests.rs"]
+mod timer_events;

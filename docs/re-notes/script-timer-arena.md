@@ -64,3 +64,9 @@ The later [group slice](script-group-arena.md) names the shared wrapper
 `ObjectHost`, retaining `TimerHost` as a compatible alias and its timer-only
 constructor behavior. Explicit group admission completes the same map's global
 initialization; timer scheduling remains unsupported.
+
+The later [timer-expiry subscription slice](script-trigger-admission.md#timer-expiry-subscriptions)
+links an already live timer and an already created trigger through an event
+record on that same arena. It does not add running state or expiration. Timer
+start, scheduler integration and callback delivery remain open; the chapter
+runner's caller-supplied tick callback interface is not a JASS timer scheduler.
