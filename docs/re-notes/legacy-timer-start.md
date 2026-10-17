@@ -178,3 +178,54 @@ the same callback, then querying that new timer after its null-handler expiry.
 This adds test coverage only; production timer and session code are unchanged.
 No new original-client run or native/recreation timing comparison was performed.
 Evidence: `.scratch/timer-lifecycle-root-20261018/review-1/acceptance.json`.
+
+## Timed-trigger lifecycle reference (2026-10-18)
+
+The actual owned-factory Human01 RNG experiment now stops at
+`TriggerRegisterTimerEvent`; its required four-result gate fails after one exact
+original result. Registration alone would hide the missing scheduler and trigger
+consumer. This section qualifies additional behavior before implementing that
+consumer; production timer and trigger code are unchanged.
+
+Static decoding of the same fingerprinted executable links the functional
+registration to an event-owned scheduling subobject. Its configuration forwards
+the supplied timeout and periodicity through the same timer wrapper and zero
+clock selector qualified above. This supports sharing the existing recreation
+game-time scheduler; it does not establish all native queue behavior or require
+an extra script-visible timer identity.
+
+One fresh isolated Wine run instruments the unchanged Human01 `main` immediately
+around its authored `InitBlizzard` call. Only the script member changes, reversibly,
+in a private unsigned map. Positive timeout values and operation sequences are
+self-authored experiment inputs. The probe completes with 22 records:
+
+| Probe condition | Observation in this run |
+| --- | --- |
+| Query a newly created trigger | It is enabled before any explicit enable/disable assignment. |
+| Register two conditions, the first false and the second true | Both run in registration order; no action runs. Short-circuiting between condition registrations would lose the second condition's effects. |
+| Register two true conditions and two actions | Both conditions run, followed by both actions in registration order. |
+| Query context in automatic timed-trigger conditions/actions | The triggering trigger matches its owner, the event matches the loaded `EVENT_GAME_TIMER_EXPIRED`, and `GetExpiredTimer()` is null. |
+| Subscribe a trigger and a direct handler to an existing timer | The trigger action runs first with that expired timer. The direct handler sees the same timer, with null trigger and event context. |
+| Disable a periodic timed trigger, then enable it between deadlines | No disabled callback appears; delivery resumes on its original periodic phase. |
+| Destroy an armed periodic trigger before its first deadline | No action for it appears before probe completion. |
+| Destroy a periodic trigger in its first action at its third firing | Its second action still runs for that firing; no later firing appears before completion. |
+
+The final capture shows the original opening cinematic, not recreation rendering
+or chapter completion. Probe-member re-extraction, reversible edits, script
+resolution, complete callback identities, context/order checks and seven rejected
+log mutations pass. A self-authored formatter initially referenced an absent
+helper; the failed resolution is retained and corrected before the only runtime
+launch. An initial capture command's argument refusal is also retained. The
+successful run is stopped and preserved, and all original payloads remain local.
+Commands, range hashes, script/log fingerprints and verification are in
+`.scratch/timed-trigger-root-20261018/`.
+
+These are bounded observations from one instrumented Wine run, not native Windows
+truth, an unmodified-map baseline or production delivery acceptance. They do not
+settle yielding actions, arbitrary nesting, callback-list mutation, condition
+destruction, edge delays, native rounding or general equal-deadline ordering.
+The implementation must preserve one owned arena, clock and VM; evaluate all
+registered conditions before deciding whether to run actions; retain the active
+action tail across self-destruction; and restore event context before a direct
+handler. Admission, work bounds, failure cleanup and replacement lifetime still
+need actual native/WASM consumer tests. The RNG factory gate remains failed.

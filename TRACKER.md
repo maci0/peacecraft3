@@ -1936,6 +1936,12 @@ actions, repeated-run stability and scheduler/world integration remain open.
   pause/speed integration, edge delays, native rounding/tie order and full map
   execution. The 100-consecutive unmodified-original baseline gate is unchanged.
   See [the timer evidence and implementation limits](docs/re-notes/legacy-timer-start.md).
+- [~] A fresh bounded timed-trigger reference qualifies condition/action order,
+  callback context, disabled periodic phase and self-destruction's active action
+  tail. Both registered conditions execute even when the first returns false;
+  automatic timed triggers observe a null expired timer. The 22-record probe and
+  seven refusal mutations pass; production event delivery is still unsupported.
+  See [the reference scope](docs/re-notes/legacy-timer-start.md#timed-trigger-lifecycle-reference-2026-10-18).
 
 
 ### 2026-10-17 — retained player-unit event associations
