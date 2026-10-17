@@ -78,6 +78,8 @@ pub enum Failure {
     DestructableState(&'static str),
     #[error("unit creation: {0}")]
     UnitState(&'static str),
+    #[error("stock configuration: {0}")]
+    StockState(&'static str),
     #[error("unit catalog {requested:?}: {problem:?}")]
     UnitCatalog {
         requested: [u8; 4],
@@ -633,7 +635,7 @@ pub use objects::{
     MapConfigBudget, MapMusicSelection, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget,
     PlayerBudget, PlayerSettings, PlayerStateRequestBudget, QuestBudget, QuestEvent, QuestFlag,
     ResearchObservation, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest,
-    StartLocation, StartPriorities, StartPriority, StartupClockState, StartupSettings,
+    StartLocation, StartPriorities, StartPriority, StartupClockState, StartupSettings, StockBudget,
     TechLimitBudget, TimerEventRegistration, TimerHost, TriggerActionRecord, TriggerBudget,
     UnitBudget, UnitEventRegistration, UnitStateBudget,
 };

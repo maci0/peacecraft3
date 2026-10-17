@@ -464,3 +464,13 @@ Evidence and command receipts remain local under
 `.scratch/player-current-research-root-20261017/`. This does not provide an
 application Host factory, live research simulation, item-stock behavior or a
 playable campaign.
+
+The research gate above stops before shop stock. Executed slot configuration
+is the following slice: `script-stock-slots.md`. The BJ slot integers are
+not production constants.
+
+The following same-context continuation retains both stock slot assignments
+and reaches `TimerStart` in Blizzard.j (`447183..447286`; common.j
+`61987..62103`). The newly executed stock timer shares the existing arena.
+This is assignment retention, not stock inventory or restock execution;
+see [the stock slice](script-stock-slots.md).

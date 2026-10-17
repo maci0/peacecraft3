@@ -35,6 +35,7 @@ pub struct ObjectHost {
     forces: Option<forces::Admission>,
     startup_settings: Option<StartupSettings>,
     startup_version: Option<HandleId>,
+    stock: Option<stock::State>,
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -75,6 +76,7 @@ impl ObjectHost {
             forces: None,
             startup_settings: None,
             startup_version: None,
+            stock: None,
         })
     }
     fn contract(
@@ -357,6 +359,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.unit_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.stock_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.startup_settings_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -486,3 +491,7 @@ pub use forces::ForceBudget;
 #[path = "startup_settings_host.rs"]
 mod settings;
 pub use settings::StartupSettings;
+
+#[path = "stock_host.rs"]
+mod stock;
+pub use stock::StockBudget;

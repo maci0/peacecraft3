@@ -1229,8 +1229,13 @@ original-client observation; both source BJ rectangles are retained. The next
 unsupported call was the boolean `GetPlayerTechResearched`. Explicit current
 research observations now pass its 24 exact startup queries after the authored
 early setter; retained setter levels remain separate and missing answers refuse.
-The next unsupported call is `SetAllItemTypeSlots` in `Blizzard.j`
-(`446992..447041`). Item-stock behavior is not inferred.
+Explicit item and unit slot configuration now stores the integers passed to
+`SetAllItemTypeSlots`, `SetAllUnitTypeSlots`, `SetItemTypeSlots` and
+`SetUnitTypeSlots`. No BJ slot count is copied into the host. A per-unit
+record does not inherit the global integer. Add/remove stock, restock and
+shop simulation remain open. In `InitNeutralBuildings` the next unsupported
+call after those two global assignments and `CreateTimer` is `TimerStart`.
+See `docs/re-notes/script-stock-slots.md`.
 Comparison evaluation, timer start, expiry and callback delivery remain unsupported. Fog/mask setters retain
 independent booleans;
 speed writes remain unsupported because original requests do not always read

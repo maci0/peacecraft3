@@ -1420,6 +1420,17 @@ Format: `date — subsystem — symptom — root cause — status`
       All 373 native/actual WASI play tests and strict native/browser Clippy pass.
       Counts, missing research defaults, live provider, item-stock behavior and
       playable chapter remain open; see `docs/re-notes/script-player-setup.md`.
+      Explicit stock slot configuration now retains the executed integers from
+      `SetAllItemTypeSlots` and `SetAllUnitTypeSlots`, plus bounded per-unit
+      `SetItemTypeSlots` and `SetUnitTypeSlots` records on the same Host.
+      Unset stays distinct from an explicit zero. The BJ slot constants are
+      not copied into the host, and a per-unit record does not inherit the
+      global integer. Add/remove stock, restock, categories and shop effects
+      stay refused. The same Human01 gate now retains both global assignments
+      and refuses `TimerStart` in Blizzard.j (`447183..447286`). All 376 native
+      and actual WASI play tests, strict native/browser Clippy, 78 map-loading
+      and four app-library tests pass. Native slot-capacity semantics and a
+      playable chapter remain open; see `docs/re-notes/script-stock-slots.md`.
       Live participation, application provider and general eligibility remain open.
       No world objects or rendering are claimed. These values do not yet enforce
       construction, training or
