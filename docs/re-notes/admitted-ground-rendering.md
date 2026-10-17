@@ -9,8 +9,10 @@ VM, simulation world, gameplay camera or playable chapter.
 The publisher requires the successful admission's context, binding revision,
 map identity and exact receipt arc, a matching `SelectedMapSources` reader,
 and explicit `GroundSupply` read and texture budgets. There is no default
-archive, budget or substitute tile. Native file drops currently do not publish
-that reader. Missing inputs report a ground error. A failed replacement keeps
+archive, budget or substitute tile. Native `replace_selected` and a file drop of
+a resolver-backed binding publish that reader with the exact receipt arc. A
+binding that did not retain its resolver does not. Missing inputs report a
+ground error. A failed replacement keeps
 the previous mounted entity, source context and catalog/BLP receipts. A
 successful replacement retires the previous entity. Asset handles are inserted
 only after selectors, geometry and every texture decode succeed.

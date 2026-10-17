@@ -6,10 +6,13 @@
 //! is not a playable session.
 //!
 //! The source reader is [`crate::browser_configuration::SelectedMapSources`]
-//! for the admitted binding receipts. Native file drop does not publish that
-//! reader; the publisher records [`MapGroundError::MissingSourceReader`] and
-//! does not draw. The SLK read limit and retained/transient texture budgets
-//! come from [`GroundSupply`]. No limit, archive, or tileset is filled in here.
+//! for the admitted binding receipts. Native `replace_selected` and a file drop
+//! of a resolver-backed binding publish that pair. A binding that did not retain
+//! its resolver, or a refused candidate, leaves the previous reader in place.
+//! With no published reader the publisher records
+//! [`MapGroundError::MissingSourceReader`] and does not draw.
+//! The SLK read limit and retained/transient texture budgets come from
+//! [`GroundSupply`]. No limit, archive, or tileset is filled in here.
 
 use std::sync::{Arc, Weak};
 

@@ -4,6 +4,7 @@ use pcx_assets::{ArchiveLayer, ContentSource, NamedMember, Resolver, SourceError
 use pcx_mpq::{ExtractionBudget, MpqArchive};
 use peacecraft3::{
     browser_archive_source::{ArchiveSelection, CommittedArchiveSource},
+    browser_configuration::SelectedMapSources,
     map_requests::MapRequests,
 };
 use std::sync::{Arc, Mutex};
@@ -248,17 +249,26 @@ pub fn resolver_to_actual_app_and_stale_rollback() {
             )),
         })
         .collect();
-    let resolver =
-        Resolver::new("1.29b-tft-vanilla-vanilla".parse().unwrap(), None, layers).unwrap();
+    let resolver = Arc::new(
+        Resolver::new("1.29b-tft-vanilla-vanilla".parse().unwrap(), None, layers).unwrap(),
+    );
     let mut app = bevy::prelude::App::new();
     peacecraft3::map_requests::install(&mut app);
-    assert!(
-        app.world_mut()
-            .resource_mut::<MapRequests>()
-            .replace_selected(&resolver, f.input(7), f.limits())
-            .result
-            .is_ok()
-    );
+    {
+        let mut state = app.world_mut().remove_resource::<MapRequests>().unwrap();
+        let mut selected = app
+            .world_mut()
+            .remove_resource::<SelectedMapSources>()
+            .unwrap();
+        assert!(
+            state
+                .replace_selected(&mut selected, Arc::clone(&resolver), f.input(7), f.limits(),)
+                .result
+                .is_ok()
+        );
+        app.world_mut().insert_resource(state);
+        app.world_mut().insert_resource(selected);
+    }
     let old = app
         .world()
         .resource::<MapRequests>()
@@ -276,13 +286,21 @@ pub fn resolver_to_actual_app_and_stale_rollback() {
     assert_eq!(receipts.map.provenance.locator, "selected map.w3m");
     assert_eq!(old.map_digest.hash, pcx_mpq::fnv1a64(&f.raw));
     *stores[0].revision.lock().unwrap() = 18;
-    assert!(
-        app.world_mut()
-            .resource_mut::<MapRequests>()
-            .replace_selected(&resolver, f.input(8), f.limits())
-            .result
-            .is_err()
-    );
+    {
+        let mut state = app.world_mut().remove_resource::<MapRequests>().unwrap();
+        let mut selected = app
+            .world_mut()
+            .remove_resource::<SelectedMapSources>()
+            .unwrap();
+        assert!(
+            state
+                .replace_selected(&mut selected, Arc::clone(&resolver), f.input(8), f.limits(),)
+                .result
+                .is_err()
+        );
+        app.world_mut().insert_resource(state);
+        app.world_mut().insert_resource(selected);
+    }
     let current = app.world().resource::<MapRequests>();
     assert!(Arc::ptr_eq(
         &old,

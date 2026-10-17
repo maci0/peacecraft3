@@ -155,6 +155,17 @@ pub fn runtime_sources_follow_successful_publication_and_receipt_identity() {
         .unwrap();
     let sources = app.world().resource::<SelectedMapSources>();
     let reader = sources.for_receipts(&receipts).unwrap();
+    assert!(Arc::ptr_eq(
+        &reader,
+        app.world()
+            .resource::<MapRequests>()
+            .bindings
+            .as_ref()
+            .unwrap()
+            .resolver
+            .as_ref()
+            .unwrap()
+    ));
     assert!(
         sources
             .for_receipts(&Arc::new((*receipts).clone()))
@@ -221,6 +232,17 @@ pub fn runtime_sources_follow_successful_publication_and_receipt_identity() {
     let sources = app.world().resource::<SelectedMapSources>();
     assert!(sources.for_receipts(&receipts).is_none());
     let replacement = sources.for_receipts(current).unwrap();
+    assert!(Arc::ptr_eq(
+        &replacement,
+        app.world()
+            .resource::<MapRequests>()
+            .bindings
+            .as_ref()
+            .unwrap()
+            .resolver
+            .as_ref()
+            .unwrap()
+    ));
     assert!(!Arc::ptr_eq(&reader, &replacement));
     assert_eq!(
         replacement
