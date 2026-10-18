@@ -2375,10 +2375,19 @@ repeated, and the public site package was not rebuilt.
   records and refuses eight mutated logs. Creation agrees with `SetUnitPosition`
   in this sample, while axis setters preserve requested coordinates. Bounds and
   114 cliff-level queries join to the parsed terrain. A limited terrain/wall
-  replay matches only 14 requests; all five misses remain gates. One accepted
+  replay initially matches only 14 requests. One accepted
   creation is reported blocked by the terrain predicate, so that predicate
   cannot become the placement test. The original container is stopped; the
   capture shows its loading screen, not recreation rendering.
+- [~] Source movement-token decoding now supplies the selected creation masks.
+  Finite-search failure behavior plus additional source object/building
+  footprints explain the five replay misses. A fresh run repeats the same 19
+  coordinates against saved predictions: 19 creation positions, 114 WPM
+  predicate queries and 114 cliff queries match. The explicit source building
+  binding is verified and 16 mutated logs refuse. This is repeated-coordinate
+  evidence; automatic placed-object activation, asymmetric/rotated footprints,
+  complete occupancy/lifetime and platform overlays remain unqualified. The
+  private replay is not a production world or placement default.
 - [ ] Queried initial positions do not preserve the requested creation geometry.
   Accepted live placement must precede a world-coordinate consumer. Parsed
   placement records and movement-harness ids do not establish the script unit's

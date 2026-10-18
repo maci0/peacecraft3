@@ -124,6 +124,52 @@ remain local in `.scratch/unit-placement-probe-root-20261018/`. No production
 placement, range-registration behavior or recreation rendering changes in this
 experiment. The unchanged-map four-result RNG factory gate remains open.
 
+## Source placement replay and fresh repetition (2026-10-18)
+
+Further selected-code analysis resolves the movement-mask producer that was
+missing above. The unit defaults bind the `movetp` column; the unit-type cache
+decodes that source token through a selected string table, then indexed switches
+produce its outgoing and incoming cell masks. The footman row parsed from the
+supplied table selects the corresponding cases. The masks and coordinate scale
+are decoded from the selected executable for this analysis, not copied into
+production constants. The terrain predicate separately maps the source-declared
+pathing type to its static cell mask and returns whether that mask blocks the
+point. It does not include the placement solver's complete occupancy test.
+
+Two additions explain the limited replay's remaining misses. First, the selected
+creation call supplies a finite search bound. If the initial point and permitted
+perimeters fail, the native path retains the requested coordinates. That explains
+the unchanged point whose terrain predicate reports blocked; it does not permit
+a fallback when recreation geometry is missing. Second, source-selected placed
+object textures, their death-texture alternatives, and one explicitly selected
+script-created building contribute footprints. The building is identified by
+its actual source global and executed call, not a rawcode/placement-ordinal join.
+The private replay with these inputs reproduces all 19 earlier requests.
+
+A fresh isolated reference run then repeats those same 19 requests against a
+saved prediction, with an additional query of that source building. Its 61
+records reproduce all 19 creation positions and confirm the building's rawcode,
+position and catalog collision. All 114 requested/returned terrain-pathing
+queries agree with the parsed WPM mask, and all 114 cliff queries still agree
+with the source corner nibble and selected indexing. These are repeated
+coordinates, not an unseen-coordinate validation or a proof across maps.
+
+Verification rechecks 13 new bounded code graphs (259 source blocks), directly
+decodes the relevant switch cases, and refuses eight additional mutated logs
+alongside the previous eight. Other indirect branches and outside graph tails
+remain recorded. Source identities, extracted texture data, the saved replay,
+reversible script edits, isolation, stopped-container status and checks stay
+local under `.scratch/unit-placement-policy-root-20261018/` and
+`.scratch/unit-placement-validation-root-20261018/`.
+
+The replay remains private. Automatic placed-object activation versus explicit
+script creation, asymmetric texture orientation, non-cardinal rotation, complete
+dynamic occupancy and lifetime, platform overlays and out-of-map queries are
+not qualified. Loading every descriptor into another arena could duplicate
+script-created objects and is not an accepted world model. No production live
+placement or range consumer changes here. The capture remains the original
+loading screen; recreation rendering and the unchanged-map RNG gate remain open.
+
 ## One bounded range probe (2026-10-18)
 
 A fresh isolated Wine/Xvfb/software-Mesa run instruments Human01 around its
