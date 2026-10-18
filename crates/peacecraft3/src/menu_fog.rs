@@ -97,7 +97,9 @@ impl MenuFog {
         let [alpha, red, green, blue] = self.color_argb;
         // Recreation convention: grouped ARGB and style zero linear; native/render acceptance pending.
         DistanceFog {
-            color: Color::srgba_u8(red, green, blue, alpha),
+            color: crate::menu_composition::colour(
+                [red, green, blue, alpha].map(|v| f32::from(v) / f32::from(u8::MAX)),
+            ),
             falloff: FogFalloff::Linear {
                 start: self.start,
                 end: self.end,
@@ -117,6 +119,7 @@ pub fn material_fog_enabled(shading_flags: u32, filter_mode: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::color::ColorToComponents;
     fn table(source: &str) -> SkinTable {
         SkinTable::parse(source).unwrap()
     }
@@ -132,7 +135,10 @@ mod tests {
         assert_eq!((tft.start, tft.end, tft.density), (23.0, 97.0, 0.29));
         assert_eq!(tft.color_argb, [109, 43, 71, 89]);
         let fog = tft.distance_fog();
-        assert_eq!(fog.color, Color::srgba_u8(43, 71, 89, 109));
+        assert_eq!(
+            fog.color.to_linear().to_f32_array(),
+            [43u8, 71, 89, 109].map(|v| f32::from(v) / 255.0)
+        );
         assert!(matches!(
             fog.falloff,
             FogFalloff::Linear {

@@ -132,6 +132,10 @@ fn half(bytes: &[u8]) -> f32 {
 }
 
 fn vulkan_menu_app(label: &str) -> App {
+    let _ = bevy::log::tracing_subscriber::fmt()
+        .with_max_level(bevy::log::Level::INFO)
+        .with_test_writer()
+        .try_init();
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -153,11 +157,16 @@ fn vulkan_menu_app(label: &str) -> App {
                 ..default()
             })
             .disable::<WinitPlugin>()
+            .disable::<bevy::log::LogPlugin>()
             .disable::<bevy::audio::AudioPlugin>()
             .disable::<bevy::gilrs::GilrsPlugin>(),
     )
     .add_plugins(MaterialPlugin::<MenuMaterial>::default())
+    .add_plugins(crate::menu_composition::MenuCompositionPlugin)
+    .add_plugins(crate::mainmenu_scene::ParticleMaterialPlugin)
+    .init_resource::<crate::button_actions::ButtonActions>()
     .init_resource::<Capture>();
+    crate::glue_menu::install(&mut app);
     app.finish();
     app.cleanup();
     println!(
@@ -226,6 +235,15 @@ fn add_menu_material(
 }
 
 fn drive_readback(app: &mut App, target: Handle<Image>) -> GpuReadback {
+    let pixel_bytes = app
+        .world()
+        .resource::<Assets<Image>>()
+        .get(&target)
+        .unwrap()
+        .texture_descriptor
+        .format
+        .block_copy_size(None)
+        .unwrap() as usize;
     for frame in 0..48 {
         if frame == 24 {
             app.world_mut()
@@ -258,7 +276,7 @@ fn drive_readback(app: &mut App, target: Handle<Image>) -> GpuReadback {
     );
     assert!(capture.last.len().is_multiple_of(READBACK_HEIGHT as usize));
     let stride = capture.last.len() / READBACK_HEIGHT as usize;
-    assert!(stride >= READBACK_WIDTH as usize * 8);
+    assert!(stride >= READBACK_WIDTH as usize * pixel_bytes);
     GpuReadback {
         bytes: capture.last.clone(),
         stride,
@@ -357,10 +375,10 @@ fn authored_geoset_colour_reaches_the_menu_material_render_graph() {
         [1.0, 0.0, 0.0],
         [1.0; 3],
     ];
-    let untinted_control = Color::srgb(0.25, 0.5, 0.75).to_linear();
+    let untinted_control = Color::linear_rgb(0.25, 0.5, 0.75).to_linear();
     let mut checks = 0;
     for (column, rgb) in expected.into_iter().enumerate() {
-        let linear = Color::srgb(rgb[0], rgb[1], rgb[2]).to_linear();
+        let linear = Color::linear_rgb(rgb[0], rgb[1], rgb[2]).to_linear();
         for dy in [15, 16, 17] {
             for dx in [15, 16, 17] {
                 for (channel, expected) in [linear.red, linear.green, linear.blue]
@@ -716,5 +734,286 @@ Frame "SIMPLEFRAME" "Console" {
         red.len(),
         green.len(),
         readback.completed
+    );
+}
+
+// Synthetic channel/alpha values; no game content or screenshot measurements.
+const COMPOSITION_BG: [u8; 4] = [32, 96, 160, 255];
+const COMPOSITION_PANEL: [u8; 3] = [196, 84, 156];
+const COMPOSITION_TINT: [f32; 4] = [0.625, 0.375, 0.75, 0.7];
+const COMPOSITION_PARTICLE: [u8; 4] = [64, 192, 96, 128];
+const COMPOSITION_PARTICLE_TINT: [f32; 4] = [0.25, 0.75, 0.5, 0.5];
+const COMPOSITION_UI: [u8; 4] = [212, 64, 172, 128];
+const COMPOSITION_UI_TINT: [f32; 4] = [0.75, 0.5, 0.25, 0.5];
+
+fn composition_readback(raw: bool) -> GpuReadback {
+    use crate::{mainmenu_scene::ParticleMaterial, menu_composition};
+    use bevy::camera::visibility::RenderLayers;
+    let mut app = vulkan_menu_app(if raw {
+        "menu working channels"
+    } else {
+        "linear control"
+    });
+    let mut output = Image::new_target_texture(
+        READBACK_WIDTH,
+        READBACK_HEIGHT,
+        TextureFormat::Rgba8UnormSrgb,
+        None,
+    );
+    output.texture_descriptor.usage |= TextureUsages::COPY_SRC;
+    let target = app.world_mut().resource_mut::<Assets<Image>>().add(output);
+    for (order, layer) in [(0, 1), (1, 2)] {
+        let mut camera = app.world_mut().spawn((
+            Camera3d::default(),
+            Camera {
+                order,
+                clear_color: if order == 0 {
+                    ClearColorConfig::Custom(Color::BLACK)
+                } else {
+                    ClearColorConfig::None
+                },
+                ..default()
+            },
+            RenderTarget::Image(target.clone().into()),
+            Projection::Orthographic(OrthographicProjection {
+                scaling_mode: ScalingMode::Fixed {
+                    width: 4.0,
+                    height: 1.0,
+                },
+                near: 0.1,
+                far: 20.0,
+                ..OrthographicProjection::default_3d()
+            }),
+            Transform::from_xyz(0.0, 0.0, 8.0).looking_at(Vec3::ZERO, Vec3::Y),
+            Tonemapping::None,
+            DebandDither::Disabled,
+            Msaa::Off,
+            RenderLayers::layer(layer),
+        ));
+        if raw {
+            camera.insert(menu_composition::MenuColourCamera);
+        }
+    }
+    let camera = {
+        let mut entity = app.world_mut().spawn((
+            Camera2d,
+            Camera {
+                order: 2,
+                clear_color: ClearColorConfig::None,
+                ..default()
+            },
+            RenderTarget::Image(target.clone().into()),
+            Msaa::Off,
+        ));
+        if raw {
+            entity.insert(menu_composition::MenuColourCamera);
+        }
+        entity.id()
+    };
+    let image = |world: &mut World, rgba: [u8; 4]| {
+        let texture = pcx_gfx::LoadedTexture {
+            source: "synthetic.tga".into(),
+            width: 1,
+            height: 1,
+            rgba: rgba.to_vec(),
+        };
+        let image = if raw {
+            menu_composition::image(&texture)
+        } else {
+            pcx_gfx::viewer::rgba_image(&texture)
+        };
+        world.resource_mut::<Assets<Image>>().add(image)
+    };
+    let colour = |rgba: [f32; 4]| {
+        if raw {
+            menu_composition::colour(rgba)
+        } else {
+            Color::srgba(rgba[0], rgba[1], rgba[2], rgba[3])
+        }
+    };
+    let background = image(app.world_mut(), COMPOSITION_BG);
+    let panel_mesh = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Rectangle::new(0.75, 1.0));
+    let background_mesh = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Rectangle::new(4.0, 1.0));
+    let material = |world: &mut World, texture, tint, alpha_mode, mode| {
+        world.resource_mut::<Assets<MenuMaterial>>().add(
+            checked_source_mode(
+                StandardMaterial {
+                    base_color_texture: Some(texture),
+                    base_color: colour(tint),
+                    alpha_mode,
+                    unlit: true,
+                    fog_enabled: false,
+                    cull_mode: None,
+                    ..default()
+                },
+                mode,
+                0,
+            )
+            .unwrap(),
+        )
+    };
+    let background = material(app.world_mut(), background, [1.0; 4], AlphaMode::Opaque, 0);
+    app.world_mut().spawn((
+        Mesh3d(background_mesh),
+        MeshMaterial3d(background),
+        RenderLayers::layer(1),
+    ));
+    for (column, alpha) in [0, 64, 128, 255].into_iter().enumerate() {
+        let texture = image(
+            app.world_mut(),
+            [
+                COMPOSITION_PANEL[0],
+                COMPOSITION_PANEL[1],
+                COMPOSITION_PANEL[2],
+                alpha,
+            ],
+        );
+        let handle = material(
+            app.world_mut(),
+            texture,
+            COMPOSITION_TINT,
+            AlphaMode::Blend,
+            2,
+        );
+        app.world_mut().spawn((
+            Mesh3d(panel_mesh.clone()),
+            MeshMaterial3d(handle),
+            Transform::from_xyz(column as f32 - 1.5, 0.0, 0.0),
+            RenderLayers::layer(2),
+        ));
+    }
+    let particle_image = image(app.world_mut(), COMPOSITION_PARTICLE);
+    let particle = app
+        .world_mut()
+        .resource_mut::<Assets<ParticleMaterial>>()
+        .add(ParticleMaterial {
+            base: StandardMaterial {
+                base_color: colour(COMPOSITION_PARTICLE_TINT),
+                base_color_texture: Some(particle_image),
+                alpha_mode: AlphaMode::Add,
+                unlit: true,
+                fog_enabled: false,
+                cull_mode: None,
+                ..default()
+            },
+            ..default()
+        });
+    let mesh = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Rectangle::new(4.0, 6.0 / READBACK_HEIGHT as f32));
+    app.world_mut().spawn((
+        Mesh3d(mesh),
+        MeshMaterial3d(particle),
+        Transform::from_xyz(0.0, 0.5 - 9.0 / READBACK_HEIGHT as f32, 0.2),
+        RenderLayers::layer(2),
+    ));
+    let ui_image = image(app.world_mut(), COMPOSITION_UI);
+    app.world_mut().spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0),
+            top: Val::Px(12.0),
+            width: Val::Px(READBACK_WIDTH as f32),
+            height: Val::Px(6.0),
+            ..default()
+        },
+        UiTargetCamera(camera),
+        ImageNode::new(ui_image.clone())
+            .with_mode(bevy::ui::widget::NodeImageMode::Stretch)
+            .with_color(colour(COMPOSITION_UI_TINT)),
+    ));
+    crate::glue_menu::composition_test_nodes(
+        app.world_mut(),
+        camera,
+        ui_image,
+        READBACK_WIDTH as f32,
+        18.0,
+        6.0,
+    );
+    drive_readback(&mut app, target)
+}
+
+fn composition_expected(raw: bool, column: usize, row: usize) -> [u8; 3] {
+    let decode = |value: f32| {
+        if raw {
+            value
+        } else {
+            Color::srgb(value, 0.0, 0.0).to_linear().red
+        }
+    };
+    let encode = |value: f32| {
+        if raw {
+            value
+        } else {
+            Color::linear_rgb(value, 0.0, 0.0).to_srgba().red
+        }
+    };
+    let mut destination = [COMPOSITION_BG[0], COMPOSITION_BG[1], COMPOSITION_BG[2]];
+    let mut blend = |source: [u8; 4], tint: [f32; 4], add| {
+        let alpha = f32::from(source[3]) / 255.0 * tint[3];
+        for channel in 0..3 {
+            let src = decode(f32::from(source[channel]) / 255.0) * decode(tint[channel]);
+            let dst = decode(f32::from(destination[channel]) / 255.0);
+            let mixed = src * alpha + dst * if add { 1.0 } else { 1.0 - alpha };
+            destination[channel] = (encode(mixed).clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+    };
+    blend(
+        [
+            COMPOSITION_PANEL[0],
+            COMPOSITION_PANEL[1],
+            COMPOSITION_PANEL[2],
+            [0, 64, 128, 255][column],
+        ],
+        COMPOSITION_TINT,
+        false,
+    );
+    match row {
+        0 => (),
+        1 => blend(COMPOSITION_PARTICLE, COMPOSITION_PARTICLE_TINT, true),
+        2 => blend(COMPOSITION_UI, COMPOSITION_UI_TINT, false),
+        3 => blend(COMPOSITION_UI, [1.0; 4], false),
+        4 => blend(COMPOSITION_UI, [1.0; 4], true),
+        _ => unreachable!(),
+    }
+    destination
+}
+
+#[test]
+#[ignore = "requires a local Vulkan adapter; synthetic legacy and linear framebuffer readbacks"]
+fn menu_geometry_particles_and_ui_share_the_same_working_channels() {
+    let mut differences = 0;
+    for raw in [false, true] {
+        let readback = composition_readback(raw);
+        for column in 0..4 {
+            for row in 0..5 {
+                let expected = composition_expected(raw, column, row);
+                let other = composition_expected(!raw, column, row);
+                for channel in 0..3 {
+                    let offset = (row * 6 + 3) * readback.stride + (column * 32 + 16) * 4 + channel;
+                    let actual = readback.bytes[offset];
+                    assert!(
+                        actual.abs_diff(expected[channel]) <= 2,
+                        "raw={raw} column={column} row={row} channel={channel}: {actual} != {}",
+                        expected[channel]
+                    );
+                    differences += usize::from(actual.abs_diff(other[channel]) > 2);
+                }
+            }
+        }
+    }
+    assert!(
+        differences > 0,
+        "linear and encoded working-space controls must differ"
+    );
+    println!(
+        "composition readbacks=2 rgb_checks=120 different_working_channel_checks={differences}"
     );
 }

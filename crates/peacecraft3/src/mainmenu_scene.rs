@@ -864,6 +864,7 @@ pub fn spawn(
     let camera = commands
         .spawn((
             Camera3d::default(),
+            crate::menu_composition::MenuColourCamera,
             // Preserve source-art colors instead of adding Bevy's filmic transform.
             Tonemapping::None,
             DebandDither::Disabled,
@@ -901,11 +902,12 @@ pub fn spawn(
     let lights = m.lights(bytes).unwrap_or_default();
     let mut ambient = Vec::new();
     for (i, l) in lights.iter().enumerate() {
-        let colour = Color::srgb(
+        let colour = crate::menu_composition::colour([
             l.colour[0].clamp(0.0, 1.0),
             l.colour[1].clamp(0.0, 1.0),
             l.colour[2].clamp(0.0, 1.0),
-        );
+            1.0,
+        ]);
         match l.kind {
             pcx_mdl::LightKind::Ambient => ambient.push((colour, l.ambient_intensity)),
             pcx_mdl::LightKind::Directional => {
@@ -1259,7 +1261,7 @@ pub fn apply_geoset_colour(
 }
 
 fn checked_geoset_colour(geoset: usize, rgb: [f32; 3], alpha: f32) -> Result<Color, SceneError> {
-    let colour = Color::srgba(rgb[0], rgb[1], rgb[2], alpha);
+    let colour = crate::menu_composition::colour([rgb[0], rgb[1], rgb[2], alpha]);
     let linear = colour.to_linear();
     if [linear.red, linear.green, linear.blue, linear.alpha]
         .iter()
@@ -1268,7 +1270,7 @@ fn checked_geoset_colour(geoset: usize, rgb: [f32; 3], alpha: f32) -> Result<Col
         Ok(colour)
     } else {
         Err(SceneError::Decode(format!(
-            "geoset {geoset}: colour cannot be represented as finite linear RGBA"
+            "geoset {geoset}: colour cannot be represented as finite working RGBA"
         )))
     }
 }
@@ -1481,7 +1483,7 @@ fn cache_texture_images(
                     authored.flags,
                 );
                 let handle = shared.entry(key).or_insert_with(|| {
-                    let mut image = pcx_gfx::viewer::rgba_image(texture);
+                    let mut image = crate::menu_composition::image(texture);
                     image.sampler = pcx_gfx::viewer::sampler_for_texture_flags(authored.flags);
                     images.add(image)
                 });
@@ -2073,32 +2075,23 @@ mod tests {
             unrelated_before
         );
         let white_mat = materials.get(&white).unwrap();
-        assert_eq!(white_mat.base.base_color.to_srgba().red, 1.0);
-        assert_eq!(white_mat.base.base_color.to_srgba().green, 1.0);
-        assert_eq!(white_mat.base.base_color.to_srgba().blue, 1.0);
-        let tinted_mat = materials.get(&tinted).unwrap();
-        assert!((tinted_mat.base.base_color.to_srgba().red - 0.25).abs() < 1e-6);
-        assert!((tinted_mat.base.base_color.to_srgba().green - 0.5).abs() < 1e-6);
-        assert!((tinted_mat.base.base_color.to_srgba().blue - 0.75).abs() < 1e-6);
-
-        // Finite source words can overflow the renderer's sRGB-to-linear conversion.
-        assert!(
-            !Color::srgba(f32::MAX, 0.5, 0.75, 1.0)
-                .to_linear()
-                .red
-                .is_finite()
-        );
-        plan.geoset_animations[0].static_colour = [f32::MAX, 0.5, 0.75];
-        let overflow = pcx_gfx::mdx_opacity::OpacityPlan::checked(&plan, [0, 100]).unwrap();
-        let before = bound
-            .each_ref()
-            .map(|(_, _, handle)| materials.get(handle).unwrap().base.base_color);
-        assert!(apply_geoset_colour(&overflow, &bound, 0, 0, &mut materials).is_err());
         assert_eq!(
-            bound
-                .each_ref()
-                .map(|(_, _, handle)| materials.get(handle).unwrap().base.base_color),
-            before
+            white_mat.base.base_color.to_linear().to_f32_array(),
+            [1.0, 1.0, 1.0, 0.7]
+        );
+        let tinted_mat = materials.get(&tinted).unwrap();
+        assert_eq!(
+            tinted_mat.base.base_color.to_linear().to_f32_array(),
+            [0.25, 0.5, 0.75, 1.0]
+        );
+        assert!(checked_geoset_colour(1, [f32::INFINITY, 0.5, 0.75], 1.0).is_err());
+        assert!(checked_geoset_colour(1, [0.25, 0.5, 0.75], f32::NAN).is_err());
+        assert_eq!(
+            checked_geoset_colour(1, [f32::MAX, 0.5, 0.75], 1.0)
+                .unwrap()
+                .to_linear()
+                .red,
+            f32::MAX
         );
         plan.geoset_animations[0].static_colour = [2.0, 0.5, 0.75];
         let hdr = pcx_gfx::mdx_opacity::OpacityPlan::checked(&plan, [0, 100]).unwrap();
@@ -2109,7 +2102,7 @@ mod tests {
                 .unwrap()
                 .base
                 .base_color
-                .to_srgba()
+                .to_linear()
                 .red,
             2.0
         );
@@ -4368,7 +4361,10 @@ mod fog_camera_tests {
                 end: 97.0
             }
         ));
-        assert_eq!(fog.color, Color::srgba_u8(43, 71, 89, 109));
+        assert_eq!(
+            fog.color.to_linear().to_f32_array(),
+            [43u8, 71, 89, 109].map(|v| f32::from(v) / 255.0)
+        );
         assert!(world.get::<DistanceFog>(ui).is_none());
         let mut output = world.query_filtered::<Entity, With<MainMenuSceneCamera>>();
         let camera = output.single(&world).unwrap();

@@ -1420,6 +1420,7 @@ pub fn spawn(
     // models' own extents; transparent geosets sort by that depth.
     commands.spawn((
         Camera3d::default(),
+        crate::menu_composition::MenuColourCamera,
         Projection::Orthographic(OrthographicProjection {
             scaling_mode: ScalingMode::Fixed {
                 width: crate::mainmenu::FRAME_W,

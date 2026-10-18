@@ -7,6 +7,7 @@
 //! Rendering the launcher on the engine it stages for is deliberate — one fewer
 //! dependency, and the launcher and the game share a version.
 
+use crate::menu_composition::{MenuColourCamera, colour as menu_colour};
 use crate::menu_material::MenuMaterial;
 use bevy::ecs::system::SystemParam;
 use bevy::picking::hover::Hovered;
@@ -291,6 +292,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     app.add_plugins(DefaultPlugins.set(window))
         .init_resource::<bevy::picking::ordered::OrderedPointerInput>()
         .add_plugins(crate::menu_particle_order::MenuParticleOrderPlugin)
+        .add_plugins(crate::menu_composition::MenuCompositionPlugin)
         .add_plugins(crate::mainmenu_scene::ParticleMaterialPlugin)
         .add_plugins(bevy::pbr::MaterialPlugin::<MenuMaterial>::default())
         .add_plugins(bevy::input_focus::tab_navigation::TabNavigationPlugin)
@@ -622,6 +624,7 @@ fn setup(
     commands.spawn((
         Camera2d,
         MenuLetterbox,
+        MenuColourCamera,
         Camera {
             // Before the menu background (-1). Clears the bars outside the
             // centered 4:3 picture. Inactive until a menu layer exists.
@@ -816,7 +819,7 @@ fn spawn_main_menu(commands: &mut Commands) {
                     font_size: bevy::text::FontSize::Px(14.0),
                     ..default()
                 },
-                TextColor(TEXT),
+                TextColor(menu_colour(TEXT.to_srgba().to_f32_array())),
                 ZIndex(10),
             ));
         });
@@ -961,7 +964,7 @@ fn update_menu_notice(
             },
             bevy::render::render_resource::TextureDimension::D2,
             rgba,
-            bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+            bevy::render::render_resource::TextureFormat::Rgba8Unorm,
             bevy::asset::RenderAssetUsages::default(),
         )));
     }
@@ -985,7 +988,7 @@ fn update_menu_notice(
             Outline {
                 width: Val::Px(if focused == Some(entity) { 2.0 } else { 0.0 }),
                 offset: Val::Px(2.0),
-                color: TEXT,
+                color: menu_colour(TEXT.to_srgba().to_f32_array()),
             },
         ));
     }
@@ -1157,7 +1160,7 @@ fn open_resolutions(
                 .iter()
                 .all(|value| value.is_finite() && (0.0..=1.0).contains(value)) =>
         {
-            Some(srgba([*r, *g, *b, *a]))
+            Some(menu_colour([*r, *g, *b, *a]))
         }
         _ => return Err(format!("{menu}: invalid MenuTextHighlightColor")),
     };
@@ -1251,7 +1254,7 @@ fn open_resolutions(
                 Hovered::default(),
                 ResolutionChoice(offer.clone()),
                 ResolutionChoiceColours {
-                    normal: srgba(style.colour),
+                    normal: menu_colour(style.colour),
                     highlight,
                 },
                 Name::new(offer.label.clone()),
@@ -1269,7 +1272,7 @@ fn open_resolutions(
                     ),
                     ..default()
                 },
-                TextColor(srgba(style.colour)),
+                TextColor(menu_colour(style.colour)),
                 Pickable::IGNORE,
             ))
             .id();
@@ -1474,7 +1477,7 @@ fn initialize_menu_logo(
         flex_shrink: 0.0,
         ..default()
     };
-    let mut image = ImageNode::new(images.add(pcx_gfx::viewer::rgba_image(&texture)));
+    let mut image = ImageNode::new(images.add(crate::menu_composition::image(&texture)));
     image.color = Color::srgba(1.0, 1.0, 1.0, 0.0);
     let entity = commands
         .spawn((node, image, crate::menu_panel::MenuLogo, Pickable::IGNORE))
@@ -1699,13 +1702,14 @@ type LetterboxCameraFilter = (
 );
 
 fn show_menu_or_launcher(
+    mut commands: Commands,
     intro: Res<crate::intro::Intro>,
     windows: Query<&Window>,
     menu: Query<Entity, With<MenuLayer>>,
     mut launcher: Query<&mut Visibility, With<LauncherPanel>>,
     mut cameras: Query<&mut Camera, With<crate::mainmenu_scene::MainMenuSceneCamera>>,
     mut ui_cameras: Query<
-        &mut Camera,
+        (Entity, &mut Camera, Has<MenuColourCamera>),
         (
             With<bevy::ui::IsDefaultUiCamera>,
             Without<crate::mainmenu_scene::MainMenuSceneCamera>,
@@ -1780,7 +1784,14 @@ fn show_menu_or_launcher(
     } else {
         bevy::camera::ClearColorConfig::Custom(BG_APP)
     };
-    for mut camera in &mut ui_cameras {
+    for (entity, mut camera, working) in &mut ui_cameras {
+        if !menu.is_empty() && !working {
+            commands.entity(entity).insert(MenuColourCamera);
+        } else if menu.is_empty() && working {
+            commands
+                .entity(entity)
+                .remove::<(MenuColourCamera, bevy::camera::CompositingSpace)>();
+        }
         if camera
             .viewport
             .as_ref()
@@ -2539,8 +2550,8 @@ fn apply_menu_text(
         let font = bevy::text::FontSource::Handle(faces[&style.font].clone());
         let size = bevy::text::FontSize::Vh(style.height / crate::mainmenu::FRAME_H * 100.0);
         let dim = disabled.contains(label.button);
-        let normal = srgba(if dim { style.disabled } else { style.colour });
-        let hot = srgba(if dim { style.disabled } else { style.highlight });
+        let normal = menu_colour(if dim { style.disabled } else { style.colour });
+        let hot = menu_colour(if dim { style.disabled } else { style.highlight });
         if let Ok(mut node) = nodes.get_mut(parent.parent()) {
             // Popup title, FontJustificationV absent along INHERITS: TEXT default MIDDLE.
             node.justify_content =
@@ -2578,7 +2589,7 @@ fn apply_menu_text(
             ),
             TextShadow {
                 offset: Vec2::ZERO,
-                color: srgba(style.shadow_colour),
+                color: menu_colour(style.shadow_colour),
             },
             crate::glue_menu::FrameShadow(Vec2::from(style.shadow_offset)),
         ));
@@ -2627,11 +2638,6 @@ fn align_h(h: crate::menu_text::JustifyH) -> AlignItems {
         crate::menu_text::JustifyH::Center => AlignItems::Center,
         crate::menu_text::JustifyH::Right => AlignItems::FlexEnd,
     }
-}
-
-/// An authored four-float colour.
-fn srgba(c: [f32; 4]) -> Color {
-    Color::srgba(c[0], c[1], c[2], c[3])
 }
 
 fn header(root: &mut ChildSpawnerCommands, artwork: Handle<Image>) {
@@ -3819,6 +3825,11 @@ mod menu_tests {
 
         let menu = world.spawn(MenuLayer).id();
         world.run_system_once(show_menu_or_launcher).unwrap();
+        assert!(world.get::<MenuColourCamera>(ui).is_some());
+        assert_eq!(
+            world.get::<bevy::camera::CompositingSpace>(ui),
+            Some(&bevy::camera::CompositingSpace::Srgb)
+        );
         assert!(world.get::<Camera>(scene).unwrap().is_active);
         assert!(world.get::<Camera>(letterbox).unwrap().is_active);
         assert!(world.get::<Camera>(scene).unwrap().viewport.is_none());
@@ -3877,6 +3888,8 @@ mod menu_tests {
         world.despawn(menu);
         world.run_system_once(show_menu_or_launcher).unwrap();
         assert!(world.get::<Camera>(ui).unwrap().viewport.is_none());
+        assert!(world.get::<MenuColourCamera>(ui).is_none());
+        assert!(world.get::<bevy::camera::CompositingSpace>(ui).is_none());
         assert!(!world.get::<Camera>(letterbox).unwrap().is_active);
     }
 

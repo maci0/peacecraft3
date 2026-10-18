@@ -437,6 +437,41 @@ impl UiMaterial for BackdropImage {
     }
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn composition_test_nodes(
+    world: &mut World,
+    camera: Entity,
+    texture: Handle<Image>,
+    width: f32,
+    top: f32,
+    height: f32,
+) {
+    let backdrop = world
+        .resource_mut::<Assets<BackdropImage>>()
+        .add(BackdropImage {
+            texture: texture.clone(),
+            uv_transform: Vec4::new(1.0, 1.0, 0.0, 0.0),
+            uv_rows: Vec4::new(1.0, 0.0, 0.0, 1.0),
+        });
+    let additive = world
+        .resource_mut::<Assets<AdditiveImage>>()
+        .add(AdditiveImage { texture });
+    let node = |top| Node {
+        position_type: PositionType::Absolute,
+        left: Val::Px(0.0),
+        top: Val::Px(top),
+        width: Val::Px(width),
+        height: Val::Px(height),
+        ..default()
+    };
+    world.spawn((node(top), UiTargetCamera(camera), MaterialNode(backdrop)));
+    world.spawn((
+        node(top + height),
+        UiTargetCamera(camera),
+        MaterialNode(additive),
+    ));
+}
+
 #[derive(Component)]
 struct BackdropRepeat(Vec2);
 
@@ -1220,7 +1255,7 @@ fn load_art(
                     });
                 match decoded {
                     Ok(texture) => {
-                        let mut image = pcx_gfx::viewer::rgba_image(&texture);
+                        let mut image = crate::menu_composition::image(&texture);
                         if art.tile {
                             image.sampler = bevy::image::ImageSampler::Descriptor(
                                 bevy::image::ImageSamplerDescriptor {
@@ -1694,7 +1729,7 @@ Frame "FRAME" "MainMenuFrame" {
         };
         let handle = world
             .resource_mut::<Assets<Image>>()
-            .add(pcx_gfx::viewer::rgba_image(&texture));
+            .add(crate::menu_composition::image(&texture));
         world
             .resource_mut::<GlueImages>()
             .images

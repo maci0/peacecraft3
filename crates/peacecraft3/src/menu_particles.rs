@@ -285,7 +285,7 @@ impl Prepared<'_> {
                     },
                     TextureDimension::D2,
                     image.rgba.to_vec(),
-                    TextureFormat::Rgba8UnormSrgb,
+                    TextureFormat::Rgba8Unorm,
                     RenderAssetUsages::default(),
                 );
                 gpu.sampler = pcx_gfx::viewer::sampler_for_texture_flags(

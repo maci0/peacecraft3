@@ -183,16 +183,16 @@ fn resolution_popup_hover_focus_and_wheel_use_authored_rows() {
             .unwrap()
             .0
     };
-    assert_eq!(colour(&world, rows[0]), srgba([0.2, 0.3, 0.4, 1.0]));
-    assert_eq!(colour(&world, rows[1]), srgba([0.7, 0.8, 0.9, 1.0]));
+    assert_eq!(colour(&world, rows[0]), menu_colour([0.2, 0.3, 0.4, 1.0]));
+    assert_eq!(colour(&world, rows[1]), menu_colour([0.7, 0.8, 0.9, 1.0]));
     world.entity_mut(rows[1]).insert(Hovered(false));
     world.resource_mut::<InputFocusVisible>().0 = true;
     world
         .resource_mut::<InputFocus>()
         .set(rows[2], FocusCause::Navigated);
     world.run_system(system).unwrap();
-    assert_eq!(colour(&world, rows[1]), srgba([0.2, 0.3, 0.4, 1.0]));
-    assert_eq!(colour(&world, rows[2]), srgba([0.7, 0.8, 0.9, 1.0]));
+    assert_eq!(colour(&world, rows[1]), menu_colour([0.2, 0.3, 0.4, 1.0]));
+    assert_eq!(colour(&world, rows[2]), menu_colour([0.7, 0.8, 0.9, 1.0]));
     assert_eq!(world.get::<ScrollPosition>(scroller).unwrap().0.y, 80.0);
     world.resource_mut::<InputFocusVisible>().0 = false;
     world.entity_mut(rows[0]).insert(Hovered(true));
