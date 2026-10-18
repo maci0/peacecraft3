@@ -1540,9 +1540,9 @@ pub struct PanelAdvanceAssets<'w, 's> {
 }
 
 /// Advances the entrance clock, fires the events it passed, and poses each
-/// panel at its frame.
+/// panel at its frame. Presentation time is uncapped by the simulation clock.
 pub fn advance(
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     mut commands: Commands,
     mut state: ResMut<MenuPanels>,
     mut navigation: ResMut<crate::menu_screens::Navigation>,
@@ -1857,8 +1857,7 @@ mod tests {
         use bevy::prelude::{Assets, AudioPlayer, AudioSource, Mesh, Time, World};
         use std::time::Duration;
 
-        #[test]
-        fn category_pops_stay_on_their_source_slice() {
+        fn category_app() -> App {
             let runtime =
                 pcx_gfx::mdx_runtime::RuntimePlan::checked(pcx_gfx::mdx_runtime::RuntimeInput {
                     bones: Vec::new(),
@@ -1963,7 +1962,9 @@ mod tests {
             assert_eq!(panels.clock.local, Duration::ZERO);
             assert_eq!(panels.clock.global, Duration::from_millis(40));
 
-            let mut world = World::new();
+            let mut app = App::new();
+            app.add_plugins(bevy::time::TimePlugin);
+            let world = app.world_mut();
             world.init_resource::<Assets<Mesh>>();
             world.init_resource::<Assets<MenuMaterial>>();
             world.init_resource::<Assets<AudioSource>>();
@@ -1974,8 +1975,14 @@ mod tests {
             backend.set_test_source(&launcher);
             world.insert_resource(backend);
             world.insert_resource(launcher);
-            world.insert_resource(Time::<()>::default());
             world.insert_resource(panels);
+            app
+        }
+
+        #[test]
+        fn category_pops_stay_on_their_source_slice() {
+            let mut app = category_app();
+            let world = app.world_mut();
             let played = |world: &mut World| {
                 let mut gains: Vec<f32> = world
                     .query::<&crate::menu_audio::AuthoredVolume>()
@@ -1996,10 +2003,10 @@ mod tests {
             };
 
             world
-                .resource_mut::<Time<()>>()
+                .resource_mut::<Time<Real>>()
                 .advance_by(Duration::from_millis(40));
             world.run_system_once(advance).unwrap();
-            assert_eq!(played(&mut world), vec![0.2, 0.5]);
+            assert_eq!(played(world), vec![0.2, 0.5]);
             {
                 let panels = world.resource::<MenuPanels>();
                 assert_eq!(panels.clock.phase, Phase::OptionsStandAlternate);
@@ -2017,10 +2024,10 @@ mod tests {
                 Ok(Transition::Animated)
             ));
             world
-                .resource_mut::<Time<()>>()
+                .resource_mut::<Time<Real>>()
                 .advance_by(Duration::from_millis(16));
             world.run_system_once(advance).unwrap();
-            assert_eq!(played(&mut world), vec![0.2, 0.5, 0.7, 0.8]);
+            assert_eq!(played(world), vec![0.2, 0.5, 0.7, 0.8]);
             assert_eq!(
                 world.resource::<MenuPanels>().clock.phase,
                 Phase::OptionsMorphAlternate
@@ -2030,14 +2037,56 @@ mod tests {
                 Duration::from_millis(16)
             );
             world
-                .resource_mut::<Time<()>>()
+                .resource_mut::<Time<Real>>()
                 .advance_by(Duration::from_millis(40));
             world.run_system_once(advance).unwrap();
-            assert_eq!(played(&mut world), vec![0.2, 0.4, 0.4, 0.5, 0.7, 0.8]);
+            assert_eq!(played(world), vec![0.2, 0.4, 0.4, 0.5, 0.7, 0.8]);
             {
                 let panels = world.resource::<MenuPanels>();
                 assert_eq!(panels.clock.phase, Phase::OptionsDeath);
                 assert_eq!(panels.clock.local, Duration::from_millis(16));
+            }
+        }
+
+        #[test]
+        fn category_clock_and_sounds_ignore_frame_partition_and_virtual_pause() {
+            use bevy::time::{TimeUpdateStrategy, Virtual};
+            fn run(steps: &[u64], paused: bool) -> (Phase, Duration, Duration, Vec<u32>) {
+                let mut app = category_app();
+                app.add_systems(Update, advance);
+                app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
+                app.update();
+                if paused {
+                    app.world_mut().resource_mut::<Time<Virtual>>().pause();
+                }
+                for &step in steps {
+                    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                        step,
+                    )));
+                    app.update();
+                }
+                let world = app.world_mut();
+                let clock = world.resource::<MenuPanels>().clock.clone();
+                let sounds = world
+                    .query::<&crate::menu_audio::AuthoredVolume>()
+                    .iter(world)
+                    .map(|gain| gain.0.to_bits())
+                    .collect();
+                (clock.phase, clock.local, clock.global, sounds)
+            }
+            let steady = run(&[40; 15], false);
+            assert_eq!(steady.0, Phase::OptionsStandAlternate);
+            assert_eq!(steady.2, Duration::from_millis(640));
+            for (steps, paused) in [
+                (&[600][..], false),
+                (&[7, 333, 260][..], false),
+                (&[600][..], true),
+            ] {
+                assert_eq!(
+                    run(steps, paused),
+                    steady,
+                    "steps={steps:?}, paused={paused}"
+                );
             }
         }
     }

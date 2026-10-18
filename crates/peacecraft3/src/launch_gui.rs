@@ -311,13 +311,13 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
                     colour_picks,
                     apply_clicks.in_set(LauncherInput),
                     finish_intro,
+                    poll_asset_revision,
+                    invalidate_on_asset_revision,
                     apply_menu_clicks.in_set(MenuActions),
                     menu_navigation_keys,
                 )
                     .chain(),
                 (
-                    poll_asset_revision,
-                    invalidate_on_asset_revision,
                     apply_menu_art,
                     process_panel_navigation,
                     build_control_layer,
@@ -356,7 +356,10 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     app.add_systems(
         Update,
         crate::menu_sprites::advance
-            .after(process_panel_navigation)
+            .after(invalidate_on_asset_revision)
+            .before(MenuActions)
+            .before(menu_navigation_keys)
+            .before(process_panel_navigation)
             .before(build_control_layer)
             .run_if(resource_exists::<crate::menu_sprites::MenuPanels>)
             .run_if(menu_is_visible),

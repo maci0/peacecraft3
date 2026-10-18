@@ -206,3 +206,34 @@ regression and 363 application tests pass (18 explicit gates ignored), with
 strict native/browser Clippy and formatting. Evidence:
 `.scratch/category-pop-advance-20261017/root-verification/`. This adds no runtime
 behavior and proves neither audible parity nor full Bevy WASI support.
+
+
+## Panel presentation clock (2026-10-18)
+
+The panel system uses `Time<Real>` instead of Bevy's generic, capped virtual
+clock. The five-resolution diagnostic exposed the consequence at 4K: a Video
+shortcut reached an Options transition that had advanced too little despite
+several seconds of elapsed time. A deterministic regression reproduces the
+loss with manually supplied time: one 600 ms update previously advanced the
+panel by only the framework's 250 ms cap, producing fewer authored sound events
+than smaller updates covering the same interval. Those numbers describe the
+synthetic experiment and framework policy, not copied game durations.
+
+The system now advances existing panels after asset-store invalidation and
+before navigation actions create a new phase. A new request does not consume the
+preceding frame's delta. Source invalidation still discards the old scene before
+its clock or sound events run. Source clip durations, opacity curves, sound
+ordering, dispatch budgets and busy-transition input refusal are unchanged.
+
+The production-system regression compares phase, local/global elapsed time and
+ordered sound gains across different frame partitions and virtual-clock pause.
+The full application suite passes 645 tests, with 23 explicit fixture ignores;
+strict native/all-target and WASM library/binary Clippy checks pass. Actual 4K
+rendered validation is retained separately under
+`.scratch/menu-panel-clock-root-20261018/`.
+
+This is a presentation-clock implementation choice addressing observed frame
+loss, not proof of the original native clock API or input timestamps. Bevy's
+virtual clock, simulation scheduling, background/particle clocks, RNG and
+material blending are not changed. Pixel parity and whole-application
+load-independent playback remain open.
