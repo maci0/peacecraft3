@@ -201,7 +201,18 @@ integration. A completed prototype does not close its broader milestone.
       families refuse; axis locks outside them remain on the existing path.
       Native matrix identity and particle-phase parity are not proved. See
       `docs/re-notes/menu-billboards.md`.
-- [~] The composed alpha/billboard candidate passes 651 application tests,
+- [x] Non-line PRE2 emission now uses a circular cone from the selected client's
+      separate latitude and full-circle azimuth paths (2026-10-19). Two bounded
+      tilts previously let particles leave the authored cone. The regression
+      fails before and passes after; 156 graphics tests, 654 application tests,
+      21 actual WASI particle tests, two selected-TFT CPU/quad gates and strict
+      native/WASM checks/builds pass. Fresh native/browser journals through 4K
+      use calibrated native monitor modes; all sixty RGB comparisons against
+      retained WC3/Wine frames still differ. Original PRNG/phase, quality scaling
+      and complete matrix/trajectory equivalence remain open. See
+      `docs/re-notes/menu-particles.md` and local evidence
+      `.scratch/menu-particle-policy-root-20261019/`.
+- [~] The earlier composed alpha/billboard candidate passes 651 application tests,
       strict native/WASM checks/builds, five hardware source-background extents
       and ten fresh native/browser navigation runs through 3840×2160. Forty new
       captures are reviewed against twenty retained WC3/Wine captures; all

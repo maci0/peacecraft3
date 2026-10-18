@@ -645,6 +645,33 @@ fn retained_cyclic_gap_and_equal_value_conventions_are_explicit() {
 }
 
 #[test]
+fn non_line_emitters_stay_inside_the_authored_round_cone() {
+    for latitude in [10., 30., 60.] {
+        let mut props = properties();
+        props.speed = 8.;
+        props.latitude = latitude;
+        props.emission_rate = 1024.;
+        let p = plan(&[emitter(props)], &[], [0, 1000], true);
+        let mut s = Simulation::new(p, 11, limits()).unwrap();
+        s.advance(Duration::from_millis(125), limits()).unwrap();
+        assert_eq!(s.particles().len(), 128);
+        let minimum_z = props.speed * latitude.to_radians().cos();
+        let mut quadrants = [false; 4];
+        for particle in s.particles() {
+            let [x, y, z] = particle.velocity;
+            approx((x * x + y * y + z * z).sqrt(), props.speed);
+            assert!(
+                z >= minimum_z - 0.00002,
+                "latitude {latitude}: velocity {:?} leaves the cone",
+                particle.velocity,
+            );
+            quadrants[usize::from(x < 0.) + 2 * usize::from(y < 0.)] = true;
+        }
+        assert!(quadrants.into_iter().all(|seen| seen));
+    }
+}
+
+#[test]
 fn line_angular_plane_variation_and_xy_facing_are_source_driven() {
     let mut props = properties();
     props.speed = 8.;

@@ -96,16 +96,6 @@ fn slerp(a: [f64; 4], mut b: [f64; 4], t: f64) -> Result<[f64; 4], Failure> {
     };
     normalize(std::array::from_fn(|i| left * a[i] + right * b[i]))
 }
-fn multiply(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
-    let [x, y, z, w] = a;
-    let [i, j, k, l] = b;
-    [
-        w * i + x * l + y * k - z * j,
-        w * j - x * k + y * l + z * i,
-        w * k + x * j - y * i + z * l,
-        w * l - x * i - y * j - z * k,
-    ]
-}
 fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
     let [x, y, z, w] = q;
     let [a, b, c] = v;
@@ -888,25 +878,16 @@ fn spawn_particle(
         f64::from(profile.pivot[i]) + f64::from(sample.translation[i]) + offset[i]
     }))?;
     let lat = f64::from(props.latitude).to_radians();
-    let ay = rng.symmetric(lat);
-    let ax = if profile.flags & LINE == 0 {
-        rng.symmetric(lat)
+    let inclination = rng.symmetric(lat);
+    let azimuth = if profile.flags & LINE == 0 {
+        rng.symmetric(std::f64::consts::TAU)
     } else {
         0.
     };
-    let local = multiply(
-        multiply(
-            [
-                0.,
-                0.,
-                std::f64::consts::FRAC_1_SQRT_2,
-                std::f64::consts::FRAC_1_SQRT_2,
-            ],
-            [0., (ay / 2.).sin(), 0., (ay / 2.).cos()],
-        ),
-        [(ax / 2.).sin(), 0., 0., (ax / 2.).cos()],
-    );
-    let direction = rotate(multiply(q, local), [0., 0., 1.]);
+    let (sin_lat, cos_lat) = inclination.sin_cos();
+    let (sin_az, cos_az) = azimuth.sin_cos();
+    // The source plane basis turns the polar cone a quarter turn around local Z.
+    let direction = rotate(q, [-sin_lat * sin_az, sin_lat * cos_az, cos_lat]);
     let speed = f64::from(props.speed) * (1. + rng.symmetric(f64::from(props.variation)));
     Ok(Particle {
         emitter: index,

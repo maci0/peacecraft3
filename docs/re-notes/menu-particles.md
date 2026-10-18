@@ -92,7 +92,7 @@ The adapted Bevy fragment's MIT
 license accompanies its source and the public code package. No original game
 payload is part of either publication.
 
-RNG/distribution, fixed-tick integration, raw emission rate without a guessed
+RNG/initial ages, fixed-tick integration, raw emission rate without a guessed
 quality factor, head corner order, piece submission order and signed priority
 ties are explicit recreation choices. Particle lighting/normals, source
 color transfer, radial fog, additive target-alpha behavior and density/spread
@@ -101,3 +101,52 @@ selected additive RGB equation through premultiplication; its target-alpha
 semantics are not claimed identical. SortFarZ, parented/model-space emitters,
 squirt and other unsupported channels remain reported gaps. Tests do not close
 rendered/native fidelity.
+
+## Circular emission cone (2026-10-19)
+
+Non-line emitters now sample one inclination within the authored latitude and
+a separate full-circle azimuth. Previously, two independent latitude-limited
+tilts could place particles outside that cone. The source-facing line plane,
+node rotation, authored speed/variation, extents, opacity and emission rate keep
+their existing paths. The unused quaternion-product helper is removed.
+
+Fresh bounded disassembly uses the selected Legacy client SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`:
+
+- PRE2 dispatch `0x8f3b21` reaches reader `0x909930`, whose third scalar is stored
+  at record `+0xdc`. Binding `0x9251f0` converts it from degrees to radians and
+  passes it to the plane emitter's inclination setter `0x97f5a0`.
+- When source flag `0x20000` is clear, the binding separately supplies a full
+  turn to azimuth setter `0x97f5c0`. The line branch skips that setter.
+- RTTI associates `CPlaneParticleEmitter` with spawn method `0x97f1c0`. Its
+  velocity combines sine/cosine of those two angles. The math helper fallbacks
+  contain `FSIN` and `FCOS`; they are not named from a screenshot inference.
+
+The local `native-cone-2.json` receipt checks thirty instructions and rejects an
+azimuth mutation. A first receipt attempt refused an incomplete instruction at
+its window boundary; that failure remains retained. The historical analysis
+snapshot was refused for an analysis-profile mismatch and is not presented as
+a fresh successful analysis. No original-game runtime was launched for this
+increment. The complete bone-to-plane matrix and extent-axis equivalence remain
+unqualified; this correction establishes the circular angular support, not an
+identical native particle trajectory.
+
+The synthetic cone regression fails before the correction and passes afterward.
+All 156 graphics tests and 654 application tests pass, with nine and thirty
+explicit ignores respectively. A private wrapper compiles the same production
+CPU module and integration-test source as actual WASI code: 21 tests pass and
+the explicit original-file test remains ignored there. Two native tests read
+the selected TFT model in place and exercise all three clips and all particle
+profiles. Strict native/browser-WASM Clippy, both application builds and
+formatting pass.
+
+Fresh native and browser-WASM journals cover Main, the blank Options landing,
+Video and return at five extents through 3840×2160. Native capture now calibrates
+the active RandR output before application startup. Native platform scale and
+browser DPR remain separate inputs. Forty new captures are
+compared with twenty retained WC3/Wine references; all sixty exact RGB
+comparisons still differ. The private evidence and report are under
+`.scratch/menu-particle-policy-root-20261019/`. Animation phase, particle PRNG and
+floating-point equivalence, quality scaling, native Windows hardware and full
+rendered parity remain open. No pixel exclusions, opacity fit, quality multiplier
+or public-site update is part of this correction.
