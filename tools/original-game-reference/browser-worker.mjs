@@ -72,7 +72,7 @@ try {
   if (!(await page.evaluate(() => peacecraft3.local_menu_editions())).includes(config.edition))
     throw Error('Requested edition is not admitted by the imported source');
   await page.locator('#demo-edition').selectOption(config.edition);
-  await page.locator('#demo-start').click();
+  await page.locator('#demo-start').click({timeout: 120000});
   await page.waitForFunction(() => {
     const raw = peacecraft3.menu_state();
     if (!raw) return false;

@@ -10,7 +10,7 @@ The user also supplied Windows installation media. Image metadata was inspected,
 but no Windows VM disk or guest installation was created before selecting the
 container alternative. A native Windows VM remains a separate future cross-check.
 
-## Actual observations
+## Initial observations (2026-10-16)
 
 The selected executable reports version 1.29.2.9231 and has SHA-256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
@@ -26,8 +26,9 @@ a universal original-game resolution list or physical monitor capability.
 
 Retained captures show a clean TFT Main menu and Video Options. Two untouched
 Options landing captures, separated by about a minute, show the selector and
-confirmation controls without a settings body. The recreation currently enters
-Gameplay settings immediately; that navigation difference requires correction.
+confirmation controls without a settings body. The recreation then entered
+Gameplay settings immediately. The later source-derived landing correction
+removes that initial navigation difference; current observations follow below.
 The images and action timestamps establish these observations; parser tests do
 not establish them.
 
@@ -55,7 +56,7 @@ and synthetic tests check parsing, stream separation, copying, ownership,
 calibration-preserving retries and report extent refusal. These checks do not
 constitute a full CLI Spec conformance claim or a rendered-game test.
 
-## Capture acceptance and current limits
+## Early capture acceptance and limits
 
 Comparison reports require equal pixel extents and preserve the input images.
 They do not resize either side. The first current-code recreation screenshot
@@ -99,7 +100,7 @@ Actual captures, display/window receipts, action timestamps and command logs sta
 in ignored local directories. Equal-size screenshots are necessary for comparison
 but do not synchronize animation clocks or establish complete visual fidelity.
 
-## Paired input replay
+## Paired input replay (2026-10-16)
 
 The comparison command now sends one bounded, versioned physical-input journal
 to both the private original window and a fresh local browser canvas. It checks
@@ -147,3 +148,66 @@ receipts sampled menu state before the screenshot; slow software rendering can
 advance the screen while capture waits. Current receipts retain before/after
 snapshots and flag changes instead of treating a pre-image snapshot as proof of
 the rendered state. Animation/game tick synchronization remains open.
+
+## Three-application resolution diagnostic (2026-10-18)
+
+The fresh diagnostic runs original WC3/Wine, the actual PC3 native application
+and the actual PC3 browser WASM application separately at 1024×768, 1280×960,
+1920×1080, 2560×1440 and 3840×2160. Each receives the same eleven-event journal,
+including four capture checkpoints: Main, Options entry, Video and return.
+The sixty retained PNGs have the requested physical dimensions; none is resized
+or normalized for comparison. All three pairwise exact RGB comparisons are
+recorded at every checkpoint. Pixel fidelity fails. No version-string mask is
+applied because its exact glyph footprint remains unqualified.
+
+The application builds share tracked source `6a3c2fc`. Their native executable,
+WASM package and local imports have independent fingerprints. The original is
+the retained 1.29.2.9231 Wine reference. The recreation uses a locally selected
+152-member menu closure; that does not establish retail archive priority or
+identical source editions. Missing client-derived settings remain explicitly
+unavailable, and four packed popup sound codecs remain unsupported.
+
+Original and native Main, Options landing and Video render at all five sizes.
+At the 4K WASM Video checkpoint, Options landing is still visible: the recorded
+Video key arrives while the transition is active, and the category does not open.
+That is a failed navigation comparison, not a successful Video-screen capture.
+The widescreen native
+and original captures both retain black side regions around menu content.
+Panel bodies are visibly paler in PC3; fog, lighting and effects also differ.
+WASM and native additionally differ in notices and captured transition state.
+Some WASM return checkpoints occur while panels are moving, so this is not a
+steady-frame or load-independent timing test. Cached before/after browser
+snapshots do not acknowledge the simulation tick that produced a PNG. RNG and
+animation phase remain uncontrolled.
+
+The capture adapter now uses the visible canvas's checked document clip directly
+through CDP, avoiding Playwright's DOM font/style preparation. The CDP session is
+bound to the already measured viewport, screen and DPR, then those dimensions
+are checked again after capture. Capture has a finite 90-second bound, input and
+geometry 30 seconds, and capture protocol waiting 150 seconds. Host Open menu
+preparation has a separate 120-second click bound and startup protocol waiting
+300 seconds. These are observation limits, not performance acceptance gates.
+Both X11 adapters verify actual pointer position after a move: an XRandR monitor
+can clamp input even when the root framebuffer and captured client are larger.
+
+Earlier failed attempts remain retained. Two native launcher-only attempts were
+rejected through visual review and replaced by existing keyboard navigation,
+with Main visually checked before replay. Original 4K controller interruption
+was recovered in the same original process from a reviewed Main state. The first
+current 4K WASM attempt stopped at host-page preparation; a fresh bounded run
+uses the corrected preparation limit. No failed adapter is reused.
+
+Evidence and the local three-column report are in
+`.scratch/menu-resolution-transparency-root-20261018/`; the final verification is
+`verification-final-1.json` and report `comparison-1/index.html`. All original
+files and generated captures remain private. Forty-six Python harness checks and
+four Node checks, including real Chromium crop/input validation, pass. This
+harness change does not rebuild the public site or close native Windows, full
+visual fidelity, simulation lockstep or the original baseline gate.
+
+The transparency investigation separately follows production opacity decoding
+on the selected panel models and texture alpha planes. No measured alpha value
+was copied into production. Linear versus encoded-space blending is a plausible
+rendering difference, but the effective original state is not yet established;
+adding Bevy's Camera2d-only compositing component to these Camera3d materials
+would fall back to linear and is not a fix. Transparency correction remains open.

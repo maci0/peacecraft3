@@ -28,6 +28,22 @@ def scenario():
 
 
 class ReplayTests(unittest.TestCase):
+    def test_native_move_refuses_clamped_pointer_before_marking_delivery(self):
+        event = {'kind': 'pointer', 'phase': 'move', 'x': 2385, 'y': 92, 'after_ms': 0}
+        for observed, succeeds in [('X=2385\nY=92\nSCREEN=0', True),
+                                   ('X=1279\nY=92\nSCREEN=0', False),
+                                   ('X=2385\nY=92\nSCREEN=1', False), ('', False)]:
+            with self.subTest(observed=observed), patch.object(reference, 'execute',
+                    side_effect=['', observed]) as send, patch.object(reference, 'mark') as mark:
+                if succeeds:
+                    replay.native_input(reference, 'synthetic', event)
+                    mark.assert_called_once()
+                else:
+                    with self.assertRaisesRegex(reference.Failure, 'actual pointer'):
+                        replay.native_input(reference, 'synthetic', event)
+                    mark.assert_not_called()
+                self.assertEqual(send.call_args.args[1], ['xdotool', 'getmouselocation', '--shell'])
+
     def test_native_grid_matches_the_only_default_screen_and_window(self):
         display = ('default screen number:    0\n'
                    'screen #0:\n'

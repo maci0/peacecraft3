@@ -17,7 +17,8 @@ const near = (a, b) => Number.isFinite(a) && Math.abs(a - b) < 0.001;
 export function checkedGeometry(observed, extent) {
   requireValue(extent.length === 2 && extent.every(n => Number.isSafeInteger(n) && n > 0), 'INVALID_EXTENT', 'Expected positive physical pixel extent');
   const [width, height] = extent;
-  const {box, bitmap, client, dpr, visual, viewport, insets} = observed;
+  const {box, bitmap, client, dpr, visual, viewport, screen, insets} = observed;
+  requireValue(Array.isArray(screen) && screen.length === 2 && screen.every(n => Number.isSafeInteger(n) && n > 0), 'SCREEN_EXTENT_MISSING', 'Measured screen bounds are required', observed);
   requireValue(dpr === 1 && visual.scale === 1 && visual.offsetX === 0 && visual.offsetY === 0, 'SCALE_MISMATCH', 'Replay requires actual DPR1 without page zoom or visual viewport displacement', observed);
   requireValue(bitmap[0] === width && bitmap[1] === height && client[0] === width && client[1] === height && near(box.width, width) && near(box.height, height) && insets.every(value => value === 0), 'CANVAS_EXTENT_MISMATCH', 'Canvas content, CSS box and bitmap must match the requested extent', observed);
   requireValue(near(box.x, Math.round(box.x)) && near(box.y, Math.round(box.y)) && box.x >= 0 && box.y >= 0 && box.x + width <= viewport[0] && box.y + height <= viewport[1], 'CANVAS_CLIPPED', 'Canvas must be pixel aligned and wholly inside the viewport', observed);
@@ -56,13 +57,13 @@ export function createBrowserAdapter({page, cdp, width, height}) {
   let failed = false;
   let pointer;
   const heldButtons = new Set();
-  async function bounded(label, operation) {
+  async function bounded(label, operation, limitMs = timeoutMs) {
     requireValue(!failed, 'ADAPTER_FAILED', 'A previous operation failed; do not retry replay inputs');
     let timer;
     try {
       return await Promise.race([
         operation(),
-        new Promise((_, reject) => {timer = setTimeout(() => reject(new BrowserAdapterError('OPERATION_TIMEOUT', `${label} exceeded its operation bound`)), timeoutMs);}),
+        new Promise((_, reject) => {timer = setTimeout(() => reject(new BrowserAdapterError('OPERATION_TIMEOUT', `${label} exceeded its operation bound`)), limitMs);}),
       ]);
     } catch (error) {
       failed = true;
@@ -75,7 +76,7 @@ export function createBrowserAdapter({page, cdp, width, height}) {
         const canvas = document.querySelector('#launcher-canvas');
         if (!canvas) return null;
         const box = canvas.getBoundingClientRect(), style = getComputedStyle(canvas);
-        const observed = {box: {x: box.x, y: box.y, width: box.width, height: box.height}, bitmap: [canvas.width, canvas.height], client: [canvas.clientWidth, canvas.clientHeight], viewport: [innerWidth, innerHeight], dpr: devicePixelRatio,
+        const observed = {box: {x: box.x, y: box.y, width: box.width, height: box.height}, bitmap: [canvas.width, canvas.height], client: [canvas.clientWidth, canvas.clientHeight], viewport: [innerWidth, innerHeight], screen: [screen.width, screen.height], dpr: devicePixelRatio,
           insets: ['borderLeftWidth', 'borderRightWidth', 'borderTopWidth', 'borderBottomWidth', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom'].map(name => parseFloat(style[name]))};
         const raw = includeState ? globalThis.peacecraft3?.menu_state?.() : null;
         return {observed, state: raw ? JSON.parse(raw) : null};
@@ -129,17 +130,22 @@ export function createBrowserAdapter({page, cdp, width, height}) {
     async capture(path) {
       const {geometry: geometryBefore, state: stateBefore} = await observe(true);
       return bounded('capture', async () => {
-        // Playwright restores screen emulation after Chromium's clipped capture.
-        const clip = {...geometryBefore.origin, width, height};
-        const bytes = await page.screenshot({type: 'png', clip, caret: 'initial'});
+        // A new CDP session otherwise resets screen bounds to Chromium's defaults on capture.
+        const measured = geometryBefore.observed;
+        await cdp.send('Emulation.setDeviceMetricsOverride', {width: measured.viewport[0], height: measured.viewport[1],
+          screenWidth: measured.screen[0], screenHeight: measured.screen[1], deviceScaleFactor: measured.dpr,
+          mobile: false, dontSetVisibleSize: true});
+        const capture = await cdp.send('Page.captureScreenshot', {format: 'png', clip: geometryBefore.clip, captureBeyondViewport: false});
+        const bytes = Buffer.from(capture.data, 'base64');
         requireValue(bytes.length >= 24 && bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) && bytes.readUInt32BE(16) === extent[0] && bytes.readUInt32BE(20) === extent[1], 'CAPTURE_EXTENT_MISMATCH', 'Captured PNG does not match requested physical extent');
         const {geometry: geometryAfter, state: stateAfter} = await observe(true);
         requireValue(JSON.stringify(geometryBefore.clip) === JSON.stringify(geometryAfter.clip) && JSON.stringify(geometryBefore.origin) === JSON.stringify(geometryAfter.origin), 'GEOMETRY_CHANGED', 'Canvas geometry changed during capture');
+        requireValue(JSON.stringify(measured.screen) === JSON.stringify(geometryAfter.observed.screen), 'SCREEN_CHANGED', 'Screen bounds changed during capture');
         await writeFile(path, bytes, {flag: 'wx'});
         return {path, sha256: createHash('sha256').update(bytes).digest('hex'), geometry: geometryBefore,
           state_before: stateBefore, state_after: stateAfter,
           state_changed_during_capture: JSON.stringify(stateBefore) !== JSON.stringify(stateAfter)};
-      });
+      }, 90000);
     },
   };
 }

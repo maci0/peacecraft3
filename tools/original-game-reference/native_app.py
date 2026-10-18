@@ -308,6 +308,7 @@ class NativeApp:
             if phase == 'move':
                 self._ready()
                 self._x(['xdotool', 'mousemove', '--sync', str(point[0]), str(point[1])])
+                replay.check_native_pointer(_Display(self), None, *point)
                 self.pointer = point
                 return {**self.start, 'event': dict(event), 'started_ns': started, 'finished_ns': time.monotonic_ns()}
             if self.pointer != point or event.get('button') not in replay.BUTTONS:

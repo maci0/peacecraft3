@@ -123,10 +123,22 @@ not moved or fitted. Capture validation checks actual DPR1, CSS/bitmap size,
 viewport and document offsets, and resulting PNG dimensions. An exact-size image
 with the wrong page crop is not a valid canvas capture.
 
-The browser capture preserves the page's emulated screen bounds: a clipped raw
-CDP screenshot can reset them and change subsequent source-derived mode choices.
-The real-browser adapter test checks unchanged screen dimensions alongside
-scrolled crop pixels and input delivery.
+The browser captures the visible canvas through CDP without preparing DOM fonts
+or changing page styles. Before capture, the CDP session receives the measured,
+unchanged viewport, screen and DPR: a fresh session otherwise resets screen bounds
+to Chromium defaults, changing subsequent source-derived mode choices. The PNG
+crop uses document coordinates, with capture beyond the viewport disabled. Actual
+screen and canvas geometry are checked again afterward. The real-browser adapter
+test checks unchanged screen dimensions, exact scrolled crop pixels and input
+delivery. Geometry and input operations remain bounded to 30 seconds. Capture
+has a separate 90-second bound for software-rendered 4K readback; the protocol
+wait is bounded to 150 seconds including the preceding geometry check. These
+are observation limits, not performance pass/fail thresholds. Timed-out requests
+still poison the adapter, stop the replay and retain the failure.
+The host page's Open menu preparation has a 120-second click bound, separate
+from replay input. Startup protocol waiting is bounded to 300 seconds to include
+import, preparation and the existing Main-menu readiness check. Failed startup
+is retained and closed; a new attempt requires a fresh output directory.
 
 The journal records both targets' actual operation times and scheduling lateness.
 Browser capture receipts retain snapshots before and after the screenshot and
@@ -205,6 +217,11 @@ contains WC3/native, WC3/WASM and native/WASM pixel differences. Any differing
 pair makes `images_equal` false. Equal dimensions are required; there is no image
 rescaling. Input failures release potentially held input and retain the failure
 receipt. Existing outputs are never reused.
+
+Both X11 targets verify the actual pointer position after every move. A large
+framebuffer can still have a smaller XRandR monitor area that clamps the pointer;
+that refuses instead of recording the requested coordinates as delivered. Verify
+the actual menu after launcher preparation before starting the shared journal.
 
 Each code-manifest file must declare its SHA-256 and a byte size no larger than
 72 MiB. Optimize an oversized WASM build before replay. Responses are base64

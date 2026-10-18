@@ -912,7 +912,12 @@
       "rng": "Non-null visual replay seed refuses; serial VM RNG gates are separate.",
       "limits": {
         "image_bytes": 67108864,
-        "image_axis_pixels": 4096
+        "image_axis_pixels": 4096,
+        "browser_input_or_geometry_ms": 30000,
+        "browser_capture_ms": 90000,
+        "browser_capture_protocol_ms": 150000,
+        "browser_open_menu_preparation_ms": 120000,
+        "browser_startup_protocol_ms": 300000
       },
       "deterministic_parity_verified": false,
       "build_identity": "Native build-receipt v1 files must include actual executable. Native and WASM source_head and source_tree_sha256 must agree. Fingerprint documents list actual absolute file paths; aggregate contents bound16GiB."

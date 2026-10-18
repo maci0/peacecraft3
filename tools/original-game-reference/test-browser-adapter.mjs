@@ -5,12 +5,12 @@ import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {test} from 'node:test';
 import {checkedGeometry, physicalPoint, checkPointerPosition, checkHeldButton, createBrowserAdapter} from './browser-adapter.mjs';
-const observed = {box:{x:20,y:0,width:80,height:60},bitmap:[80,60],client:[80,60],viewport:[200,150],dpr:1,insets:[0,0,0,0,0,0,0,0],visual:{scale:1,offsetX:0,offsetY:0,pageX:0,pageY:320}};
+const observed = {box:{x:20,y:0,width:80,height:60},bitmap:[80,60],client:[80,60],viewport:[200,150],screen:[200,150],dpr:1,insets:[0,0,0,0,0,0,0,0],visual:{scale:1,offsetX:0,offsetY:0,pageX:0,pageY:320}};
 const actual = checkedGeometry(observed,[80,60]);
 assert.deepEqual(actual,{origin:{x:20,y:0},clip:{x:20,y:320,width:80,height:60,scale:1}});
 assert.deepEqual(physicalPoint(actual.origin,[80,60],79,59),{x:99,y:59});
 for(const [x,y] of [[-1,0],[80,0],[0,60],[0.1,0],[NaN,0]]) assert.throws(()=>physicalPoint(actual.origin,[80,60],x,y),{code:'INPUT_OUTSIDE_CANVAS'});
-for(const change of [{dpr:2},{bitmap:[81,60]},{client:[79,60]},{box:{...observed.box,x:20.5}},{box:{...observed.box,x:150}},{insets:[1]},{visual:{...observed.visual,scale:2}},{visual:{...observed.visual,pageY:320.5}}]) assert.throws(()=>checkedGeometry({...observed,...change},[80,60]));
+for(const change of [{screen:undefined},{screen:[0,150]},{dpr:2},{bitmap:[81,60]},{client:[79,60]},{box:{...observed.box,x:20.5}},{box:{...observed.box,x:150}},{insets:[1]},{visual:{...observed.visual,scale:2}},{visual:{...observed.visual,pageY:320.5}}]) assert.throws(()=>checkedGeometry({...observed,...change},[80,60]));
 checkPointerPosition(undefined,'move',{x:20,y:30});
 checkPointerPosition({x:20,y:30},'down',{x:20,y:30});
 checkPointerPosition({x:20,y:30},'up',{x:20,y:30});
@@ -37,11 +37,17 @@ test('capture samples geometry and state together using two renderer evaluations
         assert.equal(includeState, true);
         return {observed: {...observed}, state: {phase}};
       },
-      async screenshot() {phase = 'after'; return bytes;},
+      async screenshot() {assert.fail('Canvas capture must not prepare DOM fonts or styles');},
     },
-    cdp: {async send(method) {
-      assert.equal(method, 'Page.getLayoutMetrics');
-      return {cssVisualViewport: observed.visual};
+    cdp: {async send(method, options) {
+      if (method === 'Page.getLayoutMetrics') return {cssVisualViewport: observed.visual};
+      if (method === 'Emulation.setDeviceMetricsOverride') {
+        assert.deepEqual(options, {width:200,height:150,screenWidth:200,screenHeight:150,deviceScaleFactor:1,mobile:false,dontSetVisibleSize:true});
+        return {};
+      }
+      assert.equal(method, 'Page.captureScreenshot');
+      assert.deepEqual(options, {format:'png',clip:actual.clip,captureBeyondViewport:false});
+      phase = 'after'; return {data:bytes.toString('base64')};
     }},
   });
   const capture = await adapter.capture(join(output, 'sample.png'));
@@ -50,6 +56,46 @@ test('capture samples geometry and state together using two renderer evaluations
   assert.deepEqual(capture.state_after, {phase: 'after'});
   assert.equal(capture.state_changed_during_capture, true);
   assert.deepEqual(capture.geometry.clip, actual.clip);
+});
+
+test('capture has a finite separate budget and refuses reuse after timeout', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  let captureStarted = false, rejected = false;
+  const adapter = createBrowserAdapter({width:80,height:60,
+    page: {async evaluate() {return {observed: {...observed}, state: null};}},
+    cdp: {async send(method) {
+      if (method === 'Page.getLayoutMetrics') return {cssVisualViewport: observed.visual};
+      if (method === 'Emulation.setDeviceMetricsOverride') return {};
+      assert.equal(method, 'Page.captureScreenshot'); captureStarted = true;
+      return new Promise(() => {});
+    }},
+  });
+  const pending = adapter.capture('/unused-timeout.png').catch(error => {rejected = true; throw error;});
+  for (let n=0;n<20 && !captureStarted;n++) await Promise.resolve();
+  assert(captureStarted);
+  t.mock.timers.tick(30001); await Promise.resolve(); assert.equal(rejected,false);
+  t.mock.timers.tick(59999);
+  await assert.rejects(pending, {code:'OPERATION_TIMEOUT'});
+  await assert.rejects(adapter.capture('/unused-retry.png'), {code:'ADAPTER_FAILED'});
+});
+
+test('capture refuses changed screen bounds even when canvas geometry matches', async t => {
+  const output = await mkdtemp(join(tmpdir(), 'pcx-reference-screen-'));
+  t.after(() => rm(output, {recursive:true}));
+  const bytes = Buffer.alloc(24); bytes.set([137,80,78,71,13,10,26,10]);
+  bytes.writeUInt32BE(80,16); bytes.writeUInt32BE(60,20);
+  let captured = false;
+  const adapter = createBrowserAdapter({width:80,height:60,
+    page: {async evaluate() {return {observed:{...observed,screen:captured ? [201,150] : observed.screen},state:null};}},
+    cdp: {async send(method) {
+      if (method === 'Page.getLayoutMetrics') return {cssVisualViewport:observed.visual};
+      if (method === 'Emulation.setDeviceMetricsOverride') return {};
+      assert.equal(method,'Page.captureScreenshot'); captured = true;
+      return {data:bytes.toString('base64')};
+    }},
+  });
+  await assert.rejects(adapter.capture(join(output,'changed.png')), {code:'SCREEN_CHANGED'});
+  await assert.rejects(adapter.capture(join(output,'retry.png')), {code:'ADAPTER_FAILED'});
 });
 
 test('real browser adapter preserves scrolled synthetic canvas crop and explicit input events',
@@ -109,14 +155,15 @@ test('real browser adapter preserves scrolled synthetic canvas crop and explicit
     }, (await readFile(path)).toString('base64'));
     assert.deepEqual(pixelsMatch.extent, [80, 60]);
     assert.equal(pixelsMatch.incorrect, 0, JSON.stringify(pixelsMatch));
-    const changing = createBrowserAdapter({page: {
-      evaluate: page.evaluate.bind(page),
-      async screenshot(options) {
-        const bytes = await page.screenshot(options);
-        await page.evaluate(() => {globalThis.peacecraft3.menu_state = () => JSON.stringify({screen: 'Changed'});});
-        return bytes;
+    const session = await page.context().newCDPSession(page);
+    const changing = createBrowserAdapter({page, cdp: {
+      async send(method, options) {
+        const result = await session.send(method, options);
+        if (method === 'Page.captureScreenshot')
+          await page.evaluate(() => {globalThis.peacecraft3.menu_state = () => JSON.stringify({screen: 'Changed'});});
+        return result;
       },
-    }, cdp: await page.context().newCDPSession(page), width: 80, height: 60});
+    }, width: 80, height: 60});
     const changed = await changing.capture(join(output, 'changed.png'));
     assert.deepEqual(changed.state_before, {screen: 'Synthetic'});
     assert.deepEqual(changed.state_after, {screen: 'Changed'});

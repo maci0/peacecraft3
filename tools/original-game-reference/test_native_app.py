@@ -37,6 +37,21 @@ def fingerprint(directory, kind, name):
 
 
 class NativeAppTests(unittest.TestCase):
+    def test_clamped_pointer_is_not_remembered_for_a_later_button_press(self):
+        app = native_app.NativeApp.__new__(native_app.NativeApp)
+        app.ref = reference
+        app.scenario = {'extent': [3840, 2160]}
+        app.pointer = None
+        app.held_buttons = set()
+        event = {'kind': 'pointer', 'phase': 'move', 'x': 2385, 'y': 92, 'after_ms': 0}
+        with patch.object(app, '_ready'), patch.object(app, '_x',
+                side_effect=['', 'X=1279\nY=92\nSCREEN=0']):
+            with self.assertRaisesRegex(reference.Failure, 'actual pointer'):
+                app.input(event)
+        self.assertIsNone(app.pointer)
+        with self.assertRaisesRegex(reference.Failure, 'current point'):
+            app.input({**event, 'phase': 'down', 'button': 'left'})
+
     def test_partial_key_delivery_keeps_release_for_cleanup(self):
         app = native_app.NativeApp.__new__(native_app.NativeApp)
         app.ref, app.start = reference, {}

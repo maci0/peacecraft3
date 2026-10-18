@@ -89,8 +89,9 @@ integration. A completed prototype does not close its broader milestone.
       to both isolated targets, preserves unchanged checkpoint PNGs and reports
       exact RGB differences. Twenty-one strict harness tests and an actual
       browser adapter check pass. Four checkpoints complete at 1024×768,
-      1280×960, 1920×1080 and 2560×1440; the 4K browser screenshot times out and
-      is retained as failed. Before/after capture snapshots expose asynchronous
+      1280×960, 1920×1080 and 2560×1440; the historical 4K browser timeout
+      is retained as failed. The current three-application matrix below captures
+      4K but exposes a navigation failure. Before/after snapshots expose asynchronous
       UI changes. RNG/clock synchronization and pixel fidelity remain open;
       non-null seeded comparison refuses rather than inventing a seed hook.
       See `docs/re-notes/original-game-vm.md`.
@@ -2437,3 +2438,6 @@ repeated, and the public site package was not rebuilt.
   world identity. No placeholder join or range registration is added; the
   unchanged-map four-result RNG gate remains failed after one exact result.
   See [the evidence and limits](docs/re-notes/script-unit-world.md).
+
+- [x] Five-resolution three-application diagnostic (2026-10-18): original WC3/Wine, actual native PC3 and actual WASM PC3 each receive the same eleven-event journal at 1024×768, 1280×960, 1920×1080, 2560×1440 and 3840×2160. Sixty raw PNGs retain exact extents and sixty pairwise RGB comparisons. Capture and pointer-delivery checks are corrected; 46 Python and four Node checks pass. Evidence: `.scratch/menu-resolution-transparency-root-20261018/verification-final-1.json`; local report: `comparison-1/index.html`. This completes the diagnostic scope, not parity.
+- [~] Resolution/transparency fidelity: PC3 panels remain paler; fog, effects, missing settings defaults and notices differ. At 4K the WASM Video checkpoint remains on Options landing because the Video input arrives during an active transition. Other WASM captures also include moving panels. No alpha constants were changed, no pixels excluded, no simulation/animation lockstep or load-independence claim, and no public-site rebuild. See `docs/re-notes/original-game-vm.md`.

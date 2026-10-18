@@ -135,7 +135,7 @@ class Browser:
         message = {'id': self.serial, 'op': op, **arguments}
         self.process.stdin.write((json.dumps(message) + '\n').encode())
         self.process.stdin.flush()
-        result = self.receive(90)
+        result = self.receive(150 if op == 'capture' else 90)
         if type(result.get('id')) is not int or result.get('id') != self.serial:
             raise self.ref.Failure('browser adapter response order mismatch')
         return result.get('data')
@@ -210,6 +210,13 @@ def native_window(ref, run, scenario):
     return {'window': window, 'geometry': fields}
 
 
+def check_native_pointer(ref, run, x, y):
+    observed = ref.execute(run, ['xdotool', 'getmouselocation', '--shell'])
+    fields = dict(line.split('=', 1) for line in observed.splitlines() if '=' in line)
+    if any(fields.get(key) != value for key, value in {'X': str(x), 'Y': str(y), 'SCREEN': '0'}.items()):
+        raise ref.Failure('actual pointer differs from requested framebuffer point; input refused')
+
+
 def native_input(ref, run, event):
     if event['kind'] == 'key':
         argv = ['xdotool', 'key' + event['phase'], KEYS[event['key']]]
@@ -219,6 +226,8 @@ def native_input(ref, run, event):
         argv = ['xdotool', 'mouse' + event['phase'], BUTTONS[event['button']]]
     started = time.monotonic_ns()
     ref.execute(run, argv)
+    if event['kind'] == 'pointer' and event['phase'] == 'move':
+        check_native_pointer(ref, run, event['x'], event['y'])
     return ref.mark(run, 'paired_input', {'event': event, 'started_ns': started, 'finished_ns': time.monotonic_ns()})
 
 
@@ -312,7 +321,7 @@ def compare(args, ref):
                   'extent': scenario['extent'], 'edition': scenario['edition']}
         ref.write_json(output / 'browser-config.json', config)
         browser = Browser(ref, output / 'browser-config.json', output)
-        result['browser_start'] = browser.receive(180)['data']
+        result['browser_start'] = browser.receive(300)['data']
         start = time.monotonic_ns()
         previous_finished = start
         scheduled = 0
