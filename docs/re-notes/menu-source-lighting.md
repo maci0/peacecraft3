@@ -117,3 +117,9 @@ and initialization, cursor/font/render details, native Windows behavior and
 original/native/WASM deterministic lockstep remain open. The public site has not
 been updated by these local captures or packages. No full-menu fidelity or
 original-baseline gate closure is claimed.
+
+The same qualified client reader now also supplies the PRE2 appearance operands
+to live scene preparation. These are read from image data and the reviewed
+packing instruction, then validated before use. They cover biased phase and
+packed color/opacity interpolation, not lighting attenuation or a replacement
+blend mode. See [particle appearance evidence](menu-particles.md#source-bound-color-opacity-size-and-atlas-phase-2026-10-19).

@@ -440,6 +440,13 @@ pub(crate) mod tests {
             range: 10.0,
             channel_scale: 1.0 / f32::from(u8::MAX),
             max_lights: 4,
+            particle_appearance: pcx_play::menu_lighting::ParticleAppearance {
+                phase_scale: 1.,
+                phase_bias: 0.,
+                colour_scale: 255.,
+                packing_bias: 1024.,
+                packing_shift: 13,
+            },
         }
     }
     pub(crate) fn lighting() -> Lighting {

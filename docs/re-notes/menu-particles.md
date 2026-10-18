@@ -263,3 +263,58 @@ Evidence, the retained failed inventory assertion and the corrected source
 inventory remain local under `.scratch/menu-plane-transform-root-20261019/`.
 Original RNG/initial ages, effective quality settings, animation phase, native
 Windows and exact original/native/WASM output remain open.
+
+## Source-bound color, opacity, size and atlas phase (2026-10-19)
+
+The live menu now derives particle appearance coefficients from its supplied,
+SHA-qualified Legacy 1.29.2.9231 client. The existing bounded PE reader supplies
+the phase multiplier and bias, RGB endpoint scale, float-packing bias and shift.
+These are image operands, not measured screenshot constants. Data-only model
+validation retains its explicit unbound path; live scene preparation attaches
+the qualified parameters and their source/edition/version/image identity.
+
+Native-code evidence joins the PRE2 reader to binding `0x925641`, phase builders
+`0x97eed0`/`0x97efa0`/`0x97ef70` and evaluator `0x97eca0`. RGB endpoints are
+converted to packed bytes before interpolation; authored alpha already consists
+of bytes. The evaluator applies a biased, single-precision phase, then packs each
+interpolated channel back to a byte. Size and atlas evaluation share that phase.
+The reader's reversed internal color storage and binding's packed byte order
+cancel: source RGB channels retain their identity in the renderer.
+
+Atlas endpoints are inclusive. Forward and reversed intervals follow the native
+builders, and the phase object's head repeat count also drives its tail interval.
+The live native profile refuses non-power-of-two atlas dimensions, following the
+reviewed setter, while preserving the geometry transaction and reporting the
+unsupported particle batch. The raw parser still preserves the authored records.
+The existing UV corner order agrees with the native strip after vertex ordering;
+no corner swap was introduced.
+
+A causal two-frame regression fails before the inclusive-end correction. Synthetic
+tests use independently supplied coefficients to exercise byte quantization,
+shared color/size/atlas phase, reversed tails, validation and live mesh binding.
+Bounded instruction interpretation samples all 33 selected TFT emitters: 462
+color/size cases match exactly, with 455 complete atlas cases. The other seven
+stop before the repeated-atlas remainder branch and qualify color/size only.
+This is offline native-code evidence, not a new original-game runtime capture.
+Evidence remains local in `.scratch/menu-particle-fragment-root-20261019/`.
+
+The final candidate passes 162 graphics, 575 playback-library and 655 application
+tests, strict native/WASM checks, both application builds and 41 production-module
+tests executed in WASI. Explicit selected-model CPU/quad and qualified-client
+reader gates pass. Model identity stays separate from appearance provenance so
+decoded texture ownership remains intact. Deterministic source-model birth,
+update and retained-particle counters are unchanged; this does not measure total
+appearance cost or establish an FPS improvement.
+
+Five fresh native and five trusted browser journals complete Main, Options
+landing, Video and return at 1024×768, 1280×960, 1920×1080, 2560×1440 and
+3840×2160. Forty new captures are visually reviewed alongside twenty retained
+WC3/Wine frames. All sixty full-size RGB comparisons differ, with no exclusions
+or rescaling. Rays/density, fog/background composition, settings values, panel
+contrast, pointer/focus and version pixels remain visible differences. Animation
+phase and platform scale inputs are explicit; no fresh original-game run,
+native Windows run or public deployment occurred. Final receipts and the local
+three-way comparison are in the same evidence directory.
+
+Original RNG/initial age, lifecycle, uncontrolled animation phase, effective
+quality/settings, native Windows and exact three-target pixels remain open.

@@ -360,10 +360,84 @@ fn colour_alpha_size_and_tail_follow_two_source_phases() {
 }
 
 #[test]
-fn asymmetric_atlas_repeat_exclusive_end_and_single_cell_are_distinct() {
+fn inclusive_atlas_interval_reaches_its_last_frame() {
+    let mut props = properties();
+    props.rows = 1;
+    props.columns = 2;
+    props.head_or_tail = 0;
+    props.life_span_uv_anim = [0, 1, 1];
+    let p = plan(&[emitter(props)], &[], [0, 1000], true);
+    assert_eq!(p.appearance(&live(0.75)).unwrap().head_cell, Some(1));
+}
+
+#[test]
+fn native_appearance_uses_supplied_coefficients_for_colour_size_and_both_atlas_directions() {
+    let mut props = properties();
+    props.rows = 1;
+    props.columns = 4;
+    props.segment_colours = [[0., 1., 0.5], [1., 0., 0.5], [0.; 3]];
+    props.segment_alpha = [0, 255, 0];
+    props.life_span_uv_anim = [1, 3, 1];
+    props.tail_uv_anim = [3, 1, 7];
+    let p = Arc::try_unwrap(plan(&[emitter(props)], &[], [0, 1000], true))
+        .unwrap()
+        .with_native_appearance(
+            "synthetic appearance operands",
+            [0.5, 0.25],
+            [128., 1024.],
+            13,
+        )
+        .unwrap();
+    let a = p.appearance(&live(0.)).unwrap();
+    assert_eq!(a.rgba, [32., 96., 64., 63.].map(|v| v / 255.));
+    assert_eq!(a.scale, 1.5);
+    assert_eq!((a.head_cell, a.tail_cell), (Some(1), Some(3)));
+    let b = p.appearance(&live(0.5)).unwrap();
+    assert_eq!(b.rgba, [64., 64., 64., 127.].map(|v| v / 255.));
+    assert_eq!(b.scale, 2.);
+    assert_eq!((b.head_cell, b.tail_cell), (Some(2), Some(2)));
+    let c = p.appearance(&live(0.999)).unwrap();
+    assert_eq!((c.head_cell, c.tail_cell), (Some(3), Some(1)));
+    assert_eq!(p.source(), "synthetic:markers");
+    assert_eq!(p.appearance_source(), Some("synthetic appearance operands"));
+}
+
+#[test]
+fn native_appearance_refuses_unusable_phase_or_float_packing_parameters() {
+    for (source, phase, colour, shift) in [
+        ("", [0.5, 0.25], [128., 1024.], 13),
+        ("fixture", [f32::NAN, 0.25], [128., 1024.], 13),
+        ("fixture", [0.75, 0.5], [128., 1024.], 13),
+        ("fixture", [-0.5, 0.25], [128., 1024.], 13),
+        ("fixture", [0.5, 0.25], [0., 1024.], 13),
+        ("fixture", [0.5, 0.25], [128., 1023.], 13),
+        ("fixture", [0.5, 0.25], [128., 1024.], 32),
+        ("fixture", [0.5, 0.25], [128., 1024.], 14),
+    ] {
+        let p = Arc::try_unwrap(plan(&[emitter(properties())], &[], [0, 1000], true)).unwrap();
+        assert!(
+            p.with_native_appearance(source, phase, colour, shift)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn native_appearance_refuses_non_power_of_two_atlas_dimensions() {
+    let mut props = properties();
+    props.columns = 3;
+    let p = Arc::try_unwrap(plan(&[emitter(props)], &[], [0, 1000], true)).unwrap();
+    let error = p
+        .with_native_appearance("synthetic", [0.5, 0.25], [128., 1024.], 13)
+        .unwrap_err();
+    assert!(matches!(error.failure, Failure::Unsupported(_)));
+}
+
+#[test]
+fn asymmetric_atlas_repeat_inclusive_end_and_single_cell_are_distinct() {
     let p = plan(&[emitter(properties())], &[], [0, 1000], true);
     let a = p.appearance(&live(0.3)).unwrap();
-    assert_eq!(a.head_cell, Some(3));
+    assert_eq!(a.head_cell, Some(4));
     assert_eq!(a.tail_cell, Some(4));
     let corners = a.cell_corners(true).unwrap();
     assert_eq!(

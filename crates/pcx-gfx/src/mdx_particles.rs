@@ -304,9 +304,109 @@ pub struct Plan {
     profiles: Vec<Profile>,
     interval: [u32; 2],
     looping: bool,
+    native_appearance: Option<NativeAppearance>,
+}
+
+#[derive(Clone, Debug)]
+struct NativeAppearance {
+    source: String,
+    phase_scale: f32,
+    phase_bias: f32,
+    colour_scale: f32,
+    packing_bias: f32,
+    packing_shift: u32,
+}
+
+impl NativeAppearance {
+    fn phase(&self, phase: f32) -> f32 {
+        phase * self.phase_scale + self.phase_bias
+    }
+    fn pack(&self, value: f32) -> u8 {
+        ((value + self.packing_bias).to_bits() >> self.packing_shift) as u8
+    }
+    fn endpoint(&self, value: f32) -> u8 {
+        let scaled = value * self.colour_scale;
+        // CVTTSS2SI's indefinite integer has a zero low byte.
+        if !scaled.is_finite()
+            || f64::from(scaled) < f64::from(i32::MIN)
+            || f64::from(scaled) >= (i64::from(i32::MAX) + 1) as f64
+        {
+            0
+        } else {
+            scaled as i32 as u8
+        }
+    }
+    fn rgba(&self, properties: &Particle2Properties, segment: usize, phase: f32) -> [f32; 4] {
+        std::array::from_fn(|channel| {
+            let value = |index: usize| {
+                if channel == 3 {
+                    properties.segment_alpha[index]
+                } else {
+                    self.endpoint(properties.segment_colours[index][channel])
+                }
+            };
+            let left = value(segment);
+            let delta = i32::from(value(segment + 1)) - i32::from(left);
+            f32::from(self.pack(delta as f32 * phase + f32::from(left))) / f32::from(u8::MAX)
+        })
+    }
 }
 
 impl Plan {
+    /// Select coefficients read from the caller's qualified native client image.
+    /// The ordinary checked plan retains floating-point channels for data-only callers.
+    pub fn with_native_appearance(
+        mut self,
+        source: &str,
+        phase: [f32; 2],
+        colour: [f32; 2],
+        packing_shift: u32,
+    ) -> Result<Self, Error> {
+        let [phase_scale, phase_bias] = phase;
+        let [colour_scale, packing_bias] = colour;
+        let bits = packing_bias.to_bits();
+        let exponent = ((bits >> 23) & 0xff) as i32 - 127;
+        if source.trim().is_empty()
+            || phase.into_iter().chain(colour).any(|v| !v.is_finite())
+            || phase_scale < 0.
+            || phase_bias < 0.
+            || phase_scale + phase_bias > 1.
+            || colour_scale <= 0.
+            || bits & 0x807f_ffff != 0
+            || !(8..=23).contains(&exponent)
+            || packing_shift != (23 - exponent) as u32
+        {
+            return Err(Error {
+                source_name: format!("{}; appearance {source}", self.source),
+                emitter: None,
+                failure: Failure::Malformed("native appearance parameters"),
+            });
+        }
+        if self.profiles.iter().any(|profile| {
+            !profile.properties.rows.is_power_of_two()
+                || !profile.properties.columns.is_power_of_two()
+        }) {
+            return Err(Error {
+                source_name: format!("{}; appearance {source}", self.source),
+                emitter: None,
+                failure: Failure::Unsupported("native atlas dimensions must be powers of two"),
+            });
+        }
+        self.native_appearance = Some(NativeAppearance {
+            source: source.into(),
+            phase_scale,
+            phase_bias,
+            colour_scale,
+            packing_bias,
+            packing_shift,
+        });
+        Ok(self)
+    }
+    pub fn appearance_source(&self) -> Option<&str> {
+        self.native_appearance
+            .as_ref()
+            .map(|style| style.source.as_str())
+    }
     pub fn source(&self) -> &str {
         &self.source
     }
@@ -445,19 +545,6 @@ impl Plan {
                     .checked_mul(props.columns)
                     .filter(|n| *n > 0)
                     .ok_or(Failure::Malformed("atlas dimensions"))?;
-                for interval in [
-                    (props.head_or_tail != 1).then_some(props.life_span_uv_anim),
-                    (props.head_or_tail != 1).then_some(props.decay_uv_anim),
-                    (props.head_or_tail != 0).then_some(props.tail_uv_anim),
-                    (props.head_or_tail != 0).then_some(props.tail_decay_uv_anim),
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    if interval[1] < interval[0] {
-                        return Err(Failure::Malformed("reversed atlas interval"));
-                    }
-                }
                 let texture = textures
                     .get(props.texture_id as usize)
                     .ok_or(Failure::Malformed("TEXS reference"))?;
@@ -526,6 +613,7 @@ impl Plan {
             profiles,
             interval,
             looping,
+            native_appearance: None,
         })
     }
     fn error(&self, index: usize, failure: Failure) -> Error {
@@ -959,51 +1047,79 @@ impl Plan {
             {
                 return Err(Failure::Malformed("live particle age"));
             }
-            let age = particle.age / f64::from(p.life_span);
-            let (segment, t) = if age < f64::from(p.time) {
-                (0, age / f64::from(p.time))
+            let (segment, t, native_phase) = if let Some(style) = self.native_appearance.as_ref() {
+                let age = particle.age as f32;
+                let split = p.time * p.life_span;
+                let (segment, start, end) = if p.time == 1. || age < split {
+                    (0, 0., split)
+                } else {
+                    (1, split, p.life_span)
+                };
+                let phase = style.phase((age - start) * (end - start).recip());
+                if !phase.is_finite() {
+                    return Err(Failure::Arithmetic);
+                }
+                (segment, f64::from(phase), Some(phase))
             } else {
-                (1, (age - f64::from(p.time)) / (1. - f64::from(p.time)))
+                let age = particle.age / f64::from(p.life_span);
+                let (segment, t) = if age < f64::from(p.time) {
+                    (0, age / f64::from(p.time))
+                } else {
+                    (1, (age - f64::from(p.time)) / (1. - f64::from(p.time)))
+                };
+                (segment, t, None)
             };
             let lerp = |a: f32, b: f32| f64::from(a) + (f64::from(b) - f64::from(a)) * t;
-            let rgba = [
-                lerp(
-                    p.segment_colours[segment][0],
-                    p.segment_colours[segment + 1][0],
-                ),
-                lerp(
-                    p.segment_colours[segment][1],
-                    p.segment_colours[segment + 1][1],
-                ),
-                lerp(
-                    p.segment_colours[segment][2],
-                    p.segment_colours[segment + 1][2],
-                ),
-                lerp(
-                    f32::from(p.segment_alpha[segment]) / 255.,
-                    f32::from(p.segment_alpha[segment + 1]) / 255.,
-                ),
-            ];
+            let rgba = if let Some(style) = self.native_appearance.as_ref() {
+                style.rgba(&p, segment, t as f32).map(f64::from)
+            } else {
+                [
+                    lerp(
+                        p.segment_colours[segment][0],
+                        p.segment_colours[segment + 1][0],
+                    ),
+                    lerp(
+                        p.segment_colours[segment][1],
+                        p.segment_colours[segment + 1][1],
+                    ),
+                    lerp(
+                        p.segment_colours[segment][2],
+                        p.segment_colours[segment + 1][2],
+                    ),
+                    lerp(
+                        f32::from(p.segment_alpha[segment]) / 255.,
+                        f32::from(p.segment_alpha[segment + 1]) / 255.,
+                    ),
+                ]
+            };
+            let head_interval = if segment == 0 {
+                p.life_span_uv_anim
+            } else {
+                p.decay_uv_anim
+            };
+            let mut tail_interval = if segment == 0 {
+                p.tail_uv_anim
+            } else {
+                p.tail_decay_uv_anim
+            };
+            if self.native_appearance.is_some() {
+                // The reviewed phase object shares its head repeat count with the tail interval.
+                tail_interval[2] = head_interval[2];
+            }
             let head_cell = (p.head_or_tail != 1).then(|| {
                 atlas_cell(
-                    if segment == 0 {
-                        p.life_span_uv_anim
-                    } else {
-                        p.decay_uv_anim
-                    },
+                    head_interval,
                     t,
                     p.rows * p.columns,
+                    self.native_appearance.as_ref(),
                 )
             });
             let tail_cell = (p.head_or_tail != 0).then(|| {
                 atlas_cell(
-                    if segment == 0 {
-                        p.tail_uv_anim
-                    } else {
-                        p.tail_decay_uv_anim
-                    },
+                    tail_interval,
                     t,
                     p.rows * p.columns,
+                    self.native_appearance.as_ref(),
                 )
             });
             let tail_start = if tail_cell.is_some() {
@@ -1014,7 +1130,14 @@ impl Plan {
             } else {
                 particle.position
             };
-            let scale = lerp(p.particle_scaling[segment], p.particle_scaling[segment + 1]);
+            let scale = if let Some(phase) = native_phase {
+                f64::from(
+                    (p.particle_scaling[segment + 1] - p.particle_scaling[segment]) * phase
+                        + p.particle_scaling[segment],
+                )
+            } else {
+                lerp(p.particle_scaling[segment], p.particle_scaling[segment + 1])
+            };
             if !rgba
                 .iter()
                 .chain([&scale])
@@ -1045,14 +1168,41 @@ impl Plan {
         result().map_err(|failure| self.error(particle.emitter, failure))
     }
 }
-fn atlas_cell(interval: [u32; 3], factor: f64, cells: u32) -> u32 {
+fn atlas_cell(
+    interval: [u32; 3],
+    factor: f64,
+    cells: u32,
+    native: Option<&NativeAppearance>,
+) -> u32 {
     let [start, end, repeat] = interval;
-    let span = end - start;
-    if span == 0 {
-        return start;
+    if let Some(style) = native {
+        if start > cells || end > cells {
+            return 0;
+        }
+        let phase = if repeat == 1 {
+            factor as f32
+        } else {
+            (factor as f32 * repeat as f32) % 1.
+        };
+        let (start, end) = (start as i32, end as i32);
+        let (first, delta) = if end >= start {
+            (start, end.wrapping_sub(start).wrapping_add(1))
+        } else {
+            (
+                start.wrapping_add(1),
+                end.wrapping_sub(start).wrapping_sub(1),
+            )
+        };
+        return u32::from(style.pack(delta as f32 * phase + first as f32));
     }
-    let frame = (f64::from(span) * f64::from(repeat) * factor).floor() % f64::from(span);
-    (f64::from(start) + frame).min(f64::from(cells - 1)) as u32
+    let span = u64::from(start.abs_diff(end)) + 1;
+    let frame = (span as f64 * f64::from(repeat) * factor).floor() % span as f64;
+    let cell = if end >= start {
+        f64::from(start) + frame
+    } else {
+        f64::from(start) - frame
+    };
+    cell.min(f64::from(cells - 1)) as u32
 }
 
 impl Appearance {

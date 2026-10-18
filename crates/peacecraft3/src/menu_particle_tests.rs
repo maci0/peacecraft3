@@ -127,6 +127,13 @@ struct Spawned {
     result: Result<SceneInfo, SceneError>,
 }
 fn spawn_case(bytes: &[u8], textures: &[pcx_gfx::LoadedTexture]) -> Spawned {
+    spawn_case_with_parameters(bytes, textures, crate::menu_lighting::tests::parameters())
+}
+fn spawn_case_with_parameters(
+    bytes: &[u8],
+    textures: &[pcx_gfx::LoadedTexture],
+    parameters: pcx_play::menu_lighting::Parameters,
+) -> Spawned {
     let mut world = World::new();
     let mut meshes = Assets::default();
     let mut materials = Assets::default();
@@ -143,7 +150,7 @@ fn spawn_case(bytes: &[u8], textures: &[pcx_gfx::LoadedTexture]) -> Spawned {
         "synthetic:TFT:selected-model-and-image-batch",
         bytes,
         textures,
-        (fog(), crate::menu_lighting::tests::parameters()),
+        (fog(), parameters),
     );
     world.flush();
     Spawned {
@@ -154,6 +161,62 @@ fn spawn_case(bytes: &[u8], textures: &[pcx_gfx::LoadedTexture]) -> Spawned {
         images,
         result,
     }
+}
+
+#[test]
+fn live_particle_mesh_uses_the_qualified_appearance_parameters() {
+    let (bytes, textures) = synthetic(|props, _| {
+        props.segment_colours = [[0., 1., 0.5], [1., 0., 0.5], [0.; 3]];
+        props.segment_alpha = [0, 255, 0];
+    });
+    let mut parameters = crate::menu_lighting::tests::parameters();
+    // A constant biased phase isolates binding from within-tick particle aging.
+    parameters.particle_appearance.phase_scale = 0.;
+    parameters.particle_appearance.phase_bias = 0.25;
+    parameters.particle_appearance.colour_scale = 128.;
+    let mut spawned = spawn_case_with_parameters(&bytes, &textures, parameters);
+    assert!(spawned.result.unwrap().particle_gap.is_none());
+    let camera = spawned
+        .world
+        .query_filtered::<Entity, With<MainMenuSceneCamera>>()
+        .single(&spawned.world)
+        .unwrap();
+    let order = spawned
+        .world
+        .get::<crate::menu_particle_order::SourceOrderView>(camera)
+        .unwrap()
+        .clone();
+    let mesh = spawned
+        .world
+        .query::<(Entity, &Mesh3d)>()
+        .iter(&spawned.world)
+        .find(|(entity, _)| {
+            order.orders[&bevy::render::sync_world::MainEntity::from(*entity)].ordinal == 0
+        })
+        .unwrap()
+        .1
+        .0
+        .clone();
+    spawned.world.insert_resource(spawned.meshes);
+    spawned.world.insert_resource(spawned.materials);
+    spawned.world.insert_resource(spawned.particle_materials);
+    spawned.world.insert_resource(spawned.images);
+    let mut time = Time::<()>::default();
+    time.advance_by(std::time::Duration::from_nanos(16_666_666));
+    spawned.world.insert_resource(time);
+    spawned.world.run_system_once(advance).unwrap();
+    let mesh = spawned.world.resource::<Assets<Mesh>>().get(&mesh).unwrap();
+    let VertexAttributeValues::Float32x4(colours) = mesh.attribute(Mesh::ATTRIBUTE_COLOR).unwrap()
+    else {
+        panic!("particle vertex colours");
+    };
+    assert!(!colours.is_empty());
+    assert!(
+        colours
+            .iter()
+            .all(|rgba| *rgba == [32., 96., 64., 63.].map(|v| v / 255.)),
+        "unexpected live colours: {colours:?}"
+    );
 }
 
 #[test]

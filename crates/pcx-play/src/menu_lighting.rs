@@ -1,4 +1,4 @@
-//! Fixed-function menu light parameters read from a reviewed client image.
+//! Fixed-function menu light and particle appearance parameters from a reviewed client image.
 use crate::{
     neutral_player::{RuleInputBudget, Sha256Digest, sha256},
     neutral_rule_input::Pe,
@@ -22,6 +22,16 @@ pub struct Parameters {
     pub range: f32,
     pub channel_scale: f32,
     pub max_lights: usize,
+    pub particle_appearance: ParticleAppearance,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ParticleAppearance {
+    pub phase_scale: f32,
+    pub phase_bias: f32,
+    pub colour_scale: f32,
+    pub packing_bias: f32,
+    pub packing_shift: u32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -85,7 +95,19 @@ impl Parameters {
                 .first()
                 .ok_or_else(|| fail("truncated light slot operand"))?,
         );
-        Self::checked(origin, digest, values, max_lights)
+        let particle_appearance = ParticleAppearance {
+            phase_scale: read(0xed59e4, false)?,
+            phase_bias: read(0xe8df70, false)?,
+            colour_scale: read(0xe7834c, false)?,
+            packing_bias: read(0xe8dfe8, false)?,
+            packing_shift: u32::from(
+                *pe.read_from(0x97ecfb, true)
+                    .map_err(|_| fail("missing reviewed particle packing operand"))?
+                    .first()
+                    .ok_or_else(|| fail("truncated particle packing operand"))?,
+            ),
+        };
+        Self::checked(origin, digest, values, max_lights, particle_appearance)
     }
 
     fn checked(
@@ -93,6 +115,7 @@ impl Parameters {
         image_sha256: Sha256Digest,
         values: [f32; 5],
         max_lights: usize,
+        particle_appearance: ParticleAppearance,
     ) -> Result<Self, Error> {
         let [linear, quadratic, constant, range, channel_scale] = values;
         if values
@@ -102,6 +125,18 @@ impl Parameters {
             || range == 0.0
             || channel_scale == 0.0
             || max_lights == 0
+            || [
+                particle_appearance.phase_scale,
+                particle_appearance.phase_bias,
+                particle_appearance.colour_scale,
+                particle_appearance.packing_bias,
+            ]
+            .into_iter()
+            .any(|value| !value.is_finite() || value < 0.)
+            || particle_appearance.phase_scale + particle_appearance.phase_bias > 1.
+            || particle_appearance.colour_scale == 0.
+            || particle_appearance.packing_bias == 0.
+            || particle_appearance.packing_shift >= u32::BITS
         {
             return Err(Error {
                 source_name: origin.source,
@@ -117,6 +152,7 @@ impl Parameters {
             range,
             channel_scale,
             max_lights,
+            particle_appearance,
         })
     }
 
@@ -139,9 +175,25 @@ mod tests {
             version: "fixture".into(),
         }
     }
+    fn particle() -> ParticleAppearance {
+        ParticleAppearance {
+            phase_scale: 0.5,
+            phase_bias: 0.25,
+            colour_scale: 128.,
+            packing_bias: 1024.,
+            packing_shift: 13,
+        }
+    }
     #[test]
     fn attenuation_uses_all_source_parameters_and_inclusive_range() {
-        let p = Parameters::checked(origin(), [73; 32], [0.25, 0.125, 2.0, 12.0, 0.01], 4).unwrap();
+        let p = Parameters::checked(
+            origin(),
+            [73; 32],
+            [0.25, 0.125, 2.0, 12.0, 0.01],
+            4,
+            particle(),
+        )
+        .unwrap();
         assert_eq!(p.attenuation(0.0), 0.5);
         assert_eq!(p.attenuation(4.0), 0.2);
         assert_eq!(p.attenuation(12.0), 1.0 / 23.0);
@@ -152,11 +204,20 @@ mod tests {
     }
     #[test]
     fn quadratic_term_uses_squared_distance_before_its_coefficient() {
-        let p =
-            Parameters::checked(origin(), [19; 32], [0.0023, 0.003, 1.2, 100.0, 0.01], 4).unwrap();
+        let p = Parameters::checked(
+            origin(),
+            [19; 32],
+            [0.0023, 0.003, 1.2, 100.0, 0.01],
+            4,
+            particle(),
+        )
+        .unwrap();
         // Independent f32 reference with synthetic operands; the left-associated mutant differs.
         assert_eq!(p.attenuation(77.7).to_bits(), 0x3d52_2720);
-        assert!(Parameters::checked(origin(), [0; 32], [0.0, 0.0, 1.0, 9.0, 0.01], 0).is_err());
+        assert!(
+            Parameters::checked(origin(), [0; 32], [0.0, 0.0, 1.0, 9.0, 0.01], 0, particle())
+                .is_err()
+        );
     }
 
     #[test]
@@ -165,11 +226,37 @@ mod tests {
             for bad in [f32::NAN, f32::INFINITY, -0.1] {
                 let mut values = [0.1, 0.2, 1.0, 9.0, 0.01];
                 values[index] = bad;
-                assert!(Parameters::checked(origin(), [0; 32], values, 4).is_err());
+                assert!(Parameters::checked(origin(), [0; 32], values, 4, particle()).is_err());
             }
         }
         assert!(Parameters::read(b"MZ unknown", origin()).is_err());
-        assert!(Parameters::checked(origin(), [0; 32], [0.0, 0.0, 0.0, 9.0, 0.01], 4).is_err());
+        assert!(
+            Parameters::checked(origin(), [0; 32], [0.0, 0.0, 0.0, 9.0, 0.01], 4, particle())
+                .is_err()
+        );
+    }
+    #[test]
+    fn invalid_particle_coefficients_refuse() {
+        for index in 0..4 {
+            for bad in [f32::NAN, f32::INFINITY, -1.] {
+                let mut appearance = particle();
+                match index {
+                    0 => appearance.phase_scale = bad,
+                    1 => appearance.phase_bias = bad,
+                    2 => appearance.colour_scale = bad,
+                    _ => appearance.packing_bias = bad,
+                }
+                assert!(
+                    Parameters::checked(origin(), [0; 32], [0., 0., 1., 10., 0.01], 4, appearance)
+                        .is_err()
+                );
+            }
+        }
+        let mut appearance = particle();
+        appearance.packing_shift = u32::BITS;
+        assert!(
+            Parameters::checked(origin(), [0; 32], [0., 0., 1., 10., 0.01], 4, appearance).is_err()
+        );
     }
     #[test]
     #[ignore = "requires explicitly supplied reviewed Legacy client image"]
@@ -185,6 +272,11 @@ mod tests {
         // Relations, not copied original parameter values.
         assert!(p.constant > p.quadratic && p.quadratic > p.linear);
         assert!(p.attenuation(p.range / 2.0) > p.attenuation(p.range));
+        assert_eq!(
+            p.particle_appearance.phase_scale + 2. * p.particle_appearance.phase_bias,
+            1.
+        );
+        assert_eq!(p.particle_appearance.colour_scale * p.channel_scale, 1.);
         let mut changed = image;
         changed[0] ^= 1;
         assert!(Parameters::read(&changed, p.origin).is_err());

@@ -2597,3 +2597,20 @@ repeated, and the public site package was not rebuilt.
   settings and initialization, cursor/font details, native Windows and original/
   native/WASM deterministic lockstep still need work. The public site and the
   100-consecutive original-baseline gate are unchanged.
+- [x] Source-bound particle appearance calculation (2026-10-19): the qualified
+  client supplies biased phase, RGB endpoint scale and byte-packing operands to
+  live native/WASM menu preparation. Color/opacity, size and inclusive/reversed
+  atlas intervals share the reviewed phase; tail intervals share head repeats.
+  Model and client-appearance provenance remain separate, preserving texture
+  ownership. Synthetic/live binding regressions, 162 graphics, 575 playback and
+  655 application tests, strict native/WASM checks, both builds, 41 actual WASI
+  module tests and explicit selected-source gates pass. Bounded instruction
+  interpretation matches 462 color/size and 455 complete atlas samples.
+  See `docs/re-notes/menu-particles.md` and private evidence under
+  `.scratch/menu-particle-fragment-root-20261019/`.
+- [~] Full particle/menu parity remains open: ten fresh native/browser journals
+  pass at five extents through 4K, but all sixty unscaled RGB comparisons with
+  retained WC3/Wine frames differ. Rays/density, background/contrast, settings,
+  cursor/focus, original RNG/ages/phase and native Windows need further work.
+  No fresh original runtime or public deployment; the deterministic three-target,
+  campaign/custom-map and 100-consecutive original-baseline gates remain open.

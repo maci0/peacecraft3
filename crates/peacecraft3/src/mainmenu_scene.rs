@@ -610,6 +610,7 @@ pub fn validate_particle_import(
             interval: [clip.interval_start, clip.interval_end],
             looping: !clip.non_looping,
         }),
+        None,
     )
     .map_err(|e| format!("{source}: PRE2: {e}"))?
     {
@@ -783,7 +784,7 @@ pub fn spawn(
         bytes,
         &runtime,
         interval,
-        lighting_parameters,
+        lighting_parameters.clone(),
     )
     .map_err(SceneError::Decode)?;
     let texture_selection = texture_selection(&runtime, interval, source)?;
@@ -799,6 +800,7 @@ pub fn spawn(
             interval,
             looping: !clip.non_looping,
         }),
+        Some(&lighting_parameters),
     )
     .map_err(|error| SceneError::Particles {
         source_name: source.into(),
@@ -4184,6 +4186,7 @@ mod texture_selection_tests {
                 interval: [0, 1000],
                 looping: true,
             }),
+            Some(&crate::menu_lighting::tests::parameters()),
         )
         .unwrap() else {
             panic!("admission")

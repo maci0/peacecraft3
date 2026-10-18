@@ -134,6 +134,7 @@ pub fn prepare<'a>(
     runtime: &RuntimePlan,
     textures: &'a [pcx_gfx::LoadedTexture],
     clip: Option<Clip>,
+    native_parameters: Option<&pcx_play::menu_lighting::Parameters>,
 ) -> Result<Admission<'a>, Error> {
     let emitters = model
         .particles2(bytes)
@@ -157,12 +158,37 @@ pub fn prepare<'a>(
         source,
         policy.cpu,
     ) {
-        Ok(plan) => Arc::new(plan),
+        Ok(plan) => plan,
         Err(error) if matches!(error.failure, cpu::Failure::Unsupported(_)) => {
             return Ok(Admission::Unsupported(Error::Cpu(error)));
         }
         Err(error) => return Err(Error::Cpu(error)),
     };
+    // Import validation is data-only; the live scene supplies its qualified client parameters.
+    let plan = if let Some(parameters) = native_parameters {
+        let appearance = parameters.particle_appearance;
+        match plan.with_native_appearance(
+            &format!(
+                "{} {} {} {:?}",
+                parameters.origin.source,
+                parameters.origin.edition,
+                parameters.origin.version,
+                parameters.image_sha256
+            ),
+            [appearance.phase_scale, appearance.phase_bias],
+            [appearance.colour_scale, appearance.packing_bias],
+            appearance.packing_shift,
+        ) {
+            Ok(plan) => plan,
+            Err(error) if matches!(error.failure, cpu::Failure::Unsupported(_)) => {
+                return Ok(Admission::Unsupported(Error::Cpu(error)));
+            }
+            Err(error) => return Err(Error::Cpu(error)),
+        }
+    } else {
+        plan
+    };
+    let plan = Arc::new(plan);
     let mut geometry_ids = Vec::new();
     let mut phases = Vec::new();
     let item_count = runtime
