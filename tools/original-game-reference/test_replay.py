@@ -49,14 +49,19 @@ class ReplayTests(unittest.TestCase):
                    'screen #0:\n'
                    '  dimensions:    1920x1080 pixels (508x286 millimeters)\n'
                    '  resolution:    96x96 dots per inch\n')
+        randr = ('Screen 0: minimum 1 x 1, current 1920 x 1080, maximum 1920 x 1080\n'
+                 'screen connected primary 1920x1080+0+0 (normal left inverted right x axis y axis)\n'
+                 '   1920x1080 60.00*\n')
 
-        def check(text=display, extent=(1920, 1080), screen='0'):
+        def check(text=display, extent=(1920, 1080), screen='0', outputs=randr):
             calls = []
 
             def execute(unused_run, argv):
                 calls.append(argv)
                 if argv == ['xdpyinfo']:
                     return text
+                if argv == ['xrandr', '--current']:
+                    return outputs
                 if argv[:2] == ['xdotool', 'search']:
                     return '42'
                 if argv[:2] == ['xdotool', 'getwindowgeometry']:
@@ -93,6 +98,16 @@ class ReplayTests(unittest.TestCase):
         for screen in ['1', '']:
             with self.subTest(screen=screen), self.assertRaisesRegex(reference.Failure, 'framebuffer'):
                 check(screen=screen)
+        for outputs in [
+            randr.replace('1920x1080+0+0', '1280x1024+0+0'),
+            randr.replace('1920x1080+0+0', '1920x1080+1+0'),
+            randr.replace('current 1920 x 1080', 'current 1280 x 1024'),
+            randr + 'other connected 1920x1080+0+0 (normal)\n',
+            randr.replace(' connected primary 1920x1080+0+0', ' disconnected'),
+            '',
+        ]:
+            with self.subTest(outputs=outputs), self.assertRaisesRegex(reference.Failure, 'RandR'):
+                check(outputs=outputs)
 
     def test_offline_input_schema_describes_the_supported_journal(self):
         import jsonschema

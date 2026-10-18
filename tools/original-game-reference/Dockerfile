@@ -9,3 +9,6 @@ RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils gstreamer1.0-plugins-base:i386 gstreamer1.0-plugins-good:i386 gstreamer1.0-libav:i386 \
  && rm -rf /var/lib/apt/lists/*
 ENV XDG_RUNTIME_DIR=/run/reference/audio
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends x11-xserver-utils \
+ && rm -rf /var/lib/apt/lists/*

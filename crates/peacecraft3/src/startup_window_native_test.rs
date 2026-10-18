@@ -29,7 +29,11 @@ fn observe(
         return;
     };
     let expected = if gate.saved {
-        gate.seed
+        // Winit scales the seed on creation; preserving it keeps its logical size.
+        (
+            (gate.seed.0 as f32 * window.scale_factor()) as u32,
+            (gate.seed.1 as f32 * window.scale_factor()) as u32,
+        )
     } else {
         fitted_physical_client(monitor.physical_width, monitor.physical_height)
             .expect("nonempty host monitor")
@@ -47,6 +51,7 @@ fn observe(
         "ok": true,
         "saved_resolution": gate.saved,
         "seed": gate.seed,
+        "scale_factor": window.scale_factor(),
         "monitor": [monitor.physical_width, monitor.physical_height],
         "expected": expected,
         "native_client": actual,

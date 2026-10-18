@@ -188,6 +188,19 @@ Launch that dedicated display with `Xvfb :N -screen 0 WIDTHxHEIGHTx24 -dpi 96 -r
 and local authentication before starting PC3. The adapter checks the server's
 `-r` startup policy to prevent held keys from repeating with host timing.
 
+Before starting either native target, also inspect `xrandr --current`. Its single
+active output must have the scenario's exact extent at `+0+0`, matching
+`xdpyinfo`. Some Xvfb versions leave an active output with different bounds even
+when `-screen` creates the requested framebuffer. Winit reads that output for
+monitor sizing and available modes. A matching PNG alone does not qualify these
+inputs. Both native adapters now refuse this mismatch before focus or input;
+successful calibration records the output name, extent and origin. The PC3
+command filter only permits the read-only `xrandr --current` query. Preparing
+the display remains the caller's responsibility; the adapters do not change
+modes or resize images. Rebuild the reference image to include the declared
+`x11-xserver-utils` dependency. See
+[the calibration evidence](../../docs/re-notes/launcher-monitor-calibration.md).
+
 The native configuration is versioned and available offline through `schema`:
 
 ```json

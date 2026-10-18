@@ -584,10 +584,21 @@ terrain rendering, asset-defined terrain materials or native rendering fidelity.
       wgpu therefore selects the WebGL2 backend, and the app runs on it.
 - [x] The launcher canvas is created inside `#launcher-canvas` at 880×860.
 - [x] Custom launcher configuration layout (2026-10-18): project-owned controls replace stretched imported plates; a bundled sans font, stable selection borders, readable disabled labels, wrapping source paths and keyboard focus/scrolling are integrated. Original landscape artwork decorates only the custom launcher, with no extracted game art. Actual native and WASM launcher captures at 880×860, 1280×960 and 640×800, native main-menu entry, 48 launcher/navigation tests (one explicit asset test ignored), strict native/WASM builds and Clippy pass. Evidence: `.scratch/launcher-ui-root-20261018/verification.json`. This does not close original-menu, gameplay or rendered parity gates; no site deployment is claimed.
-- [ ] Initial native launcher sizing must fit the actual desktop work area.
-      The five-resolution alpha review observes the initial window overflowing
-      a small headless display; explicit final window bounds and in-game menu
-      navigation pass separately. This is not a completed launcher sizing gate.
+- [x] Native launcher monitor calibration (2026-10-19): the observed headless
+      overflow came from mismatched framebuffer/RandR output bounds. The
+      unchanged project fitter passes six natural-size native runs from 640×800
+      through 3840×2160. The comparison boundary now refuses inconsistent
+      monitor inputs before focus/input. Forty-eight Python tests, five startup
+      unit tests, seven actual Winit cases, three real positive adapter checks
+      and a real mismatch refusal pass; the rebuilt runtime image passes six
+      display probes without launching a game. Saved-seed verification handles
+      reported DPI scale. Desktop work areas/decorations and native Windows
+      remain unverified. See `docs/re-notes/launcher-monitor-calibration.md`.
+- [ ] Returning keyboard focus to the launcher's Main menu control can leave
+      the heading clipped by the scroll viewport. Preserve the heading's
+      context when revealing that control; verify compact native and WASM
+      keyboard navigation. Retained example:
+      `.scratch/launcher-monitor-root-20261019/640x800/native-1/keyboard-return.png`.
 - [x] Three-application comparison instrumentation (2026-10-18): one input journal drives actual original WC3/Wine, native PC3 and browser WASM PC3, with checked native process/window/build/content identities and matching native/WASM source fingerprints. Four checkpoints retain twelve unscaled 1280×960 captures and all three pairwise RGB comparisons; the run completed with differences (exit 1), not a runtime refusal. Forty-four Python checks and two browser-adapter checks pass. Evidence: `.scratch/three-target-reference-root-20261018/verification-final-4.json`.
 - [~] Exact rendered-output acceptance: every decoded RGB pixel must match across all three targets, except the bottom-right version string only. No tolerance, normalization or broad corner crop is allowed. Its precise text footprint is not qualified, so no pixels are currently excluded. All four retained checkpoints fail the strict comparison; animation clocks/RNG remain uncontrolled and native frame state is unobserved. The local source closure was corrected to include the model-derived left-panel sound dependencies; fresh native/WASM captures restore the Video housing without inventing audio. Lighting, glyphs, slider thumb, settings admission and animation alignment still differ. This does not close deterministic gameplay, audio or original/native/browser visual parity.
 

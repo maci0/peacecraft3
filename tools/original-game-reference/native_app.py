@@ -10,7 +10,7 @@ from rng_fixture import document
 
 _SHA = re.compile(r'^[0-9a-f]{64}$')
 _DISPLAY = re.compile(r'^:[0-9]{1,4}$')
-_TOOLS = {'xdpyinfo', 'xdotool', 'import'}
+_TOOLS = {'xdpyinfo', 'xrandr', 'xdotool', 'import'}
 _XDOTOOL = {'search', 'getwindowgeometry', 'getwindowpid', 'getwindowname',
             'windowfocus', 'getwindowfocus', 'getmouselocation', 'keydown', 'keyup', 'mousemove', 'mousedown', 'mouseup'}
 
@@ -192,6 +192,7 @@ class NativeApp:
                       'executable_sha256': self.executable_sha256,
                       'build_receipt_sha256': self.build_sha256,
                       'content_manifest_sha256': self.content_sha256,
+                      'monitor': found['monitor'],
                       'keyboard_autorepeat': 'off'}
 
     def _x(self, argv):
@@ -199,6 +200,8 @@ class NativeApp:
             raise self.ref.Failure('refusing an unbounded display command')
         if argv[0] == 'xdotool' and (len(argv) < 2 or argv[1] not in _XDOTOOL):
             raise self.ref.Failure('refusing an unbounded xdotool command')
+        if argv[0] == 'xrandr' and argv != ['xrandr', '--current']:
+            raise self.ref.Failure('refusing a display-mode change; only xrandr --current is allowed')
         if any(part in {'-resize', '-scale', '-thumbnail', '-c'} or part.startswith('png:-') for part in argv):
             raise self.ref.Failure('refusing a rescaled or shell display command')
         prefix = ['env', '-i', f'DISPLAY={self.display}']

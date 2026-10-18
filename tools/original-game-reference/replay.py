@@ -194,6 +194,14 @@ def native_window(ref, run, scenario):
             or dimensions != [(str(width), str(height))]
             or resolutions != [(str(scenario['dpi']), str(scenario['dpi']))]):
         raise ref.Failure('actual X framebuffer/DPI differs from the scenario')
+    # Winit reads RandR CRTC bounds, which Xvfb can leave different from its framebuffer.
+    randr = ref.execute(run, ['xrandr', '--current'])
+    screens = re.findall(r'(?m)^Screen 0:.*?current (\d+) x (\d+),', randr)
+    outputs = re.findall(
+        r'(?m)^(\S+) connected(?: primary)? (\d+)x(\d+)([+-]\d+)([+-]\d+)(?:\s|$)', randr)
+    if (screens != [(str(width), str(height))] or len(outputs) != 1
+            or outputs[0][1:] != (str(width), str(height), '+0', '+0')):
+        raise ref.Failure('actual RandR output must match the single scenario framebuffer at origin')
     pattern = '^' + re.escape(scenario['window_title']) + '$'
     ids = ref.execute(run, ['xdotool', 'search', '--onlyvisible', '--name', pattern]).splitlines()
     if len(ids) != 1 or not ids[0].isdigit():
@@ -207,7 +215,8 @@ def native_window(ref, run, scenario):
     ref.execute(run, ['xdotool', 'windowfocus', '--sync', window])
     if ref.execute(run, ['xdotool', 'getwindowfocus']).strip() != window:
         raise ref.Failure('original window focus could not be verified')
-    return {'window': window, 'geometry': fields}
+    return {'window': window, 'geometry': fields,
+            'monitor': {'output': outputs[0][0], 'extent': [width, height], 'position': [0, 0]}}
 
 
 def check_native_pointer(ref, run, x, y):

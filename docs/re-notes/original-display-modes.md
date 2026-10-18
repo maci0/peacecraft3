@@ -237,6 +237,15 @@ current device-pixel grid from DOM geometry; fractional surrounding page
 layout must not clip a viewport-sized canvas. Render dimensions and authored
 menu coordinates are unchanged by this page-layout correction.
 
+The 2026-10-19 launcher calibration review withdraws the earlier small-headless-
+display overflow as proof of a production sizing bug. That Xvfb framebuffer and
+its active RandR output had different bounds. With consistent monitor inputs,
+the unchanged production fitter passes six natural-size desktop runs through
+4K. The live saved-seed test now accounts for Winit's reported DPI scale instead
+of assuming 1×. This remains a project policy, not a recovered original default
+or proof of desktop work-area/decorations behavior. See
+[launcher monitor calibration](launcher-monitor-calibration.md).
+
 ## Production selector
 
 When the selected client admits a complete selector-2 popup caller, Options uses

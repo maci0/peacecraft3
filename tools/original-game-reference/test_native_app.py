@@ -37,6 +37,18 @@ def fingerprint(directory, kind, name):
 
 
 class NativeAppTests(unittest.TestCase):
+    def test_randr_command_filter_only_allows_reading_current_state(self):
+        app = native_app.NativeApp.__new__(native_app.NativeApp)
+        app.ref, app.display, app.xauthority = reference, ':2', None
+        with patch.object(reference, 'command', return_value='synthetic output') as send:
+            self.assertEqual(app._x(['xrandr', '--current']), 'synthetic output')
+            send.assert_called_once_with(['env', '-i', 'DISPLAY=:2', 'xrandr', '--current'])
+            for args in [['xrandr'], ['xrandr', '--output', 'screen', '--auto'],
+                         ['xrandr', '--current', '--fb', '80x60']]:
+                with self.subTest(args=args), self.assertRaisesRegex(reference.Failure, 'display-mode'):
+                    app._x(args)
+            self.assertEqual(send.call_count, 1)
+
     def test_pointer_query_uses_the_real_display_command_filter(self):
         app = native_app.NativeApp.__new__(native_app.NativeApp)
         app.ref = reference
@@ -136,13 +148,16 @@ class NativeAppTests(unittest.TestCase):
                 self.assertNotIn('-c', argv)
                 self.assertNotIn('-resize', argv)
                 self.assertFalse(any('should-not-leak' in part for part in argv))
-                tool = next(part for part in argv if part in {'xdpyinfo', 'xdotool', 'import'})
+                tool = next(part for part in argv if part in {'xdpyinfo', 'xrandr', 'xdotool', 'import'})
                 args = argv[argv.index(tool):]
                 if args == ['xdpyinfo']:
                     return ('default screen number:    0\n'
                             'screen #0:\n'
                             '  dimensions:    80x60 pixels (21x16 millimeters)\n'
                             '  resolution:    96x96 dots per inch\n')
+                if args == ['xrandr', '--current']:
+                    return ('Screen 0: minimum 1 x 1, current 80 x 60, maximum 80 x 60\n'
+                            'screen connected 80x60+0+0 (normal)\n')
                 if args[:4] == ['xdotool', 'search', '--onlyvisible', '--name']:
                     self.assertEqual(args[4], '^' + re.escape('Synthetic native') + '$')
                     return '42'
@@ -312,6 +327,9 @@ class NativeAppTests(unittest.TestCase):
                 if 'xdpyinfo' in argv:
                     return ('default screen number:    0\nscreen #0:\n'
                             '  dimensions:    80x60 pixels\n  resolution:    96x96 dots per inch\n')
+                if 'xrandr' in argv:
+                    return ('Screen 0: minimum 1 x 1, current 80 x 60, maximum 80 x 60\n'
+                            'screen connected 80x60+0+0 (normal)\n')
                 if 'search' in argv:
                     return '9'
                 if 'getwindowgeometry' in argv:
