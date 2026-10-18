@@ -2359,3 +2359,16 @@ repeated, and the public site package was not rebuilt.
   callback-list mutation semantics, native timing precision, application clock,
   rendered gameplay and the 100-consecutive baseline remain open. See
   [the scope and evidence](docs/re-notes/legacy-timer-start.md#owned-timed-trigger-consumer-2026-10-18).
+
+### 2026-10-18 — live unit placement and range-event reference
+
+- [~] One fresh instrumented reference completes 51 records, with eight mutated
+  logs refused. It distinguishes range notifications from `IsUnitInRange`,
+  observes deferred entry and same-callback movement coalescing, and records
+  filter/condition/action context plus filter work after trigger destruction.
+- [ ] Queried initial positions do not preserve the requested creation geometry.
+  Accepted live placement must precede a world-coordinate consumer. Parsed
+  placement records and movement-harness ids do not establish the script unit's
+  world identity. No placeholder join or range registration is added; the
+  unchanged-map four-result RNG gate remains failed after one exact result.
+  See [the evidence and limits](docs/re-notes/script-unit-world.md).

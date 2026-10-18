@@ -227,6 +227,11 @@ Catalog failures keep their typed reason and declaration context. Finite-real
 refusal is a recreation policy. No life, stats, model, movement-world id or
 rendering defaults are assigned.
 
+The later [live-position/range investigation](script-unit-world.md) observes that
+initial queried positions can differ from these creation requests. A world
+consumer must obtain accepted placement rather than relabel the retained request
+as live coordinates; no placement-ordinal or rawcode-based identity join is proved.
+
 Both constant and non-constant loaded declarations are admitted for these read-only
 getters; parameter/result kinds, family and source still have to match.
 When declared on `CreateUnit`'s source, `GetUnitTypeId` returns that definition's
