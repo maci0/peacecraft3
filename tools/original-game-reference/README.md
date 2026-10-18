@@ -135,7 +135,16 @@ is pending; neither snapshot independently attests the image's simulation tick.
 Screenshot work does not consume the next requested input hold/wait. This is
 barrier-relative wall-clock replay, **not simulation lockstep**. Captures retain
 the two real renderers' outputs; clocks and animation phases are not synchronized.
-The report compares decoded RGB pixels, gives changed bounds and channel errors,
+Acceptance requires identical rendered output across Original WC3, PC3 native
+and PC3 WASM, except for the bottom-right version string. This is exact decoded
+RGB equality: zero channel tolerance, no color normalization or image rescaling.
+Only a verified version-text footprint may be excluded; a bottom-right rectangle
+or a whole text frame would also hide unrelated background pixels. That footprint
+is not qualified yet, so **no pixels are currently excluded**, including the
+footer. Raw captures and differences remain intact. This stricter interim check
+cannot certify the requested version-text exception or full visual parity.
+
+The report compares decoded RGB pixels, gives changed pixel counts, bounds and channel errors,
 and preserves the unchanged source PNGs. Checkpoints retain the browser's change
 flag: `frame_time` means state changed during capture and the image is unqualified
 for stable comparison; otherwise `match` and `pixel_mismatch` describe the pixels.
@@ -153,6 +162,84 @@ verified original seed hook currently joins them. Deterministic comparison needs
 both setters observed, matching map/settings, controlled draw ordering and clock
 checkpoints, and repeated matching outputs. The receipt always keeps
 `deterministic_parity_verified: false` until those controls are real.
+
+## Original WC3 | PC3 native | PC3 WASM
+
+Add `--native-config /path/to/local-native-config.json` to `compare` to replay the
+same journal against all three actual applications. The native PC3 process must
+already be running on its dedicated local X11 display at the scenario's exact
+framebuffer extent and 96 DPI. Its executable, process start identity, window
+owner, build receipt and content manifest are verified. The adapter never launches
+or terminates that caller-owned process. It refuses changed identities, wrong
+geometry and focus failures; it does not resize a target to fit a comparison.
+Launch that dedicated display with `Xvfb :N -screen 0 WIDTHxHEIGHTx24 -dpi 96 -r`
+and local authentication before starting PC3. The adapter checks the server's
+`-r` startup policy to prevent held keys from repeating with host timing.
+
+The native configuration is versioned and available offline through `schema`:
+
+```json
+{"version":1,"target":"pc3-native","pid":1234,"start_ticks":5678,
+ "display":":177","window_title":"peacecraft3 launcher",
+ "executable":{"path":"/absolute/path/peacecraft3","sha256":"<file SHA-256>"},
+ "build_receipt":{"path":"/absolute/path/build.json","sha256":"<file SHA-256>"},
+ "content_manifest":{"path":"/absolute/path/content.json","sha256":"<file SHA-256>"}}
+```
+
+Replace every example value with the actual process identity and fingerprints;
+`start_ticks` is Linux `/proc/PID/stat` field 22. Build and content documents use
+`{"version":1,"kind":"build-receipt","files":[{"path":"/absolute/file","sha256":"<file SHA-256>"}]}`
+and the same shape with `kind: "content-manifest"`, respectively. Every listed
+file is hashed, with at most 256 files and 16 GiB per document. The build list must
+include the actual executable. The build receipt also records `source_head`
+(40 lowercase hex characters) and `source_tree_sha256` (64 lowercase hex
+characters); both must match the WASM code manifest. Record the exact tracked
+source tree used by both builds, and keep compiler commands/results with it.
+Keep the content document explicit about the selected archives and provenance;
+the adapter verifies fingerprints, not the meaning or completeness of a closure.
+
+The same event is dispatched to all three targets, and the next event's delay
+starts after all three operations finish. Every checkpoint preserves raw PNGs in
+this order: **original WC3 / Wine | PC3 native app | PC3 WASM app**. The receipt
+contains WC3/native, WC3/WASM and native/WASM pixel differences. Any differing
+pair makes `images_equal` false. Equal dimensions are required; there is no image
+rescaling. Input failures release potentially held input and retain the failure
+receipt. Existing outputs are never reused.
+
+Each code-manifest file must declare its SHA-256 and a byte size no larger than
+72 MiB. Optimize an oversized WASM build before replay. Responses are base64
+encoded through Chromium's DevTools pipe; the raw file limit leaves room under
+its observed 100 MiB message capacity. Oversized files refuse before browser
+launch instead of disconnecting the browser during transfer.
+
+Native captures come from the actual application window, not a Rust VM test.
+The browser captures come from the actual browser WASM application. Both build
+and local content identities must be retained separately from the original game's
+executable/archive identity. A source-selected local closure does not establish
+the original game's archive priority or release identity.
+
+Browser capture samples canvas geometry and menu state together in one renderer
+evaluation before the screenshot and one afterwards. This avoids extra renderer
+round trips under load while retaining the geometry and state-change checks and
+the existing operation deadline. These observations still do not synchronize
+simulation ticks or animation clocks.
+
+A static three-column report can also be generated from existing captures:
+
+```sh
+python tools/original-game-reference/reference.py report \
+  --reference /path/to/wc3.png --native /path/to/pc3-native.png \
+  --recreation /path/to/pc3-wasm.png --output .scratch/three-way-report-1 \
+  --note "Observed application captures; clocks and RNG are uncontrolled"
+```
+
+A static report only labels caller-supplied PNGs; its execution provenance is in
+the replay receipt. The native application's frame state is currently unobserved,
+and the browser's before/after state does not control animation phase. Three-way
+visual replay still refuses a non-null seed. It is a visual diagnostic until
+application seed acknowledgments, shared logical ticks, all consumers and repeated
+state/pose checkpoints are available. The serial RNG and timer DST gates below
+remain separate checks; they do not certify three-application lockstep.
 
 ## Repeatable original RNG fixture
 

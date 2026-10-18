@@ -207,31 +207,57 @@ def stop(args):
     return {'running': False, 'container_preserved': bool(state)}
 
 
+PIXEL_POLICY = {
+    'comparison': 'exact decoded RGB equality',
+    'channel_tolerance': 0,
+    'rescaling': False,
+    'permitted_exception': 'bottom-right version string only',
+    'applied_exclusions': [],
+    'version_text_footprint': 'unqualified; full-frame comparison remains active',
+}
+
+
 def report(args):
     from PIL import Image
     reference = Path(args.reference).resolve(strict=True)
     recreation = Path(args.recreation).resolve(strict=True)
-    with Image.open(reference) as a, Image.open(recreation) as b:
-        if a.size != b.size:
-            raise Failure(f'comparison extents differ: {a.size} and {b.size}; no rescaling performed')
-        size = a.size
+    native = Path(args.native).resolve(strict=True) if getattr(args, 'native', None) else None
+    images = [('Original WC3 / Wine', reference, 'reference.png')]
+    if native:
+        images.append(('PC3 native app', native, 'native.png'))
+    images.append(('PC3 WASM app' if native else 'PeaceCraft III', recreation, 'recreation.png'))
+    size = None
+    for _, path, _ in images:
+        if path.stat().st_size > 64 << 20:
+            raise Failure('comparison image exceeds 64 MiB')
+        with Image.open(path) as image:
+            if not all(1 <= axis <= 4096 for axis in image.size):
+                raise Failure('comparison image extent exceeds 4096 pixels')
+            if size is not None and size != image.size:
+                raise Failure(f'comparison extents differ: {size} and {image.size}; no rescaling performed')
+            size = image.size
     target = Path(args.output).resolve()
     if target.exists():
         raise Failure('report destination exists; choose a new path')
     target.mkdir(parents=True, mode=0o700)
-    shutil.copyfile(reference, target / 'reference.png')
-    shutil.copyfile(recreation, target / 'recreation.png')
+    for _, path, name in images:
+        shutil.copyfile(path, target / name)
     receipt = {'reference': str(reference), 'reference_sha256': digest(reference),
                'recreation': str(recreation), 'recreation_sha256': digest(recreation),
-               'extent': size, 'note': args.note, 'claim': 'Wine reference comparison; no parity claim'}
+               'extent': size, 'note': args.note, 'pixel_policy': PIXEL_POLICY,
+               'claim': 'Wine reference comparison; no parity claim'}
+    if native:
+        receipt.update(native=str(native), native_sha256=digest(native),
+                       targets=['original-wc3', 'pc3-native', 'pc3-wasm'],
+                       provenance='caller-supplied PNGs; application execution identities require the replay receipt')
     write_json(target / 'receipt.json', receipt)
     metadata = html.escape(json.dumps(receipt, indent=2))
     (target / 'index.html').write_text('<!doctype html><meta charset="utf-8"><title>Local original comparison</title>'
         '<style>body{font-family:system-ui;background:#17191c;color:#eee;margin:24px}main{display:flex;gap:16px}'
         'figure{margin:0;flex:1;min-width:0}img{width:100%;height:auto}pre{white-space:pre-wrap}</style>'
-        '<h1>Local original comparison</h1><main><figure><figcaption>Original executable / Wine</figcaption>'
-        '<img src="reference.png"></figure><figure><figcaption>PeaceCraft III</figcaption>'
-        '<img src="recreation.png"></figure></main><pre>' + metadata + '</pre>')
+        '<h1>Local original comparison</h1><main>' +
+        ''.join('<figure><figcaption>' + label + '</figcaption><img src="' + name + '"></figure>'
+                for label, _, name in images) + '</main><pre>' + metadata + '</pre>')
     return {'report': str(target / 'index.html'), 'extent': size}
 
 
@@ -279,10 +305,12 @@ def parser():
             a.add_argument('--x', type=int, required=True); a.add_argument('--y', type=int, required=True)
     a = s.add_parser('report')
     for arg in ['reference', 'recreation', 'output', 'note']: a.add_argument('--' + arg, required=True)
+    a.add_argument('--native', help='native application PNG; produces WC3 | PC3 native | PC3 WASM')
     a = s.add_parser('compare', help='replay one shared input journal and compare paired captures')
     for arg in ['run-dir', 'scenario', 'url', 'manifest', 'iso', 'playwright-module', 'output']:
         a.add_argument('--' + arg, required=True)
     a.add_argument('--chromium', default='/usr/bin/chromium')
+    a.add_argument('--native-config', help='fingerprinted live native-app X11 configuration; replay all three targets')
     a = s.add_parser('rng-plan', help='generate one bounded, explicitly seeded serial JASS RNG fixture')
     for arg in ['scenario', 'output']:
         a.add_argument('--' + arg, required=True)

@@ -69,19 +69,21 @@ export function createBrowserAdapter({page, cdp, width, height}) {
       throw error;
     } finally {clearTimeout(timer);}
   }
-  async function geometry() {
+  async function observe(captureState = false) {
     return bounded('geometry', async () => {
-      const observed = await page.evaluate(() => {
+      const [snapshot, metrics] = await Promise.all([page.evaluate(includeState => {
         const canvas = document.querySelector('#launcher-canvas');
         if (!canvas) return null;
         const box = canvas.getBoundingClientRect(), style = getComputedStyle(canvas);
-        return {box: {x: box.x, y: box.y, width: box.width, height: box.height}, bitmap: [canvas.width, canvas.height], client: [canvas.clientWidth, canvas.clientHeight], viewport: [innerWidth, innerHeight], dpr: devicePixelRatio,
+        const observed = {box: {x: box.x, y: box.y, width: box.width, height: box.height}, bitmap: [canvas.width, canvas.height], client: [canvas.clientWidth, canvas.clientHeight], viewport: [innerWidth, innerHeight], dpr: devicePixelRatio,
           insets: ['borderLeftWidth', 'borderRightWidth', 'borderTopWidth', 'borderBottomWidth', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom'].map(name => parseFloat(style[name]))};
-      });
-      requireValue(observed, 'CANVAS_MISSING', 'Launcher canvas is absent');
-      const metrics = await cdp.send('Page.getLayoutMetrics');
+        const raw = includeState ? globalThis.peacecraft3?.menu_state?.() : null;
+        return {observed, state: raw ? JSON.parse(raw) : null};
+      }, captureState), cdp.send('Page.getLayoutMetrics')]);
+      requireValue(snapshot, 'CANVAS_MISSING', 'Launcher canvas is absent');
+      const {observed, state} = snapshot;
       observed.visual = metrics.cssVisualViewport ?? metrics.visualViewport;
-      return {...checkedGeometry(observed, extent), observed};
+      return {geometry: {...checkedGeometry(observed, extent), observed}, state};
     });
   }
   async function state() {
@@ -108,7 +110,7 @@ export function createBrowserAdapter({page, cdp, width, height}) {
       requireValue(['pointer', 'key'].includes(event.kind), 'INVALID_EVENT', 'Expected pointer or key event');
       if (event.kind === 'pointer') {
         requireValue(['move', 'down', 'up'].includes(event.phase), 'INVALID_EVENT', 'Invalid pointer phase');
-        const {origin} = await geometry();
+        const {geometry: {origin}} = await observe();
         const point = physicalPoint(origin, extent, event.x, event.y);
         requireValue(event.phase === 'move' || ['left', 'middle', 'right'].includes(event.button), 'INVALID_EVENT', 'Invalid pointer button');
         checkPointerPosition(pointer, event.phase, point);
@@ -125,15 +127,13 @@ export function createBrowserAdapter({page, cdp, width, height}) {
       return bounded('key', () => page.keyboard[event.phase](physicalKey(event.key)));
     },
     async capture(path) {
-      const geometryBefore = await geometry();
-      const stateBefore = await state();
+      const {geometry: geometryBefore, state: stateBefore} = await observe(true);
       return bounded('capture', async () => {
         // Playwright restores screen emulation after Chromium's clipped capture.
         const clip = {...geometryBefore.origin, width, height};
         const bytes = await page.screenshot({type: 'png', clip, caret: 'initial'});
         requireValue(bytes.length >= 24 && bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) && bytes.readUInt32BE(16) === extent[0] && bytes.readUInt32BE(20) === extent[1], 'CAPTURE_EXTENT_MISMATCH', 'Captured PNG does not match requested physical extent');
-        const geometryAfter = await geometry();
-        const stateAfter = await state();
+        const {geometry: geometryAfter, state: stateAfter} = await observe(true);
         requireValue(JSON.stringify(geometryBefore.clip) === JSON.stringify(geometryAfter.clip) && JSON.stringify(geometryBefore.origin) === JSON.stringify(geometryAfter.origin), 'GEOMETRY_CHANGED', 'Canvas geometry changed during capture');
         await writeFile(path, bytes, {flag: 'wx'});
         return {path, sha256: createHash('sha256').update(bytes).digest('hex'), geometry: geometryBefore,

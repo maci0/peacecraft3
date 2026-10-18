@@ -311,7 +311,7 @@
     },
     {
       "name": "report",
-      "description": "Copy a same-extent pair to a new local HTML report; refuses existing destination.",
+      "description": "Copy a same-extent pair or three application captures to a new local HTML report; no rescaling or reuse.",
       "effects": "non_idempotent",
       "output_kind": "data",
       "cardinality": "single",
@@ -335,6 +335,11 @@
           "name": "--note",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "--native",
+          "type": "string",
+          "description": "Optional native application PNG; column order is original WC3, PC3 native, PC3 WASM."
         }
       ],
       "stdout_schema": {
@@ -355,7 +360,7 @@
     },
     {
       "name": "compare",
-      "description": "Replay the same bounded physical-input journal against an owned original window and local recreation. Seeded deterministic comparison refuses until both setters are implemented. Outputs paired image reports and observed timing; no lockstep/parity claim.",
+      "description": "Replay one bounded physical-input journal against original WC3 and PC3 WASM, optionally also the fingerprinted live PC3 native app. Three-target mode reports every pair. Non-null seed refuses until application controls exist. Observed wall-clock captures do not certify deterministic parity.",
       "effects": "non_idempotent",
       "output_kind": "data",
       "cardinality": "single",
@@ -399,6 +404,11 @@
           "name": "--chromium",
           "type": "string",
           "default": "/usr/bin/chromium"
+        },
+        {
+          "name": "--native-config",
+          "type": "string",
+          "description": "Optional native-app configuration; validates process, build/content fingerprints, local X11 window/extent and focus before routing the same events to all three targets."
         }
       ],
       "stdout_schema": {
@@ -838,7 +848,9 @@
       "browser_observations_per_collection": 1024,
       "checkpoints": 32,
       "events": 256,
-      "protocol_bytes": 2097152
+      "protocol_bytes": 2097152,
+      "code_file_bytes": 75497472,
+      "code_transport": "Base64 response fulfillment must fit Chromium DevTools pipe; optimize oversized WASM before replay."
     },
     "rng_fixture": {
       "version": 1,
@@ -874,6 +886,135 @@
       "clock": "one serial callback, no world tick advancement",
       "deterministic_parity_verified": false,
       "execution_receipts": "Original: complete=true, records count and observation_sha256. Recreation: exit_code=0. Each execution JSON is fingerprinted; runtime identity is explicit."
+    },
+    "three_target_comparison": {
+      "targets": [
+        "original-wc3",
+        "pc3-native",
+        "pc3-wasm"
+      ],
+      "column_order": "original WC3 | PC3 native app | PC3 WASM app",
+      "pixel_policy": {
+        "comparison": "exact decoded RGB equality",
+        "channel_tolerance": 0,
+        "rescaling": false,
+        "permitted_exception": "bottom-right version string only",
+        "applied_exclusions": [],
+        "version_text_footprint": "unqualified; full-frame comparison remains active"
+      },
+      "pairwise_differences": [
+        "wc3_vs_pc3_native",
+        "wc3_vs_pc3_wasm",
+        "pc3_native_vs_pc3_wasm"
+      ],
+      "native_capture": "Actual caller-owned Linux application window; no resizing by the adapter; process/window/build/content identities checked. Frame state unobserved.",
+      "clock": "Barrier-relative wall-clock observation only; no simulation lockstep.",
+      "rng": "Non-null visual replay seed refuses; serial VM RNG gates are separate.",
+      "limits": {
+        "image_bytes": 67108864,
+        "image_axis_pixels": 4096
+      },
+      "deterministic_parity_verified": false,
+      "build_identity": "Native build-receipt v1 files must include actual executable. Native and WASM source_head and source_tree_sha256 must agree. Fingerprint documents list actual absolute file paths; aggregate contents bound16GiB."
+    },
+    "native_app_config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "target",
+        "pid",
+        "start_ticks",
+        "executable",
+        "display",
+        "window_title",
+        "build_receipt",
+        "content_manifest"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "target": {
+          "const": "pc3-native"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4194304
+        },
+        "start_ticks": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "executable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "display": {
+          "type": "string",
+          "pattern": "^:[0-9]{1,4}$"
+        },
+        "window_title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "build_receipt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "content_manifest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        }
+      }
     }
   }
 }

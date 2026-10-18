@@ -23,6 +23,35 @@ assert.throws(()=>checkHeldButton(new Set(['left']),'down','left'),{code:'BUTTON
 assert.throws(()=>checkHeldButton(new Set(),'up','left'),{code:'BUTTON_STATE_MISMATCH'});
 console.log('Pure geometry: document crop versus viewport input, physical bounds, scale, clipping, padding, alignment pass. No browser adapter integration is asserted.');
 
+test('capture samples geometry and state together using two renderer evaluations', async t => {
+  const output = await mkdtemp(join(tmpdir(), 'pcx-reference-observation-'));
+  t.after(() => rm(output, {recursive: true}));
+  let evaluations = 0, phase = 'before';
+  const bytes = Buffer.alloc(24);
+  bytes.set([137,80,78,71,13,10,26,10]);
+  bytes.writeUInt32BE(80, 16); bytes.writeUInt32BE(60, 20);
+  const adapter = createBrowserAdapter({width: 80, height: 60,
+    page: {
+      async evaluate(_fn, includeState) {
+        evaluations++;
+        assert.equal(includeState, true);
+        return {observed: {...observed}, state: {phase}};
+      },
+      async screenshot() {phase = 'after'; return bytes;},
+    },
+    cdp: {async send(method) {
+      assert.equal(method, 'Page.getLayoutMetrics');
+      return {cssVisualViewport: observed.visual};
+    }},
+  });
+  const capture = await adapter.capture(join(output, 'sample.png'));
+  assert.equal(evaluations, 2);
+  assert.deepEqual(capture.state_before, {phase: 'before'});
+  assert.deepEqual(capture.state_after, {phase: 'after'});
+  assert.equal(capture.state_changed_during_capture, true);
+  assert.deepEqual(capture.geometry.clip, actual.clip);
+});
+
 test('real browser adapter preserves scrolled synthetic canvas crop and explicit input events',
   {skip: !process.env.PCX_PLAYWRIGHT_MODULE}, async t => {
     const {chromium} = await import(pathToFileURL(process.env.PCX_PLAYWRIGHT_MODULE).href);

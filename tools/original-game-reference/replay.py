@@ -1,4 +1,4 @@
-"""One validated input journal, two targets; wall-clock observation is not lockstep."""
+"""One input journal across original and application targets; observation is not lockstep."""
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import hashlib
@@ -11,6 +11,9 @@ import subprocess
 import time
 from types import SimpleNamespace
 from urllib.parse import urlparse
+from rng_fixture import document
+
+MAX_CODE_BYTES = 72 << 20  # Leave room for base64 and headers in Chromium's 100 MiB pipe.
 
 KEYS = {**{c: c for c in 'abcdefghijklmnopqrstuvwxyz0123456789'},
         'Enter': 'Return', 'Escape': 'Escape', 'Tab': 'Tab', 'Backspace': 'BackSpace',
@@ -142,8 +145,12 @@ class Browser:
             self.process.stdin.close()
             self.process.wait(timeout=10)
         except (OSError, subprocess.TimeoutExpired):
-            self.process.kill()
-            self.process.wait(timeout=10)
+            self.process.terminate()  # Let Playwright close its detached browser processes.
+            try:
+                self.process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=10)
         self.log.close()
         self.process.stdout.close()
 
@@ -154,11 +161,16 @@ def image_difference(reference, recreation, extent):
         if list(a.size) != extent or list(b.size) != extent:
             raise ValueError('checkpoint extent differs; no rescaling is allowed')
         difference = ImageChops.difference(a.convert('RGB'), b.convert('RGB'))
+        red, green, blue = difference.split()
+        changed = ImageChops.lighter(ImageChops.lighter(red, green), blue)
+        pixels = extent[0] * extent[1]
+        changed_pixels = pixels - changed.histogram()[0]
         histogram = difference.histogram()
         absolute = sum((i % 256) * count for i, count in enumerate(histogram))
         maximum = max((i % 256 for i, count in enumerate(histogram) if count), default=0)
-        return {'equal': difference.getbbox() is None, 'changed_bounds': difference.getbbox(),
-                'max_channel_error': maximum, 'mean_absolute_channel_error': absolute / (extent[0] * extent[1] * 3)}
+        return {'equal': changed_pixels == 0, 'changed_pixels': changed_pixels,
+                'compared_pixels': pixels, 'changed_bounds': difference.getbbox(),
+                'max_channel_error': maximum, 'mean_absolute_channel_error': absolute / (pixels * 3)}
 
 
 def comparison_kind(difference, state_changed_during_capture):
@@ -245,9 +257,15 @@ def compare(args, ref):
     manifest = Path(args.manifest).resolve(strict=True)
     if manifest.stat().st_size > ref.MAX_METADATA:
         raise ref.Failure('code manifest exceeds metadata bound')
-    code = json.loads(manifest.read_text())
+    code = document(manifest)
     if not isinstance(code, dict) or not isinstance(code.get('files'), dict) or not 1 <= len(code['files']) <= 256:
         raise ref.Failure('bounded code build receipt with files is required')
+    for expected in code['files'].values():
+        if (not isinstance(expected, dict) or type(expected.get('bytes')) is not int
+                or not 0 <= expected['bytes'] <= MAX_CODE_BYTES
+                or not isinstance(expected.get('sha256'), str)
+                or not re.fullmatch(r'[0-9a-f]{64}', expected['sha256'])):
+            raise ref.Failure('code files require a SHA-256 and byte size in 0..72 MiB; optimize the WASM package first')
     iso, module = Path(args.iso).resolve(strict=True), Path(args.playwright_module).resolve(strict=True)
     if not iso.is_file() or not module.is_file():
         raise ref.Failure('ISO and installed Playwright module must be local files')
@@ -259,8 +277,9 @@ def compare(args, ref):
         raise ref.Failure('comparison output exists; use a new directory, never retry inputs blindly')
     # No game input is sent until all scenario/seed/calibration validation passed.
     output.mkdir(parents=True, mode=0o700)
-    browser = None
+    browser = native_app = None
     result = {'version': 1, 'scenario_sha256': ref.digest(scenario_path), 'scenario': scenario,
+              'pixel_policy': ref.PIXEL_POLICY,
               'source_manifest_sha256': ref.digest(run / 'source.json'),
               'harness_sha256': {name: ref.digest(ref.HERE / name) for name in
                   ['reference.py', 'replay.py', 'browser-worker.mjs', 'browser-adapter.mjs']},
@@ -270,6 +289,23 @@ def compare(args, ref):
               'clock': 'barrier-relative wall-clock delays after both preceding operations finish; no simulation-tick or animation-phase control',
               'deterministic_parity_verified': False, 'events': [], 'checkpoints': []}
     try:
+        if getattr(args, 'native_config', None):
+            from native_app import NativeApp
+            native_app = NativeApp(ref, args.native_config, output, scenario)
+            config = document(args.native_config)
+            build = document(config['build_receipt']['path'])
+            head, tree = code.get('source_head'), code.get('source_tree_sha256')
+            if (not isinstance(head, str) or not re.fullmatch(r'[0-9a-f]{40}', head)
+                    or not isinstance(tree, str) or not re.fullmatch(r'[0-9a-f]{64}', tree)
+                    or not isinstance(build, dict)
+                    or build.get('source_head') != head or build.get('source_tree_sha256') != tree):
+                raise ref.Failure('native and WASM application builds must share explicit source head and tree fingerprints')
+            result['pc3_native_start'] = native_app.start
+            result['pc3_native_config_sha256'] = ref.digest(Path(args.native_config))
+            result['harness_sha256']['native_app.py'] = ref.digest(ref.HERE / 'native_app.py')
+            result['targets'] = ['original-wc3', 'pc3-native', 'pc3-wasm']
+            result['rng']['pc3_native'] = 'uncontrolled'
+            result['clock'] = 'barrier-relative wall-clock delays after all three operations finish; no simulation-tick or animation-phase control'
         result['native'] = native_window(ref, run, scenario)
         config = {'url': args.url, 'manifest': str(manifest), 'iso': str(iso),
                   'playwrightModule': str(module), 'chromium': args.chromium,
@@ -280,7 +316,7 @@ def compare(args, ref):
         start = time.monotonic_ns()
         previous_finished = start
         scheduled = 0
-        with ThreadPoolExecutor(max_workers=2) as pair:
+        with ThreadPoolExecutor(max_workers=3 if native_app else 2) as pair:
             for index, event in enumerate(scenario['events']):
                 scheduled += event['after_ms']
                 dispatch, lateness = wait_after(previous_finished, event['after_ms'])
@@ -292,7 +328,10 @@ def compare(args, ref):
                     label = f'paired-{hashlib.sha256(str(output).encode()).hexdigest()[:12]}-{index}'
                     native = pair.submit(ref.capture, SimpleNamespace(run_dir=str(run), label=label))
                     recreation = pair.submit(browser.request, 'capture', path=str(output / f'{event["name"]}-recreation.png'))
+                    desktop = pair.submit(native_app.capture, str(output / f'{event["name"]}-native.png')) if native_app else None
                     journal['original'], journal['recreation'] = native.result(), recreation.result()
+                    if desktop:
+                        journal['pc3_native'] = desktop.result()
                     changed = journal['recreation'].get('state_changed_during_capture')
                     if type(changed) is not bool:
                         raise ref.Failure('browser capture must include boolean state_changed_during_capture')
@@ -301,32 +340,50 @@ def compare(args, ref):
                             f'state_changed_during_capture is {str(changed).lower()}.')
                     if changed:
                         note += ' This capture is unqualified for stable comparison.'
+                    if native_app:
+                        note += ' Native application frame state is unobserved; no stable-frame claim.'
                     target = output / event['name']
                     report = ref.report(SimpleNamespace(reference=journal['original']['capture'],
-                        recreation=journal['recreation']['path'], output=str(target), note=note))
+                        recreation=journal['recreation']['path'], output=str(target), note=note,
+                        native=journal['pc3_native']['path'] if native_app else None))
                     ref.write_json(target / 'browser-capture.json', journal['recreation'])
                     journal['recreation'] = {key: value for key, value in journal['recreation'].items() if key not in ('state_before', 'state_after')}
                     metrics = image_difference(target / 'reference.png', target / 'recreation.png', scenario['extent'])
-                    result['checkpoints'].append({'name': event['name'], 'report': report, 'difference': metrics,
-                        'state_changed_during_capture': changed, 'kind': comparison_kind(metrics, changed)})
+                    checkpoint = {'name': event['name'], 'report': report, 'difference': metrics,
+                        'state_changed_during_capture': changed, 'kind': comparison_kind(metrics, changed)}
+                    if native_app:
+                        checkpoint['pairwise_difference'] = {
+                            'wc3_vs_pc3_native': image_difference(target / 'reference.png', target / 'native.png', scenario['extent']),
+                            'wc3_vs_pc3_wasm': metrics,
+                            'pc3_native_vs_pc3_wasm': image_difference(target / 'native.png', target / 'recreation.png', scenario['extent'])}
+                        checkpoint['native_state_changed_during_capture'] = None
+                    result['checkpoints'].append(checkpoint)
                 else:
                     native = pair.submit(native_input, ref, run, event)
                     recreation = pair.submit(browser.request, 'input', event=event)
+                    desktop = pair.submit(native_app.input, event) if native_app else None
                     journal['original'], journal['recreation'] = native.result(), recreation.result()
+                    if desktop:
+                        journal['pc3_native'] = desktop.result()
                 journal['finished_ns'] = time.monotonic_ns()
                 previous_finished = journal['finished_ns']
                 ref.write_json(output / 'comparison.json', result)
         result['browser_end'] = browser.request('summary')
-        result['observed_images_equal'] = all(c['difference']['equal'] for c in result['checkpoints'])
+        result['observed_images_equal'] = all(
+            all(d['equal'] for d in c['pairwise_difference'].values()) if native_app else c['difference']['equal']
+            for c in result['checkpoints'])
         links = ''.join(f'<li><a href="{html.escape(c["name"])}/index.html">{html.escape(c["name"])}</a>: '
                         f'{html.escape(c["kind"])}; state_changed_during_capture='
                         f'{str(c["state_changed_during_capture"]).lower()}; '
-                        f'{html.escape(json.dumps(c["difference"]))}</li>' for c in result['checkpoints'])
+                        f'{html.escape(json.dumps(c.get("pairwise_difference", c["difference"])))}</li>' for c in result['checkpoints'])
         unstable = ', '.join(html.escape(c['name']) for c in result['checkpoints'] if c['kind'] == 'frame_time')
         qualification = (' Captures classified frame_time (' + unstable
                          + ') changed during capture and are unqualified for stable comparison.' if unstable else '')
-        (output / 'index.html').write_text('<!doctype html><meta charset="utf-8"><title>Paired input comparison</title>'
-            '<h1>Paired input comparison</h1><p>Uncontrolled RNG and animation clocks. '
+        heading = 'WC3 | PC3 native | PC3 WASM' if native_app else 'Paired input comparison'
+        if native_app:
+            qualification += ' Native application frame state is unobserved.'
+        (output / 'index.html').write_text('<!doctype html><meta charset="utf-8"><title>' + heading + '</title>'
+            '<h1>' + heading + '</h1><p>Uncontrolled RNG and animation clocks. '
             'These are observed outputs, not verified deterministic parity.' + qualification + '</p><ul>' + links + '</ul>')
         return {'report': str(output / 'index.html'), 'receipt': str(output / 'comparison.json'),
                 'checkpoints': len(result['checkpoints']), 'images_equal': result['observed_images_equal'],
@@ -347,6 +404,15 @@ def compare(args, ref):
             result['abort_cleanup_error'] = str(cleanup_error)
         raise
     finally:
-        if browser:
-            browser.close()
+        cleanup_errors = []
+        for adapter in (browser, native_app):
+            if adapter:
+                try:
+                    adapter.close()
+                except Exception as error:
+                    cleanup_errors.append(str(error))
+        if cleanup_errors:
+            result['adapter_cleanup_errors'] = cleanup_errors
         ref.write_json(output / 'comparison.json', result)
+        if cleanup_errors:
+            raise ref.Failure('adapter cleanup failed; inspect retained receipt: ' + '; '.join(cleanup_errors))

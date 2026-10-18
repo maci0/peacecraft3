@@ -106,7 +106,7 @@ class ReplayTests(unittest.TestCase):
                 (run / 'game/Warcraft III.exe').write_bytes(b'synthetic executable')
                 reference.write_json(run / 'source.json', {'executable_sha256': reference.digest(run / 'game/Warcraft III.exe')})
                 reference.write_json(run / 'launch.json', {'framebuffer': [80, 60], 'x_dpi': 96})
-                manifest = tmp / 'code.json'; reference.write_json(manifest, {'files': {'synthetic.js': {}}})
+                manifest = tmp / 'code.json'; reference.write_json(manifest, {'files': {'synthetic.js': {'bytes': 1, 'sha256': 'f' * 64}}})
                 iso = tmp / 'fixture.iso'; iso.write_bytes(b'synthetic source')
                 module = tmp / 'fixture.mjs'; module.write_text('')
                 path = tmp / 'scenario.json'; value = scenario()
@@ -248,9 +248,31 @@ class ReplayTests(unittest.TestCase):
                 image.putpixel((3, 2), (11, 20, 30)); image.save(b)
             difference = replay.image_difference(a, b, [8, 6])
             self.assertFalse(difference['equal'])
+            self.assertEqual(difference['changed_pixels'], 1)
+            self.assertEqual(difference['compared_pixels'], 48)
             self.assertEqual(difference['changed_bounds'], (3, 2, 4, 3))
             self.assertEqual(difference['max_channel_error'], 1)
             with self.assertRaisesRegex(ValueError, 'extent'): replay.image_difference(a, b, [9, 6])
+
+    def test_one_channel_one_pixel_mismatch_never_passes_or_crops_the_corner(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = Path(tmp) / 'a.png', Path(tmp) / 'b.png'
+            Image.new('RGB', (8, 6), (10, 20, 30)).save(a)
+            for point in [(0, 0), (4, 3), (7, 5)]:
+                for channel in range(3):
+                    image = Image.new('RGB', (8, 6), (10, 20, 30))
+                    color = [10, 20, 30]; color[channel] += 1
+                    image.putpixel(point, tuple(color)); image.save(b)
+                    difference = replay.image_difference(a, b, [8, 6])
+                    self.assertFalse(difference['equal'])
+                    self.assertEqual(difference['changed_pixels'], 1)
+                    self.assertEqual(difference['max_channel_error'], 1)
+            self.assertEqual(reference.PIXEL_POLICY['channel_tolerance'], 0)
+            self.assertEqual(reference.PIXEL_POLICY['applied_exclusions'], [])
+            contract = json.loads((HERE / 'schema.json').read_text())
+            self.assertEqual(contract['extensions']['three_target_comparison']['pixel_policy'],
+                             reference.PIXEL_POLICY)
 
     def test_unstable_capture_is_not_a_stable_pixel_mismatch(self):
         from PIL import Image
@@ -259,7 +281,7 @@ class ReplayTests(unittest.TestCase):
             (run / 'game/Warcraft III.exe').write_bytes(b'synthetic executable')
             reference.write_json(run / 'source.json', {'executable_sha256': reference.digest(run / 'game/Warcraft III.exe')})
             reference.write_json(run / 'launch.json', {'framebuffer': [8, 6], 'x_dpi': 96})
-            manifest = tmp / 'code.json'; reference.write_json(manifest, {'files': {'synthetic.js': {}}})
+            manifest = tmp / 'code.json'; reference.write_json(manifest, {'files': {'synthetic.js': {'bytes': 1, 'sha256': 'f' * 64}}})
             iso = tmp / 'fixture.iso'; iso.write_bytes(b'synthetic source')
             module = tmp / 'fixture.mjs'; module.write_text('')
             path = tmp / 'scenario.json'; value = scenario()

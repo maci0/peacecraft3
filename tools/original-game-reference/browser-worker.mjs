@@ -39,7 +39,7 @@ try {
       const expected = Object.hasOwn(manifest.files, name) && manifest.files[name];
       if (request.method() !== 'GET' || request.postDataBuffer() || url.origin !== origin ||
           !expected || !Number.isSafeInteger(expected.bytes) || expected.bytes < 0 ||
-          expected.bytes > 128 * 1024 * 1024 || !/^[a-f0-9]{64}$/.test(expected.sha256)) {
+          expected.bytes > 72 * 1024 * 1024 || !/^[a-f0-9]{64}$/.test(expected.sha256)) {
         append(errors, `Blocked request outside code manifest: ${request.method()} ${url.pathname}`);
         await route.abort('blockedbyclient');
         return;
