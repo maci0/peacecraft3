@@ -3,8 +3,8 @@ pub mod visibility;
 pub mod window;
 
 use bevy_camera::{
-    Camera, CameraMainTextureUsages, ClearColor, ClearColorConfig, CompositingSpace, Exposure,
-    MainPassResolutionOverride, NormalizedRenderTarget, primitives::Frustum,
+    primitives::Frustum, Camera, CameraMainTextureUsages, ClearColor, ClearColorConfig,
+    CompositingSpace, Exposure, MainPassResolutionOverride, NormalizedRenderTarget,
 };
 use bevy_diagnostic::FrameCount;
 pub use composition::*;
@@ -12,7 +12,6 @@ pub use visibility::*;
 pub use window::*;
 
 use crate::{
-    GpuResourceAppExt, Render, RenderApp, RenderSystems,
     camera::{ExtractedCamera, MipBias, NormalizedRenderTargetExt as _, TemporalJitter},
     extract_component::ExtractComponentPlugin,
     occlusion_culling::OcclusionCulling,
@@ -27,6 +26,7 @@ use crate::{
         CachedTexture, ColorAttachment, DepthStencilAttachment, GpuImage, ManualTextureViews,
         OutputColorAttachment, TextureCache,
     },
+    GpuResourceAppExt, Render, RenderApp, RenderSystems,
 };
 use alloc::sync::{Arc, Weak};
 use bevy_app::{App, Plugin};
@@ -35,9 +35,9 @@ use bevy_derive::{Deref, DerefMut};
 use bevy_ecs::prelude::*;
 use bevy_extract_macros::ExtractComponent;
 use bevy_image::ToExtents;
-use bevy_math::{Mat3, Mat4, UVec4, Vec2, Vec3, Vec4, Vec4Swizzles, mat3, vec2, vec3};
-use bevy_platform::collections::{HashMap, hash_map::Entry};
-use bevy_reflect::{Reflect, std_traits::ReflectDefault};
+use bevy_math::{mat3, vec2, vec3, Mat3, Mat4, UVec4, Vec2, Vec3, Vec4, Vec4Swizzles};
+use bevy_platform::collections::{hash_map::Entry, HashMap};
+use bevy_reflect::{std_traits::ReflectDefault, Reflect};
 use bevy_transform::components::GlobalTransform;
 use core::{
     ops::Range,
@@ -1529,35 +1529,4 @@ pub fn prepare_view_targets(
     }
 }
 
-// WebGL renders the main format directly and cannot declare alternate view formats.
-fn main_texture_view_formats(
-    format: TextureFormat,
-    supports_view_formats: bool,
-) -> &'static [TextureFormat] {
-    if !supports_view_formats {
-        return &[];
-    }
-    match format {
-        TextureFormat::Bgra8Unorm => &[TextureFormat::Bgra8UnormSrgb],
-        TextureFormat::Rgba8Unorm => &[TextureFormat::Rgba8UnormSrgb],
-        _ => &[],
-    }
-}
-
-#[cfg(test)]
-mod view_format_tests {
-    use super::*;
-
-    #[test]
-    fn alternate_main_texture_formats_require_adapter_support() {
-        for (base, alternate) in [
-            (TextureFormat::Bgra8Unorm, TextureFormat::Bgra8UnormSrgb),
-            (TextureFormat::Rgba8Unorm, TextureFormat::Rgba8UnormSrgb),
-        ] {
-            assert!(main_texture_view_formats(base, false).is_empty());
-            assert_eq!(main_texture_view_formats(base, true), &[alternate]);
-        }
-        assert!(main_texture_view_formats(TextureFormat::Rgba16Float, true).is_empty());
-        assert!(main_texture_view_formats(TextureFormat::Rgba8UnormSrgb, true).is_empty());
-    }
-}
+include!("texture_view_formats.rs");

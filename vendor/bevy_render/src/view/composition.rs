@@ -18,7 +18,7 @@ use bevy_log::warn_once;
 use bevy_platform::collections::HashMap;
 use wgpu::TextureFormat;
 
-use super::{ExtractedView, MainTextureKey, Msaa, main_texture_key};
+use super::{main_texture_key, ExtractedView, MainTextureKey, Msaa};
 use crate::camera::ExtractedCamera;
 
 /// The compositing space a camera view actually uses this frame, written by

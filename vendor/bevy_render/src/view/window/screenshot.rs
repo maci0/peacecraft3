@@ -1,5 +1,4 @@
 use crate::{
-    ExtractSchedule, GpuResourceAppExt, MainWorld, Render, RenderApp, RenderStartup, RenderSystems,
     gpu_readback,
     render_asset::RenderAssets,
     render_resource::{
@@ -10,13 +9,14 @@ use crate::{
     sync_world::MainEntity,
     texture::{GpuImage, ManualTextureViews, OutputColorAttachment},
     view::{
-        ExtractedWindow, SurfaceData, ViewTargetAttachments, prepare_view_attachments,
-        prepare_view_targets,
+        prepare_view_attachments, prepare_view_targets, ExtractedWindow, SurfaceData,
+        ViewTargetAttachments,
     },
+    ExtractSchedule, GpuResourceAppExt, MainWorld, Render, RenderApp, RenderStartup, RenderSystems,
 };
 use alloc::{borrow::Cow, sync::Arc};
 use bevy_app::{First, Plugin, Update};
-use bevy_asset::{AssetServer, Handle, RenderAssetUsages, embedded_asset, load_embedded_asset};
+use bevy_asset::{embedded_asset, load_embedded_asset, AssetServer, Handle, RenderAssetUsages};
 use bevy_camera::{ManualTextureViewHandle, NormalizedRenderTarget, RenderTarget};
 use bevy_color::{ColorToPacked, LinearRgba, Srgba};
 use bevy_derive::{Deref, DerefMut};
@@ -26,7 +26,7 @@ use bevy_ecs::{
 use bevy_image::{Image, TextureFormatPixelInfo, ToExtents};
 use bevy_log::{error, info, warn};
 use bevy_material::{
-    bind_group_layout_entries::{BindGroupLayoutEntries, binding_types::texture_2d},
+    bind_group_layout_entries::{binding_types::texture_2d, BindGroupLayoutEntries},
     descriptor::{
         BindGroupLayoutDescriptor, CachedRenderPipelineId, FragmentState, RenderPipelineDescriptor,
         VertexState,
@@ -42,8 +42,8 @@ use core::ops::Deref;
 use std::{
     path::Path,
     sync::{
-        Mutex,
         mpsc::{Receiver, Sender},
+        Mutex,
     },
 };
 use wgpu::{CommandEncoder, Extent3d, TextureFormat};

@@ -1,11 +1,11 @@
 use crate::renderer::wgpu_wrapper;
 use crate::sync_world::{MainEntity, RenderEntity, SyncToRenderWorld};
+use crate::{camera::extract_cameras, renderer::RenderQueue};
 use crate::{
-    Extract, ExtractSchedule, Render, RenderApp, RenderSystems,
     render_resource::{SurfaceTexture, TextureView},
     renderer::{RenderAdapter, RenderDevice, RenderInstance},
+    Extract, ExtractSchedule, Render, RenderApp, RenderSystems,
 };
-use crate::{camera::extract_cameras, renderer::RenderQueue};
 use bevy_app::{App, Plugin};
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::RunSystemOnce;
@@ -507,9 +507,7 @@ fn present_mode(window: &ExtractedWindow, caps: &wgpu::SurfaceCapabilities) -> w
             );
         });
     if new_present_mode != present_mode && fallbacks.contains(&present_mode) {
-        info!(
-            "PresentMode {present_mode:?} requested but not available. Falling back to {new_present_mode:?}"
-        );
+        info!("PresentMode {present_mode:?} requested but not available. Falling back to {new_present_mode:?}");
     }
     new_present_mode
 }

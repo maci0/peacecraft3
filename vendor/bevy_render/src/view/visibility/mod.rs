@@ -7,20 +7,20 @@ use bevy_ecs::{
     prelude::ReflectComponent,
     query::{Changed, Or, With},
     system::{
-        Local, Query, SystemParam,
         lifetimeless::{Read, SQuery},
+        Local, Query, SystemParam,
     },
 };
 #[cfg(feature = "trace")]
 use bevy_log::info_span;
 use bevy_platform::collections::{HashMap, HashSet};
-use bevy_reflect::{Reflect, prelude::ReflectDefault};
+use bevy_reflect::{prelude::ReflectDefault, Reflect};
 use bevy_utils::TypeIdHashMap;
 
 use crate::{
-    Extract,
     sync_world::{MainEntity, MainEntityHashMap, RenderEntity},
     view::RetainedViewEntity,
+    Extract,
 };
 
 mod range;

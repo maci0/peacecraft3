@@ -12,17 +12,17 @@ use bevy_ecs::{
     system::{Query, Res, ResMut},
 };
 use bevy_log::warn_once;
-use bevy_math::{Vec4, vec4};
+use bevy_math::{vec4, Vec4};
 use bevy_platform::collections::HashMap;
 use bevy_utils::prelude::default;
 use nonmax::NonMaxU16;
 use wgpu::{BufferBindingType, BufferUsages};
 
 use crate::{
-    Extract, ExtractSchedule, GpuResourceAppExt, Render, RenderApp, RenderSystems,
     render_resource::BufferVec,
     renderer::{RenderDevice, RenderQueue},
     sync_world::{MainEntity, MainEntityHashMap},
+    Extract, ExtractSchedule, GpuResourceAppExt, Render, RenderApp, RenderSystems,
 };
 
 /// We need at least 4 storage buffer bindings available to enable the

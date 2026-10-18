@@ -1,4 +1,4 @@
-# Bevy 0.20 pointer input patches
+# Bevy 0.20 patches
 
 `bevy_picking`, `bevy_ui` and `bevy_sprite` start from their published 0.20.0
 sources and retain the MIT/Apache license notices. The workspace patches those three crates
@@ -36,6 +36,6 @@ application and browser verification boundary.
 Its main-target texture descriptor declares alternate sRGB views only when the
 adapter reports `DownlevelFlags::VIEW_FORMATS`. WebGL cannot declare these views;
 without the guard numeric menu targets fail texture validation and render blank.
-The target format, pixel bytes and compositing rules are unchanged. A synthetic
+The target format, pixel bytes and compositing rules are unchanged. The vendored crate retains the published style edition for formatting. A synthetic
 capability regression covers both supported format pairs and formats without an
 alternate view. Actual browser rendering is a separate application gate.

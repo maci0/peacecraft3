@@ -96,3 +96,9 @@ use crate::map_source_controls as source_controls;
 #[cfg(all(test, target_arch = "wasm32"))]
 #[path = "../tests/support/browser_application_gate.rs"]
 mod browser_application_gate;
+
+#[cfg(test)]
+mod view_format_guard_tests {
+    use bevy::render::render_resource::TextureFormat;
+    include!("../../../vendor/bevy_render/src/view/texture_view_formats.rs");
+}
