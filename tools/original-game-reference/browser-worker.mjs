@@ -16,6 +16,7 @@ const manifest = JSON.parse(await readFile(config.manifest, 'utf8'));
 const origin = new URL(config.url).origin;
 const requests = [], errors = [], sockets = [], messages = [];
 let browser;
+let stage = 'launch';
 try {
   browser = await chromium.launch({executablePath: config.chromium,
     args: ['--no-sandbox', '--enable-unsafe-swiftshader']});
@@ -63,9 +64,11 @@ try {
     append(messages, {type, text});
     if (isConsoleError(type, text)) append(errors, text);
   });
+  stage = 'page';
   await page.goto(config.url, {waitUntil: 'domcontentloaded'});
   await page.waitForFunction(() => globalThis.peacecraft3?.menu_state && globalThis.peacecraft3Settings);
   const revision = await page.evaluate(() => peacecraft3.asset_revision());
+  stage = 'import';
   await page.locator('#iso').setInputFiles(config.iso);
   await page.waitForFunction(() => document.querySelectorAll('#iso-candidates input').length > 0 && !document.querySelector('#iso').disabled);
   if (await page.locator('#iso-candidates input').count() !== 1)
@@ -76,13 +79,16 @@ try {
   if (!(await page.evaluate(() => peacecraft3.local_menu_editions())).includes(config.edition))
     throw Error('Requested edition is not admitted by the imported source');
   await page.locator('#demo-edition').selectOption(config.edition);
+  stage = 'entry-click';
   await page.locator('#demo-start').click({timeout: 120000});
+  stage = 'entry-readiness';
   await page.waitForFunction(() => {
     const raw = peacecraft3.menu_state();
     if (!raw) return false;
     const state = JSON.parse(raw);
     return state.menuVisible && !state.transitionActive && state.screen === 'Main';
   }, undefined, {timeout: 120000});
+  stage = 'capture-geometry';
   // Only the host page is positioned: game layout and framebuffer pixels are unchanged.
   await page.evaluate(([w, h]) => {
     const stage = document.querySelector('#stage');
@@ -99,10 +105,12 @@ try {
     return canvas.width === w && canvas.height === h && canvas.clientWidth === w && canvas.clientHeight === h;
   }, config.extent);
   const adapter = createBrowserAdapter({page, cdp: await page.context().newCDPSession(page), width, height});
+  stage = 'focus';
   await adapter.focus();
   if (errors.length || sockets.length) throw Error('Browser startup had errors or sockets; inspect adapter error response');
   respond({ok: true, data: {state: await adapter.state(), extent: config.extent,
     dpr: await page.evaluate(() => devicePixelRatio), rng: 'uncontrolled', requests}});
+  stage = 'replay';
   for await (const line of createInterface({input: process.stdin, crlfDelay: Infinity})) {
     if (Buffer.byteLength(line) > maximumMetadata) throw Error('Adapter request exceeds metadata bound');
     const request = JSON.parse(line);
@@ -117,7 +125,13 @@ try {
       finished_ns: process.hrtime.bigint().toString()}});
   }
 } catch (error) {
-  respond({ok: false, error: {message: error.message, code: error.code ?? 'BROWSER_REPLAY_FAILED', errors, sockets}});
+  const message = String(error.message ?? error), code = String(error.code ?? 'BROWSER_REPLAY_FAILED');
+  // Eight bounded records per collection fit the metadata ceiling even with UTF-8 expansion.
+  const diagnostics = Object.entries({errors, sockets, requests, messages});
+  respond({ok: false, error: {message: message.slice(0, 4000), code: code.slice(0, 128), stage,
+    message_truncated: message.length > 4000, code_truncated: code.length > 128,
+    ...Object.fromEntries(diagnostics.map(([name, values]) => [name, values.slice(-8)])),
+    omitted: Object.fromEntries(diagnostics.map(([name, values]) => [name, Math.max(0, values.length - 8)]))}});
   process.exitCode = 2;
 } finally {
   await browser?.close();

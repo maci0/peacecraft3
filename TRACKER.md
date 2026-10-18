@@ -225,6 +225,17 @@ integration. A completed prototype does not close its broader milestone.
       four views, but does not replace that failed workflow or establish its
       cause. Keep entry acknowledgment/load diagnosis and exact pixel/RNG parity
       open; no blind replay or raised timeout is recorded as a fix.
+- [x] Browser refusal diagnostics retain bounded tails, omitted counts and the
+      failing stage (2026-10-19). Large retained logs previously suppressed the
+      structured failure response. The process regression fails before and passes
+      after; all 51 Python harness and five browser-adapter tests pass. The same
+      sealed application completes trusted 4K navigation in isolation, alongside
+      native rendering, and with the tracked diagnostic worker. Sixteen fresh
+      checkpoints are reviewed; all twelve three-target RGB comparisons still
+      differ. The earlier timeout and a missed native operator-review deadline
+      remain preserved. No entry-cause, exact-output or deterministic-parity claim.
+      See `docs/re-notes/menu-particles.md` and local evidence
+      `.scratch/browser-entry-ack-root-20261019/`.
 - [~] The earlier composed alpha/billboard candidate passes 651 application tests,
       strict native/WASM checks/builds, five hardware source-background extents
       and ten fresh native/browser navigation runs through 3840×2160. Forty new

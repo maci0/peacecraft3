@@ -395,6 +395,13 @@ repeat and retains the container. Key/click are not safe to repeat blindly. All
 container inspection/control validates its path-derived name and ownership label.
 No cleanup command deletes containers, files, host installs or existing VMs.
 
+Replay failures inside the browser worker report the failing stage and latest eight error,
+socket, request and console observations per collection, with omitted counts.
+Primary error messages/codes are capped at 4000/128 characters with explicit
+truncation flags. These tails keep the caught failure response within the
+metadata ceiling.
+This diagnostic limit does not change input delivery, readiness or click timeouts.
+
 The offline schema declares the v0.3 candidate, pinned to published schema bytes
 whose SHA-256 is checked against the accompanying published CHECKSUMS.txt. The
 candidate can change upstream. Schema validation and subprocess tests are distinct

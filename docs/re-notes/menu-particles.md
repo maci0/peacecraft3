@@ -190,3 +190,32 @@ its file initializer and finite-value setter checks. Its option-name/current
 saved-state join remains unqualified, so no quality multiplier is applied.
 Native floating-point identity, initial ages, the native clamped-time lifecycle,
 particle PRNG and full three-target rendered/simulation parity remain open.
+
+## Trusted 4K entry follow-up (2026-10-19)
+
+The same sealed application completes the unchanged trusted-click workflow in
+an isolated run and alongside the native 4K renderer. Read-only event observations
+retain trusted pointer/mouse/click delivery and the handler's canvas focus handoff.
+Both full eleven-event journals reach Main, the blank Options landing, Video and
+Main return. A third browser journal runs the tracked worker without those event
+observers and also passes. The native journal passes after the concurrent browser
+run. One earlier native attempt missed its operator visual-review deadline and
+is retained as a failed experiment, not evidence about browser entry.
+
+This does not identify the earlier click timeout's cause. Concurrent menu readiness
+took longer, but the observed click itself returned; no click timeout or input
+sequence was changed. Error-path process tests independently exposed a harness
+bug: a retained console log could exceed the worker's failure-response ceiling,
+discarding its structured error. The worker now bounds diagnostic tails, declares
+omissions/truncation and includes the failing stage. The regression fails before
+and passes after, including Unicode logs. All 51 Python harness tests and five
+browser-adapter tests pass, including the explicit real-browser canvas case.
+
+Sixteen new 4K checkpoints are visually reviewed. The three-target report uses
+the tracked worker's four frames, four fresh native frames and four retained
+WC3/Wine frames. All twelve exact RGB comparisons differ; no version pixels are
+excluded. Source application inputs and artifacts are unchanged from the gravity
+candidate; only harness diagnostics changed. No Rust rebuild, fresh original-game
+run or public deployment is claimed. Receipts and raw comparison reports remain
+local under `.scratch/browser-entry-ack-root-20261019/`. Reliable entry, original
+RNG/phase, native Windows and full rendered/simulation parity remain open.
