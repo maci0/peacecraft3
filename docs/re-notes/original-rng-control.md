@@ -1,5 +1,29 @@
 # Original seeded RNG probe
 
+## Deterministic simulation testing boundary (2026-10-18)
+
+The explicit local `selected_rng_timer` gate couples the selected original RNG
+and numeric policies to the actual VM and `ObjectHost` timer queue. Synthetic
+periodic callbacks draw integers/reals on caller-supplied logical time. Three
+polling schedules exercise fine stepping, stalled catch-up and one large catch-up;
+delivery quanta and bounded CPU work differ. All 20 callback checkpoints must
+retain exact logical timestamps, callback order, script counters, integer/real
+bits and the complete RNG state, including its secondary lanes. Exhausted work
+budgets preserve the next callback and RNG state; resuming delivers it once.
+A changed seed must change the trace. Success uses deterministic work counts and
+exact state, with no elapsed-time or FPS threshold.
+
+Native and actual WASI runs emit the same exact trace digest. Each records
+18 budget boundaries and 1,376,256 injected work iterations without changing
+its 20 checkpoints. Strict native/browser Clippy and formatting pass.
+
+This is a recreation scheduling invariance test with explicit inputs. Synthetic
+durations and work counts are test conditions. It does not establish the native
+timer tie policy, an application fixed-step clock, placement authority, all
+engine RNG consumers or rendered lockstep. The original-game serial fixture
+below remains a separate native RNG comparison. Broad deterministic gameplay and
+100-consecutive unchanged-map gates remain open.
+
 ## Repeatable exact-bit harness (2026-10-18)
 
 The local reference tool now generates an explicit serial JASS RNG fixture and

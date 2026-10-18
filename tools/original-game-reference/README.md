@@ -236,6 +236,24 @@ means refusal. Existing outputs refuse reuse; replaying game input is never an
 automatic retry. Malformed, over-budget or duplicate-field inputs refuse with
 JSON diagnostics on stderr and no stdout data.
 
+A separate DST gate runs the selected RNG inside the production VM/timer queue:
+
+```sh
+cargo test -p pcx-play --test rng_fixture --locked --offline --jobs 1 \
+  -- --ignored selected_rng_timer --nocapture
+```
+
+It needs the same image, RNG/numeric bindings and common declarations. Synthetic
+periodic callbacks use explicit logical time. Fine polling, delayed catch-up and
+one large catch-up must retain every callback in the same order. Different work
+budgets and bounded injected CPU work must preserve exact callback times, integer
+and real bits, script counters and the complete retained RNG state. The gate also
+requires a changed seed to produce a different trace. No elapsed-time or FPS
+threshold decides success. Native and actual WASI runs must emit the same trace
+digest.
+This verifies the admitted scheduler under those conditions, not the original
+engine's timer tie policy or a complete gameplay clock/render integration.
+
 This controls **one serial JASS RNG experiment**, without world tick advancement.
 It does not synchronize engine startup, secondary consumers, world state,
 animation or rendering. Visual `compare` still refuses non-null seeds, and

@@ -2423,6 +2423,11 @@ repeated, and the public site package was not rebuilt.
   divergence. This does not synchronize world ticks, other engine consumers,
   animation or rendering. Visual seeded replay, unchanged-map startup and the
   100-consecutive original baseline remain open.
+- [~] DST now has a selected-RNG timer scheduling gate: exact callback/RNG states
+  must survive different polling/catch-up partitions, delivery budgets and bounded
+  CPU work. Logical time drives the production VM/timer queue; no FPS or elapsed
+  threshold decides success. Original timer ordering, the application clock,
+  all engine consumers and full gameplay/render lockstep remain open.
 - [ ] Queried initial positions do not preserve the requested creation geometry.
   Accepted live placement must precede a world-coordinate consumer. Parsed
   placement records and movement-harness ids do not establish the script unit's
