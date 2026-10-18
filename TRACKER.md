@@ -594,11 +594,15 @@ terrain rendering, asset-defined terrain materials or native rendering fidelity.
       display probes without launching a game. Saved-seed verification handles
       reported DPI scale. Desktop work areas/decorations and native Windows
       remain unverified. See `docs/re-notes/launcher-monitor-calibration.md`.
-- [ ] Returning keyboard focus to the launcher's Main menu control can leave
-      the heading clipped by the scroll viewport. Preserve the heading's
-      context when revealing that control; verify compact native and WASM
-      keyboard navigation. Retained example:
-      `.scratch/launcher-monitor-root-20261019/640x800/native-1/keyboard-return.png`.
+- [x] Launcher keyboard return now reveals the complete heading with the Main
+      menu control (2026-10-19). Other controls retain nearest-edge scrolling;
+      pointer and unchanged-focus scrolling remain undisturbed. Three synthetic
+      regressions cover both scale factors and controls without a Pick action.
+      The old path reproduces the clipping in a unit assertion and actual
+      native/WASM captures. All 654 application tests, strict native/WASM
+      checks/builds and twelve actual configuration runs at six desktop sizes
+      through 4K pass; 36 new captures were reviewed. The browser runs use a
+      code-only component host. See `docs/re-notes/launcher-keyboard-focus.md`.
 - [x] Three-application comparison instrumentation (2026-10-18): one input journal drives actual original WC3/Wine, native PC3 and browser WASM PC3, with checked native process/window/build/content identities and matching native/WASM source fingerprints. Four checkpoints retain twelve unscaled 1280×960 captures and all three pairwise RGB comparisons; the run completed with differences (exit 1), not a runtime refusal. Forty-four Python checks and two browser-adapter checks pass. Evidence: `.scratch/three-target-reference-root-20261018/verification-final-4.json`.
 - [~] Exact rendered-output acceptance: every decoded RGB pixel must match across all three targets, except the bottom-right version string only. No tolerance, normalization or broad corner crop is allowed. Its precise text footprint is not qualified, so no pixels are currently excluded. All four retained checkpoints fail the strict comparison; animation clocks/RNG remain uncontrolled and native frame state is unobserved. The local source closure was corrected to include the model-derived left-panel sound dependencies; fresh native/WASM captures restore the Video housing without inventing audio. Lighting, glyphs, slider thumb, settings admission and animation alignment still differ. This does not close deterministic gameplay, audio or original/native/browser visual parity.
 

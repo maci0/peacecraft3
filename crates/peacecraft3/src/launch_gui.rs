@@ -3155,7 +3155,7 @@ fn colour_picks(
 fn reveal_launcher_focus(
     focus: Res<bevy::input_focus::InputFocus>,
     visible: Res<bevy::input_focus::InputFocusVisible>,
-    controls: Query<(&ComputedNode, &UiGlobalTransform), With<LauncherControl>>,
+    controls: Query<(&ComputedNode, &UiGlobalTransform, Option<&Pick>), With<LauncherControl>>,
     mut panels: Query<
         (&ComputedNode, &UiGlobalTransform, &mut ScrollPosition),
         With<LauncherPanel>,
@@ -3167,10 +3167,15 @@ fn reveal_launcher_focus(
     let Some(entity) = focus.get() else {
         return;
     };
-    let Ok((control, position)) = controls.get(entity) else {
+    let Ok((control, position, pick)) = controls.get(entity) else {
         return;
     };
     for (panel, origin, mut scroll) in &mut panels {
+        // Main menu belongs to the header; reveal the title along with its button.
+        if matches!(pick, Some(Pick::Menu)) {
+            scroll.0.y = 0.0;
+            continue;
+        }
         let top = origin.affine().translation.y - panel.size().y * 0.5;
         let control_top = position.affine().translation.y - control.size().y * 0.5;
         let delta = if control_top < top {
@@ -3708,6 +3713,83 @@ mod tests {
             BorderColor::all(TEXT)
         );
         assert_eq!(*world.get::<Node>(entity).unwrap(), node);
+    }
+
+    fn launcher_focus_fixture(
+        scale: f32,
+        pick: Option<Pick>,
+        control_y: f32,
+    ) -> (App, Entity, Entity) {
+        use bevy::input_focus::{InputFocus, InputFocusVisible};
+        let mut app = App::new();
+        app.init_resource::<InputFocus>()
+            .insert_resource(InputFocusVisible(true))
+            .add_systems(Update, reveal_launcher_focus);
+        let panel = app
+            .world_mut()
+            .spawn((
+                LauncherPanel,
+                ComputedNode {
+                    size: Vec2::new(100.0, 80.0) * scale,
+                    content_size: Vec2::new(100.0, 300.0) * scale,
+                    inverse_scale_factor: 1.0 / scale,
+                    ..default()
+                },
+                UiGlobalTransform::from_translation(Vec2::new(50.0, 40.0) * scale),
+                ScrollPosition(Vec2::new(0.0, 50.0)),
+            ))
+            .id();
+        let mut control = app.world_mut().spawn((
+            LauncherControl,
+            ComputedNode {
+                size: Vec2::new(20.0, 10.0) * scale,
+                ..default()
+            },
+            UiGlobalTransform::from_translation(Vec2::new(40.0, control_y) * scale),
+        ));
+        if let Some(pick) = pick {
+            control.insert(pick);
+        }
+        let control = control.id();
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(control, bevy::input_focus::FocusCause::Navigated);
+        (app, panel, control)
+    }
+
+    #[test]
+    fn keyboard_return_reveals_the_entire_launcher_heading() {
+        for scale in [1.0, 2.0] {
+            let (mut app, panel, _) = launcher_focus_fixture(scale, Some(Pick::Menu), 15.0);
+            app.update();
+            assert_eq!(app.world().get::<ScrollPosition>(panel).unwrap().0.y, 0.0);
+        }
+    }
+
+    #[test]
+    fn other_launcher_controls_keep_nearest_edge_scrolling() {
+        for pick in [None, Some(Pick::Stage)] {
+            for scale in [1.0, 2.0] {
+                let (mut app, panel, _) = launcher_focus_fixture(scale, pick, 150.0);
+                app.update();
+                assert_eq!(app.world().get::<ScrollPosition>(panel).unwrap().0.y, 125.0);
+            }
+        }
+    }
+
+    #[test]
+    fn launcher_reveal_preserves_pointer_and_unchanged_focus_scrolling() {
+        let (mut app, panel, _) = launcher_focus_fixture(1.0, Some(Pick::Menu), 15.0);
+        app.world_mut()
+            .resource_mut::<bevy::input_focus::InputFocusVisible>()
+            .0 = false;
+        app.update();
+        assert_eq!(app.world().get::<ScrollPosition>(panel).unwrap().0.y, 50.0);
+        app.world_mut()
+            .resource_mut::<bevy::input_focus::InputFocusVisible>()
+            .0 = true;
+        app.update();
+        assert_eq!(app.world().get::<ScrollPosition>(panel).unwrap().0.y, 50.0);
     }
 
     /// Relative luminance per WCAG 2.1.

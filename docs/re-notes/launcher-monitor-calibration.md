@@ -47,7 +47,9 @@ local in `.scratch/launcher-monitor-root-20261019/`. Existing comparison images
 and receipts are unchanged. Their exact-size RGB differences remain diagnostic;
 they do not certify equal monitor-mode inputs or deterministic simulation.
 
-Keyboard return still clips the launcher heading in a compact viewport. That
-is a separate visible UI defect, retained in `640x800/native-1/keyboard-return.png`.
+The calibration review retained a separate keyboard-heading clipping defect in
+`640x800/native-1/keyboard-return.png`. That subsequent correction is documented
+in [launcher keyboard focus](launcher-keyboard-focus.md); these before receipts
+remain unchanged.
 Decorated desktop work areas, Windows, original/WASM runtime parity and the
 original-baseline deterministic gate remain open. No public site was deployed.
