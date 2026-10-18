@@ -1701,22 +1701,31 @@ type LetterboxCameraFilter = (
     Without<bevy::ui::IsDefaultUiCamera>,
 );
 
+type MenuUiCameraFilter = (
+    With<bevy::ui::IsDefaultUiCamera>,
+    Without<crate::mainmenu_scene::MainMenuSceneCamera>,
+);
+
+#[derive(SystemParam)]
+struct MenuUiCameraState<'w, 's> {
+    commands: Commands<'w, 's>,
+    cameras:
+        Query<'w, 's, (Entity, &'static mut Camera, Has<MenuColourCamera>), MenuUiCameraFilter>,
+}
+
 fn show_menu_or_launcher(
-    mut commands: Commands,
     intro: Res<crate::intro::Intro>,
     windows: Query<&Window>,
     menu: Query<Entity, With<MenuLayer>>,
     mut launcher: Query<&mut Visibility, With<LauncherPanel>>,
     mut cameras: Query<&mut Camera, With<crate::mainmenu_scene::MainMenuSceneCamera>>,
-    mut ui_cameras: Query<
-        (Entity, &mut Camera, Has<MenuColourCamera>),
-        (
-            With<bevy::ui::IsDefaultUiCamera>,
-            Without<crate::mainmenu_scene::MainMenuSceneCamera>,
-        ),
-    >,
+    ui: MenuUiCameraState,
     mut letterboxes: Query<&mut Camera, LetterboxCameraFilter>,
 ) {
+    let MenuUiCameraState {
+        mut commands,
+        cameras: mut ui_cameras,
+    } = ui;
     // The original CFrame renderer has a centered 4:3 branch. Its main-menu
     // live flags are unmeasured; keep the authored extent without stretching.
     let viewport = if !menu.is_empty() {
