@@ -2415,6 +2415,14 @@ repeated, and the public site package was not rebuilt.
   Real equality and inequality retain their distinct native behavior. The
   full-map startup RNG gate still fails at one of four results; live placement,
   declared-real coercions, other numeric natives and non-normal values remain open.
+- [~] The reference harness now generates one explicit seeded serial JASS RNG
+  fixture for both targets. Two fresh original runs, two native owned VMs and
+  two actual WASI VMs agree on all 60 ordered records, including exact real bits.
+  Source/probe fingerprints, seed acknowledgments, call order, arguments and
+  repeated outputs are checked; a local side-by-side report identifies the first
+  divergence. This does not synchronize world ticks, other engine consumers,
+  animation or rendering. Visual seeded replay, unchanged-map startup and the
+  100-consecutive original baseline remain open.
 - [ ] Queried initial positions do not preserve the requested creation geometry.
   Accepted live placement must precede a world-coordinate consumer. Parsed
   placement records and movement-harness ids do not establish the script unit's

@@ -428,6 +428,141 @@
           }
         }
       }
+    },
+    {
+      "name": "rng-plan",
+      "description": "Generate a caller-seeded bounded serial JASS RNG fixture. No game execution; existing outputs refuse reuse.",
+      "effects": "non_idempotent",
+      "output_kind": "data",
+      "cardinality": "single",
+      "args": [
+        {
+          "name": "--scenario",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--output",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "stdout_schema": {
+        "type": "object",
+        "required": [
+          "fixture",
+          "version",
+          "scope",
+          "scenario_sha256",
+          "files",
+          "entrypoint",
+          "output_name",
+          "clock",
+          "deterministic_parity_verified"
+        ],
+        "properties": {
+          "fixture": {
+            "type": "string"
+          },
+          "version": {
+            "const": 1
+          },
+          "scope": {
+            "const": "serial_jass_rng"
+          },
+          "scenario_sha256": {
+            "type": "string"
+          },
+          "files": {
+            "type": "object"
+          },
+          "entrypoint": {
+            "const": "PCXRngFixture"
+          },
+          "output_name": {
+            "type": "string"
+          },
+          "clock": {
+            "type": "string"
+          },
+          "deterministic_parity_verified": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "name": "rng-compare",
+      "description": "Compare exact serial RNG records from 2..8 independent original and recreation receipts each. Exit 0 matches,1 differs,2 refuses. Never certifies world/render lockstep.",
+      "effects": "non_idempotent",
+      "output_kind": "data",
+      "cardinality": "single",
+      "args": [
+        {
+          "name": "--fixture",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--original",
+          "type": "string[]",
+          "required": true,
+          "description": "Repeat 2..8 times with independent local run receipts."
+        },
+        {
+          "name": "--recreation",
+          "type": "string[]",
+          "required": true,
+          "description": "Repeat 2..8 times with independent local run receipts."
+        },
+        {
+          "name": "--output",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "stdout_schema": {
+        "type": "object",
+        "required": [
+          "receipt",
+          "report",
+          "steps",
+          "runs",
+          "rng_results_match",
+          "first_divergence",
+          "deterministic_parity_verified"
+        ],
+        "properties": {
+          "receipt": {
+            "type": "string"
+          },
+          "report": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "integer",
+            "minimum": 3,
+            "maximum": 256
+          },
+          "runs": {
+            "type": "integer",
+            "minimum": 4,
+            "maximum": 16
+          },
+          "rng_results_match": {
+            "type": "boolean"
+          },
+          "first_divergence": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "deterministic_parity_verified": {
+            "const": false
+          }
+        }
+      }
     }
   ],
   "errors": [
@@ -704,6 +839,41 @@
       "checkpoints": 32,
       "events": 256,
       "protocol_bytes": 2097152
+    },
+    "rng_fixture": {
+      "version": 1,
+      "scope": "serial_jass_rng",
+      "seed": "explicit signed i32, executed before draws",
+      "steps": {
+        "maximum": 256,
+        "operations": [
+          "seed",
+          "integer",
+          "real"
+        ],
+        "real_bounds": "ordered integers -1,0,1; bit extraction refuses other classes"
+      },
+      "run_receipts": {
+        "minimum_per_target": 2,
+        "maximum_per_target": 8,
+        "files": [
+          "image",
+          "common",
+          "probe",
+          "observation",
+          "execution"
+        ],
+        "files_format": {
+          "path": "local file",
+          "sha256": "64 lowercase hex digits"
+        },
+        "identity": "image/common/probe fingerprints must agree across all runs",
+        "independence": "unique run ids and observation files; callers retain actual execution receipts, not a cryptographic attestation of independent launches"
+      },
+      "comparison": "exact signed i32 integers and IEEE binary32 bits; ordered seed acknowledgments and arguments are validated",
+      "clock": "one serial callback, no world tick advancement",
+      "deterministic_parity_verified": false,
+      "execution_receipts": "Original: complete=true, records count and observation_sha256. Recreation: exit_code=0. Each execution JSON is fingerprinted; runtime identity is explicit."
     }
   }
 }

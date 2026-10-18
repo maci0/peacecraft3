@@ -1,5 +1,53 @@
 # Original seeded RNG probe
 
+## Repeatable exact-bit harness (2026-10-18)
+
+The local reference tool now generates an explicit serial JASS RNG fixture and
+compares repeated original/recreation executions. One frozen scenario drives the
+same generated script on both sides: explicit signed seed calls, ordered integer
+and real calls, and stored results exported only after all draws finish. Real
+results are normalized into binary32 bits; formatted decimal equality is no
+longer the comparison criterion for this experiment. The extractor uses binary32
+format invariants, with a bounded loop and refusal of unsupported classes.
+
+Two fresh private original-game runs each complete 60 records: six seed
+acknowledgments, 43 integer results and 11 exact real-bit results. Two fresh native
+owned VMs and two fresh VMs under actual WASI produce the same records, with no
+divergence. The fixture includes repeated reseeds, an alternate seed, negative
+seeds, equal bounds, reversed integer bounds and a full signed integer span.
+These are caller-selected synthetic controls, not original defaults or an engine
+startup recipe. The supplied common declarations qualify the experiment; their
+archive provenance remains independent of the executable identity.
+
+The recreation executes the generated code in the actual VM and selected-policy
+`ObjectHost`, including the numeric policy. Only fixture export and integer-to-
+decimal reporting are adapted. This admits no production `I2S` implementation.
+The extractor additionally checks signed zero and the smallest normal value in
+the recreation. The original experiment changes only `war3map.j`, with reversible
+insertion after `InitBlizzard`; all 17 retained members are independently checked.
+Original main/config remain present. Both isolated containers are stopped and
+preserved. Wine/software rendering is not native Windows ground truth.
+
+`rng-plan` emits a bounded self-authored fixture, and `rng-compare` requires
+2..8 independent receipts per target. It verifies source/probe fingerprints,
+seed acknowledgments, every operation and argument, complete observations and
+successful collection/execution. A local HTML table shows exact real bits and
+the earliest differing operation. CLI tests exercise matching and differing
+outcomes, JSON/stdout/stderr separation, invalid fingerprints, failed execution,
+reused observations, malformed/over-budget inputs and refusal to overwrite prior
+outputs. The schema is checked against the pinned published v0.3 candidate;
+full CLI conformance is not claimed. Strict native/browser checks and the four
+existing selected-code/original RNG gates pass on native and actual WASI.
+
+This controls one serial callback, without world tick advancement. It does not
+control all engine seed inputs, secondary consumers, world state, animation or
+rendering. Visual replay still refuses a non-null seed, and its complete parity
+flag stays false. The unchanged Human01 factory remains failed at one of four
+required RNG results. The 100-consecutive baseline and paired gameplay gates
+remain open. Receipts, original exports and the side-by-side report stay local in
+`.scratch/deterministic-rng-harness-root-20261018/`; no original values or assets
+are published. Usage is in the reference tool's README.
+
 Current implementation: [explicit seeded host and factory](#explicit-seeded-production-host-2026-10-18). [Startup input observations and the owned-factory experiment](#startup-inputs-and-owned-factory-boundary-2026-10-18) qualify one primary-stream prefix. The [timed-trigger consumer](legacy-timer-start.md#owned-timed-trigger-consumer-2026-10-18) removes the registration boundary; the required four-checkpoint factory gate still fails after one match at unsupported `TriggerRegisterUnitInRange`. Production engine initialization and full consumer parity remain open. Earlier sections retain their historical scope.
 
 Two fresh isolated Wine runs loaded the same private, intentionally modified

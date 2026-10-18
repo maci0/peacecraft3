@@ -240,6 +240,16 @@ def compare(args):
     return replay(args, sys.modules[__name__])
 
 
+def rng_plan(args):
+    from rng_fixture import prepare
+    return prepare(args, sys.modules[__name__])
+
+
+def rng_compare(args):
+    from rng_fixture import compare
+    return compare(args, sys.modules[__name__])
+
+
 class Parser(argparse.ArgumentParser):
     def error(self, message):
         raise Failure(message)
@@ -273,6 +283,14 @@ def parser():
     for arg in ['run-dir', 'scenario', 'url', 'manifest', 'iso', 'playwright-module', 'output']:
         a.add_argument('--' + arg, required=True)
     a.add_argument('--chromium', default='/usr/bin/chromium')
+    a = s.add_parser('rng-plan', help='generate one bounded, explicitly seeded serial JASS RNG fixture')
+    for arg in ['scenario', 'output']:
+        a.add_argument('--' + arg, required=True)
+    a = s.add_parser('rng-compare', help='compare exact ordered RNG results and repeated run receipts')
+    for arg in ['fixture', 'output']:
+        a.add_argument('--' + arg, required=True)
+    for arg in ['original', 'recreation']:
+        a.add_argument('--' + arg, required=True, action='append')
     return p
 
 
@@ -284,10 +302,12 @@ def main():
         else:
             handler = {'prepare': prepare, 'launch': launch, 'status': status, 'stop': stop,
                        'capture': capture, 'key': action, 'click': action, 'report': report,
-                       'compare': compare}[args.command]
+                       'compare': compare, 'rng-plan': rng_plan, 'rng-compare': rng_compare}[args.command]
             result = handler(args)
         print(json.dumps(result) if args.format == 'json' else json.dumps(result, indent=2))
-        return 1 if args.command == 'compare' and not result['images_equal'] else 0
+        if args.command == 'compare' and not result['images_equal']:
+            return 1
+        return 1 if args.command == 'rng-compare' and not result['rng_results_match'] else 0
     except KeyboardInterrupt:
         print(json.dumps({'error': {'kind': 'reference_interrupted', 'message': 'Interrupted; inspect retained receipts before starting a new run', 'retryable': False}}), file=sys.stderr)
         return 130

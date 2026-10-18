@@ -22,14 +22,13 @@ pub fn local_bytes(variable: &str, maximum: u64) -> Vec<u8> {
     bytes
 }
 
-pub fn policy_from_inputs(
-    image: &[u8],
+pub fn binding_windows(
     selection: &[u8],
-) -> pcx_play::script_random::profile::Policy {
+) -> (
+    [u8; 32],
+    std::collections::BTreeMap<&str, pcx_play::camera_margins::SourceWindow>,
+) {
     use pcx_play::camera_margins::SourceWindow;
-    use pcx_play::neutral_player::RuleInputBudget;
-    use pcx_play::script_random::profile::{Binding, Policy, Problem};
-    use pcx_play::scripts::AssetIdentity;
     use std::collections::BTreeMap;
     assert!(selection.len() <= 16 << 10);
     let text = std::str::from_utf8(selection).expect("binding UTF-8");
@@ -63,6 +62,17 @@ pub fn policy_from_inputs(
         );
     }
     assert_eq!(windows.len(), 12);
+    (image_sha256, windows)
+}
+
+pub fn policy_from_inputs(
+    image: &[u8],
+    selection: &[u8],
+) -> pcx_play::script_random::profile::Policy {
+    use pcx_play::neutral_player::RuleInputBudget;
+    use pcx_play::script_random::profile::{Binding, Policy, Problem};
+    use pcx_play::scripts::AssetIdentity;
+    let (image_sha256, mut windows) = binding_windows(selection);
     let mut window = |name| windows.remove(name).expect("missing reviewed role");
     let binding = Binding {
         origin: AssetIdentity {

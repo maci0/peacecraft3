@@ -30,7 +30,7 @@ class ReferenceTests(unittest.TestCase):
         published = json.loads((HERE / 'schema/clispec-v0.3.json').read_text())
         jsonschema.Draft202012Validator(published).validate(schema)
         self.assertEqual(schema['clispec'], '0.3')
-        self.assertEqual(len(schema['commands']), 10)
+        self.assertEqual(len(schema['commands']), 12)
         self.assertIn('compare', [command['name'] for command in schema['commands']])
         sha = hashlib.sha256((HERE / 'schema/clispec-v0.3.json').read_bytes()).hexdigest()
         self.assertIn(f'candidate  {sha}  schema/v0.3.json', (HERE / 'schema/CHECKSUMS.txt').read_text())

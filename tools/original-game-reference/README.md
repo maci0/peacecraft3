@@ -144,7 +144,8 @@ Exit 0 means the observed checkpoint
 images match, exit 1 means they differ, and exit 2 means input/runtime refusal.
 None of these outcomes establishes complete game parity.
 
-**Seed control is not implemented yet.** `seed: null` explicitly requests an
+**Seed control in visual replay is not implemented yet.** The serial RNG fixture
+below controls the selected JASS stream separately. `seed: null` explicitly requests an
 uncontrolled visual diagnostic. A signed script seed is recognized but refuses
 before replay rather than claiming an arbitrary launcher argument was applied.
 The synthetic simulation RNG, JASS RNG and menu-particle RNG are distinct; no
@@ -152,6 +153,94 @@ verified original seed hook currently joins them. Deterministic comparison needs
 both setters observed, matching map/settings, controlled draw ordering and clock
 checkpoints, and repeated matching outputs. The receipt always keeps
 `deterministic_parity_verified: false` until those controls are real.
+
+## Repeatable original RNG fixture
+
+`rng-plan` generates one self-authored JASS fixture from explicit signed-i32 seed
+calls and an ordered list of integer/real calls. It never chooses a game seed or
+substitutes the synthetic simulation RNG. The same `probe.j` runs in the original
+and in the selected-policy recreation VM. Results are stored before export;
+real results are normalized into their binary32 bits rather than rounded text.
+The finite real fixture domain uses ordered bounds drawn from `-1`, `0`, `1`;
+unsupported classes refuse. Include at least one nondegenerate integer and real
+call. Up to 256 steps, including reseeding and degenerate controls, are accepted.
+
+```json
+{"version":1,"nonce":"local-check","steps":[
+  {"op":"seed","value":17},
+  {"op":"integer","low":-9,"high":13},
+  {"op":"real","low":-1,"high":1}
+]}
+```
+
+These numbers are synthetic test inputs, not original defaults.
+
+```sh
+python tools/original-game-reference/reference.py rng-plan \
+  --scenario /path/to/local-scenario.json --output .scratch/rng-fixture-1
+```
+
+The bundle contains `probe.j`, its globals/functions separately for reversible
+local map instrumentation, and a fingerprinted manifest. Call `PCXRngFixture`
+once in a serial callback after the original map has initialized its native
+environment. Preserve the map's original globals/config/main, verify the exact
+insertion and all retained members, and use fresh private runs. The harness does
+not automatically rewrite or launch a map. Keep original maps, modified copies
+and exported results local. This fixture is an experiment, not unchanged-map
+acceptance or a seed for all engine consumers.
+
+The explicit recreation gate uses supplied common declarations, the reviewed
+RNG/numeric bindings and that identical generated script. Set
+`PEACECRAFT3_RANDOM_REAL_IMAGE`, `PEACECRAFT3_RANDOM_BINDING`,
+`PEACECRAFT3_NUMERIC_BINDING`, `PEACECRAFT3_RANDOM_COMMON`,
+`PEACECRAFT3_RNG_PROBE` and `PEACECRAFT3_RNG_OUTPUT`, then run:
+
+```sh
+cargo test -p pcx-play --test rng_fixture --locked --offline --jobs 1 \
+  -- --ignored --nocapture
+```
+
+The output directory must exist and contain neither `run-0.txt` nor `run-1.txt`.
+Two fresh owned VMs must emit byte-identical observations. Only fixture export
+and integer-to-decimal reporting are adapted; RNG calls and numeric operations
+use the production VM/host and selected image policies. This does not admit a
+production `I2S` implementation. The same gate also runs on actual WASI with
+explicit preopened local input/output directories.
+
+Retain a version-1 JSON receipt for each independent run with `target` (`original`
+or `recreation`), unique `run_id`, explicit `runtime`, and a `files` object. Its
+five entries `image`, `common`, `probe`, `observation`, `execution` each contain
+an explicit local `path` and its lowercase `sha256`. `common` identifies the
+declarations used to qualify the fixture; its archive/version remains separate
+from executable identity. An original execution JSON requires `complete: true`,
+`records` and `observation_sha256`; a recreation execution JSON requires
+`exit_code: 0`. Retain launch, staging, source and collection provenance with the
+original execution. Fingerprints detect changed inputs; receipts alone are not
+cryptographic proof that someone launched independent processes.
+
+```sh
+python tools/original-game-reference/reference.py rng-compare \
+  --fixture .scratch/rng-fixture-1 \
+  --original /path/to/original-run-1.json --original /path/to/original-run-2.json \
+  --recreation /path/to/recreation-run-1.json --recreation /path/to/recreation-run-2.json \
+  --output .scratch/rng-comparison-1
+```
+
+Each target needs 2..8 independent receipts and observation files. Selected
+image, declarations and probe must agree. The comparison validates executed seed
+acknowledgments, every call's order/arguments, complete exports, fingerprints and
+successful collection/execution. It writes a local side-by-side HTML table with
+real bits shown in hexadecimal and reports the earliest differing operation.
+Exit 0 means all ordered results match, exit 1 means they differ, and exit 2
+means refusal. Existing outputs refuse reuse; replaying game input is never an
+automatic retry. Malformed, over-budget or duplicate-field inputs refuse with
+JSON diagnostics on stderr and no stdout data.
+
+This controls **one serial JASS RNG experiment**, without world tick advancement.
+It does not synchronize engine startup, secondary consumers, world state,
+animation or rendering. Visual `compare` still refuses non-null seeds, and
+`deterministic_parity_verified` stays false. Matching this fixture must never be
+reported as a complete deterministic campaign or pixel comparison.
 
 Comparison outputs are restricted to local `.scratch` or `/tmp`. Existing output
 directories refuse reuse. Interrupted or failed replays close their browser and
