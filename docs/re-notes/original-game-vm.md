@@ -211,3 +211,27 @@ was copied into production. Linear versus encoded-space blending is a plausible
 rendering difference, but the effective original state is not yet established;
 adding Bevy's Camera2d-only compositing component to these Camera3d materials
 would fall back to linear and is not a fix. Transparency correction remains open.
+
+
+## Follow-up 4K panel-clock correction
+
+The five-resolution matrix above is retained as the baseline. A subsequent
+`c90730a` native/WASM source build corrects panel time lost to Bevy's virtual
+clock cap and advances existing transitions before new navigation requests.
+Fresh 3840×2160 native and browser runs now show all four requested screens,
+including the Video body that the baseline WASM run missed. Each browser
+after-capture state is settled. These eight new raw captures are compared with
+the earlier original 4K captures; no new original session was launched.
+
+The first native attempt stopped before replay because a bounded pointer query
+was missing from its command filter. That harness omission is corrected and
+covered through the actual filter; the successful rerun delivers the full
+journal. The failed attempt remains retained. Forty-seven Python harness checks,
+four Node checks, 645 application tests and strict native/WASM Clippy pass.
+
+See `.scratch/menu-panel-clock-root-20261018/verification-final-1.json` and
+`comparison-1/index.html`. Navigation acceptance passes at this tested size;
+exact RGB equality still fails. Transparency, fog, background/particle timing,
+unsupported settings and sound codecs, simulation/animation lockstep and full
+original fidelity remain open. No pixels were excluded or rescaled, and all
+original data and captures remain private.

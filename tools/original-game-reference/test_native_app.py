@@ -37,6 +37,27 @@ def fingerprint(directory, kind, name):
 
 
 class NativeAppTests(unittest.TestCase):
+    def test_pointer_query_uses_the_real_display_command_filter(self):
+        app = native_app.NativeApp.__new__(native_app.NativeApp)
+        app.ref = reference
+        app.display, app.xauthority = ':2', '/private/test-authority'
+        app.scenario = {'extent': [3840, 2160]}
+        app.pointer, app.held_buttons, app.start = None, set(), {}
+        event = {'kind': 'pointer', 'phase': 'move', 'x': 2385, 'y': 92, 'after_ms': 0}
+        with patch.object(app, '_ready'), patch.object(reference, 'command',
+                side_effect=['', 'X=2385\nY=92\nSCREEN=0']) as send:
+            app.input(event)
+            self.assertEqual(send.call_args.args[0], ['env', '-i', 'DISPLAY=:2',
+                'XAUTHORITY=/private/test-authority', 'xdotool', 'getmouselocation', '--shell'])
+        self.assertEqual(app.pointer, (2385, 92))
+        with patch.object(app, '_ready'), patch.object(reference, 'command',
+                side_effect=['', 'X=1279\nY=92\nSCREEN=0']):
+            with self.assertRaisesRegex(reference.Failure, 'actual pointer'):
+                app.input(event)
+        self.assertIsNone(app.pointer)
+        with self.assertRaisesRegex(reference.Failure, 'current point'):
+            app.input({**event, 'phase': 'down', 'button': 'left'})
+
     def test_clamped_pointer_is_not_remembered_for_a_later_button_press(self):
         app = native_app.NativeApp.__new__(native_app.NativeApp)
         app.ref = reference

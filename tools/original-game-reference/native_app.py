@@ -12,7 +12,7 @@ _SHA = re.compile(r'^[0-9a-f]{64}$')
 _DISPLAY = re.compile(r'^:[0-9]{1,4}$')
 _TOOLS = {'xdpyinfo', 'xdotool', 'import'}
 _XDOTOOL = {'search', 'getwindowgeometry', 'getwindowpid', 'getwindowname',
-            'windowfocus', 'getwindowfocus', 'keydown', 'keyup', 'mousemove', 'mousedown', 'mouseup'}
+            'windowfocus', 'getwindowfocus', 'getmouselocation', 'keydown', 'keyup', 'mousemove', 'mousedown', 'mouseup'}
 
 
 def read_link(path):
@@ -307,6 +307,7 @@ class NativeApp:
             point = (event['x'], event['y'])
             if phase == 'move':
                 self._ready()
+                self.pointer = None
                 self._x(['xdotool', 'mousemove', '--sync', str(point[0]), str(point[1])])
                 replay.check_native_pointer(_Display(self), None, *point)
                 self.pointer = point

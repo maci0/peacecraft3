@@ -237,3 +237,26 @@ loss, not proof of the original native clock API or input timestamps. Bevy's
 virtual clock, simulation scheduling, background/particle clocks, RNG and
 material blending are not changed. Pixel parity and whole-application
 load-independent playback remain open.
+
+
+### Actual 4K validation
+
+The frozen `c90730a` source builds both native and WASM applications. Separate
+3840×2160 runs receive the same eleven-event journal as the earlier diagnostic.
+All four checkpoints now show the requested Main, Options landing, Video body
+and return Main states. Each WASM after-capture snapshot has the expected screen
+and `transitionActive: false`; raw images were also visually reviewed. The
+original reference images are retained from the prior verified 4K run, with no
+new original process launched. Twelve exact RGB comparisons still differ.
+
+Evidence: `.scratch/menu-panel-clock-root-20261018/verification-final-1.json`;
+local three-column report: `comparison-1/index.html`. Both app runtimes are
+stopped. No source alpha values were changed, no version mask applied, and the
+public site was not rebuilt or deployed.
+
+The first native check also exposed a harness-only command-filter omission:
+its pointer-position query was refused before journal delivery. That attempt
+is retained and stopped. The corrected filter admits the bounded read, rejects
+clamped positions, and clears a stale remembered point on failed movement.
+Forty-seven Python harness tests and four Node checks pass; the successful native
+rerun exercises the real filter, not a mock of it.
