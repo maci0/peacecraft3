@@ -2371,6 +2371,14 @@ repeated, and the public site package was not rebuilt.
   logs refused. It distinguishes range notifications from `IsUnitInRange`,
   observes deferred entry and same-callback movement coalescing, and records
   filter/condition/action context plus filter work after trigger destruction.
+- [~] A separate 19-request initialization probe retains 57 creation/setter
+  records and refuses eight mutated logs. Creation agrees with `SetUnitPosition`
+  in this sample, while axis setters preserve requested coordinates. Bounds and
+  114 cliff-level queries join to the parsed terrain. A limited terrain/wall
+  replay matches only 14 requests; all five misses remain gates. One accepted
+  creation is reported blocked by the terrain predicate, so that predicate
+  cannot become the placement test. The original container is stopped; the
+  capture shows its loading screen, not recreation rendering.
 - [ ] Queried initial positions do not preserve the requested creation geometry.
   Accepted live placement must precede a world-coordinate consumer. Parsed
   placement records and movement-harness ids do not establish the script unit's

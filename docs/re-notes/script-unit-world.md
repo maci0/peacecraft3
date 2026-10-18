@@ -74,6 +74,56 @@ library build and formatting checks pass. These do not establish accepted
 placement or rendered gameplay; no fresh browser package or reference run was
 needed for this catalog query.
 
+## Creation, position setters and occupancy probe (2026-10-18)
+
+A subsequent fresh isolated run retains the original Human01 `main` and
+`config`, with reversible instrumentation after `InitBlizzard`. Nineteen
+synthetic position requests each create a footman, call `SetUnitPosition`, then
+call both axis setters before removing that probe unit. Three requests have
+fractional coordinates and one repeats an earlier request. All 57 operation
+records, the bounds record and completion markers are retained. This is map
+initialization during loading, not a movement or frame-update experiment.
+
+- Creation and `SetUnitPosition` return identical positions for all 19 requests.
+  This agreement does not establish equivalence for other unit classes, existing
+  states, removal timing or out-of-map positions.
+- The axis setters preserve every requested coordinate in this sample, including
+  fractional inputs. They do not apply the observed placement adjustment.
+- The queried world bounds match the parsed terrain origin and complete grid
+  extent under the scale read from the selected coordinate-normalization code.
+  No camera/playable-area restriction is substituted for those bounds.
+- The source corner's low final-byte nibble matches all 114 requested/returned
+  cliff-level queries, covering three distinct values, with the selected
+  routine's nearest-corner indexing. This is a source/runtime join for these
+  points, not a qualification of other terrain versions or platform overlays.
+- One unchanged creation position has a true `IsTerrainPathable` result for
+  walkability. That predicate cannot directly substitute for creation's
+  acceptance test, just as `IsUnitInRange` cannot substitute for range-event
+  membership.
+
+Further bounded decoding resolves the placement search's four-way dispatch.
+It tries the initial point and can expand integer bounds through a mode-selected
+perimeter scan. Its grid test combines stored cell flags with occupancy records;
+another callback checks a terrain/overlay-derived domain. The footprint loader
+reads table-selected image data and builds a cell mask. These are selected code
+relations, not a complete live-world model.
+
+A private replay using the terrain raster alone reproduces the first retained
+range probe's anchor but fails its other creation. Adding nearby source-derived
+stone-wall footprints reproduces both. Testing that same limited model against
+the new 19-request probe matches only 14 requests. The misses are preserved:
+other placed footprints, executed unit occupancy, terrain acceptance masks,
+cliff/overlay rules, rotation and lifetime still need qualification. In particular,
+the limited replay must not become a production placement default or a silent
+fallback for missing geometry.
+
+Eight mutated logs are refused. The container is stopped and preserved, and its
+reviewed capture shows the original loading screen. Probe/member hashes,
+reversible edits, isolation, source checks, observations and replay mismatches
+remain local in `.scratch/unit-placement-probe-root-20261018/`. No production
+placement, range-registration behavior or recreation rendering changes in this
+experiment. The unchanged-map four-result RNG factory gate remains open.
+
 ## One bounded range probe (2026-10-18)
 
 A fresh isolated Wine/Xvfb/software-Mesa run instruments Human01 around its
