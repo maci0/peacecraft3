@@ -275,3 +275,42 @@ source-code evidence about the proposed implementation, not proof of the
 original's effective render state. No alpha, tint or production rendering code
 was changed. The review and pinned dependency-source hashes are retained in
 `.scratch/menu-composition-root-20261018/composition-review-1.json`.
+
+
+## Qualified menu working-channel correction
+
+A complete fresh bounded original API trace now qualifies the effective menu
+colour profile for the observed Wine interval. It records no explicit sRGB
+sampling/write setter or pixel shader; documented default-disabled D3D9 states
+support numeric-channel composition. This is an inference from complete API
+coverage and defaults, not a direct state query or native Windows hardware proof.
+The earlier flag-only proposal remains rejected: the implemented correction
+covers geometry, source colours, PRE2, ordinary UI, both custom UI materials and
+final presentation together. Source alpha and texture bytes are unchanged.
+See [working-colour evidence and implementation](menu-working-colour.md).
+
+The actual WebGL test caught an unsupported alternate-view declaration in Bevy.
+A capability guard now retains the same render-target format and equation without
+requesting unavailable views. The comparison worker also treats renderer errors
+logged through the ordinary Rust console as failures. The rejected blank-canvas
+run, native startup timeout and first bounded-out original trace remain separate
+immutable evidence. A fresh parent-debugger startup diagnostic succeeded; the
+intermittent native startup cause is not proved. Fresh visual native captures
+isolate host audio with an ALSA null PCM and make no audible-fidelity claim.
+
+The frozen application source `2f02f7c` passes 647 ordinary tests (24 explicit
+ignores), strict native/WASM Clippy, both application builds, formatting and all
+five GPU checks on Radeon and llvmpipe. Forty fresh native/WASM screenshots now
+complete the eleven-event journal at all five sizes through 3840×2160. All twenty
+browser after-capture states are settled and no renderer errors are recorded.
+All fresh processes are stopped. The twenty original image references are
+retained from the earlier matrix; the fresh original API run is separate.
+
+The report is
+`.scratch/menu-composition-root-20261018/comparison-2/index.html`, verified by
+`verification-final-2.json`. Sixty pairwise exact RGB comparisons still differ;
+no version mask or other exclusion, tolerance, normalization, crop or rescaling
+is applied. Snapshot changes persist during all twenty browser captures, so
+animation/RNG/render lockstep is unqualified. Fog, lighting, effects, unavailable
+settings, notices and full original fidelity remain open. Original content and
+captures remain local; the public site is not redeployed by this validation.

@@ -1,6 +1,9 @@
 import {writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 
+export const isConsoleError = (type, text) =>
+  type === 'error' || /^%cERROR%c(?:\s|$)/.test(text);
+
 export class BrowserAdapterError extends Error {
   constructor(code, message, details) {
     super(message);

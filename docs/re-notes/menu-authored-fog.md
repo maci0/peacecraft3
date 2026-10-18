@@ -35,8 +35,10 @@ does not prove native archive priority or identify adjacent archive releases.
 
 Grouped ARGB and style zero as linear falloff are explicit recreation
 conventions. Density is retained but unused by that linear choice. Bevy applies
-radial camera distance; exact original Z/range distance, color transfer, style
-interpretation and visible match remain acceptance questions. No brightness,
+radial camera distance. Fog RGB now follows the same checked
+[numeric working-colour path](menu-working-colour.md) as geometry, particles and
+UI, without changing the authored ARGB bytes. Exact original Z/range distance,
+style interpretation and visible match remain acceptance questions. No brightness,
 ambient floor, screenshot fit or directional fog glow is introduced here.
 Existing scene-light calibration and animation gaps are separate work.
 

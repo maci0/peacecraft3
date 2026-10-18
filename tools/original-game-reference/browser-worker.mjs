@@ -2,7 +2,7 @@ import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {createInterface} from 'node:readline';
 import {pathToFileURL} from 'node:url';
-import {createBrowserAdapter} from './browser-adapter.mjs';
+import {createBrowserAdapter, isConsoleError} from './browser-adapter.mjs';
 
 const maximumMetadata = 2 * 1024 * 1024;
 const respond = message => {
@@ -58,7 +58,11 @@ try {
   });
   page.on('pageerror', error => append(errors, error.message));
   page.on('websocket', socket => append(sockets, socket.url()));
-  page.on('console', message => append(messages, {type: message.type(), text: message.text().slice(0, 4000)}));
+  page.on('console', message => {
+    const type = message.type(), text = message.text().slice(0, 4000);
+    append(messages, {type, text});
+    if (isConsoleError(type, text)) append(errors, text);
+  });
   await page.goto(config.url, {waitUntil: 'domcontentloaded'});
   await page.waitForFunction(() => globalThis.peacecraft3?.menu_state && globalThis.peacecraft3Settings);
   const revision = await page.evaluate(() => peacecraft3.asset_revision());

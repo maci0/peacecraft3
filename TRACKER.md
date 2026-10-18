@@ -2447,3 +2447,29 @@ repeated, and the public site package was not rebuilt.
 - [x] Native harness pointer-query boundary correction (2026-10-18): the read-only position query is now admitted by the real display-command filter, and a failed move invalidates the stored point before any later button press. The regression failed before correction; 47 Python harness tests and four Node tests pass afterward. A fresh native 4K journal exercises the actual filter successfully. The earlier pre-journal refusal remains in private evidence.
 
 - [x] Current-build five-resolution navigation follow-up (2026-10-18): the corrected native/WASM application builds complete Main → Options landing → Video → Main at 1024×768, 1280×960, 1920×1080 and 2560×1440 as well as the verified 3840×2160 follow-up. Thirty-two fresh captures, eight retained current-build 4K captures and twenty retained original WC3/Wine references produce sixty exact-size captures and sixty differing pairwise comparisons. All twenty browser after-capture states are settled; snapshots still change during capture, so animation lockstep is unproved. Source/build/hash/geometry checks, 47 Python and four Node harness checks pass; all fresh runtimes are stopped. No alpha adjustment, pixel exclusion, public deployment or full fidelity claim. Evidence: `.scratch/menu-resolution-current-root-20261018/verification-final-1.json`; report: `comparison-1/index.html`. Transparency, fog/effects, unavailable settings, notices, native Windows and gameplay determinism remain open.
+
+
+- [x] Menu working-channel correction (2026-10-18): a complete fresh original
+  Wine/D3D9 API interval supports numeric sampling/blending. Geometry, PRE2,
+  source colours, fog, ordinary UI and custom UI materials now share that path,
+  with the final display conversion applied once. Authored alpha and texture
+  bytes are unchanged. Actual WebGL caught a missing alternate-view capability;
+  the guarded vendored Bevy descriptor retains the same pixel format. Renderer
+  errors logged through the Rust console now fail the comparison harness.
+  Validation: 647 application tests, 24 explicit ignores, strict native/WASM
+  Clippy/builds/fmt, five GPU checks on Radeon and llvmpipe, 47 Python and five
+  Node/browser checks. Evidence and limits: `docs/re-notes/menu-working-colour.md`.
+- [x] Corrected-composition five-resolution diagnostic: forty fresh native/WASM
+  captures and twenty retained original WC3/Wine references cover Main, blank
+  Options landing, Video and return at 1024×768, 1280×960, 1920×1080, 2560×1440
+  and 3840×2160. All twenty browser after-capture states are settled, without
+  renderer errors; all owned processes are stopped. The native visual run uses
+  an isolated null audio output. Report and verification:
+  `.scratch/menu-composition-root-20261018/comparison-2/index.html` and
+  `verification-final-2.json`.
+- [~] Exact menu fidelity remains open: all sixty pairwise full-frame RGB
+  comparisons still differ. No pixels are excluded or rescaled; the permitted
+  version-string footprint is still unqualified. Fog, lighting, particles,
+  settings defaults/notices, native Windows rendering and deterministic
+  simulation/animation lockstep remain acceptance gates. No public-site update
+  or 100-consecutive original-baseline closure is claimed.

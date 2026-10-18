@@ -4,7 +4,15 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {test} from 'node:test';
-import {checkedGeometry, physicalPoint, checkPointerPosition, checkHeldButton, createBrowserAdapter} from './browser-adapter.mjs';
+import {checkedGeometry, physicalPoint, checkPointerPosition, checkHeldButton, createBrowserAdapter, isConsoleError} from './browser-adapter.mjs';
+
+test('renderer errors logged through the Rust console fail the comparison', () => {
+  assert.equal(isConsoleError('log', '%cERROR%c Caught rendering error: Validation Error'), true);
+  assert.equal(isConsoleError('error', 'Shader compilation failed'), true);
+  assert.equal(isConsoleError('log', '%cWARN%c Software rendering is slow'), false);
+  assert.equal(isConsoleError('warning', 'GPU stall due to ReadPixels'), false);
+  assert.equal(isConsoleError('log', 'An ordinary message mentioning ERROR'), false);
+});
 const observed = {box:{x:20,y:0,width:80,height:60},bitmap:[80,60],client:[80,60],viewport:[200,150],screen:[200,150],dpr:1,insets:[0,0,0,0,0,0,0,0],visual:{scale:1,offsetX:0,offsetY:0,pageX:0,pageY:320}};
 const actual = checkedGeometry(observed,[80,60]);
 assert.deepEqual(actual,{origin:{x:20,y:0},clip:{x:20,y:320,width:80,height:60,scale:1}});
