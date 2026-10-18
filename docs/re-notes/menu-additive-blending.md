@@ -1,76 +1,81 @@
 # Source-selected menu additive blending
 
-Classic layer filter mode 3 requests ONE/ONE RGB addition. The previous menu
-binding used Bevy Add, whose shader multiplies RGB by alpha first. The shared
-menu geometry material now selects the existing StandardMaterial Premultiplied
-shader branch for mode 3 and specializes the forward color blend to
-ONE/ONE/Add. The same specialization applies shading bits `0x40` and `0x80`.
-`0x40` selects `Always` and forces the depth write off. `0x80` forces the
-write off and leaves the compare. Mode 4 retains ordinary Add. No shader fork,
-texture substitution, color adjustment or measured asset value is introduced.
-PRE2 and the UI logo have independent material paths.
+The retained original TFT lens-flare draw uses `SrcAlpha / One` RGB addition.
+The recreation now keeps Bevy `AlphaMode::Add`, which weights the evaluated
+texture/material alpha once before addition. The previous custom `ONE/ONE`
+override bypassed that weight and made transparent texels contribute light.
+It has been removed from the shared background/panel geometry material.
+Authored alpha, textures, tracks and colors are unchanged. Mode 4 keeps its
+existing Add mapping; this observation does not newly qualify that mode.
+PRE2 particles and the UI logo have independent material paths.
 
-The extension key carries the checked source filter word and shading bits
-`0x40` and `0x80`. All source materials are prepared before any model
-asset/entity writes; an unsupported or inconsistent later layer refuses the
-whole batch. The same store serves background and panel geometry. Opacity,
-KMTF and TXAN updates mutate the base material while retaining its handle and
-specialization key; source sampler and ordering admission remain unchanged.
+## Original runtime evidence
 
-The RGB equation does not establish original framebuffer-alpha behavior. The
-explicit compatibility policy preserves destination alpha, like the old Add
-path. Ordered rendering is retained rather than silently selecting weighted
-OIT. Existing zero-opacity visibility, first-layer-only rendering, the cutout
-convention, and Modulate2x remain separate fidelity limits. Culling is
-unchanged. Filter mode 6 keeps the opaque depth write when both depth bits
-are clear; either bit forces that write off. The pinned viewers suppress the
-Modulate2x write even with both bits clear. A blend layer with `0x40` compares
-always and keeps its depth write off. Native depth order and original Warcraft
-III execution of these bits remain unobserved.
+The bounded reader joins the retained model's unique flare topology and index
+range to the original Wine/D3D9 draw. Its directly preceding applied stateblock
+selects source blend `SrcAlpha`, destination blend `One`, blending enabled, and
+stage-zero alpha modulation of texture and current alpha. The reader checks
+thread, context, stateblock, draw tuple and adjacency. Synthetic wrong-context,
+wrong-draw and changed-factor cases exercise the join. [Wine 10.0's enum header](https://github.com/wine-mirror/wine/blob/wine-10.0/include/wine/wined3d.h)
+confirms the recorded factor and stage identifiers.
 
-## Verification boundary
+The selected source model is the locally supplied Legacy TFT background with
+SHA-256 `15586ffd9dc25b82a4f8ce2e679581f6e14cbcdc0916c7422d89308f010f6293`.
+Receipts are `.scratch/menu-alpha-root-20261019/native-blend-1.json` and
+`wine-enum-qualification-1.json`; the trace remains local. This is retained
+application API state joined by topology, not a fresh native file-open receipt
+or proof of every fragment input, alpha-test threshold or framebuffer alpha.
+No screenshot measurement supplies an opacity value.
 
-The actual Bevy material pipeline draws synthetic linear textures into a
-blendable RGBA16Float target, with HDR, unlit materials, fog/tonemapping/debanding
-off and MSAA off. Eighteen cells cover texture alpha zero/interior/one, composed
-base alpha, overlapping additive layers and an alpha-blended interloper. All
-72 channel checks pass on both llvmpipe and Radeon RX 7900 XTX/Vulkan, maximum
-absolute error 0.0004022 within a declared 0.002 half-float tolerance. An actual
-old-Add negative draw fails 27 channels across all nine mode-3 cells while
-mode-4 cells remain correct. This is a bounded synthetic material-pipeline test,
-not original-game or complete menu visual parity.
+## Current material verification
 
-The native app suite passes 245 tests with 11 explicit local-input ignores;
-strict native/WASM checks and builds pass. The qualified Legacy RoC/TFT scene
-import passes. The explicitly selected compatibility-tree panel spawn gate
-passes separately. The Legacy panel gate still refuses its sound compression
-mask 0x81 before geometry construction; this is not a passing panel gate.
-Evidence, including failures, is retained in `.scratch/menu-additive-root-20261016/`
-and `.scratch/menu-additive-bevy-gpu-20261016/`.
+A real Bevy render-graph regression draws a synthetic texture over a nonzero
+background. Four cases cover zero texture alpha, zero material alpha and two
+nonzero products. Twelve RGB checks enforce
+`background + texture_rgb * tint_rgb * texture_alpha * material_alpha` in an
+RGBA16Float target. The old override fails the zero-texture-alpha case; the
+corrected path passes all four cases on Radeon Vulkan. All eight synthetic
+menu render-graph cases pass, including the retained color/fog/depth checks.
+This bounded readback tolerance tests shader arithmetic, not visual parity.
 
-The fresh asset-free package also passes the unchanged local browser gate:
-Main at two animation times, Video Options, then Cancel back to Main. All four
-captures were reviewed. The source scene admits its geosets and textures with
-no missing dependencies or old mode-3 warning. Fifteen local code GETs, no
-uploads, sockets or page errors were recorded. Software-adapter capability
-warnings remain explicit; there was no new pipeline error. This is local
-packaged execution, not a public deployment or original-game comparison.
+The current application suite passes 651 tests with 30 explicit ignores.
+Strict native/WASM Clippy, formatting and both application builds pass. Two
+explicit source-model gates cover 101 poses each; five fixed-pose source
+background readbacks reach 3840×2160. Full-billboard posing is documented in
+[menu-billboards.md](menu-billboards.md).
 
-The retained test ISO predates mandatory panel sound-scale admission. Its two
-earlier runs stopped before rendering on missing metadata and remain failures.
-The refreshed 150-member local fixture preserves all retained member hashes,
-adds explicitly selected source metadata, and retains the original packed
-unsupported sound bytes and their checked archive flags/sector framing. Fresh
-Rust WASM hydration passes before the browser run. No source skin was edited,
-codec refusal bypassed or sound transcoded. The Legacy panel sound still
-refuses mask 0x81 and its panel remains unavailable, visibly separate from the
-working background and Options controls. The fixture and captures stay local.
+Fresh native and local packaged WASM applications each complete Main → Options
+landing → Video → Main at 1024×768, 1280×960, 1920×1080, 2560×1440 and
+3840×2160. Forty new journal captures were visually reviewed against twenty
+retained original WC3/Wine captures. All sixty unscaled pairwise RGB comparisons
+differ; no pixels are excluded, including the unqualified version-text footprint.
+Navigation acceptance passes; exact output acceptance fails. The browser records
+85 admitted local code GETs and no uploads, sockets or page errors. All owned
+capture runtimes stopped. The public site was not deployed. The artifacts use
+one frozen current working tree, including preserved foreign gameplay edits;
+these are not clean-checkout build receipts. The report is
+`.scratch/menu-alpha-root-20261019/comparison-1/index.html`.
 
-The UI logo looks gold/blue in these captures, but its full material composition
-and comparison against a running original remain independent questions; this
-geometry change does not claim a separate logo-color fix or full menu fidelity.
 
-## Authored depth flags: current verification
+The material extension still applies authored depth flags, uses the shared
+fog shader, and retains ordered submission with weighted OIT disabled.
+Unsupported equations and inconsistent base modes refuse before scene writes.
+Full original fragment inputs, cutout/culling, Modulate2x and destination-alpha
+behavior remain separate gates. The current cutout convention is not changed
+by copying a measured API threshold into a constant.
+
+## Superseded additive claim
+
+The earlier ONE/ONE interpretation and its 72-channel synthetic readback proved
+an explicitly chosen recreation equation, not the original game's equation.
+Its old-Add negative control likewise tested that choice. The leading claim in
+the previous version of this note and the corresponding tracker item are
+withdrawn. Historical receipts in `.scratch/menu-additive-root-20261016/` and
+`.scratch/menu-additive-bevy-gpu-20261016/` remain unchanged; they must not be
+used as original blend-fidelity evidence. Earlier browser/package checks did
+not establish full visual parity.
+
+## Earlier authored depth verification (retained)
 
 The source layer's shading word now reaches the shared background/panel material
 specialization. The disabled-test profile also disables writes: replacing an

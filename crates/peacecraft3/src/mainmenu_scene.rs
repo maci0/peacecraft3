@@ -53,10 +53,10 @@
 //!     explicit reconstruction convention from primary MDX renderers. Cutoff,
 //!     blend/depth and composed-alpha behavior are not certified native parity;
 //!     see `docs/re-notes/menu-alpha-test.md` for evidence and remaining limits.
-//!   * `filterMode 3` (`Additive`) uses unattenuated RGB and `ONE/ONE` blending.
-//!     `filterMode 4` retains Bevy's alpha-weighted `Add` path. The explicit
-//!     destination-alpha preservation policy is a recreation convention, not
-//!     original framebuffer-alpha proof; see `menu-additive-blending.md`.
+//!   * `filterMode 3` uses source-alpha addition, qualified at a retained native
+//!     model draw. Mode 4 retains its existing Add path. Framebuffer alpha,
+//!     fragment cutoff and complete native input parity remain open; see
+//!     `menu-additive-blending.md`.
 //!   * `filterMode 6` (`Modulate2x`) has no equivalent and draws opaque.
 //!
 //!   `filterMode 5` (`Modulate`) maps to `AlphaMode::Multiply`, which Bevy does
@@ -389,24 +389,16 @@ pub struct LayerFlags {
     pub alpha_mode: AlphaMode,
     /// The layer's static alpha. `1.0` when the layer has none.
     pub alpha: f32,
-    /// Gaps in the base StandardMaterial mapping; menu specialization resolves mode 3.
+    /// Remaining unsupported base blend equations.
     pub blend_gap: Option<BlendGap>,
 }
 
 /// A blend the format asks for that `StandardMaterial` cannot reproduce exactly.
 ///
 /// Each variant names what is *different*, because "not exact" on its own is not
-/// actionable and the two cases fail differently on screen.
+/// actionable; unsupported equations remain explicit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlendGap {
-    /// `filterMode 3`, additive with `ONE/ONE`: the source colour is added
-    /// unmodified. Bevy's `AlphaMode::Add` premultiplies first
-    /// (`src_color *= src_alpha`, `src_alpha = 0`, giving
-    /// `src_alpha * src_color + dst_color`), so the two agree only where the
-    /// layer's alpha is 1. Below that Bevy adds less than the original does.
-    /// `filterMode 4` is *exactly* Bevy's `Add`, which is why only `3` is
-    /// flagged.
-    AdditiveIsPremultiplied,
     /// `filterMode 6`, modulate 2x: the destination is multiplied by twice the
     /// source. There is no such mode, so it draws opaque.
     Modulate2x,
@@ -417,9 +409,6 @@ impl BlendGap {
     #[must_use]
     pub fn reason(self) -> &'static str {
         match self {
-            BlendGap::AdditiveIsPremultiplied => {
-                "filterMode 3 is ONE/ONE; Bevy's Add premultiplies by alpha"
-            }
             BlendGap::Modulate2x => "filterMode 6 modulate-2x has no equivalent; draws opaque",
         }
     }
@@ -434,7 +423,7 @@ impl BlendGap {
 /// 0  None          opaque
 /// 1  Transparent   alpha test -- opaque or discarded, no partial coverage
 /// 2  Blend         SRC_ALPHA / ONE_MINUS_SRC_ALPHA
-/// 3  Additive      ONE / ONE
+/// 3  Additive      SRC_ALPHA / ONE (retained original menu draw)
 /// 4  AdditiveAlpha SRC_ALPHA / ONE
 /// 5  Modulate      DST_COLOR / ZERO          (multiply)
 /// 6  Modulate2x    DST_COLOR / SRC_COLOR      (multiply, then add both)
@@ -443,18 +432,16 @@ impl BlendGap {
 /// Against Bevy's `AlphaMode`, verified in this tree: `Blend` is the same as
 /// mode 2; `Multiply` maps to `BLEND_MULTIPLY`
 /// (`bevy_pbr/src/pbr_material.rs`) and is the same as mode 5; and `Add` is
-/// **mode 4**, not mode 3 — `bevy_pbr/src/render/pbr_functions.wesl` premultiplies
-/// `src_color` by `src_alpha` and zeroes `src_alpha`, which is `SRC_ALPHA / ONE`.
-/// Mode 3 therefore gets [`BlendGap::AdditiveIsPremultiplied`] and mode 6 has no
-/// equivalent at all.
+/// the observed mode-3 RGB equation: the shader premultiplies evaluated alpha
+/// before ONE/ONE addition. Mode 4 retains the existing mapping; it is not newly
+/// native-qualified here. Mode 6 still has no complete equivalent.
 fn alpha_mode_of(filter_mode: u32) -> (AlphaMode, Option<BlendGap>) {
     match filter_mode {
         0 => (AlphaMode::Opaque, None),
         // Reconstruction convention from primary MDX renderers; see menu-alpha-test.md.
         1 => (AlphaMode::Mask(0.75), None),
         2 => (AlphaMode::Blend, None),
-        3 => (AlphaMode::Add, Some(BlendGap::AdditiveIsPremultiplied)),
-        4 => (AlphaMode::Add, None),
+        3 | 4 => (AlphaMode::Add, None),
         5 => (AlphaMode::Multiply, None),
         _ => (AlphaMode::Opaque, Some(BlendGap::Modulate2x)),
     }
@@ -711,6 +698,7 @@ pub struct MainMenuScene {
     opacity_materials: Vec<(usize, Entity, Handle<MenuMaterial>)>,
     particles: Option<particles::ParticleScene>,
     lighting: Option<crate::menu_lighting::Lighting>,
+    camera_pose: Option<pcx_gfx::mdx_billboard::CameraPosePlan>,
     clip: Option<pcx_gfx::mdx_particles::Clip>,
     /// The clip's first frame.
     interval_start: u32,
@@ -769,6 +757,9 @@ pub fn spawn(
         pcx_gfx::load_model(bytes, source).map_err(|e| SceneError::Decode(e.to_string()))?;
     let runtime = pcx_gfx::mdx_runtime::RuntimePlan::parse(bytes)
         .map_err(|e| SceneError::Decode(e.to_string()))?;
+    let camera_pose_plan =
+        pcx_gfx::mdx_billboard::CameraPosePlan::checked(&runtime.joints, camera_pose.rotation)
+            .map_err(|error| SceneError::Decode(format!("{source}: BONE/HELP: {error}")))?;
     let joints = &runtime.joints;
     let bones = joints.joints().to_vec();
     let pivots = Some(joints.pivots().clone());
@@ -920,12 +911,14 @@ pub fn spawn(
             bones: &bones,
             pivots: pivots.as_ref().unwrap(),
             global_durations: &runtime.global_sequences,
+            camera_pose: Some(&camera_pose_plan),
         },
         &handles,
         interval[0],
         0,
         meshes,
-    );
+    )
+    .map_err(|error| SceneError::Decode(format!("{source}: BONE/HELP: {error}")))?;
     lighting
         .apply(
             &model,
@@ -940,6 +933,7 @@ pub fn spawn(
         model: Some(model),
         particles,
         lighting: Some(lighting),
+        camera_pose: Some(camera_pose_plan),
         clip: clip.map(|clip| pcx_gfx::mdx_particles::Clip {
             interval,
             looping: !clip.non_looping,
@@ -1087,9 +1081,7 @@ pub fn preflight_geosets<'a>(
                 mesh.geoset, mesh.material_id
             ))
         })?;
-        let gap = flags
-            .blend_gap
-            .filter(|gap| *gap != BlendGap::AdditiveIsPremultiplied);
+        let gap = flags.blend_gap;
         initial.push((id, material, gap));
     }
     Ok(GeosetPreflight { required, initial })
@@ -1243,6 +1235,8 @@ pub struct Rig<'a> {
     pub pivots: &'a pcx_mdl::Pivots,
     /// `GLBS` durations, indexed by global-sequence id.
     pub global_durations: &'a [u32],
+    /// Checked static source camera; panels retain their independent pose path.
+    pub camera_pose: Option<&'a pcx_gfx::mdx_billboard::CameraPosePlan>,
 }
 
 /// Poses the skeleton at `frame` and rewrites every geoset's positions.
@@ -1256,13 +1250,18 @@ pub fn skin_geosets(
     frame: u32,
     elapsed_ms: u32,
     meshes: &mut Assets<Mesh>,
-) -> pcx_gfx::Skeleton {
+) -> Result<pcx_gfx::Skeleton, SceneError> {
     let poses: Vec<pcx_mdl::Pose> = rig
         .bones
         .iter()
         .map(|b| tracked_pose(b, frame, elapsed_ms, rig.global_durations))
         .collect();
-    let skeleton = pcx_gfx::pose_from_poses(rig.model, rig.bones, rig.pivots, &poses);
+    let skeleton = match rig.camera_pose {
+        Some(plan) => plan
+            .pose(&poses)
+            .map_err(|error| SceneError::Decode(error.into()))?,
+        None => pcx_gfx::pose_from_poses(rig.model, rig.bones, rig.pivots, &poses),
+    };
     for (handle, rest) in handles.iter().zip(&rig.model.meshes) {
         let Some(mut mesh) = meshes.get_mut(handle) else {
             continue;
@@ -1272,7 +1271,7 @@ pub fn skin_geosets(
             pcx_gfx::skin_mesh(rest, &skeleton),
         );
     }
-    skeleton
+    Ok(skeleton)
 }
 
 /// Marker for the camera this module owns, so a caller can find and remove it.
@@ -1778,12 +1777,20 @@ pub fn advance(
             bones: &scene.bones,
             pivots,
             global_durations: &scene.global_durations,
+            camera_pose: scene.camera_pose.as_ref(),
         },
         &scene.handles,
         frame,
         elapsed_ms as u32,
         &mut meshes,
     );
+    let skeleton = match skeleton {
+        Ok(skeleton) => skeleton,
+        Err(error) => {
+            error!("{}: {error}", scene.texture_bindings.source);
+            return;
+        }
+    };
     if let Some(lighting) = &scene.lighting
         && let Err(error) = lighting.apply(
             model,
@@ -1936,7 +1943,7 @@ mod tests {
         );
         assert_eq!(
             materials.get(&animated).unwrap().base.alpha_mode,
-            AlphaMode::Premultiplied
+            AlphaMode::Add
         );
         assert_eq!(
             materials.get(&unrelated).unwrap().base.base_color.alpha(),
@@ -2496,15 +2503,9 @@ mod tests {
                 .count(),
             "shadingFlags bit 0"
         );
-        // These are base mappings; shared menu specialization resolves mode 3.
+        // Mode 3 now follows the observed source-alpha equation directly.
         let gaps: Vec<BlendGap> = all.iter().filter_map(|f| f.blend_gap).collect();
-        assert_eq!(gaps.len(), filter_count(3) + filter_count(6));
-        assert_eq!(
-            gaps.iter()
-                .filter(|g| **g == BlendGap::AdditiveIsPremultiplied)
-                .count(),
-            filter_count(3)
-        );
+        assert_eq!(gaps.len(), filter_count(6));
 
         for (material, flags) in materials.iter().zip(&all) {
             assert_eq!(
@@ -2544,10 +2545,7 @@ mod tests {
         assert_eq!(alpha_mode_of(0), (AlphaMode::Opaque, None));
         assert_eq!(alpha_mode_of(1), (AlphaMode::Mask(0.75), None));
         assert_eq!(alpha_mode_of(2), (AlphaMode::Blend, None));
-        assert_eq!(
-            alpha_mode_of(3),
-            (AlphaMode::Add, Some(BlendGap::AdditiveIsPremultiplied))
-        );
+        assert_eq!(alpha_mode_of(3), (AlphaMode::Add, None));
         // Mode 4 is `SRC_ALPHA / ONE`, which is exactly what Bevy's `Add` does.
         assert_eq!(alpha_mode_of(4), (AlphaMode::Add, None));
         assert_eq!(alpha_mode_of(5), (AlphaMode::Multiply, None));
@@ -3008,7 +3006,7 @@ mod texture_selection_tests {
         let blended = spawned.materials.get(&geosets.bound[1].2).unwrap();
         assert!(!additive.base.fog_enabled);
         assert!(blended.base.fog_enabled);
-        assert_eq!(additive.base.alpha_mode, AlphaMode::Premultiplied);
+        assert_eq!(additive.base.alpha_mode, AlphaMode::Add);
         assert_eq!(additive.base.base_color.alpha(), 0.25);
         assert_eq!(blended.base.base_color.alpha(), 0.25);
         assert!(!additive.base.unlit);

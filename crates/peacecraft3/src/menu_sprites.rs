@@ -1720,18 +1720,22 @@ pub fn advance(
             &mut materials,
             &mut visibility,
         );
-        scene::skin_geosets(
+        if let Err(error) = scene::skin_geosets(
             scene::Rig {
                 model: &panel.model,
                 bones: &panel.bones,
                 pivots: &panel.pivots,
                 global_durations: &panel.global_durations,
+                camera_pose: None,
             },
             &panel.geosets.handles,
             frame,
             elapsed_ms as u32,
             &mut meshes,
-        );
+        ) {
+            navigation.notice = format!("{}: {error}", panel.path);
+            return;
+        }
     }
     events.sort_by_key(|&(segment, offset, _, _, _)| (segment, offset));
     for (_, _, panel, sound, phase) in events {

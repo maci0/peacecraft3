@@ -1541,7 +1541,7 @@ pub fn bone_matrices_from_poses(
 /// `(pivot + translation) - (R * S) * pivot`. The world matrix is then
 /// `parent * local` — **both** the 3×3 and the translation column, because a
 /// bone inside a rotated parent has to inherit that parent's rotation.
-fn compose(parent: [f32; 16], pose: Pose, pivot: [f32; 3]) -> [f32; 16] {
+pub fn compose(parent: [f32; 16], pose: Pose, pivot: [f32; 3]) -> [f32; 16] {
     let q = pose.rotation;
     let s = pose.scale;
     let (x, y, z, w) = (q[0], q[1], q[2], q[3]);

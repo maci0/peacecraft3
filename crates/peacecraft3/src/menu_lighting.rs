@@ -715,6 +715,12 @@ pub(crate) mod tests {
         let bytes = std::fs::read(&model).unwrap();
         let mdx = pcx_mdl::Mdlx::parse(&bytes).unwrap();
         let runtime = pcx_gfx::mdx_runtime::RuntimePlan::parse(&bytes).unwrap();
+        let camera = mdx.cameras(&bytes).unwrap().remove(0);
+        let camera = Transform::from_translation(Vec3::from(camera.eye))
+            .looking_at(Vec3::from(camera.target), Vec3::Z);
+        let camera_pose =
+            pcx_gfx::mdx_billboard::CameraPosePlan::checked(&runtime.joints, camera.rotation)
+                .unwrap();
         let clips = mdx.sequences(&bytes).unwrap();
         let clip = clips.iter().find(|c| c.name == "Stand").unwrap();
         let mut lighting = Lighting::checked(
@@ -790,12 +796,14 @@ pub(crate) mod tests {
                     bones: runtime.joints.joints(),
                     pivots: runtime.joints.pivots(),
                     global_durations: &runtime.global_sequences,
+                    camera_pose: Some(&camera_pose),
                 },
                 &handles,
                 frame,
                 elapsed as u32,
                 &mut meshes,
-            );
+            )
+            .unwrap();
             lighting
                 .apply(
                     &loaded,

@@ -185,13 +185,31 @@ integration. A completed prototype does not close its broader milestone.
       runtime-bounded image regions are unchanged between entry and Sound in
       both the old and fresh large-view runs. No rendering repair is claimed. See
       `docs/re-notes/options-slider-input.md`.
-- [x] Menu geometry now preserves source ONE/ONE additive RGB instead of
-      premultiplying it by alpha. Actual Bevy draws pass 72 channel checks on
-      software and Radeon Vulkan; the old-Add negative fails the expected cases.
-      Fresh local packaged browser Main/Video Options/Cancel captures pass with
-      no uploads or page errors. PRE2, UI-logo composition, framebuffer alpha and
-      full native menu fidelity remain separate. See
+- [x] Corrected menu additive geometry to the retained original flare draw's
+      source-alpha/One RGB equation (2026-10-19). The earlier ONE/ONE fidelity
+      claim is withdrawn: that synthetic test proved a chosen equation, not
+      the original. Removing the override makes zero texture/material alpha
+      contribute no additive light, without changing authored opacity. The
+      causal GPU regression fails before the fix and passes after it; all eight
+      synthetic hardware render-graph cases pass. See
       `docs/re-notes/menu-additive-blending.md`.
+- [x] Background full-billboard posing consumes source flags, hierarchy, pivots,
+      tracks and the selected source camera (2026-10-19). Nested camera-facing
+      joints cancel the parent turn once; skinning and lighting share the pose.
+      Six synthetic regressions, 53 renderer tests, 57 decoder tests and both
+      explicit 101-pose source gates pass. Unsupported transforms in affected
+      families refuse; axis locks outside them remain on the existing path.
+      Native matrix identity and particle-phase parity are not proved. See
+      `docs/re-notes/menu-billboards.md`.
+- [~] The composed alpha/billboard candidate passes 651 application tests,
+      strict native/WASM checks/builds, five hardware source-background extents
+      and ten fresh native/browser navigation runs through 3840×2160. Forty new
+      captures are reviewed against twenty retained WC3/Wine captures; all
+      sixty exact RGB comparisons still differ. No version pixels are excluded.
+      Glow/rays, panel appearance, source settings, glyphs, cutout/culling,
+      native Windows and deterministic original/native/WASM lockstep remain
+      open. Public site unchanged. Local receipts and report:
+      `.scratch/menu-alpha-root-20261019/audit-final-2.json`.
 - [~] Local imports follow skin-selected hanging-panel model/TEXS edges.
       Known unsupported panel audio codecs now preserve admitted graphics and
       other playable sounds. Qualified Legacy panel spawn and a six-capture local
@@ -566,6 +584,10 @@ terrain rendering, asset-defined terrain materials or native rendering fidelity.
       wgpu therefore selects the WebGL2 backend, and the app runs on it.
 - [x] The launcher canvas is created inside `#launcher-canvas` at 880×860.
 - [x] Custom launcher configuration layout (2026-10-18): project-owned controls replace stretched imported plates; a bundled sans font, stable selection borders, readable disabled labels, wrapping source paths and keyboard focus/scrolling are integrated. Original landscape artwork decorates only the custom launcher, with no extracted game art. Actual native and WASM launcher captures at 880×860, 1280×960 and 640×800, native main-menu entry, 48 launcher/navigation tests (one explicit asset test ignored), strict native/WASM builds and Clippy pass. Evidence: `.scratch/launcher-ui-root-20261018/verification.json`. This does not close original-menu, gameplay or rendered parity gates; no site deployment is claimed.
+- [ ] Initial native launcher sizing must fit the actual desktop work area.
+      The five-resolution alpha review observes the initial window overflowing
+      a small headless display; explicit final window bounds and in-game menu
+      navigation pass separately. This is not a completed launcher sizing gate.
 - [x] Three-application comparison instrumentation (2026-10-18): one input journal drives actual original WC3/Wine, native PC3 and browser WASM PC3, with checked native process/window/build/content identities and matching native/WASM source fingerprints. Four checkpoints retain twelve unscaled 1280×960 captures and all three pairwise RGB comparisons; the run completed with differences (exit 1), not a runtime refusal. Forty-four Python checks and two browser-adapter checks pass. Evidence: `.scratch/three-target-reference-root-20261018/verification-final-4.json`.
 - [~] Exact rendered-output acceptance: every decoded RGB pixel must match across all three targets, except the bottom-right version string only. No tolerance, normalization or broad corner crop is allowed. Its precise text footprint is not qualified, so no pixels are currently excluded. All four retained checkpoints fail the strict comparison; animation clocks/RNG remain uncontrolled and native frame state is unobserved. The local source closure was corrected to include the model-derived left-panel sound dependencies; fresh native/WASM captures restore the Video housing without inventing audio. Lighting, glyphs, slider thumb, settings admission and animation alignment still differ. This does not close deterministic gameplay, audio or original/native/browser visual parity.
 

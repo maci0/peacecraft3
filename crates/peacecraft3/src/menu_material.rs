@@ -1,11 +1,10 @@
-//! Source-selected menu geometry blending; PRE2 and UI images use other paths.
+//! Checked source menu modes and authored depth flags; PRE2/UI use other paths.
 use bevy::{
     mesh::MeshVertexBufferLayoutRef,
     pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline},
     prelude::*,
     render::render_resource::{
-        AsBindGroup, BlendComponent, BlendFactor, BlendOperation, BlendState, CompareFunction,
-        RenderPipelineDescriptor, SpecializedMeshPipelineError,
+        AsBindGroup, CompareFunction, RenderPipelineDescriptor, SpecializedMeshPipelineError,
     },
 };
 use std::fmt;
@@ -25,14 +24,12 @@ pub(crate) const NO_DEPTH_SET: u32 = 0x80;
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
 #[bind_group_data(MenuBlendKey)]
 pub(crate) struct MenuBlend {
-    one_one: bool,
     no_depth_test: bool,
     no_depth_set: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct MenuBlendKey {
-    one_one: bool,
     no_depth_test: bool,
     no_depth_set: bool,
 }
@@ -40,7 +37,6 @@ pub(crate) struct MenuBlendKey {
 impl From<&MenuBlend> for MenuBlendKey {
     fn from(value: &MenuBlend) -> Self {
         Self {
-            one_one: value.one_one,
             no_depth_test: value.no_depth_test,
             no_depth_set: value.no_depth_set,
         }
@@ -73,7 +69,7 @@ impl std::error::Error for SourceModeError {}
 /// caller. Mode 1 retains the caller's cutoff. Mode 6 retains its opaque alpha
 /// mode; a set depth bit still forces that depth write off.
 pub(crate) fn checked_source_mode(
-    mut base: StandardMaterial,
+    base: StandardMaterial,
     filter_mode: u32,
     shading_flags: u32,
 ) -> Result<MenuMaterial, SourceModeError> {
@@ -89,15 +85,10 @@ pub(crate) fn checked_source_mode(
     if !consistent {
         return Err(SourceModeError::InconsistentAlphaMode(filter_mode));
     }
-    let one_one = filter_mode == 3;
-    if one_one {
-        // The standard Premultiplied shader branch leaves RGB unchanged.
-        base.alpha_mode = AlphaMode::Premultiplied;
-    }
+    // Bevy Add weights RGB by the evaluated source alpha once before addition.
     Ok(MenuMaterial {
         base,
         extension: MenuBlend {
-            one_one,
             no_depth_test: shading_flags & NO_DEPTH_TEST != 0,
             no_depth_set: shading_flags & NO_DEPTH_SET != 0,
         },
@@ -120,27 +111,6 @@ impl MenuBlend {
             }
             depth.depth_write_enabled = Some(false);
         }
-        if !key.one_one {
-            return;
-        }
-        let target = descriptor
-            .fragment
-            .as_mut()
-            .expect("StandardMaterial forward pipeline has a fragment stage")
-            .targets
-            .first_mut()
-            .and_then(Option::as_mut)
-            .expect("StandardMaterial forward pipeline has color target zero");
-        target.blend = Some(BlendState {
-            color: BlendState::ADDITIVE.color,
-            // Compatibility convention: preserve existing Add's destination
-            // alpha; original separate-alpha parity remains unverified.
-            alpha: BlendComponent {
-                src_factor: BlendFactor::Zero,
-                dst_factor: BlendFactor::One,
-                operation: BlendOperation::Add,
-            },
-        });
     }
 }
 
@@ -169,10 +139,10 @@ impl MaterialExtension for MenuBlend {
 mod tests {
     use super::*;
     use bevy::{
-        pbr::{Material, MeshPipelineKey},
+        pbr::Material,
         render::render_resource::{
-            ColorTargetState, ColorWrites, DepthBiasState, DepthStencilState, Face, FragmentState,
-            StencilFaceState, StencilState, TextureFormat,
+            BlendState, ColorTargetState, ColorWrites, DepthBiasState, DepthStencilState, Face,
+            FragmentState, StencilFaceState, StencilState, TextureFormat,
         },
         shader::ShaderRef,
     };
@@ -235,30 +205,14 @@ mod tests {
         descriptor
     }
 
-    fn one_one_blend() -> BlendState {
-        BlendState {
-            color: BlendComponent {
-                src_factor: BlendFactor::One,
-                dst_factor: BlendFactor::One,
-                operation: BlendOperation::Add,
-            },
-            alpha: BlendComponent {
-                src_factor: BlendFactor::Zero,
-                dst_factor: BlendFactor::One,
-                operation: BlendOperation::Add,
-            },
-        }
-    }
-
     #[test]
     fn source_mode_atomically_selects_key_without_changing_source_material_values() {
         let original = base(AlphaMode::Add);
         let source_color = original.base_color;
         let source_uv = original.uv_transform;
         let mode3 = checked_source_mode(original, 3, 0).unwrap();
-        assert_eq!(mode3.base.alpha_mode, AlphaMode::Premultiplied);
+        assert_eq!(mode3.base.alpha_mode, AlphaMode::Add);
         let mode3_key = MenuBlendKey::from(&mode3.extension);
-        assert!(mode3_key.one_one);
         assert!(!mode3_key.no_depth_test);
         assert!(!mode3_key.no_depth_set);
         assert_eq!(mode3.base.base_color, source_color);
@@ -268,11 +222,11 @@ mod tests {
         assert_eq!(mode3.base.cull_mode, None);
         let mode4 = checked_source_mode(base(AlphaMode::Add), 4, 0).unwrap();
         assert_eq!(mode4.base.alpha_mode, AlphaMode::Add);
-        assert_ne!(
+        assert_eq!(
             MenuBlendKey::from(&mode3.extension),
             MenuBlendKey::from(&mode4.extension)
         );
-        assert_eq!(Material::alpha_mode(&mode3), AlphaMode::Premultiplied);
+        assert_eq!(Material::alpha_mode(&mode3), AlphaMode::Add);
         assert_eq!(Material::alpha_mode(&mode4), AlphaMode::Add);
         assert!(!MenuBlend::enable_oit());
         assert!(matches!(MenuBlend::fragment_shader(), ShaderRef::Path(_)));
@@ -285,6 +239,7 @@ mod tests {
             (0, AlphaMode::Opaque),
             (1, AlphaMode::Mask(0.37)),
             (2, AlphaMode::Blend),
+            (3, AlphaMode::Add),
             (4, AlphaMode::Add),
             (5, AlphaMode::Multiply),
             (6, AlphaMode::Opaque),
@@ -292,7 +247,6 @@ mod tests {
             let material = checked_source_mode(base(alpha), mode, 0).unwrap();
             assert_eq!(material.base.alpha_mode, alpha);
             let key = MenuBlendKey::from(&material.extension);
-            assert!(!key.one_one);
             assert!(!key.no_depth_test);
             assert!(!key.no_depth_set);
         }
@@ -317,51 +271,12 @@ mod tests {
     }
 
     #[test]
-    fn hook_payload_and_actual_key_change_only_mode3_blend() {
-        let material = checked_source_mode(base(AlphaMode::Add), 3, 0).unwrap();
-        let key = MaterialExtensionKey::<MenuBlend> {
-            mesh_key: MeshPipelineKey::BLEND_PREMULTIPLIED_ALPHA,
-            bind_group_data: MenuBlendKey::from(&material.extension),
-        };
-        let mut actual = descriptor();
-        let mut expected = actual.clone();
-        expected.fragment.as_mut().unwrap().targets[0]
-            .as_mut()
-            .unwrap()
-            .blend = Some(one_one_blend());
-        MenuBlend::specialize_descriptor(&mut actual, key.bind_group_data);
-        assert_eq!(actual, expected);
-        let mode4 = checked_source_mode(base(AlphaMode::Add), 4, 0).unwrap();
-        let mut unchanged = descriptor();
-        let before = unchanged.clone();
-        MenuBlend::specialize_descriptor(&mut unchanged, MenuBlendKey::from(&mode4.extension));
-        assert_eq!(unchanged, before);
-        // The real trait entry point delegates exactly this descriptor/key
-        // operation. Executing it also needs Bevy's device-owned MeshPipeline.
-        let _hook = <MenuBlend as MaterialExtension>::specialize;
-    }
-
-    #[test]
-    #[should_panic(expected = "color target zero")]
-    fn mode3_does_not_silently_succeed_without_the_standard_forward_target() {
-        let material = checked_source_mode(base(AlphaMode::Add), 3, 0).unwrap();
-        let mut missing = descriptor();
-        missing.fragment.as_mut().unwrap().targets.clear();
-        MenuBlend::specialize_descriptor(&mut missing, MenuBlendKey::from(&material.extension));
-    }
-
-    #[test]
     fn depth_flags_specialize_compare_and_write_without_other_pipeline_state() {
         let cases = [
             (0, AlphaMode::Opaque, true, None),
             (1, AlphaMode::Mask(0.75), true, None),
             (2, AlphaMode::Blend, false, Some(BlendState::ALPHA_BLENDING)),
-            (
-                3,
-                AlphaMode::Add,
-                false,
-                Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-            ),
+            (3, AlphaMode::Add, false, Some(BlendState::ADDITIVE)),
             (4, AlphaMode::Add, false, Some(BlendState::ADDITIVE)),
             (6, AlphaMode::Opaque, true, None),
         ];
@@ -370,7 +285,6 @@ mod tests {
                 let source = base(alpha);
                 let material = checked_source_mode(source.clone(), mode, flags).unwrap();
                 let key = MenuBlendKey::from(&material.extension);
-                assert_eq!(key.one_one, mode == 3);
                 assert_eq!(key.no_depth_test, flags & NO_DEPTH_TEST != 0);
                 assert_eq!(key.no_depth_set, flags & NO_DEPTH_SET != 0);
                 assert_eq!(material.base.base_color, source.base_color);
@@ -378,12 +292,7 @@ mod tests {
                 assert_eq!(material.base.unlit, source.unlit);
                 assert_eq!(material.base.fog_enabled, source.fog_enabled);
                 assert_eq!(material.base.cull_mode, source.cull_mode);
-                let expected_alpha = if mode == 3 {
-                    AlphaMode::Premultiplied
-                } else {
-                    alpha
-                };
-                assert_eq!(material.base.alpha_mode, expected_alpha);
+                assert_eq!(material.base.alpha_mode, alpha);
 
                 let mut actual = forward(blend, write);
                 let depth_before = actual.depth_stencil.clone().unwrap();
@@ -417,12 +326,7 @@ mod tests {
                 let color = actual.fragment.as_ref().unwrap().targets[0]
                     .as_ref()
                     .unwrap();
-                let expected_blend = if mode == 3 {
-                    Some(one_one_blend())
-                } else {
-                    blend_before
-                };
-                assert_eq!(color.blend, expected_blend);
+                assert_eq!(color.blend, blend_before);
                 assert_eq!(color.write_mask, ColorWrites::RED | ColorWrites::ALPHA);
                 assert_eq!(actual.primitive.cull_mode, Some(Face::Back));
                 assert!(actual.multisample.alpha_to_coverage_enabled);
@@ -451,7 +355,7 @@ mod tests {
             MenuBlendKey::from(&clear.extension)
         );
         let mode3 = checked_source_mode(base(AlphaMode::Add), 3, 0xC0).unwrap();
-        assert_ne!(
+        assert_eq!(
             MenuBlendKey::from(&mode3.extension),
             MenuBlendKey::from(&combined.extension)
         );
@@ -529,16 +433,6 @@ mod tests {
         assert_eq!(depth.depth_compare, Some(CompareFunction::Always));
         assert_eq!(depth.depth_write_enabled, Some(false));
         assert!(pipeline.fragment.is_none());
-    }
-
-    #[test]
-    #[should_panic(expected = "color target zero")]
-    fn mode3_depth_flag_still_requires_the_color_target() {
-        let material = checked_source_mode(base(AlphaMode::Add), 3, 0x40).unwrap();
-        let mut missing = descriptor();
-        missing.fragment.as_mut().unwrap().targets.clear();
-        missing.depth_stencil = Some(depth_state(false));
-        MenuBlend::specialize_descriptor(&mut missing, MenuBlendKey::from(&material.extension));
     }
 
     #[test]
