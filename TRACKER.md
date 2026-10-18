@@ -2402,8 +2402,10 @@ repeated, and the public site package was not rebuilt.
   five new handles. A separate source-tagged unit stream records all 155 map
   constructor calls across 53 rawcodes. One hundred getter poses differ from
   post-native argument snapshots; 146 fit quarter-unit flooring and nine move
-  further. Coordinate conversion and 129 logged input/literal-cast differences
-  still need isolation. Two incomplete unit-trace attempts remain rejected;
+  further. A subsequent 32-case probe isolates 26 compiled-literal differences
+  before native creation, using scaled integer checks. Real equality accepts
+  those differing pairs while ordering distinguishes them. Exact conversion
+  and equality policies remain open. Two incomplete unit traces remain rejected;
   accepted datasets refuse eight mutants each and all containers are stopped.
   This changes the required world inputs, not production placement behavior.
 - [ ] Queried initial positions do not preserve the requested creation geometry.

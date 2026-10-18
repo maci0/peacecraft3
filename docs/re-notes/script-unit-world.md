@@ -240,9 +240,9 @@ from the selected coordinate path before implementing it.
 
 There is another unresolved numeric distinction: 129 of 465 logged x/y/facing
 inputs differ from a standard decimal-to-binary32 literal cast. Because these
-helper arguments are read after native creation, literal decoding, parameter
-writeback and formatting effects still need isolation. Changing the shared
-script parser on this evidence alone would be premature.
+helper arguments were read after native creation, that trace alone did not
+isolate literal decoding, parameter writeback or formatting. The subsequent
+numeric probe below narrows that distinction.
 
 The first unit-trace attempt produced no records and a native error dialog;
 moving the wrapper definition before its first use allowed native execution.
@@ -257,6 +257,39 @@ Input/member hashes, bounded code checks and receipts remain local under
 No production placement or range consumer changes here. Complete live
 occupancy, walkable-model overlays, rotation and lifetime remain open, as do
 the unchanged-map four-result RNG gate and recreation rendering.
+
+## Numeric input isolation (2026-10-18)
+
+Two further fresh reference runs compare 32 selected decimals before any probe
+unit creation. References are constructed from exactly representable signed
+integer mantissas and repeated scaling by integer two. The second run extracts
+scaled integer values with `R2I`; all 32 constructed references recover the
+expected integer. This avoids treating decimal formatting or real equality as
+an exact representation check.
+
+Twenty-six compiled literals differ from standard nearest binary32 conversion.
+Twenty-four selected map literals differ by one step toward zero; the positive
+and negative `0.1` controls differ by one step away from zero. `S2R` agrees with
+the constructed reference in the other 30 cases, including the 24 selected map
+literals. These differences occur before the probe's native creation calls;
+they cannot be attributed solely to creation's argument writeback or logging.
+All eight later creation calls preserve their before/after formatted arguments.
+That observation covers these inputs, not every native or possible argument.
+
+Real equality reports true for all 26 differing literal/reference pairs, while
+ordered comparisons and integer comparisons distinguish them. False controls
+and distant-value checks also execute. The equality tolerance and complete
+literal-conversion algorithm remain unqualified; an assumed epsilon or blanket
+round-toward-zero conversion would not follow from these observations.
+
+The runs retain 82 and 146 complete records, with all common observations
+repeated. Eight mutated logs refuse. Six selected-code graphs and 50 blocks are
+rechecked, including `S2R`'s decimal parser and integer conversion helpers; they
+do not yet identify the compiler's literal-conversion path. Both containers are
+stopped and preserved. Receipts remain local under
+`.scratch/script-real-input-root-20261018/`. Production literal evaluation and
+real comparisons still use the existing host operations; this is an open
+fidelity difference, not a parser fix or a successful full-map startup.
 
 ## One bounded range probe (2026-10-18)
 
