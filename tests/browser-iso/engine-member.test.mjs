@@ -6,6 +6,8 @@ import { extractArcMembers } from '../../web/iso/arc-extract.js';
 import { CLIENT_IMAGE_BYTES, directEngineFile, planEngineMembers, selectNamedEngine } from '../../web/iso/engine-member.js';
 import { stageStoredInstallerFiles } from '../../web/iso/installer-import.js';
 import { importIsoCandidates } from '../../web/iso/import.js';
+import { discoverIso } from '../../web/iso.js';
+import { isoFixture } from './fixtures.mjs';
 
 const SOLID = 2 * 1024 * 1024 * 1024;
 const SELECTED = 1024 * 1024 * 1024;
@@ -318,4 +320,18 @@ test('the worker reserves other selected archives before the image', () => {
   assert.match(worker, /maxSelectedBytes: MAX_SELECTED_BYTES/);
   assert.equal(worker.includes('14858960'), false);
   assert.equal(worker.includes('14837224'), false);
+});
+
+test('primary ISO version suffix selects original record without changing its provenance',async()=>{
+ const bytes=Uint8Array.of(13,9,5);
+ const discovery=await discoverIso(new Blob([isoFixture([{name:'Warcraft III.exe;1',bytes}])]));
+ const selected=directEngineFile(discovery.files);
+ assert.equal(selected.status,'selected');
+ assert.equal(selected.file,discovery.files[0]);
+ assert.equal(selected.file.path,'/Warcraft III.exe;1');
+ assert.equal(selectNamedEngine([{path:'Warcraft III.exe;1',size:3}]).status,'absent');
+});
+test('ISO engine versions remain ambiguous instead of choosing a version',()=>{
+ assert.equal(directEngineFile([{path:'/Game.dll;1',size:3},{path:'/Game.dll;2',size:3},{path:'/Warcraft III.exe;1',size:3}]).status,'ambiguous-named-engine');
+ assert.equal(directEngineFile([{path:'/Warcraft III.exe;1',size:3},{path:'/Warcraft III.exe;2',size:3}]).status,'ambiguous-executable-candidate');
 });

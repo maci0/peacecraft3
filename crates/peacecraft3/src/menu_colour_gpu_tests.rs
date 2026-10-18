@@ -235,25 +235,22 @@ fn add_menu_material(
 }
 
 fn drive_readback(app: &mut App, target: Handle<Image>) -> GpuReadback {
-    let pixel_bytes = app
+    let descriptor = &app
         .world()
         .resource::<Assets<Image>>()
         .get(&target)
         .unwrap()
-        .texture_descriptor
-        .format
-        .block_copy_size(None)
-        .unwrap() as usize;
+        .texture_descriptor;
+    let pixel_bytes = descriptor.format.block_copy_size(None).unwrap() as usize;
+    let width = descriptor.size.width as usize;
+    let height = descriptor.size.height as usize;
     for frame in 0..48 {
         if frame == 24 {
             app.world_mut()
                 .spawn(Readback::texture(target.clone()))
                 .observe(
-                    |event: On<ReadbackComplete>, mut capture: ResMut<Capture>| {
-                        assert!(
-                            event.data.len()
-                                <= (READBACK_WIDTH as usize * 8 + 256) * READBACK_HEIGHT as usize
-                        );
+                    move |event: On<ReadbackComplete>, mut capture: ResMut<Capture>| {
+                        assert!(event.data.len() <= (width * pixel_bytes + 256) * height);
                         capture.completed += 1;
                         capture.last.clone_from(&event.data);
                     },
@@ -274,9 +271,9 @@ fn drive_readback(app: &mut App, target: Handle<Image>) -> GpuReadback {
         capture.completed > 0,
         "no readback within deterministic frame cap"
     );
-    assert!(capture.last.len().is_multiple_of(READBACK_HEIGHT as usize));
-    let stride = capture.last.len() / READBACK_HEIGHT as usize;
-    assert!(stride >= READBACK_WIDTH as usize * pixel_bytes);
+    assert!(capture.last.len().is_multiple_of(height));
+    let stride = capture.last.len() / height;
+    assert!(stride >= width * pixel_bytes);
     GpuReadback {
         bytes: capture.last.clone(),
         stride,
@@ -1130,4 +1127,226 @@ fn menu_fog_uses_camera_depth_for_geometry_and_particles() {
     }
     assert!(radial_discriminators >= 4);
     println!("camera_depth_fog rgb_checks=48 radial_discriminators={radial_discriminators}");
+}
+#[test]
+#[ignore = "requires a local Vulkan render adapter; synthetic Gouraud lighting readback"]
+fn source_menu_vertex_lighting_precedes_texture_modulation() {
+    let mut app = vulkan_menu_app("menu-lighting-readback");
+    let target = spawn_readback_camera(&mut app);
+    let edge = QUAD_EXTENT / 2.0;
+    let rest = pcx_gfx::LoadedMesh {
+        positions: vec![
+            [-edge, -edge, 0.0],
+            [edge, -edge, 0.0],
+            [edge, edge, 0.0],
+            [-edge, edge, 0.0],
+        ],
+        normals: vec![[0.0, 0.0, 1.0]; 4],
+        tex_coords: vec![[0.0; 2]; 4],
+        indices: vec![0, 1, 2, 0, 2, 3],
+        vertex_groups: vec![],
+        bone_indices: vec![],
+        group_counts: vec![],
+        geoset: 0,
+        material_id: 0,
+    };
+    let mesh = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(pcx_gfx::to_bevy_mesh(&rest));
+    let texture_rgb = [64u8, 128, 192];
+    let image = Image::new_fill(
+        bevy::render::render_resource::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        bevy::render::render_resource::TextureDimension::D2,
+        &[texture_rgb[0], texture_rgb[1], texture_rgb[2], 255],
+        TextureFormat::Rgba8Unorm,
+        bevy::asset::RenderAssetUsages::default(),
+    );
+    let image = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+    let material = app.world_mut().resource_mut::<Assets<MenuMaterial>>().add(
+        checked_source_mode(
+            StandardMaterial {
+                base_color: crate::menu_composition::colour([0.5, 0.5, 0.5, 1.0]),
+                base_color_texture: Some(image),
+                unlit: false,
+                fog_enabled: false,
+                cull_mode: None,
+                ..default()
+            },
+            0,
+            0,
+        )
+        .unwrap(),
+    );
+    let entity = app
+        .world_mut()
+        .spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone())))
+        .id();
+    let bound = vec![(0, entity, material)];
+    let model = pcx_gfx::LoadedModel {
+        name: "synthetic lighting quad".into(),
+        minimum_extent: [-edge; 3],
+        maximum_extent: [edge; 3],
+        meshes: vec![rest],
+        bone_names: vec![],
+        bone_parents: vec![],
+        sequences: vec![],
+    };
+    let skeleton = pcx_gfx::Skeleton {
+        matrices: vec![],
+        ids: vec![],
+        names: vec![],
+    };
+    let mut lighting = crate::menu_lighting::tests::lighting();
+    app.world_mut()
+        .resource_scope(|world, mut meshes: Mut<Assets<Mesh>>| {
+            let mut materials = world.resource_mut::<Assets<MenuMaterial>>();
+            lighting.bind(&bound, &materials);
+            lighting
+                .apply(
+                    &model,
+                    &skeleton,
+                    (&[mesh], &bound),
+                    (0, 0),
+                    (&mut meshes, &mut materials),
+                )
+                .unwrap();
+        });
+    let captured = drive_readback(&mut app, target);
+    let lambert = 2.0 / (4.0 + 2.0 * edge * edge).sqrt();
+    let expected = [255.0f32, 127.0, 63.0]
+        .map(|channel| (channel / 255.0 * 4.0 * lambert * 0.5).clamp(0.0, 1.0));
+    for channel in 0..3 {
+        let expected = expected[channel] * f32::from(texture_rgb[channel]) / 255.0;
+        let got = channel_at(
+            &captured.bytes,
+            captured.stride,
+            2,
+            0,
+            READBACK_HEIGHT as usize / 2,
+            channel,
+        );
+        assert!(
+            (got - expected).abs() < 0.001,
+            "lighting channel {channel}: {got} != {expected}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires explicit original Legacy install, extent and private PNG output path; source-pose diagnostic only"]
+fn selected_original_background_reaches_the_offscreen_menu_graph() {
+    use bevy::render::render_resource::{Extent3d, TextureDimension};
+    use sha2::{Digest, Sha256};
+    let install = std::path::PathBuf::from(
+        std::env::var_os("PEACECRAFT3_MDX_INSTALL").expect("PEACECRAFT3_MDX_INSTALL"),
+    );
+    let output = std::path::PathBuf::from(
+        std::env::var_os("PCX_LIGHTING_OUTPUT").expect("PCX_LIGHTING_OUTPUT"),
+    );
+    assert!(!output.exists(), "diagnostic output must be new");
+    let member = crate::mainmenu_scene::scene_source(true).0;
+    let bytes =
+        crate::mainmenu::art_bytes(Some(&install), member).expect("selected original model");
+    let textures = crate::mainmenu_scene::load_textures_in(
+        Some(&install),
+        &bytes,
+        crate::mainmenu_scene::scene_source(true).2,
+    );
+    let fog_bytes = crate::mainmenu::art_bytes(Some(&install), crate::mainmenu::MENU_FOG_CONFIG)
+        .expect("selected original menu fog");
+    let table =
+        crate::menu_skin::SkinTable::parse(std::str::from_utf8(&fog_bytes).unwrap()).unwrap();
+    let fog = crate::menu_fog::MenuFog::checked(&table, 1).unwrap();
+    let parameters = crate::menu_lighting::parameters(Some(&install)).unwrap();
+    let profile_digest = parameters.image_sha256;
+    let mut app = vulkan_menu_app("source-background-diagnostic");
+    let mut meshes = app.world_mut().remove_resource::<Assets<Mesh>>().unwrap();
+    let mut materials = app
+        .world_mut()
+        .remove_resource::<Assets<MenuMaterial>>()
+        .unwrap();
+    let mut particles = app
+        .world_mut()
+        .remove_resource::<Assets<crate::mainmenu_scene::ParticleMaterial>>()
+        .unwrap();
+    let mut images = app.world_mut().remove_resource::<Assets<Image>>().unwrap();
+    let info = crate::mainmenu_scene::spawn(
+        &mut app.world_mut().commands(),
+        crate::mainmenu_scene::GeosetAssets {
+            meshes: &mut meshes,
+            materials: &mut materials,
+            images: &mut images,
+        },
+        &mut particles,
+        member,
+        &bytes,
+        &textures,
+        (fog, parameters),
+    )
+    .unwrap();
+    app.world_mut().flush();
+    let [width, height]: [u32; 2] = serde_json::from_str(
+        &std::env::var("PCX_LIGHTING_EXTENT").expect("PCX_LIGHTING_EXTENT: [width,height]"),
+    )
+    .unwrap();
+    // Local readback resource ceiling, independent of source layout.
+    assert!(width > 0 && height > 0 && u64::from(width) * u64::from(height) <= 16 * 1024 * 1024);
+    let mut image = Image::new_target_texture(width, height, TextureFormat::Rgba8UnormSrgb, None);
+    image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
+    let target = images.add(image);
+    let mut cameras = app
+        .world_mut()
+        .query_filtered::<Entity, With<crate::mainmenu_scene::MainMenuSceneCamera>>();
+    let camera = cameras.single(app.world()).unwrap();
+    app.world_mut()
+        .entity_mut(camera)
+        .insert((RenderTarget::Image(target.clone().into()), Msaa::Off));
+    app.world_mut().insert_resource(meshes);
+    app.world_mut().insert_resource(materials);
+    app.world_mut().insert_resource(particles);
+    app.world_mut().insert_resource(images);
+    let captured = drive_readback(&mut app, target);
+    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+    for row in captured.bytes.chunks_exact(captured.stride) {
+        rgba.extend_from_slice(&row[..width as usize * 4]);
+    }
+    assert_eq!(rgba.len(), width as usize * height as usize * 4);
+    assert!(
+        rgba.as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[..3] != rgba[..3]),
+        "source frame is uniform"
+    );
+    let frame_digest = Sha256::digest(&rgba).to_vec();
+    let image = Image::new(
+        Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        rgba,
+        TextureFormat::Rgba8UnormSrgb,
+        bevy::asset::RenderAssetUsages::MAIN_WORLD,
+    );
+    image.try_into_dynamic().unwrap().save(&output).unwrap();
+    let metadata = serde_json::json!({
+        "source_install": install, "source_member": member, "source_model_sha256": Sha256::digest(&bytes).to_vec(),
+        "profile_image_sha256": profile_digest, "width": width, "height": height, "rgba_sha256": frame_digest,
+        "geosets": info.geosets, "source_lights": info.lights, "source_textures": textures.len(),
+        "particle_emitters": info.particle_emitters, "particle_gap": info.particle_gap,
+        "textures": textures.iter().map(|t| serde_json::json!({"source":t.source,"width":t.width,"height":t.height,
+            "decoded_rgba_sha256":Sha256::digest(&t.rgba).to_vec()})).collect::<Vec<_>>(),
+        "scope": "Native offscreen Vulkan source-pose diagnostic; no UI, no animation advance, no native-window or original paired-frame parity claim",
+    });
+    let metadata_path = output.with_extension("json");
+    assert!(!metadata_path.exists());
+    std::fs::write(metadata_path, serde_json::to_vec_pretty(&metadata).unwrap()).unwrap();
+    println!("source-pose diagnostic: {}", output.display());
 }

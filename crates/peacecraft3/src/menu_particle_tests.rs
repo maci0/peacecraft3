@@ -143,7 +143,7 @@ fn spawn_case(bytes: &[u8], textures: &[pcx_gfx::LoadedTexture]) -> Spawned {
         "synthetic:TFT:selected-model-and-image-batch",
         bytes,
         textures,
-        fog(),
+        (fog(), crate::menu_lighting::tests::parameters()),
     );
     world.flush();
     Spawned {

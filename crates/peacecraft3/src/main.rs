@@ -29,6 +29,7 @@ mod menu_audio;
 mod menu_colour_gpu_tests;
 mod menu_composition;
 mod menu_fog;
+mod menu_lighting;
 mod menu_material;
 mod menu_panel;
 mod menu_particle_order;

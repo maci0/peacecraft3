@@ -2488,3 +2488,29 @@ repeated, and the public site package was not rebuilt.
   original captures and between PC3 targets. No pixels are excluded or rescaled.
   Lighting/effects, source settings, original/native/WASM simulation and
   animation lockstep remain open; public site and original-baseline gate unchanged.
+
+- [x] Source-bound menu lighting implementation (2026-10-19): replaces lumen
+  multipliers and the white ambient floor with source-parameter Gouraud vertex
+  lighting before texture modulation. The reviewed client supplies attenuation,
+  range, byte scale and light-slot limit on both native and WASM. Missing images
+  report a notice while independent panels remain usable. ISO client-image
+  selection recognizes file-version suffixes without discarding provenance or
+  choosing between ambiguous versions. See `docs/re-notes/menu-source-lighting.md`
+  and private terminal receipts in `.scratch/menu-lighting-root-20261018/`.
+  The frozen candidate passes 653 ordinary application tests, strict native/WASM
+  checks, actual WASI parser/parameter execution, eleven ISO selection cases,
+  missing-image panel recovery and five offscreen source backgrounds through 4K.
+- [x] Source lighting and contextual menu guidance verification (2026-10-19):
+  after access restoration, seven hardware GPU cases, 654 application tests,
+  strict native/WASM checks, both builds and local browser packaging pass.
+  Passive display/preview guidance no longer covers idle Main or Options views;
+  errors retain priority and live resolution hover/unhover still shows help.
+  Forty fresh native/browser journal captures at five resolutions through 4K
+  are compared with twenty retained original WC3/Wine captures. Early invalid
+  or partial preparation attempts are retained, excluded from accepted captures.
+  See `.scratch/menu-notice-scope-root-20261019/verification-final-2.json`.
+- [~] Exact menu appearance remains open: all sixty full-frame RGB comparisons
+  differ. No pixels are excluded or rescaled. Light rays/effects, supported
+  settings and initialization, cursor/font details, native Windows and original/
+  native/WASM deterministic lockstep still need work. The public site and the
+  100-consecutive original-baseline gate are unchanged.

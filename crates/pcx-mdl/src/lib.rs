@@ -1209,7 +1209,7 @@ pub struct GeosetAnim {
     pub trailing: usize,
 }
 
-/// One animation track on a geoset.
+/// One scalar/colour animation curve, also reused by checked light tracks.
 ///
 /// The measured layout is a 16-byte header — `magic[4]`, `count`, the
 /// interpolation type and the global sequence id — followed by `count` keys. A
@@ -1223,7 +1223,7 @@ pub struct GeosetAnim {
 /// `0xFFFFFFFF` when it did not.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnimTrack {
-    /// `KGAA`, `KGAC` or `KGAO`.
+    /// Original curve tag, including `KGAC`, `KLAC` and `KLBC` colours.
     pub magic: [u8; 4],
     pub count: u32,
     pub interpolation: Interpolation,
@@ -1237,7 +1237,7 @@ impl AnimTrack {
     /// Components in one key value: one for a scalar track, three for a colour.
     fn components(&self) -> usize {
         match &self.magic[..] {
-            b"KGAC" => 3,
+            b"KGAC" | b"KLAC" | b"KLBC" => 3,
             _ => 1,
         }
     }
@@ -1690,10 +1690,10 @@ pub fn sample_scalar(track: &AnimTrack, frame: u32) -> f32 {
     sample_anim_component(track, frame, 0)
 }
 
-/// Samples a `KGAC` track at `frame`.
+/// Samples a `KGAC`, `KLAC` or `KLBC` colour track at `frame`.
 ///
 /// Returns raw stored components with one shared key-span search. The caller
-/// supplies a validated `KGAC` track; material channel mapping is separate.
+/// supplies a validated colour curve; material channel mapping is separate.
 pub fn sample_colour(track: &AnimTrack, frame: u32) -> [f32; 3] {
     let n = track.count as usize;
     if n == 0 {
@@ -3979,6 +3979,30 @@ impl Mdlx {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn light_colour_curves_keep_their_vector_stride_and_channels() {
+        for magic in [*b"KLAC", *b"KLBC"] {
+            let mut raw = Vec::new();
+            for (frame, values) in [(0u32, [0.0f32, 0.25, 1.0]), (100, [1.0, 0.75, 0.0])] {
+                raw.extend(frame.to_le_bytes());
+                for value in values {
+                    raw.extend(value.to_le_bytes());
+                }
+            }
+            let track = AnimTrack {
+                magic,
+                count: 2,
+                interpolation: Interpolation::Linear,
+                global_seq_id: NO_ID,
+                raw,
+            };
+            assert_eq!(track.key_len(), 16);
+            assert_eq!(track.frame(1), 100);
+            assert_eq!(sample_colour(&track, 50), [0.5, 0.5, 0.5]);
+            assert_eq!(sample_colour(&track, 100), [1.0, 0.75, 0.0]);
+        }
+    }
 
     /// Where to find a WC3 install.
     ///

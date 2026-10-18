@@ -61,9 +61,10 @@
 //!
 //!   `filterMode 5` (`Modulate`) maps to `AlphaMode::Multiply`, which Bevy does
 //!   have (`BLEND_MULTIPLY`); no material in this scene uses it.
-//! * **Animated light volumes are placed statically.** `LITE` records carry
-//!   node tracks this module does not sample, so each light sits where its
-//!   record's default puts it.
+//! * **Lighting uses the selected client profile and authored point lights.**
+//!   Source colour/intensity and discrete visibility tracks feed vertex colours.
+//!   Unsupported light transforms/kinds refuse; full native normal, hardware
+//!   policy and rendered-lighting parity remain open.
 //! * The background's logical camera aspect survives target resize, with its
 //!   source angle normalized by the logical rectangle diagonal. TFT pose/clip/
 //!   topology and context draws support this rule; final native presentation
@@ -709,6 +710,7 @@ pub struct MainMenuScene {
     uv_translation: Option<pcx_gfx::mdx_uv_translation::UvTranslationPlan>,
     opacity_materials: Vec<(usize, Entity, Handle<MenuMaterial>)>,
     particles: Option<particles::ParticleScene>,
+    lighting: Option<crate::menu_lighting::Lighting>,
     clip: Option<pcx_gfx::mdx_particles::Clip>,
     /// The clip's first frame.
     interval_start: u32,
@@ -737,7 +739,10 @@ pub fn spawn(
     source: &str,
     bytes: &[u8],
     textures: &[pcx_gfx::LoadedTexture],
-    fog: crate::menu_fog::MenuFog,
+    (fog, lighting_parameters): (
+        crate::menu_fog::MenuFog,
+        pcx_play::menu_lighting::Parameters,
+    ),
 ) -> Result<SceneInfo, SceneError> {
     let GeosetAssets {
         meshes,
@@ -781,6 +786,15 @@ pub fn spawn(
     let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&runtime, interval)
         .map_err(|e| SceneError::Decode(format!("{source}: {e}")))?;
 
+    let mut lighting = crate::menu_lighting::Lighting::checked(
+        source,
+        &m,
+        bytes,
+        &runtime,
+        interval,
+        lighting_parameters,
+    )
+    .map_err(SceneError::Decode)?;
     let texture_selection = texture_selection(&runtime, interval, source)?;
     let uv_translation =
         pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(&runtime, interval, source)?;
@@ -898,87 +912,34 @@ pub fn spawn(
         particles
     });
 
-    // The model's own lights.
-    let lights = m.lights(bytes).unwrap_or_default();
-    let mut ambient = Vec::new();
-    for (i, l) in lights.iter().enumerate() {
-        let colour = crate::menu_composition::colour([
-            l.colour[0].clamp(0.0, 1.0),
-            l.colour[1].clamp(0.0, 1.0),
-            l.colour[2].clamp(0.0, 1.0),
-            1.0,
-        ]);
-        match l.kind {
-            pcx_mdl::LightKind::Ambient => ambient.push((colour, l.ambient_intensity)),
-            pcx_mdl::LightKind::Directional => {
-                // A directional light in this format has no position; its
-                // direction is the node's own transform. Without sampling the
-                // node tracks it is placed looking down the world -Y, which is
-                // the scene's default orientation.
-                commands.spawn((
-                    DirectionalLight {
-                        color: colour,
-                        illuminance: (l.intensity.max(0.0) * 20_000.0).max(1.0),
-                        ..default()
-                    },
-                    Transform::from_xyz(0.0, 0.0, 5000.0).looking_at(Vec3::ZERO, Vec3::Z),
-                    Name::new(format!("menu3d-light-{i}")),
-                    MainMenuSceneEntity,
-                ));
-                info.lights += 1;
-            }
-            pcx_mdl::LightKind::Omnidirectional => {
-                // The light's position is its **node pivot**, which is where the
-                // model's own rest pose puts it. Placing these all at the origin
-                // — which an earlier version did — stacks five point lights in
-                // one spot and blows the scene out. The light's animated node
-                // position is not sampled (its `KeyTrack`s have no public
-                // sampler here), so a light that moves sits still; that is
-                // recorded rather than approximated.
-                let pos = pivots
-                    .as_ref()
-                    .and_then(|p| p.position(l.object_id))
-                    .unwrap_or([0.0; 3]);
-                commands.spawn((
-                    PointLight {
-                        color: colour,
-                        // WC3's intensity is its own unit, not lumens, so this
-                        // is a scale factor and an approximation: the shipped
-                        // values are 40..175 and Bevy wants thousands of lumens
-                        // for a room-sized light. `×200` puts them at 8,000..
-                        // 35,000 lm. The original's exact photometric behaviour
-                        // is not reproduced.
-                        intensity: (l.intensity.max(0.0) * 200.0).max(1.0),
-                        // `attenuation_end` (200 in every shipped record) is the
-                        // radius in the model's own units.
-                        range: l.attenuation_end.max(1.0),
-                        ..default()
-                    },
-                    Transform::from_translation(Vec3::from(pos)),
-                    Name::new(format!("menu3d-light-{i}")),
-                    MainMenuSceneEntity,
-                ));
-                info.lights += 1;
-            }
-        }
-    }
-    let ambient_total: f32 = ambient.iter().map(|(_, i)| i.max(0.0)).sum();
-    commands.insert_resource(GlobalAmbientLight {
-        color: Color::WHITE,
-        brightness: if ambient_total > 0.0 {
-            ambient_total * 2000.0
-        } else {
-            // A glue scene with no ambient record still needs the unlit parts
-            // to be visible; this is a floor, and `lights` above says whether
-            // the model supplied anything.
-            600.0
+    info.lights = lighting.count();
+    lighting.bind(&opacity_materials, materials);
+    let skeleton = skin_geosets(
+        Rig {
+            model: &model,
+            bones: &bones,
+            pivots: pivots.as_ref().unwrap(),
+            global_durations: &runtime.global_sequences,
         },
-        affects_lightmapped_meshes: true,
-    });
+        &handles,
+        interval[0],
+        0,
+        meshes,
+    );
+    lighting
+        .apply(
+            &model,
+            &skeleton,
+            (&handles, &opacity_materials),
+            (interval[0], 0),
+            (meshes, materials),
+        )
+        .map_err(SceneError::Decode)?;
 
     commands.insert_resource(MainMenuScene {
         model: Some(model),
         particles,
+        lighting: Some(lighting),
         clip: clip.map(|clip| pcx_gfx::mdx_particles::Clip {
             interval,
             looping: !clip.non_looping,
@@ -1295,7 +1256,7 @@ pub fn skin_geosets(
     frame: u32,
     elapsed_ms: u32,
     meshes: &mut Assets<Mesh>,
-) {
+) -> pcx_gfx::Skeleton {
     let poses: Vec<pcx_mdl::Pose> = rig
         .bones
         .iter()
@@ -1311,6 +1272,7 @@ pub fn skin_geosets(
             pcx_gfx::skin_mesh(rest, &skeleton),
         );
     }
+    skeleton
 }
 
 /// Marker for the camera this module owns, so a caller can find and remove it.
@@ -1810,7 +1772,7 @@ pub fn advance(
     let (Some(model), Some(pivots)) = (scene.model.as_ref(), scene.pivots.as_ref()) else {
         return;
     };
-    skin_geosets(
+    let skeleton = skin_geosets(
         Rig {
             model,
             bones: &scene.bones,
@@ -1822,6 +1784,17 @@ pub fn advance(
         elapsed_ms as u32,
         &mut meshes,
     );
+    if let Some(lighting) = &scene.lighting
+        && let Err(error) = lighting.apply(
+            model,
+            &skeleton,
+            (&scene.handles, &scene.opacity_materials),
+            (frame, elapsed_ms),
+            (&mut meshes, &mut materials),
+        )
+    {
+        error!("{error}");
+    }
 }
 
 #[cfg(test)]
@@ -2153,7 +2126,10 @@ mod tests {
                 source,
                 &bytes,
                 &textures,
-                fog,
+                (
+                    fog,
+                    crate::menu_lighting::parameters(Some(&install)).unwrap(),
+                ),
             )
             .unwrap();
             world.flush();
@@ -2758,37 +2734,28 @@ mod global_seq_tests {
         assert!(durations[max_id as usize] > 0, "and it has a duration");
     }
 
-    /// The lights, pinned: the values that made the blow-out possible.
-    ///
-    /// An earlier version scaled `intensity` by 200,000 and put every light at
-    /// the origin, which drove five point lights to tens of millions of lumens
-    /// in one spot — the white, blown-out planes the browser showed. The scale
-    /// is now 200 and each light takes its own node pivot.
     #[test]
-    fn the_lights_are_the_models_own_and_not_blown_out() {
+    fn source_lights_have_finite_state_and_authored_pivots() {
         let Some((bytes, m)) = scene() else { return };
         let lights = m.lights(&bytes).expect("lights");
         let pivots = m.pivots(&bytes).expect("pivots");
-        assert_eq!(lights.len(), 5, "the scene's five lights");
+        assert!(!lights.is_empty());
         for l in &lights {
-            assert_eq!(l.kind, pcx_mdl::LightKind::Omnidirectional);
+            assert!(l.intensity.is_finite() && l.ambient_intensity.is_finite());
             assert!(
-                (1.0..=200.0).contains(&l.intensity),
-                "{}: intensity {} is the shipped range",
-                l.name,
-                l.intensity
+                l.colour
+                    .iter()
+                    .chain(&l.ambient_colour)
+                    .all(|v| v.is_finite())
             );
-            // The scale this module applies must keep a light inside the range a
-            // scene light can plausibly be, not millions.
-            let scaled = l.intensity.max(0.0) * 200.0;
-            assert!(scaled <= 40_000.0, "{}: {scaled} lumens", l.name);
-            // And every light has a real place to stand, not the origin.
-            let p = pivots.position(l.object_id).expect("a pivot");
-            assert!(p != [0.0, 0.0, 0.0], "{}: placed at the origin", l.name);
+            assert!(
+                pivots
+                    .position(l.object_id)
+                    .expect("authored pivot")
+                    .iter()
+                    .all(|v| v.is_finite())
+            );
         }
-        // Ambient is zero in every record, so the module's floor is what lights
-        // the unlit pieces; that floor is not zero.
-        assert!(lights.iter().all(|l| l.ambient_intensity == 0.0));
     }
 }
 
@@ -4348,7 +4315,7 @@ mod fog_camera_tests {
             "synthetic-background",
             &empty_scene_with_camera(),
             &[],
-            fog,
+            (fog, crate::menu_lighting::tests::parameters()),
         )
         .unwrap();
         world.flush();

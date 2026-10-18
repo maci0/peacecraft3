@@ -68,7 +68,8 @@ export function planEngineMembers(archive, mpqMembers, {
 // slice helper. Any other payload, including an installer executable, is absent.
 export function directEngineFile(files) {
   const records = (files ?? []).map(file => ({
-    path: file.path,
+    // ISO file versions belong to the directory record, not the basename.
+    path: String(file.path).replace(/;[0-9]+$/, ''),
     size: file.size,
     directory: Boolean(file.directory),
     source: file,

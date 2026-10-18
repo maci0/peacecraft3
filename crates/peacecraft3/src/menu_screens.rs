@@ -203,6 +203,8 @@ pub struct Navigation {
     pub(crate) transition_active: bool,
     pub built: Option<Screen>,
     pub notice: String,
+    /// Passive capability guidance shown while inspecting the resolution control.
+    pub(crate) display_notice: String,
     pub draft: Settings,
     pub applied: Settings,
     pub resolutions: Vec<OfferedResolution>,

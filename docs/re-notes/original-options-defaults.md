@@ -268,3 +268,35 @@ and color-depth writes still need a complete renderer consumer and live image
 replacement transaction; an RGBA8 mip-only implementation cannot stand in for
 all authored choices. Decoder checks establish neither native texture packing
 nor rendered quality parity. Callers still own their decoded-size budgets.
+
+
+## Contextual menu guidance (2026-10-19)
+
+Passive display guidance now has a separate owner from operational status.
+`Navigation::display_notice` is presented only while the Video resolution control
+is hovered, visibly keyboard-focused or open. Source-profile admission and mode
+listing keep their diagnostics; those explanations no longer occupy idle Main,
+Options landing or category screens. Current display guidance is regenerated
+from the current observation, so an earlier profile cannot leave stale help.
+
+Read-only fallback controls retain their source captions, disabled state and
+accessibility descriptions. Preview/unavailable help appears while inspecting a
+control. A failed Apply, unreadable preference or missing lighting image still
+uses the authoritative status channel and remains visible. No quality control
+acquires a runtime implementation or a substituted default through this change.
+No authored dimensions, alpha, colours, fonts, textures or sampler values change.
+
+The idle-preview regression failed on the previous persistent caption, then
+passed after the correction. An ECS test covers idle Main and Video, resolution
+hover, keyboard focus, an open popup and error priority. The full application
+suite passes 654 tests with 29 explicit fixture/GPU ignores; strict native/WASM
+checks, both application builds, formatting and seven hardware Vulkan cases pass.
+Fresh rendered acceptance and remaining appearance gaps are recorded separately
+under `.scratch/menu-notice-scope-root-20261019/`.
+
+Runtime preparation is evidence-driven: capture, visual review and approval are
+separate actions. A rejected early run played an unqualified workspace fallback
+intro; subsequent native runs use the explicit fixture directory as their working
+directory. Original source movie behavior is unchanged. Initial launcher-window
+clamping on a headless display remains a separate host-integration question.
+Full original/native/WASM pixel, simulation and animation equality remains open.

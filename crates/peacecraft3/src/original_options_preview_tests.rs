@@ -546,13 +546,10 @@ fn notice_error_priority_and_idle_restore_are_explicit() {
     );
     assert_eq!(notice("", true, true, Some(&c), &s), "PeaceCraft settings");
     assert_eq!(notice("", false, true, Some(&c), &s), IDLE_NOTICE);
-    assert_eq!(notice("", false, true, None, &s), IDLE_NOTICE);
+    assert_eq!(notice("", false, true, None, &s), "");
     assert_eq!(notice("", false, false, None, &s), "");
     let unavailable = Snapshot::unavailable("B".into(), "Archive-only input");
-    assert_eq!(
-        notice("", false, true, None, &unavailable),
-        "Defaults unavailable."
-    );
+    assert_eq!(notice("", false, true, None, &unavailable), "");
     let unavailable_control = Control {
         popup: None,
         available: false,

@@ -1009,49 +1009,33 @@ fn display_policy(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn note_listing_failure(nav: &mut Navigation, backend: &mut Backend, error: &str) {
-    if backend.display.empty_noted {
-        return;
+    if !backend.display.empty_noted {
+        warn!("Qualified display modes could not be listed: {error}");
+        backend.display.empty_noted = true;
     }
-    warn!("Qualified display modes could not be listed: {error}");
-    if nav.notice.is_empty() {
-        nav.notice = format!("Qualified display modes could not be listed. {error}");
-    }
-    backend.display.empty_noted = true;
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn clear_qualified_notice(nav: &mut Navigation) {
-    const LISTING: &str = "Qualified display modes could not be listed.";
-    const EMPTY: &str = "No display modes passed the qualified client filter for this monitor.";
-    if nav.notice == EMPTY || nav.notice.starts_with(LISTING) {
-        nav.notice.clear();
-    }
+    nav.display_notice = format!("Qualified display modes could not be listed. {error}");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn announce_display(nav: &mut Navigation, backend: &mut Backend, empty_qualified: bool) {
-    if !backend.display.announced {
-        if let DisplayState::Unqualified {
-            detail: Some(detail),
-        } = &backend.display.state
-        {
-            let detail = detail.clone();
+    if let DisplayState::Unqualified {
+        detail: Some(detail),
+    } = &backend.display.state
+    {
+        if !backend.display.announced {
             warn!("Display mode profile was not admitted: {detail}");
-            if nav.notice.is_empty() {
-                nav.notice = format!(
-                    "Display mode profile was not admitted; listing render sizes only. {detail}"
-                );
-            }
         }
-        backend.display.announced = true;
+        nav.display_notice =
+            format!("Display mode profile was not admitted; listing render sizes only. {detail}");
     }
-    if empty_qualified && !backend.display.empty_noted {
-        warn!("Qualified display profile admitted no modes for the primary monitor");
-        if nav.notice.is_empty() {
-            nav.notice =
-                "No display modes passed the qualified client filter for this monitor.".into();
+    backend.display.announced = true;
+    if empty_qualified {
+        if !backend.display.empty_noted {
+            warn!("Qualified display profile admitted no modes for the primary monitor");
+            backend.display.empty_noted = true;
         }
-        backend.display.empty_noted = true;
+        nav.display_notice =
+            "No display modes passed the qualified client filter for this monitor.".into();
     }
 }
 
@@ -1072,7 +1056,7 @@ const BROWSER_ADMISSION_NOTICE: &str =
     "Display mode profile was not admitted. Measured choices stay.";
 #[cfg(any(test, target_arch = "wasm32"))]
 const BROWSER_LISTING_NOTICE: &str = "Source display choices could not be listed.";
-#[cfg(any(test, target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
 const BROWSER_SCREEN_BOUND_NOTICE: &str = "Browser screen bound:";
 
 #[cfg(any(test, target_arch = "wasm32"))]
@@ -1138,21 +1122,8 @@ fn resolve_browser_list(
 }
 
 #[cfg(any(test, target_arch = "wasm32"))]
-fn browser_qualification_notice(text: &str) -> bool {
-    text == BROWSER_SOURCE_NOTICE
-        || text == BROWSER_MEASURED_IMAGE_NOTICE
-        || text == BROWSER_MEASURED_BOUND_NOTICE
-        || text == BROWSER_MEASURED_PROFILE_NOTICE
-        || text.starts_with(BROWSER_ADMISSION_NOTICE)
-        || text.starts_with(BROWSER_LISTING_NOTICE)
-        || text.starts_with(BROWSER_SCREEN_BOUND_NOTICE)
-}
-
-#[cfg(any(test, target_arch = "wasm32"))]
 fn assign_browser_notice(nav: &mut Navigation, notice: String) {
-    if nav.notice.is_empty() || browser_qualification_notice(&nav.notice) {
-        nav.notice = notice;
-    }
+    nav.display_notice = notice;
 }
 
 /// Frameless flag-0 families for one positive screen observation.
@@ -1282,6 +1253,7 @@ fn environment(
     let Ok((entity, mut window, on_monitor)) = windows.single_mut() else {
         return;
     };
+    nav.display_notice.clear();
     let current = backend
         .observed_resolution
         .unwrap_or((window.physical_width(), window.physical_height()));
@@ -1318,9 +1290,6 @@ fn environment(
         if policy.has_popup_profile() {
             match popup_offers(policy, monitors.iter()) {
                 Ok(rows) => {
-                    if !rows.is_empty() {
-                        clear_qualified_notice(&mut nav);
-                    }
                     nav.resolutions = rows;
                     (false, true)
                 }
@@ -1334,9 +1303,6 @@ fn environment(
             match qualified_offers(policy, monitor) {
                 Ok(rows) => {
                     let empty = rows.is_empty();
-                    if !empty {
-                        clear_qualified_notice(&mut nav);
-                    }
                     nav.resolutions = rows;
                     (empty, false)
                 }
@@ -1348,16 +1314,10 @@ fn environment(
             }
         } else {
             nav.resolutions = render_offers(modes);
-            if !nav.resolutions.is_empty() {
-                clear_qualified_notice(&mut nav);
-            }
             (false, false)
         }
     } else {
         nav.resolutions = render_offers(modes);
-        if !nav.resolutions.is_empty() {
-            clear_qualified_notice(&mut nav);
-        }
         (false, false)
     };
     if !backend.loaded {
@@ -1416,8 +1376,8 @@ fn environment(
     #[cfg(not(target_arch = "wasm32"))]
     announce_display(&mut nav, &mut backend, empty_qualified);
     #[cfg(not(target_arch = "wasm32"))]
-    if popup_list && nav.notice.is_empty() {
-        nav.notice = crate::menu_screens::POPUP_WORK_AREA_NOTICE.into();
+    if popup_list && nav.display_notice.is_empty() {
+        nav.display_notice = crate::menu_screens::POPUP_WORK_AREA_NOTICE.into();
     }
     #[cfg(target_arch = "wasm32")]
     assign_browser_notice(&mut nav, browser_notice);
@@ -2327,25 +2287,17 @@ mod tests {
     }
 
     #[test]
-    fn browser_qualification_notice_does_not_replace_other_messages() {
-        let mut nav = Navigation::default();
+    fn passive_browser_guidance_does_not_replace_action_failures() {
+        let mut nav = Navigation {
+            notice: "Save failed".into(),
+            ..default()
+        };
         assign_browser_notice(&mut nav, BROWSER_SOURCE_NOTICE.to_owned());
-        assert_eq!(nav.notice, BROWSER_SOURCE_NOTICE);
+        assert_eq!(nav.display_notice, BROWSER_SOURCE_NOTICE);
+        assert_eq!(nav.notice, "Save failed");
         assign_browser_notice(&mut nav, BROWSER_MEASURED_IMAGE_NOTICE.to_owned());
-        assert_eq!(nav.notice, BROWSER_MEASURED_IMAGE_NOTICE);
-        assert!(browser_qualification_notice(&format!(
-            "{BROWSER_LISTING_NOTICE} label budget"
-        )));
-        assert!(browser_qualification_notice(&format!(
-            "{BROWSER_SCREEN_BOUND_NOTICE} exceeds its input limit"
-        )));
-        assert!(!browser_qualification_notice(
-            "Browser display information exceeds its input limit"
-        ));
-        nav.notice =
-            "Saved resolution is unavailable on this display; using the current window".into();
-        assign_browser_notice(&mut nav, BROWSER_SOURCE_NOTICE.to_owned());
-        assert!(nav.notice.starts_with("Saved resolution"));
+        assert_eq!(nav.display_notice, BROWSER_MEASURED_IMAGE_NOTICE);
+        assert_eq!(nav.notice, "Save failed");
     }
 
     #[test]

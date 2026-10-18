@@ -156,16 +156,13 @@ pub(crate) fn notice(
     } else if cog {
         "PeaceCraft settings".into()
     } else if options {
-        hovered.map_or_else(
-            || snapshot.notice(),
-            |control| {
-                if control.available {
-                    IDLE_NOTICE.into()
-                } else {
-                    "Setting unavailable.".into()
-                }
-            },
-        )
+        hovered.map_or_else(String::new, |control| {
+            if control.available {
+                snapshot.notice()
+            } else {
+                "Setting unavailable.".into()
+            }
+        })
     } else {
         String::new()
     }

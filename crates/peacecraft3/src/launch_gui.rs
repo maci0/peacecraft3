@@ -907,6 +907,16 @@ fn sync_settings_cog(
 struct MenuNoticeState<'w, 's> {
     navigation: Res<'w, crate::menu_screens::Navigation>,
     cache: Res<'w, MenuArtCache>,
+    resolution_controls: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static crate::glue_menu::GlueButton,
+            &'static Hovered,
+        ),
+    >,
+    resolution_popups: Query<'w, 's, (), With<ResolutionPopup>>,
     previewed: Query<
         'w,
         's,
@@ -934,6 +944,8 @@ fn update_menu_notice(
         navigation,
         cache,
         previewed,
+        resolution_controls,
+        resolution_popups,
     } = state;
     if icon.is_none() {
         // Project-owned vector geometry rasterized here, independent of game
@@ -992,9 +1004,20 @@ fn update_menu_notice(
             },
         ));
     }
+    let inspecting_resolution = navigation.screen
+        == crate::menu_screens::Screen::Options(crate::menu_screens::Page::Video)
+        && (!resolution_popups.is_empty()
+            || resolution_controls.iter().any(|(entity, button, hovered)| {
+                button.frame == "ResolutionMenu" && (hovered.get() || focused == Some(entity))
+            }));
+    let status = if navigation.notice.is_empty() && inspecting_resolution {
+        &navigation.display_notice
+    } else {
+        &navigation.notice
+    };
     for mut label in &mut labels {
         let text = crate::menu_settings::preview::notice(
-            &navigation.notice,
+            status,
             navigation.screen == crate::menu_screens::Screen::Main
                 && cogs.iter().any(|(e, h, _)| h.get() || focused == Some(e)),
             matches!(navigation.screen, crate::menu_screens::Screen::Options(_)),
@@ -1617,38 +1640,42 @@ fn initialize_menu_scene(
         }
     };
     state.finished = true;
-    let textures = crate::mainmenu_scene::load_textures_in(install.as_deref(), &bytes, directory);
-    let scene_context = format!(
-        "edition={:?}; install={:?}; member={}; desktop-first/browser-store-fallback",
-        launcher.mode.addon, install, source
-    );
-    match crate::mainmenu_scene::spawn(
-        &mut commands,
-        crate::mainmenu_scene::GeosetAssets {
-            meshes: &mut meshes,
-            materials: &mut materials,
-            images: &mut images,
-        },
-        &mut particle_materials,
-        &scene_context,
-        &bytes,
-        &textures,
-        fog,
-    ) {
-        Ok(info) => info!(
-            "Original menu background: {} geosets, {} textures, {} ms loop; missing {:?}; PRE2 {} emitters, gap {:?}",
-            info.geosets,
-            textures.len(),
-            info.duration_ms,
-            info.missing_textures,
-            info.particle_emitters,
-            info.particle_gap
-        ),
-        Err(error) => {
-            warn!("Original menu background: {error}");
-            return;
-        }
+    let background = crate::menu_lighting::parameters(install.as_deref()).and_then(|lighting| {
+        info!(source = %lighting.origin.source, "Original menu lighting: source-bound uncapped D3D9 profile");
+        let textures = crate::mainmenu_scene::load_textures_in(install.as_deref(), &bytes, directory);
+        let scene_context = format!(
+            "edition={:?}; install={:?}; member={}; desktop-first/browser-store-fallback",
+            launcher.mode.addon, install, source
+        );
+        let info = crate::mainmenu_scene::spawn(
+            &mut commands,
+            crate::mainmenu_scene::GeosetAssets {
+                meshes: &mut meshes,
+                materials: &mut materials,
+                images: &mut images,
+            },
+            &mut particle_materials,
+            &scene_context,
+            &bytes,
+            &textures,
+            (fog, lighting),
+        ).map_err(|error| error.to_string())?;
+        info!(
+                "Original menu background: {} geosets, {} textures, {} ms loop; missing {:?}; PRE2 {} emitters, gap {:?}",
+                info.geosets,
+                textures.len(),
+                info.duration_ms,
+                info.missing_textures,
+                info.particle_emitters,
+                info.particle_gap
+            );
+        Ok(())
+    });
+    if let Err(error) = background {
+        warn!("Original menu background: {error}");
+        navigation.notice = "Menu background unavailable for these source files.".into();
     }
+
     // The skin keys' `_V%d` is the edition: 0 Reign of Chaos, 1 The Frozen Throne.
     let edition = u32::from(launcher.mode.addon == Addon::Tft);
     let panels = crate::menu_sprites::load(install.as_deref(), edition).and_then(|sources| {
@@ -5336,3 +5363,99 @@ mod settings_cog_tests;
 #[cfg(test)]
 #[path = "resolution_popup_tests.rs"]
 mod resolution_popup_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod lighting_source_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    #[ignore = "requires explicit original MPQ fixture directory without its client image"]
+    fn missing_lighting_image_reports_failure_and_keeps_independent_panels() {
+        let path = std::env::var("PCX_LIGHTING_MISSING_CLIENT_FIXTURE")
+            .expect("PCX_LIGHTING_MISSING_CLIENT_FIXTURE");
+        assert!(
+            !std::path::Path::new(&path)
+                .join("Warcraft III.exe")
+                .exists()
+        );
+        let mut world = World::new();
+        world.insert_resource(Launcher::test_source(path, true));
+        world.insert_resource(SceneLoad::default());
+        world.insert_resource(crate::menu_screens::Navigation::default());
+        world.insert_resource(Assets::<Mesh>::default());
+        world.insert_resource(Assets::<MenuMaterial>::default());
+        world.insert_resource(Assets::<crate::mainmenu_scene::ParticleMaterial>::default());
+        world.insert_resource(Assets::<Image>::default());
+        world.spawn(MenuLayer);
+        world.run_system_once(initialize_menu_scene).unwrap();
+        world.flush();
+        assert!(!world.contains_resource::<crate::mainmenu_scene::MainMenuScene>());
+        assert!(
+            world.contains_resource::<crate::menu_sprites::MenuPanels>(),
+            "independent authored panel models must remain usable"
+        );
+        assert!(
+            !world
+                .resource::<crate::menu_screens::Navigation>()
+                .notice
+                .is_empty()
+        );
+        assert!(world.resource::<SceneLoad>().finished);
+    }
+}
+
+#[cfg(test)]
+mod notice_scope_tests {
+    use super::*;
+    use crate::menu_screens::{Navigation, Page, Screen};
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn passive_display_guidance_requires_resolution_inspection_and_keeps_errors() {
+        let mut world = World::new();
+        world.insert_resource(Navigation {
+            display_notice: "Render sizes only".into(),
+            ..default()
+        });
+        world.insert_resource(MenuArtCache::default());
+        world.insert_resource(Assets::<Image>::default());
+        let label = world.spawn((Text::new("stale"), MenuNotice)).id();
+        let resolution = world
+            .spawn((
+                crate::glue_menu::GlueButton {
+                    frame: "ResolutionMenu".into(),
+                    shortcut: None,
+                    pushed_text_offset: None,
+                },
+                Hovered(false),
+            ))
+            .id();
+        let update = |world: &mut World| {
+            world.run_system_once(update_menu_notice).unwrap();
+            world.flush();
+            world.get::<Text>(label).unwrap().0.clone()
+        };
+        assert_eq!(update(&mut world), "");
+        world.resource_mut::<Navigation>().screen = Screen::Options(Page::Video);
+        assert_eq!(update(&mut world), "");
+        world.entity_mut(resolution).insert(Hovered(true));
+        assert_eq!(update(&mut world), "Render sizes only");
+        world.resource_mut::<Navigation>().screen = Screen::Main;
+        assert_eq!(update(&mut world), "");
+        world.entity_mut(resolution).insert(Hovered(false));
+        world.resource_mut::<Navigation>().screen = Screen::Options(Page::Video);
+        let mut focus = bevy::input_focus::InputFocus::default();
+        focus.set(resolution, bevy::input_focus::FocusCause::Navigated);
+        world.insert_resource(focus);
+        world.insert_resource(bevy::input_focus::InputFocusVisible(true));
+        assert_eq!(update(&mut world), "Render sizes only");
+        world.remove_resource::<bevy::input_focus::InputFocusVisible>();
+        let popup = world.spawn(ResolutionPopup).id();
+        assert_eq!(update(&mut world), "Render sizes only");
+        world.despawn(popup);
+        world.resource_mut::<Navigation>().notice = "Apply failed".into();
+        world.resource_mut::<Navigation>().screen = Screen::Main;
+        assert_eq!(update(&mut world), "Apply failed");
+    }
+}
