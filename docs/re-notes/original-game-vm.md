@@ -235,3 +235,43 @@ exact RGB equality still fails. Transparency, fog, background/particle timing,
 unsupported settings and sound codecs, simulation/animation lockstep and full
 original fidelity remain open. No pixels were excluded or rescaled, and all
 original data and captures remain private.
+
+## Current-build five-resolution follow-up
+
+The same `c90730a` native and WASM application builds now also complete the
+eleven-event journal at 1024×768, 1280×960, 1920×1080 and 2560×1440. Their
+thirty-two fresh captures are combined with the eight verified 4K follow-up
+captures and the twenty retained original WC3/Wine references. All five sizes
+therefore use the corrected application source. No new original runtime was
+launched, and the earlier failed attempts remain separate evidence.
+The selected compatibility-source closure is unchanged; this does not establish
+retail archive priority or qualify a different edition.
+
+All twenty browser after-capture states name the requested Main, unselected
+Options, Video or return screen with no active transition. Visual review also
+confirms those screens in the fresh native and browser captures. Before/after
+browser snapshots still change during every capture; they do not establish a
+shared animation frame. Sixty exact-size raw images yield sixty differing
+pairwise RGB comparisons. No version mask, tolerance, normalization or rescaling
+is applied. Widescreen side bars remain present. Pale panels, fog/effects,
+unsupported settings and notices remain fidelity failures.
+
+The immutable report is
+`.scratch/menu-resolution-current-root-20261018/comparison-1/index.html`;
+`verification-final-1.json` checks source/build identities, raw image hashes,
+physical extents, ordered journals and unchanged unrelated edits. Forty-seven
+Python harness checks and four Node checks pass again. All eight fresh PC3
+runtimes are stopped. Original content and screenshots stay local; the public
+site was not deployed. Full gameplay, native Windows rendering and load-independent
+simulation/animation parity are not established by this menu diagnostic.
+
+A further source review rejects forcing the 2D compositing flag onto the whole
+menu stack. Besides the Camera3d resolver restriction, the ordinary UI shader
+does not encode its output for that non-linear target, and the PBR helper
+premultiplies additive/multiply RGB before returning. A transfer conversion at
+the wrong point would change the blend equation. Geometry, PRE2 and both UI
+material paths need a consistent composition/presentation contract. This is
+source-code evidence about the proposed implementation, not proof of the
+original's effective render state. No alpha, tint or production rendering code
+was changed. The review and pinned dependency-source hashes are retained in
+`.scratch/menu-composition-root-20261018/composition-review-1.json`.
