@@ -292,7 +292,26 @@ fn bezier_translation_and_spherical_cubic_rotation_are_not_linear_replacements()
 }
 
 #[test]
-fn signed_speed_node_rotation_translation_and_semiimplicit_gravity_are_preserved() {
+fn constant_gravity_matches_the_ballistic_path_across_tick_sizes() {
+    let mut props = properties();
+    props.speed = 8.;
+    props.gravity = 8.;
+    props.emission_rate = 8.;
+    let p = plan(&[emitter(props)], &[], [0, 2000], true);
+    for millis in [125, 250] {
+        let mut policy = limits();
+        policy.tick = Duration::from_millis(millis);
+        let mut simulation = Simulation::new(Arc::clone(&p), 11, policy).unwrap();
+        simulation.advance(Duration::from_secs(1), policy).unwrap();
+        let first = simulation.particles()[0];
+        assert_eq!(first.age, 1.);
+        assert_eq!(first.velocity, [0., 0., 0.]);
+        assert_eq!(first.position, [7., 11., 17.]);
+    }
+}
+
+#[test]
+fn signed_speed_node_rotation_translation_and_ballistic_gravity_are_preserved() {
     let mut p = properties();
     p.speed = -4.;
     p.gravity = 8.;
@@ -318,7 +337,7 @@ fn signed_speed_node_rotation_translation_and_semiimplicit_gravity_are_preserved
     assert_eq!(x.position[0], 9.);
     assert_eq!(x.position[1], 14.);
     approx(x.velocity[2], 3.);
-    approx(x.position[2], 17.375);
+    approx(x.position[2], 17.4375);
 }
 
 #[test]

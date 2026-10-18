@@ -150,3 +150,43 @@ comparisons still differ. The private evidence and report are under
 floating-point equivalence, quality scaling, native Windows hardware and full
 rendered parity remain open. No pixel exclusions, opacity fit, quality multiplier
 or public-site update is part of this correction.
+
+## Ballistic gravity (2026-10-19)
+
+Live particles now advance from the previous velocity using
+`z += vz * dt - gravity * dt * dt / 2`, then update `vz -= gravity * dt`.
+The previous semi-implicit update used the new velocity for the entire step,
+adding downward drift. Authored gravity and the existing coordinate, lifetime,
+fixed-step, work-budget and RNG policies retain their existing paths.
+
+Fresh selected-client disassembly joins PRE2 reader `0x909930`'s gravity field
+`+0xf8` through binding `0x9251f0` and setter `0x97e4e0` to emitter field `+0x160`.
+The live branch in `0x97d170` explicitly subtracts the half-acceleration position
+term before updating velocity. Thirty-one instruction checks and a rejected
+missing-half-term mutation are retained in the private `native-gravity-3.json`
+receipt under `.scratch/menu-particle-gravity-root-20261019/`.
+
+The synthetic trajectory regression fails before the fix at height 16.5 instead
+of 17.0 after one second. It passes at both 125 ms and 250 ms integration steps
+afterward. Those binary-exact synthetic inputs check the individual trajectory;
+they do not prove identical emission timing or complete state across different
+step policies. All 157 graphics tests, 654 application tests and 22 actual WASI
+particle tests pass, with nine, thirty and one explicit ignores respectively.
+Both selected-TFT CPU/quad gates, strict native/WASM Clippy, application builds
+and formatting pass. The selected-model birth/update/retained work counters
+match the preceding cone candidate without elapsed-time or FPS thresholds.
+
+The rebuilt native application completes the four-view 4K journal. The first
+browser run times out awaiting the trusted Open menu click acknowledgment;
+its failure and clean Chromium shutdown remain retained. One isolated diagnostic
+uses scheduled DOM entry and completes Main, Options landing, Video and return
+with the same compiled WASM. That verifies rendering, not the trusted entry
+workflow. Multiple changed inputs prevent attributing the original timeout to
+a specific cause. The diagnostic report keeps those acceptance results separate.
+No fresh original-game run or public deployment is part of this increment.
+
+The density investigation also traces a separate shared-emitter rate factor,
+its file initializer and finite-value setter checks. Its option-name/current
+saved-state join remains unqualified, so no quality multiplier is applied.
+Native floating-point identity, initial ages, the native clamped-time lifecycle,
+particle PRNG and full three-target rendered/simulation parity remain open.

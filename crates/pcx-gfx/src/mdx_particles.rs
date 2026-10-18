@@ -906,14 +906,16 @@ fn advance_particle(
     if particle.age >= f64::from(life) {
         return Ok(None);
     }
+    let mut position = std::array::from_fn(|i| {
+        f64::from(particle.position[i]) + f64::from(particle.velocity[i]) * dt
+    });
+    position[2] -= 0.5 * f64::from(particle.gravity) * dt * dt;
+    particle.position = vector(position)?;
     particle.velocity = vector([
         f64::from(particle.velocity[0]),
         f64::from(particle.velocity[1]),
         f64::from(particle.velocity[2]) - f64::from(particle.gravity) * dt,
     ])?;
-    particle.position = vector(std::array::from_fn(|i| {
-        f64::from(particle.position[i]) + f64::from(particle.velocity[i]) * dt
-    }))?;
     Ok(Some(particle))
 }
 

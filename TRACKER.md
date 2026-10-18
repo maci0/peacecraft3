@@ -212,6 +212,19 @@ integration. A completed prototype does not close its broader milestone.
       and complete matrix/trajectory equivalence remain open. See
       `docs/re-notes/menu-particles.md` and local evidence
       `.scratch/menu-particle-policy-root-20261019/`.
+- [x] PRE2 gravity now follows the selected client's constant-acceleration
+      position equation before updating velocity (2026-10-19). The causal
+      trajectory regression fails before the correction and passes at two
+      integration tick sizes afterward. All 157 graphics, 654 application and
+      22 actual WASI particle tests, two selected-TFT CPU/quad gates and strict
+      native/WASM checks/builds pass. Native 4K navigation passes; scheduled-entry
+      WASM verifies rendering only. See `docs/re-notes/menu-particles.md` and
+      `.scratch/menu-particle-gravity-root-20261019/`.
+- [~] The fresh trusted-click browser 4K entry attempt timed out before its
+      journal began. An isolated scheduled-DOM-entry diagnostic completes the
+      four views, but does not replace that failed workflow or establish its
+      cause. Keep entry acknowledgment/load diagnosis and exact pixel/RNG parity
+      open; no blind replay or raised timeout is recorded as a fix.
 - [~] The earlier composed alpha/billboard candidate passes 651 application tests,
       strict native/WASM checks/builds, five hardware source-background extents
       and ten fresh native/browser navigation runs through 3840×2160. Forty new
