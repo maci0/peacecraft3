@@ -2362,6 +2362,11 @@ repeated, and the public site package was not rebuilt.
 
 ### 2026-10-18 — live unit placement and range-event reference
 
+- [x] Declared `BlzGetUnitCollisionSize` reads the existing unit's retained
+  catalog geometry through checked metadata, without copied collision values or
+  another catalog lookup. Missing, ambiguous or unusable geometry refuses.
+  Selected class relations and the parsed footman row agree with the retained
+  runtime query; unusual override clamping and runtime mutation remain open.
 - [~] One fresh instrumented reference completes 51 records, with eight mutated
   logs refused. It distinguishes range notifications from `IsUnitInRange`,
   observes deferred entry and same-callback movement coalescing, and records

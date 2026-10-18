@@ -29,6 +29,7 @@ use std::sync::Arc;
 const NATIVE: &str = "CreateUnit";
 const GET_TYPE: &str = "GetUnitTypeId";
 const GET_OWNER: &str = "GetOwningPlayer";
+const GET_COLLISION: &str = "BlzGetUnitCollisionSize";
 const SET_RANGE: &str = "SetUnitAcquireRange";
 const SET_HERO_LEVEL: &str = "SetHeroLevel";
 const SET_STATE: &str = "SetUnitState";
@@ -132,6 +133,7 @@ pub(super) struct Admission {
     type_span: Option<Span>,
     /// Present when this program declares `GetOwningPlayer` on the same source.
     owner_span: Option<Span>,
+    collision_span: Option<Span>,
     /// Present when this program declares `SetUnitAcquireRange` on the same source.
     acquire_span: Option<Span>,
     /// Present when this program declares `SetHeroLevel` on the same source.
@@ -187,6 +189,8 @@ impl ObjectHost {
         declaration_source.push_str(&native.source);
         let type_span = self.optional_unit_getter(&declaration_source, GET_TYPE, "integer")?;
         let owner_span = self.optional_unit_getter(&declaration_source, GET_OWNER, "player")?;
+        let collision_span =
+            self.optional_unit_getter(&declaration_source, GET_COLLISION, "real")?;
         let acquire_span = self.acquire_declaration(&declaration_source)?;
         let hero_level_span = self.hero_level_declaration(&declaration_source)?;
         self.units = Some(Admission {
@@ -200,6 +204,7 @@ impl ObjectHost {
             records: 0,
             type_span,
             owner_span,
+            collision_span,
             acquire_span,
             hero_level_span,
             unit_state: None,
@@ -396,6 +401,9 @@ impl ObjectHost {
         if name == GET_OWNER && self.admitted_units().ok()?.owner_span.is_some() {
             return Some(self.owning_player(args));
         }
+        if name == GET_COLLISION && self.admitted_units().ok()?.collision_span.is_some() {
+            return Some(self.unit_collision(args));
+        }
         if name == SET_RANGE && self.admitted_units().ok()?.acquire_span.is_some() {
             return Some(self.set_acquire_range(args));
         }
@@ -486,6 +494,58 @@ impl ObjectHost {
             }
             _ => Err(fail(Failure::Identity)),
         }
+    }
+
+    fn unit_collision(&self, args: &[Value]) -> Result<Value, Error> {
+        let fail = |reason| self.inner.error(GET_COLLISION, reason);
+        let [Value::Handle(unit)] = args else {
+            return Err(fail(Failure::UnitState(
+                "collision query requires one unit",
+            )));
+        };
+        let definition = &self.created_unit(*unit, GET_COLLISION)?.definition;
+        let mut fields = definition.fields.iter().filter(|(_, field)| {
+            field.metadata.as_ref().is_some_and(|meta| {
+                matches!(&meta.source, FieldSource::Column { slk: SlkId::UnitBalance, column } if column == "collision")
+            })
+        });
+        let Some((id, field)) = fields.next() else {
+            return Err(fail(Failure::UnitState(
+                "missing UnitBalance collision field",
+            )));
+        };
+        if fields.next().is_some() {
+            return Err(fail(Failure::UnitState(
+                "ambiguous UnitBalance collision field",
+            )));
+        }
+        let metadata = field
+            .metadata
+            .as_ref()
+            .ok_or_else(|| fail(Failure::Identity))?;
+        if metadata.fourcc != *id
+            || metadata.from != SlkId::UnitMetaData
+            || metadata.index != -1
+            || !matches!(metadata.kind, FieldKind::Real | FieldKind::Unreal)
+        {
+            return Err(fail(Failure::UnitState("unsupported collision metadata")));
+        }
+        let value = match (&field.value, metadata.kind) {
+            (Ok(FieldValue::Cell(text)), _) => text.trim().parse::<f32>().ok(),
+            (Ok(FieldValue::Override(pcx_objects::Value::Real(value))), FieldKind::Real)
+            | (Ok(FieldValue::Override(pcx_objects::Value::Unreal(value))), FieldKind::Unreal) => {
+                Some(*value)
+            }
+            _ => None,
+        }
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .ok_or_else(|| {
+            fail(Failure::UnitState(
+                "collision must be a finite nonnegative catalog real",
+            ))
+        })?;
+        // shortcut: catalog geometry only; qualify runtime collision mutations before admitting their setters.
+        Ok(Value::Real(value))
     }
 
     /// `Ok(None)` when the program does not declare the setter. A present

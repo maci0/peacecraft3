@@ -27,14 +27,52 @@ unit's position virtual method, the same method used by `GetUnitX/Y`. The
 single-axis setters preserve the other coordinate through that position object
 and call its update wrapper. `SetUnitPosition` follows a separate virtual path
 with additional arguments; it is not established as two single-axis assignments.
-`BlzGetUnitCollisionSize` reads another unit virtual method, not a proved direct
-copy of a catalog collision field. Creation passes through an engine factory
-before exposing the JASS handle.
+`BlzGetUnitCollisionSize` reads another unit virtual method. Further selected
+class decoding links that method to a rawcode-keyed unit-type entry. Creation
+passes through an engine factory before exposing the JASS handle.
 
 Twenty-one source windows and the selected virtual-call relations are rechecked
 against the complete image. These are bounded windows, sometimes including
 subsequent functions, not complete function/caller graphs or runtime observations.
 No decoded operand or measured collision size is a production constant.
+
+## Catalog collision and creation path (2026-10-18)
+
+Selected MSVC class metadata links the `CUnit` position, collision and initializer
+methods. The collision method looks up the unit rawcode and reads its unit-type
+entry. The supplied `UnitMetaData.slk` maps the collision field to the `unreal`
+column `UnitBalance.collision`. Production SYLK parsing of the supplied footman
+row agrees with both footmen's collision queries in the retained range run.
+The separately extracted base and expansion table members are byte-identical;
+that equality does not identify their archive releases or general priority.
+
+The recreation now admits a declared `BlzGetUnitCollisionSize` alongside the
+existing catalog-backed `CreateUnit`. It reads the same retained definition by
+metadata source and column, including a correctly typed map override. It neither
+opens another archive nor resolves a replacement definition. Missing, ambiguous,
+indexed, nonnumeric, nonfinite and negative geometry refuse with the selected
+native's source context. Omitted declarations remain unsupported; present ones
+must have the loaded signature and share the creation declaration's source.
+This is catalog geometry; runtime collision mutation and native clamping of
+unusual map overrides remain unqualified.
+
+The creation initializer also reaches a position-adjustment method before the
+position is stored. One branch passes the unit collision method's result into a
+spatial search; another takes a distinct query path. A separate nullable record
+can adjust the coordinates again. These relations explain why bypassing
+placement is unsafe, but do not establish the search order, blocker policy or
+the producer of that optional record. A bounded decoder still leaves indirect
+switches unresolved in the larger initializer. No placement algorithm is copied
+or inferred from those incomplete graphs. Rechecked bytes, table comparisons,
+refused source/geometry mutants and validation receipts remain local under
+`.scratch/unit-placement-root-20261018/`.
+
+Validation passes 448 library tests both natively and through the WASI runtime
+(six explicit local-input ignores), plus 107 map-loading integration tests
+(one explicit ignore). Native and browser-WASM all-target Clippy, the browser
+library build and formatting checks pass. These do not establish accepted
+placement or rendered gameplay; no fresh browser package or reference run was
+needed for this catalog query.
 
 ## One bounded range probe (2026-10-18)
 
@@ -78,7 +116,7 @@ verification remain local in `.scratch/unit-world-root-20261018/`.
 
 This is one instrumented Wine run, not native Windows truth or an unmodified-map
 acceptance run. No production range-registration stub, world-id adapter, copied
-position/collision values or assumed polling interval is added. Live placement,
+position/collision constants or assumed polling interval is added. Live placement,
 session-scoped world identity, world-driven event delivery and the required
 four-result RNG factory gate remain open. The factory still refuses
 `TriggerRegisterUnitInRange` after one exact RNG result.

@@ -394,47 +394,56 @@ fn identity_getters_refuse_another_family_and_a_reserved_unit_token() {
 #[test]
 fn identity_getters_from_another_source_are_refused() {
     let primary = "type agent extends handle\ntype widget extends agent\ntype unit extends widget\ntype player extends agent\ntype timer extends agent\ntype playercolor extends handle\nconstant native ConvertPlayerColor takes integer i returns playercolor\nnative CreateTimer takes nothing returns timer\nnative DestroyTimer takes timer t returns nothing\nnative CreateUnit takes player id, integer unitid, real x, real y, real face returns unit\nglobals\nconstant playercolor C = ConvertPlayerColor(1)\nendglobals\n";
-    let other = "native GetUnitTypeId takes unit whichUnit returns integer\nnative GetOwningPlayer takes unit whichUnit returns player\n";
-    let map = pcx_script::parse_script("").unwrap();
-    let primary = pcx_script::parse_script(primary).unwrap();
-    let other = pcx_script::parse_script(other).unwrap();
-    let program = Arc::new(
-        pcx_script::resolve_with(
-            &map,
-            &[
-                pcx_script::Prelude::new("synthetic/common.j", &primary),
-                pcx_script::Prelude::new("synthetic/other.j", &other),
-            ],
+    for (name, other) in [
+        (
+            "GetUnitTypeId",
+            "native GetUnitTypeId takes unit whichUnit returns integer\nnative GetOwningPlayer takes unit whichUnit returns player\n",
+        ),
+        (
+            "BlzGetUnitCollisionSize",
+            "native BlzGetUnitCollisionSize takes unit u returns real\n",
+        ),
+    ] {
+        let map = pcx_script::parse_script("").unwrap();
+        let primary = pcx_script::parse_script(primary).unwrap();
+        let other = pcx_script::parse_script(other).unwrap();
+        let program = Arc::new(
+            pcx_script::resolve_with(
+                &map,
+                &[
+                    pcx_script::Prelude::new("synthetic/common.j", &primary),
+                    pcx_script::Prelude::new("synthetic/other.j", &other),
+                ],
+            )
+            .unwrap(),
+        );
+        let inner = crate::playercolor_host::EnumHost::checked_selected(
+            program,
+            "split-source",
+            &["ConvertPlayerColor"],
+            crate::playercolor_host::Limits {
+                max_handles: 4,
+                admission_steps: 100,
+                expression_depth: 16,
+                expression_work: 100,
+            },
         )
-        .unwrap(),
-    );
-    let inner = crate::playercolor_host::EnumHost::checked_selected(
-        program,
-        "split-source",
-        &["ConvertPlayerColor"],
-        crate::playercolor_host::Limits {
-            max_handles: 4,
-            admission_steps: 100,
-            expression_depth: 16,
-            expression_work: 100,
-        },
-    )
-    .unwrap();
-    let (catalog, hits, _) = counting();
-    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
-    let error = match crate::playercolor_host::ObjectHost::checked(inner)
-        .unwrap()
-        .with_unit_catalog(shared, source(), limits(1))
-    {
-        Err(error) => error,
-        Ok(_) => panic!("foreign identity getters were admitted"),
-    };
-    assert_eq!(error.failure, Failure::Source);
-    assert_eq!(error.native, "GetUnitTypeId");
-    assert_eq!(error.declaration_source, "synthetic/other.j");
-    assert_eq!(hits.load(Ordering::SeqCst), 0);
+        .unwrap();
+        let (catalog, hits, _) = counting();
+        let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+        let error = match crate::playercolor_host::ObjectHost::checked(inner)
+            .unwrap()
+            .with_unit_catalog(shared, source(), limits(1))
+        {
+            Err(error) => error,
+            Ok(_) => panic!("foreign identity getters were admitted"),
+        };
+        assert_eq!(error.failure, Failure::Source);
+        assert_eq!(error.native, name);
+        assert_eq!(error.declaration_source, "synthetic/other.j");
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
 }
-
 #[test]
 fn identity_getters_validate_the_loaded_signature_before_catalog_use() {
     for (name, declaration) in [
@@ -453,6 +462,14 @@ fn identity_getters_validate_the_loaded_signature_before_catalog_use() {
         (
             "GetOwningPlayer",
             "native GetOwningPlayer takes unit u returns integer\n",
+        ),
+        (
+            "BlzGetUnitCollisionSize",
+            "native BlzGetUnitCollisionSize takes timer u returns real\n",
+        ),
+        (
+            "BlzGetUnitCollisionSize",
+            "native BlzGetUnitCollisionSize takes unit u returns integer\n",
         ),
     ] {
         let common = script_common_with("widget", true, declaration);
@@ -490,6 +507,15 @@ fn omitted_identity_getters_stay_unsupported() {
         .native("GetOwningPlayer", &[Value::Handle(unit)])
         .unwrap_err();
     assert!(missing_owner.contains("unsupported"), "{missing_owner}");
+    let missing_collision = session
+        .vm
+        .host()
+        .native("BlzGetUnitCollisionSize", &[Value::Handle(unit)])
+        .unwrap_err();
+    assert!(
+        missing_collision.contains("unsupported"),
+        "{missing_collision}"
+    );
 }
 
 #[test]
@@ -2040,4 +2066,190 @@ fn defend_requires_one_authored_upgrade_level_before_any_unit_creation() {
             .to_string()
             .contains("admit Defend before creating units")
     );
+}
+
+struct GeometryCatalog {
+    fields: BTreeMap<[u8; 4], ObjectField>,
+    hits: Arc<AtomicUsize>,
+}
+
+impl ObjectCatalog for GeometryCatalog {
+    fn resolve(&self, rawcode: [u8; 4]) -> Result<Definition, ResolutionProblem> {
+        self.hits.fetch_add(1, Ordering::SeqCst);
+        Ok(definition(
+            rawcode,
+            "synthetic-base".into(),
+            ObjectKind::Unit,
+            self.fields.clone(),
+        ))
+    }
+}
+
+fn geometry_field(value: Result<FieldValue, pcx_sim::world::FieldProblem>) -> ObjectField {
+    ObjectField {
+        metadata: Some(FieldDef {
+            fourcc: *b"G001",
+            from: SlkId::UnitMetaData,
+            field: "collision".into(),
+            slk: "UnitBalance".into(),
+            index: -1,
+            declared: "unreal".into(),
+            kind: FieldKind::Unreal,
+            category: "synthetic-geometry".into(),
+            source: FieldSource::Column {
+                slk: SlkId::UnitBalance,
+                column: "collision".into(),
+            },
+            measured: true,
+        }),
+        value,
+    }
+}
+
+fn geometry_vm(fields: BTreeMap<[u8; 4], ObjectField>, constant: bool) -> VmHost {
+    let prefix = if constant { "constant " } else { "" };
+    let common = script_common_with(
+        "widget",
+        true,
+        &format!("{prefix}native BlzGetUnitCollisionSize takes unit u returns real\n"),
+    );
+    let map = format!(
+        "{MAP}\nfunction collision takes unit u returns real\nreturn BlzGetUnitCollisionSize(u)\nendfunction\n"
+    );
+    let ctx = context(300, &common, &map, "unit-catalog");
+    let hits = Arc::new(AtomicUsize::new(0));
+    let catalog: Arc<dyn ObjectCatalog + Send + Sync> = Arc::new(GeometryCatalog {
+        fields,
+        hits: Arc::clone(&hits),
+    });
+    let host = object(&ctx, 16)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(Arc::clone(&catalog), source(), limits(1))
+        .unwrap();
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    VmHost {
+        vm,
+        hits,
+        seen: Arc::new(Mutex::new(Vec::new())),
+        catalog,
+    }
+}
+
+#[test]
+fn collision_query_uses_the_retained_catalog_field_without_resolving_again() {
+    for constant in [false, true] {
+        for (kind, value, expected) in [
+            (
+                FieldKind::Unreal,
+                FieldValue::Cell(" 27.125 ".into()),
+                27.125,
+            ),
+            (
+                FieldKind::Unreal,
+                FieldValue::Override(pcx_objects::Value::Unreal(9.5)),
+                9.5,
+            ),
+            (
+                FieldKind::Real,
+                FieldValue::Override(pcx_objects::Value::Real(0.0)),
+                0.0,
+            ),
+        ] {
+            let mut field = geometry_field(Ok(value));
+            field.metadata.as_mut().unwrap().kind = kind;
+            let mut session = geometry_vm(BTreeMap::from([(*b"G001", field)]), constant);
+            let unit = session.vm.global("U");
+            let before = session.vm.host().inner.inner().handles();
+            assert_eq!(
+                session
+                    .vm
+                    .call("collision", std::slice::from_ref(&unit))
+                    .unwrap(),
+                Value::Real(expected)
+            );
+            assert_eq!(
+                session
+                    .vm
+                    .host()
+                    .native("BlzGetUnitCollisionSize", std::slice::from_ref(&unit))
+                    .unwrap(),
+                Value::Real(expected)
+            );
+            assert_eq!(session.vm.host().inner.inner().handles(), before);
+            assert_eq!(session.hits.load(Ordering::SeqCst), 1);
+            let player = session.vm.global("P");
+            let wrong = session
+                .vm
+                .host()
+                .native("BlzGetUnitCollisionSize", &[player])
+                .unwrap_err();
+            assert!(wrong.contains("BlzGetUnitCollisionSize"), "{wrong}");
+            assert!(
+                session
+                    .vm
+                    .host()
+                    .native("BlzGetUnitCollisionSize", &[Value::Null])
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[test]
+fn collision_query_refuses_missing_ambiguous_and_unusable_geometry() {
+    let good = geometry_field(Ok(FieldValue::Cell("27.125".into())));
+    let mut cases = vec![BTreeMap::new()];
+    let mut duplicate = good.clone();
+    duplicate.metadata.as_mut().unwrap().fourcc = *b"G002";
+    cases.push(BTreeMap::from([
+        (*b"G001", good.clone()),
+        (*b"G002", duplicate),
+    ]));
+    for value in [
+        Err(pcx_sim::world::FieldProblem::Missing),
+        Err(pcx_sim::world::FieldProblem::Indexed([1, 2])),
+        Ok(FieldValue::Cell("_".into())),
+        Ok(FieldValue::Cell("-1".into())),
+        Ok(FieldValue::Cell("NaN".into())),
+        Ok(FieldValue::Cell("1e999".into())),
+        Ok(FieldValue::Override(pcx_objects::Value::Int(8))),
+        Ok(FieldValue::Override(pcx_objects::Value::Real(8.0))),
+        Ok(FieldValue::Override(pcx_objects::Value::Unreal(
+            f32::INFINITY,
+        ))),
+    ] {
+        cases.push(BTreeMap::from([(*b"G001", geometry_field(value))]));
+    }
+    for mutation in 0..5 {
+        let mut field = good.clone();
+        let meta = field.metadata.as_mut().unwrap();
+        match mutation {
+            0 => meta.fourcc = *b"G002",
+            1 => meta.from = SlkId::AbilityMetaData,
+            2 => meta.kind = FieldKind::Int,
+            3 => meta.index = 0,
+            _ => {
+                meta.source = FieldSource::Column {
+                    slk: SlkId::UnitData,
+                    column: "collision".into(),
+                }
+            }
+        }
+        cases.push(BTreeMap::from([(*b"G001", field)]));
+    }
+    for fields in cases {
+        let mut session = geometry_vm(fields, false);
+        let unit = session.vm.global("U");
+        let error = session
+            .vm
+            .host()
+            .native("BlzGetUnitCollisionSize", &[unit])
+            .unwrap_err();
+        assert!(error.contains("BlzGetUnitCollisionSize"), "{error}");
+        assert!(error.contains("synthetic/common.j"), "{error}");
+        assert_eq!(session.hits.load(Ordering::SeqCst), 1);
+    }
 }
