@@ -117,23 +117,29 @@ const BG_FIELD: Color = Color::srgb(0.032, 0.039, 0.043);
 const BG_PILL: Color = Color::srgb(0.075, 0.075, 0.071);
 const BORDER: Color = Color::srgb(0.23, 0.205, 0.145);
 const BORDER_STRONG: Color = Color::srgb(0.69, 0.55, 0.22);
-const TEXT: Color = Color::srgb(0.92, 0.85, 0.67);
-const TEXT_DIM: Color = Color::srgb(0.80, 0.72, 0.56);
-const TEXT_FAINT: Color = Color::srgb(0.67, 0.62, 0.52);
+const TEXT: Color = Color::srgb(0.94, 0.93, 0.88);
+const TEXT_DIM: Color = Color::srgb(0.78, 0.77, 0.71);
+const TEXT_FAINT: Color = Color::srgb(0.67, 0.66, 0.60);
 const ACCENT_SOFT: Color = Color::srgb(0.16, 0.14, 0.09);
 const DISABLED_BG: Color = Color::srgb(0.086, 0.098, 0.125);
-const DISABLED_FG: Color = Color::srgb(0.36, 0.35, 0.32);
-const WARN: Color = crate::mainmenu::LABEL;
-const PANEL_ART: &str = crate::mainmenu::BUTTON_BG_ART;
+const DISABLED_FG: Color = Color::srgb(0.59, 0.58, 0.54);
+const WARN: Color = Color::srgb(0.91, 0.73, 0.40);
 
 #[derive(Component)]
-struct Wc3Panel;
+struct LauncherText;
+
+#[derive(Resource)]
+struct LauncherFont(Handle<Font>);
+
+#[derive(Component)]
+#[require(bevy::input_focus::tab_navigation::TabIndex)]
+struct LauncherControl;
+
+#[derive(Component)]
+struct LauncherArtwork;
 
 #[derive(Component)]
 struct LauncherPanel;
-
-#[derive(Component)]
-struct ButtonArt;
 
 /// The node the FDF control layer is built into; it covers the authored frame.
 #[derive(Component)]
@@ -177,13 +183,13 @@ struct MenuTextFilled;
 // ------------------------------------------------------------- spacing/type
 
 fn card_radius() -> BorderRadius {
-    BorderRadius::ZERO
+    BorderRadius::all(Val::Rem(0.75))
 }
 fn pill_radius() -> BorderRadius {
-    BorderRadius::ZERO
+    BorderRadius::all(Val::Rem(0.375))
 }
 fn field_radius() -> BorderRadius {
-    BorderRadius::ZERO
+    BorderRadius::all(Val::Rem(0.375))
 }
 
 fn tint(s: impl Into<String>, size: f32, colour: Color) -> impl Bundle {
@@ -195,11 +201,13 @@ fn tint(s: impl Into<String>, size: f32, colour: Color) -> impl Bundle {
             ..default()
         },
         TextColor(colour),
+        TextLayout::default().with_linebreak(bevy::text::LineBreak::WordOrCharacter),
+        LauncherText,
         ZIndex(1),
     )
 }
 
-/// An inset panel using the menu backdrop.
+/// The project's configuration surface, independent of imported game art.
 fn card() -> impl Bundle {
     (
         Node {
@@ -208,14 +216,14 @@ fn card() -> impl Bundle {
             flex_direction: FlexDirection::Column,
             padding: UiRect::axes(Val::Rem(1.25), Val::Rem(1.0)),
             row_gap: Val::Rem(0.75),
-            border: UiRect::all(Val::Rem(0.125)),
+            border: UiRect::all(Val::Px(1.0)),
+            flex_shrink: 0.0,
             // `BorderRadius` is a `Node` field in 0.20, not a component.
             border_radius: card_radius(),
             ..default()
         },
         BackgroundColor(BG_CARD),
         BorderColor::all(BORDER),
-        Wc3Panel,
     )
 }
 
@@ -232,7 +240,7 @@ fn section(c: &mut ChildSpawnerCommands, title: &str, hint: Option<&str>) {
         ..default()
     })
     .with_children(|r| {
-        r.spawn(tint(title, 20.0, crate::mainmenu::LABEL));
+        r.spawn(tint(title, 18.0, TEXT));
         if let Some(h) = hint {
             r.spawn((
                 tint(h, 12.0, TEXT_FAINT),
@@ -286,6 +294,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
         .add_plugins(crate::mainmenu_scene::ParticleMaterialPlugin)
         .add_plugins(bevy::pbr::MaterialPlugin::<MenuMaterial>::default())
         .add_plugins(bevy::input_focus::tab_navigation::TabNavigationPlugin)
+        .insert_resource(bevy::text::RemSize(16.0))
         .insert_resource(Launcher::default())
         .init_resource::<MenuArtCache>()
         .init_resource::<SceneLoad>()
@@ -298,6 +307,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
             Update,
             (
                 (
+                    launcher_typeface,
                     colour_picks,
                     apply_clicks.in_set(LauncherInput),
                     finish_intro,
@@ -330,6 +340,12 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
                 .chain(),
         );
     install_resolution_popup_input(&mut app);
+    app.add_systems(
+        PostUpdate,
+        (crop_launcher_artwork, reveal_launcher_focus)
+            .after(bevy::ui::UiSystems::Layout)
+            .before(bevy::ui::UiSystems::PostLayout),
+    );
     app.add_systems(
         Update,
         crate::mainmenu_scene::advance
@@ -590,7 +606,16 @@ pub(crate) fn selected_install(launcher: &Launcher) -> Option<std::path::PathBuf
     }
 }
 
-fn setup(mut commands: Commands, l: Res<Launcher>) {
+fn setup(
+    mut commands: Commands,
+    l: Res<Launcher>,
+    mut fonts: ResMut<Assets<Font>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let font = Font::from_bytes(include_bytes!("../art/DejaVuSans.ttf").to_vec());
+    commands.insert_resource(LauncherFont(fonts.add(font)));
+    let artwork = launcher_artwork().expect("bundled launcher artwork must decode");
+    let artwork = images.add(artwork);
     commands.spawn((
         Camera2d,
         MenuLetterbox,
@@ -620,9 +645,9 @@ fn setup(mut commands: Commands, l: Res<Launcher>) {
                 width: Val::Percent(100.0),
                 min_width: Val::Rem(0.0),
                 height: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                padding: UiRect::all(Val::Rem(1.625)),
-                row_gap: Val::Rem(1.125),
+                align_items: AlignItems::Start,
+                justify_content: JustifyContent::Center,
+                padding: UiRect::all(Val::Rem(1.25)),
                 overflow: Overflow::scroll_y(),
                 ..default()
             },
@@ -630,16 +655,68 @@ fn setup(mut commands: Commands, l: Res<Launcher>) {
             LauncherPanel,
             Hovered::default(),
             ScrollPosition::default(),
+            bevy::input_focus::tab_navigation::TabGroup::new(0),
         ))
         .with_children(|root| {
-            header(root, &l);
-            source_card(root, &l);
-            mode_card(root, l.mode);
-            action_card(root);
-            log_card(root);
+            root.spawn(Node {
+                width: Val::Percent(100.0),
+                max_width: Val::Rem(68.0),
+                min_width: Val::ZERO,
+                flex_shrink: 0.0,
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Rem(1.0),
+                ..default()
+            })
+            .with_children(|content| {
+                header(content, artwork);
+                source_card(content, &l);
+                mode_card(content, l.mode);
+                action_card(content);
+                log_card(content);
+            });
         });
 
     // PeaceCraft settings precede the original menu; Main menu opens it.
+}
+
+fn launcher_artwork() -> Result<Image, bevy::image::TextureError> {
+    Image::from_buffer(
+        include_bytes!("../art/launcher-landscape.png"),
+        bevy::image::ImageType::Extension("png"),
+        bevy::image::CompressedImageFormats::NONE,
+        true,
+        bevy::image::ImageSampler::linear(),
+        bevy::asset::RenderAssetUsages::default(),
+    )
+}
+
+fn launcher_typeface(
+    font: Res<LauncherFont>,
+    mut texts: Query<&mut TextFont, Added<LauncherText>>,
+) {
+    for mut text in &mut texts {
+        text.font = bevy::text::FontSource::Handle(font.0.clone());
+    }
+}
+
+// Crop from decoded image dimensions; never stretch the landscape on resize.
+fn crop_launcher_artwork(
+    images: Res<Assets<Image>>,
+    mut art: Query<(&ComputedNode, &mut ImageNode), With<LauncherArtwork>>,
+) {
+    for (node, mut image) in &mut art {
+        if let Some(source) = images.get(&image.image)
+            && node.size().min_element() > 0.0
+        {
+            let size = source.size().as_vec2();
+            let scale = (node.size() / size).max_element();
+            let visible = node.size() / scale;
+            let rect = Rect::from_center_size(size * 0.5, visible);
+            if image.rect != Some(rect) {
+                image.rect = Some(rect);
+            }
+        }
+    }
 }
 
 /// Draws the original main menu over the staging panel.
@@ -1283,7 +1360,6 @@ fn invalidate_on_asset_revision(
     }
     // Everything decoded or derived from the old store goes, including the
     // texts the labels and their style come from.
-    cache.button = None;
     cache.fonts.clear();
     cache.skin = None;
     cache.fdf = None;
@@ -1730,14 +1806,9 @@ fn menu_is_visible(menu: Query<Entity, With<MenuLayer>>) -> bool {
     !menu.is_empty()
 }
 
-/// The menu's frame and text sources, and the plate art the launcher's own
-/// controls wear.
+/// The imported menu's frame and text sources.
 #[derive(Resource, Default)]
 struct MenuArtCache {
-    /// `GlueScreen-Button1-Border.blp`, worn by the launcher's own buttons.
-    button: Option<Handle<Image>>,
-    /// The launcher panels' tiled backdrop.
-    panel: Option<Handle<Image>>,
     /// One handle per authored face.
     fonts: std::collections::HashMap<String, Handle<Font>>,
     /// `UI\war3skins.txt`, the face -> file binding's source.
@@ -1781,23 +1852,6 @@ fn cached_text(slot: &mut Option<String>, install: Option<&std::path::Path>, pat
     {
         *slot = std::str::from_utf8(&bytes).ok().map(str::to_string);
     }
-}
-
-type ButtonArtData = (Entity, Option<&'static InteractionDisabled>);
-type ButtonArtFilter = (
-    With<Button>,
-    Without<ButtonArt>,
-    Without<crate::glue_menu::GlueButton>,
-    Without<SettingsCog>,
-    Without<ResolutionChoice>,
-);
-
-#[derive(SystemParam)]
-struct MenuArtQueries<'w, 's> {
-    buttons: Query<'w, 's, ButtonArtData, ButtonArtFilter>,
-    // Store replacement changes handles while preserving button identities.
-    dressed: Query<'w, 's, &'static mut ImageNode, With<ButtonArt>>,
-    panels: Query<'w, 's, Entity, (With<Wc3Panel>, Without<ImageNode>)>,
 }
 
 /// Limits packed/decoded definitions before extraction, not after allocation.
@@ -1896,26 +1950,17 @@ pub(crate) fn read_screen_fdf(
     Ok((fdf, menu))
 }
 
-/// Reads the menu's frame definitions, strings and skin table, and puts the
-/// plate art on the launcher's own buttons.
+/// Reads the imported menu's frame definitions, strings and skin table.
 ///
 /// Deferred rather than done at spawn because a browser only has what the page
 /// fetched, a moment later; running every frame and doing nothing until the
 /// bytes exist means one code path serves both.
 fn apply_menu_art(
     launcher: Res<Launcher>,
-    mut commands: Commands,
-    mut images: ResMut<Assets<Image>>,
     mut cache: ResMut<MenuArtCache>,
     mut glue: ResMut<crate::glue_menu::GlueImages>,
     mut navigation: ResMut<crate::menu_screens::Navigation>,
-    queries: MenuArtQueries,
 ) {
-    let MenuArtQueries {
-        buttons,
-        mut dressed,
-        panels,
-    } = queries;
     let selection = format!("{}:{:?}", launcher.source, launcher.mode);
     if cache.selection.as_ref() != Some(&selection) {
         navigation.built = None;
@@ -1944,17 +1989,6 @@ fn apply_menu_art(
     let install = install.as_deref();
     // The desktop install is read once; the browser store fills asynchronously.
     if !cache.native_loaded || cfg!(target_arch = "wasm32") {
-        for (slot, path) in [
-            (&mut cache.button, crate::mainmenu::BUTTON_ART),
-            (&mut cache.panel, PANEL_ART),
-        ] {
-            if slot.is_none()
-                && let Some(bytes) = crate::mainmenu::art_bytes(install, path)
-                && let Ok(tex) = pcx_gfx::load_image(&bytes, path)
-            {
-                *slot = Some(images.add(pcx_gfx::viewer::rgba_image(&tex)));
-            }
-        }
         cached_text(&mut cache.skin, install, crate::mainmenu::SKIN_TABLE);
         cached_text(&mut cache.main_menu, install, cache.screen.file());
         if cache.main_menu.is_none() && cache.screen != crate::menu_screens::Screen::Main {
@@ -1989,31 +2023,6 @@ fn apply_menu_art(
             }
         }
         cache.native_loaded = true;
-    }
-    if let Some(handle) = &cache.button {
-        for mut image in &mut dressed {
-            if image.image != *handle {
-                image.image = handle.clone();
-            }
-        }
-        for (entity, disabled) in &buttons {
-            let mut image = ImageNode::new(handle.clone()).with_mode(NodeImageMode::Stretch);
-            if disabled.is_some() {
-                image.color = DISABLED_FG;
-            }
-            commands.entity(entity).insert((ButtonArt, image));
-        }
-    }
-    if let Some(handle) = &cache.panel {
-        for entity in &panels {
-            let mut image = ImageNode::new(handle.clone()).with_mode(NodeImageMode::Tiled {
-                tile_x: true,
-                tile_y: true,
-                stretch_value: 1.0,
-            });
-            image.color = Color::srgb(0.12, 0.12, 0.12);
-            commands.entity(entity).insert(image);
-        }
     }
 }
 
@@ -2622,43 +2631,66 @@ fn srgba(c: [f32; 4]) -> Color {
     Color::srgba(c[0], c[1], c[2], c[3])
 }
 
-fn header(root: &mut ChildSpawnerCommands, _l: &Launcher) {
-    root.spawn(Node {
-        flex_direction: FlexDirection::Row,
-        justify_content: JustifyContent::SpaceBetween,
-        align_items: AlignItems::Center,
-        flex_wrap: FlexWrap::Wrap,
-        row_gap: Val::Rem(0.75),
-        width: Val::Percent(100.0),
-        ..default()
-    })
+fn header(root: &mut ChildSpawnerCommands, artwork: Handle<Image>) {
+    root.spawn((
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Rem(9.0),
+            flex_shrink: 0.0,
+            border_radius: card_radius(),
+            overflow: Overflow::clip(),
+            ..default()
+        },
+        ImageNode {
+            color: Color::srgb(0.58, 0.58, 0.58),
+            image_mode: NodeImageMode::Stretch,
+            ..ImageNode::new(artwork)
+        },
+        LauncherArtwork,
+    ))
     .with_children(|r| {
         r.spawn(Node {
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Rem(0.25),
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            padding: UiRect::all(Val::Rem(1.25)),
+            flex_direction: FlexDirection::Row,
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: Val::Rem(1.0),
+            row_gap: Val::Rem(0.5),
             ..default()
         })
-        .with_children(|c| {
-            c.spawn(tint("PeaceCraft III", 34.0, crate::mainmenu::LABEL));
-            c.spawn(tint("Game configuration", 15.0, TEXT_DIM));
-        });
-        r.spawn((
-            Button,
-            Hovered::default(),
-            Pick::Menu,
-            Node {
-                width: Val::Rem(10.5),
-                height: Val::Rem(3.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                border: UiRect::all(Val::Rem(0.0625)),
+        .with_children(|row| {
+            row.spawn(Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Rem(0.25),
                 ..default()
-            },
-            BackgroundColor(BG_PILL),
-            BorderColor::all(BORDER),
-        ))
-        .with_children(|b| {
-            b.spawn(tint("Main menu", 16.0, TEXT));
+            })
+            .with_children(|c| {
+                c.spawn(tint("PeaceCraft III", 30.0, TEXT));
+                c.spawn(tint("Game configuration", 15.0, TEXT));
+            });
+            row.spawn((
+                Button,
+                Hovered::default(),
+                LauncherControl,
+                Pick::Menu,
+                Node {
+                    min_height: Val::Rem(2.75),
+                    padding: UiRect::axes(Val::Rem(1.0), Val::Rem(0.5)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: pill_radius(),
+                    ..default()
+                },
+                BackgroundColor(BG_PILL),
+                BorderColor::all(BORDER),
+            ))
+            .with_children(|b| {
+                b.spawn(tint("Main menu", 15.0, TEXT));
+            });
         });
     });
 }
@@ -2675,8 +2707,9 @@ fn source_card(root: &mut ChildSpawnerCommands, l: &Launcher) {
             Node {
                 width: Val::Percent(100.0),
                 min_height: Val::Rem(2.375),
+                flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
-                padding: UiRect::horizontal(Val::Rem(0.75)),
+                padding: UiRect::axes(Val::Rem(0.75), Val::Rem(0.5)),
                 border: UiRect::all(Val::Rem(0.0625)),
                 border_radius: field_radius(),
                 ..default()
@@ -2685,11 +2718,20 @@ fn source_card(root: &mut ChildSpawnerCommands, l: &Launcher) {
             BorderColor::all(BORDER),
         ))
         .with_children(|f| {
-            f.spawn((tint(l.source.clone(), 14.0, TEXT), SourcePath));
+            f.spawn((
+                tint(l.source.clone(), 14.0, TEXT),
+                Node {
+                    min_width: Val::ZERO,
+                    width: Val::Percent(100.0),
+                    ..default()
+                },
+                SourcePath,
+            ));
         });
         c.spawn(Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
+            flex_wrap: FlexWrap::Wrap,
             column_gap: Val::Rem(0.375),
             ..default()
         })
@@ -2704,14 +2746,16 @@ fn source_card(root: &mut ChildSpawnerCommands, l: &Launcher) {
         c.spawn((
             Button,
             Hovered::default(),
+            LauncherControl,
             crate::map_source_controls::LoadSelectedMap,
             Node {
-                width: Val::Percent(100.0),
+                max_width: Val::Percent(100.0),
                 min_height: Val::Rem(2.375),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                padding: UiRect::horizontal(Val::Rem(0.75)),
-                border: UiRect::all(Val::Rem(0.0625)),
+                padding: UiRect::axes(Val::Rem(0.75), Val::Rem(0.5)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: pill_radius(),
                 ..default()
             },
             BackgroundColor(BG_PILL),
@@ -2808,6 +2852,8 @@ fn mode_card(root: &mut ChildSpawnerCommands, mode: GameMode) {
         c.spawn((
             Node {
                 width: Val::Percent(100.0),
+                flex_wrap: FlexWrap::Wrap,
+                min_width: Val::ZERO,
                 margin: UiRect::top(Val::Rem(0.25)),
                 padding: UiRect::axes(Val::Rem(0.75), Val::Rem(0.5625)),
                 column_gap: Val::Rem(0.625),
@@ -2854,10 +2900,11 @@ fn row_axis(
         });
         row.spawn(Node {
             flex_direction: FlexDirection::Row,
-            column_gap: Val::Rem(0.4375),
+            column_gap: Val::Rem(0.5),
+            row_gap: Val::Rem(0.5),
             flex_wrap: FlexWrap::Wrap,
             flex_grow: 1.0,
-            flex_basis: Val::Rem(25.0),
+            flex_basis: Val::Rem(28.0),
             max_width: Val::Percent(100.0),
             min_width: Val::Rem(0.0),
             align_items: AlignItems::Stretch,
@@ -2869,21 +2916,24 @@ fn row_axis(
                     .spawn((
                         Button,
                         Hovered::default(),
+                        LauncherControl,
                         Node {
                             padding: UiRect {
-                                left: Val::Rem(1.5),
+                                left: Val::Rem(0.75),
                                 right: Val::Rem(0.75),
-                                top: Val::Rem(0.8125),
-                                bottom: Val::Rem(0.8125),
+                                top: Val::Rem(0.625),
+                                bottom: Val::Rem(0.625),
                             },
                             flex_direction: FlexDirection::Column,
                             align_items: AlignItems::Start,
                             row_gap: Val::Rem(0.125),
                             border: UiRect::all(Val::Rem(0.0625)),
                             border_radius: pill_radius(),
-                            width: Val::Rem(13.125),
+                            flex_basis: Val::Rem(10.0),
+                            flex_grow: 1.0,
+                            min_width: Val::ZERO,
                             max_width: Val::Percent(100.0),
-                            min_height: Val::Rem(4.5),
+                            min_height: Val::Rem(2.75),
                             ..default()
                         },
                         BackgroundColor(BG_PILL),
@@ -2891,8 +2941,8 @@ fn row_axis(
                         p,
                     ))
                     .with_children(|b| {
-                        b.spawn(tint(name, 16.0, crate::mainmenu::LABEL));
-                        b.spawn(tint(what, 12.0, TEXT_DIM));
+                        b.spawn(tint(name, 15.0, TEXT));
+                        b.spawn(tint(what, 13.0, TEXT_DIM));
                     });
             }
         });
@@ -2901,7 +2951,7 @@ fn row_axis(
 
 fn action_card(root: &mut ChildSpawnerCommands) {
     root.spawn(card()).with_children(|c| {
-        section(c, "Stage", None);
+        section(c, "Stage", Some("Update checks are not available yet."));
         c.spawn(Node {
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::Wrap,
@@ -2914,16 +2964,17 @@ fn action_card(root: &mut ChildSpawnerCommands) {
             r.spawn((
                 Button,
                 Hovered::default(),
+                LauncherControl,
                 Node {
-                    width: Val::Rem(15.625),
+                    width: Val::Rem(11.0),
                     max_width: Val::Percent(100.0),
-                    height: Val::Rem(4.0),
-                    padding: UiRect::left(Val::Rem(1.25)),
+                    height: Val::Rem(2.75),
+                    padding: UiRect::horizontal(Val::Rem(0.75)),
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
                     column_gap: Val::Rem(0.5625),
                     border: UiRect::all(Val::Rem(0.0625)),
-                    border_radius: BorderRadius::ZERO,
+                    border_radius: pill_radius(),
                     ..default()
                 },
                 BackgroundColor(BG_PILL),
@@ -2931,15 +2982,16 @@ fn action_card(root: &mut ChildSpawnerCommands) {
                 Pick::Stage,
             ))
             .with_children(|b| {
-                b.spawn(tint("Stage assets", 19.0, crate::mainmenu::LABEL));
+                b.spawn(tint("Stage assets", 16.0, TEXT));
             });
             r.spawn((
                 Button,
                 InteractionDisabled,
+                LauncherControl,
                 Pick::Download,
                 Node {
                     width: Val::Rem(11.875),
-                    height: Val::Rem(3.25),
+                    height: Val::Rem(2.75),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     border: UiRect::all(Val::Rem(0.0625)),
@@ -2989,7 +3041,7 @@ fn log_card(root: &mut ChildSpawnerCommands) {
             c.spawn((
                 Node {
                     width: Val::Percent(100.0),
-                    min_height: Val::Rem(7.5),
+                    min_height: Val::Rem(3.0),
                     flex_grow: 1.0,
                     flex_direction: FlexDirection::Column,
                     padding: UiRect::all(Val::Rem(0.8125)),
@@ -3003,7 +3055,7 @@ fn log_card(root: &mut ChildSpawnerCommands) {
                 BorderColor::all(BORDER),
             ))
             .with_children(|area| {
-                area.spawn((tint("Ready.", 14.0, TEXT_DIM), LogBody));
+                area.spawn((tint("Ready.", 13.0, TEXT_DIM), LogBody));
             });
         });
 }
@@ -3012,56 +3064,78 @@ fn log_card(root: &mut ChildSpawnerCommands) {
 
 /// Paints the active option in each axis, and the disabled one as disabled.
 type PickPaintData = (
-    &'static Pick,
+    Entity,
+    Option<&'static Pick>,
     &'static mut BackgroundColor,
     &'static mut BorderColor,
-    &'static mut Node,
     Option<&'static InteractionDisabled>,
     Option<&'static Hovered>,
-    Option<&'static mut ImageNode>,
 );
 
-fn colour_picks(l: Res<Launcher>, mut q: Query<PickPaintData, With<Button>>) {
-    for (p, mut bg, mut border, mut node, disabled, interaction, image) in &mut q {
-        if disabled.is_some() || *p == Pick::Download {
-            *bg = DISABLED_BG.into();
-            *border = BorderColor::all(BORDER);
-            if let Some(mut image) = image {
-                image.color = DISABLED_FG;
-            }
-            continue;
-        }
-        let active = match p {
-            Pick::Build(v) => *v == l.mode.build,
-            Pick::Addon(a) => *a == l.mode.addon,
-            Pick::Assets(a) => *a == l.mode.assets,
-            Pick::Behaviour(b) => *b == l.mode.behaviour,
-            Pick::Stage => true,
-            Pick::Download => false,
-            Pick::Menu => false,
+fn colour_picks(
+    l: Res<Launcher>,
+    focus: Res<bevy::input_focus::InputFocus>,
+    visible: Res<bevy::input_focus::InputFocusVisible>,
+    mut q: Query<PickPaintData, With<LauncherControl>>,
+) {
+    for (entity, pick, mut bg, mut border, disabled, hovered) in &mut q {
+        let active = match pick {
+            Some(Pick::Build(v)) => *v == l.mode.build,
+            Some(Pick::Addon(a)) => *a == l.mode.addon,
+            Some(Pick::Assets(a)) => *a == l.mode.assets,
+            Some(Pick::Behaviour(b)) => *b == l.mode.behaviour,
+            Some(Pick::Stage) => true,
+            _ => false,
         };
-        if active {
-            *bg = BG_PILL.into();
-            *border = BorderColor::all(BORDER_STRONG);
-            let width = UiRect::all(Val::Rem(0.125));
-            if node.border != width {
-                node.border = width;
-            }
+        let disabled = disabled.is_some() || pick == Some(&Pick::Download);
+        let focused = visible.0 && focus.get() == Some(entity);
+        *bg = if disabled {
+            DISABLED_BG
+        } else if active || hovered.is_some_and(Hovered::get) {
+            ACCENT_SOFT
         } else {
-            *bg = BG_PILL.into();
-            *border = BorderColor::all(BORDER);
-            let width = UiRect::all(Val::Rem(0.0625));
-            if node.border != width {
-                node.border = width;
-            }
+            BG_PILL
         }
-        if let Some(mut image) = image {
-            image.color = if active || interaction.is_some_and(Hovered::get) {
-                Color::WHITE
-            } else {
-                Color::srgb(0.78, 0.78, 0.78)
-            };
-        }
+        .into();
+        *border = BorderColor::all(if focused && !disabled {
+            TEXT
+        } else if active && !disabled {
+            BORDER_STRONG
+        } else {
+            BORDER
+        });
+    }
+}
+
+fn reveal_launcher_focus(
+    focus: Res<bevy::input_focus::InputFocus>,
+    visible: Res<bevy::input_focus::InputFocusVisible>,
+    controls: Query<(&ComputedNode, &UiGlobalTransform), With<LauncherControl>>,
+    mut panels: Query<
+        (&ComputedNode, &UiGlobalTransform, &mut ScrollPosition),
+        With<LauncherPanel>,
+    >,
+) {
+    if !focus.is_changed() || !visible.0 {
+        return;
+    }
+    let Some(entity) = focus.get() else {
+        return;
+    };
+    let Ok((control, position)) = controls.get(entity) else {
+        return;
+    };
+    for (panel, origin, mut scroll) in &mut panels {
+        let top = origin.affine().translation.y - panel.size().y * 0.5;
+        let control_top = position.affine().translation.y - control.size().y * 0.5;
+        let delta = if control_top < top {
+            control_top - top
+        } else {
+            (control_top + control.size().y - top - panel.size().y).max(0.0)
+        };
+        let max =
+            ((panel.content_size().y - panel.size().y) * panel.inverse_scale_factor()).max(0.0);
+        scroll.0.y = (scroll.0.y + delta * panel.inverse_scale_factor()).clamp(0.0, max);
     }
 }
 
@@ -3467,7 +3541,11 @@ fn refresh(
         do_stage(&mut l);
     }
     if let Ok(mut t) = log_q.single_mut() {
-        t.0 = l.log.join("\n");
+        t.0 = if l.log.is_empty() {
+            "Ready.".into()
+        } else {
+            l.log.join("\n")
+        };
     }
     if let Ok(mut t) = path_q.single_mut() {
         t.0 = l.source.clone();
@@ -3522,6 +3600,71 @@ fn do_stage(l: &mut Launcher) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn launcher_controls_use_project_assets_and_have_keyboard_targets() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<Launcher>();
+        world.init_resource::<Assets<Font>>();
+        world.init_resource::<Assets<Image>>();
+        world.run_system_once(setup).unwrap();
+        world.run_system_once(launcher_typeface).unwrap();
+        let font = world.resource::<LauncherFont>().0.clone();
+        for (text_font, _) in world.query::<(&TextFont, &LauncherText)>().iter(&world) {
+            assert_eq!(text_font.font, bevy::text::FontSource::Handle(font.clone()));
+        }
+        let mut controls = world.query_filtered::<Entity, With<Button>>();
+        assert_eq!(controls.iter(&world).count(), 13);
+        for entity in controls.iter(&world) {
+            assert!(world.get::<LauncherControl>(entity).is_some());
+            assert!(
+                world
+                    .get::<bevy::input_focus::tab_navigation::TabIndex>(entity)
+                    .is_some()
+            );
+            assert!(world.get::<ImageNode>(entity).is_none());
+        }
+        let artwork = launcher_artwork().unwrap();
+        assert!(artwork.width() > artwork.height());
+    }
+
+    #[test]
+    fn selection_and_focus_do_not_change_control_geometry() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<Launcher>();
+        world.init_resource::<bevy::input_focus::InputFocus>();
+        world.insert_resource(bevy::input_focus::InputFocusVisible(true));
+        let entity = world
+            .spawn((
+                Button,
+                LauncherControl,
+                Pick::Addon(Addon::Roc),
+                Node {
+                    border: UiRect::all(Val::Px(1.0)),
+                    ..default()
+                },
+                BackgroundColor(BG_PILL),
+                BorderColor::all(BORDER),
+            ))
+            .id();
+        let node = world.get::<Node>(entity).unwrap().clone();
+        world.run_system_once(colour_picks).unwrap();
+        assert_eq!(world.get::<BackgroundColor>(entity).unwrap().0, BG_PILL);
+        world.resource_mut::<Launcher>().mode.addon = Addon::Roc;
+        world.run_system_once(colour_picks).unwrap();
+        assert_eq!(world.get::<BackgroundColor>(entity).unwrap().0, ACCENT_SOFT);
+        world
+            .resource_mut::<bevy::input_focus::InputFocus>()
+            .set(entity, bevy::input_focus::FocusCause::Navigated);
+        world.run_system_once(colour_picks).unwrap();
+        assert_eq!(
+            *world.get::<BorderColor>(entity).unwrap(),
+            BorderColor::all(TEXT)
+        );
+        assert_eq!(*world.get::<Node>(entity).unwrap(), node);
+    }
+
     /// Relative luminance per WCAG 2.1.
     fn luminance(c: Color) -> f32 {
         let s = c.to_linear();
@@ -3536,9 +3679,7 @@ mod tests {
 
     /// The palette has to be readable, not just chosen.
     ///
-    /// This stands in for looking at the window: it can be checked in CI and it
-    /// fails when a colour is tweaked into illegibility, which is exactly the
-    /// mistake a hand-tuned dark theme invites.
+    /// This supplements visual checks with a stable contrast regression.
     #[test]
     fn the_palette_is_readable_against_its_own_backgrounds() {
         let pairs = [
@@ -3548,17 +3689,13 @@ mod tests {
             ("body text on the app background", TEXT, BG_APP),
             ("log text on a recessed field", TEXT, BG_FIELD),
             ("warn on a recessed field", WARN, BG_FIELD),
-            (
-                "stage button label on frame",
-                crate::mainmenu::LABEL,
-                BG_PILL,
-            ),
+            ("stage button label on frame", TEXT, BG_PILL),
         ];
         for (what, fg, bg) in pairs {
             let r = contrast(fg, bg);
             assert!(
-                r >= 3.0,
-                "{what}: contrast {r:.2} is too low to read (minimum 3.0)"
+                r >= 4.5,
+                "{what}: contrast {r:.2} is too low to read (minimum 4.5)"
             );
         }
         // Body copy needs the stricter 4.5:1.
@@ -3567,14 +3704,11 @@ mod tests {
             "body text should comfortably clear 4.5:1, got {:.2}",
             contrast(TEXT, BG_CARD)
         );
-        // A disabled control is *meant* to be hard to read, so it is held to a
-        // different rule: visible enough to know it is there, clearly less
-        // emphatic than any live text, so it reads as inert rather than as
-        // merely low-contrast copy.
+        // Disabled labels stay readable; the inert state is also enforced by the widget.
         let d = contrast(DISABLED_FG, DISABLED_BG);
         assert!(
-            (1.4..2.6).contains(&d),
-            "disabled control contrast {d:.2} should read as inert-but-present"
+            d >= 4.5,
+            "disabled label contrast {d:.2} must remain readable"
         );
         assert!(
             d < contrast(TEXT_DIM, BG_CARD),
@@ -4048,7 +4182,7 @@ mod menu_tests {
             "the root is kept for the rebuild"
         );
         let cache = world.resource::<MenuArtCache>();
-        assert!(cache.button.is_none() && cache.fonts.is_empty());
+        assert!(cache.fonts.is_empty());
         assert!(cache.fdf.is_none() && cache.strings.is_none() && cache.templates.is_none());
         assert!(cache.main_menu.is_none() && !cache.native_loaded);
     }
@@ -5084,9 +5218,7 @@ mod resize_bridge_tests {
             assert!(std::sync::Arc::ptr_eq(&cache.preview, &preview));
             assert!(!cache.fdf_failed && !cache.native_loaded);
             assert!(
-                cache.button.is_none()
-                    && cache.panel.is_none()
-                    && cache.fonts.is_empty()
+                cache.fonts.is_empty()
                     && cache.skin.is_none()
                     && cache.problems.is_empty()
                     && cache.templates.is_none()

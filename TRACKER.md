@@ -564,6 +564,7 @@ terrain rendering, asset-defined terrain materials or native rendering fidelity.
       Chromium 153 and Chrome 155, with or without `--enable-features=WebGPU`.
       wgpu therefore selects the WebGL2 backend, and the app runs on it.
 - [x] The launcher canvas is created inside `#launcher-canvas` at 880×860.
+- [x] Custom launcher configuration layout (2026-10-18): project-owned controls replace stretched imported plates; a bundled sans font, stable selection borders, readable disabled labels, wrapping source paths and keyboard focus/scrolling are integrated. Original landscape artwork decorates only the custom launcher, with no extracted game art. Actual native and WASM launcher captures at 880×860, 1280×960 and 640×800, native main-menu entry, 48 launcher/navigation tests (one explicit asset test ignored), strict native/WASM builds and Clippy pass. Evidence: `.scratch/launcher-ui-root-20261018/verification.json`. This does not close original-menu, gameplay or rendered parity gates; no site deployment is claimed.
 
 ### Original main menu (M7 entry screen) — WC3-styled, interactive
 

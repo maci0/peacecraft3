@@ -33,14 +33,6 @@ use std::collections::BTreeSet;
 
 use bevy::prelude::*;
 
-/// The launcher's own accent gold, for PeaceCraft's UI rather than the original
-/// menu.
-///
-/// The menu label's colour, highlight, size, alignment and shadow are **not**
-/// copied here: they are read from `StandardButtonTextTemplate` through
-/// [`crate::menu_text::text_style_in`], so they cannot drift from the asset.
-pub const LABEL: Color = Color::srgb(0.99, 0.827, 0.0705);
-
 /// The art path of the button frame, `StandardMenuButtonBaseBackdrop`'s
 /// `BackdropBackground`.
 pub const BUTTON_ART: &str = r"UI\Widgets\Glues\GlueScreen-Button1-Border.blp";
