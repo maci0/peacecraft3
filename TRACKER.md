@@ -2397,6 +2397,15 @@ repeated, and the public site package was not rebuilt.
   107 native map-loading cases (one ignore), strict native/browser Clippy and
   affected library builds. This admits no mutation, dynamic occupancy or live
   placement. The full-map four-result RNG gate remains failed at one result.
+- [~] A fresh source-predicted census verifies 1,422 automatic destructables
+  retain their identities and state, then five explicit source globals create
+  five new handles. A separate source-tagged unit stream records all 155 map
+  constructor calls across 53 rawcodes. One hundred getter poses differ from
+  post-native argument snapshots; 146 fit quarter-unit flooring and nine move
+  further. Coordinate conversion and 129 logged input/literal-cast differences
+  still need isolation. Two incomplete unit-trace attempts remain rejected;
+  accepted datasets refuse eight mutants each and all containers are stopped.
+  This changes the required world inputs, not production placement behavior.
 - [ ] Queried initial positions do not preserve the requested creation geometry.
   Accepted live placement must precede a world-coordinate consumer. Parsed
   placement records and movement-harness ids do not establish the script unit's

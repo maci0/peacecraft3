@@ -206,6 +206,58 @@ reported as successful startup. Receipts and local factory inputs remain in
 `.scratch/terrain-pathing-root-20261018/`. No fresh browser rendering or full
 campaign parity is claimed.
 
+## Automatic placed objects and the map's unit stream (2026-10-18)
+
+Selected MSVC class metadata links the placed-object reader's virtual predicate
+to `CDoodads`. Its normal-game branch consults the destructable database and
+the authored flags: some rows create game destructables through a registered
+callback, some remain generic world objects, and script-created rows wait for
+their source calls. The callback reaches the live/dead destructable constructors;
+the authored Z flag is separate from the life selector. This replaces the
+earlier assumption that every descriptor could be loaded the same way.
+
+A fresh reference census brackets the original `CreateAllDestructables` call.
+The saved source prediction matches all 1,422 automatic destructables by their
+complete type/position multiset. They retain the same handles, life and maximum
+life after the call. Five new handles match the five explicit source globals,
+bringing the count to 1,427. Four initially dead automatic destructables agree
+with their source life bytes. The complete census has 2,858 records and refuses
+eight mutated logs. This qualifies that stock-map initialization branch, not
+editor mode, arbitrary custom metadata, enumeration order or later lifetime.
+The canonical recreation world must avoid loading those five script objects
+twice and must keep any automatic actors in the same owned authority.
+
+A separate corrected probe tags the map's direct `CreateUnit` call sites by
+their original source spans and records construction inside `CreateAllUnits`.
+Its 312 complete records cover 155 distinct handles, 155 source call sites and
+53 rawcodes. This is an executed call stream, not a placement-ordinal identity
+join. The getter positions differ from the helper's post-native argument
+snapshots in 100 cases. All reported positions lie on a quarter-unit grid;
+146 cases match flooring those snapshots to that grid and nine have additional
+displacement. That observation does not establish an intentional quantizer or
+permit a copied coordinate constant in production. The cause must be derived
+from the selected coordinate path before implementing it.
+
+There is another unresolved numeric distinction: 129 of 465 logged x/y/facing
+inputs differ from a standard decimal-to-binary32 literal cast. Because these
+helper arguments are read after native creation, literal decoding, parameter
+writeback and formatting effects still need isolation. Changing the shared
+script parser on this evidence alone would be premature.
+
+The first unit-trace attempt produced no records and a native error dialog;
+moving the wrapper definition before its first use allowed native execution.
+The second attempt completed 155 creations but clipped every long observation
+at 259 characters. Both attempts remain rejected datasets. The accepted third
+attempt uses two records per observation, checks their payload bounds, and
+refuses eight mutated logs. All reference containers are stopped and preserved.
+Input/member hashes, bounded code checks and receipts remain local under
+`.scratch/unit-world-activation-root-20261018/` and
+`.scratch/unit-startup-placement-root-20261018/revision-3/`.
+
+No production placement or range consumer changes here. Complete live
+occupancy, walkable-model overlays, rotation and lifetime remain open, as do
+the unchanged-map four-result RNG gate and recreation rendering.
+
 ## One bounded range probe (2026-10-18)
 
 A fresh isolated Wine/Xvfb/software-Mesa run instruments Human01 around its
