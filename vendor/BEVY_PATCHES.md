@@ -29,3 +29,13 @@ touch, multiple pointers, observer changes, backend priority, and stationary
 targets. These tests do not establish original-client behavior or rendered
 fidelity. See [Options input](../docs/re-notes/options-slider-input.md) for the
 application and browser verification boundary.
+
+## Main texture view formats
+
+`bevy_render` also starts from published 0.20.0 and retains its MIT/Apache notices.
+Its main-target texture descriptor declares alternate sRGB views only when the
+adapter reports `DownlevelFlags::VIEW_FORMATS`. WebGL cannot declare these views;
+without the guard numeric menu targets fail texture validation and render blank.
+The target format, pixel bytes and compositing rules are unchanged. A synthetic
+capability regression covers both supported format pairs and formats without an
+alternate view. Actual browser rendering is a separate application gate.
