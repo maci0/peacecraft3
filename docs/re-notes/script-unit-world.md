@@ -170,6 +170,42 @@ script-created objects and is not an accepted world model. No production live
 placement or range consumer changes here. The capture remains the original
 loading screen; recreation rendering and the unchanged-map RNG gate remain open.
 
+## Opt-in static terrain predicate (2026-10-18)
+
+`ObjectHost::with_terrain_pathing` now admits the loaded `IsTerrainPathable`
+declaration against the map context already owned by its player host. The
+startup factory accepts the same optional input. Omission keeps the native
+unsupported. Admission checks the declaration signature and the admitted
+`ConvertPathingType` source; queries use that arena's symbolic selector and
+the existing context's WPM raster rather than another map or world copy.
+
+`terrain_pathing::TerrainPathing::read` reads the cell scale and selector masks
+from caller-reviewed executable windows. Complete-image and window fingerprints,
+source identity, byte budgets, executable sections, branch shape, indexed branch
+targets and constant-result handlers are checked. The existing selected
+normal-real subtraction helper supplies coordinate differences before raster
+indexing. No measured scale or pathing mask becomes a production constant.
+
+The query reports whether the selected mask blocks the authored cell. It creates
+no handles or occupancy state and does not admit terrain mutation. Nonfinite or
+unsupported arithmetic, wrong argument families and missing cells refuse.
+Coordinates outside the raster also refuse explicitly: their native edge
+behavior is not yet qualified. This is a static terrain predicate, not an
+accepted-position, live occupancy or range-membership implementation. Numeric
+handle tokens retain the existing host-local arena contract.
+
+Validation passes 454 library tests natively and in the WASI runtime, with six
+explicit local-input ignores, and 107 native map-loading integration tests with
+one explicit ignore. Strict native/browser-WASM Clippy, native/WASI/browser
+library builds and formatting pass. The actual startup factory reads the
+selected original image and admitted Human01 context; its new query agrees with
+all 114 retained reference observations in both native and WASI executions.
+Those full-map runs still stop at `TriggerRegisterUnitInRange` with one of the
+required four RNG checkpoints. Their failing gate exits are retained, not
+reported as successful startup. Receipts and local factory inputs remain in
+`.scratch/terrain-pathing-root-20261018/`. No fresh browser rendering or full
+campaign parity is claimed.
+
 ## One bounded range probe (2026-10-18)
 
 A fresh isolated Wine/Xvfb/software-Mesa run instruments Human01 around its

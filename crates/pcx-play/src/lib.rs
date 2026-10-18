@@ -84,6 +84,7 @@ pub mod script_trace;
 pub mod scripts;
 pub mod sound_parameters;
 pub mod startup_clock;
+pub mod terrain_pathing;
 pub mod trace;
 pub use map_scripts_import::*;
 

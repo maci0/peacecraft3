@@ -2388,6 +2388,15 @@ repeated, and the public site package was not rebuilt.
   evidence; automatic placed-object activation, asymmetric/rotated footprints,
   complete occupancy/lifetime and platform overlays remain unqualified. The
   private replay is not a production world or placement default.
+- [x] Optional `IsTerrainPathable` uses the existing admitted map's WPM cells
+  with masks and scale decoded from fingerprinted executable windows. Loaded
+  signature/conversion source, symbolic handle family, arithmetic and raster
+  bounds are checked; out-of-raster queries explicitly refuse. The actual
+  startup host matches all 114 retained reference queries in native and WASI
+  runs. All 454 library cases pass on both targets (six explicit ignores), plus
+  107 native map-loading cases (one ignore), strict native/browser Clippy and
+  affected library builds. This admits no mutation, dynamic occupancy or live
+  placement. The full-map four-result RNG gate remains failed at one result.
 - [ ] Queried initial positions do not preserve the requested creation geometry.
   Accepted live placement must precede a world-coordinate consumer. Parsed
   placement records and movement-harness ids do not establish the script unit's

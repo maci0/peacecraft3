@@ -24,6 +24,7 @@ pub struct ObjectHost {
     stacked_sound_limit: Option<usize>,
     stacked_sound_requests: Vec<StackedSoundRequest>,
     startup_clock: Option<clock::StartupClockState>,
+    terrain_pathing: Option<crate::terrain_pathing::TerrainPathing>,
     map_music: Option<music::State>,
     quests: Option<crate::quest_session::QuestSession>,
     rectangles: bool,
@@ -71,6 +72,7 @@ impl ObjectHost {
             stacked_sound_limit: None,
             stacked_sound_requests: Vec::new(),
             startup_clock: None,
+            terrain_pathing: None,
             map_music: None,
             quests: None,
             rectangles: false,
@@ -372,6 +374,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.startup_clock_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.terrain_pathing_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.sound_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -485,6 +490,9 @@ pub use sounds::{LabelSoundFlags, SoundState};
 #[path = "startup_clock_host.rs"]
 mod clock;
 pub use clock::StartupClockState;
+
+#[path = "terrain_pathing_host.rs"]
+mod terrain_pathing;
 
 #[path = "map_music_host.rs"]
 mod music;

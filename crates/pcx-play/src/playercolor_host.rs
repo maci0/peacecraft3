@@ -48,6 +48,8 @@ pub enum Failure {
     SettingsState(&'static str),
     #[error("startup clock: {0}")]
     ClockState(&'static str),
+    #[error("terrain pathing: {0}")]
+    TerrainPathing(&'static str),
     #[error("map music selection: {0}")]
     MusicState(&'static str),
     #[error("day/night setup: {0}")]

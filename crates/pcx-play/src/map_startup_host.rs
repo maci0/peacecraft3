@@ -178,6 +178,8 @@ pub struct MapStartupInputs {
     pub trigger_runtime: Option<crate::playercolor_host::TriggerRuntimeInput>,
     /// Source-qualified parameters without an invented initial engine seed.
     pub random: Option<RandomInput>,
+    /// Source-qualified static WPM queries; absent keeps IsTerrainPathable unsupported.
+    pub terrain_pathing: Option<crate::terrain_pathing::TerrainPathing>,
     pub catalog: Arc<dyn ObjectCatalog + Send + Sync>,
     pub defend: DefendSelection,
     pub current_research: Option<CurrentResearchInput>,
@@ -340,6 +342,7 @@ pub fn assemble(
         timer_time,
         trigger_runtime,
         random,
+        terrain_pathing,
         catalog,
         defend,
         current_research,
@@ -428,6 +431,9 @@ pub fn assemble(
     }
     if let Some(input) = random {
         object = object.with_script_random(input.policy, input.max_secondary)?;
+    }
+    if let Some(input) = terrain_pathing {
+        object = object.with_terrain_pathing(input)?;
     }
     if let Some(stock) = budgets.stock {
         object = object.with_stock(stock)?;

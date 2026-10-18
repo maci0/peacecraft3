@@ -501,3 +501,6 @@ mod current_research;
 
 #[path = "stock_host_tests.rs"]
 mod stock_slots;
+
+#[path = "terrain_pathing_host_tests.rs"]
+mod terrain_pathing;
