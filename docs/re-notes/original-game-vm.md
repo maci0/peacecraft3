@@ -314,3 +314,22 @@ is applied. Snapshot changes persist during all twenty browser captures, so
 animation/RNG/render lockstep is unqualified. Fog, lighting, effects, unavailable
 settings, notices and full original fidelity remain open. Original content and
 captures remain local; the public site is not redeployed by this validation.
+
+### Camera-depth menu fog follow-up (2026-10-18)
+
+The next frozen native/WASM candidate replaces radial distance with camera-space
+Z for the menu's linear fog, preserving authored color, opacity and distances.
+The cross-run original evidence and material behavior are qualified in
+[the fog note](menu-authored-fog.md). All six GPU checks pass on Radeon and
+llvmpipe, alongside 647 ordinary tests, strict native/WASM Clippy, both builds
+and formatting. The initial restricted-runtime failures remain retained; after
+access was restored, both actual applications completed the same eleven-event
+journal at all five framebuffer sizes through 3840×2160.
+
+`.scratch/menu-fog-depth-root-20261018/comparison-2/index.html` contains forty
+fresh PC3 captures and twenty retained original references. Navigation and all
+twenty settled browser states pass, without renderer errors. All sixty exact
+RGB pair comparisons differ; zero exclusions or tolerance apply, including no
+version-text mask. Every browser capture still spans changing state. This is
+not deterministic render lockstep or full visual acceptance. All owned runtimes
+are stopped; original inputs/captures stay local and the public site is unchanged.

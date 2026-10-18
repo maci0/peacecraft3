@@ -34,11 +34,12 @@ The base and expansion observations remain separate source receipts; equality
 does not prove native archive priority or identify adjacent archive releases.
 
 Grouped ARGB and style zero as linear falloff are explicit recreation
-conventions. Density is retained but unused by that linear choice. Bevy applies
-radial camera distance. Fog RGB now follows the same checked
+conventions. Density is retained but unused by that linear choice. The menu's
+shared fragment now uses camera-space depth for linear fog, as qualified below.
+Fog RGB follows the same checked
 [numeric working-colour path](menu-working-colour.md) as geometry, particles and
-UI, without changing the authored ARGB bytes. Exact original Z/range distance,
-style interpretation and visible match remain acceptance questions. No brightness,
+UI, without changing the authored ARGB bytes. The cross-run depth inference and
+visible match remain qualified separately. No brightness,
 ambient floor, screenshot fit or directional fog glow is introduced here.
 Existing scene-light calibration and animation gaps are separate work.
 
@@ -51,7 +52,9 @@ The material policy therefore suppresses fog color for format mode 3, without
 special-casing geoset IDs, texture names or measured material values. This is a
 reconstruction convention supported by that draw, not proof of every additive
 material's native behavior. The earlier sky draw precedes this transition and
-its inherited fog enable/start/mode remain unknown. Later orthographic UI fog
+its inherited fog enable/start/mode were unknown in that truncated window. The
+complete API interval below resolves that inherited-state gap for joined draws.
+Later orthographic UI fog
 settings are not transferred to the background.
 
 The trace span is bytes `[6930706,7979282)`, SHA-256
@@ -84,6 +87,63 @@ has 273 passing tests and eight explicit ignores after the cutout correction.
 New receipts are in `.scratch/menu-cutout-root/` and
 `.scratch/menu-cutout-release/`; public publication is tracked separately.
 No native visual parity is claimed.
+
+## Camera-depth correction (2026-10-18)
+
+The complete retained same-executable WC3/Wine interval in
+`.scratch/menu-composition-root-20261018/reference-trace-2/` was reparsed with
+bounded reads and its original raw SHA-256, byte count and line count verified.
+It contains 175,347 indexed draws and 1,264 presents. The bounded topology join
+finds 282 complete background cohorts, each with thirteen fog-enabled geometry
+draws and five fog-disabled geometry draws. Another 981 candidate cohorts do
+not complete the join; they are retained as partial observations, not claimed
+as complete background evidence. The enabled cohort state explicitly selects
+linear table fog. No range-fog or vertex-fog-mode setters occur in the interval.
+Source values remain observations, never production constants.
+
+This trace logs projection pointers, not matrix contents. The prior retained
+same-executable perspective projection, joined to the authored camera and
+background topology, has a non-affine fourth column. Combining these separate
+runs supports camera-depth fog as a reconstruction; it does not establish a
+fresh matrix read or native Windows hardware behavior.
+[Microsoft's pixel-fog contract](https://learn.microsoft.com/en-us/windows/win32/direct3d9/pixel-fog)
+distinguishes perspective eye-relative depth from affine device depth.
+The pinned Wine 10.0
+[fixed-function selection](https://github.com/wine-mirror/wine/blob/wine-10.0/dlls/wined3d/utils.c#L6136-L6152)
+and [shader generation](https://github.com/wine-mirror/wine/blob/wine-10.0/dlls/wined3d/glsl_shader.c#L8608-L8637)
+use absolute camera-space Z for this non-affine, untransformed table-fog path.
+
+Geometry and particles reuse the existing embedded menu fragment. Linear fog
+uses the view transform's absolute Z, retaining the camera's source-derived
+color, opacity and start/end values. Ordinary additive geometry keeps colored
+fog; only additive particles retain their existing black-fog convention. The
+local material flag is cleared after fog so the standard post-lighting helper
+does not apply it twice. Unfogged surfaces and cameras without fog remain
+unaffected; other falloff modes retain their existing standard path.
+
+A synthetic GPU regression uses an offset, rotated camera and checks opaque
+geometry, additive geometry, additive particles and an unfogged control. All
+48 RGB checks pass on Radeon and llvmpipe; twelve checks distinguish the radial
+alternative. All six menu GPU tests pass on each adapter. The 647 ordinary application tests, strict
+native/WASM Clippy, both application builds and formatting pass; 25 tests remain
+explicitly ignored in the ordinary run. The initial restricted run could not
+access the hardware adapter or bind the native/browser capture sockets. Those
+failures remain retained. After session access was explicitly restored, the
+same frozen builds completed fresh native and browser captures at 1024×768,
+1280×960, 1920×1080, 2560×1440 and 3840×2160. The matching local browser package
+contains 26 code files; no original assets are included.
+
+Forty fresh PC3 captures and twenty retained original WC3/Wine captures produce
+sixty strict full-frame RGB comparisons. Every comparison differs, with no
+version mask, other exclusion, tolerance, normalization or rescaling. Main →
+Options landing → Video → Main passes at every extent. All twenty browser
+after-capture states are settled, with no renderer errors or sockets; state
+changes during capture still prevent a same-frame animation claim. All owned
+runtimes are stopped. The private report is
+`.scratch/menu-fog-depth-root-20261018/comparison-2/index.html`, qualified by
+`verification-final-2.json`. Lighting, particles, texture appearance, settings,
+native Windows and deterministic simulation/animation parity remain open.
+The public site was not redeployed.
 
 Old prepared 115-member menu fixtures lack the newly required configuration.
 Regenerate them from their explicitly selected original sources before a fresh

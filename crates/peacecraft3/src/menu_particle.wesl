@@ -1,6 +1,6 @@
 // Standard fragment adapted from Bevy 0.20.0, render/pbr.wesl.
 // Distributed under the accompanying menu_particle.wesl.license (MIT).
-// Local delta: additive black fog before standard post-lighting processing.
+// Local delta: menu camera-depth fog, with particle-only additive black fog.
 import bevy_pbr::{
     render::{
         pbr_types,
@@ -89,23 +89,23 @@ fn fragment(
         out.color = pbr_input.material.base_color;
     }
 
-    // Reconstruction convention: additive light is attenuated toward black.
-    // Preserve source fog enablement and the camera's falloff/opacity, with no
-    // directional inscattering. The normal helper still owns tone mapping and
-    // Add premultiplication; clear only this local input to avoid a second fog.
+    // The menu's linear table fog uses camera depth, not radial distance.
 @if(!PREPASS_PIPELINE && DISTANCE_FOG) {
-    let alpha_mode = pbr_input.material.flags & pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS;
-    if alpha_mode == pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_ADD
+    var menu_fog = bevy_pbr::render::mesh_view_bindings::fog;
+    if menu_fog.mode == bevy_pbr::render::mesh_view_types::FOG_MODE_LINEAR
         && (pbr_input.material.flags & pbr_types::STANDARD_MATERIAL_FLAGS_FOG_ENABLED_BIT) != 0u {
-        var black_fog = bevy_pbr::render::mesh_view_bindings::fog;
-        black_fog.base_color = vec4<f32>(vec3<f32>(0.0), black_fog.base_color.a);
-        black_fog.directional_light_color = vec4<f32>(0.0);
-        out.color = bevy_pbr::render::pbr_functions::apply_fog(
-            black_fog,
+@if(MENU_PARTICLE_FOG) {
+        let alpha_mode = pbr_input.material.flags & pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS;
+        if alpha_mode == pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_ADD {
+            menu_fog.base_color = vec4<f32>(vec3<f32>(0.0), menu_fog.base_color.a);
+        }
+}
+        let view_position = bevy_pbr::render::view_transformations::position_world_to_view(pbr_input.world_position.xyz);
+        out.color = bevy_pbr::render::fog::linear_fog(
+            menu_fog,
             out.color,
-            pbr_input.world_position.xyz,
-            bevy_pbr::render::mesh_view_bindings::view.world_position.xyz,
-            pbr_input.frag_coord.xy,
+            abs(view_position.z),
+            vec3<f32>(0.0),
         );
         pbr_input.material.flags &= ~pbr_types::STANDARD_MATERIAL_FLAGS_FOG_ENABLED_BIT;
     }

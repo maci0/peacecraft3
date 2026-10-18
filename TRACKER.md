@@ -2473,3 +2473,18 @@ repeated, and the public site package was not rebuilt.
   settings defaults/notices, native Windows rendering and deterministic
   simulation/animation lockstep remain acceptance gates. No public-site update
   or 100-consecutive original-baseline closure is claimed.
+
+- [x] Menu fog depth correction (2026-10-18): geometry and PRE2 now
+  share camera-depth linear fog, preserving source settings and the existing
+  particle-only black-fog convention. Retained same-executable evidence supports
+  this cross-run reconstruction. Six GPU tests each on Radeon/llvmpipe, 647 ordinary tests,
+  strict native/WASM Clippy, both builds, formatting and local browser packaging
+  pass. After session access was restored, the same frozen candidate completed
+  forty fresh native/browser captures at five resolutions through 4K, with
+  settled navigation and no browser render errors. Initial socket refusals are
+  retained. See `docs/re-notes/menu-authored-fog.md` and
+  `.scratch/menu-fog-depth-root-20261018/verification-final-2.json`.
+- [~] Exact visual parity still fails all sixty RGB comparisons against retained
+  original captures and between PC3 targets. No pixels are excluded or rescaled.
+  Lighting/effects, source settings, original/native/WASM simulation and
+  animation lockstep remain open; public site and original-baseline gate unchanged.

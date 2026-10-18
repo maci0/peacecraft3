@@ -7,10 +7,13 @@ use bevy::{
     asset::RenderAssetUsages,
     camera::visibility::NoFrustumCulling,
     math::DVec3,
+    mesh::MeshVertexBufferLayoutRef,
     mesh::{Indices, PrimitiveTopology},
-    pbr::{ExtendedMaterial, MaterialExtension},
+    pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline},
     prelude::*,
-    render::render_resource::AsBindGroup,
+    render::render_resource::{
+        AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError,
+    },
     render::{
         batching::NoAutomaticBatching,
         sync_world::{MainEntity, MainEntityHashMap},
@@ -36,6 +39,18 @@ pub struct ParticleFog {}
 impl MaterialExtension for ParticleFog {
     fn fragment_shader() -> ShaderRef {
         "embedded://peacecraft3/menu_particle.wesl".into()
+    }
+
+    fn specialize(
+        _pipeline: &MaterialExtensionPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialExtensionKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        if let Some(fragment) = &mut descriptor.fragment {
+            fragment.shader_defs.push("MENU_PARTICLE_FOG".into());
+        }
+        Ok(())
     }
 }
 

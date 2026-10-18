@@ -145,6 +145,10 @@ impl MenuBlend {
 }
 
 impl MaterialExtension for MenuBlend {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        "embedded://peacecraft3/menu_particle.wesl".into()
+    }
+
     fn enable_oit() -> bool {
         // The menu's source-order submission must retain its explicit blend.
         false
@@ -271,7 +275,7 @@ mod tests {
         assert_eq!(Material::alpha_mode(&mode3), AlphaMode::Premultiplied);
         assert_eq!(Material::alpha_mode(&mode4), AlphaMode::Add);
         assert!(!MenuBlend::enable_oit());
-        assert!(matches!(MenuBlend::fragment_shader(), ShaderRef::Default));
+        assert!(matches!(MenuBlend::fragment_shader(), ShaderRef::Path(_)));
         assert!(matches!(MenuBlend::vertex_shader(), ShaderRef::Default));
     }
 

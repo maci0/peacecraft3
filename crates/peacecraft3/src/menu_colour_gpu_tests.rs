@@ -161,9 +161,9 @@ fn vulkan_menu_app(label: &str) -> App {
             .disable::<bevy::audio::AudioPlugin>()
             .disable::<bevy::gilrs::GilrsPlugin>(),
     )
-    .add_plugins(MaterialPlugin::<MenuMaterial>::default())
     .add_plugins(crate::menu_composition::MenuCompositionPlugin)
     .add_plugins(crate::mainmenu_scene::ParticleMaterialPlugin)
+    .add_plugins(MaterialPlugin::<MenuMaterial>::default())
     .init_resource::<crate::button_actions::ButtonActions>()
     .init_resource::<Capture>();
     crate::glue_menu::install(&mut app);
@@ -1016,4 +1016,118 @@ fn menu_geometry_particles_and_ui_share_the_same_working_channels() {
     println!(
         "composition readbacks=2 rgb_checks=120 different_working_channel_checks={differences}"
     );
+}
+
+#[test]
+#[ignore = "requires a local Vulkan render adapter; synthetic GPU readback"]
+fn menu_fog_uses_camera_depth_for_geometry_and_particles() {
+    use crate::mainmenu_scene::ParticleMaterial;
+    use bevy::pbr::{DistanceFog, FogFalloff};
+    let mut app = vulkan_menu_app("camera-depth-fog");
+    let target = spawn_readback_camera(&mut app);
+    let camera_transform =
+        Transform::from_xyz(7.0, 5.0, 9.0).looking_at(Vec3::new(1.0, 2.0, 1.0), Vec3::Y);
+    let camera = app
+        .world_mut()
+        .query_filtered::<Entity, With<Camera3d>>()
+        .single(app.world())
+        .unwrap();
+    let source = [0.2, 0.4, 0.7, 0.6];
+    let fog = [0.8, 0.1, 0.3, 0.5];
+    app.world_mut().entity_mut(camera).insert((
+        camera_transform,
+        DistanceFog {
+            color: Color::linear_rgba(fog[0], fog[1], fog[2], fog[3]),
+            falloff: FogFalloff::Linear {
+                start: 2.0,
+                end: 6.0,
+            },
+            directional_light_color: Color::NONE,
+            directional_light_exponent: 0.0,
+        },
+    ));
+    let quad = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Rectangle::new(QUAD_EXTENT, QUAD_EXTENT));
+    for column in 0..4 {
+        let base = StandardMaterial {
+            base_color: Color::linear_rgba(source[0], source[1], source[2], source[3]),
+            unlit: true,
+            fog_enabled: column != 3,
+            cull_mode: None,
+            alpha_mode: if column == 1 || column == 2 {
+                AlphaMode::Add
+            } else {
+                AlphaMode::Opaque
+            },
+            ..default()
+        };
+        let transform = Transform {
+            translation: camera_transform.transform_point(Vec3::new(
+                column as f32 - 1.5,
+                0.0,
+                -4.0,
+            )),
+            rotation: camera_transform.rotation,
+            ..default()
+        };
+        if column == 2 {
+            let material = app
+                .world_mut()
+                .resource_mut::<Assets<ParticleMaterial>>()
+                .add(ParticleMaterial {
+                    base,
+                    extension: default(),
+                });
+            app.world_mut()
+                .spawn((Mesh3d(quad.clone()), MeshMaterial3d(material), transform));
+        } else {
+            let material = app
+                .world_mut()
+                .resource_mut::<Assets<MenuMaterial>>()
+                .add(checked_source_mode(base, if column == 1 { 4 } else { 0 }, 0).unwrap());
+            app.world_mut()
+                .spawn((Mesh3d(quad.clone()), MeshMaterial3d(material), transform));
+        }
+    }
+    let readback = drive_readback(&mut app, target);
+    let mut radial_discriminators = 0;
+    for column in 0..4 {
+        for dx in [14, 18] {
+            for dy in [15, 16] {
+                let x = -2.0 + (column * 32 + dx) as f32 / 32.0 + 0.5 / 32.0;
+                let y = 0.5 - (dy as f32 + 0.5) / 32.0;
+                let radial_fog = ((16.0 + x * x + y * y).sqrt() - 2.0) / 4.0 * fog[3];
+                for channel in 0..3 {
+                    let fog_channel = if column == 2 { 0.0 } else { fog[channel] };
+                    let blend = |amount: f32| {
+                        let value = source[channel] * (1.0 - amount) + fog_channel * amount;
+                        if column == 1 || column == 2 {
+                            value * source[3]
+                        } else {
+                            value
+                        }
+                    };
+                    let expected = if column == 3 {
+                        source[channel]
+                    } else {
+                        blend(0.25)
+                    };
+                    let actual =
+                        channel_at(&readback.bytes, readback.stride, column, dx, dy, channel);
+                    assert!(
+                        (actual - expected).abs() < 0.003,
+                        "column={column} sample={dx},{dy} channel={channel}: {actual} != {expected}"
+                    );
+                    if column != 3 && (blend(radial_fog) - expected).abs() > 0.006 {
+                        assert!((actual - blend(radial_fog)).abs() > 0.003);
+                        radial_discriminators += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(radial_discriminators >= 4);
+    println!("camera_depth_fog rgb_checks=48 radial_discriminators={radial_discriminators}");
 }
