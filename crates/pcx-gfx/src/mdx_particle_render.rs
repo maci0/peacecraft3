@@ -423,15 +423,12 @@ fn build_quads(
         let start = a.tail_start.map(f64::from);
         let end = particle.position.map(f64::from);
         let direction = std::array::from_fn(|i| end[i] - start[i]);
-        let length = dot(direction, direction).sqrt();
-        // A degenerate/eye-parallel tail collapses naturally. No invented perpendicular.
-        let normal = if length == 0. {
-            [0.; 3]
-        } else {
-            cross(camera.toward_eye, direction.map(|v| v / length))
-        };
-        // Flow does not normalize this cross product: view-parallel tails foreshorten.
-        let boundary = normal.map(|v| v * f64::from(a.scale));
+        let x = dot(direction, camera.right);
+        let y = dot(direction, camera.up);
+        // The client normalizes in the view plane; the unity floor tapers short tails.
+        let divisor = (x * x + y * y).max(1.).sqrt();
+        let boundary =
+            cross(camera.toward_eye, direction).map(|v| v * f64::from(a.scale) / divisor);
         let positions = [
             checked_vector(std::array::from_fn(|i| start[i] - boundary[i]))?,
             checked_vector(std::array::from_fn(|i| end[i] - boundary[i]))?,

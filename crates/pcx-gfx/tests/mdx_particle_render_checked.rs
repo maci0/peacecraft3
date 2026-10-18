@@ -294,12 +294,34 @@ fn zero_speed_and_eye_parallel_tails_collapse_without_nan() {
     }
 }
 #[test]
-fn tail_width_foreshortens_using_unnormalized_camera_cross_product() {
+fn tail_width_uses_camera_plane_even_with_depth_velocity() {
     let p = plan(props(), 0, &[tex("a.blp", 0)]);
-    let mut v = particle();
-    v.velocity = [4., 0., 4.];
-    let q = quads(&p, &v, camera()).unwrap()[1].unwrap();
-    approx(q.positions[1][1], 20. - 2. / 2f32.sqrt());
+    let turned = CameraBasis::checked([0., 1., 0.], [0., 0., 1.], [1., 0., 0.]).unwrap();
+    for depth in [0., 4., 400.] {
+        for (basis, velocity, side) in [
+            (camera(), [4., 0., depth], [0., 2., 0.]),
+            (turned, [depth, 4., 0.], [0., 0., 2.]),
+        ] {
+            let mut v = particle();
+            v.velocity = velocity;
+            let q = quads(&p, &v, basis).unwrap()[1].unwrap();
+            for (i, offset) in side.into_iter().enumerate() {
+                approx(q.positions[1][i], v.position[i] - offset);
+                approx(q.positions[2][i], v.position[i] + offset);
+            }
+        }
+    }
+}
+#[test]
+fn subunit_projected_tails_taper_without_depth_dependent_width() {
+    let p = plan(props(), 0, &[tex("a.blp", 0)]);
+    for depth in [0., 4., 400.] {
+        let mut v = particle();
+        v.velocity = [1., 0., depth];
+        let q = quads(&p, &v, camera()).unwrap()[1].unwrap();
+        approx(q.positions[1][1], 19.);
+        approx(q.positions[2][1], 21.);
+    }
 }
 #[test]
 fn invalid_camera_and_nonfinite_particle_refuse_with_source_and_emitter_context() {

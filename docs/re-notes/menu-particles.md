@@ -33,8 +33,9 @@ native fog internals. The shader runs fog once before standard tone mapping and
 Add premultiplication. Black RGB with nonzero alpha therefore adds no fog-colored
 rectangle; alpha-zero pixels were already neutral. Geometry keeps its existing
 material path. Camera-facing quads use the actual background camera's
-checked source-space rotation. XY pieces and velocity tails follow the selected
-primary conventions; no second coordinate fit or depth bias is introduced.
+checked source-space rotation. XY pieces retain the selected primary convention;
+tail width follows the selected client's camera-plane normalization described
+below. No second coordinate fit or depth bias is introduced.
 
 The background camera alone receives the checked geometry/particle source order.
 Transparent items are ordered after Bevy's distance sort and before batching,
@@ -219,3 +220,46 @@ candidate; only harness diagnostics changed. No Rust rebuild, fresh original-gam
 run or public deployment is claimed. Receipts and raw comparison reports remain
 local under `.scratch/browser-entry-ack-root-20261019/`. Reliable entry, original
 RNG/phase, native Windows and full rendered/simulation parity remain open.
+
+## Camera-plane tail width (2026-10-19)
+
+The shared quad builder previously divided a tail's perpendicular by its full
+three-dimensional length. That narrowed oblique tails as their depth component
+increased. The selected client instead forms the perpendicular from camera-space
+displacement and divides by `sqrt(max(x*x + y*y, 1))`. Depth still determines the
+tail endpoint, but is absent from the width denominator. The numerical unity floor
+tapers subunit projected tails without dividing by zero. Authored tail length,
+scale, color, opacity, UVs and emission rates retain their parsed asset paths.
+
+Fresh offline evidence from the same qualified Legacy executable joins the
+PRE2 tail-length reader through binding `0x925414` and setter `0x97e6c0` to
+the tail branch in `0x97d9a0`. The branch transforms negative velocity, multiplies
+by authored tail length, sums only the two view-plane squares, clamps that sum
+to unity, takes its square root and divides the sampled scale by it. Forty-one
+instruction checks include the square-root helper and reject a mutation that
+substitutes depth into the denominator. This establishes the width calculation;
+it does not re-prove the complete vertex winding, UV/color path or native floats.
+
+The selected model has nineteen tail-bearing emitters, including Both-mode
+splashes and fog as well as the two identified ray emitters. All profiles pass
+the explicit source CPU/quad gates. The oblique-tail regression fails before the
+fix at 18.585787 instead of 18. It passes afterward for two camera orientations
+and multiple depth velocities. A separate subunit regression and the existing
+degenerate/eye-parallel checks preserve finite tapered/collapsed geometry.
+All 158 graphics tests, 654 application tests, strict native/WASM checks and
+both application builds pass. Actual WASI execution of the production CPU and
+quad modules passes 37 tests, with two explicit local-input ignores. Source-model
+CPU birth/update/retained counters remain unchanged; no FPS threshold is used.
+
+Five fresh native and five trusted browser journals complete the same four views
+at 1024×768, 1280×960, 1920×1080, 2560×1440 and 3840×2160. All forty new captures
+are visually reviewed with twenty retained WC3/Wine references. All sixty exact
+RGB comparisons still differ, with no pixel exclusions or rescaling. Native
+monitor modes are calibrated; browser capture uses actual DPR 1. The original
+reference, mixed-source fixture, platform scale inputs and uncontrolled animation
+phase remain explicit. No fresh original-game run or public deployment occurred.
+
+Evidence, the retained failed inventory assertion and the corrected source
+inventory remain local under `.scratch/menu-plane-transform-root-20261019/`.
+Original RNG/initial ages, effective quality settings, animation phase, native
+Windows and exact original/native/WASM output remain open.

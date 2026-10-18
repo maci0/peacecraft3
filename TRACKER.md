@@ -220,6 +220,17 @@ integration. A completed prototype does not close its broader milestone.
       native/WASM checks/builds pass. Native 4K navigation passes; scheduled-entry
       WASM verifies rendering only. See `docs/re-notes/menu-particles.md` and
       `.scratch/menu-particle-gravity-root-20261019/`.
+- [x] PRE2 tail width now normalizes in the camera plane, preserving width on
+      oblique tails and tapering subunit projections (2026-10-19). Forty-one
+      selected-client instruction checks reject a depth-denominator mutation;
+      the regression fails before and passes after. All 158 graphics, 654 app
+      and 37 actual WASI CPU/quad tests pass, alongside strict native/WASM
+      checks/builds and both selected-TFT profile gates. Five native and five
+      trusted browser journals pass through 4K. Forty new captures are reviewed
+      with twenty retained originals; all sixty RGB comparisons still differ.
+      Original RNG/initial ages, source settings, native Windows and complete
+      rendered/simulation parity remain open. See `docs/re-notes/menu-particles.md`
+      and `.scratch/menu-plane-transform-root-20261019/verification-final-1.json`.
 - [~] The fresh trusted-click browser 4K entry attempt timed out before its
       journal began. An isolated scheduled-DOM-entry diagnostic completes the
       four views, but does not replace that failed workflow or establish its
