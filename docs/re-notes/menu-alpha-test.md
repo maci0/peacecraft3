@@ -68,4 +68,34 @@ original-fixture Main/Video Options/Cancel/Main run passes four captures and
 source-label/control checks, with no uploads, sockets or page errors. The
 captures show the scene and source panels but do not isolate animated cutout
 coverage or depth order; those native/rendered parity questions remain open.
+
+## Native backend qualification (2026-10-19)
+
+The reviewed Legacy client has a different backend contract from the current
+Mask convention. Its render-state block copies the blend selector into
+renderer field `+0x3ac`. The nonzero-selector branch at `0x7df01f` enables both
+alpha blending and alpha testing, reads source/destination factors from image
+tables and selects GreaterEqual for the alpha comparison. Helper `0x7d3380`
+reads the byte-reference word from the supplied image table at `0x10df96c`.
+Backend selector one uses SrcAlpha/InvSrcAlpha. This state does not turn surviving
+source alpha into one. The installed Bevy Mask helper does, and its current
+project cutoff is below the decoded backend-selector-one cutoff.
+
+Thirty-one instruction checks, six bounded executions of the reference helper
+and a rejected shifted-table mutation qualify those backend facts. A synthetic
+alpha between the two cutoffs distinguishes their admission decisions. These
+are source/instruction checks, not GPU or pixel acceptance. No measured threshold
+has been copied into production, and no opacity or rendering behavior changed.
+
+The panel caller still needs a complete join from the parsed MDX layer through
+its runtime state packet, including instance overrides, to this backend selector.
+The game layer reader at `0x8fc830` matches the established editor reader after
+masking relative call operands, but that alone does not establish the later
+selector mapping. The retained full D3D9 trace has compatible draw counts and
+states; count/FVF compatibility alone does not uniquely identify a panel layer.
+Do not apply selector-one behavior to MDX filter one on that evidence alone.
+
+Private receipts are under `.scratch/menu-panel-input-root-20261019/`.
+Source-bound cutoff/blend transport, a uniquely associated panel draw, actual GPU
+composition and original/native/WASM rendered parity remain open.
 Package and browser receipts are in `.scratch/menu-cutout-release/`.

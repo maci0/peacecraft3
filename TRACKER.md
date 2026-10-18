@@ -2614,3 +2614,13 @@ repeated, and the public site package was not rebuilt.
   cursor/focus, original RNG/ages/phase and native Windows need further work.
   No fresh original runtime or public deployment; the deterministic three-target,
   campaign/custom-map and 100-consecutive original-baseline gates remain open.
+- [~] Panel composition qualification (2026-10-19): sixty bounded named reads
+  find all twelve TFT panel model/texture inputs byte-identical to present
+  candidates in the four selected Legacy MPQs. All 136 panel geosets have
+  single-matrix groups. Thirty-one native instruction checks and six bounded
+  helper cases establish a backend branch that combines alpha testing and
+  blending, unlike the current Mask convention. The parsed-layer/instance-to-
+  backend selector join is still incomplete; compatible draw counts are not
+  unique material attribution. No production opacity/render change or new
+  runtime acceptance is claimed. See `docs/re-notes/menu-alpha-test.md` and
+  `.scratch/menu-panel-input-root-20261019/`.

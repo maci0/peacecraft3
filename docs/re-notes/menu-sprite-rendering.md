@@ -200,3 +200,22 @@ metadata without rereading an original. Evidence remains local in
 `.scratch/menu-split-gate-center-20261016/` and
 `.scratch/menu-split-gate-center-root-review-20261016/`. No Center placement,
 timing or dispatch is added to production by this evidence.
+
+## Exact panel input comparison (2026-10-19)
+
+Sixty bounded named reads compare the current fixture with four explicitly named
+MPQs in the locally supplied Legacy installation. Both TFT panel models and all
+ten texture dependencies are byte-identical to their present Legacy candidates;
+no unequal candidate is found for these twelve members. This narrows the panel
+contrast investigation to their consumers and state rather than replacing those
+inputs. It does not establish runtime archive priority or qualify the remainder
+of the mixed-source fixture.
+
+The current parser also confirms one matrix per skin group in all 136 panel
+geosets, so the general multi-matrix skinning limitation does not explain these
+panels. Native backend alpha-test/blend differences are qualified separately in
+[the cutout note](menu-alpha-test.md#native-backend-qualification-2026-10-19);
+the specific layer/instance-to-backend join remains open. No source alpha,
+texture, shader or material setting was adjusted. Exact-member receipts,
+inventory output and source hashes remain local under
+`.scratch/menu-panel-input-root-20261019/`.
