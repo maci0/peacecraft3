@@ -63,8 +63,19 @@ pub const MAX_CALL_DEPTH: u32 = 512;
 /// guard, not a game rule.
 pub const MAX_STEPS: u64 = 20_000_000;
 
+/// Arithmetic and literal conversion qualified by the caller's selected runtime.
+pub trait RealOps {
+    fn literal(&self, spelling: &str) -> Result<f32, String>;
+    fn integer(&self, value: i32) -> Result<f32, String>;
+    fn binary(&self, op: BinOp, left: f32, right: f32) -> Result<Value, String>;
+}
+
 /// Everything the VM cannot decide for itself.
 pub trait Host {
+    /// Absent preserves the interpreter's ordinary host-float operations.
+    fn real_ops(&self) -> Option<&dyn RealOps> {
+        None
+    }
     /// A native the map calls that this crate does not implement. Returning
     /// `Err` is the honest default; a host with the game state returns the
     /// map's own value.
@@ -1909,6 +1920,21 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         if op == BinOp::And || op == BinOp::Or {
             return self.truth(&right, rhs_span).map(Value::Bool);
         }
+        if let Some(real) = self.host.real_ops()
+            && matches!(
+                (&left, &right),
+                (Value::Real(_), Value::Real(_) | Value::Int(_)) | (Value::Int(_), Value::Real(_))
+            )
+        {
+            let number = |value: &Value| match value {
+                Value::Real(value) => Ok(*value),
+                Value::Int(value) => real.integer(*value),
+                _ => unreachable!(),
+            };
+            return number(&left)
+                .and_then(|left| number(&right).and_then(|right| real.binary(op, left, right)))
+                .map_err(|why| crate::Error::run(span, why));
+        }
         binary(op, &left, &right).map_err(|e| self.op_error(&e, span))
     }
 
@@ -1959,7 +1985,13 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     ) -> Result<Value, crate::Error> {
         match which {
             NativeImpl::IntToReal => match args[0] {
-                Value::Int(i) => Ok(Value::Real(i as f32)),
+                Value::Int(i) => match self.host.real_ops() {
+                    Some(real) => real
+                        .integer(i)
+                        .map(Value::Real)
+                        .map_err(|why| crate::Error::run(span, why)),
+                    None => Ok(Value::Real(i as f32)),
+                },
                 ref v => Err(crate::Error::run(
                     span,
                     format!("I2R takes an integer, got {}", v.type_name()),
@@ -2030,7 +2062,13 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     fn literal(&mut self, l: &Literal, span: Span) -> Result<Value, crate::Error> {
         match l {
             Literal::Int(i) => Ok(Value::Int(Value::wrap32(i.value))),
-            Literal::Real(r) => Ok(Value::Real(r.value as f32)),
+            Literal::Real(r) => match self.host.real_ops() {
+                Some(real) => real
+                    .literal(&r.text)
+                    .map(Value::Real)
+                    .map_err(|why| crate::Error::run(span, why)),
+                None => Ok(Value::Real(r.value as f32)),
+            },
             Literal::Bool(b) => Ok(Value::Bool(*b)),
             Literal::Null => Ok(Value::Null),
             Literal::Raw(rc) => Ok(Value::Int(Value::wrap32(rawcode_int(&rc.text)))),

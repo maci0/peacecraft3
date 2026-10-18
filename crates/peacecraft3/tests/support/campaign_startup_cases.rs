@@ -597,6 +597,7 @@ fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) ->
     MapStartupInputs {
         random: None,
         terrain_pathing: None,
+        numeric: None,
         enumeration: EnumContracts {
             context: "synthetic admitted map enumeration".into(),
             names: [

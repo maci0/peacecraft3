@@ -124,7 +124,7 @@ mod tests_vm;
 
 pub use ast::*;
 pub use canon::fnv1a64;
-pub use eval::{Exec, Host, NullHost, OwnedVm, Vm, run_main};
+pub use eval::{Exec, Host, NullHost, OwnedVm, RealOps, Vm, run_main};
 pub use lexer::{
     Comment, CommentKind, Directive, DirectiveRecord, Esc, Ident, IntBase, IntLit, Kw, Lexed,
     RawLit, RealLit, StrLit, StrPart, Tok, Token,

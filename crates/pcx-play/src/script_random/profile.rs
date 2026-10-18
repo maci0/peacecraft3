@@ -503,6 +503,31 @@ fn i32_shape(bytes: &[u8], base: u32) -> Option<u32> {
         .then_some(scan)
 }
 
+pub(crate) fn arithmetic_shapes(
+    sub: &[u8],
+    add: &[u8],
+    mul: &[u8],
+    scan: &[u8],
+    convert: &[u8],
+    convert_va: u32,
+    scan_va: u32,
+) -> bool {
+    !(!stores_result(sub)
+        || !sub.starts_with(&[0x55, 0x8b, 0xec, 0x8b, 0x45, 16, 0x8b, 0x4d, 12])
+        || !has(sub, &[0x35, 0, 0, 0, 0x80])
+        || !stores_result(add)
+        || !add.starts_with(&[
+            0x55, 0x8b, 0xec, 0x8b, 0x45, 12, 0x53, 0x56, 0x57, 0x8b, 0x08,
+        ])
+        || !has(add, &[0x03, 0xf6])
+        || !has(add, &[0x03, 0xd2])
+        || !stores_result(mul)
+        || !has(mul, &[0xf7, 0xe7])
+        || !scan.starts_with(&[0x55, 0x8b, 0xec, 0x51, 0x89, 0x4d, 0xfc, 0x0f, 0xbd])
+        || !scan.ends_with(&[0xc3])
+        || i32_shape(convert, convert_va) != Some(scan_va))
+}
+
 fn read_table(
     pe: &Pe<'_>,
     displacement: u32,
@@ -661,22 +686,15 @@ impl Policy {
         let secondary_count =
             secondary_shape(secondary, binding.secondary.va, binding.seed.va, &lane)
                 .ok_or_else(|| fail(Problem::Secondary))?;
-        if !stores_result(sub)
-            || !sub.starts_with(&[0x55, 0x8b, 0xec, 0x8b, 0x45, 16, 0x8b, 0x4d, 12])
-            || !has(sub, &[0x35, 0, 0, 0, 0x80])
-            || !stores_result(add)
-            || !add.starts_with(&[
-                0x55, 0x8b, 0xec, 0x8b, 0x45, 12, 0x53, 0x56, 0x57, 0x8b, 0x08,
-            ])
-            || !has(add, &[0x03, 0xf6])
-            || !has(add, &[0x03, 0xd2])
-            || !stores_result(mul)
-            || !has(mul, &[0xf7, 0xe7])
-            || !scan.starts_with(&[0x55, 0x8b, 0xec, 0x51, 0x89, 0x4d, 0xfc, 0x0f, 0xbd])
-            || !scan.ends_with(&[0xc3])
-            || i32_shape(convert, binding.math_i32_to_real.va).ok_or_else(|| fail(Problem::Math))?
-                != binding.math_lzcnt.va
-        {
+        if !arithmetic_shapes(
+            sub,
+            add,
+            mul,
+            scan,
+            convert,
+            binding.math_i32_to_real.va,
+            binding.math_lzcnt.va,
+        ) {
             return Err(fail(Problem::Math));
         }
         let length = usize::try_from(*lane.periods.iter().max().unwrap())

@@ -193,6 +193,10 @@ impl<'a, H> LocalizedHost<'a, H> {
     }
 }
 impl<H: Host> Host for LocalizedHost<'_, H> {
+    fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
+        self.inner.real_ops()
+    }
+
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         self.inner.suspend(name, args)
     }
@@ -223,6 +227,10 @@ impl<H> OwnedLocalizedHost<H> {
     }
 }
 impl<H: Host> Host for OwnedLocalizedHost<H> {
+    fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
+        self.inner.real_ops()
+    }
+
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         self.inner.suspend(name, args)
     }

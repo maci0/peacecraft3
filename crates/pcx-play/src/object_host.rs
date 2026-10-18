@@ -24,6 +24,7 @@ pub struct ObjectHost {
     stacked_sound_limit: Option<usize>,
     stacked_sound_requests: Vec<StackedSoundRequest>,
     startup_clock: Option<clock::StartupClockState>,
+    numeric: Option<crate::script_numeric::NumericPolicy>,
     terrain_pathing: Option<crate::terrain_pathing::TerrainPathing>,
     map_music: Option<music::State>,
     quests: Option<crate::quest_session::QuestSession>,
@@ -46,6 +47,11 @@ pub struct ObjectHost {
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
+    pub fn with_script_numeric(mut self, policy: crate::script_numeric::NumericPolicy) -> Self {
+        self.numeric = Some(policy);
+        self
+    }
+
     pub fn checked(inner: EnumHost) -> Result<Self, Error> {
         for (name, parameters, result) in [
             ("CreateTimer", &[][..], "timer"),
@@ -72,6 +78,7 @@ impl ObjectHost {
             stacked_sound_limit: None,
             stacked_sound_requests: Vec::new(),
             startup_clock: None,
+            numeric: None,
             terrain_pathing: None,
             map_music: None,
             quests: None,
@@ -343,6 +350,10 @@ impl ObjectHost {
     }
 }
 impl Host for ObjectHost {
+    fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
+        self.numeric.as_ref().map(|p| p as &dyn pcx_script::RealOps)
+    }
+
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         if let Some(result) = self.random_native(name, args) {
             return result.map_err(|e| e.to_string());

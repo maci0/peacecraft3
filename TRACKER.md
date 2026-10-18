@@ -2408,6 +2408,13 @@ repeated, and the public site package was not rebuilt.
   and equality policies remain open. Two incomplete unit traces remain rejected;
   accepted datasets refuse eight mutants each and all containers are stopped.
   This changes the required world inputs, not production placement behavior.
+- [~] Selected numeric execution now reads reciprocal data and an equality
+  threshold from the fingerprinted image. The owned startup VM matches 32 exact
+  literal controls, 465 formatted inputs and 72 comparison results on native
+  and actual WASI; all 155 original constructor argument sets also agree.
+  Real equality and inequality retain their distinct native behavior. The
+  full-map startup RNG gate still fails at one of four results; live placement,
+  declared-real coercions, other numeric natives and non-normal values remain open.
 - [ ] Queried initial positions do not preserve the requested creation geometry.
   Accepted live placement must precede a world-coordinate consumer. Parsed
   placement records and movement-harness ids do not establish the script unit's

@@ -320,6 +320,10 @@ impl<H> SelectedMapNeutralHost<H> {
     }
 }
 impl<H: Host> Host for SelectedMapNeutralHost<H> {
+    fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
+        self.inner.real_ops()
+    }
+
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         name != self.rule.native_name && self.inner.suspend(name, args)
     }

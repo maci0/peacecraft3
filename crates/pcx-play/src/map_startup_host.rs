@@ -180,6 +180,8 @@ pub struct MapStartupInputs {
     pub random: Option<RandomInput>,
     /// Source-qualified static WPM queries; absent keeps IsTerrainPathable unsupported.
     pub terrain_pathing: Option<crate::terrain_pathing::TerrainPathing>,
+    /// Selected real literal and operator policy; absent retains host arithmetic.
+    pub numeric: Option<crate::script_numeric::NumericPolicy>,
     pub catalog: Arc<dyn ObjectCatalog + Send + Sync>,
     pub defend: DefendSelection,
     pub current_research: Option<CurrentResearchInput>,
@@ -343,6 +345,7 @@ pub fn assemble(
         trigger_runtime,
         random,
         terrain_pathing,
+        numeric,
         catalog,
         defend,
         current_research,
@@ -429,6 +432,9 @@ pub fn assemble(
     if let Some(input) = trigger_runtime {
         object = object.with_trigger_runtime(input)?;
     }
+    if let Some(policy) = numeric {
+        object = object.with_script_numeric(policy);
+    }
     if let Some(input) = random {
         object = object.with_script_random(input.policy, input.max_secondary)?;
     }
@@ -459,6 +465,10 @@ pub fn assemble(
 }
 
 impl Host for MapStartupHost {
+    fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
+        self.inner.real_ops()
+    }
+
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         if name == "GetPlayerTechResearched"
             && let Some(pending) = self.research.take()

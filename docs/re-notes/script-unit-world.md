@@ -287,9 +287,50 @@ repeated. Eight mutated logs refuse. Six selected-code graphs and 50 blocks are
 rechecked, including `S2R`'s decimal parser and integer conversion helpers; they
 do not yet identify the compiler's literal-conversion path. Both containers are
 stopped and preserved. Receipts remain local under
-`.scratch/script-real-input-root-20261018/`. Production literal evaluation and
-real comparisons still use the existing host operations; this is an open
-fidelity difference, not a parser fix or a successful full-map startup.
+`.scratch/script-real-input-root-20261018/`. That isolation checkpoint did not
+change execution; the selected policy below addresses the qualified operations.
+
+## Selected numeric execution (2026-10-18)
+
+The selected compiler converts decimal whole and fractional parts separately,
+using its integer-to-real, division and addition helpers. Replaying that code
+matches all 32 scaled-integer controls and all 465 formatted constructor inputs.
+The selected VM uses a strict image-derived threshold for real equality, but
+compares stored representations for real inequality. A fresh 14-record probe
+checks 72 results at the threshold and adjacent values, including signed zero;
+eight mutated logs refuse. The VM also checks a zero divisor before entering
+its shared arithmetic helper.
+
+`NumericPolicy::read` now binds those reviewed roles in one fingerprinted image,
+checks their call relationships and bounded windows, and reads the reciprocal
+lookup data and equality threshold from that image. Neither the measured table
+nor a copied tolerance is a production constant. Edition/version/source remain
+explicit, independently of the map and archive identities.
+
+`MapStartupInputs.numeric` admits the policy into the existing `ObjectHost`.
+The same authority reaches the VM through startup, neutral, recording and both
+localization wrappers, including parked expressions. Decimal literals, `I2R`
+and real arithmetic/comparisons use that policy when supplied. An unbound VM
+retains its ordinary host arithmetic; it is not evidence of selected native
+behavior. Unsupported spellings and number classes report their source context.
+
+Native and actual WASI checks cover 32 exact literal representations, 465
+formatted source inputs and 72 comparison results through the owned VM. The
+unchanged original-map factory also verifies all 155 constructors' numeric
+arguments. It still refuses `TriggerRegisterUnitInRange` and fails the required
+four-result RNG gate at one result. Correct creation arguments are not accepted
+live positions or a world identity join.
+
+Validation passes 457 play-library cases on native and actual WASI (six explicit
+local-input ignores), 112 native script cases and 111 WASI script cases (three
+explicit ignores each), plus 107 native map-loading cases (one ignore). Strict
+native/browser Clippy, affected library builds and formatting pass. Receipts
+remain local under `.scratch/script-numeric-policy-root-20261018/`.
+
+This does not add `S2R` execution, qualify non-normal arithmetic or complete
+implicit coercion of declared real storage and parameters. Live occupancy,
+placement, range delivery, the original startup gate and rendered fidelity
+remain open.
 
 ## One bounded range probe (2026-10-18)
 

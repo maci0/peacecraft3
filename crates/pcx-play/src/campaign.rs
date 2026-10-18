@@ -155,6 +155,10 @@ impl<H> RecordingHost<H> {
     }
 }
 impl<H: Host> Host for RecordingHost<H> {
+    fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
+        self.inner.real_ops()
+    }
+
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         self.inner.suspend(name, args)
     }
