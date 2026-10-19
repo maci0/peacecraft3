@@ -3005,7 +3005,23 @@ repeated, and the public site package was not rebuilt.
   all 155 creation inputs and accepted positions retain the original comparison.
 - [x] Native 542 tests, six application trigger tests, actual WASI 28 tests,
   strict native/browser lint and both application library builds pass.
-- [ ] Next caller: `SetUnitInvulnerable`. Ordinary Host/cache assembly, live
+- [x] Explicit `SetUnitInvulnerable` now completes as recorded below. Ordinary Host/cache assembly, live
   world updates, unit lifecycle/combat, native ordering and rendered/4K parity
   remain open. Human01 is not playable; the original baseline gate is unchanged.
   See [group actions](docs/re-notes/script-unit-world.md#group-actions-on-the-owning-vm-2026-10-19).
+
+
+### 2026-10-19 — explicit unit protection and its script query
+
+- [x] Executed `SetUnitInvulnerable` changes the same unit record consumed by
+  the loaded `BlzIsUnitInvulnerable` query. Null behavior follows selected native
+  wrappers; untouched initial protection stays unknown rather than defaulting.
+- [x] Human01 completes three protection assignments and queries on three
+  actual handles; all 155 original creation inputs/positions still match.
+  Native 547 tests, application trigger six tests, actual WASI 34 tests, strict
+  native/browser lint and both application library builds pass.
+- [ ] Next caller: `SetPlayerHandicapXP`. Initial/other ability effects, ability
+  list/level changes, damage/combat, ordinary Host preparation, playable actors
+  and original/native/WASM rendered/4K parity remain open. Human01 is not
+  playable and the original baseline gate is unchanged. See
+  [explicit unit protection](docs/re-notes/script-unit-world.md#explicit-unit-protection-2026-10-19).

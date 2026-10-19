@@ -333,7 +333,7 @@ fn identity_getters_refuse_another_family_and_a_reserved_unit_token() {
     );
     assert!(owner_error.contains("GetOwningPlayer"), "{owner_error}");
 
-    let extra = "native GetUnitTypeId takes unit whichUnit returns integer\nnative GetOwningPlayer takes unit whichUnit returns player\n";
+    let extra = "native GetUnitTypeId takes unit whichUnit returns integer\nnative GetOwningPlayer takes unit whichUnit returns player\nnative SetUnitInvulnerable takes unit u, boolean flag returns nothing\nnative BlzIsUnitInvulnerable takes unit u returns boolean\n";
     let common = script_common_with("widget", true, extra);
     let ctx = context(300, &common, IDENTITY_MAP, "unit-catalog");
     let (catalog, _, _) = counting();
@@ -375,6 +375,19 @@ fn identity_getters_refuse_another_family_and_a_reserved_unit_token() {
             .unwrap(),
         player
     );
+    for (name, args) in [
+        (
+            "SetUnitInvulnerable",
+            vec![Value::Handle(reserved), Value::Bool(true)],
+        ),
+        ("BlzIsUnitInvulnerable", vec![Value::Handle(reserved)]),
+    ] {
+        let e = host.native(name, &args).unwrap_err();
+        assert!(
+            e.contains(name) && e.contains("handle identifies another family"),
+            "{e}"
+        );
+    }
     let reserved_type = host
         .native("GetUnitTypeId", &[Value::Handle(reserved)])
         .unwrap_err();
@@ -2552,3 +2565,6 @@ fn failed_creation_and_rectangle_budget_leave_arena_and_members_unchanged() {
 
 #[path = "unit_enumeration_tests.rs"]
 mod enumeration;
+
+#[path = "unit_invulnerability_tests.rs"]
+mod invulnerability;

@@ -648,3 +648,45 @@ source isolation, and independent nested group/rectangle/trigger contexts. Stric
 native/browser lint and both application library builds pass. No new original
 runtime, rendered comparison, 4K capture or full three-runtime determinism claim
 is made; the original baseline gate is unchanged.
+
+## Explicit unit protection (2026-10-19)
+
+`SetUnitInvulnerable` now changes explicit protection on the existing executed
+unit record. The optional loaded `BlzIsUnitInvulnerable` query reads that state;
+aliases share it, repeated assignments are idempotent, and siblings remain
+independent. The declaration signatures and sources are checked against
+`CreateUnit` before catalog resolution. Each field is bounded by the existing
+unit-record limit, with no additional object identity or per-write record.
+A null setter is a no-op and a null query returns false, matching the selected
+wrappers. Wrong-family and reserved unit tokens still refuse before mutation.
+
+The selected image's setter at `0x4ab600` dispatches virtual slot `0xa8` to
+`0x6d8da0`. That implementation finds the ability class returned by `0xba4820`,
+then adds or removes it according to the boolean argument. The query at
+`0x499fa0` reads the unit protection flag. The recreation uses a boolean state
+instead of duplicating that native ability object. This is an implementation
+choice supported for the explicit setter path, not a complete ability runtime.
+Static graphs, the class/vtable relationship and the complete image fingerprint
+remain local in `.scratch/campaign-invulnerability-root-20261019/`. No captured
+ability identifier or native field offset is a production constant.
+
+Initial protection is not assumed false. A unit without an explicit assignment
+has unknown protection here, and its query reports that unsupported state.
+Initial and other ability effects, ability-level/list changes, damage handling
+and combat interactions remain open. In particular this field is not evidence
+that a combat or health-bar consumer has run.
+
+The unchanged Human01 completes three true assignments on three actual unit
+handles; querying each reports its assigned state. Its next refusal is
+`SetPlayerHandicapXP` at map span `123764..123825`. The same run retains both
+completed group calls, eight enum-unit reads and all 155 original creation-input
+and accepted-position comparisons. Its explicit private Host inputs and collision
+cache are unchanged; ordinary bootstrap and a playable world remain open.
+
+Validation passes 547 native library tests (seven local-input cases ignored),
+six application trigger integration tests and 34 selected actual WASI tests.
+These cover explicit true/false assignment, aliases, siblings, unknown initial
+state, null handling, invalid/reserved handles, optional interfaces and each
+foreign declaration independently. Strict native/browser lint and both
+application library builds pass. This turn did not run the original game,
+rendered/4K comparisons or a complete original/native/WASM mission replay.

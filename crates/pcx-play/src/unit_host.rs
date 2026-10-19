@@ -32,6 +32,8 @@ const GET_OWNER: &str = "GetOwningPlayer";
 const GET_COLLISION: &str = "BlzGetUnitCollisionSize";
 const SET_RANGE: &str = "SetUnitAcquireRange";
 const SET_HERO_LEVEL: &str = "SetHeroLevel";
+const SET_INVULNERABLE: &str = "SetUnitInvulnerable";
+const GET_INVULNERABLE: &str = "BlzIsUnitInvulnerable";
 const SET_STATE: &str = "SetUnitState";
 const CONVERT_STATE: &str = "ConvertUnitState";
 const ORDER: &str = "IssueImmediateOrder";
@@ -101,6 +103,9 @@ pub struct ExecutedUnit {
     /// Executed `SetUnitState` pairs. Empty means none have run. A stored
     /// `0.0` is an executed value, not an omitted state.
     pub unit_states: Vec<ExecutedUnitState>,
+    /// Explicit protection set on this unit. None means its initial ability effects
+    /// have not been derived; queries refuse rather than inventing that state.
+    pub invulnerable: Option<bool>,
     /// Admitted immediate-order class on this unit.
     ///
     /// `None` means the unit ability list does not name the admitted alias,
@@ -141,6 +146,8 @@ pub(super) struct Admission {
     acquire_span: Option<Span>,
     /// Present when this program declares `SetHeroLevel` on the same source.
     hero_level_span: Option<Span>,
+    invulnerable_span: Option<Span>,
+    invulnerable_query_span: Option<Span>,
     /// Present after [`ObjectHost::with_unit_states`] admits the setter.
     unit_state: Option<UnitStateLimits>,
     /// Present after [`ObjectHost::with_defend_ability`].
@@ -202,6 +209,9 @@ impl ObjectHost {
             self.optional_unit_getter(&declaration_source, GET_COLLISION, "real")?;
         let acquire_span = self.acquire_declaration(&declaration_source)?;
         let hero_level_span = self.hero_level_declaration(&declaration_source)?;
+        let invulnerable_span = self.invulnerability_declaration(&declaration_source)?;
+        let invulnerable_query_span =
+            self.optional_unit_getter(&declaration_source, GET_INVULNERABLE, "boolean")?;
         self.units = Some(Admission {
             catalog,
             source,
@@ -216,6 +226,8 @@ impl ObjectHost {
             collision_span,
             acquire_span,
             hero_level_span,
+            invulnerable_span,
+            invulnerable_query_span,
             unit_state: None,
             order: None,
         });
@@ -418,6 +430,18 @@ impl ObjectHost {
         }
         if name == SET_HERO_LEVEL && self.admitted_units().ok()?.hero_level_span.is_some() {
             return Some(self.set_hero_level(args));
+        }
+        if name == SET_INVULNERABLE && self.admitted_units().ok()?.invulnerable_span.is_some() {
+            return Some(self.set_unit_invulnerable(args));
+        }
+        if name == GET_INVULNERABLE
+            && self
+                .admitted_units()
+                .ok()?
+                .invulnerable_query_span
+                .is_some()
+        {
+            return Some(self.unit_invulnerability(args));
         }
         if name == SET_STATE && self.admitted_units().ok()?.unit_state.is_some() {
             return Some(self.set_unit_state(args));
@@ -630,6 +654,65 @@ impl ObjectHost {
             }
             _ => Err(self.inner.error(SET_HERO_LEVEL, Failure::WrongFamily)),
         }
+    }
+
+    fn invulnerability_declaration(&self, create_source: &str) -> Result<Option<Span>, Error> {
+        let Some(native) = self.inner.program.natives().get(SET_INVULNERABLE) else {
+            return Ok(None);
+        };
+        Self::contract(
+            &self.inner,
+            SET_INVULNERABLE,
+            &[KIND, "boolean"],
+            "nothing",
+            false,
+            Some(KIND),
+        )?;
+        if native.source != create_source {
+            return Err(self.inner.error(SET_INVULNERABLE, Failure::Source));
+        }
+        Ok(Some(native.span))
+    }
+
+    fn set_unit_invulnerable(&mut self, args: &[Value]) -> Result<Value, Error> {
+        if matches!(args, [Value::Null, Value::Bool(_)]) {
+            return Ok(Value::Null);
+        }
+        let [Value::Handle(unit), Value::Bool(flag)] = args else {
+            return Err(self.inner.error(
+                SET_INVULNERABLE,
+                Failure::UnitState("unit and boolean required"),
+            ));
+        };
+        self.created_unit(*unit, SET_INVULNERABLE)?;
+        match self.inner.entry_mut(*unit)? {
+            Entry::Unit { record } => {
+                // shortcut: explicit setter state only; derive initial and other ability effects with the ability runtime.
+                record.invulnerable = Some(*flag);
+                Ok(Value::Null)
+            }
+            _ => Err(self.inner.error(SET_INVULNERABLE, Failure::WrongFamily)),
+        }
+    }
+
+    fn unit_invulnerability(&self, args: &[Value]) -> Result<Value, Error> {
+        if matches!(args, [Value::Null]) {
+            return Ok(Value::Bool(false));
+        }
+        let [Value::Handle(unit)] = args else {
+            return Err(self
+                .inner
+                .error(GET_INVULNERABLE, Failure::UnitState("one unit required")));
+        };
+        self.created_unit(*unit, GET_INVULNERABLE)?
+            .invulnerable
+            .map(Value::Bool)
+            .ok_or_else(|| {
+                self.inner.error(
+                    GET_INVULNERABLE,
+                    Failure::UnitState("initial invulnerability is not derived"),
+                )
+            })
     }
 
     fn set_unit_state(&mut self, args: &[Value]) -> Result<Value, Error> {
@@ -848,6 +931,7 @@ impl ObjectHost {
                 requested_hero_level: None,
                 requested_show_eye_candy: None,
                 unit_states: Vec::new(),
+                invulnerable: None,
                 admitted_order,
             }
         };
