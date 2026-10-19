@@ -1364,30 +1364,58 @@ pub fn sample_bone_pose(bone: &Bone, frame: u32) -> Pose {
 /// Samples one borrowed track without allocating or selecting its clock.
 /// Only its property changes; the other pose properties retain their identities.
 pub fn sample_bone_track(track: &BoneTrack, frame: u32) -> Pose {
+    sample_bone_track_range(track, frame, 0, track.count as usize)
+}
+
+/// Samples only keys in the selected local sequence, retaining identity when
+/// that sequence has no keys. Global-sequence clocks use `sample_bone_track`.
+pub fn sample_bone_track_in_interval(track: &BoneTrack, frame: u32, interval: [u32; 2]) -> Pose {
+    let partition = |inclusive: bool, boundary: u32| {
+        let (mut lo, mut hi) = (0, track.count as usize);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let key = track.key_time(mid).unwrap_or(0);
+            if key < boundary || (inclusive && key == boundary) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    };
+    let first = partition(false, interval[0]);
+    let end = partition(true, interval[1]);
+    if first >= end {
+        return Pose::default();
+    }
+    sample_bone_track_range(track, frame, first, end)
+}
+
+fn sample_bone_track_range(track: &BoneTrack, frame: u32, first: usize, end: usize) -> Pose {
     let mut pose = Pose::default();
     match track.kind {
         TrackKind::Translation => {
             pose.translation = [
-                sample_vec3(track, frame, 0),
-                sample_vec3(track, frame, 1),
-                sample_vec3(track, frame, 2),
+                sample_vec3(track, frame, 0, first, end),
+                sample_vec3(track, frame, 1, first, end),
+                sample_vec3(track, frame, 2, first, end),
             ]
         }
         TrackKind::Rotation => {
             pose.rotation = [
-                sample_vec3(track, frame, 0),
-                sample_vec3(track, frame, 1),
-                sample_vec3(track, frame, 2),
+                sample_vec3(track, frame, 0, first, end),
+                sample_vec3(track, frame, 1, first, end),
+                sample_vec3(track, frame, 2, first, end),
                 // The quaternion's w component is the fourth vector slot; the key
                 // stride is the track's own, so it reads like any other component.
-                sample_vec3(track, frame, 3),
+                sample_vec3(track, frame, 3, first, end),
             ]
         }
         TrackKind::Scaling => {
             pose.scale = [
-                sample_vec3(track, frame, 0),
-                sample_vec3(track, frame, 1),
-                sample_vec3(track, frame, 2),
+                sample_vec3(track, frame, 0, first, end),
+                sample_vec3(track, frame, 1, first, end),
+                sample_vec3(track, frame, 2, first, end),
             ]
         }
     }
@@ -1398,20 +1426,20 @@ pub fn sample_bone_track(track: &BoneTrack, frame: u32) -> Pose {
 ///
 /// The key stride comes from the track, so this works for both 3-component
 /// vectors and the 4-component quaternion a rotation track holds.
-fn sample_vec3(track: &BoneTrack, frame: u32, component: usize) -> f32 {
-    let n = track.count as usize;
+fn sample_vec3(track: &BoneTrack, frame: u32, component: usize, first: usize, end: usize) -> f32 {
+    let n = end - first;
     if n == 0 {
         return 0.0;
     }
-    if n == 1 || frame <= track.key_time(0).unwrap_or(0) {
-        return track.value(0).map(|v| v[component]).unwrap_or(0.0);
+    if n == 1 || frame <= track.key_time(first).unwrap_or(0) {
+        return track.value(first).map(|v| v[component]).unwrap_or(0.0);
     }
-    let last = track.key_time(n - 1).unwrap_or(0);
+    let last = track.key_time(end - 1).unwrap_or(0);
     if frame >= last {
-        return track.value(n - 1).map(|v| v[component]).unwrap_or(0.0);
+        return track.value(end - 1).map(|v| v[component]).unwrap_or(0.0);
     }
-    let mut lo = 0usize;
-    let mut hi = n - 1;
+    let mut lo = first;
+    let mut hi = end - 1;
     while hi - lo > 1 {
         let mid = (lo + hi) / 2;
         if track.key_time(mid).unwrap_or(0) <= frame {
@@ -7544,9 +7572,7 @@ mod cubic_regressions {
             stride: 40,
             raw,
         };
-        assert_eq!(sample_vec3(&track, 50, 0), 3.);
-        assert_eq!(sample_vec3(&track, 50, 1), 6.);
-        assert_eq!(sample_vec3(&track, 50, 2), 9.);
+        assert_eq!(sample_bone_track(&track, 50).translation, [3., 6., 9.]);
     }
 
     #[test]

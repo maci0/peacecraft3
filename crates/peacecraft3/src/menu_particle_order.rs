@@ -45,51 +45,6 @@ pub enum OrderFailure {
     DuplicateOrdinal,
     DuplicateEntity,
     SortFarZNeedsParticleSort,
-    ConflictingDepthPriorities,
-    CrossPassPriorities,
-}
-
-/// Explicit Bevy submission class determined from the checked final material pipeline.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SourcePass {
-    DepthWriting,
-    Transparent,
-}
-
-/// Admission boundary for retaining Bevy's earlier opaque/alpha-mask pass.
-/// Its source planes must agree and precede every transparent plane. Equal planes
-/// use the declared recreation convention: depth-writing geometry first.
-pub fn check_phase_profile(
-    records: impl IntoIterator<Item = (SourcePass, i32)>,
-    max_items: usize,
-) -> Result<(), OrderFailure> {
-    let mut depth_plane = None;
-    let mut first_transparent = None;
-    let mut count = 0usize;
-    for (pass, plane) in records {
-        count = count.checked_add(1).ok_or(OrderFailure::Budget)?;
-        if count > max_items {
-            return Err(OrderFailure::Budget);
-        }
-        match pass {
-            SourcePass::DepthWriting => {
-                if depth_plane.is_some_and(|previous| previous != plane) {
-                    return Err(OrderFailure::ConflictingDepthPriorities);
-                }
-                depth_plane = Some(plane);
-            }
-            SourcePass::Transparent => {
-                first_transparent = Some(first_transparent.map_or(plane, |p: i32| p.min(plane)));
-            }
-        }
-    }
-    if depth_plane
-        .zip(first_transparent)
-        .is_some_and(|(d, t)| d > t)
-    {
-        return Err(OrderFailure::CrossPassPriorities);
-    }
-    Ok(())
 }
 
 /// Reorders only this owner's existing phase slots. Untagged items keep their slots and get no invented plane.
@@ -237,27 +192,6 @@ mod tests {
     }
     fn ids(phase: &SortedRenderPhase<Transparent3d>) -> Vec<MainEntity> {
         phase.items.values().map(|i| i.entity.1).collect()
-    }
-    #[test]
-    fn phase_profile_refuses_cross_pass_inversions_and_mixed_depth_planes() {
-        use SourcePass::{DepthWriting as D, Transparent as T};
-        assert_eq!(check_phase_profile([(D, -4), (T, -4), (T, 9)], 3), Ok(()));
-        assert_eq!(
-            check_phase_profile([(T, i32::MIN), (T, i32::MAX)], 2),
-            Ok(())
-        );
-        assert_eq!(
-            check_phase_profile([(D, 5), (T, -2)], 2),
-            Err(OrderFailure::CrossPassPriorities)
-        );
-        assert_eq!(
-            check_phase_profile([(D, -7), (D, 7)], 2),
-            Err(OrderFailure::ConflictingDepthPriorities)
-        );
-        assert_eq!(
-            check_phase_profile([(D, -4), (T, 9)], 1),
-            Err(OrderFailure::Budget)
-        );
     }
     #[test]
     fn source_signed_planes_override_distance_without_changing_geometry_or_other_slots() {

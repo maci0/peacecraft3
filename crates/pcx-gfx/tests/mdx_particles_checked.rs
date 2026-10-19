@@ -546,17 +546,11 @@ fn malformed_and_unsupported_inputs_fail_with_source_and_emitter_context() {
     let mut e = emitter(properties());
     e.parent_id = 12;
     cases.push((e, Failure::Unsupported("parented emitter")));
-    let mut e = emitter(properties());
-    e.flags |= mdx_particles::MODEL_SPACE;
-    cases.push((
-        e,
-        Failure::Unsupported("model-space particles outside TFT profile"),
-    ));
     let mut p = properties();
     p.squirt = 1;
     cases.push((
         emitter(p),
-        Failure::Unsupported("squirt emission outside TFT profile"),
+        Failure::Unsupported("burst emission needs a STEP rate channel"),
     ));
     let mut e = emitter(properties());
     e.node_tracks.push(track(
@@ -569,16 +563,13 @@ fn malformed_and_unsupported_inputs_fail_with_source_and_emitter_context() {
     cases.push((e, Failure::Malformed("global reference")));
     let mut e = emitter(properties());
     e.tracks.push(track(
-        *b"KP2E",
+        *b"KP2G",
         Interpolation::None,
         NO_ID,
         &[(0, &[1.], &[], &[])],
     ));
     finish(&mut e);
-    cases.push((
-        e,
-        Failure::Unsupported("animated scalar outside TFT STEP visibility"),
-    ));
+    cases.push((e, Failure::Unsupported("particle scalar channel")));
     let mut p = properties();
     p.speed = f32::NAN;
     cases.push((emitter(p), Failure::Malformed("particle scalars")));
@@ -885,4 +876,285 @@ fn simulation_owns_plan_without_a_self_reference_or_leak() {
     assert_eq!(simulation.plan().profiles().len(), 1);
     drop(simulation);
     assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn model_space_particles_follow_current_emitter_pose_without_reintegrating_world_motion() {
+    let mut props = properties();
+    props.emission_rate = 8.;
+    let mut e = emitter(props);
+    e.flags |= mdx_particles::MODEL_SPACE;
+    e.node_tracks.push(track(
+        *b"KGTR",
+        Interpolation::Linear,
+        NO_ID,
+        &[
+            (0, &[0., 0., 0.], &[], &[]),
+            (1000, &[8., 0., 0.], &[], &[]),
+        ],
+    ));
+    finish(&mut e);
+    let p = plan(&[e.clone()], &[], [0, 1000], false);
+    let mut simulation = Simulation::new(Arc::clone(&p), 17, limits()).unwrap();
+    simulation
+        .advance(Duration::from_millis(500), limits())
+        .unwrap();
+    assert_eq!(simulation.particles().len(), 4);
+    for particle in simulation.particles() {
+        assert_eq!(particle.position, [7., 11., 13.]);
+        assert_eq!(
+            p.world_particle(particle, 500).unwrap().position,
+            [11., 11., 13.]
+        );
+        assert_eq!(
+            p.world_particle(particle, 1000).unwrap().position,
+            [15., 11., 13.]
+        );
+    }
+    e.flags &= !mdx_particles::MODEL_SPACE;
+    let p = plan(&[e], &[], [0, 1000], false);
+    let mut world = Simulation::new(Arc::clone(&p), 17, limits()).unwrap();
+    world.advance(Duration::from_millis(500), limits()).unwrap();
+    assert_eq!(world.particles()[0].position, [8., 11., 13.]);
+    assert_eq!(
+        p.world_particle(&world.particles()[0], 1000)
+            .unwrap()
+            .position,
+        [8., 11., 13.]
+    );
+}
+
+#[test]
+fn model_space_pose_rotates_displacement_and_velocity_about_the_authored_pivot() {
+    let mut e = emitter(properties());
+    e.flags |= mdx_particles::MODEL_SPACE;
+    let q = std::f32::consts::FRAC_1_SQRT_2;
+    e.node_tracks.push(track(
+        *b"KGRT",
+        Interpolation::None,
+        NO_ID,
+        &[(0, &[0., q, 0., q], &[], &[])],
+    ));
+    finish(&mut e);
+    let p = plan(&[e], &[], [0, 1000], false);
+    let particle = Particle {
+        position: [8., 11., 13.],
+        velocity: [0., 0., 2.],
+        ..live(0.5)
+    };
+    let world = p.world_particle(&particle, 500).unwrap();
+    for (a, b) in world.position.into_iter().zip([7., 11., 12.]) {
+        approx(a, b);
+    }
+    for (a, b) in world.velocity.into_iter().zip([2., 0., 0.]) {
+        approx(a, b);
+    }
+    assert_eq!(particle.position, [8., 11., 13.]);
+}
+
+fn burst_plan(keys: &[TrackKey<'_>], global: u32, globals: &[u32], looping: bool) -> Arc<Plan> {
+    let mut props = properties();
+    props.squirt = 1;
+    props.emission_rate = 0.;
+    let mut e = emitter(props);
+    e.tracks
+        .push(track(*b"KP2E", Interpolation::None, global, keys));
+    finish(&mut e);
+    plan(&[e], globals, [0, 1000], looping)
+}
+
+#[test]
+fn burst_keys_retain_fractional_carry_across_loops_and_frame_partitions() {
+    let p = burst_plan(
+        &[
+            (125, &[1.6], &[], &[]),
+            (250, &[0.], &[], &[]),
+            (500, &[2.4], &[], &[]),
+            (750, &[0.], &[], &[]),
+        ],
+        NO_ID,
+        &[],
+        true,
+    );
+    let mut a = Simulation::new(Arc::clone(&p), 17, limits()).unwrap();
+    let mut b = Simulation::new(p, 17, limits()).unwrap();
+    a.advance(Duration::from_secs(2), limits()).unwrap();
+    for _ in 0..16 {
+        b.advance(Duration::from_millis(125), limits()).unwrap();
+    }
+    assert_eq!(a.work.births, 8);
+    assert_eq!(a.work, b.work);
+    assert_eq!(a.particles(), b.particles());
+}
+
+#[test]
+fn burst_keys_inside_one_tick_and_global_loops_are_not_skipped() {
+    let p = burst_plan(
+        &[
+            (0, &[0.], &[], &[]),
+            (25, &[1.], &[], &[]),
+            (50, &[0.], &[], &[]),
+            (75, &[2.], &[], &[]),
+            (100, &[0.], &[], &[]),
+        ],
+        NO_ID,
+        &[],
+        false,
+    );
+    let mut simulation = Simulation::new(p, 17, limits()).unwrap();
+    simulation
+        .advance(Duration::from_millis(125), limits())
+        .unwrap();
+    assert_eq!(simulation.work.births, 3);
+    let p = burst_plan(
+        &[
+            (0, &[0.], &[], &[]),
+            (50, &[1.], &[], &[]),
+            (100, &[0.], &[], &[]),
+        ],
+        0,
+        &[250],
+        false,
+    );
+    let mut simulation = Simulation::new(p, 17, limits()).unwrap();
+    simulation
+        .advance(Duration::from_secs(2), limits())
+        .unwrap();
+    assert_eq!(
+        simulation.work.births, 8,
+        "global emission continues after a nonlooping local clip"
+    );
+}
+
+#[test]
+fn burst_initial_key_fires_once_and_capacity_failure_is_transactional() {
+    let p = burst_plan(
+        &[(0, &[3.], &[], &[]), (500, &[0.], &[], &[])],
+        NO_ID,
+        &[],
+        false,
+    );
+    let mut simulation = Simulation::new(Arc::clone(&p), 17, limits()).unwrap();
+    simulation
+        .advance(Duration::from_secs(2), limits())
+        .unwrap();
+    assert_eq!(simulation.work.births, 3);
+    let tiny = Limits {
+        particle_capacity: 2,
+        ..limits()
+    };
+    let mut simulation = Simulation::new(p, 17, tiny).unwrap();
+    assert!(matches!(
+        simulation
+            .advance(Duration::from_millis(125), tiny)
+            .unwrap_err()
+            .failure,
+        Failure::Budget {
+            kind: "particles",
+            ..
+        }
+    ));
+    assert!(simulation.particles().is_empty());
+    assert_eq!(simulation.elapsed(), Duration::ZERO);
+    assert_eq!(simulation.work.births, 0);
+}
+
+#[test]
+fn animated_bezier_emission_uses_the_track_instead_of_the_static_rate() {
+    let mut props = properties();
+    props.emission_rate = 1000.;
+    let mut e = emitter(props);
+    e.tracks.push(track(
+        *b"KP2E",
+        Interpolation::Bezier,
+        NO_ID,
+        &[(0, &[0.], &[0.], &[0.]), (1000, &[8.], &[8.], &[8.])],
+    ));
+    finish(&mut e);
+    let p = plan(&[e], &[], [0, 1000], false);
+    let mut simulation = Simulation::new(p, 17, limits()).unwrap();
+    simulation
+        .advance(Duration::from_millis(500), limits())
+        .unwrap();
+    assert_eq!(simulation.work.births, 1);
+    simulation
+        .advance(Duration::from_millis(500), limits())
+        .unwrap();
+    assert_eq!(simulation.work.births, 4);
+}
+
+#[test]
+fn burst_key_scans_obey_the_work_budget_before_emitting() {
+    let p = burst_plan(
+        &[
+            (0, &[0.], &[], &[]),
+            (25, &[1.], &[], &[]),
+            (50, &[0.], &[], &[]),
+        ],
+        NO_ID,
+        &[],
+        false,
+    );
+    let constrained = Limits {
+        max_updates: 2,
+        ..limits()
+    };
+    let mut simulation = Simulation::new(p, 17, constrained).unwrap();
+    assert!(matches!(
+        simulation
+            .advance(Duration::from_millis(125), constrained)
+            .unwrap_err()
+            .failure,
+        Failure::Budget {
+            kind: "updates",
+            needed: 3,
+            limit: 2
+        }
+    ));
+    assert!(simulation.particles().is_empty());
+    assert_eq!(simulation.elapsed(), Duration::ZERO);
+    assert_eq!(simulation.work, mdx_particles::Work::default());
+}
+
+#[test]
+fn negative_and_duplicate_rate_channels_and_nonstep_bursts_refuse() {
+    for (squirt, interpolation, negative, duplicate) in [
+        (0, Interpolation::Linear, true, false),
+        (0, Interpolation::None, false, true),
+        (1, Interpolation::Linear, false, false),
+    ] {
+        let mut props = properties();
+        props.squirt = squirt;
+        let mut e = emitter(props);
+        let rate = track(
+            *b"KP2E",
+            interpolation,
+            NO_ID,
+            &[(0, &[if negative { -1. } else { 1. }], &[], &[])],
+        );
+        e.tracks.push(rate.clone());
+        if duplicate {
+            e.tracks.push(rate);
+        }
+        finish(&mut e);
+        let error = Plan::checked(
+            &[e],
+            &texture(),
+            &Pivots(vec![[0.; 3]]),
+            &[],
+            Clip {
+                interval: [0, 1000],
+                looping: true,
+            },
+            "synthetic:bad-rate",
+            limits(),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error.failure,
+            Failure::Malformed(_) | Failure::Unsupported(_)
+        ));
+        assert_eq!(error.source_name, "synthetic:bad-rate");
+        assert_eq!(error.emitter, Some(0));
+    }
 }

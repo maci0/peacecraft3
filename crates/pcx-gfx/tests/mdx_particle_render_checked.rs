@@ -505,3 +505,70 @@ fn explicit_tft_source_graph_and_all_profile_geometry() {
         clips.len()
     );
 }
+
+#[test]
+fn model_space_draws_move_head_and_tail_with_the_current_emitter_pose() {
+    use pcx_mdl::{Interpolation, KeyTrack, NO_ID};
+    let mut e = Particle2 {
+        offset: 0,
+        total_size: 0,
+        node_size: 96,
+        name: "moving-model-space".into(),
+        object_id: 0,
+        parent_id: -1,
+        flags: mdx_particles::MODEL_SPACE,
+        state: props().to_bytes(),
+        node_tracks: vec![],
+        tracks: vec![],
+    };
+    let mut raw = vec![];
+    for (frame, value) in [(0u32, [0f32, 0., 0.]), (1000, [8., 0., 0.])] {
+        raw.extend(frame.to_le_bytes());
+        for v in value {
+            raw.extend(v.to_le_bytes());
+        }
+    }
+    e.node_tracks.push(KeyTrack {
+        magic: *b"KGTR",
+        count: 2,
+        interpolation: Interpolation::Linear,
+        global_seq_id: NO_ID,
+        width: 3,
+        stride: 16,
+        raw,
+    });
+    e.node_size = e.measured_node_size() as u32;
+    e.total_size = e.measured_size() as u32;
+    let p = Plan::checked(
+        &[e],
+        &[tex("marker.blp", 0)],
+        &Pivots(vec![[0.; 3]]),
+        &[],
+        Clip {
+            interval: [0, 1000],
+            looping: false,
+        },
+        SOURCE,
+        Limits {
+            max_emitters: 4,
+            max_keys: 100,
+            particle_capacity: 16,
+            max_ticks: 10,
+            max_updates: 100,
+            tick: Duration::from_millis(10),
+        },
+    )
+    .unwrap();
+    let local = particle();
+    let before = quads(&p, &local, camera()).unwrap();
+    let after = pcx_gfx::mdx_particle_render::quads_at(&p, &local, camera(), 500).unwrap();
+    for (before, after) in before.into_iter().zip(after) {
+        let before = before.unwrap();
+        let after = after.unwrap();
+        assert_eq!(before.rgba, after.rgba);
+        assert_eq!(before.uv, after.uv);
+        for (a, b) in before.positions.into_iter().zip(after.positions) {
+            assert_eq!(b, [a[0] + 4., a[1], a[2]]);
+        }
+    }
+}

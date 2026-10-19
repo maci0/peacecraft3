@@ -40,10 +40,10 @@ below. No second coordinate fit or depth bias is introduced.
 The background camera alone receives the checked geometry/particle source order.
 Transparent items are ordered after Bevy's distance sort and before batching,
 preserving unrelated items' slots. The declared convention is ascending signed
-priority, then geometry/particle class and source ordinal. Earlier depth-writing
-passes must share one source plane that precedes the transparent planes. Mixed
-depth planes, cross-pass inversions and SortFarZ profiles refuse instead of
-silently ignoring source ordering.
+priority, then geometry/particle class and source ordinal. Opaque geometry draws
+before that translucent sort. Source priorities need not agree across these
+passes; the former cross-pass guard incorrectly rejected the RoC scene. SortFarZ
+profiles still refuse rather than silently omitting the required particle sort.
 
 Browser candidate hydration checks the same particle/image/profile path before
 replacing canonical paths, aliases or revision. Missing/malformed dependencies
@@ -99,9 +99,10 @@ ties are explicit recreation choices. Particle lighting/normals, source
 color transfer, radial fog, additive target-alpha behavior and density/spread
 still require comparison to the original presentation. Bevy Add provides the
 selected additive RGB equation through premultiplication; its target-alpha
-semantics are not claimed identical. SortFarZ, parented/model-space emitters,
-squirt and other unsupported channels remain reported gaps. Tests do not close
-rendered/native fidelity.
+semantics are not claimed identical. SortFarZ, parented/scaled emitters and
+unsupported channels remain reported gaps. The bounded model-space, burst and
+animated-rate extension is described below. Tests do not close rendered/native
+fidelity.
 
 ## Circular emission cone (2026-10-19)
 
@@ -318,3 +319,39 @@ three-way comparison are in the same evidence directory.
 
 Original RNG/initial age, lifecycle, uncontrolled animation phase, effective
 quality/settings, native Windows and exact three-target pixels remain open.
+
+
+## RoC model-space bursts and animated rates (2026-10-19)
+
+The selected RoC scene previously lost its entire particle batch because one
+emitter used model space and a STEP burst channel; its rain also has animated
+emission rates. The CPU plan now admits those root-node profiles. Bursts count
+crossed authored keys, including several keys per substep and independent global
+loops, with fractional carry and bounded scan work checked before mutation.
+Continuous rates use the existing checked scalar interpolation. Unsupported
+parents, scaling, channels and invalid burst interpolation remain refusals.
+
+Model-space particles retain local simulation coordinates. Head positions,
+velocities and tail starts receive the current emitter pose about its authored
+pivot when quads are submitted. World-space particles keep their previous path.
+No source rate, duration, transform or texture is copied into a constant.
+
+A second refusal incorrectly compared priorities across opaque and translucent
+passes. The pinned primary renderer's `setupgroups.ts` separates opaque geometry
+before sorting translucent geometry and emitters, so that cross-pass guard is
+removed. Existing source depth flags, translucent ordering, image ownership and
+work limits remain. This establishes a reconstruction convention, not original
+Warcraft draw-order identity.
+
+Fifty CPU/quad tests pass natively and in actual WASI. The explicit local Legacy
+RoC gate retains all source emitters and a populated particle mesh through two
+authored Stand loops with opaque geometry present. Fresh native TFT/RoC/TFT
+journals at 1024×768 and 3840×2160 have no renderer errors or particle gaps. The
+first full render, which lost the background to the cross-pass guard, remains a
+rejected attempt. Evidence is in `.scratch/menu-roc-particles-root-20261019/` and
+the final combined checks in `.scratch/menu-horizon-root-20261019/`.
+
+The separate horizon correction is documented in
+[menu node sequences](menu-node-sequences.md). Browser compilation passes, but a
+fresh browser visual journal for this RoC extension and exact three-target
+particle/animation parity remain open. No public site deployment occurred.

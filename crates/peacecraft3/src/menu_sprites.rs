@@ -1723,6 +1723,7 @@ pub fn advance(
         );
         if let Err(error) = scene::skin_geosets(
             scene::Rig {
+                interval: plan.clip.interval,
                 model: &panel.model,
                 bones: &panel.bones,
                 pivots: &panel.pivots,

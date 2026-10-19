@@ -153,3 +153,35 @@ fn borrowed_sampling_preserves_curves_identities_and_allocates_nothing() {
     let allocations = ALLOCATIONS.replace(None).unwrap();
     assert_eq!(allocations, 0);
 }
+
+#[test]
+fn local_sequence_sampling_excludes_other_clips_without_allocating() {
+    use pcx_mdl::sample_bone_track_in_interval as sample;
+    for kind in [
+        TrackKind::Translation,
+        TrackKind::Rotation,
+        TrackKind::Scaling,
+    ] {
+        for interpolation in [
+            Interpolation::None,
+            Interpolation::Linear,
+            Interpolation::Hermite,
+            Interpolation::Bezier,
+        ] {
+            let t = track(kind, interpolation, 2);
+            assert_eq!(sample(&t, 0, [0, 9]), Pose::default());
+            assert_eq!(sample(&t, 70, [11, 109]), Pose::default());
+            assert_eq!(sample(&t, 200, [111, 200]), Pose::default());
+            assert_eq!(sample(&t, 80, [0, 10]), expected(kind, 2.));
+            assert_eq!(sample(&t, 80, [110, 200]), expected(kind, 6.));
+            for frame in [0, 10, 60, 110, 200] {
+                assert_eq!(sample(&t, frame, [10, 110]), sample_bone_track(&t, frame));
+            }
+            ALLOCATIONS.with(|count| count.set(Some(0)));
+            black_box(sample(black_box(&t), 60, [11, 109]));
+            black_box(sample(black_box(&t), 60, [10, 110]));
+            let allocated = ALLOCATIONS.with(|count| count.replace(None).unwrap());
+            assert_eq!(allocated, 0);
+        }
+    }
+}

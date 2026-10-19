@@ -140,5 +140,7 @@ Legacy installation and embedded shaders: all three captures show the expected
 logo. The first private probe had the wrong embedded-shader crate namespace and
 is rejected. Evidence: `.scratch/menu-edition-root-20261019/verification-1.json`.
 
-This does not fix the separate RoC PRE2 batch refusal at its model-space burst
-emitter. Original runtime, fresh browser visual and 4K parity remain open.
+The separate RoC PRE2 batch refusal was subsequently corrected; see
+[menu particles](menu-particles.md). The later
+[horizon comparison](menu-node-sequences.md) uses original RoC captures through
+4K. Fresh browser visuals and exact three-target parity remain open.

@@ -205,6 +205,46 @@ impl Channel {
             rotation,
         })
     }
+    fn bursts(&self, from: Duration, to: Duration, looping: bool) -> Result<f64, Failure> {
+        let period = u128::from(self.range[1] - self.range[0]) * 1_000_000;
+        let repeating = self.global.is_some() || looping;
+        let mut amount = if from.is_zero() {
+            self.sample(self.range[0], 0, [0.; 4])?[0]
+        } else {
+            0.
+        };
+        let zero_key = self
+            .keys
+            .iter()
+            .any(|key| i64::from(key.frame) == i64::from(self.range[0]));
+        for key in &self.keys {
+            let offset = i64::from(key.frame) - i64::from(self.range[0]);
+            if offset < 0 || offset > i64::from(self.range[1] - self.range[0]) {
+                return Err(Failure::Unsupported("burst key outside clock range"));
+            }
+            let offset = offset as u128 * 1_000_000;
+            // A looping endpoint aliases the starting key when both are authored.
+            if repeating && zero_key && offset == period {
+                continue;
+            }
+            let count = |at: Duration| -> u128 {
+                let at = at.as_nanos();
+                if at < offset || period == 0 {
+                    0
+                } else if repeating {
+                    (at - offset) / period + 1
+                } else {
+                    1
+                }
+            };
+            amount += (count(to) - count(from)) as f64 * key.value[0];
+        }
+        if !amount.is_finite() || amount < 0. {
+            return Err(Failure::Arithmetic);
+        }
+        Ok(amount)
+    }
+
     fn sample(&self, frame: u32, elapsed: u64, identity: [f64; 4]) -> Result<[f64; 4], Failure> {
         if self.keys.is_empty() {
             return Ok(identity);
@@ -291,6 +331,7 @@ pub struct Profile {
     translation: Option<Channel>,
     rotation: Option<Channel>,
     visibility: Option<Channel>,
+    emission: Option<Channel>,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Clip {
@@ -488,14 +529,9 @@ impl Plan {
                 if emitter.flags & !known != 0 {
                     return Err(Failure::Unsupported("unknown PRE2 flags"));
                 }
-                if emitter.flags & MODEL_SPACE != 0 {
-                    return Err(Failure::Unsupported(
-                        "model-space particles outside TFT profile",
-                    ));
-                }
                 let props = emitter.properties();
-                if props.squirt != 0 {
-                    return Err(Failure::Unsupported("squirt emission outside TFT profile"));
+                if props.squirt > 1 {
+                    return Err(Failure::Malformed("squirt flag"));
                 }
                 if props.replaceable_id != 0 {
                     return Err(Failure::Unsupported("replaceable particle texture"));
@@ -567,6 +603,7 @@ impl Plan {
                 let mut translation = None;
                 let mut rotation = None;
                 let mut visibility = None;
+                let mut emission = None;
                 for track in &emitter.node_tracks {
                     let (slot, width, is_rotation) = match &track.magic {
                         b"KGTR" => (&mut translation, 3, false),
@@ -585,15 +622,37 @@ impl Plan {
                     )?);
                 }
                 for track in &emitter.tracks {
-                    if track.magic != *b"KP2V" || track.interpolation != Interpolation::None {
-                        return Err(Failure::Unsupported(
-                            "animated scalar outside TFT STEP visibility",
-                        ));
+                    let slot = match &track.magic {
+                        b"KP2V" if track.interpolation == Interpolation::None => &mut visibility,
+                        b"KP2E" => &mut emission,
+                        _ => return Err(Failure::Unsupported("particle scalar channel")),
+                    };
+                    if slot.is_some() {
+                        return Err(Failure::Malformed("duplicate particle scalar channel"));
                     }
-                    if visibility.is_some() {
-                        return Err(Failure::Malformed("duplicate visibility channel"));
-                    }
-                    visibility = Some(Channel::checked(track, 1, false, interval, globals)?);
+                    *slot = Some(Channel::checked(track, 1, false, interval, globals)?);
+                }
+                if props.squirt == 1
+                    && emission
+                        .as_ref()
+                        .is_none_or(|channel| channel.interpolation != Interpolation::None)
+                {
+                    return Err(Failure::Unsupported(
+                        "burst emission needs a STEP rate channel",
+                    ));
+                }
+                if emission
+                    .as_ref()
+                    .is_some_and(|channel| channel.keys.iter().any(|key| key.value[0] < 0.))
+                {
+                    return Err(Failure::Malformed("negative emission key"));
+                }
+                if props.squirt == 1 {
+                    emission.as_ref().expect("checked burst channel").bursts(
+                        Duration::ZERO,
+                        Duration::ZERO,
+                        looping,
+                    )?;
                 }
                 Ok(Profile {
                     object_id: emitter.object_id,
@@ -604,6 +663,7 @@ impl Plan {
                     translation,
                     rotation,
                     visibility,
+                    emission,
                 })
             };
             profiles.push(build().map_err(|failure| fail(Some(emitter.object_id), failure))?);
@@ -634,6 +694,32 @@ impl Plan {
                 elapsed_ms.min(duration) as u32
             }
     }
+    /// Render pose for a live particle; simulation retains model-space coordinates.
+    pub fn world_particle(&self, particle: &Particle, elapsed_ms: u64) -> Result<Particle, Error> {
+        let profile = self
+            .profiles
+            .get(particle.emitter)
+            .ok_or_else(|| self.error(particle.emitter, Failure::Malformed("particle emitter")))?;
+        let mut world = *particle;
+        if profile.flags & MODEL_SPACE != 0 {
+            let sample = self.sample_emitter(particle.emitter, elapsed_ms)?;
+            let q = sample.rotation.map(f64::from);
+            let offset = rotate(
+                q,
+                std::array::from_fn(|i| {
+                    f64::from(particle.position[i]) - f64::from(profile.pivot[i])
+                }),
+            );
+            world.position = vector(std::array::from_fn(|i| {
+                f64::from(profile.pivot[i]) + f64::from(sample.translation[i]) + offset[i]
+            }))
+            .map_err(|failure| self.error(particle.emitter, failure))?;
+            world.velocity = vector(rotate(q, particle.velocity.map(f64::from)))
+                .map_err(|failure| self.error(particle.emitter, failure))?;
+        }
+        Ok(world)
+    }
+
     pub fn sample_emitter(&self, index: usize, elapsed_ms: u64) -> Result<EmitterSample, Error> {
         let result = || -> Result<EmitterSample, Failure> {
             let profile = self
@@ -686,6 +772,7 @@ pub struct Particle {
 pub struct Work {
     pub ticks: u64,
     pub births: u64,
+    /// Particle integration/birth work and inspected burst keys.
     pub updates: u64,
     pub expired: u64,
 }
@@ -843,8 +930,62 @@ impl Simulation {
                 if !sample.visible {
                     continue;
                 }
-                let emission =
-                    self.remainders[index] + f64::from(profile.properties.emission_rate) * dt;
+                if profile.properties.squirt == 1 {
+                    let keys = profile
+                        .emission
+                        .as_ref()
+                        .expect("checked burst channel")
+                        .keys
+                        .len();
+                    updates = updates
+                        .checked_add(
+                            u64::try_from(keys)
+                                .map_err(|_| plan.error(index, Failure::Arithmetic))?,
+                        )
+                        .ok_or_else(|| plan.error(index, Failure::Arithmetic))?;
+                    let needed = work
+                        .updates
+                        .checked_add(updates)
+                        .ok_or_else(|| plan.error(index, Failure::Arithmetic))?;
+                    if needed > limits.max_updates {
+                        return Err(plan.error(
+                            index,
+                            Failure::Budget {
+                                kind: "updates",
+                                needed: u128::from(needed),
+                                limit: u128::from(limits.max_updates),
+                            },
+                        ));
+                    }
+                }
+                let amount = if profile.properties.squirt == 1 {
+                    profile
+                        .emission
+                        .as_ref()
+                        .expect("checked burst channel")
+                        .bursts(self.elapsed, end, plan.looping)
+                        .map_err(|failure| plan.error(index, failure))?
+                } else {
+                    profile
+                        .emission
+                        .as_ref()
+                        .map_or(
+                            Ok([f64::from(profile.properties.emission_rate), 0., 0., 0.]),
+                            |channel| {
+                                channel.sample(
+                                    plan.frame(ms),
+                                    ms,
+                                    [f64::from(profile.properties.emission_rate), 0., 0., 0.],
+                                )
+                            },
+                        )
+                        .map_err(|failure| plan.error(index, failure))?[0]
+                        * dt
+                };
+                if !amount.is_finite() || amount < 0. {
+                    return Err(plan.error(index, Failure::Arithmetic));
+                }
+                let emission = self.remainders[index] + amount;
                 if !emission.is_finite() || emission < 0. {
                     return Err(plan.error(index, Failure::Arithmetic));
                 }
@@ -953,6 +1094,15 @@ fn spawn_particle(
     rng: &mut Rng,
 ) -> Result<Particle, Failure> {
     let props = profile.properties;
+    let sample = if profile.flags & MODEL_SPACE != 0 {
+        EmitterSample {
+            translation: [0.; 3],
+            rotation: [0., 0., 0., 1.],
+            visible: sample.visible,
+        }
+    } else {
+        sample
+    };
     let q = sample.rotation.map(f64::from);
     let offset = rotate(
         q,

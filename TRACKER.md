@@ -193,6 +193,21 @@ integration. A completed prototype does not close its broader milestone.
       causal GPU regression fails before the fix and passes after it; all eight
       synthetic hardware render-graph cases pass. See
       `docs/re-notes/menu-additive-blending.md`.
+- [x] RoC menu root-node model-space particles, STEP bursts and animated emission
+      rates now retain the complete batch. Cross-pass priority checks no longer
+      reject the source scene; opaque geometry precedes translucent sorting.
+      Fifty native/actual-WASI CPU/quad cases and an explicit local two-loop
+      RoC gate pass. Native edition-switch journals render through 4K. Original
+      RNG/phase, fresh browser visuals and full parity remain open. See
+      `docs/re-notes/menu-particles.md`.
+- [x] Menu node transforms respect the selected source sequence. Other-sequence
+      keys previously moved the RoC gradient plane into the sky, creating a flat
+      cutoff. Fresh original WC3/Wine and corrected native captures at 1024×768
+      and 3840×2160 confirm the skyline correction. All 116 model, 171 graphics
+      and 411 menu binary tests, two actual WASI pose cases, strict native/browser
+      checks and both builds pass. Exact three-target pixels remain open. See
+      `docs/re-notes/menu-node-sequences.md` and local evidence
+      `.scratch/menu-horizon-root-20261019/`.
 - [x] Background full-billboard posing consumes source flags, hierarchy, pivots,
       tracks and the selected source camera (2026-10-19). Nested camera-facing
       joints cancel the parent turn once; skinning and lighting share the pose.

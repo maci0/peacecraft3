@@ -910,6 +910,7 @@ pub fn spawn(
     lighting.bind(&opacity_materials, materials);
     let skeleton = skin_geosets(
         Rig {
+            interval,
             model: &model,
             bones: &bones,
             pivots: pivots.as_ref().unwrap(),
@@ -1248,6 +1249,8 @@ fn checked_geoset_colour(geoset: usize, rgb: [f32; 3], alpha: f32) -> Result<Col
 
 /// A model's rest meshes and the joints that pose them.
 pub struct Rig<'a> {
+    /// Selected authored local sequence; global tracks keep independent clocks.
+    pub interval: [u32; 2],
     pub model: &'a pcx_gfx::LoadedModel,
     pub bones: &'a [pcx_mdl::Bone],
     pub pivots: &'a pcx_mdl::Pivots,
@@ -1272,7 +1275,7 @@ pub fn skin_geosets(
     let poses: Vec<pcx_mdl::Pose> = rig
         .bones
         .iter()
-        .map(|b| tracked_pose(b, frame, elapsed_ms, rig.global_durations))
+        .map(|b| tracked_pose(b, frame, elapsed_ms, rig.global_durations, rig.interval))
         .collect();
     let skeleton = match rig.camera_pose {
         Some(plan) => plan
@@ -1625,9 +1628,20 @@ pub fn tracked_pose(
     sequence_frame: u32,
     elapsed_ms: u32,
     durations: &[u32],
+    interval: [u32; 2],
 ) -> pcx_mdl::Pose {
     if bone.tracks.iter().all(|t| t.global_sequence_id < 0) {
-        return pcx_mdl::sample_bone_pose(bone, sequence_frame);
+        let sample =
+            |track| pcx_mdl::sample_bone_track_in_interval(track, sequence_frame, interval);
+        return pcx_mdl::Pose {
+            translation: bone
+                .translation()
+                .map_or([0.0; 3], |t| sample(t).translation),
+            rotation: bone
+                .rotation()
+                .map_or([0.0, 0.0, 0.0, 1.0], |t| sample(t).rotation),
+            scale: bone.scaling().map_or([1.0; 3], |t| sample(t).scale),
+        };
     }
     let mut out = pcx_mdl::Pose::default();
     for track in &bone.tracks {
@@ -1640,7 +1654,11 @@ pub fn tracked_pose(
             },
             Err(_) => sequence_frame,
         };
-        let pose = pcx_mdl::sample_bone_track(track, frame);
+        let pose = if track.global_sequence_id < 0 {
+            pcx_mdl::sample_bone_track_in_interval(track, frame, interval)
+        } else {
+            pcx_mdl::sample_bone_track(track, frame)
+        };
         match track.kind {
             pcx_mdl::TrackKind::Translation => out.translation = pose.translation,
             pcx_mdl::TrackKind::Rotation => out.rotation = pose.rotation,
@@ -1791,6 +1809,7 @@ pub fn advance(
     };
     let skeleton = skin_geosets(
         Rig {
+            interval: scene.clip.map_or([0, 0], |clip| clip.interval),
             model,
             bones: &scene.bones,
             pivots,
@@ -2685,7 +2704,13 @@ mod global_seq_tests {
             for durations in [&[][..], &[100, 0][..], &[100, 75, 90, 80][..]] {
                 for (sequence, elapsed) in [(0, 0), (50, 125), (100, 200), (101, u32::MAX)] {
                     assert_eq!(
-                        bits(tracked_pose(&bone, sequence, elapsed, durations)),
+                        bits(tracked_pose(
+                            &bone,
+                            sequence,
+                            elapsed,
+                            durations,
+                            [0, u32::MAX]
+                        )),
                         bits(previous(&bone, sequence, elapsed, durations))
                     );
                 }
@@ -2694,10 +2719,61 @@ mod global_seq_tests {
                 t.global_sequence_id = -1;
             }
             bone.tracks[3].raw[4..8].copy_from_slice(&20_f32.to_le_bytes());
-            assert_eq!(tracked_pose(&bone, 0, 125, &[100]).translation[0], 2.);
+            assert_eq!(
+                tracked_pose(&bone, 0, 125, &[100], [0, u32::MAX]).translation[0],
+                2.
+            );
             bone.tracks[1].global_sequence_id = 0;
-            assert_eq!(tracked_pose(&bone, 0, 125, &[100]).translation[0], 20.);
+            assert_eq!(
+                tracked_pose(&bone, 0, 125, &[100], [0, u32::MAX]).translation[0],
+                20.
+            );
         }
+    }
+
+    #[test]
+    fn local_nodes_without_selected_keys_keep_identity_beside_global_animation() {
+        use pcx_mdl::{Bone, BoneTrack, Interpolation, Pose, TrackKind};
+        let mut raw = vec![];
+        for frame in [120_u32, 180] {
+            raw.extend(frame.to_le_bytes());
+            for value in [8_f32, 9., 10.] {
+                raw.extend(value.to_le_bytes());
+            }
+        }
+        let local = BoneTrack {
+            kind: TrackKind::Translation,
+            count: 2,
+            interpolation: Interpolation::Linear,
+            global_sequence_id: -1,
+            offset: 0,
+            stride: 16,
+            raw,
+        };
+        let mut bone = Bone {
+            offset: 0,
+            span: 0,
+            name: String::new(),
+            object_id: 0,
+            parent_id: -1,
+            flags: 0,
+            tracks: vec![local.clone()],
+            geoset_id: -1,
+            geoset_anim_id: -1,
+        };
+        assert_eq!(tracked_pose(&bone, 50, 150, &[], [0, 100]), Pose::default());
+        assert_eq!(
+            tracked_pose(&bone, 150, 150, &[], [120, 180]).translation,
+            [8., 9., 10.]
+        );
+        bone.tracks.push(BoneTrack {
+            kind: TrackKind::Scaling,
+            global_sequence_id: 0,
+            ..local
+        });
+        let pose = tracked_pose(&bone, 50, 150, &[200], [0, 100]);
+        assert_eq!(pose.translation, [0.; 3]);
+        assert_eq!(pose.scale, [8., 9., 10.]);
     }
 
     fn scene() -> Option<(Vec<u8>, pcx_mdl::Mdlx)> {

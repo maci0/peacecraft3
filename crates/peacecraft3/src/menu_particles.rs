@@ -1,8 +1,6 @@
 //! Complete background PRE2 binding; source inputs share the geometry transaction.
 use super::{MainMenuSceneEntity, TextureBindings};
-use crate::menu_particle_order::{
-    OrderFailure, SourceKind, SourceOrder, SourceOrderView, SourcePass, check_phase_profile,
-};
+use crate::menu_particle_order::{OrderFailure, SourceKind, SourceOrder, SourceOrderView};
 use bevy::{
     asset::RenderAssetUsages,
     camera::visibility::NoFrustumCulling,
@@ -190,16 +188,12 @@ pub fn prepare<'a>(
     };
     let plan = Arc::new(plan);
     let mut geometry_ids = Vec::new();
-    let mut phases = Vec::new();
     let item_count = runtime
         .geosets
         .len()
         .checked_add(plan.profiles().len())
         .filter(|count| *count <= policy.max_items)
         .ok_or(Error::Invalid("scene submission item budget exceeded"))?;
-    phases
-        .try_reserve_exact(item_count)
-        .map_err(|_| Error::Invalid("phase allocation failed"))?;
     for geo in &runtime.geosets {
         let material = runtime
             .materials
@@ -210,13 +204,6 @@ pub fn prepare<'a>(
         let layer = material.layers.first().ok_or(Error::Invalid(
             "GEOS has no checked first layer for particle composition",
         ))?;
-        let mode = super::alpha_mode_of(layer.properties.filter_mode).0;
-        let pass = if matches!(mode, AlphaMode::Opaque | AlphaMode::Mask(_)) {
-            SourcePass::DepthWriting
-        } else {
-            SourcePass::Transparent
-        };
-        phases.push((pass, material.priority_plane));
         geometry_ids.push(layer.properties.texture_id);
         geometry_ids.extend(
             layer
@@ -236,10 +223,9 @@ pub fn prepare<'a>(
                 OrderFailure::SortFarZNeedsParticleSort,
             )));
         }
-        phases.push((SourcePass::Transparent, requirement.priority_plane));
         requirements.push(requirement);
     }
-    check_phase_profile(phases, policy.max_items).map_err(Error::Order)?;
+    // Opaque geometry precedes the translucent priority sort (pinned setupgroups.ts).
     let graph = ImageGraph::checked(
         &plan,
         &source_textures,
@@ -567,8 +553,10 @@ impl ParticleScene {
         pieces
             .try_reserve_exact(max_pieces)
             .map_err(|_| Error::Invalid("piece allocation failed"))?;
+        let pose_ms = u64::try_from(elapsed.as_millis())
+            .map_err(|_| Error::Invalid("particle clock overflow"))?;
         for particle in self.simulation.particles() {
-            for quad in draw::quads(self.simulation.plan(), particle, basis)?
+            for quad in draw::quads_at(self.simulation.plan(), particle, basis, pose_ms)?
                 .into_iter()
                 .flatten()
             {

@@ -800,6 +800,7 @@ pub(crate) mod tests {
             }
             let skeleton = crate::mainmenu_scene::skin_geosets(
                 crate::mainmenu_scene::Rig {
+                    interval: [clip.interval_start, clip.interval_end],
                     model: &loaded,
                     bones: runtime.joints.joints(),
                     pivots: runtime.joints.pivots(),

@@ -372,7 +372,17 @@ pub fn quads(
     particle: &Particle,
     camera: CameraBasis,
 ) -> Result<[Option<Quad>; 2], Error> {
-    let appearance = plan.appearance(particle).map_err(|e| {
+    quads_at(plan, particle, camera, 0)
+}
+
+/// The emitter's current pose applies to all living model-space particles.
+pub fn quads_at(
+    plan: &Plan,
+    particle: &Particle,
+    camera: CameraBasis,
+    elapsed_ms: u64,
+) -> Result<[Option<Quad>; 2], Error> {
+    let mut appearance = plan.appearance(particle).map_err(|e| {
         error(
             &e.source_name,
             e.emitter,
@@ -380,6 +390,23 @@ pub fn quads(
             Failure::Appearance(e.failure),
         )
     })?;
+    let pose = |particle: &Particle| {
+        plan.world_particle(particle, elapsed_ms).map_err(|e| {
+            error(
+                &e.source_name,
+                e.emitter,
+                None,
+                Failure::Appearance(e.failure),
+            )
+        })
+    };
+    appearance.tail_start = pose(&Particle {
+        position: appearance.tail_start,
+        ..*particle
+    })?
+    .position;
+    let world = pose(particle)?;
+    let particle = &world;
     let fail = |failure| {
         error(
             plan.source(),

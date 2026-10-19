@@ -467,7 +467,7 @@ fn particle_missing_late_image_and_malformed_properties_refuse_before_any_scene_
 
 #[test]
 fn particle_unsupported_flags_preserve_geometry_path_without_partial_emitters() {
-    let (bytes, textures) = synthetic(|_, flags| *flags |= cpu::MODEL_SPACE);
+    let (bytes, textures) = synthetic(|_, flags| *flags |= 1);
     let gap = validate_particle_import("synthetic", &bytes, &textures)
         .unwrap()
         .unwrap();
@@ -662,4 +662,129 @@ fn particle_visibility_track_retires_and_restarts_one_emitter_with_stable_assets
             );
         }
     }
+}
+
+#[test]
+#[ignore = "requires PEACECRAFT3_INSTALL with original RoC menu assets and selected client"]
+fn original_roc_particles_survive_two_authored_loops_with_opaque_geometry() {
+    let install = std::path::PathBuf::from(
+        std::env::var_os("PEACECRAFT3_INSTALL").expect("explicit original installation"),
+    );
+    let skin = crate::mainmenu::art_bytes(Some(&install), crate::mainmenu::SKIN_TABLE)
+        .expect("source skin");
+    let skin = crate::menu_skin::SkinTable::parse(std::str::from_utf8(&skin).unwrap()).unwrap();
+    let source = skin_scene_source(&skin, false).unwrap();
+    let bytes = crate::mainmenu::art_bytes(Some(&install), &source).expect("source RoC model");
+    let model = pcx_mdl::Mdlx::parse(&bytes).unwrap();
+    let emitters = model.particles2(&bytes).unwrap();
+    assert!(!emitters.is_empty());
+    let runtime = pcx_gfx::mdx_runtime::RuntimePlan::parse(&bytes).unwrap();
+    let depth = runtime
+        .materials
+        .iter()
+        .flat_map(|material| {
+            material.layers.iter().map(move |layer| {
+                (
+                    material.priority_plane,
+                    alpha_mode_of(layer.properties.filter_mode).0,
+                )
+            })
+        })
+        .filter(|(_, mode)| matches!(mode, AlphaMode::Opaque | AlphaMode::Mask(_)))
+        .map(|(plane, _)| plane)
+        .max()
+        .unwrap();
+    let translucent = runtime
+        .materials
+        .iter()
+        .flat_map(|material| {
+            material.layers.iter().map(move |layer| {
+                (
+                    material.priority_plane,
+                    alpha_mode_of(layer.properties.filter_mode).0,
+                )
+            })
+        })
+        .filter(|(_, mode)| !matches!(mode, AlphaMode::Opaque | AlphaMode::Mask(_)))
+        .map(|(plane, _)| plane)
+        .chain(
+            emitters
+                .iter()
+                .map(|emitter| emitter.properties().priority_plane),
+        )
+        .min()
+        .unwrap();
+    assert!(
+        translucent < depth,
+        "exercise cross-pass authored priorities"
+    );
+    let textures = load_textures_in(Some(&install), &bytes, scene_source(false).2);
+    let fog = crate::mainmenu::art_bytes(Some(&install), crate::mainmenu::MENU_FOG_CONFIG)
+        .expect("source fog");
+    let fog = crate::menu_skin::SkinTable::parse(std::str::from_utf8(&fog).unwrap()).unwrap();
+    let fog = crate::menu_fog::MenuFog::checked(&fog, 0).unwrap();
+    let parameters = crate::menu_lighting::parameters(Some(&install)).unwrap();
+    let mut world = World::new();
+    let mut meshes = Assets::default();
+    let mut materials = Assets::default();
+    let mut particles = Assets::default();
+    let mut images = Assets::default();
+    let info = spawn(
+        &mut world.commands(),
+        GeosetAssets {
+            meshes: &mut meshes,
+            materials: &mut materials,
+            images: &mut images,
+        },
+        &mut particles,
+        &source,
+        &bytes,
+        &textures,
+        (fog, parameters),
+    )
+    .unwrap();
+    world.flush();
+    assert_eq!(info.particle_emitters, emitters.len());
+    assert!(info.particle_gap.is_none());
+    world.insert_resource(meshes);
+    world.insert_resource(materials);
+    world.insert_resource(particles);
+    let clip = model
+        .sequences(&bytes)
+        .unwrap()
+        .into_iter()
+        .find(|sequence| sequence.name == "Stand" && !sequence.non_looping)
+        .expect("authored entry clip");
+    let step = std::time::Duration::from_millis(16);
+    let duration =
+        std::time::Duration::from_millis(u64::from(clip.interval_end - clip.interval_start) * 2);
+    let frames = duration.as_nanos().div_ceil(step.as_nanos());
+    assert!(frames <= 10000, "bounded original-input test");
+    world.init_resource::<Time>();
+    for _ in 0..frames {
+        world.resource_mut::<Time>().advance_by(step);
+        world.run_system_once(advance).unwrap();
+    }
+    assert!(
+        world
+            .resource::<MainMenuScene>()
+            .particles
+            .as_ref()
+            .unwrap()
+            .enabled()
+    );
+    let order = world
+        .query::<&crate::menu_particle_order::SourceOrderView>()
+        .single(&world)
+        .unwrap()
+        .clone();
+    let mut draw_query = world.query::<(Entity, &Mesh3d)>();
+    let meshes = world.resource::<Assets<Mesh>>();
+    assert!(draw_query.iter(&world).any(|(entity, mesh)| {
+        order
+            .orders
+            .get(&bevy::render::sync_world::MainEntity::from(entity))
+            .is_some_and(|entry| entry.kind == crate::menu_particle_order::SourceKind::Particle)
+            && meshes.get(&mesh.0).unwrap().count_vertices() > 0
+    }));
 }
