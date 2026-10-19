@@ -17,8 +17,8 @@ impl ObjectHost {
     ///
     /// Context identity does not authenticate the input's runtime provenance.
     /// The caller must refresh or invalidate on external setting changes. Failed
-    /// admission preserves the prior state. Speed writes remain unsupported:
-    /// observed requests do not always read back as the requested value.
+    /// admission preserves the prior state. Only requests for the already-current
+    /// speed are supported; a different speed requires a qualified clock rate.
     pub fn admit_startup_settings(
         &mut self,
         context: &Arc<ParsedMapContext>,
@@ -64,6 +64,23 @@ impl ObjectHost {
                 .natives()
                 .get(name)
                 .ok_or_else(|| fail(Failure::Signature))?
+                .source
+                != source
+            {
+                return Err(self.inner.error(name, Failure::Source));
+            }
+        }
+        let name = "SetGameSpeed";
+        if self.inner.program.natives().get(name).is_some()
+            || self.inner.program.natives().ambiguous(name).is_some()
+        {
+            Self::contract(&self.inner, name, &["gamespeed"], "nothing", false, None)?;
+            if &self
+                .inner
+                .program
+                .natives()
+                .get(name)
+                .expect("checked setter")
                 .source
                 != source
             {
@@ -293,6 +310,24 @@ impl ObjectHost {
                     Failure::SettingsState("arguments do not match the native declaration"),
                 ))
             });
+        }
+        if name == "SetGameSpeed" {
+            let settings = self.startup_settings?;
+            return Some((|| {
+                Self::contract(&self.inner, name, &["gamespeed"], "nothing", false, None)?;
+                match args {
+                    [Value::Handle(speed)] if *speed == settings.speed => Ok(Value::Null),
+                    // shortcut: rate changes refuse until the clock consumes qualified speed rates.
+                    [Value::Handle(_)] => Err(self.inner.error(
+                        name,
+                        Failure::SettingsState("changing game speed is unsupported"),
+                    )),
+                    _ => Err(self.inner.error(
+                        name,
+                        Failure::SettingsState("expected the current gamespeed identity"),
+                    )),
+                }
+            })());
         }
         let settings = self.startup_settings.as_mut()?;
         match (name, args) {

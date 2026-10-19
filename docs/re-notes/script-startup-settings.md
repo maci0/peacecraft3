@@ -51,7 +51,7 @@ player census. Before and after initialization, current settings read
 not universal defaults. Slowest, Slow and Normal requests read back their selected
 source values. Fast and Fastest requests both read back Normal. The observation
 does not distinguish clamping, context restrictions or ignored requests;
-`SetGameSpeed` therefore remains unsupported. No speed-to-time relationship is
+rate-changing `SetGameSpeed` requests therefore remain unsupported. No speed-to-time relationship is
 inferred; the separate [simulation clock investigation](legacy-simulation-clock.md)
 remains partial.
 
@@ -80,7 +80,7 @@ Synthetic owned-VM tests save, toggle and restore state, cover every fog/mask
 combination, retain exact speed identity and verify no handle growth. Refusal
 checks cover absent/invalidated state, malformed calls, wrong map context,
 missing selected conversion, wrong-family/unknown/out-of-domain speed tokens,
-source/type/interface changes and speed writes. Native and actual WASI execute
+source/type/interface changes and rate-changing speed writes. Native and actual WASI execute
 the same tests. Command and source-stability receipts remain in the local root
 evidence directory.
 
@@ -134,3 +134,35 @@ hashes and source-observation-qualified gate stay local in
 `.scratch/startup-version-root-20261017/`. The application provider and composed
 Host factory, remaining event/scheduler semantics, rendered gameplay and campaign
 completion stay open. No original asset or generated payload is published.
+
+## Current-speed requests (2026-10-19)
+
+An optional `SetGameSpeed(gamespeed)` declaration is now admitted with the exact
+non-constant signature and the same source as the selected startup settings.
+Missing declarations remain unsupported, including direct Host dispatch. A request
+for the exact already-current identity returns nothing and preserves the retained
+settings, arena and logical clock. Every other identity, null, malformed argument
+list or request after invalidation refuses without changing state. No enum number
+or speed-to-time factor is copied into production.
+
+This supports the unchanged Human01 cinematic request for its already-admitted
+speed. It does not implement rate changes. The retained original runtime probe
+above shows Normal requested while Normal remains current. Additional bounded
+static reads of that same executable locate the functional setter at `0x4a8790`:
+it tests a context restriction bit, then delegates to `0x4c2450`. That callee
+clamps the input byte, stores the current-speed byte and calls `0x5ae760`, which
+sets a scheduler index and derives its rate from image data. The getter at
+`0x492806` reads the stored byte. Those instructions explain the retained clamp
+observation; they do not qualify the live restriction bit, all pacing inputs or
+networked speed-change behavior. The reconstruction therefore acknowledges only
+the already-current request. Full rate changes and original/native/WASM clock
+parity remain open. Private static reads and verification receipts are in
+`.scratch/campaign-speed-root-20261019/`; no original runtime was launched.
+
+The unchanged private Human01 prefix now passes that current-speed request and
+next refuses `SetMapFlag(MAP_LOCK_SPEED, true)` in Blizzard at `292599..292636`.
+The explicit recreation seed and retained observation/profile limitations still
+apply; this is not normal application bootstrap or a playable chapter. Native
+Host/application/integration tests, strict native/WASM Clippy, eleven actual WASI
+settings/version tests and thirty-six executable Cargo-WASM factory gate cases
+pass. No new browser render or original-game runtime comparison was performed.

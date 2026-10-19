@@ -126,7 +126,7 @@ endfunction
     assert_eq!(vm.host().inner().handles(), handles);
 }
 #[test]
-fn invalid_writes_and_failed_replacement_preserve_state_and_speed_writes_refuse() {
+fn invalid_writes_and_failed_replacement_preserve_settings() {
     let (mut h, ctx) = object(&common(), "// map", true);
     let s = seed(&mut h);
     for name in [
@@ -169,10 +169,9 @@ fn invalid_writes_and_failed_replacement_preserve_state_and_speed_writes_refuse(
     let wrong = context(301, &common(), "// map", "synthetic:settings");
     assert!(h.admit_startup_settings(&wrong, s).is_err());
     assert_eq!(read(&mut h), before);
-    assert!(
-        h.native("SetGameSpeed", &[Value::Handle(s.speed)])
-            .unwrap_err()
-            .contains("unsupported")
+    assert_eq!(
+        h.native("SetGameSpeed", &[Value::Handle(s.speed)]).unwrap(),
+        Value::Null
     );
     assert_eq!(read(&mut h), before);
     assert_eq!(h.inner().handles(), handles);
@@ -260,6 +259,98 @@ fn settings_need_selected_conversion_matching_context_and_loaded_native_contract
         (
             common().replace("type gamespeed extends handle", ""),
             "type gamespeed extends handle\n".into(),
+        ),
+    ] {
+        let (mut h, ctx) = object(&c, &map, true);
+        let s = seed(&mut h);
+        assert!(h.admit_startup_settings(&ctx, s).is_err());
+    }
+}
+
+#[test]
+fn current_speed_roundtrip_is_idempotent_and_other_requests_refuse_atomically() {
+    let map = "function keep takes nothing returns nothing\ncall SetGameSpeed(GetGameSpeed())\nendfunction\n";
+    let (mut h, ctx) = object(&common(), map, true);
+    let s = seed(&mut h);
+    h.admit_startup_settings(&ctx, s).unwrap();
+    let other = h.native("ConvertGameSpeed", &[Value::Int(43)]).unwrap();
+    let foreign = h.native("ConvertOtherSpeed", &[Value::Int(101)]).unwrap();
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    let before = read(&mut h);
+    let handles = h.inner().handles();
+    for args in [
+        vec![],
+        vec![Value::Null],
+        vec![Value::Int(-11)],
+        vec![other.clone()],
+        vec![foreign],
+        vec![timer],
+        vec![Value::Handle(HandleId::new(
+            std::num::NonZeroU64::new(u64::MAX).unwrap(),
+        ))],
+        vec![Value::Handle(s.speed), Value::Handle(s.speed)],
+    ] {
+        assert!(h.native("SetGameSpeed", &args).is_err());
+        assert_eq!(read(&mut h), before);
+    }
+    assert_eq!(h.inner().handles(), handles);
+    let mut vm = h.into_vm();
+    vm.init_globals().unwrap();
+    let handles = vm.host().inner().handles();
+    vm.call("keep", &[]).unwrap();
+    assert_eq!(read(vm.host()), before);
+    assert_eq!(vm.host().inner().handles(), handles);
+    let high = id(&other);
+    vm.host()
+        .admit_startup_settings(&ctx, StartupSettings { speed: high, ..s })
+        .unwrap();
+    vm.call("keep", &[]).unwrap();
+    assert_eq!(vm.host().native("GetGameSpeed", &[]).unwrap(), other);
+    assert!(
+        vm.host()
+            .native("SetGameSpeed", &[Value::Handle(s.speed)])
+            .is_err()
+    );
+    vm.host().invalidate_startup_settings();
+    assert!(
+        vm.host()
+            .native("SetGameSpeed", &[Value::Handle(high)])
+            .is_err()
+    );
+}
+#[test]
+fn optional_speed_setter_requires_its_own_source_and_contract() {
+    let declaration = "native SetGameSpeed takes gamespeed s returns nothing";
+    let c = common();
+    let absent = c.replace(declaration, "");
+    let (mut h, ctx) = object(&absent, "// map", true);
+    let s = seed(&mut h);
+    h.admit_startup_settings(&ctx, s).unwrap();
+    assert!(h.native("SetGameSpeed", &[Value::Handle(s.speed)]).is_err());
+    for (c, map) in [
+        (absent.clone(), declaration.to_owned()),
+        (c.clone(), declaration.to_owned()),
+        (
+            c.clone(),
+            "function SetGameSpeed takes gamespeed s returns nothing\nendfunction\n".to_owned(),
+        ),
+        (
+            c.replace(
+                declaration,
+                "constant native SetGameSpeed takes gamespeed s returns nothing",
+            ),
+            "// map".to_owned(),
+        ),
+        (
+            c.replace("SetGameSpeed takes gamespeed", "SetGameSpeed takes integer"),
+            "// map".to_owned(),
+        ),
+        (
+            c.replace(
+                declaration,
+                "native SetGameSpeed takes gamespeed s returns integer",
+            ),
+            "// map".to_owned(),
         ),
     ] {
         let (mut h, ctx) = object(&c, &map, true);

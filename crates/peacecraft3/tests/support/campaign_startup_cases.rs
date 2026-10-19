@@ -1245,3 +1245,6 @@ mod message_cases;
 
 #[path = "occlusion_cases.rs"]
 mod occlusion_cases;
+
+#[path = "speed_cases.rs"]
+mod speed_cases;

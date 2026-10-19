@@ -1446,8 +1446,10 @@ Format: `date — subsystem — symptom — root cause — status`
       input for that context. The unchanged gate passes all three getters and
       stores their values in the Blizzard globals; the next refusal is
       `GetPlayerSlotState` in Blizzard at `438504..438537` (common `61390..61470`).
-      Independent fog/mask setters retain boolean state. `SetGameSpeed` stays
-      unsupported: Fast/Fastest requested during the probe read back Normal.
+      Independent fog/mask setters retain boolean state. Rate-changing
+      `SetGameSpeed` requests remain unsupported: Fast/Fastest requested during
+      the probe read back Normal. Already-current requests are supported by the
+      later current-speed continuation below.
       No startup defaults, speed rates or rendered fog behavior are inferred;
       see `docs/re-notes/script-startup-settings.md`.
       Explicit startup slot-state input now passes `GetPlayerSlotState` on that
@@ -2896,3 +2898,13 @@ repeated, and the public site package was not rebuilt.
   building rules and original rendering comparison remain open. The broader
   occlusion task remains active, and first-chapter playability is unfinished.
   See [script occlusion](docs/re-notes/script-occlusion.md).
+
+
+### 2026-10-19 — current-speed campaign request
+
+- [x] Source-qualified `SetGameSpeed` accepts an already-current identity without
+  changing settings, arena or logical time. Optional declaration validation and
+  invalid/different-speed refusal preserve the prior state and published session.
+- [ ] Different-speed requests, source-qualified pacing, original/native/WASM clock
+  parity, normal first-chapter bootstrap and playable world actors remain open.
+  See [startup settings](docs/re-notes/script-startup-settings.md).
