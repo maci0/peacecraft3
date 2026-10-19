@@ -3104,3 +3104,20 @@ repeated, and the public site package was not rebuilt.
   it is stopped without retry or subsequent 4K attempt. Rendered WASM, rain,
   transparency and full original/native/WASM equality remain open. The public
   site is unchanged. See [texture filtering](docs/re-notes/menu-texture-filtering.md).
+
+### 2026-10-20 — retain authored menu mipmaps
+
+- [x] Bounded model-image loading and geometry/PRE2 uploads now retain the source
+  BLP mip chain, including lower-level RGB and alpha. Complete-chain budgets and
+  duplicate identity checks apply before scene admission; base-only terrain-atlas
+  consumers retain their existing contract.
+- [x] 55 graphics-library, 17 particle-render integration and 412 menu tests,
+  synthetic Vulkan mip readback, strict native/WASM checks and both full builds
+  pass. All 257 levels in the 33 selected RoC textures match decoder/upload bytes.
+  Fifteen native edition-switch captures pass at five extents through 4K; fresh
+  isolated software-WebGL RoC captures pass at 1024×768 and 4K. Geometry is unchanged.
+- [ ] Original mip selection/LOD bias, hardware-browser startup, particle state,
+  full transparency and exact three-target pixels remain open. The six raw RGB
+  comparisons still differ. The first campaign remains unplayable and the original
+  baseline gate is unchanged. Public hosting was not updated. See
+  [texture mipmaps](docs/re-notes/menu-texture-mipmaps.md).

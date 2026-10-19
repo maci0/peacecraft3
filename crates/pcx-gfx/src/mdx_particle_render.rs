@@ -49,6 +49,7 @@ pub struct Decoded<'a> {
     pub width: u32,
     pub height: u32,
     pub rgba: &'a [u8],
+    pub mipmaps: &'a [Vec<u8>],
 }
 #[derive(Debug, Clone, Copy)]
 pub struct ImageLimits {
@@ -200,16 +201,17 @@ impl ImageGraph {
                 if image.source_context != self.source {
                     return Err(fail(Failure::Conflict("decoded source context")));
                 }
-                let length = usize::try_from(image.width)
-                    .ok()
-                    .and_then(|w| usize::try_from(image.height).ok()?.checked_mul(w))
-                    .and_then(|pixels| pixels.checked_mul(4));
-                if image.width == 0 || image.height == 0 || length != Some(image.rgba.len()) {
+                if crate::rgba_mip_bytes(image.width, image.height, image.rgba, image.mipmaps)
+                    .is_none()
+                {
                     return Err(fail(Failure::Malformed("decoded dimensions/RGBA length")));
                 }
                 if candidate.is_some_and(|old| {
                     let old = decoded[old];
-                    old.width != image.width || old.height != image.height || old.rgba != image.rgba
+                    old.width != image.width
+                        || old.height != image.height
+                        || old.rgba != image.rgba
+                        || old.mipmaps != image.mipmaps
                 }) {
                     return Err(fail(Failure::Conflict("decoded canonical pixels")));
                 }
@@ -219,7 +221,15 @@ impl ImageGraph {
                 candidate.ok_or_else(|| fail(Failure::Missing("decoded canonical image")))?;
             prepared.rgba_bytes = prepared
                 .rgba_bytes
-                .checked_add(decoded[candidate].rgba.len())
+                .checked_add(
+                    crate::rgba_mip_bytes(
+                        decoded[candidate].width,
+                        decoded[candidate].height,
+                        decoded[candidate].rgba,
+                        decoded[candidate].mipmaps,
+                    )
+                    .expect("validated mip chain"),
+                )
                 .ok_or_else(|| fail(Failure::Budget("decoded backing bytes")))?;
             if prepared.rgba_bytes > max_backing_rgba_bytes {
                 return Err(fail(Failure::Budget("decoded backing bytes")));

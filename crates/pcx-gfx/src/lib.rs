@@ -40,8 +40,107 @@ pub struct LoadedTexture {
     pub height: u32,
     /// Straight RGBA8, row-major.
     pub rgba: Vec<u8>,
+    /// Authored lower-resolution RGBA8 levels, starting at mip one.
+    pub mipmaps: Vec<Vec<u8>>,
     /// Where the pixels came from, for a trace.
     pub source: String,
+}
+
+impl LoadedTexture {
+    /// Validate the complete upload and count its decoded bytes before admission.
+    pub fn rgba_bytes(&self) -> Option<usize> {
+        rgba_mip_bytes(self.width, self.height, &self.rgba, &self.mipmaps)
+    }
+}
+
+#[cfg(test)]
+#[path = "image_mip_tests.rs"]
+mod image_mip_tests;
+
+/// Validate a contiguous, possibly partial RGBA8 mip chain without allocating.
+pub fn rgba_mip_bytes(
+    mut width: u32,
+    mut height: u32,
+    rgba: &[u8],
+    mipmaps: &[Vec<u8>],
+) -> Option<usize> {
+    let bytes = |w, h| {
+        usize::try_from(w)
+            .ok()?
+            .checked_mul(usize::try_from(h).ok()?)?
+            .checked_mul(4)
+    };
+    if width == 0 || height == 0 || bytes(width, height)? != rgba.len() {
+        return None;
+    }
+    let mut total = rgba.len();
+    for mip in mipmaps {
+        if width == 1 && height == 1 {
+            return None;
+        }
+        width = (width / 2).max(1);
+        height = (height / 2).max(1);
+        if bytes(width, height)? != mip.len() {
+            return None;
+        }
+        total = total.checked_add(mip.len())?;
+    }
+    Some(total)
+}
+
+/// Preserve the supplied BLP mip chain for model textures; never regenerate its pixels.
+/// The byte budget covers every level before any decoding allocation.
+pub fn load_mipmapped_image_bounded(
+    bytes: &[u8],
+    source: &str,
+    max_rgba_bytes: usize,
+) -> Result<LoadedTexture, Error> {
+    if AssetKind::detect(bytes) != AssetKind::Blp {
+        return load_image_bounded(bytes, source, max_rgba_bytes);
+    }
+    let fail = |e: String| Error::Decode(format!("{source}: {e}"));
+    let header = pcx_blp::Header::parse(bytes).map_err(|e| fail(e.to_string()))?;
+    let count = header.mip_count();
+    if count == 0 || header.mip_sizes[..count].contains(&0) {
+        return Err(fail("missing or noncontiguous BLP mip levels".into()));
+    }
+    let mut total = 0usize;
+    for level in 0..count {
+        let (width, height) = header.mip_size(level);
+        if width == 0 || height == 0 || (level > 0 && header.mip_size(level - 1) == (1, 1)) {
+            return Err(fail("invalid BLP mip dimensions".into()));
+        }
+        let size = usize::try_from(width)
+            .ok()
+            .and_then(|w| usize::try_from(height).ok()?.checked_mul(w))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| fail("BLP mip byte count overflow".into()))?;
+        total = total
+            .checked_add(size)
+            .ok_or_else(|| fail("BLP mip byte count overflow".into()))?;
+        if total > max_rgba_bytes {
+            return Err(fail("decoded RGBA mip budget exceeded".into()));
+        }
+        pcx_blp::mip_bytes(bytes, &header, level).map_err(|e| fail(e.to_string()))?;
+    }
+    let mut texture = load_image_bounded(bytes, source, max_rgba_bytes)?;
+    texture
+        .mipmaps
+        .try_reserve_exact(count - 1)
+        .map_err(|_| fail("BLP mip allocation failed".into()))?;
+    for level in 1..count {
+        let rgba = if header.content == 0 {
+            pcx_blp::decode_jpeg_with_limit(bytes, &header, level, max_rgba_bytes)
+        } else {
+            pcx_blp::decode_mip(bytes, &header, level)
+        }
+        .map_err(|e| fail(e.to_string()))?;
+        texture.mipmaps.push(rgba);
+    }
+    if texture.rgba_bytes() != Some(total) {
+        return Err(fail("decoded BLP mip dimensions/length differ".into()));
+    }
+    Ok(texture)
 }
 
 /// Which format an asset turned out to be, decided by content and not by
@@ -112,6 +211,7 @@ pub fn load_image_bounded(
         let rgba = pcx_blp::decode_jpeg_with_limit(bytes, &h, 0, max_rgba_bytes)
             .map_err(|e| fail(e.to_string()))?;
         return Ok(LoadedTexture {
+            mipmaps: Vec::new(),
             width,
             height,
             rgba,
@@ -156,6 +256,7 @@ pub fn load_image(bytes: &[u8], source: &str) -> Result<LoadedTexture, crate::Er
                 (hh.width, hh.height, px)
             };
             Ok(LoadedTexture {
+                mipmaps: Vec::new(),
                 width: w,
                 height: hgt,
                 rgba,
@@ -166,6 +267,7 @@ pub fn load_image(bytes: &[u8], source: &str) -> Result<LoadedTexture, crate::Er
             let (h, rgba) = pcx_tga::decode(bytes)
                 .map_err(|e| crate::Error::Decode(format!("{source}: {e}")))?;
             Ok(LoadedTexture {
+                mipmaps: Vec::new(),
                 width: u32::from(h.width),
                 height: u32::from(h.height),
                 rgba,

@@ -565,8 +565,8 @@ pub fn load_textures_in(
         let Some(raw) = crate::mainmenu::art_bytes_named(desktop, &path, &served) else {
             continue;
         };
-        if let Ok(tex) = pcx_gfx::load_image_bounded(&raw, &path, remaining) {
-            remaining -= tex.rgba.len();
+        if let Ok(tex) = pcx_gfx::load_mipmapped_image_bounded(&raw, &path, remaining) {
+            remaining -= tex.rgba_bytes().expect("validated mip chain");
             out.push(tex);
         }
     }
@@ -1421,17 +1421,14 @@ fn required_texture_images<'a>(
                 .iter()
                 .filter(|image| normalize(&image.source) == path)
             {
-                let length = usize::try_from(image.width)
-                    .ok()
-                    .and_then(|width| usize::try_from(image.height).ok()?.checked_mul(width))
-                    .and_then(|pixels| pixels.checked_mul(4));
-                if image.width == 0 || image.height == 0 || length != Some(image.rgba.len()) {
+                if image.rgba_bytes().is_none() {
                     return Err(fail("invalid decoded RGBA dimensions or length"));
                 }
                 if found.is_some_and(|previous| {
                     previous.width != image.width
                         || previous.height != image.height
                         || previous.rgba != image.rgba
+                        || previous.mipmaps != image.mipmaps
                 }) {
                     return Err(fail("unequal decoded images for canonical path"));
                 }
@@ -2993,6 +2990,7 @@ mod texture_selection_tests {
         ]
         .into_iter()
         .map(|(source, rgba)| pcx_gfx::LoadedTexture {
+            mipmaps: Vec::new(),
             width: 1,
             height: 1,
             rgba: rgba.to_vec(),
@@ -4278,6 +4276,7 @@ mod texture_selection_tests {
     fn particle_union_reuses_geometry_kmtf_images_and_keeps_sampler_ownership() {
         let mut fixture = fixture(&[track(NO_ID, &[(0, 2), (500, 5)])]);
         fixture.textures.push(pcx_gfx::LoadedTexture {
+            mipmaps: Vec::new(),
             width: 1,
             height: 1,
             rgba: vec![17, 71, 139, 43],

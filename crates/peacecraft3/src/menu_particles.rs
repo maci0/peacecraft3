@@ -244,6 +244,7 @@ pub fn prepare<'a>(
             width: image.width,
             height: image.height,
             rgba: &image.rgba,
+            mipmaps: &image.mipmaps,
         })
         .collect::<Vec<_>>();
     let images = graph.preflight(&decoded, policy.max_image_bytes)?;
@@ -315,6 +316,11 @@ impl Prepared<'_> {
                     TextureFormat::Rgba8Unorm,
                     RenderAssetUsages::default(),
                 );
+                let data = gpu.data.as_mut().expect("RGBA image has CPU data");
+                for mip in image.mipmaps {
+                    data.extend_from_slice(mip);
+                }
+                gpu.texture_descriptor.mip_level_count = 1 + image.mipmaps.len() as u32;
                 gpu.sampler = pcx_gfx::viewer::sampler_for_texture_flags(
                     self.graph.backings()[backing].sampler_flags,
                 );

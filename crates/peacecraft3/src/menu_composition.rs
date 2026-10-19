@@ -75,6 +75,7 @@ mod tests {
         let uploaded = colour(source).to_linear();
         assert_eq!(uploaded.to_f32_array(), source);
         let texture = pcx_gfx::LoadedTexture {
+            mipmaps: Vec::new(),
             source: "synthetic.tga".into(),
             width: 1,
             height: 1,

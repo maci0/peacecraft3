@@ -102,6 +102,7 @@ pub(super) fn synthetic(
     ]
     .into_iter()
     .map(|(source, rgba)| pcx_gfx::LoadedTexture {
+        mipmaps: Vec::new(),
         width: 1,
         height: 1,
         rgba: rgba.to_vec(),
@@ -160,6 +161,24 @@ fn spawn_case_with_parameters(
         particle_materials,
         images,
         result,
+    }
+}
+
+#[test]
+fn particle_only_images_retain_their_authored_mip_chain() {
+    let (bytes, mut textures) = synthetic(|_, _| {});
+    for texture in &mut textures {
+        texture.width = 2;
+        texture.height = 2;
+        texture.rgba = texture.rgba.repeat(4);
+        texture.mipmaps = vec![vec![23, 67, 131, 197]];
+    }
+    let spawned = spawn_case(&bytes, &textures);
+    assert!(spawned.result.unwrap().particle_gap.is_none());
+    assert_eq!(spawned.images.len(), 3);
+    for (_, image) in spawned.images.iter() {
+        assert_eq!(image.texture_descriptor.mip_level_count, 2);
+        assert_eq!(&image.data.as_ref().unwrap()[16..], &[23, 67, 131, 197]);
     }
 }
 

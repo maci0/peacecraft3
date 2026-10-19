@@ -58,6 +58,7 @@ fn render_app() -> App {
 fn synthetic_filter_alpha_reaches_the_gpu_and_scales_with_the_view() {
     let mut app = render_app();
     let mut art = pcx_gfx::viewer::rgba_image(&pcx_gfx::LoadedTexture {
+        mipmaps: Vec::new(),
         source: "synthetic".into(),
         width: 1,
         height: 1,

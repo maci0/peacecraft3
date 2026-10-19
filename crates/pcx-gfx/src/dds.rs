@@ -395,6 +395,7 @@ pub fn decode(bytes: &[u8], source: &str, limits: Limits) -> Result<Decoded, Err
     }
     Ok(Decoded {
         texture: LoadedTexture {
+            mipmaps: Vec::new(),
             width: profile.width,
             height: profile.height,
             rgba: decoded.into_raw(),

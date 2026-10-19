@@ -756,14 +756,14 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
                     let raw = extract_unique(set, &texture)?;
                     if particle_model {
                         decoded.push(
-                            pcx_gfx::load_image_bounded(&raw, &texture, remaining_pixels)
+                            pcx_gfx::load_mipmapped_image_bounded(&raw, &texture, remaining_pixels)
                                 .map_err(|e| format!("{context}: TEXS {texture}: {e}"))?,
                         );
                     }
                     if let Some(image) = decoded.last()
                         && particle_model
                     {
-                        remaining_pixels -= image.rgba.len();
+                        remaining_pixels -= image.rgba_bytes().expect("validated mip chain");
                     }
                     let alias = crate::mainmenu_scene::texture_served_name_in(&texture, directory);
                     put(&texture, Some(&alias), raw)?;
@@ -863,9 +863,9 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
                 crate::mainmenu_scene::texture_paths(&bytes).map_err(|e| format!("{path}: {e}"))?
             {
                 let raw = extract_unique(set, &texture)?;
-                let decoded = pcx_gfx::load_image_bounded(&raw, &texture, remaining)
+                let decoded = pcx_gfx::load_mipmapped_image_bounded(&raw, &texture, remaining)
                     .map_err(|e| format!("{path}: TEXS {texture}: {e}"))?;
-                remaining -= decoded.rgba.len();
+                remaining -= decoded.rgba_bytes().expect("validated mip chain");
                 textures.push(decoded);
                 put(&texture, None, raw)?;
             }

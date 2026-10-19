@@ -320,6 +320,65 @@ fn spawn_menu_quad(
 }
 
 #[test]
+#[ignore = "requires a local Vulkan adapter; synthetic authored mip readback"]
+fn authored_mip_levels_reach_the_menu_render_graph() {
+    use bevy::image::{ImageSampler, ImageSamplerDescriptor};
+    let mut app = vulkan_menu_app("mip-readback");
+    let target = spawn_readback_camera(&mut app);
+    let texture = pcx_gfx::LoadedTexture {
+        source: "synthetic distinct mip levels".into(),
+        width: 4,
+        height: 4,
+        rgba: [31, 79, 157, 255].repeat(16),
+        mipmaps: vec![[173, 43, 89, 255].repeat(4), vec![67, 197, 23, 255]],
+    };
+    let quad = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Rectangle::new(QUAD_EXTENT, QUAD_EXTENT));
+    for level in 0..3 {
+        let mut image = crate::menu_composition::image(&texture);
+        image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+            lod_min_clamp: level as f32,
+            lod_max_clamp: level as f32,
+            ..ImageSamplerDescriptor::nearest()
+        });
+        let image = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        let material = app.world_mut().resource_mut::<Assets<MenuMaterial>>().add(
+            checked_source_mode(
+                StandardMaterial {
+                    base_color_texture: Some(image),
+                    unlit: true,
+                    fog_enabled: false,
+                    ..default()
+                },
+                0,
+                0,
+            )
+            .unwrap(),
+        );
+        app.world_mut().spawn((
+            Mesh3d(quad.clone()),
+            MeshMaterial3d(material),
+            Transform::from_xyz(level as f32 - 1.5, 0., 0.),
+        ));
+    }
+    let readback = drive_readback(&mut app, target);
+    for (level, expected) in [[31u8, 79, 157], [173, 43, 89], [67, 197, 23]]
+        .into_iter()
+        .enumerate()
+    {
+        for (channel, expected) in expected.into_iter().enumerate() {
+            let got = channel_at(&readback.bytes, readback.stride, level, 16, 16, channel);
+            assert!(
+                (got - f32::from(expected) / 255.).abs() < 0.002,
+                "mip={level} channel={channel} got={got}"
+            );
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires a local Vulkan adapter; synthetic additive-alpha readback"]
 fn source_additive_layers_weight_texture_and_material_alpha_once() {
     let mut app = vulkan_menu_app("source-additive-alpha");
@@ -892,6 +951,7 @@ fn composition_readback(raw: bool) -> GpuReadback {
     };
     let image = |world: &mut World, rgba: [u8; 4]| {
         let texture = pcx_gfx::LoadedTexture {
+            mipmaps: Vec::new(),
             source: "synthetic.tga".into(),
             width: 1,
             height: 1,

@@ -1725,6 +1725,7 @@ Frame "FRAME" "MainMenuFrame" {
 
     fn cache_image(world: &mut World, path: &str, tile: bool, width: u32, height: u32) {
         let texture = pcx_gfx::LoadedTexture {
+            mipmaps: Vec::new(),
             source: path.into(),
             width,
             height,

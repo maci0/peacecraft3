@@ -201,7 +201,7 @@ pub fn rgba_image(tex: &LoadedTexture) -> Image {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-    Image::new(
+    let mut image = Image::new(
         Extent3d {
             width: tex.width.max(1),
             height: tex.height.max(1),
@@ -211,7 +211,13 @@ pub fn rgba_image(tex: &LoadedTexture) -> Image {
         tex.rgba.clone(),
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::default(),
-    )
+    );
+    let data = image.data.as_mut().expect("RGBA image has CPU data");
+    for mip in &tex.mipmaps {
+        data.extend_from_slice(mip);
+    }
+    image.texture_descriptor.mip_level_count = 1 + tex.mipmaps.len() as u32;
+    image
 }
 
 /// The sampler a texture's own `TEXS` flags ask for.
@@ -1109,6 +1115,7 @@ mod tests {
     #[test]
     fn textures_are_matched_through_either_separator() {
         let tex = vec![LoadedTexture {
+            mipmaps: Vec::new(),
             width: 2,
             height: 2,
             rgba: vec![0; 16],
@@ -1133,6 +1140,7 @@ mod tests {
     #[test]
     fn rgba_becomes_an_image_of_the_right_size() {
         let tex = LoadedTexture {
+            mipmaps: Vec::new(),
             width: 4,
             height: 3,
             rgba: vec![7u8; 4 * 3 * 4],

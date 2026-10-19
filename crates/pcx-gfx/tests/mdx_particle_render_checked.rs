@@ -95,6 +95,7 @@ fn graph(p: &Plan, t: &[Texture], geometry: &[u32]) -> ImageGraph {
 }
 fn image<'a>(path: &'a str, rgba: &'a [u8], width: u32, height: u32) -> Decoded<'a> {
     Decoded {
+        mipmaps: &[],
         source_context: SOURCE,
         path,
         width,
@@ -104,6 +105,34 @@ fn image<'a>(path: &'a str, rgba: &'a [u8], width: u32, height: u32) -> Decoded<
 }
 fn approx(a: f32, b: f32) {
     assert!((a - b).abs() < 0.00001, "{a} != {b}");
+}
+
+#[test]
+fn mip_chains_participate_in_particle_admission_budget_and_identity() {
+    let t = [tex("a.blp", 0)];
+    let p = plan(props(), 0, &t);
+    let g = graph(&p, &t, &[]);
+    let pixels = [0; 16];
+    let mips = [vec![17; 4]];
+    let mut a = image("a.blp", &pixels, 2, 2);
+    a.mipmaps = &mips;
+    let prepared = g.preflight(&[a], 20).unwrap();
+    assert_eq!(prepared.rgba_bytes, 20);
+    assert!(std::ptr::eq(prepared.images[0].mipmaps, &mips));
+    assert!(
+        matches!(g.preflight(&[a],19), Err(e) if e.failure == Failure::Budget("decoded backing bytes"))
+    );
+    let other = [vec![19; 4]];
+    let mut b = a;
+    b.mipmaps = &other;
+    assert!(
+        matches!(g.preflight(&[a,b],40),Err(e) if e.failure == Failure::Conflict("decoded canonical pixels"))
+    );
+    let invalid = [vec![0; 3]];
+    b.mipmaps = &invalid;
+    assert!(
+        matches!(g.preflight(&[b],20), Err(e) if e.failure == Failure::Malformed("decoded dimensions/RGBA length"))
+    );
 }
 #[test]
 fn request_graph_unions_particle_and_geometry_ids_and_splits_sampler_ownership() {
