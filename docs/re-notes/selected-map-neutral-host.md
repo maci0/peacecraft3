@@ -261,3 +261,44 @@ With [start priorities](script-start-priorities.md) admitted, this same headless
 Human01 VM completes its authored `config` and enters `main`. Its next actual
 boundary is `GetCameraMargin` at map-script line 7781. Default launcher wiring,
 native defaults, completed startup and campaign execution remain open.
+
+
+## Opt-in source-image discovery
+
+`map_startup_host::NeutralRuleSet::discover_first_family` prepares all six rules
+for the existing selected-successful-W3I reconstruction from one complete PE32
+image. It matches the zero-argument integer registration signature, named native
+and supported straight-line getter encoding. Exactly one matching registration
+per native and one supported header-range pattern must exist. Thresholds, masks,
+addends and accepted header range derive from those bytes. Missing or duplicate
+matches, uninitialized/unsupported image ranges and exhausted scan policy refuse.
+
+`DiscoveryBudget` bounds the complete image, sections, identity metadata,
+registration candidates and logical scan bytes. No elapsed-time cutoff, player
+count, threshold or target address selects a result. The caller supplies explicit
+source identity. Each rule retains the complete image digest and a generated
+binding receipt. Its `profile_sha256` is that receipt's digest for discovered
+rules; it is not an independently approved imported profile. The approved-profile
+APIs and their approval checks remain unchanged.
+
+This is an opt-in pattern-qualified interpretation for the existing first-family
+functional reconstruction. A unique encoding does not establish active native
+registration-family selection, context/cache lifetime, fallback state or generic
+roles across releases. It does not supply another missing Host input or install
+a default application bootstrap.
+
+Two synthetic tests derive independent rule operands, drive the actual admitted
+Host/VM and reject missing/duplicate/budget-invalid input. Both run natively and
+in actual WASI. The full native suites and strict native/WASM lint/builds pass;
+28 existing application WASM regression cases also pass. A real-input probe on
+the retained executable and Human01 context compares all six discovered results
+with independently reviewed imports, then uses discovered rules in the existing
+startup factory. Globals/config complete and 155 unit-creation calls remain;
+main still refuses `SetCampaignMenuRace`. That is a bounded recreation prefix,
+not a playable chapter or original-game execution. The probe keeps its explicit
+recreation seed and compatibility catalog limitations. The first WASI run chose
+an overbroad parent namespace and exhausted fuel in unrelated nested tests; the
+corrected affected-test filter passes at the same fuel limit.
+
+Evidence is retained in
+`.scratch/campaign-bootstrap-root-20261019/verification-final-0.json`.

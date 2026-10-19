@@ -1580,3 +1580,11 @@ camera setups on the published VM and matching admitted terrain. Source clipping
 field identities and session replacement stay explicit. Projection conventions
 need gameplay qualification; this is not first-chapter playability. See
 [executed camera consumer](docs/re-notes/script-camera-setups.md#application-camera-consumer).
+
+
+The startup factory's six neutral-player rules can now be derived together from
+one selected PE32 image under an explicit first-family reconstruction opt-in.
+Discovery matches named registration/getter shapes and a unique supported header
+range, deriving operands from image bytes. It retains independent approved-profile
+imports. This removes that input family's six separate profile files; it does not
+prepare the remaining Host inputs or prove native active-family/cache behavior.

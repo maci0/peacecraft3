@@ -102,6 +102,26 @@ pub struct NeutralRuleSet {
     pub extra: Arc<VerifiedNeutralRule>,
     pub slots: Arc<VerifiedNeutralRule>,
 }
+impl NeutralRuleSet {
+    /// Opt in to the selected-successful-W3I reconstruction's first getter family.
+    /// Discovery qualifies encodings, not the original active family or cache lifetime.
+    pub fn discover_first_family(
+        image: &[u8],
+        origin: crate::scripts::AssetIdentity,
+        budget: crate::neutral_player::DiscoveryBudget,
+    ) -> Result<Self, NeutralError> {
+        let [passive, aggressive, max_players, victim, extra, slots] =
+            crate::neutral_rule_discovery::discover(image, origin, budget)?;
+        Ok(Self {
+            passive: Arc::new(passive),
+            aggressive: Arc::new(aggressive),
+            max_players: Arc::new(max_players),
+            victim: Arc::new(victim),
+            extra: Arc::new(extra),
+            slots: Arc::new(slots),
+        })
+    }
+}
 
 pub struct StartupClockInput {
     pub clock: StartupClock,

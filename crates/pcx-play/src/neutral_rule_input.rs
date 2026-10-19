@@ -297,7 +297,7 @@ pub(super) fn import(
         max_tag,
     })
 }
-fn decode_getter(d: &[u8]) -> Result<(u32, i32, i32), NeutralError> {
+pub(super) fn decode_getter(d: &[u8]) -> Result<(u32, i32, i32), NeutralError> {
     let mut r = Reader { d, at: 0 };
     let mut expect = |b: &[u8]| -> Result<(), NeutralError> {
         if r.take(b.len())? != b {
@@ -343,7 +343,7 @@ fn decode_getter(d: &[u8]) -> Result<(u32, i32, i32), NeutralError> {
     }
     Ok((threshold, mask.wrapping_add(add) as i32, add as i32))
 }
-fn decode_header(d: &[u8]) -> Result<(u32, u32), NeutralError> {
+pub(super) fn decode_header(d: &[u8]) -> Result<(u32, u32), NeutralError> {
     let mut found = None;
     for (i, b) in d.windows(36).enumerate() {
         if b[..2] != [0x83, 0xf8]

@@ -73,6 +73,13 @@ pub struct RuleInputBudget {
     pub profile_bytes: usize,
     pub sections: usize,
 }
+/// Bounded scan policy; counts/work are independent of machine timing.
+#[derive(Clone, Copy)]
+pub struct DiscoveryBudget {
+    pub image: RuleInputBudget,
+    pub registration_candidates: usize,
+    pub work_bytes: usize,
+}
 #[derive(Debug)]
 pub struct VerifiedNeutralRule {
     pub(crate) native_name: &'static str,
@@ -178,6 +185,8 @@ impl VerifiedNeutralRule {
     pub fn image_sha256(&self) -> Sha256Digest {
         self.image_sha256
     }
+    /// Imported profile digest, or a generated source-binding receipt for discovery.
+    /// A discovery receipt is not an independently approved imported profile.
     pub fn profile_sha256(&self) -> Sha256Digest {
         self.profile_sha256
     }

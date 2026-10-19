@@ -69,6 +69,7 @@ pub mod menu_lighting;
 pub mod minimize;
 pub mod mp3_frame;
 pub mod neutral_player;
+mod neutral_rule_discovery;
 mod neutral_rule_input;
 pub mod options_defaults;
 pub mod options_modes;

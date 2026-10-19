@@ -1136,3 +1136,129 @@ fn cooperative_delegate_cannot_park_the_owned_neutral_getter() {
     assert!(host.suspend("SyntheticPark", &[Value::Int(4)]));
     assert_eq!(host.inner().names, ["SyntheticPark"]);
 }
+
+fn discovery_image() -> Vec<u8> {
+    let mut image = input(257).image;
+    let base = 0x00301000u32;
+    let raw = 0x200;
+    for (i, name) in crate::neutral_rule_discovery::NAMES.iter().enumerate() {
+        let offset = 0x400 + i * 0x100;
+        let mut reg = vec![0x68];
+        reg.extend((base + 0x140).to_le_bytes());
+        reg.push(0x68);
+        reg.extend((base + offset as u32 + 0x20).to_le_bytes());
+        reg.push(0x68);
+        reg.extend((base + offset as u32 + 0x60).to_le_bytes());
+        image[raw + offset..raw + offset + 15].copy_from_slice(&reg);
+        image[raw + offset + 0x20..raw + offset + 0x20 + name.len()]
+            .copy_from_slice(name.as_bytes());
+        let body = getter(257 + i as u32, -20, 61 + i as i8);
+        image[raw + offset + 0x60..raw + offset + 0x60 + body.len()].copy_from_slice(&body);
+    }
+    image
+}
+fn discovery_origin() -> AssetIdentity {
+    AssetIdentity {
+        edition: "synthetic".into(),
+        version: "pattern test".into(),
+        source: "synthetic complete PE".into(),
+    }
+}
+fn discovery_budget() -> DiscoveryBudget {
+    DiscoveryBudget {
+        image: RuleInputBudget {
+            image_bytes: 8192,
+            profile_bytes: 4096,
+            sections: 2,
+        },
+        registration_candidates: 128,
+        work_bytes: 1 << 20,
+    }
+}
+#[test]
+fn discovery_derives_each_registered_first_family_rule_and_drives_the_actual_host() {
+    let image = discovery_image();
+    let rules = crate::map_startup_host::NeutralRuleSet::discover_first_family(
+        &image,
+        discovery_origin(),
+        discovery_budget(),
+    )
+    .unwrap();
+    for (i, rule) in [
+        &rules.passive,
+        &rules.aggressive,
+        &rules.max_players,
+        &rules.victim,
+        &rules.extra,
+        &rules.slots,
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert_eq!(rule.threshold, 257 + i as u32);
+        assert_eq!(rule.below, 41 + i as i32);
+        assert_eq!(rule.at_or_above, 61 + i as i32);
+        assert_eq!(rule.image_sha256(), sha256(&image));
+    }
+    for (word, expected) in [(256, 41), (257, 61)] {
+        let ctx = context(word, COMMON, MAP, "discovered selected map");
+        let scripts = Arc::clone(&ctx.scripts);
+        let host =
+            SelectedMapNeutralHost::try_new(ctx, Arc::clone(&rules.passive), Delegate::default())
+                .unwrap();
+        let mut vm = scripts.owned_vm(host);
+        vm.init_globals().unwrap();
+        assert_eq!(vm.global("result"), Value::Int(expected));
+    }
+    let again = crate::map_startup_host::NeutralRuleSet::discover_first_family(
+        &image,
+        discovery_origin(),
+        discovery_budget(),
+    )
+    .unwrap();
+    assert_eq!(
+        rules.passive.profile_sha256(),
+        again.passive.profile_sha256()
+    );
+}
+#[test]
+fn discovery_refuses_missing_ambiguous_changed_and_over_budget_inputs() {
+    let image = discovery_image();
+    for kind in 0..6 {
+        let mut bytes = image.clone();
+        let mut budget = discovery_budget();
+        match kind {
+            0 => bytes[0x200 + 0x400] = 0,
+            1 => {
+                let h = header();
+                bytes[0x200 + 0xb00..0x200 + 0xb00 + h.len()].copy_from_slice(&h);
+            }
+            2 => {
+                let reg = bytes[0x200 + 0x400..0x200 + 0x400 + 15].to_vec();
+                bytes[0x200 + 0xb00..0x200 + 0xb00 + 15].copy_from_slice(&reg);
+            }
+            3 => budget.work_bytes = 1,
+            4 => budget.registration_candidates = 1,
+            _ => budget.image.profile_bytes = 1,
+        }
+        assert!(
+            crate::map_startup_host::NeutralRuleSet::discover_first_family(
+                &bytes,
+                discovery_origin(),
+                budget
+            )
+            .is_err(),
+            "{kind}"
+        );
+    }
+    let mut origin = discovery_origin();
+    origin.source.clear();
+    assert!(
+        crate::map_startup_host::NeutralRuleSet::discover_first_family(
+            &image,
+            origin,
+            discovery_budget()
+        )
+        .is_err()
+    );
+}

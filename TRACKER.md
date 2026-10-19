@@ -2767,3 +2767,18 @@ repeated, and the public site package was not rebuilt.
 - [ ] Other Host bootstrap inputs, mission natives, world lighting and live
   actors/controls still block a playable first chapter. MIDI/DLS decoding,
   multi-file variant selection and original audible/native behavior remain open.
+
+### 2026-10-19 — selected neutral-rule discovery
+
+- [x] Add an opt-in source-image constructor for the startup factory's six
+  first-family neutral rules. Derive encoded operands and identities, bound scan
+  work/candidates and refuse missing/ambiguous patterns. Retain approved imports.
+- [x] Native suites, strict native/WASM lint/builds, 28 existing application WASM
+  regression cases and two new discovery cases in actual WASI pass. The actual
+  Human01 context matches all six reviewed results; the discovered-rule factory
+  completes globals/config and retains 155 creation calls before the unchanged
+  `SetCampaignMenuRace` refusal. Evidence:
+  `.scratch/campaign-bootstrap-root-20261019/verification-final-0.json`.
+- [ ] Remaining Host inputs and application preparation, active native family/
+  cache behavior, later mission natives, live actors/controls and chapter fidelity
+  remain open. The first campaign is still not playable.
