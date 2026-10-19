@@ -2726,3 +2726,17 @@ repeated, and the public site package was not rebuilt.
 - [ ] First-chapter Host bootstrap, mission natives, lighting, actors/controls
   and three-target gameplay fidelity remain open. No original game or new
   rendered campaign comparison was run for this caller change.
+
+### 2026-10-19 — executed campaign sound-file preparation
+
+- [x] Load direct PCM/MP3 files from executed constructor arguments through the
+  retained session reader. Append under cumulative input bounds, preserving old
+  handles and resource buffers; refuse failed/wrong bindings before mutation.
+- [x] Native Host/application suites, 21 actual Cargo WASM cases, 25 targeted
+  WASI cases, strict native/WASM lint/builds and formatting pass. All 58 selected
+  Human01 sound inputs (23 PCM/35 MP3) load through the production source adapter
+  with matching retained byte fingerprints. Evidence:
+  `.scratch/campaign-sound-source-root-20261019/`.
+- [ ] Other Host inputs, mission initialization, world lighting, actors/controls
+  and full playability remain open. Source-input qualification is separate from
+  chapter execution, audible behavior and original-game parity.

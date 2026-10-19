@@ -287,3 +287,253 @@ pub fn cumulative_model_load_work_is_bounded_without_charging_cached_selection()
     }
     assert_eq!(selected(&mut app), [62.0, 0.875]);
 }
+
+const SOUND_SCRIPT: &str = r#"
+globals
+string folder = "Media/"
+sound first = null
+sound encoded = null
+endglobals
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+set first = CreateSound(folder + "first.audio", true, false, true, -7, 91, "Authored")
+set encoded = CreateSound(folder + "encoded.data", false, true, false, 3, 5, "Other")
+call StartSound(first)
+call StartSound(encoded)
+endfunction
+function repeat takes nothing returns sound
+return CreateSound(folder + "first.audio", false, false, false, 0, 0, "")
+endfunction
+function fresh takes nothing returns sound
+return CreateSound(folder + "later.audio", false, false, false, 0, 0, "")
+endfunction
+function absent takes nothing returns sound
+return CreateSound(folder + "missing.audio", false, false, false, 0, 0, "")
+endfunction
+function choose_sound takes string path returns sound
+return CreateSound(path, false, false, false, 0, 0, "")
+endfunction
+"#;
+
+fn waveform(sample: i16) -> Vec<u8> {
+    let mut bytes = b"RIFF".to_vec();
+    bytes.extend(38u32.to_le_bytes());
+    bytes.extend(b"WAVEfmt ");
+    bytes.extend(16u32.to_le_bytes());
+    bytes.extend(1u16.to_le_bytes());
+    bytes.extend(1u16.to_le_bytes());
+    bytes.extend(8000u32.to_le_bytes());
+    bytes.extend(16000u32.to_le_bytes());
+    bytes.extend(2u16.to_le_bytes());
+    bytes.extend(16u16.to_le_bytes());
+    bytes.extend(b"data");
+    bytes.extend(2u32.to_le_bytes());
+    bytes.extend(sample.to_le_bytes());
+    bytes
+}
+
+fn sounds() -> BTreeMap<String, Reply> {
+    BTreeMap::from([
+        ("Media/first.audio".into(), Reply::Bytes(waveform(7))),
+        (
+            "Media/encoded.data".into(),
+            Reply::Bytes(
+                include_bytes!("../../../pcx-play/tests/fixtures/synthetic-mp3/mono-xing.mp3")
+                    .to_vec(),
+            ),
+        ),
+        ("Media/later.audio".into(), Reply::Bytes(waveform(9))),
+        ("Media/missing.audio".into(), Reply::Missing),
+    ])
+}
+
+#[test]
+pub fn executed_sound_files_append_pcm_and_mp3_with_original_identity_and_cached_reads() {
+    let mut app = app();
+    let reads = deliver(&mut app, SOUND_SCRIPT, sounds(), 1);
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none()
+    );
+    let first = app
+        .world()
+        .resource::<MapScriptSession<MapStartupHost>>()
+        .global("first")
+        .unwrap();
+    let encoded = app
+        .world()
+        .resource::<MapScriptSession<MapStartupHost>>()
+        .global("encoded")
+        .unwrap();
+    let Value::Handle(first_id) = first else {
+        panic!("PCM")
+    };
+    let Value::Handle(mp3_id) = encoded else {
+        panic!("MP3")
+    };
+    {
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let host = session.host().unwrap().objects();
+        let pcm = host.file_sound_state(first_id).unwrap();
+        assert_eq!(pcm.resource.bytes(), waveform(7));
+        assert!(pcm.looping && pcm.stop_when_out_of_range);
+        assert_eq!(
+            (pcm.fade_in_rate, pcm.fade_out_rate, pcm.eax_setting),
+            (-7, 91, "Authored")
+        );
+        let origin: serde_json::Value =
+            serde_json::from_str(&pcm.resource.origin().source).unwrap();
+        assert_eq!(origin["source"]["id"], "catalog");
+        assert!(
+            origin["locator"]
+                .as_str()
+                .unwrap()
+                .ends_with("Media/first.audio")
+        );
+        let mp3 = host.file_mp3_state(mp3_id).unwrap();
+        assert_eq!(
+            mp3.resource.bytes(),
+            include_bytes!("../../../pcx-play/tests/fixtures/synthetic-mp3/mono-xing.mp3")
+        );
+        assert_eq!(mp3.resource.origin().version, "catalog supplied version");
+    }
+    let before = reads.load(std::sync::atomic::Ordering::SeqCst);
+    let repeated = call(&mut app, "repeat").unwrap();
+    assert_ne!(repeated, first);
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), before);
+    call(&mut app, "fresh").unwrap();
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), before + 1);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let host = session.host().unwrap().objects_mut();
+    assert_eq!(
+        host.file_sound_state(first_id).unwrap().resource.bytes(),
+        waveform(7)
+    );
+    assert_eq!(
+        host.file_mp3_state(mp3_id).unwrap().resource.bytes(),
+        include_bytes!("../../../pcx-play/tests/fixtures/synthetic-mp3/mono-xing.mp3")
+    );
+    assert_eq!(host.take_sound_starts().len(), 2);
+}
+
+#[test]
+pub fn failed_sound_replacement_keeps_the_prior_vm_resources_and_reader() {
+    let mut app = app();
+    deliver(&mut app, SOUND_SCRIPT, sounds(), 1);
+    let witness = app
+        .world()
+        .resource::<MapScriptSession<MapStartupHost>>()
+        .session_witness()
+        .unwrap();
+    for (index, reply) in [
+        Reply::Missing,
+        Reply::Bytes(b"not audio".to_vec()),
+        Reply::Bytes(vec![0; (16 << 20) + 1]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut next = sounds();
+        next.insert("Media/encoded.data".into(), reply);
+        next.insert("Media/later.audio".into(), Reply::Bytes(waveform(100)));
+        deliver(&mut app, SOUND_SCRIPT, next, index as u64 + 2);
+        assert!(
+            app.world()
+                .resource::<CampaignStartup>()
+                .last_error
+                .is_some()
+        );
+        assert!(std::sync::Weak::ptr_eq(
+            &witness,
+            &app.world()
+                .resource::<MapScriptSession<MapStartupHost>>()
+                .session_witness()
+                .unwrap()
+        ));
+        let Value::Handle(id) = call(&mut app, "fresh").unwrap() else {
+            panic!("sound")
+        };
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .file_sound_state(id)
+                .unwrap()
+                .resource
+                .bytes(),
+            waveform(9)
+        );
+    }
+}
+
+#[test]
+pub fn failed_sound_source_work_is_bounded_and_cached_files_do_not_charge_it() {
+    let mut app = app();
+    let reads = deliver(&mut app, SOUND_SCRIPT, sounds(), 1);
+    let before = reads.load(std::sync::atomic::Ordering::SeqCst);
+    call(&mut app, "repeat").unwrap();
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), before);
+    for _ in 0..126 {
+        assert!(call(&mut app, "absent").is_err());
+    }
+    assert_eq!(
+        reads.load(std::sync::atomic::Ordering::SeqCst),
+        before + 126
+    );
+    let error = call(&mut app, "absent").expect_err("source work cap");
+    assert!(
+        error
+            .to_string()
+            .contains("session source-load budget exhausted")
+    );
+    assert_eq!(
+        reads.load(std::sync::atomic::Ordering::SeqCst),
+        before + 126
+    );
+    assert!(call(&mut app, "repeat").is_ok());
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn browser_campaign_file_sound_gate() -> u32 {
+    executed_sound_files_append_pcm_and_mp3_with_original_identity_and_cached_reads();
+    failed_sound_replacement_keeps_the_prior_vm_resources_and_reader();
+    failed_sound_source_work_is_bounded_and_cached_files_do_not_charge_it();
+    sound_source_path_limit_refuses_before_reading_or_copying_the_path_into_an_error();
+    4
+}
+
+#[test]
+pub fn sound_source_path_limit_refuses_before_reading_or_copying_the_path_into_an_error() {
+    let mut app = app();
+    let reads = deliver(&mut app, SOUND_SCRIPT, sounds(), 1);
+    let before = reads.load(std::sync::atomic::Ordering::SeqCst);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let id = session
+        .context()
+        .unwrap()
+        .scripts
+        .program()
+        .function_id("choose_sound")
+        .unwrap();
+    let error = session
+        .call_function(id, &[Value::Str("x".repeat((16 << 10) + 1))])
+        .expect_err("source path cap");
+    let message = error.to_string();
+    assert!(message.contains("source path/identity/count budget exceeded"));
+    assert!(message.len() < 2048);
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), before);
+}

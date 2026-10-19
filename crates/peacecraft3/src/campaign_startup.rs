@@ -154,9 +154,40 @@ fn start_admitted_map(
     let result = session.replace_sequenced(
         Arc::clone(&context),
         move |ctx| {
-            let host = map_startup_host::assemble(ctx, inputs)?;
+            let mut host = map_startup_host::assemble(ctx, inputs)?;
             Ok::<_, MapStartupError>(match reader {
                 Some(reader) => {
+                    let sound_reader = Arc::clone(&reader);
+                    let sound_edition = edition.clone();
+                    let mut remaining_sounds = 128usize;
+                    // Application source/decoder limits, not authored sound settings.
+                    host.objects_mut().admit_file_sound_loader(
+                        pcx_play::file_sounds::Budget {
+                            resources: 128,
+                            resource_bytes: 16 << 20,
+                            total_bytes: 128 << 20,
+                            metadata_bytes: 1 << 20,
+                        },
+                        move |member, remaining| {
+                            remaining_sounds = remaining_sounds
+                                .checked_sub(1)
+                                .ok_or("CreateSound: session source-load budget exhausted")?;
+                            crate::campaign_assets::file_sound(
+                                &sound_reader,
+                                &sound_edition,
+                                member,
+                                remaining,
+                                pcx_play::file_sounds::Mp3Budget {
+                                    max_input_allocation_bytes: (16 << 20)
+                                        + pcx_play::mp3_frame::DECODER_RING_BYTES,
+                                    max_decoder_steps: 1 << 20,
+                                    max_packets: 1 << 16,
+                                    max_frames: 16 << 20,
+                                    max_samples: 32 << 20,
+                                },
+                            )
+                        },
+                    )?;
                     // Bound cumulative source work too; selecting an already loaded pair reads nothing.
                     let mut remaining_loads = 64usize;
                     host.with_day_night_loader(move |terrain, unit| {

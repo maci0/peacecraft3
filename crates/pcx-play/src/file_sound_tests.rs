@@ -1217,3 +1217,243 @@ fn duration_requires_admission_and_actual_vm_execution_preserves_its_last_assign
     assert_eq!(vm.host().inner().handles(), count);
     assert_eq!(vm.host().sound_duration(id).unwrap(), Some(103));
 }
+
+fn loaded_file(member: &str, bytes: &[u8], budget: Budget) -> Result<Assets, String> {
+    let mut value = input(bytes);
+    value.member = member;
+    Assets::read_encoded(&[value], budget, mp3_budget()).map_err(|e| e.to_string())
+}
+
+#[test]
+fn incremental_file_loading_keeps_old_resources_and_cached_reads() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut h = host(COMMON, "", 16)
+        .with_file_sounds(mixed_assets(), 64)
+        .unwrap();
+    let old_pcm = h.file_sound_assets().unwrap().resources()[0]
+        .bytes()
+        .as_ptr();
+    let old_mp3 = h.file_sound_assets().unwrap().mp3_resources()[0]
+        .bytes()
+        .as_ptr();
+    let counts = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::clone(&counts);
+    let limit = Budget {
+        resources: 4,
+        resource_bytes: 8192,
+        total_bytes: 16384,
+        ..budget()
+    };
+    h.admit_file_sound_loader(limit, move |member, remaining| {
+        calls.fetch_add(1, Ordering::SeqCst);
+        assert!(remaining.resources <= 2);
+        let pcm = wave();
+        loaded_file(
+            member,
+            if member.ends_with(".bin") { MPEG } else { &pcm },
+            remaining,
+        )
+    })
+    .unwrap();
+    let mut ids = Vec::new();
+    for member in [
+        r"Media\a.wav",
+        r"Media\tone.bin",
+        "new.wav",
+        "new.bin",
+        "new.wav",
+    ] {
+        let mut a = args();
+        a[0] = Value::Str(member.into());
+        let Value::Handle(id) = h.native("CreateSound", &a).unwrap() else {
+            panic!("sound")
+        };
+        ids.push(id);
+    }
+    assert_eq!(counts.load(Ordering::SeqCst), 2);
+    assert_ne!(ids[2], ids[4]);
+    assert_eq!(h.file_sound_state(ids[0]).unwrap().resource.bytes(), wave());
+    assert_eq!(h.file_mp3_state(ids[1]).unwrap().resource.bytes(), MPEG);
+    assert_eq!(
+        h.file_sound_state(ids[0])
+            .unwrap()
+            .resource
+            .bytes()
+            .as_ptr(),
+        old_pcm
+    );
+    assert_eq!(
+        h.file_mp3_state(ids[1]).unwrap().resource.bytes().as_ptr(),
+        old_mp3
+    );
+    assert_eq!(
+        h.file_sound_state(ids[2])
+            .unwrap()
+            .resource
+            .bytes()
+            .as_ptr(),
+        h.file_sound_state(ids[4])
+            .unwrap()
+            .resource
+            .bytes()
+            .as_ptr()
+    );
+    assert_eq!(
+        h.file_mp3_state(ids[3]).unwrap().resource.sha256(),
+        sha256(MPEG)
+    );
+    let mut a = args();
+    a[0] = Value::Str("over.wav".into());
+    assert!(h.native("CreateSound", &a).is_err());
+    assert_eq!(
+        counts.load(Ordering::SeqCst),
+        2,
+        "full bank refuses before source work"
+    );
+}
+
+#[test]
+fn incremental_file_loading_refuses_arguments_and_wrong_bindings_before_mutation() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut h = host(COMMON, "", 8)
+        .with_file_sounds(Assets::read(&[], budget()).unwrap(), 64)
+        .unwrap();
+    let counts = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::clone(&counts);
+    h.admit_file_sound_loader(budget(), move |member, remaining| {
+        calls.fetch_add(1, Ordering::SeqCst);
+        match member {
+            "missing" => Err("qualified source missing".into()),
+            "wrong" => loaded_file("another", &wave(), remaining),
+            "many" => Ok(mixed_assets()),
+            "malformed" => loaded_file(member, b"not audio", remaining),
+            _ => loaded_file(member, &wave(), remaining),
+        }
+    })
+    .unwrap();
+    let before = h.inner().handles();
+    for member in ["missing", "wrong", "many", "malformed"] {
+        let mut a = args();
+        a[0] = Value::Str(member.into());
+        assert!(h.native("CreateSound", &a).is_err());
+        assert!(h.file_sound_assets().unwrap().resources().is_empty());
+        assert!(h.file_sound_assets().unwrap().mp3_resources().is_empty());
+        assert_eq!(h.inner().handles(), before);
+    }
+    assert_eq!(counts.load(Ordering::SeqCst), 4);
+    for index in 0..4 {
+        let mut a = args();
+        match index {
+            0 => a[1] = Value::Int(1),
+            1 => a[6] = Value::Str("\0".into()),
+            2 => a[0] = Value::Str("\0".into()),
+            _ => a[0] = Value::Str("x".repeat(budget().metadata_bytes + 1)),
+        }
+        assert!(h.native("CreateSound", &a).is_err());
+    }
+    assert_eq!(counts.load(Ordering::SeqCst), 4);
+    assert!(h.native("CreateSound", &args()).is_ok());
+    assert_eq!(h.inner().handles(), before + 1);
+}
+
+#[test]
+fn incremental_file_bank_checks_combined_budgets_and_duplicate_names() {
+    let pcm = wave();
+    let mut next = input(&pcm);
+    next.member = "second";
+    let metadata = |i: &SoundInput<'_>| {
+        [
+            i.member,
+            i.asset.label,
+            &i.origin.source,
+            &i.origin.edition,
+            &i.origin.version,
+        ]
+        .iter()
+        .map(|s| s.len())
+        .sum::<usize>()
+    };
+    let exact = Budget {
+        resources: 2,
+        resource_bytes: pcm.len(),
+        total_bytes: pcm.len() * 2,
+        metadata_bytes: metadata(&input(&pcm)) + metadata(&next),
+    };
+    for limit in [
+        Budget {
+            resources: 1,
+            ..exact
+        },
+        Budget {
+            resource_bytes: pcm.len() - 1,
+            ..exact
+        },
+        Budget {
+            total_bytes: exact.total_bytes - 1,
+            ..exact
+        },
+        Budget {
+            metadata_bytes: exact.metadata_bytes - 1,
+            ..exact
+        },
+    ] {
+        let mut bank = assets();
+        let pointer = bank.resources()[0].bytes().as_ptr();
+        let extra = Assets::read(
+            &[SoundInput {
+                member: next.member,
+                asset: next.asset,
+                origin: next.origin.clone(),
+            }],
+            budget(),
+        )
+        .unwrap();
+        assert!(bank.append(extra, limit).is_err());
+        assert_eq!(bank.resources().len(), 1);
+        assert_eq!(bank.resources()[0].bytes().as_ptr(), pointer);
+    }
+    let mut bank = assets();
+    assert!(matches!(
+        bank.append(assets(), budget()).unwrap_err().problem,
+        Problem::Duplicate
+    ));
+    bank.append(loaded_file("second", &pcm, budget()).unwrap(), exact)
+        .unwrap();
+    let left = bank.remaining_budget(exact).unwrap();
+    assert_eq!(
+        (left.resources, left.total_bytes, left.metadata_bytes),
+        (0, 0, 0)
+    );
+}
+
+#[test]
+fn incremental_file_loader_requires_admission_and_preserves_it_on_rejection() {
+    let mut bare = host(COMMON, "", 8);
+    assert!(
+        bare.admit_file_sound_loader(budget(), |_, _| unreachable!())
+            .is_err()
+    );
+    let mut h = bare.with_file_sounds(assets(), 64).unwrap();
+    assert!(
+        h.admit_file_sound_loader(
+            Budget {
+                metadata_bytes: (isize::MAX as usize) + 1,
+                ..budget()
+            },
+            |_, _| unreachable!()
+        )
+        .is_err()
+    );
+    h.admit_file_sound_loader(budget(), |member, remaining| {
+        loaded_file(member, &wave(), remaining)
+    })
+    .unwrap();
+    assert!(
+        h.admit_file_sound_loader(budget(), |_, _| unreachable!())
+            .is_err()
+    );
+    assert!(h.native("CreateSound", &args()).is_ok());
+    let mut a = args();
+    a[0] = Value::Str("second".into());
+    assert!(h.native("CreateSound", &a).is_ok());
+}

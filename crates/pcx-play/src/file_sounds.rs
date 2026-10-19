@@ -17,6 +17,16 @@ pub struct Budget {
     /// Aggregate member names, source labels and identity fields.
     pub metadata_bytes: usize,
 }
+impl Budget {
+    fn validate(self) -> Result<(), std::alloc::LayoutError> {
+        std::alloc::Layout::array::<PcmResource>(self.resources)
+            .and_then(|_| std::alloc::Layout::array::<Mp3Resource>(self.resources))
+            .and_then(|_| std::alloc::Layout::array::<u8>(self.resource_bytes))
+            .and_then(|_| std::alloc::Layout::array::<u8>(self.total_bytes))
+            .and_then(|_| std::alloc::Layout::array::<u8>(self.metadata_bytes))?;
+        Ok(())
+    }
+}
 #[derive(Debug, thiserror::Error)]
 #[error("sound file {source_context}: {problem}")]
 pub struct Error {
@@ -102,11 +112,8 @@ impl Assets {
             source_context: source.into(),
             problem,
         };
-        std::alloc::Layout::array::<PcmResource>(budget.resources)
-            .and_then(|_| std::alloc::Layout::array::<Mp3Resource>(budget.resources))
-            .and_then(|_| std::alloc::Layout::array::<u8>(budget.resource_bytes))
-            .and_then(|_| std::alloc::Layout::array::<u8>(budget.total_bytes))
-            .and_then(|_| std::alloc::Layout::array::<u8>(budget.metadata_bytes))
+        budget
+            .validate()
             .map_err(|_| fail("selected file sounds", Problem::Budget))?;
         if inputs.len() > budget.resources {
             return Err(fail("selected file sounds", Problem::Budget));
@@ -209,6 +216,109 @@ impl Assets {
     pub(crate) fn path_limit(&self) -> usize {
         self.path_limit
     }
+
+    pub(crate) fn find(&self, member: &str) -> Option<(usize, bool)> {
+        self.resources
+            .iter()
+            .position(|r| r.member() == member)
+            .map(|i| (i, false))
+            .or_else(|| {
+                self.mp3
+                    .iter()
+                    .position(|r| r.member() == member)
+                    .map(|i| (i, true))
+            })
+    }
+
+    fn bindings(&self) -> impl Iterator<Item = (&str, &str, &AssetIdentity, &[u8])> {
+        self.resources
+            .iter()
+            .map(|r| (r.member(), r.source_label(), r.origin(), r.bytes()))
+            .chain(
+                self.mp3
+                    .iter()
+                    .map(|r| (r.member(), r.source_label(), r.origin(), r.bytes())),
+            )
+    }
+
+    pub(crate) fn remaining_budget(&self, budget: Budget) -> Result<Budget, Error> {
+        let (count, total, metadata) = retained_budget(self.bindings(), budget)?;
+        Ok(Budget {
+            resources: budget.resources - count,
+            resource_bytes: budget.resource_bytes.min(budget.total_bytes - total),
+            total_bytes: budget.total_bytes - total,
+            metadata_bytes: budget.metadata_bytes - metadata,
+        })
+    }
+
+    pub(crate) fn admit_budget(&mut self, budget: Budget) -> Result<(), Error> {
+        self.remaining_budget(budget)?;
+        self.path_limit = budget.metadata_bytes;
+        Ok(())
+    }
+
+    /// Keep both codec index spaces stable for already-issued sound handles.
+    pub(crate) fn append(&mut self, mut next: Self, budget: Budget) -> Result<(), Error> {
+        retained_budget(self.bindings().chain(next.bindings()), budget)?;
+        if next
+            .bindings()
+            .any(|(member, ..)| self.find(member).is_some())
+        {
+            return Err(Error {
+                source_context: "selected file sounds".into(),
+                problem: Problem::Duplicate,
+            });
+        }
+        self.resources
+            .try_reserve(next.resources.len())
+            .and_then(|_| self.mp3.try_reserve(next.mp3.len()))
+            .map_err(|_| Error {
+                source_context: "selected file sounds".into(),
+                problem: Problem::Budget,
+            })?;
+        self.resources.append(&mut next.resources);
+        self.mp3.append(&mut next.mp3);
+        self.path_limit = budget.metadata_bytes;
+        Ok(())
+    }
+}
+
+fn retained_budget<'a>(
+    bindings: impl Iterator<Item = (&'a str, &'a str, &'a AssetIdentity, &'a [u8])>,
+    budget: Budget,
+) -> Result<(usize, usize, usize), Error> {
+    let fail = || Error {
+        source_context: "selected file sounds".into(),
+        problem: Problem::Budget,
+    };
+    budget.validate().map_err(|_| fail())?;
+    let (mut count, mut total, mut metadata) = (0usize, 0usize, 0usize);
+    for (member, label, origin, bytes) in bindings {
+        count = count
+            .checked_add(1)
+            .filter(|&n| n <= budget.resources)
+            .ok_or_else(fail)?;
+        if bytes.len() > budget.resource_bytes {
+            return Err(fail());
+        }
+        total = total
+            .checked_add(bytes.len())
+            .filter(|&n| n <= budget.total_bytes)
+            .ok_or_else(fail)?;
+        for field in [
+            member,
+            label,
+            &origin.source,
+            &origin.edition,
+            &origin.version,
+        ] {
+            metadata = metadata
+                .checked_add(field.len())
+                .filter(|&n| n <= budget.metadata_bytes)
+                .ok_or_else(fail)?;
+        }
+    }
+    Ok((count, total, metadata))
 }
 #[cfg(test)]
 #[path = "file_sound_tests.rs"]

@@ -64,6 +64,8 @@ pub enum Failure {
     MissingSoundLabel(String),
     #[error("sound file is not admitted: {0}")]
     MissingSoundFile(String),
+    #[error("sound file source: {0}")]
+    SoundSource(String),
     #[error("enumerand {0} is outside this native's admitted source domain")]
     OutsideDomain(i32),
     #[error("unsupported closed integer expression: {0}")]

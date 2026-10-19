@@ -112,3 +112,49 @@ imports. The two export masks are `16777215` and `511`. Commands, rejected priva
 harness compiles and corrected results stay local in `.scratch/sound-setup-root/`.
 No playback device, browser audio, default launcher or native-runtime proof is
 claimed; no original payload is committed or uploaded.
+
+## Executed-path source loading
+
+`ObjectHost::admit_file_sound_loader` optionally supplies missing exact filename
+bindings after ordinary argument validation. It requires prior file-sound
+admission, validates the existing bank against its aggregate budget, and refuses
+duplicate loader admission. The callback receives remaining resource, input-byte
+and metadata capacity. A full bank refuses before invoking it. A successful
+callback must return exactly the requested binding; append validates the combined
+bank before mutation. Existing PCM/MP3 index spaces and retained byte buffers stay
+stable. Cached filenames allocate a new sound identity without reading or decoding
+the source again. Explicit banks without a loader keep their existing contract.
+
+Campaign startup installs this callback on its exact retained binding reader.
+Executed filenames, including computed strings, determine source lookup. Full
+resolver provenance, selected edition, supplied version (or explicit unversioned
+identity), original bytes and codec reports accompany each binding. Missing,
+malformed or oversized input refuses; a failed replacement keeps the prior VM and
+its original source reader. No chapter-specific file list, silence or transcoding
+is substituted. Label constructors and parameter tables remain separate inputs.
+
+The application policy allows 128 source attempts, 128 retained file bindings,
+16 MiB per member, 128 MiB aggregate input and 1 MiB aggregate metadata. Adapter
+identity formatting is capped at 16 KiB. MP3 inspection has explicit input-copy,
+decoder-step, packet, frame and sample limits. These bounds are resource policies,
+not game values or total heap bounds. Failed source attempts consume work;
+cached bindings do not. No effective fades/EAX, native decoder equality or
+audibility is established by source loading.
+
+The new Host/factory cases check mixed-codec append, stable old byte buffers and
+identities, cache reuse, cumulative input limits, wrong loader bindings, invalid
+arguments, bounded diagnostics, failed source work and the retained reader after
+a refused replacement. Native Host/application suites, 21 actual Cargo WASM cases,
+25 targeted WASI cases, strict native/WASM lint/builds and formatting pass. The
+first strict check rejected a test assertion idiom; its corrected candidate and
+the failed receipt are retained separately.
+
+A source-only check derives the direct file arguments from the local Human01
+`InitSounds` AST and reads all 58 members through this production adapter: 23
+PCM and 35 MP3. All member lengths and SHA-256 values match the retained earlier
+source receipts. The map, codec PE and four selected archive fingerprints stay
+unchanged across the check. Archive mount order is an explicit lookup policy;
+native winners and release equivalence are unestablished. The two lighting inputs
+also pass the shared identity adapter. No original bytes are saved or published,
+and no chapter or original game is run. Evidence:
+`.scratch/campaign-sound-source-root-20261019/`.

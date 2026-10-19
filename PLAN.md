@@ -1290,6 +1290,11 @@ Executed day/night model arguments can now prepare their lighting inputs through
 the session's retained source reader, with no chapter-specific model list.
 Other automatic Host inputs, world lighting, actors and controls remain open.
 
+Direct sound files can also load on executed `CreateSound` calls through the
+session reader. PCM and MP3 bindings append under aggregate input limits, keeping
+earlier handles and bytes stable. This does not prepare label/parameter banks or
+the remaining Host inputs, and does not establish audible or native behavior.
+
 The launcher supplies explicit ground read/texture resource ceilings for each
 successfully delivered binding. Its existing terrain publisher can now mount
 the selected ground without a separate budget producer; failed loads preserve

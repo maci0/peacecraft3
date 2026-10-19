@@ -1,11 +1,13 @@
 use super::{Entry, Error, Failure, ObjectHost};
-use crate::file_sounds::{Assets, Mp3Resource};
+use crate::file_sounds::{Assets, Budget, Mp3Resource};
 use crate::label_sounds::PcmResource;
 use pcx_script::{HandleId, Value};
 pub(super) struct State {
     assets: Assets,
     eax_bytes: usize,
+    loader: Option<(FileSoundLoader, Budget)>,
 }
+type FileSoundLoader = Box<dyn FnMut(&str, Budget) -> Result<Assets, String> + Send + Sync>;
 /// Exact creation inputs, without effective fade/channel/EAX or playback guesses.
 #[derive(Debug)]
 pub struct FileSoundState<'a, R = PcmResource> {
@@ -43,8 +45,34 @@ impl ObjectHost {
         self.file_sounds = Some(State {
             assets,
             eax_bytes: max_eax_bytes,
+            loader: None,
         });
         Ok(self)
+    }
+    /// Load missing executed filenames; existing resources and identities stay in place.
+    /// The loader receives the bank's remaining input budget. It must return exactly
+    /// the requested binding. Decoder work and source-read attempts also need bounds.
+    pub fn admit_file_sound_loader(
+        &mut self,
+        budget: Budget,
+        loader: impl FnMut(&str, Budget) -> Result<Assets, String> + Send + Sync + 'static,
+    ) -> Result<(), Error> {
+        let fail = |reason| self.inner.error("CreateSound", reason);
+        let state = self
+            .file_sounds
+            .as_mut()
+            .ok_or_else(|| fail(Failure::SoundState("file sounds not admitted")))?;
+        if state.loader.is_some() {
+            return Err(fail(Failure::SoundState(
+                "file sound loader already admitted",
+            )));
+        }
+        state
+            .assets
+            .admit_budget(budget)
+            .map_err(|error| fail(Failure::SoundSource(error.to_string())))?;
+        state.loader = Some((Box::new(loader), budget));
+        Ok(())
     }
     pub fn file_sound_assets(&self) -> Option<&Assets> {
         Some(&self.file_sounds.as_ref()?.assets)
@@ -137,7 +165,7 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
-        let state = self.file_sounds.as_ref()?;
+        let state = self.file_sounds.as_mut()?;
         if name != "CreateSound" {
             return None;
         }
@@ -160,27 +188,45 @@ impl ObjectHost {
             if member.len() > state.assets.path_limit() || eax.len() > state.eax_bytes {
                 return Err(fail(Failure::Budget("file sound text")));
             }
-            if eax.contains('\0') {
+            if member.contains('\0') || eax.contains('\0') {
                 return Err(fail(Failure::SoundState(
-                    "embedded NUL in EAX text is unsupported",
+                    "embedded NUL in filename or EAX text is unsupported",
                 )));
             }
-            let (resource, mp3) = if let Some(index) = state
-                .assets
-                .resources()
-                .iter()
-                .position(|r| r.member() == member)
-            {
-                (index, false)
-            } else if let Some(index) = state
-                .assets
-                .mp3_resources()
-                .iter()
-                .position(|r| r.member() == member)
-            {
-                (index, true)
-            } else {
-                return Err(fail(Failure::MissingSoundFile(member.clone())));
+            let (resource, mp3) = match state.assets.find(member) {
+                Some(binding) => binding,
+                None => {
+                    let Some((loader, budget)) = &mut state.loader else {
+                        return Err(fail(Failure::MissingSoundFile(member.clone())));
+                    };
+                    let remaining = state
+                        .assets
+                        .remaining_budget(*budget)
+                        .map_err(|error| fail(Failure::SoundSource(error.to_string())))?;
+                    if remaining.resources == 0
+                        || remaining.total_bytes == 0
+                        || remaining.metadata_bytes == 0
+                    {
+                        return Err(fail(Failure::Budget("file sound bank")));
+                    }
+                    let next = loader(member, remaining)
+                        .map_err(|error| fail(Failure::SoundSource(error)))?;
+                    if next.resources().len() + next.mp3_resources().len() != 1
+                        || next.find(member).is_none()
+                    {
+                        return Err(fail(Failure::SoundState(
+                            "loader must return exactly the requested file",
+                        )));
+                    }
+                    state
+                        .assets
+                        .append(next, *budget)
+                        .map_err(|error| fail(Failure::SoundSource(error.to_string())))?;
+                    state
+                        .assets
+                        .find(member)
+                        .ok_or_else(|| fail(Failure::MissingSoundFile(member.clone())))?
+                }
             };
             let mut eax_setting = String::new();
             eax_setting

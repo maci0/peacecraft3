@@ -34,26 +34,8 @@ pub(crate) fn day_night(
         remaining = remaining.checked_sub(asset.bytes.len()).ok_or_else(|| {
             format!("SetDayNightModels {path}: aggregate source byte budget exceeded")
         })?;
-        // Bound identity formatting too; these are adapter-supplied strings.
-        let source = &asset.provenance.source;
-        let identity_bytes = [&source.id, &source.origin, &asset.provenance.locator]
-            .iter()
-            .try_fold(0usize, |size, value| size.checked_add(value.len()))
-            .and_then(|size| size.checked_add(source.version.as_ref().map_or(0, String::len)));
-        if identity_bytes.is_none_or(|bytes| bytes > budget.path_bytes) {
-            return Err(format!(
-                "SetDayNightModels {path}: source identity budget exceeded"
-            ));
-        }
-        let label = format!("{}::{}", source.origin, asset.provenance.locator);
-        let origin = AssetIdentity {
-            edition: edition.to_owned(),
-            version: source
-                .version
-                .clone()
-                .unwrap_or_else(|| "unversioned source".into()),
-            source: serde_json::to_string(&asset.provenance).map_err(|error| error.to_string())?,
-        };
+        let (label, origin) = identity(&asset, edition, budget.path_bytes)
+            .map_err(|error| format!("SetDayNightModels {path}: {error}"))?;
         loaded.push((asset, label, origin));
     }
     let inputs: Vec<_> = paths
@@ -69,4 +51,62 @@ pub(crate) fn day_night(
         })
         .collect();
     Assets::read(&inputs, budget).map_err(|error| format!("SetDayNightModels: {error}"))
+}
+
+pub(crate) fn file_sound(
+    reader: &Resolver,
+    edition: &str,
+    member: &str,
+    budget: pcx_play::file_sounds::Budget,
+    mp3: pcx_play::file_sounds::Mp3Budget,
+) -> Result<pcx_play::file_sounds::Assets, String> {
+    // Application metadata cap also bounds adapter identity formatting before copies.
+    let metadata = budget.metadata_bytes.min(16 << 10);
+    if member.len() > metadata || edition.len() > metadata || budget.resources == 0 {
+        return Err("CreateSound: source path/identity/count budget exceeded".into());
+    }
+    let asset = reader
+        .resolve_bounded(member, budget.resource_bytes.min(budget.total_bytes) as u64)
+        .map_err(|error| format!("CreateSound {member}: {error}"))?;
+    let (label, origin) = identity(&asset, edition, metadata)
+        .map_err(|error| format!("CreateSound {member}: {error}"))?;
+    pcx_play::file_sounds::Assets::read_encoded(
+        &[pcx_play::file_sounds::SoundInput {
+            member,
+            asset: ScriptAsset {
+                label: &label,
+                bytes: &asset.bytes,
+            },
+            origin,
+        }],
+        budget,
+        mp3,
+    )
+    .map_err(|error| format!("CreateSound {member}: {error}"))
+}
+
+fn identity(
+    asset: &pcx_assets::ResolvedAsset,
+    edition: &str,
+    limit: usize,
+) -> Result<(String, AssetIdentity), String> {
+    let source = &asset.provenance.source;
+    let bytes = [&source.id, &source.origin, &asset.provenance.locator]
+        .iter()
+        .try_fold(0usize, |size, value| size.checked_add(value.len()))
+        .and_then(|size| size.checked_add(source.version.as_ref().map_or(0, String::len)));
+    if edition.len() > limit || bytes.is_none_or(|bytes| bytes > limit) {
+        return Err("source identity budget exceeded".into());
+    }
+    Ok((
+        format!("{}::{}", source.origin, asset.provenance.locator),
+        AssetIdentity {
+            edition: edition.to_owned(),
+            version: source
+                .version
+                .clone()
+                .unwrap_or_else(|| "unversioned source".into()),
+            source: serde_json::to_string(&asset.provenance).map_err(|error| error.to_string())?,
+        },
+    ))
 }

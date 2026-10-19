@@ -76,6 +76,7 @@ bank provenance, preflight-before-decode failures, codec limits, PCM API retenti
 and a real VM retaining an MP3's parameters, duration and queued start after a
 later unsupported native. Strict native/WASM checks are distinct from playback.
 
-The launcher still needs its automatic source-bank preparation and composed
-gameplay Host. The browser playback dependency, device output, native decoder/
+Campaign startup now attaches executed direct-file source loading; automatic
+label/parameter banks and the other Host inputs remain open. The browser playback
+dependency, device output, native decoder/
 gapless behavior, 3D effects and complete campaign remain unverified.
