@@ -194,6 +194,11 @@ impl ObjectHost {
     fn create_destructable(&mut self, index: usize, args: &[Value]) -> Result<Value, Error> {
         let shape = &SHAPES[index];
         let fail = |reason| self.inner.error(shape.name, reason);
+        if self.unit_placement.is_some() {
+            return Err(fail(Failure::DestructableState(
+                "stationary collision cache must be rebuilt before creating destructables",
+            )));
+        }
         let creation = creation_from(shape, args).map_err(fail)?;
         let (records, max_records) = {
             let admitted = self

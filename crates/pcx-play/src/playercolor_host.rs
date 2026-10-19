@@ -96,6 +96,8 @@ pub enum Failure {
     DestructableState(&'static str),
     #[error("unit creation: {0}")]
     UnitState(&'static str),
+    #[error("unit placement: {0}")]
+    UnitPlacement(String),
     #[error("item creation: {0}")]
     ItemState(&'static str),
     #[error("item catalog {requested:?}: {problem:?}")]

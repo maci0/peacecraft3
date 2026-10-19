@@ -12,7 +12,7 @@ arena. Only zero-argument functions returning scalar boolean are supported.
 Callback validation, the caller wrapper bound and shared arena capacity precede
 allocation. Failed calls leave prior records and tokens unchanged. Each successful
 call currently issues one token; native repeated-code identity/caching remains an
-explicit fidelity question. Wrappers live until Host/session drop. Destruction
+explicit fidelity question. Wrappers live until Host/session drop. Non-null destruction
 and other boolean-expression constructors/operators remain unsupported.
 
 Creation does not run the predicate. `filter_callback` borrows its id, name,
@@ -44,11 +44,19 @@ extra authored ancestry edge. Exceptional native inputs are not established by
 these contract tests. Native and actual WASI run the same tests.
 
 Predicate candidate context, `GetFilterUnit`, enumeration and trigger-condition
-delivery remain open. The first later source consumer is
+delivery remain open. A later source consumer is
 `GroupEnumUnitsInRangeOfLoc` in `IssueHauntOrderAtLocBJ`. `GetUnitTypeId` now
-returns the rawcode of an admitted `CreateUnit` record; group enumeration and
+returns the rawcode of an admitted `CreateUnit` record; filtered group enumeration and
 predicate context remain unimplemented. Wrapper retention does not implement
 those operations or the application gameplay Host factory.
 
 The subsequent [explicit force slice](script-force-memberships.md) now passes
 that constructor boundary. Predicate contexts remain unsupported.
+
+
+The later [creation-placement slice](script-unit-world.md#creation-placement-on-executed-identities-2026-10-19)
+now admits `DestroyBoolExpr(null)` when its optional declaration matches the
+filter source and signature. This is a no-op on existing wrappers and arena
+capacity. Non-null inputs still refuse. The actual Human01 frontier is now the
+owner-filtered rectangle helper, which needs a candidate context on the same VM;
+null cleanup does not implement predicate execution or wrapper destruction.

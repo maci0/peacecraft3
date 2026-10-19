@@ -28,6 +28,7 @@ pub struct ObjectHost {
     startup_clock: Option<clock::StartupClockState>,
     numeric: Option<crate::script_numeric::NumericPolicy>,
     terrain_pathing: Option<crate::terrain_pathing::TerrainPathing>,
+    unit_placement: Option<crate::unit_placement::Placement>,
     map_music: Option<music::State>,
     quests: Option<crate::quest_session::QuestSession>,
     game_caches: Option<game_caches::State>,
@@ -88,6 +89,7 @@ impl ObjectHost {
             startup_clock: None,
             numeric: None,
             terrain_pathing: None,
+            unit_placement: None,
             map_music: None,
             quests: None,
             game_caches: None,
@@ -517,6 +519,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.unit_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.unit_position_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.item_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -638,6 +643,9 @@ pub use destructables::{DestructableBudget, DestructableCreation};
 #[path = "unit_host.rs"]
 mod unit_creation;
 pub use unit_creation::{ExecutedUnit, ExecutedUnitState, UnitBudget, UnitStateBudget};
+
+#[path = "unit_position_host.rs"]
+mod unit_positions;
 
 #[path = "item_host.rs"]
 mod item_creation;

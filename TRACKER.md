@@ -2938,10 +2938,10 @@ repeated, and the public site package was not rebuilt.
   coordinate explains the observed fractional loss through real-arithmetic
   cancellation. A synthetic regression preserves that loss; production native
   and WASI arithmetic match all captured stored/reconstructed axis words.
-- [ ] The live world still needs accepted collision placement, occupancy and
-  rectangle enumeration on the same executed handles. No measured coordinate
-  constant or quarter-floor shortcut is added. Human01 still stops at rectangle
-  enumeration and is not playable. See
+- [~] The creation-position and null-filter rectangle slice now uses the same
+  executed handles, as recorded below. Live updates, filtered enumeration and
+  ordinary campaign world assembly remain open. No measured coordinate constant
+  or quarter-floor shortcut is added. Human01 is not playable. See
   [creation-position cancellation](docs/re-notes/script-unit-world.md#creation-position-cancellation-2026-10-19).
 
 
@@ -2956,8 +2956,25 @@ repeated, and the public site package was not rebuilt.
   authored starting-forces rectangle. The corrected private startup verifier
   supplies and forwards the selected numeric policy and matches all 155 exact
   coordinate pairs; the former host-arithmetic run matched only 80.
-- [ ] Integrate accepted positions and mutable occupancy on the actual shared
-  handles, then implement faithful enumeration and its ordering/filter behavior.
-  This remains an initialization candidate, with geometry boundary cases and
-  later mutation open. Human01 is not playable. See
+- [~] Creation-time accepted positions and occupancy now use the actual shared
+  handles through explicit admission. Filter/order equivalence, geometry boundary
+  cases, ordinary world assembly and later mutation remain open. Human01 is not playable. See
   [full creation-stream replay](docs/re-notes/script-unit-world.md#full-creation-stream-and-rectangle-caller-2026-10-19).
+
+
+### 2026-10-19 — accepted creation positions and startup rectangles
+
+- [x] An explicit initialization cache now stamps successful births and stores
+  accepted coordinates on the existing unit handle. Source windows supply
+  geometry operands; failed placement/allocation leaves occupancy unchanged.
+  The actual native Host matches all 155 retained original creation positions.
+- [x] Four null-filter rectangle helpers now complete, including their
+  source-qualified null boolean-expression cleanup. The starting group retains
+  the authored Arthas identity. Native 529 tests, actual WASI twelve tests,
+  strict native/browser lint and both application library builds passed.
+- [ ] Filtered rectangle queries require candidate context and predicate calls
+  on the actual owned VM. `GetUnitsInRectOfPlayer` is the current refusal.
+  Creation-only occupancy, static-cache assembly, movement/removal/death,
+  native ordering/boundary/failure behavior and rendered parity remain open.
+  Human01 is not playable; the broader original baseline gate is unchanged.
+  See [creation placement](docs/re-notes/script-unit-world.md#creation-placement-on-executed-identities-2026-10-19).

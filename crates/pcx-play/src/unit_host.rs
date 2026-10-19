@@ -83,6 +83,9 @@ pub struct ExecutedUnit {
     pub source: Source,
     pub x: f32,
     pub y: f32,
+    /// Accepted world position on this same handle, when creation placement is admitted.
+    /// `x` and `y` remain the executed request.
+    pub position: Option<[f32; 2]>,
     pub face: f32,
     /// Executed `SetUnitAcquireRange` real. `None` means the native has not
     /// run for this handle. `Some(0.0)` is an executed zero, not that absence.
@@ -142,6 +145,12 @@ pub(super) struct Admission {
     unit_state: Option<UnitStateLimits>,
     /// Present after [`ObjectHost::with_defend_ability`].
     order: Option<DefendAbility>,
+}
+
+impl Admission {
+    pub(super) fn source(&self) -> &Source {
+        &self.source
+    }
 }
 
 impl ObjectHost {
@@ -833,6 +842,7 @@ impl ObjectHost {
                 source,
                 x,
                 y,
+                position: None,
                 face,
                 acquire_range: None,
                 requested_hero_level: None,
@@ -841,7 +851,18 @@ impl ObjectHost {
                 admitted_order,
             }
         };
+        let mut record = record;
+        let placement = self.prepare_unit_position(&record)?;
+        if let Some(prepared) = &placement {
+            record.position = Some(prepared.position);
+        }
         let id = self.inner.allocate(Entry::Unit { record }, NATIVE)?;
+        if let Some(prepared) = placement {
+            self.unit_placement
+                .as_mut()
+                .expect("admitted placement")
+                .commit(prepared);
+        }
         let admitted = self
             .units
             .as_mut()

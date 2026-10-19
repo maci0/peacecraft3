@@ -2253,3 +2253,225 @@ fn collision_query_refuses_missing_ambiguous_and_unusable_geometry() {
         assert_eq!(session.hits.load(Ordering::SeqCst), 1);
     }
 }
+
+fn position_host(queries: usize, memberships: usize) -> ObjectHost {
+    let mut extra = String::from(
+        "type rect extends agent\ntype group extends agent\ntype boolexpr extends agent\ntype destructable extends widget\nnative CreateDestructable takes integer id, real x, real y, real face, real scale, integer variation returns destructable\n",
+    );
+    for (name, args, result, constant) in [
+        ("GetUnitX", "unit u", "real", true),
+        ("GetUnitY", "unit u", "real", true),
+        (
+            "GroupEnumUnitsInRect",
+            "group g, rect r, boolexpr b",
+            "nothing",
+            false,
+        ),
+        ("CreateGroup", "nothing", "group", false),
+        ("DestroyGroup", "group g", "nothing", false),
+        ("GroupClear", "group g", "nothing", false),
+        ("FirstOfGroup", "group g", "unit", false),
+        ("GroupAddUnit", "group g, unit u", "nothing", false),
+        ("GroupRemoveUnit", "group g, unit u", "nothing", false),
+        ("IsUnitInGroup", "unit u, group g", "boolean", true),
+        ("Rect", "real a, real b, real c, real d", "rect", false),
+        ("RemoveRect", "rect r", "nothing", false),
+        (
+            "SetRect",
+            "rect r, real a, real b, real c, real d",
+            "nothing",
+            false,
+        ),
+        ("MoveRectTo", "rect r, real x, real y", "nothing", false),
+        ("GetRectCenterX", "rect r", "real", false),
+        ("GetRectCenterY", "rect r", "real", false),
+        ("GetRectMinX", "rect r", "real", false),
+        ("GetRectMinY", "rect r", "real", false),
+        ("GetRectMaxX", "rect r", "real", false),
+        ("GetRectMaxY", "rect r", "real", false),
+    ] {
+        extra.push_str(&format!(
+            "{}native {name} takes {args} returns {result}\n",
+            if constant { "constant " } else { "" }
+        ));
+    }
+    let common = script_common_with("widget", true, &extra);
+    let ctx = context(
+        300,
+        &common,
+        "function main takes nothing returns nothing\nendfunction\n",
+        "unit-catalog",
+    );
+    let mut fields = BTreeMap::new();
+    fields.insert(*b"G001", geometry_field(Ok(FieldValue::Cell("2".into()))));
+    for (id, column, value) in [(*b"M001", "movetp", "foot"), (*b"P001", "pathTex", "_")] {
+        let mut field = geometry_field(Ok(FieldValue::Cell(value.into())));
+        let meta = field.metadata.as_mut().unwrap();
+        meta.fourcc = id;
+        meta.field = column.into();
+        meta.kind = FieldKind::Token;
+        meta.source = FieldSource::Column {
+            slk: SlkId::UnitData,
+            column: column.into(),
+        };
+        fields.insert(id, field);
+    }
+    let catalog: Arc<dyn ObjectCatalog + Send + Sync> = Arc::new(GeometryCatalog {
+        fields,
+        hits: Arc::new(AtomicUsize::new(0)),
+    });
+    let mut host = object(&ctx, 128)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(catalog, source(), limits(8))
+        .unwrap()
+        .with_groups(memberships)
+        .unwrap()
+        .with_rectangles()
+        .unwrap()
+        .with_destructables(crate::playercolor_host::DestructableBudget { max_records: 2 })
+        .unwrap();
+    host.admit_unit_placement(crate::unit_placement::tests::placement(source(), queries))
+        .unwrap();
+    host
+}
+
+fn position_create(host: &mut ObjectHost, x: f32, y: f32) -> Result<Value, String> {
+    let owner = host.native("Player", &[Value::Int(4)]).unwrap();
+    host.native(
+        "CreateUnit",
+        &[
+            owner,
+            Value::Int(i32::from_be_bytes(*b"hfoo")),
+            Value::Real(x),
+            Value::Real(y),
+            Value::Real(0.0),
+        ],
+    )
+}
+
+#[test]
+fn accepted_positions_and_rectangle_members_use_the_executed_unit_handle() {
+    let mut host = position_host(100, 8);
+    let first = position_create(&mut host, 32.0005, 32.0).unwrap();
+    let second = position_create(&mut host, 32.0005, 32.0).unwrap();
+    let Value::Handle(id) = second else {
+        panic!("unit");
+    };
+    let unit = host.executed_unit(id).unwrap();
+    assert_eq!(unit.x, 32.0005);
+    assert_ne!(unit.position, Some([unit.x, unit.y]));
+    let [x, y] = unit.position.unwrap();
+    assert_eq!(
+        host.native("GetUnitX", std::slice::from_ref(&second))
+            .unwrap(),
+        Value::Real(x)
+    );
+    assert_eq!(
+        host.native("GetUnitY", std::slice::from_ref(&second))
+            .unwrap(),
+        Value::Real(y)
+    );
+    let rect = host
+        .native(
+            "Rect",
+            &[
+                Value::Real(x - 0.125),
+                Value::Real(y - 0.125),
+                Value::Real(x + 0.125),
+                Value::Real(y + 0.125),
+            ],
+        )
+        .unwrap();
+    let group = host.native("CreateGroup", &[]).unwrap();
+    host.native(
+        "GroupEnumUnitsInRect",
+        &[group.clone(), rect.clone(), Value::Null],
+    )
+    .unwrap();
+    assert_eq!(
+        host.native("FirstOfGroup", std::slice::from_ref(&group))
+            .unwrap(),
+        second
+    );
+    assert_eq!(
+        host.native("IsUnitInGroup", &[first, group.clone()])
+            .unwrap(),
+        Value::Bool(false)
+    );
+    let before = host.memberships();
+    assert!(
+        host.native("GroupEnumUnitsInRect", &[group.clone(), rect, Value::Null])
+            .is_err()
+    );
+    assert_eq!(host.memberships(), before);
+    assert!(
+        host.admit_unit_placement(crate::unit_placement::tests::placement(source(), 100))
+            .is_err()
+    );
+}
+
+#[test]
+fn failed_creation_and_rectangle_budget_leave_arena_and_members_unchanged() {
+    let mut host = position_host(1, 1);
+    let first = position_create(&mut host, 32.0, 32.0).unwrap();
+    let handles = host.inner().handles();
+    assert!(
+        position_create(&mut host, 32.0, 32.0)
+            .unwrap_err()
+            .contains("query budget")
+    );
+    assert_eq!(host.inner().handles(), handles);
+    assert!(
+        host.native(
+            "CreateDestructable",
+            &[
+                Value::Int(i32::from_be_bytes(*b"D001")),
+                Value::Real(32.0),
+                Value::Real(32.0),
+                Value::Real(0.0),
+                Value::Real(1.0),
+                Value::Int(0)
+            ]
+        )
+        .unwrap_err()
+        .contains("stationary collision cache")
+    );
+    assert_eq!(host.inner().handles(), handles);
+    let second = position_create(&mut host, 64.0, 64.0).unwrap();
+    assert_ne!(first, second);
+    let rect = host
+        .native(
+            "Rect",
+            &[
+                Value::Real(0.0),
+                Value::Real(0.0),
+                Value::Real(100.0),
+                Value::Real(100.0),
+            ],
+        )
+        .unwrap();
+    let group = host.native("CreateGroup", &[]).unwrap();
+    let handles = host.inner().handles();
+    assert!(
+        host.native(
+            "GroupEnumUnitsInRect",
+            &[group.clone(), rect.clone(), Value::Null]
+        )
+        .unwrap_err()
+        .contains("group membership")
+    );
+    assert_eq!(host.memberships(), 0);
+    assert_eq!(host.inner().handles(), handles);
+    assert!(
+        host.native(
+            "GroupEnumUnitsInRect",
+            &[group.clone(), rect, second.clone()]
+        )
+        .is_err()
+    );
+    assert_eq!(host.memberships(), 0);
+    host.native("GroupAddUnit", &[group.clone(), first])
+        .unwrap();
+    assert_ne!(host.native("FirstOfGroup", &[group]).unwrap(), second);
+}

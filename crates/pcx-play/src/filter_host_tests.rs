@@ -228,3 +228,45 @@ fn admission_checks_loaded_interface_and_ancestry_sources_without_copying_edges(
             .is_err()
     );
 }
+
+#[test]
+fn null_boolean_expression_cleanup_preserves_wrappers_and_requires_its_source_declaration() {
+    let common = COMMON.replace(
+        "native DestroyFilter",
+        "native DestroyBoolExpr takes boolexpr b returns nothing\nnative DestroyFilter",
+    );
+    let mut h = ObjectHost::checked(enums(&common, MAP, 8))
+        .unwrap()
+        .with_filters(FilterBudget { max_records: 2 })
+        .unwrap();
+    let callback = h.inner.program.function_id("TruePred").unwrap();
+    let wrapper = h.native("Filter", &[Value::Code(callback)]).unwrap();
+    let before = h.inner().handles();
+    for _ in 0..2 {
+        assert_eq!(
+            h.native("DestroyBoolExpr", &[Value::Null]).unwrap(),
+            Value::Null
+        );
+    }
+    assert_eq!(h.inner().handles(), before);
+    assert!(
+        h.native("DestroyBoolExpr", std::slice::from_ref(&wrapper))
+            .is_err()
+    );
+    assert_eq!(h.filter_callback(id(&wrapper)).unwrap().function, callback);
+    assert!(
+        host(8, 2)
+            .native("DestroyBoolExpr", &[Value::Null])
+            .is_err()
+    );
+    let wrong = common.replace(
+        "DestroyBoolExpr takes boolexpr b",
+        "DestroyBoolExpr takes integer b",
+    );
+    assert!(
+        ObjectHost::checked(enums(&wrong, MAP, 8))
+            .unwrap()
+            .with_filters(FilterBudget { max_records: 2 })
+            .is_err()
+    );
+}

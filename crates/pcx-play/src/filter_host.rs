@@ -24,6 +24,7 @@ pub struct FilterCallback<'a> {
 pub(super) struct Admission {
     max_records: usize,
     retained: usize,
+    destroy_null: bool,
 }
 impl ObjectHost {
     /// Admit the loaded `code -> filterfunc` interface and its authored ancestry.
@@ -87,9 +88,40 @@ impl ObjectHost {
         if kind != "handle" {
             return Err(fail(Failure::Signature));
         }
+        let destroy_null = if self
+            .inner
+            .program
+            .natives()
+            .get("DestroyBoolExpr")
+            .is_some()
+        {
+            Self::contract(
+                &self.inner,
+                "DestroyBoolExpr",
+                &["boolexpr"],
+                "nothing",
+                false,
+                Some("boolexpr"),
+            )?;
+            if self
+                .inner
+                .program
+                .natives()
+                .get("DestroyBoolExpr")
+                .expect("checked declaration")
+                .source
+                != native.source
+            {
+                return Err(self.inner.error("DestroyBoolExpr", Failure::Source));
+            }
+            true
+        } else {
+            false
+        };
         self.filters = Some(Admission {
             max_records: budget.max_records,
             retained: 0,
+            destroy_null,
         });
         Ok(self)
     }
@@ -122,7 +154,17 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
-        self.filters.as_ref()?;
+        let admitted = self.filters.as_ref()?;
+        if name == "DestroyBoolExpr" && admitted.destroy_null {
+            return Some(if matches!(args, [Value::Null]) {
+                Ok(Value::Null)
+            } else {
+                Err(self.inner.error(
+                    name,
+                    Failure::FilterState("non-null boolean-expression destruction is unsupported"),
+                ))
+            });
+        }
         if name != NATIVE {
             return None;
         }

@@ -90,6 +90,7 @@ pub mod sound_parameters;
 pub mod startup_clock;
 pub mod terrain_pathing;
 pub mod trace;
+pub mod unit_placement;
 pub use map_scripts_import::*;
 
 pub use diff::{Divergence, first_divergence};

@@ -495,3 +495,63 @@ open.
 range and nullable filter. The call returns an event and does not move the unit
 or run the filter. Omitting the budget leaves the native unsupported, so an
 unchanged factory still stops there. Registration is not range delivery.
+
+
+## Creation placement on executed identities (2026-10-19)
+
+`ObjectHost::admit_unit_placement` now installs an explicit initialization collision
+cache before the first executed unit. Each successful birth stores its accepted
+position on that same `Entry::Unit`; `x` and `y` still retain the creation request.
+`GetUnitX`, `GetUnitY` and the supported rectangle query consume that record.
+There is no placement-ordinal, rawcode or external world-id alias.
+
+The selected complete-image fingerprint and reviewed instruction windows supply
+the cell exponent, constructor coordinate, radius thresholds, integer-initialized
+geometry scalars and ground mask. Static collision cells, terrain-domain labels
+and decoded footprint offsets arrive with explicit selected-source identities.
+The module does not select archives or substitute missing textures. Source real
+arithmetic preserves the constructor's position cancellation. Both occupancy and
+footprint updates wait until placement, work/allocation budgets and the actual
+unit allocation succeed. A refused birth does not stamp a phantom occupant.
+
+This is an opt-in creation slice. The private caller installs the derived cache
+at the first `CreateUnit`, after earlier stationary creations. Later destructable
+creation refuses because this admission cannot rebuild stationary occupancy.
+Movement, death, removal and overlapping-footprint removal are not implemented.
+Only the admitted ground/nonmoving classes, in-map normal arithmetic and canonical
+quarter-turn unit footprints are supported. Deterministic perimeter search has
+an explicit query budget; its failure behavior is not qualified as the native
+finite-search policy. Platform coverage and general footprint geometry remain
+open. The ordinary application does not assemble this cache automatically yet.
+
+`GroupEnumUnitsInRect` currently admits an empty group and explicit null filter.
+It reads accepted positions, checks the complete membership budget before
+mutation, and preserves actual unit identities. Centre containment and creation
+order are explicit recreation choices; native edge/order equivalence remains
+open. A populated group or non-null filter refuses instead of returning a
+fabricated empty result.
+
+The helper's subsequent `DestroyBoolExpr(null)` is now a source-qualified no-op
+when that declaration is present with the matching source/signature. The selected
+functional wrapper at `0x48f310` calls `0x4810e0`, whose zero-input branch returns
+zero; the wrapper then returns without destruction. Non-null expression
+destruction remains unsupported, and null cleanup neither releases a wrapper nor
+changes its callback or the arena count.
+
+The final actual-Host execution matches all 155 retained original creation
+rawcodes, argument pairs and accepted coordinate pairs exactly. Four null-filter
+rectangle helpers return successfully; the starting group's first member is the
+same handle held by the authored Arthas global. The next refusal is the filtered
+query in `GetUnitsInRectOfPlayer` at selected Blizzard span `199211..199272`.
+Its loaded predicate requires `GetFilterUnit` followed by the existing ownership
+query, so callback candidate context is the next implementation dependency.
+
+Validation passed 529 native library tests, with seven local-input tests still
+explicitly ignored, and twelve actual WASI tests: four placement tests, two
+shared-identity/refusal tests, null cleanup and five real-arithmetic tests.
+Strict native/browser lint and both application library builds passed. The
+155-pair original comparison is a native Host run; the WASI runs use synthetic
+placement inputs. The 21 earlier control requests remain private model evidence.
+No new original-game run, rendered comparison, complete cross-runtime simulation
+parity or playable campaign is claimed. Immutable checks and rejected attempts
+remain under `.scratch/campaign-unit-world-root-20261019/live-world-1/`.
