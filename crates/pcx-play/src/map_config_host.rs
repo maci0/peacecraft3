@@ -21,6 +21,7 @@ pub struct MapConfig {
     pub players: Option<i32>,
     pub teams: Option<i32>,
     pub placement: Option<HandleId>,
+    pub speed_locked: Option<bool>,
     pub start_locations: Vec<StartLocation>,
     pub start_priorities: Vec<StartPriorities>,
     priority_limit: Option<usize>,
@@ -66,6 +67,7 @@ impl ObjectHost {
             players: None,
             teams: None,
             placement: None,
+            speed_locked: None,
             start_locations: Vec::new(),
             start_priorities: Vec::new(),
             priority_limit: None,
@@ -85,10 +87,64 @@ impl ObjectHost {
         if let Some(result) = self.priority_native(name, args) {
             return Some(result);
         }
+        if matches!(name, "SetMapFlag" | "IsMapFlagSet") {
+            return Some(self.speed_lock_native(name, args));
+        }
         if !CONTRACTS.iter().any(|c| c.0 == name) {
             return None;
         }
         Some(self.apply_config(name, args))
+    }
+    fn speed_lock_native(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let fail = |why| self.inner.error(name, why);
+        let (parameters, result) = if name == "SetMapFlag" {
+            (&["mapflag", "boolean"][..], "nothing")
+        } else {
+            (&["mapflag"][..], "boolean")
+        };
+        Self::contract(&self.inner, name, parameters, result, false, None)?;
+        if self
+            .inner
+            .program
+            .natives()
+            .get(name)
+            .expect("checked map flag")
+            .source
+            != self
+                .inner
+                .program
+                .natives()
+                .get("CreateTimer")
+                .expect("checked Host")
+                .source
+        {
+            return Err(fail(Failure::Source));
+        }
+        let flag = match args {
+            [Value::Handle(flag), Value::Bool(_)] if name == "SetMapFlag" => *flag,
+            [Value::Handle(flag)] if name == "IsMapFlagSet" => *flag,
+            _ => return Err(fail(Failure::ConfigArguments)),
+        };
+        if self
+            .inner
+            .symbolic_value(flag, "mapflag")
+            .map_err(|e| fail(e.failure))?
+            != self.source_enumerand(name, "MAP_LOCK_SPEED", "mapflag")?
+        {
+            return Err(fail(Failure::ConfigState(
+                "only MAP_LOCK_SPEED is supported",
+            )));
+        }
+        let config = self.config.as_mut().expect("admitted config");
+        if let [_, Value::Bool(locked)] = args {
+            config.speed_locked = Some(*locked);
+            Ok(Value::Null)
+        } else {
+            config
+                .speed_locked
+                .map(Value::Bool)
+                .ok_or_else(|| fail(Failure::ConfigState("speed lock is unset")))
+        }
     }
     fn apply_config(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
         let fail = |problem| self.inner.error(name, problem);

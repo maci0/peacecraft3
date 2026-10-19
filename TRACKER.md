@@ -2908,3 +2908,14 @@ repeated, and the public site package was not rebuilt.
 - [ ] Different-speed requests, source-qualified pacing, original/native/WASM clock
   parity, normal first-chapter bootstrap and playable world actors remain open.
   See [startup settings](docs/re-notes/script-startup-settings.md).
+
+
+### 2026-10-19 — executed campaign speed lock
+
+- [x] `SetMapFlag`/`IsMapFlagSet` derive `MAP_LOCK_SPEED` from the selected script.
+  Explicit lock writes now control `SetGameSpeed`: locked valid requests preserve
+  the current speed, and unlocking restores different-rate refusal. Missing state,
+  other flags, malformed inputs and incompatible sources remain unsupported.
+- [ ] Other map flags, initial flag admission, actual speed changes, source-qualified
+  pacing, playable first chapter and original/native/WASM parity remain open.
+  See [startup settings](docs/re-notes/script-startup-settings.md).

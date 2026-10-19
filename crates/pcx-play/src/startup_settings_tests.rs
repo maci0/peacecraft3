@@ -3,7 +3,11 @@ use crate::map_admission::ParsedMapContext;
 use crate::playercolor_host::{EnumHost, Limits, ObjectHost, StartupSettings};
 use pcx_script::{HandleId, Host, Value};
 use std::sync::Arc;
-const SETTINGS: &str = "type gamespeed extends handle
+const SETTINGS: &str = "type mapflag extends handle
+constant native ConvertMapFlag takes integer i returns mapflag
+native SetMapFlag takes mapflag flag, boolean value returns nothing
+native IsMapFlagSet takes mapflag flag returns boolean
+type gamespeed extends handle
 constant native ConvertGameSpeed takes integer i returns gamespeed
 constant native ConvertOtherSpeed takes integer i returns gamespeed
 constant native GetGameSpeed takes nothing returns gamespeed
@@ -13,6 +17,9 @@ native IsFogMaskEnabled takes nothing returns boolean
 native FogEnable takes boolean b returns nothing
 native FogMaskEnable takes boolean b returns nothing
 globals
+constant mapflag MAP_LOCK_SPEED = ConvertMapFlag(7*31)
+constant mapflag SPEED_LOCK_ALIAS = ConvertMapFlag(7*31)
+constant mapflag OTHER_FLAG = ConvertMapFlag(32)
 constant gamespeed Low = ConvertGameSpeed(-11)
 constant gamespeed High = ConvertGameSpeed(43)
 constant gamespeed Other = ConvertOtherSpeed(101)
@@ -29,6 +36,7 @@ fn object(c: &str, map: &str, selected: bool) -> (ObjectHost, Arc<ParsedMapConte
         "ConvertRacePref",
         "ConvertMapControl",
         "ConvertOtherSpeed",
+        "ConvertMapFlag",
     ];
     if selected {
         names.push("ConvertGameSpeed");
@@ -361,3 +369,6 @@ fn optional_speed_setter_requires_its_own_source_and_contract() {
 
 #[path = "startup_version_tests.rs"]
 mod version;
+
+#[path = "speed_lock_tests.rs"]
+mod speed_lock;

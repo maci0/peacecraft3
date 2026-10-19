@@ -1,6 +1,6 @@
 //! Executed local UI input and explicitly configured cinematic filters.
 use super::{Error, Failure, ObjectHost};
-use pcx_script::{HandleId, Value, ast::Expr};
+use pcx_script::{HandleId, Value};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CineFilter {
@@ -162,49 +162,6 @@ impl ObjectHost {
         self.presentation.as_ref()
     }
 
-    fn filter_enumerand(&self, global_name: &str, kind: &str) -> Result<i32, Error> {
-        let name = "DisplayCineFilter";
-        let fail = |why| self.inner.error(name, why);
-        let source = &self
-            .inner
-            .program
-            .natives()
-            .get(name)
-            .ok_or_else(|| fail(Failure::Signature))?
-            .source;
-        let global = self
-            .inner
-            .program
-            .globals()
-            .iter()
-            .find(|g| g.name == global_name)
-            .ok_or_else(|| fail(Failure::Presentation("missing filter enumerand")))?;
-        if global.source != *source {
-            return Err(fail(Failure::Source));
-        }
-        if !global.is_constant || global.array || global.ty.array || global.ty.kind.name() != kind {
-            return Err(fail(Failure::Signature));
-        }
-        let Some(Expr::Call { callee, args, .. }) = &global.init else {
-            return Err(fail(Failure::Initializer(global.name.clone())));
-        };
-        let (Expr::Ident(conversion, _), [arg]) = (callee.as_ref(), args.as_slice()) else {
-            return Err(fail(Failure::Initializer(global.name.clone())));
-        };
-        let admitted = self
-            .inner
-            .conversions
-            .get(conversion.as_str())
-            .filter(|c| c.kind == kind && c.source == *source)
-            .ok_or_else(|| fail(Failure::Signature))?;
-        let mut work = 256;
-        let value = super::super::integer(arg, 16, &mut work).map_err(fail)?;
-        if !admitted.domain.contains(&value) {
-            return Err(fail(Failure::OutsideDomain(value)));
-        }
-        Ok(value)
-    }
-
     pub(super) fn presentation_native(
         &mut self,
         name: &str,
@@ -288,9 +245,13 @@ impl ObjectHost {
                 .flags
                 .ok_or_else(|| fail("missing texture mapping flags"))?;
             if self.inner.symbolic_value(blend, "blendmode")?
-                != self.filter_enumerand("BLEND_MODE_BLEND", "blendmode")?
+                != self.source_enumerand("DisplayCineFilter", "BLEND_MODE_BLEND", "blendmode")?
                 || self.inner.symbolic_value(flags, "texmapflags")?
-                    != self.filter_enumerand("TEXMAP_FLAG_NONE", "texmapflags")?
+                    != self.source_enumerand(
+                        "DisplayCineFilter",
+                        "TEXMAP_FLAG_NONE",
+                        "texmapflags",
+                    )?
             {
                 return Err(fail("unsupported filter blend or texture mapping"));
             }

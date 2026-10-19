@@ -141,7 +141,7 @@ An optional `SetGameSpeed(gamespeed)` declaration is now admitted with the exact
 non-constant signature and the same source as the selected startup settings.
 Missing declarations remain unsupported, including direct Host dispatch. A request
 for the exact already-current identity returns nothing and preserves the retained
-settings, arena and logical clock. Every other identity, null, malformed argument
+settings, arena and logical clock. Without an explicit speed lock, every other identity, null, malformed argument
 list or request after invalidation refuses without changing state. No enum number
 or speed-to-time factor is copied into production.
 
@@ -166,3 +166,39 @@ apply; this is not normal application bootstrap or a playable chapter. Native
 Host/application/integration tests, strict native/WASM Clippy, eleven actual WASI
 settings/version tests and thirty-six executable Cargo-WASM factory gate cases
 pass. No new browser render or original-game runtime comparison was performed.
+
+## Executed map speed lock (2026-10-19)
+
+`SetMapFlag` and `IsMapFlagSet` now support the loaded `MAP_LOCK_SPEED` constant.
+Its value is derived from its authored initializer and the selected conversion
+domain. The exact native declarations, source, type ancestry and constant source
+are checked. No flag value is copied from the original observation or executable.
+Other map flags and combined masks remain unsupported until their consumers exist.
+
+The map configuration retains no initial lock default. A query before an explicit
+write refuses; a successful true or false write replaces only the speed lock.
+While explicitly locked, a valid selected speed request returns nothing without
+changing current settings, clock or identities. This also works without current
+settings input: the lock does not invent a value for `GetGameSpeed`. After unlock,
+only the already-current speed remains supported; actual rate changes still refuse.
+Malformed calls, unknown/wrong-family tokens, outside-domain speed tokens and
+foreign declarations cannot mutate the state.
+
+Bounded static reads of the selected `1.29.2.9231` executable locate `SetMapFlag`
+at `0x4a9320`: true ORs the input into context `+0x38`, and false ANDs its inverse.
+`IsMapFlagSet` at `0x49932a` tests those same bits. The preceding speed investigation
+shows `SetGameSpeed` testing that field before delegating to the speed setter.
+The selected script's `MAP_LOCK_SPEED` initializer identifies that tested bit.
+This supports the lock consumer; it does not establish other map-flag effects,
+initial map flags, networked mutation or a speed-to-time mapping. Static reads and
+verification receipts stay local in `.scratch/campaign-mapflag-root-20261019/`.
+
+The unchanged private Human01 prefix now passes its source speed-lock write and
+both following fog-state writes. The next refusal is
+`EnableWorldFogBoundary(false)`, Blizzard `292712..292746`, common
+`137947..138014`. All 1,247 native test executions, fifteen actual WASI
+settings/version/lock tests, thirty-seven executable Cargo-WASM factory gate
+cases, strict native/WASM Clippy and formatting checks pass. This slice performs
+no new original-game runtime or browser rendering comparison. Rate changes,
+normal application bootstrap, rendered fog and first-chapter playability remain
+open.

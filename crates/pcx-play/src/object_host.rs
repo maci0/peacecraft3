@@ -1,7 +1,7 @@
 #[cfg(test)]
 use super::Limits;
 use super::{Entry, EnumHost, Error, Failure, below};
-use pcx_script::{HandleId, Host, Value};
+use pcx_script::{HandleId, Host, Value, ast::Expr};
 use std::sync::Arc;
 /// Opt-in session objects and authored map/player setup in one bounded arena.
 /// Timer delivery uses explicit game time; world enumeration remains unsupported.
@@ -125,6 +125,67 @@ impl ObjectHost {
                 .map_err(|e| fail(e.failure)),
             _ => Err(fail(Failure::WrongFamily)),
         }
+    }
+
+    fn source_enumerand(&self, name: &str, global_name: &str, kind: &str) -> Result<i32, Error> {
+        let fail = |why| self.inner.error(name, why);
+        let source = &self
+            .inner
+            .program
+            .natives()
+            .get(name)
+            .ok_or_else(|| fail(Failure::Signature))?
+            .source;
+        let mut parent = kind;
+        for _ in 0..=self.inner.program.types().count() {
+            if parent == "handle" {
+                break;
+            }
+            let ty = self
+                .inner
+                .program
+                .types()
+                .find(|ty| ty.name == parent)
+                .ok_or_else(|| fail(Failure::Signature))?;
+            if ty.source != *source {
+                return Err(fail(Failure::Source));
+            }
+            parent = &ty.parent;
+        }
+        if parent != "handle" {
+            return Err(fail(Failure::Signature));
+        }
+        let global = self
+            .inner
+            .program
+            .globals()
+            .iter()
+            .find(|g| g.name == global_name)
+            .ok_or_else(|| fail(Failure::Initializer(global_name.to_owned())))?;
+        if global.source != *source {
+            return Err(fail(Failure::Source));
+        }
+        if !global.is_constant || global.array || global.ty.array || global.ty.kind.name() != kind {
+            return Err(fail(Failure::Signature));
+        }
+        let Some(Expr::Call { callee, args, .. }) = &global.init else {
+            return Err(fail(Failure::Initializer(global.name.clone())));
+        };
+        let (Expr::Ident(conversion, _), [arg]) = (callee.as_ref(), args.as_slice()) else {
+            return Err(fail(Failure::Initializer(global.name.clone())));
+        };
+        let admitted = self
+            .inner
+            .conversions
+            .get(conversion.as_str())
+            .filter(|c| c.kind == kind && c.source == *source)
+            .ok_or_else(|| fail(Failure::Signature))?;
+        let mut work = 256;
+        let value = super::integer(arg, 16, &mut work).map_err(fail)?;
+        if !admitted.domain.contains(&value) {
+            return Err(fail(Failure::OutsideDomain(value)));
+        }
+        Ok(value)
     }
 
     fn contract(

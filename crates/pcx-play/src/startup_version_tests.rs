@@ -25,6 +25,7 @@ fn object(c: &str, map: &str, selected: bool) -> (ObjectHost, Arc<ParsedMapConte
         "ConvertRacePref",
         "ConvertMapControl",
         "ConvertGameSpeed",
+        "ConvertMapFlag",
         "ConvertOtherSpeed",
         "ConvertOtherVersion",
     ];

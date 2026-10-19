@@ -17,8 +17,8 @@ impl ObjectHost {
     ///
     /// Context identity does not authenticate the input's runtime provenance.
     /// The caller must refresh or invalidate on external setting changes. Failed
-    /// admission preserves the prior state. Only requests for the already-current
-    /// speed are supported; a different speed requires a qualified clock rate.
+    /// admission preserves the prior state. Locked speed requests are ignored.
+    /// Unlocked requests can only retain the current speed until rates are qualified.
     pub fn admit_startup_settings(
         &mut self,
         context: &Arc<ParsedMapContext>,
@@ -312,16 +312,59 @@ impl ObjectHost {
             });
         }
         if name == "SetGameSpeed" {
-            let settings = self.startup_settings?;
+            let settings = self.startup_settings;
+            let locked = self
+                .config
+                .as_ref()
+                .is_some_and(|c| c.speed_locked == Some(true));
+            if settings.is_none() && !locked {
+                return None;
+            }
             return Some((|| {
                 Self::contract(&self.inner, name, &["gamespeed"], "nothing", false, None)?;
+                let source = &self
+                    .inner
+                    .program
+                    .natives()
+                    .get("CreateTimer")
+                    .expect("checked Host")
+                    .source;
+                let conversion = self
+                    .inner
+                    .conversions
+                    .get("ConvertGameSpeed")
+                    .filter(|c| c.kind == "gamespeed" && c.source == *source)
+                    .ok_or_else(|| self.inner.error(name, Failure::Signature))?;
+                if self
+                    .inner
+                    .program
+                    .natives()
+                    .get(name)
+                    .expect("checked setter")
+                    .source
+                    != *source
+                {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
                 match args {
-                    [Value::Handle(speed)] if *speed == settings.speed => Ok(Value::Null),
-                    // shortcut: rate changes refuse until the clock consumes qualified speed rates.
-                    [Value::Handle(_)] => Err(self.inner.error(
-                        name,
-                        Failure::SettingsState("changing game speed is unsupported"),
-                    )),
+                    [Value::Handle(speed)] => {
+                        let value = self
+                            .inner
+                            .symbolic_value(*speed, "gamespeed")
+                            .map_err(|e| self.inner.error(name, e.failure))?;
+                        if !conversion.domain.contains(&value) {
+                            return Err(self.inner.error(name, Failure::OutsideDomain(value)));
+                        }
+                        if locked || settings.is_some_and(|settings| *speed == settings.speed) {
+                            Ok(Value::Null)
+                        } else {
+                            // shortcut: rate changes refuse until the clock consumes qualified speed rates.
+                            Err(self.inner.error(
+                                name,
+                                Failure::SettingsState("changing game speed is unsupported"),
+                            ))
+                        }
+                    }
                     _ => Err(self.inner.error(
                         name,
                         Failure::SettingsState("expected the current gamespeed identity"),
