@@ -1547,3 +1547,9 @@ integration gate over the community's actual content, not a diff against a synth
 scenario, because that is the only test that exercises the join between object data,
 the scripting VM and the simulation at the scale real maps use them. A green test suite
 that has not passed criterion 4 means we have a renderer with a decoder, not Warcraft III.
+
+Campaign scene connection (2026-10-19): the launcher consumes instant executed
+camera setups on the published VM and matching admitted terrain. Source clipping,
+field identities and session replacement stay explicit. Projection conventions
+need gameplay qualification; this is not first-chapter playability. See
+[executed camera consumer](docs/re-notes/script-camera-setups.md#application-camera-consumer).

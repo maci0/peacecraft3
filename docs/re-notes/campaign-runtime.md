@@ -11,7 +11,8 @@ The game-time origin comes from the admitted Host clock. A missing clock refuses
 `Time<Real>` only paces work: pending steps survive a slow frame and the per-update
 budget. The runtime samples before startup publishes a replacement, then binds
 that replacement on the following frame, excluding the loading-frame delta.
-Pause excludes paused elapsed time while retaining work already due. A successful
+Explicit simulation pause and application-view suspension each exclude elapsed
+time while retaining work already due. A successful
 replacement resets the timeline by session identity; a refused replacement keeps
 the prior session. Callback failure stops advancement without replaying effects
 that completed before the failure.
@@ -62,3 +63,9 @@ are local in `.scratch/campaign-runtime-root-20261019/`.
 Automatic Host-input preparation, live scene/unit/control wiring, source-qualified
 speed and pause behavior, mission-native coverage and complete campaign playability
 remain open. No menu appearance or public browser package is changed here.
+
+The launcher also installs the [executed camera consumer](script-camera-setups.md#application-camera-consumer).
+It binds an instant script setup to a real Bevy perspective camera over matching
+admitted terrain, with a selected-source clip receipt and isolated render layer.
+This supplies a live scene caller for supported published sessions; it does not
+remove the missing automatic startup-input or mission-native gates for Human01.

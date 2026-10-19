@@ -1793,7 +1793,7 @@ pub fn follow_ui_viewport(
         if key(&camera.viewport) != key(&ui.viewport) {
             camera.viewport = ui.viewport.clone();
         }
-        let active = !menu.is_empty();
+        let active = !menu.is_empty() && ui.is_active;
         if camera.is_active != active {
             camera.is_active = active;
         }

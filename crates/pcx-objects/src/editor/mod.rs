@@ -161,6 +161,7 @@ use pcx_mpq::MpqSet;
 
 use crate::Error;
 
+pub mod camera;
 pub mod campaign_index;
 pub mod defaults;
 pub mod meta;

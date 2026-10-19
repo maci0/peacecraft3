@@ -1,4 +1,4 @@
-//! Stored camera-setup fields and destination. Nothing here moves a camera or advances time.
+//! Executed camera setups and bounded instant application on the shared arena.
 use super::super::{Entry, Error, Failure};
 use super::ObjectHost;
 use pcx_script::{HandleId, Value};
@@ -19,8 +19,18 @@ pub struct CameraDestination {
     pub duration: f32,
 }
 
+/// Snapshot at application time; later edits to the setup do not change this view.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AppliedCameraSetup {
+    pub sequence: u64,
+    pub setup: HandleId,
+    pub fields: Vec<CameraFieldRecord>,
+    pub destination: CameraDestination,
+}
+
 pub(super) struct Admission {
     max_fields: usize,
+    applied: Option<AppliedCameraSetup>,
 }
 
 const FIELD_NATIVE: &str = "ConvertCameraField";
@@ -74,13 +84,42 @@ impl ObjectHost {
             ("CameraSetupGetField", &[SETUP_KIND, FIELD_KIND][..], "real"),
             ("CameraSetupGetDestPositionX", &[SETUP_KIND][..], "real"),
             ("CameraSetupGetDestPositionY", &[SETUP_KIND][..], "real"),
+            (
+                "CameraSetupApplyForceDuration",
+                &[SETUP_KIND, "boolean", "real"][..],
+                "nothing",
+            ),
         ] {
             if self.inner.program.natives().get(name).is_some() {
                 self.bind_setup_native(name, parameters, result, &field_source)?;
             }
         }
-        self.camera_setups = Some(Admission { max_fields });
+        self.camera_setups = Some(Admission {
+            max_fields,
+            applied: None,
+        });
         Ok(self)
+    }
+
+    pub fn applied_camera_setup(&self) -> Option<&AppliedCameraSetup> {
+        self.camera_setups.as_ref()?.applied.as_ref()
+    }
+
+    /// Resolve an actual loaded field handle against the applied snapshot.
+    pub fn applied_camera_field(&self, field: HandleId) -> Result<f32, Error> {
+        let name = "CameraSetupApplyForceDuration";
+        let enumerand = self.field_enumerand(&Value::Handle(field), name)?;
+        self.applied_camera_setup()
+            .and_then(|view| {
+                view.fields
+                    .iter()
+                    .find(|field| field.enumerand == enumerand)
+            })
+            .map(|field| field.value)
+            .ok_or_else(|| {
+                self.inner
+                    .error(name, Failure::CameraSetupObject("applied field is unset"))
+            })
     }
 
     fn bind_setup_native(
@@ -162,6 +201,7 @@ impl ObjectHost {
                     | "CameraSetupSetDestPosition"
                     | "CameraSetupGetDestPositionX"
                     | "CameraSetupGetDestPositionY"
+                    | "CameraSetupApplyForceDuration"
             )
         {
             return None;
@@ -195,6 +235,40 @@ impl ObjectHost {
         };
         let at = self.setup_index(*setup, name)?;
         match name {
+            "CameraSetupApplyForceDuration" => {
+                let [Value::Bool(do_pan), Value::Real(duration)] = rest else {
+                    return Err(fail("boolean pan and real duration required"));
+                };
+                // shortcut: only instant application, add timed interpolation before admitting pans.
+                if *duration != 0.0 {
+                    return Err(fail("timed camera application is unsupported"));
+                }
+                let destination = if *do_pan {
+                    self.camera_setup_destination(*setup)?
+                } else {
+                    self.applied_camera_setup()
+                        .ok_or_else(|| fail("non-panning application needs a prior camera target"))?
+                        .destination
+                };
+                let sequence = self
+                    .applied_camera_setup()
+                    .map_or(Some(1), |view| view.sequence.checked_add(1))
+                    .ok_or_else(|| self.inner.error(name, Failure::Capacity))?;
+                let source = self.setup_fields(*setup, name)?;
+                let mut fields = Vec::new();
+                fields
+                    .try_reserve_exact(source.len())
+                    .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+                fields.extend_from_slice(source);
+                let admission = self.camera_setups.as_mut().expect("admitted camera setups");
+                admission.applied = Some(AppliedCameraSetup {
+                    sequence,
+                    setup: *setup,
+                    fields,
+                    destination,
+                });
+                Ok(Value::Null)
+            }
             "CameraSetupGetField" => {
                 let [field] = rest else {
                     return Err(fail("arguments do not match the camera setup declaration"));

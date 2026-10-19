@@ -1,0 +1,381 @@
+//! Camera consumer for executed instant setup applications on the published VM.
+use crate::{
+    browser_configuration::SelectedMapSources,
+    campaign_startup::CampaignStartupSet,
+    map_binding::{AssetReceipt, receipt},
+    map_ground::GroundPublication,
+    map_requests::MapRequests,
+    map_script_session::MapScriptSession,
+};
+use bevy::camera::visibility::RenderLayers;
+use bevy::prelude::*;
+use pcx_play::map_startup_host::MapStartupHost;
+use pcx_script::Value;
+use std::sync::{Arc, Weak};
+
+const MISC_DATA: &str = "UI\\MiscData.txt";
+/// Application render isolation, separate from menu geometry and menu sprite layer 7.
+pub(crate) const RENDER_LAYER: usize = 1;
+const FIELDS: [&str; 7] = [
+    "CAMERA_FIELD_TARGET_DISTANCE",
+    "CAMERA_FIELD_FARZ",
+    "CAMERA_FIELD_ANGLE_OF_ATTACK",
+    "CAMERA_FIELD_FIELD_OF_VIEW",
+    "CAMERA_FIELD_ROLL",
+    "CAMERA_FIELD_ROTATION",
+    "CAMERA_FIELD_ZOFFSET",
+];
+
+#[derive(Component)]
+pub struct CampaignSceneCamera;
+
+/// Projection selection is application policy. Clip values still come from the selected assets.
+#[derive(Resource)]
+pub struct CampaignCamera {
+    zoom: usize,
+    read_limit: usize,
+    session: Option<Weak<()>>,
+    attempted: Option<u64>,
+    near: Option<f32>,
+    visible: bool,
+    ready: bool,
+    pub entity: Option<Entity>,
+    pub clip_receipt: Option<AssetReceipt>,
+    pub last_error: Option<String>,
+}
+
+impl CampaignCamera {
+    pub fn active(&self) -> bool {
+        self.ready && self.visible && self.entity.is_some()
+    }
+}
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CampaignCameraSet;
+
+pub fn install(app: &mut App, zoom: usize, read_limit: usize) {
+    app.insert_resource(CampaignCamera {
+        zoom,
+        read_limit,
+        session: None,
+        attempted: None,
+        near: None,
+        visible: true,
+        ready: false,
+        entity: None,
+        clip_receipt: None,
+        last_error: None,
+    })
+    .add_systems(
+        Update,
+        (apply_camera, pause_view)
+            .chain()
+            .in_set(CampaignCameraSet)
+            .after(CampaignStartupSet),
+    );
+}
+
+fn clear(commands: &mut Commands, camera: &mut CampaignCamera) {
+    if let Some(entity) = camera.entity.take() {
+        commands.entity(entity).despawn();
+    }
+    camera.attempted = None;
+    camera.near = None;
+    camera.clip_receipt = None;
+    camera.last_error = None;
+    camera.visible = true;
+    camera.ready = false;
+}
+
+fn pause_view(
+    keys: Option<ResMut<ButtonInput<KeyCode>>>,
+    mut view: ResMut<CampaignCamera>,
+    runtime: Option<ResMut<crate::campaign_runtime::CampaignRuntime>>,
+    mut cameras: Query<&mut Camera, With<CampaignSceneCamera>>,
+) {
+    if view.entity.is_some()
+        && let Some(mut keys) = keys
+        && keys.just_pressed(KeyCode::Escape)
+    {
+        keys.clear_just_pressed(KeyCode::Escape);
+        view.visible = !view.visible;
+    }
+    if let Some(mut runtime) = runtime {
+        runtime.view_paused = view.entity.is_some() && !view.visible;
+    }
+    for mut camera in &mut cameras {
+        camera.is_active = view.active();
+    }
+}
+
+fn apply_camera(
+    mut commands: Commands,
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+    ground: Res<GroundPublication>,
+    requests: Res<MapRequests>,
+    sources: Res<SelectedMapSources>,
+    mut camera: ResMut<CampaignCamera>,
+) {
+    let witness = session.session_witness();
+    camera.ready = false;
+    if !match (&camera.session, &witness) {
+        (Some(old), Some(new)) => Weak::ptr_eq(old, new),
+        (None, None) => true,
+        _ => false,
+    } {
+        clear(&mut commands, &mut camera);
+        camera.session = witness;
+    }
+    let Some(context) = session.context().cloned() else {
+        return;
+    };
+    // Never view a new VM over terrain from a different admission.
+    if !ground
+        .context
+        .as_ref()
+        .is_some_and(|ground| Arc::ptr_eq(ground, &context))
+    {
+        return;
+    }
+    camera.ready = true;
+    let Some(sequence) = session.host().and_then(|host| {
+        host.objects()
+            .applied_camera_setup()
+            .map(|view| view.sequence)
+    }) else {
+        return;
+    };
+    if camera.attempted == Some(sequence) {
+        return;
+    }
+    if camera.near.is_none() {
+        let Some(bindings) = requests.bindings.as_ref() else {
+            return;
+        };
+        if !requests
+            .admission
+            .shared_context()
+            .as_ref()
+            .is_some_and(|admitted| Arc::ptr_eq(admitted, &context))
+            || !requests
+                .published_receipts
+                .as_ref()
+                .is_some_and(|published| Arc::ptr_eq(published, &bindings.receipts))
+        {
+            return;
+        }
+        let Some(reader) = sources.for_receipts(&bindings.receipts) else {
+            camera.last_error =
+                Some("campaign camera has no source reader for its binding receipts".into());
+            return;
+        };
+        camera.attempted = Some(sequence);
+        match reader.resolve_bounded(MISC_DATA, camera.read_limit as u64) {
+            Ok(asset) => match pcx_objects::editor::camera::near_clip(
+                &asset.bytes,
+                MISC_DATA,
+                camera.zoom,
+                camera.read_limit,
+            ) {
+                Ok(near) => {
+                    camera.near = Some(near);
+                    camera.clip_receipt = Some(receipt(&asset));
+                }
+                Err(error) => {
+                    camera.last_error = Some(error);
+                    return;
+                }
+            },
+            Err(error) => {
+                camera.last_error = Some(format!("{MISC_DATA}: {error}"));
+                return;
+            }
+        }
+    }
+    camera.attempted = Some(sequence);
+    let result = executed_pose(
+        &mut session,
+        &context.terrain,
+        camera.near.expect("source clip"),
+    );
+    match result {
+        Ok((transform, projection)) => {
+            if let Some(entity) = camera.entity {
+                commands
+                    .entity(entity)
+                    .insert((transform, Projection::Perspective(projection)));
+            } else {
+                camera.entity = Some(
+                    commands
+                        .spawn((
+                            CampaignSceneCamera,
+                            RenderLayers::layer(RENDER_LAYER),
+                            Camera3d::default(),
+                            transform,
+                            Projection::Perspective(projection),
+                        ))
+                        .id(),
+                );
+            }
+            camera.last_error = None;
+        }
+        Err(error) => {
+            camera.last_error = Some(format!(
+                "{}: camera application {sequence}: {error}",
+                context.sources.map.source
+            ))
+        }
+    }
+}
+
+fn executed_pose(
+    session: &mut MapScriptSession<MapStartupHost>,
+    terrain: &pcx_map::Terrain,
+    near: f32,
+) -> Result<(Transform, PerspectiveProjection), String> {
+    // Read actual initialized globals, never copy the conversion's numeric enumerands.
+    let handles = FIELDS.map(|name| session.global(name));
+    let objects = session
+        .host()
+        .ok_or("campaign session is absent")?
+        .objects();
+    let view = objects
+        .applied_camera_setup()
+        .ok_or("camera application is absent")?;
+    let mut values = [0.0; 7];
+    for (index, handle) in handles.into_iter().enumerate() {
+        let Some(Value::Handle(field)) = handle else {
+            return Err(format!(
+                "{} is not an initialized field handle",
+                FIELDS[index]
+            ));
+        };
+        values[index] = objects
+            .applied_camera_field(field)
+            .map_err(|error| error.to_string())?;
+    }
+    let [x, y] = [view.destination.x, view.destination.y];
+    let z = pcx_tera::world::sample_world_z(terrain, x, y)
+        .ok_or("camera target lies outside the terrain surface")?;
+    pose(values, [x, y, z], near)
+}
+
+fn pose(
+    values: [f32; 7],
+    target: [f32; 3],
+    near: f32,
+) -> Result<(Transform, PerspectiveProjection), String> {
+    let [distance, far, attack, fov, roll, rotation, offset] = values;
+    if values
+        .iter()
+        .chain(target.iter())
+        .chain([&near])
+        .any(|value| !value.is_finite())
+        || distance <= 0.0
+        || near <= 0.0
+        || far <= near
+        || !(0.0..180.0).contains(&fov)
+        || fov == 0.0
+    {
+        return Err("camera has invalid distance, clipping, angle or target values".into());
+    }
+    let (sin_attack, cos_attack) = attack.to_radians().sin_cos();
+    let (sin_rotation, cos_rotation) = rotation.to_radians().sin_cos();
+    let target = Vec3::new(target[0], target[2] + offset, -target[1]);
+    // Source is Z-up; the ground renderer uses (x,z,-y). Angles are setter degrees.
+    let forward = Vec3::new(
+        cos_attack * cos_rotation,
+        sin_attack,
+        -cos_attack * sin_rotation,
+    );
+    let up = Vec3::new(sin_rotation, 0.0, cos_rotation).cross(forward);
+    let eye = target - forward * distance;
+    if !target.is_finite() || !eye.is_finite() {
+        return Err("camera pose overflows".into());
+    }
+    let direction = (target - eye)
+        .try_normalize()
+        .ok_or("camera eye and target collapse at this precision")?;
+    if direction.cross(up).try_normalize().is_none() {
+        return Err("camera direction is parallel to its up axis".into());
+    }
+    let mut transform = Transform::from_translation(eye).looking_to(direction, up);
+    transform.rotate_local_z(roll.to_radians());
+    // shortcut: vertical FOV and bilinear terrain targeting are recreation conventions; qualify native projection/smoothing separately.
+    let projection = PerspectiveProjection {
+        fov: fov.to_radians(),
+        near,
+        far,
+        ..default()
+    };
+    if !bevy::camera::CameraProjection::get_clip_from_view(&projection).is_finite() {
+        return Err("camera projection overflows".into());
+    }
+    Ok((transform, projection))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_axes_angles_and_clips_drive_the_pose() {
+        let (transform, projection) = pose(
+            [80.0, 900.0, 330.0, 65.0, 0.0, 90.0, 7.0],
+            [11.0, 23.0, 5.0],
+            9.0,
+        )
+        .unwrap();
+        let target = Vec3::new(11.0, 12.0, -23.0);
+        assert!((transform.translation.distance(target) - 80.0).abs() < 0.0001);
+        assert!(
+            (transform.forward().as_vec3() - (target - transform.translation).normalize()).length()
+                < 0.0001
+        );
+        assert!(transform.translation.y > target.y);
+        assert!(transform.translation.z > target.z);
+        assert_eq!(projection.near, 9.0);
+        assert_eq!(projection.far, 900.0);
+        assert_eq!(projection.fov, 65f32.to_radians());
+        for bad in [0.0, f32::NAN, 900.0] {
+            assert!(
+                pose(
+                    [80.0, 900.0, 330.0, 65.0, 0.0, 90.0, 7.0],
+                    [11.0, 23.0, 5.0],
+                    bad
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            pose(
+                [f32::MIN_POSITIVE, 900.0, 330.0, 65.0, 0.0, 90.0, 7.0],
+                [11.0, 23.0, 5.0],
+                9.0
+            )
+            .is_err()
+        );
+        assert!(
+            pose(
+                [80.0, 900.0, 330.0, f32::from_bits(1), 0.0, 90.0, 7.0],
+                [11.0, 23.0, 5.0],
+                9.0
+            )
+            .is_err()
+        );
+        for attack in [90.0, 270.0] {
+            let (transform, _) = pose(
+                [80.0, 900.0, attack, 65.0, 35.0, 90.0, 7.0],
+                [11.0, 23.0, 5.0],
+                9.0,
+            )
+            .unwrap();
+            assert!(transform.rotation.is_finite());
+            assert!(
+                (transform.forward().as_vec3() - (target - transform.translation).normalize())
+                    .length()
+                    < 0.0001
+            );
+        }
+    }
+}

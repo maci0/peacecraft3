@@ -1061,6 +1061,22 @@ impl ParsedProfile {
 }
 
 pub(crate) fn parse_profile(bytes: &[u8], member: &str) -> Result<ParsedProfile, Unresolved> {
+    parse_profile_lines(bytes, member, false)
+}
+
+/// Config profiles allow inline comments outside quoted values; unit text profiles do not.
+pub(crate) fn parse_config_profile(
+    bytes: &[u8],
+    member: &str,
+) -> Result<ParsedProfile, Unresolved> {
+    parse_profile_lines(bytes, member, true)
+}
+
+fn parse_profile_lines(
+    bytes: &[u8],
+    member: &str,
+    inline_comments: bool,
+) -> Result<ParsedProfile, Unresolved> {
     let error = |detail: String| Unresolved::Asset {
         member: member.into(),
         detail,
@@ -1083,6 +1099,18 @@ pub(crate) fn parse_profile(bytes: &[u8], member: &str) -> Result<ParsedProfile,
             line,
             text: authored_line.into(),
             detail,
+        };
+        let raw = if inline_comments {
+            let mut quoted = false;
+            let comment = raw.char_indices().find_map(|(index, ch)| {
+                if ch == '"' {
+                    quoted = !quoted;
+                }
+                (!quoted && raw[index..].starts_with("//")).then_some(index)
+            });
+            &raw[..comment.unwrap_or(raw.len())]
+        } else {
+            raw
         };
         let raw = raw.trim();
         if raw.is_empty() || raw.starts_with("//") {

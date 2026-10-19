@@ -28,6 +28,8 @@ pub struct CampaignRuntime {
     pending: Duration,
     tick: u64,
     pub paused: bool,
+    /// Application view suspension, independent of an explicit simulation pause.
+    pub view_paused: bool,
     pub last_error: Option<CampaignRuntimeError>,
 }
 
@@ -51,6 +53,7 @@ impl CampaignRuntime {
             pending: Duration::ZERO,
             tick: 0,
             paused: false,
+            view_paused: false,
             last_error: None,
         }
     }
@@ -89,7 +92,7 @@ impl CampaignRuntime {
             // Loading and the previous session's frame debt do not advance this session.
             return;
         }
-        if self.paused || self.last_error.is_some() {
+        if self.paused || self.view_paused || self.last_error.is_some() {
             return;
         }
         self.pending = self.pending.saturating_add(elapsed);

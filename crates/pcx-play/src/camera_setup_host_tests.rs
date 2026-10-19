@@ -18,6 +18,7 @@ native CameraSetupGetField takes camerasetup whichSetup, camerafield whichField 
 native CameraSetupSetDestPosition takes camerasetup whichSetup, real x, real y, real duration returns nothing
 native CameraSetupGetDestPositionX takes camerasetup whichSetup returns real
 native CameraSetupGetDestPositionY takes camerasetup whichSetup returns real
+native CameraSetupApplyForceDuration takes camerasetup whichSetup, boolean doPan, real duration returns nothing
 globals
 constant camerafield FIELD_NEAR = ConvertCameraField(4 + 5)
 constant camerafield FIELD_OTHER = ConvertCameraField(-3)
@@ -60,6 +61,107 @@ fn field(host: &mut ObjectHost, value: i32) -> Value {
 
 fn create(host: &mut ObjectHost) -> Value {
     host.native("CreateCameraSetup", &[]).unwrap()
+}
+
+#[test]
+fn instant_application_snapshots_the_setup_and_refuses_timed_changes_atomically() {
+    let mut host = host();
+    let setup = create(&mut host);
+    let other = create(&mut host);
+    let field = field(&mut host, 9);
+    let Value::Handle(field_id) = field.clone() else {
+        panic!("field")
+    };
+    host.native(
+        "CameraSetupSetField",
+        &[
+            setup.clone(),
+            field.clone(),
+            Value::Real(21.0),
+            Value::Real(5.0),
+        ],
+    )
+    .unwrap();
+    host.native(
+        "CameraSetupSetDestPosition",
+        &[
+            setup.clone(),
+            Value::Real(2.0),
+            Value::Real(3.0),
+            Value::Real(8.0),
+        ],
+    )
+    .unwrap();
+    assert!(
+        host.native(
+            "CameraSetupApplyForceDuration",
+            &[setup.clone(), Value::Bool(false), Value::Real(0.0)]
+        )
+        .is_err()
+    );
+    host.native(
+        "CameraSetupApplyForceDuration",
+        &[setup.clone(), Value::Bool(true), Value::Real(0.0)],
+    )
+    .unwrap();
+    let saved = host.applied_camera_setup().unwrap().clone();
+    host.native(
+        "CameraSetupSetField",
+        &[setup.clone(), field, Value::Real(99.0), Value::Real(0.0)],
+    )
+    .unwrap();
+    assert_eq!(host.applied_camera_field(field_id).unwrap(), 21.0);
+    for duration in [0.5, -1.0, f32::NAN, f32::INFINITY] {
+        assert!(
+            host.native(
+                "CameraSetupApplyForceDuration",
+                &[setup.clone(), Value::Bool(true), Value::Real(duration)]
+            )
+            .is_err()
+        );
+        assert_eq!(host.applied_camera_setup(), Some(&saved));
+    }
+    assert!(
+        host.native(
+            "CameraSetupApplyForceDuration",
+            &[other.clone(), Value::Bool(true), Value::Real(0.0)]
+        )
+        .is_err()
+    );
+    assert_eq!(host.applied_camera_setup(), Some(&saved));
+    host.native(
+        "CameraSetupApplyForceDuration",
+        &[other, Value::Bool(false), Value::Real(-0.0)],
+    )
+    .unwrap();
+    assert_eq!(host.applied_camera_setup().unwrap().sequence, 2);
+    assert_eq!(
+        host.applied_camera_setup().unwrap().destination,
+        saved.destination
+    );
+}
+
+#[test]
+fn optional_application_requires_its_exact_loaded_contract() {
+    let absent = DECLARATIONS
+        .lines()
+        .filter(|line| !line.starts_with("native CameraSetupApplyForceDuration"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut host = host_from(&absent, "", 8).with_camera_setups(2).unwrap();
+    let setup = create(&mut host);
+    assert!(
+        host.native(
+            "CameraSetupApplyForceDuration",
+            &[setup, Value::Bool(true), Value::Real(0.0)]
+        )
+        .is_err()
+    );
+    let malformed = DECLARATIONS.replace(
+        "native CameraSetupApplyForceDuration",
+        "constant native CameraSetupApplyForceDuration",
+    );
+    assert!(host_from(&malformed, "", 8).with_camera_setups(2).is_err());
 }
 
 #[test]

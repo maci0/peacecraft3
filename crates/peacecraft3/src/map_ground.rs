@@ -272,7 +272,11 @@ fn entity_from_draw(commands: &mut Commands, draw: &GroundDraw) -> Option<Entity
     let material = draw.material.clone()?;
     Some(
         commands
-            .spawn((Mesh3d(mesh), MeshMaterial3d(material)))
+            .spawn((
+                Mesh3d(mesh),
+                MeshMaterial3d(material),
+                bevy::camera::visibility::RenderLayers::layer(crate::campaign_camera::RENDER_LAYER),
+            ))
             .id(),
     )
 }
@@ -466,6 +470,12 @@ mod tests {
         let entity = entity_from_draw(&mut world.commands(), &draw).unwrap();
         world.flush();
         assert!(world.get::<Mesh3d>(entity).is_some());
+        assert_eq!(
+            world.get::<bevy::camera::visibility::RenderLayers>(entity),
+            Some(&bevy::camera::visibility::RenderLayers::layer(
+                crate::campaign_camera::RENDER_LAYER
+            ))
+        );
         assert!(
             world
                 .get::<MeshMaterial3d<GroundMaterial>>(entity)

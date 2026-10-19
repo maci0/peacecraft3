@@ -316,7 +316,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
                     poll_asset_revision,
                     invalidate_on_asset_revision,
                     apply_menu_clicks.in_set(MenuActions),
-                    menu_navigation_keys,
+                    menu_navigation_keys.run_if(campaign_is_hidden),
                 )
                     .chain(),
                 (
@@ -332,7 +332,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
                     initialize_menu_logo,
                     show_logo_for_screen,
                     initialize_menu_scene,
-                    show_menu_or_launcher,
+                    show_menu_or_launcher.after(peacecraft3::campaign_camera::CampaignCameraSet),
                     scroll_launcher,
                     refresh,
                     crate::button_actions::clear,
@@ -377,6 +377,14 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
             .run_if(menu_is_visible),
     );
     peacecraft3::map_ground::install(&mut app);
+    // Default zoom-list selection and config-read cap are explicit application policies.
+    peacecraft3::campaign_camera::install(&mut app, 0, 64 * 1024);
+    app.configure_sets(
+        Update,
+        (LauncherInput, MenuActions)
+            .after(peacecraft3::campaign_camera::CampaignCameraSet)
+            .run_if(campaign_is_hidden),
+    );
     // Scheduling granularity/work budgets are application policy, not original game rules.
     peacecraft3::campaign_runtime::install(
         &mut app,
@@ -1745,6 +1753,7 @@ type MenuUiCameraFilter = (
 #[derive(SystemParam)]
 struct MenuUiCameraState<'w, 's> {
     commands: Commands<'w, 's>,
+    campaign: Option<Res<'w, peacecraft3::campaign_camera::CampaignCamera>>,
     cameras:
         Query<'w, 's, (Entity, &'static mut Camera, Has<MenuColourCamera>), MenuUiCameraFilter>,
 }
@@ -1760,8 +1769,10 @@ fn show_menu_or_launcher(
 ) {
     let MenuUiCameraState {
         mut commands,
+        campaign,
         cameras: mut ui_cameras,
     } = ui;
+    let playing = campaign.as_ref().is_some_and(|camera| camera.active());
     // The original CFrame renderer has a centered 4:3 branch. Its main-menu
     // live flags are unmeasured; keep the authored extent without stretching.
     let viewport = if !menu.is_empty() {
@@ -1786,7 +1797,7 @@ fn show_menu_or_launcher(
         None
     };
     for mut visibility in &mut launcher {
-        let desired = if menu.is_empty() && !intro.playing() {
+        let desired = if menu.is_empty() && !intro.playing() && !playing {
             Visibility::Visible
         } else {
             Visibility::Hidden
@@ -1812,13 +1823,13 @@ fn show_menu_or_launcher(
         {
             camera.viewport = viewport.clone();
         }
-        let active = !menu.is_empty();
+        let active = !menu.is_empty() && !playing;
         if camera.is_active != active {
             camera.is_active = active;
         }
     }
     for mut camera in &mut letterboxes {
-        let active = !menu.is_empty();
+        let active = !menu.is_empty() && !playing;
         if camera.is_active != active {
             camera.is_active = active;
         }
@@ -1830,6 +1841,7 @@ fn show_menu_or_launcher(
         bevy::camera::ClearColorConfig::Custom(BG_APP)
     };
     for (entity, mut camera, working) in &mut ui_cameras {
+        camera.is_active = !playing;
         if !menu.is_empty() && !working {
             commands.entity(entity).insert(MenuColourCamera);
         } else if menu.is_empty() && working {
@@ -1861,8 +1873,15 @@ fn show_menu_or_launcher(
     }
 }
 
-fn menu_is_visible(menu: Query<Entity, With<MenuLayer>>) -> bool {
-    !menu.is_empty()
+fn menu_is_visible(
+    menu: Query<Entity, With<MenuLayer>>,
+    camera: Option<Res<peacecraft3::campaign_camera::CampaignCamera>>,
+) -> bool {
+    !menu.is_empty() && !camera.as_ref().is_some_and(|camera| camera.active())
+}
+
+fn campaign_is_hidden(camera: Option<Res<peacecraft3::campaign_camera::CampaignCamera>>) -> bool {
+    !camera.as_ref().is_some_and(|camera| camera.active())
 }
 
 /// The imported menu's frame and text sources.

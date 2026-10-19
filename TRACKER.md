@@ -2666,3 +2666,22 @@ repeated, and the public site package was not rebuilt.
   100-consecutive original baseline gate remain open. No menu visual comparison,
   original runtime or public site deployment was repeated. See
   [campaign runtime](docs/re-notes/campaign-runtime.md).
+
+### 2026-10-19 — executed campaign camera connection
+
+- [~] The launcher consumes instant camera-setup applications from the published
+  VM, using its actual initialized field handles, selected-source near clipping
+  and matching admitted terrain. Camera/ground render separately from menu
+  geometry; view suspension preserves explicit simulation pause. Timed camera
+  applications remain unsupported.
+- [ ] First Human campaign playability remains open. Automatic startup inputs,
+  remaining initialization natives, actor rendering/control and original/native/
+  WASM gameplay projection and simulation comparisons are still required.
+  No original runtime, fresh gameplay capture, public deployment or
+  100-consecutive original-baseline acceptance is claimed by this change.
+
+- [~] Camera increment checks pass: selected local config, native suites, strict
+  native/WASM checks and builds, 17 actual Cargo WASM integration cases and nine
+  targeted WASI cases. A bounded native application startup reaches its Vulkan
+  window without a scheduling panic; this is not rendered campaign acceptance.
+  Receipts are local in `.scratch/campaign-camera-root-20261019/`.

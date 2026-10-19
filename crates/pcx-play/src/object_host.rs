@@ -547,7 +547,7 @@ pub use stacked_sounds::{StackedSoundAction, StackedSoundRequest};
 
 #[path = "camera_setup_host.rs"]
 mod camera_setup;
-pub use camera_setup::{CameraDestination, CameraFieldRecord};
+pub use camera_setup::{AppliedCameraSetup, CameraDestination, CameraFieldRecord};
 
 #[path = "destructable_host.rs"]
 mod destructables;
