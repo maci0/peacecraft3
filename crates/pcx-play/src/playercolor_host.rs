@@ -32,6 +32,8 @@ pub enum Failure {
     TimerState(&'static str),
     #[error("arguments do not match the group native declaration")]
     GroupArguments,
+    #[error("group iteration: {0}")]
+    GroupState(&'static str),
     #[error("arguments do not match the map configuration native declaration")]
     ConfigArguments,
     #[error("map configuration: {0}")]

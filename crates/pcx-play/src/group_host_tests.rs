@@ -264,3 +264,6 @@ fn membership_layout_refuses_platform_overflow_without_allocating_the_limit() {
     let result = timer_host(COMMON, "", 4).with_groups(count);
     assert_eq!(result.is_err(), usize::BITS == 32);
 }
+
+#[path = "group_iteration_tests.rs"]
+mod iteration;

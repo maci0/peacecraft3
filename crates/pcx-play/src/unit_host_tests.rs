@@ -2273,6 +2273,7 @@ fn position_host_program(
         "type rect extends agent\ntype group extends agent\ntype boolexpr extends agent\ntype destructable extends widget\nnative CreateDestructable takes integer id, real x, real y, real face, real scale, integer variation returns destructable\n",
     );
     extra.push_str("type filterfunc extends boolexpr\ntype conditionfunc extends boolexpr\nnative Filter takes code f returns filterfunc\nnative Condition takes code f returns conditionfunc\nconstant native GetFilterUnit takes nothing returns unit\nconstant native GetOwningPlayer takes unit u returns player\n");
+    extra.push_str("native ForGroup takes group g, code f returns nothing\nconstant native GetEnumUnit takes nothing returns unit\n");
     extra.push_str(declarations);
     for (name, args, result, constant) in [
         ("GetUnitX", "unit u", "real", true),

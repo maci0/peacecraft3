@@ -374,3 +374,66 @@ endfunction
     );
     v.call("clear_filtered", &[]).unwrap();
 }
+
+#[test]
+fn group_rectangle_and_trigger_contexts_are_independent_and_nested() {
+    let mut v = vm(
+        r#"
+globals
+trigger T = null
+unit ENUM_SAVED = null
+endglobals
+function TriggerAction takes nothing returns nothing
+if GetEnumUnit() != ENUM_SAVED or GetFilterUnit() != SAVED or GetTriggeringTrigger() != T then
+set OK = false
+endif
+endfunction
+function InnerEnum takes nothing returns nothing
+if GetFilterUnit() != SAVED then
+set OK = false
+endif
+set INNER_HITS = INNER_HITS + 1
+endfunction
+function Predicate takes nothing returns boolean
+set SAVED = GetFilterUnit()
+if GetEnumUnit() != ENUM_SAVED then
+set OK = false
+endif
+call TriggerExecute(T)
+call ForGroup(OTHER, function InnerEnum)
+if GetEnumUnit() != ENUM_SAVED or GetFilterUnit() != SAVED then
+set OK = false
+endif
+return true
+endfunction
+function OuterEnum takes nothing returns nothing
+set ENUM_SAVED = GetEnumUnit()
+if GetFilterUnit() != null then
+set OK = false
+endif
+call GroupEnumUnitsInRect(INNER, BOUNDS, Filter(function Predicate))
+if GetFilterUnit() != null or GetEnumUnit() != ENUM_SAVED then
+set OK = false
+endif
+set HITS = HITS + 1
+endfunction
+function run takes nothing returns nothing
+set T = CreateTrigger()
+call TriggerAddAction(T, function TriggerAction)
+call GroupAddUnit(TARGET, A)
+call GroupAddUnit(TARGET, B)
+call GroupAddUnit(OTHER, C)
+call ForGroup(TARGET, function OuterEnum)
+endfunction
+"#,
+        12,
+        TRIGGERS,
+    );
+    v.call("run", &[]).unwrap();
+    assert_eq!(v.global("OK"), Value::Bool(true));
+    assert_eq!(v.global("HITS"), Value::Int(2));
+    assert_eq!(v.global("INNER_HITS"), Value::Int(6));
+    for name in ["GetEnumUnit", "GetFilterUnit", "GetTriggeringTrigger"] {
+        assert_eq!(v.host().inner.native(name, &[]).unwrap(), Value::Null);
+    }
+}

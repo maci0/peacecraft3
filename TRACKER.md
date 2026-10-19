@@ -2990,7 +2990,22 @@ repeated, and the public site package was not rebuilt.
   all 155 handles and their original creation positions still match.
 - [x] Native 535 tests, six application trigger integration tests, actual WASI
   21 tests, strict native/browser lint and both library builds pass.
-- [ ] `ForGroup` in `GroupAddGroup` is the next caller. Candidate ordering/edges,
+- [x] `ForGroup` in `GroupAddGroup` now completes as recorded below. Candidate ordering/edges,
   mutable traversal, ordinary cache assembly, live world updates and rendered
   parity remain open. Human01 is not playable and the original baseline gate
   remains unchanged. See [rectangle predicates](docs/re-notes/script-unit-world.md#filtered-rectangle-predicates-2026-10-19).
+
+
+### 2026-10-19 — retained group actions on the same VM
+
+- [x] `ForGroup` and `GetEnumUnit` use the existing callback stack and actual unit
+  handles. Native code qualifies a retained member snapshot; nested group,
+  rectangle and trigger contexts restore independently, including on error.
+- [x] The unchanged Human01 completes two group iterations/eight enum reads;
+  all 155 creation inputs and accepted positions retain the original comparison.
+- [x] Native 542 tests, six application trigger tests, actual WASI 28 tests,
+  strict native/browser lint and both application library builds pass.
+- [ ] Next caller: `SetUnitInvulnerable`. Ordinary Host/cache assembly, live
+  world updates, unit lifecycle/combat, native ordering and rendered/4K parity
+  remain open. Human01 is not playable; the original baseline gate is unchanged.
+  See [group actions](docs/re-notes/script-unit-world.md#group-actions-on-the-owning-vm-2026-10-19).

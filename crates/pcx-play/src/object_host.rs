@@ -56,6 +56,7 @@ pub struct ObjectHost {
 enum NativeCallback {
     Trigger(trigger_runtime::DirectCall),
     Rectangle(unit_positions::Enumeration),
+    Group(group_iteration::Iteration),
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -279,6 +280,25 @@ impl ObjectHost {
             true,
             Some("group"),
         )?;
+        for (name, args, result, constant) in [
+            ("ForGroup", &["group", "code"][..], "nothing", false),
+            ("GetEnumUnit", &[][..], "unit", true),
+        ] {
+            if let Some(native) = self.inner.program.natives().get(name) {
+                Self::contract(&self.inner, name, args, result, constant, Some("group"))?;
+                if native.source
+                    != self
+                        .inner
+                        .program
+                        .natives()
+                        .get("CreateGroup")
+                        .expect("group admission")
+                        .source
+                {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
+            }
+        }
         if self.members.len() > max_members {
             return Err(self
                 .inner
@@ -442,6 +462,12 @@ impl Host for ObjectHost {
         {
             return Ok(Some(call));
         }
+        if let Some(call) = self
+            .begin_group_call(name, args)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(call));
+        }
         self.begin_trigger_call(name, args)
             .map_err(|e| e.to_string())
     }
@@ -449,6 +475,7 @@ impl Host for ObjectHost {
         match self.callbacks.last() {
             Some(NativeCallback::Rectangle(_)) => self.continue_rectangle_call(value),
             Some(NativeCallback::Trigger(_)) => self.continue_trigger_call(value),
+            Some(NativeCallback::Group(_)) => self.continue_group_call(),
             None => return Err("no native script callback is active".into()),
         }
         .map_err(|e| e.to_string())
@@ -536,6 +563,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.unit_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.group_iteration_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.unit_position_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -588,6 +618,9 @@ mod timer_tests;
 
 #[path = "script_random_host.rs"]
 mod random;
+
+#[path = "group_iteration_host.rs"]
+mod group_iteration;
 
 #[cfg(test)]
 #[path = "group_host_tests.rs"]

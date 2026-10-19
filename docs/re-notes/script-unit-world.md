@@ -603,3 +603,48 @@ attempts remain local in `.scratch/campaign-filtered-rectangle-root-20261019/`.
 No new original runtime, rendered/4K comparison, complete cross-runtime mission
 parity or playable campaign is claimed; normal cache assembly and live world
 updates remain open.
+
+## Group actions on the owning VM (2026-10-19)
+
+`ForGroup` now invokes loaded zero-argument, nothing-returning actions on the
+existing VM and shared unit identities. `GetEnumUnit` returns the current action's
+unit, restores its parent after a nested group call, and returns null outside a
+group action. Its context remains independent of `GetFilterUnit` and trigger
+context when these callbacks nest. Both declarations are optional at group
+admission; when present, their signatures and source must match the admitted
+group interface. Undeclared APIs and invalid callbacks remain unsupported.
+
+Static evidence from the selected 1.29.2.9231 image (`3f2ed012…`) establishes the
+member snapshot and context separation. The `ForGroup` entry at `0x4906f0` calls
+`0x5025c0`, which retains the loaded callback and traverses through `0x502360`.
+That traversal copies member references into a temporary vector through
+`0x4f5b20` before invoking actions. Callback `0x5026a0` pushes and pops the enum-unit
+context around the saved code; `GetEnumUnit` at `0x491f20` reads that context.
+This is code evidence, not a new runtime observation. The retained decoder graphs
+and image fingerprint remain local in
+`.scratch/campaign-group-iteration-root-20261019/`.
+
+The recreation therefore retains a bounded member snapshot per active action
+frame. Group additions, removals, clearing or destruction during an action do
+not replace that traversal. Nested calls retain their own callback and members.
+Execution errors unwind group, rectangle and trigger frames together, preserving
+completed script effects. Native traversal also checks unit liveness; actual unit
+removal/death remains unsupported here. The existing deterministic insertion order
+is still a reconstruction choice, not proof of native group ordering.
+
+The unchanged Human01 now completes two group iterations and eight enum-unit
+reads. Its next refusal is `SetUnitInvulnerable` at map span `109548..109592`.
+All 155 creation inputs and accepted positions still match the retained original
+comparisons; the authored starting Arthas identity remains unchanged. This run
+uses the existing explicit private Host inputs and creation cache. Ordinary
+application cache assembly, live actors/controls, removal/death and combat remain
+open; this does not make the campaign playable.
+
+Validation passes 542 native library tests (seven local-input tests ignored),
+six application trigger integration tests and 28 actual WASI tests. The new cases
+cover shared globals/handles, empty groups, mutation and destruction during
+iteration, nested calls, abort cleanup, malformed callback/declaration contracts,
+source isolation, and independent nested group/rectangle/trigger contexts. Strict
+native/browser lint and both application library builds pass. No new original
+runtime, rendered comparison, 4K capture or full three-runtime determinism claim
+is made; the original baseline gate is unchanged.
