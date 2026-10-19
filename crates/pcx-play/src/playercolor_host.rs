@@ -98,6 +98,8 @@ pub enum Failure {
     DestructableState(&'static str),
     #[error("unit creation: {0}")]
     UnitState(&'static str),
+    #[error("hero skills: {0}")]
+    HeroSkills(String),
     #[error("unit placement: {0}")]
     UnitPlacement(String),
     #[error("item creation: {0}")]
@@ -713,14 +715,15 @@ pub use objects::{
     ConditionBudget, ConditionCallback, DayNightState, DeathEventRegistration, DestructableBudget,
     DestructableCreation, ExecutedItem, ExecutedUnit, ExecutedUnitState, FileSoundState,
     FilterBudget, FilterCallback, FilterSample, ForceBudget, GameStateEventRegistration,
-    ItemBudget, LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection, MessageBudget,
-    MessageState, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget,
-    PlayerEventRegistration, PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration,
-    PresentationState, QuestBudget, QuestEvent, QuestFlag, RegionBudget, RegionEventKind,
-    RegionEventRegistration, RegionRectRequest, ResearchObservation, SoundProperties, SoundState,
-    StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
-    StartupClockState, StartupSettings, StockBudget, TechLimitBudget, TimedMessage,
-    TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord, TriggerBudget,
-    TriggerConditionRegistration, TriggerDelivery, TriggerRuntimeInput, UnitBudget,
-    UnitEventRegistration, UnitInRangeRegistration, UnitStateBudget,
+    HeroBudget, HeroProgress, ItemBudget, LabelSoundFlags, MapConfig, MapConfigBudget,
+    MapMusicSelection, MessageBudget, MessageState, ObjectHost, PlayerAdmissionError,
+    PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration, PlayerSettings,
+    PlayerStateRequestBudget, PlayerUnitEventRegistration, PresentationState, QuestBudget,
+    QuestEvent, QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration,
+    RegionRectRequest, ResearchObservation, SoundProperties, SoundState, StackedSoundAction,
+    StackedSoundRequest, StartLocation, StartPriorities, StartPriority, StartupClockState,
+    StartupSettings, StockBudget, TechLimitBudget, TimedMessage, TimerEventRegistration,
+    TimerExpiry, TimerHost, TriggerActionRecord, TriggerBudget, TriggerConditionRegistration,
+    TriggerDelivery, TriggerRuntimeInput, UnitAbilities, UnitBudget, UnitEventRegistration,
+    UnitInRangeRegistration, UnitStateBudget,
 };

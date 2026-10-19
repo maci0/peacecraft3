@@ -2572,3 +2572,6 @@ mod invulnerability;
 
 #[path = "unit_owner_tests.rs"]
 mod ownership;
+
+#[path = "unit_hero_tests.rs"]
+mod hero;

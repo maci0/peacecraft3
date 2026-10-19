@@ -692,7 +692,10 @@ pub use destructables::{DestructableBudget, DestructableCreation};
 
 #[path = "unit_host.rs"]
 mod unit_creation;
-pub use unit_creation::{ExecutedUnit, ExecutedUnitState, UnitBudget, UnitStateBudget};
+pub use unit_creation::{
+    ExecutedUnit, ExecutedUnitState, HeroBudget, HeroProgress, UnitAbilities, UnitBudget,
+    UnitStateBudget,
+};
 
 #[path = "unit_position_host.rs"]
 mod unit_positions;

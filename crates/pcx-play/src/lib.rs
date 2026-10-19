@@ -62,6 +62,7 @@ pub mod diff;
 pub mod file_sounds;
 pub mod game_cache;
 pub mod generator;
+pub mod hero_skills;
 pub mod label_sounds;
 pub mod map_admission;
 pub mod map_scripts_import;

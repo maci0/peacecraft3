@@ -3121,3 +3121,23 @@ repeated, and the public site package was not rebuilt.
   comparisons still differ. The first campaign remains unplayable and the original
   baseline gate is unchanged. Public hosting was not updated. See
   [texture mipmaps](docs/re-notes/menu-texture-mipmaps.md).
+
+### 2026-10-20 — source-backed hero learning state
+
+- [x] The campaign factory admits source-derived hero counters, learned ranks,
+  authored level requirements/caps and scalar custom-ability overrides on the
+  existing unit. `SelectHeroSkill` spends a point; the ability/hero queries read
+  that state. Implicit components, source identity, budgets and live-listener
+  qualification are explicit; no measured game-rule values are copied into defaults.
+- [x] Unchanged Human01 learns `AHhb` on its existing `Hart`: rank one, level one,
+  zero unspent points. All 155 original creation inputs and accepted positions
+  still match exactly. Earlier group/protection/XP/ownership results are retained,
+  and two more source ownership calls execute. Native 577 playback tests, one
+  profile test, six app trigger tests, seventeen actual WASI hero cases, strict
+  native/browser checks and both full builds pass.
+- [ ] Next refusal is `SetUnitAnimation("stand defend")` at `110016..110069`.
+  General spell/availability/dependency effects, XP/stat gains and hero-event
+  delivery remain open, as do ordinary Host inputs, live actors/controls and the
+  full campaign and deterministic three-target gates. Hero task remains active;
+  first Human01 is not playable and the original baseline gate is unchanged.
+  See [hero skill state](docs/re-notes/script-hero-skills.md).

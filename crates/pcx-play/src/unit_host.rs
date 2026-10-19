@@ -26,6 +26,10 @@ use pcx_sim::world::{
 };
 use std::sync::Arc;
 
+#[path = "unit_hero_host.rs"]
+mod hero;
+pub use hero::{HeroBudget, HeroProgress, UnitAbilities};
+
 const NATIVE: &str = "CreateUnit";
 const GET_TYPE: &str = "GetUnitTypeId";
 const GET_OWNER: &str = "GetOwningPlayer";
@@ -117,6 +121,8 @@ pub struct ExecutedUnit {
     /// or no order was admitted. `Some((code, false))` is the ability-data
     /// `code` cell, inactive. `Some((code, true))` is the executed on order.
     pub admitted_order: Option<([u8; 4], bool)>,
+    /// Source-backed ability levels and hero counters, when that runtime is admitted.
+    pub abilities: Option<UnitAbilities>,
 }
 
 struct DefendAbility {
@@ -158,6 +164,7 @@ pub(super) struct Admission {
     unit_state: Option<UnitStateLimits>,
     /// Present after [`ObjectHost::with_defend_ability`].
     order: Option<DefendAbility>,
+    heroes: Option<hero::Admission>,
 }
 
 impl Admission {
@@ -238,6 +245,7 @@ impl ObjectHost {
             invulnerable_query_span,
             unit_state: None,
             order: None,
+            heroes: None,
         });
         Ok(self)
     }
@@ -421,6 +429,9 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         self.units.as_ref()?;
+        if let Some(result) = self.hero_native(name, args) {
+            return Some(result);
+        }
         if name == NATIVE {
             return Some(self.create_unit(args));
         }
@@ -589,9 +600,14 @@ impl ObjectHost {
         if number == previous_number {
             return Ok(Value::Null);
         }
-        let unit_event =
-            self.ownership_event("EVENT_UNIT_CHANGE_OWNER", "unitevent", "ConvertUnitEvent")?;
-        let player_event = self.ownership_event(
+        let unit_event = self.unit_event_enumerand(
+            SET_OWNER,
+            "EVENT_UNIT_CHANGE_OWNER",
+            "unitevent",
+            "ConvertUnitEvent",
+        )?;
+        let player_event = self.unit_event_enumerand(
+            SET_OWNER,
             "EVENT_PLAYER_UNIT_CHANGE_OWNER",
             "playerunitevent",
             "ConvertPlayerUnitEvent",
@@ -632,7 +648,13 @@ impl ObjectHost {
         }
     }
 
-    fn ownership_event(&self, name: &str, kind: &str, convert: &str) -> Result<Option<i32>, Error> {
+    fn unit_event_enumerand(
+        &self,
+        caller: &str,
+        name: &str,
+        kind: &str,
+        convert: &str,
+    ) -> Result<Option<i32>, Error> {
         let source = &self.admitted_units()?.declaration_source;
         let mut globals = self
             .inner
@@ -643,7 +665,7 @@ impl ObjectHost {
         let Some(global) = globals.next() else {
             return Ok(None);
         };
-        let fail = || self.inner.error(SET_OWNER, Failure::Signature);
+        let fail = || self.inner.error(caller, Failure::Signature);
         if globals.next().is_some()
             || !global.is_constant
             || global.array
@@ -669,13 +691,13 @@ impl ObjectHost {
             .get(convert)
             .is_none_or(|native| &native.source != source)
         {
-            return Err(self.inner.error(SET_OWNER, Failure::Source));
+            return Err(self.inner.error(caller, Failure::Source));
         }
         // Local expression limits, independent of the source enumerand.
         let mut work = 1024;
         super::super::integer(argument, 64, &mut work)
             .map(Some)
-            .map_err(|failure| self.inner.error(SET_OWNER, failure))
+            .map_err(|failure| self.inner.error(caller, failure))
     }
 
     fn unit_collision(&self, args: &[Value]) -> Result<Value, Error> {
@@ -773,6 +795,9 @@ impl ObjectHost {
     }
 
     fn set_hero_level(&mut self, args: &[Value]) -> Result<Value, Error> {
+        if self.admitted_units()?.heroes.is_some() {
+            return self.change_hero_level(args);
+        }
         let (id, level, show_eye_candy) = {
             let fail = |reason| self.inner.error(SET_HERO_LEVEL, reason);
             let [
@@ -1083,9 +1108,11 @@ impl ObjectHost {
                 unit_states: Vec::new(),
                 invulnerable: None,
                 admitted_order,
+                abilities: None,
             }
         };
         let mut record = record;
+        record.abilities = self.prepare_unit_abilities(&record.definition)?;
         let placement = self.prepare_unit_position(&record)?;
         if let Some(prepared) = &placement {
             record.position = Some(prepared.position);

@@ -141,6 +141,12 @@ pub struct DefendSelection {
     pub alias: String,
 }
 
+pub struct HeroSkillsInput {
+    pub rules: crate::hero_skills::Rules,
+    pub abilities: pcx_objects::editor::Overlay,
+    pub budget: crate::playercolor_host::HeroBudget,
+}
+
 pub struct CurrentResearchInput {
     pub entries: Vec<ResearchObservation>,
     pub budget: TechLimitBudget,
@@ -209,6 +215,7 @@ pub struct MapStartupInputs {
     pub numeric: Option<crate::script_numeric::NumericPolicy>,
     /// Source-qualified XP-factor limits; absent leaves the handicap natives unsupported.
     pub experience_handicap: Option<crate::player_handicap::Rules>,
+    pub hero_skills: Option<HeroSkillsInput>,
     pub catalog: Arc<dyn ObjectCatalog + Send + Sync>,
     pub defend: DefendSelection,
     pub current_research: Option<CurrentResearchInput>,
@@ -389,6 +396,7 @@ pub fn assemble(
         terrain_pathing,
         numeric,
         experience_handicap,
+        hero_skills,
         catalog,
         defend,
         current_research,
@@ -450,7 +458,17 @@ pub fn assemble(
             budgets.units,
         )?
         .with_unit_states(budgets.unit_states)?
-        .with_defend_ability(&defend.tables, &defend.alias)?
+        .with_defend_ability(&defend.tables, &defend.alias)?;
+    if let Some(input) = hero_skills {
+        object = object.with_hero_skills(
+            defend.tables,
+            context.sources.catalog.clone(),
+            input.abilities,
+            input.rules,
+            input.budget,
+        )?;
+    }
+    object = object
         .with_trigger_admission(budgets.triggers)?
         .with_timer_events(budgets.timer_events)?
         .with_game_state_events(budgets.game_state_events)?;
