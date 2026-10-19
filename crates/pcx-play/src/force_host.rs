@@ -67,6 +67,30 @@ impl ObjectHost {
                 return Err(self.inner.error(name, Failure::Source));
             }
         }
+        let query = "IsPlayerInForce";
+        if self.inner.program.natives().get(query).is_some()
+            || self.inner.program.natives().ambiguous(query).is_some()
+        {
+            Self::contract(
+                &self.inner,
+                query,
+                &["player", "force"],
+                "boolean",
+                true,
+                Some("force"),
+            )?;
+            if self
+                .inner
+                .program
+                .natives()
+                .get(query)
+                .expect("checked query")
+                .source
+                != *source
+            {
+                return Err(self.inner.error(query, Failure::Source));
+            }
+        }
         let mut kind = self
             .inner
             .program
@@ -226,11 +250,29 @@ impl ObjectHost {
         match name {
             "CreateForce" => Some(self.create_force(args)),
             "ForceAddPlayer" => Some(self.force_add_player(args)),
+            "IsPlayerInForce" if self.inner.program.natives().get(name).is_some() => {
+                Some(self.is_player_in_force(args))
+            }
             "ForceEnumPlayers" if self.forces.as_ref()?.startup_players.is_some() => {
                 Some(self.force_enum_players(args))
             }
             _ => None,
         }
+    }
+    fn is_player_in_force(&self, args: &[Value]) -> Result<Value, Error> {
+        let name = "IsPlayerInForce";
+        let [Value::Handle(player), Value::Handle(force)] = args else {
+            return Err(self.inner.error(
+                name,
+                Failure::ForceState("expected player and force identities"),
+            ));
+        };
+        self.player_settings(*player)
+            .map_err(|e| self.inner.error(name, e.failure))?;
+        let members = self
+            .force_members(*force)
+            .map_err(|e| self.inner.error(name, e.failure))?;
+        Ok(Value::Bool(members.contains(player)))
     }
     fn force_enum_players(&mut self, args: &[Value]) -> Result<Value, Error> {
         let name = "ForceEnumPlayers";

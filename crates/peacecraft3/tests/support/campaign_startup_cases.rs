@@ -1236,3 +1236,6 @@ mod timed_trigger_cases;
 
 #[path = "presentation_cases.rs"]
 mod presentation_cases;
+
+#[path = "force_query_cases.rs"]
+mod force_query_cases;

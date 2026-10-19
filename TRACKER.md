@@ -2842,3 +2842,21 @@ repeated, and the public site package was not rebuilt.
   Details: `docs/re-notes/campaign-presentation.md`; receipts:
   `.scratch/campaign-presentation-root-20261019/`. The previously verified
   implementation is now published; chapter playability remains open.
+
+
+### 2026-10-19 — force membership predicate
+
+- [x] Add optional source-qualified constant `IsPlayerInForce` to the existing
+  force admission. Read explicit shared-arena membership without allocation or
+  player/force adoption; preserve signature, source and identity validation.
+- [x] Native, actual WASI and actual Cargo WASM checks cover aliases, membership
+  changes, capacity, invalid identities, omitted/foreign declarations and failed
+  session replacement. Strict native/WASM lint/builds pass. Evidence:
+  `.scratch/force-query-root-20261019/`.
+- [x] Unchanged Human01 passes the force query with its private explicit local
+  client selection and next refuses `ClearTextMessages`. No production local
+  slot default, original local-player identity or original runtime result is
+  inferred from this probe.
+- [ ] Text message consumers, further cinematic/mission natives, normal Host
+  preparation and live actors/controls still block the first playable chapter.
+  Original null-force/null-player behavior and destruction edges remain open.

@@ -45,8 +45,8 @@ malformed/wrong-family/unknown/reserved identities, missing player admission,
 source/type/interface overrides and an extra authored ancestry edge. Native and
 actual WASI execute the same tests.
 
-`ForForce`/`GetEnumPlayer`, destruction, removal, clear and membership-query
-natives remain unsupported. `ForceEnumPlayers` requires the separately admitted
+`ForForce`/`GetEnumPlayer`, destruction, removal and clear natives remain
+unsupported. The membership query is described below. `ForceEnumPlayers` requires the separately admitted
 startup participation described below; callback iteration must execute on the same VM with an explicit
 candidate context. Neither operation follows from container retention.
 
@@ -142,3 +142,39 @@ Owned-VM tests exercise independent forces and aliases, exact aggregate limits,
 empty versus invalidated input, transactional re-admission, context/interface/
 identity refusal, controller invalidation and recovery. Non-null filters leave
 callback side effects untouched. Native and actual WASI execute the same tests.
+
+
+## Source-qualified membership query (2026-10-19)
+
+When the selected common source declares the exact constant native
+`IsPlayerInForce(player, force) -> boolean`, force admission validates that
+optional declaration and its source. Omission leaves the native unsupported;
+a mismatched qualifier, signature, override or declaring source refuses.
+No factory budget or extra store is required.
+
+The predicate validates an existing admitted player and a real owned force,
+then reads that force's explicit memberships. It allocates nothing, never
+adopts reserved same-kind identities and does not infer participation from
+controllers or slot state. Querying remains valid after startup enumeration
+input is invalidated, since the previously retained force still exists.
+Null, unknown, wrong-family and reserved identities refuse; original null and
+destruction edge behavior remains unqualified. The valid-member semantics agree
+with the independent original membership checks recorded above; no new original
+runtime was launched.
+
+Three owned-VM/Host tests cover empty/member/nonmember results, canonical player
+aliases, queries at full capacity, unchanged identity/membership state,
+invalidation, invalid identities and declaration/source refusal. Two application
+tests exercise the actual factory and published session, including preservation
+of the old session on a refused replacement. Host cases execute on native and
+actual WASI; application cases execute on native and actual Cargo WASM. Strict
+native/WASM checks and builds also pass.
+
+The unchanged selected Human01 run uses an explicit private client selection
+from the single supplied user-controller row. That is a reconstruction client
+choice, not a new original local-player observation or a production slot
+default. Its force query returns true and the next refusal is
+`ClearTextMessages`; original map/common/BJ bytes are unchanged. Source/probe
+receipts remain local under `.scratch/force-query-root-20261019/`.
+Normal Host input preparation, live actors/controls, later mission natives and
+first-chapter playability remain open.

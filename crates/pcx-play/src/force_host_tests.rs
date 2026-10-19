@@ -237,3 +237,119 @@ fn admission_requires_players_and_loaded_contracts_and_ancestry_sources() {
 
 #[path = "force_enumeration_tests.rs"]
 mod enumeration;
+
+const QUERY: &str = "constant native IsPlayerInForce takes player p, force f returns boolean\n";
+#[test]
+fn membership_query_reads_the_owned_force_without_allocating_or_inferring_participation() {
+    let c = format!("{}{QUERY}", common());
+    let map = "globals\nplayer A=Player(0)\nplayer Alias=Player(0)\nplayer B=Player(1)\nforce F=CreateForce()\nforce Empty=CreateForce()\nendglobals\nfunction add takes nothing returns boolean\ncall ForceAddPlayer(F,A)\nreturn IsPlayerInForce(Alias,F)\nendfunction\n";
+    let h = host(&c, map, 16, true).with_forces(bound(2, 1)).unwrap();
+    let mut vm = h.into_vm();
+    vm.init_globals().unwrap();
+    let a = vm.global("A");
+    let b = vm.global("B");
+    let f = vm.global("F");
+    let empty = vm.global("Empty");
+    assert_eq!(
+        vm.host()
+            .native("IsPlayerInForce", &[a.clone(), f.clone()])
+            .unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(vm.call("add", &[]).unwrap(), Value::Bool(true));
+    let handles = vm.host().inner().handles();
+    for _ in 0..32 {
+        assert_eq!(
+            vm.host()
+                .native("IsPlayerInForce", &[a.clone(), f.clone()])
+                .unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            vm.host()
+                .native("IsPlayerInForce", &[b.clone(), f.clone()])
+                .unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            vm.host()
+                .native("IsPlayerInForce", &[a.clone(), empty.clone()])
+                .unwrap(),
+            Value::Bool(false)
+        );
+    }
+    vm.host().invalidate_force_enumeration();
+    assert_eq!(
+        vm.host()
+            .native("IsPlayerInForce", &[a.clone(), f.clone()])
+            .unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(vm.host().inner().handles(), handles);
+    assert_eq!(vm.host().force_members(id(&f)).unwrap(), &[id(&a)]);
+}
+#[test]
+fn membership_query_rejects_invalid_identities_without_adopting_or_mutating_them() {
+    let c = format!("{}{QUERY}", common());
+    let ctx = context(301, &c, "// map", "synthetic:force-query");
+    let mut inner = enums(&ctx, 16);
+    let reserved = inner.reserve_identity("force").unwrap();
+    let reserved_player = inner.reserve_identity("player").unwrap();
+    let mut h = ObjectHost::checked(inner)
+        .unwrap()
+        .with_players(ctx, slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_forces(bound(1, 1))
+        .unwrap();
+    let player = h.native("Player", &[Value::Int(0)]).unwrap();
+    let f = h.native("CreateForce", &[]).unwrap();
+    h.native("ForceAddPlayer", &[f.clone(), player.clone()])
+        .unwrap();
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    let handles = h.inner().handles();
+    let unknown = Value::Handle(HandleId::new(std::num::NonZeroU64::new(u64::MAX).unwrap()));
+    for args in [
+        vec![],
+        vec![unknown.clone(), f.clone()],
+        vec![player.clone(), unknown],
+        vec![player.clone()],
+        vec![Value::Null, f.clone()],
+        vec![player.clone(), Value::Null],
+        vec![timer.clone(), f.clone()],
+        vec![player.clone(), timer],
+        vec![f.clone(), player.clone()],
+        vec![Value::Handle(reserved_player), f.clone()],
+        vec![player.clone(), Value::Handle(reserved)],
+    ] {
+        assert!(h.native("IsPlayerInForce", &args).is_err());
+    }
+    assert_eq!(h.inner().handles(), handles);
+    assert_eq!(h.force_members(id(&f)).unwrap(), &[id(&player)]);
+}
+#[test]
+fn membership_query_requires_its_optional_exact_same_source_declaration() {
+    let mut h = host(&common(), "// map", 16, true)
+        .with_forces(bound(1, 1))
+        .unwrap();
+    assert!(
+        h.native("IsPlayerInForce", &[Value::Null, Value::Null])
+            .unwrap_err()
+            .contains("unsupported")
+    );
+    for declaration in [
+        QUERY.replace("boolean", "integer"),
+        QUERY.replace("constant native IsPlayerInForce", "native IsPlayerInForce"),
+        QUERY.replace("player p, force f", "force f, player p"),
+    ] {
+        assert!(
+            host(&format!("{}{declaration}", common()), "// map", 16, true)
+                .with_forces(bound(1, 1))
+                .is_err()
+        );
+    }
+    assert!(
+        host(&common(), QUERY, 16, true)
+            .with_forces(bound(1, 1))
+            .is_err()
+    );
+}
