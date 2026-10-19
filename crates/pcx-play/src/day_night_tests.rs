@@ -274,6 +274,37 @@ fn bad_arguments_and_oversized_unknown_paths_leave_selection_unset() {
     assert!(set(&mut h, "", "units.mdl").is_err());
     assert!(h.day_night_state().unwrap().selected().is_none());
 }
+
+#[test]
+fn replacement_models_commit_only_after_both_paths_resolve() {
+    let mut h = host(COMMON, "").with_day_night(assets()).unwrap();
+    set(&mut h, "terrain.mdl", "units.mdl").unwrap();
+    let before = h
+        .day_night_state()
+        .unwrap()
+        .selected()
+        .unwrap()
+        .map(|model| model.sha256());
+    assert!(
+        h.apply_day_night_assets(assets(), ["terrain.mdl", "missing.mdl"])
+            .is_err()
+    );
+    assert_eq!(
+        h.day_night_state()
+            .unwrap()
+            .selected()
+            .unwrap()
+            .map(|model| model.sha256()),
+        before
+    );
+    h.apply_day_night_assets(assets(), ["units.mdl", "terrain.mdl"])
+        .unwrap();
+    assert_eq!(
+        h.day_night_state().unwrap().selected().unwrap()[0].script_path(),
+        "units.mdl"
+    );
+    assert_eq!(h.inner().handles(), 0);
+}
 #[test]
 fn exact_native_contracts_and_script_overrides_are_required() {
     for common in [

@@ -1,6 +1,7 @@
 //! Start one admitted map on the production host after parsed delivery.
 //! Browser source selection stays on `SelectedMapSources`. This system reads
 //! the admitted context and caller-supplied host inputs only.
+use crate::browser_configuration::SelectedMapSources;
 use crate::map_requests::{MapRequestSet, MapRequests};
 use crate::map_script_session::{MapScriptSession, ScriptSessionError};
 use bevy::prelude::*;
@@ -76,6 +77,7 @@ fn entry_id(context: &ParsedMapContext, name: &'static str) -> Result<FunctionId
 
 fn start_admitted_map(
     requests: Res<MapRequests>,
+    sources: Res<SelectedMapSources>,
     mut supply: ResMut<CampaignHostSupply>,
     mut startup: ResMut<CampaignStartup>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
@@ -146,10 +148,38 @@ fn start_admitted_map(
         return;
     };
     let post = inputs.post_config.clone();
+    let reader = sources.for_receipts(&bindings.receipts);
+    let edition = context.sources.map.edition.clone();
     let admitted = Arc::clone(&context);
     let result = session.replace_sequenced(
         Arc::clone(&context),
-        move |ctx| map_startup_host::assemble(ctx, inputs),
+        move |ctx| {
+            let host = map_startup_host::assemble(ctx, inputs)?;
+            Ok::<_, MapStartupError>(match reader {
+                Some(reader) => {
+                    // Bound cumulative source work too; selecting an already loaded pair reads nothing.
+                    let mut remaining_loads = 64usize;
+                    host.with_day_night_loader(move |terrain, unit| {
+                        remaining_loads = remaining_loads
+                            .checked_sub(1)
+                            .ok_or("SetDayNightModels: session source-load budget exhausted")?;
+                        // Application input limits, not lighting values or native engine limits.
+                        crate::campaign_assets::day_night(
+                            &reader,
+                            &edition,
+                            [terrain, unit],
+                            pcx_play::day_night::Budget {
+                                models: 2,
+                                model_bytes: 2 << 20,
+                                total_bytes: 4 << 20,
+                                path_bytes: 16 << 10,
+                            },
+                        )
+                    })
+                }
+                None => host,
+            })
+        },
         &[config, main],
         move |vm, completed| apply_after_config(vm, &admitted, completed, &post),
     );

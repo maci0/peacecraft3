@@ -74,3 +74,9 @@ An explicit post-config local-player selection now supports `GetLocalPlayer`
 on the existing player arena. The application camera test follows the same
 identity branch used by the loaded Blizzard camera helper. No local slot is
 chosen automatically; see [player setup](script-player-setup.md#explicit-local-client-player).
+
+Startup also installs a bounded lighting loader on the candidate Host using the
+reader attached to its binding receipts. Executed day/night model arguments now
+load their own source assets. The rest of automatic Host-input preparation and
+the remaining Human01 mission natives still block playability. See
+[day/night source preparation](script-day-night-models.md#application-source-preparation).

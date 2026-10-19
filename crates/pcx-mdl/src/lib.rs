@@ -76,6 +76,16 @@ use std::path::Path;
 
 pub const MAGIC: &[u8; 4] = b"MDLX";
 
+/// Select the shipped binary counterpart of a script/skin `.mdl` reference.
+/// Other extensions and the authored directory/name are preserved.
+/// Original-engine extension lookup order is not established by this mapping.
+pub fn binary_model_path(path: &str) -> String {
+    match path.len().checked_sub(4).and_then(|at| path.get(at..)) {
+        Some(ext) if ext.eq_ignore_ascii_case(".mdl") => format!("{}.mdx", &path[..path.len() - 4]),
+        _ => path.to_string(),
+    }
+}
+
 /// Chunk tags seen across the shipped models.
 pub mod tag {
     pub const VERS: &[u8; 4] = b"VERS";
@@ -3978,6 +3988,19 @@ impl Mdlx {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn script_model_paths_select_only_the_binary_extension() {
+        for (path, expected) in [
+            ("UI/Custom.MDL", "UI/Custom.mdx"),
+            ("Models/树.mdl", "Models/树.mdx"),
+            ("a.mdx", "a.mdx"),
+            ("a.mdl/other", "a.mdl/other"),
+            ("", ""),
+            ("树", "树"),
+        ] {
+            assert_eq!(super::binary_model_path(path), expected);
+        }
+    }
     use super::*;
 
     #[test]

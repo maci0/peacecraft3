@@ -4,6 +4,7 @@
 //! Parsed publication and script startup stay separate: startup runs only after a
 //! successful admission and caller-supplied host inputs.
 
+mod campaign_assets;
 pub mod campaign_camera;
 pub mod campaign_runtime;
 pub mod campaign_startup;

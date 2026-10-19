@@ -1196,6 +1196,9 @@ mod script_timer_cases;
 #[path = "script_camera_cases.rs"]
 mod script_camera_cases;
 
+#[path = "campaign_asset_cases.rs"]
+mod campaign_asset_cases;
+
 #[path = "player_unit_event_cases.rs"]
 mod player_unit_event_cases;
 

@@ -29,7 +29,7 @@ script-function overrides through the existing shared contract validator.
 Nothing is selected initially. An executed call resolves both terrain/unit
 references before atomically retaining the selected model pair. Missing models,
 malformed arguments and over-budget path arguments preserve the prior pair.
-Successful selection allocates no session handles or replacement model buffers.
+Selecting prebound models allocates no session handles or replacement model buffers.
 This is real source-backed scene setup state; applying/sampling it in the world
 renderer and admitting it through the default launcher remain separate work.
 
@@ -86,3 +86,43 @@ typed failures. Captured commands, immutable failed attempts, fingerprints and
 successful outputs are local in `.scratch/daynight-source-root/`. No model or
 other original payload was saved or published by the gate. Time-of-day sampling,
 GPU lighting, audio initialization and campaign completion remain open.
+
+## Application source preparation
+
+Campaign startup now attaches the reader for its exact admitted binding receipts
+to the candidate Host. An executed `SetDayNightModels` call can load its terrain
+and unit paths from that reader without a hand-built lighting bank. Paths can
+come from runtime expressions; no chapter name or model list is embedded.
+The shared `.mdl`-to-`.mdx` mapping preserves the existing menu behavior and is
+an explicit binary-counterpart selection, not proof of native lookup order.
+
+The loader enforces application limits of two models, 2 MiB per member, 4 MiB
+per pair and 16 KiB of path/identity metadata. At most 64 new pair-load attempts
+are allowed per Host. Already loaded bindings can be selected without another
+read or load charge. These bounds are resource policy, not original game values.
+Duplicate arguments share one binding. All model values/tracks come from the
+existing MDX reader. Each bound model keeps the original script spelling,
+content digest, full serialized resolver provenance and source version (or an
+explicit unversioned label); its edition is the binding's declared selection.
+This does not certify a mixed source set as one original release.
+
+Both models decode before the active pair changes. Missing, malformed or
+oversized inputs preserve prior state. Failed session replacement keeps the
+published VM and its retained reader, even after another source configuration
+is admitted. A binding without a retained reader keeps the explicit prebound
+asset path. The launcher still requires the other Host inputs; this completes
+lighting-input preparation, not the automatic campaign bootstrap or world
+lighting renderer.
+
+Verification of this increment passes 58 native model, 474 Host, 20 application
+library, 409 launcher and 119 map/session tests, with explicit local-input ignores
+retained. Strict native/WASM lint and application builds pass. The compiled Cargo
+WASM module executes 27 integration cases, including four source-loading cases;
+targeted WASI executes nine lighting cases and the shared path case.
+
+A bounded local check extracts the two lighting arguments from the actual
+Human01 map script and invokes the production loader against one explicitly
+selected local archive. Both 1,468-byte models match the previously retained
+member hashes above and decode one light each. No mission or original game is
+run. Commands, input hashes and failed private-probe preparation attempts remain
+local in `.scratch/campaign-lighting-root-20261019/`.

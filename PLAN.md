@@ -1286,6 +1286,10 @@ executed camera branch using the same arena identity as `Player`. This removes
 one required camera-helper gap; automatic first-chapter bootstrap and the last
 observed `SetCampaignMenuRace` initialization refusal remain open.
 
+Executed day/night model arguments can now prepare their lighting inputs through
+the session's retained source reader, with no chapter-specific model list.
+Other automatic Host inputs, world lighting, actors and controls remain open.
+
 Remaining work includes native behavior and handle lifetimes, actual trigger
 registration/delivery and VM callbacks, timer/event ordering, the `BJ`/`Blz`
 surface, complete localization substitution, and application game-loop wiring.

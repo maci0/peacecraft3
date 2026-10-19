@@ -2699,3 +2699,17 @@ repeated, and the public site package was not rebuilt.
 - [ ] First Human campaign remains unfinished: automatic Host inputs, the last
   observed `SetCampaignMenuRace` refusal and later mission natives, actors and
   controls. Original/native/WASM gameplay and visual parity remain open.
+
+### 2026-10-19 — automatic campaign lighting inputs
+
+- [x] Campaign startup attaches its exact binding reader to the Host; executed
+  day/night paths load and validate both source models before changing selection.
+  Existing bindings are reused; new source work is bounded per session. Failed
+  replacement keeps the prior VM, lighting and source reader.
+- [x] Native suites, strict native/WASM lint/builds, 27 actual Cargo WASM cases
+  and ten targeted WASI cases pass. The actual Human01 map arguments load both
+  selected original lighting members with matching retained hashes. No mission
+  or original game was run. Evidence: `.scratch/campaign-lighting-root-20261019/`.
+- [ ] Other automatic startup inputs, `SetCampaignMenuRace` and later mission
+  natives, world lighting, actors/controls and complete first-chapter playability
+  remain open. This is source preparation, not rendered or original-game parity.

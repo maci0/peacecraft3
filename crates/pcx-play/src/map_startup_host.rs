@@ -204,9 +204,20 @@ type NeutralStack = SelectedMapNeutralHost<
 pub struct MapStartupHost {
     inner: NeutralStack,
     research: Option<CurrentResearchInput>,
+    day_night_loader: Option<DayNightLoader>,
 }
 
+type DayNightLoader = Box<dyn FnMut(&str, &str) -> Result<day_night::Assets, String> + Send + Sync>;
+
 impl MapStartupHost {
+    /// Resolve the executed paths on this session's retained source reader.
+    pub fn with_day_night_loader(
+        mut self,
+        loader: impl FnMut(&str, &str) -> Result<day_night::Assets, String> + Send + Sync + 'static,
+    ) -> Self {
+        self.day_night_loader = Some(Box::new(loader));
+        self
+    }
     pub fn context(&self) -> &Arc<ParsedMapContext> {
         self.inner.context()
     }
@@ -473,6 +484,7 @@ pub fn assemble(
     Ok(MapStartupHost {
         inner,
         research: current_research,
+        day_night_loader: None,
     })
 }
 
@@ -495,6 +507,26 @@ impl Host for MapStartupHost {
     }
 
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if name == "SetDayNightModels"
+            && let [Value::Str(terrain), Value::Str(unit)] = args
+        {
+            let loaded = self.objects().day_night_state().is_some_and(|state| {
+                [terrain, unit].iter().all(|path| {
+                    state
+                        .assets()
+                        .models()
+                        .iter()
+                        .any(|model| model.script_path() == path.as_str())
+                })
+            });
+            if !loaded && let Some(loader) = &mut self.day_night_loader {
+                let assets = loader(terrain, unit)?;
+                return self
+                    .objects_mut()
+                    .apply_day_night_assets(assets, [terrain, unit])
+                    .map_err(|error| error.to_string());
+            }
+        }
         if name == "GetPlayerTechResearched"
             && let Some(pending) = self.research.take()
         {

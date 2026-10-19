@@ -17,6 +17,7 @@ use bevy::camera::ScalingMode;
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::prelude::*;
+use pcx_mdl::binary_model_path;
 
 use crate::mainmenu_scene as scene;
 #[path = "menu_panel_phases.rs"]
@@ -193,15 +194,6 @@ fn tagged(name: &str, anim: &str) -> bool {
     tokens.len() == 2
         && tokens.iter().any(|t| t.eq_ignore_ascii_case(SCREEN))
         && tokens.iter().any(|t| t.eq_ignore_ascii_case(anim))
-}
-
-/// The skin table names `.mdl` paths; the archives ship only the binary `.mdx`
-/// for these keys. The native extension rewrite has not been traced.
-fn binary_model_path(path: &str) -> String {
-    match path.len().checked_sub(4).and_then(|at| path.get(at..)) {
-        Some(ext) if ext.eq_ignore_ascii_case(".mdl") => format!("{}.mdx", &path[..path.len() - 4]),
-        _ => path.to_string(),
-    }
 }
 
 /// The selected skin's panel bindings, shared by native reads and local imports.

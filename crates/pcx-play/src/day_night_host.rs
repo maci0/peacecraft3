@@ -18,6 +18,25 @@ impl DayNightState {
     }
 }
 impl ObjectHost {
+    /// Replace the active pair only after both caller-loaded models validate.
+    pub(crate) fn apply_day_night_assets(
+        &mut self,
+        assets: Assets,
+        paths: [&str; 2],
+    ) -> Result<Value, Error> {
+        let name = "SetDayNightModels";
+        let fail = |failure| self.inner.error(name, failure);
+        let state = self
+            .day_night
+            .as_mut()
+            .ok_or_else(|| fail(Failure::DayNightState("not admitted")))?;
+        let pair = select(&assets, paths).map_err(fail)?;
+        *state = DayNightState {
+            assets,
+            selected: Some(pair),
+        };
+        Ok(Value::Null)
+    }
     pub fn with_day_night(mut self, assets: Assets) -> Result<Self, Error> {
         if self.day_night.is_some() {
             return Err(self.inner.error(
@@ -56,26 +75,26 @@ impl ObjectHost {
                 .inner
                 .error(name, Failure::DayNightState("expected two model strings"))));
         };
-        let mut pair = [0; 2];
-        for (out, path) in pair.iter_mut().zip([terrain, unit]) {
-            if path.len() > state.assets.path_limit() {
-                return Some(Err(self
-                    .inner
-                    .error(name, Failure::Budget("day/night path"))));
-            }
-            let Some(index) = state
-                .assets
-                .models()
-                .iter()
-                .position(|m| m.script_path() == path)
-            else {
-                return Some(Err(self
-                    .inner
-                    .error(name, Failure::MissingDayNightModel(path.clone()))));
-            };
-            *out = index;
-        }
+        let pair = match select(&state.assets, [terrain, unit]) {
+            Ok(pair) => pair,
+            Err(failure) => return Some(Err(self.inner.error(name, failure))),
+        };
         state.selected = Some(pair);
         Some(Ok(Value::Null))
     }
+}
+
+fn select(assets: &Assets, paths: [&str; 2]) -> Result<[usize; 2], Failure> {
+    let mut pair = [0; 2];
+    for (out, path) in pair.iter_mut().zip(paths) {
+        if path.len() > assets.path_limit() {
+            return Err(Failure::Budget("day/night path"));
+        }
+        *out = assets
+            .models()
+            .iter()
+            .position(|model| model.script_path() == path)
+            .ok_or_else(|| Failure::MissingDayNightModel(path.to_owned()))?;
+    }
+    Ok(pair)
 }
