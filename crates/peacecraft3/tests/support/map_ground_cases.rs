@@ -314,5 +314,118 @@ pub fn browser_ground_publication_gate() -> u32 {
     delivered_ground_uses_the_selected_reader_and_keeps_its_draw_on_refusal();
     stale_ground_delivery_and_missing_inputs_preserve_the_mounted_source();
     corrected_ground_budgets_retry_the_same_admitted_map();
-    3
+    automatic_ground_budget_follows_delivery_and_preserves_refused_replacement();
+    automatic_ground_budget_is_enforced_before_publication();
+    5
+}
+
+fn automatic_app(inbox: &ConfigurationInbox, read_limit: u64, retained_bytes: usize) -> App {
+    let mut app = configuration::app(inbox);
+    app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+    peacecraft3::map_ground::install_with_budget(
+        &mut app,
+        read_limit,
+        GroundMemory {
+            retained_bytes,
+            transient_bytes: 128,
+        },
+    );
+    app.init_resource::<Assets<Mesh>>()
+        .init_resource::<Assets<Image>>();
+    app
+}
+
+#[test]
+fn automatic_ground_budget_follows_delivery_and_preserves_refused_replacement() {
+    let inbox = ConfigurationInbox::default();
+    let mut app = automatic_app(&inbox, 4096, 64);
+    app.update();
+    assert_eq!(app.world().resource::<GroundSupply>().read_limit, None);
+    let f = ground_fixture();
+    let id = enqueue(&inbox, &f, ground_assets());
+    app.update();
+    assert!(matches!(inbox.poll(id).unwrap(), Poll::Completed(o) if o.result.is_ok()));
+    let publication = app.world().resource::<GroundPublication>();
+    assert!(
+        publication.last_error.is_none(),
+        "{:?}",
+        publication.last_error
+    );
+    let first = publication.entity.unwrap();
+    assert_eq!(app.world().resource::<GroundSupply>().revision, 73);
+    app.update();
+    assert_eq!(
+        app.world().resource::<GroundPublication>().entity,
+        Some(first)
+    );
+    assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 1);
+
+    let mut request = configuration::request(&f, f.resolver_with_assets(ground_assets()));
+    request.revision = 91;
+    request.limits.reader.max_listed_paths = 7;
+    let id = inbox.enqueue(request).unwrap();
+    app.update();
+    assert!(matches!(inbox.poll(id).unwrap(), Poll::Completed(o) if o.result.is_ok()));
+    let publication = app.world().resource::<GroundPublication>();
+    assert!(
+        publication.last_error.is_none(),
+        "{:?}",
+        publication.last_error
+    );
+    let second = publication.entity.unwrap();
+    let context = Arc::clone(publication.context.as_ref().unwrap());
+    let receipts = publication.receipts.clone();
+    assert_ne!(second, first);
+    assert!(app.world().get_entity(first).is_err());
+    assert_eq!(app.world().resource::<GroundSupply>().revision, 91);
+
+    let mut missing = ground_assets();
+    missing.remove("Synthetic\\Ground.blp");
+    let id = enqueue(&inbox, &f, missing);
+    app.update();
+    assert!(matches!(inbox.poll(id).unwrap(), Poll::Completed(o) if o.result.is_ok()));
+    let publication = app.world().resource::<GroundPublication>();
+    assert!(matches!(
+        publication.last_error,
+        Some(MapGroundError::Read { .. })
+    ));
+    assert_eq!(publication.entity, Some(second));
+    assert!(Arc::ptr_eq(publication.context.as_ref().unwrap(), &context));
+    assert_eq!(publication.receipts, receipts);
+    assert!(app.world().get::<Mesh3d>(second).is_some());
+    assert_eq!(app.world().resource::<GroundSupply>().revision, 73);
+}
+
+#[test]
+fn automatic_ground_budget_is_enforced_before_publication() {
+    for (read_limit, retained_bytes) in [(1, 64), (4096, 63)] {
+        let inbox = ConfigurationInbox::default();
+        let mut app = automatic_app(&inbox, read_limit, retained_bytes);
+        let f = ground_fixture();
+        let id = enqueue(&inbox, &f, ground_assets());
+        app.update();
+        assert!(matches!(inbox.poll(id).unwrap(), Poll::Completed(o) if o.result.is_ok()));
+        let publication = app.world().resource::<GroundPublication>();
+        assert!(publication.entity.is_none());
+        if read_limit == 1 {
+            assert!(matches!(
+                publication.last_error,
+                Some(MapGroundError::Read { .. })
+            ));
+        } else {
+            assert!(matches!(
+                publication.last_error,
+                Some(MapGroundError::Ground(
+                    pcx_gfx::GroundError::RetainedBytes {
+                        needed: 64,
+                        limit: 63,
+                        ..
+                    }
+                ))
+            ));
+        }
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 0);
+        assert_eq!(app.world().resource::<Assets<Image>>().len(), 0);
+        assert_eq!(app.world().resource::<Assets<GroundMaterial>>().len(), 0);
+    }
 }

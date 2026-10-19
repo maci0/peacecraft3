@@ -376,7 +376,15 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
             .after(initialize_menu_logo)
             .run_if(menu_is_visible),
     );
-    peacecraft3::map_ground::install(&mut app);
+    // Application read/texture limits, independent of source terrain dimensions.
+    peacecraft3::map_ground::install_with_budget(
+        &mut app,
+        16 << 20,
+        pcx_gfx::GroundMemory {
+            retained_bytes: 128 << 20,
+            transient_bytes: 64 << 20,
+        },
+    );
     // Default zoom-list selection and config-read cap are explicit application policies.
     peacecraft3::campaign_camera::install(&mut app, 0, 64 * 1024);
     app.configure_sets(

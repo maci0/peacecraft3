@@ -8,8 +8,13 @@ VM, simulation world, gameplay camera or playable chapter.
 
 The publisher requires the successful admission's context, binding revision,
 map identity and exact receipt arc, a matching `SelectedMapSources` reader,
-and explicit `GroundSupply` read and texture budgets. There is no default
-archive, budget or substitute tile. Native `replace_selected` and a file drop of
+and explicit `GroundSupply` read and texture budgets. `install` retains the
+caller-supplied budget contract. The launcher uses `install_with_budget` to
+supply its application policy after successful delivery and before publication:
+16 MiB per source read, 128 MiB retained texture data and 64 MiB decode scratch.
+These are resource ceilings, not source terrain values or original engine limits.
+The policy follows the binding revision on replacement; it chooses no archive
+or substitute tile. Native `replace_selected` and a file drop of
 a resolver-backed binding publish that reader with the exact receipt arc. A
 binding that did not retain its resolver does not. Missing inputs report a
 ground error. A failed replacement keeps
@@ -74,8 +79,9 @@ source is restored afterward. This validates the Bevy pipeline on that
 adapter. It does not establish native terrain appearance.
 
 Cliffs, blight, water, terrain lighting, shadows, fog, gameplay camera activation,
-world/session synchronization, automatic launcher budget admission and complete
-terrain fidelity remain open. The existing `--tile` viewer remains a
+world/session synchronization and complete terrain fidelity remain open.
+Automatic ground preparation does not supply the other required campaign Host
+inputs or make a refused initialization playable. The existing `--tile` viewer remains a
 single-texture preview.
 
 An explicit local source check also constructs Human01's draw from each selected
@@ -85,3 +91,11 @@ winners produce a 96×96 mesh and a 64×64×192 array with seven mip levels
 the check records their archive identities and member fingerprints separately.
 Those dimensions are observations, not production constants or release inference.
 No original assets are written by that check or published with the code.
+
+The automatic budget caller is checked through actual map delivery, including
+changed binding revisions, cached updates, missing replacement textures and
+read/texture budget refusal before publication. All five ground cases pass on
+native and the actual Cargo WASM artifact. Native application suites (550 tests,
+30 explicit skips), seventeen targeted WASM cases, strict native/WASM lint/builds
+and formatting pass. Evidence: `.scratch/campaign-ground-budget-root-20261019/`.
+This caller check adds no original-game or rendered campaign comparison.

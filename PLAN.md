@@ -1290,6 +1290,11 @@ Executed day/night model arguments can now prepare their lighting inputs through
 the session's retained source reader, with no chapter-specific model list.
 Other automatic Host inputs, world lighting, actors and controls remain open.
 
+The launcher supplies explicit ground read/texture resource ceilings for each
+successfully delivered binding. Its existing terrain publisher can now mount
+the selected ground without a separate budget producer; failed loads preserve
+the prior draw. This does not supply campaign Host inputs or complete startup.
+
 Remaining work includes native behavior and handle lifetimes, actual trigger
 registration/delivery and VM callbacks, timer/event ordering, the `BJ`/`Blz`
 surface, complete localization substitution, and application game-loop wiring.

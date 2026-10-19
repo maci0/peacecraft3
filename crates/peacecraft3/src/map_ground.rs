@@ -12,7 +12,8 @@
 //! With no published reader the publisher records
 //! [`MapGroundError::MissingSourceReader`] and does not draw.
 //! The SLK read limit and retained/transient texture budgets come from
-//! [`GroundSupply`]. No limit, archive, or tileset is filled in here.
+//! [`GroundSupply`]. [`install_with_budget`] supplies a fixed application policy
+//! for each delivered binding. Neither entry point chooses archives or tilesets.
 
 use std::sync::{Arc, Weak};
 
@@ -52,7 +53,7 @@ pub struct GroundPublication {
 }
 
 /// Caller budgets for the admitted binding revision. `Default` sets no limit.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, PartialEq, Eq)]
 pub struct GroundSupply {
     pub revision: u64,
     pub read_limit: Option<u64>,
@@ -91,6 +92,32 @@ pub enum MapGroundError {
 pub fn install(app: &mut App) {
     app.add_plugins(GroundMaterialPlugin);
     register_publisher(app);
+}
+
+/// Install ground publication with application budgets that follow map delivery.
+/// These bounds do not change the selected terrain or its authored values.
+pub fn install_with_budget(app: &mut App, read_limit: u64, memory: GroundMemory) {
+    install(app);
+    app.add_systems(
+        Update,
+        (move |requests: Res<MapRequests>, mut supply: ResMut<GroundSupply>| {
+            let Some(outcome) = &requests.last_outcome else {
+                return;
+            };
+            let Some(bindings) = &requests.bindings else {
+                return;
+            };
+            if outcome.result.is_ok() && outcome.binding_revision == Some(bindings.revision) {
+                supply.set_if_neq(GroundSupply {
+                    revision: bindings.revision,
+                    read_limit: Some(read_limit),
+                    memory: Some(memory),
+                });
+            }
+        })
+        .after(MapRequestSet::Deliver)
+        .before(publish_admitted_ground),
+    );
 }
 
 fn register_publisher(app: &mut App) {

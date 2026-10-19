@@ -2713,3 +2713,16 @@ repeated, and the public site package was not rebuilt.
 - [ ] Other automatic startup inputs, `SetCampaignMenuRace` and later mission
   natives, world lighting, actors/controls and complete first-chapter playability
   remain open. This is source preparation, not rendered or original-game parity.
+
+### 2026-10-19 — automatic launcher ground budgets
+
+- [x] Launcher supplies fixed application read/texture ceilings after map
+  delivery, using the existing exact-reader terrain publisher. Explicit supply
+  callers remain supported. Replacement failures keep the prior mounted source.
+- [x] Five ground-delivery cases pass on native and actual Cargo WASM. The full
+  native application suites pass (550 tests, 30 explicit skips), plus strict
+  native/WASM lint/builds and formatting. Seventeen targeted Cargo WASM cases
+  pass. Evidence: `.scratch/campaign-ground-budget-root-20261019/`.
+- [ ] First-chapter Host bootstrap, mission natives, lighting, actors/controls
+  and three-target gameplay fidelity remain open. No original game or new
+  rendered campaign comparison was run for this caller change.
