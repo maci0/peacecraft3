@@ -2797,3 +2797,23 @@ repeated, and the public site package was not rebuilt.
 - [ ] Automatic remaining Host inputs, cache persistence, later mission natives,
   accepted live units/controls and three-target campaign fidelity remain open.
   No new original-game run or playable-chapter claim.
+
+### 2026-10-19 — persistent primitive campaign caches
+
+- [x] Add bounded primitive game caches to the existing Host arena: independent
+  handles share filename data, typed entries remain distinct, and save/reload/
+  flush preserve explicit storage and identity boundaries. Validate signatures,
+  source ownership, profile records and resource limits. Preserve exact real
+  bits and prior saves on failure. Keep unknown storage formats explicit.
+- [x] Attach the profile to the startup Host with native atomic file replacement
+  and a bounded browser local-storage adapter; include that adapter in the
+  loader and code-only package manifest. Script names are opaque profile keys.
+- [x] All 496 native Host, 21 application library and 132 map-integration cases,
+  seven actual WASI cache cases, four actual Cargo WASM storage-binding checks,
+  the JavaScript storage test, strict native/WASM lint/builds and formatting pass.
+  Unchanged Human01 retains the returned cache handle and advances to
+  `EnableUserUI(false)`. Evidence: `.scratch/campaign-cache-root-20261019/`.
+- [ ] Original W3V import, hero/unit serialization and synchronization, native
+  limits/mode/locale details, real browser persistence, other startup inputs,
+  cinematics and live units/controls remain open. The first chapter is still
+  not playable; the original game was not rerun.

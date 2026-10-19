@@ -1596,3 +1596,10 @@ Reign of Chaos selection and the extended native remain unsupported. The actual
 Human01 factory prefix advances to `InitGameCache`. Automatic remaining Host
 inputs, cache behavior, mission natives and live actors/controls still block
 playability; see [campaign runtime](docs/re-notes/campaign-runtime.md#legacy-campaign-menu-call-in-frozen-throne-mode).
+
+Campaign-cache follow-up (2026-10-19): persistent primitive caches now share the
+Host arena and reach native/browser local storage through the startup caller.
+The unchanged Human01 prefix passes initialization and next refuses
+`EnableUserUI(false)`. Original W3V import, hero transfer, remaining startup
+inputs, cinematics and live controls remain open; see
+[game caches](docs/re-notes/script-game-caches.md).

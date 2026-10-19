@@ -30,6 +30,7 @@ pub struct ObjectHost {
     terrain_pathing: Option<crate::terrain_pathing::TerrainPathing>,
     map_music: Option<music::State>,
     quests: Option<crate::quest_session::QuestSession>,
+    game_caches: Option<game_caches::State>,
     rectangles: bool,
     regions: Option<regions::Admission>,
     camera_setups: Option<camera_setup::Admission>,
@@ -86,6 +87,7 @@ impl ObjectHost {
             terrain_pathing: None,
             map_music: None,
             quests: None,
+            game_caches: None,
             rectangles: false,
             regions: None,
             camera_setups: None,
@@ -373,6 +375,9 @@ impl Host for ObjectHost {
     }
 
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.game_cache_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.random_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -600,6 +605,9 @@ pub use forces::ForceBudget;
 #[path = "startup_settings_host.rs"]
 mod settings;
 pub use settings::StartupSettings;
+
+#[path = "game_cache_host.rs"]
+mod game_caches;
 
 #[path = "stock_host.rs"]
 mod stock;

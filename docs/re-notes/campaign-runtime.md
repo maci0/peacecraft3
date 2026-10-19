@@ -89,6 +89,12 @@ explicit version observation, recreation seed and compatibility catalog; it is
 still neither a published playable session nor a full original-game comparison.
 Evidence stays local in `.scratch/campaign-menu-state-root-20261019/`.
 
+The subsequent [primitive game-cache implementation](script-game-caches.md)
+and application storage adapter now pass the executed `InitGameCache` call on
+an isolated fresh profile. Blizzard.j retains its real arena handle; the same
+Human01 prefix next refuses `EnableUserUI(false)`. Hero transfer, original W3V
+import and complete chapter playability remain open.
+
 Automatic Host-input preparation, live scene/unit/control wiring, source-qualified
 speed and pause behavior, mission-native coverage and complete campaign playability
 remain open. No menu appearance or public browser package is changed here.

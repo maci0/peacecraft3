@@ -21,6 +21,7 @@ FILES = (
     ("map-configuration.js", "map-configuration.js"),
     ("menu-audio.js", "menu-audio.js"),
     ("menu-settings.js", "menu-settings.js"),
+    ("game-cache.js", "game-cache.js"),
     ("intro.js", "intro.js"),
     ("iso.js", "iso.js"),
     ("iso/import.js", "iso/import.js"),

@@ -46,6 +46,8 @@ pub enum Failure {
     CameraSetupObject(&'static str),
     #[error("startup settings: {0}")]
     SettingsState(&'static str),
+    #[error("game cache: {0}")]
+    GameCache(String),
     #[error("startup clock: {0}")]
     ClockState(&'static str),
     #[error("terrain pathing: {0}")]
@@ -156,6 +158,10 @@ pub struct Conversion {
 }
 #[derive(Debug)]
 enum Entry {
+    GameCache {
+        filename: String,
+        live: bool,
+    },
     Force {
         members: Vec<HandleId>,
     },
@@ -557,6 +563,10 @@ impl EnumHost {
     }
     pub fn kind(&self, id: HandleId) -> Result<&str, Error> {
         Ok(match self.entry(id)? {
+            Entry::GameCache { live: true, .. } => "gamecache",
+            Entry::GameCache { live: false, .. } => {
+                return Err(self.error("arena", Failure::Identity));
+            }
             Entry::Symbolic { kind, .. } | Entry::Object(kind) => kind,
             Entry::Timer { live: true, .. } => "timer",
             Entry::Group { live: true } => "group",

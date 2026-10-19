@@ -32,6 +32,7 @@ import { createInstallerDecoder, stageStoredInstallerFiles } from './iso/install
 import { classifyLocalArchiveSelection, importLocalArchives, localClientInputError } from './local-archives.js';
 import { installMapConfiguration } from './map-configuration.js';
 import './menu-settings.js';
+import './game-cache.js';
 let mapConfiguration;
 const demoOnly = document.documentElement.dataset.localAssets === 'true';
 const wasmLoading = createLoadingProgress({ progressId: 'wasm-progress', statusId: 'wasm-status' });

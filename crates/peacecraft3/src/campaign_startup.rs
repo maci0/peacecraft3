@@ -155,6 +155,7 @@ fn start_admitted_map(
         Arc::clone(&context),
         move |ctx| {
             let mut host = map_startup_host::assemble(ctx, inputs)?;
+            crate::campaign_cache::attach(&mut host)?;
             Ok::<_, MapStartupError>(match reader {
                 Some(reader) => {
                     let parameter_reader = Arc::clone(&reader);
