@@ -16,9 +16,7 @@ use bevy::{
 use std::time::Duration;
 #[derive(Resource, Default)]
 struct Capture(Vec<u8>);
-#[test]
-#[ignore = "requires a Vulkan adapter"]
-fn synthetic_filter_alpha_reaches_the_gpu_and_scales_with_the_view() {
+fn render_app() -> App {
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -43,9 +41,22 @@ fn synthetic_filter_alpha_reaches_the_gpu_and_scales_with_the_view() {
     );
     bevy::asset::embedded_asset!(&mut app, "campaign_filter.wgsl");
     app.add_plugins(UiMaterialPlugin::<FilterMaterial>::default())
-        .init_resource::<Capture>();
+        .init_resource::<Capture>()
+        .init_resource::<CampaignPresentation>()
+        .add_systems(
+            PostUpdate,
+            interface_visibility
+                .before(bevy::ui::UiSystems::Prepare)
+                .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+        );
     app.finish();
     app.cleanup();
+    app
+}
+#[test]
+#[ignore = "requires a Vulkan adapter"]
+fn synthetic_filter_alpha_reaches_the_gpu_and_scales_with_the_view() {
+    let mut app = render_app();
     let mut art = pcx_gfx::viewer::rgba_image(&pcx_gfx::LoadedTexture {
         source: "synthetic".into(),
         width: 1,
@@ -172,5 +183,124 @@ fn synthetic_filter_alpha_reaches_the_gpu_and_scales_with_the_view() {
         app.world_mut().despawn(readback);
         app.world_mut().despawn(overlay);
         previous = Some((scene, camera));
+    }
+}
+
+#[test]
+#[ignore = "requires a Vulkan adapter; synthetic ordinary-HUD visibility through 4K"]
+fn interface_hides_explicitly_visible_children_and_restores_the_source_layout() {
+    let mut app = render_app();
+    for (width, height) in [(64, 32), (128, 64), (3840, 2160)] {
+        let mut image =
+            Image::new_target_texture(width, height, TextureFormat::Rgba8UnormSrgb, None);
+        image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
+        let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera2d,
+                Camera {
+                    clear_color: ClearColorConfig::Custom(Color::BLACK),
+                    ..default()
+                },
+                RenderTarget::Image(target.clone().into()),
+                Msaa::Off,
+            ))
+            .id();
+        let root = app
+            .world_mut()
+            .spawn((
+                Node {
+                    width: percent(100),
+                    height: percent(100),
+                    display: Display::Grid,
+                    ..default()
+                },
+                CampaignInterface,
+                UiTargetCamera(camera),
+            ))
+            .id();
+        let child = app
+            .world_mut()
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: percent(50),
+                    height: percent(100),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(1., 0., 0.)),
+                Visibility::Visible,
+                ChildOf(root),
+            ))
+            .id();
+        let text_layer = app
+            .world_mut()
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: percent(50),
+                    width: percent(50),
+                    height: percent(100),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0., 1., 0.)),
+                UiTargetCamera(camera),
+            ))
+            .id();
+        let readback = app
+            .world_mut()
+            .spawn(Readback::texture(target.clone()))
+            .observe(
+                |event: On<ReadbackComplete>, mut capture: ResMut<Capture>| {
+                    capture.0.clone_from(&event.data);
+                },
+            )
+            .id();
+        for hide in [false, true, false] {
+            app.world_mut()
+                .resource_mut::<CampaignPresentation>()
+                .hide_interface = hide;
+            app.world_mut().resource_mut::<Capture>().0.clear();
+            for _ in 0..32 {
+                app.update();
+                app.world()
+                    .resource::<RenderDevice>()
+                    .wgpu_device()
+                    .poll(PollType::Wait {
+                        submission_index: None,
+                        timeout: Some(Duration::from_secs(10)),
+                    })
+                    .unwrap();
+            }
+            assert_eq!(
+                app.world().get::<Visibility>(child),
+                Some(&Visibility::Visible)
+            );
+            assert_eq!(
+                app.world().get::<Node>(root).unwrap().display,
+                if hide { Display::None } else { Display::Grid }
+            );
+            let data = &app.world().resource::<Capture>().0;
+            assert!(!data.is_empty());
+            assert!(data.len().is_multiple_of(height as usize));
+            let stride = data.len() / height as usize;
+            for (x, expected) in [
+                (width / 4, if hide { [0, 0, 0] } else { [255, 0, 0] }),
+                (width * 3 / 4, [0, 255, 0]),
+            ] {
+                let at = (height / 2) as usize * stride + x as usize * 4;
+                assert_eq!(&data[at..at + 3], &expected, "{width}x{height} hide={hide}");
+            }
+            println!(
+                "ordinary HUD suppression extent={width}x{height} hidden={hide}; separate cinematic layer preserved"
+            );
+        }
+        for entity in [root, text_layer, readback, camera] {
+            app.world_mut().despawn(entity);
+        }
+        app.world_mut()
+            .resource_mut::<Assets<Image>>()
+            .remove(target.id());
     }
 }

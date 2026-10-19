@@ -7,7 +7,7 @@ use bevy::{
 };
 use peacecraft3::{
     campaign_camera::CampaignCamera,
-    campaign_presentation::{CampaignHud, CampaignPresentation, FilterMaterial},
+    campaign_presentation::{CampaignHud, CampaignInterface, CampaignPresentation, FilterMaterial},
     map_ground::GroundPublication,
 };
 
@@ -17,6 +17,8 @@ type texmapflags extends handle
 constant native ConvertBlendMode takes integer n returns blendmode
 constant native ConvertTexMapFlags takes integer n returns texmapflags
 native EnableUserUI takes boolean enabled returns nothing
+native EnableUserControl takes boolean enabled returns nothing
+native ShowInterface takes boolean show, real duration returns nothing
 native SetCineFilterTexture takes string path returns nothing
 native SetCineFilterBlendMode takes blendmode b returns nothing
 native SetCineFilterTexMapFlags takes texmapflags f returns nothing
@@ -44,6 +46,28 @@ call SetCineFilterDuration(0)
 call DisplayCineFilter(true)
 ";
 const CALLBACKS: &str = "
+function hide_interface takes nothing returns nothing
+call ShowInterface(false,0)
+endfunction
+function show_interface takes nothing returns nothing
+call ShowInterface(true,0)
+endfunction
+function disable_control takes nothing returns nothing
+call EnableUserControl(false)
+endfunction
+function enable_control takes nothing returns nothing
+call EnableUserControl(true)
+endfunction
+function disable_ui takes nothing returns nothing
+call EnableUserUI(false)
+endfunction
+function enable_ui takes nothing returns nothing
+call EnableUserUI(true)
+endfunction
+function unsupported_fade takes nothing returns nothing
+call ShowInterface(true,1.0)
+endfunction
+
 function hide takes nothing returns nothing
 call DisplayCineFilter(false)
 call EnableUserUI(true)
@@ -76,6 +100,17 @@ fn deliver(app: &mut App, revision: u64, fade: bool) {
     deliver_art(app, revision, fade, Art::Tga);
 }
 fn deliver_art(app: &mut App, revision: u64, fade: bool, art: Art) {
+    deliver_extra(app, revision, fade, art, EXTRA);
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none(),
+        "{:?}",
+        app.world().resource::<CampaignStartup>().last_error
+    );
+}
+fn deliver_extra(app: &mut App, revision: u64, fade: bool, art: Art, extra: &str) {
     let script = format!(
         "{}{}",
         SCRIPT.replace(
@@ -88,7 +123,11 @@ fn deliver_art(app: &mut App, revision: u64, fade: bool, art: Art) {
         CALLBACKS
     );
     let mut f = fixture(&script);
-    f.common = format!("{COMMON}{CAMERA_COMMON}{EXTRA}").into_bytes();
+    f.common = format!(
+        "{COMMON}{CAMERA_COMMON}{extra}{}",
+        super::script_timer_cases::TIMER_COMMON
+    )
+    .into_bytes();
     f.rebuild();
     let mut tga = vec![0u8; 18];
     tga[2] = 2;
@@ -139,6 +178,7 @@ fn deliver_art(app: &mut App, revision: u64, fade: bool, art: Art) {
     );
     let mut inputs = host_inputs(Arc::clone(&requests.bindings.as_ref().unwrap().catalog.0));
     inputs.budgets.camera_setup_fields = 7;
+    inputs.timer_time = Some(10.0);
     inputs
         .enumeration
         .names
@@ -152,14 +192,14 @@ fn deliver_art(app: &mut App, revision: u64, fade: bool, art: Art) {
         });
     app.world_mut().write_message(request);
     app.update();
-    assert!(
-        app.world()
-            .resource::<CampaignStartup>()
-            .last_error
-            .is_none(),
-        "{:?}",
-        app.world().resource::<CampaignStartup>().last_error
-    );
+    if app
+        .world()
+        .resource::<CampaignStartup>()
+        .last_error
+        .is_some()
+    {
+        return;
+    }
     let context = app
         .world()
         .resource::<MapScriptSession<MapStartupHost>>()
@@ -355,4 +395,217 @@ pub fn browser_campaign_presentation_gate() -> u32 {
     missing_tga_resolves_the_existing_blp_from_the_same_published_reader();
     invalid_or_unreadable_exact_texture_does_not_fall_back_to_blp();
     3
+}
+
+#[test]
+pub fn immediate_interface_hides_only_the_ordinary_hud_and_preserves_clock_and_source_visibility() {
+    let mut app = app();
+    let hud = app
+        .world_mut()
+        .spawn((Node::default(), CampaignHud, CampaignInterface))
+        .id();
+    let hidden = app
+        .world_mut()
+        .spawn((
+            Node::default(),
+            CampaignHud,
+            CampaignInterface,
+            Visibility::Hidden,
+        ))
+        .id();
+    let child = app
+        .world_mut()
+        .spawn((Node::default(), Visibility::Hidden, ChildOf(hud)))
+        .id();
+    let message = app.world_mut().spawn((Node::default(), CampaignHud)).id();
+    deliver(&mut app, 1, false);
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none()
+    );
+    call(&mut app, "hide_interface");
+    assert_eq!(app.world().get::<Node>(hud).unwrap().display, Display::None);
+    assert_eq!(
+        app.world().get::<Visibility>(hud),
+        Some(&Visibility::Hidden)
+    );
+    assert_ne!(
+        app.world().get::<Visibility>(message),
+        Some(&Visibility::Hidden)
+    );
+    assert!(
+        app.world()
+            .resource::<CampaignPresentation>()
+            .input_blocked()
+    );
+    assert!(app.world().resource::<CampaignCamera>().active());
+    assert!(
+        !app.world()
+            .resource::<peacecraft3::campaign_runtime::CampaignRuntime>()
+            .paused
+    );
+    let button = app.world_mut().spawn(bevy::ui_widgets::Button).id();
+    app.world_mut()
+        .trigger(bevy::ui_widgets::Activate { entity: button });
+    app.world_mut().flush();
+    assert!(
+        app.world()
+            .resource::<crate::button_actions::ButtonActions>()
+            .entities
+            .is_empty()
+    );
+    call(&mut app, "enable_control");
+    assert!(
+        !app.world()
+            .resource::<CampaignPresentation>()
+            .input_blocked()
+    );
+    assert_eq!(
+        app.world().get::<Visibility>(hud),
+        Some(&Visibility::Hidden)
+    );
+    call(&mut app, "disable_ui");
+    call(&mut app, "show_interface");
+    assert!(
+        app.world()
+            .resource::<CampaignPresentation>()
+            .input_blocked()
+    );
+    assert_eq!(
+        app.world().get::<Visibility>(hud),
+        Some(&Visibility::Inherited)
+    );
+    assert_eq!(
+        app.world().get::<Visibility>(hidden),
+        Some(&Visibility::Hidden)
+    );
+    assert_eq!(
+        app.world().get::<Visibility>(child),
+        Some(&Visibility::Hidden)
+    );
+    assert_eq!(app.world().get::<Node>(hud).unwrap().display, Display::Flex);
+    call(&mut app, "enable_ui");
+    assert!(
+        !app.world()
+            .resource::<CampaignPresentation>()
+            .input_blocked()
+    );
+    call(&mut app, "disable_control");
+    assert!(
+        app.world()
+            .resource::<CampaignPresentation>()
+            .input_blocked()
+    );
+    assert_eq!(
+        app.world().get::<Visibility>(hud),
+        Some(&Visibility::Inherited)
+    );
+    {
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let host = session.host().unwrap().objects_mut();
+        assert_eq!(host.timer_game_time(), Some(10.));
+        assert!(host.next_timer_expiry(11., &mut 8).unwrap().is_none());
+        assert_eq!(host.timer_game_time(), Some(11.));
+    }
+    call(&mut app, "hide_interface");
+    let late = app
+        .world_mut()
+        .spawn((Node::default(), CampaignHud, CampaignInterface))
+        .id();
+    app.update();
+    assert_eq!(
+        app.world().get::<Visibility>(late),
+        Some(&Visibility::Hidden)
+    );
+    deliver(&mut app, 2, false);
+    assert_eq!(
+        app.world().get::<Visibility>(hud),
+        Some(&Visibility::Inherited)
+    );
+    assert_eq!(
+        app.world().get::<Visibility>(late),
+        Some(&Visibility::Inherited)
+    );
+    assert_eq!(
+        app.world().get::<Visibility>(hidden),
+        Some(&Visibility::Hidden)
+    );
+    assert!(
+        !app.world()
+            .resource::<CampaignPresentation>()
+            .input_blocked()
+    );
+}
+#[test]
+pub fn unsupported_interface_fades_and_refused_replacement_keep_the_existing_hud_state() {
+    let mut app = app();
+    let hud = app
+        .world_mut()
+        .spawn((Node::default(), CampaignHud, CampaignInterface))
+        .id();
+    deliver(&mut app, 1, false);
+    call(&mut app, "hide_interface");
+    let witness = app
+        .world()
+        .resource::<MapScriptSession<MapStartupHost>>()
+        .session_witness()
+        .unwrap();
+    {
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let id = session
+            .context()
+            .unwrap()
+            .scripts
+            .program()
+            .function_id("unsupported_fade")
+            .unwrap();
+        assert!(session.call_function(id, &[]).is_err());
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .presentation()
+                .unwrap()
+                .interface_visible,
+            Some(false)
+        );
+    }
+    let extra = EXTRA.replace(
+        "native ShowInterface takes boolean show, real duration",
+        "native ShowInterface takes boolean show, integer duration",
+    );
+    deliver_extra(&mut app, 2, false, Art::Tga, &extra);
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_some()
+    );
+    assert!(witness.upgrade().is_some());
+    assert_eq!(
+        app.world().get::<Visibility>(hud),
+        Some(&Visibility::Hidden)
+    );
+    app.world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>()
+        .clear();
+    app.update();
+    assert_eq!(
+        app.world().get::<Visibility>(hud),
+        Some(&Visibility::Inherited)
+    );
+}
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn browser_campaign_interface_gate() -> u32 {
+    immediate_interface_hides_only_the_ordinary_hud_and_preserves_clock_and_source_visibility();
+    unsupported_interface_fades_and_refused_replacement_keep_the_existing_hud_state();
+    2
 }

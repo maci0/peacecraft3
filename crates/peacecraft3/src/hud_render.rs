@@ -249,7 +249,8 @@ pub fn install(app: &mut App) {
                 sync_hud_layout,
                 track_hud_surface,
             )
-                .chain(),
+                .chain()
+                .before(peacecraft3::campaign_presentation::CampaignPresentationSet),
         );
 }
 
@@ -628,6 +629,7 @@ fn mount_resolved(
             },
             HudRoot,
             peacecraft3::campaign_presentation::CampaignHud,
+            peacecraft3::campaign_presentation::CampaignInterface,
             Pickable::IGNORE,
             Name::new("Hud"),
         ))

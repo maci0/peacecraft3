@@ -19,6 +19,14 @@ use std::sync::{Arc, Weak};
 /// Roots which render on the gameplay UI camera when the campaign is visible.
 #[derive(Component)]
 pub struct CampaignHud;
+/// Ordinary gameplay HUD roots. Cinematic text and filters are separate roots.
+#[derive(Component)]
+pub struct CampaignInterface;
+#[derive(Component)]
+struct SuppressedInterface {
+    visibility: Visibility,
+    display: Display,
+}
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CampaignPresentationSet;
 
@@ -49,6 +57,7 @@ pub struct CampaignPresentation {
     attempted: Option<u64>,
     shown: Option<CineFilter>,
     blocked: bool,
+    hide_interface: bool,
     pub texture_receipt: Option<AssetReceipt>,
     pub last_error: Option<String>,
 }
@@ -67,6 +76,12 @@ pub fn install(app: &mut App) {
             project
                 .in_set(CampaignPresentationSet)
                 .after(CampaignCameraSet),
+        )
+        .add_systems(
+            PostUpdate,
+            interface_visibility
+                .before(bevy::ui::UiSystems::Prepare)
+                .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
         );
 }
 
@@ -76,6 +91,41 @@ struct ViewAssets<'w> {
     materials: ResMut<'w, Assets<FilterMaterial>>,
     sources: Res<'w, SelectedMapSources>,
     requests: Res<'w, MapRequests>,
+}
+fn interface_visibility(
+    mut commands: Commands,
+    state: Res<CampaignPresentation>,
+    mut roots: Query<
+        (
+            Entity,
+            &mut Node,
+            &mut Visibility,
+            Option<&SuppressedInterface>,
+        ),
+        With<CampaignInterface>,
+    >,
+) {
+    for (entity, mut node, mut visibility, suppressed) in &mut roots {
+        if state.hide_interface {
+            if suppressed.is_none() {
+                commands.entity(entity).insert(SuppressedInterface {
+                    visibility: *visibility,
+                    display: node.display,
+                });
+            }
+            if *visibility != Visibility::Hidden {
+                *visibility = Visibility::Hidden;
+            }
+            // Explicitly visible descendants otherwise bypass their hidden parent.
+            if node.display != Display::None {
+                node.display = Display::None;
+            }
+        } else if let Some(saved) = suppressed {
+            *visibility = saved.visibility;
+            node.display = saved.display;
+            commands.entity(entity).remove::<SuppressedInterface>();
+        }
+    }
 }
 fn fullscreen() -> Node {
     Node {
@@ -129,7 +179,10 @@ fn project(
     let now = objects.and_then(|o| o.timer_game_time());
     let presentation = objects.and_then(|o| o.presentation());
     let active = view.active();
-    state.blocked = active && presentation.is_some_and(|p| p.ui_enabled == Some(false));
+    state.blocked = active
+        && presentation
+            .is_some_and(|p| p.ui_enabled == Some(false) || p.control_enabled == Some(false));
+    state.hide_interface = presentation.is_some_and(|p| p.interface_visible == Some(false));
     let has_filter = presentation.is_some_and(|p| p.filter.is_some());
     let changed = presentation
         .and_then(|p| p.filter.as_ref())

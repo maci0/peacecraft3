@@ -2,7 +2,9 @@
 
 This slice consumes executed script calls on the existing `ObjectHost` and the
 published campaign view. It does not supply missing startup inputs, create live
-units, implement `ShowInterface` or `EnableUserControl`, or make Human01 playable.
+units or make Human01 playable. Immediate interface visibility and user control
+now reach the ordinary HUD/input consumer; positive interface fades remain
+unsupported.
 The FDF declaration catalog in `ingame-cinematics-dialogs.md` remains separate.
 
 ## Source evidence
@@ -105,3 +107,52 @@ comparison or browser rendering. Evidence and command exits are retained under
 Automatic Host input preparation, force predicates, later cinematic calls, live
 actors and controls, original/native/WASM visual comparison and complete chapter
 playability remain open. No original-game runtime was launched for this slice.
+
+
+## Immediate interface and control follow-up
+
+The optional same-source contracts now include `ShowInterface(boolean, real)`
+and `EnableUserControl(boolean)`. Their state starts absent. The startup branch
+actually requested by Human01 has zero fade duration: the loaded BJ helper
+forces an immediate change while `bj_gameStarted` is false. Nonzero and non-finite
+interface durations refuse atomically; they are not silently converted into
+immediate changes. The native's positive-duration frame animation remains a
+required follow-up.
+
+Additional bounded static reads of the same selected executable are private in
+`.scratch/campaign-interface-root-20261019/`. `ShowInterface` reaches `0x5f3760`.
+Its show branch writes `1` to the control flag at UI offset `0x1bc`; its hide
+branch writes `0`. `EnableUserControl` reaches `0x5ebd50` and writes that same
+flag on its respective branches. The separate `EnableUserUI` flag at `0x1c0`
+is preserved. Therefore a successful immediate interface change updates both
+the requested ordinary-interface visibility and the control flag. A subsequent
+control call can change input without showing the HUD, and showing the HUD does
+not undo an explicit `EnableUserUI(false)`. Neither operation advances or pauses
+the logical game clock.
+
+The ordinary HUD mount marks its viewport root as `CampaignInterface`, separately
+from `CampaignHud` camera routing. After all Update-stage mounts and before UI
+layout/visibility propagation, the consumer suppresses that root's display and
+visibility. Display suppression matters because an explicitly visible Bevy child
+can ignore a hidden parent's visibility. Restoring the root uses its saved display
+and visibility rather than overwriting source child states, colors, fonts or
+geometry. Late-mounted roots observe the current request on their first layout;
+session clearing or a replacement with absent interface state restores the root.
+Cinematic message/filter roots are not marked as ordinary interface and remain
+separate. Existing input/picking consumers use both UI and control flags.
+
+Synthetic Host tests cover the declared-real native argument boundary, ordering,
+unknown initial state, source/qualifier checks and atomic refusal. Published
+session tests cover actual HUD/input changes, continuing logical time, late roots,
+source-hidden children, session replacement and rejected candidates. A targeted
+Vulkan regression hides and restores an explicitly visible child at small and
+3840 × 2160 targets while leaving a separate cinematic layer present.
+Native/WASM strict builds and actual WASI/Cargo-WASM execution have separate
+command receipts in the private evidence directory.
+
+This is ordinary-HUD/control application, not complete native cinematic UI.
+The native also switches other interface surfaces; cinematic panels, portrait/
+transmission content, positive-duration interface animation, native viewport
+changes and original rendered comparison remain open. The unchanged private
+Human01 prefix now passes both immediate calls and reaches `EnableOcclusion`.
+Normal startup input preparation and playable actors/controls remain unfinished.

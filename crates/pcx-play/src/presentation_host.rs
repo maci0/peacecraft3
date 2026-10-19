@@ -53,6 +53,8 @@ impl CineFilter {
 #[derive(Default)]
 pub struct PresentationState {
     pub ui_enabled: Option<bool>,
+    pub control_enabled: Option<bool>,
+    pub interface_visible: Option<bool>,
     pub filter: Option<CineFilter>,
     texture: Option<String>,
     blend: Option<HandleId>,
@@ -67,6 +69,8 @@ pub struct PresentationState {
 }
 const CONTRACTS: &[(&str, &[&str])] = &[
     ("EnableUserUI", &["boolean"]),
+    ("EnableUserControl", &["boolean"]),
+    ("ShowInterface", &["boolean", "real"]),
     ("SetCineFilterTexture", &["string"]),
     ("SetCineFilterBlendMode", &["blendmode"]),
     ("SetCineFilterTexMapFlags", &["texmapflags"]),
@@ -99,8 +103,16 @@ impl ObjectHost {
             .source;
         let mut found = false;
         for &(name, parameters) in CONTRACTS {
-            if let Some(native) = self.inner.program.natives().get(name) {
+            if self.inner.program.natives().get(name).is_some()
+                || self.inner.program.natives().ambiguous(name).is_some()
+            {
                 Self::contract(&self.inner, name, parameters, "nothing", false, None)?;
+                let native = self
+                    .inner
+                    .program
+                    .natives()
+                    .get(name)
+                    .expect("checked presentation contract");
                 if &native.source != source {
                     return Err(self.inner.error(name, Failure::Source));
                 }
@@ -181,6 +193,30 @@ impl ObjectHost {
         let fail = |why| self.inner.error(name, Failure::Presentation(why));
         if args.len() != arity {
             return Err(fail("arguments do not match the declaration"));
+        }
+        if name == "ShowInterface" {
+            let [Value::Bool(show), Value::Real(duration)] = args else {
+                return Err(fail("expected interface boolean and real duration"));
+            };
+            if !duration.is_finite() || *duration != 0.0 {
+                return Err(fail(
+                    "interface fades require a supported transition consumer; only immediate changes are admitted",
+                ));
+            }
+            let state = self.presentation.as_mut().expect("admitted");
+            state.interface_visible = Some(*show);
+            state.control_enabled = Some(*show);
+            return Ok(Value::Null);
+        }
+        if name == "EnableUserControl" {
+            let [Value::Bool(enabled)] = args else {
+                return Err(fail("expected control boolean"));
+            };
+            self.presentation
+                .as_mut()
+                .expect("admitted")
+                .control_enabled = Some(*enabled);
+            return Ok(Value::Null);
         }
         if name == "DisplayCineFilter" {
             let [Value::Bool(show)] = args else {

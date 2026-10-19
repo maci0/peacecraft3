@@ -2872,3 +2872,16 @@ repeated, and the public site package was not rebuilt.
   prefixes and original rendered comparison remain open. This does not make
   Human01 playable or close the original/native/WASM parity gate. See
   [text messages](docs/re-notes/script-text-messages.md).
+
+
+### 2026-10-19 — immediate campaign interface and control
+
+- [~] Executed zero-duration `ShowInterface` hides/restores ordinary HUD roots and
+  changes the same input-control flag as `EnableUserControl`. The separate UI
+  flag, cinematic text/filter layers, child source states and logical clock are
+  preserved. Newly mounted roots observe the request before their first layout;
+  rejected replacements retain the existing session's state.
+- [ ] Positive interface fades, other cinematic surfaces/viewport transitions and
+  original rendering comparison remain open. The unchanged private Human01 prefix
+  reaches `EnableOcclusion`; this is not a playable first chapter. See
+  [campaign presentation](docs/re-notes/campaign-presentation.md#immediate-interface-and-control-follow-up).

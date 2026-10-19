@@ -13,6 +13,8 @@ constant native ConvertTexMapFlags takes integer n returns texmapflags
 native CreateTimer takes nothing returns timer
 native DestroyTimer takes timer t returns nothing
 native EnableUserUI takes boolean enabled returns nothing
+native EnableUserControl takes boolean enabled returns nothing
+native ShowInterface takes boolean show, real duration returns nothing
 native SetCineFilterTexture takes string path returns nothing
 native SetCineFilterBlendMode takes blendmode b returns nothing
 native SetCineFilterTexMapFlags takes texmapflags f returns nothing
@@ -231,4 +233,79 @@ fn published_timed_filter_advances_on_the_host_timer_clock() {
     let f = h.presentation().unwrap().filter.as_ref().unwrap();
     assert_eq!(f.started_at, Some(20.));
     assert_eq!(f.sample(h.timer_game_time()).unwrap().color[3], 0.5);
+}
+
+#[test]
+fn immediate_interface_changes_control_without_changing_the_ui_flag_or_clock() {
+    let mut h = host(
+        COMMON,
+        "function run takes nothing returns nothing\ncall ShowInterface(false,0)\ncall EnableUserControl(true)\nendfunction",
+    );
+    h.admit_presentation(64).unwrap();
+    assert_eq!(h.presentation().unwrap().interface_visible, None);
+    assert_eq!(h.presentation().unwrap().control_enabled, None);
+    let mut vm = h.into_vm();
+    vm.init_globals().unwrap();
+    vm.call("run", &[]).unwrap();
+    let state = vm.host().presentation().unwrap();
+    assert_eq!(state.interface_visible, Some(false));
+    assert_eq!(state.control_enabled, Some(true));
+    assert_eq!(state.ui_enabled, None);
+    vm.host()
+        .native("EnableUserUI", &[Value::Bool(false)])
+        .unwrap();
+    vm.host()
+        .native("EnableUserControl", &[Value::Bool(false)])
+        .unwrap();
+    vm.host()
+        .native("ShowInterface", &[Value::Bool(true), Value::Real(0.)])
+        .unwrap();
+    let state = vm.host().presentation().unwrap();
+    assert_eq!(state.interface_visible, Some(true));
+    assert_eq!(state.control_enabled, Some(true));
+    assert_eq!(state.ui_enabled, Some(false));
+    assert_eq!(vm.host().timer_game_time(), None);
+}
+#[test]
+fn unsupported_interface_fades_and_bad_arguments_preserve_the_visible_state() {
+    let mut h = host(COMMON, "");
+    h.admit_presentation(64).unwrap();
+    h.native("ShowInterface", &[Value::Bool(false), Value::Real(0.)])
+        .unwrap();
+    for duration in [1., -1., f32::INFINITY, f32::NAN] {
+        assert!(
+            h.native("ShowInterface", &[Value::Bool(true), Value::Real(duration)])
+                .is_err()
+        );
+        assert_eq!(h.presentation().unwrap().interface_visible, Some(false));
+        assert_eq!(h.presentation().unwrap().control_enabled, Some(false));
+    }
+    for (name, args) in [
+        ("ShowInterface", vec![Value::Bool(true), Value::Int(0)]),
+        ("EnableUserControl", vec![Value::Int(1)]),
+        ("ShowInterface", vec![]),
+    ] {
+        assert!(h.native(name, &args).is_err());
+    }
+    assert_eq!(h.presentation().unwrap().interface_visible, Some(false));
+}
+#[test]
+fn optional_interface_and_control_contracts_do_not_admit_foreign_or_missing_calls() {
+    for declaration in [
+        "native EnableUserControl takes boolean enabled returns nothing\n",
+        "native ShowInterface takes boolean show, real duration returns nothing\n",
+    ] {
+        let common = COMMON.replace(declaration, "");
+        let mut h = host(&common, "");
+        h.admit_presentation(64).unwrap();
+        let name = declaration.split_whitespace().nth(1).unwrap();
+        assert!(h.native(name, &[]).is_err());
+        let mut h = host(&common, declaration);
+        assert!(h.admit_presentation(64).is_err());
+        let mut h = host(
+            &COMMON.replace(declaration, &format!("constant {declaration}")),
+            "",
+        );
+        assert!(h.admit_presentation(64).is_err());
+    }
 }
