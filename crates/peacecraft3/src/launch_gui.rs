@@ -387,10 +387,11 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     );
     // Default zoom-list selection and config-read cap are explicit application policies.
     peacecraft3::campaign_camera::install(&mut app, 0, 64 * 1024);
+    peacecraft3::campaign_presentation::install(&mut app);
     app.configure_sets(
         Update,
         (LauncherInput, MenuActions)
-            .after(peacecraft3::campaign_camera::CampaignCameraSet)
+            .after(peacecraft3::campaign_presentation::CampaignPresentationSet)
             .run_if(campaign_is_hidden),
     );
     // Scheduling granularity/work budgets are application policy, not original game rules.

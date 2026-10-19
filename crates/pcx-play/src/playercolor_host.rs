@@ -48,6 +48,8 @@ pub enum Failure {
     SettingsState(&'static str),
     #[error("game cache: {0}")]
     GameCache(String),
+    #[error("campaign presentation: {0}")]
+    Presentation(&'static str),
     #[error("startup clock: {0}")]
     ClockState(&'static str),
     #[error("terrain pathing: {0}")]
@@ -701,17 +703,18 @@ mod tests;
 #[path = "object_host.rs"]
 mod objects;
 pub use objects::{
-    AppliedCameraSetup, CameraDestination, CameraFieldRecord, CameraState, ConditionBudget,
-    ConditionCallback, DayNightState, DeathEventRegistration, DestructableBudget,
+    AppliedCameraSetup, CameraDestination, CameraFieldRecord, CameraState, CineFilter,
+    ConditionBudget, ConditionCallback, DayNightState, DeathEventRegistration, DestructableBudget,
     DestructableCreation, ExecutedItem, ExecutedUnit, ExecutedUnitState, FileSoundState,
-    FilterBudget, FilterCallback, ForceBudget, GameStateEventRegistration, ItemBudget,
-    LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection, ObjectHost,
+    FilterBudget, FilterCallback, FilterSample, ForceBudget, GameStateEventRegistration,
+    ItemBudget, LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection, ObjectHost,
     PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
-    PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration, QuestBudget, QuestEvent,
-    QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration, RegionRectRequest,
-    ResearchObservation, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest,
-    StartLocation, StartPriorities, StartPriority, StartupClockState, StartupSettings, StockBudget,
-    TechLimitBudget, TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord,
-    TriggerBudget, TriggerConditionRegistration, TriggerDelivery, TriggerRuntimeInput, UnitBudget,
-    UnitEventRegistration, UnitInRangeRegistration, UnitStateBudget,
+    PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration, PresentationState,
+    QuestBudget, QuestEvent, QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration,
+    RegionRectRequest, ResearchObservation, SoundProperties, SoundState, StackedSoundAction,
+    StackedSoundRequest, StartLocation, StartPriorities, StartPriority, StartupClockState,
+    StartupSettings, StockBudget, TechLimitBudget, TimerEventRegistration, TimerExpiry, TimerHost,
+    TriggerActionRecord, TriggerBudget, TriggerConditionRegistration, TriggerDelivery,
+    TriggerRuntimeInput, UnitBudget, UnitEventRegistration, UnitInRangeRegistration,
+    UnitStateBudget,
 };

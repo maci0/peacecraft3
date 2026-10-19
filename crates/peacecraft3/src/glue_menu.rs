@@ -1418,7 +1418,12 @@ pub(crate) fn shortcut_keys(
     mut keys: MessageReader<bevy::input::keyboard::KeyboardInput>,
     buttons: Query<(Entity, &GlueButton), Without<InteractionDisabled>>,
     mut actions: ResMut<crate::button_actions::ButtonActions>,
+    presentation: Option<Res<peacecraft3::campaign_presentation::CampaignPresentation>>,
 ) {
+    if !crate::button_actions::input_allowed(presentation) {
+        keys.clear();
+        return;
+    }
     for key in keys.read() {
         let bevy::input::keyboard::Key::Character(text) = &key.logical_key else {
             continue;

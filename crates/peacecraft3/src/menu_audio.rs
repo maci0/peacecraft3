@@ -22,6 +22,8 @@ pub fn install(app: &mut App) {
     app.add_systems(
         Update,
         feedback
+            .run_if(crate::button_actions::input_allowed)
+            .after(crate::button_actions::discard_blocked)
             .after(crate::menu_settings::SettingsUpdate)
             .after(SourceAudioUpdate)
             .before(crate::launch_gui::LauncherInput)

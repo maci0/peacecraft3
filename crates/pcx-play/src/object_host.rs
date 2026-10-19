@@ -31,6 +31,7 @@ pub struct ObjectHost {
     map_music: Option<music::State>,
     quests: Option<crate::quest_session::QuestSession>,
     game_caches: Option<game_caches::State>,
+    presentation: Option<presentation::PresentationState>,
     rectangles: bool,
     regions: Option<regions::Admission>,
     camera_setups: Option<camera_setup::Admission>,
@@ -88,6 +89,7 @@ impl ObjectHost {
             map_music: None,
             quests: None,
             game_caches: None,
+            presentation: None,
             rectangles: false,
             regions: None,
             camera_setups: None,
@@ -375,6 +377,9 @@ impl Host for ObjectHost {
     }
 
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.presentation_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.game_cache_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -608,6 +613,10 @@ pub use settings::StartupSettings;
 
 #[path = "game_cache_host.rs"]
 mod game_caches;
+
+#[path = "presentation_host.rs"]
+mod presentation;
+pub use presentation::{CineFilter, FilterSample, PresentationState};
 
 #[path = "stock_host.rs"]
 mod stock;

@@ -3,7 +3,7 @@ use super::*;
 use peacecraft3::campaign_camera::{CampaignCamera, CampaignSceneCamera};
 use peacecraft3::map_ground::GroundPublication;
 
-const CAMERA_COMMON: &str = "
+pub(super) const CAMERA_COMMON: &str = "
 constant native GetLocalPlayer takes nothing returns player
 native CameraSetupApplyForceDuration takes camerasetup which, boolean pan, real duration returns nothing
 globals
@@ -16,7 +16,7 @@ constant camerafield CAMERA_FIELD_ROTATION = ConvertCameraField(26)
 constant camerafield CAMERA_FIELD_ZOFFSET = ConvertCameraField(29)
 endglobals
 ";
-const SCRIPT: &str = "
+pub(super) const SCRIPT: &str = "
 globals
 camerasetup setup = CreateCameraSetup()
 endglobals
@@ -39,7 +39,7 @@ call CameraSetupApplyForceDuration(setup, true, 0.0)
 endfunction
 ";
 
-fn app() -> App {
+pub(super) fn app() -> App {
     let mut app = App::new();
     peacecraft3::map_requests::install(&mut app);
     peacecraft3::campaign_startup::install(&mut app);

@@ -627,6 +627,7 @@ fn mount_resolved(
                 height: 100.0,
             },
             HudRoot,
+            peacecraft3::campaign_presentation::CampaignHud,
             Pickable::IGNORE,
             Name::new("Hud"),
         ))

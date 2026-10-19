@@ -328,7 +328,10 @@ native/browser Clippy, affected library builds and formatting pass. Receipts
 remain local under `.scratch/script-numeric-policy-root-20261018/`.
 
 This does not add `S2R` execution, qualify non-normal arithmetic or complete
-implicit coercion of declared real storage and parameters. Live occupancy,
+implicit coercion of declared real storage and parameters. The later
+[native real-argument boundary](campaign-presentation.md) converts integers for
+declared native real parameters, preserving the current VM callback path;
+storage and user-function coercion remain open. Live occupancy,
 placement, range delivery, the original startup gate and rendered fidelity
 remain open.
 

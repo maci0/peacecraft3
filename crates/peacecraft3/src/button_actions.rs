@@ -18,7 +18,11 @@ pub(crate) fn install(app: &mut App) {
     app.init_resource::<ButtonActions>()
         .add_observer(collect)
         .add_observer(collect_click)
-        .add_observer(clear_disabled_press);
+        .add_observer(clear_disabled_press)
+        .add_systems(
+            Update,
+            discard_blocked.after(peacecraft3::campaign_presentation::CampaignPresentationSet),
+        );
 }
 
 // Press insertion may be deferred until after the control becomes disabled.
@@ -38,7 +42,11 @@ fn collect(
     event: On<Activate>,
     enabled: Query<(), (With<Button>, Without<InteractionDisabled>)>,
     mut actions: ResMut<ButtonActions>,
+    presentation: Option<Res<peacecraft3::campaign_presentation::CampaignPresentation>>,
 ) {
+    if !input_allowed(presentation) {
+        return;
+    }
     if enabled.contains(event.entity) && !actions.entities.contains(&event.entity) {
         actions.entities.push(event.entity);
     }
@@ -58,9 +66,28 @@ fn collect_click(
     event: On<PointerClick>,
     enabled: Query<(), ClickButtonFilter>,
     mut actions: ResMut<ButtonActions>,
+    presentation: Option<Res<peacecraft3::campaign_presentation::CampaignPresentation>>,
 ) {
+    if !input_allowed(presentation) {
+        return;
+    }
     if enabled.contains(event.entity) && !actions.entities.contains(&event.entity) {
         actions.entities.push(event.entity);
+    }
+}
+
+pub(crate) fn input_allowed(
+    presentation: Option<Res<peacecraft3::campaign_presentation::CampaignPresentation>>,
+) -> bool {
+    presentation.is_none_or(|p| !p.input_blocked())
+}
+
+pub(crate) fn discard_blocked(
+    presentation: Option<Res<peacecraft3::campaign_presentation::CampaignPresentation>>,
+    mut actions: ResMut<ButtonActions>,
+) {
+    if !input_allowed(presentation) {
+        actions.entities.clear();
     }
 }
 

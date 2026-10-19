@@ -1729,6 +1729,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         match self.program.natives().call(callee) {
             Some(NativeCall::Implemented(native, which)) => {
                 self.check_native_arity(callee, native.params.len(), argv.len(), span)?;
+                let argv = self.native_arguments(&native.params, argv, span)?;
                 let value = self.run_native(which, &argv, span)?;
                 self.finish_zip(outer, value, frame)
             }
@@ -1745,6 +1746,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             }
             Some(NativeCall::Unimplemented(native)) => {
                 self.check_native_arity(callee, native.params.len(), argv.len(), span)?;
+                let argv = self.native_arguments(&native.params, argv, span)?;
                 if self.host.suspend(callee, &argv) {
                     self.suspended_span = Some(span);
                     return Ok(ExprOut::Park(outer));
@@ -2050,6 +2052,34 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         ))
     }
 
+    // Convert before any Host seam, including suspension and VM callbacks.
+    fn native_arguments(
+        &self,
+        params: &[crate::ast::Param],
+        mut argv: Vec<Value>,
+        span: Span,
+    ) -> Result<Vec<Value>, crate::Error> {
+        for (param, value) in params.iter().zip(&mut argv) {
+            if !param.ty.array
+                && param.ty.kind == TypeKind::Real
+                && let Value::Int(integer) = value
+            {
+                *value = self.integer_real(*integer, span)?;
+            }
+        }
+        Ok(argv)
+    }
+
+    fn integer_real(&self, integer: i32, span: Span) -> Result<Value, crate::Error> {
+        match self.host.real_ops() {
+            Some(real) => real
+                .integer(integer)
+                .map(Value::Real)
+                .map_err(|why| crate::Error::run(span, why)),
+            None => Ok(Value::Real(integer as f32)),
+        }
+    }
+
     fn run_native(
         &self,
         which: NativeImpl,
@@ -2058,13 +2088,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     ) -> Result<Value, crate::Error> {
         match which {
             NativeImpl::IntToReal => match args[0] {
-                Value::Int(i) => match self.host.real_ops() {
-                    Some(real) => real
-                        .integer(i)
-                        .map(Value::Real)
-                        .map_err(|why| crate::Error::run(span, why)),
-                    None => Ok(Value::Real(i as f32)),
-                },
+                Value::Int(i) => self.integer_real(i, span),
                 ref v => Err(crate::Error::run(
                     span,
                     format!("I2R takes an integer, got {}", v.type_name()),

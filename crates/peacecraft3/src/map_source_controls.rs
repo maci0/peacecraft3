@@ -15,6 +15,7 @@ pub(crate) fn install(app: &mut App) {
     app.add_systems(
         Update,
         click_selected_map
+            .run_if(crate::button_actions::input_allowed)
             .before(MapRequestSet::Deliver)
             .before(crate::button_actions::clear),
     );

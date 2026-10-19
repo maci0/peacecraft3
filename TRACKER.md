@@ -2817,3 +2817,28 @@ repeated, and the public site package was not rebuilt.
   limits/mode/locale details, real browser persistence, other startup inputs,
   cinematics and live units/controls remain open. The first chapter is still
   not playable; the original game was not rerun.
+
+### 2026-10-19 — executed cinematic filter and native real arguments
+
+- [x] Retain the ten executed UI/filter calls on the existing Host. Preserve
+  explicit fields, low-byte colors, sorted UVs and logical-clock interpolation;
+  qualify supported modes from the loaded common source. Keep unsupported inputs
+  explicit. Gate activations/picking separately from HUD visibility and time.
+- [x] Render through the published campaign's own UI camera, retained source
+  reader and bounded image decoder. Support the supplied same-stem BLP for a
+  missing TGA reference, preserve successful images on failure, and clear assets
+  on successful session replacement. Keep real source errors visible.
+- [x] Convert integer arguments at declared native real parameters through the
+  shared I2R policy before suspend/callback/native dispatch. Preserve the current
+  VM callbacks; real storage and user-function/return coercion remain open.
+- [x] Native suites, strict native/WASM lint/builds, nine targeted actual WASI
+  cases, 26 actual Cargo WASM cases and synthetic Vulkan readback through 4K pass.
+  Unchanged Human01 completes its fade setup. A private explicit selection of the
+  single supplied user-controller row reaches `IsPlayerInForce`; no production
+  slot default or original-engine local-player observation is inferred.
+- [ ] The first chapter is still not playable. Automatic Host preparation,
+  remaining mission natives, actors/controls, native sampling/composition parity,
+  real browser rendering and original/native/WASM campaign comparison remain open.
+  Details: `docs/re-notes/campaign-presentation.md`; receipts:
+  `.scratch/campaign-presentation-root-20261019/`. The previously verified
+  implementation is now published; chapter playability remains open.

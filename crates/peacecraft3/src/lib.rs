@@ -7,6 +7,7 @@
 mod campaign_assets;
 mod campaign_cache;
 pub mod campaign_camera;
+pub mod campaign_presentation;
 pub mod campaign_runtime;
 pub mod campaign_startup;
 pub mod map_admission;

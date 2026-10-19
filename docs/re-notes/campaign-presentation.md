@@ -1,0 +1,107 @@
+# Executed campaign UI input and cinematic filters
+
+This slice consumes executed script calls on the existing `ObjectHost` and the
+published campaign view. It does not supply missing startup inputs, create live
+units, implement `ShowInterface` or `EnableUserControl`, or make Human01 playable.
+The FDF declaration catalog in `ingame-cinematics-dialogs.md` remains separate.
+
+## Source evidence
+
+The local legacy executable has SHA256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+Private static reads are retained in
+`.scratch/campaign-presentation-root-20261019/presentation-entries-0.json` and
+`presentation-consumers-4.json`. These are bounded decoded windows, not a new
+original-game run or proof that every branch was reached. Candidate linear
+scans that stop at embedded data are not evidence of absence.
+
+The functional `EnableUserUI` entry at `0x48fdb0` writes UI object offset `0x1c0`.
+The input predicate at `0x5f6cb0` requires both `0x1bc` and `0x1c0`. The separate
+`EnableUserControl` and `ShowInterface` entries call different methods. Therefore
+this implementation gates activations and picking; it does not hide the HUD or
+pause the simulation merely because `EnableUserUI(false)` ran. Unknown initial
+UI state remains absent until an executed call supplies it.
+
+Start/end color wrappers at `0x4a7640` and `0x4a74d0` read each integer's low byte.
+The UV wrappers at `0x4a7740` and `0x4a75d0` sort each pair of axis endpoints.
+The duration wrapper stores the supplied float. Texture, blend, mapping and
+Display entries configure/show the same filter. The source common declarations
+and `BLEND_MODE_BLEND` / `TEXMAP_FLAG_NONE` initializers identify the supported
+symbolic modes; their numeric enumerands are not copied into the implementation.
+
+## Recreation behavior and boundaries
+
+The startup caller admits ten declarations with checked signatures and common
+source ownership. Fields stay absent until supplied. Display requires a complete
+explicit filter. Invalid calls and unsupported modes refuse without replacing the
+previous displayed filter. Color bytes wrap, UVs sort, and RGBA interpolation is
+component-wise. Zero duration selects the end fields immediately. Positive
+intervals use the admitted timer clock; update chunking and wall-clock load do not
+select the sample. This timing policy is a recreation choice, not a claim about
+the original renderer's clock. Negative/non-finite duration and non-finite UVs
+are explicit unsupported inputs.
+
+The renderer resolves the executed path through the reader bound to the
+published session's receipts. It reuses the existing bounded BLP/TGA image decoder.
+Read/decode ceilings are application allocation policies, not original game caps.
+A failed replacement texture preserves the previous successful display and
+reports the source error. Successful session replacement clears old image and
+material assets; leaving the campaign deactivates its UI camera. HUD roots target
+that camera, while a transparent picking barrier and activation gate consume the
+UI flag. Escape/menu view suspension remains available.
+
+Rendering uses the existing 3D stack's linear compositing space, with an explicit
+transfer from the filter's numeric source RGB after texture/tint multiplication.
+Alpha stays linear and is applied once by the blend stage. Linear/clamp sampling
+is a reconstruction policy. Original sampling, gamma/blend behavior and visual
+parity at all resolutions remain open; source parsing and synthetic GPU readback
+cannot close those gates.
+
+## Native real argument boundary
+
+The unchanged Human01 probe initially stopped at `SetCineFilterStartUV`: its
+helper supplies integer literals to four declared real parameters. Fixing that
+inside the filter alone would leave the same defect at other natives. The VM
+now converts integer arguments at a native's real parameter before suspension,
+callback dispatch or host execution. It shares the `I2R` conversion, including
+`RealOps::integer` when a selected policy is installed. Already-real arguments
+and integer parameters stay unchanged. Invalid signatures/arity still fail
+before dispatch. This is a recreation of the declared native ABI, not a new
+observation of the original compiler's conversion opcode.
+
+Four synthetic VM tests distinguish selected conversion from the unbound cast,
+check wide integers and conversion failure, and exercise both suspension and
+same-VM callback dispatch. This narrow correction does not complete real
+storage, user-function parameter/return or native-return coercion. The retained
+older broad coercion candidate predates the current callback implementation;
+its replacement of the VM was not applied.
+
+## Selected assets, validation and remaining frontier
+
+The retained Human01 script asks for a TGA mask while the supplied legacy archive
+contains its same-stem BLP. The consumer tries the exact path first, then the BLP
+format alias only after `MissingAsset` across the mounted source set. A listed
+but unreadable asset, a budget error or malformed exact image does not trigger
+that fallback. The selected path and byte provenance remain in the receipt.
+Native priority when both formats exist is not established by this policy.
+
+The unchanged Human01 factory probe passes all ten calls and retains the actual
+filter snapshot. The selected BLP passes the production bounded decoder. Without
+an explicit local client selection, the next refusal is `GetLocalPlayer`.
+A separate private client selects the single supplied user-controller row,
+without a numeric slot default; that run reaches `IsPlayerInForce`. This is an
+explicit recreation client selection, not a newly measured original local-player
+identity. Neither run is a normal application bootstrap or a playable chapter.
+
+Validation covers the full native script suite, play library/integration suites,
+application library/binary, map-loading and published-audio suites; strict native
+and WASM lint/builds; nine targeted actual WASI cases; and 26 actual Cargo WASM
+cases executed in Node. The Vulkan readback checks source-channel transfer and
+single alpha application at corners/center in two small targets and
+3840 × 2160. This is synthetic artwork over a 3D view, not an original-game 4K
+comparison or browser rendering. Evidence and command exits are retained under
+`.scratch/campaign-presentation-root-20261019/`.
+
+Automatic Host input preparation, force predicates, later cinematic calls, live
+actors and controls, original/native/WASM visual comparison and complete chapter
+playability remain open. No original-game runtime was launched for this slice.
