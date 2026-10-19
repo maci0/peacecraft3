@@ -4,7 +4,8 @@ use bevy::{
     pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline},
     prelude::*,
     render::render_resource::{
-        AsBindGroup, CompareFunction, RenderPipelineDescriptor, SpecializedMeshPipelineError,
+        AsBindGroup, BlendState, CompareFunction, RenderPipelineDescriptor,
+        SpecializedMeshPipelineError,
     },
 };
 use std::fmt;
@@ -26,12 +27,14 @@ pub(crate) const NO_DEPTH_SET: u32 = 0x80;
 pub(crate) struct MenuBlend {
     no_depth_test: bool,
     no_depth_set: bool,
+    native_cutout: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct MenuBlendKey {
     no_depth_test: bool,
     no_depth_set: bool,
+    native_cutout: bool,
 }
 
 impl From<&MenuBlend> for MenuBlendKey {
@@ -39,6 +42,7 @@ impl From<&MenuBlend> for MenuBlendKey {
         Self {
             no_depth_test: value.no_depth_test,
             no_depth_set: value.no_depth_set,
+            native_cutout: value.native_cutout,
         }
     }
 }
@@ -47,11 +51,13 @@ impl From<&MenuBlend> for MenuBlendKey {
 pub(crate) enum SourceModeError {
     UnknownFilterMode(u32),
     InconsistentAlphaMode(u32),
+    InvalidCutoutReference,
 }
 
 impl fmt::Display for SourceModeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidCutoutReference => write!(f, "invalid native menu cutout binding"),
             Self::UnknownFilterMode(mode) => write!(f, "unsupported menu filter mode {mode}"),
             Self::InconsistentAlphaMode(mode) => {
                 write!(f, "menu filter mode {mode} disagrees with base alpha mode")
@@ -91,12 +97,40 @@ pub(crate) fn checked_source_mode(
         extension: MenuBlend {
             no_depth_test: shading_flags & NO_DEPTH_TEST != 0,
             no_depth_set: shading_flags & NO_DEPTH_SET != 0,
+            native_cutout: false,
         },
     })
 }
 
 impl MenuBlend {
+    pub(crate) fn bind_native_cutout(
+        &mut self,
+        base: &mut StandardMaterial,
+        reference: f32,
+    ) -> Result<(), SourceModeError> {
+        if !matches!(base.alpha_mode, AlphaMode::Mask(_))
+            || !reference.is_finite()
+            || !(0.0..=1.0).contains(&reference)
+        {
+            return Err(SourceModeError::InvalidCutoutReference);
+        }
+        base.alpha_mode = AlphaMode::Mask(reference);
+        self.native_cutout = true;
+        Ok(())
+    }
+
     fn specialize_descriptor(descriptor: &mut RenderPipelineDescriptor, key: MenuBlendKey) {
+        if key.native_cutout {
+            let fragment = descriptor
+                .fragment
+                .as_mut()
+                .expect("StandardMaterial forward pipeline has a fragment stage");
+            fragment.shader_defs.push("MENU_NATIVE_CUTOUT".into());
+            fragment.targets[0]
+                .as_mut()
+                .expect("StandardMaterial forward pipeline has a color target")
+                .blend = Some(BlendState::ALPHA_BLENDING);
+        }
         // Either depth bit forces the write off. `0x40` also selects Always.
         // Clear bits leave the stored compare and the blend-coupled write,
         // including mode 6. wgpu `Always` still updates depth when
@@ -141,8 +175,8 @@ mod tests {
     use bevy::{
         pbr::Material,
         render::render_resource::{
-            BlendState, ColorTargetState, ColorWrites, DepthBiasState, DepthStencilState, Face,
-            FragmentState, StencilFaceState, StencilState, TextureFormat,
+            ColorTargetState, ColorWrites, DepthBiasState, DepthStencilState, Face, FragmentState,
+            StencilFaceState, StencilState, TextureFormat,
         },
         shader::ShaderRef,
     };
@@ -231,6 +265,47 @@ mod tests {
         assert!(!MenuBlend::enable_oit());
         assert!(matches!(MenuBlend::fragment_shader(), ShaderRef::Path(_)));
         assert!(matches!(MenuBlend::vertex_shader(), ShaderRef::Default));
+    }
+
+    #[test]
+    fn native_cutout_preserves_depth_and_source_values_and_refuses_invalid_binding() {
+        let mut material = checked_source_mode(base(AlphaMode::Mask(0.37)), 1, 0).unwrap();
+        let colour = material.base.base_color;
+        let uv = material.base.uv_transform;
+        for bad in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+            assert!(
+                material
+                    .extension
+                    .bind_native_cutout(&mut material.base, bad)
+                    .is_err()
+            );
+            assert_eq!(material.base.alpha_mode, AlphaMode::Mask(0.37));
+            assert!(!material.extension.native_cutout);
+        }
+        material
+            .extension
+            .bind_native_cutout(&mut material.base, 0.61)
+            .unwrap();
+        assert_eq!(material.base.alpha_mode, AlphaMode::Mask(0.61));
+        assert_eq!(material.base.base_color, colour);
+        assert_eq!(material.base.uv_transform, uv);
+        let mut pipeline = forward(None, true);
+        let depth = pipeline.depth_stencil.clone();
+        MenuBlend::specialize_descriptor(&mut pipeline, MenuBlendKey::from(&material.extension));
+        assert_eq!(pipeline.depth_stencil, depth);
+        let fragment = pipeline.fragment.unwrap();
+        assert!(fragment.shader_defs.contains(&"MENU_NATIVE_CUTOUT".into()));
+        let target = fragment.targets[0].as_ref().unwrap();
+        assert_eq!(target.blend, Some(BlendState::ALPHA_BLENDING));
+        assert_eq!(target.write_mask, ColorWrites::RED | ColorWrites::ALPHA);
+        let mut opaque = checked_source_mode(base(AlphaMode::Opaque), 0, 0).unwrap();
+        assert!(
+            opaque
+                .extension
+                .bind_native_cutout(&mut opaque.base, 0.61)
+                .is_err()
+        );
+        assert_eq!(opaque.base.alpha_mode, AlphaMode::Opaque);
     }
 
     #[test]

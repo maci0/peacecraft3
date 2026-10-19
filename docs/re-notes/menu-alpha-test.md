@@ -87,15 +87,64 @@ alpha between the two cutoffs distinguishes their admission decisions. These
 are source/instruction checks, not GPU or pixel acceptance. No measured threshold
 has been copied into production, and no opacity or rendering behavior changed.
 
-The panel caller still needs a complete join from the parsed MDX layer through
-its runtime state packet, including instance overrides, to this backend selector.
-The game layer reader at `0x8fc830` matches the established editor reader after
-masking relative call operands, but that alone does not establish the later
-selector mapping. The retained full D3D9 trace has compatible draw counts and
-states; count/FVF compatibility alone does not uniquely identify a panel layer.
-Do not apply selector-one behavior to MDX filter one on that evidence alone.
+At that qualification stage the panel caller still lacked the join from the MDX
+layer to the runtime packet. Compatible draw counts/FVF in the retained D3D9
+trace did not uniquely identify a panel material. The default code path is now
+joined as described below; a uniquely attributed original panel draw and
+arbitrary instance overrides remain open.
 
-Private receipts are under `.scratch/menu-panel-input-root-20261019/`.
-Source-bound cutoff/blend transport, a uniquely associated panel draw, actual GPU
-composition and original/native/WASM rendered parity remain open.
+Private receipts for that stage are under
+`.scratch/menu-panel-input-root-20261019/`.
+
+## Default cutout binding (2026-10-19)
+
+The game layer reader stores serialized FilterMode at raw-layer offset zero.
+The material builder at `0x924360` maps modes zero through six to backend
+selectors through a jump table at `0x9245c4`. Filter one selects backend one.
+The builder writes that selector into shared-layer offset zero, then copies it
+to per-instance layer offset `+0x18`. Default submission at `0x91a6e7` passes
+layer `+4` to `0x7d0d60`; the virtual setter at `0x7d3980` copies the 24-byte
+packet into renderer `+0x398`. Its selector therefore reaches `+0x3ac`, joining
+the alpha-test/blend branch above. Fifty-five instruction checks and seven
+bounded switch/copy cases qualify this default path. The game/editor reader
+fingerprint is checked against both complete image digests. Packet-wide SSE
+copies are checked statically, not interpreted with the scalar SSE harness.
+
+The supplied, digest-qualified client now supplies the byte alpha reference to
+menu preparation. It is normalized by the byte format range, never copied as
+a measured constant. Both background and panel geometry bind that reference
+for filter one. Their shared shader discards combined texture/material alpha
+below the cutoff, preserves surviving alpha and uses SrcAlpha/InvSrcAlpha RGB
+blending. The cutout retains its mask submission phase and depth writes;
+authored depth flags retain their existing separate handling. Other filter
+modes and PRE2 keep their own paths. Without a supported client profile, panels
+report that limitation and retain the existing unbound material convention.
+
+The GPU regression fails on the previous opaque-survivor path, then passes on
+the corrected path with independent synthetic texture/material inputs, including
+a value exactly at the cutoff. Material and geoset preparation checks cover
+binding, source-value preservation and invalid-reference refusal. Private
+receipts are under `.scratch/menu-native-cutout-root-20261019/`.
+
+Validation passes 162 graphics, 576 playback and 657 application tests,
+strict native/WASM Clippy, both builds, five executed WASI parameter tests,
+nine synthetic GPU composition tests and an explicit original-input offscreen
+background gate. Five calibrated native and five trusted browser navigation
+journals pass at 1024×768, 1280×960, 1920×1080, 2560×1440 and 3840×2160. Both
+live targets load the qualified client profile without a cutout fallback.
+
+Forty new native/WASM captures are compared with twenty retained WC3/Wine
+captures. All sixty full-frame RGB comparisons differ, with no rescaling or
+pixel exclusions. Visual review still finds a darker Video left panel, different
+particle rays/density/phase, settings values/availability and pointer/focus cues.
+The version pixels remain included because no exclusion footprint is qualified.
+These runs are diagnostic comparisons, not identical-input deterministic
+simulation or native Windows acceptance. Builds include the preserved foreign
+gameplay edits, rather than a clean-checkout build; no public site was deployed.
+
+This is the qualified default material behavior, not proof of every original
+panel instance or complete rendered parity. Arbitrary instance overrides,
+framebuffer alpha, the separate disabled-depth-test convention, animation/RNG
+phase, settings consumers and native Windows remain open.
+
 Package and browser receipts are in `.scratch/menu-cutout-release/`.

@@ -2620,7 +2620,27 @@ repeated, and the public site package was not rebuilt.
   single-matrix groups. Thirty-one native instruction checks and six bounded
   helper cases establish a backend branch that combines alpha testing and
   blending, unlike the current Mask convention. The parsed-layer/instance-to-
-  backend selector join is still incomplete; compatible draw counts are not
+  backend selector join was still incomplete at that stage; compatible draw counts are not
   unique material attribution. No production opacity/render change or new
   runtime acceptance is claimed. See `docs/re-notes/menu-alpha-test.md` and
   `.scratch/menu-panel-input-root-20261019/`.
+
+- [x] Default native menu cutout binding (2026-10-19): the MDX filter-to-state
+  packet join is qualified with 55 instruction checks and seven bounded cases.
+  The supplied client supplies the byte cutoff; background and panel geometry
+  preserve surviving source alpha for RGB blending while retaining cutout depth
+  writes. The previous opaque-survivor GPU regression fails before and passes
+  after the fix. 162 graphics, 576 playback and 657 application tests, strict
+  native/WASM checks/builds, five actual WASI and nine synthetic GPU tests pass,
+  along with explicit selected-source and offscreen background gates. This
+  closes the previous default-selector gap; arbitrary instance overrides remain
+  separate. See `docs/re-notes/menu-alpha-test.md` and private receipts under
+  `.scratch/menu-native-cutout-root-20261019/`.
+- [~] Full menu opacity/output parity remains open: five calibrated native and
+  five trusted browser navigation journals pass through 3840×2160, but all sixty
+  full-frame RGB comparisons against twenty retained WC3/Wine captures differ.
+  The Video left panel remains darker; particle rays/phase, settings, focus and
+  native Windows still differ or remain unverified. No version-pixel mask,
+  fresh original runtime, public deployment or deterministic three-target
+  simulation acceptance is claimed. The 100-consecutive original-baseline,
+  campaign/custom-map and overall fidelity gates remain open.

@@ -859,6 +859,7 @@ pub fn spawn(
             runtime: &runtime,
             selection: &texture_selection,
             uv_translation: &uv_translation,
+            native_cutout_reference: Some(lighting_parameters.cutout_reference),
         },
         &opacity,
         interval[0],
@@ -975,6 +976,7 @@ pub struct GeosetSource<'a> {
     pub runtime: &'a pcx_gfx::mdx_runtime::RuntimePlan,
     pub selection: &'a pcx_gfx::mdx_texture_selection::TextureSelectionPlan,
     pub uv_translation: &'a pcx_gfx::mdx_uv_translation::UvTranslationPlan,
+    pub native_cutout_reference: Option<f32>,
 }
 
 /// One geoset's authored id, its entity and its material.
@@ -1008,6 +1010,7 @@ pub fn preflight_geosets<'a>(
         runtime,
         selection,
         uv_translation,
+        native_cutout_reference,
     } = *input;
     let required = required_texture_images(source, runtime, textures)?;
     let mdl_materials = m
@@ -1062,7 +1065,7 @@ pub fn preflight_geosets<'a>(
             0,
         )?;
         let flags = layer_flags(&mdl_materials, mesh.material_id as usize);
-        let material = crate::menu_material::checked_source_mode(
+        let mut material = crate::menu_material::checked_source_mode(
             StandardMaterial {
                 base_color,
                 uv_transform: uv,
@@ -1083,6 +1086,19 @@ pub fn preflight_geosets<'a>(
                 mesh.geoset, mesh.material_id
             ))
         })?;
+        if layer.properties.filter_mode == 1
+            && let Some(reference) = native_cutout_reference
+        {
+            material
+                .extension
+                .bind_native_cutout(&mut material.base, reference)
+                .map_err(|error| {
+                    SceneError::Decode(format!(
+                        "{source}: geoset {} material {}: {error}",
+                        mesh.geoset, mesh.material_id
+                    ))
+                })?;
+        }
         let gap = flags.blend_gap;
         initial.push((id, material, gap));
     }
@@ -2956,6 +2972,7 @@ mod texture_selection_tests {
                 runtime,
                 selection: &selection,
                 uv_translation: &uv_translation,
+                native_cutout_reference: None,
             },
             &opacity,
             interval[0],
@@ -3031,6 +3048,40 @@ mod texture_selection_tests {
             assert!(spawned.materials.is_empty());
             assert!(spawned.images.is_empty());
         }
+    }
+
+    #[test]
+    fn native_cutout_binding_reaches_shared_geoset_preparation() {
+        let f = fixture_with_materials(vec![
+            material_with_flags(1, &[], 1, 0x10),
+            material_with_flags(7, &[], 2, 0x10),
+        ]);
+        let m = pcx_mdl::Mdlx::parse(&f.bytes).unwrap();
+        let selection = texture_selection(&f.runtime, [100, 117], "synthetic").unwrap();
+        let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&f.runtime, [100, 117]).unwrap();
+        let uv = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
+            &f.runtime,
+            [100, 117],
+            "synthetic",
+        )
+        .unwrap();
+        let mut source = GeosetSource {
+            m: &m,
+            bytes: &f.bytes,
+            source: "synthetic",
+            model: &f.model,
+            textures: &f.textures,
+            runtime: &f.runtime,
+            selection: &selection,
+            uv_translation: &uv,
+            native_cutout_reference: Some(0.61),
+        };
+        let prepared = preflight_geosets(&source, &opacity, 100).unwrap();
+        assert_eq!(prepared.initial[0].1.base.alpha_mode, AlphaMode::Mask(0.61));
+        assert_eq!(prepared.initial[0].1.base.base_color.alpha(), 0.25);
+        assert_eq!(prepared.initial[1].1.base.alpha_mode, AlphaMode::Blend);
+        source.native_cutout_reference = Some(f32::NAN);
+        assert!(preflight_geosets(&source, &opacity, 100).is_err());
     }
 
     #[test]
@@ -3303,7 +3354,8 @@ mod texture_selection_tests {
                         textures: &f.textures,
                         runtime: &f.runtime,
                         selection: &selection,
-                        uv_translation: &uv
+                        uv_translation: &uv,
+                        native_cutout_reference: None,
                     },
                     &opacity,
                     100
@@ -3625,6 +3677,7 @@ mod texture_selection_tests {
                 runtime: &f.runtime,
                 selection: &selection,
                 uv_translation: &uv,
+                native_cutout_reference: None,
             },
             &opacity,
             100,
@@ -4220,6 +4273,7 @@ mod texture_selection_tests {
                 runtime: &fixture.runtime,
                 selection: &selection,
                 uv_translation: &uv,
+                native_cutout_reference: None,
             },
             &opacity,
             0,

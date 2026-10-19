@@ -23,6 +23,7 @@ pub struct Parameters {
     pub channel_scale: f32,
     pub max_lights: usize,
     pub particle_appearance: ParticleAppearance,
+    pub cutout_reference: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -107,7 +108,22 @@ impl Parameters {
                     .ok_or_else(|| fail("truncated particle packing operand"))?,
             ),
         };
-        Self::checked(origin, digest, values, max_lights, particle_appearance)
+        let reference = pe
+            .read_from(0x10df970, false)
+            .map_err(|_| fail("missing reviewed cutout reference"))?;
+        let reference = reference
+            .get(..4)
+            .ok_or_else(|| fail("truncated cutout reference"))?;
+        let reference = u8::try_from(u32::from_le_bytes(reference.try_into().unwrap()))
+            .map_err(|_| fail("cutout reference exceeds byte range"))?;
+        Self::checked(
+            origin,
+            digest,
+            values,
+            max_lights,
+            particle_appearance,
+            f32::from(reference) / f32::from(u8::MAX),
+        )
     }
 
     fn checked(
@@ -116,6 +132,7 @@ impl Parameters {
         values: [f32; 5],
         max_lights: usize,
         particle_appearance: ParticleAppearance,
+        cutout_reference: f32,
     ) -> Result<Self, Error> {
         let [linear, quadratic, constant, range, channel_scale] = values;
         if values
@@ -125,6 +142,8 @@ impl Parameters {
             || range == 0.0
             || channel_scale == 0.0
             || max_lights == 0
+            || !cutout_reference.is_finite()
+            || !(0.0..=1.0).contains(&cutout_reference)
             || [
                 particle_appearance.phase_scale,
                 particle_appearance.phase_bias,
@@ -153,6 +172,7 @@ impl Parameters {
             channel_scale,
             max_lights,
             particle_appearance,
+            cutout_reference,
         })
     }
 
@@ -192,6 +212,7 @@ mod tests {
             [0.25, 0.125, 2.0, 12.0, 0.01],
             4,
             particle(),
+            0.6,
         )
         .unwrap();
         assert_eq!(p.attenuation(0.0), 0.5);
@@ -210,13 +231,21 @@ mod tests {
             [0.0023, 0.003, 1.2, 100.0, 0.01],
             4,
             particle(),
+            0.6,
         )
         .unwrap();
         // Independent f32 reference with synthetic operands; the left-associated mutant differs.
         assert_eq!(p.attenuation(77.7).to_bits(), 0x3d52_2720);
         assert!(
-            Parameters::checked(origin(), [0; 32], [0.0, 0.0, 1.0, 9.0, 0.01], 0, particle())
-                .is_err()
+            Parameters::checked(
+                origin(),
+                [0; 32],
+                [0.0, 0.0, 1.0, 9.0, 0.01],
+                0,
+                particle(),
+                0.6
+            )
+            .is_err()
         );
     }
 
@@ -226,14 +255,39 @@ mod tests {
             for bad in [f32::NAN, f32::INFINITY, -0.1] {
                 let mut values = [0.1, 0.2, 1.0, 9.0, 0.01];
                 values[index] = bad;
-                assert!(Parameters::checked(origin(), [0; 32], values, 4, particle()).is_err());
+                assert!(
+                    Parameters::checked(origin(), [0; 32], values, 4, particle(), 0.6).is_err()
+                );
             }
         }
         assert!(Parameters::read(b"MZ unknown", origin()).is_err());
         assert!(
-            Parameters::checked(origin(), [0; 32], [0.0, 0.0, 0.0, 9.0, 0.01], 4, particle())
-                .is_err()
+            Parameters::checked(
+                origin(),
+                [0; 32],
+                [0.0, 0.0, 0.0, 9.0, 0.01],
+                4,
+                particle(),
+                0.6
+            )
+            .is_err()
         );
+    }
+    #[test]
+    fn invalid_cutout_references_refuse() {
+        for reference in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+            assert!(
+                Parameters::checked(
+                    origin(),
+                    [0; 32],
+                    [0., 0., 1., 10., 0.01],
+                    4,
+                    particle(),
+                    reference
+                )
+                .is_err()
+            );
+        }
     }
     #[test]
     fn invalid_particle_coefficients_refuse() {
@@ -247,15 +301,30 @@ mod tests {
                     _ => appearance.packing_bias = bad,
                 }
                 assert!(
-                    Parameters::checked(origin(), [0; 32], [0., 0., 1., 10., 0.01], 4, appearance)
-                        .is_err()
+                    Parameters::checked(
+                        origin(),
+                        [0; 32],
+                        [0., 0., 1., 10., 0.01],
+                        4,
+                        appearance,
+                        0.6
+                    )
+                    .is_err()
                 );
             }
         }
         let mut appearance = particle();
         appearance.packing_shift = u32::BITS;
         assert!(
-            Parameters::checked(origin(), [0; 32], [0., 0., 1., 10., 0.01], 4, appearance).is_err()
+            Parameters::checked(
+                origin(),
+                [0; 32],
+                [0., 0., 1., 10., 0.01],
+                4,
+                appearance,
+                0.6
+            )
+            .is_err()
         );
     }
     #[test]
@@ -269,6 +338,20 @@ mod tests {
         source.version = "1.29.2.9231".into();
         let p = Parameters::read(&image, source).unwrap();
         assert_eq!(p.image_sha256, sha256(&image));
+        let pe = Pe::parse(
+            &image,
+            RuleInputBudget {
+                image_bytes: 32 * 1024 * 1024,
+                profile_bytes: 128,
+                sections: 96,
+            },
+        )
+        .unwrap();
+        let word = pe.read_from(0x10df970, false).unwrap();
+        assert_eq!(
+            p.cutout_reference * f32::from(u8::MAX),
+            u32::from_le_bytes(word[..4].try_into().unwrap()) as f32
+        );
         // Relations, not copied original parameter values.
         assert!(p.constant > p.quadratic && p.quadratic > p.linear);
         assert!(p.attenuation(p.range / 2.0) > p.attenuation(p.range));

@@ -1433,3 +1433,94 @@ fn selected_original_background_reaches_the_offscreen_menu_graph() {
     std::fs::write(metadata_path, serde_json::to_vec_pretty(&metadata).unwrap()).unwrap();
     println!("source-pose diagnostic: {}", output.display());
 }
+
+#[test]
+#[ignore = "requires a local Vulkan render adapter; synthetic native cutout readback"]
+fn source_native_cutout_tests_combined_alpha_and_blends_survivors() {
+    let mut app = vulkan_menu_app("source-native-cutout");
+    let target = spawn_readback_camera(&mut app);
+    let quad = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Rectangle::new(QUAD_EXTENT, QUAD_EXTENT));
+    let background = [0.07, 0.11, 0.19];
+    let tint = [0.5, 0.25, 0.75];
+    let texture_rgb = [192u8, 96, 160];
+    let cases = [(255u8, 0.0), (128, 0.5), (255, 0.5), (255, 0.75)];
+    for (column, (texture_alpha, material_alpha)) in cases.into_iter().enumerate() {
+        spawn_menu_quad(
+            &mut app,
+            &quad,
+            (column, 0.0),
+            (
+                Color::linear_rgb(background[0], background[1], background[2]),
+                AlphaMode::Opaque,
+                0,
+                0,
+            ),
+        );
+        let image = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::new(
+                bevy::render::render_resource::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                bevy::render::render_resource::TextureDimension::D2,
+                vec![
+                    texture_rgb[0],
+                    texture_rgb[1],
+                    texture_rgb[2],
+                    texture_alpha,
+                ],
+                TextureFormat::Rgba8Unorm,
+                bevy::asset::RenderAssetUsages::default(),
+            ));
+        let mut source = checked_source_mode(
+            StandardMaterial {
+                base_color: Color::linear_rgba(tint[0], tint[1], tint[2], material_alpha),
+                base_color_texture: Some(image),
+                alpha_mode: AlphaMode::Mask(0.5),
+                unlit: true,
+                fog_enabled: false,
+                cull_mode: None,
+                ..default()
+            },
+            1,
+            0,
+        )
+        .unwrap();
+        source
+            .extension
+            .bind_native_cutout(&mut source.base, 0.5)
+            .unwrap();
+        let material = app
+            .world_mut()
+            .resource_mut::<Assets<MenuMaterial>>()
+            .add(source);
+        app.world_mut().spawn((
+            Mesh3d(quad.clone()),
+            MeshMaterial3d(material),
+            Transform::from_xyz(column as f32 - 1.5, 0.0, 0.5),
+        ));
+    }
+    let readback = drive_readback(&mut app, target);
+    for (column, (texture_alpha, material_alpha)) in cases.into_iter().enumerate() {
+        let alpha = f32::from(texture_alpha) / 255.0 * material_alpha;
+        for channel in 0..3 {
+            let expected = if alpha < 0.5 {
+                background[channel]
+            } else {
+                background[channel] * (1. - alpha)
+                    + f32::from(texture_rgb[channel]) / 255.0 * tint[channel] * alpha
+            };
+            let actual = channel_at(&readback.bytes, readback.stride, column, 16, 16, channel);
+            assert!(
+                (actual - expected).abs() < 0.002,
+                "column={column} channel={channel}: {actual} != {expected}"
+            );
+        }
+    }
+}

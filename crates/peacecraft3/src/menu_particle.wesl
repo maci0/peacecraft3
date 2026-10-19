@@ -65,7 +65,13 @@ fn fragment(
     // generate a PbrInput struct from the StandardMaterial bindings
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
-    // alpha discard
+    // The native cutout tests combined alpha and blends surviving fragments.
+@if(MENU_NATIVE_CUTOUT) {
+    if pbr_input.material.base_color.a < pbr_input.material.alpha_cutoff {
+        discard;
+    }
+}
+@if(!MENU_NATIVE_CUTOUT)
     pbr_input.material.base_color = alpha_discard(
         pbr_input.material.flags,
         pbr_input.material.alpha_cutoff,

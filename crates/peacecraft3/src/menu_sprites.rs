@@ -929,6 +929,7 @@ fn preflight_plans(
                 runtime,
                 selection: &plan.textures,
                 uv_translation: &plan.uv,
+                native_cutout_reference: None,
             },
             &plan.opacity,
             plan.clip.interval[0],
@@ -1225,6 +1226,13 @@ pub fn spawn(
             reason: "mixed source selection in panel batch".into(),
         });
     }
+    let native_cutout_reference = match crate::menu_lighting::parameters(install) {
+        Ok(parameters) => Some(parameters.cutout_reference),
+        Err(error) => {
+            warn!(%error, "Native panel cutout profile unavailable; retaining unbound material convention");
+            None
+        }
+    };
     let mut prepared = Vec::with_capacity(sources.len());
     for source in sources {
         let PanelSource {
@@ -1351,6 +1359,7 @@ pub fn spawn(
                 runtime: &p.runtime,
                 selection: &plan.textures,
                 uv_translation: &plan.uv,
+                native_cutout_reference,
             },
             &plan.opacity,
             plan.clip.interval[0],

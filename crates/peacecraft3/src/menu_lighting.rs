@@ -434,6 +434,7 @@ pub(crate) mod tests {
                 version: "fixture".into(),
             },
             image_sha256: [71; 32],
+            cutout_reference: 0.6,
             constant: 2.0,
             linear: 0.0,
             quadratic: 0.0,
