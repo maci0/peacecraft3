@@ -207,6 +207,8 @@ pub struct MapStartupInputs {
     pub terrain_pathing: Option<crate::terrain_pathing::TerrainPathing>,
     /// Selected real literal and operator policy; absent retains host arithmetic.
     pub numeric: Option<crate::script_numeric::NumericPolicy>,
+    /// Source-qualified XP-factor limits; absent leaves the handicap natives unsupported.
+    pub experience_handicap: Option<crate::player_handicap::Rules>,
     pub catalog: Arc<dyn ObjectCatalog + Send + Sync>,
     pub defend: DefendSelection,
     pub current_research: Option<CurrentResearchInput>,
@@ -386,6 +388,7 @@ pub fn assemble(
         random,
         terrain_pathing,
         numeric,
+        experience_handicap,
         catalog,
         defend,
         current_research,
@@ -477,6 +480,9 @@ pub fn assemble(
     }
     if let Some(policy) = numeric {
         object = object.with_script_numeric(policy);
+    }
+    if let Some(rules) = experience_handicap {
+        object = object.with_player_experience_handicap(rules)?;
     }
     if let Some(input) = random {
         object = object.with_script_random(input.policy, input.max_secondary)?;

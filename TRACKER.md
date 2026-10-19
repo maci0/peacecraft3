@@ -3020,8 +3020,25 @@ repeated, and the public site package was not rebuilt.
   actual handles; all 155 original creation inputs/positions still match.
   Native 547 tests, application trigger six tests, actual WASI 34 tests, strict
   native/browser lint and both application library builds pass.
-- [ ] Next caller: `SetPlayerHandicapXP`. Initial/other ability effects, ability
+- [x] `SetPlayerHandicapXP` now completes as recorded below. Initial/other ability effects, ability
   list/level changes, damage/combat, ordinary Host preparation, playable actors
   and original/native/WASM rendered/4K parity remain open. Human01 is not
   playable and the original baseline gate is unchanged. See
   [explicit unit protection](docs/re-notes/script-unit-world.md#explicit-unit-protection-2026-10-19).
+
+
+### 2026-10-19 — source-bound player XP factor
+
+- [x] The startup factory accepts an explicit source policy for the XP setter
+  and query. Limits/null results come from fingerprinted image data and checked
+  real initializers using the same selected numeric model; no measured bounds
+  or initial valid-player factor is a production default.
+- [x] Human01 completes the assignment and query on one actual player row.
+  All 155 creation-input/position comparisons remain exact. Native 557 tests,
+  six application integration tests, 188 distinct actual WASI tests, strict
+  native/browser lint and both application library builds pass.
+- [ ] Next caller: `SetUnitOwner`. Initial player factors, experience awards,
+  ownership/colour/event effects, ordinary Host preparation, live actors and
+  original/native/WASM deterministic/rendered/4K parity remain open. The first
+  campaign is not playable; the original baseline gate is unchanged. See
+  [experience handicap](docs/re-notes/script-player-setup.md#source-bound-experience-handicap-2026-10-19).

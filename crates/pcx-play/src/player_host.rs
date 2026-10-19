@@ -47,6 +47,8 @@ pub struct PlayerSettings {
     /// Last executed `SetPlayerState` request for each symbolic setting.
     /// These signed inputs are not effective resource balances or fabricated defaults.
     pub state_requests: Vec<(HandleId, i32)>,
+    /// Assigned, source-clamped XP factor. None is unknown initial player state.
+    pub experience_handicap: Option<f32>,
 }
 /// Caller bound on stored `(player, techid)` records. Not a native or build limit.
 #[derive(Clone, Copy, Debug)]
@@ -85,6 +87,7 @@ pub(super) struct Players {
     research: Option<RecordLimits>,
     alliance: Option<RecordLimits>,
     state_requests: Option<RecordLimits>,
+    experience_handicap: Option<crate::player_handicap::Rules>,
     slot_states_admitted: bool,
     controllers: Option<controllers::Controllers>,
     current_research: Option<Vec<ResearchObservation>>,
@@ -208,6 +211,7 @@ impl ObjectHost {
             research: None,
             alliance: None,
             state_requests: None,
+            experience_handicap: None,
             slot_states_admitted: false,
             controllers: None,
             current_research: None,
@@ -701,6 +705,10 @@ impl ObjectHost {
                 Err(self.inner.error(name, Failure::PlayerArguments))
             });
         }
+        if matches!(name, "SetPlayerHandicapXP" | "GetPlayerHandicapXP") {
+            players.experience_handicap.as_ref()?;
+            return Some(self.experience_handicap_native(name, args));
+        }
         if name == SET_PLAYER_STATE {
             players.state_requests.as_ref()?;
             return Some(self.request_player_state(args));
@@ -773,6 +781,7 @@ impl ObjectHost {
                 tech_researched: Vec::new(),
                 alliances: Vec::new(),
                 state_requests: Vec::new(),
+                experience_handicap: None,
             });
             return Ok(Value::Handle(id));
         }
@@ -1003,3 +1012,6 @@ mod controllers;
 #[path = "player_current_research_host.rs"]
 mod current_research;
 pub use current_research::ResearchObservation;
+
+#[path = "player_handicap_host.rs"]
+mod handicap;

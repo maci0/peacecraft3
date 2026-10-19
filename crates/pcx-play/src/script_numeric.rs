@@ -207,6 +207,22 @@ impl NumericPolicy {
         &self.binding.image_sha256
     }
 
+    pub(crate) fn integer_initializer(&self, bytes: &[u8], base: u32) -> Option<(u32, f32)> {
+        let (value, at) = match bytes {
+            [0x6a, value, ..] => (i32::from(*value as i8), 2),
+            [0x68, a, b, c, d, ..] => (i32::from_le_bytes([*a, *b, *c, *d]), 5),
+            _ => return None,
+        };
+        if bytes.len() != at + 14
+            || bytes[at] != 0x68
+            || call(bytes, base, at + 5) != Some(self.binding.math_i32_to_real.va)
+            || bytes[at + 10..] != [0x83, 0xc4, 8, 0xc3]
+        {
+            return None;
+        }
+        Some((word(bytes, at + 1)?, self.integer(value).ok()?))
+    }
+
     fn division(&self, left: u32, right: u32) -> Result<u32, real::MathError> {
         if left == right {
             return Ok(1.0f32.to_bits());
@@ -363,4 +379,4 @@ impl RealOps for NumericPolicy {
 
 #[cfg(test)]
 #[path = "script_numeric_tests.rs"]
-mod tests;
+pub(crate) mod tests;

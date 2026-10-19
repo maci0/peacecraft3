@@ -534,3 +534,52 @@ cases, including three camera cases; the five local-player Host/VM tests also
 execute under bounded WASI. This is component/VM execution, not rendered
 gameplay. Local command receipts are in
 `.scratch/campaign-local-player-root-20261019/`.
+
+## Source-bound experience handicap (2026-10-19)
+
+The startup factory can now accept an explicit `experience_handicap` policy.
+It requires the matching selected numeric policy and the loaded constant
+`SetPlayerHandicapXP`/`GetPlayerHandicapXP` contracts from the player interface's
+source. Omitting the policy keeps those natives unsupported. Assignments and
+queries use the existing player row and identity; aliases see the same factor,
+while another player's unassigned factor remains unknown.
+
+Limits are read from source, not copied from a measured result. In the selected
+1.29.2.9231 image, setter `0x4a9660` compares its real argument against a data
+minimum and an initialized real maximum before storing it. Getter `0x4945c0`
+reads that same property and a separate initialized real for a null player.
+The reader validates both wrapper shapes, shared lookup target, stored-field
+relationship, repeated data addresses and initializer destinations. Integer
+initializers must call the conversion already bound by `NumericPolicy` in the
+same complete image. The existing integer conversion is reused, including
+signed and wide initializer operands. Image/window fingerprints, section
+permissions, identities and byte budgets are checked before accepting rules.
+
+The recreation follows the ordered comparisons: ordinary inputs clamp to the
+source limits, infinities clamp, and NaN payloads remain unchanged. A null setter
+has no effect; the null getter returns its source-derived value. VM integer
+arguments and literal spelling use the selected numeric policy. A synthetic
+reciprocal table deliberately differing from host arithmetic verifies that this
+path is preserved through the assignment and query.
+
+The unchanged Human01 completes its XP-factor assignment and the query returns
+the same derived bits on that actual player handle. The prior three protection
+assignments, two group calls, and all 155 original creation-input/position
+comparisons still pass. The next refusal is `SetUnitOwner` at map span
+`109800..109850`. This uses the existing explicit private startup inputs;
+ordinary application input preparation remains open.
+
+This supplies an assigned factor and its script query, not an experience-award
+engine. Initial factors for valid players, hero experience/level progression,
+ownership/colour transitions, live actors and playable campaign behavior remain
+open. The original baseline gate and original/native/WASM rendered/4K and full
+simulation-comparison gates are unchanged.
+
+Verification passes 557 native library tests (seven explicit local-input cases
+ignored), six application trigger integration tests, 188 distinct actual WASI
+tests, strict native/browser lint and both application library builds. The larger
+WASI player suite exhausted its first aggregate fuel allowance; it passed under
+a larger bounded allowance without source changes. Local receipts, source-byte
+analysis, both rejected native attempts and the count-check correction remain in
+`.scratch/campaign-handicap-xp-root-20261019/`. No original runtime or new rendered
+comparison was run.

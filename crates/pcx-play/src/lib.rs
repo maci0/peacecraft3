@@ -75,6 +75,7 @@ mod neutral_rule_input;
 pub mod options_defaults;
 pub mod options_modes;
 pub mod pcm_decoder;
+pub mod player_handicap;
 pub mod playercolor_host;
 pub mod quest_session;
 pub mod quest_view;

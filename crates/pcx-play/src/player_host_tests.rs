@@ -509,3 +509,6 @@ mod stock_slots;
 
 #[path = "terrain_pathing_host_tests.rs"]
 mod terrain_pathing;
+
+#[path = "player_handicap_host_tests.rs"]
+mod handicap;

@@ -5,7 +5,7 @@ use pcx_script::{Host, RealOps};
 use std::sync::Arc;
 
 // Self-authored encodings and arbitrary table values; no original image bytes.
-fn fixture() -> (Vec<u8>, Binding, RuleInputBudget) {
+pub(crate) fn fixture() -> (Vec<u8>, Binding, RuleInputBudget) {
     let mut image = vec![0; 0x2000];
     image[..2].copy_from_slice(b"MZ");
     image[0x80..0x84].copy_from_slice(b"PE\0\0");
