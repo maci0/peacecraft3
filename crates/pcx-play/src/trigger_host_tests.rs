@@ -690,3 +690,6 @@ fn trigger_state_contracts_are_selected_and_optional() {
 
 #[path = "death_event_tests.rs"]
 mod death_event_tests;
+
+#[path = "range_event_tests.rs"]
+mod range_event_tests;

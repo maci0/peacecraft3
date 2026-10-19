@@ -72,6 +72,8 @@ pub struct MapStartupBudgets {
     pub player_unit_events: Option<usize>,
     /// None keeps widget death-event registration unsupported.
     pub death_events: Option<usize>,
+    /// None keeps `TriggerRegisterUnitInRange` unsupported. Registration does not place or deliver.
+    pub unit_in_range: Option<usize>,
     /// None keeps player-event registration unsupported.
     pub player_events: Option<usize>,
     /// None keeps region creation, rectangle requests and subscriptions unsupported.
@@ -420,6 +422,9 @@ pub fn assemble(
     if let Some(limit) = budgets.death_events {
         object = object.with_death_events(limit)?;
     }
+    if let Some(limit) = budgets.unit_in_range {
+        object = object.with_unit_in_range(limit)?;
+    }
     if let Some(limit) = budgets.player_events {
         object = object.with_player_events(limit)?;
     }
@@ -465,6 +470,19 @@ pub fn assemble(
 }
 
 impl Host for MapStartupHost {
+    fn begin_script_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.inner.begin_script_call(name, args)
+    }
+    fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
+        self.inner.continue_script_call(value)
+    }
+    fn abort_script_calls(&mut self) {
+        self.inner.abort_script_calls();
+    }
     fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
         self.inner.real_ops()
     }

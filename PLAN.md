@@ -1273,6 +1273,14 @@ terrain and HUD. See
 [map admission](docs/re-notes/map-data-admission.md) and
 [executed Host state](docs/re-notes/script-player-setup.md).
 
+The application now drives published campaign timers on logical ticks with
+retained catch-up work, and direct initialization-trigger callbacks execute in
+the owning VM. Loading time is excluded from a newly published session. The
+Human01 candidate now reaches its initialization action and refuses
+`SetCampaignMenuRace`; it is still not a playable chapter. Automatic startup
+input preparation and the live world, rendering and controls remain open. See
+[campaign runtime](docs/re-notes/campaign-runtime.md).
+
 Remaining work includes native behavior and handle lifetimes, actual trigger
 registration/delivery and VM callbacks, timer/event ordering, the `BJ`/`Blz`
 surface, complete localization substitution, and application game-loop wiring.

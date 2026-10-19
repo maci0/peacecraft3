@@ -19,10 +19,105 @@ native TriggerRegisterTimerEvent takes trigger t, real timeout, boolean periodic
 native TriggerAddAction takes trigger t, code callback returns triggeraction
 native Condition takes code callback returns conditionfunc
 native TriggerAddCondition takes trigger t, boolexpr callback returns triggercondition
+native TriggerEvaluate takes trigger t returns boolean
+native TriggerExecute takes trigger t returns nothing
 globals
 constant gameevent TEST_TIMER_EVENT = ConvertGameEvent(29)
 endglobals
 ";
+
+#[test]
+fn direct_initialization_triggers_execute_in_the_owning_vm_and_restore_nested_context() {
+    let source = "\
+globals
+trigger a = CreateTrigger()
+trigger b = CreateTrigger()
+integer seen = 0
+boolean contexts = true
+endglobals
+function first takes nothing returns boolean
+set seen = seen * 10 + 1
+set contexts = contexts and GetTriggeringTrigger() == a and GetTriggerEventId() == null
+return false
+endfunction
+function second takes nothing returns boolean
+set seen = seen * 10 + 2
+return true
+endfunction
+function inner takes nothing returns nothing
+set seen = seen * 10 + 3
+set contexts = contexts and GetTriggeringTrigger() == b and GetTriggerEventId() == null
+endfunction
+function outer takes nothing returns nothing
+set seen = seen * 10 + 4
+call TriggerExecute(b)
+set seen = seen * 10 + 5
+set contexts = contexts and GetTriggeringTrigger() == a
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TriggerAddCondition(a, Condition(function first))
+call TriggerAddCondition(a, Condition(function second))
+call TriggerAddAction(a, function outer)
+call TriggerAddAction(b, function inner)
+call DisableTrigger(a)
+if TriggerEvaluate(a) then
+set seen = -1
+endif
+call TriggerExecute(a)
+set contexts = contexts and GetTriggeringTrigger() == null and GetTriggerEventId() == null
+endfunction
+";
+    let mut app = timer_app();
+    deliver_timed_trigger(&mut app, source, 1);
+    let session = app.world().resource::<MapScriptSession<MapStartupHost>>();
+    assert_eq!(session.global("seen"), Some(Value::Int(12435)));
+    assert_eq!(session.global("contexts"), Some(Value::Bool(true)));
+}
+
+#[test]
+fn direct_trigger_callback_failure_unwinds_context_without_repeating_prior_effects() {
+    let source = "\
+globals
+trigger t = CreateTrigger()
+integer seen = 0
+endglobals
+function fails takes nothing returns nothing
+set seen = seen + 1
+call SetSoundPitch(null, 1.0)
+endfunction
+function run takes nothing returns nothing
+call TriggerExecute(t)
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TriggerAddAction(t, function fails)
+endfunction
+";
+    let mut app = timer_app();
+    deliver_timed_trigger(&mut app, source, 1);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let id = session
+        .context()
+        .unwrap()
+        .scripts
+        .program()
+        .function_id("run")
+        .unwrap();
+    let ticket = session.callback_ticket(id).unwrap();
+    assert!(session.call_callback(&ticket, &[]).is_err());
+    assert_eq!(session.global("seen"), Some(Value::Int(1)));
+    let host = session.host().unwrap();
+    assert_eq!(
+        host.native("GetTriggeringTrigger", &[]).unwrap(),
+        Value::Null
+    );
+    assert_eq!(host.native("GetTriggerEventId", &[]).unwrap(), Value::Null);
+}
 const SCRIPT: &str = "\
 globals
 trigger t = CreateTrigger()
@@ -260,4 +355,12 @@ pub fn browser_timed_trigger_gate() -> u32 {
     timer_subscription_runs_actions_then_restores_context_for_direct_handler();
     timed_callback_failure_cleans_context_and_candidate_replacement_keeps_previous_state();
     4
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn browser_direct_trigger_gate() -> u32 {
+    direct_initialization_triggers_execute_in_the_owning_vm_and_restore_nested_context();
+    direct_trigger_callback_failure_unwinds_context_without_repeating_prior_effects();
+    2
 }

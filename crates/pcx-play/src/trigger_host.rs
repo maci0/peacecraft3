@@ -33,6 +33,10 @@ pub use trigger_conditions::TriggerConditionRegistration;
 mod death_events;
 pub use death_events::DeathEventRegistration;
 
+#[path = "range_event_host.rs"]
+mod range_events;
+pub use range_events::UnitInRangeRegistration;
+
 const CREATE: &str = "CreateTrigger";
 const REGISTER: &str = "TriggerRegisterUnitEvent";
 const CONVERT: &str = "ConvertUnitEvent";
@@ -85,6 +89,8 @@ pub(super) struct Admission {
     retained_player_unit_events: usize,
     death_event_limit: Option<usize>,
     retained_death_events: usize,
+    unit_in_range_limit: Option<usize>,
+    retained_unit_in_range: usize,
     player_event_limit: Option<usize>,
     retained_player_events: usize,
     timer_event_limit: Option<usize>,
@@ -218,6 +224,8 @@ impl ObjectHost {
             retained_player_unit_events: 0,
             death_event_limit: None,
             retained_death_events: 0,
+            unit_in_range_limit: None,
+            retained_unit_in_range: 0,
             player_event_limit: None,
             retained_player_events: 0,
             timer_event_limit: None,
@@ -272,6 +280,9 @@ impl ObjectHost {
             REGISTER => Some(self.register_unit_event(args)),
             death_events::REGISTER if self.triggers.as_ref()?.death_event_limit.is_some() => {
                 Some(self.register_death_event(args))
+            }
+            range_events::REGISTER if self.triggers.as_ref()?.unit_in_range_limit.is_some() => {
+                Some(self.register_unit_in_range(args))
             }
             player_events::REGISTER if self.triggers.as_ref()?.player_event_limit.is_some() => {
                 Some(self.register_player_event(args))

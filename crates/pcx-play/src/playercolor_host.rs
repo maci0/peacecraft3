@@ -239,6 +239,7 @@ enum Entry {
     RegisteredPlayerUnitEvent(objects::PlayerUnitEventRegistration),
     RegisteredPlayerEvent(objects::PlayerEventRegistration),
     RegisteredDeathEvent(objects::DeathEventRegistration),
+    RegisteredUnitInRange(objects::UnitInRangeRegistration),
     TriggerCondition(objects::TriggerConditionRegistration),
     /// One retained timer-expiry subscription; no clock or pending firing.
     RegisteredTimerEvent {
@@ -581,6 +582,7 @@ impl EnumHost {
             | Entry::RegisteredPlayerUnitEvent(_)
             | Entry::RegisteredPlayerEvent(_)
             | Entry::RegisteredDeathEvent(_)
+            | Entry::RegisteredUnitInRange(_)
             | Entry::RegisteredRegionEvent(_)
             | Entry::RegisteredTimedEvent { .. }
             | Entry::RegisteredTimerEvent { .. }
@@ -698,5 +700,6 @@ pub use objects::{
     StackedSoundRequest, StartLocation, StartPriorities, StartPriority, StartupClockState,
     StartupSettings, StockBudget, TechLimitBudget, TimerEventRegistration, TimerExpiry, TimerHost,
     TriggerActionRecord, TriggerBudget, TriggerConditionRegistration, TriggerDelivery,
-    TriggerRuntimeInput, UnitBudget, UnitEventRegistration, UnitStateBudget,
+    TriggerRuntimeInput, UnitBudget, UnitEventRegistration, UnitInRangeRegistration,
+    UnitStateBudget,
 };

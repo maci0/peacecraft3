@@ -350,6 +350,20 @@ impl ObjectHost {
     }
 }
 impl Host for ObjectHost {
+    fn begin_script_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.begin_trigger_call(name, args)
+            .map_err(|e| e.to_string())
+    }
+    fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
+        self.continue_trigger_call(value).map_err(|e| e.to_string())
+    }
+    fn abort_script_calls(&mut self) {
+        self.abort_trigger_calls();
+    }
     fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
         self.numeric.as_ref().map(|p| p as &dyn pcx_script::RealOps)
     }
@@ -552,7 +566,7 @@ mod trigger_admission;
 pub use trigger_admission::{
     DeathEventRegistration, GameStateEventRegistration, PlayerEventRegistration,
     PlayerUnitEventRegistration, TimerEventRegistration, TriggerActionRecord, TriggerBudget,
-    TriggerConditionRegistration, UnitEventRegistration,
+    TriggerConditionRegistration, UnitEventRegistration, UnitInRangeRegistration,
 };
 
 #[cfg(test)]

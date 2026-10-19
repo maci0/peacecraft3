@@ -88,6 +88,18 @@ fn register(
 }
 
 #[test]
+fn direct_trigger_callback_declarations_are_checked_before_runtime_admission() {
+    for declaration in [
+        "native TriggerEvaluate takes trigger t returns real\n",
+        "constant native TriggerEvaluate takes trigger t returns boolean\n",
+        "native TriggerExecute takes integer t returns nothing\n",
+    ] {
+        let common = format!("{COMMON}{declaration}");
+        assert!(host(&common, 32).with_trigger_runtime(input(2)).is_err());
+    }
+}
+
+#[test]
 fn automatic_event_shares_clock_preserves_period_and_has_no_script_timer() {
     let mut h = host(COMMON, 32).with_trigger_runtime(input(2)).unwrap();
     let trigger = h.native("CreateTrigger", &[]).unwrap();

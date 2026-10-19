@@ -299,6 +299,7 @@ fn budgets() -> MapStartupBudgets {
         trigger_conditions: None,
         player_unit_events: None,
         death_events: None,
+        unit_in_range: None,
         player_events: None,
         regions: None,
         timer_events: 4,

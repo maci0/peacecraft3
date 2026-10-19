@@ -2644,3 +2644,25 @@ repeated, and the public site package was not rebuilt.
   fresh original runtime, public deployment or deterministic three-target
   simulation acceptance is claimed. The 100-consecutive original-baseline,
   campaign/custom-map and overall fidelity gates remain open.
+
+
+### 2026-10-19 — campaign application clock and initialization callbacks
+
+- [~] The launcher drives a published campaign VM with fixed logical steps and
+  retained catch-up work. Loading time is excluded; pause, replacement and callback
+  failure have explicit behavior. This scheduling policy is not the original tick
+  or game-speed proof.
+- [~] Direct initialization triggers call their retained script callbacks in the
+  owning VM. Nested contexts and error cleanup preserve prior effects. The bounded
+  range-registration candidate is reviewed and integrated; it does not deliver
+  world range events or change placement.
+- [~] The local Human01 candidate now enters its initialization action and refuses
+  `SetCampaignMenuRace`, after globals/config and 155 executed unit creations. Its
+  explicit recreation seed and labelled compatibility catalog do not establish an
+  original startup match. Native and Cargo WebAssembly checks are retained in
+  `.scratch/campaign-runtime-root-20261019/`.
+- [ ] Automatic startup inputs, live scene/unit/control wiring, remaining mission
+  natives, original seed/call order, complete campaign playability and the
+  100-consecutive original baseline gate remain open. No menu visual comparison,
+  original runtime or public site deployment was repeated. See
+  [campaign runtime](docs/re-notes/campaign-runtime.md).

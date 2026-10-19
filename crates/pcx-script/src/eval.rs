@@ -70,6 +70,13 @@ pub trait RealOps {
     fn binary(&self, op: BinOp, left: f32, right: f32) -> Result<Value, String>;
 }
 
+/// A host native calling back into the same script thread and global state.
+#[derive(Debug)]
+pub enum ScriptCall {
+    Call(crate::value::FunctionId),
+    Return(Value),
+}
+
 /// Everything the VM cannot decide for itself.
 pub trait Host {
     /// Absent preserves the interpreter's ordinary host-float operations.
@@ -82,6 +89,23 @@ pub trait Host {
     ///
     /// This is not called for an invocation that [`Host::suspend`] parks.
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String>;
+
+    /// Optional callback dispatch. `None` uses ordinary native dispatch.
+    /// A callback takes no arguments; its return reaches `continue_script_call`.
+    fn begin_script_call(
+        &mut self,
+        _name: &str,
+        _args: &[Value],
+    ) -> Result<Option<ScriptCall>, String> {
+        Ok(None)
+    }
+
+    fn continue_script_call(&mut self, _value: Value) -> Result<ScriptCall, String> {
+        Err("no native script callback is active".into())
+    }
+
+    /// Unwind callback contexts after an execution error, preserving prior effects.
+    fn abort_script_calls(&mut self) {}
 
     /// `true` parks the running thread instead of producing a value.
     ///
@@ -226,6 +250,9 @@ enum ExprDest {
 /// One operator waiting above the hole. The nearest frame is at the back.
 #[derive(Debug)]
 enum Zip {
+    ScriptCall {
+        span: Span,
+    },
     Unary {
         op: UnOp,
         span: Span,
@@ -476,6 +503,9 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         self.busy = true;
         let result = self.begin(name, args.to_vec(), Span::EMPTY);
         self.busy = false;
+        if result.is_err() {
+            self.host.abort_script_calls();
+        }
         result
     }
 
@@ -501,6 +531,9 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         self.stack.last_mut().unwrap().incoming = Some(value);
         let result = self.drive_until(0);
         self.busy = false;
+        if result.is_err() {
+            self.host.abort_script_calls();
+        }
         result
     }
 
@@ -519,6 +552,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         self.error_source = None;
         let result = self.initialise_globals_inner();
         if result.is_err() {
+            self.host.abort_script_calls();
             self.stack.clear();
             self.depth = 0;
             self.suspended_span = None;
@@ -1715,6 +1749,13 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     self.suspended_span = Some(span);
                     return Ok(ExprOut::Park(outer));
                 }
+                if let Some(call) = self
+                    .host
+                    .begin_script_call(callee, &argv)
+                    .map_err(|why| crate::Error::run(span, why))?
+                {
+                    return self.dispatch_script_call(call, span, frame, outer);
+                }
                 match self.host.native(callee, &argv) {
                     Ok(value) => self.finish_zip(outer, value, frame),
                     Err(why) => {
@@ -1740,6 +1781,31 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     "`{callee}` is not declared as a function or native in the loaded script sources"
                 ),
             )),
+        }
+    }
+
+    fn dispatch_script_call(
+        &mut self,
+        call: ScriptCall,
+        span: Span,
+        frame: &mut Frame,
+        mut outer: Vec<Zip>,
+    ) -> Result<ExprOut, crate::Error> {
+        self.tick(span)?;
+        match call {
+            ScriptCall::Return(value) => self.finish_zip(outer, value, frame),
+            ScriptCall::Call(id) => {
+                let function = self.program.functions().get(id.index()).ok_or_else(|| {
+                    crate::Error::run(span, "native callback is not in the loaded program")
+                })?;
+                if !function.params.is_empty() {
+                    return Err(crate::Error::run(span, "native callback must take nothing"));
+                }
+                let name = function.name.clone();
+                self.push_activation(&name, Vec::new(), span)?;
+                outer.push(Zip::ScriptCall { span });
+                Ok(ExprOut::Push(outer))
+            }
         }
     }
 
@@ -1848,6 +1914,13 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     ) -> Result<ExprOut, crate::Error> {
         while let Some(top) = zip.pop() {
             match top {
+                Zip::ScriptCall { span } => {
+                    let call = self
+                        .host
+                        .continue_script_call(value)
+                        .map_err(|why| crate::Error::run(span, why))?;
+                    return self.dispatch_script_call(call, span, frame, zip);
+                }
                 Zip::Unary { op, span } => {
                     value = unary(op, &value).map_err(|e| self.op_error(&e, span))?;
                 }
@@ -2287,4 +2360,53 @@ pub fn run_main<H: Host>(program: &Program, host: H) -> Result<(), crate::Error>
     vm.init_globals()?;
     let _ = vm.call("main", &[])?;
     Ok(())
+}
+
+#[cfg(test)]
+mod callback_work_tests {
+    use super::*;
+
+    #[test]
+    fn native_callback_chains_spend_work_even_when_the_function_body_is_empty() {
+        #[derive(Default)]
+        struct Chain {
+            function: Option<crate::value::FunctionId>,
+            calls: usize,
+        }
+        impl Host for Chain {
+            fn native(&mut self, _: &str, _: &[Value]) -> Result<Value, String> {
+                Err("unexpected native".into())
+            }
+            fn begin_script_call(
+                &mut self,
+                _: &str,
+                args: &[Value],
+            ) -> Result<Option<ScriptCall>, String> {
+                let [Value::Code(function)] = args else {
+                    return Err("callback required".into());
+                };
+                self.function = Some(*function);
+                Ok(Some(ScriptCall::Call(*function)))
+            }
+            fn continue_script_call(&mut self, _: Value) -> Result<ScriptCall, String> {
+                self.calls += 1;
+                Ok(if self.calls < 1000 {
+                    ScriptCall::Call(self.function.unwrap())
+                } else {
+                    ScriptCall::Return(Value::Null)
+                })
+            }
+        }
+        let script = crate::parse_script("native Drive takes code callback returns nothing\nfunction empty takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\ncall Drive(function empty)\nendfunction\n").unwrap();
+        let program = crate::resolve(&script).unwrap();
+        let mut vm = Vm::new(&program, Chain::default());
+        vm.set_steps_for_test(MAX_STEPS - 100);
+        assert!(
+            vm.call("main", &[])
+                .unwrap_err()
+                .to_string()
+                .contains("steps")
+        );
+        assert!(vm.host().calls < 1000);
+    }
 }

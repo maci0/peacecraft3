@@ -373,8 +373,12 @@ rendering or chapter completion. Source windows, probe, logs, captures and
 verification remain local in `.scratch/unit-world-root-20261018/`.
 
 This is one instrumented Wine run, not native Windows truth or an unmodified-map
-acceptance run. No production range-registration stub, world-id adapter, copied
-position/collision constants or assumed polling interval is added. Live placement,
-session-scoped world identity, world-driven event delivery and the required
-four-result RNG factory gate remain open. The factory still refuses
-`TriggerRegisterUnitInRange` after one exact RNG result.
+acceptance run. No world-id adapter, copied position/collision constants or
+assumed polling interval is added. Live placement, session-scoped world identity,
+world-driven event delivery and the required four-result RNG factory gate remain
+open.
+
+`ObjectHost::with_unit_in_range` can retain the executed trigger, unit, finite
+range and nullable filter. The call returns an event and does not move the unit
+or run the filter. Omitting the budget leaves the native unsupported, so an
+unchanged factory still stops there. Registration is not range delivery.

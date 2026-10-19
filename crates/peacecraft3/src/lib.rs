@@ -4,6 +4,7 @@
 //! Parsed publication and script startup stay separate: startup runs only after a
 //! successful admission and caller-supplied host inputs.
 
+pub mod campaign_runtime;
 pub mod campaign_startup;
 pub mod map_admission;
 pub mod map_binding;

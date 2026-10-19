@@ -377,6 +377,15 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
             .run_if(menu_is_visible),
     );
     peacecraft3::map_ground::install(&mut app);
+    // Scheduling granularity/work budgets are application policy, not original game rules.
+    peacecraft3::campaign_runtime::install(
+        &mut app,
+        peacecraft3::campaign_runtime::CampaignRuntime::new(
+            std::time::Duration::from_secs_f64(1.0 / 64.0),
+            64,
+            4096,
+        ),
+    );
     crate::intro::install(&mut app);
     app.configure_sets(
         Update,

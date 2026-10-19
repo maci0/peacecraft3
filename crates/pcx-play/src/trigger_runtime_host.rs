@@ -17,6 +17,16 @@ pub(super) struct State {
     limit: usize,
     retained: usize,
     active: Option<HandleId>,
+    timer_context: bool,
+    calls: Vec<DirectCall>,
+}
+
+struct DirectCall {
+    previous: Option<HandleId>,
+    callbacks: Vec<FunctionId>,
+    next: usize,
+    evaluate: bool,
+    accepted: bool,
 }
 
 /// Callback snapshot from one arena. The session executes it in its existing VM.
@@ -87,6 +97,33 @@ impl ObjectHost {
                 return Err(fail(Failure::Source));
             }
         }
+        for (native, result) in [
+            ("TriggerEvaluate", "boolean"),
+            ("TriggerExecute", "nothing"),
+        ] {
+            if self.inner.program.natives().get(native).is_some() {
+                Self::contract_in(
+                    &self.inner,
+                    native,
+                    &["trigger"],
+                    result,
+                    false,
+                    None,
+                    false,
+                )?;
+                if self
+                    .inner
+                    .program
+                    .natives()
+                    .get(native)
+                    .expect("checked contract")
+                    .source
+                    != *source
+                {
+                    return Err(fail(Failure::Source));
+                }
+            }
+        }
         let ty = self
             .inner
             .program
@@ -134,6 +171,8 @@ impl ObjectHost {
             limit: input.max_timed_events,
             retained: 0,
             active: None,
+            timer_context: false,
+            calls: Vec::new(),
         });
         Ok(self)
     }
@@ -160,11 +199,9 @@ impl ObjectHost {
             "GetTriggeringTrigger" | "GetTriggerEventId" => Some(if args.is_empty() {
                 Ok(match state.active {
                     None => Value::Null,
-                    Some(trigger) => Value::Handle(if name == "GetTriggeringTrigger" {
-                        trigger
-                    } else {
-                        state.event
-                    }),
+                    Some(trigger) if name == "GetTriggeringTrigger" => Value::Handle(trigger),
+                    Some(_) if state.timer_context => Value::Handle(state.event),
+                    Some(_) => Value::Null,
                 })
             } else {
                 Err(self
@@ -305,12 +342,129 @@ impl ObjectHost {
             ));
         }
         state.active = Some(record.trigger);
+        state.timer_context = true;
         Ok(true)
     }
 
     pub fn finish_timer_trigger(&mut self) {
         if let Some(state) = &mut self.trigger_runtime {
             state.active = None;
+            state.timer_context = false;
+        }
+    }
+
+    pub(super) fn begin_trigger_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<pcx_script::ScriptCall>, Error> {
+        if !matches!(name, "TriggerEvaluate" | "TriggerExecute") || self.trigger_runtime.is_none() {
+            return Ok(None);
+        }
+        if self.inner.program.natives().get(name).is_none() {
+            return Err(self.inner.error(name, Failure::Signature));
+        }
+        let [Value::Handle(trigger)] = args else {
+            return Err(self
+                .inner
+                .error(name, Failure::TriggerState("expected one trigger")));
+        };
+        // Explicit calls validate identity but do not depend on automatic-event enablement.
+        self.trigger_enabled(*trigger)?;
+        let evaluate = name == "TriggerEvaluate";
+        // shortcut: list edits become visible on the next call; qualify mid-call edits before extending this policy.
+        let mut callbacks = Vec::new();
+        for entry in &self.inner.arena {
+            let function = match entry {
+                Entry::TriggerCondition(record) if evaluate && record.trigger == *trigger => {
+                    match self.inner.entry(record.condition)? {
+                        Entry::Condition { .. } => {
+                            self.condition_callback(record.condition)?.function
+                        }
+                        Entry::Filter { .. } => self.filter_callback(record.condition)?.function,
+                        _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+                    }
+                }
+                Entry::TriggerAction {
+                    trigger: owner,
+                    function,
+                } if !evaluate && *owner == *trigger => *function,
+                _ => continue,
+            };
+            callbacks
+                .try_reserve(1)
+                .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+            callbacks.push(function);
+        }
+        let state = self.trigger_runtime.as_mut().expect("checked runtime");
+        if callbacks.is_empty() {
+            return Ok(Some(pcx_script::ScriptCall::Return(if evaluate {
+                Value::Bool(true)
+            } else {
+                Value::Null
+            })));
+        }
+        if state.calls.len() >= pcx_script::eval::MAX_CALL_DEPTH as usize {
+            return Err(self
+                .inner
+                .error(name, Failure::Budget("nested trigger callbacks")));
+        }
+        state
+            .calls
+            .try_reserve(1)
+            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+        let first = callbacks[0];
+        state.calls.push(DirectCall {
+            previous: state.active,
+            callbacks,
+            next: 1,
+            evaluate,
+            accepted: true,
+        });
+        state.active = Some(*trigger);
+        Ok(Some(pcx_script::ScriptCall::Call(first)))
+    }
+
+    pub(super) fn continue_trigger_call(
+        &mut self,
+        value: Value,
+    ) -> Result<pcx_script::ScriptCall, Error> {
+        let name = "trigger callback";
+        let state = self
+            .trigger_runtime
+            .as_mut()
+            .ok_or_else(|| self.inner.error(name, Failure::TriggerState("no runtime")))?;
+        let frame = state.calls.last_mut().ok_or_else(|| {
+            self.inner
+                .error(name, Failure::TriggerState("no active call"))
+        })?;
+        if frame.evaluate {
+            let Value::Bool(accepted) = value else {
+                return Err(self.inner.error(
+                    name,
+                    Failure::TriggerState("condition did not return boolean"),
+                ));
+            };
+            frame.accepted &= accepted;
+        }
+        if let Some(&next) = frame.callbacks.get(frame.next) {
+            frame.next += 1;
+            return Ok(pcx_script::ScriptCall::Call(next));
+        }
+        let frame = state.calls.pop().expect("active call");
+        state.active = frame.previous;
+        Ok(pcx_script::ScriptCall::Return(if frame.evaluate {
+            Value::Bool(frame.accepted)
+        } else {
+            Value::Null
+        }))
+    }
+
+    pub(super) fn abort_trigger_calls(&mut self) {
+        if let Some(state) = self.trigger_runtime.as_mut() {
+            while let Some(frame) = state.calls.pop() {
+                state.active = frame.previous;
+            }
         }
     }
 }

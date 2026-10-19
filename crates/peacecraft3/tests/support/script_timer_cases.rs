@@ -45,6 +45,158 @@ pub(super) fn timer_app() -> App {
 fn deliver_timer(app: &mut App, script: &str, revision: u64) {
     deliver_timer_mode(app, script, revision, false);
 }
+
+#[test]
+fn campaign_runtime_catches_up_without_dropping_load_debt() {
+    use peacecraft3::campaign_runtime::CampaignRuntime;
+    use std::time::Duration;
+    let script = "\
+globals
+timer t = CreateTimer()
+integer marker = 0
+real elapsed = -1.0
+endglobals
+function fire takes nothing returns nothing
+set marker = marker + 1
+set elapsed = TimerGetElapsed(t)
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TimerStart(t, 0.125, true, function fire)
+endfunction
+";
+    let run = |chunks: &[u64]| {
+        let mut app = timer_app();
+        deliver_timer(&mut app, script, 1);
+        let mut runtime = CampaignRuntime::new(Duration::from_millis(125), 2, 8);
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        runtime.advance(&mut session, Duration::from_secs(50));
+        assert_eq!(runtime.tick(), 0, "loading time is excluded");
+        for chunk in chunks {
+            runtime.advance(&mut session, Duration::from_millis(*chunk));
+            assert!(runtime.last_error.is_none(), "{:?}", runtime.last_error);
+        }
+        while !runtime.pending().is_zero() {
+            runtime.advance(&mut session, Duration::ZERO);
+            assert!(runtime.last_error.is_none());
+        }
+        (
+            runtime.tick(),
+            session.global("marker"),
+            session.global("elapsed"),
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .timer_game_time()
+                .unwrap()
+                .to_bits(),
+        )
+    };
+    let expected = run(&[125; 8]);
+    assert_eq!(expected.0, 8);
+    assert_eq!(expected.1, Some(Value::Int(8)));
+    assert_eq!(run(&[1000]), expected);
+    assert_eq!(run(&[0, 13, 112, 7, 618, 250]), expected);
+}
+
+#[test]
+fn campaign_runtime_pause_replacement_and_failed_callback_do_not_replay_effects() {
+    use peacecraft3::campaign_runtime::CampaignRuntime;
+    use std::time::Duration;
+    let mut app = timer_app();
+    deliver_timer(&mut app, RESTART, 1);
+    let mut runtime = CampaignRuntime::new(Duration::from_millis(125), 1, 8);
+    {
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        runtime.advance(&mut session, Duration::ZERO);
+        runtime.advance(&mut session, Duration::from_secs(1));
+        assert_eq!(runtime.tick(), 1);
+        assert_eq!(runtime.pending(), Duration::from_millis(875));
+        runtime.paused = true;
+        runtime.advance(&mut session, Duration::from_secs(10));
+        assert_eq!(runtime.tick(), 1);
+        assert_eq!(runtime.pending(), Duration::from_millis(875));
+    }
+    // A declared native with an invalid handle fails after the callback's first effect.
+    let failing = RESTART.replace(
+        "set marker = marker + 1",
+        "set marker = marker + 1\ncall SetSoundPitch(null, 1.0)",
+    );
+    deliver_timer(&mut app, &failing, 2);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    runtime.paused = false;
+    runtime.advance(&mut session, Duration::from_secs(10));
+    assert_eq!(runtime.tick(), 0);
+    assert_eq!(runtime.pending(), Duration::ZERO);
+    runtime.advance(&mut session, Duration::from_secs(1));
+    runtime.advance(&mut session, Duration::ZERO);
+    runtime.advance(&mut session, Duration::ZERO);
+    runtime.advance(&mut session, Duration::ZERO);
+    assert!(runtime.last_error.is_some());
+    assert_eq!(session.global("marker"), Some(Value::Int(1)));
+    runtime.advance(&mut session, Duration::from_secs(10));
+    assert_eq!(session.global("marker"), Some(Value::Int(1)));
+}
+#[test]
+fn campaign_runtime_application_system_advances_the_published_host() {
+    use peacecraft3::campaign_runtime::{self, CampaignRuntime};
+    use std::time::Duration;
+    let mut app = timer_app();
+    app.init_resource::<Time<Real>>();
+    campaign_runtime::install(
+        &mut app,
+        CampaignRuntime::new(Duration::from_millis(125), 2, 8),
+    );
+    deliver_timer(&mut app, RESTART, 1);
+    // The next frame's delta includes startup work done after Time<Real> was sampled.
+    app.world_mut()
+        .resource_mut::<Time<Real>>()
+        .advance_by(Duration::from_secs(10_000));
+    app.update();
+    assert_eq!(app.world().resource::<CampaignRuntime>().tick(), 0);
+    assert!(
+        app.world()
+            .resource::<CampaignRuntime>()
+            .pending()
+            .is_zero()
+    );
+    app.world_mut()
+        .resource_mut::<Time<Real>>()
+        .advance_by(Duration::from_secs(1));
+    app.update();
+    assert_eq!(app.world().resource::<CampaignRuntime>().tick(), 2);
+    assert_eq!(
+        app.world().resource::<CampaignRuntime>().pending(),
+        Duration::from_millis(750)
+    );
+    for _ in 0..3 {
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(Duration::ZERO);
+        app.update();
+    }
+    let runtime = app.world().resource::<CampaignRuntime>();
+    assert_eq!(runtime.tick(), 8);
+    assert!(runtime.pending().is_zero());
+    assert!(runtime.last_error.is_none());
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    assert_eq!(session.global("marker"), Some(Value::Int(2)));
+    assert_eq!(
+        session.host().unwrap().objects().timer_game_time(),
+        Some(11.0)
+    );
+}
+
 pub(super) fn deliver_timed_trigger(app: &mut App, script: &str, revision: u64) {
     deliver_timer_mode(app, script, revision, true);
 }
@@ -345,4 +497,13 @@ pub fn browser_timer_callback_lifetime_gate() -> u32 {
     destroyed_expired_timer_start_keeps_its_own_run();
     periodic_catch_up_spends_one_budget_per_callback_and_destruction_stops_it();
     6
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn browser_campaign_runtime_gate() -> u32 {
+    campaign_runtime_catches_up_without_dropping_load_debt();
+    campaign_runtime_pause_replacement_and_failed_callback_do_not_replay_effects();
+    campaign_runtime_application_system_advances_the_published_host();
+    3
 }
