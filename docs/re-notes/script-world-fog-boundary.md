@@ -52,10 +52,12 @@ chapter remain open. Parser or synthetic draw checks do not close those gates.
 
 The unchanged private Human01 prefix now passes `EnableWorldFogBoundary(false)`
 and reaches `GroupEnumUnitsInRect` in Blizzard `198432..198471` (common
-`63411..63518`). That call belongs to `NudgeObjectsInRect`; its callback reads
-live unit positions and calls `SetUnitPosition`. It cannot be supplied by an
-empty-group shortcut or creation-request coordinates. Live unit enumeration,
-accepted placement and collision remain part of the playable-world frontier.
+`63411..63518`). A later exact source-offset check corrects the earlier caller
+label: this is `GetUnitsInRectMatching`, reached through `GetUnitsInRectAll` for
+the map's starting-forces rectangle. It cannot be supplied by an empty-group
+shortcut or creation-request coordinates. Live unit enumeration, accepted
+placement and collision remain part of the playable-world frontier. See the
+[full creation-stream replay](script-unit-world.md#full-creation-stream-and-rectangle-caller-2026-10-19).
 The actual selected terrain produces a 384×384 boundary mask. Its profile and
 map identities remain in the local verification receipt; those derived contents
 are not published.

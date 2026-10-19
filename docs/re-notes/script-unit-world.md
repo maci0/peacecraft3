@@ -313,8 +313,60 @@ do not execute a recreation live-position consumer or render the mission.
 These are intrusive Wine observations during map loading, not a native Windows
 or running-frame equivalence claim. Full occupancy, live movement, rectangle
 enumeration and range delivery remain open. The unchanged Human01 startup still
-stops at `GroupEnumUnitsInRect` in `NudgeObjectsInRect`; this evidence alone does
-not make the mission playable.
+stops at `GroupEnumUnitsInRect`; the exact caller is corrected below. This
+evidence alone does not make the mission playable.
+
+## Full creation stream and rectangle caller (2026-10-19)
+
+An exact slice of the selected Blizzard source at the reported failure span
+identifies `GetUnitsInRectMatching`, reached through `GetUnitsInRectAll` in the
+authored map-initialization trigger. The executed rectangle handle matches the
+map global `gg_rct_Starting_Forces` and its executed bounds. The earlier
+`NudgeObjectsInRect` label was incorrect; that function is at a different source
+offset. Its repositioning callback is not the immediate blocked caller.
+
+The source-derived literal decoder and constructor cancellation reproduce 146
+of the 155 retained original creation positions without a placement search.
+The remaining nine need collision displacement. The actual recreation Host
+resolves all 155 creations to 53 catalog types; their movement inputs use two
+moving-unit tokens, and their buildings name six pathing textures. All six
+textures are present in the supplied local archives and decode through the
+production TGA reader. Archive identities remain separate from the compatibility
+catalog's identity.
+
+A private cell-occupancy candidate combines the source terrain/pathing grid,
+placed-object footprints, the executed building footprints, creation order and
+the selected real normalization. It reproduces all 155 retained creation
+positions and all 21 additional requests from the separate nineteen-request
+probe and the recent two-request probe. The previously omitted moving-unit
+occupancy matters: without it, only 149 creation positions match. A circular
+overlap candidate also matches only 149, with a different set of misses. Neither
+alternative's failures are discarded. Center containment of the matched
+positions gives a nonempty starting-forces selection; original enumeration
+order, boundary and filter behavior still require their own checks.
+
+The broad private startup verifier also had an independent omission: it left
+the selected numeric policy absent and its observation wrapper did not forward
+`real_ops`. That version agreed with only 80 of the 155 exact coordinate pairs.
+The corrected verifier supplies the reviewed policy, forwards it to the actual
+VM, checks that it is present, and matches all 155 argument pairs exactly. It
+retains the same explicit refusal at the rectangle enumeration. The production
+Host and recording/localization wrappers already forward this policy; no
+production arithmetic change is needed for this verifier correction.
+
+This is a candidate for initialization, not an installed live world. The small
+cell-query shape, including radius-boundary cases, footprint alignment/rotation,
+search bound, full terrain/platform domain, removal and later movement still
+need qualification or explicit implementation limits. In particular, the
+candidate's successful initialization replay must not be presented as proof of
+running occupancy updates. The implementation must retain the actual executed
+handles in one authority and update that authority when objects move or die.
+
+Source/member fingerprints, the frozen actual-Host executions, texture decode,
+all model comparisons and deterministic work counts remain local under
+`.scratch/campaign-unit-world-root-20261019/`. No new original-game run, playable
+mission, native Windows comparison, recreation rendering or browser parity is
+claimed by this replay.
 
 ## Numeric input isolation (2026-10-18)
 

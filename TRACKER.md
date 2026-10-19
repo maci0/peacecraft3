@@ -2940,6 +2940,24 @@ repeated, and the public site package was not rebuilt.
   and WASI arithmetic match all captured stored/reconstructed axis words.
 - [ ] The live world still needs accepted collision placement, occupancy and
   rectangle enumeration on the same executed handles. No measured coordinate
-  constant or quarter-floor shortcut is added. Human01 still stops in
-  `NudgeObjectsInRect` and is not playable. See
+  constant or quarter-floor shortcut is added. Human01 still stops at rectangle
+  enumeration and is not playable. See
   [creation-position cancellation](docs/re-notes/script-unit-world.md#creation-position-cancellation-2026-10-19).
+
+
+### 2026-10-19 — full creation-stream placement candidate
+
+- [~] A source-driven cell-occupancy candidate reproduces all 155 retained
+  original creation positions and all 21 separate control requests. Omitting
+  actor occupancy or substituting circular overlap misses six creations. All
+  53 executed catalog types and six building footprint textures are retained
+  with explicit provenance; no original contents are published.
+- [x] Correct the blocked source caller to `GetUnitsInRectMatching` for the
+  authored starting-forces rectangle. The corrected private startup verifier
+  supplies and forwards the selected numeric policy and matches all 155 exact
+  coordinate pairs; the former host-arithmetic run matched only 80.
+- [ ] Integrate accepted positions and mutable occupancy on the actual shared
+  handles, then implement faithful enumeration and its ordering/filter behavior.
+  This remains an initialization candidate, with geometry boundary cases and
+  later mutation open. Human01 is not playable. See
+  [full creation-stream replay](docs/re-notes/script-unit-world.md#full-creation-stream-and-rectangle-caller-2026-10-19).
