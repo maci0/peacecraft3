@@ -690,3 +690,58 @@ state, null handling, invalid/reserved handles, optional interfaces and each
 foreign declaration independently. Strict native/browser lint and both
 application library builds pass. This turn did not run the original game,
 rendered/4K comparisons or a complete original/native/WASM mission replay.
+
+
+## Initialization ownership transfers (2026-10-19)
+
+The unit catalog admission now accepts an optional loaded `SetUnitOwner` contract
+from the same declaration source as `CreateUnit`. The existing unit's `owner`
+is its current player handle; `executed_owner` retains the creation-time player
+number. `GetOwningPlayer` and Defend's research prerequisite read the current
+owner. No new unit, player, catalog resolve, placement or group membership is
+created by a transfer. Aliases observe the same change.
+
+The selected Legacy image SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`
+registers the `(unit, player, boolean) -> nothing` wrapper at `0x4ab930`. It skips
+null lookups and calls `0x69d140` with the resolved player ordinal. That function
+returns immediately for an unchanged owner; its color branch is conditional on
+the supplied boolean. The getter at `0x494410` returns null for a null unit.
+These are bounded static observations, not a fresh ownership runtime comparison.
+The implementation uses arena identities rather than native pointers or offsets.
+
+False preserves the known color state, including its explicit unknown initial
+state. True requires an assigned, source-typed player color and retains that
+identity on the same unit. An unchanged owner returns before color lookup.
+Initial unit color is not inferred from an assigned player color: the selected
+catalog also contains class-specific color fields, and the creation/class policy
+is not implemented here. Missing color knowledge refuses before ownership
+mutation when a color change is requested. Actual rendered unit tint remains open.
+
+Ownership-event delivery is not wired. Matching live unit/player-unit listeners
+therefore refuse before mutation; disabled or source-qualified unrelated
+listeners do not block a transfer. The event enumerands are evaluated from the
+loaded named ownership globals with bounded literal arithmetic, never copied
+from a measured integer. A listener whose ownership-event identity cannot be
+qualified also refuses. Control, food, vision, AI and other world-side ownership
+effects remain separate work; this is not full `SetUnitOwner` parity.
+
+The unchanged Human01 completes its false-color transfer on its existing `hhdl`
+unit. The getter reports the actual target player handle. All 155 creation inputs
+and accepted positions still match the retained original observations, and the
+prior group, protection and XP-factor records are unchanged. The next refusal is
+`SelectHeroSkill` at map span `109856..109898`, on the `Hart` hero and its authored
+ability rawcode. The run still uses explicit private Host inputs; ordinary app
+bootstrap and playable actors/controls remain open.
+
+Validation passes 564 native library tests (seven explicit input-dependent
+ignores), six application trigger tests and seven ownership tests executed in
+actual WASI. Coverage includes aliases, siblings, immutable creation records,
+current-owner research, nulls, wrong/reserved handles, unknown and explicit color,
+source/signature admission, and both unit/player listener guards. Strict native
+and browser lint, both application library builds and formatting pass. The real
+Human01 gate is native VM execution, not rendered gameplay or a browser mission
+run. Local commands, source hashes, rejected fixture/compile attempts and the
+removed unqualified creation-color candidate stay in
+`.scratch/campaign-unit-owner-root-20261019/`. No original game was launched for
+this slice, and no original content was committed or uploaded.

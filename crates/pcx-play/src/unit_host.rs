@@ -20,7 +20,7 @@ use super::players::TechRead;
 use pcx_objects::editor::defaults::{self, DefaultTables, Family};
 use pcx_objects::editor::{FieldKind, FieldSource, ObjectKind, SlkId};
 use pcx_script::span::Span;
-use pcx_script::{HandleId, Value};
+use pcx_script::{HandleId, Value, ast::Expr};
 use pcx_sim::world::{
     Definition, FieldValue, ObjectCatalog, ObjectField, ResolutionProblem, Source,
 };
@@ -29,6 +29,7 @@ use std::sync::Arc;
 const NATIVE: &str = "CreateUnit";
 const GET_TYPE: &str = "GetUnitTypeId";
 const GET_OWNER: &str = "GetOwningPlayer";
+const SET_OWNER: &str = "SetUnitOwner";
 const GET_COLLISION: &str = "BlzGetUnitCollisionSize";
 const SET_RANGE: &str = "SetUnitAcquireRange";
 const SET_HERO_LEVEL: &str = "SetHeroLevel";
@@ -71,7 +72,8 @@ pub struct ExecutedUnitState {
 
 /// Checked catalog result plus the executed call. `executed_owner` is the
 /// player number from this call, not a preplaced control word.
-/// `owner` is that call's existing player handle, not a newly issued identity.
+/// `owner` is the current existing player handle; ownership transfers preserve
+/// the creation-time `executed_owner` number.
 ///
 /// `requested_hero_level` and `requested_show_eye_candy` record one executed
 /// `SetHeroLevel` call. They are not derived experience, hero stats, or
@@ -80,8 +82,11 @@ pub struct ExecutedUnitState {
 pub struct ExecutedUnit {
     pub definition: Definition,
     pub executed_owner: i32,
-    /// Player handle passed to the executed `CreateUnit` call.
+    /// Current player handle, initially the executed `CreateUnit` argument.
     pub owner: HandleId,
+    /// Known team-color identity assigned by a color-changing transfer. Initial
+    /// unit color stays unknown until its class/creation color rules are supplied.
+    pub team_color: Option<HandleId>,
     pub source: Source,
     pub x: f32,
     pub y: f32,
@@ -141,6 +146,7 @@ pub(super) struct Admission {
     type_span: Option<Span>,
     /// Present when this program declares `GetOwningPlayer` on the same source.
     owner_span: Option<Span>,
+    owner_setter_span: Option<Span>,
     collision_span: Option<Span>,
     /// Present when this program declares `SetUnitAcquireRange` on the same source.
     acquire_span: Option<Span>,
@@ -205,6 +211,7 @@ impl ObjectHost {
         declaration_source.push_str(&native.source);
         let type_span = self.optional_unit_getter(&declaration_source, GET_TYPE, "integer")?;
         let owner_span = self.optional_unit_getter(&declaration_source, GET_OWNER, "player")?;
+        let owner_setter_span = self.owner_declaration(&declaration_source)?;
         let collision_span =
             self.optional_unit_getter(&declaration_source, GET_COLLISION, "real")?;
         let acquire_span = self.acquire_declaration(&declaration_source)?;
@@ -223,6 +230,7 @@ impl ObjectHost {
             records: 0,
             type_span,
             owner_span,
+            owner_setter_span,
             collision_span,
             acquire_span,
             hero_level_span,
@@ -422,6 +430,9 @@ impl ObjectHost {
         if name == GET_OWNER && self.admitted_units().ok()?.owner_span.is_some() {
             return Some(self.owning_player(args));
         }
+        if name == SET_OWNER && self.admitted_units().ok()?.owner_setter_span.is_some() {
+            return Some(self.set_unit_owner(args));
+        }
         if name == GET_COLLISION && self.admitted_units().ok()?.collision_span.is_some() {
             return Some(self.unit_collision(args));
         }
@@ -505,28 +516,166 @@ impl ObjectHost {
         Ok(Value::Int(i32::from_be_bytes(rawcode)))
     }
 
-    /// The player handle retained from the executed `CreateUnit` call.
-    ///
-    /// The handle is not allocated here. It must still be that call's player.
+    /// The current player identity on the same admitted unit.
     fn owning_player(&self, args: &[Value]) -> Result<Value, Error> {
+        if matches!(args, [Value::Null]) {
+            return Ok(Value::Null);
+        }
         let fail = |reason| self.inner.error(GET_OWNER, reason);
         let [Value::Handle(unit)] = args else {
             return Err(fail(Failure::UnitState(
                 "arguments do not match the unit native declaration",
             )));
         };
-        let record = self.created_unit(*unit, GET_OWNER)?;
-        let owner = record.owner;
+        Ok(Value::Handle(self.current_unit_owner(*unit, GET_OWNER)?.0))
+    }
+
+    fn current_unit_owner(&self, unit: HandleId, name: &str) -> Result<(HandleId, i32), Error> {
+        let fail = |reason| self.inner.error(name, reason);
+        let owner = self.created_unit(unit, name)?.owner;
         match self
             .inner
             .entry(owner)
             .map_err(|error| fail(error.failure))?
         {
-            Entry::Player { number } if *number == record.executed_owner => {
-                Ok(Value::Handle(owner))
-            }
+            Entry::Player { number } => Ok((owner, *number)),
             _ => Err(fail(Failure::Identity)),
         }
+    }
+
+    fn owner_declaration(&self, create_source: &str) -> Result<Option<Span>, Error> {
+        let Some(native) = self.inner.program.natives().get(SET_OWNER) else {
+            return Ok(None);
+        };
+        Self::contract(
+            &self.inner,
+            SET_OWNER,
+            &[KIND, "player", "boolean"],
+            "nothing",
+            false,
+            Some(KIND),
+        )?;
+        if native.source != create_source {
+            return Err(self.inner.error(SET_OWNER, Failure::Source));
+        }
+        Ok(Some(native.span))
+    }
+
+    fn set_unit_owner(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let fail = |reason| self.inner.error(SET_OWNER, reason);
+        let [unit, player, Value::Bool(change_color)] = args else {
+            return Err(fail(Failure::UnitState(
+                "unit, player and boolean required",
+            )));
+        };
+        if !matches!(unit, Value::Null | Value::Handle(_))
+            || !matches!(player, Value::Null | Value::Handle(_))
+        {
+            return Err(fail(Failure::UnitState(
+                "unit and player identities required",
+            )));
+        }
+        if matches!(unit, Value::Null) || matches!(player, Value::Null) {
+            return Ok(Value::Null);
+        }
+        let (Value::Handle(unit), Value::Handle(player)) = (unit, player) else {
+            unreachable!()
+        };
+        let (previous, previous_number) = self.current_unit_owner(*unit, SET_OWNER)?;
+        let number = match self.inner.entry(*player).map_err(|e| fail(e.failure))? {
+            Entry::Player { number } => *number,
+            _ => return Err(fail(Failure::WrongFamily)),
+        };
+        if number == previous_number {
+            return Ok(Value::Null);
+        }
+        let unit_event =
+            self.ownership_event("EVENT_UNIT_CHANGE_OWNER", "unitevent", "ConvertUnitEvent")?;
+        let player_event = self.ownership_event(
+            "EVENT_PLAYER_UNIT_CHANGE_OWNER",
+            "playerunitevent",
+            "ConvertPlayerUnitEvent",
+        )?;
+        // shortcut: ownership-event delivery is not wired; refuse matching or unqualified live listeners before changing state.
+        if self.inner.arena.iter().any(|entry| {
+            let trigger = match entry {
+                Entry::RegisteredUnitEvent { trigger, unit: watched, enumerand, .. } if watched == unit && unit_event.is_none_or(|event| event == *enumerand) => Some(trigger),
+                Entry::RegisteredPlayerUnitEvent(registration) if (registration.player == previous || registration.player == *player) && player_event.is_none_or(|event| event == registration.enumerand) => Some(&registration.trigger),
+                _ => None,
+            };
+            trigger.is_some_and(|id| matches!(self.inner.entry(*id), Ok(Entry::Trigger { enabled }) if *enabled != Some(false)))
+        }) {
+            return Err(fail(Failure::UnitState("ownership change with live unit listeners requires event delivery")));
+        }
+        let color = if *change_color {
+            let color = self
+                .player_settings(*player)
+                .map_err(|e| fail(e.failure))?
+                .color
+                .ok_or_else(|| fail(Failure::UnitState("new owner's team color is unset")))?;
+            self.inner
+                .player_color(color)
+                .map_err(|e| fail(e.failure))?;
+            Some(color)
+        } else {
+            None
+        };
+        match self.inner.entry_mut(*unit)? {
+            Entry::Unit { record } => {
+                record.owner = *player;
+                if *change_color {
+                    record.team_color = color;
+                }
+                Ok(Value::Null)
+            }
+            _ => unreachable!("validated unit identity"),
+        }
+    }
+
+    fn ownership_event(&self, name: &str, kind: &str, convert: &str) -> Result<Option<i32>, Error> {
+        let source = &self.admitted_units()?.declaration_source;
+        let mut globals = self
+            .inner
+            .program
+            .globals()
+            .iter()
+            .filter(|g| g.name == name && &g.source == source);
+        let Some(global) = globals.next() else {
+            return Ok(None);
+        };
+        let fail = || self.inner.error(SET_OWNER, Failure::Signature);
+        if globals.next().is_some()
+            || !global.is_constant
+            || global.array
+            || global.ty.array
+            || global.ty.kind.name() != kind
+        {
+            return Err(fail());
+        }
+        let Some(Expr::Call { callee, args, .. }) = &global.init else {
+            return Err(fail());
+        };
+        if !matches!(callee.as_ref(), Expr::Ident(native, _) if native.as_str() == convert) {
+            return Err(fail());
+        }
+        let [argument] = args.as_slice() else {
+            return Err(fail());
+        };
+        Self::contract(&self.inner, convert, &["integer"], kind, true, None)?;
+        if self
+            .inner
+            .program
+            .natives()
+            .get(convert)
+            .is_none_or(|native| &native.source != source)
+        {
+            return Err(self.inner.error(SET_OWNER, Failure::Source));
+        }
+        // Local expression limits, independent of the source enumerand.
+        let mut work = 1024;
+        super::super::integer(argument, 64, &mut work)
+            .map(Some)
+            .map_err(|failure| self.inner.error(SET_OWNER, failure))
     }
 
     fn unit_collision(&self, args: &[Value]) -> Result<Value, Error> {
@@ -922,6 +1071,7 @@ impl ObjectHost {
                 definition,
                 executed_owner: owner_number,
                 owner,
+                team_color: None,
                 source,
                 x,
                 y,
@@ -972,16 +1122,20 @@ impl ObjectHost {
             )));
         };
         let unit = *unit;
-        let (active, owner) = match self
+        let active = match self
             .inner
             .entry(unit)
             .map_err(|error| self.inner.error(ORDER, error.failure))
         {
             Ok(Entry::Unit { record }) => match record.admitted_order {
-                Some((_, active)) => (active, record.executed_owner),
+                Some((_, active)) => active,
                 None => return None,
             },
             Ok(_) => return Some(Err(self.inner.error(ORDER, Failure::WrongFamily))),
+            Err(error) => return Some(Err(error)),
+        };
+        let owner = match self.current_unit_owner(unit, ORDER) {
+            Ok((_, number)) => number,
             Err(error) => return Some(Err(error)),
         };
         let turning_off = text == off;

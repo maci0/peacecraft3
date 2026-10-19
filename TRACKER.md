@@ -3052,7 +3052,8 @@ repeated, and the public site package was not rebuilt.
   All 155 creation-input/position comparisons remain exact. Native 557 tests,
   six application integration tests, 188 distinct actual WASI tests, strict
   native/browser lint and both application library builds pass.
-- [ ] Next caller: `SetUnitOwner`. Initial player factors, experience awards,
+- [x] The `SetUnitOwner` initialization caller now completes as recorded below.
+  Initial player factors, experience awards,
   ownership/colour/event effects, ordinary Host preparation, live actors and
   original/native/WASM deterministic/rendered/4K parity remain open. The first
   campaign is not playable; the original baseline gate is unchanged. See
@@ -3063,7 +3064,29 @@ repeated, and the public site package was not rebuilt.
   the old logo and re-reads the authored skin/model/texture/anchor/Birth path.
   411 native tests, one explicit local Legacy TFT/RoC/TFT logo test, strict
   native/browser checks and both builds pass. Three native journal captures
-  verify the switch. The separate RoC model-space burst emitter still refuses
-  its whole particle batch; background/particle fidelity remains open. No fresh
-  original/browser/4K visual comparison. Evidence:
+  verify the switch. At this checkpoint the RoC model-space burst emitter
+  refused its batch; the later particle/horizon corrections above address it.
+  This logo-only evidence predates the fresh original/native 4K horizon check.
+  Full background/particle and browser fidelity remain open. Evidence:
   `.scratch/menu-edition-root-20261019/verification-1.json`.
+
+
+### 2026-10-19 — same-arena initialization ownership
+
+- [x] Loaded `SetUnitOwner` updates the existing unit's current player identity.
+  Creation player number, catalog/placement and aliases are preserved. Owner
+  queries and Defend research use the new owner; null and unchanged-owner calls
+  have no effect. False preserves color; true requires a known assigned player
+  color. Initial class color is not guessed.
+- [x] Human01 completes its actual `hhdl` transfer. All 155 original creation
+  inputs/positions and prior group, protection and XP records still match.
+  Native 564 library tests, six app trigger tests, seven actual WASI ownership
+  tests, strict native/browser lint and both application library builds pass.
+- [~] Ownership-event delivery, initial/rendered color, control/food/vision/AI
+  effects and live world association remain open. Matching or unqualified live
+  listeners refuse before mutation; disabled/unrelated listeners are covered.
+- [ ] Next caller: `SelectHeroSkill` at `109856..109898`. Ability levels/effects,
+  ordinary Host preparation, playable actors/controls and full deterministic
+  original/native/WASM rendered/4K parity remain open. Human01 is not playable;
+  the original baseline gate is unchanged. See
+  [initialization ownership](docs/re-notes/script-unit-world.md#initialization-ownership-transfers-2026-10-19).

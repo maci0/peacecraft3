@@ -1799,7 +1799,8 @@ fn order_common() -> String {
     let globals = common.find("\nglobals\n").expect("globals");
     common.insert_str(
         globals + 1,
-        "native IssueImmediateOrder takes unit whichUnit, string order returns boolean\n\
+        "native SetUnitOwner takes unit u, player p, boolean changeColor returns nothing\n\
+native IssueImmediateOrder takes unit whichUnit, string order returns boolean\n\
 constant native SetPlayerTechResearched takes player whichPlayer, integer techid, integer setToLevel returns nothing\n",
     );
     common
@@ -2568,3 +2569,6 @@ mod enumeration;
 
 #[path = "unit_invulnerability_tests.rs"]
 mod invulnerability;
+
+#[path = "unit_owner_tests.rs"]
+mod ownership;

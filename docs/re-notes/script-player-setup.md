@@ -565,8 +565,10 @@ path is preserved through the assignment and query.
 The unchanged Human01 completes its XP-factor assignment and the query returns
 the same derived bits on that actual player handle. The prior three protection
 assignments, two group calls, and all 155 original creation-input/position
-comparisons still pass. The next refusal is `SetUnitOwner` at map span
-`109800..109850`. This uses the existing explicit private startup inputs;
+comparisons still pass. At that checkpoint the next refusal was `SetUnitOwner`
+at map span `109800..109850`; the subsequent
+[ownership slice](script-unit-world.md#initialization-ownership-transfers-2026-10-19)
+advances that caller. This uses the existing explicit private startup inputs;
 ordinary application input preparation remains open.
 
 This supplies an assigned factor and its script query, not an experience-award
