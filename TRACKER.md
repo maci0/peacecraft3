@@ -2860,3 +2860,15 @@ repeated, and the public site package was not rebuilt.
 - [ ] Text message consumers, further cinematic/mission natives, normal Host
   preparation and live actors/controls still block the first playable chapter.
   Original null-force/null-player behavior and destruction edges remain open.
+
+### 2026-10-19 — executed campaign text messages
+
+- [~] Production startup admits optional timed local text and clearing on the
+  published Host. The launcher consumes the same state through the campaign UI
+  camera, source-derived message font/height and existing rich-text parser.
+  Visibility uses logical game time; clearing releases the actual retained text.
+  Refused declarations preserve the previous published session.
+- [ ] Native frame margins, wrapping/fading, automatic-duration text, sender
+  prefixes and original rendered comparison remain open. This does not make
+  Human01 playable or close the original/native/WASM parity gate. See
+  [text messages](docs/re-notes/script-text-messages.md).

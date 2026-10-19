@@ -611,6 +611,9 @@ impl ObjectHost {
         self.players.as_mut().expect("checked context").local_player = Some(number);
         Ok(())
     }
+    pub(super) fn local_player_number(&self) -> Option<i32> {
+        self.players.as_ref()?.local_player
+    }
     pub fn player_settings(&self, identity: HandleId) -> Result<&PlayerSettings, Error> {
         let at = self.player_index(&Value::Handle(identity), "players")?;
         self.players

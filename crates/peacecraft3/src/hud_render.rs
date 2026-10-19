@@ -771,7 +771,7 @@ fn upload_fonts(
     Ok(handles)
 }
 
-fn font_registers(bytes: &[u8]) -> bool {
+pub(crate) fn font_registers(bytes: &[u8]) -> bool {
     let mut fonts = bevy::text::FontCx::default();
     let face = Font::from_bytes(bytes.to_vec());
     !fonts.collection.register_fonts(face.data, None).is_empty()

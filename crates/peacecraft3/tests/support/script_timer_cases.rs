@@ -2,7 +2,7 @@
 use super::*;
 use peacecraft3::map_script_session::TimerSessionError;
 
-const TIMER_COMMON: &str = "\
+pub(super) const TIMER_COMMON: &str = "\
 native TimerStart takes timer t, real timeout, boolean periodic, code handler returns nothing
 native TimerGetElapsed takes timer t returns real
 native TimerGetRemaining takes timer t returns real

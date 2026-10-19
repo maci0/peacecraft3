@@ -160,7 +160,8 @@ fn resolve(
         source,
     })
 }
-pub(crate) fn receipt(asset: &ResolvedAsset) -> AssetReceipt {
+/// Record the exact resolved member and source used by a presentation consumer.
+pub fn receipt(asset: &ResolvedAsset) -> AssetReceipt {
     AssetReceipt {
         path: asset.path.clone(),
         provenance: asset.provenance.clone(),

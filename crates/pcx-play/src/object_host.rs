@@ -32,6 +32,7 @@ pub struct ObjectHost {
     quests: Option<crate::quest_session::QuestSession>,
     game_caches: Option<game_caches::State>,
     presentation: Option<presentation::PresentationState>,
+    messages: Option<messages::MessageState>,
     rectangles: bool,
     regions: Option<regions::Admission>,
     camera_setups: Option<camera_setup::Admission>,
@@ -90,6 +91,7 @@ impl ObjectHost {
             quests: None,
             game_caches: None,
             presentation: None,
+            messages: None,
             rectangles: false,
             regions: None,
             camera_setups: None,
@@ -377,6 +379,9 @@ impl Host for ObjectHost {
     }
 
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.message_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.presentation_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -636,3 +641,7 @@ pub use trigger_runtime::{TriggerDelivery, TriggerRuntimeInput};
 #[cfg(test)]
 #[path = "trigger_runtime_tests.rs"]
 mod trigger_runtime_tests;
+
+#[path = "message_host.rs"]
+mod messages;
+pub use messages::{MessageBudget, MessageState, TimedMessage};

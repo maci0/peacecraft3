@@ -157,6 +157,11 @@ fn start_admitted_map(
             let mut host = map_startup_host::assemble(ctx, inputs)?;
             crate::campaign_cache::attach(&mut host)?;
             host.objects_mut().admit_presentation(16 << 10)?;
+            host.objects_mut()
+                .admit_messages(pcx_play::playercolor_host::MessageBudget {
+                    records: 256,
+                    text_bytes: 1 << 20,
+                })?;
             Ok::<_, MapStartupError>(match reader {
                 Some(reader) => {
                     let parameter_reader = Arc::clone(&reader);

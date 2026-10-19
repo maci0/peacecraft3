@@ -1524,3 +1524,97 @@ fn source_native_cutout_tests_combined_alpha_and_blends_survivors() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires a local Vulkan adapter; synthetic campaign message readback"]
+fn campaign_message_spans_render_and_clear_through_4k() {
+    use bevy::ecs::system::RunSystemOnce;
+    for (width, height) in [(640u32, 480u32), (1280, 960), (3840, 2160)] {
+        let mut app = vulkan_menu_app("Campaign messages");
+        let target = spawn_readback_camera(&mut app);
+        app.world_mut()
+            .resource_mut::<Assets<Image>>()
+            .get_mut(&target)
+            .unwrap()
+            .resize(bevy::render::render_resource::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            });
+        let camera = app
+            .world_mut()
+            .query_filtered::<Entity, With<Camera3d>>()
+            .single(app.world())
+            .unwrap();
+        let font = app
+            .world_mut()
+            .resource_mut::<Assets<Font>>()
+            .add(Font::from_bytes(
+                include_bytes!("../art/DejaVuSans.ttf").to_vec(),
+            ));
+        let root = app
+            .world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                crate::campaign_messages::paint(
+                    &mut commands,
+                    &[pcx_play::playercolor_host::TimedMessage {
+                        sequence: 1,
+                        position: [0.125, 0.25],
+                        text: "|cffff0000MM|r|cff00ff00MM|r".into(),
+                        started_at: 0.,
+                        expires_at: 4.,
+                    }],
+                    &pcx_objects::editor::messages::MessageStyle {
+                        font_path: "synthetic font".into(),
+                        height: 0.06,
+                    },
+                    &font,
+                )
+                .unwrap()
+            })
+            .unwrap();
+        app.world_mut()
+            .entity_mut(root)
+            .insert(UiTargetCamera(camera));
+        let rendered = drive_readback(&mut app, target.clone());
+        let mut colours = [0usize; 2];
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                let at = y * rendered.stride + x * 8;
+                let red = half(&rendered.bytes[at..at + 2]);
+                let green = half(&rendered.bytes[at + 2..at + 4]);
+                for (channel, painted) in [(red > 0.5 && green < 0.1), (green > 0.5 && red < 0.1)]
+                    .into_iter()
+                    .enumerate()
+                {
+                    if painted {
+                        colours[channel] += 1;
+                        assert!(
+                            x + 1 >= width as usize / 8 && y <= height as usize * 3 / 4 + 1,
+                            "message outside relative placement at {width}x{height}: {x},{y}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(
+            colours.into_iter().all(|count| count > 0),
+            "missing authored message colour at {width}x{height}: {colours:?}"
+        );
+        app.world_mut().despawn(root);
+        let cleared = drive_readback(&mut app, target);
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                let at = y * cleared.stride + x * 8;
+                assert!(
+                    half(&cleared.bytes[at..at + 2]) < 0.01
+                        && half(&cleared.bytes[at + 2..at + 4]) < 0.01,
+                    "cleared text still rendered"
+                );
+            }
+        }
+        println!(
+            "campaign messages extent={width}x{height} coloured_pixels={colours:?}; clear verified"
+        );
+    }
+}

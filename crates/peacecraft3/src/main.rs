@@ -9,6 +9,7 @@ use peacecraft3::browser_read;
 mod import_assets;
 
 mod button_actions;
+mod campaign_messages;
 mod fdf;
 mod glue_menu;
 pub mod hud;

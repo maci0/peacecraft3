@@ -50,6 +50,8 @@ pub enum Failure {
     GameCache(String),
     #[error("campaign presentation: {0}")]
     Presentation(&'static str),
+    #[error("script text messages: {0}")]
+    Message(&'static str),
     #[error("startup clock: {0}")]
     ClockState(&'static str),
     #[error("terrain pathing: {0}")]
@@ -707,14 +709,14 @@ pub use objects::{
     ConditionBudget, ConditionCallback, DayNightState, DeathEventRegistration, DestructableBudget,
     DestructableCreation, ExecutedItem, ExecutedUnit, ExecutedUnitState, FileSoundState,
     FilterBudget, FilterCallback, FilterSample, ForceBudget, GameStateEventRegistration,
-    ItemBudget, LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection, ObjectHost,
-    PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
-    PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration, PresentationState,
-    QuestBudget, QuestEvent, QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration,
-    RegionRectRequest, ResearchObservation, SoundProperties, SoundState, StackedSoundAction,
-    StackedSoundRequest, StartLocation, StartPriorities, StartPriority, StartupClockState,
-    StartupSettings, StockBudget, TechLimitBudget, TimerEventRegistration, TimerExpiry, TimerHost,
-    TriggerActionRecord, TriggerBudget, TriggerConditionRegistration, TriggerDelivery,
-    TriggerRuntimeInput, UnitBudget, UnitEventRegistration, UnitInRangeRegistration,
-    UnitStateBudget,
+    ItemBudget, LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection, MessageBudget,
+    MessageState, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget,
+    PlayerEventRegistration, PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration,
+    PresentationState, QuestBudget, QuestEvent, QuestFlag, RegionBudget, RegionEventKind,
+    RegionEventRegistration, RegionRectRequest, ResearchObservation, SoundProperties, SoundState,
+    StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
+    StartupClockState, StartupSettings, StockBudget, TechLimitBudget, TimedMessage,
+    TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord, TriggerBudget,
+    TriggerConditionRegistration, TriggerDelivery, TriggerRuntimeInput, UnitBudget,
+    UnitEventRegistration, UnitInRangeRegistration, UnitStateBudget,
 };

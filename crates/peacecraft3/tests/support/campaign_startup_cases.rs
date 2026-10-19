@@ -1239,3 +1239,6 @@ mod presentation_cases;
 
 #[path = "force_query_cases.rs"]
 mod force_query_cases;
+
+#[path = "message_cases.rs"]
+mod message_cases;

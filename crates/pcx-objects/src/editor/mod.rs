@@ -164,6 +164,7 @@ use crate::Error;
 pub mod camera;
 pub mod campaign_index;
 pub mod defaults;
+pub mod messages;
 pub mod meta;
 pub mod object;
 pub mod path;
