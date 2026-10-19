@@ -2885,3 +2885,14 @@ repeated, and the public site package was not rebuilt.
   original rendering comparison remain open. The unchanged private Human01 prefix
   reaches `EnableOcclusion`; this is not a playable first chapter. See
   [campaign presentation](docs/re-notes/campaign-presentation.md#immediate-interface-and-control-follow-up).
+
+### 2026-10-19 — renderer-qualified occlusion disable
+
+- [~] The ground renderer explicitly declares that it has no gameplay
+  occluder-fade pass. Only that capability admits `EnableOcclusion(false)` in
+  campaign startup; absent capability, incompatible declarations and enabling
+  remain unsupported. Rejected candidates preserve the previous session.
+- [ ] Active eligibility, live model association, source-driven fades/markers,
+  building rules and original rendering comparison remain open. The broader
+  occlusion task remains active, and first-chapter playability is unfinished.
+  See [script occlusion](docs/re-notes/script-occlusion.md).

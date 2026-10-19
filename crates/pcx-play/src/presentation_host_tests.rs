@@ -309,3 +309,59 @@ fn optional_interface_and_control_contracts_do_not_admit_foreign_or_missing_call
         assert!(h.admit_presentation(64).is_err());
     }
 }
+
+#[test]
+fn disabled_occlusion_requires_an_explicit_renderer_capability_and_never_enables_a_pass() {
+    let common = format!("{COMMON}\nnative EnableOcclusion takes boolean flag returns nothing\n");
+    let mut h = host(&common, "");
+    assert!(h.native("EnableOcclusion", &[Value::Bool(false)]).is_err());
+    h.admit_no_occlusion_pass().unwrap();
+    let handles = h.inner().handles();
+    assert_eq!(
+        h.native("EnableOcclusion", &[Value::Bool(false)]).unwrap(),
+        Value::Null
+    );
+    assert!(
+        h.native("EnableOcclusion", &[Value::Bool(true)])
+            .unwrap_err()
+            .contains("renderer")
+    );
+    for args in [
+        vec![],
+        vec![Value::Int(0)],
+        vec![Value::Bool(false), Value::Bool(false)],
+    ] {
+        assert!(h.native("EnableOcclusion", &args).is_err());
+    }
+    assert_eq!(h.inner().handles(), handles);
+    assert!(h.presentation().is_none());
+    assert_eq!(h.timer_game_time(), None);
+    let mut vm = h.into_vm();
+    vm.init_globals().unwrap();
+    assert_eq!(
+        vm.host()
+            .native("EnableOcclusion", &[Value::Bool(false)])
+            .unwrap(),
+        Value::Null
+    );
+}
+#[test]
+fn occlusion_capability_checks_optional_native_source_and_signature() {
+    let mut h = host(COMMON, "");
+    h.admit_no_occlusion_pass().unwrap();
+    assert!(h.native("EnableOcclusion", &[Value::Bool(false)]).is_err());
+    for declaration in [
+        "constant native EnableOcclusion takes boolean flag returns nothing",
+        "native EnableOcclusion takes integer flag returns nothing",
+        "native EnableOcclusion takes boolean flag returns integer",
+    ] {
+        let mut h = host(&format!("{COMMON}\n{declaration}"), "");
+        assert!(h.admit_no_occlusion_pass().is_err());
+        assert!(h.native("EnableOcclusion", &[Value::Bool(false)]).is_err());
+    }
+    let mut h = host(
+        COMMON,
+        "native EnableOcclusion takes boolean flag returns nothing",
+    );
+    assert!(h.admit_no_occlusion_pass().is_err());
+}

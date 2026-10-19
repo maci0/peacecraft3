@@ -31,6 +31,12 @@ use crate::browser_configuration::SelectedMapSources;
 use crate::map_binding::{AssetReceipt, BindingReceipts, receipt};
 use crate::map_requests::{MapRequestSet, MapRequests};
 
+/// Capability of this renderer: terrain is drawn without gameplay occluder fading.
+/// Remove this admission when adding an active pass; script enabling must then
+/// be connected to that pass rather than silently accepted here.
+#[derive(Resource)]
+pub struct NoOcclusionPass;
+
 const TERRAIN_SLK: &str = "TerrainArt\\Terrain.slk";
 
 struct AttemptKey {
@@ -90,7 +96,8 @@ pub enum MapGroundError {
 
 /// Registers the ground material and the admitted-map publisher.
 pub fn install(app: &mut App) {
-    app.add_plugins(GroundMaterialPlugin);
+    app.add_plugins(GroundMaterialPlugin)
+        .insert_resource(NoOcclusionPass);
     register_publisher(app);
 }
 

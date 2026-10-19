@@ -43,6 +43,10 @@ fn ground_app(inbox: &ConfigurationInbox) -> App {
     let mut app = configuration::app(inbox);
     app.add_plugins((MinimalPlugins, AssetPlugin::default()));
     peacecraft3::map_ground::install(&mut app);
+    assert!(
+        app.world()
+            .contains_resource::<peacecraft3::map_ground::NoOcclusionPass>()
+    );
     app.init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<Image>>()
         .insert_resource(GroundSupply {

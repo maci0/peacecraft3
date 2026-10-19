@@ -127,6 +127,37 @@ impl ObjectHost {
         }
         Ok(())
     }
+    /// Only a renderer without gameplay occlusion fading may grant this capability.
+    /// Enabling fading remains unsupported; no original initial option is inferred.
+    pub fn admit_no_occlusion_pass(&mut self) -> Result<(), Error> {
+        let name = "EnableOcclusion";
+        if self.inner.program.natives().get(name).is_none()
+            && self.inner.program.natives().ambiguous(name).is_none()
+        {
+            return Ok(());
+        }
+        Self::contract(&self.inner, name, &["boolean"], "nothing", false, None)?;
+        let source = &self
+            .inner
+            .program
+            .natives()
+            .get("CreateTimer")
+            .expect("checked Host")
+            .source;
+        if self
+            .inner
+            .program
+            .natives()
+            .get(name)
+            .expect("checked occlusion contract")
+            .source
+            != *source
+        {
+            return Err(self.inner.error(name, Failure::Source));
+        }
+        self.no_occlusion_pass = true;
+        Ok(())
+    }
     pub fn presentation(&self) -> Option<&PresentationState> {
         self.presentation.as_ref()
     }
@@ -179,6 +210,20 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
+        if name == "EnableOcclusion" && self.no_occlusion_pass {
+            return Some(match args {
+                [Value::Bool(false)] => Ok(Value::Null),
+                [Value::Bool(true)] => Err(self.inner.error(
+                    name,
+                    Failure::Presentation(
+                        "the selected renderer has no active occlusion-fade pass",
+                    ),
+                )),
+                _ => Err(self
+                    .inner
+                    .error(name, Failure::Presentation("expected occlusion boolean"))),
+            });
+        }
         self.presentation.as_ref()?;
         let &(_, parameters) = CONTRACTS.iter().find(|(n, _)| *n == name)?;
         self.inner.program.natives().get(name)?;

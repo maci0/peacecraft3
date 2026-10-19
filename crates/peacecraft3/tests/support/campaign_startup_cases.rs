@@ -1242,3 +1242,6 @@ mod force_query_cases;
 
 #[path = "message_cases.rs"]
 mod message_cases;
+
+#[path = "occlusion_cases.rs"]
+mod occlusion_cases;

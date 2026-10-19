@@ -79,6 +79,7 @@ fn start_admitted_map(
     requests: Res<MapRequests>,
     sources: Res<SelectedMapSources>,
     mut supply: ResMut<CampaignHostSupply>,
+    no_occlusion: Option<Res<crate::map_ground::NoOcclusionPass>>,
     mut startup: ResMut<CampaignStartup>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
@@ -148,6 +149,7 @@ fn start_admitted_map(
         return;
     };
     let post = inputs.post_config.clone();
+    let no_occlusion = no_occlusion.is_some();
     let reader = sources.for_receipts(&bindings.receipts);
     let edition = context.sources.map.edition.clone();
     let admitted = Arc::clone(&context);
@@ -156,6 +158,9 @@ fn start_admitted_map(
         move |ctx| {
             let mut host = map_startup_host::assemble(ctx, inputs)?;
             crate::campaign_cache::attach(&mut host)?;
+            if no_occlusion {
+                host.objects_mut().admit_no_occlusion_pass()?;
+            }
             host.objects_mut().admit_presentation(16 << 10)?;
             host.objects_mut()
                 .admit_messages(pcx_play::playercolor_host::MessageBudget {
