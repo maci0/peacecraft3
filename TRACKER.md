@@ -2929,3 +2929,17 @@ repeated, and the public site package was not rebuilt.
   Full fog of war, actor boundary colors, initial state, native sampler/framebuffer
   equivalence and first-chapter playability remain open. See
   [world fog boundary](docs/re-notes/script-world-fog-boundary.md).
+
+
+### 2026-10-19 — source-qualified creation-position cancellation
+
+- [x] Two bounded original-game initialization requests now join constructor data,
+  ordered position updates and public getter words. The selected large initial
+  coordinate explains the observed fractional loss through real-arithmetic
+  cancellation. A synthetic regression preserves that loss; production native
+  and WASI arithmetic match all captured stored/reconstructed axis words.
+- [ ] The live world still needs accepted collision placement, occupancy and
+  rectangle enumeration on the same executed handles. No measured coordinate
+  constant or quarter-floor shortcut is added. Human01 still stops in
+  `NudgeObjectsInRect` and is not playable. See
+  [creation-position cancellation](docs/re-notes/script-unit-world.md#creation-position-cancellation-2026-10-19).

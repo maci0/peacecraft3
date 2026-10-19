@@ -258,6 +258,64 @@ No production placement or range consumer changes here. Complete live
 occupancy, walkable-model overlays, rotation and lifetime remain open, as do
 the unchanged-map four-result RNG gate and recreation rendering.
 
+## Creation-position cancellation (2026-10-19)
+
+A bounded debugger observation of two instrumented Human01 initialization
+requests follows the actual node writes and all four public coordinate returns.
+The first request has an exact binary fraction and passes the search unchanged;
+the second reaches a different point through the placement search. The native
+input words are checked before creation, independently of script formatting.
+
+The node constructor at `0x8baf10` loads its initial normalized coordinate from
+the selected image through the operand at `0x8baf2d`. That initial value is far
+outside the map. Both observed scales and the initialization-time scalar are
+zero. The position setter at `0x800280` subtracts the source terrain origin and
+adjusts the exponent by the amount encoded in its normalization instructions.
+Its update path computes `sub(cell, base)`, then `add(base, delta)` through the
+selected real helpers. The getter applies the inverse exponent adjustment and
+adds the terrain origin.
+
+Emulating those selected instructions reproduces both axes of all four observed
+position updates and all four public getter words exactly. The first fractional
+point loses its fraction in the cancellation through the constructor's large
+initial coordinate. The second point is already displaced before that update.
+The first case therefore explains a quarter-grid result without adding a
+quarter-floor operation. The previous inference that each intermediate had an
+in-map magnitude was incorrect: the constructor's initial coordinate invalidates
+that bound. This does not prove one fixed rounding grid for every state or map.
+
+The arithmetic regression uses synthetic operands, including a case where
+ordinary host rounding and the selected helpers differ. No measured constructor
+value or terrain origin is copied into production. A future world authority
+must derive the initializer from the selected source and preserve the ordered
+arithmetic; directly storing the request or simplifying the cancellation loses
+observable behavior.
+
+The successful trace contains 52 scoped records. Three earlier attempts remain
+rejected: a direct debugger launch reached no creation, one observer incorrectly
+required the position wrapper before a constructor write, and another exhausted
+its limit on repeated internal scalar reads. The final observer samples those
+reads only through the initial update and scopes getter reconstruction to the
+public query. It completes within the original event and time limits, detaches,
+and stops its private container. Eight changed records are refused by the
+checker. Source/member identities, reversible instrumentation, static windows,
+selected-instruction replay and captures remain local under
+`.scratch/unit-position-normalization-root-20261019/`.
+
+The existing production real helpers reproduce all eight stored axis words and
+their eight reconstructed world-coordinate words in standalone native and WASI
+executions using the same captured input. The 522 native library tests pass
+(seven explicit local-input ignores), as do the five real-arithmetic tests in
+the actual WASI runtime. Strict native/browser-WASM Clippy, native/WASI/browser-
+WASM library builds and formatting pass. These checks qualify arithmetic; they
+do not execute a recreation live-position consumer or render the mission.
+
+These are intrusive Wine observations during map loading, not a native Windows
+or running-frame equivalence claim. Full occupancy, live movement, rectangle
+enumeration and range delivery remain open. The unchanged Human01 startup still
+stops at `GroupEnumUnitsInRect` in `NudgeObjectsInRect`; this evidence alone does
+not make the mission playable.
+
 ## Numeric input isolation (2026-10-18)
 
 Two further fresh reference runs compare 32 selected decimals before any probe

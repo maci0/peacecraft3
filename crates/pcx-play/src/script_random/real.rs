@@ -154,6 +154,24 @@ mod tests {
     }
 
     #[test]
+    fn position_delta_cancellation_preserves_selected_precision_loss() {
+        // Synthetic operands: a position update must not simplify base + (target - base).
+        let base = -8192.25_f32;
+        let target = 8.0 + 3.0 * 2.0_f32.powi(-12);
+        let delta = sub(target.to_bits(), base.to_bits()).unwrap();
+        assert_eq!(add(base.to_bits(), delta), Ok(8.0_f32.to_bits()));
+        assert_ne!(8.0_f32.to_bits(), target.to_bits());
+        assert_eq!(base + (target - base), 8.0 + 2.0_f32.powi(-10));
+
+        let target = -target;
+        let delta = sub(target.to_bits(), base.to_bits()).unwrap();
+        assert_eq!(
+            add(base.to_bits(), delta),
+            Ok((-8.0 - 2.0_f32.powi(-10)).to_bits())
+        );
+    }
+
+    #[test]
     fn multiply_handles_power_and_fraction_paths_and_signed_zero() {
         assert_eq!(
             mul(2.0_f32.to_bits(), (-1.5_f32).to_bits()),
