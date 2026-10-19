@@ -2972,9 +2972,25 @@ repeated, and the public site package was not rebuilt.
   source-qualified null boolean-expression cleanup. The starting group retains
   the authored Arthas identity. Native 529 tests, actual WASI twelve tests,
   strict native/browser lint and both application library builds passed.
-- [ ] Filtered rectangle queries require candidate context and predicate calls
-  on the actual owned VM. `GetUnitsInRectOfPlayer` is the current refusal.
+- [x] Filtered rectangle predicates now run on the actual owned VM, as recorded
+  below. `GetUnitsInRectOfPlayer` completes; group iteration is the next refusal.
   Creation-only occupancy, static-cache assembly, movement/removal/death,
   native ordering/boundary/failure behavior and rendered parity remain open.
   Human01 is not playable; the broader original baseline gate is unchanged.
   See [creation placement](docs/re-notes/script-unit-world.md#creation-placement-on-executed-identities-2026-10-19).
+
+
+### 2026-10-19 — rectangle predicates on the owning VM
+
+- [x] Loaded filter/condition predicates now share the existing VM and unit
+  handles. One continuation stack routes nested rectangle and trigger calls;
+  `GetFilterUnit` restores parent context and returns null after unwinding.
+- [x] Source code qualifies destination clearing and insertion after a true
+  predicate. Human01 selects five of seven candidates; membership checks cover
+  all 155 handles and their original creation positions still match.
+- [x] Native 535 tests, six application trigger integration tests, actual WASI
+  21 tests, strict native/browser lint and both library builds pass.
+- [ ] `ForGroup` in `GroupAddGroup` is the next caller. Candidate ordering/edges,
+  mutable traversal, ordinary cache assembly, live world updates and rendered
+  parity remain open. Human01 is not playable and the original baseline gate
+  remains unchanged. See [rectangle predicates](docs/re-notes/script-unit-world.md#filtered-rectangle-predicates-2026-10-19).

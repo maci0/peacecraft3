@@ -1,5 +1,5 @@
 //! Non-yielding timer-trigger delivery on the existing object arena and clock.
-use super::{Entry, Error, Failure, ObjectHost, timers};
+use super::{Entry, Error, Failure, NativeCallback, ObjectHost, timers};
 use pcx_script::{HandleId, Value, ast::Expr, value::FunctionId};
 
 /// Caller-qualified defaults; no captured engine value is a production fallback.
@@ -18,10 +18,9 @@ pub(super) struct State {
     retained: usize,
     active: Option<HandleId>,
     timer_context: bool,
-    calls: Vec<DirectCall>,
 }
 
-struct DirectCall {
+pub(super) struct DirectCall {
     previous: Option<HandleId>,
     callbacks: Vec<FunctionId>,
     next: usize,
@@ -172,7 +171,6 @@ impl ObjectHost {
             retained: 0,
             active: None,
             timer_context: false,
-            calls: Vec::new(),
         });
         Ok(self)
     }
@@ -404,23 +402,22 @@ impl ObjectHost {
                 Value::Null
             })));
         }
-        if state.calls.len() >= pcx_script::eval::MAX_CALL_DEPTH as usize {
+        if self.callbacks.len() >= pcx_script::eval::MAX_CALL_DEPTH as usize {
             return Err(self
                 .inner
                 .error(name, Failure::Budget("nested trigger callbacks")));
         }
-        state
-            .calls
+        self.callbacks
             .try_reserve(1)
             .map_err(|_| self.inner.error(name, Failure::Capacity))?;
         let first = callbacks[0];
-        state.calls.push(DirectCall {
+        self.callbacks.push(NativeCallback::Trigger(DirectCall {
             previous: state.active,
             callbacks,
             next: 1,
             evaluate,
             accepted: true,
-        });
+        }));
         state.active = Some(*trigger);
         Ok(Some(pcx_script::ScriptCall::Call(first)))
     }
@@ -434,10 +431,11 @@ impl ObjectHost {
             .trigger_runtime
             .as_mut()
             .ok_or_else(|| self.inner.error(name, Failure::TriggerState("no runtime")))?;
-        let frame = state.calls.last_mut().ok_or_else(|| {
-            self.inner
-                .error(name, Failure::TriggerState("no active call"))
-        })?;
+        let Some(NativeCallback::Trigger(frame)) = self.callbacks.last_mut() else {
+            return Err(self
+                .inner
+                .error(name, Failure::TriggerState("no active call")));
+        };
         if frame.evaluate {
             let Value::Bool(accepted) = value else {
                 return Err(self.inner.error(
@@ -451,7 +449,9 @@ impl ObjectHost {
             frame.next += 1;
             return Ok(pcx_script::ScriptCall::Call(next));
         }
-        let frame = state.calls.pop().expect("active call");
+        let Some(NativeCallback::Trigger(frame)) = self.callbacks.pop() else {
+            unreachable!("active trigger call");
+        };
         state.active = frame.previous;
         Ok(pcx_script::ScriptCall::Return(if frame.evaluate {
             Value::Bool(frame.accepted)
@@ -460,9 +460,11 @@ impl ObjectHost {
         }))
     }
 
-    pub(super) fn abort_trigger_calls(&mut self) {
-        if let Some(state) = self.trigger_runtime.as_mut() {
-            while let Some(frame) = state.calls.pop() {
+    pub(super) fn abort_native_callbacks(&mut self) {
+        while let Some(frame) = self.callbacks.pop() {
+            if let NativeCallback::Trigger(frame) = frame
+                && let Some(state) = self.trigger_runtime.as_mut()
+            {
                 state.active = frame.previous;
             }
         }

@@ -51,6 +51,11 @@ pub struct ObjectHost {
     timers: Option<timers::State>,
     random: Option<random::Random>,
     trigger_runtime: Option<trigger_runtime::State>,
+    callbacks: Vec<NativeCallback>,
+}
+enum NativeCallback {
+    Trigger(trigger_runtime::DirectCall),
+    Rectangle(unit_positions::Enumeration),
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -112,6 +117,7 @@ impl ObjectHost {
             timers: None,
             random: None,
             trigger_runtime: None,
+            callbacks: Vec::new(),
         })
     }
     fn checked_boolean_wrapper(&self, id: HandleId, native: &str) -> Result<(), Error> {
@@ -430,14 +436,25 @@ impl Host for ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Result<Option<pcx_script::ScriptCall>, String> {
+        if let Some(call) = self
+            .begin_rectangle_call(name, args)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(call));
+        }
         self.begin_trigger_call(name, args)
             .map_err(|e| e.to_string())
     }
     fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
-        self.continue_trigger_call(value).map_err(|e| e.to_string())
+        match self.callbacks.last() {
+            Some(NativeCallback::Rectangle(_)) => self.continue_rectangle_call(value),
+            Some(NativeCallback::Trigger(_)) => self.continue_trigger_call(value),
+            None => return Err("no native script callback is active".into()),
+        }
+        .map_err(|e| e.to_string())
     }
     fn abort_script_calls(&mut self) {
-        self.abort_trigger_calls();
+        self.abort_native_callbacks();
     }
     fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
         self.numeric.as_ref().map(|p| p as &dyn pcx_script::RealOps)

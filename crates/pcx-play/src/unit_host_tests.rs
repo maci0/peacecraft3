@@ -2255,9 +2255,25 @@ fn collision_query_refuses_missing_ambiguous_and_unusable_geometry() {
 }
 
 fn position_host(queries: usize, memberships: usize) -> ObjectHost {
+    position_host_program(
+        queries,
+        memberships,
+        "function main takes nothing returns nothing\nendfunction\n",
+        "",
+    )
+}
+
+fn position_host_program(
+    queries: usize,
+    memberships: usize,
+    map: &str,
+    declarations: &str,
+) -> ObjectHost {
     let mut extra = String::from(
         "type rect extends agent\ntype group extends agent\ntype boolexpr extends agent\ntype destructable extends widget\nnative CreateDestructable takes integer id, real x, real y, real face, real scale, integer variation returns destructable\n",
     );
+    extra.push_str("type filterfunc extends boolexpr\ntype conditionfunc extends boolexpr\nnative Filter takes code f returns filterfunc\nnative Condition takes code f returns conditionfunc\nconstant native GetFilterUnit takes nothing returns unit\nconstant native GetOwningPlayer takes unit u returns player\n");
+    extra.push_str(declarations);
     for (name, args, result, constant) in [
         ("GetUnitX", "unit u", "real", true),
         ("GetUnitY", "unit u", "real", true),
@@ -2296,12 +2312,7 @@ fn position_host(queries: usize, memberships: usize) -> ObjectHost {
         ));
     }
     let common = script_common_with("widget", true, &extra);
-    let ctx = context(
-        300,
-        &common,
-        "function main takes nothing returns nothing\nendfunction\n",
-        "unit-catalog",
-    );
+    let ctx = context(300, &common, map, "unit-catalog");
     let mut fields = BTreeMap::new();
     fields.insert(*b"G001", geometry_field(Ok(FieldValue::Cell("2".into()))));
     for (id, column, value) in [(*b"M001", "movetp", "foot"), (*b"P001", "pathTex", "_")] {
@@ -2320,7 +2331,36 @@ fn position_host(queries: usize, memberships: usize) -> ObjectHost {
         fields,
         hits: Arc::new(AtomicUsize::new(0)),
     });
-    let mut host = object(&ctx, 128)
+    let mut conversions = vec![
+        "ConvertPlacement",
+        "ConvertPlayerColor",
+        "ConvertRacePref",
+        "ConvertMapControl",
+    ];
+    for name in ["ConvertUnitEvent", "ConvertGameEvent"] {
+        if ctx.scripts.shared_program().natives().get(name).is_some() {
+            conversions.push(name);
+        }
+    }
+    let inner = EnumHost::checked_selected(
+        ctx.scripts.shared_program(),
+        &ctx.map_digest.label,
+        &conversions,
+        Limits {
+            max_handles: 256,
+            admission_steps: 1000,
+            expression_depth: 64,
+            expression_work: 4096,
+        },
+    )
+    .unwrap();
+    let mut host = ObjectHost::checked(inner)
+        .unwrap()
+        .with_map_config(crate::playercolor_host::MapConfigBudget {
+            text_bytes: 128,
+            start_locations: 2,
+        })
+        .unwrap()
         .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
         .unwrap()
         .with_unit_catalog(catalog, source(), limits(8))
@@ -2331,6 +2371,38 @@ fn position_host(queries: usize, memberships: usize) -> ObjectHost {
         .unwrap()
         .with_destructables(crate::playercolor_host::DestructableBudget { max_records: 2 })
         .unwrap();
+    host = host
+        .with_filters(crate::playercolor_host::FilterBudget { max_records: 16 })
+        .unwrap()
+        .with_conditions(crate::playercolor_host::ConditionBudget { max_records: 16 })
+        .unwrap();
+    if ctx
+        .scripts
+        .shared_program()
+        .natives()
+        .get("CreateTrigger")
+        .is_some()
+    {
+        host = host
+            .with_trigger_admission(crate::playercolor_host::TriggerBudget {
+                max_triggers: 8,
+                max_unit_events: 0,
+                max_actions: 8,
+            })
+            .unwrap()
+            .with_trigger_conditions(8)
+            .unwrap()
+            .with_timer_events(8)
+            .unwrap()
+            .with_timer_runtime(0.0)
+            .unwrap()
+            .with_trigger_runtime(crate::playercolor_host::TriggerRuntimeInput {
+                initial_enabled: true,
+                timer_event_global: "TEST_TIMER".into(),
+                max_timed_events: 8,
+            })
+            .unwrap();
+    }
     host.admit_unit_placement(crate::unit_placement::tests::placement(source(), queries))
         .unwrap();
     host
@@ -2400,9 +2472,10 @@ fn accepted_positions_and_rectangle_members_use_the_executed_unit_handle() {
         Value::Bool(false)
     );
     let before = host.memberships();
-    assert!(
+    assert_eq!(
         host.native("GroupEnumUnitsInRect", &[group.clone(), rect, Value::Null])
-            .is_err()
+            .unwrap(),
+        Value::Null
     );
     assert_eq!(host.memberships(), before);
     assert!(
@@ -2475,3 +2548,6 @@ fn failed_creation_and_rectangle_budget_leave_arena_and_members_unchanged() {
         .unwrap();
     assert_ne!(host.native("FirstOfGroup", &[group]).unwrap(), second);
 }
+
+#[path = "unit_enumeration_tests.rs"]
+mod enumeration;

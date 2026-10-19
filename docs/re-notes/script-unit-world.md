@@ -524,12 +524,10 @@ an explicit query budget; its failure behavior is not qualified as the native
 finite-search policy. Platform coverage and general footprint geometry remain
 open. The ordinary application does not assemble this cache automatically yet.
 
-`GroupEnumUnitsInRect` currently admits an empty group and explicit null filter.
-It reads accepted positions, checks the complete membership budget before
-mutation, and preserves actual unit identities. Centre containment and creation
-order are explicit recreation choices; native edge/order equivalence remains
-open. A populated group or non-null filter refuses instead of returning a
-fabricated empty result.
+`GroupEnumUnitsInRect` reads accepted positions and preserves actual unit
+identities. The later predicate slice below now clears a populated destination
+and executes supplied predicates. Centre containment and creation order remain
+explicit recreation choices; native edge/order equivalence is still open.
 
 The helper's subsequent `DestroyBoolExpr(null)` is now a source-qualified no-op
 when that declaration is present with the matching source/signature. The selected
@@ -555,3 +553,53 @@ placement inputs. The 21 earlier control requests remain private model evidence.
 No new original-game run, rendered comparison, complete cross-runtime simulation
 parity or playable campaign is claimed. Immutable checks and rejected attempts
 remain under `.scratch/campaign-unit-world-root-20261019/live-world-1/`.
+
+
+## Filtered rectangle predicates (2026-10-19)
+
+Rectangle queries now evaluate loaded `Filter` and `Condition` callbacks on the
+same owned VM. `GetFilterUnit` exposes the current candidate, including across
+nested trigger calls. A nested rectangle temporarily replaces that candidate;
+returning restores its parent. The declaration, when present, must have the
+selected constant signature and source. An empty candidate stack returns null,
+as the selected `GetFilterUnit` reader does; it does not retain a stale unit.
+
+The selected rectangle wrapper at `0x498140` enters `0x5024d0`. Its setup calls
+the same container clear operation as `GroupClear`, and its candidate callback
+at `0x5028e0` establishes the unit context before evaluating the expression.
+Only a true result reaches member insertion, which occurs before the next
+candidate. The recreation follows that order. A null filter still uses the
+ordinary bounded path, with allocation/membership checks before clearing.
+
+Explicit trigger callbacks and rectangle predicates now share one continuation
+stack in `ObjectHost`. Frames retain actual identities and loaded function ids;
+there is no second VM, copied global state or replacement object arena. Return
+routing follows the top frame, including trigger evaluation returning a boolean
+inside a unit predicate. Execution errors unwind both kinds of context while
+preserving earlier script effects. Thus a later predicate/budget failure does
+not replay or roll back an earlier accepted member. Non-boolean predicate
+returns and a destination destroyed during its callback refuse explicitly.
+
+Candidate collection remains a creation-order snapshot with centre containment.
+Births during a predicate join a subsequent query. Native spatial ordering,
+boundaries and mutation during traversal remain fidelity questions; this is
+not a claim to reproduce the original spatial-index internals.
+
+The unchanged Human01 now completes its actual owner-filtered rectangle call.
+Its loaded predicate runs seven candidate reads, selects five members, and all
+155 actual unit handles agree with the authored owner/rectangle test. The prior
+155 original creation-position comparisons and four null-filter helpers still
+pass. Its next refusal is `ForGroup` in `GroupAddGroup`, at selected Blizzard
+span `194012..194066`; that callback needs `GetEnumUnit` and the existing group
+membership operation.
+
+Validation passed 535 native library tests (seven local-input tests remain
+ignored), six application trigger integration tests, and 21 actual WASI tests.
+The new tests cover shared globals, true/false results, destination clearing,
+nested and empty queries, incremental membership, budget errors, malformed
+returns, destroyed targets, mixed trigger evaluation/execution and abort cleanup.
+Strict native/browser lint and both library builds pass. Evidence and rejected
+attempts remain local in `.scratch/campaign-filtered-rectangle-root-20261019/`.
+No new original runtime, rendered/4K comparison, complete cross-runtime mission
+parity or playable campaign is claimed; normal cache assembly and live world
+updates remain open.

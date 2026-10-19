@@ -1,8 +1,15 @@
-use super::{Entry, Error, ExecutedUnit, Failure, ObjectHost};
+use super::{Entry, Error, ExecutedUnit, Failure, NativeCallback, ObjectHost};
 use crate::unit_placement::{Placement, Prepared};
 use pcx_objects::editor::{FieldKind, FieldSource, SlkId};
-use pcx_script::Value;
+use pcx_script::{HandleId, ScriptCall, Value, value::FunctionId};
 use pcx_sim::world::{Definition, FieldValue};
+
+pub(super) struct Enumeration {
+    group: HandleId,
+    candidates: Vec<HandleId>,
+    next: usize,
+    predicate: FunctionId,
+}
 
 impl ObjectHost {
     /// Admit an initialization collision cache before any unit is created.
@@ -64,6 +71,33 @@ impl ObjectHost {
                 return Err(self.inner.error(name, Failure::Source));
             }
         }
+        if self.inner.program.natives().get("GetFilterUnit").is_some() {
+            Self::contract(
+                &self.inner,
+                "GetFilterUnit",
+                &[],
+                "unit",
+                true,
+                Some("unit"),
+            )?;
+            if self
+                .inner
+                .program
+                .natives()
+                .get("GetFilterUnit")
+                .expect("checked declaration")
+                .source
+                != self
+                    .inner
+                    .program
+                    .natives()
+                    .get("CreateUnit")
+                    .expect("unit admission")
+                    .source
+            {
+                return Err(self.inner.error("GetFilterUnit", Failure::Source));
+            }
+        }
         if self.group_limit.is_none() || !self.rectangles {
             return Err(fail("group and rectangle admission required"));
         }
@@ -108,12 +142,145 @@ impl ObjectHost {
             })
     }
 
+    fn rectangle_candidates(
+        &self,
+        group: &Value,
+        rect: HandleId,
+    ) -> Result<(HandleId, Vec<HandleId>), Error> {
+        let name = "GroupEnumUnitsInRect";
+        let group = self.inner.id(self.group_index(group, name)?, name)?;
+        let [left, bottom, right, top] = self
+            .rectangle_bounds(rect)
+            .map_err(|e| self.inner.error(name, e.failure))?;
+        let mut found = Vec::new();
+        for (index, entry) in self.inner.arena.iter().enumerate() {
+            if let Entry::Unit { record } = entry {
+                let [x, y] = record.position.ok_or_else(|| {
+                    self.inner
+                        .error(name, Failure::UnitState("accepted unit position missing"))
+                })?;
+                // shortcut: centre containment and creation order; qualify native edge/order traces before widening fidelity claims.
+                if left <= x && x <= right && bottom <= y && y <= top {
+                    found
+                        .try_reserve(1)
+                        .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+                    found.push(self.inner.id(index, name)?);
+                }
+            }
+        }
+        Ok((group, found))
+    }
+
+    pub(super) fn begin_rectangle_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<ScriptCall>, Error> {
+        if name != "GroupEnumUnitsInRect" || self.unit_placement.is_none() {
+            return Ok(None);
+        }
+        if matches!(args, [_, _, Value::Null]) {
+            return Ok(None);
+        }
+        let [group, Value::Handle(rect), Value::Handle(filter)] = args else {
+            return Err(self.inner.error(
+                name,
+                Failure::UnitState("group, rectangle and boolean expression required"),
+            ));
+        };
+        let predicate = match self.inner.entry(*filter)? {
+            Entry::Filter { .. } => self.filter_callback(*filter)?.function,
+            Entry::Condition { .. } => self.condition_callback(*filter)?.function,
+            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+        };
+        let (group, candidates) = self.rectangle_candidates(group, *rect)?;
+        if candidates.is_empty() {
+            self.members.retain(|(g, _)| *g != group);
+            return Ok(Some(ScriptCall::Return(Value::Null)));
+        }
+        if self.callbacks.len() >= pcx_script::eval::MAX_CALL_DEPTH as usize {
+            return Err(self
+                .inner
+                .error(name, Failure::Budget("nested native callbacks")));
+        }
+        self.callbacks
+            .try_reserve(1)
+            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+        self.members.retain(|(g, _)| *g != group);
+        // shortcut: new births during a predicate join the next query; qualify mutable spatial iteration before extending it.
+        self.callbacks.push(NativeCallback::Rectangle(Enumeration {
+            group,
+            candidates,
+            next: 1,
+            predicate,
+        }));
+        Ok(Some(ScriptCall::Call(predicate)))
+    }
+
+    pub(super) fn continue_rectangle_call(&mut self, value: Value) -> Result<ScriptCall, Error> {
+        let name = "GroupEnumUnitsInRect";
+        let Value::Bool(accepted) = value else {
+            return Err(self
+                .inner
+                .error(name, Failure::UnitState("predicate did not return boolean")));
+        };
+        let Some(NativeCallback::Rectangle(frame)) = self.callbacks.last() else {
+            return Err(self
+                .inner
+                .error(name, Failure::UnitState("no active rectangle predicate")));
+        };
+        let group = frame.group;
+        let candidate = frame.candidates[frame.next - 1];
+        match self.inner.entry(group)? {
+            Entry::Group { live: true } => {}
+            _ => return Err(self.inner.error(name, Failure::Identity)),
+        }
+        if accepted && !self.members.contains(&(group, candidate)) {
+            if self.members.len() >= self.group_limit.unwrap_or(0) {
+                return Err(self.inner.error(name, Failure::Budget("group membership")));
+            }
+            self.members
+                .try_reserve(1)
+                .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+            self.members.push((group, candidate));
+        }
+        let Some(NativeCallback::Rectangle(frame)) = self.callbacks.last_mut() else {
+            unreachable!("active rectangle predicate");
+        };
+        if frame.next < frame.candidates.len() {
+            frame.next += 1;
+            return Ok(ScriptCall::Call(frame.predicate));
+        }
+        self.callbacks.pop();
+        Ok(ScriptCall::Return(Value::Null))
+    }
+
     pub(super) fn unit_position_native(
         &mut self,
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         self.unit_placement.as_ref()?;
+        if name == "GetFilterUnit" {
+            self.inner.program.natives().get(name)?;
+            return Some(if args.is_empty() {
+                Ok(self
+                    .callbacks
+                    .iter()
+                    .rev()
+                    .find_map(|frame| match frame {
+                        NativeCallback::Rectangle(frame) => {
+                            Some(Value::Handle(frame.candidates[frame.next - 1]))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(Value::Null))
+            } else {
+                Err(self
+                    .inner
+                    .error(name, Failure::UnitState("no arguments expected")))
+            });
+        }
         if !matches!(name, "GetUnitX" | "GetUnitY" | "GroupEnumUnitsInRect") {
             return None;
         }
@@ -132,42 +299,20 @@ impl ObjectHost {
             }
             let [group, Value::Handle(rect), Value::Null] = args else {
                 return Err(fail(
-                    "rectangle enumeration requires an explicit null filter",
+                    "filtered rectangle enumeration requires the owned VM callback path",
                 ));
             };
-            let index = self.group_index(group, name)?;
-            let group = self.inner.id(index, name)?;
-            // shortcut: populated-group and filter semantics need explicit qualification before admission.
-            if self.members.iter().any(|(g, _)| *g == group) {
-                return Err(fail("enumeration into a populated group is not admitted"));
-            }
-            let [left, bottom, right, top] = self
-                .rectangle_bounds(*rect)
-                .map_err(|e| self.inner.error(name, e.failure))?;
-            let mut found = Vec::new();
-            for (index, entry) in self.inner.arena.iter().enumerate() {
-                if let Entry::Unit { record } = entry {
-                    let [x, y] = record
-                        .position
-                        .ok_or_else(|| fail("accepted unit position missing"))?;
-                    // shortcut: centre containment and creation order; qualify native edge/order traces before widening fidelity claims.
-                    if left <= x && x <= right && bottom <= y && y <= top {
-                        if self.members.len() + found.len() >= self.group_limit.unwrap_or(0) {
-                            return Err(self
-                                .inner
-                                .error(name, Failure::Budget("group membership")));
-                        }
-                        found
-                            .try_reserve(1)
-                            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
-                        found.push((group, self.inner.id(index, name)?));
-                    }
-                }
+            let (group, found) = self.rectangle_candidates(group, *rect)?;
+            let retained = self.members.iter().filter(|(g, _)| *g != group).count();
+            if found.len() > self.group_limit.unwrap_or(0).saturating_sub(retained) {
+                return Err(self.inner.error(name, Failure::Budget("group membership")));
             }
             self.members
                 .try_reserve(found.len())
                 .map_err(|_| self.inner.error(name, Failure::Capacity))?;
-            self.members.extend(found);
+            self.members.retain(|(g, _)| *g != group);
+            self.members
+                .extend(found.into_iter().map(|unit| (group, unit)));
             Ok(Value::Null)
         })())
     }

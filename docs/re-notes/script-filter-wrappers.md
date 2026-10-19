@@ -43,11 +43,11 @@ reserved-kind refusal, malformed callbacks and source/type checks, including an
 extra authored ancestry edge. Exceptional native inputs are not established by
 these contract tests. Native and actual WASI run the same tests.
 
-Predicate candidate context, `GetFilterUnit`, enumeration and trigger-condition
-delivery remain open. A later source consumer is
+The later rectangle predicate slice below supplies candidate context and
+`GetFilterUnit`; other spatial/event predicate consumers remain open. A later source consumer is
 `GroupEnumUnitsInRangeOfLoc` in `IssueHauntOrderAtLocBJ`. `GetUnitTypeId` now
-returns the rawcode of an admitted `CreateUnit` record; filtered group enumeration and
-predicate context remain unimplemented. Wrapper retention does not implement
+returns the rawcode of an admitted `CreateUnit` record. Rectangle predicates now
+use those same identities; range predicates still need their world consumer. Wrapper retention does not implement
 those operations or the application gameplay Host factory.
 
 The subsequent [explicit force slice](script-force-memberships.md) now passes
@@ -60,3 +60,11 @@ filter source and signature. This is a no-op on existing wrappers and arena
 capacity. Non-null inputs still refuse. The actual Human01 frontier is now the
 owner-filtered rectangle helper, which needs a candidate context on the same VM;
 null cleanup does not implement predicate execution or wrapper destruction.
+
+
+The subsequent [rectangle predicate path](script-unit-world.md#filtered-rectangle-predicates-2026-10-19)
+executes these loaded callbacks in the current VM and restores nested candidate
+contexts. It shares its continuation stack with explicit trigger callbacks,
+including error cleanup. The actual Human01 owner-filtered query now selects
+five of seven candidates; group iteration is its next unsupported operation.
+Non-null expression destruction and general event/range delivery remain open.
