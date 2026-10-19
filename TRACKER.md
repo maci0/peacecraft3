@@ -3042,3 +3042,13 @@ repeated, and the public site package was not rebuilt.
   original/native/WASM deterministic/rendered/4K parity remain open. The first
   campaign is not playable; the original baseline gate is unchanged. See
   [experience handicap](docs/re-notes/script-player-setup.md#source-bound-experience-handicap-2026-10-19).
+
+
+- [x] Edition-switch logo lifetime (2026-10-19): switching source/edition retires
+  the old logo and re-reads the authored skin/model/texture/anchor/Birth path.
+  411 native tests, one explicit local Legacy TFT/RoC/TFT logo test, strict
+  native/browser checks and both builds pass. Three native journal captures
+  verify the switch. The separate RoC model-space burst emitter still refuses
+  its whole particle batch; background/particle fidelity remains open. No fresh
+  original/browser/4K visual comparison. Evidence:
+  `.scratch/menu-edition-root-20261019/verification-1.json`.

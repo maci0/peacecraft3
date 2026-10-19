@@ -2044,6 +2044,9 @@ pub(crate) fn read_screen_fdf(
 /// fetched, a moment later; running every frame and doing nothing until the
 /// bytes exist means one code path serves both.
 fn apply_menu_art(
+    mut commands: Commands,
+    logos: Query<Entity, With<crate::menu_panel::MenuLogo>>,
+    mut entrance: ResMut<crate::menu_panel::LogoEntrance>,
     launcher: Res<Launcher>,
     mut cache: ResMut<MenuArtCache>,
     mut glue: ResMut<crate::glue_menu::GlueImages>,
@@ -2051,6 +2054,11 @@ fn apply_menu_art(
 ) {
     let selection = format!("{}:{:?}", launcher.source, launcher.mode);
     if cache.selection.as_ref() != Some(&selection) {
+        // The logo belongs to the same source selection as the controls.
+        for entity in &logos {
+            commands.entity(entity).despawn();
+        }
+        *entrance = default();
         navigation.built = None;
         cache.pending_fdf = None;
         cache.preview = default();
@@ -4296,6 +4304,96 @@ mod menu_tests {
         assert_ne!(before, after);
         world.run_system_once(apply_menu_clicks).unwrap();
         assert_eq!(world.resource::<Launcher>().mode.addon, before);
+    }
+
+    #[test]
+    fn switching_edition_retires_the_logo_before_rebuilding_art() {
+        let mut world = World::new();
+        press(&mut world, "EditionButton");
+        world.init_resource::<crate::menu_panel::LogoEntrance>();
+        world.init_resource::<crate::glue_menu::GlueImages>();
+        let install = selected_install(world.resource::<Launcher>());
+        world.resource_mut::<MenuArtCache>().install = install.clone();
+        world.resource_mut::<crate::glue_menu::GlueImages>().install = install;
+        let layer = world.spawn(LogoLayer).id();
+        for _ in 0..2 {
+            let selection = {
+                let launcher = world.resource::<Launcher>();
+                format!("{}:{:?}", launcher.source, launcher.mode)
+            };
+            {
+                let mut cache = world.resource_mut::<MenuArtCache>();
+                cache.selection = Some(selection);
+                cache.native_loaded = true;
+            }
+            let old = world
+                .spawn((crate::menu_panel::MenuLogo, ChildOf(layer)))
+                .id();
+            world
+                .resource_mut::<crate::menu_panel::LogoEntrance>()
+                .elapsed_ms = 123.0;
+            world.run_system_once(apply_menu_clicks).unwrap();
+            world.run_system_once(apply_menu_art).unwrap();
+            assert!(
+                world.get_entity(old).is_err(),
+                "previous edition logo survived"
+            );
+            assert!(world.get_entity(layer).is_ok());
+            assert_eq!(
+                world
+                    .resource::<crate::menu_panel::LogoEntrance>()
+                    .elapsed_ms,
+                0.0
+            );
+            assert!(
+                world
+                    .resource::<crate::menu_panel::LogoEntrance>()
+                    .data
+                    .is_none()
+            );
+            let current = world
+                .spawn((crate::menu_panel::MenuLogo, ChildOf(layer)))
+                .id();
+            world.run_system_once(apply_menu_art).unwrap();
+            assert!(
+                world.get_entity(current).is_ok(),
+                "unchanged selection rebuilt its logo"
+            );
+            world.despawn(current);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires PEACECRAFT3_INSTALL with both original edition logos"]
+    fn original_edition_switch_rebuilds_the_selected_logo() {
+        let install =
+            std::env::var("PEACECRAFT3_INSTALL").expect("explicit original install required");
+        let mut world = World::new();
+        press(&mut world, "EditionButton");
+        world.resource_mut::<Launcher>().source = install;
+        world.init_resource::<crate::menu_panel::LogoEntrance>();
+        world.init_resource::<crate::glue_menu::GlueImages>();
+        world.init_resource::<Assets<Image>>();
+        world.spawn(LogoLayer);
+        let mut selected = Vec::new();
+        for _ in 0..3 {
+            world.run_system_once(apply_menu_art).unwrap();
+            world.run_system_once(initialize_menu_logo).unwrap();
+            let (entity, image) = world
+                .query_filtered::<(Entity, &ImageNode), With<crate::menu_panel::MenuLogo>>()
+                .single(&world)
+                .expect("one selected logo");
+            let pixels = world.resource::<Assets<Image>>().get(&image.image).unwrap();
+            selected.push((entity, pixels.data.clone()));
+            world.run_system_once(apply_menu_clicks).unwrap();
+        }
+        assert_ne!(selected[0].0, selected[1].0);
+        assert_ne!(selected[1].0, selected[2].0);
+        assert_ne!(selected[0].1, selected[1].1, "edition textures must differ");
+        assert_eq!(
+            selected[0].1, selected[2].1,
+            "returning edition must restore its texture"
+        );
     }
 
     #[test]

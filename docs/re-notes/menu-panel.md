@@ -123,3 +123,22 @@ The 500 ms entrance samples the parsed cubic Bézier and preserves fractional fr
 The background fills the display separately from the authored UI viewport, as the original background initialization explicitly sets the full-width flag. Widescreen controls follow the centered authored branch; square/5:4 displays retain the original direct conversion. Portrait browser containment is a compatibility policy, not an observed original-client mode.
 
 The hanging panel is the authored `SpriteLayers` models; see [panel origin](menu-panel-origin.md). Its `MainMenu Birth` entrance, geoset alpha and sound events are rendered from shipped data; see [sprite rendering](menu-sprite-rendering.md). The visual-fidelity gate remains open.
+
+
+## Edition switch logo lifetime (2026-10-19)
+
+The controls and scene already followed the selected edition, but a live logo
+prevented its initializer from reading the new skin entry. Source-selection
+changes now retire that logo and clear its entrance before initialization. The
+model, texture, quad, anchor and Birth curve still come from the selected assets.
+
+A synthetic dispatcher regression checks both switch directions and unchanged
+selection. An explicit local Legacy test checks TFT/RoC/TFT image replacement.
+All 411 native menu tests, strict native/browser checks and both builds pass.
+A private native render journal uses the production dispatcher, the selected
+Legacy installation and embedded shaders: all three captures show the expected
+logo. The first private probe had the wrong embedded-shader crate namespace and
+is rejected. Evidence: `.scratch/menu-edition-root-20261019/verification-1.json`.
+
+This does not fix the separate RoC PRE2 batch refusal at its model-space burst
+emitter. Original runtime, fresh browser visual and 4K parity remain open.
