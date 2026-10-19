@@ -51,3 +51,48 @@ All 15 parameter test groups also execute in actual 32-bit WASM. The retained
 same-context Human01 gate still reaches the same missing second file binding,
 preserving config completion, first sound assignment and authored duration;
 this is compatibility evidence, not a complete-manifest or campaign run.
+
+## Executed label preparation
+
+An optional `ObjectHost::admit_sound_parameter_loader` supplies one missing
+executed label after sound identity and label validation. Its source-qualified
+definition appends under aggregate table/definition/metadata bounds. A matching
+source identity, digest, profile and label column reuses the existing table;
+only its definition list grows. Old bank/definition keys keep their meaning.
+Missing, wrong or over-budget bindings fail before assignment changes. Cached
+labels use the ordinary lookup without source work. Explicit banks remain valid
+without this loader.
+
+The campaign caller discovers SLK members from its retained reader's SoundInfo
+namespace, rather than a chapter-specific table list. Exact `SoundName` or
+`SoundLabel` headers identify the lookup column on tables with parameter fields
+(`Volume` or `Flags`). Reference-only tables can contain the same labels without
+owning sound parameters. Full versus dialogue schema
+comes from the authored headers; unsupported requested schemas and labels with
+multiple owners refuse. Unrelated table schemas do not contribute labels.
+Only requested rows undergo numeric profile admission; malformed unselected
+numeric rows do not supply defaults or prevent unrelated valid assignments.
+All tables keep selected source provenance, edition/version identity and digests.
+
+Source work is application policy: at most 32 table reads on initial indexing,
+4 MiB per table, 32 MiB aggregate input, coordinate bounds of 10,000 rows and
+256 columns, 1,024 retained definitions, 1 MiB assignment metadata and 128 new
+label requests. Adapter identities/labels are capped at 16 KiB. Successful and
+failed index results are retained for that session, so a missing member is not
+read on every later call. New binding/session admission is required to change
+the selected inventory. These are input/work bounds, not original engine values
+or total parser heap bounds. Parameter assignment still does not establish
+effective playback mappings or audible behavior.
+
+Verification: 481 native Host cases pass (seven explicit ignores), as do the
+application suites, 25 actual Cargo WASM cases and 19 targeted WASI parameter
+cases. Native/WASM builds, strict lint and formatting pass. The supplied Human01
+script's 51 distinct parameter labels bind through this production adapter:
+16 full-profile rows and 35 dialogue rows across five selected table byte inputs.
+The initial source check exposed a same-label animation reference; the corrected
+schema filter and synthetic collision regression pass. Selected table bytes and
+label counts match retained fingerprints. The probe's explicit mount order has
+different archive provenance from the earlier hand-selected table set; native
+winner/release equivalence is not established. No original game, audible or
+rendered campaign check ran. Evidence is retained in
+`.scratch/campaign-parameter-source-root-20261019/verification-final-2.json`.

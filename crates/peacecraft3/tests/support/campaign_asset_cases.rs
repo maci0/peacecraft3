@@ -537,3 +537,248 @@ pub fn sound_source_path_limit_refuses_before_reading_or_copying_the_path_into_a
     assert!(message.len() < 2048);
     assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), before);
 }
+
+fn parameter_table(dialogue: bool) -> Vec<u8> {
+    let rows = if dialogue {
+        vec![
+            vec![
+                "SoundLabel",
+                "Volume",
+                "Flags",
+                "version",
+                "DirectoryBase",
+                "FileNames",
+            ],
+            vec!["Speech", "97", "OPAQUE", "4", "Dialogue/", "line.data"],
+        ]
+    } else {
+        vec![
+            vec![
+                "SoundName",
+                "Volume",
+                "Pitch",
+                "PitchVariance",
+                "Priority",
+                "Channel",
+                "MinDistance",
+                "MaxDistance",
+                "DistanceCutoff",
+                "Flags",
+                "EAXFlags",
+            ],
+            vec![
+                "Voice", "83", "0.75", "0.125", "-2", "3", "5", "9", "11", "OPAQUE", "Profile",
+            ],
+            vec![
+                "Other",
+                "17",
+                "1.25",
+                "0",
+                "7",
+                "9",
+                "3",
+                "13",
+                "19",
+                "OTHER",
+                "Different",
+            ],
+        ]
+    };
+    let mut text = String::from("ID;PWXL;N;E\r\n");
+    for (y, row) in rows.iter().enumerate() {
+        for (x, value) in row.iter().enumerate() {
+            text.push_str(&format!("C;Y{};X{};K\"{}\"\r\n", y + 1, x + 1, value));
+        }
+    }
+    text.push_str("E\r\n");
+    text.into_bytes()
+}
+
+fn parameter_assets() -> BTreeMap<String, Reply> {
+    let mut assets = sounds();
+    assets.insert(
+        "UI/SoundInfo/Arbitrary.slk".into(),
+        Reply::Bytes(parameter_table(false)),
+    );
+    assets.insert(
+        "UI/SoundInfo/Speech.slk".into(),
+        Reply::Bytes(parameter_table(true)),
+    );
+    assets.insert(
+        "UI/SoundInfo/Unrelated.slk".into(),
+        Reply::Bytes(b"ID;PWXL;N;E\r\nC;Y1;X1;K\"SoundLabel\"\r\nC;Y1;X2;K\"AnimSoundEvent\"\r\nC;Y2;X1;K\"Voice\"\r\nC;Y2;X2;K\"Event\"\r\nE\r\n".to_vec()),
+    );
+    assets
+}
+
+fn parameter_script() -> String {
+    SOUND_SCRIPT
+        .replace(
+            "call StartSound(first)",
+            "call SetSoundParamsFromLabel(first, folder + \"Voice\")\ncall StartSound(first)",
+        )
+        .replace("folder + \"Voice\"", "\"Vo\" + \"ice\"")
+        .replace(
+            "call StartSound(encoded)",
+            "call SetSoundParamsFromLabel(encoded, \"Speech\")\ncall StartSound(encoded)",
+        )
+        + r#"
+function change_parameters takes nothing returns nothing
+call SetSoundParamsFromLabel(encoded,"Other")
+endfunction
+function missing_parameters takes nothing returns nothing
+call SetSoundParamsFromLabel(first,"Missing")
+endfunction
+"#
+}
+
+fn assignment(app: &mut App, global: &str) -> (String, i32) {
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let Value::Handle(id) = session.global(global).unwrap() else {
+        panic!("sound")
+    };
+    let row = session
+        .host()
+        .unwrap()
+        .objects()
+        .sound_parameter_assignment(id)
+        .unwrap()
+        .unwrap();
+    match row.parameters {
+        pcx_play::sound_parameters::ParameterValues::Full(p) => (p.label.into(), p.values.volume),
+        pcx_play::sound_parameters::ParameterValues::Dialogue(p) => {
+            (p.label.into(), p.values.volume)
+        }
+    }
+}
+
+#[test]
+pub fn executed_parameter_labels_use_selected_tables_and_keep_old_assignments() {
+    let mut app = app();
+    let reads = deliver(&mut app, &parameter_script(), parameter_assets(), 1);
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none(),
+        "{:?}",
+        app.world().resource::<CampaignStartup>().last_error
+    );
+    assert_eq!(assignment(&mut app, "first"), ("Voice".into(), 83));
+    assert_eq!(assignment(&mut app, "encoded"), ("Speech".into(), 97));
+    let before = reads.load(std::sync::atomic::Ordering::SeqCst);
+    call(&mut app, "change_parameters").unwrap();
+    call(&mut app, "change_parameters").unwrap();
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), before);
+    assert_eq!(assignment(&mut app, "first"), ("Voice".into(), 83));
+    assert_eq!(assignment(&mut app, "encoded"), ("Other".into(), 17));
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .sound_parameter_banks()
+            .unwrap()
+            .sources()
+            .count(),
+        2
+    );
+}
+
+#[test]
+pub fn failed_parameter_replacement_preserves_prior_assignments() {
+    let mut app = app();
+    deliver(&mut app, &parameter_script(), parameter_assets(), 1);
+    let witness = app
+        .world()
+        .resource::<MapScriptSession<MapStartupHost>>()
+        .session_witness()
+        .unwrap();
+    for (i, reply) in [
+        Reply::Missing,
+        Reply::Bytes(b"not a table".to_vec()),
+        Reply::Bytes(parameter_table(false)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut assets = parameter_assets();
+        if i == 2 {
+            assets.insert("UI/SoundInfo/Duplicate.slk".into(), reply);
+        } else {
+            assets.insert("UI/SoundInfo/Arbitrary.slk".into(), reply);
+        }
+        deliver(&mut app, &parameter_script(), assets, i as u64 + 2);
+        assert!(
+            app.world()
+                .resource::<CampaignStartup>()
+                .last_error
+                .is_some()
+        );
+        assert!(std::sync::Weak::ptr_eq(
+            &witness,
+            &app.world()
+                .resource::<MapScriptSession<MapStartupHost>>()
+                .session_witness()
+                .unwrap()
+        ));
+        call(&mut app, "change_parameters").unwrap();
+        assert_eq!(assignment(&mut app, "first"), ("Voice".into(), 83));
+        assert_eq!(assignment(&mut app, "encoded"), ("Other".into(), 17));
+    }
+}
+
+#[test]
+pub fn parameter_source_work_is_bounded_without_rereading_tables() {
+    let mut app = app();
+    let reads = deliver(&mut app, &parameter_script(), parameter_assets(), 1);
+    let before = reads.load(std::sync::atomic::Ordering::SeqCst);
+    for _ in 0..126 {
+        assert!(call(&mut app, "missing_parameters").is_err());
+    }
+    assert!(
+        call(&mut app, "missing_parameters")
+            .expect_err("work cap")
+            .to_string()
+            .contains("source work budget exhausted")
+    );
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), before);
+    assert_eq!(assignment(&mut app, "first"), ("Voice".into(), 83));
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn browser_campaign_parameter_gate() -> u32 {
+    executed_parameter_labels_use_selected_tables_and_keep_old_assignments();
+    failed_parameter_replacement_preserves_prior_assignments();
+    parameter_source_work_is_bounded_without_rereading_tables();
+    failed_parameter_index_is_not_read_repeatedly_on_the_published_host();
+    4
+}
+
+#[test]
+pub fn failed_parameter_index_is_not_read_repeatedly_on_the_published_host() {
+    let mut app = app();
+    let script = SOUND_SCRIPT.to_owned()
+        + "\nfunction late_parameters takes nothing returns nothing\ncall SetSoundParamsFromLabel(first,\"Voice\")\nendfunction\n";
+    let mut assets = parameter_assets();
+    assets.insert("UI/SoundInfo/Arbitrary.slk".into(), Reply::Missing);
+    let reads = deliver(&mut app, &script, assets, 1);
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none()
+    );
+    let before = reads.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(call(&mut app, "late_parameters").is_err());
+    let after = reads.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(after, before + 1);
+    assert!(call(&mut app, "late_parameters").is_err());
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), after);
+}

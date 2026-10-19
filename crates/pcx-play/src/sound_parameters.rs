@@ -43,6 +43,7 @@ pub struct Parameters<'a> {
 #[derive(Debug)]
 pub struct Bank {
     table: Table,
+    encoded_bytes: usize,
     source_label: String,
     origin: AssetIdentity,
     sha256: Sha256Digest,
@@ -181,6 +182,7 @@ impl Bank {
         }
         Ok(Self {
             table,
+            encoded_bytes: input.bytes.len(),
             source_label: input.label.into(),
             origin,
             sha256: sha256(input.bytes),
@@ -278,6 +280,7 @@ struct DialogueDefinition {
 #[derive(Debug)]
 struct DialogueBank {
     table: Table,
+    encoded_bytes: usize,
     source_label: String,
     origin: AssetIdentity,
     sha256: Sha256Digest,
@@ -362,6 +365,7 @@ impl DialogueBank {
         }
         Ok(Self {
             table,
+            encoded_bytes: input.bytes.len(),
             source_label: input.label.into(),
             origin,
             sha256: sha256(input.bytes),
@@ -408,6 +412,48 @@ enum SourceBank {
     Dialogue(DialogueBank),
 }
 impl SourceBank {
+    fn len(&self) -> usize {
+        match self {
+            Self::Full(b) => b.definitions.len(),
+            Self::Dialogue(b) => b.definitions.len(),
+        }
+    }
+    fn encoded_bytes(&self) -> usize {
+        match self {
+            Self::Full(b) => b.encoded_bytes,
+            Self::Dialogue(b) => b.encoded_bytes,
+        }
+    }
+    fn label(&self, index: usize) -> Option<&str> {
+        match self {
+            Self::Full(b) => b
+                .table
+                .by_name(b.definitions.get(index)?.row, &b.label_column),
+            Self::Dialogue(b) => b
+                .table
+                .by_name(b.definitions.get(index)?.row, &b.label_column),
+        }
+    }
+    fn same_source(&self, other: &Self) -> bool {
+        let a = self.source();
+        let b = other.source();
+        a.profile == b.profile
+            && a.origin == b.origin
+            && a.source_label == b.source_label
+            && a.label_column == b.label_column
+            && a.sha256 == b.sha256
+    }
+    fn base_metadata(&self) -> impl Iterator<Item = &str> {
+        let s = self.source();
+        [
+            s.source_label,
+            s.label_column,
+            &s.origin.edition,
+            &s.origin.version,
+            &s.origin.source,
+        ]
+        .into_iter()
+    }
     fn source(&self) -> BankSource<'_> {
         match self {
             Self::Full(bank) => BankSource {
@@ -460,6 +506,130 @@ pub struct Banks {
     label_limit: usize,
 }
 impl Banks {
+    pub(crate) fn admit_budget(&mut self, budget: BanksBudget) -> Result<(), Error> {
+        self.check_budget(budget)?;
+        self.label_limit = budget.metadata_bytes;
+        Ok(())
+    }
+
+    fn check_budget(&self, budget: BanksBudget) -> Result<(usize, usize, usize), Error> {
+        let fail = || Error {
+            source_context: "selected sound parameter banks".into(),
+            problem: Problem::Budget,
+        };
+        std::alloc::Layout::array::<SourceBank>(budget.banks)
+            .and_then(|_| std::alloc::Layout::array::<Definition>(budget.definitions))
+            .and_then(|_| std::alloc::Layout::array::<DialogueDefinition>(budget.definitions))
+            .and_then(|_| std::alloc::Layout::array::<u8>(budget.table_bytes))
+            .and_then(|_| std::alloc::Layout::array::<u8>(budget.total_table_bytes))
+            .and_then(|_| std::alloc::Layout::array::<u8>(budget.metadata_bytes))
+            .map_err(|_| fail())?;
+        if self.banks.len() > budget.banks {
+            return Err(fail());
+        }
+        let (mut bytes, mut count, mut metadata) = (0usize, 0usize, 0usize);
+        for bank in &self.banks {
+            if bank.encoded_bytes() > budget.table_bytes {
+                return Err(fail());
+            }
+            bytes = bytes
+                .checked_add(bank.encoded_bytes())
+                .filter(|&n| n <= budget.total_table_bytes)
+                .ok_or_else(fail)?;
+            count = count
+                .checked_add(bank.len())
+                .filter(|&n| n <= budget.definitions)
+                .ok_or_else(fail)?;
+            for field in bank
+                .base_metadata()
+                .chain((0..bank.len()).filter_map(|i| bank.label(i)))
+            {
+                metadata = metadata
+                    .checked_add(field.len())
+                    .filter(|&n| n <= budget.metadata_bytes)
+                    .ok_or_else(fail)?;
+            }
+        }
+        Ok((bytes, count, metadata))
+    }
+
+    /// Extend one executed label without changing any earlier bank/definition key.
+    pub(crate) fn append_label(
+        &mut self,
+        mut next: Self,
+        label: &str,
+        budget: BanksBudget,
+    ) -> Result<ParameterKey, Error> {
+        let fail = |problem| Error {
+            source_context: "selected sound parameter banks".into(),
+            problem,
+        };
+        let (bytes, count, metadata) = self.check_budget(budget)?;
+        if next.banks.len() != 1 || next.banks[0].len() != 1 || next.find(label).is_none() {
+            return Err(fail(Problem::Missing));
+        }
+        if self.find(label).is_some() {
+            return Err(fail(Problem::Ambiguous));
+        }
+        let new = &next.banks[0];
+        let existing = self.banks.iter().position(|old| old.same_source(new));
+        let mut added_metadata = label.len();
+        if existing.is_none() {
+            for field in new.base_metadata() {
+                added_metadata = added_metadata
+                    .checked_add(field.len())
+                    .ok_or_else(|| fail(Problem::Budget))?;
+            }
+        }
+        if count >= budget.definitions
+            || metadata
+                .checked_add(added_metadata)
+                .is_none_or(|n| n > budget.metadata_bytes)
+            || new.encoded_bytes() > budget.table_bytes
+            || (existing.is_none()
+                && (self.banks.len() >= budget.banks
+                    || bytes
+                        .checked_add(new.encoded_bytes())
+                        .is_none_or(|n| n > budget.total_table_bytes)))
+        {
+            return Err(fail(Problem::Budget));
+        }
+        let new = next.banks.pop().ok_or_else(|| fail(Problem::Missing))?;
+        let key = match existing {
+            Some(bank) => {
+                let definition = self.banks[bank].len();
+                match (&mut self.banks[bank], new) {
+                    (SourceBank::Full(old), SourceBank::Full(mut new)) => {
+                        old.definitions
+                            .try_reserve(1)
+                            .map_err(|_| fail(Problem::Budget))?;
+                        old.definitions.append(&mut new.definitions);
+                    }
+                    (SourceBank::Dialogue(old), SourceBank::Dialogue(mut new)) => {
+                        old.definitions
+                            .try_reserve(1)
+                            .map_err(|_| fail(Problem::Budget))?;
+                        old.definitions.append(&mut new.definitions);
+                    }
+                    _ => return Err(fail(Problem::Ambiguous)),
+                }
+                ParameterKey { bank, definition }
+            }
+            None => {
+                self.banks
+                    .try_reserve(1)
+                    .map_err(|_| fail(Problem::Budget))?;
+                let key = ParameterKey {
+                    bank: self.banks.len(),
+                    definition: 0,
+                };
+                self.banks.push(new);
+                key
+            }
+        };
+        self.label_limit = budget.metadata_bytes;
+        Ok(key)
+    }
     /// Whole-set counts, layouts, bytes, identities and label uniqueness precede
     /// table decoding, source copies and installation. Limits are logical inputs,
     /// not a promise of total parser heap/RSS bounds.

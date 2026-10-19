@@ -1105,3 +1105,184 @@ fn actual_vm_keeps_dialogue_receipt_and_typed_full_refusal_at_next_native_failur
     vm.init_globals().unwrap();
     assert_eq!(vm.host().inner().handles(), handles);
 }
+
+fn selected_parameters(label: &str) -> Banks {
+    let bytes = if label == "Speech" {
+        table(&dialogue_rows())
+    } else {
+        table(&rows())
+    };
+    let profile = if label == "Speech" {
+        Profile::Dialogue
+    } else {
+        Profile::Full
+    };
+    Banks::read(
+        &[input(
+            &bytes,
+            if label == "Speech" {
+                "synthetic:dialogue"
+            } else {
+                "synthetic:full"
+            },
+            &origin(),
+            &[label],
+            profile,
+        )],
+        banks_budget(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn incremental_parameters_reuse_source_tables_and_preserve_earlier_keys() {
+    let mut banks = selected_parameters("Voice");
+    let first = banks.find("Voice").unwrap();
+    let pointer = banks.sources().next().unwrap().table as *const Table;
+    let second = banks
+        .append_label(selected_parameters("Other"), "Other", banks_budget())
+        .unwrap();
+    assert_eq!(banks.sources().count(), 1);
+    assert_eq!(
+        banks.sources().next().unwrap().table as *const Table,
+        pointer
+    );
+    let ParameterValues::Full(old) = banks.get(first).unwrap().parameters else {
+        panic!("full")
+    };
+    assert_eq!(old.label, "Voice");
+    assert_eq!(old.values.volume, 83);
+    let ParameterValues::Full(new) = banks.get(second).unwrap().parameters else {
+        panic!("full")
+    };
+    assert_eq!(new.label, "Other");
+    assert_eq!(new.values.volume, -14);
+    let speech = banks
+        .append_label(selected_parameters("Speech"), "Speech", banks_budget())
+        .unwrap();
+    assert_eq!(banks.sources().count(), 2);
+    assert!(matches!(
+        banks.get(speech).unwrap().parameters,
+        ParameterValues::Dialogue(_)
+    ));
+    assert_eq!(
+        banks.get(first).unwrap().source.sha256,
+        banks.get(second).unwrap().source.sha256
+    );
+}
+
+#[test]
+fn incremental_parameter_failures_keep_the_bank_and_existing_assignments() {
+    let mut banks = selected_parameters("Voice");
+    let first = banks.find("Voice").unwrap();
+    for limit in [
+        BanksBudget {
+            definitions: 1,
+            ..banks_budget()
+        },
+        BanksBudget {
+            metadata_bytes: 1,
+            ..banks_budget()
+        },
+        BanksBudget {
+            table_bytes: 1,
+            ..banks_budget()
+        },
+    ] {
+        assert!(
+            banks
+                .append_label(selected_parameters("Other"), "Other", limit)
+                .is_err()
+        );
+        assert_eq!(banks.sources().count(), 1);
+        assert!(banks.find("Other").is_none());
+        assert!(banks.get(first).is_some());
+    }
+    assert!(
+        banks
+            .append_label(selected_parameters("Other"), "Voice", banks_budget())
+            .is_err()
+    );
+    assert!(
+        banks
+            .append_label(selected_parameters("Voice"), "Voice", banks_budget())
+            .is_err()
+    );
+    assert!(
+        banks
+            .append_label(mixed_banks(), "Other", banks_budget())
+            .is_err()
+    );
+    banks
+        .append_label(selected_parameters("Other"), "Other", banks_budget())
+        .unwrap();
+    assert!(
+        banks
+            .append_label(
+                selected_parameters("Speech"),
+                "Speech",
+                BanksBudget {
+                    banks: 1,
+                    ..banks_budget()
+                }
+            )
+            .is_err()
+    );
+    assert!(banks.find("Speech").is_none());
+}
+
+#[test]
+fn incremental_parameter_host_validates_identity_before_source_work() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    let mut h = host(COMMON, "")
+        .with_sound_parameter_banks(Banks::read(&[], banks_budget()).unwrap())
+        .unwrap();
+    h.admit_sound_parameter_loader(banks_budget(), move |label| {
+        observed.fetch_add(1, Ordering::SeqCst);
+        if label == "Voice" || label == "Other" || label == "Speech" {
+            Ok(selected_parameters(label))
+        } else {
+            Err("missing source label".into())
+        }
+    })
+    .unwrap();
+    assert!(
+        h.admit_sound_parameter_loader(banks_budget(), |_| unreachable!())
+            .is_err()
+    );
+    let a = create(&mut h);
+    let b = create(&mut h);
+    for (id, label) in [(a, "Voice"), (b, "Speech"), (b, "Other"), (b, "Other")] {
+        h.native(
+            "SetSoundParamsFromLabel",
+            &[Value::Handle(id), Value::Str(label.into())],
+        )
+        .unwrap();
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    assert_eq!(h.sound_parameters(a).unwrap().unwrap().label, "Voice");
+    assert_eq!(h.sound_parameters(b).unwrap().unwrap().label, "Other");
+    assert_eq!(h.sound_parameter_banks().unwrap().sources().count(), 2);
+    let Value::Handle(timer) = h.native("CreateTimer", &[]).unwrap() else {
+        panic!("timer")
+    };
+    for args in [
+        vec![Value::Handle(timer), Value::Str("Voice".into())],
+        vec![Value::Handle(a), Value::Str("\0".into())],
+        vec![Value::Handle(a), Value::Str(String::new())],
+        vec![Value::Handle(a), Value::Int(1)],
+    ] {
+        assert!(h.native("SetSoundParamsFromLabel", &args).is_err());
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    assert!(
+        h.native(
+            "SetSoundParamsFromLabel",
+            &[Value::Handle(a), Value::Str("Missing".into())]
+        )
+        .is_err()
+    );
+    assert_eq!(h.sound_parameters(a).unwrap().unwrap().label, "Voice");
+}

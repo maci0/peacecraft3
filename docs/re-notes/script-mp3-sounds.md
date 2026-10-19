@@ -77,6 +77,7 @@ and a real VM retaining an MP3's parameters, duration and queued start after a
 later unsupported native. Strict native/WASM checks are distinct from playback.
 
 Campaign startup now attaches executed direct-file source loading; automatic
-label/parameter banks and the other Host inputs remain open. The browser playback
+constructor-label banks and the other Host inputs remain open. Executed parameter
+labels now resolve through the retained reader; see `script-sound-parameter-banks.md`. The browser playback
 dependency, device output, native decoder/
 gapless behavior, 3D effects and complete campaign remain unverified.

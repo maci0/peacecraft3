@@ -2740,3 +2740,16 @@ repeated, and the public site package was not rebuilt.
 - [ ] Other Host inputs, mission initialization, world lighting, actors/controls
   and full playability remain open. Source-input qualification is separate from
   chapter execution, audible behavior and original-game parity.
+
+### 2026-10-19 — executed sound parameter source rows
+
+- [x] Load requested source parameter labels through the session reader, preserve
+  earlier bank/definition keys, and reuse table/index state under explicit bounds.
+- [x] Native suites, 25 actual Cargo WASM cases, 19 targeted WASI cases, strict
+  native/WASM lint/builds and formatting pass. All 51 distinct Human01 parameter
+  labels qualify across five selected table byte inputs; reference-only animation
+  rows do not create false ownership. Evidence:
+  `.scratch/campaign-parameter-source-root-20261019/verification-final-2.json`.
+- [ ] Constructor-label banks, other Host bootstrap inputs, mission natives,
+  world lighting and live gameplay remain unfinished. This does not close chapter
+  or audible/native parity gates.

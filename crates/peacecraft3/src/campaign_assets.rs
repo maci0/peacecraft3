@@ -85,6 +85,138 @@ pub(crate) fn file_sound(
     .map_err(|error| format!("CreateSound {member}: {error}"))
 }
 
+pub(crate) struct ParameterSources {
+    tables: Vec<ParameterTable>,
+}
+
+struct ParameterTable {
+    asset: pcx_assets::ResolvedAsset,
+    label: String,
+    origin: AssetIdentity,
+    table: pcx_slq::Table,
+    column: String,
+    profile: Option<pcx_play::sound_parameters::Profile>,
+}
+
+impl ParameterSources {
+    /// SoundInfo is the lookup namespace; actual table names/columns/rows come
+    /// from the selected inventory and table headers, not a chapter manifest.
+    pub(crate) fn read(
+        reader: &Resolver,
+        edition: &str,
+        budget: pcx_play::sound_parameters::BanksBudget,
+    ) -> Result<Self, String> {
+        let mut tables = Vec::new();
+        let mut remaining = budget.total_table_bytes;
+        for (visited, path) in reader
+            .paths()
+            .filter(|p| p.as_str().starts_with("ui/soundinfo/") && p.as_str().ends_with(".slk"))
+            .enumerate()
+        {
+            if visited >= budget.banks {
+                return Err("sound parameter table count budget exceeded".into());
+            }
+            let asset = reader
+                .resolve_bounded(path.as_str(), budget.table_bytes.min(remaining) as u64)
+                .map_err(|e| e.to_string())?;
+            remaining = remaining
+                .checked_sub(asset.bytes.len())
+                .ok_or("sound parameter aggregate table budget exceeded")?;
+            let (label, origin) = identity(&asset, edition, budget.metadata_bytes.min(16 << 10))?;
+            let table = pcx_slq::Table::parse_bounded(&asset.bytes, budget.coordinates)
+                .map_err(|e| format!("{path}: {e}"))?;
+            let has = |field| table.headers().any(|(_, name)| name == field);
+            // Lookup/reference tables can carry SoundLabel without sound parameters.
+            if !has("Volume") && !has("Flags") {
+                continue;
+            }
+            let columns: Vec<_> = table
+                .headers()
+                .filter(|(_, name)| matches!(*name, "SoundName" | "SoundLabel"))
+                .collect();
+            if columns.is_empty() {
+                continue;
+            }
+            let [(_, column)] = columns.as_slice() else {
+                return Err(format!("{path}: expected one sound-label column"));
+            };
+            let column = column.to_string();
+            let full = [
+                "Pitch",
+                "PitchVariance",
+                "Priority",
+                "Channel",
+                "MinDistance",
+                "MaxDistance",
+                "DistanceCutoff",
+                "EAXFlags",
+            ];
+            let profile = if has("Volume") && has("Flags") && full.iter().all(|field| has(*field)) {
+                Some(pcx_play::sound_parameters::Profile::Full)
+            } else if full.iter().all(|field| !has(*field))
+                && ["Volume", "Flags", "version", "DirectoryBase", "FileNames"]
+                    .iter()
+                    .all(|field| has(*field))
+            {
+                Some(pcx_play::sound_parameters::Profile::Dialogue)
+            } else {
+                None
+            };
+            tables.push(ParameterTable {
+                asset,
+                label,
+                origin,
+                table,
+                column,
+                profile,
+            });
+        }
+        Ok(Self { tables })
+    }
+
+    pub(crate) fn bind(
+        &self,
+        label: &str,
+        budget: pcx_play::sound_parameters::BanksBudget,
+    ) -> Result<pcx_play::sound_parameters::Banks, String> {
+        if label.trim().is_empty()
+            || label.contains('\0')
+            || label.len() > budget.metadata_bytes.min(16 << 10)
+        {
+            return Err("sound parameter label/metadata budget or identity failure".into());
+        }
+        let mut owners = self.tables.iter().filter(|source| {
+            source
+                .table
+                .data_rows()
+                .any(|row| row.by_name(&source.column) == Some(label))
+        });
+        let source = owners
+            .next()
+            .ok_or_else(|| format!("sound parameter label is absent: {label}"))?;
+        if owners.next().is_some() {
+            return Err(format!("ambiguous sound parameter label: {label}"));
+        }
+        let profile = source
+            .profile
+            .ok_or_else(|| format!("{}: unsupported sound parameter schema", source.label))?;
+        pcx_play::sound_parameters::Banks::read(
+            &[pcx_play::sound_parameters::Input {
+                asset: ScriptAsset {
+                    label: &source.label,
+                    bytes: &source.asset.bytes,
+                },
+                origin: &source.origin,
+                label_column: &source.column,
+                labels: &[label],
+                profile,
+            }],
+            budget,
+        )
+        .map_err(|e| e.to_string())
+    }
+}
+
 fn identity(
     asset: &pcx_assets::ResolvedAsset,
     edition: &str,

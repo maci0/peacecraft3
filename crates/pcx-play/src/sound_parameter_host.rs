@@ -1,8 +1,30 @@
 use super::{Entry, Error, Failure, ObjectHost};
 use crate::sound_parameters::{Assignment, Bank, Banks, ParameterValues, Parameters};
 use pcx_script::{HandleId, Value};
+pub(super) type Loader = Box<dyn FnMut(&str) -> Result<Banks, String> + Send + Sync>;
 
 impl ObjectHost {
+    pub fn admit_sound_parameter_loader(
+        &mut self,
+        budget: crate::sound_parameters::BanksBudget,
+        loader: impl FnMut(&str) -> Result<Banks, String> + Send + Sync + 'static,
+    ) -> Result<(), Error> {
+        let fail = |problem| self.inner.error("SetSoundParamsFromLabel", problem);
+        if self.sound_parameter_loader.is_some() {
+            return Err(fail(Failure::SoundState(
+                "parameter loader already admitted",
+            )));
+        }
+        let banks = self
+            .sound_parameters
+            .as_mut()
+            .ok_or_else(|| fail(Failure::SoundState("parameter banks required")))?;
+        banks
+            .admit_budget(budget)
+            .map_err(|e| fail(Failure::SoundSource(e.to_string())))?;
+        self.sound_parameter_loader = Some((Box::new(loader), budget));
+        Ok(())
+    }
     pub fn with_sound_parameters(self, bank: Bank) -> Result<Self, Error> {
         self.with_sound_parameter_banks(Banks::single(bank))
     }
@@ -84,6 +106,11 @@ impl ObjectHost {
                 )));
             };
             self.sound_admitted(*id).map_err(|e| fail(e.failure))?;
+            if label.trim().is_empty() || label.contains('\0') {
+                return Err(fail(Failure::SoundState(
+                    "empty or NUL-containing sound parameter label",
+                )));
+            }
             let bank = self
                 .sound_parameters
                 .as_ref()
@@ -91,9 +118,20 @@ impl ObjectHost {
             if label.len() > bank.label_limit() {
                 return Err(fail(Failure::Budget("sound parameter label")));
             }
-            let index = bank
-                .find(label)
-                .ok_or_else(|| fail(Failure::MissingSoundLabel(label.clone())))?;
+            let index = match bank.find(label) {
+                Some(index) => index,
+                None => {
+                    let Some((loader, budget)) = &mut self.sound_parameter_loader else {
+                        return Err(fail(Failure::MissingSoundLabel(label.clone())));
+                    };
+                    let next = loader(label).map_err(|e| fail(Failure::SoundSource(e)))?;
+                    self.sound_parameters
+                        .as_mut()
+                        .ok_or_else(|| fail(Failure::SoundState("parameter banks required")))?
+                        .append_label(next, label, *budget)
+                        .map_err(|e| fail(Failure::SoundSource(e.to_string())))?
+                }
+            };
             let slot = usize::try_from(id.token() - 1).map_err(|_| fail(Failure::Identity))?;
             let (Entry::Sound { parameters, .. } | Entry::FileSound { parameters, .. }) =
                 &mut self.inner.arena[slot]

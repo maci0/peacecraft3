@@ -157,6 +157,43 @@ fn start_admitted_map(
             let mut host = map_startup_host::assemble(ctx, inputs)?;
             Ok::<_, MapStartupError>(match reader {
                 Some(reader) => {
+                    let parameter_reader = Arc::clone(&reader);
+                    let parameter_edition = edition.clone();
+                    let parameter_budget = pcx_play::sound_parameters::BanksBudget {
+                        banks: 32,
+                        table_bytes: 4 << 20,
+                        total_table_bytes: 32 << 20,
+                        coordinates: pcx_slq::CoordinateLimits {
+                            max_row: 10000,
+                            max_column: 256,
+                        },
+                        definitions: 1024,
+                        metadata_bytes: 1 << 20,
+                    };
+                    let mut parameter_sources = None;
+                    let mut remaining_parameters = 128usize;
+                    host.objects_mut().admit_sound_parameter_loader(
+                        parameter_budget,
+                        move |label| {
+                            remaining_parameters = remaining_parameters
+                                .checked_sub(1)
+                                .ok_or("sound parameter source work budget exhausted")?;
+                            if label.len() > 16 << 10 {
+                                return Err("sound parameter label byte budget exceeded".into());
+                            }
+                            parameter_sources
+                                .get_or_insert_with(|| {
+                                    crate::campaign_assets::ParameterSources::read(
+                                        &parameter_reader,
+                                        &parameter_edition,
+                                        parameter_budget,
+                                    )
+                                })
+                                .as_ref()
+                                .map_err(Clone::clone)?
+                                .bind(label, parameter_budget)
+                        },
+                    )?;
                     let sound_reader = Arc::clone(&reader);
                     let sound_edition = edition.clone();
                     let mut remaining_sounds = 128usize;
