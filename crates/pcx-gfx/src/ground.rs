@@ -88,6 +88,8 @@ pub struct DecodedGround {
 #[derive(Clone, Copy, Debug, ShaderType)]
 struct GroundUniform {
     layer_base: [UVec4; 4],
+    boundary_color: Vec4,
+    boundary_bounds: Vec4,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
@@ -97,6 +99,9 @@ pub struct GroundMaterial {
     pub texture: Handle<Image>,
     #[uniform(2)]
     params: GroundUniform,
+    #[texture(3)]
+    #[sampler(4)]
+    boundary_texture: Option<Handle<Image>>,
 }
 
 impl GroundMaterial {
@@ -105,10 +110,33 @@ impl GroundMaterial {
             texture,
             params: GroundUniform {
                 layer_base: pack_layer_base(layer_base),
+                boundary_color: Vec4::ZERO,
+                boundary_bounds: Vec4::ZERO,
             },
+            boundary_texture: None,
         }
     }
 
+    /// Explicit source boundary input; the absent pass has no color contribution.
+    pub fn set_boundary(
+        &mut self,
+        texture: Handle<Image>,
+        bounds: Vec4,
+        rgba: [u8; 4],
+    ) -> Result<(), &'static str> {
+        if !bounds.is_finite() || bounds.z <= 0.0 || bounds.w <= 0.0 {
+            return Err("invalid terrain boundary bounds");
+        }
+        self.boundary_texture = Some(texture);
+        self.params.boundary_bounds = bounds;
+        self.params.boundary_color =
+            Vec4::from_array(rgba.map(|c| f32::from(c) / f32::from(u8::MAX)));
+        Ok(())
+    }
+    pub fn clear_boundary(&mut self) {
+        self.params.boundary_color = Vec4::ZERO;
+        self.boundary_texture = None;
+    }
     #[must_use]
     pub fn layer_base(&self) -> [u32; 16] {
         unpack_layer_base(self.params.layer_base)

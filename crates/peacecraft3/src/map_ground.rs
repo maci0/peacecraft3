@@ -99,6 +99,7 @@ pub fn install(app: &mut App) {
     app.add_plugins(GroundMaterialPlugin)
         .insert_resource(NoOcclusionPass);
     register_publisher(app);
+    crate::campaign_boundary::install(app);
 }
 
 /// Install ground publication with application budgets that follow map delivery.
@@ -168,7 +169,7 @@ type GroundAssets<'w> = (
     ResMut<'w, Assets<GroundMaterial>>,
 );
 
-fn publish_admitted_ground(
+pub(crate) fn publish_admitted_ground(
     mut commands: Commands,
     requests: Res<MapRequests>,
     sources: Res<SelectedMapSources>,

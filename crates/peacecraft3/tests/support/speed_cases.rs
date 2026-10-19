@@ -1,7 +1,7 @@
 //! A current-speed request must not invent a rate or admit a different one.
 use super::*;
 use pcx_play::map_startup_host::SettingsObservation;
-const EXTRA: &str = "type mapflag extends handle
+pub(super) const EXTRA: &str = "type mapflag extends handle
 constant native ConvertMapFlag takes integer i returns mapflag
 native SetMapFlag takes mapflag flag, boolean value returns nothing
 native IsMapFlagSet takes mapflag flag returns boolean

@@ -55,6 +55,7 @@ pub struct PresentationState {
     pub ui_enabled: Option<bool>,
     pub control_enabled: Option<bool>,
     pub interface_visible: Option<bool>,
+    pub world_fog_boundary: Option<bool>,
     pub filter: Option<CineFilter>,
     texture: Option<String>,
     blend: Option<HandleId>,
@@ -69,6 +70,7 @@ pub struct PresentationState {
 }
 const CONTRACTS: &[(&str, &[&str])] = &[
     ("EnableUserUI", &["boolean"]),
+    ("EnableWorldFogBoundary", &["boolean"]),
     ("EnableUserControl", &["boolean"]),
     ("ShowInterface", &["boolean", "real"]),
     ("SetCineFilterTexture", &["string"]),
@@ -208,6 +210,16 @@ impl ObjectHost {
             let state = self.presentation.as_mut().expect("admitted");
             state.interface_visible = Some(*show);
             state.control_enabled = Some(*show);
+            return Ok(Value::Null);
+        }
+        if name == "EnableWorldFogBoundary" {
+            let [Value::Bool(enabled)] = args else {
+                return Err(fail("expected world fog boundary boolean"));
+            };
+            self.presentation
+                .as_mut()
+                .expect("admitted")
+                .world_fog_boundary = Some(*enabled);
             return Ok(Value::Null);
         }
         if name == "EnableUserControl" {

@@ -120,6 +120,7 @@ use std::fmt;
 
 pub use pcx_map::{Corner, Terrain};
 
+pub mod boundary;
 pub mod cliff;
 pub mod cliff_wall;
 pub mod ground;

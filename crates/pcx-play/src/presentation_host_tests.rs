@@ -365,3 +365,49 @@ fn occlusion_capability_checks_optional_native_source_and_signature() {
     );
     assert!(h.admit_no_occlusion_pass().is_err());
 }
+
+#[test]
+fn world_fog_boundary_switch_requires_its_declaration_and_preserves_other_state() {
+    let native = "native EnableWorldFogBoundary takes boolean flag returns nothing\n";
+    let common = format!("{COMMON}{native}");
+    let mut h = host(&common, "// map");
+    h.admit_presentation(64).unwrap();
+    assert_eq!(h.presentation().unwrap().world_fog_boundary, None);
+    let handles = h.inner().handles();
+    for enabled in [true, false, true] {
+        assert_eq!(
+            h.native("EnableWorldFogBoundary", &[Value::Bool(enabled)])
+                .unwrap(),
+            Value::Null
+        );
+        assert_eq!(h.presentation().unwrap().world_fog_boundary, Some(enabled));
+        assert_eq!(h.presentation().unwrap().ui_enabled, None);
+    }
+    for args in [
+        vec![],
+        vec![Value::Null],
+        vec![Value::Int(0)],
+        vec![Value::Bool(false), Value::Bool(false)],
+    ] {
+        assert!(h.native("EnableWorldFogBoundary", &args).is_err());
+        assert_eq!(h.presentation().unwrap().world_fog_boundary, Some(true));
+    }
+    assert_eq!(h.inner().handles(), handles);
+    let mut h = host(COMMON, "// map");
+    h.admit_presentation(64).unwrap();
+    assert!(
+        h.native("EnableWorldFogBoundary", &[Value::Bool(false)])
+            .is_err()
+    );
+    for (c, map) in [
+        (COMMON.to_owned(), native.to_owned()),
+        (common.clone(), native.to_owned()),
+        (
+            common.replace("takes boolean flag", "takes integer flag"),
+            "// map".into(),
+        ),
+    ] {
+        let mut h = host(&c, &map);
+        assert!(h.admit_presentation(64).is_err());
+    }
+}

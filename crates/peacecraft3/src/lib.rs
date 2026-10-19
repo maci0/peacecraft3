@@ -5,6 +5,7 @@
 //! successful admission and caller-supplied host inputs.
 
 mod campaign_assets;
+pub mod campaign_boundary;
 mod campaign_cache;
 pub mod campaign_camera;
 pub mod campaign_presentation;

@@ -3,11 +3,15 @@ import bevy_pbr::render::view_transformations::position_world_to_clip;
 
 struct GroundUniform {
     layer_base: array<vec4<u32>, 4>,
+    boundary_color: vec4<f32>,
+    boundary_bounds: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var ground_texture: texture_2d_array<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(1) var ground_sampler: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(2) var<uniform> ground: GroundUniform;
+@group(constants::MATERIAL_BIND_GROUP) @binding(3) var boundary_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(4) var boundary_sampler: sampler;
 
 struct VertexIn {
     @builtin(instance_index) instance_index: u32,
@@ -20,6 +24,7 @@ struct VertexOut {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) selectors: vec4<u32>,
+    @location(2) world_xy: vec2<f32>,
 }
 
 @vertex
@@ -31,6 +36,7 @@ fn vertex(vertex: VertexIn) -> VertexOut {
         vec4<f32>(vertex.position, 1.0),
     );
     out.position = position_world_to_clip(world_position.xyz);
+    out.world_xy = vec2<f32>(world_position.x, -world_position.z);
     out.uv = vertex.uv;
     out.selectors = vertex.selectors;
     return out;
@@ -69,5 +75,10 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     color = over(color, sample_selector(in.selectors.z, uv));
     color = over(color, sample_selector(in.selectors.y, uv));
     color = over(color, sample_selector(in.selectors.x, uv));
+    if ground.boundary_color.a > 0.0 {
+        let uv = (in.world_xy - ground.boundary_bounds.xy) / ground.boundary_bounds.zw;
+        let coverage = textureSample(boundary_texture, boundary_sampler, uv).r;
+        color = vec4<f32>(mix(color.rgb, ground.boundary_color.rgb, coverage * ground.boundary_color.a), 1.0);
+    }
     return vec4<f32>(color.rgb, 1.0);
 }

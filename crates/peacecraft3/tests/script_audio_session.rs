@@ -23,6 +23,8 @@ mod button_actions;
 mod consumer_cases;
 #[path = "support/map_fixtures.rs"]
 mod fixtures;
+#[path = "support/ground_fixtures.rs"]
+mod ground_fixtures;
 #[path = "support/mpq_extraction_cases.rs"]
 mod mpq_extraction_cases;
 #[cfg(not(target_arch = "wasm32"))]

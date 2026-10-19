@@ -204,6 +204,9 @@ impl ObjectHost {
         self.startup_version = Some(version);
         Ok(())
     }
+    pub fn startup_settings(&self) -> Option<StartupSettings> {
+        self.startup_settings
+    }
     /// Withdraw version input without changing independently supplied settings.
     pub fn invalidate_startup_version(&mut self) {
         self.startup_version = None;

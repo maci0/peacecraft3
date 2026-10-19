@@ -515,9 +515,9 @@ fn ground_edge_and_minification_stay_inside_the_variation_cell() {
         Msaa::Off,
     ));
     app.world_mut()
-        .spawn((Mesh3d(wide), MeshMaterial3d(material.clone())));
+        .spawn((Mesh3d(wide.clone()), MeshMaterial3d(material.clone())));
     app.world_mut()
-        .spawn((Mesh3d(pixel), MeshMaterial3d(material)));
+        .spawn((Mesh3d(pixel), MeshMaterial3d(material.clone())));
 
     for frame in 0..48 {
         if frame == 24 {
@@ -569,6 +569,159 @@ fn ground_edge_and_minification_stay_inside_the_variation_cell() {
         "{minified:?}"
     );
     assert!((edge[1] - minified[1]).abs() > 0.04);
+    let _ = capture;
+    // A uniform source mask isolates the material's blend and toggle at each extent.
+    let mut mask = Image::new(
+        bevy::render::render_resource::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        vec![255],
+        TextureFormat::R8Unorm,
+        bevy::asset::RenderAssetUsages::default(),
+    );
+    mask.sampler = ImageSampler::linear();
+    let mask = app.world_mut().resource_mut::<Assets<Image>>().add(mask);
+    let rgba = [17, 43, 71, 128];
+    for (width, height) in [(64, 32), (128, 64), (3840, 2160)] {
+        let old: Vec<_> = app
+            .world_mut()
+            .query_filtered::<Entity, With<Readback>>()
+            .iter(app.world())
+            .collect();
+        for entity in old {
+            app.world_mut().despawn(entity);
+        }
+        let mut image = Image::new_target_texture(width, height, TextureFormat::Rgba16Float, None);
+        image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
+        let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        let mut targets = app
+            .world_mut()
+            .query_filtered::<&mut RenderTarget, With<Camera3d>>();
+        *targets.single_mut(app.world_mut()).unwrap() = RenderTarget::Image(target.clone().into());
+        app.world_mut().spawn(Readback::texture(target)).observe(
+            |event: On<ReadbackComplete>, mut c: ResMut<Capture>| {
+                c.completed += 1;
+                c.last.clone_from(&event.data);
+            },
+        );
+        for enabled in [true, false] {
+            {
+                let mut materials = app
+                    .world_mut()
+                    .resource_mut::<Assets<pcx_gfx::GroundMaterial>>();
+                let mut material = materials.get_mut(&material).unwrap();
+                if enabled {
+                    material
+                        .set_boundary(mask.clone(), Vec4::new(0.0, 0.0, 1.0, 1.0), rgba)
+                        .unwrap();
+                } else {
+                    material.clear_boundary();
+                }
+            }
+            let before = app.world().resource::<Capture>().completed;
+            for _ in 0..24 {
+                app.update();
+                app.world()
+                    .resource::<RenderDevice>()
+                    .wgpu_device()
+                    .poll(PollType::Wait {
+                        submission_index: None,
+                        timeout: Some(Duration::from_secs(10)),
+                    })
+                    .unwrap();
+            }
+            let capture = app.world().resource::<Capture>();
+            assert!(capture.completed > before);
+            let stride = capture.last.len() / height as usize;
+            let actual = sample(
+                &capture.last,
+                stride,
+                width as usize * 33 / 128,
+                height as usize / 2,
+            );
+            for channel in 0..3 {
+                let alpha = if enabled {
+                    f32::from(rgba[3]) / 255.0
+                } else {
+                    0.0
+                };
+                let expected =
+                    center[channel] * (1.0 - alpha) + f32::from(rgba[channel]) / 255.0 * alpha;
+                assert!(
+                    (actual[channel] - expected).abs() < 2.0 / 255.0,
+                    "{width}x{height} enabled={enabled} actual={actual:?} expected={expected}"
+                );
+            }
+        }
+    }
+    // Rotate the test sheet into the actual ground plane and check source north/south.
+    {
+        let mut meshes = app.world_mut().resource_mut::<Assets<Mesh>>();
+        let mut mesh = meshes.get_mut(&wide).unwrap();
+        let VertexAttributeValues::Float32x3(positions) =
+            mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION).unwrap()
+        else {
+            panic!("ground positions");
+        };
+        for p in positions {
+            let [x, y, _] = *p;
+            *p = [x, 0.0, -y];
+        }
+    }
+    let mut camera = app
+        .world_mut()
+        .query_filtered::<&mut Transform, With<Camera3d>>();
+    *camera.single_mut(app.world_mut()).unwrap() =
+        Transform::from_xyz(0.0, 8.0, 0.0).looking_at(Vec3::ZERO, Vec3::NEG_Z);
+    let mut mask = Image::new(
+        bevy::render::render_resource::Extent3d {
+            width: 1,
+            height: 2,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        vec![0, 255],
+        TextureFormat::R8Unorm,
+        bevy::asset::RenderAssetUsages::default(),
+    );
+    mask.sampler = ImageSampler::linear();
+    let mask = app.world_mut().resource_mut::<Assets<Image>>().add(mask);
+    app.world_mut()
+        .resource_mut::<Assets<pcx_gfx::GroundMaterial>>()
+        .get_mut(&material)
+        .unwrap()
+        .set_boundary(mask, Vec4::new(-1.9, -0.9, 1.8, 1.8), rgba)
+        .unwrap();
+    for _ in 0..24 {
+        app.update();
+        app.world()
+            .resource::<RenderDevice>()
+            .wgpu_device()
+            .poll(PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(10)),
+            })
+            .unwrap();
+    }
+    let capture = app.world().resource::<Capture>();
+    let stride = capture.last.len() / 2160;
+    let north = sample(&capture.last, stride, 3840 * 33 / 128, 2160 / 4);
+    let south = sample(&capture.last, stride, 3840 * 33 / 128, 2160 * 3 / 4);
+    for channel in 0..3 {
+        let alpha = f32::from(rgba[3]) / 255.0;
+        let expected = edge[channel] * (1.0 - alpha) + f32::from(rgba[channel]) / 255.0 * alpha;
+        assert!(
+            (north[channel] - expected).abs() < 2.0 / 255.0,
+            "north={north:?} expected={expected}"
+        );
+        assert!(
+            (south[channel] - edge[channel]).abs() < 2.0 / 255.0,
+            "south={south:?}"
+        );
+    }
 }
 
 fn full_uv_quad(center: [f32; 3], half: [f32; 2], selectors: [u32; 4]) -> Mesh {

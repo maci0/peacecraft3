@@ -4,6 +4,8 @@ mod admission;
 mod binding;
 #[path = "support/map_fixtures.rs"]
 mod fixtures;
+#[path = "support/ground_fixtures.rs"]
+mod ground_fixtures;
 
 pub use peacecraft3::map_requests;
 #[path = "../src/button_actions.rs"]

@@ -2919,3 +2919,13 @@ repeated, and the public site package was not rebuilt.
 - [ ] Other map flags, initial flag admission, actual speed changes, source-qualified
   pacing, playable first chapter and original/native/WASM parity remain open.
   See [startup settings](docs/re-notes/script-startup-settings.md).
+
+
+### 2026-10-19 — campaign terrain fog boundary
+
+- [~] Executed world-boundary switches now reach a source-derived terrain mask and
+  profile color in the ground material, including explicit removal. The pass
+  requires matching published sources and explicitly disabled fog/mask state.
+  Full fog of war, actor boundary colors, initial state, native sampler/framebuffer
+  equivalence and first-chapter playability remain open. See
+  [world fog boundary](docs/re-notes/script-world-fog-boundary.md).

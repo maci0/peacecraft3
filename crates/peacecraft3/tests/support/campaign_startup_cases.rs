@@ -1248,3 +1248,6 @@ mod occlusion_cases;
 
 #[path = "speed_cases.rs"]
 mod speed_cases;
+
+#[path = "fog_boundary_cases.rs"]
+mod fog_boundary_cases;
