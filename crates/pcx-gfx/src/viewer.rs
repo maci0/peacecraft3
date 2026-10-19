@@ -224,9 +224,8 @@ pub fn rgba_image(tex: &LoadedTexture) -> Image {
 /// and column across the whole surface, which is what streaked ice and water
 /// looked like.
 ///
-/// The filter is left at its default: nothing in the format flags says which
-/// filter to use, and inventing one would be a change the original does not ask
-/// for.
+/// Wrap flags change addressing only, preserving the application's default
+/// image filtering rather than the descriptor's different defaults.
 #[must_use]
 pub fn sampler_for_texture_flags(flags: u32) -> bevy::image::ImageSampler {
     use bevy::image::ImageSampler as S;
@@ -248,7 +247,7 @@ pub fn sampler_for_texture_flags(flags: u32) -> bevy::image::ImageSampler {
     S::Descriptor(ImageSamplerDescriptor {
         address_mode_u: wrap(flags & pcx_mdl::TEXTURE_WRAP_WIDTH != 0),
         address_mode_v: wrap(flags & pcx_mdl::TEXTURE_WRAP_HEIGHT != 0),
-        ..ImageSamplerDescriptor::default()
+        ..bevy::image::ImagePlugin::default().default_sampler
     })
 }
 
@@ -1148,7 +1147,7 @@ mod tests {
 #[cfg(test)]
 mod sampler_tests {
     use super::*;
-    use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
+    use bevy::image::{ImageAddressMode, ImageSampler};
 
     fn modes(flags: u32) -> (ImageAddressMode, ImageAddressMode) {
         match sampler_for_texture_flags(flags) {
@@ -1189,17 +1188,26 @@ mod sampler_tests {
         ));
     }
 
-    /// The filter is not invented from a flag word.
+    /// Enabling either repeat axis must not change the default image filtering.
     #[test]
-    fn the_filter_stays_at_its_default() {
-        let d = ImageSamplerDescriptor::default();
-        match sampler_for_texture_flags(0x3) {
-            ImageSampler::Descriptor(got) => {
-                assert_eq!(got.mag_filter, d.mag_filter);
-                assert_eq!(got.min_filter, d.min_filter);
-                assert_eq!(got.mipmap_filter, d.mipmap_filter);
+    fn wrapping_preserves_application_filtering() {
+        let d = bevy::image::ImagePlugin::default().default_sampler;
+        for flags in [
+            pcx_mdl::TEXTURE_WRAP_WIDTH,
+            pcx_mdl::TEXTURE_WRAP_HEIGHT,
+            pcx_mdl::TEXTURE_WRAP_WIDTH | pcx_mdl::TEXTURE_WRAP_HEIGHT,
+        ] {
+            match sampler_for_texture_flags(flags) {
+                ImageSampler::Descriptor(got) => {
+                    assert_eq!(got.mag_filter, d.mag_filter);
+                    assert_eq!(got.min_filter, d.min_filter);
+                    assert_eq!(got.mipmap_filter, d.mipmap_filter);
+                    assert_eq!(got.anisotropy_clamp, d.anisotropy_clamp);
+                    assert_eq!(got.lod_min_clamp, d.lod_min_clamp);
+                    assert_eq!(got.lod_max_clamp, d.lod_max_clamp);
+                }
+                other => panic!("{other:?}"),
             }
-            other => panic!("{other:?}"),
         }
     }
 }

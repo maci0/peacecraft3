@@ -3090,3 +3090,17 @@ repeated, and the public site package was not rebuilt.
   original/native/WASM rendered/4K parity remain open. Human01 is not playable;
   the original baseline gate is unchanged. See
   [initialization ownership](docs/re-notes/script-unit-world.md#initialization-ownership-transfers-2026-10-19).
+
+
+### 2026-10-19 — preserve image filtering when applying texture wrap
+
+- [x] The shared TEXS sampler now changes addressing without accidentally
+  replacing the application's linear filtering with nearest-neighbour defaults.
+  Source wrap flags, image pixels, alpha and geometry remain unchanged.
+- [x] 53 graphics and 411 menu tests, strict native/WASM checks and both full
+  builds pass. Fresh native TFT/RoC/TFT captures at 1024×768 and 3840×2160 show
+  smoother repeating textures and unchanged RoC geometry.
+- [ ] The fresh browser adapter times out before menu readiness at 1024×768;
+  it is stopped without retry or subsequent 4K attempt. Rendered WASM, rain,
+  transparency and full original/native/WASM equality remain open. The public
+  site is unchanged. See [texture filtering](docs/re-notes/menu-texture-filtering.md).
