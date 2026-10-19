@@ -1281,6 +1281,11 @@ Human01 candidate now reaches its initialization action and refuses
 input preparation and the live world, rendering and controls remain open. See
 [campaign runtime](docs/re-notes/campaign-runtime.md).
 
+Explicit session-local player input now reaches `GetLocalPlayer` and the
+executed camera branch using the same arena identity as `Player`. This removes
+one required camera-helper gap; automatic first-chapter bootstrap and the last
+observed `SetCampaignMenuRace` initialization refusal remain open.
+
 Remaining work includes native behavior and handle lifetimes, actual trigger
 registration/delivery and VM callbacks, timer/event ordering, the `BJ`/`Blz`
 surface, complete localization substitution, and application game-loop wiring.

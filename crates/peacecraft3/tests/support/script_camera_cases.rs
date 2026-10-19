@@ -4,6 +4,7 @@ use peacecraft3::campaign_camera::{CampaignCamera, CampaignSceneCamera};
 use peacecraft3::map_ground::GroundPublication;
 
 const CAMERA_COMMON: &str = "
+constant native GetLocalPlayer takes nothing returns player
 native CameraSetupApplyForceDuration takes camerasetup which, boolean pan, real duration returns nothing
 globals
 constant camerafield CAMERA_FIELD_TARGET_DISTANCE = ConvertCameraField(11)
@@ -54,6 +55,16 @@ fn app() -> App {
 }
 
 fn deliver_camera(app: &mut App, script: &str, config: &[u8], revision: u64) {
+    deliver_camera_for_player(app, script, config, revision, None);
+}
+
+fn deliver_camera_for_player(
+    app: &mut App,
+    script: &str,
+    config: &[u8],
+    revision: u64,
+    local_player: Option<i32>,
+) {
     let mut f = fixture(script);
     f.common = format!("{COMMON}{CAMERA_COMMON}").into_bytes();
     f.rebuild();
@@ -69,6 +80,7 @@ fn deliver_camera(app: &mut App, script: &str, config: &[u8], revision: u64) {
     assert!(outcome.result.is_ok(), "{:?}", outcome.result);
     let mut inputs = host_inputs(Arc::clone(&requests.bindings.as_ref().unwrap().catalog.0));
     inputs.budgets.camera_setup_fields = 7;
+    inputs.post_config.local_player = local_player;
     let request = requests.selected_map_request().unwrap();
     app.insert_resource(requests)
         .insert_resource(sources)
@@ -221,5 +233,34 @@ pub fn invalid_source_clip_does_not_create_a_default_camera() {
 pub fn browser_campaign_camera_gate() -> u32 {
     published_camera_uses_executed_fields_and_preserves_session_ownership();
     invalid_source_clip_does_not_create_a_default_camera();
-    2
+    selected_local_player_controls_the_published_camera_branch();
+    3
+}
+
+#[test]
+pub fn selected_local_player_controls_the_published_camera_branch() {
+    let script = SCRIPT.replace(
+        "call CameraSetupApplyForceDuration(setup, true, 0.0)",
+        "if GetLocalPlayer() == Player(4) then\ncall CameraSetupApplyForceDuration(setup, true, 0.0)\nendif",
+    );
+    for (number, active) in [(4, true), (5, false)] {
+        let mut app = app();
+        deliver_camera_for_player(&mut app, &script, b"[Camera]\nNearZ=3,9", 1, Some(number));
+        assert!(
+            app.world()
+                .resource::<CampaignStartup>()
+                .last_error
+                .is_none()
+        );
+        assert_eq!(app.world().resource::<CampaignCamera>().active(), active);
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let host = session.host().unwrap();
+        let local = pcx_script::Host::native(host, "GetLocalPlayer", &[]).unwrap();
+        assert_eq!(
+            pcx_script::Host::native(host, "GetPlayerId", &[local]).unwrap(),
+            Value::Int(number)
+        );
+    }
 }

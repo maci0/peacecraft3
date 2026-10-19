@@ -148,6 +148,8 @@ pub struct ControllerObservation {
 /// `None` skips that admission. It does not install a lobby, speed or research default.
 #[derive(Clone, Debug, Default)]
 pub struct PostConfigObservations {
+    /// This client's explicit source slot; not inferred from participants or controllers.
+    pub local_player: Option<i32>,
     pub participants: Option<Vec<i32>>,
     pub settings: Option<SettingsObservation>,
     pub version_global: Option<String>,
@@ -156,6 +158,7 @@ pub struct PostConfigObservations {
 }
 
 pub struct ResolvedObservations {
+    pub local_player: Option<i32>,
     pub participants: Option<Vec<i32>>,
     pub settings: Option<StartupSettings>,
     pub version: Option<HandleId>,
@@ -227,6 +230,9 @@ impl MapStartupHost {
         context: &Arc<ParsedMapContext>,
         observations: &ResolvedObservations,
     ) -> Result<(), MapStartupError> {
+        if let Some(number) = observations.local_player {
+            self.objects_mut().admit_local_player(context, number)?;
+        }
         if let Some(numbers) = &observations.participants {
             let mut players = Vec::new();
             players
@@ -320,6 +326,7 @@ pub fn resolve_observations(
         controllers = Some(resolved);
     }
     Ok(ResolvedObservations {
+        local_player: observations.local_player,
         participants: observations.participants.clone(),
         settings,
         version,

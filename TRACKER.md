@@ -2685,3 +2685,17 @@ repeated, and the public site package was not rebuilt.
   targeted WASI cases. A bounded native application startup reaches its Vulkan
   window without a scheduling panic; this is not rendered campaign acceptance.
   Receipts are local in `.scratch/campaign-camera-root-20261019/`.
+### 2026-10-19 — campaign local-player camera branch
+
+- [x] Explicit post-config local slot reaches the production Host and published VM;
+  `GetLocalPlayer` aliases the ordinary lazy `Player` identity. No slot/controller
+  or participation default is guessed.
+- [x] Exact signature, source, domain and context checks preserve opt-in behavior.
+  Tests cover both sides of the application camera branch and session isolation.
+- [x] Native checks pass: 473 Host-library, 20 application-library and 115
+  map/session tests; explicit original-input ignores remain. Strict native/WASM
+  lint and builds, 23 actual Cargo WASM cases and five targeted WASI cases pass.
+  Receipts are local in `.scratch/campaign-local-player-root-20261019/`.
+- [ ] First Human campaign remains unfinished: automatic Host inputs, the last
+  observed `SetCampaignMenuRace` refusal and later mission natives, actors and
+  controls. Original/native/WASM gameplay and visual parity remain open.

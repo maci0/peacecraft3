@@ -69,3 +69,8 @@ It binds an instant script setup to a real Bevy perspective camera over matching
 admitted terrain, with a selected-source clip receipt and isolated render layer.
 This supplies a live scene caller for supported published sessions; it does not
 remove the missing automatic startup-input or mission-native gates for Human01.
+
+An explicit post-config local-player selection now supports `GetLocalPlayer`
+on the existing player arena. The application camera test follows the same
+identity branch used by the loaded Blizzard camera helper. No local slot is
+chosen automatically; see [player setup](script-player-setup.md#explicit-local-client-player).

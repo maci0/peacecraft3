@@ -503,3 +503,34 @@ and reaches `TimerStart` in Blizzard.j (`447183..447286`; common.j
 `61987..62103`). The newly executed stock timer shares the existing arena.
 This is assignment retention, not stock inventory or restock execution;
 see [the stock slice](script-stock-slots.md).
+
+## Explicit local client player
+
+The selected common.j declares the constant, no-argument `GetLocalPlayer`
+returning `player`. The selected Blizzard.j camera helper compares that handle
+with its target player before applying a setup. This is shipped-script evidence;
+the recreation implements that observable branch without inferring a client
+from controller flags, participation, or a particular slot number.
+
+`PostConfigObservations.local_player` optionally supplies this client's slot
+after config. Admission checks the exact map context, source slot domain,
+native signature and common source of the player type chain and `Player`.
+Absent input keeps the native unsupported. The first query uses the existing
+lazy `Player` allocator; subsequent `Player` and `GetLocalPlayer` calls return
+the same arena identity. Selecting a slot does not assign team, controller,
+participation or other player settings. Invalid admission preserves an earlier
+choice, and a replacement Host starts without one.
+
+Synthetic tests exercise lazy/existing identities, declaration and context
+refusals, malformed arguments and session isolation. The application factory
+test supplies different local slots and checks the published camera consumer
+for both sides of the identity comparison. This does not supply an automatic
+first-chapter bootstrap or prove original-client rendering or multiplayer policy.
+
+Verification: 473 native Host-library, 20 application-library and 115 map/session
+tests pass, with original-input ignores retained. Strict native/WASM lint and
+application builds pass. The compiled Cargo WASM integration module executes 23
+cases, including three camera cases; the five local-player Host/VM tests also
+execute under bounded WASI. This is component/VM execution, not rendered
+gameplay. Local command receipts are in
+`.scratch/campaign-local-player-root-20261019/`.

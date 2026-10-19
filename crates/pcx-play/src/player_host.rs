@@ -88,6 +88,7 @@ pub(super) struct Players {
     slot_states_admitted: bool,
     controllers: Option<controllers::Controllers>,
     current_research: Option<Vec<ResearchObservation>>,
+    local_player: Option<i32>,
     rows: Vec<PlayerSettings>,
 }
 const SET_PLAYER_STATE: &str = "SetPlayerState";
@@ -210,6 +211,7 @@ impl ObjectHost {
             slot_states_admitted: false,
             controllers: None,
             current_research: None,
+            local_player: None,
             rows: Vec::new(),
         });
         Ok(self)
@@ -555,6 +557,60 @@ impl ObjectHost {
     pub fn player_context(&self) -> Option<&Arc<ParsedMapContext>> {
         self.players.as_ref().map(|p| p.source.context())
     }
+    /// Select this client's source slot without changing participation or controller setup.
+    /// The normal `Player` path creates its canonical identity lazily on the first query.
+    pub fn admit_local_player(
+        &mut self,
+        context: &Arc<ParsedMapContext>,
+        number: i32,
+    ) -> Result<(), Error> {
+        let name = "GetLocalPlayer";
+        let fail = |reason| self.inner.error(name, reason);
+        if self
+            .player_context()
+            .is_none_or(|selected| !Arc::ptr_eq(selected, context))
+        {
+            return Err(fail(Failure::PlayerState(
+                "local player map context is not admitted",
+            )));
+        }
+        Self::contract(&self.inner, name, &[], "player", true, Some("player"))?;
+        let natives = self.inner.program.natives();
+        let source = &natives
+            .get("Player")
+            .ok_or_else(|| fail(Failure::Signature))?
+            .source;
+        if &natives.get(name).expect("checked contract").source != source {
+            return Err(fail(Failure::Source));
+        }
+        let mut kind = "player";
+        for _ in 0..=self.inner.program.types().count() {
+            if kind == "handle" {
+                break;
+            }
+            let ty = self
+                .inner
+                .program
+                .types()
+                .find(|ty| ty.name == kind)
+                .ok_or_else(|| fail(Failure::Signature))?;
+            if &ty.source != source {
+                return Err(fail(Failure::Source));
+            }
+            kind = &ty.parent;
+        }
+        if kind != "handle" {
+            return Err(fail(Failure::Signature));
+        }
+        if usize::try_from(number)
+            .ok()
+            .is_none_or(|n| n >= self.players.as_ref().expect("checked context").slots)
+        {
+            return Err(fail(Failure::OutsideDomain(number)));
+        }
+        self.players.as_mut().expect("checked context").local_player = Some(number);
+        Ok(())
+    }
     pub fn player_settings(&self, identity: HandleId) -> Result<&PlayerSettings, Error> {
         let at = self.player_index(&Value::Handle(identity), "players")?;
         self.players
@@ -633,6 +689,15 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         let players = self.players.as_ref()?;
+        if name == "GetLocalPlayer" {
+            let number = players.local_player?;
+            return Some(if args.is_empty() {
+                self.apply_player("Player", &[Value::Int(number)])
+                    .map_err(|error| self.inner.error(name, error.failure))
+            } else {
+                Err(self.inner.error(name, Failure::PlayerArguments))
+            });
+        }
         if name == SET_PLAYER_STATE {
             players.state_requests.as_ref()?;
             return Some(self.request_player_state(args));
