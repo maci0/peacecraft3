@@ -782,3 +782,210 @@ pub fn failed_parameter_index_is_not_read_repeatedly_on_the_published_host() {
     assert!(call(&mut app, "late_parameters").is_err());
     assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), after);
 }
+
+fn label_assets() -> BTreeMap<String, Reply> {
+    let mut assets = parameter_assets();
+    let table = String::from_utf8(parameter_table(false)).unwrap();
+    let mut table = table.strip_suffix("E\r\n").unwrap().to_owned();
+    table.push_str("C;Y1;X12;K\"DirectoryBase\"\r\nC;Y1;X13;K\"FileNames\"\r\nC;Y2;X12;K\"Media\"\r\nC;Y2;X13;K\"voice.wav\"\r\nC;Y3;X12;K\"Media\"\r\nC;Y3;X13;K\"other.wav\"\r\nE\r\n");
+    assets.insert(
+        "UI/SoundInfo/Arbitrary.slk".into(),
+        Reply::Bytes(table.into_bytes()),
+    );
+    assets.insert(
+        "UI/SoundInfo/Speech.slk".into(),
+        Reply::Bytes(
+            String::from_utf8(parameter_table(true))
+                .unwrap()
+                .replace("Dialogue/", "Dialogue")
+                .into_bytes(),
+        ),
+    );
+    assets.insert("UI/SoundInfo/OtherFormat.slk".into(), Reply::Bytes(
+        b"ID;PWXL;N;E\r\nC;Y1;X1;K\"SoundLabel\"\r\nC;Y1;X2;K\"MIDIFileName\"\r\nC;Y1;X3;K\"Volume\"\r\nC;Y2;X1;K\"Speech\"\r\nC;Y2;X2;K\"other.mid\"\r\nC;Y2;X3;K\"17\"\r\nE\r\n".to_vec()));
+    assets.insert("Media/voice.wav".into(), Reply::Bytes(waveform(23)));
+    assets.insert("Media/other.wav".into(), Reply::Bytes(waveform(37)));
+    assets.insert("Dialogue/line.data".into(), Reply::Bytes(waveform(41)));
+    assets
+}
+const LABEL_SCRIPT: &str = r#"
+globals
+sound first=null
+sound encoded=null
+endglobals
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+set first=CreateSoundFromLabel("Vo"+"ice",true,false,true,-7,91)
+set encoded=CreateMIDISound("Speech",3,5)
+call StartSound(first)
+call StartSound(encoded)
+endfunction
+function apply_label_parameters takes nothing returns nothing
+call SetSoundParamsFromLabel(first,"Voice")
+endfunction
+function repeat_label takes nothing returns sound
+return CreateSoundFromLabel("Voice",false,false,false,0,0)
+endfunction
+function later_label takes nothing returns sound
+return CreateSoundFromLabel("Other",false,false,false,0,0)
+endfunction
+function missing_label takes nothing returns sound
+return CreateSoundFromLabel("Missing",false,false,false,0,0)
+endfunction
+"#;
+fn labelled(app: &mut App, global: &str) -> (String, Vec<u8>, i32, i32) {
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let Value::Handle(id) = session.global(global).unwrap() else {
+        panic!("sound handle")
+    };
+    let state = session.host().unwrap().objects().sound_state(id).unwrap();
+    (
+        state.resource.label().into(),
+        state.resource.bytes().to_vec(),
+        state.fade_in_rate,
+        state.fade_out_rate,
+    )
+}
+#[test]
+pub fn executed_label_constructors_share_sources_and_keep_existing_sounds() {
+    let mut app = app();
+    let reads = deliver(&mut app, LABEL_SCRIPT, label_assets(), 1);
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none(),
+        "{:?}",
+        app.world().resource::<CampaignStartup>().last_error
+    );
+    assert_eq!(
+        labelled(&mut app, "first"),
+        ("Voice".into(), waveform(23), -7, 91)
+    );
+    assert_eq!(
+        labelled(&mut app, "encoded"),
+        ("Speech".into(), waveform(41), 3, 5)
+    );
+    let indexed_reads = reads.load(std::sync::atomic::Ordering::SeqCst);
+    call(&mut app, "apply_label_parameters").unwrap();
+    assert_eq!(
+        reads.load(std::sync::atomic::Ordering::SeqCst),
+        indexed_reads,
+        "parameter assignment reuses the constructor's source index"
+    );
+    assert_eq!(assignment(&mut app, "first"), ("Voice".into(), 83));
+    let before = reads.load(std::sync::atomic::Ordering::SeqCst);
+    let a = call(&mut app, "repeat_label").unwrap();
+    let b = call(&mut app, "repeat_label").unwrap();
+    assert_ne!(a, b);
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), before);
+    call(&mut app, "later_label").unwrap();
+    let after = reads.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(after, before + 1);
+    call(&mut app, "later_label").unwrap();
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), after);
+    assert_eq!(labelled(&mut app, "first").1, waveform(23));
+}
+#[test]
+pub fn failed_label_source_replacements_preserve_the_old_reader_and_sounds() {
+    let mut app = app();
+    deliver(&mut app, LABEL_SCRIPT, label_assets(), 1);
+    let witness = app
+        .world()
+        .resource::<MapScriptSession<MapStartupHost>>()
+        .session_witness()
+        .unwrap();
+    for (i, reply) in [
+        Reply::Missing,
+        Reply::Bytes(b"broken wave".to_vec()),
+        Reply::Bytes(vec![0; (64 << 20) + 1]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut assets = label_assets();
+        assets.insert("Media/voice.wav".into(), reply);
+        assets.insert("Media/other.wav".into(), Reply::Bytes(waveform(99)));
+        deliver(&mut app, LABEL_SCRIPT, assets, i as u64 + 2);
+        assert!(
+            app.world()
+                .resource::<CampaignStartup>()
+                .last_error
+                .is_some()
+        );
+        assert!(std::sync::Weak::ptr_eq(
+            &witness,
+            &app.world()
+                .resource::<MapScriptSession<MapStartupHost>>()
+                .session_witness()
+                .unwrap()
+        ));
+        let Value::Handle(id) = call(&mut app, "later_label").unwrap() else {
+            panic!("sound")
+        };
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .sound_state(id)
+                .unwrap()
+                .resource
+                .bytes(),
+            waveform(37)
+        );
+    }
+    assert_eq!(labelled(&mut app, "first").1, waveform(23));
+}
+#[test]
+pub fn unsupported_label_variants_refuse_before_reading_and_work_is_bounded() {
+    let mut app = app();
+    let mut assets = label_assets();
+    let Reply::Bytes(table) = assets.get_mut("UI/SoundInfo/Arbitrary.slk").unwrap() else {
+        panic!("table")
+    };
+    *table = String::from_utf8(table.clone())
+        .unwrap()
+        .replace("K\"other.wav\"", "K\"other.wav,extra.wav\"")
+        .into_bytes();
+    let reads = deliver(&mut app, LABEL_SCRIPT, assets, 1);
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none()
+    );
+    let before = reads.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        call(&mut app, "later_label")
+            .unwrap_err()
+            .to_string()
+            .contains("multiple files")
+    );
+    for _ in 0..125 {
+        assert!(call(&mut app, "missing_label").is_err());
+    }
+    assert!(
+        call(&mut app, "missing_label")
+            .unwrap_err()
+            .to_string()
+            .contains("source work budget exhausted")
+    );
+    call(&mut app, "repeat_label").unwrap();
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), before);
+    assert_eq!(labelled(&mut app, "encoded").1, waveform(41));
+}
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn browser_campaign_label_sound_gate() -> u32 {
+    executed_label_constructors_share_sources_and_keep_existing_sounds();
+    failed_label_source_replacements_preserve_the_old_reader_and_sounds();
+    unsupported_label_variants_refuse_before_reading_and_work_is_bounded();
+    3
+}

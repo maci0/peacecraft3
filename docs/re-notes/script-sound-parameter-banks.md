@@ -96,3 +96,9 @@ different archive provenance from the earlier hand-selected table set; native
 winner/release equivalence is not established. No original game, audible or
 rendered campaign check ran. Evidence is retained in
 `.scratch/campaign-parameter-source-root-20261019/verification-final-2.json`.
+
+The campaign's executed label constructors now share this index through a
+retained `OnceLock` result. A parameter assignment after constructor loading
+performs no second table read; the actual factory regression measures that work.
+PCM lookup additionally requires `FileNames`, keeping legacy MIDI/DLS labels in
+their separate format. Parameter lookup retains its own existing schema checks.

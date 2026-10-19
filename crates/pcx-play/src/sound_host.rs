@@ -1,5 +1,6 @@
 use super::{Entry, Error, Failure, ObjectHost};
-use crate::label_sounds::{BoundSound, PcmResource, SoundBank};
+use crate::label_sounds::{BoundSound, Budget, LoadBudget, PcmResource, SoundBank};
+pub(super) type Loader = Box<dyn FnMut(&str, Budget) -> Result<SoundBank, String> + Send + Sync>;
 use pcx_script::{HandleId, Value};
 
 /// Exact boolean inputs of CreateSoundFromLabel; not effective mixer settings.
@@ -25,6 +26,162 @@ pub struct SoundState<'a> {
     pub fade_out_rate: i32,
 }
 impl ObjectHost {
+    fn label_banks(&self, name: &str) -> Option<&[SoundBank]> {
+        match name {
+            "CreateMIDISound" => self.sounds.as_deref(),
+            "CreateSoundFromLabel" => self.label_sound_creation.as_deref(),
+            _ => None,
+        }
+    }
+    fn label_sound_remaining(
+        &self,
+        name: &str,
+        budget: LoadBudget,
+    ) -> Result<(usize, Budget), Error> {
+        let fail = || {
+            self.inner
+                .error(name, Failure::Budget("label sound inputs"))
+        };
+        std::alloc::Layout::array::<SoundBank>(budget.banks)
+            .and_then(|_| std::alloc::Layout::array::<u8>(budget.total_table_bytes))
+            .and_then(|_| std::alloc::Layout::array::<BoundSound>(budget.inputs.sounds))
+            .and_then(|_| std::alloc::Layout::array::<u8>(budget.inputs.table_bytes))
+            .and_then(|_| std::alloc::Layout::array::<u8>(budget.inputs.resource_bytes))
+            .and_then(|_| std::alloc::Layout::array::<u8>(budget.inputs.total_resource_bytes))
+            .and_then(|_| std::alloc::Layout::array::<u8>(budget.inputs.metadata_bytes))
+            .map_err(|_| fail())?;
+        let mut banks = budget.banks;
+        let mut tables = budget.total_table_bytes;
+        let mut remaining = budget.inputs;
+        for bank in self
+            .sounds
+            .iter()
+            .flatten()
+            .chain(self.label_sound_creation.iter().flatten())
+        {
+            let (table, metadata) = bank.input_usage();
+            if table > budget.inputs.table_bytes {
+                return Err(fail());
+            }
+            banks = banks.checked_sub(1).ok_or_else(fail)?;
+            tables = tables.checked_sub(table).ok_or_else(fail)?;
+            remaining.sounds = remaining
+                .sounds
+                .checked_sub(bank.sounds().len())
+                .ok_or_else(fail)?;
+            remaining.metadata_bytes = remaining
+                .metadata_bytes
+                .checked_sub(metadata)
+                .ok_or_else(fail)?;
+            for sound in bank.sounds() {
+                if sound.bytes().len() > budget.inputs.resource_bytes {
+                    return Err(fail());
+                }
+                remaining.total_resource_bytes = remaining
+                    .total_resource_bytes
+                    .checked_sub(sound.bytes().len())
+                    .ok_or_else(fail)?;
+            }
+        }
+        remaining.table_bytes = remaining.table_bytes.min(tables);
+        remaining.resource_bytes = remaining.resource_bytes.min(remaining.total_resource_bytes);
+        Ok((banks, remaining))
+    }
+    pub fn admit_label_sound_loader(
+        &mut self,
+        budget: LoadBudget,
+        loader: impl FnMut(&str, Budget) -> Result<SoundBank, String> + Send + Sync + 'static,
+    ) -> Result<(), Error> {
+        let name = "CreateSoundFromLabel";
+        if self.label_sound_loader.is_some()
+            || (self.sounds.is_none() && self.label_sound_creation.is_none())
+        {
+            return Err(self.inner.error(
+                name,
+                Failure::SoundState("label constructors required; loader must be admitted once"),
+            ));
+        }
+        self.label_sound_remaining(name, budget)?;
+        self.label_sound_loader = Some((Box::new(loader), budget));
+        Ok(())
+    }
+    fn prepare_label_sound(&mut self, name: &str, label: &str) -> Result<usize, Error> {
+        let fail = |reason| self.inner.error(name, reason);
+        let banks = self
+            .label_banks(name)
+            .ok_or_else(|| fail(Failure::Signature))?;
+        let limit = banks
+            .iter()
+            .map(SoundBank::label_limit)
+            .max()
+            .unwrap_or(0)
+            .max(
+                self.label_sound_loader
+                    .as_ref()
+                    .map_or(0, |(_, b)| b.inputs.metadata_bytes),
+            );
+        if label.trim().is_empty() || label.contains('\0') {
+            return Err(fail(Failure::SoundState("empty or NUL-containing label")));
+        }
+        if label.len() > limit {
+            return Err(fail(Failure::Budget("sound label")));
+        }
+        if let Some(index) = banks
+            .iter()
+            .flat_map(|b| b.sounds())
+            .position(|s| s.label() == label)
+        {
+            return Ok(index);
+        }
+        let budget = self
+            .label_sound_loader
+            .as_ref()
+            .map(|(_, b)| *b)
+            .ok_or_else(|| fail(Failure::MissingSoundLabel(label.into())))?;
+        let (banks_left, remaining) = self.label_sound_remaining(name, budget)?;
+        if banks_left == 0
+            || remaining.sounds == 0
+            || remaining.table_bytes == 0
+            || remaining.resource_bytes == 0
+        {
+            return Err(fail(Failure::Budget("label sound inputs")));
+        }
+        let loader = &mut self
+            .label_sound_loader
+            .as_mut()
+            .ok_or_else(|| fail(Failure::Signature))?
+            .0;
+        let next = loader(label, remaining)
+            .map_err(|e| self.inner.error(name, Failure::SoundSource(e)))?;
+        let (table, metadata) = next.input_usage();
+        if next.sounds().len() != 1 || next.sounds()[0].label() != label {
+            return Err(self.inner.error(
+                name,
+                Failure::SoundState("loader must return one matching label"),
+            ));
+        }
+        if table > remaining.table_bytes
+            || metadata > remaining.metadata_bytes
+            || next.sounds()[0].bytes().len() > remaining.resource_bytes
+        {
+            return Err(self
+                .inner
+                .error(name, Failure::Budget("label sound inputs")));
+        }
+        let banks = match name {
+            "CreateMIDISound" => self.sounds.as_mut(),
+            "CreateSoundFromLabel" => self.label_sound_creation.as_mut(),
+            _ => None,
+        }
+        .ok_or_else(|| self.inner.error(name, Failure::Signature))?;
+        let index = banks.iter().map(|b| b.sounds().len()).sum();
+        banks
+            .try_reserve(1)
+            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+        // Append only: flattening existing bank resources must keep every old index.
+        banks.push(next);
+        Ok(index)
+    }
     pub(super) fn has_sound_resources(&self) -> bool {
         self.sounds.is_some() || self.label_sound_creation.is_some() || self.file_sounds.is_some()
     }
@@ -162,11 +319,12 @@ impl ObjectHost {
             false,
             Some("sound"),
         )?;
-        self.sounds = Some(bank);
+        self.sounds = Some(vec![bank]);
         Ok(self)
     }
+    /// Initial explicit MIDI bank. Per-object sources are available through `sound_state`.
     pub fn sound_bank(&self) -> Option<&SoundBank> {
-        self.sounds.as_ref()
+        self.sounds.as_ref()?.first()
     }
     /// Encoded bytes already retained by the admitted sound banks, without copying.
     /// Repeated labels or equal files are conservatively counted separately.
@@ -174,6 +332,7 @@ impl ObjectHost {
         let labels = self
             .sounds
             .iter()
+            .flatten()
             .chain(self.label_sound_creation.iter().flatten())
             .flat_map(SoundBank::sounds)
             .map(|sound| sound.bytes().len());
@@ -244,7 +403,7 @@ impl ObjectHost {
         let banks = if creation_flags.is_some() {
             self.label_sound_creation.as_deref()
         } else {
-            self.sounds.as_ref().map(std::slice::from_ref)
+            self.sounds.as_deref()
         }
         .ok_or_else(|| fail(Failure::SoundState("not admitted")))?;
         let (bank, resource) = banks
@@ -306,11 +465,7 @@ impl ObjectHost {
                 Ok(Value::Null)
             })());
         }
-        let banks = match name {
-            "CreateMIDISound" => std::slice::from_ref(self.sounds.as_ref()?),
-            "CreateSoundFromLabel" => self.label_sound_creation.as_ref()?.as_slice(),
-            _ => return None,
-        };
+        self.label_banks(name)?;
         let fail = |reason| self.inner.error(name, reason);
         let (label, fade_in_rate, fade_out_rate, creation_flags) = match (name, args) {
             ("CreateMIDISound", [Value::Str(label), Value::Int(a), Value::Int(b)]) => {
@@ -342,15 +497,9 @@ impl ObjectHost {
                 ))));
             }
         };
-        if label.len() > banks.iter().map(SoundBank::label_limit).max().unwrap_or(0) {
-            return Some(Err(fail(Failure::Budget("sound label"))));
-        }
-        let Some(resource) = banks
-            .iter()
-            .flat_map(|bank| bank.sounds())
-            .position(|s| s.label() == label)
-        else {
-            return Some(Err(fail(Failure::MissingSoundLabel(label.clone()))));
+        let resource = match self.prepare_label_sound(name, label) {
+            Ok(index) => index,
+            Err(error) => return Some(Err(error)),
         };
         Some(
             self.inner

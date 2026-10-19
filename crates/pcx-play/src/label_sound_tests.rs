@@ -692,3 +692,161 @@ fn retained_vm_start_requests_survive_later_failure_without_reinitialization() {
 
 #[path = "label_constructor_tests.rs"]
 mod constructor;
+
+fn named_bank(label: &str) -> SoundBank {
+    let bytes = wave();
+    let mut input = source(&bytes);
+    input.label = label;
+    SoundBank::read(
+        ScriptAsset {
+            label: "synthetic:slk",
+            bytes: &table(label, "sample.wav"),
+        },
+        origin(),
+        "Selector",
+        &[input],
+        limits(),
+    )
+    .unwrap()
+}
+fn loading_budget() -> LoadBudget {
+    let mut inputs = limits();
+    inputs.sounds = 8;
+    LoadBudget {
+        banks: 8,
+        total_table_bytes: 32768,
+        inputs,
+    }
+}
+fn loading_host() -> ObjectHost {
+    let common = COMMON.replacen("globals\n", "native CreateSoundFromLabel takes string s, boolean a, boolean b, boolean c, integer x, integer y returns sound\nglobals\n", 1);
+    host(&common, "", 64)
+        .with_label_sounds(bank())
+        .unwrap()
+        .with_label_sound_creation(vec![bank()])
+        .unwrap()
+}
+fn create_label(h: &mut ObjectHost, label: &str) -> Result<Value, String> {
+    h.native(
+        "CreateSoundFromLabel",
+        &[
+            Value::Str(label.into()),
+            Value::Bool(true),
+            Value::Bool(false),
+            Value::Bool(true),
+            Value::Int(-7),
+            Value::Int(91),
+        ],
+    )
+}
+fn handle(value: Value) -> pcx_script::HandleId {
+    let Value::Handle(id) = value else {
+        panic!("handle required")
+    };
+    id
+}
+#[test]
+fn executed_label_loading_appends_without_changing_old_indices_or_buffers() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    let mut h = loading_host();
+    let first = handle(create(&mut h, "Breeze", 3, 5).unwrap());
+    let original = h.sound_resource(first).unwrap().bytes().as_ptr();
+    h.admit_label_sound_loader(loading_budget(), move |label, _| {
+        observed.fetch_add(1, Ordering::SeqCst);
+        Ok(named_bank(label))
+    })
+    .unwrap();
+    let one = handle(create(&mut h, "One", 45, 91).unwrap());
+    let two = handle(create_label(&mut h, "Two").unwrap());
+    let again = handle(create(&mut h, "One", -1, 8).unwrap());
+    assert_ne!(one, again);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(h.sound_state(one).unwrap().resource.label(), "One");
+    assert_eq!(h.sound_state(two).unwrap().resource.label(), "Two");
+    assert_eq!(h.sound_state(again).unwrap().fade_in_rate, -1);
+    assert_eq!(h.sound_resource(first).unwrap().bytes().as_ptr(), original);
+    assert_eq!(h.sound_state(first).unwrap().resource.label(), "Breeze");
+    assert!(h.sound_state(two).unwrap().creation_flags.unwrap().looping);
+    assert_eq!(h.sound_resource_bytes().unwrap(), wave().len() * 4);
+}
+#[test]
+fn label_loader_rejects_wrong_bindings_and_arguments_before_allocating() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    let mut h = loading_host();
+    h.admit_label_sound_loader(loading_budget(), move |_, _| {
+        observed.fetch_add(1, Ordering::SeqCst);
+        Ok(bank())
+    })
+    .unwrap();
+    let before = handle(h.native("CreateTimer", &[]).unwrap());
+    for label in ["", "\0", "   "] {
+        assert!(create_label(&mut h, label).is_err());
+    }
+    assert!(
+        h.native(
+            "CreateMIDISound",
+            &[Value::Int(0), Value::Int(0), Value::Int(0)]
+        )
+        .is_err()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(
+        create_label(&mut h, "Other")
+            .unwrap_err()
+            .contains("one matching label")
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let after = handle(h.native("CreateTimer", &[]).unwrap());
+    assert_eq!(after.token(), before.token() + 1);
+    assert!(
+        h.admit_label_sound_loader(loading_budget(), |_, _| Ok(bank()))
+            .is_err()
+    );
+    let id = handle(create(&mut h, "Breeze", 0, 0).unwrap());
+    assert_eq!(h.sound_state(id).unwrap().resource.label(), "Breeze");
+}
+#[test]
+fn label_loading_enforces_cumulative_input_limits_before_source_work() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for kind in 0..6 {
+        let mut budget = loading_budget();
+        let mut h = loading_host();
+        match kind {
+            0 => budget.banks = 1,
+            1 => budget.total_table_bytes = 0,
+            2 => budget.inputs.sounds = 1,
+            3 => budget.inputs.resource_bytes = wave().len() - 1,
+            4 => budget.inputs.total_resource_bytes = wave().len() * 2 - 1,
+            _ => budget.inputs.metadata_bytes = 1,
+        }
+        assert!(
+            h.admit_label_sound_loader(budget, |_, _| Ok(bank()))
+                .is_err(),
+            "{kind}"
+        );
+    }
+    let mut h = loading_host();
+    let mut budget = loading_budget();
+    budget.inputs.sounds = 2;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    h.admit_label_sound_loader(budget, move |_, _| {
+        observed.fetch_add(1, Ordering::SeqCst);
+        Ok(bank())
+    })
+    .unwrap();
+    assert!(create_label(&mut h, "Other").is_err());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(create_label(&mut h, "Breeze").is_ok());
+    let mut h = loading_host();
+    let mut budget = loading_budget();
+    budget.inputs.total_resource_bytes = wave().len() * 2 + 1;
+    h.admit_label_sound_loader(budget, |label, _| Ok(named_bank(label)))
+        .unwrap();
+    assert!(create_label(&mut h, "Other").is_err());
+    assert_eq!(h.sound_resource_bytes().unwrap(), wave().len() * 2);
+}

@@ -170,7 +170,8 @@ fn start_admitted_map(
                         definitions: 1024,
                         metadata_bytes: 1 << 20,
                     };
-                    let mut parameter_sources = None;
+                    let sound_sources = Arc::new(std::sync::OnceLock::new());
+                    let parameter_sources = Arc::clone(&sound_sources);
                     let mut remaining_parameters = 128usize;
                     host.objects_mut().admit_sound_parameter_loader(
                         parameter_budget,
@@ -182,8 +183,8 @@ fn start_admitted_map(
                                 return Err("sound parameter label byte budget exceeded".into());
                             }
                             parameter_sources
-                                .get_or_insert_with(|| {
-                                    crate::campaign_assets::ParameterSources::read(
+                                .get_or_init(|| {
+                                    crate::campaign_assets::SoundSources::read(
                                         &parameter_reader,
                                         &parameter_edition,
                                         parameter_budget,
@@ -192,6 +193,42 @@ fn start_admitted_map(
                                 .as_ref()
                                 .map_err(Clone::clone)?
                                 .bind(label, parameter_budget)
+                        },
+                    )?;
+                    let label_reader = Arc::clone(&reader);
+                    let label_edition = edition.clone();
+                    let mut remaining_labels = 128usize;
+                    host.objects_mut().admit_label_sound_loader(
+                        pcx_play::label_sounds::LoadBudget {
+                            banks: 130,
+                            total_table_bytes: 32 << 20,
+                            inputs: pcx_play::label_sounds::Budget {
+                                table_bytes: 4 << 20,
+                                coordinates: parameter_budget.coordinates,
+                                sounds: 128,
+                                resource_bytes: 64 << 20,
+                                total_resource_bytes: 128 << 20,
+                                metadata_bytes: 1 << 20,
+                            },
+                        },
+                        move |label, budget| {
+                            remaining_labels = remaining_labels
+                                .checked_sub(1)
+                                .ok_or("label sound source work budget exhausted")?;
+                            if label.len() > 16 << 10 {
+                                return Err("label sound label byte budget exceeded".into());
+                            }
+                            sound_sources
+                                .get_or_init(|| {
+                                    crate::campaign_assets::SoundSources::read(
+                                        &label_reader,
+                                        &label_edition,
+                                        parameter_budget,
+                                    )
+                                })
+                                .as_ref()
+                                .map_err(Clone::clone)?
+                                .label_sound(&label_reader, &label_edition, label, budget)
                         },
                     )?;
                     let sound_reader = Arc::clone(&reader);

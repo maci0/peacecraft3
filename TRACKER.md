@@ -2753,3 +2753,17 @@ repeated, and the public site package was not rebuilt.
 - [ ] Constructor-label banks, other Host bootstrap inputs, mission natives,
   world lighting and live gameplay remain unfinished. This does not close chapter
   or audible/native parity gates.
+
+### 2026-10-19 — executed label-constructor source preparation
+
+- [x] Prepare PCM definitions/files from executed `CreateSoundFromLabel` and
+  `CreateMIDISound` arguments through the retained reader. Preserve prior object
+  indices and buffers, validate cumulative inputs before append, and share the
+  successful/failed table index with parameter assignments.
+- [x] Native suites, 28 actual Cargo WASM cases, 22 targeted WASI cases, strict
+  native/WASM lint/builds and formatting pass. All 13 selected label resources
+  qualify, including the large ambient loops, with matching retained file hashes.
+  Evidence: `.scratch/campaign-label-source-root-20261019/verification-final-6.json`.
+- [ ] Other Host bootstrap inputs, mission natives, world lighting and live
+  actors/controls still block a playable first chapter. MIDI/DLS decoding,
+  multi-file variant selection and original audible/native behavior remain open.

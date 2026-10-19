@@ -1292,14 +1292,16 @@ Other automatic Host inputs, world lighting, actors and controls remain open.
 
 Direct sound files can also load on executed `CreateSound` calls through the
 session reader. PCM and MP3 bindings append under aggregate input limits, keeping
-earlier handles and bytes stable. Constructor-label banks and other Host inputs
-remain separate; this does not establish audible or native behavior.
+earlier handles and bytes stable. Other Host inputs remain separate; this does
+not establish audible or native behavior.
 
 Executed parameter-label assignments can now prepare their selected source rows.
 Tables are discovered in the selected SoundInfo inventory; column/profile checks
 and unique label ownership precede assignment. Existing source rows and internal
-keys survive later additions. Automatic constructor-label banks and the other
-Host inputs remain open.
+keys survive later additions. Label-based constructors resolve requested PCM
+files from the same retained index, using the authored file-definition schema.
+The remaining Host bootstrap inputs are still required. Neither source path
+establishes audible behavior or complete first-chapter execution.
 
 The launcher supplies explicit ground read/texture resource ceilings for each
 successfully delivered binding. Its existing terrain publisher can now mount

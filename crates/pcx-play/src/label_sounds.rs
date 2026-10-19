@@ -27,6 +27,13 @@ pub struct Budget {
     /// Aggregate labels, member paths, source labels and identity strings.
     pub metadata_bytes: usize,
 }
+/// Cumulative source-input bounds for executed label constructors.
+#[derive(Clone, Copy)]
+pub struct LoadBudget {
+    pub banks: usize,
+    pub total_table_bytes: usize,
+    pub inputs: Budget,
+}
 #[derive(Debug, thiserror::Error)]
 #[error("sound input {source_context}: {problem}")]
 pub struct Error {
@@ -92,6 +99,8 @@ impl BoundSound {
 #[derive(Debug)]
 pub struct SoundBank {
     table: Table,
+    encoded_bytes: usize,
+    metadata_bytes: usize,
     source_label: String,
     origin: AssetIdentity,
     sha256: Sha256Digest,
@@ -265,6 +274,8 @@ impl SoundBank {
         }
         Ok(Self {
             table: decoded,
+            encoded_bytes: table.bytes.len(),
+            metadata_bytes: metadata,
             source_label: table.label.into(),
             origin,
             sha256: sha256(table.bytes),
@@ -289,6 +300,9 @@ impl SoundBank {
     }
     pub(crate) fn label_limit(&self) -> usize {
         self.label_limit
+    }
+    pub(crate) fn input_usage(&self) -> (usize, usize) {
+        (self.encoded_bytes, self.metadata_bytes)
     }
 }
 

@@ -76,8 +76,8 @@ bank provenance, preflight-before-decode failures, codec limits, PCM API retenti
 and a real VM retaining an MP3's parameters, duration and queued start after a
 later unsupported native. Strict native/WASM checks are distinct from playback.
 
-Campaign startup now attaches executed direct-file source loading; automatic
-constructor-label banks and the other Host inputs remain open. Executed parameter
-labels now resolve through the retained reader; see `script-sound-parameter-banks.md`. The browser playback
+Campaign startup now attaches direct-file, PCM label-constructor and parameter
+source loading on executed arguments. Other Host bootstrap inputs remain open.
+See `script-label-sounds.md` and `script-sound-parameter-banks.md`. Browser playback
 dependency, device output, native decoder/
 gapless behavior, 3D effects and complete campaign remain unverified.

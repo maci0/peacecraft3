@@ -217,3 +217,44 @@ the successful selected-program gate are local in
 `.scratch/label-constructor-root-20261017/`. No original payload is committed.
 The application Host factory, audio playback, callback scheduling, campaign
 completion and rendered/native parity remain open.
+
+
+### Executed source preparation
+
+`admit_label_sound_loader` optionally extends already admitted constructors with
+one exact label binding per request. The Host checks constructor arguments and
+cached labels first. New banks append without moving any earlier flattened
+resource index; existing handles and PCM buffers remain valid. MIDI creation and
+explicit-flag creation retain separate resource lists. `sound_bank` still exposes
+the initial explicit MIDI bank; `sound_state` identifies each object's actual
+source bank. Failed or wrong bindings do not allocate a sound or replace old data.
+
+The campaign caller shares one retained SoundInfo index with parameter loading.
+PCM constructor ownership requires the authored `FileNames` definition schema;
+legacy MIDI/DLS records with matching labels do not own PCM bindings. No table
+filename or chapter label list selects a winner. Multiple PCM owners, disabled
+rows and multiple-file rows refuse. This extends the existing PCM-backed native
+admission; it does not implement MIDI/DLS decoding or establish the original
+engine's active format policy. Paths derive from the selected row's directory
+and file fields. Only the requested resource is read and decoded.
+
+Application ceilings are 130 total retained banks, 32 MiB of table input copies,
+128 sound bindings, 64 MiB per PCM file, 128 MiB aggregate file input and 1 MiB
+metadata. There are 128 uncached label-source attempts per Host; cached labels
+remain usable after exhaustion. Label/path adapter text is capped at 16 KiB.
+The shared index uses the parameter loader's table/coordinate/work ceilings and
+retains both success and failure. These are application input/work bounds,
+not total parser memory bounds or original game settings.
+
+Verification: 484 native Host cases pass with seven explicit ignores, as do the
+application suites, 28 actual Cargo WASM cases and 22 targeted WASI label tests.
+Strict native/WASM lint/builds and formatting pass. A local source-only probe
+qualifies eleven literal constructor labels from the selected script set and
+two authored ambient selections: thirteen PCM resources across three table
+byte inputs. All file fingerprints match retained evidence. The initial probe
+exposed matching PCM and MIDI/DLS labels; the schema filter and synthetic
+same-label regression pass. Both large ambient files fit the final loader
+policy. Two nonliteral constructor sites are reported without a completeness
+claim. Explicit archive mount order remains distinct from native winner/release
+proof. No new original runtime, audible output or rendered campaign check ran.
+Evidence: `.scratch/campaign-label-source-root-20261019/verification-final-6.json`.
