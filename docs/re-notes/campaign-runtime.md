@@ -60,6 +60,35 @@ seed, prior RNG consumers, accepted unit placement or a published playable sessi
 The original game was not launched for this check. Command receipts and outputs
 are local in `.scratch/campaign-runtime-root-20261019/`.
 
+## Legacy campaign-menu call in Frozen Throne mode
+
+The selected 1.29b image's functional `SetCampaignMenuRace` registration points
+to a routine that compares the same mode slot returned by `VersionGet`. A nonzero
+mode returns before reading the race or calling the campaign selector. The loaded
+common source defines the Reign of Chaos and Frozen Throne version constants;
+this establishes the ignored legacy call for the explicit Frozen Throne input.
+The image also contains a separate generic fallback registration. Both sites
+are retained in the private analysis; an arbitrary unique-registration assumption
+was rejected. This is static code evidence, not a new original-game observation.
+
+The existing Host now accepts that ignored call only with an admitted runtime
+version matching the loaded, source-qualified `VERSION_FROZEN_THRONE` constant.
+No numeric version or race mapping is copied into production. Native signatures,
+source ownership and typed arguments remain checked. Missing or invalidated
+version input, another version, missing/foreign declarations and the extended
+`SetCampaignMenuRaceEx` call still refuse. No campaign selection is manufactured.
+The Reign of Chaos path calls a real selector and remains unsupported.
+
+All 489 native Host cases and six version cases under actual WASI pass, including
+owned-VM continuation, no allocation, invalidation and declaration/argument
+refusals. Strict native/WASM Clippy and both application builds pass. A local
+production-factory run of the unchanged Human01 scripts now passes the legacy
+call and next refuses `InitGameCache`, retaining the same 448 global calls,
+538 cumulative config calls and 155 unit-creation requests. It uses the prior
+explicit version observation, recreation seed and compatibility catalog; it is
+still neither a published playable session nor a full original-game comparison.
+Evidence stays local in `.scratch/campaign-menu-state-root-20261019/`.
+
 Automatic Host-input preparation, live scene/unit/control wiring, source-qualified
 speed and pause behavior, mission-native coverage and complete campaign playability
 remain open. No menu appearance or public browser package is changed here.

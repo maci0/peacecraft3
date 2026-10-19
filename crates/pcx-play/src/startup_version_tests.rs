@@ -31,6 +31,9 @@ fn object(c: &str, map: &str, selected: bool) -> (ObjectHost, Arc<ParsedMapConte
     if selected {
         names.push("ConvertVersion");
     }
+    if c.contains("constant native ConvertRace takes") {
+        names.push("ConvertRace");
+    }
     let inner = EnumHost::checked_selected(
         ctx.scripts.shared_program(),
         "synthetic:version",
@@ -51,6 +54,118 @@ fn object(c: &str, map: &str, selected: bool) -> (ObjectHost, Arc<ParsedMapConte
 }
 fn version(h: &mut ObjectHost, n: i32) -> HandleId {
     id(&h.native("ConvertVersion", &[Value::Int(n)]).unwrap())
+}
+
+const CAMPAIGN: &str = "type race extends handle
+constant native ConvertRace takes integer i returns race
+native SetCampaignMenuRace takes race r returns nothing
+native SetCampaignMenuRaceEx takes integer index returns nothing
+globals
+constant version VERSION_FROZEN_THRONE=ConvertVersion(60+3)
+constant race TEST_RACE=ConvertRace(91)
+endglobals
+";
+
+#[test]
+fn frozen_throne_ignores_legacy_campaign_race_without_allocating_or_selecting_a_menu() {
+    let c = format!("{}\n{CAMPAIGN}", common());
+    let map = "globals\ninteger Reached=0\nendglobals\nfunction initialize takes nothing returns nothing\ncall SetCampaignMenuRace(TEST_RACE)\ncall SetCampaignMenuRace(null)\nset Reached=Reached+1\nendfunction\n";
+    let (mut h, ctx) = object(&c, map, true);
+    let high = version(&mut h, 63);
+    h.admit_startup_version(&ctx, high).unwrap();
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(h);
+    vm.init_globals().unwrap();
+    let handles = vm.host().inner.inner().handles();
+    for expected in 1..=3 {
+        assert_eq!(vm.call("initialize", &[]).unwrap(), Value::Null);
+        assert_eq!(vm.global("Reached"), Value::Int(expected));
+        assert_eq!(vm.host().inner.inner().handles(), handles);
+        assert_eq!(
+            vm.host().native("VersionGet", &[]).unwrap(),
+            Value::Handle(high)
+        );
+    }
+    assert!(
+        vm.host()
+            .native("SetCampaignMenuRaceEx", &[Value::Int(63)])
+            .is_err()
+    );
+    vm.host().inner.invalidate_startup_version();
+    assert!(vm.call("initialize", &[]).is_err());
+    assert_eq!(vm.global("Reached"), Value::Int(3));
+}
+
+#[test]
+fn legacy_campaign_race_requires_explicit_supported_version_and_checked_arguments() {
+    let c = format!("{}\n{CAMPAIGN}", common());
+    let (mut h, ctx) = object(&c, "// map", true);
+    assert!(h.native("SetCampaignMenuRace", &[Value::Null]).is_err());
+    let low = version(&mut h, -17);
+    h.admit_startup_version(&ctx, low).unwrap();
+    assert!(h.native("SetCampaignMenuRace", &[Value::Null]).is_err());
+    let high = version(&mut h, 63);
+    h.admit_startup_version(&ctx, high).unwrap();
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    let unknown = Value::Handle(HandleId::new(std::num::NonZeroU64::new(u64::MAX).unwrap()));
+    let before = h.inner().handles();
+    for args in [
+        vec![],
+        vec![Value::Int(91)],
+        vec![timer],
+        vec![unknown],
+        vec![Value::Null, Value::Null],
+    ] {
+        assert!(h.native("SetCampaignMenuRace", &args).is_err());
+        assert_eq!(h.inner().handles(), before);
+        assert_eq!(h.native("VersionGet", &[]).unwrap(), Value::Handle(high));
+    }
+    assert_eq!(
+        h.native("SetCampaignMenuRace", &[Value::Null]).unwrap(),
+        Value::Null
+    );
+}
+
+#[test]
+fn legacy_campaign_race_refuses_missing_changed_and_foreign_declarations() {
+    let declaration = "native SetCampaignMenuRace takes race r returns nothing";
+    for replacement in [
+        "",
+        "native SetCampaignMenuRace takes integer r returns nothing",
+        "constant native SetCampaignMenuRace takes race r returns nothing",
+    ] {
+        let c = format!(
+            "{}\n{}",
+            common(),
+            CAMPAIGN.replace(declaration, replacement)
+        );
+        let (mut h, ctx) = object(&c, "// map", true);
+        let high = version(&mut h, 63);
+        h.admit_startup_version(&ctx, high).unwrap();
+        assert!(h.native("SetCampaignMenuRace", &[Value::Null]).is_err());
+    }
+    let c = format!("{}\n{}", common(), CAMPAIGN.replace(declaration, ""));
+    let (mut h, ctx) = object(&c, declaration, true);
+    let high = version(&mut h, 63);
+    h.admit_startup_version(&ctx, high).unwrap();
+    assert!(
+        h.native("SetCampaignMenuRace", &[Value::Null])
+            .unwrap_err()
+            .contains("multiple declaration sources")
+    );
+    let version_constant = "constant version VERSION_FROZEN_THRONE=ConvertVersion(60+3)";
+    let c = format!("{}\n{}", common(), CAMPAIGN.replace(version_constant, ""));
+    let (mut h, ctx) = object(
+        &c,
+        &format!("globals\n{version_constant}\nendglobals"),
+        true,
+    );
+    let high = version(&mut h, 63);
+    h.admit_startup_version(&ctx, high).unwrap();
+    assert!(
+        h.native("SetCampaignMenuRace", &[Value::Null])
+            .unwrap_err()
+            .contains("multiple declaration sources")
+    );
 }
 #[test]
 fn owned_vm_reads_explicit_version_identity_without_allocating_or_changing_other_settings() {

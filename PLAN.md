@@ -1588,3 +1588,11 @@ Discovery matches named registration/getter shapes and a unique supported header
 range, deriving operands from image bytes. It retains independent approved-profile
 imports. This removes that input family's six separate profile files; it does not
 prepare the remaining Host inputs or prove native active-family/cache behavior.
+
+Human01 initialization follow-up (2026-10-19): the selected legacy native ignores
+`SetCampaignMenuRace` in Frozen Throne mode. The Host now follows that branch
+using the explicitly admitted runtime version and the loaded source constant;
+Reign of Chaos selection and the extended native remain unsupported. The actual
+Human01 factory prefix advances to `InitGameCache`. Automatic remaining Host
+inputs, cache behavior, mission natives and live actors/controls still block
+playability; see [campaign runtime](docs/re-notes/campaign-runtime.md#legacy-campaign-menu-call-in-frozen-throne-mode).

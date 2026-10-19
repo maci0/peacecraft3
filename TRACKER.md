@@ -2782,3 +2782,18 @@ repeated, and the public site package was not rebuilt.
 - [ ] Remaining Host inputs and application preparation, active native family/
   cache behavior, later mission natives, live actors/controls and chapter fidelity
   remain open. The first campaign is still not playable.
+
+### 2026-10-19 — legacy campaign-menu compatibility
+
+- [x] Qualify the selected image's old campaign-menu setter against `VersionGet`:
+  the Frozen Throne branch returns before race selection. Follow that branch on
+  the existing Host only with an explicit source-qualified version input; derive
+  the constant from the loaded common source. Keep Reign of Chaos and Ex paths
+  unsupported, with signature/source/argument and version-invalidation checks.
+- [x] All 489 native Host cases, six actual WASI version cases, strict native/WASM
+  lint and both application builds pass. Unchanged Human01 scripts pass the call
+  on the production factory and next refuse `InitGameCache("Campaigns.w3v")`.
+  Evidence: `.scratch/campaign-menu-state-root-20261019/`.
+- [ ] Automatic remaining Host inputs, cache persistence, later mission natives,
+  accepted live units/controls and three-target campaign fidelity remain open.
+  No new original-game run or playable-chapter claim.
