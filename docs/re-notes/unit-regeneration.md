@@ -182,3 +182,61 @@ Remaining work before blight eligibility can be enabled:
    order must match the event delivery order.
 
 Until then, a nonzero blight rate refuses. This refusal is interim and the task stays open.
+
+## Controlled blight runtime probe (local, not evidence)
+
+Question: does original runtime regeneration of a `regenType=blight` unit depend on
+`SetBlight*` state, and for which player? This probe does not depend on the initial
+W3E encoding. It varies only the known `SetBlight*` calls around a unit.
+
+Design (`.scratch/blight-probe`, ignored; built with an adapted copy of the wave03
+packer and template-patch builder):
+
+- Template: Human01 members from the selected install, extracted read-only with the
+  wave03 `mapbuilder`. The patch inserts three globals and replaces `main`. The
+  template's own triggers still run.
+- Blight unit `Ucrl` (UnitBalance row 134: `regenHP` 2, `regenType` blight), owner
+  Player(0), at (0, 0). Control `hfoo` (row 10: `regenHP` 0.25, `regenType` always),
+  owner Player(0), at (2000, 0), outside every blight region.
+- Time of day suspended at hour 12 (`SuspendTimeOfDay`, `SetFloatGameState`).
+- Each phase: life reset to 100 for both units, 20 s of `TriggerSleepAction`, then one
+  `Preload` line with `t0`, `t1`, life before/after, and positions before/after.
+- Phases: off; on/off `SetBlightPoint` for Player(0), then for Player(1); on/off
+  `SetBlightRect` and `SetBlight` radius for Player(0); then a move from (0,0) to
+  (300,0) with `SetUnitPosition` and `IssuePointOrder "move"` under an east rect
+  x 128..512 blight, followed by its removal.
+- Output: `PreloadGenEnd("PCXB-blight-probe.txt")`. The destination directory is not
+  yet verified on the installed game; check it at the first launch.
+
+Gate: `compile_check` resolves the patched `war3map.j` against the selected
+`Scripts\common.j` and `Scripts\Blizzard.j` (pcx-script `resolve_with`, pass).
+
+Interpretation rules:
+
+- Control: `hfoo` must gain ≈ 0.25 × 20 = 5 in every phase. If not, the probe is
+  invalid for that phase.
+- Blight signal: an "on" phase whose blight gain is ≈ 2 × 20 = 40 is a candidate
+  eligibility signal. Gain ≈ 0 with an "off" phase gain ≈ 0 is "no signal".
+- Mark a phase unobserved, not negative, when the blight unit is not in the region
+  or the control phase fails.
+- Affinity: compare Player(0) and Player(1) point phases.
+- Crossing: the walk phase's gain must start at the sample where x crosses 128, or
+  the probe reports the crossing as not observed. The sampling interval is 20 s, so
+  the crossing time is not resolved by the probe alone.
+
+Status: the map is built and compile-checked. It is not launched. Launch waits for
+the root GUI queue after Walk and Sound03. No result is recorded here.
+
+## Motion segments requested from root09
+
+Blight eligibility along a moving unit needs exact time-spans inside the active
+motion path, not point samples. The minimal request for the motion owner:
+
+- Per active unit: `unit`, `segment` (index), `from` (x, y), `to` (x, y), `start` and
+  `end` in the timer clock used by `advance_unit_activity`, `speed` (units per second),
+  and a `turn`/`hold` flag that marks non-moving spans.
+- Segments are monotonic in time and cover `[projected_through, now]` exactly, with
+  no gaps and no overlap.
+- Work bound: one pass per advance, O(segments intersecting the span) per unit.
+  Segment count per unit is bounded by its path length in points, and the eligibility
+  integrator splits each segment only at blight region boundary crossings.
