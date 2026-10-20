@@ -625,6 +625,14 @@ impl Actor {
         if !scale.is_finite() || scale <= 0.0 {
             return Err("nonpositive actor model scale".into());
         }
+        let initial_transform = visual.transform(terrain, scale, height)?;
+        // Bevy culls by screen winding and corrects only shader front facing, so a mirrored
+        // root would cull its visible side. Mirrors are refused; no mirror policy is inferred.
+        // Written so that NaN fails the test.
+        let determinant = initial_transform.to_matrix().determinant();
+        if !(determinant.is_finite() && determinant > 0.0) {
+            return Err("unsupported nonfinite or mirrored actor transform".into());
+        }
         let source_input = model_scene::GeosetSource {
             m: &mdl,
             bytes,
@@ -636,10 +644,10 @@ impl Actor {
             uv_translation: &uv,
             native_cutout_reference: Some(cutout),
             material_layers: Some(&source_layers),
+            culls_back_faces: true,
         };
         model_scene::preflight_geosets(&source_input, &opacity, sample.frame)
             .map_err(|e| e.to_string())?;
-        let initial_transform = visual.transform(terrain, scale, height)?;
         let mut root = commands.spawn((initial_transform, Visibility::default()));
         if let Some(id) = id {
             root.insert(UnitActor(id));
@@ -893,7 +901,15 @@ fn project(
                 None
             }
         },
-        _ => None,
+        // Lit geosets keep Bevy's shading without source sun: this path is not PBR fidelity.
+        (None, _) => {
+            state.last_error = Some("unit day/night light state is not selected".into());
+            None
+        }
+        (Some(_), None) => {
+            state.last_error = Some("unit day fraction is unavailable".into());
+            None
+        }
     };
     let (channel_scale, cutout) = (parameters.channel_scale, parameters.cutout_reference);
     let live: BTreeSet<_> = objects

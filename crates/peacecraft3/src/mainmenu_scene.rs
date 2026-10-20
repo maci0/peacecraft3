@@ -414,6 +414,17 @@ impl BlendGap {
     }
 }
 
+/// `shadingFlags` bit `0x10`: the layer is drawn from both sides.
+const TWO_SIDED: u32 = 0x10;
+
+/// Back-face culling for one layer. Bevy's default front face is counter-clockwise.
+fn back_face_culling(
+    shading_flags: u32,
+    culls: bool,
+) -> Option<bevy::render::render_resource::Face> {
+    (culls && shading_flags & TWO_SIDED == 0).then_some(bevy::render::render_resource::Face::Back)
+}
+
 /// Maps a format `filterMode` word onto Bevy's blending, and says where the two
 /// differ.
 ///
@@ -861,6 +872,7 @@ pub fn spawn(
             uv_translation: &uv_translation,
             native_cutout_reference: Some(lighting_parameters.cutout_reference),
             material_layers: None,
+            culls_back_faces: false,
         },
         &opacity,
         interval[0],
@@ -981,6 +993,15 @@ pub struct GeosetSource<'a> {
     pub native_cutout_reference: Option<f32>,
     /// Projected material index -> authored MTLS material/layer; absent means layer zero.
     pub material_layers: Option<&'a [(usize, usize)]>,
+    /// Cull back faces of layers without `TwoSided`, keeping authored index order.
+    /// Only `true` for a world transform with a positive determinant. Such a transform
+    /// preserves handedness, which keeps the counter-clockwise front on the normal side
+    /// of an authored surface. It does not prove that every authored normal agrees with
+    /// its winding, and it says nothing about the renderer compensating mirrors. Bevy
+    /// corrects only the shader's front facing for negative determinants, not the
+    /// rasterizer cull, so mirrored roots are refused by `Actor::spawn`. Scenery, the
+    /// menu and sprite callers pass `false`.
+    pub culls_back_faces: bool,
 }
 
 /// One geoset's authored id, its entity and its material.
@@ -1016,6 +1037,7 @@ pub fn preflight_geosets<'a>(
         uv_translation,
         native_cutout_reference,
         material_layers,
+        culls_back_faces,
     } = *input;
     let required = required_texture_images(source, runtime, textures)?;
     let mdl_materials = m
@@ -1096,12 +1118,12 @@ pub fn preflight_geosets<'a>(
             StandardMaterial {
                 base_color,
                 uv_transform: uv,
-                // Preserve the existing scenery roughness and culling conventions.
+                // Preserve the existing scenery roughness convention.
                 perceptual_roughness: 1.0,
                 unlit: flags.unshaded,
                 fog_enabled,
                 alpha_mode: flags.alpha_mode,
-                cull_mode: None,
+                cull_mode: back_face_culling(layer.properties.shading_flags, culls_back_faces),
                 ..default()
             },
             layer.properties.filter_mode,
@@ -3074,6 +3096,7 @@ mod texture_selection_tests {
                 uv_translation: &uv_translation,
                 native_cutout_reference: None,
                 material_layers: None,
+                culls_back_faces: false,
             },
             &opacity,
             interval[0],
@@ -3152,6 +3175,46 @@ mod texture_selection_tests {
     }
 
     #[test]
+    fn campaign_culling_keeps_two_sided_layers_and_scenery_unculled() {
+        let f = fixture_with_materials(vec![
+            material_with_flags(1, &[], 0, 0x00),
+            material_with_flags(2, &[], 0, TWO_SIDED),
+        ]);
+        let m = pcx_mdl::Mdlx::parse(&f.bytes).unwrap();
+        let selection = texture_selection(&f.runtime, [100, 117], "synthetic").unwrap();
+        let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&f.runtime, [100, 117]).unwrap();
+        let uv = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
+            &f.runtime,
+            [100, 117],
+            "synthetic",
+        )
+        .unwrap();
+        let mut source = GeosetSource {
+            m: &m,
+            bytes: &f.bytes,
+            source: "synthetic",
+            model: &f.model,
+            textures: &f.textures,
+            runtime: &f.runtime,
+            selection: &selection,
+            uv_translation: &uv,
+            native_cutout_reference: Some(0.61),
+            material_layers: None,
+            culls_back_faces: true,
+        };
+        let prepared = preflight_geosets(&source, &opacity, 100).unwrap();
+        assert_eq!(
+            prepared.initial[0].1.base.cull_mode,
+            Some(bevy::render::render_resource::Face::Back)
+        );
+        assert_eq!(prepared.initial[1].1.base.cull_mode, None);
+        source.culls_back_faces = false;
+        let prepared = preflight_geosets(&source, &opacity, 100).unwrap();
+        assert_eq!(prepared.initial[0].1.base.cull_mode, None);
+        assert_eq!(prepared.initial[1].1.base.cull_mode, None);
+    }
+
+    #[test]
     fn native_cutout_binding_reaches_shared_geoset_preparation() {
         let f = fixture_with_materials(vec![
             material_with_flags(1, &[], 1, 0x10),
@@ -3177,6 +3240,7 @@ mod texture_selection_tests {
             uv_translation: &uv,
             native_cutout_reference: Some(0.61),
             material_layers: None,
+            culls_back_faces: false,
         };
         let prepared = preflight_geosets(&source, &opacity, 100).unwrap();
         assert_eq!(prepared.initial[0].1.base.alpha_mode, AlphaMode::Mask(0.61));
@@ -3459,6 +3523,7 @@ mod texture_selection_tests {
                         uv_translation: &uv,
                         native_cutout_reference: None,
                         material_layers: None,
+                        culls_back_faces: false,
                     },
                     &opacity,
                     100
@@ -3782,6 +3847,7 @@ mod texture_selection_tests {
                 uv_translation: &uv,
                 native_cutout_reference: None,
                 material_layers: None,
+                culls_back_faces: false,
             },
             &opacity,
             100,
@@ -4380,6 +4446,7 @@ mod texture_selection_tests {
                 uv_translation: &uv,
                 native_cutout_reference: None,
                 material_layers: None,
+                culls_back_faces: false,
             },
             &opacity,
             0,
