@@ -755,7 +755,7 @@ fn a_transfer_between_check_and_commit_makes_the_grant_stale_without_writes() {
     give(&mut h, b, p);
     assert!(h.commit_item_use(g).is_err());
     assert_eq!(charges_of(&mut h, p), Value::Int(2));
-    assert_eq!(h.check_item_use(b, p).map(|c| matches!(c, UseCheck::Ready(_))).unwrap(), true);
+    assert!(h.check_item_use(b, p).map(|c| matches!(c, UseCheck::Ready(_))).unwrap());
 }
 
 #[test]

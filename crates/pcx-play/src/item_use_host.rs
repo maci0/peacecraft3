@@ -156,7 +156,7 @@ impl ObjectHost {
         }
         let state = self.item_use.as_ref().expect("session matched");
         let record = self.live_item(grant.item)?.expect("ready item is live");
-        let perishable = state.rules.perishable(&record.definition).map_err(&fail)?;
+        let perishable = state.rules.perishable(&record.definition).map_err(fail)?;
         let remaining = if grant.charged {
             Some(self.charge_count(grant.item, record)? - 1)
         } else {
@@ -168,12 +168,11 @@ impl ObjectHost {
         {
             return Err(self.inner.error(GET, Failure::Budget("item charges")));
         }
-        if let Some(cooldown) = &grant.cooldown {
-            if !state.ready_at.contains_key(&cooldown.group)
-                && state.ready_at.len() >= state.max_records
-            {
-                return Err(self.inner.error(GET, Failure::Budget("item cooldown groups")));
-            }
+        if let Some(cooldown) = &grant.cooldown
+            && !state.ready_at.contains_key(&cooldown.group)
+            && state.ready_at.len() >= state.max_records
+        {
+            return Err(self.inner.error(GET, Failure::Budget("item cooldown groups")));
         }
         let state = self.item_use.as_mut().expect("session matched");
         if let Some(count) = remaining {
@@ -220,13 +219,13 @@ impl ObjectHost {
             return Ok(UseCheck::NotHeld);
         }
         let charged = matches!(
-            state.rules.charges(&record.definition).map_err(&fail)?,
+            state.rules.charges(&record.definition).map_err(fail)?,
             Charges::Charged(_)
         );
         if charged && self.charge_count(item, record)? == 0 {
             return Ok(UseCheck::NoCharges);
         }
-        let cooldown = state.rules.cooldown(&record.definition).map_err(&fail)?;
+        let cooldown = state.rules.cooldown(&record.definition).map_err(fail)?;
         if let Some(cooldown) = &cooldown {
             if cooldown.ignores_wait {
                 return Err(fail("ignoreCD cooldown semantics are unverified".into()));
