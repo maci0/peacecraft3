@@ -178,8 +178,8 @@ impl ContentSource for MpqSource {
             detail: "MPQ reader lock is poisoned".into(),
         })?;
         // A per-source table wins; otherwise the codec source imported with the archive.
-        let imported = archive.codec_table().cloned();
-        let codec = huffman.as_ref().or(imported.as_ref());
+        let imported = archive.codec_table();
+        let codec = huffman.as_ref().or(imported.as_deref());
         let bytes = archive
             .extract_bounded(&mapping.member, budget, codec)
             .map_err(|source| SourceError::MpqExtraction(Box::new(source)))?;

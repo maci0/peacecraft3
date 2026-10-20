@@ -386,8 +386,8 @@ pub fn read_bounded(
         let origin = origin(ordinal, archive);
         // Archive tables come from the staged codec source at commit. A per-call table
         // in the policy takes precedence; no executable is discovered here.
-        let imported = archive.codec_table().cloned();
-        let codec = policy.huffman.or(imported.as_ref());
+        let imported = archive.codec_table();
+        let codec = policy.huffman.or(imported.as_deref());
         let bytes = match archive.extract_bounded(&member, budget, codec) {
             Ok(bytes) => bytes,
             Err(error) => {

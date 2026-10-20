@@ -8,6 +8,7 @@
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub mod checked;
 pub mod crypt;
@@ -377,7 +378,7 @@ pub struct MpqArchive {
     pub header: Header,
     hashes: Vec<HashEntry>,
     blocks: Vec<BlockEntry>,
-    huffman: Option<huffman::HuffmanTable>,
+    huffman: Option<Arc<huffman::HuffmanTable>>,
     huffman_checked: bool,
 }
 
@@ -471,20 +472,20 @@ impl MpqArchive {
         source: impl AsRef<Path>,
     ) -> Result<(), huffman::HuffmanError> {
         let table = huffman::HuffmanTable::from_pe(bytes, source)?;
-        self.set_codec_table(table);
+        self.set_codec_table(Arc::new(table));
         Ok(())
     }
 
     /// Codec tables this archive uses for Huffman and ADPCM sectors. Once set, file
     /// discovery is off, so the tables come only from the caller.
-    pub fn set_codec_table(&mut self, table: huffman::HuffmanTable) {
+    pub fn set_codec_table(&mut self, table: Arc<huffman::HuffmanTable>) {
         self.huffman = Some(table);
         self.huffman_checked = true;
     }
 
     /// The table imported by [`MpqArchive::set_codec_table`] or [`MpqArchive::set_huffman_table`].
-    pub fn codec_table(&self) -> Option<&huffman::HuffmanTable> {
-        self.huffman.as_ref()
+    pub fn codec_table(&self) -> Option<Arc<huffman::HuffmanTable>> {
+        self.huffman.clone()
     }
 
     pub fn path(&self) -> &Path {
@@ -616,7 +617,7 @@ impl MpqArchive {
                 table,
             )
         };
-        match decode(self.huffman.as_ref()) {
+        match decode(self.huffman.as_deref()) {
             Err(payload::PayloadError::UnsupportedCompression { mask })
                 if payload::needs_codec_tables(mask)
                     && self.huffman.is_none()
@@ -628,10 +629,10 @@ impl MpqArchive {
                 let Some(source) = codec_source(directory)? else {
                     return Err(payload::PayloadError::UnsupportedCompression { mask }.into());
                 };
-                self.huffman = Some(
+                self.huffman = Some(Arc::new(
                     huffman::HuffmanTable::open(source).map_err(payload::PayloadError::Huffman)?,
-                );
-                Ok(decode(self.huffman.as_ref())?)
+                ));
+                Ok(decode(self.huffman.as_deref())?)
             }
             result => Ok(result?),
         }
@@ -1379,7 +1380,9 @@ mod memory_tests {
         assert!(archive.codec_table().is_none());
         let table =
             huffman::HuffmanTable::from_pe(&huffman::tests::synthetic_pe(), "fixture.dll").unwrap();
-        archive.set_codec_table(table);
+        let shared = Arc::new(table);
+        archive.set_codec_table(Arc::clone(&shared));
+        assert!(Arc::ptr_eq(&archive.codec_table().unwrap(), &shared));
         assert_eq!(
             archive.codec_table().map(|table| table.table_va),
             Some(0x402000)

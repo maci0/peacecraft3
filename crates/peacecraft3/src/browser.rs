@@ -1067,8 +1067,9 @@ fn attach_codec_source(
     };
     match pcx_mpq::huffman::HuffmanTable::from_pe(bytes, source) {
         Ok(table) => {
+            let table = std::sync::Arc::new(table);
             for archive in set.iter_mut() {
-                archive.set_codec_table(table.clone());
+                archive.set_codec_table(std::sync::Arc::clone(&table));
             }
             vec![format!("codec source: {source}")]
         }
@@ -1617,5 +1618,21 @@ mod tests {
         let line = add_archive("not-an-mpq.bin".into(), b"certainly not an MPQ".to_vec());
         assert!(line.contains("would not open"), "{line}");
         assert!(stored_assets().is_empty(), "a bad archive must not land");
+    }
+
+    #[test]
+    fn codec_source_absent_or_unparsable_is_a_note_not_a_failure() {
+        let absent = attach_codec_source(&mut [], None);
+        assert_eq!(
+            absent,
+            ["codec source: no client image staged; Huffman and ADPCM members refuse"]
+        );
+        let unparsable = attach_codec_source(&mut [], Some(("ISO:game.dll@0", b"not a PE")));
+        assert_eq!(unparsable.len(), 1);
+        assert!(
+            unparsable[0].starts_with("codec source ISO:game.dll@0 unavailable: "),
+            "{unparsable:?}"
+        );
+        assert!(unparsable[0].ends_with("; Huffman and ADPCM members refuse"));
     }
 }
