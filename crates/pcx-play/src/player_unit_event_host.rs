@@ -87,6 +87,7 @@ impl ObjectHost {
         ] {
             loaded_type(&self.inner, REGISTER, name, parent, source)?;
         }
+        self.check_trigger_player_response(source)?;
         self.triggers
             .as_mut()
             .expect("admitted above")

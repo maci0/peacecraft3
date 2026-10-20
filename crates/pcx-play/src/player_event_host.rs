@@ -82,6 +82,7 @@ impl ObjectHost {
         for (name, parent) in [("player", "agent"), ("playerevent", "eventid")] {
             loaded_type(&self.inner, REGISTER, name, parent, source)?;
         }
+        self.check_trigger_player_response(source)?;
         self.triggers
             .as_mut()
             .expect("admitted above")
@@ -185,16 +186,24 @@ impl ObjectHost {
                 .error(event, Failure::PlayerState("local player is not admitted")));
         };
         let mut fired = Vec::new();
-        for (index, entry) in self.inner.arena.iter().enumerate() {
+        for entry in &self.inner.arena {
             if let Entry::RegisteredPlayerEvent(record) = entry
                 && record.player == local
                 && record.enumerand == enumerand
             {
-                fired.push((self.inner.id(index, event)?, record.trigger));
+                fired.push((record.playerevent, record.trigger, record.player));
             }
         }
-        for &(id, trigger) in &fired {
-            self.queue_event(trigger, None, Default::default(), Some(id))?;
+        for &(event, trigger, player) in &fired {
+            self.queue_event(
+                trigger,
+                None,
+                super::super::EventSubject {
+                    player: Some(player),
+                    ..Default::default()
+                },
+                Some(event),
+            )?;
         }
         Ok(fired.len())
     }

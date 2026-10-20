@@ -44,9 +44,35 @@ directory. Parser and ECS checks do not prove rendered/native fidelity.
 Remaining fidelity questions include native root placement, top-button pushed
 and hover art, quest-row icons and completion checkboxes, detail formatting and
 scroll interaction, and single-player pause behaviour while viewing quests.
-The resource bar is still absent: recorded `SetPlayerState` requests are not
-an effective resource balance, and the host does not yet provide
-`GetPlayerState`. No counters are fabricated from those requests.
+`KEY_QUESTS` now supplies the quest shortcut through the checked shared
+`campaign_camera::authored_function_key` mapper. The source highlight is read
+from the selected global strings; no particular function key is assumed. The
+shortcut appends the same shared button action as pointer/keyboard activation.
+
+## Effective resource bar
+
+`campaign_resource_bar.rs` reads the selected `ResourceBar.fdf` and race skin.
+Named texture/string templates, anonymous inherited texture instances, font
+sizes, icon dimensions, TextLength and slot anchors remain source-derived.
+The viewport top-right attachment is an explicit recreation choice: the FDF
+has no root attachment record. Asset receipts retain source identity/version
+and hashes in `CampaignHud.resource_receipts`. Unsupported or unknown state
+reaches `CampaignHud.resource_error`; unknown counters display no invented text.
+
+The read-only `ObjectHost::player_resource_value` projection supplies effective
+local-player gold, lumber, food usage and food cap. Recorded setter requests are
+never treated as balances. The food separator is neutral mathematical notation,
+an explicit recreation choice until a native source-format binding is retained.
+A local compatibility Game.dll printable-string scan found several candidate
+ratio formats but no resource-bar call-site binding; those bytes do not establish
+native usage or the target release. Upkeep remains blank with a diagnostic until
+an effective source-qualified tier is available.
+
+Image/final font payloads share an application aggregate cap; frame/image values
+come from the assets. Repeated effective values do not rewrite Text components.
+Parser fixtures exercise inherited icon/font properties, authored anchor offsets,
+unsupported/malformed anchors, and an explicitly ignored original-FDF check.
+These checks do not prove the native resource-bar appearance or update behavior.
 
 Native Xvfb/Vulkan software-rendered Human01 replay on 2026-10-20 opens the live
 quest list through a fast click, closes it with Escape, then suspends through Menu

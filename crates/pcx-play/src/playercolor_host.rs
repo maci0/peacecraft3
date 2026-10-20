@@ -90,6 +90,8 @@ pub enum Failure {
     WrongFamily,
     #[error("arguments do not match the quest native declaration")]
     QuestArguments,
+    #[error("script dialog: {0}")]
+    DialogState(&'static str),
     #[error("quest state: {0}")]
     QuestState(&'static str),
     #[error("rectangle state: {0}")]
@@ -220,6 +222,18 @@ enum Entry {
         fade_in_rate: i32,
         fade_out_rate: i32,
         eax_setting: String,
+    },
+    Dialog {
+        live: bool,
+    },
+    DialogButton {
+        dialog: HandleId,
+        live: bool,
+    },
+    RegisteredDialogEvent {
+        trigger: HandleId,
+        dialog: HandleId,
+        button: Option<HandleId>,
     },
     Quest {
         live: bool,
@@ -607,6 +621,11 @@ impl EnumHost {
             Entry::Timer { live: false, .. } | Entry::Group { live: false } => {
                 return Err(self.error("arena", Failure::Identity));
             }
+            Entry::Dialog { live: true } => "dialog",
+            Entry::DialogButton { live: true, .. } => "button",
+            Entry::Dialog { live: false } | Entry::DialogButton { live: false, .. } => {
+                return Err(self.error("arena", Failure::Identity));
+            }
             Entry::Quest { live: true } => "quest",
             Entry::QuestItem { live: true } => "questitem",
             Entry::Quest { live: false } | Entry::QuestItem { live: false } => {
@@ -628,7 +647,8 @@ impl EnumHost {
             Entry::FogModifier(Some(_)) => "fogmodifier",
             Entry::FogModifier(None) => return Err(self.error("arena", Failure::Identity)),
             Entry::Trigger { .. } | Entry::DeadTrigger => "trigger",
-            Entry::RegisteredUnitEvent { .. }
+            Entry::RegisteredDialogEvent { .. }
+            | Entry::RegisteredUnitEvent { .. }
             | Entry::RegisteredPlayerUnitEvent(_)
             | Entry::RegisteredPlayerEvent(_)
             | Entry::RegisteredDeathEvent(_)
@@ -757,6 +777,7 @@ pub use objects::{
     UnitRangeEntry, UnitStateBudget,
 };
 pub use objects::{
-    CinematicScene, Combat, DestructableState, EventSubject, FiredEvent, FogModifier, Indicator,
-    MinimapPing, Relation, Vitals, Weapon,
+    CinematicScene, Combat, DestructableState, DialogBudget, DialogButton, DialogQuitRequest,
+    DialogState, EventSubject, FiredEvent, FogModifier, Indicator, MinimapPing, Relation,
+    ScriptDialog, Vitals, Weapon,
 };

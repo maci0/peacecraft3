@@ -7,11 +7,11 @@ use crate::label_sounds::SoundBank;
 use crate::map_admission::ParsedMapContext;
 use crate::neutral_player::{NeutralError, SelectedMapNeutralHost, VerifiedNeutralRule};
 use crate::playercolor_host::{
-    ConditionBudget, DestructableBudget, EnumHost, Error as HostError, FilterBudget, ForceBudget,
-    ItemBudget, Limits, MapConfigBudget, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget,
-    PlayerBudget, PlayerStateRequestBudget, QuestBudget, RegionBudget, ResearchObservation,
-    StartupSettings, StockBudget, TechLimitBudget, TimerHost, TriggerBudget, UnitBudget,
-    UnitStateBudget,
+    ConditionBudget, DestructableBudget, DialogBudget, EnumHost, Error as HostError, FilterBudget,
+    ForceBudget, ItemBudget, Limits, MapConfigBudget, ObjectHost, PlayerAdmissionError,
+    PlayerAllianceBudget, PlayerBudget, PlayerStateRequestBudget, QuestBudget, RegionBudget,
+    ResearchObservation, StartupSettings, StockBudget, TechLimitBudget, TimerHost, TriggerBudget,
+    UnitBudget, UnitStateBudget,
 };
 use crate::sound_parameters::Banks;
 use crate::startup_clock::StartupClock;
@@ -87,6 +87,8 @@ pub struct MapStartupBudgets {
     pub stock: Option<StockBudget>,
     /// None keeps quest and quest-item natives unsupported.
     pub quests: Option<QuestBudget>,
+    /// None keeps script-created dialogs and dialog events unsupported.
+    pub dialogs: Option<DialogBudget>,
     /// None keeps `CreateItem` unsupported.
     pub items: Option<ItemBudget>,
 }
@@ -246,6 +248,8 @@ pub struct MapStartupInputs {
     pub file_sounds: file_sounds::Assets,
     pub sound_parameters: Banks,
     pub sound_playback: Option<sound_playback::Rules>,
+    pub resources: Option<crate::player_resources::Rules>,
+    pub dialog_layout: Option<crate::dialog_layout::Rules>,
     pub clock: StartupClockInput,
     /// Explicit game time for positive-timeout timers; absent keeps TimerStart unsupported.
     pub timer_time: Option<f64>,
@@ -482,6 +486,8 @@ pub fn assemble(
         file_sounds,
         sound_parameters,
         sound_playback,
+        resources,
+        dialog_layout,
         clock,
         timer_time,
         trigger_runtime,
@@ -552,6 +558,9 @@ pub fn assemble(
         )?
         .with_unit_states(budgets.unit_states)?
         .with_defend_ability(&defend.tables, &defend.alias)?;
+    if let Some(rules) = resources {
+        object = object.with_player_resources(rules)?;
+    }
     if context
         .scripts
         .program()
@@ -632,6 +641,12 @@ pub fn assemble(
         {
             object.admit_thread_sleep(parked)?;
         }
+    }
+    if let Some(budget) = budgets.dialogs {
+        object = object.with_dialogs(budget)?;
+    }
+    if let Some(rules) = dialog_layout {
+        object = object.with_dialog_layout(rules)?;
     }
     if let Some(policy) = numeric {
         object = object.with_script_numeric(policy);

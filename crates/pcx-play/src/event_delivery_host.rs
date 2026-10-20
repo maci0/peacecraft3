@@ -14,6 +14,9 @@ pub struct EventSubject {
     /// Killing or attacking unit.
     pub source: Option<HandleId>,
     pub destructable: Option<HandleId>,
+    pub dialog: Option<HandleId>,
+    pub button: Option<HandleId>,
+    pub player: Option<HandleId>,
 }
 
 #[derive(Debug)]
@@ -35,16 +38,69 @@ pub(super) struct Delivery {
     region_known: BTreeSet<HandleId>,
 }
 
-const RESPONSES: [&str; 6] = [
+const RESPONSES: [&str; 9] = [
     "GetTriggerUnit",
     "GetEnteringUnit",
     "GetLeavingUnit",
     "GetDyingUnit",
     "GetKillingUnit",
     "GetAttacker",
+    "GetClickedDialog",
+    "GetClickedButton",
+    "GetTriggerPlayer",
 ];
 
 impl ObjectHost {
+    pub(super) fn check_trigger_player_response(&self, source: &str) -> Result<(), Error> {
+        let name = "GetTriggerPlayer";
+        if self.inner.program.natives().get(name).is_none()
+            && self.inner.program.natives().ambiguous(name).is_none()
+        {
+            return Ok(());
+        }
+        Self::contract_in(
+            &self.inner,
+            name,
+            &[],
+            "player",
+            true,
+            Some("player"),
+            false,
+        )?;
+        if self
+            .inner
+            .program
+            .natives()
+            .get(name)
+            .is_none_or(|n| n.source != source)
+        {
+            return Err(self.inner.error(name, Failure::Source));
+        }
+        Ok(())
+    }
+    pub(super) fn reserve_dialog_event_delivery(
+        &mut self,
+        count: usize,
+        limit: usize,
+    ) -> Result<(), Error> {
+        let pending = self
+            .events
+            .queue
+            .iter()
+            .filter(|event| event.subject.dialog.is_some())
+            .count();
+        if pending.checked_add(count).is_none_or(|n| n > limit) {
+            return Err(self.inner.error(
+                "dialog button input",
+                Failure::Budget("pending dialog events"),
+            ));
+        }
+        self.events
+            .queue
+            .try_reserve(count)
+            .map_err(|_| self.inner.error("event delivery", Failure::Capacity))
+    }
+
     pub(super) fn queue_event(
         &mut self,
         trigger: HandleId,
@@ -124,13 +180,28 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
+        if matches!(name, "GetClickedDialog" | "GetClickedButton") && self.dialogs.is_none() {
+            return None;
+        }
         if !RESPONSES.contains(&name) || !args.is_empty() {
             return None;
         }
         self.inner.program.natives().get(name)?;
         let subject = self.events.subject;
+        if name == "GetTriggerPlayer" {
+            let source = &self.inner.program.natives().get("CreateTimer")?.source;
+            if let Err(error) = self.check_trigger_player_response(source) {
+                return Some(Err(error));
+            }
+            if self.events.active && subject.player.is_none() {
+                return None;
+            }
+        }
         let value = match name {
             "GetKillingUnit" | "GetAttacker" => subject.source,
+            "GetClickedDialog" => subject.dialog,
+            "GetClickedButton" => subject.button,
+            "GetTriggerPlayer" => subject.player,
             _ if subject.unit.is_some() => subject.unit,
             // Fall through to range delivery, which owns its own responses.
             "GetTriggerUnit" | "GetEnteringUnit" if self.range_context().is_some() => return None,

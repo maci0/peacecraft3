@@ -172,19 +172,26 @@ const MAX_MENU_STRINGS_BYTES: u64 = 1 << 20;
 const GLOBAL_STRINGS: &str = "UI\\FrameDef\\GlobalStrings.fdf";
 
 fn menu_key(text: &str) -> Result<KeyCode, String> {
-    let value = crate::global_strings::global_string(text, "KEY_MENU")
-        .ok_or_else(|| format!("{GLOBAL_STRINGS}: missing KEY_MENU"))?;
-    let key = if let Some((_, highlighted)) = value.split_once("|C") {
-        let (_, text) = highlighted
-            .split_at_checked(8)
-            .filter(|(color, _)| color.bytes().all(|byte| byte.is_ascii_hexdigit()))
-            .ok_or_else(|| format!("{GLOBAL_STRINGS}: malformed KEY_MENU color"))?;
-        text.split_once("|R")
-            .map(|(key, _)| key)
-            .ok_or_else(|| format!("{GLOBAL_STRINGS}: unterminated KEY_MENU highlight"))?
-    } else {
-        value.as_str()
-    };
+    authored_function_key(text, "KEY_MENU")
+}
+
+/// Reads a source-qualified function-key label from the supplied global strings.
+pub fn authored_function_key(text: &str, label_key: &str) -> Result<KeyCode, String> {
+    let value = crate::global_strings::global_string(text, label_key)
+        .ok_or_else(|| format!("{GLOBAL_STRINGS}: missing {label_key}"))?;
+    let key =
+        if let Some((_, highlighted)) = value.split_once("|C").or_else(|| value.split_once("|c")) {
+            let (_, text) = highlighted
+                .split_at_checked(8)
+                .filter(|(color, _)| color.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                .ok_or_else(|| format!("{GLOBAL_STRINGS}: malformed {label_key} color"))?;
+            text.split_once("|R")
+                .or_else(|| text.split_once("|r"))
+                .map(|(key, _)| key)
+                .ok_or_else(|| format!("{GLOBAL_STRINGS}: unterminated {label_key} highlight"))?
+        } else {
+            value.as_str()
+        };
     // Function-key names are a keyboard format, not selected asset values.
     let keys = [
         KeyCode::F1,
@@ -216,7 +223,7 @@ fn menu_key(text: &str) -> Result<KeyCode, String> {
         .and_then(|number| number.parse::<usize>().ok())
         .and_then(|number| number.checked_sub(1))
         .and_then(|index| keys.get(index).copied())
-        .ok_or_else(|| format!("{GLOBAL_STRINGS}: unsupported KEY_MENU {value:?}"))
+        .ok_or_else(|| format!("{GLOBAL_STRINGS}: unsupported {label_key} {value:?}"))
 }
 
 fn pause_view(
@@ -470,6 +477,22 @@ fn pose(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn authored_function_keys_share_mapping_for_localized_labels() {
+        use super::*;
+        assert_eq!(
+            authored_function_key(
+                "KEY_QUESTS \"Objectives (|cabc12345F7|r)\",\n",
+                "KEY_QUESTS"
+            ),
+            Ok(KeyCode::F7)
+        );
+        assert_eq!(
+            authored_function_key("KEY_QUESTS \"F12\",\n", "KEY_QUESTS"),
+            Ok(KeyCode::F12)
+        );
+        assert!(authored_function_key("KEY_MENU \"F7\",\n", "KEY_QUESTS").is_err());
+    }
     #[test]
     fn menu_key_follows_selected_strings_and_refuses_unknown_names() {
         use super::*;

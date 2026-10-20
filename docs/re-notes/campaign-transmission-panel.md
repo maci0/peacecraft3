@@ -37,14 +37,9 @@ component order is not established by the existing renderer, so those background
 layers are omitted and the exact frame is reported in `CampaignMessages.last_error`.
 Their independently supported border pieces still render. Equal-inset portrait
 backgrounds render. This is an explicit partial transmission surface, not a full
-cinematic/dialog fidelity claim. JASS script-button dialogs are a separate, unimplemented surface. There is no
-live `DialogCreate`/`DialogDisplay`/`DialogAddButton` state, handle lifecycle,
-button-event dispatch or renderer in the current gameplay Host. Parsing
-`ScriptDialog.fdf` declarations does not implement those natives. Its dynamic
-button placement and sizing also require evidence; no content or layout is
-substituted. The local unchanged Human01 map does not call these dialog natives
-directly, while the shipped `Blizzard.j` wrappers and game-over helpers do use
-them. Those paths remain unsupported and must not be presented as working.
+cinematic/dialog fidelity claim. JASS script-button dialogs are a separate surface, now described in
+[the executed script-dialog note](script-dialog-runtime.md). This transmission
+panel does not consume or fabricate their handle/button state.
 
 Per-source reads and raster decode allocations are bounded; decoded transmission
 images have a 64 MiB aggregate ceiling. These limits are application resource

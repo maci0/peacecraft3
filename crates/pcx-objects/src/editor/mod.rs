@@ -70,9 +70,13 @@
 //!   The same check is run at load time by [`Editor::open_in`] for every field
 //!   of every metadata table, and the ones that fail are counted in
 //!   [`EditorCensus`] rather than answered with a blank.
-//! * **836 unit rawcodes, in all five unit tables at once.** `UnitData`,
-//!   `unitUI`, `UnitBalance`, `UnitWeapons` and `UnitAbilities` each carry a
-//!   row with the same rawcode in column 1, and no table repeats one.
+//! * **836 canonical unit rawcodes, in all five unit tables at once.** `UnitData`,
+//!   `unitUI`, `UnitBalance`, `UnitWeapons` and `UnitAbilities` carry those
+//!   shared identities. A selected UnitWeapons table can have a different
+//!   identity header and additional authored rows. Its identity column is then
+//!   derived from a unique complete join to the supplied UnitData/UnitBalance
+//!   keys, with every weapon key validated; header aliases and column order
+//!   are not inferred from a known install.
 //! * **All 135 field fourccs used by any shipped `w3u`/`w3t` modification**
 //!   (3 401 entries on 1.28c, 5 975 on both builds) come from
 //!   `UnitMetaData.slk`. The **eight** metadata tables this crate reads hold
@@ -166,6 +170,7 @@ pub mod campaign_index;
 pub mod defaults;
 pub mod fog_boundary;
 pub mod hero;
+mod keys;
 pub mod messages;
 pub mod meta;
 pub mod misc;
@@ -391,7 +396,17 @@ impl Editor {
             let Some(t) = tables.get(id) else { continue };
             let mut m = BTreeMap::new();
             let mut spelled = Vec::new();
-            if let Some(c) = t.column_of(id.id_column().unwrap()) {
+            let column = if *id == SlkId::UnitWeapons {
+                Some(keys::weapon_identity_column(&tables).map_err(|detail| {
+                    Error::Unsupported {
+                        what: "editor weapon identity schema",
+                        detail: Some(format!("{}: {detail}", install.display())),
+                    }
+                })?)
+            } else {
+                t.column_of(id.id_column().expect("row-bearing table identity"))
+            };
+            if let Some(c) = column {
                 for r in t.data_rows() {
                     if let Some(v) = r.get(c) {
                         m.entry(v.to_lowercase()).or_insert(r.index());

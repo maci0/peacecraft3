@@ -521,7 +521,22 @@ impl DefaultTables {
                     SlkId::Doodads => Some("doodID"),
                     _ => id.id_column(),
                 };
-                let Some(column) = key.and_then(|key| table.column_of(key)) else {
+                let column = if id == SlkId::UnitWeapons {
+                    match super::keys::weapon_identity_column(&editor.tables) {
+                        Ok(column) => Some(column),
+                        Err(detail) => {
+                            unresolved.push(Unresolved::Row {
+                                member: id.path().into(),
+                                row: 1,
+                                detail,
+                            });
+                            continue;
+                        }
+                    }
+                } else {
+                    key.and_then(|key| table.column_of(key))
+                };
+                let Some(column) = column else {
                     unresolved.push(Unresolved::Row {
                         member: id.path().into(),
                         row: 1,

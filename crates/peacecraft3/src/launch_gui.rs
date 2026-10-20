@@ -427,6 +427,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     crate::glue_menu::install(&mut app);
     crate::hud_render::install(&mut app);
     crate::campaign_messages::install(&mut app);
+    crate::campaign_script_dialogs::install(&mut app);
     crate::tooltip::install(&mut app);
     crate::menu_settings::install(&mut app);
     #[cfg(not(target_arch = "wasm32"))]

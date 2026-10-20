@@ -306,6 +306,7 @@ fn budgets() -> MapStartupBudgets {
         game_state_events: 4,
         stock: None,
         quests: None,
+        dialogs: None,
         items: None,
     }
 }
@@ -664,6 +665,8 @@ fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) ->
         )
         .expect("file sounds"),
         sound_playback: None,
+        resources: None,
+        dialog_layout: None,
         sound_parameters: Banks::read(
             &[],
             sound_parameters::BanksBudget {

@@ -28,6 +28,9 @@ use pcx_play::scripts::AssetIdentity;
 use pcx_script::HandleId;
 use std::{collections::HashSet, sync::Weak};
 use tracing::warn;
+#[path = "script_audio_mix.rs"]
+mod mix;
+use pcx_play::map_startup_host::sound_playback::VoicePolicy;
 
 /// Per-voice source gain, including the source-timed fade. User gain multiplies it.
 #[derive(Component)]
@@ -40,11 +43,12 @@ pub struct ScriptAudioMetadata {
     pub channel: Option<i32>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PlaybackProfile {
     maximum: f32,
     update_seconds: f32,
     minimum_fade_step: u32,
+    mix: Option<std::sync::Arc<VoicePolicy>>,
 }
 
 #[derive(Component)]
@@ -116,6 +120,8 @@ struct ScriptAudioMemory {
     sources: Vec<LiveSource>,
     playing: HashSet<HandleId>,
     profile: Option<(Weak<()>, Result<PlaybackProfile, String>)>,
+    mixed: Vec<mix::Active>,
+    next_serial: u64,
 }
 
 struct LiveSource {
@@ -128,6 +134,18 @@ struct LiveSource {
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScriptAudioPlayback;
+
+type ScriptVoices<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static ScriptVoice,
+        Option<&'static AudioSink>,
+        Has<AudioPlayer>,
+        Option<&'static mix::Voice>,
+    ),
+>;
 
 pub fn install(app: &mut App) {
     app.init_resource::<ScriptAudioReport>()
@@ -156,7 +174,7 @@ fn play_published_script_sounds(
     mut report: ResMut<ScriptAudioReport>,
     mut memory: ResMut<ScriptAudioMemory>,
     limits: Option<Res<ScriptAudioLimits>>,
-    voices: Query<(Entity, &ScriptVoice, Option<&AudioSink>, Has<AudioPlayer>)>,
+    voices: ScriptVoices,
 ) {
     let current = session.session_witness();
     reclaim_script_voices(
@@ -204,6 +222,7 @@ fn play_published_script_sounds(
                 maximum,
                 update_seconds: rules.update_seconds(),
                 minimum_fade_step: rules.minimum_fade_step(),
+                mix: Some(rules.voice_policy()),
             })
         })();
         memory.profile = Some((witness.clone(), profile));
@@ -258,18 +277,26 @@ fn reclaim_script_voices(
     commands: &mut Commands,
     assets: &mut Assets<AudioSource>,
     memory: &mut ScriptAudioMemory,
-    voices: &Query<(Entity, &ScriptVoice, Option<&AudioSink>, Has<AudioPlayer>)>,
+    voices: &ScriptVoices,
     current: Option<&Weak<()>>,
 ) {
     let mut finished = Vec::new();
     memory.playing.clear();
-    for (entity, voice, sink, has_player) in voices.iter() {
+    memory.mixed.clear();
+    for (entity, voice, sink, has_player, mixed) in voices.iter() {
         let current_voice = current.is_some_and(|session| Weak::ptr_eq(session, &voice.session));
         let sink_empty = sink.map(AudioSinkPlayback::empty);
         if !current_voice || oneshot_completed(voice.looping, has_player, sink_empty) {
             finished.push((entity, voice.source.clone()));
         } else {
             memory.playing.insert(voice.handle);
+            if let Some(mixed) = mixed {
+                memory.mixed.push(mix::Active {
+                    voice: mixed.clone(),
+                    entity,
+                    source: voice.source.clone(),
+                });
+            }
         }
     }
     for (entity, source) in finished {
@@ -300,7 +327,7 @@ enum Classified {
     Refuse(HandleId, String),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PlayPlan {
     id: HandleId,
     encoded_mp3: bool,
@@ -314,6 +341,9 @@ struct PlayPlan {
     duration: Option<i32>,
     profile: Option<PlaybackProfile>,
     channel: Option<i32>,
+    mix: Option<mix::Voice>,
+    victim: Option<HandleId>,
+    channel_gain: f32,
 }
 
 impl PlayPlan {
@@ -333,6 +363,7 @@ struct Observed<'a> {
     fade_out_rate: i32,
     eax: &'a str,
     duration: Option<i32>,
+    member: &'a str,
 }
 
 struct Prepared {
@@ -357,7 +388,7 @@ fn publish_queued_starts(
         .as_ref()
         .filter(|(witness, _)| Weak::ptr_eq(witness, session))
         .and_then(|(_, value)| value.as_ref().ok())
-        .copied();
+        .cloned();
     let mut ids = Vec::new();
     ids.try_reserve_exact(objects.pending_sound_starts().len())
         .map_err(|_| "script audio start list allocation failed".to_string())?;
@@ -369,6 +400,12 @@ fn publish_queued_starts(
     let mut seen = HashSet::new();
     seen.try_reserve(ids.len())
         .map_err(|_| "script audio start identity allocation failed".to_string())?;
+    let mut simulated: Vec<_> = memory
+        .mixed
+        .iter()
+        .map(|active| active.voice.clone())
+        .collect();
+    let mut serial = memory.next_serial;
     for id in ids {
         if memory.playing.contains(&id) || !seen.insert(id) {
             classified.push(Classified::Refuse(
@@ -376,7 +413,27 @@ fn publish_queued_starts(
                 "repeat StartSound on an active handle has no admitted playback behavior".into(),
             ));
         } else {
-            classified.push(classify(objects, id, profile)?);
+            let mut classified_sound = classify(objects, id, profile.clone())?;
+            if let Classified::Play(plan) = &mut classified_sound
+                && let Some(voice) = &mut plan.mix
+                && let Some(policy) = profile.as_ref().and_then(|profile| profile.mix.as_ref())
+            {
+                voice.serial = serial;
+                serial = serial
+                    .checked_add(1)
+                    .ok_or("script audio start serial overflowed")?;
+                match mix::admission(simulated.iter(), voice, policy) {
+                    Ok(victim) => {
+                        plan.victim = victim;
+                        if let Some(victim) = victim {
+                            simulated.retain(|voice| voice.id != victim);
+                        }
+                        simulated.push(voice.clone());
+                    }
+                    Err(reason) => classified_sound = Classified::Refuse(id, reason),
+                }
+            }
+            classified.push(classified_sound);
         }
     }
     let mut staged = 0usize;
@@ -445,7 +502,7 @@ fn publish_queued_starts(
         match item {
             Err(refusal) => ready.push(Err(refusal)),
             Ok(prepared) => {
-                let plan = prepared.plan;
+                let plan = prepared.plan.clone();
                 match commit_source(objects, assets, memory, session, prepared) {
                     Ok(voice) => {
                         committed.push(voice.source.clone());
@@ -461,6 +518,7 @@ fn publish_queued_starts(
             }
         }
     }
+    memory.next_serial = serial;
     objects.take_sound_starts();
     for item in ready {
         match item {
@@ -471,6 +529,17 @@ fn publish_queued_starts(
                 report.refusal_count = report.refusal_count.saturating_add(1);
             }
             Ok((voice, plan)) => {
+                if let Some(victim) = plan.victim
+                    && let Some(at) = memory
+                        .mixed
+                        .iter()
+                        .position(|active| active.voice.id == victim)
+                {
+                    let old = memory.mixed.swap_remove(at);
+                    commands.entity(old.entity).despawn();
+                    memory.release(assets, &old.source);
+                    memory.playing.remove(&victim);
+                }
                 let mut playback = if voice.looping {
                     PlaybackSettings::LOOP
                 } else {
@@ -483,7 +552,7 @@ fn publish_queued_starts(
                 memory.playing.insert(voice.handle);
                 let rate = voice.fade_in_rate;
                 let mut entity = commands.spawn((
-                    AudioPlayer(source),
+                    AudioPlayer(source.clone()),
                     playback,
                     voice,
                     ScriptAudioMetadata {
@@ -491,6 +560,14 @@ fn publish_queued_starts(
                         channel: plan.channel,
                     },
                 ));
+                if let Some(mixed) = plan.mix {
+                    entity.insert(mixed.clone());
+                    memory.mixed.push(mix::Active {
+                        voice: mixed,
+                        entity: entity.id(),
+                        source,
+                    });
+                }
                 if let Some(gain) = plan.gain {
                     entity.insert(ScriptAudioGain(gain));
                     if let Some(profile) = plan.profile {
@@ -500,7 +577,8 @@ fn publish_queued_starts(
                             FadeIn {
                                 elapsed: 0.0,
                                 period: f64::from(profile.update_seconds),
-                                increment: f64::from(step) / f64::from(profile.maximum),
+                                increment: f64::from(step) / f64::from(profile.maximum)
+                                    * f64::from(plan.channel_gain),
                                 target: gain,
                             },
                         ));
@@ -542,6 +620,7 @@ fn classify(
                 fade_out_rate: state.fade_out_rate,
                 eax: state.eax_setting,
                 duration: state.duration,
+                member: state.resource.member(),
             },
         );
     }
@@ -561,6 +640,7 @@ fn classify(
                 fade_out_rate: state.fade_out_rate,
                 eax: state.eax_setting,
                 duration: state.duration,
+                member: state.resource.member(),
             },
         );
     }
@@ -586,6 +666,7 @@ fn classify(
             fade_out_rate: state.fade_out_rate,
             eax: "",
             duration: state.duration,
+            member: state.resource.resource().member(),
         },
     )
 }
@@ -626,7 +707,9 @@ fn plan_file(
     let mut speed = None;
     let mut duration = None;
     let mut channel = None;
-    if let Some(profile) = profile {
+    let mut mixed = None;
+    let mut channel_gain = 1.0;
+    if let Some(profile) = profile.as_ref() {
         if observed.fade_in_rate < 0 || observed.fade_out_rate < 0 {
             return Ok(Classified::Refuse(
                 id,
@@ -638,23 +721,64 @@ fn plan_file(
             .map_err(|e| e.to_string())?;
         let volume = match assignment {
             Some(assignment) => match assignment.parameters {
-                pcx_play::sound_parameters::ParameterValues::Dialogue(parameters)
-                    if parameters.flags == "0" =>
-                {
-                    Some(parameters.values.volume)
-                }
                 pcx_play::sound_parameters::ParameterValues::Dialogue(parameters) => {
-                    return Ok(Classified::Refuse(
-                        id,
-                        format!(
-                            "dialogue parameter label {:?}, row {}, source {} ({:?}): unsupported Flags={:?}; channel/list saturation and preemption are not implemented",
-                            parameters.label,
-                            parameters.row,
-                            assignment.source.source_label,
-                            assignment.source.origin,
-                            parameters.flags,
-                        ),
-                    ));
+                    let mut preempt_channel = false;
+                    let mut preempt_list = false;
+                    for flag in parameters.flags.split(['|', ',']).map(str::trim) {
+                        match flag {
+                            "0" if parameters.flags == "0" => {}
+                            "CHANNELFULLPREEMPT" => preempt_channel = true,
+                            "LISTFULLPREEMPT" => preempt_list = true,
+                            _ => {
+                                return Ok(Classified::Refuse(
+                                    id,
+                                    format!(
+                                        "dialogue parameter label {:?}, row {}, source {} ({:?}): unsupported flag {:?} in Flags={:?}",
+                                        parameters.label,
+                                        parameters.row,
+                                        assignment.source.source_label,
+                                        assignment.source.origin,
+                                        flag,
+                                        parameters.flags
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                    if (preempt_channel || preempt_list) && profile.mix.is_none() {
+                        return Ok(Classified::Refuse(
+                            id,
+                            format!(
+                                "dialogue parameter label {:?}, row {}, source {} ({:?}): Flags={:?} require source channel/list preemption capacities",
+                                parameters.label,
+                                parameters.row,
+                                assignment.source.source_label,
+                                assignment.source.origin,
+                                parameters.flags
+                            ),
+                        ));
+                    }
+                    if let Some(policy) = &profile.mix {
+                        let channel = properties.channel.unwrap_or(policy.default_channel());
+                        let Some(rule) = policy.channel(channel) else {
+                            return Ok(Classified::Refuse(
+                                id,
+                                format!("sound channel {channel} missing from source policy"),
+                            ));
+                        };
+                        mixed = Some(mix::Voice {
+                            id,
+                            channel,
+                            priority: policy
+                                .default_priority()
+                                .clamp(rule.minimum_priority, rule.maximum_priority),
+                            member: observed.member.replace('\\', "/").to_ascii_lowercase(),
+                            serial: 0,
+                            preempt_channel,
+                            preempt_list,
+                        });
+                    }
+                    Some(parameters.values.volume)
                 }
                 pcx_play::sound_parameters::ParameterValues::Full(parameters) => {
                     return Ok(Classified::Refuse(
@@ -674,7 +798,41 @@ fn plan_file(
             },
             None => None,
         };
-        if let Some(volume) = properties.volume.or(volume) {
+        if mixed.is_none()
+            && let Some(policy) = &profile.mix
+        {
+            let channel = properties.channel.unwrap_or(policy.default_channel());
+            let Some(rule) = policy.channel(channel) else {
+                return Ok(Classified::Refuse(
+                    id,
+                    format!("sound channel {channel} missing from source policy"),
+                ));
+            };
+            mixed = Some(mix::Voice {
+                id,
+                channel,
+                priority: policy
+                    .default_priority()
+                    .clamp(rule.minimum_priority, rule.maximum_priority),
+                member: observed.member.replace('\\', "/").to_ascii_lowercase(),
+                serial: 0,
+                preempt_channel: false,
+                preempt_list: false,
+            });
+        }
+        if let Some(mixed) = &mixed
+            && let Some(policy) = &profile.mix
+        {
+            channel_gain = policy
+                .channel(mixed.channel)
+                .ok_or("source channel disappeared")?
+                .gain;
+        }
+        if let Some(volume) = properties
+            .volume
+            .or(volume)
+            .or_else(|| profile.mix.as_ref().map(|policy| policy.default_volume()))
+        {
             let volume = volume as f32;
             if !(0.0..=profile.maximum).contains(&volume) {
                 return Ok(Classified::Refuse(
@@ -682,14 +840,16 @@ fn plan_file(
                     "sound volume exceeds source range".into(),
                 ));
             }
-            gain = Some(volume / profile.maximum);
+            gain = Some(volume / profile.maximum * channel_gain);
         } else if observed.fade_in_rate != 0 || observed.fade_out_rate != 0 {
             return Ok(Classified::Refuse(
                 id,
                 "fade requires an explicit source target volume".into(),
             ));
         }
-        speed = properties.pitch;
+        speed = properties
+            .pitch
+            .or_else(|| profile.mix.as_ref().map(|policy| policy.default_pitch()));
         if speed.is_some_and(|pitch| pitch <= 0.0) {
             return Ok(Classified::Refuse(
                 id,
@@ -697,7 +857,10 @@ fn plan_file(
             ));
         }
         duration = observed.duration;
-        channel = supported.channel.take();
+        channel = supported
+            .channel
+            .take()
+            .or_else(|| mixed.as_ref().map(|voice| voice.channel));
         supported.volume = None;
         supported.pitch = None;
     } else if let Some(reason) = parameter_block(objects, id)? {
@@ -719,6 +882,9 @@ fn plan_file(
         duration,
         profile,
         channel,
+        mix: mixed,
+        victim: None,
+        channel_gain,
     }))
 }
 
@@ -1177,7 +1343,9 @@ endglobals
                  mut memory: ResMut<ScriptAudioMemory>,
                  limits: Res<ScriptAudioLimits>| {
                     let Fixture { host, profile } = &mut *fixture;
-                    memory.profile = profile.map(|profile| (witness.0.clone(), Ok(profile)));
+                    memory.profile = profile
+                        .as_ref()
+                        .map(|profile| (witness.0.clone(), Ok(profile.clone())));
                     publish_queued_starts(
                         host,
                         &witness.0,
@@ -1209,7 +1377,53 @@ endglobals
             maximum: 100.0,
             update_seconds: 0.25,
             minimum_fade_step: 3,
+            mix: None,
         }
+    }
+
+    pub(super) fn mix_policy(
+        channel_capacity: u32,
+        list_capacity: u8,
+        filename_capacity: u8,
+    ) -> std::sync::Arc<VoicePolicy> {
+        let mut defaults = Vec::new();
+        for (field, value) in [0x2c, 0x30, 0x34, 0x38, 0x3c, 0x40].into_iter().zip([
+            100,
+            1.0f32.to_bits(),
+            0,
+            7,
+            0,
+            0,
+        ]) {
+            defaults.extend([0xc7, 0x41, field]);
+            defaults.extend(value.to_le_bytes());
+        }
+        let channels: Vec<_> = [channel_capacity, 0, 100, 1.0f32.to_bits(), 0u32]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        std::sync::Arc::new(
+            VoicePolicy::read(
+                ScriptAsset {
+                    label: "synthetic:defaults",
+                    bytes: &defaults,
+                },
+                ScriptAsset {
+                    label: "synthetic:channels",
+                    bytes: &channels,
+                },
+                ScriptAsset {
+                    label: "synthetic:list",
+                    bytes: &[0x83, 0xf8, list_capacity],
+                },
+                ScriptAsset {
+                    label: "synthetic:filename",
+                    bytes: &[0x83, 0x78, 0x18, filename_capacity],
+                },
+                origin(),
+            )
+            .unwrap(),
+        )
     }
 
     #[test]
@@ -1234,7 +1448,11 @@ endglobals
 
     #[test]
     fn dialogue_source_volume_and_flag_refusals_preserve_receipt() {
-        for flags in ["0", "CHANNELFULLPREEMPT|LISTFULLPREEMPT"] {
+        for (flags, with_policy) in [
+            ("0", false),
+            ("CHANNELFULLPREEMPT|LISTFULLPREEMPT", false),
+            ("CHANNELFULLPREEMPT|LISTFULLPREEMPT", true),
+        ] {
             use pcx_play::sound_parameters::{Banks, BanksBudget, Input, Profile};
             let mut slk = String::from("ID;PWXL;N;E\r\n");
             let rows = [
@@ -1296,9 +1514,13 @@ endglobals
                 )
                 .unwrap();
             let mut world = world_for(object_host, limits_for(bytes.len()));
-            world.resource_mut::<Fixture>().profile = Some(profile());
+            let mut playback_profile = profile();
+            if with_policy {
+                playback_profile.mix = Some(mix_policy(4, 8, 4));
+            }
+            world.resource_mut::<Fixture>().profile = Some(playback_profile);
             publish(&mut world).unwrap();
-            if flags != "0" {
+            if flags != "0" && !with_policy {
                 assert_eq!(count::<ScriptVoice>(&mut world), 0);
                 let reason = world
                     .resource::<ScriptAudioReport>()
@@ -1333,6 +1555,90 @@ endglobals
                 .unwrap();
             assert_eq!(assignment.source.source_label, "synthetic:dialogue");
             assert_eq!(assignment.source.origin, &origin());
+        }
+    }
+
+    #[test]
+    fn source_list_preemption_retires_entities_and_shared_source_references() {
+        use pcx_play::sound_parameters::{Banks, BanksBudget, Input, Profile};
+        let table = b"ID;PWXL;N;E\r\nC;X1;Y1;K\"Selector\"\r\nC;X2;Y1;K\"DirectoryBase\"\r\nC;X3;Y1;K\"FileNames\"\r\nC;X4;Y1;K\"Volume\"\r\nC;X5;Y1;K\"Flags\"\r\nC;X6;Y1;K\"version\"\r\nC;X1;Y2;K\"Speech\"\r\nC;X2;Y2;K\"Voice\"\r\nC;X3;Y2;K\"a.wav\"\r\nC;X4;Y2;K\"50\"\r\nC;X5;Y2;K\"LISTFULLPREEMPT|CHANNELFULLPREEMPT\"\r\nC;X6;Y2;K\"0\"\r\nE\r\n";
+        for batch in [false, true] {
+            let bytes = pcm(16, false);
+            let assets = SoundAssets::read(
+                &[file_input(r"Media\a.wav", "synthetic:pcm", &bytes)],
+                file_budget(bytes.len(), 1),
+            )
+            .unwrap();
+            let banks = Banks::read(
+                &[Input {
+                    asset: ScriptAsset {
+                        label: "synthetic:dialogue",
+                        bytes: table,
+                    },
+                    origin: &origin(),
+                    label_column: "Selector",
+                    labels: &["Speech"],
+                    profile: Profile::Dialogue,
+                }],
+                BanksBudget {
+                    banks: 1,
+                    table_bytes: table.len(),
+                    total_table_bytes: table.len(),
+                    coordinates: CoordinateLimits {
+                        max_row: 8,
+                        max_column: 8,
+                    },
+                    definitions: 1,
+                    metadata_bytes: 512,
+                },
+            )
+            .unwrap();
+            let mut object_host = host(assets).with_sound_parameter_banks(banks).unwrap();
+            let mut ids = Vec::new();
+            for _ in 0..2 {
+                let id = start(
+                    &mut object_host,
+                    &create(r"Media\a.wav", false, false, false, 2, 2, ""),
+                );
+                object_host
+                    .native(
+                        "SetSoundParamsFromLabel",
+                        &[Value::Handle(id), Value::Str("Speech".into())],
+                    )
+                    .unwrap();
+                ids.push(id);
+            }
+            let mut world = world_for(object_host, limits_for(bytes.len()));
+            let mut playback_profile = profile();
+            playback_profile.mix = Some(mix_policy(4, 2, 4));
+            world.resource_mut::<Fixture>().profile = Some(playback_profile);
+            if !batch {
+                publish(&mut world).unwrap();
+                assert_eq!(count::<ScriptVoice>(&mut world), 2);
+            }
+            let id = {
+                let mut fixture = world.resource_mut::<Fixture>();
+                let id = start(
+                    &mut fixture.host,
+                    &create(r"Media\a.wav", false, false, false, 2, 2, ""),
+                );
+                fixture
+                    .host
+                    .native(
+                        "SetSoundParamsFromLabel",
+                        &[Value::Handle(id), Value::Str("Speech".into())],
+                    )
+                    .unwrap();
+                id
+            };
+            publish(&mut world).unwrap();
+            let mut voices = world.query::<&ScriptVoice>();
+            let surviving: HashSet<_> = voices.iter(&world).map(|voice| voice.handle).collect();
+            assert_eq!(surviving, HashSet::from([ids[1], id]));
+            assert_eq!(world.resource::<Assets<AudioSource>>().iter().count(), 1);
+            assert_eq!(world.resource::<ScriptAudioMemory>().sources[0].voices, 2);
+            assert_eq!(world.resource::<ScriptAudioReport>().played, 3);
+            assert_eq!(world.resource::<ScriptAudioReport>().refusal_count, 0);
         }
     }
 
@@ -1671,12 +1977,7 @@ endglobals
                 move |mut commands: Commands,
                       mut assets: ResMut<Assets<AudioSource>>,
                       mut memory: ResMut<ScriptAudioMemory>,
-                      voices: Query<(
-                    Entity,
-                    &ScriptVoice,
-                    Option<&AudioSink>,
-                    Has<AudioPlayer>,
-                )>| {
+                      voices: ScriptVoices| {
                     reclaim_script_voices(
                         &mut commands,
                         &mut assets,
@@ -1743,6 +2044,189 @@ endglobals
             });
         assert_eq!(count, 4096);
         assert!(audible);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[ignore = "requires PCX_SCRIPT_AUDIO_{CLIENT,BJ,TABLE,MAP,MEDIA,LABEL} local original inputs"]
+    fn local_original_dialogue_voice_decodes_through_published_consumer() {
+        use bevy::audio::Decodable;
+        use pcx_play::sound_parameters::{Banks, BanksBudget, Input, Profile};
+        use pcx_script::{Expr, Item, Literal, Stmt};
+        let path = |name: &str| {
+            std::env::var(format!("PCX_SCRIPT_AUDIO_{name}"))
+                .expect("explicit local original input")
+        };
+        let client = path("CLIENT");
+        let bj = path("BJ");
+        let table_path = path("TABLE");
+        let map_path = path("MAP");
+        let media_path = path("MEDIA");
+        let label = path("LABEL");
+        let identity = |source: String| AssetIdentity {
+            source,
+            edition: "explicit local original selection".into(),
+            version:
+                "client digest qualified; adjacent asset release not independently established"
+                    .into(),
+        };
+        let image = std::fs::read(&client).unwrap();
+        let rules = pcx_play::map_startup_host::sound_playback::Rules::reviewed_legacy(
+            &image,
+            identity(client),
+        )
+        .unwrap();
+        let maximum = crate::sound_volume::VolumeScale::checked(&std::fs::read(&bj).unwrap())
+            .unwrap()
+            .maximum;
+        let raw = std::fs::read(&table_path).unwrap();
+        let banks = Banks::read(
+            &[Input {
+                asset: ScriptAsset {
+                    label: &table_path,
+                    bytes: &raw,
+                },
+                origin: &identity(table_path.clone()),
+                label_column: "SoundName",
+                labels: &[&label],
+                profile: Profile::Dialogue,
+            }],
+            BanksBudget {
+                banks: 1,
+                table_bytes: raw.len(),
+                total_table_bytes: raw.len(),
+                coordinates: CoordinateLimits {
+                    max_row: 100_000,
+                    max_column: 64,
+                },
+                definitions: 1,
+                metadata_bytes: 64 << 10,
+            },
+        )
+        .unwrap();
+        let original_map = std::fs::read_to_string(&map_path).unwrap();
+        let script = pcx_script::parse_script(&original_map).unwrap();
+        let init = script
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(function) if function.name.name == "InitSounds" => {
+                    function.body.as_ref()
+                }
+                _ => None,
+            })
+            .expect("original InitSounds");
+        let variables: Vec<_> = init
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Stmt::Call { callee, args, .. } if callee.name == "SetSoundParamsFromLabel" => {
+                    match args.as_slice() {
+                        [
+                            Expr::Ident(variable, _),
+                            Expr::Literal(Literal::Str(name), _),
+                        ] if name.decoded() == label => Some(variable.name.as_str()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(variables.len(), 1, "unambiguous original label assignment");
+        let creations: Vec<_> = init
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Stmt::Set {
+                    target: Expr::Ident(variable, _),
+                    value: Expr::Call { callee, args, .. },
+                    ..
+                } if variable.name == variables[0] => match callee.as_ref() {
+                    Expr::Ident(name, _) if name.name == "CreateSound" => Some(args),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(creations.len(), 1, "unambiguous original CreateSound");
+        let arguments: Vec<_> = creations[0]
+            .iter()
+            .map(|arg| match arg {
+                Expr::Literal(Literal::Str(value), _) => Value::Str(value.decoded()),
+                Expr::Literal(Literal::Bool(value), _) => Value::Bool(*value),
+                Expr::Literal(Literal::Int(value), _) => {
+                    Value::Int(i32::try_from(value.value).unwrap())
+                }
+                _ => panic!("unsupported original creation expression"),
+            })
+            .collect();
+        let Value::Str(member) = &arguments[0] else {
+            panic!("original sound filename")
+        };
+        let encoded = std::fs::read(&media_path).unwrap();
+        let asset_origin = identity(format!("{media_path} explicitly bound to {member}"));
+        let assets = SoundAssets::read_encoded(
+            &[SoundInput {
+                member,
+                asset: ScriptAsset {
+                    label: &media_path,
+                    bytes: &encoded,
+                },
+                origin: asset_origin,
+            }],
+            file_budget(encoded.len(), 1),
+            Mp3Budget {
+                max_input_allocation_bytes: encoded.len() + pcx_play::mp3_frame::DECODER_RING_BYTES,
+                max_decoder_steps: 2 << 20,
+                max_packets: 64 << 10,
+                max_frames: 4 << 20,
+                max_samples: 8 << 20,
+            },
+        )
+        .unwrap();
+        let mut object_host = host(assets).with_sound_parameter_banks(banks).unwrap();
+        let id = start(&mut object_host, &arguments);
+        object_host
+            .native(
+                "SetSoundParamsFromLabel",
+                &[Value::Handle(id), Value::Str(label)],
+            )
+            .unwrap();
+        let mut world = world_for(object_host, limits_for(encoded.len()));
+        world.resource_mut::<Fixture>().profile = Some(PlaybackProfile {
+            maximum,
+            update_seconds: rules.update_seconds(),
+            minimum_fade_step: rules.minimum_fade_step(),
+            mix: Some(rules.voice_policy()),
+        });
+        publish(&mut world).unwrap();
+        assert_eq!(world.resource::<ScriptAudioReport>().played, 1);
+        assert_eq!(
+            world.resource::<ScriptAudioReport>().refusal_count,
+            0,
+            "{:?}",
+            world.resource::<ScriptAudioReport>().last_refusal
+        );
+        let mut voices = world.query::<(&ScriptVoice, &mix::Voice, &FadeIn)>();
+        let (voice, mixed, fade) = voices.single(&world).unwrap();
+        assert_eq!(voice.member, member.as_str());
+        assert!(mixed.preempt_channel && mixed.preempt_list);
+        assert!(fade.target > 0.0);
+        let audio = world
+            .resource::<Assets<AudioSource>>()
+            .get(&voice.source)
+            .unwrap();
+        let (samples, nonzero) = audio
+            .decoder()
+            .take(8 << 20)
+            .fold((0usize, false), |(count, audible), sample| {
+                (count + 1, audible || sample != 0.0)
+            });
+        assert!(
+            samples > 0 && nonzero,
+            "selected original voice decoded silence"
+        );
+        println!(
+            "selected original voice published and decoded: {samples} samples; source flags retained and capacity policy admitted"
+        );
     }
 
     #[test]
@@ -1973,6 +2457,9 @@ E\r\n";
         source_profile_refuses_missing_volume_and_invalid_effective_numbers();
         dialogue_source_volume_and_flag_refusals_preserve_receipt();
         fade_clock_preserves_pauses_and_frame_partition();
-        15
+        source_list_preemption_retires_entities_and_shared_source_references();
+        mix::tests::list_and_channel_priority_rules_use_distinct_comparisons();
+        mix::tests::filename_capacity_and_deterministic_ties_preserve_flags();
+        18
     }
 }

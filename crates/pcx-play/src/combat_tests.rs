@@ -24,6 +24,7 @@ native TriggerRegisterUnitEvent takes trigger t, unit u, unitevent e returns eve
 constant native GetDyingUnit takes nothing returns unit
 constant native GetKillingUnit takes nothing returns unit
 constant native GetAttacker takes nothing returns unit
+constant native GetTriggerPlayer takes nothing returns player
 globals
 constant unitstate UNIT_STATE_LIFE = ConvertUnitState(0)
 constant unitstate UNIT_STATE_MAX_LIFE = ConvertUnitState(1)
@@ -324,6 +325,10 @@ fn attacks_and_deaths_queue_their_registered_triggers_with_event_responses() {
     assert!(delivery.actions.is_empty());
     assert_eq!(h.native("GetTriggerUnit", &[]).unwrap(), Value::Handle(b));
     assert_eq!(h.native("GetAttacker", &[]).unwrap(), Value::Handle(a));
+    assert!(
+        h.native("GetTriggerPlayer", &[]).is_err(),
+        "ordinary unit event has no admitted player response"
+    );
     h.finish_fired_event();
     assert_eq!(h.native("GetAttacker", &[]).unwrap(), Value::Null);
     h.native("KillUnit", &[Value::Handle(b)]).unwrap();
@@ -421,6 +426,11 @@ fn player_attacked_events_match_the_current_owner_and_keep_filters_and_event_con
     assert_eq!(h.native("GetTriggerEventId", &[]).unwrap(), attacked);
     assert_eq!(h.native("GetTriggerUnit", &[]).unwrap(), Value::Handle(b));
     assert_eq!(h.native("GetAttacker", &[]).unwrap(), Value::Handle(a));
+    let registered_player = Value::Handle(h.executed_unit(b).unwrap().owner);
+    assert_eq!(
+        h.native("GetTriggerPlayer", &[]).unwrap(),
+        registered_player
+    );
     h.finish_fired_event();
     let filtered = h.take_fired_event().unwrap();
     assert_eq!(Value::Handle(filtered.trigger), matching[3]);
@@ -437,6 +447,16 @@ fn player_attacked_events_match_the_current_owner_and_keep_filters_and_event_con
     assert!(h.take_fired_event().is_none());
     assert_eq!(h.native("GetAttacker", &[]).unwrap(), Value::Null);
     assert_eq!(h.native("GetFilterUnit", &[]).unwrap(), Value::Null);
+    h.native("KillUnit", &[Value::Handle(b)]).unwrap();
+    let death = h.take_fired_event().unwrap();
+    assert_eq!(Value::Handle(death.trigger), matching[2]);
+    h.begin_fired_event(&death).unwrap().unwrap();
+    assert_eq!(
+        h.native("GetTriggerPlayer", &[]).unwrap(),
+        registered_player
+    );
+    h.finish_fired_event();
+    assert_eq!(h.native("GetTriggerPlayer", &[]).unwrap(), Value::Null);
 }
 
 #[test]

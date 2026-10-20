@@ -470,7 +470,7 @@ impl ObjectHost {
                 Entry::RegisteredPlayerUnitEvent(r)
                     if r.player == owner && r.enumerand == player_death =>
                 {
-                    fired.push((r.trigger, r.filter, Some(r.playerunitevent)));
+                    fired.push((r.trigger, r.filter, Some(r.playerunitevent), Some(r.player)));
                 }
                 Entry::RegisteredUnitEvent {
                     trigger,
@@ -478,16 +478,16 @@ impl ObjectHost {
                     unitevent,
                     enumerand,
                 } if *u == unit && *enumerand == unit_death => {
-                    fired.push((*trigger, None, Some(*unitevent)));
+                    fired.push((*trigger, None, Some(*unitevent), None));
                 }
                 Entry::RegisteredDeathEvent(r) if r.widget == unit => {
-                    fired.push((r.trigger, None, None));
+                    fired.push((r.trigger, None, None, None));
                 }
                 _ => {}
             }
         }
-        for (trigger, filter, event) in fired {
-            self.queue_event(trigger, filter, subject, event)?;
+        for (trigger, filter, event, player) in fired {
+            self.queue_event(trigger, filter, EventSubject { player, ..subject }, event)?;
         }
         Ok(())
     }
@@ -691,12 +691,12 @@ impl ObjectHost {
                                 unitevent,
                                 enumerand,
                             } if *u == target && *enumerand == attacked => {
-                                Some((*trigger, None, *unitevent))
+                                Some((*trigger, None, *unitevent, None))
                             }
                             Entry::RegisteredPlayerUnitEvent(r)
                                 if r.player == owner && r.enumerand == player_attacked =>
                             {
-                                Some((r.trigger, r.filter, r.playerunitevent))
+                                Some((r.trigger, r.filter, r.playerunitevent, Some(r.player)))
                             }
                             _ => None,
                         })
@@ -706,8 +706,13 @@ impl ObjectHost {
                         source: Some(unit),
                         ..EventSubject::default()
                     };
-                    for (trigger, filter, event) in fired {
-                        self.queue_event(trigger, filter, subject, Some(event))?;
+                    for (trigger, filter, event, player) in fired {
+                        self.queue_event(
+                            trigger,
+                            filter,
+                            EventSubject { player, ..subject },
+                            Some(event),
+                        )?;
                     }
                 }
                 Some((swung, hit_at)) if now >= hit_at => {

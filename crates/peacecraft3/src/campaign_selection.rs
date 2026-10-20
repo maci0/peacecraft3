@@ -6,9 +6,8 @@
 //! (the last band takes the rest), and the ARGB tint is `ColorFriend`,
 //! `ColorNeutral` or `ColorEnemy` by the local player's relation to the owner.
 //! Recreation choices, unqualified against the original: the size is the
-//! circle's diameter, the circle is a flat alpha-blended quad at the ground
-//! height under the unit (slopes can cut through it), and the texture name takes
-//! a `.blp` suffix.
+//! circle's diameter, its image is clipped onto the admitted ground triangles,
+//! and the texture name takes a `.blp` suffix.
 use std::{
     collections::BTreeMap,
     sync::{Arc, Weak},
@@ -22,6 +21,9 @@ use peacecraft3::{
     map_ground::GroundPublication, map_requests::MapRequests, map_script_session::MapScriptSession,
 };
 
+#[path = "campaign_selection_mesh.rs"]
+mod projection;
+
 const TEXTURE_SUFFIX: &str = ".blp";
 /// Read and decode limit for one circle texture.
 const MAX_TEXTURE_BYTES: usize = 4 << 20;
@@ -34,7 +36,7 @@ struct SelectionCircle(HandleId);
 #[derive(Resource, Default)]
 pub(crate) struct CampaignSelection {
     session: Option<Weak<()>>,
-    quad: Option<Handle<Mesh>>,
+    meshes: BTreeMap<HandleId, (Transform, Handle<Mesh>)>,
     materials: BTreeMap<(String, [u8; 4]), Handle<StandardMaterial>>,
     pub last_error: Option<String>,
     last_counts: Option<(usize, usize, usize)>,
@@ -82,6 +84,7 @@ type Drawn = (
     Entity,
     &'static SelectionCircle,
     &'static mut Transform,
+    &'static mut Mesh3d,
     &'static mut MeshMaterial3d<StandardMaterial>,
 );
 
@@ -112,6 +115,9 @@ fn draw(
     } {
         state.session = witness;
         state.materials.clear();
+        for (_, mesh) in std::mem::take(&mut state.meshes).into_values() {
+            meshes.remove(mesh.id());
+        }
         state.last_error = None;
         state.last_counts = None;
         for (entity, ..) in &drawn {
@@ -140,10 +146,6 @@ fn draw(
                 Some("selection terrain does not belong to the active script session".into());
         }
     }
-    let quad = state
-        .quad
-        .get_or_insert_with(|| meshes.add(Plane3d::default().mesh().size(1.0, 1.0)))
-        .clone();
     let reader = requests
         .bindings
         .as_ref()
@@ -183,24 +185,61 @@ fn draw(
                 }
             }
         };
-        placed.insert(unit, (transform, material));
+        let mesh = match state.meshes.get(&unit) {
+            Some((previous, mesh)) if *previous == transform => mesh.clone(),
+            cached => {
+                let Some(context) = ground.context.as_ref() else {
+                    continue;
+                };
+                let projected = match projection::project(&context.terrain, &transform) {
+                    Ok(projected) => projected,
+                    Err(error) => {
+                        state.last_error =
+                            Some(format!("selection circle for unit {unit:?}: {error}"));
+                        continue;
+                    }
+                };
+                let handle = if let Some((_, handle)) = cached
+                    && let Some(mut mesh) = meshes.get_mut(handle)
+                {
+                    *mesh = projected;
+                    handle.clone()
+                } else {
+                    meshes.add(projected)
+                };
+                state.meshes.insert(unit, (transform, handle.clone()));
+                handle
+            }
+        };
+        placed.insert(unit, (transform, mesh, material));
     }
+    state.meshes.retain(|unit, (_, mesh)| {
+        if placed.contains_key(unit) {
+            true
+        } else {
+            meshes.remove(mesh.id());
+            false
+        }
+    });
     let counts = (selected_count, wanted_count, placed.len());
     if state.last_counts != Some(counts) {
         tracing::debug!(selected = counts.0, wanted = counts.1, placed = counts.2,
             error = ?state.last_error, "campaign selection circle projection");
         state.last_counts = Some(counts);
     }
-    for (entity, circle, mut transform, mut material) in &mut drawn {
+    for (entity, circle, mut transform, mut mesh, mut material) in &mut drawn {
         match placed.remove(&circle.0) {
-            Some((next, handle)) => {
+            Some((next, next_mesh, handle)) => {
                 *transform = next;
+                if mesh.0 != next_mesh {
+                    mesh.0 = next_mesh;
+                }
                 material.0 = handle;
             }
             None => commands.entity(entity).despawn(),
         }
     }
-    for (unit, (transform, material)) in placed {
+    for (unit, (transform, mesh, material)) in placed {
         if let Some(context) = ground.context.as_ref() {
             let center = transform.translation;
             let half_size = transform.scale.x / 2.0;
@@ -218,7 +257,7 @@ fn draw(
         }
         commands.spawn((
             SelectionCircle(unit),
-            Mesh3d(quad.clone()),
+            Mesh3d(mesh),
             MeshMaterial3d(material),
             transform,
             RenderLayers::layer(peacecraft3::campaign_camera::RENDER_LAYER),
@@ -324,7 +363,7 @@ mod tests {
     use pcx_objects::editor::selection::{CircleBand, SelectionCircles};
 
     #[test]
-    fn clearing_session_discards_materials_from_the_previous_source() {
+    fn clearing_session_or_selection_retires_owned_meshes() {
         let witness = std::sync::Arc::new(());
         let mut state = CampaignSelection {
             session: Some(std::sync::Arc::downgrade(&witness)),
@@ -345,20 +384,63 @@ mod tests {
             .init_resource::<Assets<StandardMaterial>>()
             .init_resource::<Assets<Image>>()
             .add_systems(Update, draw);
+        let mesh = app
+            .world_mut()
+            .resource_mut::<Assets<Mesh>>()
+            .add(Plane3d::default().mesh().size(1.0, 1.0));
+        app.world_mut()
+            .resource_mut::<CampaignSelection>()
+            .meshes
+            .insert(
+                HandleId::new(std::num::NonZeroU64::new(1).unwrap()),
+                (Transform::default(), mesh.clone()),
+            );
         let circle = app
             .world_mut()
             .spawn((
                 SelectionCircle(HandleId::new(std::num::NonZeroU64::new(1).unwrap())),
                 Transform::default(),
+                Mesh3d(mesh.clone()),
                 MeshMaterial3d::<StandardMaterial>::default(),
             ))
             .id();
         app.update();
         assert!(app.world().get_entity(circle).is_err());
+        assert!(app.world().resource::<Assets<Mesh>>().get(&mesh).is_none());
         let state = app.world().resource::<CampaignSelection>();
         assert!(state.session.is_none());
         assert!(state.materials.is_empty());
+        assert!(state.meshes.is_empty());
         assert!(state.last_error.is_none());
+
+        // An empty selection without a session transition retires only its mesh.
+        let mesh = app
+            .world_mut()
+            .resource_mut::<Assets<Mesh>>()
+            .add(Plane3d::default().mesh().size(1.0, 1.0));
+        let unit = HandleId::new(std::num::NonZeroU64::new(2).unwrap());
+        let circle = app
+            .world_mut()
+            .spawn((
+                SelectionCircle(unit),
+                Transform::default(),
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d::<StandardMaterial>::default(),
+            ))
+            .id();
+        let mut state = app.world_mut().resource_mut::<CampaignSelection>();
+        state
+            .meshes
+            .insert(unit, (Transform::default(), mesh.clone()));
+        state
+            .materials
+            .insert(("current.blp".into(), [0; 4]), Handle::default());
+        app.update();
+        assert!(app.world().get_entity(circle).is_err());
+        assert!(app.world().resource::<Assets<Mesh>>().get(&mesh).is_none());
+        let state = app.world().resource::<CampaignSelection>();
+        assert!(state.meshes.is_empty());
+        assert_eq!(state.materials.len(), 1);
     }
 
     #[test]

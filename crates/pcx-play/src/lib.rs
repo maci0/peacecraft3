@@ -124,3 +124,7 @@ pub(crate) fn is_valid_name(s: &str) -> bool {
             .iter()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
+
+pub mod player_resources;
+
+pub mod dialog_layout;

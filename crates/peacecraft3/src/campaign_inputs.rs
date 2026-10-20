@@ -81,6 +81,16 @@ pub fn prepare_new_game(
     if let Some(bytes) = &map_misc {
         day_profiles.push((bindings.map_label.as_str(), bytes.as_slice()));
     }
+    inputs.resources = Some(pcx_play::player_resources::Rules::discover(
+        image,
+        client.clone(),
+        &day_profiles,
+        pcx_play::neutral_player::RuleInputBudget {
+            image_bytes: 32 << 20,
+            profile_bytes: 8 << 20,
+            sections: 96,
+        },
+    )?);
     let day_cycle = pcx_objects::editor::misc::DayCycle::read(&day_profiles, 8 << 20)?;
     let game_misc = reader
         .resolve_bounded("Units/MiscGame.txt", 4 << 20)
@@ -327,6 +337,11 @@ pub fn prepare(
             image,
             client.clone(),
         )?),
+        resources: None,
+        dialog_layout: Some(pcx_play::dialog_layout::Rules::reviewed_legacy(
+            image,
+            client.clone(),
+        )?),
         clock: StartupClockInput {
             clock: source.clock,
             global_name: "GAME_STATE_TIME_OF_DAY".into(),
@@ -549,6 +564,13 @@ fn budgets() -> MapStartupBudgets {
         game_state_events: 65536,
         stock: Some(StockBudget {
             max_unit_records: 65536,
+        }),
+        dialogs: Some(DialogBudget {
+            max_dialogs: 4096,
+            max_buttons: 16384,
+            text_bytes: 4 << 20,
+            max_events: 65536,
+            max_quit_requests: 4096,
         }),
         quests: Some(QuestBudget {
             max_quests: 4096,

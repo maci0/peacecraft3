@@ -89,6 +89,7 @@ pub(super) struct Players {
     research: Option<RecordLimits>,
     alliance: Option<RecordLimits>,
     state_requests: Option<RecordLimits>,
+    resources: Option<Resources>,
     experience_handicap: Option<crate::player_handicap::Rules>,
     slot_states: Option<Vec<(i32, HandleId)>>,
     controllers: Option<controllers::Controllers>,
@@ -97,6 +98,20 @@ pub(super) struct Players {
     local_player: Option<i32>,
     rows: Vec<PlayerSettings>,
 }
+struct Resources {
+    rules: crate::player_resources::Rules,
+    // Gold, lumber, food used, food supplied, food ceiling; identities come from common source.
+    states: [i32; 5],
+    values: Vec<(i32, i32, i32)>,
+}
+const RESOURCE_GLOBALS: [&str; 5] = [
+    "PLAYER_STATE_RESOURCE_GOLD",
+    "PLAYER_STATE_RESOURCE_LUMBER",
+    "PLAYER_STATE_RESOURCE_FOOD_USED",
+    "PLAYER_STATE_RESOURCE_FOOD_CAP",
+    "PLAYER_STATE_FOOD_CAP_CEILING",
+];
+const GET_PLAYER_STATE: &str = "GetPlayerState";
 const SET_PLAYER_STATE: &str = "SetPlayerState";
 const CONVERT_PLAYER_STATE: &str = "ConvertPlayerState";
 const PLAYER_STATE_KIND: &str = "playerstate";
@@ -214,6 +229,7 @@ impl ObjectHost {
             research: None,
             alliance: None,
             state_requests: None,
+            resources: None,
             experience_handicap: None,
             slot_states: None,
             controllers: None,
@@ -527,6 +543,7 @@ impl ObjectHost {
         {
             return Err(fail(Failure::OutsideDomain(enumerand)));
         }
+        let effective = self.resource_assignment(at, enumerand, *value)?;
         let players = self
             .players
             .as_mut()
@@ -536,19 +553,229 @@ impl ObjectHost {
             .as_mut()
             .ok_or_else(|| fail(Failure::PlayerState("state requests not admitted")))?;
         let requests = &mut players.rows[at].state_requests;
-        if let Some(stored) = requests.iter_mut().find(|(state, _)| *state == *setting) {
-            stored.1 = *value;
-            return Ok(Value::Null);
+        let stored = requests.iter().position(|(state, _)| *state == *setting);
+        if stored.is_none() {
+            if limits.records >= limits.max_records {
+                return Err(fail(Failure::Budget("player-state requests")));
+            }
+            requests
+                .try_reserve(1)
+                .map_err(|_| fail(Failure::Capacity))?;
         }
-        if limits.records >= limits.max_records {
-            return Err(fail(Failure::Budget("player-state requests")));
+        if let Some(value) = effective {
+            let number = players.rows[at].number;
+            let resources = players.resources.as_mut().expect("prepared resources");
+            if let Some(row) = resources
+                .values
+                .iter_mut()
+                .find(|(p, s, _)| *p == number && *s == enumerand)
+            {
+                row.2 = value;
+            } else {
+                resources
+                    .values
+                    .try_reserve(1)
+                    .map_err(|_| fail(Failure::Capacity))?;
+                resources.values.push((number, enumerand, value));
+            }
         }
-        requests
-            .try_reserve(1)
-            .map_err(|_| fail(Failure::Capacity))?;
-        requests.push((*setting, *value));
-        limits.records += 1;
+        let requests = &mut players.rows[at].state_requests;
+        if let Some(index) = stored {
+            requests[index].1 = *value;
+        } else {
+            requests.push((*setting, *value));
+            limits.records += 1;
+        }
         Ok(Value::Null)
+    }
+    /// Admit selected initial resource counters and assignment limits before any request.
+    pub fn with_player_resources(
+        mut self,
+        rules: crate::player_resources::Rules,
+    ) -> Result<Self, Error> {
+        let fail = |s| self.inner.error(GET_PLAYER_STATE, Failure::PlayerState(s));
+        let players = self
+            .players
+            .as_ref()
+            .ok_or_else(|| fail("players not admitted"))?;
+        if players.state_requests.is_none()
+            || players.resources.is_some()
+            || players.rows.iter().any(|p| !p.state_requests.is_empty())
+        {
+            return Err(fail("admit resources once before assignments"));
+        }
+        Self::contract(
+            &self.inner,
+            GET_PLAYER_STATE,
+            &["player", "playerstate"],
+            "integer",
+            true,
+            Some("player"),
+        )?;
+        let source = &self
+            .inner
+            .program
+            .natives()
+            .get("Player")
+            .expect("admitted players")
+            .source;
+        if self
+            .inner
+            .program
+            .natives()
+            .get(GET_PLAYER_STATE)
+            .is_none_or(|n| &n.source != source)
+        {
+            return Err(self.inner.error(GET_PLAYER_STATE, Failure::Source));
+        }
+        let mut states = [0; 5];
+        for (state, name) in states.iter_mut().zip(RESOURCE_GLOBALS) {
+            *state = self.source_constant_enumerand(name, "playerstate")?;
+        }
+        if states
+            .iter()
+            .any(|s| *s < 0 || *s >= rules.initialized_states)
+            || states[0..2] != rules.money_states
+            || states
+                .iter()
+                .enumerate()
+                .any(|(i, v)| states[..i].contains(v))
+        {
+            return Err(fail("resource constants do not match selected source"));
+        }
+        self.players.as_mut().expect("players").resources = Some(Resources {
+            rules,
+            states,
+            values: Vec::new(),
+        });
+        Ok(self)
+    }
+    fn live_food(&self, owner: HandleId, column: &str) -> Result<i32, Error> {
+        self.executed_units()
+            .filter(|(_, u)| {
+                u.owner == owner
+                    && u.combat.as_ref().is_none_or(|c| !c.dead)
+                    && u.vitals.is_none_or(|v| v.life > 0.0)
+            })
+            .try_fold(0i32, |total, (_, u)| {
+                let value = super::unit_activity::balance_real(&u.definition, column)
+                    .map_err(|s| self.inner.error(GET_PLAYER_STATE, Failure::UnitActivity(s)))?;
+                if value.fract() != 0.0 || value >= i32::MAX as f32 {
+                    return Err(self.inner.error(
+                        GET_PLAYER_STATE,
+                        Failure::PlayerState("invalid integral unit food"),
+                    ));
+                }
+                total.checked_add(value as i32).ok_or_else(|| {
+                    self.inner
+                        .error(GET_PLAYER_STATE, Failure::PlayerState("unit food overflow"))
+                })
+            })
+    }
+    fn resource_assignment(&self, at: usize, state: i32, value: i32) -> Result<Option<i32>, Error> {
+        let Some(players) = &self.players else {
+            return Ok(None);
+        };
+        let Some(resources) = &players.resources else {
+            return Ok(None);
+        };
+        let Some(index) = resources.states.iter().position(|s| *s == state) else {
+            return Ok(None);
+        };
+        let value = match index {
+            0 | 1 => resources.rules.money(value),
+            2 | 3 => value
+                .checked_sub(self.live_food(
+                    players.rows[at].identity,
+                    if index == 2 { "fused" } else { "fmade" },
+                )?)
+                .ok_or_else(|| {
+                    self.inner.error(
+                        SET_PLAYER_STATE,
+                        Failure::PlayerState("food assignment overflow"),
+                    )
+                })?,
+            _ => value,
+        };
+        Ok(Some(value))
+    }
+    fn resource_value(&self, at: usize, state: i32) -> Result<Option<i32>, Error> {
+        let players = self.players.as_ref().expect("admitted players");
+        let Some(resources) = &players.resources else {
+            return Ok(None);
+        };
+        let Some(index) = resources.states.iter().position(|s| *s == state) else {
+            return Ok(None);
+        };
+        let player = &players.rows[at];
+        let value = resources
+            .values
+            .iter()
+            .find(|(p, s, _)| *p == player.number && *s == state)
+            .map(|(_, _, v)| *v)
+            .unwrap_or(if index == 4 {
+                resources.rules.food_limit
+            } else if index < 2 {
+                resources.rules.initial / resources.rules.money_scale
+            } else {
+                resources.rules.initial
+            });
+        let value = if matches!(index, 2 | 3) {
+            value
+                .checked_add(
+                    self.live_food(player.identity, if index == 2 { "fused" } else { "fmade" })?,
+                )
+                .ok_or_else(|| {
+                    self.inner.error(
+                        GET_PLAYER_STATE,
+                        Failure::PlayerState("effective food overflow"),
+                    )
+                })?
+        } else {
+            value
+        };
+        if index == 3 {
+            let ceiling = self
+                .resource_value(at, resources.states[4])?
+                .expect("ceiling");
+            Ok(Some(value.min(ceiling)))
+        } else {
+            Ok(Some(value))
+        }
+    }
+    /// Effective source resource counters for the selected owned player; absent admission stays unknown.
+    pub fn player_resource_value(
+        &self,
+        player: HandleId,
+        source_global: &str,
+    ) -> Result<Option<i32>, Error> {
+        let at = self.player_index(&Value::Handle(player), GET_PLAYER_STATE)?;
+        if !RESOURCE_GLOBALS.contains(&source_global) {
+            return Err(self.inner.error(
+                GET_PLAYER_STATE,
+                Failure::PlayerState("unsupported resource setting"),
+            ));
+        }
+        let state = self.source_constant_enumerand(source_global, "playerstate")?;
+        self.resource_value(at, state)
+    }
+    fn get_player_state(&self, args: &[Value]) -> Result<Value, Error> {
+        let [player, Value::Handle(setting)] = args else {
+            return Err(self.inner.error(GET_PLAYER_STATE, Failure::PlayerArguments));
+        };
+        let at = self.player_index(player, GET_PLAYER_STATE)?;
+        let state = self
+            .inner
+            .symbolic_value(*setting, PLAYER_STATE_KIND)
+            .map_err(|e| self.inner.error(GET_PLAYER_STATE, e.failure))?;
+        self.resource_value(at, state)?
+            .map(Value::Int)
+            .ok_or_else(|| {
+                self.inner.error(
+                    GET_PLAYER_STATE,
+                    Failure::PlayerState("effective player state is unsupported"),
+                )
+            })
     }
     pub fn player_slots(&self) -> Option<usize> {
         self.players.as_ref().map(|p| p.slots)
@@ -760,6 +987,10 @@ impl ObjectHost {
         if matches!(name, "SetPlayerHandicapXP" | "GetPlayerHandicapXP") {
             players.experience_handicap.as_ref()?;
             return Some(self.experience_handicap_native(name, args));
+        }
+        if name == GET_PLAYER_STATE {
+            players.resources.as_ref()?;
+            return Some(self.get_player_state(args));
         }
         if name == SET_PLAYER_STATE {
             players.state_requests.as_ref()?;

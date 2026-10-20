@@ -10,6 +10,7 @@ pub struct ObjectHost {
     selection: Option<Vec<HandleId>>,
     pings: Vec<indicators::MinimapPing>,
     cinematic_scene: Option<Option<cinematic_scene::CinematicScene>>,
+    dialogs: Option<dialogs::DialogState>,
     indicators: Option<(Vec<indicators::Indicator>, usize)>,
     combat: Option<combat::Rules>,
     events: event_delivery::Delivery,
@@ -148,6 +149,7 @@ impl ObjectHost {
             combat: None,
             indicators: None,
             cinematic_scene: None,
+            dialogs: None,
             pings: Vec::new(),
             selection: None,
             fog_modifiers: false,
@@ -761,6 +763,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.selection_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.dialog_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.cinematic_scene_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -1019,6 +1024,10 @@ pub use fog_modifiers::FogModifier;
 
 #[path = "selection_host.rs"]
 mod selection;
+
+#[path = "dialog_host.rs"]
+mod dialogs;
+pub use dialogs::{DialogBudget, DialogButton, DialogQuitRequest, DialogState, ScriptDialog};
 
 #[path = "cinematic_scene_host.rs"]
 mod cinematic_scene;

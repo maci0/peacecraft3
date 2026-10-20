@@ -512,3 +512,6 @@ mod terrain_pathing;
 
 #[path = "player_handicap_host_tests.rs"]
 mod handicap;
+
+#[path = "dialog_host_tests.rs"]
+mod script_dialogs;

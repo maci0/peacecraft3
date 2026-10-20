@@ -258,3 +258,168 @@ fn request_admission_is_explicit_source_bound_and_independent_of_the_getter() {
             .is_err()
     );
 }
+
+fn resource_common() -> String {
+    common().replacen("globals\n", "type widget extends agent\ntype unit extends widget\nnative CreateUnit takes player p, integer id, real x, real y, real face returns unit\nnative RemoveUnit takes unit u returns nothing\nnative SetUnitOwner takes unit u, player p, boolean color returns nothing\nglobals\nconstant playerstate PLAYER_STATE_RESOURCE_GOLD=ConvertPlayerState(1)\nconstant playerstate PLAYER_STATE_RESOURCE_LUMBER=ConvertPlayerState(2)\nconstant playerstate PLAYER_STATE_RESOURCE_FOOD_USED=ConvertPlayerState(5)\nconstant playerstate PLAYER_STATE_RESOURCE_FOOD_CAP=ConvertPlayerState(4)\nconstant playerstate PLAYER_STATE_FOOD_CAP_CEILING=ConvertPlayerState(6)\n",1)
+}
+#[test]
+fn effective_money_uses_selected_initial_scale_and_clamp_while_requests_stay_exact() {
+    let c = resource_common();
+    let (_, host) = fixture(&c, "// resources", true);
+    let mut host = host
+        .with_player_state_requests(PlayerStateRequestBudget { max_records: 1 })
+        .unwrap()
+        .with_player_resources(crate::player_resources::fixture::rules())
+        .unwrap();
+    let a = host.native("Player", &[Value::Int(0)]).unwrap();
+    let b = host.native("Player", &[Value::Int(1)]).unwrap();
+    let gold = host.native("ConvertPlayerState", &[Value::Int(1)]).unwrap();
+    let lumber = host.native("ConvertPlayerState", &[Value::Int(2)]).unwrap();
+    assert_eq!(
+        host.player_resource_value(id(&a), "PLAYER_STATE_RESOURCE_GOLD")
+            .unwrap(),
+        Some(3)
+    );
+    assert_eq!(
+        host.native("GetPlayerState", &[a.clone(), gold.clone()])
+            .unwrap(),
+        Value::Int(3)
+    );
+    host.native(
+        "SetPlayerState",
+        &[a.clone(), gold.clone(), Value::Int(117)],
+    )
+    .unwrap();
+    assert_eq!(
+        host.native("GetPlayerState", &[a.clone(), gold.clone()])
+            .unwrap(),
+        Value::Int(100)
+    );
+    assert_eq!(
+        host.player_settings(id(&a)).unwrap().state_requests,
+        [(id(&gold), 117)]
+    );
+    assert!(
+        host.native(
+            "SetPlayerState",
+            &[a.clone(), lumber.clone(), Value::Int(37)]
+        )
+        .is_err()
+    );
+    assert_eq!(
+        host.native("GetPlayerState", &[a.clone(), lumber]).unwrap(),
+        Value::Int(3)
+    );
+    assert_eq!(
+        host.native("GetPlayerState", &[b, gold.clone()]).unwrap(),
+        Value::Int(3)
+    );
+    host.native("SetPlayerState", &[a.clone(), gold.clone(), Value::Int(-3)])
+        .unwrap();
+    assert_eq!(
+        host.native("GetPlayerState", &[a, gold]).unwrap(),
+        Value::Int(0)
+    );
+}
+
+struct FoodCatalog;
+impl pcx_sim::world::ObjectCatalog for FoodCatalog {
+    fn resolve(
+        &self,
+        rawcode: [u8; 4],
+    ) -> Result<pcx_sim::world::Definition, pcx_sim::world::ResolutionProblem> {
+        use pcx_objects::editor::{FieldDef, FieldKind, FieldSource, ObjectKind, SlkId};
+        use pcx_sim::world::{FieldValue, ObjectField};
+        let fields = [(*b"f001", "fused", 2), (*b"f002", "fmade", 5)].map(|(id, column, value)| {
+            (
+                id,
+                ObjectField {
+                    metadata: Some(FieldDef {
+                        fourcc: id,
+                        from: SlkId::UnitMetaData,
+                        field: column.into(),
+                        slk: "UnitBalance".into(),
+                        index: -1,
+                        declared: "int".into(),
+                        kind: FieldKind::Int,
+                        category: "synthetic".into(),
+                        source: FieldSource::Column {
+                            slk: SlkId::UnitBalance,
+                            column: column.into(),
+                        },
+                        measured: true,
+                    }),
+                    value: Ok(FieldValue::Cell(value.to_string())),
+                },
+            )
+        });
+        Ok(pcx_sim::world::Definition {
+            rawcode,
+            base_rawcode: pcx_objects::fourcc_text(rawcode),
+            kind: ObjectKind::Unit,
+            fields: fields.into(),
+            modifications: Vec::new(),
+        })
+    }
+}
+#[test]
+fn effective_food_follows_owned_unit_lifetimes_and_explicit_counter_adjustments() {
+    use crate::playercolor_host::UnitBudget;
+    let (_, host) = fixture(&resource_common(), "// food", true);
+    let mut host = host
+        .with_player_state_requests(PlayerStateRequestBudget { max_records: 4 })
+        .unwrap()
+        .with_player_resources(crate::player_resources::fixture::rules())
+        .unwrap()
+        .with_unit_catalog(
+            Arc::new(FoodCatalog),
+            pcx_sim::world::Source {
+                install: "synthetic catalog".into(),
+                edition: "synthetic".into(),
+                map: "synthetic food".into(),
+            },
+            UnitBudget {
+                max_records: 4,
+                max_retained_fields: 2,
+                max_modifications: 0,
+            },
+        )
+        .unwrap();
+    let a = host.native("Player", &[Value::Int(0)]).unwrap();
+    let b = host.native("Player", &[Value::Int(1)]).unwrap();
+    let mut create = |owner| {
+        host.native(
+            "CreateUnit",
+            &[
+                owner,
+                Value::Int(i32::from_be_bytes(*b"hfoo")),
+                Value::Real(0.0),
+                Value::Real(0.0),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap()
+    };
+    let first = create(a.clone());
+    let second = create(a.clone());
+    let _third = create(b.clone());
+    let used = "PLAYER_STATE_RESOURCE_FOOD_USED";
+    let cap = "PLAYER_STATE_RESOURCE_FOOD_CAP";
+    assert_eq!(host.player_resource_value(id(&a), used).unwrap(), Some(22));
+    assert_eq!(host.player_resource_value(id(&a), cap).unwrap(), Some(28));
+    let state = host.native("ConvertPlayerState", &[Value::Int(5)]).unwrap();
+    host.native("SetPlayerState", &[a.clone(), state, Value::Int(30)])
+        .unwrap();
+    assert_eq!(host.player_resource_value(id(&a), used).unwrap(), Some(30));
+    host.native("SetUnitOwner", &[first, b.clone(), Value::Bool(false)])
+        .unwrap();
+    assert_eq!(host.player_resource_value(id(&a), used).unwrap(), Some(28));
+    assert_eq!(host.player_resource_value(id(&b), used).unwrap(), Some(22));
+    host.native("RemoveUnit", &[second]).unwrap();
+    assert_eq!(host.player_resource_value(id(&a), used).unwrap(), Some(26));
+    assert_eq!(host.player_resource_value(id(&a), cap).unwrap(), Some(18));
+    let ceiling = host.native("ConvertPlayerState", &[Value::Int(6)]).unwrap();
+    host.native("SetPlayerState", &[b.clone(), ceiling, Value::Int(21)])
+        .unwrap();
+    assert_eq!(host.player_resource_value(id(&b), cap).unwrap(), Some(21));
+}

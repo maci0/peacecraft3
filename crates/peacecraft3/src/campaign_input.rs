@@ -43,8 +43,11 @@ pub(crate) fn install(app: &mut App) {
             (
                 (load_circles, click)
                     .chain()
-                    .after(crate::campaign_hud::CampaignHudSet),
-                end_cinematic.after(crate::campaign_hud::CampaignHudSet),
+                    .after(crate::campaign_hud::CampaignHudSet)
+                    .after(crate::campaign_script_dialogs::CampaignScriptDialogSet),
+                end_cinematic
+                    .after(crate::campaign_hud::CampaignHudSet)
+                    .after(crate::campaign_script_dialogs::CampaignScriptDialogSet),
             ),
         )
         .add_systems(Update, hud_menu.before(CampaignCameraSet));
@@ -52,8 +55,32 @@ pub(crate) fn install(app: &mut App) {
 
 fn hud_menu(
     mut actions: MessageReader<crate::campaign_hud::CampaignHudAction>,
+    mut quits: MessageReader<crate::campaign_script_dialogs::CampaignDialogQuit>,
     mut view: ResMut<CampaignCamera>,
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
+    for quit in quits.read() {
+        if !session
+            .session_witness()
+            .is_some_and(|current| Weak::ptr_eq(&current, &quit.session))
+        {
+            continue;
+        }
+        let local = session
+            .host()
+            .and_then(|host| host.objects().local_player_settings())
+            .map(|player| player.identity);
+        if local != Some(quit.request.player) {
+            continue;
+        }
+        if quit.request.score_screen {
+            warn!(
+                "script dialog quit requested a score screen; score presentation is not implemented"
+            );
+        }
+        session.clear();
+        view.suspend();
+    }
     if actions
         .read()
         .any(|action| matches!(action, crate::campaign_hud::CampaignHudAction::Menu))
@@ -118,6 +145,7 @@ fn end_cinematic(
     keys: Option<Res<ButtonInput<KeyCode>>>,
     view: Res<CampaignCamera>,
     hud: Res<crate::campaign_hud::CampaignHud>,
+    dialogs: Res<crate::campaign_script_dialogs::CampaignScriptDialogs>,
     mut input: ResMut<CampaignInput>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
@@ -125,6 +153,7 @@ fn end_cinematic(
         || !view.active()
         || hud.quest_log_open
         || hud.quest_escape_consumed
+        || dialogs.input_blocked()
     {
         return;
     }
@@ -190,6 +219,7 @@ struct Picking<'w, 's> {
     >,
     view: Res<'w, CampaignCamera>,
     ground: Res<'w, GroundPublication>,
+    dialogs: Res<'w, crate::campaign_script_dialogs::CampaignScriptDialogs>,
 }
 
 fn click(
@@ -205,13 +235,19 @@ fn click(
         cameras,
         view,
         ground,
+        dialogs,
     } = picking;
     let (Some(mouse), Some(circles)) = (mouse, input.circles.clone()) else {
         return;
     };
     let select = mouse.just_pressed(MouseButton::Left);
     let order = mouse.just_pressed(MouseButton::Right);
-    if !(select || order) || !view.active() || hud.quest_log_open || hud.pointer_consumed {
+    if !(select || order)
+        || !view.active()
+        || hud.quest_log_open
+        || hud.pointer_consumed
+        || dialogs.input_blocked()
+    {
         return;
     }
     let (Ok(window), Ok((camera, transform, projection))) = (windows.single(), cameras.single())

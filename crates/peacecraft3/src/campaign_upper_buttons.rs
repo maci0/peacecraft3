@@ -29,6 +29,8 @@ enum Action {
     Select(pcx_script::HandleId),
 }
 #[derive(Component)]
+struct AuthoredShortcut(KeyCode);
+#[derive(Component)]
 struct CampaignControlsRoot;
 #[derive(Resource, Default)]
 struct UpperControls {
@@ -49,6 +51,7 @@ struct Source {
     receipts: Vec<peacecraft3::map_binding::AssetReceipt>,
     fdf: Fdf,
     globals: String,
+    quests_key: KeyCode,
     fonts: HashMap<String, Handle<Font>>,
     backdrop: glue_menu::Backdrop,
     backdrop_images: HashMap<(String, bool), Handle<Image>>,
@@ -65,6 +68,7 @@ pub(super) fn install(app: &mut App) {
         .add_systems(
             Update,
             (
+                keyboard_shortcuts,
                 activate.before(crate::button_actions::clear),
                 project,
                 publish_error,
@@ -75,6 +79,24 @@ pub(super) fn install(app: &mut App) {
                 .after(peacecraft3::campaign_camera::CampaignCameraSet)
                 .before(peacecraft3::campaign_presentation::CampaignPresentationSet),
         );
+}
+fn keyboard_shortcuts(
+    keys: Res<ButtonInput<KeyCode>>,
+    buttons: Query<(Entity, &AuthoredShortcut), Without<InteractionDisabled>>,
+    mut actions: ResMut<crate::button_actions::ButtonActions>,
+    camera: Option<Res<CampaignCamera>>,
+    presentation: Option<Res<peacecraft3::campaign_presentation::CampaignPresentation>>,
+) {
+    if camera.as_ref().is_some_and(|camera| !camera.active())
+        || !crate::button_actions::input_allowed(presentation)
+    {
+        return;
+    }
+    for (entity, shortcut) in &buttons {
+        if keys.just_pressed(shortcut.0) && !actions.entities.contains(&entity) {
+            actions.entities.push(entity);
+        }
+    }
 }
 fn activate(
     buttons: Query<&Action>,
@@ -307,7 +329,29 @@ fn normalize(text: &str) -> String {
         })
         .collect()
 }
-fn read(
+pub(crate) fn skin_file(
+    skin: &SkinTable,
+    sections: &[String],
+    key: &str,
+) -> Result<String, String> {
+    for section in sections {
+        let values: Vec<_> = skin
+            .sections()
+            .iter()
+            .filter(|s| s.name == *section)
+            .flat_map(|s| &s.entries)
+            .filter(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .collect();
+        match values.as_slice() {
+            [] => {}
+            [value] if !value.is_empty() => return Ok(value.clone()),
+            _ => return Err(format!("ambiguous/empty {section}.{key}")),
+        }
+    }
+    Err(format!("missing skin key {key}"))
+}
+pub(crate) fn read(
     reader: &pcx_assets::Resolver,
     path: &str,
     limit: u64,
@@ -319,7 +363,7 @@ fn read(
     receipts.push(peacecraft3::map_binding::receipt(&asset));
     Ok(asset.bytes)
 }
-fn text(
+pub(crate) fn text(
     reader: &pcx_assets::Resolver,
     path: &str,
     receipts: &mut Vec<peacecraft3::map_binding::AssetReceipt>,
@@ -369,24 +413,7 @@ fn load(
     ] {
         fdf.rect(name, view).map_err(|e| e.to_string())?;
     }
-    let file = |key: &str| -> Result<String, String> {
-        for section in &sections {
-            let values: Vec<_> = skin
-                .sections()
-                .iter()
-                .filter(|s| s.name == *section)
-                .flat_map(|s| &s.entries)
-                .filter(|(k, _)| k == key)
-                .map(|(_, v)| v.clone())
-                .collect();
-            match values.as_slice() {
-                [] => {}
-                [value] if !value.is_empty() => return Ok(value.clone()),
-                _ => return Err(format!("ambiguous/empty {section}.{key}")),
-            }
-        }
-        Err(format!("missing skin key {key}"))
-    };
+    let file = |key: &str| skin_file(&skin, &sections, key);
     let mut decoded_fonts = HashMap::new();
     for name in [
         "UpperButtonBarButtonTextTemplate",
@@ -465,8 +492,10 @@ fn load(
     {
         return Err("invalid quest backdrop tile size".into());
     }
+    let quests_key = peacecraft3::campaign_camera::authored_function_key(&globals, "KEY_QUESTS")?;
     Ok(Source {
         receipts,
+        quests_key,
         fdf,
         globals,
         fonts: decoded_fonts
@@ -593,6 +622,11 @@ fn upper(commands: &mut Commands, source: &Source) -> Result<Entity, String> {
                 image,
             ))
             .id();
+        if matches!(name, "UpperButtonBarQuestsButton") {
+            commands
+                .entity(button)
+                .insert(AuthoredShortcut(source.quests_key));
+        }
         commands.entity(root).add_child(button);
         label(commands, button, global(source, key)?, source, style)?;
     }
@@ -824,9 +858,15 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .add_message::<CampaignHudAction>()
             .add_observer(capture_pointer_press)
-            .add_systems(Update, (activate, crate::button_actions::clear).chain());
+            .add_systems(
+                Update,
+                (keyboard_shortcuts, activate, crate::button_actions::clear).chain(),
+            );
         crate::button_actions::install(&mut app);
-        let open = app.world_mut().spawn((UiButton, Action::Quests)).id();
+        let open = app
+            .world_mut()
+            .spawn((UiButton, Action::Quests, AuthoredShortcut(KeyCode::F7)))
+            .id();
         let close = app.world_mut().spawn((UiButton, Action::Close)).id();
         click(app.world_mut(), open);
         assert!(
@@ -860,6 +900,14 @@ mod tests {
         assert!(
             app.world().resource::<UpperControls>().open,
             "keyboard Activate uses the same action queue"
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::F7);
+        app.update();
+        assert!(
+            !app.world().resource::<UpperControls>().open,
+            "authored function key closes the same modal"
         );
     }
     #[test]
@@ -896,7 +944,7 @@ mod tests {
     }
 }
 
-fn image_sampler(tiled: bool) -> bevy::image::ImageSamplerDescriptor {
+pub(crate) fn image_sampler(tiled: bool) -> bevy::image::ImageSamplerDescriptor {
     let address = if tiled {
         bevy::image::ImageAddressMode::Repeat
     } else {

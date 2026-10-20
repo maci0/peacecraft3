@@ -2,8 +2,11 @@
 use crate::{
     neutral_player::{RuleInputBudget, Sha256Digest, sha256},
     neutral_rule_input::Pe,
-    scripts::AssetIdentity,
+    scripts::{AssetIdentity, ScriptAsset},
 };
+#[path = "sound_voice_policy.rs"]
+mod voice;
+pub use voice::{Channel, VoicePolicy};
 
 #[derive(Clone, Debug)]
 pub struct Rules {
@@ -11,9 +14,13 @@ pub struct Rules {
     pub image_sha256: Sha256Digest,
     update_seconds: f32,
     minimum_fade_step: u32,
+    voice_policy: std::sync::Arc<VoicePolicy>,
 }
 
 impl Rules {
+    pub fn voice_policy(&self) -> std::sync::Arc<VoicePolicy> {
+        std::sync::Arc::clone(&self.voice_policy)
+    }
     pub fn update_seconds(&self) -> f32 {
         self.update_seconds
     }
@@ -47,11 +54,43 @@ impl Rules {
             .read_from(0x5d67ce, true)
             .map_err(|e| fail(&e.to_string()))?;
         let (update_seconds, minimum_fade_step) = operands(timer, minimum).map_err(fail)?;
+        let window = |va, len, executable| -> Result<&[u8], String> {
+            pe.read_from(va, executable)
+                .map_err(|e| fail(&e.to_string()))?
+                .get(..len)
+                .ok_or_else(|| fail("truncated voice policy window"))
+        };
+        let count = window(0x5d71cf, 2, true)?;
+        let pointer = window(0x5d71d7, 5, true)?;
+        if count[0] != 0x6a || pointer[0] != 0x68 {
+            return Err(fail("unsupported channel initialization"));
+        }
+        let table = u32::from_le_bytes(pointer[1..].try_into().unwrap());
+        let voice_policy = VoicePolicy::read(
+            ScriptAsset {
+                label: "client sound definition defaults",
+                bytes: window(0x5b8cbe, 42, true)?,
+            },
+            ScriptAsset {
+                label: "client sound channel table",
+                bytes: window(table, usize::from(count[1]) * 20, false)?,
+            },
+            ScriptAsset {
+                label: "client total sound-list comparison",
+                bytes: window(0x7c74fc, 3, true)?,
+            },
+            ScriptAsset {
+                label: "client filename-count comparison",
+                bytes: window(0x7c7739, 4, true)?,
+            },
+            origin.clone(),
+        )?;
         Ok(Self {
             origin,
             image_sha256: sha256(image),
             update_seconds,
             minimum_fade_step,
+            voice_policy: std::sync::Arc::new(voice_policy),
         })
     }
 }

@@ -44,11 +44,42 @@ contribution of each occluder. The terrain sampler is bilinear whereas the
 rendered terrain uses planar triangles, so sampled height may additionally differ
 from the actual surface within a tile.
 
+## Terrain-conforming projection
+
+The circle image now conforms to the admitted rendered ground. Each intersected
+tile uses the ground renderer's `[00,10,11]` and `[00,11,01]` triangles; each triangle
+is clipped against the source-sized circle square, and the resulting polygon is
+triangulated without crossing a ground-triangle boundary. Clip intersections
+interpolate the original corner positions. No vertical lift or bilinear surface
+approximation is added. The existing render depth bias resolves coplanarity.
+
+UV coordinates still span the original square, with V increasing toward world
+negative Y, matching the previous Plane3d texture orientation. Clipping at map
+edges crops the texture rather than stretching it. The source-derived diameter,
+texture-band choice and relationship tint are unchanged. Each circle owns its
+mesh; position/size changes replace that mesh's contents, unchanged transforms
+reuse it, deselection removes it, and session replacement retires all owned mesh
+assets. The circle's transform retains the existing center height, while local
+vertex elevations cancel that center to land on the actual rendered triangles.
+
+The renderer refuses a footprint intersecting more than 256 terrain tiles before
+allocating geometry. This is an explicit rendering-work bound, not a game rule or
+an authored size. Two input triangles per tile, four clip planes, and at most five
+fan triangles per clipped polygon bound output to 30 vertices per visited tile.
+Synthetic tests check non-coplanar slopes across multiple tiles, vertices and
+triangle centroids against the rendered surface, complete footprint area, source
+UV orientation/extents, cropped map-edge UVs, malformed sizes, and deterministic
+geometry at the tile-work cap. ECS cleanup covers both session clear and empty
+selection, including actual mesh-asset retirement. These new checks await the
+coordinated build and rendered validation; the v7 observation above predates this
+projection change.
+
 Unqualified recreation choices remain: interpreting scaled size as diameter,
-adding `.blp` to the authored texture name, a flat alpha-blended plane at the unit
-center's terrain height, and render depth bias. Terrain-conforming projection,
-exact original slope behavior and original radius-versus-diameter semantics remain
-explicit fidelity work; no screenshot fit or guessed size multiplier was added.
+adding `.blp` to the authored texture name, and render depth bias. Exact original
+projection behavior and original radius-versus-diameter semantics remain explicit
+fidelity work; no screenshot fit or guessed size multiplier was added. Projection
+matches the currently rendered ground; walkable doodad surfaces and future cliff
+geometry require their actual surface data before this can cover those cases.
 The moving-footman capture is not a matched original-client or browser comparison.
 No source bytes or generated original assets are included here. The target is
 1.29b; runtime resolver receipts retain selected source provenance rather than
