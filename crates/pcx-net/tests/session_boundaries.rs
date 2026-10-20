@@ -358,9 +358,9 @@ fn tick_keyed_orders_match_across_arrival_lookahead_and_bounded_work() {
 
     let after_select_then_move = snapshot_world(&reference[0]);
     assert_eq!(after_select_then_move.unit(1).unwrap().x, MOVE_SPEED);
-    assert_eq!(after_select_then_move.unit(1).unwrap().selected, true);
+    assert!(after_select_then_move.unit(1).unwrap().selected);
     assert_eq!(after_select_then_move.unit(2).unwrap().x, FX_ONE * 3);
-    assert_eq!(after_select_then_move.unit(2).unwrap().selected, false);
+    assert!(!after_select_then_move.unit(2).unwrap().selected);
     assert_eq!(
         after_select_then_move.unit(3).unwrap().y,
         FX_ONE + MOVE_SPEED
