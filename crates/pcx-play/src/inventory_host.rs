@@ -632,6 +632,28 @@ impl ObjectHost {
         }
         Some(self.inventory_call(name, args))
     }
+    /// Input command from an inventory slot index: the slot's held item, if any, is activated by the
+    /// local player through `player_activate_held_item`. A slot beyond the unit's policy capacity or
+    /// an empty slot returns `false` with no write.
+    pub fn player_activate_slot(
+        &mut self,
+        local_player: i32,
+        unit: HandleId,
+        slot: usize,
+    ) -> Result<bool, Error> {
+        let owner = self.executed_unit(unit)?.owner;
+        if self.player_settings(owner)?.number != local_player {
+            return Ok(false);
+        }
+        if slot >= self.inventory_policy(unit)?.slots {
+            return Ok(false);
+        }
+        match self.held_slot(unit, slot) {
+            Some(item) => self.player_activate_held_item(local_player, unit, item),
+            None => Ok(false),
+        }
+    }
+
     /// Input command from an inventory slot: the local player activates an item held by one of its
     /// units. A unit owned by another player, a non-healing item and an item the unit does not hold
     /// return `false` with no write. An item whose authored target is not `_` needs a selected

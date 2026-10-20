@@ -443,6 +443,7 @@ fn open() -> Fixture {
         .with_item_use(
             crate::item_use_rules::Rules::new(powerup_tables(), Overlay::default()),
             8,
+            crate::playercolor_host::CooldownScope::SharedGroup,
         )
         .unwrap();
     h.native("SetRandomSeed", &[Value::Int(7)]).unwrap();
@@ -1486,4 +1487,39 @@ fn removed_hero_reads_zero_because_the_native_handle_gate_fails() {
     h.native("RemoveUnit", &[Value::Handle(hero)]).unwrap();
     assert_eq!(hero_attribute(&mut h, "GetHeroStr", hero, true), Ok(0));
     assert_eq!(hero_attribute(&mut h, "GetHeroInt", hero, false), Ok(0));
+}
+
+#[test]
+fn slot_input_activates_the_item_in_that_slot_and_nothing_else() {
+    let Fixture { mut h, hero, .. } = open();
+    h.set_timer_game_time(1.0).unwrap();
+    let max = h.unit_vitals(hero).unwrap().unwrap().max_life;
+    set_life(&mut h, hero, max / 2.0);
+    let potion = item(&mut h, b"phea", 0.0);
+    assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
+    let local = owner_number(&h, hero);
+    // The first item lands in slot 0; slot 1 is empty and slot 9 is beyond the unit's capacity.
+    assert!(!h.player_activate_slot(local, hero, 1).unwrap());
+    assert!(!h.player_activate_slot(local, hero, 9).unwrap());
+    assert_eq!(life_of(&h, hero), max / 2.0);
+    assert!(h.player_activate_slot(local, hero, 0).unwrap());
+    assert_eq!(life_of(&h, hero), max / 2.0 + 250.0);
+    assert!(h.executed_items().all(|(id, _)| id != potion));
+}
+
+#[test]
+fn slot_input_from_another_player_changes_nothing() {
+    let Fixture { mut h, hero, .. } = open();
+    h.set_timer_game_time(1.0).unwrap();
+    let max = h.unit_vitals(hero).unwrap().unwrap().max_life;
+    set_life(&mut h, hero, max / 2.0);
+    let potion = item(&mut h, b"phea", 0.0);
+    assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
+    let local = owner_number(&h, hero);
+    assert!(!h.player_activate_slot(local + 1, hero, 0).unwrap());
+    assert_eq!(life_of(&h, hero), max / 2.0);
+    assert_eq!(
+        h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(potion)]),
+        Ok(Value::Bool(true))
+    );
 }
