@@ -1,4 +1,7 @@
-//! Placed units/items, using native 0x551cc0/0x5520d0 framing.
+//! Placed units and their drop sets. The framing is checked against shipped campaign
+//! files (`tests/campaign_item_sets.rs`). It is not native-derived: earlier notes cited
+//! 0x551cc0 and 0x5520d0, but REA resolves them to `FUN_00551870` (race preference) and
+//! `FUN_00552040` (game option flags), which read no placed-unit records.
 use crate::{Error, Map};
 pub const UNITS_NAME: &str = "war3mapUnits.doo";
 
