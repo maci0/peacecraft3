@@ -44,6 +44,7 @@ pub(crate) fn install(app: &mut App) {
                 (load_circles, click)
                     .chain()
                     .after(crate::campaign_hud::CampaignHudSet)
+                    .after(crate::campaign_inventory::CampaignInventorySet)
                     .after(crate::campaign_script_dialogs::CampaignScriptDialogSet),
                 end_cinematic
                     .after(crate::campaign_hud::CampaignHudSet)
@@ -221,6 +222,7 @@ struct Picking<'w, 's> {
     ground: Res<'w, GroundPublication>,
     dialogs: Res<'w, crate::campaign_script_dialogs::CampaignScriptDialogs>,
     actors: Res<'w, crate::campaign_actors::UnitActors>,
+    inventory: Res<'w, crate::campaign_inventory::CampaignInventory>,
 }
 
 fn click(
@@ -238,6 +240,7 @@ fn click(
         ground,
         dialogs,
         actors,
+        inventory,
     } = picking;
     let (Some(mouse), Some(circles)) = (mouse, input.circles.clone()) else {
         return;
@@ -248,6 +251,7 @@ fn click(
         || !view.active()
         || hud.quest_log_open
         || hud.pointer_consumed
+        || inventory.pointer_consumed
         || dialogs.input_blocked()
     {
         return;

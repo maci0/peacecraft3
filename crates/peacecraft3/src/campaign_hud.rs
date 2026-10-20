@@ -143,7 +143,7 @@ fn policy(
 }
 
 /// The skin section named by the race constant, then `[Default]`.
-fn race_sections(skin: &SkinTable, race: Option<String>) -> Result<Vec<String>, String> {
+pub(crate) fn race_sections(skin: &SkinTable, race: Option<String>) -> Result<Vec<String>, String> {
     let race = race.ok_or("local player race preference is unset")?;
     let name = race
         .strip_prefix(RACE_PREFIX)

@@ -742,16 +742,44 @@ impl ObjectHost {
         } else {
             None
         };
+        let guard = if self.guard_managed_owner(*player)? {
+            let record = self.executed_unit(*unit)?;
+            let eligible =
+                super::unit_guards::candidate(&record.definition, record.combat.as_ref())
+                    .map_err(|error| self.inner.error(SET_OWNER, Failure::UnitActivity(error)))?;
+            if eligible {
+                let position = record.position.ok_or_else(|| {
+                    self.inner.error(
+                        SET_OWNER,
+                        Failure::UnitActivity("guard transfer requires accepted placement".into()),
+                    )
+                })?;
+                self.prepare_unit_guard(Some(*unit), *player, position, true)?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if self
+            .guard_state()
+            .and_then(|state| state.get(*unit))
+            .is_some_and(|guard| guard.returning)
+        {
+            self.steer_unit(*unit, None, SET_OWNER)?;
+            self.clear_combat_target(*unit);
+        }
         match self.inner.entry_mut(*unit)? {
             Entry::Unit { record } => {
                 record.owner = *player;
                 if *change_color {
                     record.team_color = color;
                 }
-                Ok(Value::Null)
             }
             _ => unreachable!("validated unit identity"),
         }
+        self.publish_unit_guard(*unit, guard);
+        Ok(Value::Null)
     }
 
     fn unit_event_enumerand(
@@ -1257,12 +1285,27 @@ impl ObjectHost {
         if let Some(prepared) = &placement {
             record.position = Some(prepared.position);
         }
+        let guard = if self.guard_managed_owner(record.owner)?
+            && super::unit_guards::candidate(&record.definition, record.combat.as_ref())
+                .map_err(|error| self.inner.error(NATIVE, Failure::UnitActivity(error)))?
+        {
+            let position = record.position.ok_or_else(|| {
+                self.inner.error(
+                    NATIVE,
+                    Failure::UnitActivity("guard creation requires accepted placement".into()),
+                )
+            })?;
+            self.prepare_unit_guard(None, record.owner, position, true)?
+        } else {
+            None
+        };
         let id = self.inner.allocate(
             Entry::Unit {
                 record: Box::new(record),
             },
             NATIVE,
         )?;
+        self.publish_unit_guard(id, guard);
         if let Some(prepared) = placement {
             self.unit_placement
                 .as_mut()

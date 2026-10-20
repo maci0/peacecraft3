@@ -134,3 +134,7 @@ pub mod dialog_layout;
 pub mod inventory;
 pub mod player_removal_rules;
 pub mod selection_circle;
+
+pub mod inventory_layout;
+pub mod script_localization;
+pub mod unit_guard_rules;

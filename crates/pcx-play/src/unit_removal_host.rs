@@ -55,6 +55,7 @@ impl ObjectHost {
                         .error(REMOVE, Failure::UnitPlacement(e.to_string()))
                 })?;
             }
+            self.forget_unit_guard(unit);
             self.forget_hidden_unit_ranges(unit);
             self.forget_unit_activity(unit);
             self.members.retain(|&(_, member)| member != unit);

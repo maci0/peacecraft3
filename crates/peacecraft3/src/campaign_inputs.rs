@@ -122,6 +122,10 @@ pub fn prepare_new_game(
     });
     let hero_vitals = pcx_objects::editor::misc::HeroVitals::read(&game_profiles, 8 << 20)?;
     let combat = pcx_objects::editor::misc::CombatRules::read(&game_profiles, 8 << 20)?;
+    inputs.unit_guards = Some(UnitGuardsInput {
+        native: pcx_play::unit_guard_rules::Rules::reviewed_legacy(image, client.clone())?,
+        source: combat.clone(),
+    });
     let camera_config = reader
         .resolve_bounded("UI/MiscData.txt", 2 << 20)
         .map_err(|e| e.to_string())?;
@@ -324,6 +328,8 @@ pub fn prepare(
     let constructors = vec![sound_sources.empty_label_bank(label_budget)?];
     Ok(MapStartupInputs {
         inventory: None,
+        unit_guards: None,
+        localization: Some(localization(reader, image, &client)?),
         player_removal_rules: Some(pcx_play::player_removal_rules::Rules::reviewed_legacy(
             image,
             client.clone(),
@@ -405,6 +411,43 @@ pub fn prepare(
         // Authored controller roles alone do not establish these runtime inputs.
         post_config: PostConfigObservations::default(),
     })
+}
+
+fn localization(
+    reader: &Resolver,
+    image: &[u8],
+    client: &AssetIdentity,
+) -> Result<pcx_play::script_localization::Bank, String> {
+    use pcx_play::script_localization::{Bank, Budget, Rules};
+    use pcx_play::scripts::ScriptAsset;
+    let strings = reader
+        .resolve_bounded("UI/FrameDef/GlobalStrings.fdf", 4 << 20)
+        .map_err(|error| error.to_string())?;
+    let hotkeys = reader
+        .resolve_bounded("UI/MiscUI.txt", 4 << 20)
+        .map_err(|error| error.to_string())?;
+    let (strings_label, strings_origin) =
+        campaign_assets::identity(&strings, &client.edition, 16 << 10)?;
+    let (hotkeys_label, hotkeys_origin) =
+        campaign_assets::identity(&hotkeys, &client.edition, 16 << 10)?;
+    Bank::read(
+        ScriptAsset {
+            label: &strings_label,
+            bytes: &strings.bytes,
+        },
+        strings_origin,
+        ScriptAsset {
+            label: &hotkeys_label,
+            bytes: &hotkeys.bytes,
+        },
+        hotkeys_origin,
+        Rules::reviewed_legacy(image, client.clone())?,
+        Budget {
+            bytes: 8 << 20,
+            entries: 65536,
+            string_bytes: 1 << 20,
+        },
+    )
 }
 
 fn enum_contracts(context: &ParsedMapContext) -> Result<EnumContracts, String> {

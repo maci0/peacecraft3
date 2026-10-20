@@ -581,6 +581,7 @@ impl ObjectHost {
         if (position[0] - destination[0]).hypot(position[1] - destination[1]) <= range {
             self.reserve_item_events(&[(unit, true)])?;
             self.steer_unit(unit, None, name)?;
+            self.guard_ordered(unit);
             self.cancel_inventory_order(unit);
             self.clear_combat_target(unit);
             return self.add_inventory_item(unit, item);
@@ -605,6 +606,7 @@ impl ObjectHost {
         if !self.steer_unit(unit, Some(destination), name)? {
             return Ok(false);
         }
+        self.guard_ordered(unit);
         self.cancel_inventory_order(unit);
         self.clear_combat_target(unit);
         self.items

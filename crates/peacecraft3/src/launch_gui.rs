@@ -396,6 +396,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     crate::campaign_input::install(&mut app);
     crate::campaign_diagnostics::install(&mut app);
     crate::campaign_hud::install(&mut app);
+    crate::campaign_inventory::install(&mut app);
     crate::campaign_selection::install(&mut app);
     #[cfg(not(target_arch = "wasm32"))]
     crate::native_campaign::install(&mut app);

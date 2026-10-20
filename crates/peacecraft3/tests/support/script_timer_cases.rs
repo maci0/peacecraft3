@@ -3,6 +3,7 @@ use super::*;
 use peacecraft3::map_script_session::TimerSessionError;
 
 pub(super) const TIMER_COMMON: &str = "\
+native PauseGame takes boolean paused returns nothing
 native TimerStart takes timer t, real timeout, boolean periodic, code handler returns nothing
 native TimerGetElapsed takes timer t returns real
 native TimerGetRemaining takes timer t returns real
@@ -201,32 +202,45 @@ pub(super) fn deliver_timed_trigger(app: &mut App, script: &str, revision: u64) 
     deliver_timer_mode(app, script, revision, true);
 }
 fn deliver_timer_mode(app: &mut App, script: &str, revision: u64, timed: bool) {
+    let common = if timed {
+        super::timed_trigger_cases::COMMON
+    } else {
+        ""
+    };
+    deliver_timer_with(app, script, revision, common, |inputs| {
+        if timed {
+            inputs.trigger_runtime = Some(pcx_play::playercolor_host::TriggerRuntimeInput {
+                initial_enabled: true,
+                timer_event_global: "TEST_TIMER_EVENT".into(),
+                max_timed_events: 16,
+                max_parked_threads: 16,
+            });
+            inputs.enumeration.names.push("ConvertGameEvent".into());
+            inputs.enumeration.limits.max_handles = 256;
+            inputs.budgets.triggers.max_triggers = 16;
+            inputs.budgets.triggers.max_actions = 32;
+            inputs.budgets.conditions =
+                Some(pcx_play::playercolor_host::ConditionBudget { max_records: 16 });
+            inputs.budgets.trigger_conditions = Some(16);
+        }
+    });
+}
+fn deliver_timer_with(
+    app: &mut App,
+    script: &str,
+    revision: u64,
+    common: &str,
+    configure: impl FnOnce(&mut MapStartupInputs),
+) {
     let mut map = fixture(script);
     map.common.extend_from_slice(TIMER_COMMON.as_bytes());
-    if timed {
-        map.common
-            .extend_from_slice(super::timed_trigger_cases::COMMON.as_bytes());
-    }
+    map.common.extend_from_slice(common.as_bytes());
     map.rebuild();
     let resolver = map.resolver();
     let bound = bind_map(&resolver, map.input(revision), map.limits()).unwrap();
     let mut inputs = host_inputs(Arc::clone(&bound.catalog.0));
     inputs.timer_time = Some(10.0);
-    if timed {
-        inputs.trigger_runtime = Some(pcx_play::playercolor_host::TriggerRuntimeInput {
-            initial_enabled: true,
-            timer_event_global: "TEST_TIMER_EVENT".into(),
-            max_timed_events: 16,
-            max_parked_threads: 16,
-        });
-        inputs.enumeration.names.push("ConvertGameEvent".into());
-        inputs.enumeration.limits.max_handles = 256;
-        inputs.budgets.triggers.max_triggers = 16;
-        inputs.budgets.triggers.max_actions = 32;
-        inputs.budgets.conditions =
-            Some(pcx_play::playercolor_host::ConditionBudget { max_records: 16 });
-        inputs.budgets.trigger_conditions = Some(16);
-    }
+    configure(&mut inputs);
     let bytes = Arc::clone(&bound.catalog_map_bytes);
     app.insert_resource(MapRequests {
         bindings: Some(bound),
@@ -506,5 +520,12 @@ pub fn browser_campaign_runtime_gate() -> u32 {
     campaign_runtime_catches_up_without_dropping_load_debt();
     campaign_runtime_pause_replacement_and_failed_callback_do_not_replay_effects();
     campaign_runtime_application_system_advances_the_published_host();
-    3
+    game_pause::executed_pause_finishes_thread_and_holds_future_timer_delivery();
+    game_pause::runtime_rebases_a_mid_tick_pause_and_discards_paused_wall_time();
+    game_pause::queued_dialog_resume_runs_while_the_simulation_clock_is_paused();
+    game_pause::paused_session_preserves_parked_threads_until_game_time_resumes();
+    7
 }
+
+#[path = "script_game_pause_cases.rs"]
+mod game_pause;

@@ -66,6 +66,22 @@ impl CampaignRuntime {
         self.pending
     }
 
+    fn synchronize_script_pause(&mut self, session: &mut MapScriptSession<MapStartupHost>) -> bool {
+        let Some(host) = session.host() else {
+            return false;
+        };
+        let objects = host.objects();
+        if objects.game_paused() != Some(true) {
+            return false;
+        }
+        self.pending = Duration::ZERO;
+        match objects.timer_game_time() {
+            Some(now) => self.origin = now - self.step.as_secs_f64() * self.tick as f64,
+            None => self.last_error = Some(CampaignRuntimeError::MissingClock),
+        }
+        true
+    }
+
     /// An error stops this session; repeating an update cannot replay partial effects.
     pub fn advance(&mut self, session: &mut MapScriptSession<MapStartupHost>, elapsed: Duration) {
         let Some(witness) = session.session_witness() else {
@@ -95,6 +111,15 @@ impl CampaignRuntime {
         if let Some(host) = session.host() {
             host.objects_mut().advance_volume_group_clock(elapsed);
         }
+        if self.synchronize_script_pause(session) {
+            if self.last_error.is_none()
+                && let Err(error) = session.advance_queued_events(65536)
+            {
+                self.last_error = Some(error.into());
+            }
+            // This frame's wall interval belongs to the paused state even if a UI callback resumes it.
+            return;
+        }
         if self.paused || self.view_paused || self.last_error.is_some() {
             return;
         }
@@ -110,11 +135,23 @@ impl CampaignRuntime {
             let until = self.origin + self.step.as_secs_f64() * tick as f64;
             let result = session
                 .advance_timers(until, self.max_expiries_per_tick)
-                .and_then(|count| session.advance_unit_ranges(65536).map(|_| count));
+                .and_then(|count| {
+                    if session
+                        .host()
+                        .is_some_and(|host| host.objects().game_paused() == Some(true))
+                    {
+                        Ok(count)
+                    } else {
+                        session.advance_unit_ranges(65536).map(|_| count)
+                    }
+                });
             match result {
                 Ok(_) => {
                     self.tick = tick;
                     self.pending -= self.step;
+                    if self.synchronize_script_pause(session) {
+                        break;
+                    }
                 }
                 Err(error) => {
                     self.last_error = Some(error.into());

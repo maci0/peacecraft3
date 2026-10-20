@@ -486,6 +486,7 @@ impl ObjectHost {
             if !can_attack || self.weapon_target(target).is_none() || unit == target {
                 return Ok(Value::Bool(false));
             }
+            self.guard_ordered(unit);
             self.cancel_inventory_order(unit);
             self.clear_combat_target(unit);
             if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
@@ -511,6 +512,7 @@ impl ObjectHost {
         let owner = record.owner;
         let now = self.timer_game_time().unwrap_or(0.0);
         self.forget_inventory_unit(unit, false)?;
+        self.forget_unit_guard(unit);
         self.steer_unit(unit, None, name)?;
         if let Some(placement) = &mut self.unit_placement {
             placement.hide(unit).map_err(|e| {
@@ -650,6 +652,13 @@ impl ObjectHost {
             .map(|(id, _)| id)
             .collect();
         for unit in units {
+            let has_valid_target = self
+                .live(unit)
+                .and_then(|record| record.combat.as_ref()?.target)
+                .is_some_and(|target| self.weapon_target(target).is_some());
+            if self.guard_combat_step(unit, now, has_valid_target)? {
+                continue;
+            }
             let Some(record) = self.live(unit) else {
                 continue;
             };
@@ -767,6 +776,7 @@ impl ObjectHost {
                                 .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
                         }
                     }
+                    self.guard_attacked(target, now);
                     let rules = self.combat.as_ref().expect("combat");
                     let (attacked, player_attacked) = (rules.unit_attacked, rules.player_attacked);
                     let owner = self.executed_unit(target)?.owner;

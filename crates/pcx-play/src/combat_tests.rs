@@ -1246,3 +1246,6 @@ fn explicit_protection_does_not_override_script_kill_or_direct_life_assignment()
 
 #[path = "unit_hero_vital_tests.rs"]
 mod hero_vital_updates;
+
+#[path = "unit_guard_tests.rs"]
+mod guard_positions;

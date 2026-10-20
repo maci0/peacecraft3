@@ -66,6 +66,9 @@ pub struct ObjectHost {
     units: Option<unit_creation::Admission>,
     items: Option<item_creation::Admission>,
     player_removal: Option<player_removal::PlayerRemovalState>,
+    localized_queries: Option<crate::script_localization::Bank>,
+    game_pause: Option<Option<bool>>,
+    guards: Option<unit_guards::GuardState>,
     triggers: Option<trigger_admission::Admission>,
     filters: Option<filters::Admission>,
     conditions: Option<conditions::Admission>,
@@ -159,6 +162,9 @@ impl ObjectHost {
             effects: false,
             items: None,
             player_removal: None,
+            localized_queries: None,
+            game_pause: None,
+            guards: None,
             triggers: None,
             filters: None,
             conditions: None,
@@ -782,7 +788,16 @@ impl Host for ObjectHost {
         if let Some(result) = self.inventory_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.localized_query_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.game_pause_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.player_removal_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.guard_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.combat_native(name, args) {
@@ -1084,3 +1099,12 @@ mod cheat_queries;
 #[path = "player_removal_host.rs"]
 mod player_removal;
 pub use player_removal::{PlayerRemoval, PlayerRemovalBudget, PlayerRemovalState};
+
+#[path = "game_pause_host.rs"]
+mod game_pause;
+#[path = "localized_queries_host.rs"]
+mod localized_queries;
+
+#[path = "unit_guard_host.rs"]
+mod unit_guards;
+pub use unit_guards::{GuardBudget, GuardState, UnitGuard};

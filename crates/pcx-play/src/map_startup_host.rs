@@ -148,6 +148,11 @@ pub struct DefendSelection {
     pub alias: String,
 }
 
+pub struct UnitGuardsInput {
+    pub native: crate::unit_guard_rules::Rules,
+    pub source: pcx_objects::editor::misc::CombatRules,
+}
+
 pub struct HeroSkillsInput {
     pub rules: crate::hero_skills::Rules,
     pub abilities: pcx_objects::editor::Overlay,
@@ -252,6 +257,8 @@ pub struct MapStartupInputs {
     pub sound_playback: Option<sound_playback::Rules>,
     pub resources: Option<crate::player_resources::Rules>,
     pub inventory: Option<crate::inventory::Rules>,
+    pub localization: Option<crate::script_localization::Bank>,
+    pub unit_guards: Option<UnitGuardsInput>,
     pub player_removal_rules: Option<crate::player_removal_rules::Rules>,
     pub cheats: Option<crate::cheat_rules::Rules>,
     pub dialog_layout: Option<crate::dialog_layout::Rules>,
@@ -493,6 +500,8 @@ pub fn assemble(
         sound_playback,
         resources,
         inventory,
+        localization,
+        unit_guards,
         player_removal_rules,
         cheats,
         dialog_layout,
@@ -607,6 +616,10 @@ pub fn assemble(
     {
         object = object.with_fog_modifiers()?;
     }
+    object = object.with_game_pause()?;
+    if let Some(bank) = localization {
+        object = object.with_localized_queries(bank)?;
+    }
     let tables = defend.tables;
     if let Some(input) = hero_skills {
         object = object.with_hero_skills(
@@ -709,6 +722,15 @@ pub fn assemble(
         object
             .native("SetRandomSeed", &[Value::Int(input.seed)])
             .map_err(MapStartupError::Observation)?;
+    }
+    if let Some(input) = unit_guards {
+        object = object.with_unit_guards(
+            input.native,
+            input.source,
+            crate::playercolor_host::GuardBudget {
+                max_units: budgets.units.max_records,
+            },
+        )?;
     }
     if let Some(input) = terrain_pathing {
         object = object.with_terrain_pathing(input)?;

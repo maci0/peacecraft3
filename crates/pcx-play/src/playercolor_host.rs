@@ -764,9 +764,9 @@ pub use objects::{
     ConditionBudget, ConditionCallback, DayNightState, DeathEventRegistration, DestructableBudget,
     DestructableCreation, Environment, ExecutedItem, ExecutedUnit, ExecutedUnitState,
     FileSoundState, FilterBudget, FilterCallback, FilterSample, ForceBudget,
-    GameStateEventRegistration, HeroBudget, HeroProgress, ItemBudget, LabelSoundFlags, MapConfig,
-    MapConfigBudget, MapMusicSelection, MessageBudget, MessageState, ObjectHost,
-    PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
+    GameStateEventRegistration, GuardBudget, GuardState, HeroBudget, HeroProgress, ItemBudget,
+    LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection, MessageBudget, MessageState,
+    ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
     PlayerRemoval, PlayerRemovalBudget, PlayerRemovalState, PlayerSettings,
     PlayerStateRequestBudget, PlayerUnitEventRegistration, PresentationState, QuestBudget,
     QuestEvent, QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration,
@@ -775,8 +775,8 @@ pub use objects::{
     StartupSettings, StockBudget, TechLimitBudget, TerrainFog, TimedMessage,
     TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord, TriggerBudget,
     TriggerConditionRegistration, TriggerDelivery, TriggerRuntimeInput, UnitAbilities,
-    UnitActivity, UnitBudget, UnitEffect, UnitEventRegistration, UnitInRangeRegistration,
-    UnitRangeEntry, UnitStateBudget,
+    UnitActivity, UnitBudget, UnitEffect, UnitEventRegistration, UnitGuard,
+    UnitInRangeRegistration, UnitRangeEntry, UnitStateBudget,
 };
 pub use objects::{
     CinematicScene, Combat, DestructableState, DialogBudget, DialogButton, DialogQuitRequest,

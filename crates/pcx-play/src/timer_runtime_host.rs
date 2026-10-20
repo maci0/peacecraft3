@@ -386,15 +386,8 @@ impl ObjectHost {
         Ok(Value::Real(value as f32))
     }
 
-    /// Prepare at most one firing, in deadline/start order (a recreation tie policy).
-    /// Work is bounded by the arena and retained registration counts per firing. A budget
-    /// refusal preserves the next firing; previously delivered effects remain.
-    /// Trigger snapshots are prepared before consuming the deadline.
-    pub fn next_timer_expiry(
-        &mut self,
-        until: f64,
-        budget: &mut usize,
-    ) -> Result<Option<TimerExpiry>, Error> {
+    /// Validate a delivery boundary without advancing the admitted clock.
+    pub fn validate_timer_target(&self, until: f64) -> Result<(), Error> {
         let fail = |reason| self.inner.error("timer delivery", reason);
         let state = self
             .timers
@@ -405,6 +398,21 @@ impl ObjectHost {
                 "invalid time or unfinished expiry",
             )));
         }
+        Ok(())
+    }
+
+    /// Prepare at most one firing, in deadline/start order (a recreation tie policy).
+    /// Work is bounded by the arena and retained registration counts per firing. A budget
+    /// refusal preserves the next firing; previously delivered effects remain.
+    /// Trigger snapshots are prepared before consuming the deadline.
+    pub fn next_timer_expiry(
+        &mut self,
+        until: f64,
+        budget: &mut usize,
+    ) -> Result<Option<TimerExpiry>, Error> {
+        let fail = |reason| self.inner.error("timer delivery", reason);
+        self.validate_timer_target(until)?;
+        let state = self.timers.as_ref().expect("validated timer clock");
         let next = self
             .inner
             .arena

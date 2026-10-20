@@ -13,6 +13,7 @@ mod campaign_actors;
 mod campaign_diagnostics;
 mod campaign_hud;
 mod campaign_input;
+mod campaign_inventory;
 mod campaign_messages;
 mod campaign_prepare;
 mod campaign_script_dialogs;

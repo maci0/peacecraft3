@@ -3581,3 +3581,31 @@ repeated, and the public site package was not rebuilt.
   These are route points, not completed objectives. AI guard management, authored
   ledger pickup/return, chapter victory, campaign transitions, networking and the
   required unmodified community maps remain unfinished.
+
+
+### 2026-10-20 — localized defeat dialogs and simulation pause
+
+- [x] Selected-source localization and hotkey queries retain file provenance and
+  native operand qualification. Executed `PauseGame` lets the current script
+  finish, freezes later simulation delivery, and permits queued dialog callbacks
+  to resume without accumulating paused wall time.
+- [x] Unit guard participation tracks source-qualified computer ownership,
+  authored home positions and selected combat chase/return settings. Special
+  native enrollment flags and complete computer AI remain open.
+- [x] The unchanged no-input Human01 script reaches its authored localized
+  Defeat dialog and pauses at 36.1719 game seconds without a runtime error in
+  the production-factory headless verifier. This verifies VM/dialog state, not
+  rendered dialog parity or working restart/load/quit actions.
+- [ ] Held inventory presentation reads selected image geometry and source skin,
+  item art and text. Native rendered behavior remains unverified. Applying the
+  decoded cover UV crop, asset-load rollback and effective verbose-tooltip
+  preference handling remain open; item use/drag/drop explicitly refuse.
+- [ ] The stateful authored ledger route reaches quest discovery and camp combat,
+  then refuses `GroupPointOrderLoc` at 172.2188 seconds. Group-order drafts stay
+  outside this checkpoint. Authored pickup/return and the strength reward remain
+  unverified; chapter completion and campaign transitions remain open.
+- [x] Checkpoint validation: 733 shared-host tests and 812 application tests
+  pass, including all four pause runtime cases. Selected original localization,
+  pause declaration, guard operand and inventory layout gates pass. Strict native
+  and browser all-target Clippy pass. Rendered inventory/dialog comparison and
+  browser runtime execution for this checkpoint remain unverified.

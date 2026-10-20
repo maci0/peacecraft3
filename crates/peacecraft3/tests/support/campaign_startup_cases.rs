@@ -608,6 +608,8 @@ fn rule_with_getter(kind: RuleKind, body: Vec<u8>) -> Arc<VerifiedNeutralRule> {
 fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) -> MapStartupInputs {
     MapStartupInputs {
         inventory: None,
+        localization: None,
+        unit_guards: None,
         player_removal_rules: None,
         random: None,
         terrain_pathing: None,

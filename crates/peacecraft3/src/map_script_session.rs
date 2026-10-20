@@ -256,15 +256,28 @@ pub enum TimerSessionError {
 impl MapScriptSession<pcx_play::map_startup_host::MapStartupHost> {
     /// Deliver positive-timeout callbacks in this published VM using explicit game time.
     /// Errors retain prior effects; the host clock records how far delivery reached.
-    /// This method supplies no application clock, pause policy or yielding continuation.
+    /// An executed game pause freezes future timer/wake delivery after the current event.
     pub fn advance_timers(
         &mut self,
         until: f64,
         mut budget: usize,
     ) -> Result<usize, TimerSessionError> {
+        self.host()
+            .ok_or(ScriptSessionError::NoSession)?
+            .objects()
+            .validate_timer_target(until)?;
         let mut delivered = 0;
         let mut activity_work = 65536;
         loop {
+            if self
+                .host()
+                .ok_or(ScriptSessionError::NoSession)?
+                .objects()
+                .game_paused()
+                == Some(true)
+            {
+                return Ok(delivered);
+            }
             let wake = self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
@@ -416,7 +429,7 @@ impl MapScriptSession<pcx_play::map_startup_host::MapStartupHost> {
     /// queued event, each as a filtered trigger thread.
     pub fn advance_unit_ranges(&mut self, work: usize) -> Result<usize, TimerSessionError> {
         let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
-        let mut delivered = drain_unit_ranges(&active.context, &mut active.vm, work)?;
+        let delivered = drain_unit_ranges(&active.context, &mut active.vm, work)?;
         let mut work = work;
         active
             .vm
@@ -424,6 +437,14 @@ impl MapScriptSession<pcx_play::map_startup_host::MapStartupHost> {
             .inner
             .objects_mut()
             .poll_region_events(&mut work)?;
+        self.advance_queued_events(work)
+            .map(|events| delivered + events)
+    }
+
+    /// Deliver already queued UI/script callbacks without polling world geometry or time.
+    pub fn advance_queued_events(&mut self, mut work: usize) -> Result<usize, TimerSessionError> {
+        let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
+        let mut delivered = 0;
         while let Some(fired) = active.vm.host().inner.objects_mut().take_fired_event() {
             let Some(trigger) = active
                 .vm
@@ -435,6 +456,9 @@ impl MapScriptSession<pcx_play::map_startup_host::MapStartupHost> {
                 continue;
             };
             let result = (|| -> Result<bool, TimerSessionError> {
+                work = work
+                    .checked_sub(trigger.actions.len().max(1))
+                    .ok_or(TimerSessionError::RangeBudget)?;
                 for id in fired.filter.into_iter().chain(trigger.conditions) {
                     let Value::Bool(accepted) =
                         call_range_callback(&active.context, &mut active.vm, &mut work, id)?

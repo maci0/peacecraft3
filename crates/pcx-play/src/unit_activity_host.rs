@@ -146,6 +146,10 @@ pub(crate) fn balance_real_with_marker(
 }
 
 impl ObjectHost {
+    pub(super) fn activity_stop_order(&self) -> Option<i32> {
+        self.unit_activity.as_ref().map(|state| state.rules.stop)
+    }
+
     pub fn admit_unit_activity(&mut self, rules: Rules, route_work: usize) -> Result<(), Error> {
         let fail = |detail: &str| {
             self.inner
@@ -548,6 +552,7 @@ impl ObjectHost {
                 }
                 _ => {}
             }
+            self.guard_ordered(unit);
             self.cancel_inventory_order(unit);
             self.clear_combat_target(unit);
             if let Entry::Unit { record } = self.inner.entry_mut(unit)?
