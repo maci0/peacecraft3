@@ -146,10 +146,73 @@ Still Bevy-coupled, and needed for a headless startup: `map_requests::prepare` a
 `Resolver` and script identities), `map_script_session` (`war3map.j` and creation
 triggers), and the assembly in `campaign_startup`.
 
-
 ## Integration checkpoint
 
 The later extraction also moves cache, placement and script-session ownership into
 `pcx-play`. `campaign_host::create_host` and its post-configuration helpers are
 shared by the application startup and the selected-install headless driver.
 The earlier Bevy-coupling list above describes the preceding checkpoint.
+
+## Production authority
+
+`pcx_net::production::ProductionAuthority` drives the admitted map's startup from peer
+batches. `pcx_net::host::Host` is generic over `SessionAuthority`, and the harness `Session`
+remains its default.
+
+Rules implemented:
+
+- **Admission.** A peer joins only as a human slot of the map's own roster
+  (`context.world.info.human_players()`). Reconnect tokens take roster slots in ascending
+  order. A second human, a non-roster slot, or a bound slot is refused.
+- **Packets.** `parse_packet` checks size, identity (the packet's player must be the
+  peer's slot), command count and coordinate bounds. Tick checks belong to the authority:
+  a tick already run is refused, one more than `MAX_INPUT_LEAD` ahead is refused, and a
+  duplicate for a peer and tick is refused.
+- **Gating before orders.** A batch is refused, with no native call, when the game is paused
+  (`game_paused`), when user control is off (`presentation().control_enabled == Some(false)`,
+  the application's rule), when the player owns no movable unit, or when it carries `Select`
+  or `Stop`. The gate runs before any `IssuePointOrder`, so a script's own order calls are
+  not the admission check.
+- **Apply once.** A batch applies at the clock tick it names, then the clock steps one
+  tick. Refusals go to a bounded log with the number dropped.
+- **Fail-stop.** An order native that returns anything but `true` ends the authority rather
+  than continuing from a partly applied batch.
+- **Export.** A snapshot maps each executed unit to a wire unit with checked handle, owner and
+  coordinate values. It reads `selection()` for the selected flag and `activity.destination()`
+  for the move target.
+- **Identity.** `startup.admission_digest()`: the executable, map, both scripts, catalog
+  source, seed, mode and roster. Unit snapshots are not the identity.
+
+Scope and limits:
+
+- `Move` orders every owned movable unit, through the same `IssuePointOrder` native the
+  application uses. The application orders its selected units, and the wire carries no
+  selection, so this divergence stays until selection is on the wire.
+- Coordinates become `f32` world units for orders and come back as wire fixed point, so a
+  round trip is exact only to the `f32` precision of the position.
+- Snapshot equality compares executed-unit identity, owner and current position. It does not
+  establish VM globals, RNG streams or script-level parity.
+
+Observations, from `production_authority` and `pcx-play` probes run during this change:
+
+- **Human01 is paused for the window that was observed.** User control is off from tick 0 to
+  tick 2315. At tick 2315 control is on, and the game is paused. The pause did not end
+  within 131,072 ticks (about 34 minutes of game time). Player orders are refused by the
+  gate for that whole window, so accepted orders can't be shown on this map yet. The
+  application ends the cinematic with an end-cinematic event from Escape. That input is not on
+  the wire.
+- **Route and destination.** A direct `IssuePointOrder` east of unit 777 before any step gives
+  a one-waypoint route to the target, and the unit moves about 4.2 units per tick. A control
+  run with no player order has unit 777 and unit 780 each holding a multi-waypoint route
+  after the first step (unit 777 ends at `(-3952, 2896)`), and unit 805 already holds one
+  before any step. Those routes come from script orders in the first clock steps. The
+  north-west detour is script-authored in this map. The authority's batches in those probes
+  were refused by the control gate at tick 0, which is why the ordered and control runs
+  matched. Direct natives bypass that gate.
+- **Human03** stops at startup on `SetPlayerAbilityAvailable`, which is not implemented.
+
+Gaps, in order of effect: the end-cinematic input is not on the wire, so Human01 cannot
+reach an accepted order; the roster policy refuses maps with more than one human slot
+(`campaign_inputs::prepare_new_game`), so a two-human source-map session needs a policy
+decision; selection and stop orders need the wire to carry them; and `SetPlayerAbilityAvailable`
+ is missing.

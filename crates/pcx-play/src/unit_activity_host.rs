@@ -141,6 +141,17 @@ impl UnitActivity {
     pub fn moving(&self) -> bool {
         self.motion.is_some()
     }
+    /// Whether the unit's class admits movement orders at all.
+    pub fn movable(&self) -> bool {
+        self.movable
+    }
+    /// The accepted route's waypoints, in travel order, and the index of the next one. Empty
+    /// when no route is pending.
+    pub fn waypoints(&self) -> (&[[f32; 2]], usize) {
+        self.motion
+            .as_ref()
+            .map_or((&[][..], 0), |m| (m.path.as_slice(), m.next))
+    }
     pub fn destination(&self) -> Option<[f32; 2]> {
         self.motion.as_ref().map(|m| m.goal)
     }

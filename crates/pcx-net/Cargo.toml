@@ -7,7 +7,7 @@ license.workspace = true
 description = "Transports, command codec and authoritative lockstep server"
 
 [features]
-session-server = ["dep:tungstenite", "dep:sha2", "dep:serde_json"]
+session-server = ["dep:tungstenite", "dep:sha2", "dep:serde_json", "dep:pcx-play", "dep:pcx-script"]
 
 [[bin]]
 name = "session_server"
@@ -26,6 +26,14 @@ required-features = ["session-server"]
 name = "cli_process"
 required-features = ["session-server"]
 
+[[test]]
+name = "production_authority"
+required-features = ["session-server"]
+
+[[test]]
+name = "production_peers"
+required-features = ["session-server"]
+
 [dependencies]
 flate2.workspace = true
 pcx-sim.workspace = true
@@ -39,6 +47,11 @@ sha1 = "0.11.0"
 tungstenite = { version = "0.30", optional = true, default-features = false, features = ["handshake"] }
 sha2 = { workspace = true, optional = true }
 serde_json = { version = "1.0.154", optional = true }
+pcx-play = { workspace = true, optional = true }
+pcx-script = { workspace = true, optional = true }
+
+[dev-dependencies]
+pcx-assets.workspace = true
 
 [lints]
 workspace = true

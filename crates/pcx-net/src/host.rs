@@ -1,8 +1,9 @@
-//! Local WebSocket session host: admits peers by reconnect token, binds each
-//! connection to a player slot and drives the shared [`Session`] clock.
+//! Local WebSocket session host: admits peers by reconnect token, binds each connection to a
+//! player slot and drives a [`SessionAuthority`] clock. The default authority is the harness
+//! [`Session`].
 //!
-//! The caller owns the loop. [`Host::poll`] performs one bounded service pass,
-//! so a test or launcher can run it on a thread and stop it deterministically.
+//! The caller owns the loop. [`Host::poll`] performs one bounded service pass, so a test or
+//! launcher can run it on a thread and stop it deterministically.
 
 use std::{
     collections::BTreeMap,
@@ -12,13 +13,14 @@ use std::{
 };
 
 use pcx_sim::{FX_ONE, TICK_MS, World};
-use tungstenite::{Message, WebSocket, protocol::WebSocketConfig};
-
 use sha2::{Digest, Sha256};
+use tungstenite::{Message, WebSocket, protocol::WebSocketConfig};
 
 use crate::{
     Peer, encode_world_payload,
-    session::{MAX_PACKET_BYTES, MAX_PLAYERS, Session, SessionIdentity},
+    session::{
+        MAX_PACKET_BYTES, MAX_PLAYERS, Session, SessionAuthority, SessionError, SessionIdentity,
+    },
 };
 
 mod admission;
@@ -60,9 +62,10 @@ pub fn local_world() -> World {
     world
 }
 
-pub struct Host {
+/// A TCP/WebSocket host for one authority. The default is the harness [`Session`].
+pub struct Host<A: SessionAuthority = Session> {
     listener: TcpListener,
-    session: Session,
+    authority: A,
     identity: SessionIdentity,
     connections: BTreeMap<Peer, Connection>,
     pending: Vec<admission::Pending<TcpStream>>,
@@ -72,14 +75,21 @@ pub struct Host {
 }
 
 impl Host {
-    /// Every joining peer is told this session's identity and must verify it before play.
+    /// Hosts the harness session over `world`, with `seed` as its new-game seed.
     pub fn bind(address: &str, world: World, seed: u64) -> io::Result<Self> {
+        Self::with_authority(address, Session::new(world, seed))
+    }
+}
+
+impl<A: SessionAuthority> Host<A> {
+    /// Every joining peer is told this authority's identity and must verify it before play.
+    pub fn with_authority(address: &str, authority: A) -> io::Result<Self> {
         let listener = TcpListener::bind(address)?;
         listener.set_nonblocking(true)?;
         Ok(Self {
             listener,
-            identity: session_identity(&world, seed),
-            session: Session::new(world, seed),
+            identity: authority.identity(),
+            authority,
             connections: BTreeMap::new(),
             pending: Vec::new(),
             slots: BTreeMap::new(),
@@ -93,7 +103,7 @@ impl Host {
     }
 
     /// Runs one service pass at `now`: accepts, admits, reads, closes, then advances
-    /// the shared clock when a tick is due.
+    /// the shared clock when a tick is due. An authority that stops ends the pass with an error.
     pub fn poll(&mut self, now: Instant) -> io::Result<()> {
         if let Ok((stream, _)) = self.listener.accept()
             && self.connections.len().saturating_add(self.pending.len()) < MAX_PLAYERS as usize
@@ -157,15 +167,16 @@ impl Host {
                         let player = if let Some(player) = self.slots.get(token.as_str()) {
                             *player
                         } else {
-                            if self.slots.len() >= MAX_PLAYERS as usize {
+                            let Some(player) =
+                                self.authority.player_for_new_token(self.slots.len())
+                            else {
                                 closed.push(peer);
                                 break;
-                            }
-                            let player = self.slots.len() as u8;
+                            };
                             self.slots.insert(token.to_string(), player);
                             player
                         };
-                        if self.session.join(peer, player).is_err() {
+                        if self.authority.join(peer, player).is_err() {
                             closed.push(peer);
                             break;
                         }
@@ -174,15 +185,19 @@ impl Host {
                             "{{\"player\":{player},\"tickMs\":{TICK_MS},\"session\":\"{}\"}}",
                             self.identity.to_hex()
                         );
+                        let Ok(snapshot) = self.authority.snapshot() else {
+                            closed.push(peer);
+                            break;
+                        };
                         if !send(connection, Message::Text(hello.into()))
-                            || !send(connection, Message::Binary(self.session.snapshot().into()))
+                            || !send(connection, Message::Binary(snapshot.into()))
                         {
                             closed.push(peer);
                             break;
                         }
                     }
                     Ok(Message::Binary(bytes)) if connection.player.is_some() => {
-                        match self.session.receive(peer, &bytes) {
+                        match self.authority.receive(peer, &bytes) {
                             Ok(Some(reply)) => {
                                 if !send(connection, Message::Binary(reply.into())) {
                                     closed.push(peer);
@@ -218,18 +233,21 @@ impl Host {
         closed.dedup();
         for peer in closed {
             self.connections.remove(&peer);
-            self.session.leave(peer);
+            self.authority.leave(peer);
         }
         if now >= self.next_tick {
-            let snapshot = self.session.advance();
-            let session = &mut self.session;
+            let snapshot = self
+                .authority
+                .advance()
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            let authority = &mut self.authority;
             self.connections.retain(|&peer, connection| {
                 if connection.player.is_none()
                     || send(connection, Message::Binary(snapshot.clone().into()))
                 {
                     true
                 } else {
-                    session.leave(peer);
+                    authority.leave(peer);
                     false
                 }
             });
@@ -240,13 +258,37 @@ impl Host {
     }
 }
 
-/// The identity of a session: its seed and initial world. Peers compare it before play.
+/// The identity of the harness session: its seed and initial world. Peers compare it before play.
 pub fn session_identity(world: &World, seed: u64) -> SessionIdentity {
     let mut hash = Sha256::new();
     hash.update(b"pcx-session-world-v1\n");
     hash.update(seed.to_le_bytes());
     hash.update(encode_world_payload(world));
     SessionIdentity(hash.finalize().into())
+}
+
+impl SessionAuthority for Session {
+    fn identity(&self) -> SessionIdentity {
+        session_identity(self.world(), self.seed())
+    }
+    fn join(&mut self, peer: Peer, player: u8) -> Result<(), SessionError> {
+        Session::join(self, peer, player)
+    }
+    fn leave(&mut self, peer: Peer) {
+        Session::leave(self, peer);
+    }
+    fn receive(&mut self, peer: Peer, bytes: &[u8]) -> Result<Option<Vec<u8>>, SessionError> {
+        Session::receive(self, peer, bytes)
+    }
+    fn advance(&mut self) -> Result<Vec<u8>, SessionError> {
+        Ok(Session::advance(self))
+    }
+    fn snapshot(&mut self) -> Result<Vec<u8>, SessionError> {
+        Ok(Session::snapshot(self))
+    }
+    fn player_for_new_token(&self, bound: usize) -> Option<u8> {
+        (bound < MAX_PLAYERS as usize).then_some(bound as u8)
+    }
 }
 
 #[cfg(test)]
@@ -260,10 +302,10 @@ mod tick_debt_tests {
         let now = first + TICK_INTERVAL * 9;
         for tick in 1..=10 {
             host.poll(now).unwrap();
-            assert_eq!(host.session.world().tick, tick);
+            assert_eq!(host.authority.world().tick, tick);
         }
         assert_eq!(host.next_tick, first + TICK_INTERVAL * 10);
         host.poll(now).unwrap();
-        assert_eq!(host.session.world().tick, 10);
+        assert_eq!(host.authority.world().tick, 10);
     }
 }

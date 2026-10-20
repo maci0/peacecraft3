@@ -93,6 +93,7 @@ pub struct Startup {
     /// Game time when the session was published, and the ticks stepped since.
     origin: f64,
     tick: u64,
+    admission: crate::neutral_player::Sha256Digest,
 }
 
 /// Object definitions from the install's unit and item metadata plus the map's overrides.
@@ -279,12 +280,66 @@ pub fn start(
         .ok_or(StartupError::Clock(
             "the admitted map has no game clock".into(),
         ))?;
+    let admission = digest_admission(AdmissionInputs {
+        image: &image,
+        map: map_bytes,
+        common: &common_bytes,
+        blizzard: &blizzard_bytes,
+        catalog: &sources.catalog_identity.source,
+        seed,
+        mode,
+        context: &context,
+    });
     Ok(Startup {
         context,
         session,
         origin,
         tick: 0,
+        admission,
     })
+}
+
+/// Everything the admission read. Two starts agree on the digest exactly when they admitted the
+/// same executable, map, scripts, catalog source, seed, mode and human roster.
+struct AdmissionInputs<'a> {
+    image: &'a [u8],
+    map: &'a [u8],
+    common: &'a [u8],
+    blizzard: &'a [u8],
+    catalog: &'a str,
+    seed: i32,
+    mode: GameMode,
+    context: &'a ParsedMapContext,
+}
+
+fn digest_admission(inputs: AdmissionInputs<'_>) -> crate::neutral_player::Sha256Digest {
+    let AdmissionInputs {
+        image,
+        map,
+        common,
+        blizzard,
+        catalog,
+        seed,
+        mode,
+        context,
+    } = inputs;
+    let mut text = String::from("pcx-admission-v1\n");
+    text += &format!("exe {}\n", hex(&crate::neutral_player::sha256(image)));
+    text += &format!("map {}\n", hex(&crate::neutral_player::sha256(map)));
+    text += &format!("common {}\n", hex(&crate::neutral_player::sha256(common)));
+    text += &format!(
+        "blizzard {}\n",
+        hex(&crate::neutral_player::sha256(blizzard))
+    );
+    text += &format!("catalog {catalog}\nseed {seed}\nmode {mode:?}\n");
+    for human in context.world.info.human_players() {
+        text += &format!("human {}\n", human.number());
+    }
+    crate::neutral_player::sha256(text.as_bytes())
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// The campaign clock's step and expiry budget: the application's launcher values
@@ -298,6 +353,11 @@ pub const MAX_CLOCK_TICKS_PER_CALL: u64 = 4096;
 
 impl Startup {
     /// Ticks reached on the campaign clock since publication.
+    /// Digest of this startup's admission inputs; see `digest_admission`.
+    pub fn admission_digest(&self) -> crate::neutral_player::Sha256Digest {
+        self.admission
+    }
+
     pub fn tick(&self) -> u64 {
         self.tick
     }

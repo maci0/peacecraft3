@@ -34,6 +34,8 @@ pub mod classic_frame;
 pub mod host;
 #[cfg(all(feature = "session-server", not(target_arch = "wasm32")))]
 pub mod map_session;
+#[cfg(all(feature = "session-server", not(target_arch = "wasm32")))]
+pub mod production;
 pub mod replay;
 pub mod rollback;
 pub mod session;
