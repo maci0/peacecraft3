@@ -93,8 +93,6 @@ with no player input.
 - Run: `python3 .scratch/first-hit/run_first_hit.py`, which writes
   `.scratch/first-hit/run-N/stdout` with `COMBAT TRACE` and `TRACE i` lines.
 
-No replay has been run on this branch yet, so the first attacker is not established.
-
 ## First hit: production replay on the isolated build
 
 Run `.scratch/first-hit/run-1` (driver `source-audit-diag`, built from
