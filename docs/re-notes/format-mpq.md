@@ -293,62 +293,57 @@ let chains; no lint suppression was added. No dependency or manifest change
 was required. No git mutation was performed and original assets, runtime
 imports and comparison streams stayed local and uncommitted.
 
-## 2026-10-20: Legacy codec source and WAV verification status
+## 2026-10-20: Legacy codec source and WAV verification
 
 ### Legacy Huffman weights
 
 `Warcraft III.exe` (Legacy 1.29.2, SHA-256
-`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`) contains the
-Huffman weight table in `.rdata` at VA `0xe6ada0`. The consumer is the same
-`IMUL r,r,258` plus `LEA r,[EAX+disp32]` shape found in Storm: the IMUL is at
-VA `0x443537` and the LEA displacement at `0x44353f`, which holds the table address.
-`HuffmanTable::from_pe` on this file yields 66,048 file-backed bytes and no
-zero fill; the compatibility Storm.dll table has 25,408 zero-filled bytes.
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`) holds the
+Huffman weight table in `.rdata` at VA `0xe6ada0`. Its consumer has the Storm shape:
+`IMUL EAX,EAX,258` at VA `0x443537`, then `LEA EAX,[EAX+disp32]` whose displacement at
+`0x44353f` is the table address. `HuffmanTable::from_pe` reads 66,048 file-backed
+bytes with no zero fill. The compatibility `Storm.dll` table has 25,408 zero-filled
+bytes.
 
-Discovery in `MpqArchive::extract` now takes `Storm.dll` from the archive directory
-and falls back to `Warcraft III.exe`, the same file `native_campaign` imports
-explicitly. A foreign or malformed source still fails with the source path.
+`MpqArchive::extract` takes `Storm.dll` from the archive directory and falls back to
+`Warcraft III.exe`. `native_campaign` imports the same executable explicitly.
 
-Decoded `Sound\Interface\BigButtonClick.wav` and `RightGlueScreenPopDown.wav`
-from Legacy `War3.mpq` are byte-identical with the Legacy table and with the
-compatibility-tree Storm table. The earlier "reference" WAV files under `.scratch/`
-were produced by this decoder, not by Storm, so they are not an independent oracle.
+### Native Storm oracle (primary evidence)
 
-### Huffman stage: structural evidence
+The compatibility-tree `Storm.dll` (SHA-256
+`eecc42b05a91413dee10588a654c6cca05836e7513af6c7c568a56124bf97d0a`) was run under
+Wine through `tests/native/storm_compare.c`. It opened the Legacy `War3.mpq` and read
+each `.wav` member through Storm's archive API. The sector decoder, ordinal 552, was
+called on the packed sectors. Native results against the Rust output:
 
-For `BigButtonClick.wav` sectors 1 to 3 (mask `0x41`), the Huffman bit cursor stops
-at the terminator with 7, 3 and 5 unread bits of padding respectively. The
-output lengths (2111, 2108, 2062 bytes) are consistent with the sector sizes
-below. A wrong adaptive update would normally desynchronize the bit stream
-before the terminator.
+- All 2,716 `.wav` members: payload sectors and archive-open bytes identical, 0 mismatches,
+  0 refusals.
+- A flipped byte in one expected sector is reported as a mismatch (negative control).
+- Native archive-open bytes are dumped per member and compared by
+  `tests/local_huffman.rs::original_wav_members_match_storm_archive_open_bytes`
+  (ignored; needs `PEACECRAFT3_FORMAT_MPQ` and `PEACECRAFT3_STORM_NATIVE_DIR`).
 
-### ADPCM stage: unresolved fidelity
+So the Huffman and ADPCM stages agree with Storm's own decoder, and the Legacy exe
+table decodes every WAV member to the same bytes as the compatibility table. The
+Storm DLL run is a Wine-hosted native execution, not Legacy runtime proof.
 
-In the three `BigButtonClick.wav` sectors inspected, each decoded header is
-`[0x00, shift, s0 LE]`, and the last decoded sample of a sector is within 5 to 9 units
-of the next sector's header sample.
-That supports the sample state and step arithmetic at the boundaries but does not
-prove the output bytes.
+### Attributes CRC is not a decoder oracle for ADPCM members
 
-The `(attributes)` CRC32 values are an independent check. For Legacy `War3.mpq`,
-every member outside the WAV class matches (6,463 of 6,463 that decode). Of 2,716
-`.wav` members, 2,705 mismatch and 11 match; the matching 11
-were not checked for sector masks. Neither the raw block nor the decoded output
-matches the stored CRC for `BigButtonClick.wav` (stored `0x64abae75`, decoded `0xd0c5a1b0`). The cause is open.
-
-Tried and not matched (all against the `BigButtonClick` CRC): index initial value
-0 through 88, bit-weight permutations over the six delta bits, base shift and
-weight offsets from -2 to 2, and the reversed bit weights. No index clamp fired and
-the control-opcode counts (0x80: 79, 0x81: 128) are consistent with the sector sizes.
-The remaining candidates are the delta bit schedule and the control semantics,
-which need the native `FUN_1500d240` disassembly or a Storm sector oracle.
+`(attributes)` CRC32 matches the decoded bytes for every non-WAV member (6,463 of
+6,463 that decode) and for the 11 `.wav` members that decode without ADPCM, presumably
+losslessly stored. It mismatches for 2,705 of 2,716 `.wav` members, which is the ADPCM
+class, while native Storm agrees with our output. This pattern and the lossy coding are
+consistent with the CRC describing the original 16-bit PCM before ADPCM encoding. That
+is an inference: no MPQ format source was checked for attributes semantics, and no
+pre-encoding original was available. The native oracle is the fidelity reference for
+these members, not the CRC.
 
 Measurement tool: `cargo run -p pcx-mpq --example attributes_crc -- <archive> <suffix>`.
-It reports counts only.
 
-### Gates
+### Remaining gates
 
-`tests/local_huffman.rs::original_huffman_adpcm_wav_members_have_consistent_riff_structure`
-(ignored, requires `PEACECRAFT3_FORMAT_MPQ`) decodes both members with no explicit
-table and checks the RIFF chunk walk against the block size. The sample-level native
-gate `original_audio_matches_storm_sectors` still requires a Storm sector export.
+- Sample-level fidelity is established against the Storm archive-open bytes. Actual
+  playback and the MILES PCM path are not verified.
+- The native gate needs a local dump: build `storm_compare.exe` with
+  `i686-w64-mingw32-gcc` and `storm.def`, then run it under Wine with the compatibility
+  `Storm.dll` beside it and a `PXC1` stream from `export_storm_comparison`.
