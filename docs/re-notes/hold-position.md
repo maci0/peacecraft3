@@ -94,3 +94,32 @@ with no player input.
   `.scratch/first-hit/run-N/stdout` with `COMBAT TRACE` and `TRACE i` lines.
 
 No replay has been run on this branch yet, so the first attacker is not established.
+
+## First hit: production replay on the isolated build
+
+Run `.scratch/first-hit/run-1` (driver `source-audit-diag`, built from
+`.scratch/first-hit/source-audit-diag.rs` against
+`.scratch/first-hit/build-isolated-resume/cargo-lib.json`, exit 0 in 68m 47s).
+The `pcx_play` artifact embeds this worktree's `combat_host.rs`, and `peacecraft3`
+embeds this worktree's paths. The earlier shared-target artifact embedded another
+worktree's path and was rejected. Unchanged `Human01.w3m`, no player orders,
+`prepare_new_game` inputs only. The run reached game time 36.17 (authored Defeat).
+The driver then returned its own ledger-route error because no route was given.
+The 60-second window was therefore not completed.
+
+- Arthas is handle 777 (player 1, `Hart`). Uther is handle 833 (player 9,
+  `Huth`).
+- First damage to Arthas: 12.375 s, source Uther (833), 39.71 damage, life 650
+  to 610.29. Uther's `Acquired` event on Arthas came earlier, at 10.344 s. It was
+  automatic acquisition (no order).
+- Uther's Acquired event at 10.344 s is the first hostile relation to Arthas in
+  the trace. The first Arthas damage happens at 0.51 s, when Player(1) footman
+  779 hits horse unit 781 (`hhdl`, owner Player 9).
+- Arthas acquires horse 781 at 0.010 s. The horse is at (-3939, 3127), about 387
+  units from Arthas's start (-3859, 2748), inside acquire range 500. Horse owner
+  transfer to Player 9 is at `Human01.j:1794-1797`.
+
+The recreation's default hostility, with no passive alliance, explains each
+`Acquired` event. Whether the selected client makes Player(1) and Player(9)
+allies at start is still unverified, so this run does not confirm the team
+hypothesis. It does show that the default hostility produces the first contact.
