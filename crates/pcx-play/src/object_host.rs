@@ -14,6 +14,7 @@ pub struct ObjectHost {
     dialogs: Option<dialogs::DialogState>,
     indicators: Option<(Vec<indicators::Indicator>, usize)>,
     combat: Option<combat::Rules>,
+    holy_light: Option<holy_light::Rules>,
     events: event_delivery::Delivery,
     unit_vitals: Option<unit_vitals::Rules>,
     volume_groups: Option<volume_groups::State>,
@@ -159,6 +160,7 @@ impl ObjectHost {
             unit_vitals: None,
             events: event_delivery::Delivery::default(),
             combat: None,
+            holy_light: None,
             indicators: None,
             cinematic_scene: None,
             dialogs: None,
@@ -1152,3 +1154,6 @@ pub use game_exit::GameExitRequest;
 #[path = "unit_guard_host.rs"]
 mod unit_guards;
 pub use unit_guards::{GuardBudget, GuardState, UnitGuard};
+
+#[path = "holy_light_host.rs"]
+mod holy_light;

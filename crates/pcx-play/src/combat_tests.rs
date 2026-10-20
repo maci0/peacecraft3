@@ -1276,3 +1276,221 @@ fn set_unit_exploded_then_kill_unit_retains_the_flag_through_the_death_path() {
         .unwrap();
     assert_eq!(h.unit_exploded(a), Some(false));
 }
+
+/// `AHhb` (Holy Light, its `AbilityFunc` `Order` names the admitted order) and the hero component `Yher`.
+fn holy_tables() -> DefaultTables {
+    let headers = [
+        "alias", "code", "levels", "reqLevel", "levelSkip", "hero", "DataA1", "Cost1", "Cool1",
+        "Rng1", "targs1",
+    ];
+    let rows = [
+        [
+            "AHhb",
+            "AHhb",
+            "3",
+            "1",
+            "0",
+            "1",
+            "200",
+            "65",
+            "5",
+            "60",
+            "air,ground,organic,notself,invu,vuln,nonancient",
+        ],
+        [
+            "Yher", "Yher", "1", "0", "0", "1", "0", "0", "0", "0", "air,ground,invu,vuln",
+        ],
+    ];
+    let mut slk = String::from("ID;PWXL;N;E\r\n");
+    for (column, name) in headers.iter().enumerate() {
+        slk.push_str(&format!("C;X{};Y1;K\"{name}\"\r\n", column + 1));
+    }
+    for (index, row) in rows.iter().enumerate() {
+        for (column, value) in row.iter().enumerate() {
+            let value = if value.parse::<f64>().is_ok() {
+                (*value).to_owned()
+            } else {
+                format!("\"{value}\"")
+            };
+            slk.push_str(&format!("C;X{};Y{};K{value}\r\n", column + 1, index + 2));
+        }
+    }
+    slk.push_str("E\r\n");
+    let profile = "[AHhb]\r\nOrder=alpha\r\n";
+    DefaultTables::from_bytes(
+        Identity {
+            install: source().install,
+            edition_version: "fixture".into(),
+        },
+        &[(SlkId::AbilityData.path(), slk.as_bytes())],
+        &[("Units\\HumanAbilityFunc.txt", profile.as_bytes())],
+        pcx_objects::editor::EditorReadLimits {
+            max_listed_paths: 4,
+            max_asset_bytes: 64 << 10,
+            max_aggregate_input_bytes: 128 << 10,
+        },
+    )
+    .expect("synthetic holy light tables")
+}
+
+const HOLY_MAP: &str = r#"
+globals
+unit H=null
+unit F=null
+unit E=null
+unit G=null
+endglobals
+function setup takes nothing returns nothing
+set H=CreateUnit(Player(4),'H001',16.0,16.0,0.0)
+set F=CreateUnit(Player(4),'u001',48.0,16.0,0.0)
+set E=CreateUnit(Player(5),'u001',56.0,16.0,180.0)
+set G=CreateUnit(Player(4),'u001',120.0,16.0,0.0)
+endfunction
+function prime takes nothing returns nothing
+call SetUnitState(H,UNIT_STATE_MANA,200.0)
+call SetUnitState(F,UNIT_STATE_LIFE,100.0)
+endfunction
+function cast takes unit c, unit t returns boolean
+return IssueTargetOrder(c,"alpha",t)
+endfunction
+"#;
+
+/// Holy Light caster `H` (hero, learned `AHhb` at rank one), friendly `F`, enemy `E`, far friend `G`.
+/// Every unit shares one fixture definition, so `types` is the `UnitBalance` `type` list of all of them.
+fn holy_open(types: &str) -> (Vm, [HandleId; 4]) {
+    let mut fields = hero_fields("STR");
+    for (id, slk, name, kind, value) in [
+        (b"H001", SlkId::UnitBalance, "HP", FieldKind::Int, "1000"),
+        (b"H003", SlkId::UnitBalance, "mana0", FieldKind::Int, "300"),
+        (b"A010", SlkId::UnitBalance, "type", FieldKind::Token, types),
+        (b"A008", SlkId::UnitAbilities, "abilList", FieldKind::Token, "AHhb"),
+    ] {
+        fields.push(column(id, slk, name, kind, value));
+    }
+    let extra = format!(
+        "{}\n{}{DECLARATIONS}",
+        enumeration::TRIGGERS,
+        super::activity::ORDERS
+    );
+    let (registry, activity) = super::activity::rules();
+    let mut h = position_host_admitting(1000, 16, HOLY_MAP, &extra, &fields, |h| h)
+        .with_locations()
+        .unwrap()
+        .with_player_unit_events(8)
+        .unwrap()
+        .with_unit_states(crate::playercolor_host::UnitStateBudget { max_records: 8 })
+        .unwrap()
+        .with_player_alliances(crate::playercolor_host::PlayerAllianceBudget { max_records: 8 })
+        .unwrap()
+        .with_unit_explosions(8)
+        .unwrap()
+        .with_order_registry(registry)
+        .unwrap()
+        .with_script_random(Arc::new(crate::script_random::profile::fixture()), 64)
+        .unwrap();
+    let origin = crate::scripts::AssetIdentity {
+        source: source().install,
+        edition: "fixture".into(),
+        version: "fixture".into(),
+    };
+    h = h
+        .with_hero_skills(
+            holy_tables(),
+            origin,
+            Default::default(),
+            hero_rules().0,
+            crate::playercolor_host::HeroBudget {
+                abilities_per_unit: 8,
+                overlay_objects: 0,
+                modifications_per_ability: 0,
+            },
+        )
+        .unwrap();
+    h.admit_unit_activity(activity, 65536).unwrap();
+    h.native("SetRandomSeed", &[Value::Int(7)]).unwrap();
+    h.admit_unit_vitals(HeroVitals {
+        life_per_strength: 25.0,
+        mana_per_intelligence: 100.0,
+    })
+    .unwrap();
+    h.admit_combat(rules(), "beta").unwrap();
+    h.admit_holy_light("alpha").unwrap();
+    h.set_neutral_passive(15);
+    let context = Arc::clone(h.player_context().unwrap());
+    let mut vm = context.scripts.clone().owned_vm(h);
+    vm.init_globals().unwrap();
+    vm.call("setup", &[]).unwrap();
+    let id = |vm: &Vm, name| match vm.global(name) {
+        Value::Handle(id) => id,
+        _ => panic!("{name}"),
+    };
+    let ids = [id(&vm, "H"), id(&vm, "F"), id(&vm, "E"), id(&vm, "G")];
+    (vm, ids)
+}
+
+fn holy_cast(vm: &mut Vm, caster: HandleId, target: HandleId) -> bool {
+    match vm
+        .call("cast", &[Value::Handle(caster), Value::Handle(target)])
+        .unwrap()
+    {
+        Value::Bool(cast) => cast,
+        other => panic!("cast returned {other:?}"),
+    }
+}
+
+fn holy_life(vm: &mut Vm, unit: HandleId) -> f32 {
+    vm.host().inner.unit_vitals(unit).unwrap().unwrap().life
+}
+
+fn holy_mana(vm: &mut Vm, unit: HandleId) -> f32 {
+    vm.host().inner.unit_vitals(unit).unwrap().unwrap().mana
+}
+
+#[test]
+fn holy_light_heals_a_friendly_living_unit_and_waits_out_its_cooldown() {
+    let (mut vm, [h, f, _, _]) = holy_open("");
+    vm.call("prime", &[]).unwrap();
+    let mana = holy_mana(&mut vm, h);
+    assert_eq!(holy_life(&mut vm, f), 100.0);
+    assert!(holy_cast(&mut vm, h, f));
+    assert_eq!(holy_life(&mut vm, f), 300.0);
+    assert_eq!(holy_mana(&mut vm, h), mana - 65.0);
+    assert!(!holy_cast(&mut vm, h, f), "cooldown refuses the recast");
+    assert_eq!(holy_life(&mut vm, f), 300.0);
+    step(&mut vm, 5.0);
+    assert!(holy_cast(&mut vm, h, f));
+    assert_eq!(holy_life(&mut vm, f), 500.0);
+}
+
+#[test]
+fn holy_light_damages_an_enemy_undead_unit_for_half_the_heal_amount() {
+    let (mut vm, [h, f, e, _]) = holy_open("undead");
+    vm.call("prime", &[]).unwrap();
+    let enemy = holy_life(&mut vm, e);
+    assert!(!holy_cast(&mut vm, h, f), "friendly undead is not organic");
+    assert!(holy_cast(&mut vm, h, e));
+    assert_eq!(enemy - holy_life(&mut vm, e), 100.0);
+}
+
+#[test]
+fn holy_light_refuses_enemy_organic_out_of_reach_and_low_mana_without_changes() {
+    let (mut vm, [h, f, e, g]) = holy_open("");
+    vm.call("prime", &[]).unwrap();
+    let (enemy, far, mana) = (
+        holy_life(&mut vm, e),
+        holy_life(&mut vm, g),
+        holy_mana(&mut vm, h),
+    );
+    assert!(!holy_cast(&mut vm, h, e), "enemy organic is not a target");
+    assert!(!holy_cast(&mut vm, h, g), "friend beyond reach");
+    assert!(!holy_cast(&mut vm, f, h), "caster without the ability");
+    assert_eq!((holy_life(&mut vm, e), holy_life(&mut vm, g)), (enemy, far));
+    assert_eq!(holy_mana(&mut vm, h), mana);
+    let mana_state = vm_global(&vm, "UNIT_STATE_MANA");
+    vm.host()
+        .inner
+        .native("SetUnitState", &[Value::Handle(h), mana_state, Value::Real(10.0)])
+        .unwrap();
+    assert!(!holy_cast(&mut vm, h, f), "insufficient mana");
+    assert_eq!(holy_life(&mut vm, f), 100.0);
+}

@@ -588,6 +588,70 @@ impl Admission {
     }
 }
 
+impl ObjectHost {
+    /// Whether hero skills were admitted, so ability ranks and AbilityData are readable.
+    pub fn has_hero_skills(&self) -> bool {
+        self.units.as_ref().is_some_and(|u| u.heroes.is_some())
+    }
+
+    fn heroes_admission(&self) -> Result<&Admission, String> {
+        self.units
+            .as_ref()
+            .and_then(|u| u.heroes.as_ref())
+            .ok_or_else(|| "hero skills are not admitted".into())
+    }
+
+    /// Integer `AbilityData` column of an ability alias, through the selected tables.
+    pub(crate) fn hero_ability_number(&self, alias: [u8; 4], column: &str) -> Result<i32, String> {
+        self.heroes_admission()?.number(alias, column)
+    }
+
+    /// Text `AbilityData` column of an ability alias. Map overrides of the alias refuse.
+    pub(crate) fn hero_ability_text(&self, alias: [u8; 4], column: &str) -> Result<String, String> {
+        let input = self.heroes_admission()?;
+        let (base, mods) = input.base(alias)?;
+        if !mods.is_empty() {
+            return Err(format!("{alias:?}: unsupported map override of {column}"));
+        }
+        let cell = input
+            .tables
+            .object(Family::Ability, base)
+            .map_err(|e| e.to_string())?
+            .cell(SlkId::AbilityData, column)
+            .map_err(|e| e.to_string())?;
+        Ok(cell.text.trim().to_owned())
+    }
+
+    /// The learned ability with rank above zero whose `AbilityFunc` `Order` names `order`.
+    pub(crate) fn learned_ability_for_order(
+        &self,
+        abilities: &UnitAbilities,
+        order: &str,
+    ) -> Result<Option<([u8; 4], i32)>, String> {
+        let input = self.heroes_admission()?;
+        let mut found = None;
+        for (alias, rank) in abilities.levels().filter(|(_, rank)| *rank > 0) {
+            let (base, _) = input.base(alias)?;
+            let orders = input
+                .tables
+                .object(Family::Ability, base)
+                .map_err(|e| e.to_string())?
+                .profile("Order");
+            if orders.iter().any(|c| c.parse_error.is_some()) {
+                return Err(format!("{alias:?}: malformed Order profile"));
+            }
+            if orders
+                .iter()
+                .any(|c| c.text.trim().eq_ignore_ascii_case(order))
+                && found.replace((alias, rank)).is_some()
+            {
+                return Err(format!("ambiguous ability for order {order}"));
+            }
+        }
+        Ok(found)
+    }
+}
+
 fn ability_list(
     definition: &Definition,
     column: &str,

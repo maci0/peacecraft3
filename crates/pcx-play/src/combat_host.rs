@@ -76,7 +76,7 @@ pub(super) struct Rules {
 }
 
 /// `None` is an omitted SLK cell, which is empty.
-fn column<'a>(
+pub(super) fn column<'a>(
     d: &'a Definition,
     slk: SlkId,
     wanted: &str,
@@ -136,7 +136,7 @@ fn number(value: &FieldValue, name: &str) -> Result<Option<f32>, String> {
         .ok_or_else(|| format!("unit field {name} is not a finite number"))
 }
 
-fn text<'a>(value: &'a FieldValue, name: &str) -> Result<&'a str, String> {
+pub(super) fn text<'a>(value: &'a FieldValue, name: &str) -> Result<&'a str, String> {
     match value {
         FieldValue::Cell(s) => Ok(s.trim()),
         FieldValue::Override(pcx_objects::Value::Str(bytes)) => {
@@ -253,7 +253,7 @@ impl ObjectHost {
     }
 }
 
-fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
+pub(super) fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
 
@@ -375,7 +375,7 @@ impl ObjectHost {
         }
     }
 
-    fn live(&self, unit: HandleId) -> Option<&super::ExecutedUnit> {
+    pub(super) fn live(&self, unit: HandleId) -> Option<&super::ExecutedUnit> {
         match self.inner.entry(unit).ok()? {
             Entry::Unit { record }
                 if record.shown && record.combat.as_ref().is_some_and(|c| !c.dead) =>
@@ -453,6 +453,7 @@ impl ObjectHost {
         }
         self.inner.program.natives().get(name)?;
         let attack_order = rules.attack_order;
+        let holy_light_order = self.holy_light_order();
         Some((|| {
             if name == KILL {
                 return match args {
@@ -474,6 +475,12 @@ impl ObjectHost {
                 (ORDER_BY_ID, Value::Int(id)) => Some(*id),
                 _ => return Err(self.inner.error(name, Failure::Signature)),
             };
+            if order.is_some() && order == holy_light_order {
+                let (Value::Handle(unit), Value::Handle(target)) = (unit, target) else {
+                    return Ok(Value::Bool(false));
+                };
+                return Ok(Value::Bool(self.cast_holy_light(*unit, *target)?));
+            }
             if order != Some(attack_order) {
                 return Err(self.inner.error(
                     name,
@@ -585,7 +592,7 @@ impl ObjectHost {
         Ok(())
     }
 
-    fn deal_weapon_damage(
+    pub(super) fn deal_weapon_damage(
         &mut self,
         source: HandleId,
         target: HandleId,
