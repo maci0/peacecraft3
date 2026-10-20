@@ -142,19 +142,26 @@ impl ObjectHost {
         let price = self
             .item_sales
             .as_ref()
-            .ok_or_else(|| self.inner.error(name, Failure::ItemState("item sales not admitted")))?
+            .ok_or_else(|| {
+                self.inner
+                    .error(name, Failure::ItemState("item sales not admitted"))
+            })?
             .row(item)
             .map(|row| row.gold)
-            .ok_or_else(|| self.inner.error(name, Failure::ItemState("sold item has no sale row")))?;
+            .ok_or_else(|| {
+                self.inner
+                    .error(name, Failure::ItemState("sold item has no sale row"))
+            })?;
         let seller = self.executed_unit(shop)?.owner;
         let buyer_record = self.executed_unit(buyer)?;
         if buyer_record.combat.as_ref().is_some_and(|c| c.dead) {
             return Ok(PurchaseOutcome::Refused(PurchaseRefusal::BuyerUnavailable));
         }
         let owner = buyer_record.owner;
-        let gold = self
-            .owner_gold(owner)?
-            .ok_or_else(|| self.inner.error(name, Failure::PlayerState("gold not admitted")))?;
+        let gold = self.owner_gold(owner)?.ok_or_else(|| {
+            self.inner
+                .error(name, Failure::PlayerState("gold not admitted"))
+        })?;
         if gold < price {
             return Ok(PurchaseOutcome::Refused(PurchaseRefusal::InsufficientGold));
         }
@@ -165,7 +172,8 @@ impl ObjectHost {
         if (0..policy.slots).all(|slot| self.held_slot(buyer, slot).is_some()) {
             return Ok(PurchaseOutcome::Refused(PurchaseRefusal::NoFreeSlot));
         }
-        let sell = self.source_constant_enumerand("EVENT_PLAYER_UNIT_SELL_ITEM", "playerunitevent")?;
+        let sell =
+            self.source_constant_enumerand("EVENT_PLAYER_UNIT_SELL_ITEM", "playerunitevent")?;
         let mut triggers = Vec::new();
         for entry in &self.inner.arena {
             if let Entry::RegisteredPlayerUnitEvent(r) = entry
@@ -177,16 +185,16 @@ impl ObjectHost {
         }
         // Writes start here. Every fallible step after this is either reserved or verified above.
         self.reserve_event_delivery(triggers.len())?;
-        let created = self.create_item(&[
-            Value::Int(item),
-            Value::Real(0.0),
-            Value::Real(0.0),
-        ])?;
+        let created = self.create_item(&[Value::Int(item), Value::Real(0.0), Value::Real(0.0)])?;
         let Value::Handle(item_handle) = created else {
-            return Err(self.inner.error(name, Failure::ItemState("created item is not a handle")));
+            return Err(self
+                .inner
+                .error(name, Failure::ItemState("created item is not a handle")));
         };
         if !self.add_inventory_item(buyer, item_handle)? {
-            return Err(self.inner.error(name, Failure::ItemState("transfer refused after checks")));
+            return Err(self
+                .inner
+                .error(name, Failure::ItemState("transfer refused after checks")));
         }
         self.debit_gold(owner, price)?;
         self.take_one_stock(shop, item)?;
@@ -200,9 +208,7 @@ impl ObjectHost {
         for (trigger, filter, event) in triggers {
             self.queue_event(trigger, filter, subject, Some(event))?;
         }
-        Ok(PurchaseOutcome::Sold {
-            item: item_handle,
-        })
+        Ok(PurchaseOutcome::Sold { item: item_handle })
     }
 }
 

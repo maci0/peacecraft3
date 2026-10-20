@@ -1437,7 +1437,10 @@ impl ObjectHost {
     /// Lowers an admitted player's gold by `price`. The caller has checked the balance, and
     /// an overflow refuses before any row changes.
     pub(crate) fn debit_gold(&mut self, player: HandleId, price: i32) -> Result<(), Error> {
-        let fail = |reason| self.inner.error(GET_PLAYER_STATE, Failure::PlayerState(reason));
+        let fail = |reason| {
+            self.inner
+                .error(GET_PLAYER_STATE, Failure::PlayerState(reason))
+        };
         let at = self.player_index(&Value::Handle(player), GET_PLAYER_STATE)?;
         let state = self.source_constant_enumerand("PLAYER_STATE_RESOURCE_GOLD", "playerstate")?;
         let current = self
