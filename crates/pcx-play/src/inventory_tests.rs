@@ -974,6 +974,9 @@ type timer extends agent
 type itemtype extends handle
 type playerstate extends handle
 native CreateTimer takes nothing returns timer
+native SetAllItemTypeSlots takes integer slots returns nothing
+native SetAllUnitTypeSlots takes integer slots returns nothing
+native SetUnitTypeSlots takes unit whichUnit, integer slots returns nothing
 native SetItemTypeSlots takes unit whichUnit, integer slots returns nothing
 native AddItemToStock takes unit whichUnit, integer itemId, integer currentStock, integer stockMax returns nothing
 native RemoveItemFromStock takes unit whichUnit, integer itemId returns nothing
@@ -1197,6 +1200,8 @@ fn set_gold(h: &mut ObjectHost, owner: &Value, amount: i32) {
 }
 
 fn stock(h: &mut ObjectHost, shop: &Value, item: i32, current: i32) {
+    h.native("SetItemTypeSlots", &[shop.clone(), Value::Int(4)])
+        .unwrap();
     h.native(
         "AddItemToStock",
         &[
