@@ -241,23 +241,49 @@ Interpretation (no thresholds):
 - Uncertainty sources, not yet measured: `R2S` precision (logged), timer read
   latency, and whether life is updated in discrete ticks within `dt`.
 
-Template isolation and interference (verified from the template `war3map.j`):
+Scene and initialization (verified from the template `war3map.j`, the installed
+`Blizzard.j`, and the audit in `out/reads-audit.json`):
 
-- The template `main` calls `CreateRegions`, `CreateCameras`, `CreateAllUnits`,
-  `InitBlizzard`, `InitGlobals`, `InitCustomTriggers` and `RunInitializationTriggers`.
-  The probe's replacement `main` calls none of them.
-- Trigger isolation holds: no `InitTrig_*` and no `RunInitializationTriggers`, so the
-  template's `gg_trg_*` triggers are never initialized.
-- Interference: `config` still runs, and it sets players, teams, start locations and
-  slots, which are not unit or trigger effects. `CreateAllUnits` is skipped, so the
-  neutral hostile, neutral passive and player-building units are absent. The probe is
-  therefore a runtime test in an emptied template world, not in the original placed
-  scene. This is a deliberate omission. Include it in any comparison.
+- Derived `main` (`src/build_main.py`) keeps every template statement except
+  `CreateAllUnits`, `InitCustomTriggers` and `RunInitializationTriggers`. It keeps
+  `InitBlizzard` and `InitGlobals`, and calls the probe runner last. The derivation
+  refuses if an omitted call is missing or a kept initialization call is missing.
+- Emptied-scene distinction: the probe world has no authored placed units
+  (`CreateAllUnits` skipped). Authored triggers are not initialized. Regions, cameras,
+  destructables, sounds and tech setup are kept. Any comparison must record this.
+- The probe reads only native functions, two `common.j` constants
+  (`UNIT_STATE_LIFE`, `GAME_STATE_TIME_OF_DAY`), three integer camera-margin constants,
+  its own functions and globals, and no `udg_` value. The audit classifies all 26
+  natives, 6 constants, 15 functions and 3 globals, with no unknown name.
+- The template `InitGlobals` writes no `common.j` constant and no probe state. The
+  installed `InitBlizzard` writes none either. So neither is a prerequisite for the
+  probe's reads. Those constants come from global initialization; this repo's VM runs
+  `init_globals` at startup (inferred from its model, not native-verified).
+- `InitBlizzard` is stock initialization. It creates stock triggers and timers, which
+  are kept (not authored). They are listed in `out/final-receipt.json`: the queued-trigger
+  timeout, the day/night sound triggers (time-of-day events), the neutral-passive
+  sell-item trigger, the restock timer and the game-started timer. The day/night
+  triggers can fire on a time-of-day change, so a `SetFloatGameState` to hour 12 may
+  play a sound. They do not touch the probe units.
+
+Compile check: `compile_check` resolves the derived patched script against
+`Scripts\common.j` and `Scripts\Blizzard.j` from the installed archives (pass). The
+probe's `B2S` was an undeclared name the resolver caught; it is replaced.
+
+Receipts (`.scratch/blight-probe/out/`, ignored):
+
+- `final-receipt.json`: executable SHA-256 `3f2ed0120d…` (resource version 1.29.2.9231,
+  plan target 1.29b), `War3.mpq` and `War3x.mpq` SHA-256, `common.j`, `Blizzard.j` and
+  `UnitBalance.slk` SHA-256, the Human01 template map and script hashes, the probe map
+  hash, the source-value and read-audit hashes, and the scene and read-dependency
+  records. `acceptance_evidence` and `launched` are false.
+- `source-values.json`, `reads-audit.json`, `compile.txt`, `main_receipt.json`,
+  `launch-plan.json`.
 
 Launch plan (not run): `prepare` the run directory, stage the map under
-`game/Maps/PCXB-Reference/`, then `launch` 1280×960 at 96 DPI with
-`--game-arg=-loadfile` and `--game-arg=Z:\run\reference\game\Maps\PCXB-Reference\PCXB-blight-probe.w3m`.
-The plan records `launched: false`. Launch waits for the root GUI queue after Sound03.
+`game/Maps/PCXB-Reference/`, then `launch` 1280×960 at 96 DPI with `--game-arg=-loadfile`
+and the staged path. Launch waits for the root GUI queue after Sound03. The
+`PreloadGenEnd` output location is unverified on the installed game.
 
 ## Motion segments requested from root09
 
