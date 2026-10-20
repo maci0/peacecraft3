@@ -329,3 +329,80 @@ fn ambiguous_timer_start_sources_refuse_runtime_admission() {
     .unwrap();
     assert!(matches!(host.with_timer_runtime(0.0), Err(error) if error.failure == Failure::Source));
 }
+
+/// One delivery to the same final game time, split at different boundaries.
+/// The boundaries are dyadic, as are the timeouts, so the deadline sum does not
+/// depend on how many times `now` is published between firings.
+#[test]
+fn equal_final_game_time_is_independent_of_until_chunking() {
+    let schedules: [&[f64]; 3] = [&[24.0], &[21.0, 21.5, 22.25, 24.0], &[20.5, 21.25, 23.0, 24.0]];
+    let runs = schedules.map(drive_until);
+    let expected = runs[0].clone();
+    for run in &runs[1..] {
+        assert_eq!(run, &expected);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct TimerSample {
+    firings: Vec<Firing>,
+    now_bits: u64,
+    first: (u32, u32, u32),
+    second: (u32, u32, u32),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Firing {
+    timer: usize,
+    now_bits: u64,
+    first_elapsed_bits: u32,
+    second_elapsed_bits: u32,
+}
+
+fn drive_until(limits: &[f64]) -> TimerSample {
+    let mut host = host();
+    let first = host.native("CreateTimer", &[]).unwrap();
+    let second = host.native("CreateTimer", &[]).unwrap();
+    start(&mut host, &first, 1.0, true);
+    start(&mut host, &second, 1.5, false);
+    let timers = [first, second];
+    let mut firings = Vec::new();
+    for until in limits {
+        loop {
+            let mut budget = 1;
+            let Some(expiry) = host.next_timer_expiry(*until, &mut budget).unwrap() else {
+                break;
+            };
+            let expired = host.native("GetExpiredTimer", &[]).unwrap();
+            let timer = timers.iter().position(|known| known == &expired).unwrap();
+            firings.push(Firing {
+                timer,
+                now_bits: host.timer_game_time().unwrap().to_bits(),
+                first_elapsed_bits: real_bits(&query(&mut host, "TimerGetElapsed", &timers[0])),
+                second_elapsed_bits: real_bits(&query(&mut host, "TimerGetElapsed", &timers[1])),
+            });
+            host.finish_timer_expiry(expiry).unwrap();
+        }
+    }
+    TimerSample {
+        firings,
+        now_bits: host.timer_game_time().unwrap().to_bits(),
+        first: timer_bits(&mut host, &timers[0]),
+        second: timer_bits(&mut host, &timers[1]),
+    }
+}
+
+fn timer_bits(host: &mut ObjectHost, timer: &Value) -> (u32, u32, u32) {
+    (
+        real_bits(&query(host, "TimerGetElapsed", timer)),
+        real_bits(&query(host, "TimerGetRemaining", timer)),
+        real_bits(&query(host, "TimerGetTimeout", timer)),
+    )
+}
+
+fn real_bits(value: &Value) -> u32 {
+    match value {
+        Value::Real(real) => real.to_bits(),
+        other => panic!("timer query returned {other}"),
+    }
+}

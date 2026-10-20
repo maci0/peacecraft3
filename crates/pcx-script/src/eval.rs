@@ -23,6 +23,8 @@
 //! operand, an argument or a nested call uses the value as the native's result
 //! and does not evaluate earlier operands or arguments again. `and` and `or`
 //! still skip the right operand when the left operand decides the result.
+//! When the parked native is declared `real`, the resumed integer is converted
+//! before that result is used.
 //!
 //! Globals, locals, the call stack, spans and the step counter survive a park.
 //! [`Vm::init_globals`] does not park. A suspend while initialising globals is
@@ -42,7 +44,7 @@
 //! [`Host::code_tag`] is the `^^…^^` seam. A code tag the host cannot resolve
 //! is an error naming the tag, not a dropped tag.
 
-use crate::ast::{BinOp, Expr, IfBranch, Literal, Stmt, StrLit, TypeKind, TypeRef, UnOp};
+use crate::ast::{BinOp, Expr, IfBranch, Literal, Param, Stmt, StrLit, TypeKind, TypeRef, UnOp};
 use crate::lexer::StrPart;
 use crate::natives::{NativeCall, NativeImpl};
 use crate::resolve::Program;
@@ -73,6 +75,10 @@ pub trait RealOps {
 /// Everything the VM cannot decide for itself.
 pub trait Host {
     /// Absent preserves the interpreter's ordinary host-float operations.
+    ///
+    /// Only an integer crossing a non-array `real` declaration is converted:
+    /// through [`RealOps::integer`] when this is present, and through the same
+    /// `as f32` cast as unbound `I2R` when it is absent.
     fn real_ops(&self) -> Option<&dyn RealOps> {
         None
     }
@@ -133,11 +139,12 @@ pub enum Exec {
     Suspended,
 }
 
-/// One variable: a scalar or an array. JASS scopes a `local … array` per
-/// function, so it belongs in the frame and not in one program-wide table.
+/// One variable: a scalar or an array, plus the type its declaration spelled.
+/// JASS scopes a `local … array` per function, so it belongs in the frame and
+/// not in one program-wide table.
 enum Slot {
-    Scalar(Value),
-    Array(BTreeMap<i32, Value>),
+    Scalar(Value, TypeKind),
+    Array(BTreeMap<i32, Value>, TypeKind),
 }
 
 type Frame = BTreeMap<String, Slot>;
@@ -203,6 +210,7 @@ struct PausedExpr {
 enum ExprDest {
     Bind {
         name: String,
+        ty: TypeKind,
     },
     Set {
         target: Expr,
@@ -256,6 +264,10 @@ enum Zip {
         name: String,
         span: Span,
         index_span: Span,
+    },
+    /// The hole is a native whose declaration returns `real`.
+    DeclaredReal {
+        span: Span,
     },
 }
 
@@ -427,7 +439,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     /// Read a global, for a caller inspecting a finished run.
     pub fn global(&self, name: &str) -> Value {
         match self.globals.get(name) {
-            Some(Slot::Scalar(v)) => v.clone(),
+            Some(Slot::Scalar(v, _)) => v.clone(),
             _ => Value::Null,
         }
     }
@@ -435,7 +447,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     /// Read one slot of an array global.
     pub fn global_at(&self, name: &str, index: i32) -> Value {
         match self.globals.get(name) {
-            Some(Slot::Array(a)) => a.get(&index).cloned().unwrap_or(Value::Null),
+            Some(Slot::Array(a, _)) => a.get(&index).cloned().unwrap_or(Value::Null),
             _ => Value::Null,
         }
     }
@@ -536,13 +548,14 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     g.name.clone(),
                     g.init.clone(),
                     g.array,
+                    g.ty.kind.clone(),
                     g.source.clone(),
                     g.span,
                 )
             })
             .collect::<Vec<_>>();
         let mut frame = Frame::new();
-        for (name, init, array, source, span) in inits {
+        for (name, init, array, kind, source, span) in inits {
             if array && init.is_some() {
                 let error = crate::Error::run(
                     span,
@@ -554,7 +567,16 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             }
             let slot = match init {
                 Some(e) => match self.eval_value(&e, &mut frame) {
-                    Ok(value) => Slot::Scalar(value),
+                    Ok(value) => match self.coerce_declared(false, &kind, value, e.span()) {
+                        Ok(value) => Slot::Scalar(value, kind),
+                        Err(error) => {
+                            if self.error_source.is_none() {
+                                self.error_source = Some(source);
+                            }
+                            self.init_error = Some(error.clone());
+                            return Err(error);
+                        }
+                    },
                     Err(error) => {
                         if self.error_source.is_none() {
                             self.error_source = Some(source);
@@ -563,8 +585,8 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                         return Err(error);
                     }
                 },
-                None if array => Slot::Array(BTreeMap::new()),
-                None => Slot::Scalar(Value::Null),
+                None if array => Slot::Array(BTreeMap::new(), kind),
+                None => Slot::Scalar(Value::Null, kind),
             };
             self.globals.insert(name, slot);
         }
@@ -629,8 +651,21 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         }
         let body = Arc::from(body);
         let mut frame = Frame::new();
+        let report = if span == Span::EMPTY { func_span } else { span };
         for (p, v) in params.iter().zip(&argv) {
-            frame.insert(p.name.as_str().to_string(), Slot::Scalar(v.clone()));
+            let value = match self.coerce_declared(p.ty.array, &p.ty.kind, v.clone(), report) {
+                Ok(value) => value,
+                Err(error) => {
+                    if span == Span::EMPTY {
+                        self.error_source = Some(source.clone());
+                    }
+                    return Err(error);
+                }
+            };
+            frame.insert(
+                p.name.as_str().to_string(),
+                Slot::Scalar(value, p.ty.kind.clone()),
+            );
         }
         self.stack.push(Activation {
             name: name.to_string(),
@@ -1103,20 +1138,22 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         }
         let Some(init) = &v.init else {
             let slot = if v.ty.array {
-                Slot::Array(BTreeMap::new())
+                Slot::Array(BTreeMap::new(), v.ty.kind.clone())
             } else {
-                Slot::Scalar(Value::Null)
+                Slot::Scalar(Value::Null, v.ty.kind.clone())
             };
             frame.insert(v.name.as_str().to_string(), slot);
             return Ok(Flow::Normal);
         };
         let name = v.name.as_str().to_string();
+        let ty = v.ty.kind.clone();
         match self.eval_expr(init, frame)? {
             ExprOut::Value(value) => {
-                frame.insert(name, Slot::Scalar(value));
+                let value = self.coerce_declared(false, &ty, value, init.span())?;
+                frame.insert(name, Slot::Scalar(value, ty));
                 Ok(Flow::Normal)
             }
-            other => Ok(suspend_in(ExprDest::Bind { name }, other)),
+            other => Ok(suspend_in(ExprDest::Bind { name, ty }, other)),
         }
     }
 
@@ -1141,7 +1178,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
 
     fn eval_return(&mut self, e: &Expr, frame: &mut Frame) -> Result<Flow, crate::Error> {
         match self.eval_expr(e, frame)? {
-            ExprOut::Value(value) => Ok(Flow::Return(value)),
+            ExprOut::Value(value) => Ok(Flow::Return(self.coerce_return(value, e.span())?)),
             other => Ok(suspend_in(ExprDest::Return, other)),
         }
     }
@@ -1281,8 +1318,9 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         frame: &mut Frame,
     ) -> Result<Flow, crate::Error> {
         match dest {
-            ExprDest::Bind { name } => {
-                frame.insert(name, Slot::Scalar(value));
+            ExprDest::Bind { name, ty } => {
+                let value = self.coerce_declared(false, &ty, value, stmt.span())?;
+                frame.insert(name, Slot::Scalar(value, ty));
                 Ok(Flow::Normal)
             }
             ExprDest::Set {
@@ -1298,7 +1336,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 self.write_target(&target, Some(idx), rhs, frame)
             }
             ExprDest::Discard => Ok(Flow::Normal),
-            ExprDest::Return => Ok(Flow::Return(value)),
+            ExprDest::Return => Ok(Flow::Return(self.coerce_return(value, stmt.span())?)),
             ExprDest::ExitWhen { span } => self.exit_value(&value, span),
             ExprDest::IfCond { branch, span } => self.apply_if(stmt, branch, span, &value, frame),
         }
@@ -1394,6 +1432,16 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         };
         // A local shadows a global of the same name, so the frame is the first
         // place to look, exactly as a read does.
+        let real = if let Some(slot) = frame.get(name) {
+            slot_is_real(slot)
+        } else {
+            self.globals.get(name).is_some_and(slot_is_real)
+        };
+        let value = if real {
+            self.coerce_declared(false, &TypeKind::Real, value, target.span())?
+        } else {
+            value
+        };
         if let Some(slot) = frame.get_mut(name) {
             return store(slot, idx, value, target.span());
         }
@@ -1590,7 +1638,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 "a call needs a name: only a function or a native can be called",
             ));
         };
-        if matches!(frame.get(name.as_str()), Some(Slot::Scalar(_))) {
+        if matches!(frame.get(name.as_str()), Some(Slot::Scalar(_, _))) {
             return Err(crate::Error::run(
                 span,
                 format!(
@@ -1621,7 +1669,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         frame: &mut Frame,
         outer: Vec<Zip>,
     ) -> Result<ExprOut, crate::Error> {
-        if matches!(frame.get(callee), Some(Slot::Scalar(_))) {
+        if matches!(frame.get(callee), Some(Slot::Scalar(_, _))) {
             return Err(crate::Error::run(
                 span,
                 format!("`{callee}` is a variable, and a variable cannot be called"),
@@ -1694,8 +1742,13 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         }
         match self.program.natives().call(callee) {
             Some(NativeCall::Implemented(native, which)) => {
-                self.check_native_arity(callee, native.params.len(), argv.len(), span)?;
+                let arity = native.params.len();
+                let params = native.params.clone();
+                let ret = native.ret.clone();
+                self.check_native_arity(callee, arity, argv.len(), span)?;
+                let argv = self.coerce_params(&params, argv, span)?;
                 let value = self.run_native(which, &argv, span)?;
+                let value = self.coerce_type(&ret, value, span)?;
                 self.finish_zip(outer, value, frame)
             }
             Some(NativeCall::SignatureMismatch(native, which)) => {
@@ -1710,24 +1763,32 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 ))
             }
             Some(NativeCall::Unimplemented(native)) => {
-                self.check_native_arity(callee, native.params.len(), argv.len(), span)?;
+                let arity = native.params.len();
+                let params = native.params.clone();
+                let ret = native.ret.clone();
+                let declared = native.name.clone();
+                let signature =
+                    crate::natives::signature_of(&native.name, &native.params, &native.ret);
+                let source = native.source.clone();
+                let declared_at = native.span;
+                self.check_native_arity(callee, arity, argv.len(), span)?;
+                let argv = self.coerce_params(&params, argv, span)?;
                 if self.host.suspend(callee, &argv) {
                     self.suspended_span = Some(span);
-                    return Ok(ExprOut::Park(outer));
+                    return Ok(ExprOut::Park(park_real_return(outer, &ret, span)));
                 }
                 match self.host.native(callee, &argv) {
-                    Ok(value) => self.finish_zip(outer, value, frame),
-                    Err(why) => {
-                        let signature =
-                            crate::natives::signature_of(&native.name, &native.params, &native.ret);
-                        Err(crate::Error::run(
-                            span,
-                            format!(
-                                "native `{}` is not implemented; it is declared as `{signature}` at {}:{}..{}: {why}",
-                                native.name, native.source, native.span.start, native.span.end
-                            ),
-                        ))
+                    Ok(value) => {
+                        let value = self.coerce_type(&ret, value, span)?;
+                        self.finish_zip(outer, value, frame)
                     }
+                    Err(why) => Err(crate::Error::run(
+                        span,
+                        format!(
+                            "native `{declared}` is not implemented; it is declared as `{signature}` at {source}:{}..{}: {why}",
+                            declared_at.start, declared_at.end
+                        ),
+                    )),
                 }
             }
             None if self.program.function(callee).is_some() => {
@@ -1812,8 +1873,8 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         let idx = self.index_of(index, index_span)?;
         let slot = frame.get(name).or_else(|| self.globals.get(name));
         match slot {
-            Some(Slot::Array(a)) => Ok(a.get(&idx).cloned().unwrap_or(Value::Null)),
-            Some(Slot::Scalar(_)) => {
+            Some(Slot::Array(a, _)) => Ok(a.get(&idx).cloned().unwrap_or(Value::Null)),
+            Some(Slot::Scalar(_, _)) => {
                 Err(crate::Error::run(span, format!("`{name}` is not an array")))
             }
             None => Err(crate::Error::run(
@@ -1884,6 +1945,9 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 } => {
                     value = self.read_index(&name, &value, span, index_span, frame)?;
                 }
+                Zip::DeclaredReal { span } => {
+                    value = self.coerce_declared(false, &TypeKind::Real, value, span)?;
+                }
                 Zip::Arg {
                     callee,
                     span,
@@ -1949,8 +2013,8 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             .or_else(|| self.globals.get(name.as_str()))
         {
             return match slot {
-                Slot::Scalar(v) => Ok(v.clone()),
-                Slot::Array(_) => Err(crate::Error::run(
+                Slot::Scalar(v, _) => Ok(v.clone()),
+                Slot::Array(_, _) => Err(crate::Error::run(
                     span,
                     format!("`{}` is an array and needs an index", name.as_str()),
                 )),
@@ -1977,6 +2041,60 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         ))
     }
 
+    /// `I2R` and a declared `real` share this conversion.
+    fn real_from_integer(&self, value: i32, span: Span) -> Result<f32, crate::Error> {
+        match self.host.real_ops() {
+            Some(real) => real
+                .integer(value)
+                .map_err(|why| crate::Error::run(span, why)),
+            None => Ok(value as f32),
+        }
+    }
+
+    fn coerce_declared(
+        &self,
+        array: bool,
+        ty: &TypeKind,
+        value: Value,
+        span: Span,
+    ) -> Result<Value, crate::Error> {
+        if array || *ty != TypeKind::Real {
+            return Ok(value);
+        }
+        let Value::Int(integer) = value else {
+            return Ok(value);
+        };
+        self.real_from_integer(integer, span).map(Value::Real)
+    }
+
+    fn coerce_type(&self, ty: &TypeRef, value: Value, span: Span) -> Result<Value, crate::Error> {
+        self.coerce_declared(ty.array, &ty.kind, value, span)
+    }
+
+    fn coerce_params(
+        &self,
+        params: &[Param],
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Vec<Value>, crate::Error> {
+        let mut out = Vec::with_capacity(args.len());
+        for (param, value) in params.iter().zip(args) {
+            out.push(self.coerce_declared(param.ty.array, &param.ty.kind, value, span)?);
+        }
+        Ok(out)
+    }
+
+    fn coerce_return(&self, value: Value, span: Span) -> Result<Value, crate::Error> {
+        let Some((array, kind)) = self
+            .stack
+            .last()
+            .map(|act| (act.ret.array, act.ret.kind.clone()))
+        else {
+            return Ok(value);
+        };
+        self.coerce_declared(array, &kind, value, span)
+    }
+
     fn run_native(
         &self,
         which: NativeImpl,
@@ -1985,13 +2103,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     ) -> Result<Value, crate::Error> {
         match which {
             NativeImpl::IntToReal => match args[0] {
-                Value::Int(i) => match self.host.real_ops() {
-                    Some(real) => real
-                        .integer(i)
-                        .map(Value::Real)
-                        .map_err(|why| crate::Error::run(span, why)),
-                    None => Ok(Value::Real(i as f32)),
-                },
+                Value::Int(i) => self.real_from_integer(i, span).map(Value::Real),
                 ref v => Err(crate::Error::run(
                     span,
                     format!("I2R takes an integer, got {}", v.type_name()),
@@ -2260,20 +2372,38 @@ fn store(
     span: Span,
 ) -> Result<Flow, crate::Error> {
     match (slot, idx) {
-        (Slot::Array(a), Some(i)) => {
+        (Slot::Array(a, _), Some(i)) => {
             a.insert(i, value);
             Ok(Flow::Normal)
         }
-        (Slot::Array(_), None) => Err(crate::Error::run(
+        (Slot::Array(_, _), None) => Err(crate::Error::run(
             span,
             "an array needs an index; `set arrayName = …` is not a JASS assignment",
         )),
-        (Slot::Scalar(s), None) => {
+        (Slot::Scalar(s, _), None) => {
             *s = value;
             Ok(Flow::Normal)
         }
-        (Slot::Scalar(_), Some(_)) => Err(crate::Error::run(span, "this variable is not an array")),
+        (Slot::Scalar(_, _), Some(_)) => {
+            Err(crate::Error::run(span, "this variable is not an array"))
+        }
     }
+}
+
+fn slot_is_real(slot: &Slot) -> bool {
+    matches!(
+        slot,
+        Slot::Scalar(_, TypeKind::Real) | Slot::Array(_, TypeKind::Real)
+    )
+}
+
+/// A parked native declared `returns real` converts the resumed value before
+/// the surrounding expression sees it.
+fn park_real_return(mut outer: Vec<Zip>, ret: &TypeRef, span: Span) -> Vec<Zip> {
+    if !ret.array && ret.kind == TypeKind::Real {
+        outer.push(Zip::DeclaredReal { span });
+    }
+    outer
 }
 
 fn plural(n: usize) -> &'static str {
