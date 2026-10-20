@@ -543,7 +543,7 @@ impl ObjectHost {
                 exploded_presented = exploded && animation.has_sequence("death explode");
                 let sequence = if exploded_presented { "death explode" } else { "death" };
                 animation
-                    .select(sequence, now)
+                    .select(sequence, now, None)
                     .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
             }
         }
@@ -788,7 +788,7 @@ impl ObjectHost {
                         combat.chase = None;
                         if let Some(animation) = &mut record.animation {
                             animation
-                                .select("attack", now)
+                                .select("attack", now, None)
                                 .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
                         }
                     }

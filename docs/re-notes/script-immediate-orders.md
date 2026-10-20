@@ -209,11 +209,28 @@ for that sequence under Wine, not a general native movement specification.
 The candidate's instantaneous steering and constant speed do **not** match that
 turning/acceleration observation. Its bounded grid route and stable tie policy
 are recreation choices; native path choice, local avoidance and replanning are
-unqualified. Walk playback scaling to actual velocity, autonomous acquisition,
+unqualified. Walk playback rate is the candidate below, not a native fact; autonomous acquisition,
 combat/death, speed effects, other movement classes, queued orders and full
 original/native/WASM trajectory parity remain open. This candidate is not a playable first mission or a completed Hold/Stop
 behavior implementation. Validation receipts must be consulted separately; the
 preceding completed registry checks do not validate this new consumer.
+
+### Walk playback rate (candidate)
+
+A unit moving under a point order plays Walk at `speed / move_speed`. `speed` is
+the resolved UnitBalance speed that already drives displacement. `move_speed` is
+the Walk sequence's SEQS ground speed (`pcx_mdl::Sequence::move_speed`). The
+selected Legacy 1.29.2 footman reads Walk at 215 over 800 ms (`mdlx info`, local
+archive read); knight, peasant, ghoul and grunt Walk records are nonzero too.
+Stand, Attack and Death keep the authored clock. A Walk with zero or nonfinite
+move speed refuses the order instead of inventing a rate. Walk-to-Stand arrival
+selects Stand at the computed arrival time.
+
+This rule is a community observation, not a native fact: a forum thread on walk
+and run speed fields describes the same comparison
+(https://www.hiveworkshop.com/threads/art-animation-walk-speed-and-run-speed.352848).
+No native code, original-client capture or rendered trajectory checks it. Its
+acceleration, turn-rate and footstep-timing consequences remain unqualified.
 
 The bounded consumer's final verification is retained in
 `.scratch/campaign-unit-activity-root-20261020/verification-1.json`: 1,378 native

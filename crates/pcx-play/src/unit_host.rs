@@ -515,7 +515,7 @@ impl ObjectHost {
         let mut animation = self.executed_unit(*unit)?.animation.clone();
         if let Some(state) = &mut animation {
             state
-                .select(sequence, now)
+                .select(sequence, now, None)
                 .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
         }
         let Entry::Unit { record } = self.inner.entry_mut(*unit)? else {
