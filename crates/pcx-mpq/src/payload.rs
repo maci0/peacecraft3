@@ -517,7 +517,8 @@ mod tests {
             .iter()
             .map(|s| i16::from_le_bytes(*s))
             .collect();
-        assert_eq!(samples, [1000, 1247, 1023, 1023, 1579, 1977, 2145]);
+        // Expected values from .scratch/adpcm_expect.py, an independent computation.
+        assert_eq!(samples, [1000, 9077, 1183, 1183, 23764, 32767, 32767]);
     }
 
     #[test]
@@ -546,7 +547,8 @@ mod tests {
             .iter()
             .map(|s| i16::from_le_bytes(*s))
             .collect();
-        assert_eq!(samples, [100, -1000, 100, -470, 11, 204]);
+        // Expected values from .scratch/adpcm_expect.py, an independent computation.
+        assert_eq!(samples, [100, -1000, 100, 8545, 17907, 6526]);
     }
 
     #[test]

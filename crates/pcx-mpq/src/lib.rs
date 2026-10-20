@@ -471,9 +471,20 @@ impl MpqArchive {
         source: impl AsRef<Path>,
     ) -> Result<(), huffman::HuffmanError> {
         let table = huffman::HuffmanTable::from_pe(bytes, source)?;
+        self.set_codec_table(table);
+        Ok(())
+    }
+
+    /// Codec tables this archive uses for Huffman and ADPCM sectors. Once set, file
+    /// discovery is off, so the tables come only from the caller.
+    pub fn set_codec_table(&mut self, table: huffman::HuffmanTable) {
         self.huffman = Some(table);
         self.huffman_checked = true;
-        Ok(())
+    }
+
+    /// The table imported by [`MpqArchive::set_codec_table`] or [`MpqArchive::set_huffman_table`].
+    pub fn codec_table(&self) -> Option<&huffman::HuffmanTable> {
+        self.huffman.as_ref()
     }
 
     pub fn path(&self) -> &Path {
@@ -1341,6 +1352,37 @@ mod memory_tests {
                 )))
             ),
             "{outcome:?}"
+        );
+    }
+
+    /// A codec table imported into an archive is what `codec_table` reports; a refused source
+    /// leaves the archive without one.
+    #[test]
+    fn imported_codec_table_is_reported_and_refused_sources_leave_none() {
+        let (name1, name2) = hash::hash_string_both("fixture");
+        let mut archive = MpqArchive {
+            file: Source::Memory(vec![1u8, 0]),
+            path: PathBuf::from("memory.mpq"),
+            header: Header::default(),
+            hashes: vec![HashEntry {
+                name1,
+                name2,
+                block_index: 0,
+                ..HashEntry::default()
+            }],
+            blocks: Vec::new(),
+            huffman: None,
+            huffman_checked: false,
+        };
+        assert!(archive.codec_table().is_none());
+        assert!(archive.set_huffman_table(b"MZ", "truncated.dll").is_err());
+        assert!(archive.codec_table().is_none());
+        let table =
+            huffman::HuffmanTable::from_pe(&huffman::tests::synthetic_pe(), "fixture.dll").unwrap();
+        archive.set_codec_table(table);
+        assert_eq!(
+            archive.codec_table().map(|table| table.table_va),
+            Some(0x402000)
         );
     }
 

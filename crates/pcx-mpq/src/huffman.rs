@@ -535,28 +535,29 @@ pub(crate) mod tests {
         }
     }
 
-    /// Test-only copy of an observed ADPCM run pair. It pins the decoder outputs asserted
-    /// in payload and integration tests; production reads these runs from the codec source.
-    pub(crate) const FIXTURE_STEPS: [u32; ADPCM_STEP_COUNT] = [
-        7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60,
-        66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371,
-        408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878,
-        2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845,
-        8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086,
-        29794, 32767,
-    ];
-    pub(crate) const FIXTURE_INDEX_ADJUST: [i32; ADPCM_INDEX_COUNT] = [
-        -1, 0, -1, 4, -1, 2, -1, 6, -1, 1, -1, 5, -1, 3, -1, 7, -1, 1, -1, 5, -1, 3, -1, 7, -1, 2,
-        -1, 4, -1, 6, -1, 8,
-    ];
+    /// Synthetic run pair: strictly increasing steps ending at the 16-bit maximum, and
+    /// index adjustments inside the accepted range. Expected decoder outputs are computed
+    /// from these values by an independent script, not from the production tables.
+    pub(crate) fn fixture_steps() -> [u32; ADPCM_STEP_COUNT] {
+        std::array::from_fn(|i| {
+            if i == ADPCM_STEP_COUNT - 1 {
+                ADPCM_STEP_MAX
+            } else {
+                7 + 367 * i as u32
+            }
+        })
+    }
+    pub(crate) fn fixture_index_adjust() -> [i32; ADPCM_INDEX_COUNT] {
+        std::array::from_fn(|i| if i % 2 == 0 { -1 } else { (i % 9) as i32 })
+    }
     const FIXTURE_INDEX_VA: u32 = 0x420000;
 
     pub(crate) fn fixture_adpcm() -> AdpcmTables {
         AdpcmTables {
             steps_va: FIXTURE_INDEX_VA + 128,
             index_va: FIXTURE_INDEX_VA,
-            steps: FIXTURE_STEPS.to_vec(),
-            index_adjust: FIXTURE_INDEX_ADJUST.to_vec(),
+            steps: fixture_steps().to_vec(),
+            index_adjust: fixture_index_adjust().to_vec(),
         }
     }
 
@@ -591,10 +592,10 @@ pub(crate) mod tests {
         bytes[0x206..0x208].copy_from_slice(&[0x8d, 0x88]);
         bytes[0x208..0x20c].copy_from_slice(&0x402000u32.to_le_bytes());
         bytes[0x220 + 65] = 4;
-        for (i, adjust) in FIXTURE_INDEX_ADJUST.iter().enumerate() {
+        for (i, adjust) in fixture_index_adjust().iter().enumerate() {
             bytes[0x400 + i * 4..0x404 + i * 4].copy_from_slice(&adjust.to_le_bytes());
         }
-        for (i, step) in FIXTURE_STEPS.iter().enumerate() {
+        for (i, step) in fixture_steps().iter().enumerate() {
             bytes[0x480 + i * 4..0x484 + i * 4].copy_from_slice(&step.to_le_bytes());
         }
         bytes
@@ -613,16 +614,16 @@ pub(crate) mod tests {
         let adpcm = table.adpcm.as_ref().expect("ADPCM run pair");
         assert_eq!(adpcm.index_va, 0x420000);
         assert_eq!(adpcm.steps_va, 0x420080);
-        assert_eq!(adpcm.steps, FIXTURE_STEPS);
-        assert_eq!(adpcm.index_adjust, FIXTURE_INDEX_ADJUST);
+        assert_eq!(adpcm.steps, fixture_steps());
+        assert_eq!(adpcm.index_adjust, fixture_index_adjust());
     }
 
     /// Replace the third section's run pair with `bytes` written at `at` (file offset).
     fn with_run_at(mut bytes: Vec<u8>, at: usize) -> Vec<u8> {
-        for (i, adjust) in FIXTURE_INDEX_ADJUST.iter().enumerate() {
+        for (i, adjust) in fixture_index_adjust().iter().enumerate() {
             bytes[at + i * 4..at + i * 4 + 4].copy_from_slice(&adjust.to_le_bytes());
         }
-        for (i, step) in FIXTURE_STEPS.iter().enumerate() {
+        for (i, step) in fixture_steps().iter().enumerate() {
             bytes[at + 128 + i * 4..at + 132 + i * 4].copy_from_slice(&step.to_le_bytes());
         }
         bytes

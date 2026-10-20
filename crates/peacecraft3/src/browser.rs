@@ -1009,7 +1009,18 @@ pub fn commit_archive_import() -> Result<Vec<String>, JsValue> {
     let set = guard
         .as_mut()
         .ok_or_else(|| JsValue::from_str("no active archive import"))?;
-    let (assets, notes) = hydrate(set).map_err(|e| JsValue::from_str(&e))?;
+    let codec_notes = {
+        let images = client_images();
+        attach_codec_source(
+            set,
+            images
+                .pending
+                .as_ref()
+                .map(|image| (image.source.as_str(), image.bytes.as_slice())),
+        )
+    };
+    let (assets, hydrate_notes) = hydrate(set).map_err(|e| JsValue::from_str(&e))?;
+    let notes: Vec<String> = codec_notes.into_iter().chain(hydrate_notes).collect();
     let editions = crate::local_demo::MenuEditions {
         roc: assets.contains_key(&normalize(crate::mainmenu_scene::scene_source(false).1)),
         tft: assets.contains_key(&normalize(crate::mainmenu_scene::scene_source(true).1)),
@@ -1040,6 +1051,31 @@ pub fn commit_archive_import() -> Result<Vec<String>, JsValue> {
         note(line);
     }
     Ok(notes)
+}
+
+/// Gives the staged client image to every archive in the transaction as its codec source.
+/// An absent or unparsable image is a note: the import still commits, and members that
+/// need Huffman weights or ADPCM tables refuse with their own error.
+fn attach_codec_source(
+    set: &mut [pcx_mpq::MpqArchive],
+    image: Option<(&str, &[u8])>,
+) -> Vec<String> {
+    let Some((source, bytes)) = image else {
+        return vec![
+            "codec source: no client image staged; Huffman and ADPCM members refuse".into(),
+        ];
+    };
+    match pcx_mpq::huffman::HuffmanTable::from_pe(bytes, source) {
+        Ok(table) => {
+            for archive in set.iter_mut() {
+                archive.set_codec_table(table.clone());
+            }
+            vec![format!("codec source: {source}")]
+        }
+        Err(error) => vec![format!(
+            "codec source {source} unavailable: {error}; Huffman and ADPCM members refuse"
+        )],
+    }
 }
 
 // --------------------------------------------------------- launcher wiring ---
@@ -1296,8 +1332,8 @@ fn browser_budget(value: &JsValue, field: &str) -> Result<usize, JsError> {
     Ok(number as usize)
 }
 /// Explicit bounded bridge to the existing committed store and archives.
-/// The caller must choose exactly "no-huffman"; streams needing a supplied table
-/// refuse without consulting an installed table or discovering an executable.
+/// The caller must choose exactly "no-huffman": no per-call codec table. Archives use the
+/// codec source imported at commit, and no executable is discovered here.
 #[wasm_bindgen]
 pub fn stored_asset_bounded(
     path: String,
