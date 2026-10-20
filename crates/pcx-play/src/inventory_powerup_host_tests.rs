@@ -23,6 +23,10 @@ native UnitHasItem takes unit u, item i returns boolean
 native GetItemX takes item i returns real
 native GetItemTypeId takes item i returns integer
 native SetItemDropID takes item whichItem, integer unitId returns nothing
+native GetHeroStr takes unit whichHero, boolean includeBonuses returns integer
+native GetHeroAgi takes unit whichHero, boolean includeBonuses returns integer
+native GetHeroInt takes unit whichHero, boolean includeBonuses returns integer
+native RemoveUnit takes unit u returns nothing
 constant native GetManipulatedItem takes nothing returns item
 constant native GetManipulatingUnit takes nothing returns unit
 globals
@@ -1264,4 +1268,151 @@ fn use_event_callback_observes_the_healed_life_and_the_charge_already_spent() {
     );
     assert_eq!(h.native("GetManipulatedItem", &[]), Ok(Value::Handle(potion)));
     h.finish_fired_event();
+}
+
+fn hero_attribute(
+    h: &mut ObjectHost,
+    native: &str,
+    unit: HandleId,
+    bonuses: bool,
+) -> Result<i32, String> {
+    match h.native(native, &[Value::Handle(unit), Value::Bool(bonuses)])? {
+        Value::Int(n) => Ok(n),
+        other => panic!("integer attribute, got {other:?}"),
+    }
+}
+
+#[test]
+fn hero_attribute_queries_split_base_permanent_and_held_totals() {
+    let Fixture { mut h, hero, .. } = open();
+    let query =
+        |h: &mut ObjectHost, native: &str, bonuses: bool| hero_attribute(h, native, hero, bonuses);
+    // Fresh hero at the admitted level 3: the base 10 / 5 / 7 with nothing added.
+    assert_eq!(query(&mut h, "GetHeroStr", false), Ok(10));
+    assert_eq!(query(&mut h, "GetHeroStr", true), Ok(10));
+    assert_eq!(query(&mut h, "GetHeroAgi", true), Ok(5));
+    assert_eq!(query(&mut h, "GetHeroInt", true), Ok(7));
+    // The retained tome strength is permanent: it joins strength without `includeBonuses`.
+    let tome = item(&mut h, b"tstr", 0.0);
+    assert_eq!(add(&mut h, hero, tome), Ok(Value::Bool(true)));
+    assert_eq!(query(&mut h, "GetHeroStr", false), Ok(17));
+    assert_eq!(query(&mut h, "GetHeroStr", true), Ok(17));
+    // The passive 5 strength and 2 agility of the held item join only with `includeBonuses`.
+    let passive = item(&mut h, b"pstr", 0.0);
+    assert_eq!(add(&mut h, hero, passive), Ok(Value::Bool(true)));
+    assert_eq!(query(&mut h, "GetHeroStr", false), Ok(17));
+    assert_eq!(query(&mut h, "GetHeroStr", true), Ok(22));
+    assert_eq!(query(&mut h, "GetHeroAgi", false), Ok(5));
+    assert_eq!(query(&mut h, "GetHeroAgi", true), Ok(7));
+    // Intelligence passive bonuses refuse on pickup, so INT has no held total to add.
+    assert_eq!(query(&mut h, "GetHeroInt", true), Ok(7));
+    // Growth floors each attribute after the fractional per-level gain: STR 10+2.5, AGI 5+1.5.
+    h.native(
+        "SetHeroLevel",
+        &[Value::Handle(hero), Value::Int(4), Value::Bool(false)],
+    )
+    .unwrap();
+    assert_eq!(query(&mut h, "GetHeroStr", false), Ok(19));
+    assert_eq!(query(&mut h, "GetHeroStr", true), Ok(24));
+    assert_eq!(query(&mut h, "GetHeroAgi", false), Ok(6));
+    assert_eq!(query(&mut h, "GetHeroAgi", true), Ok(8));
+    assert_eq!(query(&mut h, "GetHeroInt", false), Ok(7));
+    h.native(
+        "SetHeroLevel",
+        &[Value::Handle(hero), Value::Int(5), Value::Bool(false)],
+    )
+    .unwrap();
+    assert_eq!(query(&mut h, "GetHeroStr", false), Ok(22));
+    assert_eq!(query(&mut h, "GetHeroStr", true), Ok(27));
+    assert_eq!(query(&mut h, "GetHeroAgi", true), Ok(10));
+    assert_eq!(query(&mut h, "GetHeroInt", true), Ok(8));
+}
+
+#[test]
+fn hero_attribute_queries_read_zero_for_ordinary_units_and_null() {
+    let Fixture {
+        mut h,
+        ordinary,
+        hero,
+    } = open();
+    for native in ["GetHeroStr", "GetHeroAgi", "GetHeroInt"] {
+        for bonuses in [false, true] {
+            assert_eq!(hero_attribute(&mut h, native, ordinary, bonuses), Ok(0));
+        }
+    }
+    assert_eq!(
+        h.native("GetHeroAgi", &[Value::Null, Value::Bool(true)]),
+        Ok(Value::Int(0))
+    );
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", hero, false), Ok(7));
+}
+
+/// Hero attribute declarations of a selected `common.j`, normalized to single spaces. Each
+/// must be a plain `native` (not `constant native`) with the signature the query host admits.
+fn hero_attribute_declarations(common: &str) -> Result<(), String> {
+    const EXPECTED: [&str; 3] = [
+        "native GetHeroStr takes unit whichHero, boolean includeBonuses returns integer",
+        "native GetHeroAgi takes unit whichHero, boolean includeBonuses returns integer",
+        "native GetHeroInt takes unit whichHero, boolean includeBonuses returns integer",
+    ];
+    let lines: Vec<String> = common
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect();
+    for expected in EXPECTED {
+        let count = lines
+            .iter()
+            .filter(|line| line.as_str() == expected)
+            .count();
+        if count != 1 {
+            return Err(format!("{expected}: found {count} declarations"));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn hero_attribute_declarations_must_match_the_admitted_signature() {
+    let exact = "native          GetHeroStr          takes unit whichHero, boolean includeBonuses returns integer\n\
+        native GetHeroAgi takes unit whichHero, boolean includeBonuses returns integer\n\
+        native GetHeroInt takes unit whichHero, boolean includeBonuses returns integer\n";
+    assert_eq!(hero_attribute_declarations(exact), Ok(()));
+    let constant = exact.replace("native          GetHeroStr", "constant native GetHeroStr");
+    assert!(hero_attribute_declarations(&constant).is_err());
+    let missing = exact.replace(
+        "native GetHeroInt takes unit whichHero, boolean includeBonuses returns integer\n",
+        "",
+    );
+    assert!(
+        hero_attribute_declarations(&missing)
+            .unwrap_err()
+            .contains("GetHeroInt")
+    );
+    let duplicated = format!("{exact}{exact}");
+    assert!(hero_attribute_declarations(&duplicated).is_err());
+}
+
+/// Original-input gate: `PCX_WAR3_INSTALL` names a local Warcraft III install. The selected
+/// `Scripts\common.j` is read through `MpqSet`, the archive set production configuration uses,
+/// and must declare the three hero attribute natives with the admitted signature. Unset, skips.
+#[test]
+fn selected_install_common_declares_the_hero_attribute_natives() {
+    let Some(install) = std::env::var_os("PCX_WAR3_INSTALL") else {
+        return;
+    };
+    let mut set = pcx_mpq::MpqSet::open_wc3(&install).expect("readable install archives");
+    let common = set
+        .extract(r"Scripts\common.j")
+        .expect("selected Scripts\\common.j");
+    let text = std::str::from_utf8(&common).expect("common.j is text");
+    hero_attribute_declarations(text).expect("selected common.j hero attribute declarations");
+    eprintln!("install={install:?} common.j bytes={}", common.len());
+}
+
+#[test]
+fn removed_hero_reads_zero_because_the_native_handle_gate_fails() {
+    let Fixture { mut h, hero, .. } = open();
+    h.native("RemoveUnit", &[Value::Handle(hero)]).unwrap();
+    assert_eq!(hero_attribute(&mut h, "GetHeroStr", hero, true), Ok(0));
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", hero, false), Ok(0));
 }
