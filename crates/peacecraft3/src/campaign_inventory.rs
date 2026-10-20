@@ -54,6 +54,8 @@ pub(crate) struct CampaignInventory {
     pub pointer_consumed: bool,
     pub last_error: Option<String>,
     pub receipts: Vec<AssetReceipt>,
+    /// Holder and slot index of a slot press that asks to activate the slot's item.
+    pub use_request: Option<(HandleId, usize)>,
     pending_pointer: bool,
     witness: Option<Weak<()>>,
     attempted: bool,
@@ -146,17 +148,19 @@ fn capture(mut state: ResMut<CampaignInventory>) {
 }
 fn capture_press(
     event: On<PointerPress>,
-    slots: Query<Option<&ItemTooltip>, With<InventorySlot>>,
+    slots: Query<(Option<&ItemTooltip>, &InventorySlot)>,
     mut state: ResMut<CampaignInventory>,
     presentation: Option<Res<peacecraft3::campaign_presentation::CampaignPresentation>>,
 ) {
-    if slots.contains(event.entity) && crate::button_actions::input_allowed(presentation) {
+    let Ok((item, slot)) = slots.get(event.entity) else {
+        return;
+    };
+    if crate::button_actions::input_allowed(presentation) {
         state.pending_pointer = true;
-        if slots.get(event.entity).is_ok_and(|item| item.is_some()) && state.action_error.is_none()
+        if item.is_some()
+            && let Some(unit) = state.view.as_ref().map(|view| view.unit)
         {
-            let message = "inventory item use and drag/drop controls are not implemented";
-            state.action_error = Some(message.into());
-            warn!("{message}");
+            state.use_request = Some((unit, slot.0));
         }
     }
 }

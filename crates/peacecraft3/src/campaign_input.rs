@@ -65,7 +65,49 @@ pub(crate) fn install(app: &mut App) {
                     .after(crate::campaign_script_dialogs::CampaignScriptDialogSet),
             ),
         )
-        .add_systems(Update, hud_menu.before(CampaignCameraSet));
+        .add_systems(Update, hud_menu.before(CampaignCameraSet))
+        .add_systems(
+            Update,
+            use_inventory_slot
+                .after(crate::campaign_hud::CampaignHudSet)
+                .after(crate::campaign_inventory::CampaignInventorySet)
+                .after(crate::campaign_script_dialogs::CampaignScriptDialogSet),
+        );
+}
+
+/// Applies a pressed inventory slot as the local player's activation of the slot's held item.
+/// The dialog, control and quest-log gates match the order path; the core command checks the
+/// owner, the holder and the item's use.
+fn use_inventory_slot(
+    view: Res<CampaignCamera>,
+    hud: Res<crate::campaign_hud::CampaignHud>,
+    dialogs: Res<crate::campaign_script_dialogs::CampaignScriptDialogs>,
+    mut inventory: ResMut<crate::campaign_inventory::CampaignInventory>,
+    mut input: ResMut<CampaignInput>,
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+) {
+    let Some((unit, slot)) = inventory.use_request.take() else {
+        return;
+    };
+    if !view.active() || hud.quest_log_open || dialogs.input_blocked() {
+        return;
+    }
+    let Some(host) = session.host() else {
+        return;
+    };
+    let objects = host.objects_mut();
+    if objects
+        .presentation()
+        .is_some_and(|p| p.control_enabled == Some(false))
+    {
+        return;
+    }
+    let Some(local) = objects.local_player_number() else {
+        return;
+    };
+    if let Err(error) = objects.player_activate_slot(local, unit, slot) {
+        input.last_error = Some(error.to_string());
+    }
 }
 
 fn hud_menu(
