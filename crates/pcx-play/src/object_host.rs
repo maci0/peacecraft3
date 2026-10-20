@@ -1032,7 +1032,7 @@ pub use presentation::{CineFilter, FilterSample, PresentationState};
 
 #[path = "stock_host.rs"]
 mod stock;
-pub use stock::StockBudget;
+pub use stock::{ShopCapacity, StockBudget};
 
 #[path = "timer_runtime_host.rs"]
 pub(super) mod timers;

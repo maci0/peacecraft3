@@ -774,7 +774,7 @@ pub use objects::{
     QuestEvent, QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration,
     RegionRectRequest, ResearchObservation, SoundProperties, SoundState, StackedSoundAction,
     StackedSoundRequest, StartLocation, StartPriorities, StartPriority, StartupClockState,
-    StartupSettings, StockBudget, TechLimitBudget, TerrainFog, TimedMessage,
+    StartupSettings, ShopCapacity, StockBudget, TechLimitBudget, TerrainFog, TimedMessage,
     TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord, TriggerBudget,
     TriggerConditionRegistration, TriggerDelivery, TriggerRuntimeInput, UnitAbilities,
     UnitActivity, UnitBudget, UnitEffect, UnitEventRegistration, UnitGuard,

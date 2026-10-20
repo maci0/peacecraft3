@@ -1,4 +1,9 @@
 use super::{COMMON, budget, context, object, slots_rule};
+
+const SHOP: crate::playercolor_host::ShopCapacity = crate::playercolor_host::ShopCapacity {
+    cells: 12,
+    slot_ceiling: 11,
+};
 use crate::playercolor_host::{Failure, ObjectHost, StockBudget, UnitBudget};
 use pcx_objects::editor::ObjectKind;
 use pcx_script::{HandleId, Host, Value};
@@ -70,6 +75,7 @@ fn opened(records: usize) -> pcx_script::OwnedVm<ObjectHost> {
         .unwrap()
         .with_stock(StockBudget {
             max_records: records,
+            shop: SHOP,
         })
         .unwrap()
         .into_vm()
@@ -164,59 +170,116 @@ fn owned_vm_retains_executed_slot_integers_without_inheriting_or_allocating() {
 }
 
 #[test]
-fn item_stock_records_add_replace_remove_and_share_the_record_budget() {
-    let mut vm = opened(2);
+fn item_stock_cells_evict_by_age_and_removal_and_shrink_follow_the_engine() {
+    let mut vm = opened(16);
     vm.init_globals().unwrap();
     vm.call("place", &[]).unwrap();
     let unit = handle(&vm.global("U"));
-    let timer = handle(&vm.global("T"));
     let placed = vm.host().inner().handles();
-    vm.call("stock_item", &[]).unwrap();
-    assert_eq!(vm.host().item_stock(unit, 1).unwrap(), Some((1, 1)));
-    assert_eq!(vm.host().stock_item_records().unwrap(), 1);
-    vm.call("stock_again", &[]).unwrap();
-    assert_eq!(vm.host().item_stock(unit, 1).unwrap(), Some((4, 5)));
-    assert_eq!(vm.host().stock_item_records().unwrap(), 1);
-    let absent = vm.call("unstock_absent", &[]).unwrap();
-    assert_eq!(absent, Value::Null);
-    assert_eq!(vm.host().inner().handles(), placed);
-    assert_eq!(vm.host().stock_item_records().unwrap(), 1);
-    vm.call("configure", &[]).unwrap();
-    assert_eq!(vm.host().stock_unit_records().unwrap(), 1);
-    let shared = vm.call("stock_other", &[]).unwrap_err();
-    assert!(
-        shared.to_string().contains("stock item records"),
-        "{shared}"
-    );
-    assert_eq!(vm.host().item_stock(unit, 2).unwrap(), None);
-    vm.call("unstock_item", &[]).unwrap();
-    assert_eq!(vm.host().item_stock(unit, 1).unwrap(), None);
-    assert_eq!(vm.host().stock_item_records().unwrap(), 0);
-    vm.call("stock_other", &[]).unwrap();
-    assert_eq!(vm.host().item_stock(unit, 2).unwrap(), Some((1, 1)));
-    assert_eq!(vm.host().stock_item_records().unwrap(), 1);
-    let wrong_family = vm.call("stock_on_timer", &[]).unwrap_err();
-    assert!(
-        wrong_family.to_string().contains("another family"),
-        "{wrong_family}"
-    );
-    assert!(vm.host().item_stock(timer, 1).is_err());
-    assert_eq!(vm.host().inner().handles(), placed);
-    let bad = vm
+    let refused = vm
         .host()
         .native(
             "AddItemToStock",
             &[
                 Value::Handle(unit),
-                Value::Real(1.0),
+                Value::Int(1),
                 Value::Int(1),
                 Value::Int(1),
             ],
         )
         .unwrap_err();
-    assert!(bad.contains("arguments"), "{bad}");
+    assert!(refused.contains("slot count is not assigned"), "{refused}");
+    vm.host()
+        .native("SetItemTypeSlots", &[Value::Handle(unit), Value::Int(2)])
+        .unwrap();
+    let add = |vm: &mut pcx_script::OwnedVm<ObjectHost>, item: i32, cur: i32, max: i32| {
+        vm.host()
+            .native(
+                "AddItemToStock",
+                &[
+                    Value::Handle(unit),
+                    Value::Int(item),
+                    Value::Int(cur),
+                    Value::Int(max),
+                ],
+            )
+            .unwrap();
+    };
+    add(&mut vm, 1, 1, 1);
+    add(&mut vm, 2, 2, 2);
+    assert_eq!(vm.host().item_stock(unit, 1).unwrap(), Some((1, 1)));
+    add(&mut vm, 3, 3, 3);
+    assert_eq!(vm.host().item_stock(unit, 1).unwrap(), None);
+    assert_eq!(vm.host().item_stock(unit, 2).unwrap(), Some((2, 2)));
+    assert_eq!(vm.host().item_stock(unit, 3).unwrap(), Some((3, 3)));
+    assert_eq!(vm.host().stock_item_records().unwrap(), 2);
+    add(&mut vm, 2, 9, 9);
+    assert_eq!(vm.host().item_stock(unit, 2).unwrap(), Some((9, 9)));
+    assert_eq!(vm.host().stock_item_records().unwrap(), 2);
+    vm.host()
+        .native("RemoveItemFromStock", &[Value::Handle(unit), Value::Int(3)])
+        .unwrap();
+    assert_eq!(vm.host().item_stock(unit, 3).unwrap(), None);
     assert_eq!(vm.host().stock_item_records().unwrap(), 1);
-    assert_eq!(vm.host().item_stock(unit, 2).unwrap(), Some((1, 1)));
+    vm.host()
+        .native("RemoveItemFromStock", &[Value::Handle(unit), Value::Int(7)])
+        .unwrap();
+    assert_eq!(vm.host().stock_item_records().unwrap(), 1);
+    vm.host()
+        .native("SetItemTypeSlots", &[Value::Handle(unit), Value::Int(1)])
+        .unwrap();
+    assert_eq!(vm.host().item_stock(unit, 2).unwrap(), None);
+    assert_eq!(vm.host().stock_item_records().unwrap(), 0);
+    assert_eq!(vm.host().inner().handles(), placed);
+}
+
+#[test]
+fn a_new_stock_record_past_the_caller_budget_refuses_and_changes_no_cell() {
+    let mut vm = opened(2);
+    vm.init_globals().unwrap();
+    vm.call("place", &[]).unwrap();
+    let unit = handle(&vm.global("U"));
+    vm.host()
+        .native("SetItemTypeSlots", &[Value::Handle(unit), Value::Int(2)])
+        .unwrap();
+    vm.host()
+        .native(
+            "AddItemToStock",
+            &[
+                Value::Handle(unit),
+                Value::Int(1),
+                Value::Int(1),
+                Value::Int(1),
+            ],
+        )
+        .unwrap();
+    let full = vm
+        .host()
+        .native(
+            "AddItemToStock",
+            &[
+                Value::Handle(unit),
+                Value::Int(2),
+                Value::Int(1),
+                Value::Int(1),
+            ],
+        )
+        .unwrap_err();
+    assert!(full.contains("stock item records"), "{full}");
+    assert_eq!(vm.host().item_stock(unit, 1).unwrap(), Some((1, 1)));
+    assert_eq!(vm.host().stock_item_records().unwrap(), 1);
+    vm.host()
+        .native(
+            "AddItemToStock",
+            &[
+                Value::Handle(unit),
+                Value::Int(1),
+                Value::Int(5),
+                Value::Int(5),
+            ],
+        )
+        .unwrap();
+    assert_eq!(vm.host().item_stock(unit, 1).unwrap(), Some((5, 5)));
 }
 
 #[test]
@@ -270,8 +333,16 @@ fn failed_slot_calls_and_the_record_budget_preserve_prior_state() {
 #[test]
 fn stock_admission_rejects_override_source_mismatch_and_capacity() {
     let (host, _) = prepared(DECL, "// map", "synthetic:stock-once");
-    let host = host.with_stock(StockBudget { max_records: 1 }).unwrap();
-    let again = match host.with_stock(StockBudget { max_records: 1 }) {
+    let host = host
+        .with_stock(StockBudget {
+            max_records: 1,
+            shop: SHOP,
+        })
+        .unwrap();
+    let again = match host.with_stock(StockBudget {
+        max_records: 1,
+        shop: SHOP,
+    }) {
         Err(error) => error,
         Ok(_) => panic!("stock was admitted twice"),
     };
@@ -292,6 +363,7 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
     let (overflow, _) = prepared(DECL, "// map", "synthetic:stock-overflow");
     let overflow = match overflow.with_stock(StockBudget {
         max_records: usize::MAX,
+        shop: SHOP,
     }) {
         Err(error) => error,
         Ok(_) => panic!("overflowing record bound was admitted"),
@@ -302,7 +374,10 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
         "",
     );
     let (host, _) = prepared(&missing, "// map", "synthetic:stock-missing");
-    let missing = match host.with_stock(StockBudget { max_records: 1 }) {
+    let missing = match host.with_stock(StockBudget {
+        max_records: 1,
+        shop: SHOP,
+    }) {
         Err(error) => error,
         Ok(_) => panic!("missing declaration was admitted"),
     };
@@ -312,7 +387,10 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
         "constant native SetAllItemTypeSlots",
     );
     let (host, _) = prepared(&constant, "// map", "synthetic:stock-constant");
-    let constant = match host.with_stock(StockBudget { max_records: 1 }) {
+    let constant = match host.with_stock(StockBudget {
+        max_records: 1,
+        shop: SHOP,
+    }) {
         Err(error) => error,
         Ok(_) => panic!("constant declaration was admitted"),
     };
@@ -322,7 +400,10 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
         "native SetAllItemTypeSlots takes integer slots returns integer",
     );
     let (host, _) = prepared(&wrong, "// map", "synthetic:stock-signature");
-    let wrong = match host.with_stock(StockBudget { max_records: 1 }) {
+    let wrong = match host.with_stock(StockBudget {
+        max_records: 1,
+        shop: SHOP,
+    }) {
         Err(error) => error,
         Ok(_) => panic!("wrong declaration was admitted"),
     };
@@ -332,7 +413,10 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
         "function SetAllItemTypeSlots takes integer slots returns nothing\nendfunction\n",
         "synthetic:stock-override",
     );
-    let overridden = match host.with_stock(StockBudget { max_records: 1 }) {
+    let overridden = match host.with_stock(StockBudget {
+        max_records: 1,
+        shop: SHOP,
+    }) {
         Err(error) => error,
         Ok(_) => panic!("function override was admitted"),
     };
@@ -356,7 +440,10 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
         );
     let map = "native SetAllItemTypeSlots takes integer slots returns nothing\nnative SetAllUnitTypeSlots takes integer slots returns nothing\nnative SetItemTypeSlots takes unit whichUnit, integer slots returns nothing\nnative SetUnitTypeSlots takes unit whichUnit, integer slots returns nothing\n";
     let (host, _) = prepared(&foreign, map, "synthetic:stock-source");
-    let source = match host.with_stock(StockBudget { max_records: 1 }) {
+    let source = match host.with_stock(StockBudget {
+        max_records: 1,
+        shop: SHOP,
+    }) {
         Err(error) => error,
         Ok(_) => panic!("foreign source was admitted"),
     };

@@ -337,6 +337,12 @@ pub fn prepare(
     let constructors = vec![sound_sources.empty_label_bank(label_budget)?];
     let item_classes =
         pcx_play::item_class_table::derive(image, client.clone()).map_err(|e| e.to_string())?;
+    let shop_table =
+        pcx_play::shop_table::derive(image, client.clone()).map_err(|e| e.to_string())?;
+    let shop = pcx_play::playercolor_host::ShopCapacity {
+        cells: shop_table.entries as usize,
+        slot_ceiling: shop_table.slot_ceiling,
+    };
     Ok(MapStartupInputs {
         item_classes: Some(item_classes),
         inventory: None,
@@ -349,7 +355,7 @@ pub fn prepare(
         )?),
         enumeration: enum_contracts(context)?,
         rules,
-        budgets: budgets(),
+        budgets: budgets(shop),
         camera: source.camera,
         // Executed-path loaders attached by campaign_startup fill these stores.
         day_night: pcx_play::day_night::Assets::read(
@@ -594,7 +600,7 @@ fn defend_alias(tables: &DefaultTables) -> Result<String, String> {
     }
 }
 
-fn budgets() -> MapStartupBudgets {
+fn budgets(shop: pcx_play::playercolor_host::ShopCapacity) -> MapStartupBudgets {
     use pcx_play::playercolor_host::*;
     MapStartupBudgets {
         inventory: None,
@@ -651,7 +657,10 @@ fn budgets() -> MapStartupBudgets {
         }),
         timer_events: 65536,
         game_state_events: 65536,
-        stock: Some(StockBudget { max_records: 65536 }),
+        stock: Some(StockBudget {
+            max_records: 65536,
+            shop,
+        }),
         dialogs: Some(DialogBudget {
             max_dialogs: 4096,
             max_buttons: 16384,

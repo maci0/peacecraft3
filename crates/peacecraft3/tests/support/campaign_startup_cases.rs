@@ -968,7 +968,13 @@ fn local_file_source_label_and_explicit_stock_profile_reach_the_same_session() {
     let resolver = fixture.resolver();
     let bound = bind_map(&resolver, fixture.input(3), fixture.limits()).unwrap();
     let mut inputs = host_inputs(Arc::clone(&bound.catalog.0));
-    inputs.budgets.stock = Some(StockBudget { max_records: 0 });
+    inputs.budgets.stock = Some(StockBudget {
+        max_records: 0,
+        shop: pcx_play::playercolor_host::ShopCapacity {
+            cells: 1,
+            slot_ceiling: 1,
+        },
+    });
     let bytes = bound.catalog_map_bytes.clone();
     let mut identity = fixture.map_id.clone();
     identity.source = "synthetic/local/selected.w3m".into();
@@ -1154,7 +1160,13 @@ fn corrected_host_inputs_retry_a_refused_candidate_without_redelivery() {
     assert!(previous.upgrade().is_some());
 
     let mut inputs = host_inputs(Arc::clone(&catalog));
-    inputs.budgets.stock = Some(StockBudget { max_records: 0 });
+    inputs.budgets.stock = Some(StockBudget {
+        max_records: 0,
+        shop: pcx_play::playercolor_host::ShopCapacity {
+            cells: 1,
+            slot_ceiling: 1,
+        },
+    });
     app.insert_resource(CampaignHostSupply {
         revision: 7,
         inputs: Some(inputs),
