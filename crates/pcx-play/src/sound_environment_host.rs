@@ -1,19 +1,24 @@
 //! `NewSoundEnvironment` as the native runs it. A call inside the window after the last
 //! applied change only buffers the name and schedules a callback; otherwise the record
-//! is applied at once. A callback applies the buffered name. Provider state decides
-//! what the apply sends. Times are game seconds from `timer_game_time`.
+//! is computed at once. A callback computes the buffered name. Provider state decides
+//! what the computed request is for. Nothing here delivers a request: no backend
+//! acknowledges one, so the outcomes never claim a delivery.
+//!
+//! Times are game seconds from `timer_game_time`. Without a game clock the call is
+//! refused rather than timed from zero.
 use super::{Error, Failure, ObjectHost};
-use crate::sound_environment::{Applied, SoundEnvironment, SoundEnvironmentInput, apply};
+use crate::sound_environment::{Request, SoundEnvironment, SoundEnvironmentInput, Window, apply};
 use pcx_script::Value;
 
 const NATIVE: &str = "NewSoundEnvironment";
+/// The executable's `1000.0` scale (`0xe78350`) converts the window from ms to seconds.
 const MS_PER_SECOND: f64 = 1000.0;
 
-/// Identity of a 3D provider as the audio owner reports it.
+/// Identity of a 3D provider, as the audio owner reports it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProviderId(pub u64);
 
-/// Provider state supplied by the audio owner. `Unqualified` is the state before any
+/// Provider state reported by the audio owner. `Unqualified` is the state before any
 /// report: nothing is claimed about the provider.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderState {
@@ -22,36 +27,46 @@ pub enum ProviderState {
     Open(ProviderId),
 }
 
-/// Outcome of the most recent apply or schedule.
+/// Whether a room call is pending on the native's room gate. The gate byte at
+/// `0x1140aa4` is not decoded, so a pending room write is never reported as sent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoomGate {
+    Unresolved,
+    NotApplicable,
+}
+
+/// Outcome of the most recent call or callback. No variant reports a backend receipt,
+/// because no backend in this build acknowledges requests.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Delivery {
-    /// A callback is queued and applies the buffered name at `fire_at` game seconds.
+    /// A callback is queued and computes the buffered name at `fire_at` game seconds.
     Scheduled { fire_at: f64 },
     /// The name matches no record. The native sets nothing.
     NoRecord,
-    /// Values computed. The provider state is unqualified, so nothing is sent.
-    Validated(Applied),
-    /// The provider is closed. The native skips every provider call.
-    ProviderClosed(Applied),
-    /// Sent to the open provider.
-    Delivered {
+    /// Computed. The provider state is unqualified, so nothing is requested.
+    Validated(Request),
+    /// The provider is closed. The native skips its provider calls.
+    ProviderClosed(Request),
+    /// The provider reported open. The request is ready for a backend and is not sent.
+    Prepared {
         provider: ProviderId,
-        values: Applied,
+        request: Request,
+        room_gate: RoomGate,
     },
 }
 
 struct Entry {
     environment: SoundEnvironment,
-    values: Applied,
+    request: Request,
 }
 
 pub(super) struct State {
     entries: Vec<Entry>,
-    window: f64,
+    window: Window,
     provider: ProviderState,
     /// Game time of the last applied change; `None` until one occurs.
     last_change: Option<f64>,
-    /// Name the next callback applies. Set while a callback is pending or in the window.
+    /// Name the next callback computes. Set while a callback is pending or in the window.
     buffered: String,
     /// The native's pending flag: set while at least one callback is queued.
     pending: bool,
@@ -62,23 +77,34 @@ pub(super) struct State {
 }
 
 impl State {
+    fn window_seconds(&self) -> f64 {
+        f64::from(self.window.ms) / MS_PER_SECOND
+    }
+
     fn index_of(&self, name: &str) -> Option<usize> {
         self.entries
             .iter()
             .position(|entry| entry.environment.name == name)
     }
 
-    /// Applies the named record now and returns what the provider state allows.
+    /// Computes the named record now and returns what the provider state makes of it.
     fn outcome(&mut self, name: &str) -> Delivery {
         let Some(index) = self.index_of(name) else {
             return Delivery::NoRecord;
         };
         self.selected = Some(index);
-        let values = self.entries[index].values.clone();
+        let request = self.entries[index].request.clone();
         match self.provider {
-            ProviderState::Unqualified => Delivery::Validated(values),
-            ProviderState::Closed => Delivery::ProviderClosed(values),
-            ProviderState::Open(provider) => Delivery::Delivered { provider, values },
+            ProviderState::Unqualified => Delivery::Validated(request),
+            ProviderState::Closed => Delivery::ProviderClosed(request),
+            ProviderState::Open(provider) => Delivery::Prepared {
+                provider,
+                room_gate: match request.room {
+                    Some(_) => RoomGate::Unresolved,
+                    None => RoomGate::NotApplicable,
+                },
+                request,
+            },
         }
     }
 
@@ -96,12 +122,12 @@ impl State {
     fn call(&mut self, name: &str, now: f64) {
         let in_window = self
             .last_change
-            .is_some_and(|last| now <= last + self.window);
+            .is_some_and(|last| now <= last + self.window_seconds());
         if self.pending || in_window {
             self.buffered = name.to_owned();
         }
         if in_window {
-            let fire_at = now + self.window;
+            let fire_at = now + self.window_seconds();
             let at = self.fires.partition_point(|known| *known <= fire_at);
             self.fires.insert(at, fire_at);
             self.pending = true;
@@ -114,14 +140,12 @@ impl State {
 }
 
 impl ObjectHost {
-    /// Admits the native. Every record is applied against `tables` here, so a value that
-    /// cannot be written (fractional int cell, missing row) refuses the admission. The
-    /// window is the native's `0x1388` ms (5 s) constant.
+    /// Admits the native. Every record is computed against the executable tables here, so
+    /// a record that cannot be written refuses the admission.
     pub fn with_sound_environments(mut self, input: SoundEnvironmentInput) -> Result<Self, Error> {
         let SoundEnvironmentInput {
             records: environments,
             tables,
-            window_ms,
         } = input;
         if self.sound_environments.is_some() {
             return Err(self.inner.error(
@@ -137,20 +161,20 @@ impl ObjectHost {
         Self::contract(&self.inner, NATIVE, &["string"], "nothing", false, None)?;
         let mut entries = Vec::with_capacity(environments.len());
         for environment in environments {
-            let values = apply(&environment, &tables).map_err(|_| {
+            let request = apply(&environment, &tables).map_err(|_| {
                 self.inner.error(
                     NATIVE,
-                    Failure::SoundState("sound environment record cannot be applied"),
+                    Failure::SoundState("sound environment record cannot be computed"),
                 )
             })?;
             entries.push(Entry {
                 environment,
-                values,
+                request,
             });
         }
         self.sound_environments = Some(State {
             entries,
-            window: f64::from(window_ms) / MS_PER_SECOND,
+            window: tables.window,
             provider: ProviderState::Unqualified,
             last_change: None,
             buffered: String::new(),
@@ -183,18 +207,12 @@ impl ObjectHost {
         self.sound_environments.as_ref()?.delivery.as_ref()
     }
 
-    /// Values the native sent to an open provider. Any other outcome yields `None`.
-    pub fn sound_environment_applied(&self) -> Option<&Applied> {
-        match self.sound_environment_delivery()? {
-            Delivery::Delivered { values, .. } => Some(values),
-            _ => None,
-        }
-    }
-
-    /// Runs callbacks due by the current game time. Called once per simulation tick so
-    /// a scheduled apply lands on time even when no script call follows.
+    /// Runs callbacks due by the current game time. Called once per unit-activity tick
+    /// so a scheduled callback runs on time when no script call follows.
     pub(super) fn advance_sound_environments(&mut self) {
-        let now = self.timer_game_time().unwrap_or(0.0);
+        let Some(now) = self.timer_game_time() else {
+            return;
+        };
         if let Some(state) = self.sound_environments.as_mut() {
             state.fire_due(now);
         }
@@ -208,13 +226,19 @@ impl ObjectHost {
         if name != NATIVE {
             return None;
         }
-        let now = self.timer_game_time().unwrap_or(0.0);
-        let state = self.sound_environments.as_mut()?;
+        self.sound_environments.as_ref()?;
         let [Value::Str(text)] = args else {
             return Some(Err(self
                 .inner
                 .error(name, Failure::SoundState("expected one environment name"))));
         };
+        let Some(now) = self.timer_game_time() else {
+            return Some(Err(self.inner.error(
+                name,
+                Failure::SoundState("no game clock to time the environment window"),
+            )));
+        };
+        let state = self.sound_environments.as_mut()?;
         state.fire_due(now);
         state.call(text, now);
         Some(Ok(Value::Null))

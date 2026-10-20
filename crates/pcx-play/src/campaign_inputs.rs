@@ -356,7 +356,6 @@ pub fn prepare(
         Some(crate::sound_environment::SoundEnvironmentInput {
             records,
             tables: crate::sound_environment::tables(image).map_err(|e| e.to_string())?,
-            window_ms: crate::sound_environment::NATIVE_WINDOW_MS,
         })
     };
     let item_classes =

@@ -149,11 +149,6 @@ const ROOM_COUNT: usize = 26;
 /// Room-name table end; the last entry of the native's list.
 const ROOM_LAST: &str = "PSYCHOTIC";
 
-/// Window after an applied change inside which a call is scheduled, in milliseconds.
-/// The native passes `0x1388` (5000) as the first argument of its scheduler at two call
-/// sites; the local gate checks those immediates in the executable.
-pub const NATIVE_WINDOW_MS: u32 = 0x1388;
-
 /// Clamp range of one property row, from the executable.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PropertyRange {
@@ -173,6 +168,7 @@ pub struct EaxProperty {
 pub struct EnvironmentTables {
     pub properties: Vec<EaxProperty>,
     pub rooms: Vec<String>,
+    pub window: Window,
 }
 
 /// Value handed to `AIL_set_3D_provider_preference`, after clamping.
@@ -191,19 +187,18 @@ pub struct ProviderWrite {
 /// Values one record produces. `room` is `None` when its `RoomType` is not in the
 /// executable's room table: the native stores -1 and skips the room call.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Applied {
+pub struct Request {
     pub effect_volume: f32,
     pub writes: Vec<ProviderWrite>,
     pub room: Option<usize>,
 }
 
 /// Everything `NewSoundEnvironment` needs from the selected sources: the records from the
-/// sound tables, the executable tables, and the native's window in milliseconds.
+/// sound tables, the executable tables, and the executable tables, which carry the scheduling window.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SoundEnvironmentInput {
     pub records: Vec<SoundEnvironment>,
     pub tables: EnvironmentTables,
-    pub window_ms: u32,
 }
 
 /// Reads both executable tables. Each is located from code or data anchors, and each
@@ -213,6 +208,7 @@ pub fn tables(exe: &[u8]) -> Result<EnvironmentTables, String> {
     Ok(EnvironmentTables {
         properties: read_properties(&pe, &EAX_NAMES)?,
         rooms: read_rooms(&pe)?,
+        window: read_window(&pe)?,
     })
 }
 
@@ -392,7 +388,7 @@ fn c_string(pe: &PeSections<'_>, va: u32) -> Result<String, String> {
 pub fn apply(
     environment: &SoundEnvironment,
     tables: &EnvironmentTables,
-) -> Result<Applied, String> {
+) -> Result<Request, String> {
     let properties = &tables.properties;
     if properties.len() != EAX_NAMES.len() {
         return Err("EAX property table does not match the reverb fields".into());
@@ -433,7 +429,7 @@ pub fn apply(
         .rooms
         .iter()
         .position(|name| *name == environment.room_type);
-    Ok(Applied {
+    Ok(Request {
         effect_volume: effect_volume.ok_or("EAX effect volume is missing")?,
         writes,
         room,
@@ -459,6 +455,141 @@ fn clamp(
             Ok(ProviderValue::Int((value as i32).clamp(min, max)))
         }
     }
+}
+
+/// Constants of the scheduler call, read from the executable's code. `ms` is the
+/// window, and `provenance` names the code it came from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Window {
+    pub ms: u32,
+    pub provenance: WindowProvenance,
+}
+
+/// Addresses behind a [`Window`]: the global the window test reads, the one store that
+/// writes it, the setter that contains the store, and every call that passes the
+/// constant. All are virtual addresses in the selected executable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowProvenance {
+    pub global: u32,
+    pub writer: u32,
+    pub setter: u32,
+    pub call_sites: Vec<u32>,
+}
+
+/// Opcode bytes of the instructions the window derivation matches: `mov ecx, [abs]`,
+/// `add ecx, [abs]`, `mov [abs], ecx`, the setter prologue, `push imm32` and `call rel32`.
+const MOV_ECX_FROM: [u8; 2] = [0x8b, 0x0d];
+const ADD_ECX_FROM: [u8; 2] = [0x03, 0x0d];
+const MOV_TO: [u8; 2] = [0x89, 0x0d];
+const PROLOGUE: [u8; 3] = [0x55, 0x8b, 0xec];
+const PUSH_IMM32: u8 = 0x68;
+const CALL_REL32: u8 = 0xe8;
+/// Bytes between the last-change load and the window add in the shared body (8).
+const READ_PAIR_SPAN: usize = 16;
+/// `cmp dword ptr [ebp+8], -1`: the setter keeps its current value for a -1 argument.
+const FIRST_ARG_KEEP_TEST: [u8; 4] = [0x83, 0x7d, 0x08, 0xff];
+
+/// Derives the window from the scheduler code. The shared body reads the window global
+/// `G` with `add ecx, [G]` shortly after `mov ecx, [last]`. Exactly one store writes
+/// `G`, and the setter is the nearest prologue before that store. Every call to the
+/// setter must push its window as an immediate. Any other shape is refused.
+fn read_window(pe: &PeSections<'_>) -> Result<Window, String> {
+    let text = pe.section(TEXT)?.ok_or("executable has no .text section")?;
+    let code = text.bytes;
+    let base = pe
+        .image_base
+        .checked_add(text.rva)
+        .ok_or("text address overflows")?;
+    let va = |offset: usize| {
+        base.checked_add(offset as u32)
+            .ok_or("text address overflows")
+    };
+
+    let mut globals = BTreeSet::new();
+    for (at, window) in code.windows(6).enumerate() {
+        if window[..2] != ADD_ECX_FROM {
+            continue;
+        }
+        let read_before = (at.saturating_sub(READ_PAIR_SPAN)..at)
+            .any(|j| code.get(j..j + 2) == Some(&MOV_ECX_FROM));
+        if read_before {
+            globals.insert(u32_at(window, 2).ok_or("truncated operand")?);
+        }
+    }
+    // The window global is the one whose only store sits in a function that tests its
+    // first argument against -1 before storing it: the setter.
+    let mut found: Option<(u32, usize, usize)> = None;
+    let mut rejected = 0usize;
+    for global in globals.iter().copied() {
+        let mut writes = Vec::new();
+        for (at, store) in code.windows(6).enumerate() {
+            if store[..2] == MOV_TO && u32_at(store, 2) == Some(global) {
+                writes.push(at);
+            }
+        }
+        let [writer] = writes.as_slice() else {
+            rejected += 1;
+            continue;
+        };
+        let Some(setter_at) = code[..*writer].windows(3).rposition(|w| w == PROLOGUE) else {
+            rejected += 1;
+            continue;
+        };
+        if !code[setter_at..*writer]
+            .windows(4)
+            .any(|w| w == FIRST_ARG_KEEP_TEST)
+        {
+            rejected += 1;
+            continue;
+        }
+        if found.replace((global, *writer, setter_at)).is_some() {
+            return Err("more than one scheduler window global qualifies".into());
+        }
+    }
+    let Some((global, writer, setter_at)) = found else {
+        return Err(format!(
+            "no scheduler window global qualifies ({rejected} candidates rejected)"
+        ));
+    };
+    let setter = va(setter_at)?;
+
+    let mut call_sites = Vec::new();
+    let mut window_ms: Option<u32> = None;
+    for at in 5..code.len().saturating_sub(4) {
+        if code[at] != CALL_REL32 {
+            continue;
+        }
+        let rel = i32_at(code, at + 1).ok_or("truncated call")?;
+        let next = va(at + 5)?;
+        if next.wrapping_add_signed(rel) != setter {
+            continue;
+        }
+        if code[at - 5] != PUSH_IMM32 {
+            return Err(format!(
+                "scheduler call at {:#x} does not push a constant window",
+                va(at)?
+            ));
+        }
+        let ms = u32_at(code, at - 4).ok_or("truncated window immediate")?;
+        if window_ms.is_some_and(|known| known != ms) {
+            return Err("scheduler calls push different windows".into());
+        }
+        window_ms = Some(ms);
+        call_sites.push(va(at)?);
+    }
+    let ms = window_ms.ok_or("no call passes a window to the scheduler")?;
+    if ms == 0 {
+        return Err("scheduler window is zero".into());
+    }
+    Ok(Window {
+        ms,
+        provenance: WindowProvenance {
+            global,
+            writer: va(writer)?,
+            setter,
+            call_sites,
+        },
+    })
 }
 
 #[cfg(test)]
