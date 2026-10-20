@@ -272,7 +272,7 @@ fn invalid_interface_fades_and_bad_arguments_preserve_the_visible_state() {
     h.admit_presentation(64).unwrap();
     h.native("ShowInterface", &[Value::Bool(false), Value::Real(0.)])
         .unwrap();
-    for duration in [-1., f32::INFINITY, f32::NAN] {
+    for duration in [f32::INFINITY, f32::NAN] {
         assert!(
             h.native("ShowInterface", &[Value::Bool(true), Value::Real(duration)])
                 .is_err()
@@ -280,6 +280,13 @@ fn invalid_interface_fades_and_bad_arguments_preserve_the_visible_state() {
         assert_eq!(h.presentation().unwrap().interface_visible, Some(false));
         assert_eq!(h.presentation().unwrap().control_enabled, Some(false));
     }
+    // Native ShowInterface takes the immediate branch for a duration at or below 0.0.
+    h.native("ShowInterface", &[Value::Bool(true), Value::Real(-1.)])
+        .unwrap();
+    assert_eq!(h.presentation().unwrap().interface_visible, Some(true));
+    assert_eq!(h.presentation().unwrap().interface_fade, None);
+    h.native("ShowInterface", &[Value::Bool(false), Value::Real(0.)])
+        .unwrap();
     for (name, args) in [
         ("ShowInterface", vec![Value::Bool(true), Value::Int(0)]),
         ("EnableUserControl", vec![Value::Int(1)]),
@@ -294,6 +301,40 @@ fn invalid_interface_fades_and_bad_arguments_preserve_the_visible_state() {
     assert_eq!(h.presentation().unwrap().interface_visible, Some(true));
     assert_eq!(h.presentation().unwrap().interface_fade, None);
 }
+#[test]
+fn non_positive_interface_duration_clears_the_pending_fade_on_every_transition() {
+    let timed = "native TimerStart takes timer t, real timeout, boolean periodic, code f returns nothing\nnative TimerGetElapsed takes timer t returns real\nnative TimerGetRemaining takes timer t returns real\nnative TimerGetTimeout takes timer t returns real\nnative GetExpiredTimer takes nothing returns timer\n";
+    let mut h = host(&format!("{COMMON}{timed}"), "")
+        .with_timer_runtime(20.)
+        .unwrap();
+    h.admit_presentation(64).unwrap();
+    let fade = |h: &ObjectHost| h.presentation().unwrap().interface_fade;
+    let visible = |h: &ObjectHost| h.presentation().unwrap().interface_visible;
+    for (show, duration, pending) in [
+        (true, 2., Some((20., 2.))),
+        (false, -1., None),
+        (true, 3., Some((20., 3.))),
+        (true, 0., None),
+        (false, 1., Some((20., 1.))),
+        (true, -2., None),
+    ] {
+        h.native("ShowInterface", &[Value::Bool(show), Value::Real(duration)])
+            .unwrap();
+        assert_eq!(fade(&h), pending, "show {show} duration {duration}");
+        assert_eq!(visible(&h), Some(show));
+        assert_eq!(h.presentation().unwrap().control_enabled, Some(show));
+    }
+    // A refused call changes nothing, including a fade already pending.
+    h.native("ShowInterface", &[Value::Bool(false), Value::Real(4.)])
+        .unwrap();
+    assert!(
+        h.native("ShowInterface", &[Value::Bool(true), Value::Real(f32::NAN)])
+            .is_err()
+    );
+    assert_eq!(fade(&h), Some((20., 4.)));
+    assert_eq!(visible(&h), Some(false));
+}
+
 #[test]
 fn optional_interface_and_control_contracts_do_not_admit_foreign_or_missing_calls() {
     for declaration in [
