@@ -28,6 +28,7 @@ constant native GetManipulatingUnit takes nothing returns unit
 globals
 constant playerunitevent EVENT_PLAYER_UNIT_PICKUP_ITEM=ConvertPlayerUnitEvent(-71)
 constant playerunitevent EVENT_PLAYER_UNIT_DROP_ITEM=ConvertPlayerUnitEvent(99)
+constant playerunitevent EVENT_PLAYER_UNIT_USE_ITEM=ConvertPlayerUnitEvent(50)
 endglobals
 "#;
 const TOME_STRENGTH: f32 = 7.0;
@@ -1116,4 +1117,58 @@ fn out_of_range_target_is_false_for_a_short_range_potion() {
         h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(potion)]),
         Ok(Value::Bool(true))
     );
+}
+
+/// Registers a player-unit event trigger for the unit's owner; `event` is the script enumerand.
+fn register_player_event(h: &mut ObjectHost, unit: HandleId, event: i32) -> HandleId {
+    let Value::Handle(trigger) = h.native("CreateTrigger", &[]).unwrap() else {
+        panic!("trigger handle")
+    };
+    let owner = Value::Handle(h.executed_unit(unit).unwrap().owner);
+    let event = h
+        .native("ConvertPlayerUnitEvent", &[Value::Int(event)])
+        .unwrap();
+    h.native(
+        "TriggerRegisterPlayerUnitEvent",
+        &[Value::Handle(trigger), owner, event, Value::Null],
+    )
+    .unwrap();
+    trigger
+}
+
+#[test]
+fn a_successful_use_queues_one_use_event_and_a_refused_use_queues_none() {
+    let Fixture { mut h, hero, .. } = open();
+    h.set_timer_game_time(1.0).unwrap();
+    let max = h.unit_vitals(hero).unwrap().unwrap().max_life;
+    set_life(&mut h, hero, max / 2.0);
+    let trigger = register_player_event(&mut h, hero, 50);
+    let potion = item(&mut h, b"phcd", 0.0);
+    assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
+    assert_eq!(use_item(&mut h, hero, potion), Ok(Value::Bool(true)));
+    let fired = h.take_fired_event().expect("use event queued");
+    assert_eq!(fired.trigger, trigger);
+    h.begin_fired_event(&fired).unwrap().unwrap();
+    assert_eq!(h.native("GetManipulatedItem", &[]), Ok(Value::Handle(potion)));
+    assert_eq!(h.native("GetManipulatingUnit", &[]), Ok(Value::Handle(hero)));
+    h.finish_fired_event();
+    assert!(h.take_fired_event().is_none());
+    // Cooling down: the refused use queues nothing.
+    assert_eq!(use_item(&mut h, hero, potion), Ok(Value::Bool(false)));
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn player_activation_uses_the_same_path_as_the_native_and_removes_the_potion() {
+    let Fixture { mut h, hero, .. } = open();
+    h.set_timer_game_time(1.0).unwrap();
+    let max = h.unit_vitals(hero).unwrap().unwrap().max_life;
+    set_life(&mut h, hero, max / 2.0);
+    let potion = item(&mut h, b"phea", 0.0);
+    assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
+    assert!(h.activate_held_item(hero, potion).unwrap());
+    assert_eq!(life_of(&h, hero), max / 2.0 + 250.0);
+    assert!(h.executed_items().all(|(id, _)| id != potion));
+    // A second activation of a removed potion does nothing.
+    assert!(!h.activate_held_item(hero, potion).unwrap());
 }

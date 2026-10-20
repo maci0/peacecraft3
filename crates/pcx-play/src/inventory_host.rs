@@ -44,6 +44,8 @@ const CALLS: &[(&str, &[&str], &str, bool)] = &[
     ("UnitUseItem", &["unit", "item"], "boolean", false),
     ("UnitUseItemTarget", &["unit", "item", "widget"], "boolean", false),
 ];
+/// Trigger, filter and registered event of each use-event registration of a player.
+type UseEventPlan = Vec<(HandleId, Option<HandleId>, HandleId)>;
 impl ObjectHost {
     pub fn with_inventory(mut self, rules: Rules, budget: InventoryBudget) -> Result<Self, Error> {
         let fail = |s| self.inner.error("inventory", Failure::ItemState(s));
@@ -590,6 +592,19 @@ impl ObjectHost {
         }
         Some(self.inventory_call(name, args))
     }
+    /// Player activation of a held item on its holder. The command boundary is recreated here: the
+    /// authored order id for inventory item use is not yet qualified from the client, so an input
+    /// layer calls this directly rather than through an order. It shares the `UnitUseItem` path.
+    pub fn activate_held_item(&mut self, unit: HandleId, item: HandleId) -> Result<bool, Error> {
+        match self.unit_use_item("UnitUseItem", &[Value::Handle(unit), Value::Handle(item)])? {
+            Value::Bool(used) => Ok(used),
+            other => Err(self.inner.error(
+                "UnitUseItem",
+                Failure::ItemUse(format!("use returned {other:?}")),
+            )),
+        }
+    }
+
     /// `UnitUseItem` and `UnitUseItemTarget` for a held usable healing item. Every check that can
     /// decline the use runs before any write and returns `false`, as the native reports a use that
     /// did not happen. Order: prepare (no writes), `check_item_use`, `commit_item_use` (charges and
@@ -668,7 +683,21 @@ impl ObjectHost {
                 return Ok(Value::Bool(false));
             }
         };
+        // Effect boundary. Everything that can refuse runs before `commit_item_use`, and the commit
+        // refuses before any write. After the commit, queue capacity was reserved and every queued
+        // trigger was validated, so the remaining steps cannot refuse.
+        let (owner, use_events) = self.use_event_plan(unit)?;
+        self.reserve_event_delivery(use_events.len())?;
         let commit = self.commit_item_use(grant)?;
+        for (trigger, filter, event) in use_events {
+            let subject = EventSubject {
+                unit: Some(unit),
+                item: Some(item),
+                player: Some(owner),
+                ..EventSubject::default()
+            };
+            self.queue_event(trigger, filter, subject, Some(event))?;
+        }
         if let Entry::Unit { record } = self.inner.entry_mut(target)?
             && let Some(vitals) = &mut record.vitals
         {
@@ -678,6 +707,34 @@ impl ObjectHost {
             *self.inner.entry_mut(item)? = Entry::RemovedItem;
         }
         Ok(Value::Bool(true))
+    }
+
+    /// Use-event registrations of the holder's player, as (trigger, filter, event). The owner
+    /// comes from the unit's current player. Every filter is validated here, so queueing after
+    /// the commit has no failing lookup.
+    fn use_event_plan(
+        &self,
+        unit: HandleId,
+    ) -> Result<(HandleId, UseEventPlan), Error> {
+        let owner = self.executed_unit(unit)?.owner;
+        let enumerand =
+            self.source_constant_enumerand("EVENT_PLAYER_UNIT_USE_ITEM", "playerunitevent")?;
+        let mut plan = Vec::new();
+        for entry in &self.inner.arena {
+            if let Entry::RegisteredPlayerUnitEvent(r) = entry
+                && r.player == owner
+                && r.enumerand == enumerand
+            {
+                if let Some(filter) = r.filter {
+                    match self.inner.entry(filter)? {
+                        Entry::Condition { .. } | Entry::Filter { .. } => {}
+                        _ => return Err(self.inner.error("inventory", Failure::WrongFamily)),
+                    }
+                }
+                plan.push((r.trigger, r.filter, r.playerunitevent));
+            }
+        }
+        Ok((owner, plan))
     }
 
     fn inventory_call(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
