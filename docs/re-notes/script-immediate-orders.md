@@ -246,6 +246,31 @@ The Pit Lord shows SEQS Walk 125 equal to UnitUI walk and Walk Fast 350 equal to
 UnitUI run, so SEQS may be the reference that the walk/run fields select among.
 The Demon Hunter has a second Walk variant, so it is not a clean probe.
 
+Original-runtime capture (2026-10-20, Legacy 1.29.2.9231, 1280x960 at 96 DPI, one
+private Wine run, stopped afterwards). An instrumented copy of the Human01 map
+created Emoo (spd 320, scale 2.25) and nwat (spd 280) under explicit point moves,
+with a fixed-target camera. Fog and the black mask were disabled so the unit is
+drawn. The game records trace identically across two independent runs.
+
+- Emoo was accepted at game clock 1.0 s. It advanced 16 units per 50 ms of game
+  clock, consistent with spd 320. The displayed clock moves in 62.5 ms steps.
+- Its route was blocked near (-2417, 1794). It stopped at about 3.25 s with the
+  move order still current until about 5.25 s.
+- The Watcher was accepted at 4.0 s and moved on a detour route until about 8.0 s.
+- Frame capture (crop at the viewport centre, grayscale, about 40 fps) shows the
+  game redrawing about every 2 to 4 captures. Identical consecutive frames are
+  not evidence of stillness.
+- The camera-follow background shift is not a pure translation at this crop.
+  Phase correlation across the periphery returned inconsistent shifts. Translation
+  per walk cycle therefore could not be measured from these frames.
+
+Result: the candidate Walk rate (SEQS move speed, UnitUI walk, or the authored
+clock) is not separated by this capture. Its discriminating prediction depends on
+a measured screen speed that these frames do not yield. The next capture needs a
+static background (for example, a non-following camera on a flat, textured area)
+and a wall-to-game clock calibration from frame events.
+
+
 The ratio source is therefore undecided: SEQS `move_speed`, UnitUI `walk`, or
 another authored field. No native code or original-client capture checks any of
 them. The Hive Workshop forum thread
