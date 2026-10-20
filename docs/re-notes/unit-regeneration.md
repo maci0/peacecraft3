@@ -372,3 +372,44 @@ separate from timing scope.
 
 The full blight sequence (`phases=1`) has not run. It compiles and passes the structural
 and forward checks, but it stays unlaunched until this prerequisite is accepted.
+
+## Phase-enabled blight probe: one run, outcome (2026-10-20)
+
+Run `85146733cc27`, map SHA-256 `feedea06…` (staged hash matched the build receipt; the
+staged `war3map.j` member `282569c3…` matched the patched script). The container was
+stopped by the harness and the copied game tree was removed; the records and receipts
+are kept in `.scratch/blight-probe/out/phases-1/`.
+
+Observed on disk: all startup marks, `units-created`, `main-return-dispatch` at 0.000 s,
+`startup-timer-fired` at 5.000 s, 4 samples per phase, and 11 phase records.
+
+Identity: the blight unit is type `ugho`, owner 0, alive. The control `hfoo` matches
+type, owner, liveness and max (420). The blight unit's observed max is 330, not the
+stock 340. The cause is not established: the template `war3map.j` `war3map.w3u` has no
+`ugho` or `uhpm` record.
+
+Controls: `hfoo` gained 4.999 to 5.000 per 20 s, matching 0.25/s within the printed
+quantum (0.001, from the three-decimal output of every `R2S` value).
+
+Defects that invalidate this run as an eligibility test:
+
+1. Preload strings are cut at 259 characters. Every phase record lost its tail, so
+   `blight_max`, `control_max` and `move_accepted` were not recorded.
+2. The blight unit never occupied (0,0). Creation at (0,0) and `SetUnitPosition(0,0)`
+   both left it at (-16, 304) in every phase, so the point, rect and radius placements
+   did not cover it, and the walk did not start from the intended point.
+3. Blight regeneration appears to lag `SetBlight*` by about 1 s in both directions. The
+   on-phase's first 5 s gained 8.003, not 10, and the off phase after the radius phase
+   gained a residual of +2.006.
+4. The radius phase gained 2 HP/s although the unit was outside the nominal 256 radius
+   about (0,0), at a distance of about 304. The region rule is unexplained at the
+   boundary, so this is recorded, not interpreted.
+
+Phase outcome: 4 of 11 phases were invalid for placement (`on-own-point`,
+`on-other-point`, `on-own-rect`, `on-own-radius`), and the two walk phases were invalid
+for an unrecorded move flag and a unit that never moved. The off phases showed no
+blight gain, except the off phase after the radius phase (residual +2.006, as above).
+
+A corrected run (records split below 259 characters, blight placed at the unit's
+position after creation, and a pathable start) needs a new reservation. No run has been
+started for it.
