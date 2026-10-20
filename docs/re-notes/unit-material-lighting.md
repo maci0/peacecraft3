@@ -23,11 +23,11 @@ acceptance is open. Missing sun inputs are reported as a gap, not replaced.
 | `mainmenu_scene::spawn` | scenery (menu background) | `false` | unchanged `None` cull |
 | `menu_sprites` (2 sites) | sprites and panels | `false` | unchanged `None` cull |
 | destructable | none | no path in `campaign_actors` | n/a |
-| sky / score art | future | root's own decision | n/a |
+| `campaign_sky` through `Actor::spawn` | sky | `true`, after the same determinant check | `Visual::Sky` transform |
+| `campaign_score_model` | score background | `false` | shared scenery path |
 
 Units and items both reach `Actor::spawn`. The determinant check is per root
-transform, not per `Actor`. A future sky or score-art caller decides from its own
-root, and must not set `true` without that check.
+transform, not per `Actor`. The sky shares that check; score art keeps the scenery path without back-face culling.
 
 ## Positive root and mirrors
 

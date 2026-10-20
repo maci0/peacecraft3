@@ -52,9 +52,9 @@ targets of every unit the leaving player owns, whatever its selection.
 
 No original asset or original replay is read by these tests.
 
-## W3G writer: blocked
+## Initial W3G writer blocker
 
-No `.w3g` sample is available locally. A file search for `*.w3g` and `*.w3x`
+At this checkpoint no `.w3g` sample was available locally. A file search for `*.w3g` and `*.w3x`
 under `wc3/`, the main checkout's `.scratch/`, and the Legacy install found only
 `.w3x` maps, and the install has no `Replays` directory. The repo has no W3G header or block layout evidence
 either. A writer built from memory would invent header fields, zlib block
@@ -75,14 +75,15 @@ The Save Replay control in the score screen is owned by the integrator. It needs
 3. A save path for the returned bytes, and `replay::play` to verify a file
    before reporting it saved.
 
-## Gameplay replay gap
+## Initial gameplay replay gap
 
 The production campaign does not run `pcx_sim::World`. Its state is the
 script host and object model (`crates/peacecraft3/src/map_script_session.rs`,
 `advance_unit_activity`). `Session` records only the harness sim, so it cannot
 replay real campaign play. Capturing production play needs the host's
 authoritative command and tick stream, its RNG seed and initial world, and the
-map identity. None of those is exported yet.
+map identity. The later production command-log section adds part of this boundary; a complete
+production replay writer and playback remain open.
 
 `crates/pcx-net/src/classic_frame/action.rs` decodes W3GS action records
 (player id, opaque payload). It is reusable for framing action blocks, but it
