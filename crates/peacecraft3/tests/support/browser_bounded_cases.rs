@@ -161,7 +161,7 @@ pub fn packed_decoded_and_copy_caps() {
     assert!(store.get_asset(std::path::Path::new("fixture")).is_none());
 }
 #[cfg_attr(test, test)]
-pub fn supplied_codec_only() {
+pub fn archive_and_caller_supplied_codecs() {
     let store = Dir::default();
     let pe = codec_fixture::synthetic_pe();
     let table = pcx_mpq::huffman::HuffmanTable::from_pe(&pe, "explicit synthetic codec").unwrap();
@@ -175,9 +175,10 @@ pub fn supplied_codec_only() {
     archives[0]
         .set_huffman_table(&pe, "archive held synthetic codec")
         .unwrap();
-    assert!(
-        matches!(read_bounded(&store,&mut archives,95,"fixture",policy(2,4,2)),Err(ReadError::BoundedExtraction{source,..}) if matches!(source.cause.as_ref(),ExtractionCause::Mpq(pcx_mpq::Error::Payload(pcx_mpq::payload::PayloadError::UnsupportedCompression{mask:1})) ))
-    );
+    let imported = read_bounded(&store, &mut archives, 95, "fixture", policy(2, 4, 2))
+        .unwrap()
+        .unwrap();
+    assert_eq!(imported.bytes, b"AA");
     let mut supplied = policy(2, 4, 2);
     supplied.huffman = Some(&table);
     let read = read_bounded(&store, &mut archives, 95, "fixture", supplied)
