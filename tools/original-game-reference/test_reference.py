@@ -256,6 +256,30 @@ class ReferenceTests(unittest.TestCase):
             self.assertFalse(result.stdout)
             self.assertEqual(json.loads(result.stderr)['error']['kind'], 'reference_failed')
 
+    def test_export_replay_process_writes_only_json_to_stdout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.replay_run(tmp)
+            bindir = Path(tmp) / 'bin'
+            bindir.mkdir()
+            docker = bindir / 'docker'
+            docker.write_text(
+                f'#!{sys.executable}\n'
+                'import sys\n'
+                'if sys.argv[1] == "info":\n'
+                '    sys.exit(0)\n'
+                'sys.stderr.write("Error: No such object: fixture\\n")\n'
+                'sys.exit(1)\n'
+            )
+            docker.chmod(0o755)
+            env = os.environ.copy()
+            env['PATH'] = str(bindir) + os.pathsep + env.get('PATH', '')
+            result = self.invoke('export-replay', '--run-dir', str(run), '--label', 'process-1', env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(result.stderr)
+            output = json.loads(result.stdout)
+            self.assertEqual(output['bytes'], len(b'synthetic replay fixture'))
+            self.assertEqual((run / 'replays/process-1.w3g').read_bytes(), b'synthetic replay fixture')
+
     def test_export_replay_schema_matches_its_arguments_and_output(self):
         schema = json.loads((HERE / 'schema.json').read_text())
         command = next(c for c in schema['commands'] if c['name'] == 'export-replay')
