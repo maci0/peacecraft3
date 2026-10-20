@@ -434,6 +434,40 @@ impl ObjectHost {
         })
     }
 
+    /// Hold Position acquisition: the nearest hostile unit within attack reach (weapon range
+    /// plus both collision radii). Acquire range does not apply, and the unit never moves.
+    fn hold_position_target(
+        &self,
+        unit: HandleId,
+        range: f32,
+        name: &str,
+    ) -> Result<Option<HandleId>, Error> {
+        let Some(attacker) = self.live(unit) else {
+            return Ok(None);
+        };
+        let Some(position) = attacker.position else {
+            return Ok(None);
+        };
+        let own_radius = self.unit_collision_radius(unit, name)?;
+        let mut nearest: Option<(HandleId, f32)> = None;
+        for (id, other) in self.executed_units() {
+            let Some(other_position) = other.position else {
+                continue;
+            };
+            if id == unit || self.weapon_target(id).is_none() || !self.hostile(attacker, other) {
+                continue;
+            }
+            let gap = distance(position, other_position);
+            if gap > range + own_radius + self.unit_collision_radius(id, name)? {
+                continue;
+            }
+            if nearest.is_none_or(|(_, best)| gap < best) {
+                nearest = Some((id, gap));
+            }
+        }
+        Ok(nearest.map(|(id, _)| id))
+    }
+
     /// Whether `attacker`'s owner treats `target` as hostile under the combat rules.
     pub fn is_enemy(&self, attacker: HandleId, target: HandleId) -> bool {
         match (self.live(attacker), self.live(target)) {
@@ -701,23 +735,27 @@ impl ObjectHost {
                     .and_then(|a| a.destination())
                     .is_some_and(|p| Some(p) != destination);
             let mut target = previous_target.filter(|t| self.weapon_target(*t).is_some());
-            if target.is_none() && (idle || destination.is_some()) && weapon.acquire > 0.0 {
-                target = self
-                    .executed_units()
-                    .filter(|(id, other)| {
-                        *id != unit
-                            && self.weapon_target(*id).is_some()
-                            && other
-                                .position
-                                .is_some_and(|p| distance(p, position) <= weapon.acquire)
-                            && self.hostile(record, other)
-                    })
-                    .min_by(|a, b| {
-                        let da = distance(a.1.position.expect("filtered"), position);
-                        let db = distance(b.1.position.expect("filtered"), position);
-                        da.total_cmp(&db)
-                    })
-                    .map(|(id, _)| id);
+            if target.is_none() && (idle || destination.is_some()) {
+                if held {
+                    target = self.hold_position_target(unit, weapon.range, name)?;
+                } else if weapon.acquire > 0.0 {
+                    target = self
+                        .executed_units()
+                        .filter(|(id, other)| {
+                            *id != unit
+                                && self.weapon_target(*id).is_some()
+                                && other
+                                    .position
+                                    .is_some_and(|p| distance(p, position) <= weapon.acquire)
+                                && self.hostile(record, other)
+                        })
+                        .min_by(|a, b| {
+                            let da = distance(a.1.position.expect("filtered"), position);
+                            let db = distance(b.1.position.expect("filtered"), position);
+                            da.total_cmp(&db)
+                        })
+                        .map(|(id, _)| id);
+                }
             }
             if target != combat.target {
                 self.clear_combat_target(unit);
@@ -749,6 +787,8 @@ impl ObjectHost {
             let gap = distance(position, target_position);
             if gap > reach {
                 if held {
+                    // Hold Position neither chases nor keeps a target that left its reach.
+                    self.clear_combat_target(unit);
                     continue;
                 }
                 let chase = self
