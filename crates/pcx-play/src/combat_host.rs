@@ -253,6 +253,98 @@ impl ObjectHost {
     }
 }
 
+/// Identity of a unit in a combat trace, read when the event is recorded.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CombatActor {
+    pub unit: HandleId,
+    pub owner: HandleId,
+    /// Current owner's player number; `None` if the owner is not an admitted player.
+    pub player: Option<i32>,
+    pub rawcode: [u8; 4],
+}
+
+/// Diagnostic combat decisions in logical-clock order. Recording reads state only.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CombatTraceEvent {
+    /// Target chosen by automatic acquisition (no order issued).
+    Acquired {
+        source: CombatActor,
+        target: CombatActor,
+        clock: Option<f64>,
+    },
+    /// Target set by `IssueTargetOrder`, whatever the owners' relation.
+    Ordered {
+        source: CombatActor,
+        target: CombatActor,
+        clock: Option<f64>,
+    },
+    /// Weapon damage applied to a live target; `life_before` is its life before the hit.
+    Damage {
+        source: CombatActor,
+        target: CombatActor,
+        damage: f32,
+        life_before: Option<f32>,
+        clock: Option<f64>,
+    },
+}
+
+/// Bounded trace; events past `capacity` are counted in `dropped`, not stored.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CombatTrace {
+    capacity: usize,
+    events: Vec<CombatTraceEvent>,
+    dropped: usize,
+}
+
+impl CombatTrace {
+    pub fn events(&self) -> &[CombatTraceEvent] {
+        &self.events
+    }
+    pub fn dropped(&self) -> usize {
+        self.dropped
+    }
+}
+
+impl ObjectHost {
+    /// Starts recording combat events. Recording never changes combat outcomes.
+    pub fn enable_combat_trace(&mut self, capacity: usize) {
+        self.combat_trace = Some(CombatTrace {
+            capacity,
+            events: Vec::new(),
+            dropped: 0,
+        });
+    }
+
+    pub fn combat_trace(&self) -> Option<&CombatTrace> {
+        self.combat_trace.as_ref()
+    }
+
+    pub(crate) fn combat_actor(&self, unit: HandleId) -> Option<CombatActor> {
+        let record = self.executed_unit(unit).ok()?;
+        Some(CombatActor {
+            unit,
+            owner: record.owner,
+            player: self.player_settings(record.owner).ok().map(|s| s.number),
+            rawcode: record.definition.rawcode,
+        })
+    }
+
+    fn record_combat(&mut self, event: impl FnOnce(&Self) -> Option<CombatTraceEvent>) {
+        if self.combat_trace.is_none() {
+            return;
+        }
+        let Some(event) = event(self) else {
+            return;
+        };
+        let trace = self.combat_trace.as_mut().expect("trace enabled");
+        if trace.events.len() < trace.capacity {
+            trace.events.push(event);
+        } else {
+            trace.dropped += 1;
+        }
+    }
+}
+
 fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
@@ -534,6 +626,13 @@ impl ObjectHost {
                     activity.release_hold();
                 }
             }
+            self.record_combat(|h| {
+                Some(CombatTraceEvent::Ordered {
+                    source: h.combat_actor(unit)?,
+                    target: h.combat_actor(target)?,
+                    clock: h.timer_game_time(),
+                })
+            });
             Ok(Value::Bool(true))
         })())
     }
@@ -628,7 +727,17 @@ impl ObjectHost {
         let Some(record) = self.weapon_target(target) else {
             return Ok(());
         };
-        let life = record.vitals.map_or(0.0, |v| v.life) - damage;
+        let life_before = record.vitals.map(|v| v.life);
+        let life = life_before.unwrap_or(0.0) - damage;
+        self.record_combat(|h| {
+            Some(CombatTraceEvent::Damage {
+                source: h.combat_actor(source)?,
+                target: h.combat_actor(target)?,
+                damage,
+                life_before,
+                clock: h.timer_game_time(),
+            })
+        });
         if let Entry::Unit { record } = self.inner.entry_mut(target)?
             && let Some(vitals) = &mut record.vitals
         {
@@ -763,6 +872,15 @@ impl ObjectHost {
                     let combat = record.combat.as_mut().expect("combat");
                     combat.target = target;
                     combat.attack_destination = destination;
+                }
+                if let Some(acquired) = target {
+                    self.record_combat(|h| {
+                        Some(CombatTraceEvent::Acquired {
+                            source: h.combat_actor(unit)?,
+                            target: h.combat_actor(acquired)?,
+                            clock: h.timer_game_time(),
+                        })
+                    });
                 }
             }
             let Some(target) = target else {

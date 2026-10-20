@@ -1,4 +1,5 @@
 use super::*;
+use crate::playercolor_host::{CombatActor, CombatTraceEvent};
 use pcx_objects::editor::misc::{CombatRules, HeroVitals};
 use pcx_script::HandleId;
 type Vm = pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>;
@@ -1371,4 +1372,140 @@ fn hold_position_attacks_only_within_reach_and_never_chases_a_departing_target()
     let start = h.timer_game_time().unwrap();
     step(&mut vm, start + 0.1);
     assert_eq!(target(&vm.host().inner, a), Some(b));
+}
+
+fn traced_actor(h: &ObjectHost, unit: HandleId) -> CombatActor {
+    h.combat_actor(unit).unwrap()
+}
+
+#[test]
+fn combat_trace_records_acquisition_then_its_damage_with_source_identity() {
+    let mut fields = armed("64", "normal");
+    fields
+        .iter_mut()
+        .find(|(id, _)| id == b"W005")
+        .unwrap()
+        .1
+        .value = Ok(FieldValue::Cell("400".into()));
+    let (mut vm, a, b) = open(&fields);
+    let h = &mut vm.host().inner;
+    assert!(h.combat_trace().is_none());
+    h.enable_combat_trace(16);
+    let start = h.timer_game_time().unwrap();
+    step(&mut vm, start + 1.0);
+    let (source, target) = (
+        traced_actor(&vm.host().inner, a),
+        traced_actor(&vm.host().inner, b),
+    );
+    let trace = vm.host().inner.combat_trace().unwrap();
+    assert_eq!(trace.dropped(), 0);
+    assert_eq!(source.player, Some(4));
+    assert_eq!(target.player, Some(5));
+    assert_eq!(source.rawcode, *b"u001");
+    let events = trace.events();
+    let CombatTraceEvent::Acquired {
+        source: s,
+        target: t,
+        clock,
+    } = events[0]
+    else {
+        panic!("first event {:?}", events[0]);
+    };
+    assert_eq!((s, t), (source, target));
+    assert!(clock.is_some_and(|c| c >= start && c <= start + 1.0));
+    let damage = events.iter().find_map(|e| match e {
+        CombatTraceEvent::Damage {
+            source: s,
+            target: t,
+            damage,
+            life_before,
+            ..
+        } => Some((*s, *t, *damage, *life_before)),
+        _ => None,
+    });
+    let (s, t, dealt, life_before) = damage.expect("the acquired target is hit");
+    assert_eq!((s, t), (source, target));
+    assert!(dealt > 0.0);
+    assert_eq!(life_before, Some(20.0));
+}
+
+#[test]
+fn combat_trace_records_an_explicit_target_order_before_its_damage() {
+    let (mut vm, a, b) = open(&armed("64", "normal"));
+    vm.host().inner.enable_combat_trace(16);
+    let h = &mut vm.host().inner;
+    assert_eq!(
+        h.native(
+            "IssueTargetOrder",
+            &[Value::Handle(a), Value::Str("alpha".into()), Value::Handle(b)]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    let start = h.timer_game_time().unwrap();
+    step(&mut vm, start + 1.0);
+    let trace = vm.host().inner.combat_trace().unwrap();
+    let events = trace.events();
+    let CombatTraceEvent::Ordered { target, .. } = events[0] else {
+        panic!("first event {:?}", events[0]);
+    };
+    assert_eq!(target.unit, b);
+    assert!(matches!(events.get(1), Some(CombatTraceEvent::Damage { .. })));
+    assert!(!events.iter().any(|e| matches!(e, CombatTraceEvent::Acquired { .. })));
+}
+
+#[test]
+fn explicit_target_order_attacks_a_passive_ally_while_acquisition_skips_it() {
+    let mut fields = armed("64", "normal");
+    fields
+        .iter_mut()
+        .find(|(id, _)| id == b"W005")
+        .unwrap()
+        .1
+        .value = Ok(FieldValue::Cell("400".into()));
+    let (mut vm, a, b) = open(&fields);
+    let h = &mut vm.host().inner;
+    // Passive alliance is directed: set it both ways so neither side acquires the other.
+    let alliance = h.native("ConvertAllianceType", &[Value::Int(0)]).unwrap();
+    let (owner_a, owner_b) = (
+        h.executed_unit(a).unwrap().owner,
+        h.executed_unit(b).unwrap().owner,
+    );
+    for (source, other) in [(owner_a, owner_b), (owner_b, owner_a)] {
+        h.native(
+            "SetPlayerAlliance",
+            &[
+                Value::Handle(source),
+                Value::Handle(other),
+                alliance.clone(),
+                Value::Bool(true),
+            ],
+        )
+        .unwrap();
+    }
+    h.enable_combat_trace(16);
+    let start = h.timer_game_time().unwrap();
+    step(&mut vm, start + 1.0);
+    // Automatic acquisition never selects the passive ally.
+    assert_eq!(
+        vm.host().inner.combat_trace().unwrap().events(),
+        &[] as &[CombatTraceEvent]
+    );
+    let h = &mut vm.host().inner;
+    assert_eq!(
+        h.native(
+            "IssueTargetOrder",
+            &[Value::Handle(a), Value::Str("alpha".into()), Value::Handle(b)]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    let start = h.timer_game_time().unwrap();
+    step(&mut vm, start + 1.0);
+    let h = &mut vm.host().inner;
+    assert!(h.unit_vitals(b).unwrap().unwrap().life < 20.0);
+    assert!(matches!(
+        h.combat_trace().unwrap().events()[0],
+        CombatTraceEvent::Ordered { .. }
+    ));
 }

@@ -14,6 +14,7 @@ pub struct ObjectHost {
     dialogs: Option<dialogs::DialogState>,
     indicators: Option<(Vec<indicators::Indicator>, usize)>,
     combat: Option<combat::Rules>,
+    combat_trace: Option<combat::CombatTrace>,
     events: event_delivery::Delivery,
     unit_vitals: Option<unit_vitals::Rules>,
     volume_groups: Option<volume_groups::State>,
@@ -159,6 +160,7 @@ impl ObjectHost {
             unit_vitals: None,
             events: event_delivery::Delivery::default(),
             combat: None,
+            combat_trace: None,
             indicators: None,
             cinematic_scene: None,
             dialogs: None,
@@ -1104,7 +1106,7 @@ pub use indicators::{Indicator, MinimapPing};
 
 #[path = "combat_host.rs"]
 mod combat;
-pub use combat::{Combat, Relation, Weapon};
+pub use combat::{Combat, CombatActor, CombatTraceEvent, Relation, Weapon};
 
 #[path = "event_delivery_host.rs"]
 mod event_delivery;
