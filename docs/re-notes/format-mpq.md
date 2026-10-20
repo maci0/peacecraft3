@@ -292,3 +292,63 @@ crate were resolved with fixed-array chunks, temporary reader lifetimes and
 let chains; no lint suppression was added. No dependency or manifest change
 was required. No git mutation was performed and original assets, runtime
 imports and comparison streams stayed local and uncommitted.
+
+## 2026-10-20: Legacy codec source and WAV verification status
+
+### Legacy Huffman weights
+
+`Warcraft III.exe` (Legacy 1.29.2, SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`) contains the
+Huffman weight table in `.rdata` at VA `0xe6ada0`. The consumer is the same
+`IMUL r,r,258` plus `LEA r,[EAX+disp32]` shape found in Storm: the IMUL is at
+VA `0x443537` and the LEA displacement at `0x44353f`, which holds the table address.
+`HuffmanTable::from_pe` on this file yields 66,048 file-backed bytes and no
+zero fill; the compatibility Storm.dll table has 25,408 zero-filled bytes.
+
+Discovery in `MpqArchive::extract` now takes `Storm.dll` from the archive directory
+and falls back to `Warcraft III.exe`, the same file `native_campaign` imports
+explicitly. A foreign or malformed source still fails with the source path.
+
+Decoded `Sound\Interface\BigButtonClick.wav` and `RightGlueScreenPopDown.wav`
+from Legacy `War3.mpq` are byte-identical with the Legacy table and with the
+compatibility-tree Storm table. The earlier "reference" WAV files under `.scratch/`
+were produced by this decoder, not by Storm, so they are not an independent oracle.
+
+### Huffman stage: structural evidence
+
+For `BigButtonClick.wav` sectors 1 to 3 (mask `0x41`), the Huffman bit cursor stops
+at the terminator with 7, 3 and 5 unread bits of padding respectively. The
+output lengths (2111, 2108, 2062 bytes) are consistent with the sector sizes
+below. A wrong adaptive update would normally desynchronize the bit stream
+before the terminator.
+
+### ADPCM stage: unresolved fidelity
+
+In the three `BigButtonClick.wav` sectors inspected, each decoded header is
+`[0x00, shift, s0 LE]`, and the last decoded sample of a sector is within 5 to 9 units
+of the next sector's header sample.
+That supports the sample state and step arithmetic at the boundaries but does not
+prove the output bytes.
+
+The `(attributes)` CRC32 values are an independent check. For Legacy `War3.mpq`,
+every member outside the WAV class matches (6,463 of 6,463 that decode). Of 2,716
+`.wav` members, 2,705 mismatch and 11 match; the matching 11
+were not checked for sector masks. Neither the raw block nor the decoded output
+matches the stored CRC for `BigButtonClick.wav` (stored `0x64abae75`, decoded `0xd0c5a1b0`). The cause is open.
+
+Tried and not matched (all against the `BigButtonClick` CRC): index initial value
+0 through 88, bit-weight permutations over the six delta bits, base shift and
+weight offsets from -2 to 2, and the reversed bit weights. No index clamp fired and
+the control-opcode counts (0x80: 79, 0x81: 128) are consistent with the sector sizes.
+The remaining candidates are the delta bit schedule and the control semantics,
+which need the native `FUN_1500d240` disassembly or a Storm sector oracle.
+
+Measurement tool: `cargo run -p pcx-mpq --example attributes_crc -- <archive> <suffix>`.
+It reports counts only.
+
+### Gates
+
+`tests/local_huffman.rs::original_huffman_adpcm_wav_members_have_consistent_riff_structure`
+(ignored, requires `PEACECRAFT3_FORMAT_MPQ`) decodes both members with no explicit
+table and checks the RIFF chunk walk against the block size. The sample-level native
+gate `original_audio_matches_storm_sectors` still requires a Storm sector export.
