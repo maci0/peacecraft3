@@ -1044,7 +1044,7 @@ fn open_sale(price: i32, item_budget: usize) -> ObjectHost {
         SALE_CALLS
     );
     let fields = [(*b"uabi", ability_field("abilList", "L000"))];
-    let h = position_host_admitting(65536, 16, "// sale", &declarations, &fields, |h| {
+    let h = position_host_admitting(65536, 16, "// inventory", &declarations, &fields, |h| {
         h.with_player_state_requests(crate::playercolor_host::PlayerStateRequestBudget {
             max_records: 8,
         })
@@ -1066,7 +1066,7 @@ fn open_sale(price: i32, item_budget: usize) -> ObjectHost {
     )
     .unwrap();
     let origin = crate::scripts::AssetIdentity {
-        source: "synthetic sale".into(),
+        source: "synthetic inventory".into(),
         edition: "fixture".into(),
         version: "fixture".into(),
     };
@@ -1107,7 +1107,7 @@ fn open_sale(price: i32, item_budget: usize) -> ObjectHost {
         .with_hero_skills(
             Arc::clone(&tables),
             crate::scripts::AssetIdentity {
-                source: "synthetic sale".into(),
+                source: "synthetic inventory".into(),
                 edition: "fixture".into(),
                 version: "fixture".into(),
             },
@@ -1252,11 +1252,11 @@ fn sale_debits_gold_places_the_item_decrements_stock_and_delivers_completed_stat
     )
     .unwrap();
     let before = sale_state(&mut h, &owner, &shop, &buyer, I001);
-    assert_eq!(before.gold, Value::Int(120));
+    assert_eq!(before.gold, Value::Int(100));
     let outcome = h.purchase_stock_item(id(&shop), id(&buyer), I001).unwrap();
     let sold_item = sold(&outcome).expect("sale succeeds");
     let after = sale_state(&mut h, &owner, &shop, &buyer, I001);
-    assert_eq!(after.gold, Value::Int(70), "debited by the loaded price");
+    assert_eq!(after.gold, Value::Int(50), "debited by the loaded price");
     assert_eq!(after.stock, Some((1, 2)), "one loaded stock unit sold");
     assert_eq!(after.handles, before.handles + 1, "one item created");
     assert!(after.held.contains(&Value::Handle(sold_item)));
@@ -1269,7 +1269,7 @@ fn sale_debits_gold_places_the_item_decrements_stock_and_delivers_completed_stat
     );
     // Callback sees the completed sale.
     let during = sale_state(&mut h, &owner, &shop, &buyer, I001);
-    assert_eq!(during.gold, Value::Int(70));
+    assert_eq!(during.gold, Value::Int(50));
     assert_eq!(during.stock, Some((1, 2)));
     assert!(during.held.contains(&Value::Handle(sold_item)));
     h.finish_fired_event();

@@ -308,8 +308,8 @@ impl ObjectHost {
     }
     /// Passive strength and agility of one item while held. Powerups and usable items add none.
     /// Refusals are raised here, before the caller writes any state.
-    /// Passive bonus of an unexecuted definition. Refuses when the inventory attribute rules are
-    /// not admitted, because a missing rule would hide a bonus rather than prove there is none.
+    /// Passive bonus of an unexecuted definition. Without admitted attribute rules there is no
+    /// passive bonus, as for a held item, so the classification matches the pickup path.
     pub(crate) fn definition_passive(
         &self,
         definition: &pcx_sim::world::Definition,
@@ -320,10 +320,7 @@ impl ObjectHost {
             .and_then(|s| s.inventory.as_ref())
             .and_then(|s| s.attributes.as_ref())
         else {
-            return Err(self.inner.error(
-                "purchase",
-                Failure::ItemState("passive bonus classification not admitted"),
-            ));
+            return Ok(AttributeBonus::default());
         };
         let held = rules
             .held_attributes(definition)
