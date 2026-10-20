@@ -426,6 +426,25 @@ fn read_tables<R: Read + Seek>(
     Ok((hashes, blocks))
 }
 
+/// Huffman weights come from the archive directory's `Storm.dll`, else its
+/// `Warcraft III.exe`. Legacy 1.29 ships no Storm.dll and links the weights into
+/// the executable; the same table decodes its WAV members identically.
+fn codec_source(directory: &Path) -> std::io::Result<Option<PathBuf>> {
+    let (mut storm, mut game) = (None, None);
+    for entry in std::fs::read_dir(directory)? {
+        let candidate = entry?.path();
+        let name = candidate
+            .file_name()
+            .map(|name| name.to_string_lossy().to_ascii_lowercase());
+        match name.as_deref() {
+            Some("storm.dll") => storm = Some(candidate),
+            Some("warcraft iii.exe") => game = Some(candidate),
+            _ => {}
+        }
+    }
+    Ok(storm.or(game))
+}
+
 impl MpqArchive {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref().to_path_buf();
@@ -595,17 +614,7 @@ impl MpqArchive {
             {
                 self.huffman_checked = true;
                 let directory = self.path.parent().unwrap_or(Path::new("."));
-                let mut source = None;
-                for entry in std::fs::read_dir(directory)? {
-                    let candidate = entry?.path();
-                    if candidate.file_name().is_some_and(|name| {
-                        name.to_string_lossy().eq_ignore_ascii_case("Storm.dll")
-                    }) {
-                        source = Some(candidate);
-                        break;
-                    }
-                }
-                let Some(source) = source else {
+                let Some(source) = codec_source(directory)? else {
                     return Err(payload::PayloadError::UnsupportedCompression { mask }.into());
                 };
                 self.huffman = Some(
@@ -1219,12 +1228,21 @@ mod memory_tests {
                 payload::PayloadError::UnsupportedCompression { mask: 1 }
             ))
         ));
+        // Legacy has no Storm.dll: the directory's executable is the source.
+        std::fs::write(directory.join("Warcraft III.exe"), b"foreign exe").unwrap();
+        assert!(matches!(
+            make_archive().extract("fixture"),
+            Err(Error::Payload(payload::PayloadError::Huffman(
+                huffman::HuffmanError::Source { source_path, .. }
+            ))) if source_path.ends_with("Warcraft III.exe")
+        ));
+        // Storm.dll wins when both are present, and a bad source is never skipped.
         std::fs::write(directory.join("Storm.dll"), b"foreign DLL").unwrap();
         assert!(matches!(
             make_archive().extract("fixture"),
             Err(Error::Payload(payload::PayloadError::Huffman(
-                huffman::HuffmanError::Source { .. }
-            )))
+                huffman::HuffmanError::Source { source_path, .. }
+            ))) if source_path.ends_with("Storm.dll")
         ));
         assert!(matches!(
             make_archive().set_huffman_table(b"MZ", "truncated.dll"),
