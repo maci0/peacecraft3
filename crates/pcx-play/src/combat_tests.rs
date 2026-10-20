@@ -1276,3 +1276,99 @@ fn set_unit_exploded_then_kill_unit_retains_the_flag_through_the_death_path() {
         .unwrap();
     assert_eq!(h.unit_exploded(a), Some(false));
 }
+
+
+#[test]
+fn hold_position_attacks_only_within_reach_and_never_chases_a_departing_target() {
+    // Reach is range 40 plus both collision radii. Acquire 400 would select B for an idle unit.
+    let mut fields = armed("40", "normal");
+    fields.push(column(
+        b"S001",
+        SlkId::UnitBalance,
+        "spd",
+        FieldKind::Real,
+        "32",
+    ));
+    fields
+        .iter_mut()
+        .find(|(id, _)| id == b"W005")
+        .unwrap()
+        .1
+        .value = Ok(FieldValue::Cell("400".into()));
+    let (mut vm, a, b) = open(&fields);
+    let target = |h: &ObjectHost, unit: HandleId| {
+        h.executed_unit(unit)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .target
+    };
+    let h = &mut vm.host().inner;
+    // B must not acquire A itself; only A's acquisition of B is under test.
+    let alliance = h.native("ConvertAllianceType", &[Value::Int(0)]).unwrap();
+    h.native(
+        "SetPlayerAlliance",
+        &[
+            Value::Handle(h.executed_unit(b).unwrap().owner),
+            Value::Handle(h.executed_unit(a).unwrap().owner),
+            alliance,
+            Value::Bool(true),
+        ],
+    )
+    .unwrap();
+    // In this fixture "alpha" is both Hold and the attack order; this test issues no attack.
+    assert_eq!(
+        h.native(
+            "IssueImmediateOrder",
+            &[Value::Handle(a), Value::Str("alpha".into())]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    let start = h.timer_game_time().unwrap();
+    step(&mut vm, start + 0.1);
+    assert_eq!(
+        target(&vm.host().inner, a),
+        Some(b),
+        "B at 32 is within reach"
+    );
+    // B walks away at 32 per second. A holds its position and drops B once B is out of reach.
+    let h = &mut vm.host().inner;
+    let walk = [
+        Value::Handle(b),
+        Value::Str("gamma".into()),
+        Value::Real(96.0),
+        Value::Real(16.0),
+    ];
+    assert_eq!(
+        h.native("IssuePointOrder", &walk).unwrap(),
+        Value::Bool(true)
+    );
+    let start = h.timer_game_time().unwrap();
+    step(&mut vm, start + 3.0);
+    let h = &mut vm.host().inner;
+    assert_eq!(h.executed_unit(b).unwrap().position, Some([96.0, 16.0]));
+    assert_eq!(target(h, a), None);
+    assert_eq!(h.executed_unit(a).unwrap().position, Some([16.0, 16.0]));
+    let held = h
+        .executed_unit(a)
+        .unwrap()
+        .activity
+        .as_ref()
+        .unwrap()
+        .held();
+    assert!(held);
+    // Stop releases the hold: the same walking enemy is acquired by acquire range.
+    assert_eq!(
+        h.native(
+            "IssueImmediateOrder",
+            &[Value::Handle(a), Value::Str("beta".into())]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    let start = h.timer_game_time().unwrap();
+    step(&mut vm, start + 0.1);
+    assert_eq!(target(&vm.host().inner, a), Some(b));
+}
