@@ -1,65 +1,92 @@
 # Item drops and drop origins
 
-Status: retained setter state only. No death or destruction drop is implemented.
+Status: campaign placed-unit drops are script-generated; the engine path that
+runs them is not exercised by a test in `pcx-play`. Destructable drops have no
+evidence in the campaign.
 
-## Drop origin (`SetItemDropID`)
+## Script drop calls (selected `Blizzard.j`)
 
-- `common.j:1448` declares `native SetItemDropID takes item whichItem, integer unitId returns nothing`.
-  No getter for it is declared in `common.j` or `Blizzard.j`.
-- Only caller in the selected scripts: `Blizzard.j:10226`, inside `UnitDropItem`
-  (`Blizzard.j:10206`). It passes `GetUnitTypeId(inUnit)` after `CreateItem`. The item
-  position is two `GetRandomReal` draws within 32 world units of the unit.
-- `UnitDropItem` then calls `UpdateStockAvailability` (`Blizzard.j:9944`). That function
-  reads `GetItemType` and `GetItemLevel` only. It does not read the drop origin.
-- `WidgetDropItem` (`Blizzard.j:10233`) creates the item without `SetItemDropID`.
-- Native effect of the stored integer: not observed in any shipped script or evidence
-  file. The engine behavior that consumes it is unverified.
-- Code: `crates/pcx-play/src/item_drop_host.rs` (`SetItemDropID`, budget
-  `max_records`), `item_drop_tests.rs`, and the consumed-powerup refusal in
-  `inventory_powerup_host_tests.rs`.
+- `RandomDistReset` / `RandomDistAddItem` / `RandomDistChoose` (`Blizzard.j:10133-10199`)
+  are script functions, not natives. `RandomDistChoose` draws `GetRandomInt(1, sum)`
+  over the cumulative chances and returns the first entry whose cumulative sum reaches
+  the draw. It returns `-1` for an empty list. One draw is consumed even for a single
+  entry. Chances are relative weights.
+- `UnitDropItem` (`Blizzard.j:10206`) draws `GetRandomReal` twice for an x and y within
+  32 units of the unit, calls `CreateItem`, then `SetItemDropID(item, GetUnitTypeId(unit))`
+  and `UpdateStockAvailability`. `UnitDropItemPoint`, `Slot` and `Target` are declared in
+  `common.j:1564-1566` but no campaign drop calls them. `pcx-play` does not implement them.
+- `UpdateStockAvailability` (`Blizzard.j:9944`) reads `GetItemType` and `GetItemLevel`.
+  It never reads the drop origin. No script-visible getter exists for `SetItemDropID`.
 
-## Authored drop sets
+## Generated campaign drops
 
-Parsed, not consumed by the runtime:
+The campaign map scripts (`campaign-placements/j/*.j`, local, not committed) contain
+one `Unit<N>_DropItems` function per placed unit with a drop set:
 
-| Source | Parser | Shape | Runtime consumer |
-|---|---|---|---|
-| Placed unit (`war3mapUnits.doo`) | `crates/pcx-map/src/units.rs` | `item_table: Option<i32>` (subversion > 10), `item_sets: Vec<Vec<[u32; 2]>>` | `ImportedRecord.placement` in `pcx-sim` keeps the value; `pcx-play` does not read it |
-| Doodad, version 8 (`war3map.doo`) | `crates/pcx-map/src/doodads.rs` | `ItemDropData { table_id: i32, sets }` | none |
-| Map item table (`war3map.w3i`, version 0x18+) | `crates/pcx-map/src/info.rs` | `ItemTable { id, name, sets }` | none |
+- Registered by `TriggerRegisterUnitEvent(t, <unit>, EVENT_UNIT_DEATH)`.
+- Returns early when `IsUnitHidden(trigUnit)`.
+- Emits, per binary set, `RandomDistReset`, one `RandomDistAddItem(rawcode, chance)` per
+  entry, `RandomDistChoose`, and `UnitDropItem(trigUnit, itemID)`.
+- An empty set emits nothing.
 
-Pair semantics (`[u32; 2]`): the field order and the meaning of each word are not
-established by a shipped-byte or native check. `units.rs` and `info.rs` decode the two
-words without naming them.
+Across the twelve campaign scripts (nine contain drops): 96 drop functions, 50 `RandomDistAddItem` calls, all with
+chance `100`, all single-entry sets. No multi-entry set and no non-100 chance occurs in
+the campaign. Multi-entry behavior therefore rests on the `RandomDistChoose` source
+above, not on a shipped campaign case.
 
-Discrepancy: `doodads.rs` module prose and `DOO_VERSION` doc say version 8+ is refused,
-but `Doodads::from_bytes` accepts version 8 and reads an item-table id and sets before the
-creation number. The version-8 layout has no shipped-byte proof in the repo. Either the
-prose or the parser changes, not both by guess. Recorded for root.
+## Binary placement drop sets (`war3mapUnits.doo`)
 
-## Not established
+`crates/pcx-map/src/units.rs` reads each set as word pairs. Each pair is
+`[item rawcode, chance]`, with the rawcode the little-endian `u32` of the four file bytes.
+Gate: `crates/pcx-map/tests/campaign_item_sets.rs` (ignored; set
+`PEACECRAFT3_CAMPAIGN_UNITS` and `PEACECRAFT3_CAMPAIGN_SCRIPT` from one map). It checks
+that the multiset of binary pairs equals the multiset of `RandomDistAddItem` calls in that
+map's script. The order is established by that check, not by the synthetic fixture.
 
-- Roll rule: how a set chooses items (one pick per set, independent per-item chance,
-  or cumulative ranges), the `chance` unit, and whether a missing remainder means no drop.
-- Table resolution: what `table_id` and `ItemTable.id` mean, and whether `-1` is the only
-  "none" value.
-- Trigger points: which natives reach the drop path (`KillUnit`, lethal `roll_damage` in
-  `combat_host.rs`, `KillDestructable`, `RemoveUnit` with no drop).
-- Drop position and the RNG draw order for the two `GetRandomReal` calls in
-  `UnitDropItem`. The draws come from `script_random_host.rs`.
+Local Human01 evidence: 161 placed units; four have drop-set words. Creation 12 has one
+empty set. Creations 79, 94 and 37 each hold one entry at chance 100 (`pman`, `shea`, `phea`).
+These match the three non-empty generated drop functions.
 
-## Native evidence needed
+## Link from binary placement to runtime handle
 
-A Ghidra function dossier on `Warcraft III.exe` (sha256
-`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`, 1.29.2.9231) for the
-unit-death drop routine and the item-set reader. Start from the framing addresses
-cited in `crates/pcx-map/src/units.rs:1` (`0x551cc0`, `0x5520d0`).
-Needs a root Ghidra slot. No such dossier exists in `.scratch` as of this note.
+- `CreateAllUnits` in the generated script creates the runtime unit handles
+  (`CreateUnit` for each placement). The binary placement's drop sets are not read by
+  `pcx-play` and do not attach to those handles.
+- The generator names named units `gg_unit_<type>_<creation>`, with `<creation>` equal to
+  the binary creation number (79, 94). Drop-trigger numbers (`Unit000025`) are not the
+  creation number.
+- Units created by `CreateNeutralHostile` have no `gg_` name, so the name link does not
+  cover them. The mapping for those relies on the generated order and the sets.
+- Runtime drop behavior therefore comes from the generated script, not from the binary
+  sets. The binary sets are the generator's input.
 
-## Next bounded step
+## Native behavior (not established here)
 
-1. Native dossier for the roll rule and the trigger points above.
-2. Then one vertical slice: `pcx-play` reads the placement's `item_sets` and `item_table`,
-   rolls them on `KillUnit` and lethal damage with `script_random_host`, and creates items
-   through the existing `CreateItem` admission path. Destructable drops follow the same rule
-   through `KillDestructable` and the version-8 doodad record once that layout is proven.
+Whether the engine also drops binary sets on death, which would double-drop, is not
+shown by the campaign scripts. REA queries on the selected executable:
+
+- `0x551cc0`: the containing function is `FUN_00551870`, a race-preference routine that
+  calls `RANDOM`, `HUMAN`, `NIGHT_ELF` and `UNDEAD` strings. It does not read item sets.
+  The repo citation of `0x551cc0` as drop framing is wrong.
+- `0x5520d0`: see the result recorded below.
+
+## Doodads version 8
+
+`crates/pcx-map/src/doodads.rs` accepts version 8: a signed `table_id`, a set count,
+then per set an item count and `[word, word]` pairs, ahead of the creation number. No
+shipped file is version 8 (132/132 are version 7). The version 8 layout and pair order
+are unproven. The parser behavior and the docs now agree on that.
+
+## Natives on the generated path
+
+Implemented in `pcx-play`: `GetTriggerUnit`, `GetTriggeringTrigger`, `DestroyTrigger`,
+`IsUnitHidden`, `GetUnitTypeId`, `TriggerRegisterUnitEvent`, `GetRandomInt`,
+`GetRandomReal`, `CreateItem`, `SetItemDropID`, `GetItemType`, `GetItemLevel`. Not
+exercised end to end: no test runs a generated `Unit<N>_DropItems` in the VM.
+
+## Remaining
+
+1. Execution gate: run a campaign map's drop trigger through the VM, kill the unit, and
+   compare the created item and the RNG draw sequence with the original.
+2. Native check of double drops (above).
+3. Destructable drops: no campaign evidence; doodad version 8 remains unproven.

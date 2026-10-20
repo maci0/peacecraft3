@@ -42,6 +42,10 @@ pub struct UnitPlacement {
     pub life: i32,
     pub mana: i32,
     pub item_table: Option<i32>,
+    /// Drop sets. Each word pair is `[item rawcode, chance]`: the rawcode is the
+    /// little-endian `u32` of the four file bytes, the chance is an integer weight.
+    /// Campaign maps emit one `RandomDistAddItem(rawcode, chance)` per pair
+    /// (`docs/re-notes/item-drops.md`).
     pub item_sets: Vec<Vec<[u32; 2]>>,
     pub post_drop_word: u32,
     pub post_drop_float: f32,
@@ -309,8 +313,8 @@ mod tests {
             u32::MAX,
             1,
             1,
-            33,
             0x41424344,
+            33,
             100,
         ] {
             data.extend(word.to_le_bytes());
@@ -358,7 +362,7 @@ mod tests {
             assert_eq!(unit.position, [1., 2., 3.]);
             assert_eq!(unit.control_word, 24);
             assert_eq!(unit.life, -10);
-            assert_eq!(unit.item_sets, [vec![[33, 0x41424344]]]);
+            assert_eq!(unit.item_sets, [vec![[0x41424344, 33]]]);
             assert_eq!(unit.inventory, [[5, 0x11223344]]);
             assert_eq!(unit.abilities, [[0x41424344, 1, 6]]);
             assert_eq!(unit.random, expected);
