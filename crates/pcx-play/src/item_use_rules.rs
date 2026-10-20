@@ -74,14 +74,20 @@ impl Rules {
         if group.is_empty() {
             return Ok(None);
         }
+        // The group identity (`cooldownID`) and the duration source are separate. The duration comes
+        // only from the item's single ability alias. Several listed abilities leave the source open,
+        // so the use refuses rather than guessing which alias is the cooldown owner.
         let abilities = field_text(definition, ABILITY_LIST, "abilList")?;
-        let [alias] = abilities
+        let listed = abilities
             .split(',')
             .map(str::trim)
             .filter(|a| !a.is_empty() && *a != "_" && *a != UNCHARGED)
-            .collect::<Vec<_>>()[..]
-        else {
-            return Err(format!("cooldown group {group} needs exactly one ability"));
+            .collect::<Vec<_>>();
+        let [alias] = listed[..] else {
+            return Err(format!(
+                "cooldown group {group}: duration source unresolved, {} item abilities",
+                listed.len()
+            ));
         };
         Ok(Some(Cooldown {
             group,

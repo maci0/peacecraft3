@@ -49,7 +49,26 @@ pub(super) struct ItemUse {
     max_records: usize,
     session: Session,
     charges: BTreeMap<HandleId, i32>,
-    ready_at: BTreeMap<String, f64>,
+    scope: CooldownScope,
+    /// Ready time by holder (per `CooldownScope`) and cooldown group.
+    ready_at: BTreeMap<(Option<HandleId>, String), f64>,
+}
+
+/// Which holders share a cooldown group. The source rows do not establish the native scope, so the
+/// caller names it at admission. There is no default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CooldownScope {
+    /// One ready time per group for every holder. Provisional and unqualified against the original.
+    SharedGroup,
+    /// One ready time per holder unit and group.
+    PerHolder,
+}
+
+fn cooldown_key(scope: CooldownScope, unit: HandleId, group: &str) -> (Option<HandleId>, String) {
+    match scope {
+        CooldownScope::SharedGroup => (None, group.to_owned()),
+        CooldownScope::PerHolder => (Some(unit), group.to_owned()),
+    }
 }
 
 /// Outcome of the readiness check. Nothing is written until `commit_item_use`.
@@ -102,7 +121,12 @@ pub struct UseCommit {
 impl ObjectHost {
     /// Opt into charges and cooldowns. Requires item admission and a game clock
     /// (`with_timer_runtime`), since readiness and cooldown start both read the host clock.
-    pub fn with_item_use(mut self, rules: Rules, max_records: usize) -> Result<Self, Error> {
+    pub fn with_item_use(
+        mut self,
+        rules: Rules,
+        max_records: usize,
+        scope: CooldownScope,
+    ) -> Result<Self, Error> {
         if self.item_use.is_some() {
             return Err(self
                 .inner
@@ -120,6 +144,7 @@ impl ObjectHost {
             max_records,
             session: Session(Arc::new(())),
             charges: BTreeMap::new(),
+            scope,
             ready_at: BTreeMap::new(),
         });
         Ok(self)
@@ -169,7 +194,7 @@ impl ObjectHost {
             return Err(self.inner.error(GET, Failure::Budget("item charges")));
         }
         if let Some(cooldown) = &grant.cooldown
-            && !state.ready_at.contains_key(&cooldown.group)
+            && !state.ready_at.contains_key(&cooldown_key(state.scope, grant.unit, &cooldown.group))
             && state.ready_at.len() >= state.max_records
         {
             return Err(self.inner.error(GET, Failure::Budget("item cooldown groups")));
@@ -181,7 +206,7 @@ impl ObjectHost {
         if let Some(cooldown) = &grant.cooldown {
             state
                 .ready_at
-                .insert(cooldown.group.clone(), now + cooldown.seconds);
+                .insert(cooldown_key(state.scope, grant.unit, &cooldown.group), now + cooldown.seconds);
         }
         Ok(UseCommit {
             charges: remaining,
@@ -230,7 +255,7 @@ impl ObjectHost {
             if cooldown.ignores_wait {
                 return Err(fail("ignoreCD cooldown semantics are unverified".into()));
             }
-            if let Some(ready) = state.ready_at.get(&cooldown.group).filter(|r| **r > now) {
+            if let Some(ready) = state.ready_at.get(&cooldown_key(state.scope, unit, &cooldown.group)).filter(|r| **r > now) {
                 return Ok(UseCheck::OnCooldown {
                     remaining: ready - now,
                 });
