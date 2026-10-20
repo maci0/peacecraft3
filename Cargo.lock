@@ -4643,8 +4643,11 @@ name = "pcx-net"
 version = "0.2.0"
 dependencies = [
  "crc32fast",
+ "pcx-assets",
  "pcx-map",
  "pcx-mpq",
+ "pcx-play",
+ "pcx-script",
  "pcx-sim",
  "serde_json",
  "sha1",

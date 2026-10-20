@@ -48,6 +48,47 @@ impl SessionIdentity {
     }
 }
 
+/// One peer packet after identity, size and bounds checks. Tick checks belong to the authority
+/// that owns the clock.
+#[derive(Debug, PartialEq)]
+pub enum Packet {
+    Input { tick: u64, commands: Vec<Command> },
+    Resync,
+}
+
+/// Parses a packet sent by the peer assigned to `assigned`.
+pub fn parse_packet(bytes: &[u8], assigned: u8) -> Result<Packet, SessionError> {
+    if bytes.len() > MAX_PACKET_BYTES {
+        return Err(SessionError::Packet);
+    }
+    match decode(bytes).map_err(|_| SessionError::Packet)? {
+        Datagram::Input {
+            tick,
+            player,
+            payload,
+        } => {
+            if player != assigned {
+                return Err(SessionError::Identity);
+            }
+            let commands = decode_input_payload(&payload).map_err(|_| SessionError::Packet)?;
+            if commands.len() > MAX_COMMANDS_PER_TICK
+                || commands.iter().any(|c| match c {
+                    Command::Move { x, y } | Command::Select { x, y } => {
+                        !(-COORDINATE_LIMIT..=COORDINATE_LIMIT).contains(x)
+                            || !(-COORDINATE_LIMIT..=COORDINATE_LIMIT).contains(y)
+                    }
+                    _ => false,
+                })
+            {
+                return Err(SessionError::Packet);
+            }
+            Ok(Packet::Input { tick, commands })
+        }
+        Datagram::Resync { .. } => Ok(Packet::Resync),
+        _ => Err(SessionError::Packet),
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
     #[error("peer is not assigned to that player")]
@@ -58,10 +99,28 @@ pub enum SessionError {
     Duplicate,
     #[error("{0}")]
     Tick(String),
+    #[error("player {player} is not admitted to this session")]
+    NotAdmitted { player: u8 },
+    #[error("the authority stopped: {0}")]
+    Failed(String),
+}
+
+/// The authority a host serves: who may join, which packets count, and what the clock exports.
+pub trait SessionAuthority {
+    fn identity(&self) -> SessionIdentity;
+    fn join(&mut self, peer: Peer, player: u8) -> Result<(), SessionError>;
+    fn leave(&mut self, peer: Peer);
+    fn receive(&mut self, peer: Peer, bytes: &[u8]) -> Result<Option<Vec<u8>>, SessionError>;
+    /// Runs one clock step and returns the snapshot to send to every peer.
+    fn advance(&mut self) -> Result<Vec<u8>, SessionError>;
+    fn snapshot(&mut self) -> Result<Vec<u8>, SessionError>;
+    /// The player slot for a new reconnect token, given how many tokens are already bound.
+    fn player_for_new_token(&self, bound: usize) -> Option<u8>;
 }
 
 pub struct Session {
     server: Server,
+    seed: u64,
     peers: BTreeMap<Peer, u8>,
     inputs: BTreeMap<u64, BTreeMap<u8, Vec<Command>>>,
     stops_pending: [bool; MAX_PLAYERS as usize],
@@ -71,10 +130,15 @@ impl Session {
     pub fn new(world: World, seed: u64) -> Self {
         Self {
             server: Server::new(world, seed),
+            seed,
             peers: BTreeMap::new(),
             inputs: BTreeMap::new(),
             stops_pending: [false; MAX_PLAYERS as usize],
         }
+    }
+
+    pub fn seed(&self) -> u64 {
+        self.seed
     }
 
     pub fn world(&self) -> &World {
@@ -114,30 +178,8 @@ impl Session {
     /// Resync sends current authority; a client cannot rewind the shared game.
     pub fn receive(&mut self, peer: Peer, bytes: &[u8]) -> Result<Option<Vec<u8>>, SessionError> {
         let assigned = *self.peers.get(&peer).ok_or(SessionError::Identity)?;
-        if bytes.len() > MAX_PACKET_BYTES {
-            return Err(SessionError::Packet);
-        }
-        match decode(bytes).map_err(|_| SessionError::Packet)? {
-            Datagram::Input {
-                tick,
-                player,
-                payload,
-            } => {
-                if player != assigned {
-                    return Err(SessionError::Identity);
-                }
-                let commands = decode_input_payload(&payload).map_err(|_| SessionError::Packet)?;
-                if commands.len() > MAX_COMMANDS_PER_TICK
-                    || commands.iter().any(|c| match c {
-                        Command::Move { x, y } | Command::Select { x, y } => {
-                            !(-COORDINATE_LIMIT..=COORDINATE_LIMIT).contains(x)
-                                || !(-COORDINATE_LIMIT..=COORDINATE_LIMIT).contains(y)
-                        }
-                        _ => false,
-                    })
-                {
-                    return Err(SessionError::Packet);
-                }
+        match parse_packet(bytes, assigned)? {
+            Packet::Input { tick, commands } => {
                 pcx_sim::validate_input(
                     self.world(),
                     &Input {
@@ -149,18 +191,17 @@ impl Session {
                 if self
                     .inputs
                     .get(&tick)
-                    .is_some_and(|players| players.contains_key(&player))
+                    .is_some_and(|players| players.contains_key(&assigned))
                 {
                     return Err(SessionError::Duplicate);
                 }
                 self.inputs
                     .entry(tick)
                     .or_default()
-                    .insert(player, commands);
+                    .insert(assigned, commands);
                 Ok(None)
             }
-            Datagram::Resync { .. } => Ok(Some(self.snapshot())),
-            _ => Err(SessionError::Packet),
+            Packet::Resync => Ok(Some(Session::snapshot(self))),
         }
     }
 
@@ -193,7 +234,7 @@ impl Session {
             .accept(Input { tick, commands })
             .expect("session batches match the authoritative tick");
         assert!(self.server.advance());
-        self.snapshot()
+        Session::snapshot(self)
     }
 }
 

@@ -35,6 +35,8 @@ pub mod map_session;
 pub mod rollback;
 pub mod session;
 #[cfg(all(feature = "session-server", not(target_arch = "wasm32")))]
+pub mod production;
+#[cfg(all(feature = "session-server", not(target_arch = "wasm32")))]
 pub mod session_client;
 
 /// How a transport delivers commands.
