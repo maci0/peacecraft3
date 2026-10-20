@@ -51,8 +51,8 @@ integer rounding, original attack-speed caps and exact native timing are not new
 qualified by these tests. A level change does not retime an already running swing
 or remaining cooldown. The existing attack animation clock is not rescaled, and
 missile damage/target armor still use the existing launch-time roll rather than a
-new impact-time reevaluation. No Get/SetHeroStr/Agi/Int implementation currently
-exists, so this change adds no such native surface. General item/ability stat
+new impact-time reevaluation. The Get/SetHeroStr/Agi/Int queries are in
+[Hero attribute queries](hero-attribute-queries.md). General item/ability stat
 bonuses, XP awards and level-up effects remain separate work.
 
 ## Level/vitals integration

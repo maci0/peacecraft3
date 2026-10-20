@@ -1,6 +1,7 @@
 //! Ability learning on the existing executed unit, using selected stock/map data.
 use super::*;
 use crate::hero_skills::Rules;
+use crate::inventory_powerup::AttributeBonus;
 use pcx_objects::editor::Overlay;
 use std::collections::BTreeSet;
 
@@ -8,6 +9,12 @@ const LEARN: &str = "SelectHeroSkill";
 const LEVEL: &str = "GetHeroLevel";
 const POINTS: &str = "GetHeroSkillPoints";
 const ABILITY: &str = "GetUnitAbilityLevel";
+/// Attribute queries and the source stat each reads from the unit balance columns.
+const ATTRIBUTES: [(&str, &str); 3] = [
+    ("GetHeroStr", "STR"),
+    ("GetHeroAgi", "AGI"),
+    ("GetHeroInt", "INT"),
+];
 
 #[derive(Clone, Copy, Debug)]
 pub struct HeroBudget {
@@ -65,6 +72,8 @@ pub(super) struct Admission {
     level: bool,
     points: bool,
     ability: bool,
+    /// Admitted `GetHeroStr`, `GetHeroAgi`, `GetHeroInt` in `ATTRIBUTES` order.
+    attributes: [bool; 3],
 }
 
 impl ObjectHost {
@@ -121,12 +130,15 @@ impl ObjectHost {
         {
             return Err(fail("ability overlay budget exceeded"));
         }
-        let mut present = [false; 4];
+        let mut present = [false; 7];
         for (index, (name, args, result)) in [
             (LEARN, &["unit", "integer"][..], "nothing"),
             (LEVEL, &["unit"][..], "integer"),
             (POINTS, &["unit"][..], "integer"),
             (ABILITY, &["unit", "integer"][..], "integer"),
+            (ATTRIBUTES[0].0, &["unit", "boolean"][..], "integer"),
+            (ATTRIBUTES[1].0, &["unit", "boolean"][..], "integer"),
+            (ATTRIBUTES[2].0, &["unit", "boolean"][..], "integer"),
         ]
         .into_iter()
         .enumerate()
@@ -147,7 +159,15 @@ impl ObjectHost {
             }
             present[index] = true;
         }
-        let [learn, level, points, ability] = present;
+        let [
+            learn,
+            level,
+            points,
+            ability,
+            strength,
+            agility,
+            intelligence,
+        ] = present;
         self.units.as_mut().expect("admitted").heroes = Some(Admission {
             tables,
             catalog_origin,
@@ -158,6 +178,7 @@ impl ObjectHost {
             level,
             points,
             ability,
+            attributes: [strength, agility, intelligence],
         });
         Ok(self)
     }
@@ -264,6 +285,10 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         let input = self.units.as_ref()?.heroes.as_ref()?;
+        if let Some(index) = ATTRIBUTES.iter().position(|(native, _)| *native == name) {
+            let (_, stat) = ATTRIBUTES[index];
+            return input.attributes[index].then(|| self.hero_attribute(name, stat, args));
+        }
         if !match name {
             LEARN => input.learn,
             LEVEL => input.level,
@@ -274,6 +299,56 @@ impl ObjectHost {
             return None;
         }
         Some(self.hero_call(name, args))
+    }
+
+    /// Growth-derived attribute of an admitted hero. Without `includeBonuses` the total holds
+    /// the base and retained permanent strength only; held passive items are read only with it.
+    fn hero_attribute(&self, name: &str, stat: &str, args: &[Value]) -> Result<Value, Error> {
+        let [unit, Value::Bool(include_bonuses)] = args else {
+            return Err(self.hero_error(name, "unit and includeBonuses required".into()));
+        };
+        let unit = match unit {
+            Value::Null => return Ok(Value::Int(0)),
+            Value::Handle(unit) => *unit,
+            _ => return Err(self.hero_error(name, "unit identity required".into())),
+        };
+        // A removed unit fails the handle gate of the native wrapper, so it reads zero.
+        // Dead units pass that gate, and their combat state is not consulted here.
+        if matches!(self.inner.entry(unit)?, Entry::RemovedUnit) {
+            return Ok(Value::Int(0));
+        }
+        let record = self.created_unit(unit, name)?;
+        let state = record
+            .abilities
+            .as_ref()
+            .ok_or_else(|| self.hero_error(name, "ability state not admitted".into()))?;
+        // Non-hero units take the wrapper's uppercase-rawcode branch, which returns 0. The
+        // constant-zero registration returns 0 too, so this holds for either binding.
+        let Some(hero) = &state.hero else {
+            return Ok(Value::Int(0));
+        };
+        let bonus = if *include_bonuses {
+            self.unit_hero_bonus(unit)?
+        } else {
+            AttributeBonus {
+                strength: record.permanent_strength,
+                ..AttributeBonus::default()
+            }
+        };
+        let initial = self
+            .hero_initial_level()
+            .ok_or_else(|| self.hero_error(name, "hero rules not admitted".into()))?;
+        let value = Self::derive_hero_attribute(
+            &record.definition,
+            Some((initial, hero.level)),
+            bonus,
+            stat,
+        )
+        .map_err(|e| self.hero_error(name, e))?;
+        if value >= i32::MAX as f32 {
+            return Err(self.hero_error(name, format!("hero attribute {stat} exceeds integer")));
+        }
+        Ok(Value::Int(value as i32))
     }
 
     fn hero_call(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {

@@ -16,7 +16,7 @@ resource. This preserves an independently set maximum and the absolute amount
 missing from the pool. It does not preserve a percentage. Repeated assignments
 and lower requested levels keep the existing setter's non-decreasing semantics
 and cannot accumulate bonuses. Units without admitted vitals keep their existing
-unsupported-vitals state. No new Get/SetHeroStr/Agi/Int native is admitted.
+unsupported-vitals state. The GetHeroStr/Agi/Int queries are in [Hero attribute queries](hero-attribute-queries.md).
 
 ## Selected native evidence
 
