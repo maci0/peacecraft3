@@ -519,7 +519,11 @@ impl ObjectHost {
                 && let Some(animation) = &mut animation
             {
                 animation
-                    .select(if moving { "walk" } else { "stand" }, now)
+                    .select(
+                        if moving { "walk" } else { "stand" },
+                        now,
+                        if moving { activity.speed } else { None },
+                    )
                     .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
             }
             if point
@@ -703,7 +707,15 @@ impl ObjectHost {
         let mut animation = record.animation.clone();
         if let Some(animation) = &mut animation {
             animation
-                .select(if motion.is_some() { "walk" } else { "stand" }, now)
+                .select(
+                    if motion.is_some() { "walk" } else { "stand" },
+                    now,
+                    if motion.is_some() {
+                        activity.speed
+                    } else {
+                        None
+                    },
+                )
                 .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
         }
         let state = self.unit_activity.as_mut().expect("activity");
@@ -957,7 +969,7 @@ impl ObjectHost {
                             delta[1].atan2(delta[0]).to_degrees().rem_euclid(360.0) as f32;
                     }
                     if last && let Some(animation) = &mut record.animation {
-                        animation.select("stand", stand_at).map_err(|e| {
+                        animation.select("stand", stand_at, None).map_err(|e| {
                             self.inner.error("unit activity", Failure::UnitAnimation(e))
                         })?;
                     }
@@ -1026,6 +1038,7 @@ impl ObjectHost {
                         .select(
                             "stand",
                             motion.started + (motion.prefix + length) / f64::from(speed),
+                            None,
                         )
                         .err();
                 }

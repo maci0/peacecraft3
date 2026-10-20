@@ -136,6 +136,8 @@ fn open() -> Vm {
         .unwrap();
     bytes[at..at + 80].fill(0);
     bytes[at..at + 4].copy_from_slice(b"Walk");
+    // The SEQS move speed field follows the interval; Walk needs one for its rate.
+    bytes[at + 88..at + 92].copy_from_slice(&200f32.to_le_bytes());
     let model = Arc::new(
         crate::unit_model::Model::read(
             model.origin.clone(),

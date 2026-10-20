@@ -121,6 +121,8 @@ pub struct Animation {
     pub sequence: Option<usize>,
     pub created: f64,
     pub started: f64,
+    /// Sequence seconds per game second, fixed when the sequence is selected.
+    rate: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,19 +146,45 @@ impl Animation {
             sequence,
             created: now,
             started: now,
+            rate: 1.,
         })
     }
     /// Whether the model declares a sequence matching `name`. `select` ignores misses.
     pub fn has_sequence(&self, name: &str) -> bool {
         self.model.select(name).is_some()
     }
-    pub fn select(&mut self, name: &str, now: f64) -> Result<(), String> {
+    /// Select `name` at `now`. `unit_speed` is the unit's movement speed for a
+    /// moving sequence: the sequence then plays at `unit_speed / move_speed` of its
+    /// authored clock, where `move_speed` is the sequence's SEQS ground speed.
+    /// `None`, or a zero `move_speed`, keeps the authored clock. A missing
+    /// selection leaves the state unchanged.
+    pub fn select(&mut self, name: &str, now: f64, unit_speed: Option<f32>) -> Result<(), String> {
         if !now.is_finite() || now < self.started {
             return Err("invalid unit animation game time".into());
         }
         if let Some(index) = self.model.select(name) {
+            let rate = match unit_speed {
+                None => 1.,
+                Some(speed) if !speed.is_finite() || speed <= 0. => {
+                    return Err(format!("{name}: playback rate needs a positive unit speed"));
+                }
+                Some(speed) => {
+                    let move_speed = f64::from(self.model.sequences[index].move_speed);
+                    if !move_speed.is_finite() || move_speed < 0. {
+                        return Err(format!("{name}: invalid SEQS move speed"));
+                    }
+                    // ponytail: zero ground speed has nothing to scale against; shipped Walk
+                    // sequences do carry it, so the authored clock stays in effect (unverified).
+                    if move_speed == 0. {
+                        1.
+                    } else {
+                        f64::from(speed) / move_speed
+                    }
+                }
+            };
             self.sequence = Some(index);
             self.started = now;
+            self.rate = rate;
         }
         Ok(())
     }
@@ -180,7 +208,7 @@ impl Animation {
             Ok(ms as u64)
         };
         let elapsed_ms = millis(now - self.created)?;
-        let local = millis(now - self.started)?;
+        let local = millis((now - self.started) * self.rate)?;
         let duration = u64::from(sequence.duration());
         let offset = if duration == 0 {
             0
@@ -206,15 +234,17 @@ pub(crate) mod tests {
         bytes.extend(4u32.to_le_bytes());
         bytes.extend(800u32.to_le_bytes());
         let mut records = Vec::new();
-        for (name, start, end, once) in [
-            ("Stand - 1", 100u32, 900u32, false),
-            ("Stand Defend", 1200, 1800, false),
-            ("Death", 2000, 2400, true),
+        for (name, start, end, once, move_speed) in [
+            ("Stand - 1", 100u32, 900u32, false, 0f32),
+            ("Stand Defend", 1200, 1800, false, 0.),
+            ("Death", 2000, 2400, true, 0.),
+            ("Walk", 3000, 3800, false, 200.),
         ] {
             let mut record = vec![0; pcx_mdl::SEQUENCE_SIZE];
             record[..name.len()].copy_from_slice(name.as_bytes());
             record[80..84].copy_from_slice(&start.to_le_bytes());
             record[84..88].copy_from_slice(&end.to_le_bytes());
+            record[88..92].copy_from_slice(&move_speed.to_le_bytes());
             record[92..96].copy_from_slice(&u32::from(once).to_le_bytes());
             records.extend(record);
         }
@@ -296,7 +326,7 @@ pub(crate) mod tests {
     #[test]
     fn selected_sequence_drives_frames_without_wall_time_or_frame_partition_dependence() {
         let mut animation = Animation::new(model(), 2.).unwrap();
-        animation.select("sTaNd DeFeNd", 3.).unwrap();
+        animation.select("sTaNd DeFeNd", 3., None).unwrap();
         assert_eq!(animation.sequence, Some(1));
         assert_eq!(
             animation.sample(3.25).unwrap(),
@@ -311,10 +341,39 @@ pub(crate) mod tests {
             other.sample(time).unwrap();
         }
         assert_eq!(animation.sample(4.25).unwrap(), other.sample(4.25).unwrap());
-        other.select("absent", 4.25).unwrap();
+        other.select("absent", 4.25, None).unwrap();
         assert_eq!(other, animation);
-        animation.select("Death", 4.).unwrap();
+        animation.select("Death", 4., None).unwrap();
         assert_eq!(animation.sample(9.).unwrap().unwrap().frame, 2400);
         assert!(animation.sample(3.).is_err());
+    }
+    #[test]
+    fn walk_rate_is_unit_speed_over_sequence_move_speed() {
+        let mut animation = Animation::new(model(), 2.).unwrap();
+        // 400 / 200 = 2: the 250 ms of game time reaches 500 ms of Walk.
+        animation.select("walk", 3., Some(400.)).unwrap();
+        assert_eq!(animation.sample(3.25).unwrap().unwrap().frame, 3500);
+        animation.select("walk", 4., None).unwrap();
+        assert_eq!(animation.sample(4.25).unwrap().unwrap().frame, 3250);
+        assert!(animation.select("walk", 5., Some(0.)).is_err());
+        assert!(animation.select("walk", 5., Some(f32::NAN)).is_err());
+        // Death has zero move speed: it keeps the authored clock instead of refusing.
+        animation.select("death", 5., Some(400.)).unwrap();
+        assert_eq!(animation.sample(5.25).unwrap().unwrap().frame, 2250);
+    }
+    #[test]
+    fn candidate_walk_reselect_restarts_unmeasured_and_invalid_move_speed_refuses() {
+        let mut animation = Animation::new(model(), 2.).unwrap();
+        animation.select("walk", 3., Some(400.)).unwrap();
+        assert_eq!(animation.sample(3.25).unwrap().unwrap().frame, 3500);
+        // Candidate, unmeasured: a reselect restarts Walk. Original phase on a new order is unknown.
+        animation.select("walk", 3.5, Some(200.)).unwrap();
+        assert_eq!(animation.started, 3.5);
+        assert_eq!(animation.sample(3.75).unwrap().unwrap().frame, 3250);
+        let mut bad = (*model()).clone();
+        bad.sequences[3].move_speed = -1.;
+        let mut animation = Animation::new(Arc::new(bad), 2.).unwrap();
+        assert!(animation.select("walk", 3., Some(400.)).is_err());
+        assert!(animation.select("walk", 3., None).is_ok());
     }
 }
