@@ -1249,7 +1249,7 @@ fn corrected_host_inputs_retry_a_refused_candidate_without_redelivery() {
 }
 
 #[path = "script_timer_cases.rs"]
-mod script_timer_cases;
+pub(crate) mod script_timer_cases;
 
 #[path = "script_camera_cases.rs"]
 mod script_camera_cases;

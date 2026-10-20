@@ -584,6 +584,85 @@ pub fn load_textures_in(
     out
 }
 
+/// Decodes the textures at `paths`, reading each through `read`. A selected source passes its
+/// resolver's bytes here; installs keep [`load_textures_in`]. Any path that cannot be read or
+/// decoded fails the whole list and names that path, so a partially textured model is never
+/// returned.
+pub fn load_textures_from_paths(
+    paths: &[String],
+    mut read: impl FnMut(&str) -> Result<Vec<u8>, String>,
+) -> Result<Vec<pcx_gfx::LoadedTexture>, SceneError> {
+    let mut out = Vec::with_capacity(paths.len());
+    let mut remaining = MENU_IMAGE_BYTES;
+    for path in paths {
+        let raw = read(path).map_err(|e| SceneError::Decode(format!("{path}: {e}")))?;
+        let texture = pcx_gfx::load_mipmapped_image_bounded(&raw, path, remaining)
+            .map_err(|e| SceneError::Decode(format!("{path}: {e}")))?;
+        let used = texture
+            .rgba_bytes()
+            .ok_or_else(|| SceneError::Decode(format!("{path}: invalid mip chain")))?;
+        remaining = remaining
+            .checked_sub(used)
+            .ok_or_else(|| SceneError::Decode(format!("{path}: image budget exceeded")))?;
+        out.push(texture);
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod selected_texture_tests {
+    use super::*;
+
+    /// One 1x1 uncompressed 32-bit TGA, with its single pixel.
+    fn tga(pixel: [u8; 4]) -> Vec<u8> {
+        let mut bytes = vec![0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 32, 0];
+        bytes.extend_from_slice(&pixel);
+        bytes
+    }
+
+    #[test]
+    fn same_path_from_two_sources_decodes_each_sources_own_bytes() {
+        let paths = vec![r"Textures\glow.tga".to_owned()];
+        let red = load_textures_from_paths(&paths, |_| Ok(tga([0, 0, 255, 255]))).unwrap();
+        let blue = load_textures_from_paths(&paths, |_| Ok(tga([255, 0, 0, 255]))).unwrap();
+        assert_eq!(red.len(), 1);
+        assert_ne!(red[0].rgba_bytes(), blue[0].rgba_bytes());
+    }
+
+    #[test]
+    fn an_unreadable_path_fails_the_list_and_names_it() {
+        let paths = vec![
+            r"Textures\ok.tga".to_owned(),
+            r"Textures\gone.tga".to_owned(),
+        ];
+        let err = load_textures_from_paths(&paths, |path| {
+            if path.ends_with("gone.tga") {
+                Err("not in selected source".to_owned())
+            } else {
+                Ok(tga([0, 0, 0, 255]))
+            }
+        })
+        .unwrap_err();
+        let SceneError::Decode(message) = err else {
+            panic!("decode error expected");
+        };
+        assert!(
+            message.starts_with("Textures\\gone.tga: not in selected source"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn undecodable_bytes_fail_with_the_path() {
+        let paths = vec![r"Textures\bad.tga".to_owned()];
+        let err = load_textures_from_paths(&paths, |_| Ok(vec![1, 2, 3])).unwrap_err();
+        let SceneError::Decode(message) = err else {
+            panic!("decode error expected");
+        };
+        assert!(message.starts_with("Textures\\bad.tga:"), "{message}");
+    }
+}
+
 /// Validate PRE2 framing before a browser import candidate can replace its store.
 #[cfg(any(test, target_arch = "wasm32"))]
 pub fn particle_import_needed(source: &str, bytes: &[u8]) -> Result<bool, String> {
@@ -1364,6 +1443,13 @@ pub struct TextureBindings {
     source: String,
     images: std::collections::BTreeMap<u32, Handle<Image>>,
     materials: Vec<TextureBinding>,
+}
+
+impl TextureBindings {
+    /// Every image this spawn created, so its owner can release them at teardown.
+    pub fn image_handles(&self) -> impl Iterator<Item = &Handle<Image>> {
+        self.images.values()
+    }
 }
 
 pub fn texture_selection(

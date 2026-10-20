@@ -14,6 +14,8 @@ use std::sync::Arc;
 pub struct ScoreScreenAssets {
     layout: Option<ScoreScreenLayout>,
     loaded_for: Option<Arc<ParsedMapContext>>,
+    /// The selected resolver the layout was read through; its art is read through it too.
+    resolver: Option<Arc<Resolver>>,
 }
 
 impl ScoreScreenAssets {
@@ -25,6 +27,12 @@ impl ScoreScreenAssets {
             .is_some_and(|loaded| Arc::ptr_eq(loaded, context))
             .then_some(self.layout.as_ref())
             .flatten()
+    }
+
+    /// The resolver behind the layout loaded for exactly `context`.
+    pub fn source_for(&self, context: &Arc<ParsedMapContext>) -> Option<Arc<Resolver>> {
+        self.layout_for(context)?;
+        self.resolver.clone()
     }
 
     /// Whether a load was attempted for exactly `context`, successful or not.
@@ -98,7 +106,12 @@ pub fn load_assets(
     let Some(ScoreScreen::Refused { context, .. }) = &state.0 else {
         return;
     };
-    let ScoreScreenAssets { layout, loaded_for } = &mut *assets;
+    let ScoreScreenAssets {
+        layout,
+        loaded_for,
+        resolver: source,
+    } = &mut *assets;
+    let mut selected = None;
     let attempt = refresh(layout, loaded_for, context, || {
         let same_session = requests
             .admission
@@ -112,10 +125,17 @@ pub fn load_assets(
             .as_ref()
             .and_then(|b| b.resolver.clone())
             .ok_or("admitted map has no retained selected resolver")?;
-        load(&resolver)
+        let loaded = load(&resolver)?;
+        selected = Some(resolver);
+        Ok(loaded)
     });
-    if let Err(e) = attempt {
-        warn!("score screen refused: {e}");
+    match attempt {
+        Ok(true) => *source = selected,
+        Ok(false) => {}
+        Err(e) => {
+            *source = None;
+            warn!("score screen refused: {e}");
+        }
     }
 }
 

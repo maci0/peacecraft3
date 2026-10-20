@@ -561,11 +561,41 @@ struct PendingArt {
     additive: bool,
 }
 
-/// Decoded art by path and sampler policy. Every edge piece shares the strip
+/// The selected source that art under this entity decodes from. The nearest ancestor with an
+/// `ArtSource` supplies it; art without one reads from the install directory, as before.
+#[derive(Component, Clone)]
+pub struct ArtSource(pub std::sync::Arc<pcx_assets::Resolver>);
+
+/// Upper bound on one selected art file, read through its resolver.
+const SELECTED_ART_BYTES: u64 = 16 << 20;
+
+fn art_source(
+    entity: Entity,
+    parents: &Query<&ChildOf>,
+    sources: &Query<&ArtSource>,
+) -> Option<std::sync::Arc<pcx_assets::Resolver>> {
+    let mut at = Some(entity);
+    while let Some(current) = at {
+        if let Ok(source) = sources.get(current) {
+            return Some(std::sync::Arc::clone(&source.0));
+        }
+        at = parents.get(current).ok().map(ChildOf::parent);
+    }
+    None
+}
+
+/// Cache identity of one decode: the path, its sampler policy, and the source it came from.
+/// A source's address is unique while it lives, so art from one session is never reused for
+/// another. Install-directory art uses source id zero.
+fn art_cache_key(path: &str, tile: bool, source_id: usize) -> (String, bool, usize) {
+    (path.to_owned(), tile, source_id)
+}
+
+/// Decoded art by path, sampler policy and source. Every edge piece shares the strip
 /// image; its source rectangle belongs to the ImageNode, not another decode.
 #[derive(Resource, Default)]
 pub struct GlueImages {
-    images: std::collections::HashMap<(String, bool), Handle<Image>>,
+    images: std::collections::HashMap<(String, bool, usize), Handle<Image>>,
     /// Reported once; a browser keeps retrying because its store fills late.
     failed: std::collections::HashSet<String>,
     pub install: Option<std::path::PathBuf>,
@@ -577,6 +607,12 @@ impl GlueImages {
         self.images.clear();
         self.failed.clear();
         self.install = install;
+    }
+
+    /// Drops the decodes of one selected source, once its screen is gone.
+    pub fn forget_source(&mut self, source: &std::sync::Arc<pcx_assets::Resolver>) {
+        let id = std::sync::Arc::as_ptr(source) as usize;
+        self.images.retain(|(_, _, source_id), _| *source_id != id);
     }
 }
 
@@ -1279,17 +1315,29 @@ fn load_art(
     mut additive: ResMut<Assets<AdditiveImage>>,
     mut backgrounds: ResMut<Assets<BackdropImage>>,
     pending: Query<(Entity, &PendingArt, Option<&BackdropRepeat>)>,
+    parents: Query<&ChildOf>,
+    sources: Query<&ArtSource>,
 ) {
     for (entity, art, repeats) in &pending {
-        let key = (art.path.clone(), art.tile);
+        let source = art_source(entity, &parents, &sources);
+        let source_id = source
+            .as_ref()
+            .map_or(0, |s| std::sync::Arc::as_ptr(s) as usize);
+        let key = art_cache_key(&art.path, art.tile, source_id);
         let handle = match cache.images.get(&key) {
             Some(handle) => handle.clone(),
             None => {
-                let decoded = art_bytes(cache.install.as_deref(), &art.path)
-                    .ok_or_else(|| format!("{} is not readable", art.path))
-                    .and_then(|bytes| {
-                        pcx_gfx::load_image(&bytes, &art.path).map_err(|e| e.to_string())
-                    });
+                let bytes = match &source {
+                    Some(resolver) => resolver
+                        .resolve_bounded(&art.path, SELECTED_ART_BYTES)
+                        .map(|asset| asset.bytes)
+                        .map_err(|e| format!("{}: {e}", art.path)),
+                    None => art_bytes(cache.install.as_deref(), &art.path)
+                        .ok_or_else(|| format!("{} is not readable", art.path)),
+                };
+                let decoded = bytes.and_then(|bytes| {
+                    pcx_gfx::load_image(&bytes, &art.path).map_err(|e| e.to_string())
+                });
                 match decoded {
                     Ok(texture) => {
                         let mut image = crate::menu_composition::image(&texture);
@@ -2224,5 +2272,26 @@ Frame "GLUEPOPUPMENU" "Popup" {
         world.flush();
         world.run_system_once(update_setting_art).unwrap();
         assert_eq!(*world.get::<Visibility>(thumb).unwrap(), Visibility::Hidden);
+    }
+}
+
+#[cfg(test)]
+mod art_source_tests {
+    use super::*;
+
+    #[test]
+    fn art_decodes_are_keyed_by_source_so_sessions_never_share_them() {
+        assert_ne!(
+            art_cache_key("a.blp", false, 0),
+            art_cache_key("a.blp", false, 7)
+        );
+        assert_ne!(
+            art_cache_key("a.blp", false, 7),
+            art_cache_key("a.blp", true, 7)
+        );
+        assert_eq!(
+            art_cache_key("a.blp", true, 7),
+            ("a.blp".to_owned(), true, 7)
+        );
     }
 }

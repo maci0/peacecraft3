@@ -38,7 +38,7 @@ const SYNTHETIC_DEFAULT_FALLBACK: i32 = 2;
 
 /// Mirrors `CustomDefeatQuitBJ`. The defeat reset sets the current difficulty to the default,
 /// so `EndGame` reports the score only when the default, not the current input, was applied.
-const QUIT_SCRIPT: &str = "\
+pub(crate) const QUIT_SCRIPT: &str = "\
 globals
 player p = Player(0)
 dialog d = DialogCreate()
@@ -99,7 +99,7 @@ fn publish(
     publish_with_assets(app, script, revision, BTreeMap::new(), configure);
 }
 
-fn publish_with_assets(
+pub(crate) fn publish_with_assets(
     app: &mut App,
     script: &str,
     revision: u64,
@@ -149,7 +149,7 @@ fn publish_with_assets(
     );
 }
 
-fn session_present(app: &mut App) -> bool {
+pub(crate) fn session_present(app: &mut App) -> bool {
     app.world_mut()
         .resource_mut::<MapScriptSession<MapStartupHost>>()
         .host()
@@ -157,7 +157,7 @@ fn session_present(app: &mut App) -> bool {
 }
 
 /// Returns the queued callback count and the paused state observed before delivery.
-fn click_quit(app: &mut App) -> (usize, Option<bool>) {
+pub(crate) fn click_quit(app: &mut App) -> (usize, Option<bool>) {
     let mut session = app
         .world_mut()
         .resource_mut::<MapScriptSession<MapStartupHost>>();
@@ -340,7 +340,7 @@ Frame\"TEXT\" \"ScoreScreenOkText\" {
 ";
 const SCORE_STRINGS_FDF: &str = "OK_WHITE \"|cffffffffO|rK\",\n";
 
-fn score_app(assets: BTreeMap<String, crate::binding::Reply>) -> App {
+pub(crate) fn score_app(assets: BTreeMap<String, crate::binding::Reply>) -> App {
     let mut app = timer_app();
     app.init_resource::<Time<Real>>();
     campaign_runtime::install(
@@ -353,7 +353,7 @@ fn score_app(assets: BTreeMap<String, crate::binding::Reply>) -> App {
     app
 }
 
-fn selected_score_ui() -> BTreeMap<String, crate::binding::Reply> {
+pub(crate) fn selected_score_ui() -> BTreeMap<String, crate::binding::Reply> {
     BTreeMap::from([
         (
             r"UI\FrameDef\Glue\ScoreScreen.fdf".to_owned(),
@@ -393,6 +393,10 @@ pub(super) fn same_update_exit_hands_its_context_to_the_selected_score_ui() {
     assert!(
         assets.attempted_for(&admitted),
         "the selected UI was attempted for that context"
+    );
+    assert!(
+        assets.source_for(&admitted).is_some(),
+        "the selected resolver that read the UI is kept with it"
     );
     let layout = assets
         .layout_for(&admitted)
