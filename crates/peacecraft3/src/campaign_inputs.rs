@@ -651,9 +651,7 @@ fn budgets() -> MapStartupBudgets {
         }),
         timer_events: 65536,
         game_state_events: 65536,
-        stock: Some(StockBudget {
-            max_unit_records: 65536,
-        }),
+        stock: Some(StockBudget { max_records: 65536 }),
         dialogs: Some(DialogBudget {
             max_dialogs: 4096,
             max_buttons: 16384,

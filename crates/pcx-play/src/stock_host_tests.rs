@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-const DECL: &str = "type widget extends agent\ntype unit extends widget\nnative CreateUnit takes player id, integer unitid, real x, real y, real face returns unit\nnative SetAllItemTypeSlots takes integer slots returns nothing\nnative SetAllUnitTypeSlots takes integer slots returns nothing\nnative SetItemTypeSlots takes unit whichUnit, integer slots returns nothing\nnative SetUnitTypeSlots takes unit whichUnit, integer slots returns nothing\nnative AddItemToStock takes unit whichUnit, integer itemId, integer currentStock, integer stockMax returns nothing\n";
+const DECL: &str = "type widget extends agent\ntype unit extends widget\nnative CreateUnit takes player id, integer unitid, real x, real y, real face returns unit\nnative SetAllItemTypeSlots takes integer slots returns nothing\nnative SetAllUnitTypeSlots takes integer slots returns nothing\nnative SetItemTypeSlots takes unit whichUnit, integer slots returns nothing\nnative SetUnitTypeSlots takes unit whichUnit, integer slots returns nothing\nnative AddItemToStock takes unit whichUnit, integer itemId, integer currentStock, integer stockMax returns nothing\nnative RemoveItemFromStock takes unit whichUnit, integer itemId returns nothing\n";
 
-const MAP: &str = "globals\ninteger slots = 0\nplayer P = null\nunit U = null\nunit U2 = null\ntimer T = null\nendglobals\nfunction clear takes nothing returns nothing\ncall SetAllUnitTypeSlots(0)\nendfunction\nfunction main takes nothing returns nothing\nset slots = -4\ncall SetAllItemTypeSlots(slots)\ncall SetAllUnitTypeSlots(slots - 3)\nendfunction\nfunction place takes nothing returns nothing\nset P = Player(1)\nset U = CreateUnit(P, 1, 0.0, 0.0, 0.0)\nset U2 = CreateUnit(P, 1, 1.0, 0.0, 0.0)\nset T = CreateTimer()\nendfunction\nfunction configure takes nothing returns nothing\ncall SetItemTypeSlots(U, 0)\ncall SetItemTypeSlots(U, -1)\nendfunction\nfunction other_kind takes nothing returns nothing\ncall SetUnitTypeSlots(U, 5)\nendfunction\nfunction second takes nothing returns nothing\ncall SetItemTypeSlots(U2, 4)\nendfunction\nfunction replace takes nothing returns nothing\ncall SetAllItemTypeSlots(7)\nendfunction\nfunction bad_global takes nothing returns nothing\ncall SetAllItemTypeSlots(U)\nendfunction\nfunction bad_unit takes nothing returns nothing\ncall SetItemTypeSlots(T, 3)\nendfunction\nfunction stock_item takes nothing returns nothing\ncall AddItemToStock(U, 1, 1, 1)\nendfunction\n";
+const MAP: &str = "globals\ninteger slots = 0\nplayer P = null\nunit U = null\nunit U2 = null\ntimer T = null\nendglobals\nfunction clear takes nothing returns nothing\ncall SetAllUnitTypeSlots(0)\nendfunction\nfunction main takes nothing returns nothing\nset slots = -4\ncall SetAllItemTypeSlots(slots)\ncall SetAllUnitTypeSlots(slots - 3)\nendfunction\nfunction place takes nothing returns nothing\nset P = Player(1)\nset U = CreateUnit(P, 1, 0.0, 0.0, 0.0)\nset U2 = CreateUnit(P, 1, 1.0, 0.0, 0.0)\nset T = CreateTimer()\nendfunction\nfunction configure takes nothing returns nothing\ncall SetItemTypeSlots(U, 0)\ncall SetItemTypeSlots(U, -1)\nendfunction\nfunction other_kind takes nothing returns nothing\ncall SetUnitTypeSlots(U, 5)\nendfunction\nfunction second takes nothing returns nothing\ncall SetItemTypeSlots(U2, 4)\nendfunction\nfunction replace takes nothing returns nothing\ncall SetAllItemTypeSlots(7)\nendfunction\nfunction bad_global takes nothing returns nothing\ncall SetAllItemTypeSlots(U)\nendfunction\nfunction bad_unit takes nothing returns nothing\ncall SetItemTypeSlots(T, 3)\nendfunction\nfunction stock_item takes nothing returns nothing\ncall AddItemToStock(U, 1, 1, 1)\nendfunction\nfunction stock_again takes nothing returns nothing\ncall AddItemToStock(U, 1, 4, 5)\nendfunction\nfunction stock_other takes nothing returns nothing\ncall AddItemToStock(U, 2, 1, 1)\nendfunction\nfunction stock_on_timer takes nothing returns nothing\ncall AddItemToStock(T, 1, 1, 1)\nendfunction\nfunction unstock_item takes nothing returns nothing\ncall RemoveItemFromStock(U, 1)\nendfunction\nfunction unstock_absent takes nothing returns nothing\ncall RemoveItemFromStock(U, 9)\nendfunction\n";
 
 struct Fixture;
 
@@ -69,7 +69,7 @@ fn opened(records: usize) -> pcx_script::OwnedVm<ObjectHost> {
         )
         .unwrap()
         .with_stock(StockBudget {
-            max_unit_records: records,
+            max_records: records,
         })
         .unwrap()
         .into_vm()
@@ -141,12 +141,10 @@ fn owned_vm_retains_executed_slot_integers_without_inheriting_or_allocating() {
     );
     assert_eq!(vm.host().stock_unit_records().unwrap(), 1);
     assert_eq!(vm.host().unit_item_type_slots(unit).unwrap(), Some(-1));
-    let unsupported = vm.call("stock_item", &[]).unwrap_err();
-    assert!(
-        unsupported.to_string().contains("AddItemToStock")
-            && unsupported.to_string().contains("unsupported"),
-        "{unsupported}"
-    );
+    let full = vm.call("stock_item", &[]).unwrap_err();
+    assert!(full.to_string().contains("stock item records"), "{full}");
+    assert_eq!(vm.host().item_stock(unit, 1).unwrap(), None);
+    assert_eq!(vm.host().stock_item_records().unwrap(), 0);
     assert_eq!(vm.host().inner().handles(), placed);
     vm.host()
         .native("SetAllItemTypeSlots", &[Value::Int(i32::MIN)])
@@ -163,6 +161,64 @@ fn owned_vm_retains_executed_slot_integers_without_inheriting_or_allocating() {
     assert_eq!(vm.host().all_unit_type_slots().unwrap(), Some(i32::MAX));
     assert_eq!(vm.host().unit_item_type_slots(unit).unwrap(), Some(-1));
     assert!(vm.host().unit_item_type_slots(timer).is_err());
+}
+
+#[test]
+fn item_stock_records_add_replace_remove_and_share_the_record_budget() {
+    let mut vm = opened(2);
+    vm.init_globals().unwrap();
+    vm.call("place", &[]).unwrap();
+    let unit = handle(&vm.global("U"));
+    let timer = handle(&vm.global("T"));
+    let placed = vm.host().inner().handles();
+    vm.call("stock_item", &[]).unwrap();
+    assert_eq!(vm.host().item_stock(unit, 1).unwrap(), Some((1, 1)));
+    assert_eq!(vm.host().stock_item_records().unwrap(), 1);
+    vm.call("stock_again", &[]).unwrap();
+    assert_eq!(vm.host().item_stock(unit, 1).unwrap(), Some((4, 5)));
+    assert_eq!(vm.host().stock_item_records().unwrap(), 1);
+    let absent = vm.call("unstock_absent", &[]).unwrap_err();
+    assert!(
+        absent.to_string().contains("no item stock record"),
+        "{absent}"
+    );
+    assert_eq!(vm.host().stock_item_records().unwrap(), 1);
+    vm.call("configure", &[]).unwrap();
+    assert_eq!(vm.host().stock_unit_records().unwrap(), 1);
+    let shared = vm.call("stock_other", &[]).unwrap_err();
+    assert!(
+        shared.to_string().contains("stock item records"),
+        "{shared}"
+    );
+    assert_eq!(vm.host().item_stock(unit, 2).unwrap(), None);
+    vm.call("unstock_item", &[]).unwrap();
+    assert_eq!(vm.host().item_stock(unit, 1).unwrap(), None);
+    assert_eq!(vm.host().stock_item_records().unwrap(), 0);
+    vm.call("stock_other", &[]).unwrap();
+    assert_eq!(vm.host().item_stock(unit, 2).unwrap(), Some((1, 1)));
+    assert_eq!(vm.host().stock_item_records().unwrap(), 1);
+    let wrong_family = vm.call("stock_on_timer", &[]).unwrap_err();
+    assert!(
+        wrong_family.to_string().contains("another family"),
+        "{wrong_family}"
+    );
+    assert!(vm.host().item_stock(timer, 1).is_err());
+    assert_eq!(vm.host().inner().handles(), placed);
+    let bad = vm
+        .host()
+        .native(
+            "AddItemToStock",
+            &[
+                Value::Handle(unit),
+                Value::Real(1.0),
+                Value::Int(1),
+                Value::Int(1),
+            ],
+        )
+        .unwrap_err();
+    assert!(bad.contains("arguments"), "{bad}");
+    assert_eq!(vm.host().stock_item_records().unwrap(), 1);
+    assert_eq!(vm.host().item_stock(unit, 2).unwrap(), Some((1, 1)));
 }
 
 #[test]
@@ -216,14 +272,8 @@ fn failed_slot_calls_and_the_record_budget_preserve_prior_state() {
 #[test]
 fn stock_admission_rejects_override_source_mismatch_and_capacity() {
     let (host, _) = prepared(DECL, "// map", "synthetic:stock-once");
-    let host = host
-        .with_stock(StockBudget {
-            max_unit_records: 1,
-        })
-        .unwrap();
-    let again = match host.with_stock(StockBudget {
-        max_unit_records: 1,
-    }) {
+    let host = host.with_stock(StockBudget { max_records: 1 }).unwrap();
+    let again = match host.with_stock(StockBudget { max_records: 1 }) {
         Err(error) => error,
         Ok(_) => panic!("stock was admitted twice"),
     };
@@ -243,7 +293,7 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
     );
     let (overflow, _) = prepared(DECL, "// map", "synthetic:stock-overflow");
     let overflow = match overflow.with_stock(StockBudget {
-        max_unit_records: usize::MAX,
+        max_records: usize::MAX,
     }) {
         Err(error) => error,
         Ok(_) => panic!("overflowing record bound was admitted"),
@@ -254,9 +304,7 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
         "",
     );
     let (host, _) = prepared(&missing, "// map", "synthetic:stock-missing");
-    let missing = match host.with_stock(StockBudget {
-        max_unit_records: 1,
-    }) {
+    let missing = match host.with_stock(StockBudget { max_records: 1 }) {
         Err(error) => error,
         Ok(_) => panic!("missing declaration was admitted"),
     };
@@ -266,9 +314,7 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
         "constant native SetAllItemTypeSlots",
     );
     let (host, _) = prepared(&constant, "// map", "synthetic:stock-constant");
-    let constant = match host.with_stock(StockBudget {
-        max_unit_records: 1,
-    }) {
+    let constant = match host.with_stock(StockBudget { max_records: 1 }) {
         Err(error) => error,
         Ok(_) => panic!("constant declaration was admitted"),
     };
@@ -278,9 +324,7 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
         "native SetAllItemTypeSlots takes integer slots returns integer",
     );
     let (host, _) = prepared(&wrong, "// map", "synthetic:stock-signature");
-    let wrong = match host.with_stock(StockBudget {
-        max_unit_records: 1,
-    }) {
+    let wrong = match host.with_stock(StockBudget { max_records: 1 }) {
         Err(error) => error,
         Ok(_) => panic!("wrong declaration was admitted"),
     };
@@ -290,9 +334,7 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
         "function SetAllItemTypeSlots takes integer slots returns nothing\nendfunction\n",
         "synthetic:stock-override",
     );
-    let overridden = match host.with_stock(StockBudget {
-        max_unit_records: 1,
-    }) {
+    let overridden = match host.with_stock(StockBudget { max_records: 1 }) {
         Err(error) => error,
         Ok(_) => panic!("function override was admitted"),
     };
@@ -316,9 +358,7 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
         );
     let map = "native SetAllItemTypeSlots takes integer slots returns nothing\nnative SetAllUnitTypeSlots takes integer slots returns nothing\nnative SetItemTypeSlots takes unit whichUnit, integer slots returns nothing\nnative SetUnitTypeSlots takes unit whichUnit, integer slots returns nothing\n";
     let (host, _) = prepared(&foreign, map, "synthetic:stock-source");
-    let source = match host.with_stock(StockBudget {
-        max_unit_records: 1,
-    }) {
+    let source = match host.with_stock(StockBudget { max_records: 1 }) {
         Err(error) => error,
         Ok(_) => panic!("foreign source was admitted"),
     };

@@ -25,8 +25,37 @@ limit refuses before `try_reserve`. Slot calls do not allocate handles.
 A per-unit record does not read the global integer, and a global assignment
 does not rewrite per-unit records. That separation is the retained state, not
 a measured rule about defaults, ceilings, or existing marketplace units.
-`AddItemToStock`, `AddUnitToStock`, the all-stock and remove natives, restock
+`AddUnitToStock`, the all-stock natives, `RemoveUnitFromStock`, restock
 delays, item categories, and marketplace enumeration stay unsupported.
+
+## Item stock records
+
+`AddItemToStock(unit, itemId, currentStock, stockMax)` and
+`RemoveItemFromStock(unit, itemId)` are admitted with the slot natives, under the
+same declaration-source rule. Each `(unit, itemId)` pair keeps the two integers
+its last successful add passed. A repeated add replaces them. `RemoveItemFromStock`
+deletes the pair and refuses `"no item stock record"` when none exists, so no
+removal is reported as success without a record. Item records and per-unit slot
+records share `StockBudget::max_records`; a new record past the bound refuses with
+`"stock item records"` or `"stock unit slots"` before `try_reserve`. The unit must
+be a live `unit`, and other families refuse as `WrongFamily`. A `unit` accepts any
+live unit, not only a marketplace: the native rule for that is unmeasured.
+
+The stored integers are the call arguments, not a measured stock state. The
+native merge rule for a repeated pair, the effect of `currentStock` and
+`stockMax` on sale and restock, and whether `AddItemToStock` is refused for a
+non-marketplace unit are unverified.
+
+`UpdateStockAvailability` (Blizzard.j 9944) reads only `GetItemType` and
+`GetItemLevel`, which were already admitted, and is not affected by this slice.
+
+Still unsupported on the purchase path: `ChooseRandomItemEx`, `IsItemIdSellable`,
+`GetRandomInt`-driven `PerformStockUpdates` through `StartStockUpdates` (the
+timer callback needs `TimerStart` expiry delivery), `GroupEnumUnitsOfType` over
+`"marketplace"`, `EVENT_PLAYER_UNIT_SELL_ITEM` with `GetSellingUnit`/`GetSoldItem`,
+and the `RemovePurchasedItem` action. Purchase gold transfer and item transfer
+are native behavior with no evidence in this slice, so no sale is simulated.
+Sources: `common.j` 1683-1691, 1231-1236, 1443, 1990; `blizzard.j` 9944-10079.
 
 The same source-qualified Human01 Program/localization gate now retains both
 executed global integers, checks them against the observed call arguments,

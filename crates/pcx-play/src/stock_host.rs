@@ -1,4 +1,4 @@
-//! Executed shop slot configuration on the existing Host.
+//! Executed shop stock on the existing Host.
 //!
 //! `InitBlizzard` calls `InitNeutralBuildings`, which passes the script's
 //! item and unit slot integers to `SetAllItemTypeSlots` and
@@ -6,8 +6,12 @@
 //! `SetItemTypeSlots` and `SetUnitTypeSlots` records stay separate: a global
 //! value does not resolve a unit record in this assignment-only profile.
 //! Native default and ceiling behavior remains unmeasured.
-//! Add/remove stock, restock timing, item categories, and marketplace
-//! selection are not admitted.
+//!
+//! `AddItemToStock` retains one record per `(unit, item id)` pair holding the
+//! two integers the call passed. A repeated pair replaces its integers.
+//! `RemoveItemFromStock` deletes the pair's record and refuses when none exists.
+//! The native merge rule, restock timing, purchase events and item categories
+//! are not modelled, so the retained integers are not a measured stock state.
 use super::super::{Error, Failure, below};
 use super::ObjectHost;
 use pcx_script::{HandleId, Value};
@@ -16,6 +20,8 @@ const SET_ALL_ITEM: &str = "SetAllItemTypeSlots";
 const SET_ALL_UNIT: &str = "SetAllUnitTypeSlots";
 const SET_ITEM: &str = "SetItemTypeSlots";
 const SET_UNIT: &str = "SetUnitTypeSlots";
+const ADD_ITEM: &str = "AddItemToStock";
+const REMOVE_ITEM: &str = "RemoveItemFromStock";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlotKind {
@@ -30,31 +36,49 @@ struct UnitSlots {
     slots: i32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ItemStock {
+    unit: HandleId,
+    item: i32,
+    current: i32,
+    max: i32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct State {
     item_slots: Option<i32>,
     unit_slots: Option<i32>,
     units: Vec<UnitSlots>,
-    max_unit_records: usize,
+    items: Vec<ItemStock>,
+    max_records: usize,
 }
 
-/// Bound on distinct per-unit slot records. Global assignments are separate.
+impl State {
+    fn records(&self) -> usize {
+        self.units.len() + self.items.len()
+    }
+}
+
+/// Bound on distinct retained slot and item stock records. Global assignments are separate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StockBudget {
-    pub max_unit_records: usize,
+    pub max_records: usize,
 }
 
-fn slot_native(name: &str) -> bool {
-    matches!(name, SET_ALL_ITEM | SET_ALL_UNIT | SET_ITEM | SET_UNIT)
+fn stock_native_name(name: &str) -> bool {
+    matches!(
+        name,
+        SET_ALL_ITEM | SET_ALL_UNIT | SET_ITEM | SET_UNIT | ADD_ITEM | REMOVE_ITEM
+    )
 }
 
 impl ObjectHost {
-    /// Admit the four common slot natives on this Host.
+    /// Admit the four common slot natives and the two stock natives on this Host.
     ///
     /// Each declaration is non-constant, returns nothing, and shares
     /// `CreateTimer`'s source. A function of the same name, a second source,
     /// or a different parameter list refuses admission. `unit` must extend
-    /// `handle`. The record bound is checked before any slot state is stored.
+    /// `handle`. The record bound is checked before any stock state is stored.
     /// A second call returns `StockState("already admitted")` and consumes
     /// this host, as the other `with_*` admissions do.
     pub fn with_stock(mut self, budget: StockBudget) -> Result<Self, Error> {
@@ -62,7 +86,7 @@ impl ObjectHost {
         if self.stock.is_some() {
             return Err(fail(Failure::StockState("already admitted")));
         }
-        std::alloc::Layout::array::<UnitSlots>(budget.max_unit_records)
+        std::alloc::Layout::array::<UnitSlots>(budget.max_records)
             .map_err(|_| fail(Failure::Capacity))?;
         if !below(&self.inner.program, "unit", "handle") {
             return Err(fail(Failure::Signature));
@@ -80,6 +104,8 @@ impl ObjectHost {
             (SET_ALL_UNIT, &["integer"][..]),
             (SET_ITEM, &["unit", "integer"][..]),
             (SET_UNIT, &["unit", "integer"][..]),
+            (ADD_ITEM, &["unit", "integer", "integer", "integer"][..]),
+            (REMOVE_ITEM, &["unit", "integer"][..]),
         ] {
             Self::contract(&self.inner, name, parameters, "nothing", false, None)?;
             if self
@@ -98,7 +124,8 @@ impl ObjectHost {
             item_slots: None,
             unit_slots: None,
             units: Vec::new(),
-            max_unit_records: budget.max_unit_records,
+            items: Vec::new(),
+            max_records: budget.max_records,
         });
         Ok(self)
     }
@@ -129,9 +156,28 @@ impl ObjectHost {
         self.unit_slots(SET_UNIT, unit, SlotKind::Unit)
     }
 
-    /// Count of retained per-unit records. Global assignments are not included.
+    /// Count of retained per-unit slot records. Global assignments are not included.
     pub fn stock_unit_records(&self) -> Result<usize, Error> {
         Ok(self.admitted_stock(SET_ITEM)?.units.len())
+    }
+
+    /// `(current, max)` integers from the last `AddItemToStock` for one unit and item id.
+    ///
+    /// A missing record is `Ok(None)`. An id that is not a live unit is an error.
+    pub fn item_stock(&self, unit: HandleId, item: i32) -> Result<Option<(i32, i32)>, Error> {
+        self.admitted_stock(ADD_ITEM)?;
+        self.stock_unit(&Value::Handle(unit), ADD_ITEM)?;
+        Ok(self
+            .admitted_stock(ADD_ITEM)?
+            .items
+            .iter()
+            .find(|row| row.unit == unit && row.item == item)
+            .map(|row| (row.current, row.max)))
+    }
+
+    /// Count of retained item stock records.
+    pub fn stock_item_records(&self) -> Result<usize, Error> {
+        Ok(self.admitted_stock(ADD_ITEM)?.items.len())
     }
 
     fn admitted_stock(&self, name: &str) -> Result<&State, Error> {
@@ -170,7 +216,7 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
-        if self.stock.is_none() || !slot_native(name) {
+        if self.stock.is_none() || !stock_native_name(name) {
             return None;
         }
         Some(match name {
@@ -178,6 +224,8 @@ impl ObjectHost {
             SET_ALL_UNIT => self.set_all_slots(name, args, false),
             SET_ITEM => self.set_unit_slots(name, args, SlotKind::Item),
             SET_UNIT => self.set_unit_slots(name, args, SlotKind::Unit),
+            ADD_ITEM => self.add_item_stock(name, args),
+            REMOVE_ITEM => self.remove_item_stock(name, args),
             _ => Err(self.inner.error(name, Failure::Signature)),
         })
     }
@@ -222,7 +270,7 @@ impl ObjectHost {
             {
                 row.slots = slots;
                 None
-            } else if state.units.len() >= state.max_unit_records {
+            } else if state.records() >= state.max_records {
                 Some(Failure::Budget("stock unit slots"))
             } else if state.units.try_reserve(1).is_err() {
                 Some(Failure::Capacity)
@@ -239,5 +287,59 @@ impl ObjectHost {
             None => Ok(Value::Null),
             Some(failure) => Err(self.inner.error(name, failure)),
         }
+    }
+
+    fn add_item_stock(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let [unit, Value::Int(item), Value::Int(current), Value::Int(max)] = args else {
+            return Err(self.inner.error(name, Failure::StockState("arguments")));
+        };
+        let unit = self.stock_unit(unit, name)?;
+        let row = ItemStock {
+            unit,
+            item: *item,
+            current: *current,
+            max: *max,
+        };
+        let failure = {
+            let state = self.stock.as_mut().expect("stock admitted");
+            if let Some(existing) = state
+                .items
+                .iter_mut()
+                .find(|existing| existing.unit == unit && existing.item == row.item)
+            {
+                *existing = row;
+                None
+            } else if state.records() >= state.max_records {
+                Some(Failure::Budget("stock item records"))
+            } else if state.items.try_reserve(1).is_err() {
+                Some(Failure::Capacity)
+            } else {
+                state.items.push(row);
+                None
+            }
+        };
+        match failure {
+            None => Ok(Value::Null),
+            Some(failure) => Err(self.inner.error(name, failure)),
+        }
+    }
+
+    fn remove_item_stock(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let [unit, Value::Int(item)] = args else {
+            return Err(self.inner.error(name, Failure::StockState("arguments")));
+        };
+        let unit = self.stock_unit(unit, name)?;
+        let state = self.stock.as_mut().expect("stock admitted");
+        let Some(at) = state
+            .items
+            .iter()
+            .position(|row| row.unit == unit && row.item == *item)
+        else {
+            return Err(self
+                .inner
+                .error(name, Failure::StockState("no item stock record")));
+        };
+        state.items.remove(at);
+        Ok(Value::Null)
     }
 }
