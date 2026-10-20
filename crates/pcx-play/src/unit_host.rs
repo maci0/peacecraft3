@@ -94,7 +94,9 @@ pub struct ExecutedUnit {
     /// Assigned creation-player colour, captured before later ownership transfers.
     pub creation_color: Option<HandleId>,
     pub source: Source,
+    /// Executed `CreateUnit` x. Live acceptance is still unresolved.
     pub x: f32,
+    /// Executed `CreateUnit` y. Live acceptance is still unresolved.
     pub y: f32,
     /// Accepted world position on this same handle, when creation placement is admitted.
     /// `x` and `y` remain the executed request.
