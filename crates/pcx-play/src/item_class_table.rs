@@ -58,18 +58,18 @@ pub struct ItemClassTable {
     pub default: i32,
 }
 
-struct Section<'a> {
-    rva: u32,
-    bytes: &'a [u8],
+pub(crate) struct Section<'a> {
+    pub(crate) rva: u32,
+    pub(crate) bytes: &'a [u8],
 }
 
-struct Image<'a> {
-    image_base: u32,
-    text: Section<'a>,
-    rdata: Section<'a>,
+pub(crate) struct Image<'a> {
+    pub(crate) image_base: u32,
+    pub(crate) text: Section<'a>,
+    pub(crate) rdata: Section<'a>,
 }
 
-fn bytes_at(data: &[u8], at: usize, len: usize) -> Option<&[u8]> {
+pub(crate) fn bytes_at(data: &[u8], at: usize, len: usize) -> Option<&[u8]> {
     data.get(at..at.checked_add(len)?)
 }
 
@@ -86,7 +86,7 @@ fn i32_at(data: &[u8], at: usize) -> Option<i32> {
 }
 
 impl<'a> Image<'a> {
-    fn parse(data: &'a [u8]) -> Result<Self, ItemClassError> {
+    pub(crate) fn parse(data: &'a [u8]) -> Result<Self, ItemClassError> {
         let bad = ItemClassError::Image;
         let pe = u32_at(data, PE_OFFSET_AT).ok_or(bad("no PE header offset"))? as usize;
         if bytes_at(data, pe, 4) != Some(b"PE\0\0") {
@@ -151,12 +151,12 @@ impl<'a> Image<'a> {
     }
 
     /// Start of the function containing `offset`: the last prologue at or before it.
-    fn function_start(&self, offset: usize) -> Option<usize> {
+    pub(crate) fn function_start(&self, offset: usize) -> Option<usize> {
         self.text.bytes.get(..=offset)?.windows(3).rposition(|w| w == PROLOGUE)
     }
 
     /// Offset of the next prologue after `start`, or the end of `.text`.
-    fn function_end(&self, start: usize) -> usize {
+    pub(crate) fn function_end(&self, start: usize) -> usize {
         let code = self.text.bytes;
         code.get(start + 3..)
             .and_then(|rest| rest.windows(3).position(|w| w == PROLOGUE))
@@ -164,7 +164,7 @@ impl<'a> Image<'a> {
     }
 
     /// Sorted, distinct `.text` offsets of direct calls inside the function at `start`.
-    fn callees(&self, start: usize) -> Vec<usize> {
+    pub(crate) fn callees(&self, start: usize) -> Vec<usize> {
         let code = self.text.bytes;
         let end = self.function_end(start);
         let mut out = BTreeSet::new();
