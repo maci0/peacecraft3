@@ -626,7 +626,7 @@ mod selected_texture_tests {
         let red = load_textures_from_paths(&paths, |_| Ok(tga([0, 0, 255, 255]))).unwrap();
         let blue = load_textures_from_paths(&paths, |_| Ok(tga([255, 0, 0, 255]))).unwrap();
         assert_eq!(red.len(), 1);
-        assert_ne!(red[0].rgba_bytes(), blue[0].rgba_bytes());
+        assert_ne!(red[0].rgba, blue[0].rgba);
     }
 
     #[test]

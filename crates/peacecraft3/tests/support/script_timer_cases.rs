@@ -3,7 +3,7 @@ use super::*;
 use peacecraft3::map_script_session::TimerSessionError;
 use std::collections::BTreeMap;
 
-pub(super) const TIMER_COMMON: &str = "\
+pub(crate) const TIMER_COMMON: &str = "\
 native PauseGame takes boolean paused returns nothing
 native TimerStart takes timer t, real timeout, boolean periodic, code handler returns nothing
 native TimerGetElapsed takes timer t returns real

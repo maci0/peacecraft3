@@ -388,6 +388,7 @@ pub fn control_items_for(
 // ---------------------------------------------------------------------------
 // Bevy UI.
 
+use bevy::ecs::system::SystemParam;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::render::render_resource::{
@@ -1308,16 +1309,26 @@ fn uniform(rgba: &[u8]) -> bool {
 }
 
 /// Decodes pending art and puts it on its node.
+#[derive(SystemParam)]
+struct ArtQueries<'w, 's> {
+    pending: Query<'w, 's, (Entity, &'static PendingArt, Option<&'static BackdropRepeat>)>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    sources: Query<'w, 's, &'static ArtSource>,
+}
+
 fn load_art(
     mut commands: Commands,
     mut cache: ResMut<GlueImages>,
     mut images: ResMut<Assets<Image>>,
     mut additive: ResMut<Assets<AdditiveImage>>,
     mut backgrounds: ResMut<Assets<BackdropImage>>,
-    pending: Query<(Entity, &PendingArt, Option<&BackdropRepeat>)>,
-    parents: Query<&ChildOf>,
-    sources: Query<&ArtSource>,
+    queries: ArtQueries,
 ) {
+    let ArtQueries {
+        pending,
+        parents,
+        sources,
+    } = queries;
     for (entity, art, repeats) in &pending {
         let source = art_source(entity, &parents, &sources);
         let source_id = source

@@ -7,6 +7,7 @@ use crate::glue_menu::{self, GlueButton, GlueLabel};
 use crate::mainmenu::{FRAME_H, FRAME_W};
 use crate::menu_material::MenuMaterial;
 use bevy::camera::visibility::RenderLayers;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use peacecraft3::campaign_score::{ActionOutcome, ScoreScreen, ScoreScreenState, press};
 use peacecraft3::campaign_score_assets::ScoreScreenAssets;
@@ -18,6 +19,24 @@ const VIEWPORT: (f32, f32) = (FRAME_W, FRAME_H);
 
 #[derive(Component)]
 struct ScoreScreenRoot;
+
+#[derive(SystemParam)]
+struct ScoreStores<'w> {
+    meshes: ResMut<'w, Assets<Mesh>>,
+    materials: ResMut<'w, Assets<MenuMaterial>>,
+    images: ResMut<'w, Assets<Image>>,
+}
+
+type ScoreRoots<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        Option<&'static crate::glue_menu::ArtSource>,
+        Option<&'static ScoreSceneHandles>,
+    ),
+    With<ScoreScreenRoot>,
+>;
 
 pub fn install(app: &mut App) {
     app.add_systems(
@@ -56,18 +75,14 @@ fn rebuild(
     state: Res<ScoreScreenState>,
     assets: Res<ScoreScreenAssets>,
     mut glue: ResMut<crate::glue_menu::GlueImages>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<MenuMaterial>>,
-    mut images: ResMut<Assets<Image>>,
-    roots: Query<
-        (
-            Entity,
-            Option<&crate::glue_menu::ArtSource>,
-            Option<&ScoreSceneHandles>,
-        ),
-        With<ScoreScreenRoot>,
-    >,
+    stores: ScoreStores,
+    roots: ScoreRoots,
 ) {
+    let ScoreStores {
+        mut meshes,
+        mut materials,
+        mut images,
+    } = stores;
     if !(state.is_changed() || assets.is_changed()) {
         return;
     }

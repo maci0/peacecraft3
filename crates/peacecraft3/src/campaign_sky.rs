@@ -424,11 +424,7 @@ mod tests {
 
     fn scene_clear(app: &mut App) -> ClearColorConfig {
         let entity = scene(app);
-        app.world()
-            .get::<Camera>(entity)
-            .unwrap()
-            .clear_color
-            .clone()
+        app.world().get::<Camera>(entity).unwrap().clear_color
     }
 
     fn sky_camera_count(app: &mut App) -> usize {
@@ -516,7 +512,7 @@ mod tests {
         app.update();
         let camera = app.world().get::<Camera>(entity).unwrap();
         assert_eq!(camera.order, 7, "unrelated field is not reset");
-        assert_clear(camera.clear_color.clone(), &green());
+        assert_clear(camera.clear_color, &green());
         assert_eq!(sky_camera_count(&mut app), 0);
     }
 
@@ -669,24 +665,29 @@ mod production {
     /// Publish a session through the production map request path, then seed the lighting
     /// inputs the session's first `project` pass could not read.
     fn publish(app: &mut App, script: &str, revision: u64, assets: BTreeMap<String, Reply>) {
-        let fixture = fixture(script);
+        let mut fixture = fixture(script);
+        fixture.common.extend_from_slice(
+            crate::campaign_startup_cases::script_timer_cases::TIMER_COMMON.as_bytes(),
+        );
+        fixture.rebuild();
+        let asset_count = assets.len();
         let resolver = Arc::new(fixture.resolver_with_assets(assets));
+        let mut limits = fixture.limits();
+        limits.reader.max_listed_paths += asset_count;
         let mut requests = MapRequests::default();
         let mut sources = SelectedMapSources::default();
-        let outcome = requests.replace_selected(
-            &mut sources,
-            resolver,
-            fixture.input(revision),
-            fixture.limits(),
-        );
+        let outcome =
+            requests.replace_selected(&mut sources, resolver, fixture.input(revision), limits);
         assert!(outcome.result.is_ok(), "{:?}", outcome.result);
-        let inputs = host_inputs(requests.bindings.as_ref().unwrap().catalog.0.clone());
+        let mut inputs = host_inputs(requests.bindings.as_ref().unwrap().catalog.0.clone());
+        inputs.timer_time = Some(0.0);
         app.insert_resource(requests)
             .insert_resource(sources)
             .insert_resource(CampaignHostSupply {
                 revision,
                 inputs: Some(inputs),
             });
+        app.update();
         app.update();
         seed(app);
     }
@@ -697,9 +698,9 @@ mod production {
         peacecraft3::campaign_startup::install(&mut app);
         crate::campaign_actors::install(&mut app);
         app.init_resource::<crate::launch_gui::Launcher>()
-            .init_asset::<Mesh>()
-            .init_asset::<Image>()
-            .init_asset::<crate::menu_material::MenuMaterial>();
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<crate::menu_material::MenuMaterial>>();
         app
     }
 
@@ -728,11 +729,7 @@ mod production {
             .query_filtered::<Entity, With<CampaignSceneCamera>>()
             .single(app.world())
             .unwrap();
-        app.world()
-            .get::<Camera>(entity)
-            .unwrap()
-            .clear_color
-            .clone()
+        app.world().get::<Camera>(entity).unwrap().clear_color
     }
 
     fn sky_camera_count(app: &mut App) -> usize {

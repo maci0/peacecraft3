@@ -191,6 +191,8 @@ native SetAllItemTypeSlots takes integer slots returns nothing
 native SetAllUnitTypeSlots takes integer slots returns nothing
 native SetItemTypeSlots takes unit u, integer slots returns nothing
 native SetUnitTypeSlots takes unit u, integer slots returns nothing
+native AddItemToStock takes unit u, integer itemId, integer currentStock, integer stockMax returns nothing
+native RemoveItemFromStock takes unit u, integer itemId returns nothing
 globals
 constant fgamestate CLOCK = ConvertFGameState(2)
 constant igamestate IGAME = ConvertIGameState(1)
@@ -1011,7 +1013,9 @@ fn local_file_source_label_and_explicit_stock_profile_reach_the_same_session() {
         app.world()
             .resource::<CampaignStartup>()
             .last_error
-            .is_none()
+            .is_none(),
+        "{:?}",
+        app.world().resource::<CampaignStartup>().last_error
     );
     assert_eq!(session_marker(&mut app), Value::Int(2));
     let mut session = app
@@ -1213,7 +1217,9 @@ fn corrected_host_inputs_retry_a_refused_candidate_without_redelivery() {
         app.world()
             .resource::<CampaignStartup>()
             .last_error
-            .is_none()
+            .is_none(),
+        "{:?}",
+        app.world().resource::<CampaignStartup>().last_error
     );
     assert!(
         app.world()

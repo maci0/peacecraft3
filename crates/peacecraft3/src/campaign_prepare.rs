@@ -1,5 +1,6 @@
 //! Normal application producer for the existing admitted-map startup inputs.
 use crate::campaign_input::CampaignInput;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use pcx_play::{
     campaign_inputs::MapSources, map_admission::ParsedMapContext, player_command_log::StartIdentity,
@@ -19,6 +20,13 @@ struct Prepared {
     revision: u64,
 }
 
+#[derive(SystemParam)]
+struct PrepareSources<'w> {
+    requests: Res<'w, MapRequests>,
+    sources: Res<'w, SelectedMapSources>,
+    launcher: Res<'w, crate::launch_gui::Launcher>,
+}
+
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<Prepared>().add_systems(
         Update,
@@ -29,15 +37,18 @@ pub(crate) fn install(app: &mut App) {
 }
 
 fn prepare(
-    requests: Res<MapRequests>,
-    sources: Res<SelectedMapSources>,
-    launcher: Res<crate::launch_gui::Launcher>,
+    selected: PrepareSources,
     mut prepared: ResMut<Prepared>,
     mut supply: ResMut<CampaignHostSupply>,
     mut startup: ResMut<CampaignStartup>,
     mut seed: ResMut<CampaignSeed>,
     mut input: ResMut<CampaignInput>,
 ) {
+    let PrepareSources {
+        requests,
+        sources,
+        launcher,
+    } = selected;
     let (Some(bindings), Some(outcome), Some(context)) = (
         requests.bindings.as_ref(),
         requests.last_outcome.as_ref(),

@@ -11,6 +11,10 @@ native CreateItem takes integer typeId, real x, real y returns item
 native SetItemDropID takes item whichItem, integer unitId returns nothing
 native GetItemLevel takes item whichItem returns integer
 native GetItemType takes item whichItem returns itemtype
+native GetItemCharges takes item whichItem returns integer
+native SetItemCharges takes item whichItem, integer charges returns nothing
+native IsItemIdSellable takes integer itemId returns boolean
+native ChooseRandomItemEx takes itemtype whichType, integer level returns integer
 ";
 const MAP: &str = "\
 globals
