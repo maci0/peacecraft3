@@ -112,6 +112,8 @@ pub enum Failure {
     UnitActivity(String),
     #[error("item creation: {0}")]
     ItemState(&'static str),
+    #[error("item use: {0}")]
+    ItemUse(String),
     #[error("item catalog {requested:?}: {problem:?}")]
     ItemCatalog {
         requested: [u8; 4],
@@ -785,3 +787,4 @@ pub use objects::{
     DialogButton, DialogQuitRequest, DialogState, EventSubject, FiredEvent, FogModifier,
     GameExitRequest, Indicator, MinimapPing, Relation, ScriptDialog, Vitals, Weapon,
 };
+pub use objects::{UseCheck, UseCommit, UseGrant};

@@ -270,6 +270,8 @@ pub struct MapStartupInputs {
     pub item_classes: Option<crate::item_class_table::ItemClassTable>,
     /// Required with item budgets: sale rules derived from the loaded item metadata.
     pub item_sales: Option<crate::item_sales::ItemSaleTable>,
+    /// Required with item budgets: charge and cooldown rules from the selected ItemData and ability rows.
+    pub item_use: Option<crate::item_use_rules::Rules>,
     pub localization: Option<crate::script_localization::Bank>,
     pub unit_guards: Option<UnitGuardsInput>,
     pub player_removal_rules: Option<crate::player_removal_rules::Rules>,
@@ -517,6 +519,7 @@ pub fn assemble(
         inventory_powerup,
         item_classes,
         item_sales,
+        item_use,
         localization,
         unit_guards,
         player_removal_rules,
@@ -773,6 +776,10 @@ pub fn assemble(
     if let Some(items) = budgets.items {
         object = object.with_item_catalog(catalog, context.world.source.clone(), items)?;
         object = object.with_item_drops(items.max_records)?;
+        let item_use = item_use.ok_or_else(|| {
+            MapStartupError::Observation("item use requires charge and cooldown rules".into())
+        })?;
+        object = object.with_item_use(item_use, items.max_records)?;
         let classes = item_classes.ok_or_else(|| {
             MapStartupError::Observation("item queries require derived item classes".into())
         })?;

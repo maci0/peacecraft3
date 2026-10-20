@@ -144,6 +144,7 @@ pub mod inventory_powerup;
 pub mod inventory_powerup_host;
 pub mod item_class_table;
 pub mod item_sales;
+pub mod item_use_rules;
 pub mod script_localization;
 pub mod shop_table;
 pub mod unit_guard_rules;

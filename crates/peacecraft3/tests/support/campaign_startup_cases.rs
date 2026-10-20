@@ -618,6 +618,7 @@ fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) ->
         inventory_powerup: None,
         item_classes: None,
         item_sales: None,
+        item_use: None,
         localization: None,
         unit_guards: None,
         player_removal_rules: None,
