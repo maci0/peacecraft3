@@ -91,6 +91,7 @@ impl MapStartupHost {
             settings: input.settings,
             version: input.version,
             difficulty: input.difficulty,
+            default_difficulty: input.default_difficulty,
             slot_states: Some(states),
             controllers: Some(controllers),
         })

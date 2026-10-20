@@ -221,6 +221,22 @@ pub struct ResolvedNewGame {
     creep: HandleId,
 }
 
+/// Source of the `GetDefaultDifficulty` fallback. The app supplies no profile input, so only
+/// the native fallback applies; saved `.w3p`/registry profiles are not read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefaultDifficultyObservation {
+    /// `native_fallback` is the ordinal the selected image returns without a profile entry.
+    NoProfile { native_fallback: i32 },
+}
+
+impl DefaultDifficultyObservation {
+    fn fallback(&self) -> i32 {
+        match self {
+            Self::NoProfile { native_fallback } => *native_fallback,
+        }
+    }
+}
+
 /// `None` skips that admission. It does not install a lobby, speed or research default.
 #[derive(Clone, Debug, Default)]
 pub struct PostConfigObservations {
@@ -234,6 +250,8 @@ pub struct PostConfigObservations {
     pub version_global: Option<String>,
     /// Selected `gamedifficulty` constant, an explicit game input.
     pub difficulty_global: Option<String>,
+    /// Default difficulty for `GetDefaultDifficulty`, separate from the current difficulty.
+    pub default_difficulty: Option<DefaultDifficultyObservation>,
     /// Explicit source numbers, including players not yet created by the script.
     pub slot_states: Option<Vec<SlotObservation>>,
     pub controllers: Option<Vec<ControllerObservation>>,
@@ -246,6 +264,7 @@ pub struct ResolvedObservations {
     pub settings: Option<StartupSettings>,
     pub version: Option<HandleId>,
     pub difficulty: Option<HandleId>,
+    pub default_difficulty: Option<i32>,
     pub slot_states: Option<Vec<(i32, HandleId)>>,
     pub controllers: Option<Vec<(i32, HandleId)>>,
 }
@@ -411,6 +430,10 @@ impl MapStartupHost {
         if let Some(version) = observations.version {
             self.objects_mut().admit_startup_version(context, version)?;
         }
+        if let Some(fallback) = observations.default_difficulty {
+            self.objects_mut()
+                .admit_default_difficulty(context, fallback)?;
+        }
         if let Some(difficulty) = observations.difficulty {
             self.objects_mut()
                 .admit_game_difficulty(context, difficulty)?;
@@ -498,6 +521,10 @@ pub fn resolve_observations(
         settings,
         version,
         difficulty,
+        default_difficulty: observations
+            .default_difficulty
+            .as_ref()
+            .map(DefaultDifficultyObservation::fallback),
         slot_states,
         controllers,
     })
