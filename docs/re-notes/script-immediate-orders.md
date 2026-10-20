@@ -276,12 +276,27 @@ with no script call in between: the probe issues orders only at 1.0 s and 4.0 s,
 and the 4.0 s order belongs to the other unit. Whether the clear was a route
 timeout, a path failure or another native cause is not established.
 
-Displacement on the timer clock: the Emoo's straight segment (game clock 1.0 to
-2.75 s) covers 427.8 units, 244.5 units per game second against a reported
-`GetUnitMoveSpeed` of 320 (ratio 0.76). The Watcher over 4.0 to 8.5 s, which
-includes stops and a detour, gives 0.73. The gap exceeds the clock's 62.5 ms
-step, so it is not timer quantization. Its cause (clock scale, movement scale or
-path) is unresolved, and it bears on any rate rule that uses spd.
+Displacement against `GetUnitMoveSpeed` (spd). The 0.76 ratio in an earlier draft
+is withdrawn. It divided endpoint or window-wide distance by the quantized
+`TimerGetElapsed` clock over a span that included startup and stops. Two errors
+in it: the endpoint is not a path length, and the clock is quantized to 62.5 ms.
+The timer period (0.05 s) is the reliable time base: 169 callbacks read 8.5 s.
+Using the callback count as time and accepted steps only:
+
+- Emoo moving steps, callbacks 20 to 55: 533.3 units over 35 moving steps and 1.75 s,
+  305 units/s (spd 320, ratio 0.95). Stationary callbacks are excluded.
+- Emoo, all callbacks 20 to 104: 292 units/s, because the blocked stop (45
+  stationary callbacks) is included in the time.
+- Watcher, callbacks 80 to 169: 271 units/s over its moving callbacks (spd 280,
+  ratio 0.97). The path includes a detour; each step is a chord, so turns shorten
+  it slightly.
+
+The per-step chord was 16.0 units early in the walk (320 units/s at 0.05 s) and
+about 15.2 later, where the path turns. The 244.5 units/s figure in the earlier
+note is the same records divided by the clock span from 1.0 to 2.75 s. That span
+includes startup and stopped callbacks, so it is not a moving speed. Speed
+comparisons must use moving intervals. Endpoint or whole-window speed cannot
+refute spd while stops and detours are in the window.
 
 A static-camera diagnostic (`probe-diag.j`, Human01 source ground, runtime-chosen
 clear strip checked against `IsTerrainPathable`, fast and slow units in parallel
