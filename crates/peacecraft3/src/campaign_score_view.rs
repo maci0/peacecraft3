@@ -59,11 +59,14 @@ fn rebuild(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<MenuMaterial>>,
     mut images: ResMut<Assets<Image>>,
-    roots: Query<(
-        Entity,
-        Option<&crate::glue_menu::ArtSource>,
-        Option<&ScoreSceneHandles>,
-    )>,
+    roots: Query<
+        (
+            Entity,
+            Option<&crate::glue_menu::ArtSource>,
+            Option<&ScoreSceneHandles>,
+        ),
+        With<ScoreScreenRoot>,
+    >,
 ) {
     if !(state.is_changed() || assets.is_changed()) {
         return;
@@ -286,6 +289,7 @@ mod lifecycle_tests {
     #[test]
     fn a_failing_replacement_removes_the_previous_roots_and_their_owned_assets() {
         let mut app = score_app(assets_with_background());
+        let unrelated_entity = app.world_mut().spawn_empty().id();
         app.init_resource::<crate::glue_menu::GlueImages>()
             .init_resource::<crate::button_actions::ButtonActions>()
             .init_resource::<Assets<Mesh>>()
@@ -293,6 +297,7 @@ mod lifecycle_tests {
             .init_resource::<Assets<Image>>();
         install(&mut app);
         app.update();
+        assert!(app.world().get_entity(unrelated_entity).is_ok());
         click_quit(&mut app);
         app.update();
 
@@ -317,6 +322,7 @@ mod lifecycle_tests {
         app.update();
         click_quit(&mut app);
         app.update();
+        assert!(app.world().get_entity(unrelated_entity).is_ok());
 
         assert_eq!(
             app.world_mut()
