@@ -2,10 +2,11 @@
 
 ## Status
 
-The session host runs the harness world only. A real map is refused with its
-reasons, because the production startup that would make it playable is not
-wired to this host. Peers verify the host's identity before they show state or
-send a command.
+The `session_server` CLI still runs the harness world. The host library can also
+serve a production authority over a selected map, but that authority is not wired
+to the CLI or browser demo and has not shown an accepted player order on Human01.
+`check-map` continues to assess the harness path and refuses real maps. Peers
+verify the host's identity before they show state or send a command.
 
 ## Wire and identity
 
@@ -84,9 +85,9 @@ The application supplies a Bevy resource wrapper around that shared session.
 Map source bytes, the resolver, executable identity, edition and seed remain
 explicit inputs; no separate placement-only world is substituted.
 
-The network host still serves the harness world. Connecting the production object
-arena, owners, source movement and command delivery to the network authority
-remains open. A successful headless startup does not make a map network-playable.
+The production authority below can drive this startup through the generic host.
+The CLI and browser demo still use the harness authority; a successful headless
+startup does not by itself make a map network-playable.
 
 ## Tests
 
@@ -105,8 +106,8 @@ remains open. A successful headless startup does not make a map network-playable
 
 ## Not covered
 
-- Playable maps (see the production startup above).
-- Owner-to-player mapping and random-placement decoding.
+- Playable source maps (see the production authority limits below).
+- Random-placement decoding and a multiple-human roster policy.
 - The original's unit speed and collision. Harness movement is not game movement.
 - CLI surface, per `AGENTS.md` (The CLI Spec v0.3 candidate, pinned at
   `tools/original-game-reference/schema/clispec-v0.3.json`, hash in its `CHECKSUMS.txt`):
@@ -117,7 +118,7 @@ remains open. A successful headless startup does not make a map network-playable
   Legacy `--print-identity` and `--map FILE` remain aliases. `serve` keeps its text
   listening line on stdout.
   Checked: `tests/cli_process.rs` (12 pass, 1 gated real-map test) and
-  `tools/session-server/test_schema.py` (3 pass, `schema` validated with jsonschema
+  `tools/session-server/test_schema.py` (4 pass, `schema` validated with jsonschema
   against the pinned bytes). Full CLI Spec conformance is not claimed. The spec's
   conformance tooling has not been run.
 - Game input, lobby, combat, economy, and the original Battle.net and W3GS paths.
