@@ -73,6 +73,7 @@ pub struct ObjectHost {
     item_queries: Option<crate::item_class_table::ItemClassTable>,
     item_sales: Option<crate::item_sales::ItemSaleTable>,
     item_use: Option<item_use::ItemUse>,
+    player_scores: Option<Vec<player_score::PlayerScoreCounter>>,
     unit_explosions: Option<unit_explosion::UnitExplosions>,
     player_removal: Option<player_removal::PlayerRemovalState>,
     localized_queries: Option<crate::script_localization::Bank>,
@@ -180,6 +181,7 @@ impl ObjectHost {
             item_queries: None,
             item_sales: None,
             item_use: None,
+            player_scores: None,
             player_removal: None,
             localized_queries: None,
             game_pause: None,
@@ -818,6 +820,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.game_pause_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.player_score_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.game_exit_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -1170,6 +1175,9 @@ pub use player_removal::{PlayerRemoval, PlayerRemovalBudget, PlayerRemovalState}
 
 #[path = "game_pause_host.rs"]
 mod game_pause;
+#[path = "player_score_host.rs"]
+mod player_score;
+pub use player_score::{PlayerScoreCounter, PlayerScoreSnapshot};
 #[path = "localized_queries_host.rs"]
 mod localized_queries;
 

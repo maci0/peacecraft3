@@ -114,6 +114,8 @@ pub enum Failure {
     ItemState(&'static str),
     #[error("item use: {0}")]
     ItemUse(String),
+    #[error("player score: {0}")]
+    PlayerScore(String),
     #[error("item catalog {requested:?}: {problem:?}")]
     ItemCatalog {
         requested: [u8; 4],
@@ -774,7 +776,8 @@ pub use objects::{
     LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection, MessageBudget, MessageState,
     ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
     PlayerRemoval, PlayerRemovalBudget, PlayerRemovalState, PlayerSettings,
-    PlayerStateRequestBudget, PlayerUnitEventRegistration, PresentationState, QuestBudget,
+    PlayerScoreCounter, PlayerScoreSnapshot, PlayerStateRequestBudget, PlayerUnitEventRegistration,
+    PresentationState, QuestBudget,
     QuestEvent, QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration,
     RegionRectRequest, ResearchObservation, SoundProperties, SoundState, StackedSoundAction,
     StackedSoundRequest, StartLocation, StartPriorities, StartPriority, StartupClockState,
