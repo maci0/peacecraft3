@@ -111,7 +111,8 @@ fn exact_supplied_contracts_keep_both_existing_conversion_results() {
             Value::Int(-17),
         ),
     ] {
-        let map = format!("function main takes nothing returns {returns}\nreturn {call}\nendfunction\n");
+        let map =
+            format!("function main takes nothing returns {returns}\nreturn {call}\nendfunction\n");
         let scripts = compile(declaration, &map);
         let name = call.split('(').next().unwrap();
         match scripts.program().natives().call(name) {
