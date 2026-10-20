@@ -746,6 +746,7 @@ impl ObjectHost {
             self.advance_unit_regen(now)?;
             self.advance_combat()?;
             self.advance_inventory(work)?;
+            self.advance_sound_environments();
             Ok(moved)
         });
         if result.is_ok() {

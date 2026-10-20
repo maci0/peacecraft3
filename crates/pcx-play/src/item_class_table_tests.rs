@@ -1,4 +1,5 @@
 use super::*;
+use crate::pe_image::{PE32_MAGIC, PE_OFFSET_AT, SECTION_LEN};
 
 const IMAGE_BASE: u32 = 0x40_0000;
 const TEXT_RVA: u32 = 0x1000;
@@ -118,8 +119,8 @@ fn assemble(code: &[u8], rdata: &[u8]) -> Vec<u8> {
     out[opt..opt + 2].copy_from_slice(&PE32_MAGIC.to_le_bytes());
     out[opt + 28..opt + 32].copy_from_slice(&IMAGE_BASE.to_le_bytes());
     let sections = [
-        (TEXT_HDR, *TEXT_NAME, TEXT_RVA, code, text_len, TEXT_RAW),
-        (RDATA_HDR, *RDATA_NAME, TEXT_RVA + SECTION_RVA_STEP, rdata, rdata_len, rdata_raw),
+        (TEXT_HDR, *TEXT, TEXT_RVA, code, text_len, TEXT_RAW),
+        (RDATA_HDR, *RDATA, TEXT_RVA + SECTION_RVA_STEP, rdata, rdata_len, rdata_raw),
     ];
     for (at, name, va, body, len, raw) in sections {
         out[at..at + 8].copy_from_slice(&name);
@@ -178,7 +179,7 @@ fn refuses_section_offsets_and_addresses_that_overflow_or_leave_the_image() {
     not_pe32[0x58..0x5a].copy_from_slice(&0x20bu16.to_le_bytes());
     assert!(matches!(derive(&not_pe32, origin()), Err(ItemClassError::Image(_))));
     let mut duplicate = exe.clone();
-    duplicate[RDATA_HDR..RDATA_HDR + 8].copy_from_slice(TEXT_NAME);
+    duplicate[RDATA_HDR..RDATA_HDR + 8].copy_from_slice(TEXT);
     assert!(matches!(derive(&duplicate, origin()), Err(ItemClassError::Image(_))));
 }
 

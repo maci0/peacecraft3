@@ -96,6 +96,8 @@ pub use rpl::{Expectation, Rpl, RplError};
 pub mod scenario;
 pub mod script_trace;
 pub mod scripts;
+pub mod sound_environment;
+pub(crate) mod pe_image;
 pub mod sound_parameters;
 pub mod startup_clock;
 pub mod terrain_pathing;

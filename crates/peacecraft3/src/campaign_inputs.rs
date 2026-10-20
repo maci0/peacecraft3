@@ -335,6 +335,16 @@ pub fn prepare(
     };
     let labels = sound_sources.empty_label_bank(label_budget)?;
     let constructors = vec![sound_sources.empty_label_bank(label_budget)?];
+    let records = sound_sources.environments().to_vec();
+    let sound_environments = if records.is_empty() {
+        None
+    } else {
+        Some(pcx_play::sound_environment::SoundEnvironmentInput {
+            records,
+            tables: pcx_play::sound_environment::tables(image).map_err(|e| e.to_string())?,
+            window_ms: pcx_play::sound_environment::NATIVE_WINDOW_MS,
+        })
+    };
     let item_classes =
         pcx_play::item_class_table::derive(image, client.clone()).map_err(|e| e.to_string())?;
     Ok(MapStartupInputs {
@@ -351,6 +361,7 @@ pub fn prepare(
         rules,
         budgets: budgets(),
         camera: source.camera,
+        sound_environments,
         // Executed-path loaders attached by campaign_startup fill these stores.
         day_night: pcx_play::day_night::Assets::read(
             &[],

@@ -55,6 +55,7 @@ pub struct ObjectHost {
     terrain_pathing: Option<crate::terrain_pathing::TerrainPathing>,
     unit_placement: Option<crate::unit_placement::Placement>,
     map_music: Option<music::State>,
+    sound_environments: Option<environments::State>,
     quests: Option<crate::quest_session::QuestSession>,
     game_caches: Option<game_caches::State>,
     presentation: Option<presentation::PresentationState>,
@@ -138,6 +139,7 @@ impl ObjectHost {
             terrain_pathing: None,
             unit_placement: None,
             map_music: None,
+            sound_environments: None,
             quests: None,
             game_caches: None,
             presentation: None,
@@ -708,6 +710,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.map_music_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.sound_environment_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.time_of_day_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -933,6 +938,9 @@ mod terrain_pathing;
 #[path = "map_music_host.rs"]
 mod music;
 pub use music::MapMusicSelection;
+
+#[path = "sound_environment_host.rs"]
+mod environments;
 
 #[path = "file_sound_host.rs"]
 mod files;

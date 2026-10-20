@@ -3,6 +3,7 @@
 //! name, each returning its ordinal. The chain is found by a deterministic call-graph walk
 //! from the `units\ItemData` path. Names and ordinals come from its code, not from a list
 //! in this crate. The table keeps the image identity it was derived from.
+use crate::pe_image::{PeSections, RDATA, Section, TEXT, i32_at, u32_at};
 use crate::scripts::AssetIdentity;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,13 +21,6 @@ const ENTRY_LEN: usize = 14;
 const ORDINAL_WINDOW: usize = 12;
 const MAX_NAME_LEN: usize = 64;
 const NULL_WINDOW: usize = 0x20;
-const MAX_SECTIONS: usize = 96;
-const PE_OFFSET_AT: usize = 0x3c;
-const COFF_LEN: usize = 20;
-const PE32_MAGIC: u16 = 0x10b;
-const SECTION_LEN: usize = 40;
-const TEXT_NAME: &[u8; 8] = b".text\0\0\0";
-const RDATA_NAME: &[u8; 8] = b".rdata\0\0";
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ItemClassError {
@@ -58,84 +52,27 @@ pub struct ItemClassTable {
     pub default: i32,
 }
 
-struct Section<'a> {
-    rva: u32,
-    bytes: &'a [u8],
-}
-
 struct Image<'a> {
     image_base: u32,
     text: Section<'a>,
     rdata: Section<'a>,
 }
 
-fn bytes_at(data: &[u8], at: usize, len: usize) -> Option<&[u8]> {
-    data.get(at..at.checked_add(len)?)
-}
-
-fn u16_at(data: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(bytes_at(data, at, 2)?.try_into().ok()?))
-}
-
-fn u32_at(data: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(bytes_at(data, at, 4)?.try_into().ok()?))
-}
-
-fn i32_at(data: &[u8], at: usize) -> Option<i32> {
-    Some(i32::from_le_bytes(bytes_at(data, at, 4)?.try_into().ok()?))
-}
-
 impl<'a> Image<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, ItemClassError> {
         let bad = ItemClassError::Image;
-        let pe = u32_at(data, PE_OFFSET_AT).ok_or(bad("no PE header offset"))? as usize;
-        if bytes_at(data, pe, 4) != Some(b"PE\0\0") {
-            return Err(bad("missing PE signature"));
-        }
-        let coff = pe + 4;
-        let count = usize::from(u16_at(data, coff + 2).ok_or(bad("no section count"))?);
-        let opt_len = usize::from(u16_at(data, coff + 16).ok_or(bad("no optional header size"))?);
-        let opt = coff + COFF_LEN;
-        if u16_at(data, opt) != Some(PE32_MAGIC) {
-            return Err(bad("not a PE32 image"));
-        }
-        let image_base = u32_at(data, opt + 28).ok_or(bad("no image base"))?;
-        if count > MAX_SECTIONS {
-            return Err(bad("too many sections"));
-        }
-        let table = opt.checked_add(opt_len).ok_or(bad("optional header overflows"))?;
-        let mut text = None;
-        let mut rdata = None;
-        for i in 0..count {
-            let at = table
-                .checked_add(SECTION_LEN * i)
-                .ok_or(bad("section table overflows"))?;
-            let header = bytes_at(data, at, SECTION_LEN).ok_or(bad("truncated section table"))?;
-            let virtual_size = u32_at(header, 8).ok_or(bad("section size"))?;
-            let rva = u32_at(header, 12).ok_or(bad("section address"))?;
-            let raw_size = u32_at(header, 16).ok_or(bad("section data size"))?;
-            let raw_at = u32_at(header, 20).ok_or(bad("section data offset"))? as usize;
-            let mapped = virtual_size.max(raw_size);
-            image_base
-                .checked_add(rva)
-                .and_then(|v| v.checked_add(mapped))
-                .ok_or(bad("section address overflows"))?;
-            let bytes = bytes_at(data, raw_at, raw_size as usize)
-                .ok_or(bad("section data outside image"))?;
-            let section = Section { rva, bytes };
-            let slot = match &header[..8] {
-                name if name == TEXT_NAME => &mut text,
-                name if name == RDATA_NAME => &mut rdata,
-                _ => continue,
-            };
-            if slot.replace(section).is_some() {
-                return Err(bad("duplicate section"));
-            }
-        }
+        let pe = PeSections::parse(data).map_err(bad)?;
+        let section = |name, missing| -> Result<Section<'a>, ItemClassError> {
+            let found = pe.section(name).map_err(bad)?.ok_or(bad(missing))?;
+            Ok(Section {
+                rva: found.rva,
+                bytes: found.bytes,
+            })
+        };
         Ok(Self {
-            image_base,
-            text: text.ok_or(bad("no .text section"))?,
-            rdata: rdata.ok_or(bad("no .rdata section"))?,
+            image_base: pe.image_base,
+            text: section(TEXT, "no .text section")?,
+            rdata: section(RDATA, "no .rdata section")?,
         })
     }
 
