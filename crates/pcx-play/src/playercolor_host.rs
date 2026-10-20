@@ -781,7 +781,7 @@ pub use objects::{
     UnitInRangeRegistration, UnitRangeEntry, UnitStateBudget,
 };
 pub use objects::{
-    CinematicScene, Combat, DestructableState, DialogBudget, DialogButton, DialogQuitRequest,
-    DialogState, EventSubject, FiredEvent, FogModifier, GameExitRequest, Indicator, MinimapPing,
-    Relation, ScriptDialog, Vitals, Weapon,
+    CinematicScene, Combat, CombatActor, CombatTraceEvent, DestructableState, DialogBudget,
+    DialogButton, DialogQuitRequest, DialogState, EventSubject, FiredEvent, FogModifier,
+    GameExitRequest, Indicator, MinimapPing, Relation, ScriptDialog, Vitals, Weapon,
 };
