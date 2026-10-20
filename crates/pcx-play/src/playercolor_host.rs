@@ -792,4 +792,4 @@ pub use objects::{
     GameExitRequest, Indicator, MinimapPing, PurchaseOutcome, PurchaseRefusal, Relation,
     ScriptDialog, Vitals, Weapon,
 };
-pub use objects::{CooldownScope, UseCheck, UseCommit, UseGrant};
+pub use objects::{UseCheck, UseCommit, UseGrant};

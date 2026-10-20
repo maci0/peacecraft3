@@ -1020,7 +1020,7 @@ mod item_query;
 mod item_sale;
 #[path = "item_use_host.rs"]
 mod item_use;
-pub use item_use::{CooldownScope, UseCheck, UseCommit, UseGrant};
+pub use item_use::{UseCheck, UseCommit, UseGrant};
 
 #[path = "trigger_host.rs"]
 mod trigger_admission;

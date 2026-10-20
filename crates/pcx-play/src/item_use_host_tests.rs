@@ -155,7 +155,7 @@ fn host(max_records: usize) -> ObjectHost {
             },
         )
         .unwrap()
-        .with_item_use(rules(), max_records, CooldownScope::SharedGroup)
+        .with_item_use(rules(), max_records)
         .unwrap()
 }
 
@@ -189,16 +189,13 @@ fn set(h: &mut ObjectHost, id: HandleId, count: i32) {
 fn admission_requires_items_and_the_declared_natives_once() {
     let base = ObjectHost::checked(enums()).unwrap();
     assert!(
-        base.with_item_use(rules(), 1, CooldownScope::SharedGroup)
-            .is_err(),
+        base.with_item_use(rules(), 1).is_err(),
         "items are required first"
     );
     let h = host(4);
     assert!(h.item_use.is_some());
     assert!(
-        host(4)
-            .with_item_use(rules(), 4, CooldownScope::SharedGroup)
-            .is_err(),
+        host(4).with_item_use(rules(), 4).is_err(),
         "second admission refuses"
     );
 }

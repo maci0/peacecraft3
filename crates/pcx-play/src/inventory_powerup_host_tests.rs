@@ -443,7 +443,6 @@ fn open() -> Fixture {
         .with_item_use(
             crate::item_use_rules::Rules::new(powerup_tables(), Overlay::default()),
             8,
-            crate::playercolor_host::CooldownScope::SharedGroup,
         )
         .unwrap();
     h.native("SetRandomSeed", &[Value::Int(7)]).unwrap();
