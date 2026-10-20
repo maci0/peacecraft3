@@ -331,13 +331,15 @@ fn open() -> Fixture {
             },
         )
         .unwrap();
+    h.admit_unit_activity(activity, 65536).unwrap();
     h.admit_unit_vitals(HeroVitals {
         life_per_strength: LIFE_PER_STRENGTH,
         mana_per_intelligence: 15.0,
+        life_regen_per_strength: 0.0,
+        mana_regen_per_intelligence: 0.0,
     })
     .unwrap();
     let mut h = h.with_inventory_powerup(tome).unwrap();
-    h.admit_unit_activity(activity, 65536).unwrap();
     h.native("SetRandomSeed", &[Value::Int(7)]).unwrap();
     h.admit_combat(combat, "alpha").unwrap();
     h.set_neutral_passive(15);

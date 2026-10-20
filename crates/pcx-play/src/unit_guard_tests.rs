@@ -51,6 +51,8 @@ endglobals
     h.admit_unit_vitals(HeroVitals {
         life_per_strength: 25.,
         mana_per_intelligence: 15.,
+        life_regen_per_strength: 0.,
+        mana_regen_per_intelligence: 0.,
     })
     .unwrap();
     let mut combat = rules();

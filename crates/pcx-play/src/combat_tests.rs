@@ -100,6 +100,9 @@ fn armed(range: &str, weapon: &str) -> Vec<([u8; 4], ObjectField)> {
         column(b"H003", B, "mana0", Int, "-"),
         column(b"H004", B, "def", Int, "2"),
         column(b"H005", B, "defType", Token, "medium"),
+        column(b"H006", B, "regenHP", Real, "0"),
+        column(b"H007", B, "regenMana", Real, "-"),
+        column(b"H008", B, "regenType", Token, "none"),
         column(b"W001", W, "weapsOn", Int, "1"),
         column(b"W002", W, "atkType1", Token, "pierce"),
         column(b"W003", W, "weapTp1", Token, weapon),
@@ -207,6 +210,8 @@ fn open_selected(
     h.admit_unit_vitals(HeroVitals {
         life_per_strength: 25.0,
         mana_per_intelligence: 15.0,
+        life_regen_per_strength: 0.0,
+        mana_regen_per_intelligence: 0.0,
     })
     .unwrap();
     h.admit_combat(combat, "alpha").unwrap();
@@ -1275,4 +1280,93 @@ fn set_unit_exploded_then_kill_unit_retains_the_flag_through_the_death_path() {
     h.native("SetUnitExploded", &[Value::Handle(a), Value::Bool(false)])
         .unwrap();
     assert_eq!(h.unit_exploded(a), Some(false));
+}
+
+/// `armed` with regeneration rates and a 50-point mana pool. Keys `H002`/`H003`
+/// override the base mana columns, and `H006`..`H008` the regeneration columns.
+fn regen_fields(
+    life_per_second: &str,
+    life_type: &str,
+    mana_per_second: &str,
+) -> Vec<([u8; 4], ObjectField)> {
+    let mut fields = armed("64", "normal");
+    for (id, column_name, kind, value) in [
+        (b"H002", "manaN", FieldKind::Int, "50"),
+        (b"H003", "mana0", FieldKind::Int, "0"),
+        (b"H006", "regenHP", FieldKind::Real, life_per_second),
+        (b"H007", "regenMana", FieldKind::Real, mana_per_second),
+        (b"H008", "regenType", FieldKind::Token, life_type),
+    ] {
+        fields.push(column(id, SlkId::UnitBalance, column_name, kind, value));
+    }
+    fields
+}
+
+fn set_pools(vm: &mut Vm, unit: HandleId, life: f32, mana: f32) {
+    let state = |vm: &mut Vm, name: &str| vm.global(name);
+    for (name, value) in [("UNIT_STATE_LIFE", life), ("UNIT_STATE_MANA", mana)] {
+        let property = state(vm, name);
+        vm.host()
+            .inner
+            .native(
+                "SetUnitState",
+                &[Value::Handle(unit), property, Value::Real(value)],
+            )
+            .unwrap();
+    }
+}
+
+fn pools(vm: &mut Vm, unit: HandleId) -> (f32, f32) {
+    let v = vm.host().inner.unit_vitals(unit).unwrap().unwrap();
+    (v.life, v.mana)
+}
+
+#[test]
+fn regeneration_integrates_stock_rates_and_caps_at_maxima_for_any_tick_chunking() {
+    let fields = regen_fields("0.25", "always", "0.5");
+    let (mut whole, a, b) = open(&fields);
+    let (mut stepped, c, d) = open(&fields);
+    set_pools(&mut whole, a, 5.0, 0.0);
+    set_pools(&mut whole, b, 19.9, 49.0);
+    set_pools(&mut stepped, c, 5.0, 0.0);
+    set_pools(&mut stepped, d, 19.9, 49.0);
+    whole.host().inner.next_timer_expiry(10.0, &mut 100).unwrap();
+    whole.host().inner.advance_unit_activity(10.0, &mut 65536).unwrap();
+    step(&mut stepped, 10.0);
+    // 5 + 0.25 * 10 and 0 + 0.5 * 10 are exact; the second unit hits both maxima.
+    assert_eq!(pools(&mut whole, a), (7.5, 5.0));
+    assert_eq!(pools(&mut stepped, c), (7.5, 5.0));
+    assert_eq!(pools(&mut whole, b), (20.0, 50.0));
+    assert_eq!(pools(&mut stepped, d), (20.0, 50.0));
+}
+
+#[test]
+fn regeneration_never_applies_to_units_without_rate_or_with_none() {
+    let fields = regen_fields("0", "none", "0");
+    let (mut vm, a, _) = open(&fields);
+    set_pools(&mut vm, a, 5.0, 0.0);
+    step(&mut vm, 10.0);
+    assert_eq!(pools(&mut vm, a), (5.0, 0.0));
+}
+
+#[test]
+fn night_and_blight_regeneration_refuse_without_their_source_state() {
+    for (life_type, reason) in [
+        ("night", "day/night regeneration needs the admitted time-of-day window"),
+        ("blight", "blight regeneration needs terrain blight state"),
+    ] {
+        let fields = regen_fields("0.25", life_type, "0");
+        let (mut vm, a, _) = open(&fields);
+        set_pools(&mut vm, a, 5.0, 0.0);
+        vm.host().inner.next_timer_expiry(1.0, &mut 100).unwrap();
+        let error = vm
+            .host()
+            .inner
+            .advance_unit_activity(1.0, &mut 65536)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(reason), "{life_type}: {error}");
+        // The refused span is not integrated: the pool and projection clock are unchanged.
+        assert_eq!(pools(&mut vm, a), (5.0, 0.0));
+    }
 }
