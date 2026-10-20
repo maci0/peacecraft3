@@ -21,7 +21,12 @@ python tools/original-game-reference/reference.py capture --run-dir .scratch/ori
 python tools/original-game-reference/reference.py key --run-dir .scratch/original-reference-1 --key Escape
 python tools/original-game-reference/reference.py click --run-dir .scratch/original-reference-1 --x 300 --y 400
 python tools/original-game-reference/reference.py stop --run-dir .scratch/original-reference-1
+python tools/original-game-reference/reference.py export-replay --run-dir .scratch/original-reference-1 --label match-1
 ```
+
+`export-replay` copies the Wine prefix's `Warcraft III/Replay/LastReplay.w3g` into
+`replays/<label>.w3g` with a JSON receipt. It refuses a running container, so run
+it after `stop`. It copies bytes only and does not parse the file.
 
 Dimensions and DPI are caller-selected experiment conditions, not game defaults.
 Use a separate `prepare` directory for each resolution, and stop one experiment

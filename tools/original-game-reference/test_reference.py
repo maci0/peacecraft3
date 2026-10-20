@@ -30,7 +30,7 @@ class ReferenceTests(unittest.TestCase):
         published = json.loads((HERE / 'schema/clispec-v0.3.json').read_text())
         jsonschema.Draft202012Validator(published).validate(schema)
         self.assertEqual(schema['clispec'], '0.3')
-        self.assertEqual(len(schema['commands']), 12)
+        self.assertEqual(len(schema['commands']), 13)
         self.assertIn('compare', [command['name'] for command in schema['commands']])
         sha = hashlib.sha256((HERE / 'schema/clispec-v0.3.json').read_bytes()).hexdigest()
         self.assertIn(f'candidate  {sha}  schema/v0.3.json', (HERE / 'schema/CHECKSUMS.txt').read_text())
@@ -197,6 +197,70 @@ class ReferenceTests(unittest.TestCase):
                                  '--output', str(tmp / 'mismatch'), '--note', 'fixture')
             self.assertEqual(result.returncode, 2)
             self.assertFalse((tmp / 'mismatch').exists())
+
+    def replay_run(self, tmp, payload=b'synthetic replay fixture', user='tester', docs='Documents'):
+        run = Path(tmp) / 'run'
+        run.mkdir()
+        (run / 'source.json').write_text(json.dumps({'executable_sha256': 'a' * 64}))
+        replay = run / 'prefix/drive_c/users' / user / docs / ref.REPLAY_RELATIVE
+        replay.parent.mkdir(parents=True)
+        replay.write_bytes(payload)
+        return run
+
+    def test_export_replay_copies_the_single_candidate_with_a_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.replay_run(tmp)
+            args = argparse.Namespace(run_dir=str(run), label='sample-1')
+            with patch.object(ref, 'inspect', return_value=None):
+                result = ref.export_replay(args)
+                self.assertEqual(set(result), {'replay', 'sha256', 'bytes'})
+                self.assertEqual((run / 'replays/sample-1.w3g').read_bytes(), b'synthetic replay fixture')
+                self.assertEqual(result['bytes'], len(b'synthetic replay fixture'))
+                self.assertEqual(result['sha256'], hashlib.sha256(b'synthetic replay fixture').hexdigest())
+                receipt = json.loads((run / 'replays/sample-1.json').read_text())
+                self.assertEqual(receipt['executable_sha256'], 'a' * 64)
+                self.assertEqual(receipt['source'], 'prefix/drive_c/users/tester/Documents/Warcraft III/Replay/LastReplay.w3g')
+                with self.assertRaisesRegex(ref.Failure, 'already exists'):
+                    ref.export_replay(args)
+
+    def test_export_replay_refuses_ambiguous_linked_oversized_and_running_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.replay_run(tmp)
+            args = argparse.Namespace(run_dir=str(run), label='sample-2')
+            source = run / 'prefix/drive_c/users/tester/Documents' / ref.REPLAY_RELATIVE
+            with patch.object(ref, 'inspect', return_value=None):
+                other = run / 'prefix/drive_c/users/other/My Documents' / ref.REPLAY_RELATIVE
+                other.parent.mkdir(parents=True)
+                other.write_bytes(b'second')
+                with self.assertRaisesRegex(ref.Failure, 'found 2'):
+                    ref.export_replay(args)
+                other.unlink()
+                source.unlink()
+                source.symlink_to('/etc/passwd')
+                with self.assertRaisesRegex(ref.Failure, 'not a regular file'):
+                    ref.export_replay(args)
+                source.unlink()
+                source.write_bytes(b'x' * (ref.MAX_REPLAY + 1))
+                with self.assertRaisesRegex(ref.Failure, 'exceeds'):
+                    ref.export_replay(args)
+                self.assertFalse((run / 'replays').exists())
+            with patch.object(ref, 'inspect', return_value={'State': {'Running': True}}), \
+                    self.assertRaisesRegex(ref.Failure, 'stop the reference run'):
+                ref.export_replay(args)
+
+    def test_export_replay_usage_failure_is_json_stderr_with_exit_two(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.replay_run(tmp)
+            result = self.invoke('export-replay', '--run-dir', str(run), '--label', 'bad label!')
+            self.assertEqual(result.returncode, 2)
+            self.assertFalse(result.stdout)
+            self.assertEqual(json.loads(result.stderr)['error']['kind'], 'reference_failed')
+
+    def test_export_replay_schema_matches_its_arguments_and_output(self):
+        schema = json.loads((HERE / 'schema.json').read_text())
+        command = next(c for c in schema['commands'] if c['name'] == 'export-replay')
+        self.assertEqual([a['name'] for a in command['args']], ['--run-dir', '--label'])
+        self.assertEqual(sorted(command['stdout_schema']['required']), ['bytes', 'replay', 'sha256'])
 
 
 if __name__ == '__main__':

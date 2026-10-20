@@ -207,6 +207,57 @@ def stop(args):
     return {'running': False, 'container_preserved': bool(state)}
 
 
+REPLAY_RELATIVE = Path('Warcraft III/Replay/LastReplay.w3g')
+REPLAY_DOCUMENTS = ('Documents', 'My Documents')
+MAX_REPLAY = 32 * 1024 * 1024
+
+
+def replay_sources(path):
+    users = path / 'prefix/drive_c/users'
+    if not users.is_dir():
+        return []
+    found = []
+    for user in users.iterdir():
+        if user.is_symlink():
+            continue
+        for docs in REPLAY_DOCUMENTS:
+            candidate = user / docs / REPLAY_RELATIVE
+            if candidate.is_symlink() or candidate.exists():
+                found.append(candidate)
+    return found
+
+
+def export_replay(args):
+    path = local_run(args.run_dir)
+    if not re.fullmatch(r'[a-zA-Z0-9_-]{1,80}', args.label):
+        raise Failure('label must be 1..80 letters, digits, underscores or hyphens')
+    state = inspect(path)
+    if state and state['State']['Running']:
+        raise Failure('stop the reference run before export; the game writes its replay at match end')
+    found = replay_sources(path)
+    if len(found) != 1:
+        raise Failure(f'expected exactly one {REPLAY_RELATIVE} under the Wine prefix, found {len(found)}')
+    source = found[0]
+    if source.is_symlink() or not source.is_file():
+        raise Failure('replay is not a regular file; refusing to follow it')
+    with source.open('rb') as handle:
+        data = handle.read(MAX_REPLAY + 1)
+    if len(data) > MAX_REPLAY:
+        raise Failure(f'replay exceeds the {MAX_REPLAY // (1024 * 1024)} MiB bound')
+    target_dir = path / 'replays'
+    target_dir.mkdir(exist_ok=True)
+    target, receipt = target_dir / f'{args.label}.w3g', target_dir / f'{args.label}.json'
+    if target.exists() or receipt.exists():
+        raise Failure('replay label already exists; choose a new label')
+    with target.open('xb') as output:
+        output.write(data)
+    executable = json.loads((path / 'source.json').read_text())['executable_sha256']
+    record = mark(path, 'export-replay', {'label': args.label, 'sha256': hashlib.sha256(data).hexdigest(),
+                  'bytes': len(data), 'source': str(source.relative_to(path)), 'executable_sha256': executable})
+    write_json(receipt, record)
+    return {'replay': str(target), 'sha256': record['sha256'], 'bytes': record['bytes']}
+
+
 PIXEL_POLICY = {
     'comparison': 'exact decoded RGB equality',
     'channel_tolerance': 0,
@@ -297,9 +348,9 @@ def parser():
     a = s.add_parser('launch'); a.add_argument('--run-dir', required=True)
     for arg in ['width', 'height', 'dpi']: a.add_argument('--' + arg, type=positive, required=True)
     a.add_argument('--game-arg', action='append', default=[])
-    for sub in ['status', 'stop', 'capture', 'key', 'click']:
+    for sub in ['status', 'stop', 'capture', 'export-replay', 'key', 'click']:
         a = s.add_parser(sub); a.add_argument('--run-dir', required=True)
-        if sub == 'capture': a.add_argument('--label', required=True)
+        if sub in ('capture', 'export-replay'): a.add_argument('--label', required=True)
         if sub == 'key': a.add_argument('--key', required=True)
         if sub == 'click':
             a.add_argument('--x', type=int, required=True); a.add_argument('--y', type=int, required=True)
@@ -329,7 +380,7 @@ def main():
             result = json.loads((HERE / 'schema.json').read_text())
         else:
             handler = {'prepare': prepare, 'launch': launch, 'status': status, 'stop': stop,
-                       'capture': capture, 'key': action, 'click': action, 'report': report,
+                       'capture': capture, 'export-replay': export_replay, 'key': action, 'click': action, 'report': report,
                        'compare': compare, 'rng-plan': rng_plan, 'rng-compare': rng_compare}[args.command]
             result = handler(args)
         print(json.dumps(result) if args.format == 'json' else json.dumps(result, indent=2))
