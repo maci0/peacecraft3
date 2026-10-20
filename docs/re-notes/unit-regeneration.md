@@ -9,7 +9,7 @@ after motion and before combat and inventory. Each step integrates
 `[through, now)` per unit, then sets `through = now`.
 
 - Dead units and units at life ≤ 0 keep their pools, and their clock still moves,
-  so a later revive cannot regenerate across the dead span.
+  so a later life write cannot regenerate across the dead span. Revive is not admitted: `ReviveHero` and `ReviveHeroLoc` are declared by `common.j` only.
 - A step that errors keeps every pool and clock unchanged. The next call integrates
   the same spans.
 - A span that starts before the last time-of-day rebase is refused, because the stored
@@ -136,7 +136,7 @@ admitted time-of-day, real unit pools):
   fails on that refusal when the advance is removed.
 - `rejected_clock_change_leaves_pools_and_clock_unchanged`: NaN scale and hour are
   refused before any integration; pools, scale and the later result are unchanged.
-- `units_created_mid_run_and_revived_units_do_not_regenerate_retroactively`: a unit
+- `mid_run_units_and_manually_lifed_dead_units_gain_no_retroactive_regeneration`: a unit
   created at t=5 regenerates from 5, and a unit killed at t=10 and set to 5 life at
   t=13 gains nothing until its clock reaches t=20.
 - `moving_unit_regenerates_at_its_rate_while_it_travels`: the unit moves 56 units and
@@ -145,10 +145,10 @@ admitted time-of-day, real unit pools):
 Ordering is not evidenced natively. The moving-unit test checks the rate only, since
 no blight or motion-dependent eligibility exists yet.
 
-## Dead, revived and created units
+## Dead, manually lifed and created units
 
 - Creation sets `through` to the creation time. No regeneration before creation.
-- Dead or lifeless units advance `through` with pools unchanged. A revive integrates
+- Dead or lifeless units advance `through` with pools unchanged. A later life write integrates
   from the last advance, which excludes the dead span.
 - Native comparison of these policies is not established. This is a recreation policy.
 

@@ -1512,7 +1512,7 @@ fn rejected_clock_change_leaves_pools_and_clock_unchanged() {
 }
 
 #[test]
-fn units_created_mid_run_and_revived_units_do_not_regenerate_retroactively() {
+fn mid_run_units_and_manually_lifed_dead_units_gain_no_retroactive_regeneration() {
     let fields = regen_fields("1", "always", "0");
     let (mut vm, a, _) = open(&fields);
     set_pools(&mut vm, a, 5.0, 0.0);
@@ -1527,7 +1527,8 @@ fn units_created_mid_run_and_revived_units_do_not_regenerate_retroactively() {
     assert_pools(&mut vm, a, 15.0, 0.0);
     assert_pools(&mut vm, c, 10.0, 0.0);
 
-    // A dead span integrates nothing: killed at t=10, set to 5 life at t=13.
+    // Manual fixture policy, not a revive: the dead flag stays set and SetUnitState writes life.
+    // ReviveHero/ReviveHeroLoc are declared by common.j but not admitted by this host.
     vm.host()
         .inner
         .native("KillUnit", &[Value::Handle(a)])
