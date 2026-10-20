@@ -3,7 +3,8 @@
 //! One selected install and one map file go in; the production `MapStartupHost` comes out.
 //! The steps are the application's campaign path (`native_campaign::configuration`,
 //! `map_requests` binding, `campaign_prepare`) without its Bevy systems. Every game value comes
-//! from the install's archives and the map bytes. The identity labels match the application's.
+//! from the install's archives and the map bytes. The client identity is the SHA-256 of the
+//! selected executable, which the application's adapter also uses.
 use crate::campaign_host::{self, advance_tick};
 use crate::campaign_inputs::{self, MapSources};
 use crate::install_source::{
@@ -16,7 +17,7 @@ use crate::map_script_session::MapScriptSession;
 use crate::map_scripts_import::MapScriptBudget;
 use crate::map_startup_host::MapStartupHost;
 use crate::scripts::{AssetIdentity, ScriptAsset};
-use pcx_assets::{ArchiveLayer, GameMode, Resolver};
+use pcx_assets::{Addon, ArchiveLayer, GameMode, Resolver};
 use pcx_map::Map;
 use pcx_objects::ObjectFile;
 use pcx_objects::editor::{Editor, EditorReadLimits, Overlay};
@@ -31,9 +32,6 @@ const EXECUTABLE: &str = "Warcraft III.exe";
 const NO_OCCLUSION_FADING: bool = true;
 const COMMON_SCRIPT: &str = "Scripts\\common.j";
 const BLIZZARD_SCRIPT: &str = "Scripts\\Blizzard.j";
-/// The application's client identity labels. Changing them changes every session identity.
-const CLIENT_EDITION: &str = "selected campaign client";
-const CLIENT_VERSION: &str = "reviewed Legacy 1.29.2.9231";
 const MAP_READ_BUDGET: pcx_mpq::checked::ReadBudget = pcx_mpq::checked::ReadBudget {
     max_archive_bytes: 64 << 20,
     max_archive_table_bytes: 8 << 20,
@@ -128,17 +126,22 @@ fn map_overlay(map: &Map<'_>, label: &str, member: &'static str) -> Result<Overl
     Ok(Overlay::of(&file))
 }
 
+/// Whether the selected mode is The Frozen Throne. The expansion flag is a function of the mode,
+/// so no caller can pass a contradicting value.
+pub fn expansion_of(mode: GameMode) -> bool {
+    matches!(mode.addon, Addon::Tft)
+}
+
 /// Starts the map at `map_bytes` (labelled `map_label`) on the install at `install`.
 ///
-/// `mode` selects the asset policy, and `expansion` must agree with it. `seed` is the new-game
-/// seed, supplied by the caller and never defaulted here.
+/// `mode` selects the asset policy and the expansion flag. `seed` is the new-game seed,
+/// supplied by the caller and never defaulted here.
 pub fn start(
     install: &Path,
     mode: GameMode,
     map_label: &str,
     map_bytes: &[u8],
     seed: i32,
-    expansion: bool,
 ) -> Result<Startup, StartupError> {
     let exe_path = install.join(EXECUTABLE);
     let image = std::fs::read(&exe_path)
@@ -234,14 +237,16 @@ pub fn start(
         catalog_identity,
         catalog: catalog as Arc<dyn ObjectCatalog + Send + Sync>,
     };
-    let client = AssetIdentity {
-        source: install.display().to_string(),
-        edition: CLIENT_EDITION.into(),
-        version: CLIENT_VERSION.into(),
-    };
+    let client = campaign_inputs::client_identity(&image, &exe_path.display().to_string());
     let reader = Arc::new(resolver);
     let inputs = campaign_inputs::prepare_new_game(
-        &context, &sources, &reader, &image, client, seed, expansion,
+        &context,
+        &sources,
+        &reader,
+        &image,
+        client,
+        seed,
+        expansion_of(mode),
     )
     .map_err(StartupError::Inputs)?;
     let config = campaign_host::entry_id(&context, "config")
@@ -287,16 +292,56 @@ pub fn start(
 const CLOCK_STEP_MICROS: u64 = 15_625;
 const MAX_EXPIRIES_PER_TICK: usize = 4096;
 
+/// Most clock ticks one `step_clock` call runs. A caller that needs more calls again, so no call
+/// runs unbounded work and a network caller can interleave other requests between calls.
+pub const MAX_CLOCK_TICKS_PER_CALL: u64 = 4096;
+
 impl Startup {
-    /// Steps the admitted session `ticks` times on the campaign clock.
-    pub fn step_clock(&mut self, ticks: u64) -> Result<(), StartupError> {
+    /// Ticks reached on the campaign clock since publication.
+    pub fn tick(&self) -> u64 {
+        self.tick
+    }
+
+    /// Steps the admitted session `ticks` times on the campaign clock and returns the tick
+    /// reached. A call above `MAX_CLOCK_TICKS_PER_CALL` runs nothing. A failing tick ends the
+    /// call with its tick number; earlier ticks in the call stay applied.
+    pub fn step_clock(&mut self, ticks: u64) -> Result<u64, StartupError> {
+        if ticks > MAX_CLOCK_TICKS_PER_CALL {
+            return Err(StartupError::Clock(format!(
+                "{ticks} ticks exceed the per-call bound {MAX_CLOCK_TICKS_PER_CALL}"
+            )));
+        }
+        let step = Duration::from_micros(CLOCK_STEP_MICROS).as_secs_f64();
         for _ in 0..ticks {
-            self.tick += 1;
-            let step = Duration::from_micros(CLOCK_STEP_MICROS).as_secs_f64();
+            self.tick = self
+                .tick
+                .checked_add(1)
+                .ok_or_else(|| StartupError::Clock("tick counter overflow".into()))?;
             let until = self.origin + step * self.tick as f64;
             advance_tick(&mut self.session, until, MAX_EXPIRIES_PER_TICK)
-                .map_err(|error| StartupError::Clock(error.to_string()))?;
+                .map_err(|error| StartupError::Clock(format!("tick {}: {error}", self.tick)))?;
         }
-        Ok(())
+        Ok(self.tick)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pcx_assets::{AssetMode, Behaviour, Build};
+
+    fn mode(addon: Addon) -> GameMode {
+        GameMode {
+            build: Build::V1_29b,
+            addon,
+            assets: AssetMode::Vanilla,
+            behaviour: Behaviour::Vanilla,
+        }
+    }
+
+    #[test]
+    fn expansion_follows_the_selected_addon() {
+        assert!(expansion_of(mode(Addon::Tft)));
+        assert!(!expansion_of(mode(Addon::NoAddon)));
     }
 }
