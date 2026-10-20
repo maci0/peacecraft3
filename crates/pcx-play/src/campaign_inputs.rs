@@ -197,7 +197,7 @@ pub fn prepare_new_game(
         .map(|p| i32::try_from(p.number()).map_err(|_| "participant player number".to_string()))
         .collect::<Result<Vec<_>, _>>()?;
     let default_difficulty_fallback =
-        pcx_play::default_difficulty_image::native_default_fallback(image)
+        crate::default_difficulty_image::native_default_fallback(image)
             .map_err(|e| format!("GetDefaultDifficulty fallback: {e}"))?;
     inputs.post_config = PostConfigObservations {
         new_game: Some(NewGameInput {
@@ -762,7 +762,7 @@ mod tests {
 /// day/night models use.
 fn holy_light_art(reader: &Resolver, tables: &DefaultTables) -> Result<Vec<u8>, String> {
     let object = tables
-        .object(Family::Ability, HOLY_LIGHT_ROW)
+        .object(Family::Ability, &pcx_objects::fourcc_text(HOLY_LIGHT_ROW))
         .map_err(|e| e.to_string())?;
     let cells = object.profile("Targetart");
     let [model] = cells.as_slice() else {

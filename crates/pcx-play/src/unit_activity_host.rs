@@ -1252,7 +1252,7 @@ impl ObjectHost {
                 if let Entry::Unit { record } = self.inner.entry_mut(unit)?
                     && let Some(animation) = &mut record.animation
                 {
-                    animation.select("stand", now).map_err(|e| {
+                    animation.select("stand", now, None).map_err(|e| {
                         self.inner.error("unit activity", Failure::UnitAnimation(e))
                     })?;
                 }

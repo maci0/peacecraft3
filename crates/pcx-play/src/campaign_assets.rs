@@ -140,7 +140,7 @@ pub fn file_sound(
 
 pub struct SoundSources {
     tables: Vec<ParameterTable>,
-    environments: Vec<pcx_play::sound_environment::SoundEnvironment>,
+    environments: Vec<crate::sound_environment::SoundEnvironment>,
 }
 
 struct ParameterTable {
@@ -210,11 +210,11 @@ impl SoundSources {
                 .map_err(|e| format!("{path}: {e}"))?;
             let has = |field| table.headers().any(|(_, name)| name == field);
             if has("EnvironmentType") {
-                let found = pcx_play::sound_environment::from_table(&table)
+                let found = crate::sound_environment::from_table(&table)
                     .map_err(|e| format!("{path}: {e}"))?;
                 for environment in found {
                     if environments.iter().any(
-                        |known: &pcx_play::sound_environment::SoundEnvironment| {
+                        |known: &crate::sound_environment::SoundEnvironment| {
                             known.name == environment.name
                         },
                     ) {
@@ -279,7 +279,7 @@ impl SoundSources {
     }
 
     /// Environment records from every `EnvironmentType` table in the selected sources.
-    pub(crate) fn environments(&self) -> &[pcx_play::sound_environment::SoundEnvironment] {
+    pub(crate) fn environments(&self) -> &[crate::sound_environment::SoundEnvironment] {
         &self.environments
     }
 

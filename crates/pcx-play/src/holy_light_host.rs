@@ -420,7 +420,7 @@ impl ObjectHost {
         let played = match self.inner.entry_mut(caster)? {
             Entry::Unit { record } => match &mut record.animation {
                 Some(animation) if animation.has_sequence(CAST_SEQUENCE) => {
-                    animation.select(CAST_SEQUENCE, now)
+                    animation.select(CAST_SEQUENCE, now, None)
                 }
                 _ => Ok(()),
             },
