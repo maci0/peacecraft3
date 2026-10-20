@@ -810,10 +810,10 @@ fn a_grant_from_another_host_session_refuses_even_with_the_same_handles() {
     assert!(second.commit_item_use(own).is_ok());
 }
 
+// Pins the current recreation key (the group alone) and is not evidence of original fidelity. The
+// native scope (per unit, per item or per group) is unqualified; see docs/re-notes/item-charges-cooldown.md.
 #[test]
-fn two_holders_share_one_group_readiness_in_this_recreation_native_scope_unverified() {
-    // Current recreation coupling: the cooldown key is the group alone. Whether the original binds it
-    // per unit, per item or per group is not established, so this asserts the present behavior only.
+fn unqualified_current_group_key_couples_two_holders_pinned_not_established() {
     let mut h = open_with_item_use();
     let a = id(&unit(&mut h, 16.));
     let b = id(&unit(&mut h, 32.));
