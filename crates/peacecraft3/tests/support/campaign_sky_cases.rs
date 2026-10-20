@@ -73,9 +73,9 @@ pub fn executed_sky_path_is_published_with_its_source_spelling() {
 
 #[test]
 pub fn explicit_null_is_published_distinct_from_an_unset_sky() {
-    let mut app = app();
-    deliver(&mut app, &sky_script("call SetSkyModel(null)"), 1);
-    assert_eq!(published_sky(&mut app), Some(None));
+    let mut with_sky = app();
+    deliver(&mut with_sky, &sky_script("call SetSkyModel(null)"), 1);
+    assert_eq!(published_sky(&mut with_sky), Some(None));
     let mut app = app();
     deliver(&mut app, &sky_script(""), 1);
     assert_eq!(published_sky(&mut app), None);

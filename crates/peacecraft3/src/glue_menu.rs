@@ -1903,7 +1903,7 @@ Frame "FRAME" "MainMenuFrame" {
         world
             .resource_mut::<GlueImages>()
             .images
-            .insert((path.into(), tile), handle);
+            .insert(art_cache_key(path, tile, 0), handle);
     }
 
     #[test]
