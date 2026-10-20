@@ -5,9 +5,11 @@ actual `UI\TriggerData.txt`. It retains editor definitions, authored argument fi
 call return types and explicit `ScriptName` aliases. Its arity table feeds the existing
 WTG decoder; there is no duplicated WTG reader or copied stock-function mapping.
 
-This is a binding input, not WTG execution. It does not generate trigger function names,
-interpret GUI conditions/actions, register events, merge WCT code or assert quest success.
-Those behaviors still require a translator and native evidence.
+This is a binding input. `[TriggerParams]`, `[TriggerTypes]` and `[TriggerTypeDefaults]` are
+exposed as `Kind::Param`, `Kind::Type` and `Kind::TypeDefault`, with `preset_code`,
+`jass_type` and `type_default` lookups. The WTG-to-JASS translator is `pcx_trig::lower`
+(see `wtg-lowering.md`). It does not merge WCT code, run the output or assert quest
+success. Those behaviors still require native evidence.
 
 ## Shipped-byte observation
 

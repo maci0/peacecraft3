@@ -9,6 +9,12 @@ pub enum Kind {
     Condition,
     Action,
     Call,
+    /// `[TriggerParams]`: preset value key, first game version, variable type, code text.
+    Param,
+    /// `[TriggerTypes]`: variable type name, version, flags, display text, optional base type.
+    Type,
+    /// `[TriggerTypeDefaults]`: variable type name, default script text, display text.
+    TypeDefault,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Definition {
@@ -82,6 +88,9 @@ impl Catalog {
                     "TriggerConditions" => Some(Kind::Condition),
                     "TriggerActions" => Some(Kind::Action),
                     "TriggerCalls" => Some(Kind::Call),
+                    "TriggerParams" => Some(Kind::Param),
+                    "TriggerTypes" => Some(Kind::Type),
+                    "TriggerTypeDefaults" => Some(Kind::TypeDefault),
                     _ => None,
                 };
                 continue;
@@ -114,8 +123,13 @@ impl Catalog {
                 continue;
             }
             let fields: Vec<_> = value.split(',').map(|f| f.trim().to_string()).collect();
-            let prefix = if kind == Kind::Call { 3 } else { 1 };
-            if fields.len() < prefix || fields[0].parse::<u32>().is_err() {
+            let prefix = match kind {
+                Kind::Call | Kind::Param => 3,
+                Kind::Event | Kind::Condition | Kind::Action | Kind::Type | Kind::TypeDefault => 1,
+            };
+            // Type defaults lead with script text, not a game version.
+            let versioned = kind != Kind::TypeDefault;
+            if fields.len() < prefix || (versioned && fields[0].parse::<u32>().is_err()) {
                 return Err(error(
                     index + 1,
                     format!("malformed {kind:?} definition {key:?}"),
@@ -218,9 +232,33 @@ impl Catalog {
     pub fn arity(&self) -> Result<TriggerArity, crate::Error> {
         let mut arity = TriggerArity::new();
         for definition in self.definitions.values() {
-            arity.insert(definition.name.as_bytes(), definition.parameter_types.len())?;
+            if matches!(
+                definition.kind,
+                Kind::Event | Kind::Condition | Kind::Action | Kind::Call
+            ) {
+                arity.insert(definition.name.as_bytes(), definition.parameter_types.len())?;
+            }
         }
         Ok(arity)
+    }
+    /// The script text a preset value (`[TriggerParams]` key) stands for.
+    pub fn preset_code(&self, key: &str) -> Option<&str> {
+        self.get(Kind::Param, key)
+            .and_then(|d| d.fields.get(2))
+            .map(String::as_str)
+    }
+    /// The JASS type a variable type name declares: its `[TriggerTypes]` base type
+    /// when one is authored, else the type name. `None` when the name has no entry.
+    pub fn jass_type<'a>(&'a self, type_name: &'a str) -> Option<&'a str> {
+        let definition = self.get(Kind::Type, type_name)?;
+        Some(definition.fields.get(4).map_or(type_name, String::as_str))
+    }
+    /// The initial script text authored for a variable type when it is not
+    /// explicitly initialized.
+    pub fn type_default(&self, type_name: &str) -> Option<&str> {
+        self.get(Kind::TypeDefault, type_name)
+            .and_then(|d| d.fields.first())
+            .map(String::as_str)
     }
 }
 
