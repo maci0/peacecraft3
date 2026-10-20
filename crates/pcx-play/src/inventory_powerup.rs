@@ -19,9 +19,17 @@ const POWERUP_WINDOW: u32 = 0xbca0e0;
 const PASSIVE_WINDOW: u32 = 0xbc9ce0;
 /// Registration call for the passive armor class (source `AIde`, base `APbo`).
 const ARMOR_WINDOW: u32 = 0xbc9d40;
+/// Registration call for the healing class (source `AIhe`). Its base comes from a call, so the
+/// window is longer than the immediate-base shape. Reviewed at `0xbf0520`.
+const HEAL_WINDOW: u32 = 0xbf0520;
+const HEAL_WINDOW_LEN: usize = 25;
+const BASE_FN_LEN: usize = 6;
+const REGISTER_FN: u32 = 0x7f6360;
 const CLASS_WINDOW_LEN: usize = 24;
 const PUSH_IMM32: u8 = 0x68;
+const PUSH_EAX: u8 = 0x50;
 const CALL_REL32: u8 = 0xe8;
+const MOV_EAX_IMM32: u8 = 0xb8;
 const RET: u8 = 0xc3;
 const CLEANUP_RET: [u8; 4] = [0x83, 0xc4, 0x0c, RET];
 const MAX_IMAGE_BYTES: usize = 32 << 20;
@@ -76,6 +84,15 @@ pub struct Rules {
     agility: Column,
     intelligence: Column,
     armor: Column,
+    /// Healing registration, attached by `with_heal`. Absent until the healing window is read.
+    heal: Option<HealClass>,
+}
+
+/// The admitted healing class and its amount column (`Ihpg`, the `DataA` column).
+#[derive(Clone, Debug)]
+struct HealClass {
+    class: String,
+    amount: Column,
 }
 
 impl Rules {
@@ -108,8 +125,98 @@ impl Rules {
         let powerup = window(POWERUP_WINDOW)?;
         let passive = window(PASSIVE_WINDOW)?;
         let armor = window(ARMOR_WINDOW)?;
+        let heal = pe
+            .read_from(HEAL_WINDOW, true)
+            .map_err(|e| fail(&e.to_string()))?
+            .get(..HEAL_WINDOW_LEN)
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| fail("truncated healing registration window"))?;
+        let base_va = call_target(&heal, 5).map_err(|e| fail(&e))?;
+        let base_code = pe
+            .read_from(base_va, true)
+            .map_err(|e| fail(&e.to_string()))?
+            .get(..BASE_FN_LEN)
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| fail("truncated healing base function"))?;
         Self::decode(tables, overlay, origin, digest, &powerup, &passive, &armor)
+            .and_then(|rules| rules.with_heal(&heal, &base_code))
             .map_err(|e| fail(&e))
+    }
+
+    /// Attaches the healing class. The class key is an immediate in the window; the base comes
+    /// from the reviewed base function, which the caller reads from the image.
+    pub(crate) fn with_heal(mut self, window: &[u8], base_code: &[u8]) -> Result<Self, String> {
+        let (class, _) = class_from_call_window(window, base_code)?;
+        if class == self.powerup_class || class == self.passive_class || class == self.armor_class {
+            return Err("healing registration must name a distinct class".into());
+        }
+        let amount = column(&self.tables, b"Ihpg")?;
+        self.heal = Some(HealClass { class, amount });
+        Ok(self)
+    }
+
+    /// Healing amount (`DataA1` at level 1 through the `Ihpg` admission) of an item whose ability
+    /// list names the healing class. `None` for items with no abilities or no healing ability.
+    /// Mixed lists and healing that is not admitted refuse.
+    pub fn heal_effect(&self, definition: &Definition) -> Result<Option<i32>, String> {
+        let item = self.item_row(definition)?;
+        let abilities = item_text(item, "abilList")?;
+        let aliases: Vec<&str> = abilities
+            .split(',')
+            .map(str::trim)
+            .filter(|a| !a.is_empty() && *a != "_")
+            .collect();
+        // A passive or unusable item has no activation, so it is not a use: no effect, no refusal.
+        if aliases.is_empty() || !item_flag(item, "usable")? {
+            return Ok(None);
+        }
+        let Some(heal) = &self.heal else {
+            return Err("healing registration is not admitted".into());
+        };
+        let mut healing = Vec::new();
+        for alias in &aliases {
+            if self.ability_code(alias)? == heal.class {
+                healing.push(*alias);
+            }
+        }
+        match healing[..] {
+            [] => Ok(None),
+            [alias] if aliases.len() == 1 => {
+                self.single_level(alias)?;
+                if !heal.amount.aliases.iter().any(|a| a == alias) {
+                    return Err(format!("healing metadata does not admit ability {alias}"));
+                }
+                let amount = self.amount(alias, &heal.amount)?;
+                if amount < 0 {
+                    return Err(format!("negative healing amount on {}", item.rawcode()));
+                }
+                Ok(Some(amount))
+            }
+            _ => Err(format!("mixed healing ability list on {} is unsupported", item.rawcode())),
+        }
+    }
+
+    /// Cast range (`Rng1`, level 1) of an item's single ability, from the source row. Overrides
+    /// of the range field are not applied here, and that is not qualified.
+    pub fn heal_range(&self, definition: &Definition) -> Result<f32, String> {
+        let item = self.item_row(definition)?;
+        let abilities = item_text(item, "abilList")?;
+        let [alias] = abilities.split(',').map(str::trim).collect::<Vec<_>>()[..] else {
+            return Err("healing range needs exactly one ability".into());
+        };
+        let text = self
+            .tables
+            .object(Family::Ability, alias)
+            .map_err(|e| e.to_string())?
+            .cell(SlkId::AbilityData, "Rng1")
+            .map_err(|e| e.to_string())?
+            .text
+            .trim()
+            .to_owned();
+        text.parse::<f32>()
+            .ok()
+            .filter(|r| r.is_finite() && *r >= 0.0)
+            .ok_or_else(|| format!("range {text} of {alias} is not a finite distance"))
     }
 
     pub(crate) fn decode(
@@ -151,6 +258,7 @@ impl Rules {
             powerup_class,
             passive_class,
             armor_class,
+            heal: None,
         })
     }
 
@@ -377,6 +485,54 @@ fn class_from_window(window: &[u8]) -> Result<(String, String), String> {
         String::from_utf8(text.to_vec()).map_err(|_| fail())
     };
     Ok((key(11)?, key(6)?))
+}
+
+/// Target of the `call rel32` at `at` inside a healing window, given the window's own address.
+fn call_target(window: &[u8], at: usize) -> Result<u32, String> {
+    let fail = || "unsupported healing registration call".to_string();
+    if window.get(at) != Some(&CALL_REL32) {
+        return Err(fail());
+    }
+    let rel: [u8; 4] = window
+        .get(at + 1..at + 5)
+        .ok_or_else(fail)?
+        .try_into()
+        .map_err(|_| fail())?;
+    let next = i64::from(HEAL_WINDOW) + at as i64 + 5;
+    u32::try_from(next + i64::from(i32::from_le_bytes(rel))).map_err(|_| fail())
+}
+
+/// Source class from a healing registration window with a computed base. The window pushes the
+/// third argument, calls the base function, pushes its result, pushes the source class, calls the
+/// registration function (`0x7f6360`), cleans up and returns. The base function must be
+/// `mov eax, imm32; ret`, and its immediate is the base class.
+fn class_from_call_window(window: &[u8], base_code: &[u8]) -> Result<(String, String), String> {
+    let fail = || "unsupported healing registration window".to_string();
+    if window.len() != HEAL_WINDOW_LEN
+        || window[0] != PUSH_IMM32
+        || window[5] != CALL_REL32
+        || window[10] != PUSH_EAX
+        || window[11] != PUSH_IMM32
+        || window[21..] != CLEANUP_RET
+        || call_target(window, 16)? != REGISTER_FN
+        || base_code.len() != BASE_FN_LEN
+        || base_code[0] != MOV_EAX_IMM32
+        || base_code[5] != RET
+    {
+        return Err(fail());
+    }
+    Ok((fourcc_le(&window[12..16])?, fourcc_le(&base_code[1..5])?))
+}
+
+/// Four alphanumeric characters from a little-endian immediate.
+fn fourcc_le(bytes: &[u8]) -> Result<String, String> {
+    let fail = || "unsupported registration immediate".to_string();
+    let mut text: [u8; 4] = bytes.try_into().map_err(|_| fail())?;
+    if !text.iter().all(u8::is_ascii_alphanumeric) {
+        return Err(fail());
+    }
+    text.reverse();
+    String::from_utf8(text.to_vec()).map_err(|_| fail())
 }
 
 fn column(tables: &DefaultTables, id: &[u8; 4]) -> Result<Column, String> {
