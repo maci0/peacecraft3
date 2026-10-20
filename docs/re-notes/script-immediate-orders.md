@@ -237,6 +237,15 @@ Static facts, not pacing proof:
 - The executable names `SetUnitTimeScale` and `BlzSetSpecialEffectTimeScale`.
   This repo implements neither, so a script time scale has no interaction here.
 
+Candidate probes (not yet captured, plan under local ignored .scratch/walk-capture-plan-1):
+- Moon Priestess (Emoo, spd 320, one Walk 634 ms, SEQS 200, UnitUI walk 300):
+  predicted period 634 (authored), 396 (SEQS), 594 (UnitUI walk) ms.
+- Watcher (nwat, spd 280, one Walk 900 ms, SEQS 250, UnitUI walk 290):
+  predicted 900, 804, 932 ms.
+The Pit Lord shows SEQS Walk 125 equal to UnitUI walk and Walk Fast 350 equal to
+UnitUI run, so SEQS may be the reference that the walk/run fields select among.
+The Demon Hunter has a second Walk variant, so it is not a clean probe.
+
 The ratio source is therefore undecided: SEQS `move_speed`, UnitUI `walk`, or
 another authored field. No native code or original-client capture checks any of
 them. The Hive Workshop forum thread

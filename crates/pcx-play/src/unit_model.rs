@@ -362,11 +362,11 @@ pub(crate) mod tests {
         assert_eq!(animation.sample(5.25).unwrap().unwrap().frame, 2250);
     }
     #[test]
-    fn reselecting_walk_restarts_at_the_new_rate_and_invalid_move_speed_refuses() {
+    fn candidate_walk_reselect_restarts_unmeasured_and_invalid_move_speed_refuses() {
         let mut animation = Animation::new(model(), 2.).unwrap();
         animation.select("walk", 3., Some(400.)).unwrap();
         assert_eq!(animation.sample(3.25).unwrap().unwrap().frame, 3500);
-        // A new speed while still walking restarts Walk at its own rate, not a continuation.
+        // Candidate, unmeasured: a reselect restarts Walk. Original phase on a new order is unknown.
         animation.select("walk", 3.5, Some(200.)).unwrap();
         assert_eq!(animation.started, 3.5);
         assert_eq!(animation.sample(3.75).unwrap().unwrap().frame, 3250);
