@@ -1,9 +1,17 @@
 use super::{COMMON, budget, context, object, slots_rule};
 
-const SHOP: crate::playercolor_host::ShopCapacity = crate::playercolor_host::ShopCapacity {
-    cells: 12,
-    slot_ceiling: 11,
-};
+fn shop() -> crate::playercolor_host::ShopCapacity {
+    crate::playercolor_host::ShopCapacity::new(crate::shop_table::ShopTable {
+        origin: crate::scripts::AssetIdentity {
+            edition: "synthetic".into(),
+            version: "synthetic".into(),
+            source: "synthetic".into(),
+        },
+        image_sha256: [0; 32],
+        slot_ceiling: 11,
+        entries: 12,
+    })
+}
 use crate::playercolor_host::{Failure, ObjectHost, StockBudget, UnitBudget};
 use pcx_objects::editor::ObjectKind;
 use pcx_script::{HandleId, Host, Value};
@@ -75,7 +83,7 @@ fn opened(records: usize) -> pcx_script::OwnedVm<ObjectHost> {
         .unwrap()
         .with_stock(StockBudget {
             max_records: records,
-            shop: SHOP,
+            shop: shop(),
         })
         .unwrap()
         .into_vm()
@@ -336,12 +344,12 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
     let host = host
         .with_stock(StockBudget {
             max_records: 1,
-            shop: SHOP,
+            shop: shop(),
         })
         .unwrap();
     let again = match host.with_stock(StockBudget {
         max_records: 1,
-        shop: SHOP,
+        shop: shop(),
     }) {
         Err(error) => error,
         Ok(_) => panic!("stock was admitted twice"),
@@ -363,7 +371,7 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
     let (overflow, _) = prepared(DECL, "// map", "synthetic:stock-overflow");
     let overflow = match overflow.with_stock(StockBudget {
         max_records: usize::MAX,
-        shop: SHOP,
+        shop: shop(),
     }) {
         Err(error) => error,
         Ok(_) => panic!("overflowing record bound was admitted"),
@@ -376,7 +384,7 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
     let (host, _) = prepared(&missing, "// map", "synthetic:stock-missing");
     let missing = match host.with_stock(StockBudget {
         max_records: 1,
-        shop: SHOP,
+        shop: shop(),
     }) {
         Err(error) => error,
         Ok(_) => panic!("missing declaration was admitted"),
@@ -389,7 +397,7 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
     let (host, _) = prepared(&constant, "// map", "synthetic:stock-constant");
     let constant = match host.with_stock(StockBudget {
         max_records: 1,
-        shop: SHOP,
+        shop: shop(),
     }) {
         Err(error) => error,
         Ok(_) => panic!("constant declaration was admitted"),
@@ -402,7 +410,7 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
     let (host, _) = prepared(&wrong, "// map", "synthetic:stock-signature");
     let wrong = match host.with_stock(StockBudget {
         max_records: 1,
-        shop: SHOP,
+        shop: shop(),
     }) {
         Err(error) => error,
         Ok(_) => panic!("wrong declaration was admitted"),
@@ -415,7 +423,7 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
     );
     let overridden = match host.with_stock(StockBudget {
         max_records: 1,
-        shop: SHOP,
+        shop: shop(),
     }) {
         Err(error) => error,
         Ok(_) => panic!("function override was admitted"),
@@ -442,7 +450,7 @@ fn stock_admission_rejects_override_source_mismatch_and_capacity() {
     let (host, _) = prepared(&foreign, map, "synthetic:stock-source");
     let source = match host.with_stock(StockBudget {
         max_records: 1,
-        shop: SHOP,
+        shop: shop(),
     }) {
         Err(error) => error,
         Ok(_) => panic!("foreign source was admitted"),

@@ -339,12 +339,12 @@ pub fn prepare(
         pcx_play::item_class_table::derive(image, client.clone()).map_err(|e| e.to_string())?;
     let shop_table =
         pcx_play::shop_table::derive(image, client.clone()).map_err(|e| e.to_string())?;
-    let shop = pcx_play::playercolor_host::ShopCapacity {
-        cells: shop_table.entries as usize,
-        slot_ceiling: shop_table.slot_ceiling,
-    };
+    let shop = pcx_play::playercolor_host::ShopCapacity::new(shop_table);
+    let item_sales = pcx_play::item_sales::derive(&tables, &item_classes, client.clone())
+        .map_err(|e| e.to_string())?;
     Ok(MapStartupInputs {
         item_classes: Some(item_classes),
+        item_sales: Some(item_sales),
         inventory: None,
         inventory_powerup: None,
         unit_guards: None,

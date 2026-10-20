@@ -46,7 +46,7 @@ impl From<PlayerAdmissionError> for MapStartupError {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct MapStartupBudgets {
     pub inventory: Option<crate::inventory::InventoryBudget>,
     pub player_removal: Option<crate::playercolor_host::PlayerRemovalBudget>,
@@ -265,6 +265,8 @@ pub struct MapStartupInputs {
     pub inventory_powerup: Option<crate::inventory_powerup::Rules>,
     /// Required with item budgets: class ordinals derived from the selected executable.
     pub item_classes: Option<crate::item_class_table::ItemClassTable>,
+    /// Required with item budgets: sale rules derived from the loaded item metadata.
+    pub item_sales: Option<crate::item_sales::ItemSaleTable>,
     pub localization: Option<crate::script_localization::Bank>,
     pub unit_guards: Option<UnitGuardsInput>,
     pub player_removal_rules: Option<crate::player_removal_rules::Rules>,
@@ -510,6 +512,7 @@ pub fn assemble(
         inventory,
         inventory_powerup,
         item_classes,
+        item_sales,
         localization,
         unit_guards,
         player_removal_rules,
@@ -764,6 +767,10 @@ pub fn assemble(
             MapStartupError::Observation("item queries require derived item classes".into())
         })?;
         object = object.with_item_queries(classes)?;
+        let sales = item_sales.ok_or_else(|| {
+            MapStartupError::Observation("item sale rules require loaded item metadata".into())
+        })?;
+        object = object.with_item_sales(sales)?;
     }
     match (inventory, budgets.inventory) {
         (Some(rules), Some(budget)) => object = object.with_inventory(rules, budget)?,

@@ -26,7 +26,9 @@
 //! measured stock state.
 use super::super::{Error, Failure, below};
 use super::ObjectHost;
+use crate::shop_table::ShopTable;
 use pcx_script::{HandleId, Value};
+use std::sync::Arc;
 
 const SET_ALL_ITEM: &str = "SetAllItemTypeSlots";
 const SET_ALL_UNIT: &str = "SetAllUnitTypeSlots";
@@ -48,17 +50,34 @@ struct UnitSlots {
     slots: i32,
 }
 
-/// Shop item table shape read from the selected executable.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// Shop item table shape, with the selected executable identity it was read from.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShopCapacity {
-    /// Item cells per shop.
-    pub cells: usize,
-    /// Largest slot count the engine stores.
-    pub slot_ceiling: u32,
+    table: Arc<ShopTable>,
+}
+
+impl ShopCapacity {
+    pub fn new(table: ShopTable) -> Self {
+        Self {
+            table: Arc::new(table),
+        }
+    }
+
+    pub fn table(&self) -> &ShopTable {
+        &self.table
+    }
+
+    fn cells(&self) -> usize {
+        self.table.entries as usize
+    }
+
+    fn slot_ceiling(&self) -> u32 {
+        self.table.slot_ceiling
+    }
 }
 
 /// Caller bound on retained stock records, and the shop shape the records live in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StockBudget {
     /// Bound on distinct retained slot and item stock records across all units.
     pub max_records: usize,
@@ -122,7 +141,7 @@ impl State {
         self.units
             .iter()
             .find(|row| row.unit == unit && row.kind == SlotKind::Item)
-            .map(|row| effective_count(row.slots, self.shop.slot_ceiling))
+            .map(|row| effective_count(row.slots, self.shop.slot_ceiling()))
     }
 
     fn shop_index(&self, unit: HandleId) -> Option<usize> {
@@ -130,7 +149,7 @@ impl State {
     }
 
     fn set_item_slots(&mut self, unit: HandleId, slots: i32) {
-        let count = effective_count(slots, self.shop.slot_ceiling);
+        let count = effective_count(slots, self.shop.slot_ceiling());
         if let Some(at) = self.shop_index(unit) {
             for cell in self.shops[at].cells.iter_mut().skip(count) {
                 cell.stock = None;
@@ -159,13 +178,13 @@ impl State {
             None => {
                 let mut cells = Vec::new();
                 cells
-                    .try_reserve_exact(self.shop.cells)
+                    .try_reserve_exact(self.shop.cells())
                     .map_err(|_| Failure::Capacity)?;
-                cells.resize(self.shop.cells, Cell::default());
+                cells.resize(self.shop.cells(), Cell::default());
                 let mut ages = Vec::new();
-                ages.try_reserve_exact(self.shop.cells)
+                ages.try_reserve_exact(self.shop.cells())
                     .map_err(|_| Failure::Capacity)?;
-                ages.resize(self.shop.cells, 0);
+                ages.resize(self.shop.cells(), 0);
                 self.shops.push(Shop { unit, cells, ages });
                 self.shops.len() - 1
             }
@@ -228,7 +247,7 @@ impl ObjectHost {
         }
         std::alloc::Layout::array::<UnitSlots>(budget.max_records)
             .map_err(|_| fail(Failure::Capacity))?;
-        if budget.shop.cells == 0 || budget.shop.slot_ceiling as usize > budget.shop.cells {
+        if budget.shop.cells() == 0 || budget.shop.slot_ceiling() as usize > budget.shop.cells() {
             return Err(fail(Failure::StockState("shop capacity")));
         }
         if !below(&self.inner.program, "unit", "handle") {
