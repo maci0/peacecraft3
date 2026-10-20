@@ -192,12 +192,14 @@ impl ObjectHost {
                         _ => return Err(self.inner.error(name, Failure::WrongFamily)),
                     }
                     let hour = finite(value)?;
+                    self.advance_unit_regen(now)?;
                     let state = self.time_of_day.as_mut().expect("admitted");
                     state.hour = hour;
                     state.since = now;
                     Value::Null
                 }
                 ("SuspendTimeOfDay", [Value::Bool(suspended)]) => {
+                    self.advance_unit_regen(now)?;
                     let state = self.time_of_day.as_mut().expect("admitted");
                     state.rebase(now);
                     state.suspended = *suspended;
@@ -205,6 +207,7 @@ impl ObjectHost {
                 }
                 ("SetTimeOfDayScale", [value]) => {
                     let scale = finite(value)?;
+                    self.advance_unit_regen(now)?;
                     let state = self.time_of_day.as_mut().expect("admitted");
                     state.rebase(now);
                     state.scale = scale;
@@ -277,5 +280,25 @@ mod tests {
             clock(12.0, 1.0, false).daytime_between(5.0, 5.0, [6.0, 18.0]),
             0.0
         );
+    }
+
+    #[test]
+    fn spans_split_at_each_rebase_compose_to_the_scripted_clock() {
+        // Rate +0.05 h/s from 5:00 to 10:00 at t=100 (80 s of day), then a scale change
+        // to -1 at t=100 from 10:00: 10:00 to 6:00 is day (80 s), and 18:00 to 15:00 at
+        // t=420 to t=480 is day (60 s). The second span is 140 s, the total 220 s.
+        let before = clock(5.0, 1.0, false);
+        let after = TimeOfDay {
+            hour: before.hour_at(100.0),
+            since: 100.0,
+            scale: -1.0,
+            ..clock(0.0, 0.0, false)
+        };
+        let window = [6.0, 18.0];
+        assert!((before.daytime_between(0.0, 100.0, window) - 80.0).abs() < 1e-9);
+        assert!((after.daytime_between(100.0, 480.0, window) - 140.0).abs() < 1e-9);
+        let split = after.daytime_between(100.0, 300.0, window)
+            + after.daytime_between(300.0, 480.0, window);
+        assert!((split - 140.0).abs() < 1e-9, "{split}");
     }
 }

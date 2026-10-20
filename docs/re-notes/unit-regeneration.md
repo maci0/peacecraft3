@@ -117,3 +117,52 @@ boundaries is not chunk-invariant for moving units.
 
 Pure and synthetic tests do not prove native parity. The full native and WASM gates
 belong to the integrator.
+
+## Clock ordering around time-of-day changes
+
+Each `SetFloatGameState`, `SuspendTimeOfDay` and `SetTimeOfDayScale` first integrates
+unit regeneration to the change time, then mutates the clock. Every regeneration span
+therefore lies inside one clock segment. Multiple changes in one projection interval
+compose: the composition test splits a span across two rebases and checks the sum.
+Clock arms are validated before the advance, so a rejected call has no effect. An
+advance that refuses (for example a blight unit) refuses the clock change too.
+The end-to-end test with units and a clock is not yet written; the fixtures lack
+the `ConvertFGameState` conversion and the startup clock.
+
+## Dead, revived and created units
+
+- Creation sets `through` to the creation time. No regeneration before creation.
+- Dead or lifeless units advance `through` with pools unchanged. A revive integrates
+  from the last advance, which excludes the dead span.
+- Native comparison of these policies is not established. This is a recreation policy.
+
+## Terrain blight trace
+
+- Terrain.slk, selected install: 178 rows, 14 columns, `blightPri` and `convertTo`
+  present. Eight rows have the blight class letter `B`: `Bdrt`, `Bdrh`, `Bdrr`,
+  `Bdrg`, `Bdsr`, `Bdsd`, `Bflr`, `Bgrr`.
+- Each row's `convertTo` lists 15 counterparts in the class order
+  `F W B A C N Y V Q X D G Z I O`. Index 2 is the `B` class for every ground row
+  checked (for example `Ldrt` → `Bdsr`, `Lgrs` → `Bgrr`). Read the entry by class
+  letter, not by position.
+- The W3E corner nibble selects a map ground slot (`pcx-map` `slot_nibble`). The
+  probe report maps Human01 slots to `Ldrt`, `Ldro`, `Ldrg`, `Lrok`, `Lgrs`, `Lgrd`.
+  No `B`-class tile appears in those slots.
+- `pcx-tera` reads only identity columns and documents `blightPri` as uninterpreted.
+- No `SetBlight*` native is admitted. `IsPointBlighted` is not declared in
+  `common.j`, so scripts cannot query blight.
+
+Not established: whether native regeneration reads the ground class, a per-player
+blight plane, or both; the player affinity of `SetBlight*`; and the native conversion
+rule. Those need native evidence or an explicit reviewed source.
+
+Remaining work before blight eligibility can be enabled:
+1. A ground-class query at a unit point, from the selected map's W3E slot list and
+   the `pcx-tera` slot-to-tile resolution. The map startup must pass it to `ObjectHost`.
+2. `SetBlight`, `SetBlightRect`, `SetBlightPoint`, `SetBlightLoc` with per-player
+   state, admitted only after the affinity rule is evidenced.
+3. Eligibility along each movement span: solve tile-boundary crossings on the
+   existing motion path, not sample at step boundaries. Motion and regeneration
+   order must match the event delivery order.
+
+Until then, a nonzero blight rate refuses. This refusal is interim and the task stays open.
