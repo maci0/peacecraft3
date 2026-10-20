@@ -1370,6 +1370,7 @@ endglobals
 type effect extends agent
 native AddSpecialEffectTarget takes string model, widget target, string attachPoint returns effect
 native DestroyEffect takes effect e returns nothing
+native RemoveUnit takes unit u returns nothing
 native SelectHeroSkill takes unit u, integer ability returns nothing
 type unittype extends handle
 constant native ConvertUnitType takes integer i returns unittype
@@ -1381,6 +1382,18 @@ constant native GetSpellTargetUnit takes nothing returns unit
 /// Every unit shares one fixture definition, so `types` is the `type` list of all of them.
 /// `abilities` and `heroes` fill the `abilList` and `heroAbilList` of the caster.
 fn holy_open(types: &str, abilities: &str, heroes: &str) -> (Vm, [HandleId; 4]) {
+    holy_open_with_art(types, abilities, heroes, HOLY_ART_END_MS)
+}
+
+/// The art model of the stock row ends its only sequence at this many milliseconds.
+const HOLY_ART_END_MS: u32 = 2800;
+
+fn holy_open_with_art(
+    types: &str,
+    abilities: &str,
+    heroes: &str,
+    art_end_ms: u32,
+) -> (Vm, [HandleId; 4]) {
     let mut fields = hero_fields("STR");
     fields.push(column(b"H001", SlkId::UnitBalance, "HP", FieldKind::Int, "1000"));
     fields.push(column(b"H003", SlkId::UnitBalance, "mana0", FieldKind::Int, "300"));
@@ -1435,7 +1448,7 @@ fn holy_open(types: &str, abilities: &str, heroes: &str) -> (Vm, [HandleId; 4]) 
     })
     .unwrap();
     h.admit_combat(rules(), "beta").unwrap();
-    h.admit_holy_light().unwrap();
+    h.admit_holy_light(&holy_art(art_end_ms, false)).unwrap();
     h.set_neutral_passive(15);
     let context = Arc::clone(h.player_context().unwrap());
     let mut vm = context.scripts.clone().owned_vm(h);
@@ -1705,4 +1718,69 @@ fn killing_the_caster_cancels_a_walking_cast() {
         .unwrap();
     step(&mut vm, 30.0);
     assert_eq!(holy_life(&mut vm, g), 100.0);
+}
+
+/// A synthetic `MDLX` with one `SEQS` record: the Holy Light art shape, a single sequence
+/// spanning `[0, end)` ms, looping or not.
+fn holy_art(end: u32, looping: bool) -> Vec<u8> {
+    let mut sequence = vec![0; pcx_mdl::SEQUENCE_SIZE];
+    sequence[..5].copy_from_slice(b"Birth");
+    sequence[84..88].copy_from_slice(&end.to_le_bytes());
+    sequence[92..96].copy_from_slice(&u32::from(!looping).to_le_bytes());
+    let mut bytes = b"MDLX".to_vec();
+    bytes.extend(b"VERS");
+    bytes.extend(4_u32.to_le_bytes());
+    bytes.extend(800_u32.to_le_bytes());
+    bytes.extend(b"SEQS");
+    bytes.extend((sequence.len() as u32).to_le_bytes());
+    bytes.extend(sequence);
+    bytes
+}
+
+#[test]
+fn the_art_retires_when_its_only_sequence_ends() {
+    let (mut vm, [h, f, _, _]) = holy_open("", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    assert!(holy_cast(&mut vm, h, f));
+    assert_eq!(vm.host().inner.unit_effects().count(), 1);
+    step(&mut vm, 2.0);
+    assert_eq!(vm.host().inner.unit_effects().count(), 1, "still in its sequence");
+    step(&mut vm, 3.0);
+    assert_eq!(vm.host().inner.unit_effects().count(), 0, "sequence ended");
+}
+
+#[test]
+fn overlapping_art_from_two_casts_keeps_each_lifetime_on_its_own_clock() {
+    let (mut vm, [h, f, _, _]) = holy_open_with_art("", LEARNED, NOTHING, 8000);
+    vm.call("prime", &[]).unwrap();
+    assert!(holy_cast(&mut vm, h, f));
+    step(&mut vm, 5.0);
+    assert!(holy_cast(&mut vm, h, f));
+    assert_eq!(vm.host().inner.unit_effects().count(), 2, "both live at t=5");
+    step(&mut vm, 9.0);
+    assert_eq!(vm.host().inner.unit_effects().count(), 1, "first ended at t=8");
+    step(&mut vm, 14.0);
+    assert_eq!(vm.host().inner.unit_effects().count(), 0, "second ended at t=13");
+}
+
+#[test]
+fn art_retires_on_the_clock_after_its_caster_dies() {
+    let (mut vm, [h, f, _, _]) = holy_open("", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    assert!(holy_cast(&mut vm, h, f));
+    vm.host().inner.native("KillUnit", &[Value::Handle(h)]).unwrap();
+    step(&mut vm, 3.0);
+    assert_eq!(vm.host().inner.unit_effects().count(), 0);
+}
+
+#[test]
+fn removing_the_target_ends_its_art_and_the_clock_cannot_revive_it() {
+    let (mut vm, [h, f, _, _]) = holy_open("", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    assert!(holy_cast(&mut vm, h, f));
+    vm.host().inner.native("RemoveUnit", &[Value::Handle(f)]).unwrap();
+    // RemoveUnit ends every effect attached to the removed unit, as unit_removal_host does.
+    assert_eq!(vm.host().inner.unit_effects().count(), 0);
+    step(&mut vm, 3.0);
+    assert_eq!(vm.host().inner.unit_effects().count(), 0);
 }

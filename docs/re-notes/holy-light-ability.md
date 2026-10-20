@@ -39,7 +39,10 @@ from the row:
   mana and target eligibility, and cancels if any fails or another order arrives.
 - Target rules: `notself` refuses self-targeting, `nonancient` refuses ancient units,
   and `organic` refuses undead and mechanical friendly units. Enemy targets must be
-  undead, so enemy organic units are refused. Neutral passive units are never healed.
+  undead, so enemy organic units are refused. Heal targets are allies: the same player,
+  or a player that has an explicit passive alliance toward the caster's owner. The
+  tooltip says "friendly living". Neutral passive units heal only through such an
+  alliance; no owner-number rule applies.
 - Heal: `DataA` life up to max life. Invulnerable undead take no damage but still
   spend the cast.
 - Undead damage: `DataA / UNDEAD_DAMAGE_DIVISOR` through `damage_unit`, the shared
@@ -79,17 +82,23 @@ and by the explicit gate, which asserts the `type` column is `Token` and that
 ## Not verified or not implemented
 
 - Cast range is measured between unit positions, without collision radii. Native
-  cast-range geometry is unqualified. The only evidence is `Rng`. Qualifying it needs
-  RE of the order range check, which is not in the existing evidence.
-- Undead damage is `DataA / 2`. The divisor is tooltip prose ("half damage"). No
-  numeric column or native constant was found, so it is a named constant with that
-  provenance, not a qualified runtime ratio.
-- Whether spell damage ignores armor is unverified. The implementation ignores armor.
-- The `Targetart` effect (`Abilities\Spells\Human\HolyBolt\HolyBoltSpecialArt.mdl`)
-  is not attached. The attach point is not in the data we read.
-- The campaign input hotkey path (`campaign_input.rs`) is not compiled here. It needs
-  `cargo check -p peacecraft3`, which pulls in Bevy and is queued for the root slot.
-- Ability art and cooldown display are not presented.
+  cast-range geometry is unqualified.
+- Undead damage is `DataA / 2`. `UberTip` states "half damage" for every rank, and
+  admission refuses rows without that text. The native ratio is not separately
+  qualified.
+- Armor and attack type of spell damage are unverified. The implementation applies
+  no target armor. No row column names an attack type for this spell.
+- Art: the `Targetart` attaches to the target at `origin`, the model root, because the
+  row authors no `Targetattach`. That default is an inference. Its lifetime is the
+  interval of the model's only `SEQS` record, which must be non-looping (the install
+  has one, `Birth` 0-2800 ms, checked by the pcx-mdl gate). Any other layout refuses
+  admission, because which sequence the engine plays is not established. Each cast
+  attaches its own effect with its own end time. The end is derived from the game clock
+  when the effect is read, so it does not depend on combat stepping. Removing the unit
+  ends its effects, as the existing removal path does. Script `DestroyEffect` also ends one. The art bytes come from the campaign reader, with `.mdl` mapped to `.mdx`.
+- The campaign hotkey path is compiled only through `cargo check -p peacecraft3`.
+  That check was run once on the shared target and failed on a borrow error, which is
+  fixed in the next commit. A second check is needed before merge.
 
 See [script hero skills](script-hero-skills.md) for ability learning and
 [hero combat attributes](hero-combat-attributes.md) for the hero combat path.

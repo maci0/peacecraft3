@@ -272,6 +272,8 @@ enum Entry {
         unit: HandleId,
         attach_point: String,
         live: bool,
+        /// Game time the effect ends on its own, when its model finishes. `None` runs until destroyed.
+        expires_at: Option<f64>,
     },
     /// Trigger identity, with no enabled default unless a runtime input supplies it.
     Trigger {

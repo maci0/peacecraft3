@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 /// The implementation is bound to this row, as the campaign selects it with
 /// `SelectHeroSkill(unit, 'AHhb')`. Its order and art come from the row.
-const ABILITY: [u8; 4] = *b"AHhb";
+const ABILITY: [u8; 4] = crate::map_startup_host::HOLY_LIGHT_ROW;
 /// Native that dispatches the order, used as error context.
 const NATIVE: &str = "IssueTargetOrder";
 /// Animation sequence played on cast when the unit model has one.
@@ -30,6 +30,7 @@ const DEFAULT_ATTACH: &str = "origin";
 /// `UberTip` wording that names the undead ratio, and the divisor it stands for.
 const UNDEAD_RATIO_TEXT: &str = "half damage";
 const HALF: f32 = 2.0;
+const MILLISECONDS_PER_SECOND: f64 = 1000.0;
 /// `targs` tokens this cast evaluates. Any other token refuses.
 const TARGET_TOKENS: [&str; 7] = [
     "air",
@@ -49,14 +50,14 @@ pub(super) struct Rules {
     ready_at: BTreeMap<HandleId, f64>,
     /// Accepted casts still walking into range, by caster.
     pending: BTreeMap<HandleId, HandleId>,
-    /// Live art effect on each target.
-    art_on: BTreeMap<HandleId, HandleId>,
 }
 
 #[derive(Clone)]
 struct Art {
     model: String,
     attach: String,
+    /// Duration of the model's only sequence, which is non-looping, in milliseconds.
+    lifetime_ms: f64,
 }
 
 struct Filter {
@@ -103,6 +104,19 @@ fn target_filter(targs: &str) -> Result<Filter, String> {
     })
 }
 
+/// The single sequence of the art model must be non-looping; its interval is the lifetime.
+/// Any other sequence layout refuses, because which sequence the engine plays is not established.
+fn art_lifetime(model: &[u8]) -> Result<f64, String> {
+    let parsed = pcx_mdl::Mdlx::parse(model).map_err(|e| format!("art model: {e}"))?;
+    let sequences = parsed
+        .sequences(model)
+        .map_err(|e| format!("art model SEQS: {e}"))?;
+    match sequences.as_slice() {
+        [only] if only.non_looping && only.duration() > 0 => Ok(f64::from(only.duration())),
+        _ => Err("art model needs exactly one non-looping sequence".into()),
+    }
+}
+
 impl ObjectHost {
     fn holy_error(&self, reason: String) -> Error {
         self.inner.error(NATIVE, Failure::HeroSkills(reason))
@@ -110,7 +124,7 @@ impl ObjectHost {
 
     /// Needs combat (dispatches the order), hero skills (resolves ranks) and unit
     /// effects (shows the `Targetart`). Every profile it reads must be authored.
-    pub fn admit_holy_light(&mut self) -> Result<(), Error> {
+    pub fn admit_holy_light(&mut self, art_model: &[u8]) -> Result<(), Error> {
         if self.holy_light.is_some()
             || self.combat.is_none()
             || !self.has_hero_skills()
@@ -144,13 +158,17 @@ impl ObjectHost {
         if tips.is_empty() || !tips.iter().all(|tip| tip.contains(UNDEAD_RATIO_TEXT)) {
             return Err(self.holy_error(format!("UberTip does not state the {UNDEAD_RATIO_TEXT}")));
         }
+        let lifetime_ms = art_lifetime(art_model).map_err(|e| self.holy_error(e))?;
         self.holy_light = Some(Rules {
             order,
             undead_divisor: HALF,
-            art: Art { model, attach },
+            art: Art {
+                model,
+                attach,
+                lifetime_ms,
+            },
             ready_at: BTreeMap::new(),
             pending: BTreeMap::new(),
-            art_on: BTreeMap::new(),
         });
         Ok(())
     }
@@ -413,24 +431,20 @@ impl ObjectHost {
             Effect::Damage(damage) => self.damage_unit(caster, target, damage)?,
             Effect::Heal(amount) => self.heal_unit(target, amount)?,
         }
-        self.attach_holy_art(target)?;
+        self.attach_holy_art(target, now)?;
         self.queue_spell_effect(caster, target)
     }
 
     /// Shows the `Targetart` on the target. The previous art on that target ends first.
-    fn attach_holy_art(&mut self, target: HandleId) -> Result<(), Error> {
-        let Some(rules) = self.holy_light.as_mut() else {
+    /// Each cast attaches its own art with its own expiry. Earlier art on the target keeps its
+    /// own lifetime; the effect contract has no per-target replacement.
+    fn attach_holy_art(&mut self, target: HandleId, now: f64) -> Result<(), Error> {
+        let Some(rules) = self.holy_light.as_ref() else {
             return Ok(());
         };
-        let previous = rules.art_on.remove(&target);
         let art = rules.art.clone();
-        if let Some(previous) = previous {
-            self.destroy_unit_effect(previous)?;
-        }
-        let effect = self.add_unit_effect(&art.model, target, &art.attach)?;
-        if let Some(rules) = &mut self.holy_light {
-            rules.art_on.insert(target, effect);
-        }
+        let expires_at = now + art.lifetime_ms / MILLISECONDS_PER_SECOND;
+        self.add_unit_effect(&art.model, target, &art.attach, Some(expires_at))?;
         Ok(())
     }
 }
@@ -438,6 +452,32 @@ impl ObjectHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn art(sequences: &[(u32, bool)]) -> Vec<u8> {
+        let mut bytes = b"MDLX".to_vec();
+        bytes.extend(b"VERS");
+        bytes.extend(4_u32.to_le_bytes());
+        bytes.extend(800_u32.to_le_bytes());
+        let mut records = Vec::new();
+        for (end, looping) in sequences {
+            let mut sequence = vec![0; pcx_mdl::SEQUENCE_SIZE];
+            sequence[84..88].copy_from_slice(&end.to_le_bytes());
+            sequence[92..96].copy_from_slice(&u32::from(!looping).to_le_bytes());
+            records.extend(sequence);
+        }
+        bytes.extend(b"SEQS");
+        bytes.extend((records.len() as u32).to_le_bytes());
+        bytes.extend(records);
+        bytes
+    }
+
+    #[test]
+    fn art_lifetime_is_the_only_sequence_when_it_does_not_loop() {
+        assert_eq!(art_lifetime(&art(&[(2800, false)])), Ok(2800.0));
+        assert!(art_lifetime(&art(&[(2800, true)])).is_err());
+        assert!(art_lifetime(&art(&[(2800, false), (900, false)])).is_err());
+        assert!(art_lifetime(&art(&[])).is_err());
+    }
 
     #[test]
     fn target_filter_requires_the_authored_flags_and_refuses_unknown_tokens() {
