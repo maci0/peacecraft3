@@ -215,22 +215,34 @@ original/native/WASM trajectory parity remain open. This candidate is not a play
 behavior implementation. Validation receipts must be consulted separately; the
 preceding completed registry checks do not validate this new consumer.
 
-### Walk playback rate (candidate)
+### Walk playback rate (candidate, unqualified)
 
-A unit moving under a point order plays Walk at `speed / move_speed`. `speed` is
-the resolved UnitBalance speed that already drives displacement. `move_speed` is
-the Walk sequence's SEQS ground speed (`pcx_mdl::Sequence::move_speed`). The
-selected Legacy 1.29.2 footman reads Walk at 215 over 800 ms (`mdlx info`, local
-archive read); knight, peasant, ghoul and grunt Walk records are nonzero too.
-Stand, Attack and Death keep the authored clock. A Walk with zero or nonfinite
-move speed refuses the order instead of inventing a rate. Walk-to-Stand arrival
-selects Stand at the computed arrival time.
+Candidate: a unit moving under a point order plays Walk at `speed / move_speed`.
+`speed` is the resolved UnitBalance `spd` that drives displacement. `move_speed`
+is the Walk sequence's SEQS ground speed (`pcx_mdl::Sequence::move_speed`). Stand,
+Attack, Death and script `SetUnitAnimation` keep the authored clock. A Walk with
+zero SEQS move speed keeps the authored clock; movement is still accepted. Nonzero
+negative or nonfinite move speed, and nonpositive unit speed, refuse. Walk-to-Stand
+arrival selects Stand at the computed arrival time. Reselecting Walk restarts it at
+its new rate.
 
-This rule is a community observation, not a native fact: a forum thread on walk
-and run speed fields describes the same comparison
-(https://www.hiveworkshop.com/threads/art-animation-walk-speed-and-run-speed.352848).
-No native code, original-client capture or rendered trajectory checks it. Its
-acceleration, turn-rate and footstep-timing consequences remain unqualified.
+Static facts, not pacing proof:
+- The selected Legacy 1.29.2 footman (`Warcraft III.exe` SHA256 3f2ed012...570eed,
+  sibling archives read-only) has UnitBalance `spd` 270, SEQS Walk 215 over 800 ms,
+  and UnitUI `walk` 210. The footman alone does not separate the candidates.
+- Across 421 joined unit-model Walk records (local archive scan and unitUI.slk),
+  UnitUI `walk` differs from SEQS Walk `move_speed` in 263. Shipped Walk sequences
+  include zero (Murgul BloodGill, Murgul Slave). UnitUI `walk` and `run` are real engine
+  columns: their names sit in the executable's unit-field table beside `modelScale`.
+- The executable names `SetUnitTimeScale` and `BlzSetSpecialEffectTimeScale`.
+  This repo implements neither, so a script time scale has no interaction here.
+
+The ratio source is therefore undecided: SEQS `move_speed`, UnitUI `walk`, or
+another authored field. No native code or original-client capture checks any of
+them. The Hive Workshop forum thread
+(https://www.hiveworkshop.com/threads/art-animation-walk-speed-and-run-speed.352848)
+describes a walk/run comparison but is not evidence. Acceleration, turn rate and
+footstep timing remain unqualified.
 
 The bounded consumer's final verification is retained in
 `.scratch/campaign-unit-activity-root-20261020/verification-1.json`: 1,378 native

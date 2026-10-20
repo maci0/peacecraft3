@@ -156,7 +156,8 @@ impl Animation {
     /// Select `name` at `now`. `unit_speed` is the unit's movement speed for a
     /// moving sequence: the sequence then plays at `unit_speed / move_speed` of its
     /// authored clock, where `move_speed` is the sequence's SEQS ground speed.
-    /// `None` keeps the authored clock. A missing selection leaves the state unchanged.
+    /// `None`, or a zero `move_speed`, keeps the authored clock. A missing
+    /// selection leaves the state unchanged.
     pub fn select(&mut self, name: &str, now: f64, unit_speed: Option<f32>) -> Result<(), String> {
         if !now.is_finite() || now < self.started {
             return Err("invalid unit animation game time".into());
@@ -164,18 +165,21 @@ impl Animation {
         if let Some(index) = self.model.select(name) {
             let rate = match unit_speed {
                 None => 1.,
+                Some(speed) if !speed.is_finite() || speed <= 0. => {
+                    return Err(format!("{name}: playback rate needs a positive unit speed"));
+                }
                 Some(speed) => {
                     let move_speed = f64::from(self.model.sequences[index].move_speed);
-                    if !speed.is_finite()
-                        || speed <= 0.
-                        || !move_speed.is_finite()
-                        || move_speed <= 0.
-                    {
-                        return Err(format!(
-                            "{name}: playback rate needs a positive unit speed and sequence move speed"
-                        ));
+                    if !move_speed.is_finite() || move_speed < 0. {
+                        return Err(format!("{name}: invalid SEQS move speed"));
                     }
-                    f64::from(speed) / move_speed
+                    // ponytail: zero ground speed has nothing to scale against; shipped Walk
+                    // sequences do carry it, so the authored clock stays in effect (unverified).
+                    if move_speed == 0. {
+                        1.
+                    } else {
+                        f64::from(speed) / move_speed
+                    }
                 }
             };
             self.sequence = Some(index);
@@ -353,7 +357,23 @@ pub(crate) mod tests {
         assert_eq!(animation.sample(4.25).unwrap().unwrap().frame, 3250);
         assert!(animation.select("walk", 5., Some(0.)).is_err());
         assert!(animation.select("walk", 5., Some(f32::NAN)).is_err());
-        // Death has no authored move speed: no rate is invented for it.
-        assert!(animation.select("death", 5., Some(400.)).is_err());
+        // Death has zero move speed: it keeps the authored clock instead of refusing.
+        animation.select("death", 5., Some(400.)).unwrap();
+        assert_eq!(animation.sample(5.25).unwrap().unwrap().frame, 2250);
+    }
+    #[test]
+    fn reselecting_walk_restarts_at_the_new_rate_and_invalid_move_speed_refuses() {
+        let mut animation = Animation::new(model(), 2.).unwrap();
+        animation.select("walk", 3., Some(400.)).unwrap();
+        assert_eq!(animation.sample(3.25).unwrap().unwrap().frame, 3500);
+        // A new speed while still walking restarts Walk at its own rate, not a continuation.
+        animation.select("walk", 3.5, Some(200.)).unwrap();
+        assert_eq!(animation.started, 3.5);
+        assert_eq!(animation.sample(3.75).unwrap().unwrap().frame, 3250);
+        let mut bad = (*model()).clone();
+        bad.sequences[3].move_speed = -1.;
+        let mut animation = Animation::new(Arc::new(bad), 2.).unwrap();
+        assert!(animation.select("walk", 3., Some(400.)).is_err());
+        assert!(animation.select("walk", 3., None).is_ok());
     }
 }
