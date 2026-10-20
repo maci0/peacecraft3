@@ -104,6 +104,21 @@ mod binding;
 #[cfg(all(test, target_arch = "wasm32"))]
 #[path = "../tests/support/map_fixtures.rs"]
 mod fixtures;
+
+// Shared startup fixture for the native production-path tests (`test-fixtures`). Only the
+// publication helpers are used here, so the rest of the shared file is allowed to be unused.
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+#[allow(dead_code, reason = "shared integration fixture; the binary uses only publication helpers")]
+#[path = "../tests/support/map_binding_cases.rs"]
+mod binding;
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+#[allow(dead_code, reason = "shared integration fixture; the binary uses only publication helpers")]
+#[path = "../tests/support/map_fixtures.rs"]
+mod fixtures;
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+#[allow(dead_code, reason = "shared integration fixture; the binary uses only publication helpers")]
+#[path = "../tests/support/campaign_startup_cases.rs"]
+mod campaign_startup_cases;
 #[cfg(all(test, target_arch = "wasm32"))]
 use crate::map_source_controls as source_controls;
 #[cfg(all(test, target_arch = "wasm32"))]
