@@ -714,6 +714,22 @@ impl Placement {
         radius: f32,
         work: &mut usize,
     ) -> Result<bool, Error> {
+        Ok(self.clear_fraction(unit, from, to, radius, work)? == 1.0)
+    }
+
+    /// Fraction of `from..to` that is clear, sampled every half cell with corner
+    /// checks between samples. `1.0` when the whole segment is clear. Otherwise the
+    /// fraction of the last clear sample before the first blocked one, `0.0` when
+    /// the first sample is blocked. A caller stops the unit at
+    /// `from + (to - from) * fraction`, which is the same point the sample used.
+    pub(crate) fn clear_fraction(
+        &self,
+        unit: HandleId,
+        from: [f32; 2],
+        to: [f32; 2],
+        radius: f32,
+        work: &mut usize,
+    ) -> Result<f64, Error> {
         let delta = [
             f64::from(to[0]) - f64::from(from[0]),
             f64::from(to[1]) - f64::from(from[1]),
@@ -740,8 +756,9 @@ impl Placement {
                 (f64::from(from[0]) + delta[0] * n as f64 / steps as f64) as f32,
                 (f64::from(from[1]) + delta[1] * n as f64 / steps as f64) as f32,
             ];
+            let before = (n - 1) as f64 / steps as f64;
             if self.prepare_motion(unit, point, radius)?.is_none() {
-                return Ok(false);
+                return Ok(before);
             }
             let cell = self.cell(point)?;
             if cell[0] != previous[0] && cell[1] != previous[1] {
@@ -750,13 +767,13 @@ impl Placement {
                         .checked_sub(1)
                         .ok_or_else(|| fail("movement segment work exhausted"))?;
                     if self.prepare_motion(unit, centre(p), radius)?.is_none() {
-                        return Ok(false);
+                        return Ok(before);
                     }
                 }
             }
             previous = cell;
         }
-        Ok(true)
+        Ok(1.0)
     }
 
     /// Bounded deterministic cell routing on this same live collision cache.
