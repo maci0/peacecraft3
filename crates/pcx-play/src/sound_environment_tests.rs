@@ -365,6 +365,15 @@ pub(crate) fn synthetic_tables() -> EnvironmentTables {
     EnvironmentTables {
         properties,
         rooms: ROOMS.iter().map(|room| (*room).to_owned()).collect(),
+        window: Window {
+            ms: 5000,
+            provenance: WindowProvenance {
+                global: 0,
+                writer: 0,
+                setter: 0,
+                call_sites: Vec::new(),
+            },
+        },
     }
 }
 
@@ -412,6 +421,93 @@ fn apply_refuses_a_fractional_int_cell_and_a_mismatched_property_table() {
     assert!(apply(&environments[0], &short).is_err());
 }
 
+/// Synthetic executable with the scheduler shape: a window read after `mov ecx, [last]`,
+/// one store to the window global inside the setter, and callers. `callers` gives each
+/// call's first argument: `Some(ms)` pushes the immediate, `None` pushes a register.
+fn window_exe(callers: &[Option<u32>]) -> Vec<u8> {
+    const TEXT_VA: u32 = IMAGE_BASE + 0x1000;
+    const LAST: u32 = IMAGE_BASE + 0x2000;
+    const GLOBAL: u32 = IMAGE_BASE + 0x2004;
+    const SETTER: u32 = TEXT_VA + 13;
+    let mut code = Vec::new();
+    code.extend_from_slice(&[0x8b, 0x0d]);
+    code.extend_from_slice(&LAST.to_le_bytes());
+    code.extend_from_slice(&[0x03, 0x0d]);
+    code.extend_from_slice(&GLOBAL.to_le_bytes());
+    code.push(0xc3);
+    code.extend_from_slice(&[0x55, 0x8b, 0xec]);
+    code.extend_from_slice(&[0x83, 0x7d, 0x08, 0xff]);
+    code.extend_from_slice(&[0x89, 0x0d]);
+    code.extend_from_slice(&GLOBAL.to_le_bytes());
+    code.push(0xc3);
+    for caller in callers {
+        match caller {
+            Some(ms) => {
+                code.push(0x68);
+                code.extend_from_slice(&ms.to_le_bytes());
+            }
+            None => code.push(0x50),
+        }
+        let call_va = TEXT_VA + code.len() as u32;
+        code.push(0xe8);
+        code.extend_from_slice(&SETTER.wrapping_sub(call_va + 5).to_le_bytes());
+    }
+    synthetic_image(&[(TEXT, 0x1000, &code)])
+}
+
+#[test]
+fn the_window_is_the_operand_pushed_at_each_scheduler_call() {
+    let exe = window_exe(&[Some(0x1388), Some(0x1388)]);
+    let window = read_window(&PeSections::parse(&exe).unwrap()).unwrap();
+    assert_eq!(window.ms, 0x1388);
+    assert_eq!(window.provenance.global, IMAGE_BASE + 0x2004);
+    assert_eq!(window.provenance.setter, IMAGE_BASE + 0x1000 + 13);
+    assert_eq!(window.provenance.writer, IMAGE_BASE + 0x1000 + 13 + 3 + 4);
+    assert_eq!(window.provenance.call_sites.len(), 2);
+}
+
+#[test]
+fn a_changed_operand_changes_the_derived_window() {
+    // The derivation reads the operand; no value is fixed in the crate.
+    for ms in [1u32, 3000, 0x0100_0000] {
+        let exe = window_exe(&[Some(ms)]);
+        let window = read_window(&PeSections::parse(&exe).unwrap()).unwrap();
+        assert_eq!(window.ms, ms);
+    }
+}
+
+#[test]
+fn a_scheduler_shape_that_is_not_a_constant_is_refused() {
+    let pe = |callers: &[Option<u32>]| {
+        let exe = window_exe(callers);
+        read_window(&PeSections::parse(&exe).unwrap())
+    };
+    assert!(
+        pe(&[None])
+            .unwrap_err()
+            .contains("does not push a constant")
+    );
+    assert!(
+        pe(&[Some(5000), Some(3000)])
+            .unwrap_err()
+            .contains("different")
+    );
+    assert!(pe(&[]).unwrap_err().contains("no call passes"));
+    assert!(pe(&[Some(0)]).unwrap_err().contains("zero"));
+
+    // Without a setter that stores its first argument, no global qualifies.
+    let no_store = synthetic_image(&[(
+        TEXT,
+        0x1000,
+        &[0x8b, 0x0d, 0, 0, 0, 0, 0x03, 0x0d, 0, 0, 0, 0, 0xc3],
+    )]);
+    assert!(
+        read_window(&PeSections::parse(&no_store).unwrap())
+            .unwrap_err()
+            .contains("qualifies")
+    );
+}
+
 /// Explicit local original gate: `PEACECRAFT3_INSTALL` (or `PEACECRAFT3_LEGACY_DIR`)
 /// names a Legacy install whose `Warcraft III.exe` is the selected executable.
 #[test]
@@ -440,15 +536,12 @@ fn shipped_executable_yields_the_environment_tables_and_window_call_sites() {
     assert_eq!(tables.rooms[5], "STONEOOM");
     assert_eq!(tables.rooms[25], "PSYCHOTIC");
 
-    // The two scheduler callers push 0x1388 and call the same target, 0x5d6f70.
-    let pe = PeSections::parse(&exe).expect("sections");
-    for push_va in [0x0042_eea0u32, 0x0053_4cc4] {
-        let push = pe.va_bytes(push_va, 10).expect("call site inside .text");
-        assert_eq!(&push[..5], &[0x68, 0x88, 0x13, 0x00, 0x00]);
-        assert_eq!(push[5], 0xe8);
-        let rel = i32::from_le_bytes(push[6..10].try_into().unwrap());
-        let target = (push_va + 10).wrapping_add_signed(rel);
-        assert_eq!(target, 0x005d_6f70);
-    }
-    assert_eq!(NATIVE_WINDOW_MS, 0x1388);
+    // Derived from the executable's scheduler code; the expected values are the
+    // observed evidence, not inputs to the derivation.
+    assert_eq!(tables.window.ms, 0x1388);
+    assert_eq!(tables.window.provenance.setter, 0x005d_6f70);
+    assert_eq!(
+        tables.window.provenance.call_sites,
+        vec![0x0042_eea5, 0x0053_4cc9]
+    );
 }

@@ -342,7 +342,6 @@ pub fn prepare(
         Some(pcx_play::sound_environment::SoundEnvironmentInput {
             records,
             tables: pcx_play::sound_environment::tables(image).map_err(|e| e.to_string())?,
-            window_ms: pcx_play::sound_environment::NATIVE_WINDOW_MS,
         })
     };
     let item_classes =
