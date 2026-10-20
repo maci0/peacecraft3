@@ -329,14 +329,15 @@ Storm DLL run is a Wine-hosted native execution, not Legacy runtime proof.
 
 ### Attributes CRC is not a decoder oracle for ADPCM members
 
-`(attributes)` CRC32 matches the decoded bytes for every non-WAV member (6,463 of
-6,463 that decode) and for the 11 `.wav` members that decode without ADPCM, presumably
-losslessly stored. It mismatches for 2,705 of 2,716 `.wav` members, which is the ADPCM
-class, while native Storm agrees with our output. This pattern and the lossy coding are
-consistent with the CRC describing the original 16-bit PCM before ADPCM encoding. That
-is an inference: no MPQ format source was checked for attributes semantics, and no
-pre-encoding original was available. The native oracle is the fidelity reference for
-these members, not the CRC.
+`(attributes)` CRC32 matches the decoded bytes for all 6,463 non-WAV members that
+decode. For the 2,716 `.wav` members, a direct sector-mask scan shows the partition is
+exact: all 11 matches have only zlib (`0x02`) sectors, and all 2,705 mismatches contain
+an ADPCM mask (`0x40` or `0x80`). Native Storm agrees with our output on every member.
+
+The CRC-to-ADPCM correlation is consistent with the CRC describing the original 16-bit
+PCM before lossy ADPCM encoding. That is an inference: no MPQ format source was checked
+for attributes semantics, and no pre-encoding original was available. Decoder fidelity
+rests on the native oracle. The CRC does not gate WAV decoding.
 
 Measurement tool: `cargo run -p pcx-mpq --example attributes_crc -- <archive> <suffix>`.
 
@@ -347,3 +348,30 @@ Measurement tool: `cargo run -p pcx-mpq --example attributes_crc -- <archive> <s
 - The native gate needs a local dump: build `storm_compare.exe` with
   `i686-w64-mingw32-gcc` and `storm.def`, then run it under Wine with the compatibility
   `Storm.dll` beside it and a `PXC1` stream from `export_storm_comparison`.
+
+### ADPCM tables come from the codec source
+
+The 89 step values and the 32 index adjustments are no longer compiled into
+`pcx-mpq`. `HuffmanTable::from_pe` locates them in the codec source's file-backed
+section bytes. The step run must be strictly increasing, start above zero and end at
+`0x7fff`. The index run is the 32 dwords directly before it, each in `-1..=8`.
+
+Exactly one step run must match. Zero matches give `adpcm: None`, so ADPCM sectors
+refuse with `UnsupportedCompression`. Two matches are a source error.
+
+Observed locations, both unique in their sources:
+
+| Source | Steps VA | Index VA |
+| --- | --- | --- |
+| compat `Storm.dll` (SHA-256 `eecc42b0…`) | `0x15042ad8` | `0x15042a58` |
+| Legacy `Warcraft III.exe` (SHA-256 `3f2ed012…`) | `0xe6ac38` | `0xe6abb8` |
+
+Both sources hold the same bytes, which shows the two binaries agree. It does not
+establish that the values are an independent format invariant. The 89-entry step
+sequence resembles the public IMA ADPCM step table. The index adjustments have
+32 entries with every even entry -1. This was not checked against a primary IMA reference
+here, so neither point is treated as a constant.
+
+Decoder fidelity is still established by the native oracle for all 2,716 WAV members.
+The initial index of 44 per channel is still a literal in `payload.rs`. It is not
+covered by the source-derived table path.

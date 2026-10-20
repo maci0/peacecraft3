@@ -607,7 +607,7 @@ impl MpqArchive {
         };
         match decode(self.huffman.as_ref()) {
             Err(payload::PayloadError::UnsupportedCompression { mask })
-                if mask & 1 != 0
+                if payload::needs_codec_tables(mask)
                     && self.huffman.is_none()
                     && !self.huffman_checked
                     && matches!(self.file, Source::File(_)) =>
@@ -1249,6 +1249,99 @@ mod memory_tests {
             Err(huffman::HuffmanError::Source { .. })
         ));
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A malformed Storm.dll is refused and never replaced by a valid executable beside it.
+    /// Storm.dll is the sole source once present.
+    #[test]
+    fn malformed_storm_does_not_fall_back_to_a_valid_executable() {
+        let directory =
+            std::env::temp_dir().join(format!("pcx-mpq-codec-priority-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("synthetic.mpq");
+        std::fs::write(&path, [1u8, 0]).unwrap();
+        let (name1, name2) = hash::hash_string_both("fixture");
+        let make_archive = || MpqArchive {
+            file: Source::File(BufReader::new(File::open(&path).unwrap())),
+            path: path.clone(),
+            header: Header::default(),
+            hashes: vec![HashEntry {
+                name1,
+                name2,
+                block_index: 0,
+                ..HashEntry::default()
+            }],
+            blocks: vec![BlockEntry {
+                file_pos: 0,
+                file_size: 4,
+                compressed_size: 2,
+                flags: flags::EXISTING | flags::SINGLE_UNIT | flags::COMPRESS,
+            }],
+            huffman: None,
+            huffman_checked: false,
+        };
+        let valid_exe = huffman::tests::synthetic_pe();
+        std::fs::write(directory.join("Warcraft III.exe"), &valid_exe).unwrap();
+        std::fs::write(directory.join("Storm.dll"), b"malformed DLL").unwrap();
+        let outcome = make_archive().extract("fixture");
+        std::fs::remove_dir_all(&directory).unwrap();
+        assert!(
+            matches!(
+                outcome,
+                Err(Error::Payload(payload::PayloadError::Huffman(
+                    huffman::HuffmanError::Source { ref source_path, .. }
+                ))) if source_path.ends_with("Storm.dll")
+            ),
+            "{outcome:?}"
+        );
+    }
+
+    /// Without Storm.dll a valid Warcraft III.exe is the codec source: discovery accepts it,
+    /// so the Huffman stage runs instead of refusing the mask.
+    #[test]
+    fn valid_executable_is_accepted_when_storm_is_absent() {
+        let directory =
+            std::env::temp_dir().join(format!("pcx-mpq-codec-exe-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("synthetic.mpq");
+        std::fs::write(&path, [1u8, 0]).unwrap();
+        std::fs::write(
+            directory.join("Warcraft III.exe"),
+            huffman::tests::synthetic_pe(),
+        )
+        .unwrap();
+        let (name1, name2) = hash::hash_string_both("fixture");
+        let mut archive = MpqArchive {
+            file: Source::File(BufReader::new(File::open(&path).unwrap())),
+            path: path.clone(),
+            header: Header::default(),
+            hashes: vec![HashEntry {
+                name1,
+                name2,
+                block_index: 0,
+                ..HashEntry::default()
+            }],
+            blocks: vec![BlockEntry {
+                file_pos: 0,
+                file_size: 4,
+                compressed_size: 2,
+                flags: flags::EXISTING | flags::SINGLE_UNIT | flags::COMPRESS,
+            }],
+            huffman: None,
+            huffman_checked: false,
+        };
+        let outcome = archive.extract("fixture");
+        std::fs::remove_dir_all(&directory).unwrap();
+        // The synthetic weights in row one are empty, so the stream is refused as corrupt.
+        assert!(
+            matches!(
+                outcome,
+                Err(Error::Payload(payload::PayloadError::Huffman(
+                    huffman::HuffmanError::Corrupt
+                )))
+            ),
+            "{outcome:?}"
+        );
     }
 
     /// An archive opened from memory must behave exactly like one opened from
