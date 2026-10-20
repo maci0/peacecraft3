@@ -2567,6 +2567,7 @@ fn position_host_admitting(
         "ConvertPlayerUnitEvent",
         "ConvertAllianceType",
         "ConvertUnitType",
+        "ConvertPlayerScore",
     ] {
         if ctx.scripts.shared_program().natives().get(name).is_some() {
             conversions.push(name);

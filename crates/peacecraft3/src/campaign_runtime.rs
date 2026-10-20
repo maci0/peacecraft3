@@ -5,7 +5,10 @@ use crate::{
     map_script_session::{MapScriptSession, TimerSessionError},
 };
 use bevy::prelude::*;
-use pcx_play::{map_admission::ParsedMapContext, map_startup_host::MapStartupHost};
+use pcx_play::{
+    map_admission::ParsedMapContext, map_startup_host::MapStartupHost,
+    playercolor_host::PlayerScoreSnapshot,
+};
 use pcx_script::Value;
 use std::{
     sync::{Arc, Weak},
@@ -221,6 +224,9 @@ pub struct CampaignExitSnapshot {
     pub game_time: Option<f64>,
     /// `None` when the local player has no admitted removal record.
     pub local_result: Option<LocalGameResult>,
+    /// Score counters of the local player. `None` when scores are not admitted or no
+    /// local player is selected. Each counter's value is `None` until its source is verified.
+    pub local_scores: Option<PlayerScoreSnapshot>,
     /// Map context of the exiting session, for resolving its assets.
     pub context: Arc<ParsedMapContext>,
 }
@@ -267,10 +273,12 @@ fn take_game_exit(
                     .then_some(*result)
             })
         });
+    let local_number = objects.local_player_number();
     exit.0 = Some(CampaignExitSnapshot {
         score_screen: requests.iter().any(|request| request.score_screen),
         game_time: objects.timer_game_time(),
         local_result,
+        local_scores: local_number.and_then(|number| objects.player_score_snapshot(number)),
         context,
     });
     session.clear();

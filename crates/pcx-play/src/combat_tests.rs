@@ -9,6 +9,9 @@ native SetPlayerAlliance takes player a, player b, alliancetype s, boolean v ret
 type unitstate extends handle
 type playerunitevent extends eventid
 type alliancetype extends handle
+type playerscore extends handle
+constant native ConvertPlayerScore takes integer i returns playerscore
+constant native GetPlayerScore takes player p, playerscore s returns integer
 constant native ConvertUnitState takes integer i returns unitstate
 constant native ConvertPlayerUnitEvent takes integer i returns playerunitevent
 constant native ConvertAllianceType takes integer i returns alliancetype
@@ -37,6 +40,8 @@ constant playerunitevent EVENT_PLAYER_UNIT_DEATH = ConvertPlayerUnitEvent(20)
 constant unitevent EVENT_UNIT_DEATH = ConvertUnitEvent(53)
 constant unitevent EVENT_UNIT_ATTACKED = ConvertUnitEvent(54)
 constant alliancetype ALLIANCE_PASSIVE = ConvertAllianceType(0)
+constant playerscore PLAYER_SCORE_UNITS_TRAINED = ConvertPlayerScore(0)
+constant playerscore PLAYER_SCORE_UNITS_KILLED = ConvertPlayerScore(1)
 constant integer PLAYER_NEUTRAL_PASSIVE = 15
 endglobals
 "#;
@@ -163,6 +168,8 @@ fn open_selected(
         .with_player_alliances(crate::playercolor_host::PlayerAllianceBudget { max_records: 8 })
         .unwrap()
         .with_unit_explosions(8)
+        .unwrap()
+        .with_player_scores()
         .unwrap()
         .with_order_registry(registry)
         .unwrap()
@@ -1276,3 +1283,6 @@ fn set_unit_exploded_then_kill_unit_retains_the_flag_through_the_death_path() {
         .unwrap();
     assert_eq!(h.unit_exploded(a), Some(false));
 }
+
+#[path = "player_score_tests.rs"]
+mod player_score;

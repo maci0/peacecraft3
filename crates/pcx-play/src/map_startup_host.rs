@@ -674,6 +674,15 @@ pub fn assemble(
         object = object.with_regions(budget)?;
     }
     object = object.with_game_exit(budgets.game_exit)?;
+    if context
+        .scripts
+        .program()
+        .natives()
+        .get("GetPlayerScore")
+        .is_some()
+    {
+        object = object.with_player_scores()?;
+    }
     if let Some(now) = timer_time {
         object = object.with_timer_runtime(now)?;
     }

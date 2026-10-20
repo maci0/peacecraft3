@@ -32,8 +32,9 @@ unsupported.
 
 ## Not established
 
-- Score values. Row contents, column meanings, and the per-player source
-  (simulation counters or `GetPlayerScore`) are not yet derived.
+- Score values. Row contents and column meanings are not yet derived. The
+  per-player source is partly established: `GetPlayerScore` answers only
+  `PLAYER_SCORE_UNITS_KILLED`, see [player score counters](player-score-counters.md).
 - Button semantics. OK returns to the caller in the original; Save Replay and
   Replay Saved have no implemented replay writer here, so they must refuse.
 - Restart, load and campaign transition after the screen.
