@@ -211,7 +211,12 @@ impl ObjectHost {
         {
             return Ok(value);
         }
-        let mut fields = item.definition.fields.iter().filter(|(id,field)| {
+        self.definition_flag(&item.definition, column)
+    }
+
+    /// A boolean `ItemData` column of an unexecuted definition, read the same way as an item.
+    pub(crate) fn definition_flag(&self, definition: &pcx_sim::world::Definition, column: &str) -> Result<bool, Error> {
+        let mut fields = definition.fields.iter().filter(|(id,field)| {
             field.metadata.as_ref().is_some_and(|metadata| metadata.fourcc==**id
                 && matches!(metadata.kind,pcx_objects::editor::FieldKind::Bool|pcx_objects::editor::FieldKind::Int)
                 && matches!(&metadata.source,FieldSource::Column{slk:SlkId::ItemData,column:source}if source==column))
@@ -299,6 +304,29 @@ impl ObjectHost {
     }
     /// Passive strength and agility of one item while held. Powerups and usable items add none.
     /// Refusals are raised here, before the caller writes any state.
+    /// Passive bonus of an unexecuted definition. Refuses when the inventory attribute rules are
+    /// not admitted, because a missing rule would hide a bonus rather than prove there is none.
+    pub(crate) fn definition_passive(
+        &self,
+        definition: &pcx_sim::world::Definition,
+    ) -> Result<AttributeBonus, Error> {
+        let Some(rules) = self
+            .items
+            .as_ref()
+            .and_then(|s| s.inventory.as_ref())
+            .and_then(|s| s.attributes.as_ref())
+        else {
+            return Err(self.inner.error(
+                "purchase",
+                Failure::ItemState("passive bonus classification not admitted"),
+            ));
+        };
+        let held = rules
+            .held_attributes(definition)
+            .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))?;
+        Ok(held.unwrap_or_default())
+    }
+
     pub(crate) fn held_attributes(&self, item: HandleId) -> Result<AttributeBonus, Error> {
         let Some(rules) = self
             .items
