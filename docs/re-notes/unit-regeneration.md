@@ -183,49 +183,81 @@ Remaining work before blight eligibility can be enabled:
 
 Until then, a nonzero blight rate refuses. This refusal is interim and the task stays open.
 
-## Controlled blight runtime probe (local, not evidence)
+## Controlled blight runtime probe (prepared, not launched, not evidence)
 
-Question: does original runtime regeneration of a `regenType=blight` unit depend on
-`SetBlight*` state, and for which player? This probe does not depend on the initial
-W3E encoding. It varies only the known `SetBlight*` calls around a unit.
+Question: does original runtime regeneration of a non-hero `regenType=blight` unit
+depend on `SetBlight*` state, and for which owner? The probe does not depend on the
+initial W3E encoding. It varies only the known `SetBlight*` calls.
 
-Design (`.scratch/blight-probe`, ignored; built with an adapted copy of the wave03
-packer and template-patch builder):
+Source values, read from the installed archives (`War3.mpq` and `War3x.mpq` hold
+byte-identical `Units\UnitBalance.slk`, SHA-256
+`93c4f25eb75c46818e11f2569ca11e5efd742e97e68dbce4f96094059fa9f9c2`):
 
-- Template: Human01 members from the selected install, extracted read-only with the
-  wave03 `mapbuilder`. The patch inserts three globals and replaces `main`. The
-  template's own triggers still run.
-- Blight unit `Ucrl` (UnitBalance row 134: `regenHP` 2, `regenType` blight), owner
-  Player(0), at (0, 0). Control `hfoo` (row 10: `regenHP` 0.25, `regenType` always),
-  owner Player(0), at (2000, 0), outside every blight region.
-- Time of day suspended at hour 12 (`SuspendTimeOfDay`, `SetFloatGameState`).
-- Each phase: life reset to 100 for both units, 20 s of `TriggerSleepAction`, then one
-  `Preload` line with `t0`, `t1`, life before/after, and positions before/after.
-- Phases: off; on/off `SetBlightPoint` for Player(0), then for Player(1); on/off
-  `SetBlightRect` and `SetBlight` radius for Player(0); then a move from (0,0) to
-  (300,0) with `SetUnitPosition` and `IssuePointOrder "move"` under an east rect
-  x 128..512 blight, followed by its removal.
-- Output: `PreloadGenEnd("PCXB-blight-probe.txt")`. The destination directory is not
-  yet verified on the installed game; check it at the first launch.
+| Unit | Role | `HP` (max) | `realHP` | `regenHP` | `regenType` |
+|---|---|---|---|---|---|
+| `ugho` | blight unit, non-hero | 340 | 340 | 2 | blight |
+| `hfoo` | control, non-hero | 420 | 420 | 0.25 | always |
 
-Gate: `compile_check` resolves the patched `war3map.j` against the selected
-`Scripts\common.j` and `Scripts\Blizzard.j` (pcx-script `resolve_with`, pass).
+- Rawcodes are lowercase, so neither unit uses the hero rawcode convention.
+  `Ucrl` and other uppercase blight rows are heroes and are excluded.
+- Reset life 100 is valid for both: it is above zero and at most min(340, 420).
+- Rate expectation is `regenHP × elapsed`, using the timer that the probe records.
+  No gain threshold is used.
 
-Interpretation rules:
+Build (`.scratch/blight-probe`, ignored): `src/unit_rows.awk` extracts the rows from
+the installed SLK, `src/source_values.py` validates them and writes the receipt,
+`src/fill_block.py` substitutes the validated values into `src/probe_block.j`, and
+`src/blight_map.py` (adapted from the wave03 packer) patches the Human01 template.
+`run_build.sh` runs the chain. `src/plan_launch.py` prints the reference argument
+vectors and starts nothing. Receipts: `out/source-values.json`,
+`out/PCXB-blight-probe.receipt.json`, `out/launch-plan.json`, `out/compile.txt`.
 
-- Control: `hfoo` must gain ≈ 0.25 × 20 = 5 in every phase. If not, the probe is
-  invalid for that phase.
-- Blight signal: an "on" phase whose blight gain is ≈ 2 × 20 = 40 is a candidate
-  eligibility signal. Gain ≈ 0 with an "off" phase gain ≈ 0 is "no signal".
-- Mark a phase unobserved, not negative, when the blight unit is not in the region
-  or the control phase fails.
-- Affinity: compare Player(0) and Player(1) point phases.
-- Crossing: the walk phase's gain must start at the sample where x crosses 128, or
-  the probe reports the crossing as not observed. The sampling interval is 20 s, so
-  the crossing time is not resolved by the probe alone.
+Probe phases, each 20 s of `TriggerSleepAction` after a life reset of both units to 100:
 
-Status: the map is built and compile-checked. It is not launched. Launch waits for
-the root GUI queue after Walk and Sound03. No result is recorded here.
+1. `off`: no blight. Blight unit expected Δ = 0 (`regenType blight`, no blight).
+2. `SetBlightPoint(Player(0))` on, then off.
+3. `SetBlightPoint(Player(1))` on, then off (affinity).
+4. `SetBlightRect(Player(0))` on, then off.
+5. `SetBlight(Player(0), radius 256)` on, then off.
+6. Move (0,0) to (300,0) with `IssuePointOrder "move"` under `SetBlightRect` x 128..512 on,
+   then the same walk with blight off. The probe logs whether the order was accepted.
+
+Each `Preload` line records `t0`, `t1`, `dt`, life before and after for both units,
+positions, the expected control delta (`CONTROL_RATE × dt`), and the blight source
+rate. Life values come from `GetUnitState` and are printed with `R2S`. The header
+also records `R2S` output for `1/3` and `12345.678901`, which measures display
+precision. The output file is `PCXB-blight-probe.txt`, written by `PreloadGenEnd`.
+
+Interpretation (no thresholds):
+
+- Control validity: the `hfoo` delta must equal `0.25 × dt` within the `R2S` display
+  precision. Any other control residual invalidates that phase.
+- Blight: on a point or rect phase, the `ugho` delta is compared with `2 × dt` and
+  with 0. A residual matching neither is recorded as unexplained, not as a blight result.
+- Affinity: compare Player(0) and Player(1) point phases with their off controls.
+- Crossing: the walk logs the first sample where x ≥ 128. The 20 s window is one
+  sample, so no crossing time is resolved by this probe. Crossing timing needs the
+  motion segments from motion09.
+- Uncertainty sources, not yet measured: `R2S` precision (logged), timer read
+  latency, and whether life is updated in discrete ticks within `dt`.
+
+Template isolation and interference (verified from the template `war3map.j`):
+
+- The template `main` calls `CreateRegions`, `CreateCameras`, `CreateAllUnits`,
+  `InitBlizzard`, `InitGlobals`, `InitCustomTriggers` and `RunInitializationTriggers`.
+  The probe's replacement `main` calls none of them.
+- Trigger isolation holds: no `InitTrig_*` and no `RunInitializationTriggers`, so the
+  template's `gg_trg_*` triggers are never initialized.
+- Interference: `config` still runs, and it sets players, teams, start locations and
+  slots, which are not unit or trigger effects. `CreateAllUnits` is skipped, so the
+  neutral hostile, neutral passive and player-building units are absent. The probe is
+  therefore a runtime test in an emptied template world, not in the original placed
+  scene. This is a deliberate omission. Include it in any comparison.
+
+Launch plan (not run): `prepare` the run directory, stage the map under
+`game/Maps/PCXB-Reference/`, then `launch` 1280×960 at 96 DPI with
+`--game-arg=-loadfile` and `--game-arg=Z:\run\reference\game\Maps\PCXB-Reference\PCXB-blight-probe.w3m`.
+The plan records `launched: false`. Launch waits for the root GUI queue after Sound03.
 
 ## Motion segments requested from root09
 
