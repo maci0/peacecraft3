@@ -65,6 +65,14 @@ pub(super) struct Admission {
 }
 
 impl ObjectHost {
+    pub(crate) fn hero_initial_level(&self) -> Option<i32> {
+        self.units
+            .as_ref()?
+            .heroes
+            .as_ref()
+            .map(|input| input.rules.initial_level)
+    }
+
     /// Retain the caller's existing tables; scalar W3A learning-field overrides stay explicit.
     pub fn with_hero_skills(
         mut self,

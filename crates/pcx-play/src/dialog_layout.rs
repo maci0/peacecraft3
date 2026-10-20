@@ -167,7 +167,7 @@ impl Rules {
     ) -> Result<Geometry, String> {
         if !button_height.is_finite()
             || button_height <= 0.
-            || caption_height.is_some_and(|h| !h.is_finite() || h <= 0.)
+            || caption_height.is_some_and(|h| !h.is_finite() || h < 0.)
         {
             return Err("invalid script dialog content extent".into());
         }
@@ -282,6 +282,19 @@ mod tests {
         assert_eq!(ga.first_button_top, ga.caption_top + 0.015 + 0.009);
         assert!(a.geometry(Some(f32::NAN), 0.03, 1).is_err());
         assert!(a.geometry(None, 0., 1).is_err());
+    }
+    #[test]
+    fn present_zero_caption_keeps_caption_relations_distinct_from_absent() {
+        let rules = rules(&fixture(0.002, 0.08)).unwrap();
+        let present = rules.geometry(Some(0.), 0.03, 1).unwrap();
+        let absent = rules.geometry(None, 0.03, 1).unwrap();
+        assert_eq!(
+            present.first_button_top,
+            present.caption_top + rules.caption_button_gap
+        );
+        assert_eq!(absent.first_button_top, rules.empty_button_top);
+        assert_ne!(present.first_button_top, absent.first_button_top);
+        assert!(rules.geometry(Some(-0.001), 0.03, 1).is_err());
     }
     #[test]
     fn malformed_instruction_shapes_and_source_values_refuse() {

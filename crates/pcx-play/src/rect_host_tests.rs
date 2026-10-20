@@ -244,3 +244,93 @@ endfunction
         .into_vm();
     assert_eq!(vm.call("exercise", &[]).unwrap(), Value::Real(34.0));
 }
+
+fn location_declarations() -> String {
+    DECLARATIONS.replace(
+        "native Rect takes",
+        "type location extends agent\n\
+native Location takes real x, real y returns location\n\
+native MoveLocation takes location point, real x, real y returns nothing\n\
+native RemoveLocation takes location point returns nothing\n\
+native MoveRectToLoc takes rect area, location point returns nothing\n\
+native Rect takes",
+    )
+}
+
+#[test]
+fn actual_vm_moves_rectangle_to_copied_location_coordinates() {
+    let script = "function exercise takes nothing returns real
+local rect area = Rect(-4.0, 2.0, 8.0, 6.0)
+local location point = Location(30.0, 10.0)
+call MoveRectToLoc(area, point)
+call MoveLocation(point, -50.0, -60.0)
+call RemoveLocation(point)
+return GetRectMinX(area) + GetRectCenterY(area)
+endfunction
+";
+    let mut vm = host_from(&location_declarations(), script, 16)
+        .with_rectangles()
+        .unwrap()
+        .with_locations()
+        .unwrap()
+        .into_vm();
+    assert_eq!(vm.call("exercise", &[]).unwrap(), Value::Real(34.0));
+}
+
+#[test]
+fn location_movement_checks_admission_lifetime_contracts_and_atomic_bounds() {
+    let declarations = location_declarations();
+    let mut host = host_from(&declarations, "", 16).with_rectangles().unwrap();
+    let area = create(&mut host, [-4., 2., 8., 6.]);
+    assert!(
+        host.native("MoveRectToLoc", &[area.clone(), area.clone()])
+            .unwrap_err()
+            .contains("locations not admitted")
+    );
+    let mut host = host.with_locations().unwrap();
+    let point = host
+        .native("Location", &[Value::Real(30.), Value::Real(10.)])
+        .unwrap();
+    host.native("RemoveLocation", std::slice::from_ref(&point))
+        .unwrap();
+    for invalid in [point, area.clone(), Value::Null] {
+        let error = host
+            .native("MoveRectToLoc", &[area.clone(), invalid])
+            .unwrap_err();
+        assert!(error.contains("MoveRectToLoc"));
+        assert_eq!(read(&mut host, "GetRectMinX", &area), Value::Real(-4.));
+    }
+    let wide = create(&mut host, [-f32::MAX, 0., f32::MAX, 0.]);
+    let point = host
+        .native("Location", &[Value::Real(f32::MAX), Value::Real(0.)])
+        .unwrap();
+    assert!(
+        host.native("MoveRectToLoc", &[wide.clone(), point])
+            .unwrap_err()
+            .contains("moved bounds exceed real range")
+    );
+    assert_eq!(
+        read(&mut host, "GetRectMinX", &wide),
+        Value::Real(-f32::MAX)
+    );
+    for bad in [
+        declarations.replace(
+            "location point returns nothing\nnative Rect",
+            "rect point returns nothing\nnative Rect",
+        ),
+        declarations.replace(
+            "type location extends agent",
+            "type location extends handle",
+        ),
+    ] {
+        assert!(host_from(&bad, "", 16).with_rectangles().is_err());
+    }
+    assert!(
+        host_from(DECLARATIONS, "", 16)
+            .with_rectangles()
+            .unwrap()
+            .native("MoveRectToLoc", &[area.clone(), area])
+            .unwrap_err()
+            .contains("unsupported")
+    );
+}

@@ -308,3 +308,107 @@ mod tests {
         );
     }
 }
+
+/// Source category routing and real-time interpolation operands.
+#[derive(Clone, Debug)]
+pub struct GroupPolicy {
+    masks: Vec<u32>,
+    unity: f32,
+    duration: std::time::Duration,
+    period: std::time::Duration,
+}
+impl GroupPolicy {
+    pub fn read(reset: &[u8], set: &[u8], masks: &[u8], period: f32) -> Result<Self, String> {
+        let bad = || "unsupported sound category interpolation windows".to_owned();
+        if reset.len() != 34
+            || reset[..3] != [0xc7, 0x46, 0x08]
+            || reset[15..18] != [0xc7, 0x46, 0x10]
+            || reset[28..30] != [0x83, 0xff]
+            || set.len() != 5
+            || set[0] != 0x68
+        {
+            return Err(bad());
+        }
+        let unity = f32::from_le_bytes(reset[3..7].try_into().unwrap());
+        let millis = u32::from_le_bytes(reset[18..22].try_into().unwrap());
+        let count = usize::from(reset[30]) / 4;
+        if !usize::from(reset[30]).is_multiple_of(4)
+            || count == 0
+            || masks.len() != count * 4
+            || !unity.is_finite()
+            || unity <= 0.0
+            || !period.is_finite()
+            || period <= 0.0
+            || set[1..] != reset[18..22]
+        {
+            return Err(bad());
+        }
+        let masks: Vec<_> = masks
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| u32::from_le_bytes(*v))
+            .collect();
+        let mut used = 0;
+        for mask in &masks {
+            if used & mask != 0 {
+                return Err(bad());
+            }
+            used |= mask;
+        }
+        let period = std::time::Duration::try_from_secs_f32(period).map_err(|_| bad())?;
+        if period.is_zero() {
+            return Err(bad());
+        }
+        Ok(Self {
+            masks,
+            unity,
+            duration: std::time::Duration::from_millis(u64::from(millis)),
+            period,
+        })
+    }
+    pub fn masks(&self) -> &[u32] {
+        &self.masks
+    }
+    pub fn unity(&self) -> f32 {
+        self.unity
+    }
+    pub fn duration(&self) -> std::time::Duration {
+        self.duration
+    }
+    pub fn period(&self) -> std::time::Duration {
+        self.period
+    }
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+    #[test]
+    fn category_operands_masks_and_malformed_windows_are_checked() {
+        let mut reset = vec![0; 34];
+        reset[..3].copy_from_slice(&[0xc7, 0x46, 0x08]);
+        reset[3..7].copy_from_slice(&0.75f32.to_le_bytes());
+        reset[15..18].copy_from_slice(&[0xc7, 0x46, 0x10]);
+        reset[18..22].copy_from_slice(&250u32.to_le_bytes());
+        reset[28..31].copy_from_slice(&[0x83, 0xff, 8]);
+        let mut set = vec![0x68];
+        set.extend(250u32.to_le_bytes());
+        let masks = [4u32.to_le_bytes(), 16u32.to_le_bytes()].concat();
+        let p = GroupPolicy::read(&reset, &set, &masks, 0.05).unwrap();
+        assert_eq!(p.unity(), 0.75);
+        assert_eq!(p.duration().as_millis(), 250);
+        assert_eq!(p.masks(), [4, 16]);
+        for len in 0..reset.len() {
+            assert!(GroupPolicy::read(&reset[..len], &set, &masks, 0.05).is_err());
+        }
+        set[1] ^= 1;
+        assert!(GroupPolicy::read(&reset, &set, &masks, 0.05).is_err());
+        set[1] ^= 1;
+        let duplicate = [4u32.to_le_bytes(), 4u32.to_le_bytes()].concat();
+        assert!(GroupPolicy::read(&reset, &set, &duplicate, 0.05).is_err());
+        assert!(GroupPolicy::read(&reset, &set, &masks, f32::NAN).is_err());
+        reset[3..7].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(GroupPolicy::read(&reset, &set, &masks, 0.05).is_err());
+    }
+}

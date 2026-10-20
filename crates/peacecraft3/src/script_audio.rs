@@ -6,7 +6,7 @@
 //! parameter assignment.
 //! Non-spatial dialogue and explicit gain/pitch use source-backed volume and
 //! audio-update timing when supplied. 3D, EAX, distance and unhandled parameter
-//! profiles remain refused; channel categories report their shared effects bus.
+//! profiles remain refused; channel categories follow source masks and real-time transitions.
 //! Native duration stays metadata and never trims a waveform. `PlaybackSettings::LOOP` and
 //! `Remove` select lifetime only. Their backend gain and speed are not source
 //! measurements.
@@ -35,6 +35,61 @@ use pcx_play::map_startup_host::sound_playback::VoicePolicy;
 /// Per-voice source gain, including the source-timed fade. User gain multiplies it.
 #[derive(Component)]
 pub struct ScriptAudioGain(pub f32);
+#[derive(Component)]
+struct AuthoredGain(f32);
+/// Category gain clamps at the channel bus before multiplying the individual voice.
+#[derive(Component)]
+pub struct ScriptAudioCategory {
+    base: f32,
+    scale: f32,
+    unity: Option<f32>,
+}
+impl ScriptAudioCategory {
+    pub fn with_user_gain(&self, authored: f32, user: f32) -> f32 {
+        match self.unity {
+            Some(unity) if self.base > 0.0 => {
+                authored / self.base * (self.base * user * self.scale).clamp(0.0, unity)
+            }
+            Some(_) => 0.0,
+            None => authored * user,
+        }
+    }
+}
+
+fn apply_category_gains(
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+    mut voices: Query<(
+        &AuthoredGain,
+        Option<&FadeIn>,
+        &ScriptAudioMetadata,
+        &mut ScriptAudioGain,
+        &mut ScriptAudioCategory,
+    )>,
+    mut report: ResMut<ScriptAudioReport>,
+) {
+    let Some(host) = session.host() else { return };
+    for (base, fade, metadata, mut gain, mut category_gain) in &mut voices {
+        let authored = fade.map_or(base.0, FadeIn::sample);
+        let category = metadata.channel.map_or(Ok(1.0), |channel| {
+            host.objects().volume_group_channel_gain(channel)
+        });
+        match category {
+            Ok(scale) => {
+                gain.0 = authored;
+                category_gain.scale = scale;
+                category_gain.unity = host
+                    .sound_playback()
+                    .map(|rules| rules.group_policy().unity());
+            }
+            Err(error) => {
+                gain.0 = 0.0;
+                if report.last_refusal.as_ref() != Some(&error) {
+                    remember(&mut report, &error);
+                }
+            }
+        }
+    }
+}
 
 /// Native duration is query metadata; it does not trim the encoded resource.
 #[derive(Component)]
@@ -164,6 +219,12 @@ pub fn install(app: &mut App) {
             advance_fades
                 .in_set(ScriptAudioPlayback)
                 .after(play_published_script_sounds),
+        )
+        .add_systems(
+            Update,
+            apply_category_gains
+                .in_set(ScriptAudioPlayback)
+                .after(advance_fades),
         );
 }
 
@@ -569,7 +630,15 @@ fn publish_queued_starts(
                     });
                 }
                 if let Some(gain) = plan.gain {
-                    entity.insert(ScriptAudioGain(gain));
+                    entity.insert((
+                        ScriptAudioGain(gain),
+                        AuthoredGain(gain),
+                        ScriptAudioCategory {
+                            base: plan.channel_gain,
+                            scale: 1.0,
+                            unity: None,
+                        },
+                    ));
                     if let Some(profile) = plan.profile {
                         let step = (rate as u32).max(profile.minimum_fade_step);
                         entity.insert((
@@ -583,13 +652,6 @@ fn publish_queued_starts(
                             },
                         ));
                     }
-                }
-                if let Some(channel) = plan.channel {
-                    let notice = format!(
-                        "script sound channel {channel} uses the shared effects bus; category mixing is not implemented"
-                    );
-                    warn!("{notice}");
-                    report.last_partial = Some(notice);
                 }
                 report.played = report.played.saturating_add(1);
             }
@@ -823,6 +885,9 @@ fn plan_file(
         if let Some(mixed) = &mixed
             && let Some(policy) = &profile.mix
         {
+            if let Err(error) = objects.volume_group_channel_gain(mixed.channel) {
+                return Ok(Classified::Refuse(id, error));
+            }
             channel_gain = policy
                 .channel(mixed.channel)
                 .ok_or("source channel disappeared")?
@@ -1427,6 +1492,22 @@ endglobals
     }
 
     #[test]
+    fn category_gain_clamps_channel_after_user_multiplication_before_voice() {
+        let mut category = ScriptAudioCategory {
+            base: 0.5,
+            scale: 2.0,
+            unity: Some(1.0),
+        };
+        assert_eq!(category.with_user_gain(0.2, 0.5), 0.2);
+        assert_eq!(category.with_user_gain(0.2, 1.0), 0.4);
+        category.scale = 4.0;
+        assert_eq!(category.with_user_gain(0.2, 1.0), 0.4);
+        category.scale = -1.0;
+        assert_eq!(category.with_user_gain(0.2, 0.5), 0.0);
+        category.scale = 0.5;
+        assert_eq!(category.with_user_gain(0.2, 0.25), 0.025);
+    }
+    #[test]
     fn fade_clock_preserves_pauses_and_frame_partition() {
         let fade = || FadeIn {
             elapsed: 0.0,
@@ -1692,14 +1773,7 @@ endglobals
         fade.elapsed = 100.0;
         assert_eq!(fade.sample(), 0.5);
         assert_eq!(world.resource::<ScriptAudioReport>().played, 1);
-        assert!(
-            world
-                .resource::<ScriptAudioReport>()
-                .last_partial
-                .as_deref()
-                .unwrap()
-                .contains("channel 4")
-        );
+        assert!(world.resource::<ScriptAudioReport>().last_partial.is_none());
     }
 
     #[test]
@@ -2460,6 +2534,7 @@ E\r\n";
         source_list_preemption_retires_entities_and_shared_source_references();
         mix::tests::list_and_channel_priority_rules_use_distinct_comparisons();
         mix::tests::filename_capacity_and_deterministic_ties_preserve_flags();
-        18
+        category_gain_clamps_channel_after_user_multiplication_before_voice();
+        19
     }
 }

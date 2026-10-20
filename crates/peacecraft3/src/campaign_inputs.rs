@@ -338,6 +338,10 @@ pub fn prepare(
             client.clone(),
         )?),
         resources: None,
+        cheats: Some(pcx_play::cheat_rules::Rules::reviewed_legacy(
+            image,
+            client.clone(),
+        )?),
         dialog_layout: Some(pcx_play::dialog_layout::Rules::reviewed_legacy(
             image,
             client.clone(),

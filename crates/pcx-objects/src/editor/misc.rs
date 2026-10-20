@@ -97,7 +97,12 @@ pub const ATTACK_TYPES: [&str; 7] = [
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CombatRules {
+    pub sources: Vec<String>,
     pub armor_factor: f32,
+    pub primary_damage_per_attribute: f32,
+    pub armor_per_agility: f32,
+    pub hero_armor_base: f32,
+    pub attack_speed_per_agility: f32,
     /// `[attack][defense]` in [`ATTACK_TYPES`] by [`DEFENSE_TYPES`] order.
     pub damage_bonus: [[f32; 8]; 7],
     pub call_for_help: f32,
@@ -116,9 +121,24 @@ impl CombatRules {
             "GuardDistance",
             "MaxGuardDistance",
             "GuardReturnTime",
+            "StrAttackBonus",
+            "AgiDefenseBonus",
+            "AgiDefenseBase",
+            "AgiAttackSpeedBonus",
         ];
-        let (scalars, _) = misc_scalars(profiles, keys, max_bytes)?;
-        let [armor, help, creep_help, guard, max_guard, guard_time] = scalars;
+        let (scalars, sources) = misc_scalars(profiles, keys, max_bytes)?;
+        let [
+            armor,
+            help,
+            creep_help,
+            guard,
+            max_guard,
+            guard_time,
+            primary,
+            agility_armor,
+            hero_armor,
+            agility_speed,
+        ] = scalars;
         let lists = misc_lists(
             profiles,
             [
@@ -142,7 +162,12 @@ impl CombatRules {
         }
         let required = |v: Option<f32>, key: &str| v.ok_or_else(|| format!("missing Misc/{key}"));
         Ok(Self {
+            sources,
             armor_factor: required(armor, keys[0])?,
+            primary_damage_per_attribute: required(primary, keys[6])?,
+            armor_per_agility: required(agility_armor, keys[7])?,
+            hero_armor_base: required(hero_armor, keys[8])?,
+            attack_speed_per_agility: required(agility_speed, keys[9])?,
             damage_bonus,
             call_for_help: required(help, keys[1])?,
             creep_call_for_help: required(creep_help, keys[2])?,
@@ -222,7 +247,7 @@ mod tests {
     #[test]
     fn combat_rules_read_bonus_rows_in_attack_order() {
         let mut text = String::from(
-            "[Misc]\nDefenseArmor=0.5\nCallForHelp=1\nCreepCallForHelp=2\nGuardDistance=3\nMaxGuardDistance=4\nGuardReturnTime=5\n",
+            "[Misc]\nDefenseArmor=0.5\nCallForHelp=1\nCreepCallForHelp=2\nGuardDistance=3\nMaxGuardDistance=4\nGuardReturnTime=5\nStrAttackBonus=2.5\nAgiDefenseBonus=0.7\nAgiDefenseBase=-3\nAgiAttackSpeedBonus=0.03\n",
         );
         for (i, name) in [
             "Normal", "Pierce", "Siege", "Magic", "Chaos", "Spells", "Hero",
@@ -239,6 +264,40 @@ mod tests {
             [3.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
         );
         assert_eq!(rules.guard_return_time, 5.0);
+        assert_eq!(
+            (
+                rules.primary_damage_per_attribute,
+                rules.armor_per_agility,
+                rules.hero_armor_base,
+                rules.attack_speed_per_agility
+            ),
+            (2.5, 0.7, -3.0, 0.03)
+        );
+        let overridden = CombatRules::read(&[("stock", text.as_bytes()),
+            ("map", b"[Misc]\nStrAttackBonus=4\nAgiDefenseBonus=0.8\nAgiDefenseBase=-7\nAgiAttackSpeedBonus=0.09\n")], 4096).unwrap();
+        assert_eq!(overridden.sources, ["stock", "map"]);
+        assert_eq!(
+            (
+                overridden.primary_damage_per_attribute,
+                overridden.armor_per_agility,
+                overridden.hero_armor_base,
+                overridden.attack_speed_per_agility
+            ),
+            (4.0, 0.8, -7.0, 0.09)
+        );
+        for key in [
+            "StrAttackBonus",
+            "AgiDefenseBonus",
+            "AgiDefenseBase",
+            "AgiAttackSpeedBonus",
+        ] {
+            let missing = text
+                .lines()
+                .filter(|line| !line.starts_with(&format!("{key}=")))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(CombatRules::read(&[("missing", missing.as_bytes())], 4096).is_err());
+        }
         let short = text.replace("DamageBonusHero=6,1,2,3,4,5,6,7", "DamageBonusHero=6,1");
         assert!(CombatRules::read(&[("stock", short.as_bytes())], 4096).is_err());
     }

@@ -249,6 +249,7 @@ pub struct MapStartupInputs {
     pub sound_parameters: Banks,
     pub sound_playback: Option<sound_playback::Rules>,
     pub resources: Option<crate::player_resources::Rules>,
+    pub cheats: Option<crate::cheat_rules::Rules>,
     pub dialog_layout: Option<crate::dialog_layout::Rules>,
     pub clock: StartupClockInput,
     /// Explicit game time for positive-timeout timers; absent keeps TimerStart unsupported.
@@ -487,6 +488,7 @@ pub fn assemble(
         sound_parameters,
         sound_playback,
         resources,
+        cheats,
         dialog_layout,
         clock,
         timer_time,
@@ -561,6 +563,9 @@ pub fn assemble(
     if let Some(rules) = resources {
         object = object.with_player_resources(rules)?;
     }
+    if let Some(rules) = cheats {
+        object = object.with_cheat_queries(rules)?;
+    }
     if context
         .scripts
         .program()
@@ -579,9 +584,11 @@ pub fn assemble(
     {
         object = object.with_unit_effects()?;
     }
+    object = object.with_environment()?.with_volume_groups()?;
+    if let Some(rules) = &sound_playback {
+        object.configure_volume_group_playback(rules.group_policy());
+    }
     object = object
-        .with_environment()?
-        .with_volume_groups()?
         .with_indicators(256)?
         .with_cinematic_scenes()?
         .with_selection()?;

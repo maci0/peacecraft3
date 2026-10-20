@@ -143,3 +143,55 @@ paths and failed after Cargo changed the working directory; an absolute-path
 rerun passed. This is source/consumer/decoder evidence, not physical audibility,
 audio-device output, original runtime arbitration observation or full campaign
 sound parity. Original inputs and decoded content remain local.
+
+Category gain now retains one transition per source group in the host. The
+reviewed reset instructions supply group count, reset unity and duration; the
+set wrapper supplies its duration independently and must agree. The update's
+mask-load operand supplies the routing table. Overlapping masks are refused by
+the decoder, rather than choosing an undocumented combination. Inputs keep the
+selected client identity and whole-image digest through `sound_playback::Rules`.
+
+Native evidence: `VolumeGroupSetVolume` at 0x4afbb0 calls 0x5daab0,
+which records current scale, target, GetTickCount and duration. Reset at
+0x5d9990 starts new transitions toward the source unity value. The update at
+0x5bf9d0 interpolates and applies each group's channel mask. The time helper
+0x796c90 resolves to KERNEL32 GetTickCount. This is a real audio clock, not
+simulation time. `CampaignRuntime::advance` advances it once per supplied real
+delta before pause and tick-debt returns. Loading is excluded at session binding;
+the session publication epoch and source-period sampling phase are recreation
+choices. Repeated set/reset calls start at the currently sampled gain, including
+when several execute in one update. No unbounded request history is retained.
+
+The consumer keeps voice fade gain separate from category routing. The menu
+mixer multiplies source channel base, user gain and category scale, clamps the
+channel bus to source unity, then multiplies the individual voice. This matters
+for targets above unity and partial user volume. Opening dialogue's source
+default channel has no group mask, so unrelated group changes leave it alone.
+Synthetic tests exercise changed operands, malformed windows, overlapping masks,
+real-time chunking, repeated operations, channel masks, unaffected dialogue and
+the channel clamp order. These are source/parser/consumer tests; physical output
+and original runtime comparisons remain separate evidence.
+
+EAX remains explicitly unsupported. DefaultEAXON and SpellsEAX definitions carry
+nontrivial room/reverb parameters; a zero EffectsLevel or nonspatial sound is not
+proof that the profile is inert. Native profile application at 0x5cb460 copies
+profile settings without a universal spatial guard. The consumer therefore does
+not silently discard these authored profiles. Spatial placement, random pitch,
+distance attenuation and the associated flags also retain explicit refusals.
+
+## Native output observation
+
+The local native application was routed by its owned process/client/stream
+identity to a temporary dedicated PipeWire null sink. A bounded stereo monitor
+capture at 48 kHz contained nonzero output and matched the selected opening MP3
+at approximately 12.043 seconds, with normalized cross-correlation 0.481 in the
+mixed signal. The real saved audio gains were zero; a separate test preference
+directory enabled gains without changing that file. The muted baseline was
+exactly silent. Owned processes and temporary sink were removed after capture.
+
+This is native output-path evidence, not a physical-speaker or original-runtime
+comparison. The source review also found that the menu loop currently remains
+active when campaign presentation starts; the capture does not isolate every
+mixed source. Local stream identities, preference hashes, PCM and analysis remain
+under `.scratch/campaign-objective-20261020/audio-unmuted-v14/`; no original audio
+or generated copy is tracked.

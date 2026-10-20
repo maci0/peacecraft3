@@ -32,6 +32,7 @@ use std::{collections::HashMap, sync::Weak};
 const VIEW: (f32, f32) = (crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H);
 const PANEL: &str = "UI\\FrameDef\\UI\\ScriptDialog.fdf";
 const TEMPLATES: &str = "UI\\FrameDef\\UI\\EscMenuTemplates.fdf";
+const DIALOG_LAYER: i32 = peacecraft3::campaign_presentation::CAMPAIGN_CONTROL_BARRIER_LAYER + 1;
 
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct CampaignScriptDialogSet;
@@ -50,6 +51,8 @@ pub(crate) struct CampaignScriptDialogs {
     blocked: bool,
     consumed: bool,
     pending: Option<HandleId>,
+    caption: Option<CaptionExtent>,
+    ready: bool,
     pub last_error: Option<String>,
     pub receipts: Vec<AssetReceipt>,
 }
@@ -57,6 +60,28 @@ impl CampaignScriptDialogs {
     pub fn input_blocked(&self) -> bool {
         self.blocked || self.consumed
     }
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CaptionExtent {
+    dialog: HandleId,
+    revision: u64,
+    viewport: UVec2,
+    scale: f32,
+    width: f32,
+    height: f32,
+}
+#[derive(Component)]
+struct CaptionProbe {
+    root: Entity,
+    dialog: HandleId,
+    revision: u64,
+    witness: Weak<()>,
+}
+struct CaptionLayout {
+    formatting_only: bool,
+    revision: u64,
+    witness: Weak<()>,
+    extent: Option<CaptionExtent>,
 }
 #[derive(Component)]
 struct Activate(HandleId);
@@ -103,6 +128,10 @@ pub(crate) fn install(app: &mut App) {
             )
                 .chain()
                 .in_set(CampaignScriptDialogSet),
+        )
+        .add_systems(
+            PostUpdate,
+            measure_caption.after(bevy::ui::UiSystems::PostLayout),
         );
 }
 fn capture_activate(
@@ -160,7 +189,7 @@ fn activate(
             _ => None,
         })
         .collect();
-    if !state.blocked || !view.active() {
+    if !state.blocked || !state.ready || !view.active() {
         return;
     }
     let Some((witness, pending)) = displayed_input else {
@@ -304,6 +333,8 @@ fn project(
     if !state.blocked {
         clear_tree(&mut commands, &mut state, &mut assets.materials);
         state.revision = None;
+        state.caption = None;
+        state.ready = false;
         return;
     }
     if state.revision == revision && state.root.is_some() {
@@ -361,21 +392,121 @@ fn project(
             }
         }
     }
+    let formatting_only = match caption_is_formatting_only(dialog.message.as_deref()) {
+        Ok(empty) => empty,
+        Err(error) => {
+            clear_tree(&mut commands, &mut state, &mut assets.materials);
+            state.ready = false;
+            state.last_error = Some(error);
+            return;
+        }
+    };
+    let layout = CaptionLayout {
+        formatting_only,
+        revision: revision.expect("displayed dialog revision"),
+        witness: state.witness.clone().expect("displayed session witness"),
+        extent: state
+            .caption
+            .filter(|c| c.dialog == dialog.id && Some(c.revision) == revision),
+    };
+    let ready = dialog.message.as_ref().is_none_or(String::is_empty)
+        || layout.formatting_only
+        || layout.extent.is_some();
     clear_tree(&mut commands, &mut state, &mut assets.materials);
+    state.ready = false;
     let source = state.assets.as_mut().expect("loaded source");
     match paint(
         &mut commands,
         source,
         &dialog,
+        layout,
         &assets.images,
         &mut assets.materials,
     ) {
         Ok(root) => {
             state.root = Some(root);
+            state.ready = ready;
             state.revision = revision;
             state.last_error = None;
         }
         Err(e) => state.last_error = Some(e),
+    }
+}
+fn caption_is_formatting_only(message: Option<&str>) -> Result<bool, String> {
+    let Some(message) = message.filter(|s| !s.is_empty()) else {
+        return Ok(false);
+    };
+    let parsed = crate::rich_text::parse(message).map_err(|e| e.to_string())?;
+    if !parsed.unsupported.is_empty() {
+        return Err("script dialog contains unsupported substitutions".into());
+    }
+    Ok(parsed.spans.is_empty())
+}
+fn caption_extent(
+    probe: &CaptionProbe,
+    size: Vec2,
+    viewport: UVec2,
+    scale: f32,
+    width: f32,
+) -> Result<CaptionExtent, String> {
+    if viewport.min_element() == 0
+        || !size.is_finite()
+        || size.y <= 0.
+        || !scale.is_finite()
+        || scale <= 0.
+        || !width.is_finite()
+        || width <= 0.
+    {
+        return Err("script dialog caption has no finite shaped extent/target".into());
+    }
+    Ok(CaptionExtent {
+        dialog: probe.dialog,
+        revision: probe.revision,
+        viewport,
+        scale,
+        width,
+        height: size.y / viewport.y as f32 * VIEW.1,
+    })
+}
+fn measure_caption(
+    mut state: ResMut<CampaignScriptDialogs>,
+    labels: Query<(
+        &CaptionProbe,
+        &bevy::text::TextLayoutInfo,
+        &bevy::ui::ComputedUiRenderTargetInfo,
+        &ComputedNode,
+    )>,
+    mut roots: Query<&mut Visibility>,
+) {
+    for (probe, text, target, node) in &labels {
+        if state.root != Some(probe.root)
+            || !state
+                .witness
+                .as_ref()
+                .is_some_and(|w| Weak::ptr_eq(w, &probe.witness))
+            || state.revision != Some(probe.revision)
+        {
+            continue;
+        }
+        let extent = caption_extent(
+            probe,
+            text.size,
+            target.physical_size(),
+            target.scale_factor(),
+            node.content_box().width(),
+        );
+        match extent {
+            Ok(extent) if state.caption != Some(extent) => {
+                state.caption = Some(extent);
+                state.revision = None;
+                state.ready = false;
+                if let Ok(mut visibility) = roots.get_mut(probe.root) {
+                    *visibility = Visibility::Hidden;
+                }
+            }
+            Ok(_) => {}
+            Err(error) => state.last_error = Some(error),
+        }
     }
 }
 fn art_paths(art: &mut Backdrop, skin: &SkinTable, sections: &[String]) -> Result<(), String> {
@@ -695,13 +826,17 @@ fn paint(
     commands: &mut Commands,
     source: &mut Source,
     dialog: &ScriptDialog,
+    layout: CaptionLayout,
     images: &Assets<Image>,
     materials: &mut Assets<BackdropImage>,
 ) -> Result<Entity, String> {
     let l = dimensions(&source.fdf, &source.backdrop)?;
     let has_caption = dialog.message.as_ref().is_some_and(|s| !s.is_empty());
     let geometry = source.rules.geometry(
-        has_caption.then_some(source.styles[0].height),
+        layout
+            .extent
+            .map(|c| c.height)
+            .or(layout.formatting_only.then_some(0.)),
         l.button_height,
         dialog.buttons.len(),
     )?;
@@ -709,8 +844,7 @@ fn paint(
     if height > VIEW.1 {
         return Err("script dialog source layout exceeds the viewport".into());
     }
-    // shortcut: caption reserves one authored font height; feed shaped multiline
-    // extent into the decoded native relations before claiming wrapping parity.
+    // Hidden candidates still lay out text; only measured native geometry is shown.
     let root = commands
         .spawn((
             Node {
@@ -719,7 +853,12 @@ fn paint(
                 height: percent(100.),
                 ..default()
             },
-            GlobalZIndex(30),
+            if has_caption && !layout.formatting_only && layout.extent.is_none() {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            },
+            GlobalZIndex(DIALOG_LAYER),
             CampaignHud,
             Name::new("Script dialog input barrier"),
         ))
@@ -756,14 +895,23 @@ fn paint(
             })
             .id();
         commands.entity(panel).add_child(caption);
-        if let Some(message) = &dialog.message {
-            label(
+        if let Some(message) = &dialog.message
+            && has_caption
+            && !layout.formatting_only
+        {
+            let label = label(
                 commands,
                 caption,
                 message,
                 &source.styles[0],
                 &source.fonts[&source.styles[0].font],
             )?;
+            commands.entity(label).insert(CaptionProbe {
+                root,
+                dialog: dialog.id,
+                revision: layout.revision,
+                witness: layout.witness,
+            });
         }
         for (index, button) in dialog.buttons.iter().enumerate() {
             let rect = Rect {
@@ -846,6 +994,347 @@ fn paint(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn shape_caption(value: &str, width: f32, scale: f32) -> Vec2 {
+        use bevy::{
+            ecs::system::RunSystemOnce,
+            text::{
+                ComputedTextBlock, DEFAULT_FONT_DATA, FontAtlasSet, FontCx, FontHinting, LayoutCx,
+                RemSize, ScaleCx, TextBounds, TextElement, TextLayoutInfo, TextPipeline,
+            },
+        };
+        let mut app = App::new();
+        app.init_resource::<FontCx>();
+        let mut fonts = Assets::<Font>::default();
+        let font = fonts.add(Font::from_bytes(DEFAULT_FONT_DATA.to_vec()));
+        app.insert_resource(fonts);
+        app.world_mut()
+            .run_system_once(bevy::text::load_font_assets_into_font_collection)
+            .unwrap();
+        let mut font_cx = app.world_mut().remove_resource::<FontCx>().unwrap();
+        let font = TextFont {
+            font: bevy::text::FontSource::Handle(font),
+            font_size: bevy::text::FontSize::Px(20.),
+            ..default()
+        };
+        let parsed = crate::rich_text::parse(value).unwrap();
+        let runs = parsed.spans.iter().map(|span| {
+            (
+                Entity::PLACEHOLDER,
+                0,
+                TextElement::Text {
+                    text: &span.text,
+                    font: &font,
+                    color: Color::WHITE,
+                    line_height: default(),
+                    letter_spacing: default(),
+                },
+            )
+        });
+        let mut block = ComputedTextBlock::default();
+        let mut info = TextLayoutInfo::default();
+        let mut pipeline = TextPipeline::default();
+        let bounds = TextBounds::new_horizontal(width * scale);
+        pipeline
+            .update_buffer(
+                app.world().resource::<Assets<Font>>(),
+                runs,
+                bevy::text::LineBreak::WordBoundary,
+                bevy::text::Justify::Left,
+                bounds,
+                scale,
+                &mut block,
+                &mut font_cx,
+                &mut LayoutCx::default(),
+                Vec2::new(800., 600.) * scale,
+                RemSize::default(),
+            )
+            .unwrap();
+        pipeline
+            .update_text_layout_info(
+                &mut info,
+                &mut FontAtlasSet::default(),
+                &mut Assets::<Image>::default(),
+                &mut block,
+                &mut ScaleCx::default(),
+                bounds,
+                bevy::text::Justify::Left,
+                FontHinting::default(),
+            )
+            .unwrap();
+        info.size
+    }
+    #[test]
+    fn shaped_caption_wraps_breaks_and_scales_without_font_height_estimates() {
+        let witness = std::sync::Arc::new(());
+        let probe = CaptionProbe {
+            root: Entity::PLACEHOLDER,
+            dialog: HandleId::new(std::num::NonZeroU64::new(7).unwrap()),
+            revision: 3,
+            witness: std::sync::Arc::downgrade(&witness),
+        };
+        let text = "First |cffff0000coloured caption|r with several words";
+        let wide = shape_caption(text, 700., 1.);
+        let narrow = shape_caption(text, 120., 1.);
+        let broken = shape_caption("First|nSecond|nThird", 700., 1.);
+        assert!(narrow.y > wide.y);
+        assert!(broken.y > wide.y);
+        let measured = caption_extent(&probe, narrow, UVec2::new(800, 600), 1., 120.).unwrap();
+        assert_eq!(measured.height, narrow.y / 600. * VIEW.1);
+        assert_eq!(
+            measured,
+            caption_extent(&probe, narrow, UVec2::new(800, 600), 1., 120.).unwrap(),
+            "unchanged geometry converges"
+        );
+        let doubled = caption_extent(
+            &probe,
+            shape_caption(text, 120., 2.),
+            UVec2::new(1600, 1200),
+            2.,
+            240.,
+        )
+        .unwrap();
+        assert!((doubled.height - measured.height).abs() < 0.00001);
+        assert_ne!(
+            doubled, measured,
+            "viewport and effective width/scale invalidate old measurements"
+        );
+        assert!(caption_extent(&probe, Vec2::ZERO, UVec2::new(800, 600), 1., 120.).is_err());
+        assert!(caption_extent(&probe, narrow, UVec2::ZERO, 1., 120.).is_err());
+        assert!(caption_extent(&probe, narrow, UVec2::new(800, 600), f32::NAN, 120.).is_err());
+    }
+    #[test]
+    fn pointer_press_and_release_reach_modal_above_enabled_gameplay_barrier() {
+        use bevy::{
+            app::{HierarchyPropagatePlugin, PropagateSet},
+            camera::{ComputedCameraValues, RenderTarget, RenderTargetInfo},
+            input::{InputPlugin, mouse::MouseButtonInput},
+            picking::DefaultPickingPlugins,
+            ui::{
+                ComputedUiRenderTargetInfo, ComputedUiTargetCamera, UiGlobalTransform, UiStack,
+                picking_backend::UiPickingPlugin,
+            },
+            ui_widgets::ButtonPlugin,
+            window::{CursorMoved, PrimaryWindow, WindowEvent, WindowRef},
+        };
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            InputPlugin,
+            DefaultPickingPlugins,
+            UiPickingPlugin,
+            ButtonPlugin,
+            HierarchyPropagatePlugin::<ComputedUiTargetCamera>::new(PostUpdate),
+            HierarchyPropagatePlugin::<ComputedUiRenderTargetInfo>::new(PostUpdate),
+        ));
+        app.add_message::<WindowEvent>()
+            .init_resource::<UiStack>()
+            .init_resource::<UiScale>();
+        app.insert_resource(CampaignScriptDialogs {
+            blocked: true,
+            ready: true,
+            ..default()
+        });
+        crate::button_actions::install(&mut app);
+        app.add_observer(capture_activate)
+            .add_observer(capture_click);
+        app.add_systems(
+            PostUpdate,
+            bevy::ui::update::propagate_ui_target_cameras
+                .before(PropagateSet::<ComputedUiTargetCamera>::default())
+                .before(PropagateSet::<ComputedUiRenderTargetInfo>::default()),
+        );
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera {
+                    computed: ComputedCameraValues {
+                        target_info: Some(RenderTargetInfo {
+                            physical_size: UVec2::new(400, 300),
+                            scale_factor: 1.,
+                        }),
+                        ..default()
+                    },
+                    ..default()
+                },
+                RenderTarget::Window(WindowRef::Entity(window)),
+            ))
+            .id();
+        let mut spawn_node = |size, center, layer, pickable| {
+            app.world_mut()
+                .spawn((
+                    Node::default(),
+                    ComputedNode { size, ..default() },
+                    UiGlobalTransform::from_translation(center),
+                    InheritedVisibility::VISIBLE,
+                    UiTargetCamera(camera),
+                    GlobalZIndex(layer),
+                    pickable,
+                ))
+                .id()
+        };
+        let hud = spawn_node(Vec2::splat(50.), Vec2::splat(40.), 0, Pickable::default());
+        let barrier = spawn_node(
+            Vec2::new(400., 300.),
+            Vec2::new(200., 150.),
+            peacecraft3::campaign_presentation::CAMPAIGN_CONTROL_BARRIER_LAYER,
+            Pickable {
+                should_block_lower: true,
+                is_hoverable: false,
+            },
+        );
+        let button = spawn_node(
+            Vec2::new(120., 50.),
+            Vec2::new(180., 90.),
+            DIALOG_LAYER,
+            Pickable::default(),
+        );
+        let decorative = spawn_node(
+            Vec2::new(120., 50.),
+            Vec2::new(180., 90.),
+            DIALOG_LAYER,
+            Pickable::IGNORE,
+        );
+        let id = HandleId::new(std::num::NonZeroU64::new(7).unwrap());
+        app.world_mut()
+            .entity_mut(hud)
+            .insert(bevy::ui_widgets::Button);
+        app.world_mut()
+            .entity_mut(button)
+            .insert((bevy::ui_widgets::Button, Activate(id)))
+            .add_child(decorative);
+        let mut roots = [hud, barrier, button];
+        roots.sort_by_key(|e| app.world().get::<GlobalZIndex>(*e).unwrap().0);
+        assert_eq!(roots, [hud, barrier, button]);
+        {
+            let mut stack = app.world_mut().resource_mut::<UiStack>();
+            stack.uinodes = vec![hud, barrier, button, decorative];
+            stack.partition = std::iter::once(0..4).collect();
+        }
+        app.update();
+        app.update();
+        let move_to = |app: &mut App, position| {
+            app.world_mut()
+                .write_message(WindowEvent::CursorMoved(CursorMoved {
+                    window,
+                    position,
+                    delta: None,
+                }));
+            app.update();
+        };
+        let mouse = |app: &mut App, state| {
+            app.world_mut()
+                .write_message(WindowEvent::MouseButtonInput(MouseButtonInput {
+                    window,
+                    button: MouseButton::Left,
+                    state,
+                }));
+            app.update();
+        };
+        move_to(&mut app, Vec2::splat(40.));
+        mouse(&mut app, ButtonState::Pressed);
+        assert!(!app.world().entity(hud).contains::<bevy::ui::Pressed>());
+        mouse(&mut app, ButtonState::Released);
+        assert!(
+            app.world()
+                .resource::<crate::button_actions::ButtonActions>()
+                .entities
+                .is_empty()
+        );
+        assert!(
+            app.world()
+                .resource::<CampaignScriptDialogs>()
+                .pending
+                .is_none()
+        );
+        move_to(&mut app, Vec2::new(180., 90.));
+        mouse(&mut app, ButtonState::Pressed);
+        assert!(app.world().entity(button).contains::<bevy::ui::Pressed>());
+        mouse(&mut app, ButtonState::Released);
+        assert!(!app.world().entity(button).contains::<bevy::ui::Pressed>());
+        assert_eq!(
+            app.world().resource::<CampaignScriptDialogs>().pending,
+            Some(id)
+        );
+        assert_eq!(
+            app.world()
+                .resource::<crate::button_actions::ButtonActions>()
+                .entities,
+            [button]
+        );
+    }
+    #[test]
+    fn formatting_only_caption_has_no_text_to_shape() {
+        for message in ["|cffff0000|r", "|r|cffffffff|R", "|C01020304|c11223344|r"] {
+            assert!(caption_is_formatting_only(Some(message)).unwrap());
+        }
+        for message in [
+            None,
+            Some(""),
+            Some("|cffff0000text|r"),
+            Some("|n"),
+            Some(" "),
+        ] {
+            assert!(!caption_is_formatting_only(message).unwrap());
+        }
+        assert!(caption_is_formatting_only(Some("|czzz")).is_err());
+        assert!(caption_is_formatting_only(Some("^^unsupported^^")).is_err());
+    }
+    #[test]
+    fn stale_caption_probes_cannot_invalidate_the_displayed_geometry() {
+        use bevy::ecs::system::RunSystemOnce;
+        let current = std::sync::Arc::new(());
+        let old = std::sync::Arc::new(());
+        let dialog = HandleId::new(std::num::NonZeroU64::new(7).unwrap());
+        for stale in ["root", "session", "revision", "none"] {
+            let mut app = App::new();
+            let root = app.world_mut().spawn(Visibility::Inherited).id();
+            app.insert_resource(CampaignScriptDialogs {
+                witness: Some(std::sync::Arc::downgrade(&current)),
+                root: Some(root),
+                revision: Some(3),
+                blocked: true,
+                ready: true,
+                ..default()
+            });
+            app.world_mut().spawn((
+                CaptionProbe {
+                    root: if stale == "root" {
+                        Entity::PLACEHOLDER
+                    } else {
+                        root
+                    },
+                    witness: std::sync::Arc::downgrade(if stale == "session" {
+                        &old
+                    } else {
+                        &current
+                    }),
+                    revision: if stale == "revision" { 2 } else { 3 },
+                    dialog,
+                },
+                bevy::text::TextLayoutInfo::default(),
+                bevy::ui::ComputedUiRenderTargetInfo::default(),
+                ComputedNode::default(),
+            ));
+            app.world_mut().run_system_once(measure_caption).unwrap();
+            let state = app.world().resource::<CampaignScriptDialogs>();
+            assert_eq!(
+                state.last_error.is_some(),
+                stale == "none",
+                "only the current probe reaches extent validation"
+            );
+            assert_eq!(state.revision, Some(3));
+            assert!(state.ready && state.input_blocked());
+            assert!(state.caption.is_none());
+            assert_eq!(
+                *app.world().get::<Visibility>(root).unwrap(),
+                Visibility::Inherited
+            );
+        }
+    }
     #[test]
     fn stale_displayed_session_discards_pending_input_before_handle_matching() {
         let old = std::sync::Arc::new(());

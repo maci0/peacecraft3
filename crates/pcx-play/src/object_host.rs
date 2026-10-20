@@ -6,6 +6,7 @@ use std::sync::Arc;
 /// Opt-in session objects and authored map/player setup in one bounded arena.
 /// Timer delivery uses explicit game time; world enumeration remains unsupported.
 pub struct ObjectHost {
+    cheat_queries: Option<crate::cheat_rules::Rules>,
     fog_modifiers: bool,
     selection: Option<Vec<HandleId>>,
     pings: Vec<indicators::MinimapPing>,
@@ -15,7 +16,7 @@ pub struct ObjectHost {
     combat: Option<combat::Rules>,
     events: event_delivery::Delivery,
     unit_vitals: Option<unit_vitals::Rules>,
-    volume_groups: Option<std::collections::BTreeMap<i32, f32>>,
+    volume_groups: Option<volume_groups::State>,
     camera_view: Option<camera_view::CameraView>,
     scene: Option<scene::Environment>,
     threads: thread::Threads,
@@ -99,6 +100,7 @@ impl ObjectHost {
             Self::contract(&inner, name, parameters, result, false, Some("timer"))?;
         }
         Ok(Self {
+            cheat_queries: None,
             inner,
             group_limit: None,
             members: Vec::new(),
@@ -730,6 +732,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.unit_vitals_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.cheat_query_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.volume_group_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -1064,3 +1069,6 @@ mod time_of_day;
 #[path = "effect_host.rs"]
 mod effects;
 pub use effects::UnitEffect;
+
+#[path = "cheat_host.rs"]
+mod cheat_queries;

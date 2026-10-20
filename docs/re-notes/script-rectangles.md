@@ -56,9 +56,26 @@ extracted script is part of this change.
 
 ## Remaining work
 
-Location-based rectangle calls, world-bound admission and enumeration remain
+Location-based creation and setters, world-bound admission and enumeration remain
 unsupported. Explicit region creation, rectangle-addition requests and enter/leave
 subscriptions now use the composed Host factory; see [script regions](script-regions.md).
 That path does not establish cell geometry, membership or event delivery. This
 verifies execution and retained state, not spatial effects, rendered regions,
 a live campaign objective or native game parity.
+
+## Location-based movement during Human01 pursuit
+
+The unchanged chapter's periodic pursuit action reaches `MoveRectToLoc` after
+actual player attack-move inputs and two authored route points. The previous
+source-backed replay stopped at 129.5 simulated seconds because this declaration
+had no consumer. This establishes a runtime execution boundary, not chapter
+completion or original-game parity.
+
+Rectangle admission now validates that optional declaration, its location ancestry
+and source relationship to `Rect`. Execution requires admitted live locations and
+copies their current center into the existing extent-preserving movement path.
+Later location movement or removal cannot alter the rectangle. Invalid/stale
+locations, wrong-family arguments, bad signatures and overflowing moved bounds
+refuse without changing the prior rectangle. No second geometry or handle pool
+is introduced. Synthetic VM and Host checks exercise these boundaries; native
+exceptional-input and arithmetic parity remain unverified.

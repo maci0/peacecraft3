@@ -4,8 +4,8 @@ use super::ObjectHost;
 use pcx_script::{HandleId, Value};
 
 impl ObjectHost {
-    /// Admit direct-coordinate rectangle operations from the loaded declarations.
-    /// Locations, world bounds and spatial enumeration need separate context.
+    /// Admit rectangle operations from the loaded declarations.
+    /// Location-based movement additionally needs admitted locations at execution.
     pub fn with_rectangles(mut self) -> Result<Self, Error> {
         if self.rectangles {
             return Err(self
@@ -29,6 +29,27 @@ impl ObjectHost {
             ("GetRectMaxY", &["rect"][..], "real"),
         ] {
             Self::contract(&self.inner, name, parameters, result, false, Some("rect"))?;
+        }
+        if let Some(native) = self.inner.program.natives().get("MoveRectToLoc") {
+            Self::contract(
+                &self.inner,
+                "MoveRectToLoc",
+                &["rect", "location"],
+                "nothing",
+                false,
+                Some("location"),
+            )?;
+            if native.source
+                != self
+                    .inner
+                    .program
+                    .natives()
+                    .get("Rect")
+                    .expect("admitted rectangle declaration")
+                    .source
+            {
+                return Err(self.inner.error("MoveRectToLoc", Failure::Source));
+            }
         }
         self.rectangles = true;
         Ok(self)
@@ -57,6 +78,7 @@ impl ObjectHost {
                     | "RemoveRect"
                     | "SetRect"
                     | "MoveRectTo"
+                    | "MoveRectToLoc"
                     | "GetRectCenterX"
                     | "GetRectCenterY"
                     | "GetRectMinX"
@@ -67,6 +89,7 @@ impl ObjectHost {
         {
             return None;
         }
+        self.inner.program.natives().get(name)?;
         Some(self.rectangle(name, args))
     }
 
@@ -98,10 +121,17 @@ impl ObjectHost {
             ("SetRect", values) if values.len() == 4 => {
                 Some(bounds(values).ok_or_else(|| fail("ordered finite bounds required"))?)
             }
-            ("MoveRectTo", [x, y]) => {
-                let center = [x, y].map(|v| v.as_real().filter(|v| v.is_finite()));
-                let [Some(x), Some(y)] = center else {
-                    return Err(fail("finite center required"));
+            ("MoveRectTo" | "MoveRectToLoc", values) => {
+                let [x, y] = match (name, values) {
+                    ("MoveRectTo", [x, y]) => {
+                        let center = [x, y].map(|v| v.as_real().filter(|v| v.is_finite()));
+                        let [Some(x), Some(y)] = center else {
+                            return Err(fail("finite center required"));
+                        };
+                        [x, y]
+                    }
+                    ("MoveRectToLoc", [location]) => self.location_point(location, name)?,
+                    _ => return Err(fail("arguments do not match the rectangle declaration")),
                 };
                 // Wider intermediates avoid overflow for otherwise representable bounds.
                 let half_x = (f64::from(current[2]) - f64::from(current[0])) * 0.5;

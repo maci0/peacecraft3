@@ -19,6 +19,11 @@ use std::sync::{Arc, Weak};
 /// Roots which render on the gameplay UI camera when the campaign is visible.
 #[derive(Component)]
 pub struct CampaignHud;
+
+/// Application composition order: gameplay suppression stays below modal controls
+/// and the existing cinematic filter. This is not a source asset operand.
+pub const CAMPAIGN_CONTROL_BARRIER_LAYER: i32 = i32::MAX - 3;
+
 /// Ordinary gameplay HUD roots. Cinematic text and filters are separate roots.
 #[derive(Component)]
 pub struct CampaignInterface;
@@ -223,7 +228,7 @@ fn project(
             .spawn((
                 fullscreen(),
                 UiTargetCamera(camera),
-                GlobalZIndex(i32::MAX),
+                GlobalZIndex(CAMPAIGN_CONTROL_BARRIER_LAYER),
                 Pickable {
                     should_block_lower: true,
                     is_hoverable: false,

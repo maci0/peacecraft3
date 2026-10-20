@@ -87,6 +87,15 @@ fn speed(definition: &Definition) -> Result<f32, String> {
 
 /// One `UnitBalance` numeric column of a resolved unit definition, with map edits.
 pub(crate) fn balance_real(definition: &Definition, wanted: &str) -> Result<f32, String> {
+    balance_real_with_marker(definition, wanted, None)
+}
+
+/// Optional marker semantics must be admitted from the selected numeric reader.
+pub(crate) fn balance_real_with_marker(
+    definition: &Definition,
+    wanted: &str,
+    marker: Option<i32>,
+) -> Result<f32, String> {
     let mut matches = definition.fields.iter().filter(|(id, f)| {
         f.metadata.as_ref().is_some_and(|m|
         m.fourcc==**id && m.from==SlkId::UnitMetaData && matches!(m.index,-1|0)
@@ -105,7 +114,18 @@ pub(crate) fn balance_real(definition: &Definition, wanted: &str) -> Result<f32,
         .as_ref()
         .map_err(|e| format!("unit balance {wanted}: {e:?}"))?
     {
-        FieldValue::Cell(s) => s.parse::<f32>().map_err(|e| e.to_string())?,
+        FieldValue::Cell(s) => {
+            let s = s.trim();
+            if metadata.kind == FieldKind::Int && matches!(s, "-" | "_") {
+                let marker =
+                    marker.ok_or_else(|| format!("unsupported unit balance {wanted} marker"))?;
+                f32::from_bits(
+                    crate::script_random::real::from_i32(marker).map_err(|e| e.to_string())?,
+                )
+            } else {
+                s.parse::<f32>().map_err(|e| e.to_string())?
+            }
+        }
         FieldValue::Override(pcx_objects::Value::Int(n)) if metadata.kind == FieldKind::Int => {
             f32::from_bits(
                 crate::script_random::real::from_i32(*n as i32).map_err(|e| e.to_string())?,

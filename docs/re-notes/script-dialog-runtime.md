@@ -50,9 +50,22 @@ reviewed image digest, decode checked instruction/data windows and retain source
 identity plus image SHA-256. Numeric UI operands are read from that client, never
 copied into production constants. Synthetic fixtures mutate the source operands,
 including independent height/row gaps and minimum sizes. Centering remains a
-recreation context choice. Caption wrapping currently reserves one authored font
-height; larger-than-viewport dialogs, hover artwork, async dialogs and full native
-game-over behavior remain open. Source normal/pushed artwork and authored
+recreation context choice. Caption height comes from Bevy's actual shaped rich-text
+layout at the source panel width minus its authored background insets. The
+physical extent is converted through the caption's actual UI target viewport,
+then fed into the decoded native layout relations. An initial hidden candidate
+allows layout without showing an estimated one-line panel. Gameplay suppression
+remains active while measurement is pending; dialog activation waits for the
+measured panel. Nonempty captions containing only parsed colour/reset markup
+remain present captions with zero text extent: they use the decoded caption
+relations immediately rather than waiting for glyph layout. Empty/absent raw
+captions retain the absent-caption relations. Negative/nonfinite extents still
+refuse. Session witness, root identity and dialog revision reject stale
+probes. The measurement cache includes effective content width, viewport and
+scale, so text changes and resized targets reflow without rebuilding unchanged
+geometry. This recreation shaping pipeline is not evidence of identical native
+font rasterization. Larger-than-viewport dialogs, hover artwork, async dialogs
+and full native game-over behavior remain open. Source normal/pushed artwork and authored
 pressed text offsets are consumed. Caption/button content and hotkey codes come
 only from executed script state.
 
@@ -64,7 +77,14 @@ The consumer uses checked widget activation/primary release events and logical
 character hotkeys (plus Enter/Escape), preserves source hotkey codes and keeps
 same-frame gameplay suppression after a modal closes. It emits typed quit
 requests for the application. Modal controls remain separate from gameplay user
-control, allowing scripted prompts while world input is disabled.
+control, allowing scripted prompts while world input is disabled. The modal's
+composition layer sits above the gameplay-control picking barrier and below the
+existing cinematic filter layer. These are application ordering choices, not
+source asset values. The control barrier still intercepts ordinary HUD input;
+its former maximum layer intercepted modal mouse events as well. A real
+`UiPickingPlugin` regression exercises cursor movement, primary down/up,
+pressed-state lifetime and completed modal clicks with that barrier present,
+while checking ordinary HUD input stays blocked.
 
 ## Evidence and verification
 
@@ -95,5 +115,19 @@ Synthetic tests cover actual VM execution, local filtering, lifetime and stale
 handles, text/button budgets, preserved refused updates, quit flags, both
 registration kinds and event-response cleanup with deliberately changed symbolic
 IDs. UI checks cover source-derived layout mutations, hotkeys and same-frame
-input suppression; a separate ignored gate requires explicit local original FDFs.
+input suppression and stale session witnesses. A focused shaping check uses
+Bevy's real text pipeline with synthetic content to exercise word wrapping,
+explicit line breaks, rich-text spans and doubled target scale; unchanged
+measurements converge. A separate ignored gate requires explicit local original
+FDFs.
 These do not prove rendered or native parity.
+
+A local full-application native fixture invoked the real Host/consumer with
+synthetic caption/button text during Human01. The source panel became visible
+after actual text layout, primary-pointer Continue hid it, and primary-pointer
+Quit cleared the owned session. Earlier keyboard success with mouse failure
+identified the campaign control barrier above modal controls; the revised layer
+relation fixes that path while preserving the filter's visual position. Captures
+and logs remain under `.scratch/campaign-objective-20261020/gui-v15/`. This proves
+local visible/pointer behavior for the fixture, not original-game visual parity
+or an authored Human01 prompt.

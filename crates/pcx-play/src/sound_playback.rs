@@ -6,7 +6,7 @@ use crate::{
 };
 #[path = "sound_voice_policy.rs"]
 mod voice;
-pub use voice::{Channel, VoicePolicy};
+pub use voice::{Channel, GroupPolicy, VoicePolicy};
 
 #[derive(Clone, Debug)]
 pub struct Rules {
@@ -15,9 +15,13 @@ pub struct Rules {
     update_seconds: f32,
     minimum_fade_step: u32,
     voice_policy: std::sync::Arc<VoicePolicy>,
+    group_policy: std::sync::Arc<GroupPolicy>,
 }
 
 impl Rules {
+    pub fn group_policy(&self) -> std::sync::Arc<GroupPolicy> {
+        self.group_policy.clone()
+    }
     pub fn voice_policy(&self) -> std::sync::Arc<VoicePolicy> {
         std::sync::Arc::clone(&self.voice_policy)
     }
@@ -85,12 +89,35 @@ impl Rules {
             },
             origin.clone(),
         )?;
+        let reset = window(0x5d99c5, 34, true)?;
+        let mask_load = window(0x5bfa64, 6, true)?;
+        if mask_load[..2] != [0x8b, 0x82] {
+            return Err(fail("unsupported category mask load"));
+        }
+        let mask_pointer = u32::from_le_bytes(mask_load[2..].try_into().unwrap());
+        let group_policy = GroupPolicy::read(
+            reset,
+            window(0x4afbb6, 5, true)?,
+            window(mask_pointer, usize::from(reset[30]), false)?,
+            update_seconds,
+        )
+        .map_err(|e| fail(&e))?;
+        let clamp = window(0x79fa44, 8, true)?;
+        if clamp[..4] != [0xf3, 0x0f, 0x10, 0x0d] {
+            return Err(fail("unsupported channel gain clamp load"));
+        }
+        let clamp_pointer = u32::from_le_bytes(clamp[4..].try_into().unwrap());
+        let clamp_unity = f32::from_le_bytes(window(clamp_pointer, 4, false)?.try_into().unwrap());
+        if clamp_unity != group_policy.unity() {
+            return Err(fail("reset unity and channel clamp disagree"));
+        }
         Ok(Self {
             origin,
             image_sha256: sha256(image),
             update_seconds,
             minimum_fade_step,
             voice_policy: std::sync::Arc::new(voice_policy),
+            group_policy: std::sync::Arc::new(group_policy),
         })
     }
 }

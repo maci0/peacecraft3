@@ -3462,3 +3462,80 @@ repeated, and the public site package was not rebuilt.
   diagnostic-main refusal remain recorded; this is not chapter completion.
   Verification stays local under `.scratch/campaign-integration-20261020-v8/`
   and `.scratch/campaign-time-of-day-root-20261020/integrated-v8-skip48-20261020/`.
+
+### 2026-10-20 — script dialogs, resource projection and voice policy
+
+- [x] Session-owned JASS dialog/button lifetimes, local display, callbacks,
+  response context and quit requests execute through the Host. The application
+  renders source-bound normal/pushed controls and suppresses world input during
+  modal interaction. Stale session witnesses discard pending clicks and hotkeys.
+  Multiline caption geometry, rendered comparison and score presentation remain
+  open. See [script dialogs](docs/re-notes/script-dialog-runtime.md).
+- [x] The resource bar reads its FDF/skin/font/icon data and projects admitted
+  effective gold, lumber and food counters. Authored quest hotkeys use the shared
+  activation path. Upkeep remains explicitly unknown.
+- [x] Nonspatial voice admission implements selected-client channel/list priority
+  policy and source defaults. The selected original opening voice publishes and
+  decodes nonzero samples; physical output and original/browser parity remain open.
+- [x] Selection circles conform to rendered terrain triangles, retaining source
+  size/tint/UVs and bounded mesh work. Initial-position rendered proof is pending.
+- [x] UnitWeapons identity derives from unique canonical row joins when the
+  expected header is absent; both Editor and DefaultTables now reach the source
+  weapon-enable cells. Original field availability is checked, combat progression
+  remains a separate gate.
+- [x] Frozen-source v13 checks: 1,527 affected native cases, seven explicit local
+  source gates, 734 actual WASI cases, strict native/browser all-target Clippy,
+  formatting and native/browser builds pass. Fifty browser-target WASM cases execute
+  under Node; this is not browser rendering. Local evidence stays under
+  `.scratch/campaign-gameplay-20261020-v13/`.
+- [x] The production-factory replay exposed a missing food-ceiling source and
+  authored numeric markers. Admission now reads `FoodCeiling` overrides or the
+  selected-client edition table, and food projection uses the selected integer
+  reader's marker semantics. Original profile and resolved-unit query gates cover
+  both producers. Normal Human01 startup and all five resource queries now pass.
+
+### 2026-10-20 — actual modal input and objective-route checkpoint
+
+- [x] Script captions use actual Bevy shaped text height, including wrapping,
+  explicit line breaks and scale changes. Formatting-only assigned captions retain
+  a present zero extent. Hidden measurement candidates block world input until
+  ready; stale session/root/revision probes cannot publish geometry.
+- [x] A native full-application fixture visibly renders the source dialog panel.
+  Primary-pointer Continue closes it and primary-pointer Quit clears the owned
+  session. The campaign control barrier now sits below modal controls while the
+  cinematic filter retains its prior visual ordering. Real UI picking tests also
+  verify ordinary HUD suppression. This fixture's text is synthetic, not an
+  authored Human01 dialog or original-game visual comparison.
+- [x] Hero weapon damage, armor and attack timing consume source coefficients and
+  current authored attribute growth. Explicit invulnerability suppresses weapon
+  targeting/damage, including in-flight impacts; direct script kills and life
+  setters remain independent. Initial protection, hero vitals after level changes
+  and scaled attack animation remain open.
+- [x] Source-qualified fresh cheat getters preserve normal defeat. The native
+  no-input Human01 path now reaches the subsequent unsupported `RemovePlayer`
+  declaration instead of stopping at `IsNoDefeatCheat`. Cheat mutation remains
+  explicitly unsupported.
+- [x] `MoveRectToLoc` copies admitted location coordinates into the shared
+  extent-preserving rectangle movement path. Eight rectangle checks pass; the
+  objective replay independently advances to three of seven authored route
+  rectangles before refusing `UnitHasItem`. This is neither three completed
+  objectives nor chapter completion.
+- [x] Native isolated-sink capture contains the opening voice, matching the
+  selected original MP3 at approximately 12.043 seconds (normalized waveform
+  correlation 0.481 in the mixed output). A separate test profile enabled gain;
+  the actual saved music/effects gains remain zero and their file hash is
+  unchanged. The dedicated sink and owned process were removed afterward.
+  This verifies output routing, not physical speakers or original-game parity.
+- [ ] The menu music lifecycle still ignores active campaigns. Inventory and
+  pickup events, normal defeat removal, upkeep, full mission/campaign progression
+  and original/native/browser rendering comparisons remain open.
+
+- [x] Final v15 frozen-source checks pass: 1,556 affected native cases, ten explicit
+  original-source gates, 758 actual WASI cases, 51 cases on browser-target WASM
+  under Node, strict native/browser all-target Clippy, formatting and full native/
+  browser builds. Native automatic Escape followed by F9 visibly opens the quest
+  log and shows live resource values. Initial selection-circle pixels remain
+  unproved; a later manual click missed the unit, so its screenshot is not a
+  successful circle gate. Local records stay under
+  `.scratch/campaign-gameplay-20261020-v15/` and
+  `.scratch/campaign-objective-20261020/normal-gui-v15/`.

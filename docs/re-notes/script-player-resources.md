@@ -41,8 +41,12 @@ Food is projected from each canonical living owned unit's metadata-associated
 counter. Ownership transfer, removal and death consequently affect the same
 projection used by scripts and the HUD. Explicit food assignments retain an
 adjustment against the current unit sum, so subsequent unit changes remain
-visible. The ceiling starts from the selected ordered `[Misc] FoodLimit` and
-can be explicitly assigned. Supplied food is limited by that current ceiling.
+visible. The ceiling reads the selected ordered `[Misc] FoodCeiling` override and applies
+its source-decoded limits. With no authored override it uses the selected
+client's source table, indexed by the same global that its registered `VersionGet`
+reads. The recreation chooses that table entry from the canonical startup version
+at query time; it refuses before that version is supplied. Explicit script
+assignments remain authoritative. Supplied food is limited by that current ceiling.
 Missing, ambiguous, nonnumeric, negative or overflowing unit food records report
 errors instead of inventing a cost or supply amount.
 
@@ -62,3 +66,60 @@ removal and explicit adjustment counters. The ignored original-image reader test
 requires `PCX_PLAYER_RESOURCE_IMAGE`; its food profile is deliberately synthetic
 and does not establish the original game's food ceiling. Private source analysis
 and local validation receipts stay under `.scratch/player-resources-20261020/`.
+
+
+## Original normal-profile regression
+
+The selected stock `Units/MiscData.txt` and `Units/MiscGame.txt` do not supply
+`FoodLimit`; the metadata's `fcap` record names `Misc/FoodCeiling`. The normal
+stock profile also omits that optional setting. The earlier synthetic-only
+profile test hid this missing native fallback and normal preparation refused.
+The selected food-ceiling function at `0x4300a0` reads `FoodCeiling` when present,
+checks its limits, and otherwise selects a value from its source table at
+`0xe69ae8`. Its selector global is the same one read by registered `VersionGet`.
+The reader checks that relationship, repeated key/section/cache addresses,
+repeated clamp operands and table bounds before admitting the defaults. No
+numeric fallback or edition mapping is embedded in production code.
+
+An additional ignored gate requires `PCX_PLAYER_RESOURCE_IMAGE` and
+`PCX_PLAYER_RESOURCE_PROFILE` for the actual selected executable and normal
+stock profile; optional `PCX_PLAYER_RESOURCE_MAP_PROFILE` adds the map override.
+It exercises the original missing-setting path with the decoded source table,
+without a synthetic ceiling. Synthetic tests separately change both default
+table entries and clamp operands, refuse a mismatched version selector, and
+cover absent canonical version, profile override and explicit setter priority.
+
+## Authored food markers
+
+The actual Human01 resource probe reached authored `Hart` food cells containing
+`-`, and `hfoo` food-made containing whitespace-padded ` - `. The object catalog
+correctly retains those string cells. The former strict floating parser rejected
+them before it could report any normal food total.
+
+On the selected image, the `fmade` and `fused` descriptor bindings at
+`0x6b3fff`/`0x6b4017` match integer accessors `0x6aee20`/`0x6aee40`. Both reach
+`0x6afae0`, whose stock-cell path calls `0x95d830`. That reader returns an integer
+cell, truncates a floating cell, and routes string cells to `XOR EAX,EAX` at
+`0x95d858`. This establishes zero from instruction semantics, rather than an
+invented profile default. These are static shipped-byte observations; no original
+execution was performed. A cached analysis snapshot failed integrity validation,
+so the bounded checked PE ranges were decoded directly; private receipts retain
+that limitation.
+
+Resource admission now checks both source keys, matching descriptor offsets,
+their shared accessor and integer/string dispatch before retaining that marker
+result. Only the resource food projection opts into it through the shared balance
+reader. Existing strict callers retain marker refusal. Numeric text is trimmed;
+recognized `-`/`_` markers use the admitted result, while arbitrary malformed,
+nonfinite, negative, missing or ambiguous food data still refuses. Limiting the
+string conversion to recognized markers is an explicit strict recreation policy;
+the native reader's string branch is broader.
+
+Synthetic cases cover whitespace, markers, malformed-value refusal and corrupted
+source descriptor/conversion refusal. The ignored
+`supplied_resolved_human_units_support_normal_food_queries` gate requires
+`PCX_PLAYER_RESOURCE_CATALOG` naming an explicit retained source-copy directory,
+plus the image/profile variables above. It resolves original `Hart`/`hfoo` through
+actual unit metadata and balance tables, creates both on one player, and queries
+effective food using canonical version admission. This fixture uses stock object
+records; the full actual Human01 startup/runtime replay remains a separate gate.

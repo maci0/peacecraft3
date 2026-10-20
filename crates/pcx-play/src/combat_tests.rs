@@ -16,6 +16,7 @@ constant native GetUnitState takes unit u, unitstate s returns real
 native SetUnitState takes unit u, unitstate s, real v returns nothing
 native IssueTargetOrder takes unit u, string o, widget t returns boolean
 native KillUnit takes unit u returns nothing
+native SetUnitInvulnerable takes unit u, boolean flag returns nothing
 native GetRandomInt takes integer a, integer b returns integer
 native GetRandomReal takes real a, real b returns real
 native SetRandomSeed takes integer s returns nothing
@@ -49,6 +50,12 @@ endglobals
 function setup takes nothing returns nothing
 set A=CreateUnit(Player(4),'u001',16.0,16.0,0.0)
 set B=CreateUnit(Player(5),'u001',48.0,16.0,180.0)
+endfunction
+function protect takes nothing returns nothing
+call SetUnitInvulnerable(B,true)
+endfunction
+function unprotect takes nothing returns nothing
+call SetUnitInvulnerable(B,false)
 endfunction
 function attack_filter takes nothing returns boolean
 return GetFilterUnit()==B and GetTriggerUnit()==B and GetAttacker()==A
@@ -109,7 +116,12 @@ fn rules() -> CombatRules {
     let mut damage_bonus = [[1.0; 8]; 7];
     damage_bonus[1][1] = 0.75;
     CombatRules {
+        sources: vec!["synthetic combat rules".into()],
         armor_factor: 0.06,
+        primary_damage_per_attribute: 1.0,
+        armor_per_agility: 0.3,
+        hero_armor_base: -2.0,
+        attack_speed_per_agility: 0.02,
         damage_bonus,
         call_for_help: 0.0,
         creep_call_for_help: 0.0,
@@ -120,12 +132,25 @@ fn rules() -> CombatRules {
 }
 
 fn open(fields: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId) {
+    open_selected(fields, None, rules())
+}
+
+fn open_selected(
+    fields: &[([u8; 4], ObjectField)],
+    heroes: Option<crate::hero_skills::Rules>,
+    combat: CombatRules,
+) -> (Vm, HandleId, HandleId) {
     let extra = format!(
         "{}\n{}{DECLARATIONS}",
         enumeration::TRIGGERS,
         super::activity::ORDERS
     );
-    let h = position_host_admitting(1000, 16, MAP, &extra, fields, |h| h);
+    let map = if heroes.is_some() {
+        MAP.replacen("'u001'", "'H001'", 1)
+    } else {
+        MAP.into()
+    };
+    let h = position_host_admitting(1000, 16, &map, &extra, fields, |h| h);
     let (registry, activity) = super::activity::rules();
     let mut h = h
         .with_locations()
@@ -140,6 +165,40 @@ fn open(fields: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId) {
         .unwrap()
         .with_script_random(Arc::new(crate::script_random::profile::fixture()), 64)
         .unwrap();
+    if let Some(rules) = heroes {
+        let origin = crate::scripts::AssetIdentity {
+            source: source().install,
+            edition: "fixture".into(),
+            version: "fixture".into(),
+        };
+        let tables = DefaultTables::from_bytes(
+            Identity {
+                install: origin.source.clone(),
+                edition_version: origin.version.clone(),
+            },
+            &[],
+            &[],
+            pcx_objects::editor::EditorReadLimits {
+                max_listed_paths: 0,
+                max_asset_bytes: 1 << 10,
+                max_aggregate_input_bytes: 1 << 10,
+            },
+        )
+        .unwrap();
+        h = h
+            .with_hero_skills(
+                tables,
+                origin,
+                Default::default(),
+                rules,
+                crate::playercolor_host::HeroBudget {
+                    abilities_per_unit: 8,
+                    overlay_objects: 0,
+                    modifications_per_ability: 0,
+                },
+            )
+            .unwrap();
+    }
     h.admit_unit_activity(activity, 65536).unwrap();
     h.native("SetRandomSeed", &[Value::Int(7)]).unwrap();
     h.admit_unit_vitals(HeroVitals {
@@ -147,7 +206,7 @@ fn open(fields: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId) {
         mana_per_intelligence: 15.0,
     })
     .unwrap();
-    h.admit_combat(rules(), "alpha").unwrap();
+    h.admit_combat(combat, "alpha").unwrap();
     h.set_neutral_passive(15);
     let context = Arc::clone(h.player_context().unwrap());
     let mut vm = context.scripts.clone().owned_vm(h);
@@ -749,5 +808,438 @@ fn unarmed_attack_move_finishes_without_acquiring_a_target() {
         h.native("GetUnitCurrentOrder", &[Value::Handle(a)])
             .unwrap(),
         Value::Int(0)
+    );
+}
+
+fn hero_fields(primary: &str) -> Vec<([u8; 4], ObjectField)> {
+    let mut fields = armed("64", "normal");
+    for (id, name, kind, value) in [
+        (b"A001", "STR", FieldKind::Int, "10"),
+        (b"A002", "AGI", FieldKind::Int, "5"),
+        (b"A003", "INT", FieldKind::Int, "7"),
+        (b"A004", "STRplus", FieldKind::Unreal, "2.5"),
+        (b"A005", "AGIplus", FieldKind::Unreal, "1.5"),
+        (b"A006", "INTplus", FieldKind::Unreal, "0.75"),
+        (b"A007", "Primary", FieldKind::Token, primary),
+        (b"H001", "HP", FieldKind::Int, "500"),
+    ] {
+        fields.push(column(id, SlkId::UnitBalance, name, kind, value));
+    }
+    for (id, name) in [(b"A008", "abilList"), (b"A009", "heroAbilList")] {
+        fields.push(column(
+            id,
+            SlkId::UnitAbilities,
+            name,
+            FieldKind::Token,
+            "_",
+        ));
+    }
+    fields
+}
+
+fn hero_rules() -> (crate::hero_skills::Rules, CombatRules) {
+    let mut hero = crate::hero_skills::tests::rules();
+    hero.initial_level = 3;
+    let mut combat = rules();
+    combat.primary_damage_per_attribute = 1.75;
+    combat.armor_per_agility = 0.4;
+    combat.hero_armor_base = -1.0;
+    combat.attack_speed_per_agility = 0.2;
+    (hero, combat)
+}
+
+#[test]
+fn hero_primary_types_fractional_growth_and_source_baseline_follow_live_levels() {
+    for (primary, initial, fourth, fifth) in [
+        ("STR", 10.0, 12.0, 15.0),
+        ("AGI", 5.0, 6.0, 8.0),
+        ("INT", 7.0, 7.0, 8.0),
+    ] {
+        let (hero, combat) = hero_rules();
+        let (mut vm, a, b) = open_selected(&hero_fields(primary), Some(hero), combat);
+        let initial_bonuses = vm.host().inner.hero_combat_bonuses(a).unwrap();
+        assert_eq!(initial_bonuses.damage, initial * 1.75);
+        assert_eq!((initial_bonuses.armor, initial_bonuses.speed), (1.0, 2.0));
+        let ordinary = vm.host().inner.hero_combat_bonuses(b).unwrap();
+        assert_eq!(
+            (ordinary.damage, ordinary.armor, ordinary.speed),
+            (0.0, 0.0, 1.0)
+        );
+        for (level, damage, agility) in [(4, fourth, 6.0), (5, fifth, 8.0), (5, fifth, 8.0)] {
+            vm.host()
+                .inner
+                .native(
+                    "SetHeroLevel",
+                    &[Value::Handle(a), Value::Int(level), Value::Bool(false)],
+                )
+                .unwrap();
+            let bonuses = vm.host().inner.hero_combat_bonuses(a).unwrap();
+            assert_eq!(bonuses.damage, damage * 1.75);
+            assert!((bonuses.armor - (-1.0 + agility * 0.4)).abs() < 0.00001);
+            assert!((bonuses.speed - (1.0 + agility * 0.2)).abs() < 0.00001);
+        }
+    }
+}
+
+#[test]
+fn hero_attack_damage_point_cooldown_and_target_armor_use_the_derived_bonuses() {
+    let (hero, combat) = hero_rules();
+    let (mut vm, a, b) = open_selected(&hero_fields("STR"), Some(hero), combat);
+    for (source, target) in [(a, b), (b, a)] {
+        vm.host()
+            .inner
+            .native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(source),
+                    Value::Str("alpha".into()),
+                    Value::Handle(target),
+                ],
+            )
+            .unwrap();
+    }
+    let life = |vm: &mut Vm, unit| vm.host().inner.unit_vitals(unit).unwrap().unwrap().life;
+    let initial_a = life(&mut vm, a);
+    let initial_b = life(&mut vm, b);
+    step(&mut vm, 0.125);
+    assert_eq!(life(&mut vm, b), initial_b);
+    step(&mut vm, 0.15625);
+    let damage_b = initial_b - life(&mut vm, b);
+    let expected_b = (5.0 + 10.0 * 1.75) * 0.75 / (1.0 + 2.0 * 0.06);
+    assert!((damage_b - expected_b).abs() < 0.0001);
+    assert_eq!(life(&mut vm, a), initial_a);
+    step(&mut vm, 0.28125);
+    let expected_a = 5.0 * 0.75 / (1.0 + (2.0 - 1.0 + 5.0 * 0.4) * 0.06);
+    assert!((initial_a - life(&mut vm, a) - expected_a).abs() < 0.0001);
+    step(&mut vm, 0.875);
+    assert!((initial_b - life(&mut vm, b) - expected_b).abs() < 0.0001);
+    step(&mut vm, 0.90625);
+    assert!((initial_b - life(&mut vm, b) - 2.0 * expected_b).abs() < 0.0001);
+}
+
+#[test]
+fn missing_hero_state_or_attributes_and_invalid_derived_speed_refuse() {
+    let (hero, combat) = hero_rules();
+    let (mut vm, a, b) = open_selected(&hero_fields("AGI"), Some(hero.clone()), combat.clone());
+    let definition = vm.host().inner.executed_unit(a).unwrap().definition.clone();
+    let mut invalid = combat;
+    invalid.attack_speed_per_agility = -1.0;
+    assert!(
+        ObjectHost::derive_hero_combat(&definition, Some((3, 3)), &invalid)
+            .unwrap_err()
+            .contains("non-positive attack speed")
+    );
+    for (field, value) in [
+        (b"A005", None),
+        (b"A007", Some("UNKNOWN")),
+        (b"A002", Some("NaN")),
+    ] {
+        let mut bad = definition.clone();
+        if let Some(value) = value {
+            bad.fields.get_mut(field).unwrap().value = Ok(FieldValue::Cell(value.into()));
+        } else {
+            bad.fields.remove(field);
+        }
+        assert!(ObjectHost::derive_hero_combat(&bad, Some((3, 4)), &rules()).is_err());
+    }
+    assert!(ObjectHost::derive_hero_combat(&definition, Some((3, 2)), &rules()).is_err());
+    let ordinary = vm.host().inner.executed_unit(b).unwrap().definition.clone();
+    assert_eq!(
+        ObjectHost::derive_hero_combat(&ordinary, None, &invalid)
+            .unwrap()
+            .speed,
+        1.0
+    );
+    assert!(
+        ObjectHost::derive_hero_combat(&definition, None, &rules())
+            .unwrap_err()
+            .contains("admitted initial and current levels")
+    );
+}
+
+#[test]
+fn explicit_protection_rejects_new_attacks_and_cancels_swings_without_erasing_queued_events() {
+    let (mut vm, a, b) = open(&armed("64", "normal"));
+    assert_eq!(vm.host().inner.executed_unit(b).unwrap().invulnerable, None);
+    vm.call("listen", &[]).unwrap();
+    vm.call("protect", &[]).unwrap();
+    let attack = |vm: &mut Vm| {
+        vm.host()
+            .inner
+            .native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(a),
+                    Value::Str("alpha".into()),
+                    Value::Handle(b),
+                ],
+            )
+            .unwrap()
+    };
+    assert_eq!(attack(&mut vm), Value::Bool(false));
+    step(&mut vm, 0.5);
+    assert_eq!(vm.host().inner.unit_vitals(b).unwrap().unwrap().life, 20.0);
+    assert!(vm.host().inner.take_fired_event().is_none());
+    vm.call("unprotect", &[]).unwrap();
+    assert_eq!(attack(&mut vm), Value::Bool(true));
+    step(&mut vm, 0.6);
+    vm.call("protect", &[]).unwrap();
+    step(&mut vm, 0.9);
+    let Value::Handle(hit) = vm.global("Hit") else {
+        panic!("trigger");
+    };
+    let fired = vm
+        .host()
+        .inner
+        .take_fired_event()
+        .expect("earlier attacked event retained");
+    assert_eq!(fired.trigger, hit);
+    assert!(vm.host().inner.take_fired_event().is_none());
+    assert_eq!(vm.host().inner.unit_vitals(b).unwrap().unwrap().life, 20.0);
+    assert!(
+        vm.host()
+            .inner
+            .executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .target
+            .is_none()
+    );
+    vm.call("unprotect", &[]).unwrap();
+    assert_eq!(attack(&mut vm), Value::Bool(true));
+    step(&mut vm, 2.5);
+    assert!(vm.host().inner.unit_vitals(b).unwrap().unwrap().life < 20.0);
+    assert_eq!(vm.host().inner.executed_unit(a).unwrap().invulnerable, None);
+}
+
+#[test]
+fn auto_acquisition_skips_explicit_protection_and_cleared_protection_becomes_eligible() {
+    let mut fields = armed("128", "normal");
+    fields.push(column(
+        b"W005",
+        SlkId::UnitWeapons,
+        "acquire",
+        FieldKind::Real,
+        "256",
+    ));
+    let (mut vm, a, b) = open(&fields);
+    vm.call("protect", &[]).unwrap();
+    let player = vm.host().inner.executed_unit(b).unwrap().owner;
+    let Value::Handle(other) = vm
+        .host()
+        .inner
+        .native(
+            "CreateUnit",
+            &[
+                Value::Handle(player),
+                Value::Int(i32::from_be_bytes(*b"u001")),
+                Value::Real(80.0),
+                Value::Real(16.0),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("unit");
+    };
+    step(&mut vm, 0.1);
+    assert_eq!(
+        vm.host()
+            .inner
+            .executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .target,
+        Some(other)
+    );
+    assert!(
+        vm.host().inner.is_enemy(a, b),
+        "protection does not change hostility"
+    );
+    vm.host()
+        .inner
+        .native("KillUnit", &[Value::Handle(other)])
+        .unwrap();
+    vm.call("unprotect", &[]).unwrap();
+    step(&mut vm, 0.2);
+    assert_eq!(
+        vm.host()
+            .inner
+            .executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .target,
+        Some(b)
+    );
+}
+
+#[test]
+fn rejected_protected_order_preserves_the_accepted_order_and_protection_stops_a_chase() {
+    let (mut vm, a, b) = open(&armed("4", "normal"));
+    let player = vm.host().inner.executed_unit(b).unwrap().owner;
+    let Value::Handle(other) = vm
+        .host()
+        .inner
+        .native(
+            "CreateUnit",
+            &[
+                Value::Handle(player),
+                Value::Int(i32::from_be_bytes(*b"u001")),
+                Value::Real(96.0),
+                Value::Real(16.0),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("unit");
+    };
+    let attack = |vm: &mut Vm, target| {
+        vm.host()
+            .inner
+            .native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(a),
+                    Value::Str("alpha".into()),
+                    Value::Handle(target),
+                ],
+            )
+            .unwrap()
+    };
+    assert_eq!(attack(&mut vm, other), Value::Bool(true));
+    vm.call("protect", &[]).unwrap();
+    assert_eq!(attack(&mut vm, b), Value::Bool(false));
+    assert_eq!(
+        vm.host()
+            .inner
+            .executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .target,
+        Some(other)
+    );
+    vm.call("unprotect", &[]).unwrap();
+    assert_eq!(attack(&mut vm, b), Value::Bool(true));
+    step(&mut vm, 0.1);
+    assert!(
+        vm.host()
+            .inner
+            .executed_unit(a)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .moving()
+    );
+    vm.call("protect", &[]).unwrap();
+    step(&mut vm, 0.2);
+    let stopped = vm.host().inner.executed_unit(a).unwrap().position;
+    step(&mut vm, 0.5);
+    let attacker = vm.host().inner.executed_unit(a).unwrap();
+    assert_eq!(attacker.position, stopped);
+    assert!(!attacker.activity.as_ref().unwrap().moving());
+}
+
+#[test]
+fn in_flight_missile_uses_current_explicit_protection_at_impact() {
+    let mut fields = armed("640", "missile");
+    let mut speed = column(
+        b"M002",
+        SlkId::UnitData,
+        "Missilespeed",
+        FieldKind::Int,
+        "64",
+    );
+    speed.1.metadata.as_mut().unwrap().source = FieldSource::Profile {
+        key: "missilespeed".into(),
+        index: 0,
+        slots: 1,
+    };
+    fields.push(speed);
+    for clear_before_impact in [false, true] {
+        let (mut vm, a, b) = open(&fields);
+        vm.host()
+            .inner
+            .native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(a),
+                    Value::Str("alpha".into()),
+                    Value::Handle(b),
+                ],
+            )
+            .unwrap();
+        step(&mut vm, 0.4);
+        assert_eq!(vm.host().inner.unit_vitals(b).unwrap().unwrap().life, 20.0);
+        vm.call("protect", &[]).unwrap();
+        step(&mut vm, 0.6);
+        if clear_before_impact {
+            vm.call("unprotect", &[]).unwrap();
+        }
+        step(&mut vm, 0.8);
+        let life = vm.host().inner.unit_vitals(b).unwrap().unwrap().life;
+        if clear_before_impact {
+            assert!(life < 20.0);
+        } else {
+            assert_eq!(life, 20.0);
+        }
+        assert_eq!(
+            vm.host().inner.executed_unit(b).unwrap().invulnerable,
+            Some(!clear_before_impact)
+        );
+    }
+}
+
+#[test]
+fn explicit_protection_does_not_override_script_kill_or_direct_life_assignment() {
+    let (mut vm, a, b) = open(&armed("64", "normal"));
+    vm.call("protect", &[]).unwrap();
+    vm.host()
+        .inner
+        .native("KillUnit", &[Value::Handle(b)])
+        .unwrap();
+    assert!(
+        vm.host()
+            .inner
+            .executed_unit(b)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .dead
+    );
+    vm.host()
+        .inner
+        .native(
+            "SetUnitInvulnerable",
+            &[Value::Handle(a), Value::Bool(true)],
+        )
+        .unwrap();
+    let state = vm.global("UNIT_STATE_LIFE");
+    vm.host()
+        .inner
+        .native(
+            "SetUnitState",
+            &[Value::Handle(a), state, Value::Real(-1.0)],
+        )
+        .unwrap();
+    assert!(
+        vm.host()
+            .inner
+            .executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .dead
     );
 }

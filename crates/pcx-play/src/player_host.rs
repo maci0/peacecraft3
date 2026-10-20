@@ -658,8 +658,14 @@ impl ObjectHost {
                     && u.vitals.is_none_or(|v| v.life > 0.0)
             })
             .try_fold(0i32, |total, (_, u)| {
-                let value = super::unit_activity::balance_real(&u.definition, column)
-                    .map_err(|s| self.inner.error(GET_PLAYER_STATE, Failure::UnitActivity(s)))?;
+                let marker = self
+                    .players
+                    .as_ref()
+                    .and_then(|p| p.resources.as_ref())
+                    .map(|r| r.rules.food_marker_default);
+                let value =
+                    super::unit_activity::balance_real_with_marker(&u.definition, column, marker)
+                        .map_err(|s| self.inner.error(GET_PLAYER_STATE, Failure::UnitActivity(s)))?;
                 if value.fract() != 0.0 || value >= i32::MAX as f32 {
                     return Err(self.inner.error(
                         GET_PLAYER_STATE,
@@ -708,18 +714,30 @@ impl ObjectHost {
             return Ok(None);
         };
         let player = &players.rows[at];
-        let value = resources
+        let assigned = resources
             .values
             .iter()
             .find(|(p, s, _)| *p == player.number && *s == state)
-            .map(|(_, _, v)| *v)
-            .unwrap_or(if index == 4 {
-                resources.rules.food_limit
-            } else if index < 2 {
-                resources.rules.initial / resources.rules.money_scale
-            } else {
-                resources.rules.initial
-            });
+            .map(|(_, _, v)| *v);
+        let value = if let Some(value) = assigned {
+            value
+        } else if index == 4 {
+            let version = self
+                .startup_version
+                .map(|id| self.inner.symbolic_value(id, "version"))
+                .transpose()
+                .map_err(|e| self.inner.error(GET_PLAYER_STATE, e.failure))?;
+            resources.rules.food_ceiling(version).ok_or_else(|| {
+                self.inner.error(
+                    GET_PLAYER_STATE,
+                    Failure::PlayerState("food ceiling requires the selected startup version"),
+                )
+            })?
+        } else if index < 2 {
+            resources.rules.initial / resources.rules.money_scale
+        } else {
+            resources.rules.initial
+        };
         let value = if matches!(index, 2 | 3) {
             value
                 .checked_add(

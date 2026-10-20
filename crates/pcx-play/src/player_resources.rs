@@ -13,7 +13,9 @@ pub struct Rules {
     pub(crate) money_states: [i32; 2],
     pub(crate) money_scale: i32,
     pub(crate) money_maximum: i32,
-    pub(crate) food_limit: i32,
+    food_limit: Option<i32>,
+    food_defaults: Vec<i32>,
+    pub(crate) food_marker_default: i32,
 }
 fn word(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(
@@ -33,6 +35,104 @@ fn shape(bytes: &[u8], parts: &[(usize, &[u8])]) -> bool {
         .iter()
         .all(|(at, part)| bytes.get(*at..at + part.len()) == Some(*part))
 }
+/// Follow both authored food descriptors to the common integer cell reader.
+fn food_marker_default(pe: &Pe<'_>) -> Result<i32, String> {
+    let mut readers = Vec::new();
+    for key in [b"fmade\0".as_slice(), b"fused\0"] {
+        let mut descriptors = Vec::new();
+        for (_, code) in pe.code_ranges() {
+            for b in code.windows(18) {
+                if shape(
+                    b,
+                    &[(0, &[0x68]), (5, &[0x8d, 0x81]), (11, &[0x50, 0x57, 0xe8])],
+                ) && pe
+                    .read_from(word(b, 1).unwrap_or(0), false)
+                    .is_ok_and(|s| s.starts_with(key))
+                {
+                    descriptors.push(word(b, 7).ok_or("food descriptor offset")?);
+                }
+            }
+        }
+        let [descriptor] = descriptors.as_slice() else {
+            return Err("missing or ambiguous food descriptor".into());
+        };
+        let mut targets = Vec::new();
+        for (va, code) in pe.code_ranges() {
+            for (at, b) in code.windows(22).enumerate() {
+                if shape(
+                    b,
+                    &[
+                        (0, &[0x55, 0x8b, 0xec, 0x8d, 0x81]),
+                        (9, &[0x50, 0xff, 0x75, 8, 0xe8]),
+                        (18, &[0x5d, 0xc2, 4, 0]),
+                    ],
+                ) && word(b, 5) == Some(*descriptor)
+                {
+                    targets.push(call(b, va + at as u32, 13).ok_or("food descriptor reader")?);
+                }
+            }
+        }
+        let [target] = targets.as_slice() else {
+            return Err("missing or ambiguous food descriptor reader".into());
+        };
+        readers.push(*target);
+    }
+    if readers[0] != readers[1] {
+        return Err("food descriptors use different integer readers".into());
+    }
+    let va = readers[0];
+    let reader = pe.read_from(va, true).map_err(|e| e.to_string())?;
+    let mut targets = Vec::new();
+    for (at, b) in reader
+        .get(..192)
+        .ok_or("food reader bounds")?
+        .windows(21)
+        .enumerate()
+    {
+        if shape(
+            b,
+            &[
+                (0, &[0xff, 0x33, 0xff, 0x37, 0xe8]),
+                (
+                    9,
+                    &[
+                        0x83, 0xc4, 8, 0x5f, 0x5e, 0x5b, 0x8b, 0xe5, 0x5d, 0xc2, 8, 0,
+                    ],
+                ),
+            ],
+        ) {
+            targets.push(call(b, va + at as u32, 4).ok_or("food cell reader")?);
+        }
+    }
+    let [target] = targets.as_slice() else {
+        return Err("missing or ambiguous food integer cell reader".into());
+    };
+    let cell = pe.read_from(*target, true).map_err(|e| e.to_string())?;
+    if !shape(
+        cell,
+        &[
+            (0, &[0x55, 0x8b, 0xec]),
+            (39, &[0x5f, 0x33, 0xc0, 0x5e, 0x5d, 0xc3]),
+            (
+                59,
+                &[
+                    0x85, 0xc0, 0x74, 0xe8, 0x8a, 8, 0x80, 0xf9, 0x49, 0x75, 7, 0x8b, 0x40, 4,
+                    0x5f, 0x5e, 0x5d, 0xc3,
+                ],
+            ),
+            (
+                77,
+                &[
+                    0x80, 0xf9, 0x46, 0x75, 0xd5, 0xf3, 0x0f, 0x2c, 0x40, 4, 0x5f, 0x5e, 0x5d, 0xc3,
+                ],
+            ),
+        ],
+    ) {
+        return Err("unsupported food integer cell conversion".into());
+    }
+    // The checked XOR EAX,EAX instruction produces zero, independently of data.
+    Ok(0)
+}
 impl Rules {
     /// Profiles have the same ordered stock/map provenance as other `[Misc]` rules.
     pub fn discover(
@@ -50,6 +150,7 @@ impl Rules {
             return Err(fail("input identity or image budget"));
         }
         let pe = Pe::parse(image, budget).map_err(|e| fail(&e.to_string()))?;
+        let food_marker_default = food_marker_default(&pe).map_err(|e| fail(&e))?;
         let entry = |name: &[u8], signature: &[u8]| -> Result<u32, String> {
             let mut found = Vec::new();
             for (_, code) in pe.code_ranges() {
@@ -71,7 +172,12 @@ impl Rules {
                     let code = pe
                         .read_from(target, true)
                         .map_err(|e| fail(&e.to_string()))?;
-                    if code.starts_with(&[0x55, 0x8b, 0xec]) && !found.contains(&target) {
+                    if (if name == b"VersionGet\0" {
+                        code.first() == Some(&0xa1) && code.get(5) == Some(&0xc3)
+                    } else {
+                        code.starts_with(&[0x55, 0x8b, 0xec])
+                    }) && !found.contains(&target)
+                    {
                         found.push(target);
                     }
                 }
@@ -279,12 +385,103 @@ impl Rules {
         let [(initial, initialized_states)] = initializers.as_slice() else {
             return Err(fail("missing or ambiguous state initialization"));
         };
-        let ([food_limit], profile_sources) =
-            pcx_objects::editor::misc::misc_scalars(profiles, ["FoodLimit"], budget.profile_bytes)?;
+        let version_va = entry(b"VersionGet\0", b"()Hversion;\0")?;
+        let version = pe
+            .read_from(version_va, true)
+            .map_err(|e| fail(&e.to_string()))?;
+        let version_global = word(version, 1).ok_or_else(|| fail("version selector"))?;
+        let mut ceilings = Vec::new();
+        for (_, code) in pe.code_ranges() {
+            for b in code.windows(155) {
+                if !shape(
+                    b,
+                    &[
+                        (0, &[0xa1]),
+                        (5, &[0x83, 0xf8, 0xff, 0x0f, 0x85]),
+                        (14, &[0x56, 0xe8]),
+                        (34, &[0x68]),
+                        (39, &[0x68]),
+                        (44, &[0x8b, 0xce, 0xe8]),
+                        (51, &[0x85, 0xc0, 0x74, 0x46, 0x6a, 0, 0x68]),
+                        (62, &[0x68]),
+                        (67, &[0x8b, 0xce, 0xe8]),
+                        (74, &[0xa3]),
+                        (79, &[0x83, 0xf8]),
+                        (82, &[0x7d, 0x11, 0xc7, 5]),
+                        (94, &[0xb8]),
+                        (99, &[0x5e, 0xc3, 0x3d]),
+                        (106, &[0x7e, 0x2d, 0xc7, 5]),
+                        (118, &[0xb8]),
+                        (123, &[0x5e, 0xc3, 0x33, 0xc9, 0x83, 0x3d]),
+                        (134, &[0x0f, 0x46, 0x0d]),
+                        (141, &[0x8b, 4, 0x8d]),
+                        (148, &[0xa3]),
+                        (153, &[0x5e, 0xc3]),
+                    ],
+                ) {
+                    continue;
+                }
+                let key = word(b, 35).unwrap_or(0);
+                let section = word(b, 40).unwrap_or(0);
+                let cache = word(b, 1);
+                if word(b, 58) != Some(key)
+                    || word(b, 63) != Some(section)
+                    || !pe
+                        .read_from(key, false)
+                        .is_ok_and(|s| s.starts_with(b"FoodCeiling\0"))
+                    || !pe
+                        .read_from(section, false)
+                        .is_ok_and(|s| s.starts_with(b"Misc\0"))
+                    || [75, 86, 110, 149].iter().any(|at| word(b, *at) != cache)
+                    || word(b, 129) != Some(version_global)
+                    || word(b, 137) != Some(version_global)
+                {
+                    continue;
+                }
+                let minimum = i32::from(b[81] as i8);
+                let maximum = word(b, 102).ok_or_else(|| fail("ceiling maximum"))? as i32;
+                if minimum > maximum
+                    || word(b, 90) != Some(minimum as u32)
+                    || word(b, 95) != Some(minimum as u32)
+                    || word(b, 114) != Some(maximum as u32)
+                    || word(b, 119) != Some(maximum as u32)
+                {
+                    return Err(fail("inconsistent ceiling clamp"));
+                }
+                let count = i32::from(b[133] as i8)
+                    .checked_add(1)
+                    .and_then(|n| usize::try_from(n).ok())
+                    .filter(|n| *n > 0 && *n <= budget.profile_bytes / 4)
+                    .ok_or_else(|| fail("ceiling table budget"))?;
+                let table = pe
+                    .read_from(word(b, 144).unwrap_or(0), false)
+                    .map_err(|e| fail(&e.to_string()))?;
+                let defaults = (0..count)
+                    .map(|i| {
+                        word(table, i * 4)
+                            .map(|n| n as i32)
+                            .ok_or_else(|| fail("ceiling table bounds"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                ceilings.push((minimum, maximum, defaults));
+            }
+        }
+        let [(minimum, ceiling_maximum, food_defaults)] = ceilings.as_slice() else {
+            return Err(fail("missing or ambiguous selected food ceiling"));
+        };
+        let ([food_limit], profile_sources) = pcx_objects::editor::misc::misc_scalars(
+            profiles,
+            ["FoodCeiling"],
+            budget.profile_bytes,
+        )?;
         let food_limit = food_limit
-            .filter(|v| *v >= 0.0 && *v < i32::MAX as f32 && v.fract() == 0.0)
-            .ok_or_else(|| fail("missing integral Misc/FoodLimit"))?
-            as i32;
+            .map(|value| {
+                if value.fract() != 0.0 || value < i32::MIN as f32 || value >= i32::MAX as f32 {
+                    return Err(fail("nonintegral Misc/FoodCeiling"));
+                }
+                Ok((value as i32).clamp(*minimum, *ceiling_maximum))
+            })
+            .transpose()?;
         Ok(Self {
             origin,
             image_sha256: sha256(image),
@@ -295,7 +492,19 @@ impl Rules {
             money_scale: scale,
             money_maximum: maximum,
             food_limit,
+            food_defaults: food_defaults.clone(),
+            food_marker_default,
         })
+    }
+    pub(crate) fn food_ceiling(&self, version: Option<i32>) -> Option<i32> {
+        if let Some(value) = self.food_limit {
+            return Some(value);
+        }
+        let version = usize::try_from(version?)
+            .ok()
+            .filter(|index| *index < self.food_defaults.len())
+            .unwrap_or(0);
+        self.food_defaults.get(version).copied()
     }
     pub(crate) fn money(&self, value: i32) -> i32 {
         let raw = value.wrapping_mul(self.money_scale);
@@ -323,7 +532,7 @@ mod tests {
                 edition: "explicit local image".into(),
                 version: "caller-selected; identity retained".into(),
             },
-            &[("synthetic food profile", b"[Misc]\nFoodLimit=73\n")],
+            &[("synthetic food profile", b"[Misc]\nFoodCeiling=73\n")],
             RuleInputBudget {
                 image_bytes: 32 << 20,
                 profile_bytes: 1 << 20,
@@ -331,7 +540,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(rules.food_limit, 73);
+        assert_eq!(rules.food_ceiling(None), Some(73));
         assert!(rules.money_scale > 0);
         eprintln!(
             "initial={} money_states={:?} scale={} cap={} sha256={:02x?}",
@@ -349,6 +558,10 @@ pub(crate) mod fixture {
     use super::*;
     pub fn image() -> (Vec<u8>, AssetIdentity, RuleInputBudget) {
         let (mut image, binding, budget) = crate::order_registry::tests::fixture([19, 37]);
+        image.resize(0x1000, 0);
+        for at in [0x100, 0x108] {
+            image[at..at + 4].copy_from_slice(&0xe00u32.to_le_bytes());
+        }
         image[0x200..].fill(0);
         let va = |raw: usize| 0x301000u32 + (raw - 0x200) as u32;
         let mut put = |raw: usize, bytes: &[u8]| {
@@ -462,8 +675,11 @@ pub(crate) mod fixture {
         factory[50..56].copy_from_slice(&[0x89, 0x48, 8, 0xff, 0x43, 0x1c]);
         put(0x550, &factory);
 
-        for (at, name, sig, target) in [(0x200, 0x600, 0x640, 0x280), (0x214, 0x620, 0x660, 0x300)]
-        {
+        for (at, name, sig, target) in [
+            (0x200, 0x600, 0x640, 0x280),
+            (0x214, 0x620, 0x660, 0x300),
+            (0x228, 0xa40, 0xa60, 0x800),
+        ] {
             let mut reg = vec![0x68];
             reg.extend_from_slice(&va(sig).to_le_bytes());
             reg.push(0x68);
@@ -477,34 +693,181 @@ pub(crate) mod fixture {
         put(0x620, b"SetPlayerState\0");
         put(0x640, b"(Hplayer;Hplayerstate;)I\0");
         put(0x660, b"(Hplayer;Hplayerstate;I)V\0");
-        (image, binding.origin, budget)
+        put(0xa00, b"FoodCeiling\0");
+        put(0xa20, b"Misc\0");
+        put(0xa40, b"VersionGet\0");
+        put(0xa60, b"()Hversion;\0");
+        let mut version = vec![0xa1];
+        version.extend_from_slice(&va(0xa94).to_le_bytes());
+        version.push(0xc3);
+        put(0x800, &version);
+        let mut ceiling = vec![0; 155];
+        for (at, bytes) in [
+            (0, &[0xa1][..]),
+            (5, &[0x83, 0xf8, 0xff, 0x0f, 0x85]),
+            (14, &[0x56, 0xe8]),
+            (34, &[0x68]),
+            (39, &[0x68]),
+            (44, &[0x8b, 0xce, 0xe8]),
+            (51, &[0x85, 0xc0, 0x74, 0x46, 0x6a, 0, 0x68]),
+            (62, &[0x68]),
+            (67, &[0x8b, 0xce, 0xe8]),
+            (74, &[0xa3]),
+            (79, &[0x83, 0xf8, 2]),
+            (82, &[0x7d, 0x11, 0xc7, 5]),
+            (94, &[0xb8]),
+            (99, &[0x5e, 0xc3, 0x3d]),
+            (106, &[0x7e, 0x2d, 0xc7, 5]),
+            (118, &[0xb8]),
+            (123, &[0x5e, 0xc3, 0x33, 0xc9, 0x83, 0x3d]),
+            (134, &[0x0f, 0x46, 0x0d]),
+            (141, &[0x8b, 4, 0x8d]),
+            (148, &[0xa3]),
+            (153, &[0x5e, 0xc3]),
+        ] {
+            ceiling[at..at + bytes.len()].copy_from_slice(bytes);
+        }
+        for at in [1, 75, 86, 110, 149] {
+            ceiling[at..at + 4].copy_from_slice(&va(0xa90).to_le_bytes());
+        }
+        for at in [35, 58] {
+            ceiling[at..at + 4].copy_from_slice(&va(0xa00).to_le_bytes());
+        }
+        for at in [40, 63] {
+            ceiling[at..at + 4].copy_from_slice(&va(0xa20).to_le_bytes());
+        }
+        for at in [90, 95] {
+            ceiling[at..at + 4].copy_from_slice(&2u32.to_le_bytes());
+        }
+        for at in [102, 114, 119] {
+            ceiling[at..at + 4].copy_from_slice(&91u32.to_le_bytes());
+        }
+        for at in [129, 137] {
+            ceiling[at..at + 4].copy_from_slice(&va(0xa94).to_le_bytes());
+        }
+        ceiling[133] = 1;
+        ceiling[144..148].copy_from_slice(&va(0xa80).to_le_bytes());
+        put(0x880, &ceiling);
+        put(0xa80, &61i32.to_le_bytes());
+        put(0xa84, &87i32.to_le_bytes());
+        put(0xb00, b"fmade\0");
+        put(0xb10, b"fused\0");
+        for (key, at, wrapper, descriptor) in
+            [(0xb00, 0xb20, 0xb60, 0x40u32), (0xb10, 0xb40, 0xb80, 0x64)]
+        {
+            let mut init = vec![0x68];
+            init.extend_from_slice(&va(key).to_le_bytes());
+            init.extend_from_slice(&[0x8d, 0x81]);
+            init.extend_from_slice(&descriptor.to_le_bytes());
+            init.extend_from_slice(&[0x50, 0x57, 0xe8, 0, 0, 0, 0]);
+            put(at, &init);
+            let mut read = vec![0x55, 0x8b, 0xec, 0x8d, 0x81];
+            read.extend_from_slice(&descriptor.to_le_bytes());
+            read.extend_from_slice(&[0x50, 0xff, 0x75, 8, 0xe8]);
+            read.extend_from_slice(&va(0xba0).wrapping_sub(va(wrapper) + 18).to_le_bytes());
+            read.extend_from_slice(&[0x5d, 0xc2, 4, 0]);
+            put(wrapper, &read);
+        }
+        let mut reader = vec![0; 192];
+        reader[171..176].copy_from_slice(&[0xff, 0x33, 0xff, 0x37, 0xe8]);
+        reader[176..180].copy_from_slice(&va(0xc80).wrapping_sub(va(0xba0) + 180).to_le_bytes());
+        reader[180..192].copy_from_slice(&[
+            0x83, 0xc4, 8, 0x5f, 0x5e, 0x5b, 0x8b, 0xe5, 0x5d, 0xc2, 8, 0,
+        ]);
+        put(0xba0, &reader);
+        let mut cell = vec![0; 91];
+        for (at, bytes) in [
+            (0, &[0x55, 0x8b, 0xec][..]),
+            (39, &[0x5f, 0x33, 0xc0, 0x5e, 0x5d, 0xc3]),
+            (
+                59,
+                &[
+                    0x85, 0xc0, 0x74, 0xe8, 0x8a, 8, 0x80, 0xf9, 0x49, 0x75, 7, 0x8b, 0x40, 4,
+                    0x5f, 0x5e, 0x5d, 0xc3,
+                ],
+            ),
+            (
+                77,
+                &[
+                    0x80, 0xf9, 0x46, 0x75, 0xd5, 0xf3, 0x0f, 0x2c, 0x40, 4, 0x5f, 0x5e, 0x5d, 0xc3,
+                ],
+            ),
+        ] {
+            cell[at..at + bytes.len()].copy_from_slice(bytes);
+        }
+        put(0xc80, &cell);
+        (
+            image,
+            binding.origin,
+            RuleInputBudget {
+                image_bytes: 8192,
+                ..budget
+            },
+        )
     }
     pub fn rules() -> Rules {
         let (image, origin, budget) = image();
         Rules::discover(
             &image,
             origin,
-            &[("synthetic misc", b"[Misc]\nFoodLimit=73\n")],
+            &[("synthetic misc", b"[Misc]\nFoodCeiling=73\n")],
+            budget,
+        )
+        .unwrap()
+    }
+    pub fn rules_without_food_override() -> Rules {
+        let (image, origin, budget) = image();
+        Rules::discover(
+            &image,
+            origin,
+            &[("synthetic profile without food", b"[Misc]\nUnrelated=4")],
             budget,
         )
         .unwrap()
     }
     #[test]
+    fn missing_profile_ceiling_uses_the_selected_version_and_override_clamps_are_source_derived() {
+        let rules = rules_without_food_override();
+        assert_eq!(rules.food_ceiling(None), None);
+        assert_eq!(rules.food_ceiling(Some(0)), Some(61));
+        assert_eq!(rules.food_ceiling(Some(1)), Some(87));
+        let (image, origin, budget) = image();
+        for (text, expected) in [
+            (b"[Misc]\nFoodCeiling=-9".as_slice(), 2),
+            (b"[Misc]\nFoodCeiling=107".as_slice(), 91),
+        ] {
+            let rules = Rules::discover(
+                &image,
+                origin.clone(),
+                &[("authored override", text)],
+                budget,
+            )
+            .unwrap();
+            assert_eq!(rules.food_ceiling(None), Some(expected));
+        }
+        let mut corrupt = image.clone();
+        corrupt[0x880 + 129] ^= 1;
+        assert!(Rules::discover(&corrupt, origin, &[("empty", b"[Misc]")], budget).is_err());
+    }
+    #[test]
     fn changed_source_operands_drive_defaults_bounds_and_refusals() {
         let rules = rules();
         assert_eq!(rules.initial, 18);
+        assert_eq!(rules.food_marker_default, 0);
         assert_eq!(rules.money(117), 100);
         assert_eq!(rules.money(-3), 0);
         assert_eq!(rules.money(37), 37);
         let (image, origin, budget) = image();
-        for at in [0x280, 0x300, 0x380, 0x400, 0x200, 0x550, 0x4a1] {
+        for at in [
+            0x280, 0x300, 0x380, 0x400, 0x200, 0x550, 0x4a1, 0xb47, 0xca8,
+        ] {
             let mut broken = image.clone();
             broken[at] ^= 1;
             assert!(
                 Rules::discover(
                     &broken,
                     origin.clone(),
-                    &[("synthetic", b"[Misc]\nFoodLimit=73")],
+                    &[("synthetic", b"[Misc]\nFoodCeiling=73")],
                     budget
                 )
                 .is_err()
@@ -514,10 +877,59 @@ pub(crate) mod fixture {
             Rules::discover(
                 &image,
                 origin,
-                &[("synthetic", b"[Misc]\nFoodLimit=-1")],
+                &[("synthetic", b"[Misc]\nFoodCeiling=1.5")],
                 budget
             )
             .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod normal_profile_tests {
+    use super::*;
+    #[test]
+    #[ignore = "requires PCX_PLAYER_RESOURCE_IMAGE and PCX_PLAYER_RESOURCE_PROFILE selecting the actual normal stock profile"]
+    fn supplied_normal_profile_uses_selected_version_food_ceiling() {
+        let image_path =
+            std::env::var("PCX_PLAYER_RESOURCE_IMAGE").expect("PCX_PLAYER_RESOURCE_IMAGE");
+        let profile_path =
+            std::env::var("PCX_PLAYER_RESOURCE_PROFILE").expect("PCX_PLAYER_RESOURCE_PROFILE");
+        let image = std::fs::read(&image_path).unwrap();
+        let profile = std::fs::read(&profile_path).unwrap();
+        let map_path = std::env::var("PCX_PLAYER_RESOURCE_MAP_PROFILE").ok();
+        let map = map_path.as_ref().map(std::fs::read).transpose().unwrap();
+        let mut profiles = vec![(profile_path.as_str(), profile.as_slice())];
+        if let (Some(path), Some(bytes)) = (&map_path, &map) {
+            profiles.push((path.as_str(), bytes.as_slice()));
+        }
+        let rules = Rules::discover(
+            &image,
+            AssetIdentity {
+                source: image_path,
+                edition: "explicit normal source profile".into(),
+                version: "caller selected; digest retained".into(),
+            },
+            &profiles,
+            RuleInputBudget {
+                image_bytes: 32 << 20,
+                profile_bytes: 8 << 20,
+                sections: 96,
+            },
+        )
+        .unwrap();
+        // An absent override is the shipped profile regression; no synthetic ceiling supplies it.
+        assert!(rules.food_limit.is_none());
+        assert!(rules.food_ceiling(None).is_none());
+        for (index, expected) in rules.food_defaults.iter().enumerate() {
+            assert_eq!(rules.food_ceiling(Some(index as i32)), Some(*expected));
+        }
+        eprintln!(
+            "normal profile={} profile_sha256={:02x?} source_food_defaults={:?} image_sha256={:02x?}",
+            profile_path,
+            sha256(&profile),
+            rules.food_defaults,
+            rules.image_sha256
         );
     }
 }

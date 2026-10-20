@@ -80,3 +80,11 @@ and resumes with the selected F10 key. The final receipt/sampler path was also r
 Captures/logs stay local under `.scratch/campaign-integration-20261020-v6/` and
 `.scratch/campaign-integration-20261020-v7/`.
 No original-game or browser-rendered comparison was made.
+
+The v15 normal native application shows the resource bar after an ordinary
+cinematic skip, and the authored F9 key opens the quest log. The displayed food
+count changes as the script transfers units; no food parse refusal remains for
+authored numeric markers. These local screenshots are under
+`.scratch/campaign-objective-20261020/normal-gui-v15/`. They establish visible
+widgets and input, not original/native numerical or visual parity. Upkeep remains
+explicitly unavailable until its source-derived tier consumer is installed.

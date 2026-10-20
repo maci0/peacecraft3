@@ -666,6 +666,7 @@ fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) ->
         .expect("file sounds"),
         sound_playback: None,
         resources: None,
+        cheats: None,
         dialog_layout: None,
         sound_parameters: Banks::read(
             &[],

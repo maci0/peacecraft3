@@ -91,6 +91,7 @@ type UserVolumeQuery<'w, 's> = Query<
         &'static mut PlaybackSettings,
         Option<&'static AuthoredVolume>,
         Option<&'static peacecraft3::script_audio::ScriptAudioGain>,
+        Option<&'static peacecraft3::script_audio::ScriptAudioCategory>,
         Has<MenuMusic>,
     ),
     Or<(
@@ -101,15 +102,17 @@ type UserVolumeQuery<'w, 's> = Query<
 
 fn apply_user_volume(settings: Res<crate::menu_settings::Backend>, mut sinks: UserVolumeQuery) {
     use bevy::audio::AudioSinkPlayback;
-    for (sink, mut playback, base, script_gain, music) in &mut sinks {
+    for (sink, mut playback, base, script_gain, category, music) in &mut sinks {
         let gain = if music {
             settings.audio.effective_music()
         } else {
             settings.audio.effective_effects()
         };
-        playback.volume = bevy::audio::Volume::Linear(
-            base.map_or(1.0, |base| base.0) * script_gain.map_or(1.0, |gain| gain.0) * gain,
-        );
+        let authored = base.map_or(1.0, |base| base.0) * script_gain.map_or(1.0, |gain| gain.0);
+        playback.volume =
+            bevy::audio::Volume::Linear(category.map_or(authored * gain, |category| {
+                category.with_user_gain(authored, gain)
+            }));
         if let Some(mut sink) = sink {
             sink.set_volume(playback.volume);
         }

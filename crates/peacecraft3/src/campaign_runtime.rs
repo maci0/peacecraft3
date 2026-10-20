@@ -92,6 +92,9 @@ impl CampaignRuntime {
             // Loading and the previous session's frame debt do not advance this session.
             return;
         }
+        if let Some(host) = session.host() {
+            host.objects_mut().advance_volume_group_clock(elapsed);
+        }
         if self.paused || self.view_paused || self.last_error.is_some() {
             return;
         }

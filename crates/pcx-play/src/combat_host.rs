@@ -209,6 +209,69 @@ fn read_combat(d: &Definition) -> Result<Combat, String> {
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HeroBonuses {
+    pub damage: f32,
+    pub armor: f32,
+    pub speed: f32,
+}
+
+impl ObjectHost {
+    pub(crate) fn derive_hero_combat(
+        definition: &Definition,
+        progress: Option<(i32, i32)>,
+        rules: &CombatRules,
+    ) -> Result<HeroBonuses, String> {
+        if !definition.rawcode[0].is_ascii_uppercase() {
+            return Ok(HeroBonuses {
+                damage: 0.0,
+                armor: 0.0,
+                speed: 1.0,
+            });
+        }
+        let (initial, current) =
+            progress.ok_or("hero combat requires admitted initial and current levels")?;
+        let gained = current
+            .checked_sub(initial)
+            .filter(|gained| *gained >= 0)
+            .ok_or("hero combat level is below the admitted initial level")?;
+        let required = |name: &str| {
+            column(definition, SlkId::UnitBalance, name)?
+                .map(|value| number(value, name))
+                .transpose()?
+                .flatten()
+                .ok_or_else(|| format!("hero unit field {name} is empty"))
+        };
+        let attribute = |name: &str| -> Result<f32, String> {
+            // Integer attributes retain fractional growth until the live level is evaluated.
+            let value =
+                (required(name)? + required(&format!("{name}plus"))? * gained as f32).floor();
+            if !value.is_finite() || value < 0.0 {
+                return Err(format!("invalid derived hero attribute {name}"));
+            }
+            Ok(value)
+        };
+        let primary =
+            column(definition, SlkId::UnitBalance, "Primary")?.ok_or("hero Primary is empty")?;
+        let primary = text(primary, "Primary")?;
+        if !matches!(primary, "STR" | "AGI" | "INT") {
+            return Err(format!("unsupported hero Primary {primary:?}"));
+        }
+        let agility = attribute("AGI")?;
+        let damage = attribute(primary)? * rules.primary_damage_per_attribute;
+        let armor = rules.hero_armor_base + agility * rules.armor_per_agility;
+        let speed = 1.0 + agility * rules.attack_speed_per_agility;
+        if !damage.is_finite() || !armor.is_finite() || !speed.is_finite() || speed <= 0.0 {
+            return Err("invalid derived hero combat bonuses or non-positive attack speed".into());
+        }
+        Ok(HeroBonuses {
+            damage,
+            armor,
+            speed,
+        })
+    }
+}
+
 fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
@@ -265,12 +328,41 @@ impl ObjectHost {
     }
 
     pub(super) fn prepare_unit_combat(&self, d: &Definition) -> Result<Option<Combat>, Error> {
-        if self.combat.is_none() {
+        let Some(input) = &self.combat else {
             return Ok(None);
-        }
-        read_combat(d)
+        };
+        let result = || {
+            Self::derive_hero_combat(
+                d,
+                self.hero_initial_level().map(|level| (level, level)),
+                &input.rules,
+            )?;
+            read_combat(d)
+        };
+        result()
             .map(Some)
             .map_err(|e| self.inner.error(ORDER, Failure::UnitActivity(e)))
+    }
+
+    pub(crate) fn hero_combat_bonuses(&self, unit: HandleId) -> Result<HeroBonuses, Error> {
+        let record = self.executed_unit(unit)?;
+        let progress = self.hero_initial_level().zip(
+            record
+                .abilities
+                .as_ref()
+                .and_then(|abilities| abilities.hero.as_ref())
+                .map(|hero| hero.level),
+        );
+        let rules = &self
+            .combat
+            .as_ref()
+            .ok_or_else(|| {
+                self.inner
+                    .error("combat", Failure::UnitState("combat missing"))
+            })?
+            .rules;
+        Self::derive_hero_combat(&record.definition, progress, rules)
+            .map_err(|error| self.inner.error("combat", Failure::UnitActivity(error)))
     }
 
     pub(super) fn combat_attack_order(&self, unit: HandleId) -> Option<i32> {
@@ -308,6 +400,11 @@ impl ObjectHost {
             }
             _ => None,
         }
+    }
+
+    fn weapon_target(&self, unit: HandleId) -> Option<&super::ExecutedUnit> {
+        self.live(unit)
+            .filter(|record| record.invulnerable != Some(true))
     }
 
     fn hostile(&self, attacker: &super::ExecutedUnit, target: &super::ExecutedUnit) -> bool {
@@ -407,7 +504,7 @@ impl ObjectHost {
                 .live(unit)
                 .and_then(|u| u.combat.as_ref()?.weapon)
                 .is_some();
-            if !can_attack || self.live(target).is_none() || unit == target {
+            if !can_attack || self.weapon_target(target).is_none() || unit == target {
                 return Ok(Value::Bool(false));
             }
             self.clear_combat_target(unit);
@@ -492,13 +589,13 @@ impl ObjectHost {
         Ok(())
     }
 
-    fn deal_damage(
+    fn deal_weapon_damage(
         &mut self,
         source: HandleId,
         target: HandleId,
         damage: f32,
     ) -> Result<(), Error> {
-        let Some(record) = self.live(target) else {
+        let Some(record) = self.weapon_target(target) else {
             return Ok(());
         };
         let life = record.vitals.map_or(0.0, |v| v.life) - damage;
@@ -513,7 +610,12 @@ impl ObjectHost {
         Ok(())
     }
 
-    fn roll_damage(&mut self, weapon: Weapon, target: HandleId) -> Result<f32, Error> {
+    fn roll_damage(
+        &mut self,
+        source: HandleId,
+        weapon: Weapon,
+        target: HandleId,
+    ) -> Result<f32, Error> {
         let name = "combat damage";
         let (armor, defense) = {
             let combat = self
@@ -523,6 +625,8 @@ impl ObjectHost {
                 .ok_or_else(|| self.inner.error(name, Failure::UnitState("combat missing")))?;
             (combat.armor, combat.defense)
         };
+        let armor = armor + self.hero_combat_bonuses(target)?.armor;
+        let primary_damage = self.hero_combat_bonuses(source)?.damage;
         let mut roll = weapon.base;
         for _ in 0..weapon.dice.max(0) {
             roll += self.draw_random_integer(1, weapon.sides.max(1), name)?;
@@ -534,7 +638,9 @@ impl ObjectHost {
         } else {
             2.0 - (1.0 - factor).powf(-armor)
         };
-        Ok(roll as f32 * rules.damage_bonus[weapon.attack][defense] * armor_scale)
+        Ok((roll as f32 + primary_damage)
+            * rules.damage_bonus[weapon.attack][defense]
+            * armor_scale)
     }
 
     /// One combat step at the current game time, in unit handle order.
@@ -551,7 +657,7 @@ impl ObjectHost {
             missiles.into_iter().partition(|m| m.impact_at <= now);
         self.combat.as_mut().expect("combat").missiles = pending;
         for missile in due {
-            self.deal_damage(missile.source, missile.target, missile.damage)?;
+            self.deal_weapon_damage(missile.source, missile.target, missile.damage)?;
         }
         let units: Vec<HandleId> = self
             .executed_units()
@@ -588,13 +694,13 @@ impl ObjectHost {
                     .as_ref()
                     .and_then(|a| a.destination())
                     .is_some_and(|p| Some(p) != destination);
-            let mut target = previous_target.filter(|t| self.live(*t).is_some());
+            let mut target = previous_target.filter(|t| self.weapon_target(*t).is_some());
             if target.is_none() && (idle || destination.is_some()) && weapon.acquire > 0.0 {
                 target = self
                     .executed_units()
                     .filter(|(id, other)| {
                         *id != unit
-                            && self.live(*id).is_some()
+                            && self.weapon_target(*id).is_some()
                             && other
                                 .position
                                 .is_some_and(|p| distance(p, position) <= weapon.acquire)
@@ -622,6 +728,8 @@ impl ObjectHost {
                     } else if idle && let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                         record.combat.as_mut().expect("combat").attack_destination = None;
                     }
+                } else if previous_target.is_some() && !idle {
+                    self.steer_unit(unit, None, name)?;
                 }
                 continue;
             };
@@ -665,11 +773,12 @@ impl ObjectHost {
             };
             match swing {
                 None if now >= ready_at => {
+                    let speed = self.hero_combat_bonuses(unit)?.speed;
                     if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                         record.face = facing;
                         let combat = record.combat.as_mut().expect("combat");
-                        combat.swing = Some((target, now + f64::from(weapon.damage_point)));
-                        combat.ready_at = now + f64::from(weapon.cooldown);
+                        combat.swing = Some((target, now + f64::from(weapon.damage_point / speed)));
+                        combat.ready_at = now + f64::from(weapon.cooldown / speed);
                         combat.chase = None;
                         if let Some(animation) = &mut record.animation {
                             animation
@@ -719,10 +828,10 @@ impl ObjectHost {
                     if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                         record.combat.as_mut().expect("combat").swing = None;
                     }
-                    if self.live(swung).is_none() {
+                    if self.weapon_target(swung).is_none() {
                         continue;
                     }
-                    let damage = self.roll_damage(weapon, swung)?;
+                    let damage = self.roll_damage(unit, weapon, swung)?;
                     match weapon.missile_speed {
                         Some(speed) => {
                             let missiles = &mut self.combat.as_mut().expect("combat").missiles;
@@ -736,7 +845,7 @@ impl ObjectHost {
                                 damage,
                             });
                         }
-                        None => self.deal_damage(unit, swung, damage)?,
+                        None => self.deal_weapon_damage(unit, swung, damage)?,
                     }
                 }
                 _ => {}
