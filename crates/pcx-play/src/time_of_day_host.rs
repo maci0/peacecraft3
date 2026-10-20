@@ -132,11 +132,19 @@ impl ObjectHost {
         }
     }
 
-    /// Seconds of game time in `[from, to)` inside the stock day window. None when the
-    /// clock or the script's dawn/dusk constants are not admitted.
-    pub(super) fn daytime_between(&self, from: f64, to: f64) -> Option<f64> {
-        let state = self.time_of_day.as_ref()?;
-        Some(state.daytime_between(from, to, state.day_window?))
+    /// Seconds of game time in `[from, to)` inside the stock day window. `Ok(None)` when the
+    /// clock or the script's dawn/dusk constants are not admitted. A span starting before the
+    /// last rebase cannot be classified from the stored hour, so it is refused.
+    pub(super) fn daytime_between(&self, from: f64, to: f64) -> Result<Option<f64>, String> {
+        let Some(state) = self.time_of_day.as_ref() else {
+            return Ok(None);
+        };
+        if from < state.since {
+            return Err("span predates the time-of-day rebase".into());
+        }
+        Ok(state
+            .day_window
+            .map(|window| state.daytime_between(from, to, window)))
     }
 
     /// Current fraction of the day in 0..1, or None before admission.

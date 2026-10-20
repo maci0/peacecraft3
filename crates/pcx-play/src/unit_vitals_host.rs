@@ -32,6 +32,9 @@ pub struct Regen {
     pub life_per_second: f32,
     pub mana_per_second: f32,
     pub life_type: RegenType,
+    /// Game time through which this unit's regeneration is integrated. Set to the
+    /// creation time, so a unit never regenerates for time before it existed.
+    pub through: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,8 +50,6 @@ pub(super) struct Rules {
     bonuses: HeroVitals,
     /// Enumerands of LIFE, MAX_LIFE, MANA, MAX_MANA.
     states: [i32; 4],
-    /// Game time through which regeneration has been integrated.
-    regen_through: f64,
 }
 
 /// An SLK `-` cell is empty and reads as zero for a numeric column.
@@ -118,10 +119,6 @@ impl ObjectHost {
                 Failure::UnitState("vitals regeneration requires admitted unit activity"),
             ));
         }
-        let regen_through = self.timer_game_time().ok_or_else(|| {
-            self.inner
-                .error(GET, Failure::UnitState("vitals require the game clock"))
-        })?;
         Self::contract(
             &self.inner,
             GET,
@@ -139,11 +136,7 @@ impl ObjectHost {
         ]) {
             *slot = self.source_constant_enumerand(global, "unitstate")?;
         }
-        self.unit_vitals = Some(Rules {
-            bonuses,
-            states,
-            regen_through,
-        });
+        self.unit_vitals = Some(Rules { bonuses, states });
         Ok(())
     }
 
@@ -169,6 +162,9 @@ impl ObjectHost {
             life_per_second: balance_or_empty(definition, "regenHP").map_err(fail)?,
             mana_per_second: balance_or_empty(definition, "regenMana").map_err(fail)?,
             life_type: regen_type(definition).map_err(fail)?,
+            through: self
+                .timer_game_time()
+                .ok_or_else(|| fail("regeneration requires the game clock".into()))?,
         };
         if definition.rawcode[0].is_ascii_uppercase() {
             let strength = balance_real(definition, "STR").map_err(fail)?;
@@ -230,24 +226,18 @@ impl ObjectHost {
         Ok(self.executed_unit(unit)?.vitals)
     }
 
-    /// Integrate life and mana regeneration from the last projection to `now`.
+    /// Integrate each unit's life and mana regeneration from its own clock to `now`.
     /// Dead and nonpositive-life units do not regenerate. Errors leave every pool
-    /// and the projection clock unchanged, so a retry integrates the same span.
+    /// and clock unchanged, so a retry integrates the same spans.
     pub(super) fn advance_unit_regen(&mut self, now: f64) -> Result<(), Error> {
         let Some(rules) = &self.unit_vitals else {
             return Ok(());
         };
-        let from = rules.regen_through;
         let bonuses = rules.bonuses;
         let fail = |e: String| self.inner.error(REGEN, Failure::UnitActivity(e));
-        if !now.is_finite() || now < from {
-            return Err(fail("current monotonic game time required".into()));
+        if !now.is_finite() {
+            return Err(fail("finite game time required".into()));
         }
-        if now == from {
-            return Ok(());
-        }
-        let elapsed = now - from;
-        let daytime = self.daytime_between(from, now);
         let units: Vec<HandleId> = self
             .executed_units()
             .filter(|(_, u)| u.vitals.is_some())
@@ -257,14 +247,28 @@ impl ObjectHost {
         for unit in units {
             let record = self.executed_unit(unit)?;
             let vitals = record.vitals.expect("filtered to vitals");
-            if record.combat.as_ref().is_some_and(|c| c.dead) || vitals.life <= 0.0 {
+            let from = vitals.regen.through;
+            if now < from {
+                return Err(fail("unit regeneration clock moved backwards".into()));
+            }
+            if now == from {
                 continue;
             }
+            // The clock still moves on a dead or lifeless unit, so a later revive
+            // cannot regenerate across the dead span.
+            if record.combat.as_ref().is_some_and(|c| c.dead) || vitals.life <= 0.0 {
+                next.push((unit, vitals.life, vitals.mana));
+                continue;
+            }
+            let elapsed = now - from;
             let (life_rate, mana_rate) = self.regen_rates(unit, &bonuses)?;
-            let day = || {
-                daytime.ok_or_else(|| {
-                    fail("day/night regeneration needs the admitted time-of-day window".into())
-                })
+            let daytime = self.daytime_between(from, now);
+            let day = || match &daytime {
+                Ok(Some(seconds)) => Ok(*seconds),
+                Ok(None) => Err(fail(
+                    "day/night regeneration needs the admitted time-of-day window".into(),
+                )),
+                Err(reason) => Err(fail(reason.clone())),
             };
             let life_seconds = if life_rate == 0.0 {
                 0.0
@@ -293,12 +297,9 @@ impl ObjectHost {
             {
                 vitals.life = life;
                 vitals.mana = mana;
+                vitals.regen.through = now;
             }
         }
-        self.unit_vitals
-            .as_mut()
-            .expect("admitted vitals")
-            .regen_through = now;
         Ok(())
     }
 
@@ -452,6 +453,7 @@ mod tests {
             life_per_second: 0.25,
             mana_per_second: 0.01,
             life_type: RegenType::Always,
+            through: 0.0,
         };
         let old = Vitals {
             life: 40.0,

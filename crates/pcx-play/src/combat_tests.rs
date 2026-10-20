@@ -1330,8 +1330,16 @@ fn regeneration_integrates_stock_rates_and_caps_at_maxima_for_any_tick_chunking(
     set_pools(&mut whole, b, 19.9, 49.0);
     set_pools(&mut stepped, c, 5.0, 0.0);
     set_pools(&mut stepped, d, 19.9, 49.0);
-    whole.host().inner.next_timer_expiry(10.0, &mut 100).unwrap();
-    whole.host().inner.advance_unit_activity(10.0, &mut 65536).unwrap();
+    whole
+        .host()
+        .inner
+        .next_timer_expiry(10.0, &mut 100)
+        .unwrap();
+    whole
+        .host()
+        .inner
+        .advance_unit_activity(10.0, &mut 65536)
+        .unwrap();
     step(&mut stepped, 10.0);
     // 5 + 0.25 * 10 and 0 + 0.5 * 10 are exact; the second unit hits both maxima.
     assert_eq!(pools(&mut whole, a), (7.5, 5.0));
@@ -1352,7 +1360,10 @@ fn regeneration_never_applies_to_units_without_rate_or_with_none() {
 #[test]
 fn night_and_blight_regeneration_refuse_without_their_source_state() {
     for (life_type, reason) in [
-        ("night", "day/night regeneration needs the admitted time-of-day window"),
+        (
+            "night",
+            "day/night regeneration needs the admitted time-of-day window",
+        ),
         ("blight", "blight regeneration needs terrain blight state"),
     ] {
         let fields = regen_fields("0.25", life_type, "0");
@@ -1369,4 +1380,20 @@ fn night_and_blight_regeneration_refuse_without_their_source_state() {
         // The refused span is not integrated: the pool and projection clock are unchanged.
         assert_eq!(pools(&mut vm, a), (5.0, 0.0));
     }
+}
+
+#[test]
+fn dead_units_do_not_regenerate_and_their_clock_still_advances() {
+    let fields = regen_fields("0.25", "always", "0.5");
+    let (mut vm, a, _) = open(&fields);
+    vm.host()
+        .inner
+        .native("KillUnit", &[Value::Handle(a)])
+        .unwrap();
+    // Life above zero on a dead unit isolates the dead flag from the lifeless check.
+    set_pools(&mut vm, a, 5.0, 0.0);
+    step(&mut vm, 10.0);
+    let vitals = vm.host().inner.unit_vitals(a).unwrap().unwrap();
+    assert_eq!((vitals.life, vitals.mana), (5.0, 0.0));
+    assert_eq!(vitals.regen.through, 10.0);
 }
