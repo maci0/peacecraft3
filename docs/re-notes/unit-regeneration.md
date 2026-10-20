@@ -298,3 +298,24 @@ motion path, not point samples. The minimal request for the motion owner:
 - Work bound: one pass per advance, O(segments intersecting the span) per unit.
   Segment count per unit is bounded by its path length in points, and the eligibility
   integrator splits each segment only at blight region boundary crossings.
+
+## Blight probe run outcome (2026-10-20, 1280×960, 96 DPI)
+
+One original-runtime run, `run-20261020T162004Z`, container stopped by the harness.
+Staged map hash matched the build receipt (`75a90577…`), and the staged `war3map.j`
+member matched the patched script.
+
+- Observed: the main-entry file `PCXB-main-entry-5bfbaf157b37.txt`, written by
+  `PreloadGenEnd` into `Documents/Warcraft III/CustomMapData` in the Wine prefix. Its
+  run ID and SLK hash prefix match the build.
+- Not observed: the on-screen entry text, any post-initialization marker, every
+  phase record, and the final `PCXB-blight-probe-5bfbaf157b37.txt`.
+- The chapter card (Chapter One, "press any key") was up at launch. One harness Space
+  press dismissed it. The HUD then appeared over a black world, and the frames at
+  about 18:21 and 18:27 UTC were identical.
+- No life delta, start time, unit identity or residual is interpreted. The probe did
+  not record a phase, so the blight question is still open.
+
+Next: the game clock appears frozen after dismissal. Diagnosis (for example a
+modal, a runtime error, or the sleep not advancing game time) needs its own
+bounded diagnostic before this probe is rerun.
