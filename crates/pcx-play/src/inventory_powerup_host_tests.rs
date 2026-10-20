@@ -1263,3 +1263,38 @@ fn use_event_callback_observes_the_healed_life_and_the_charge_already_spent() {
     assert_eq!(h.native("GetManipulatedItem", &[]), Ok(Value::Handle(potion)));
     h.finish_fired_event();
 }
+
+#[test]
+fn slot_input_activates_the_item_in_that_slot_and_nothing_else() {
+    let Fixture { mut h, hero, .. } = open();
+    h.set_timer_game_time(1.0).unwrap();
+    let max = h.unit_vitals(hero).unwrap().unwrap().max_life;
+    set_life(&mut h, hero, max / 2.0);
+    let potion = item(&mut h, b"phea", 0.0);
+    assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
+    let local = owner_number(&h, hero);
+    // The first item lands in slot 0; slot 1 is empty and slot 9 is beyond the unit's capacity.
+    assert!(!h.player_activate_slot(local, hero, 1).unwrap());
+    assert!(!h.player_activate_slot(local, hero, 9).unwrap());
+    assert_eq!(life_of(&h, hero), max / 2.0);
+    assert!(h.player_activate_slot(local, hero, 0).unwrap());
+    assert_eq!(life_of(&h, hero), max / 2.0 + 250.0);
+    assert!(h.executed_items().all(|(id, _)| id != potion));
+}
+
+#[test]
+fn slot_input_from_another_player_changes_nothing() {
+    let Fixture { mut h, hero, .. } = open();
+    h.set_timer_game_time(1.0).unwrap();
+    let max = h.unit_vitals(hero).unwrap().unwrap().max_life;
+    set_life(&mut h, hero, max / 2.0);
+    let potion = item(&mut h, b"phea", 0.0);
+    assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
+    let local = owner_number(&h, hero);
+    assert!(!h.player_activate_slot(local + 1, hero, 0).unwrap());
+    assert_eq!(life_of(&h, hero), max / 2.0);
+    assert_eq!(
+        h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(potion)]),
+        Ok(Value::Bool(true))
+    );
+}
