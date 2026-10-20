@@ -3,7 +3,7 @@
 
 use pcx_trig::catalog::Catalog;
 use pcx_trig::lower::{LowerError, lower};
-use pcx_trig::{TriggerArity, Wtg};
+use pcx_trig::{TriggerArity, Wct, Wtg};
 
 const TRIGGER_DATA: &str = "\
 [TriggerTypes]
@@ -194,11 +194,34 @@ fn wtg(variables: &[Vec<u8>], triggers: &[Trig]) -> Vec<u8> {
     v
 }
 
-fn lower_bytes(bytes: &[u8]) -> Result<String, LowerError> {
+fn lower_with(bytes: &[u8], blocks: &[&[u8]]) -> Result<String, LowerError> {
     let catalog = catalog();
     let arity: TriggerArity = catalog.arity().unwrap();
     let parsed = Wtg::parse(bytes, &arity).unwrap();
-    lower(&parsed, &catalog)
+    let wct_bytes = wct(blocks);
+    let wct = Wct::parse(&wct_bytes).unwrap();
+    lower(&parsed, &wct, &catalog)
+}
+
+/// A WCT with the given text blocks: a zero word, the count, then length-prefixed blocks.
+fn wct(blocks: &[&[u8]]) -> Vec<u8> {
+    let mut v = Vec::new();
+    u(&mut v, 0);
+    u(&mut v, blocks.len() as u32);
+    for block in blocks {
+        u(&mut v, block.len() as u32);
+        v.extend_from_slice(block);
+    }
+    v
+}
+
+/// Lowers with one empty WCT block per trigger, as for a map with no custom text.
+fn lower_bytes(bytes: &[u8]) -> Result<String, LowerError> {
+    let catalog = catalog();
+    let arity: TriggerArity = catalog.arity().unwrap();
+    let count = Wtg::parse(bytes, &arity).unwrap().triggers().len();
+    let empty: Vec<&[u8]> = vec![&[]; count];
+    lower_with(bytes, &empty)
 }
 
 fn sum_eca() -> Vec<u8> {
@@ -412,7 +435,6 @@ fn constructs_the_editor_expands_are_refused_with_their_trigger_name() {
             Trig::new("Loop", vec![for_loop]),
             "editor-expanded ForLoopVar",
         ),
-        (custom, "custom text trigger"),
         (on_init, "run-on-initialization trigger"),
         (
             Trig::new(
@@ -483,10 +505,22 @@ fn unknown_references_and_disabled_actions_are_refused_not_guessed() {
             vec![preset("PlayerOne"), string("a\"b")],
         )],
     );
-    assert!(matches!(
-        lower_bytes(&quoted).unwrap_err(),
-        LowerError::Unsupported { construct, .. } if construct.contains("quote")
-    ));
+    let jass = lower_bytes(&quoted).unwrap();
+    assert!(
+        jass.contains(r#"call DisplayTextToPlayer(Player(0), "a\"b")"#),
+        "{jass}"
+    );
+    let literal = jass
+        .lines()
+        .find(|l| l.contains("DisplayTextToPlayer"))
+        .unwrap();
+    let literal = &literal[literal.find('"').unwrap()..literal.len() - 1];
+    let lexed = pcx_script::lex(literal).unwrap();
+    let decoded = match &lexed.tokens[0].kind {
+        pcx_script::Tok::Str(s) => s.decoded(),
+        other => panic!("not a string literal: {other:?}"),
+    };
+    assert_eq!(decoded, "a\"b");
     let mystery_type = wtg(&[variable("Odd", "mystery", None)], &[]);
     assert!(matches!(
         lower_bytes(&mystery_type).unwrap_err(),
@@ -722,5 +756,67 @@ fn initially_off_map_initialization_trigger_is_not_run_from_the_list() {
     assert!(
         jass.contains("    call DisableTrigger(gg_trg_Dragons)\n"),
         "{jass}"
+    );
+}
+
+#[test]
+fn custom_text_triggers_emit_their_wct_block_and_are_initialized() {
+    let block: &[u8] = b"function Trig_Custom_Actions takes nothing returns nothing\n    call DoNothing()\nendfunction\n\nfunction InitTrig_Custom takes nothing returns nothing\n    set gg_trg_Custom = CreateTrigger()\n    call TriggerAddAction(gg_trg_Custom, function Trig_Custom_Actions)\nendfunction\n\0";
+    let mut custom = Trig::new("Custom", vec![]);
+    custom.custom = true;
+    let jass = lower_with(&wtg(&[], &[custom]), &[block]).unwrap();
+    assert!(
+        jass.contains(std::str::from_utf8(&block[..block.len() - 1]).unwrap()),
+        "{jass}"
+    );
+    assert!(jass.contains("function InitCustomTriggers takes nothing returns nothing\n    call InitTrig_Custom()\nendfunction\n"), "{jass}");
+    assert!(!jass.contains("\0"), "{jass}");
+}
+
+#[test]
+fn custom_text_trigger_without_text_or_with_a_disabled_flag_is_refused() {
+    let mut custom = Trig::new("Empty", vec![]);
+    custom.custom = true;
+    assert!(matches!(
+        lower_with(&wtg(&[], &[custom]), &[&[]]).unwrap_err(),
+        LowerError::Malformed { context, .. } if context == "war3map.wct"
+    ));
+    let mut parked = Trig::new("Parked", vec![]);
+    parked.custom = true;
+    parked.initially_off = true;
+    assert_eq!(
+        lower_with(&wtg(&[], &[parked]), &[b"x\0"]).unwrap_err(),
+        LowerError::Unsupported {
+            context: "Parked".into(),
+            construct: "initially-off custom text trigger".into(),
+        }
+    );
+}
+
+#[test]
+fn expressions_nested_past_the_limit_are_refused_not_recursed_into() {
+    let mut expression = variable_ref("Count");
+    for _ in 0..70 {
+        expression = call(
+            3,
+            "OperatorInt",
+            vec![expression, preset("OperatorAdd"), preset("Num1")],
+        );
+    }
+    let bytes = lone(
+        "Deep",
+        vec![eca(
+            2,
+            "SetVariable",
+            true,
+            vec![variable_ref("Count"), expression],
+        )],
+    );
+    assert_eq!(
+        lower_bytes(&bytes).unwrap_err(),
+        LowerError::Malformed {
+            context: "Deep".into(),
+            reason: "nesting deeper than 64".into(),
+        }
     );
 }

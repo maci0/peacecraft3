@@ -1,126 +1,149 @@
-# war3map.wtg version 4 lowering to JASS
+# war3map.wtg / war3map.wct lowering to JASS
 
-`pcx_trig::lower::lower(&Wtg, &Catalog)` writes the JASS for the GUI triggers of
-one map: a `globals` block, `InitGlobals`, `InitCustomTriggers`,
+`pcx_trig::lower::lower(&Wtg, &Wct, &Catalog)` writes the JASS for the editor's GUI
+triggers of one map: a `globals` block, `InitGlobals`, `InitCustomTriggers`,
 `RunInitializationTriggers`, and per trigger an actions function, a conditions
-function when conditions exist, an `InitTrig_` function and one wrapper per code
-or boolexpr parameter. Names come from `UI\TriggerData.txt`, preset code text from
-`[TriggerParams]`, and variable types from `[TriggerTypes]` (the `Kind::Param`,
-`Kind::Type` and `Kind::TypeDefault` sections of `pcx_trig::catalog::Catalog`).
+function when conditions exist, an `InitTrig_` function and one wrapper per code or
+boolexpr parameter. Custom-text triggers emit their WCT block verbatim. Names come from
+`UI\TriggerData.txt` (`ScriptName` alias when authored), preset code text from
+`[TriggerParams]`, and variable types from `[TriggerTypes]`.
 
-Not wired into the map loader. The output is a fragment: it references `gg_`
-object globals declared by the map's own script and `Blizzard.j` helpers.
+`pcx_play::editor_triggers::compile_editor_triggers` parses, lowers and compiles the
+member bytes as an explicit map script. Admission does not call it.
+
+## Script source at runtime (measured in source)
+
+- `pcx_play::map_admission` calls `map_scripts_import::import_map_scripts`.
+- `import_map_scripts` requires the `war3map.j` member and fails with
+  `MissingScriptMember` when it is absent. It never reads `war3map.wtg` or
+  `war3map.wct`.
+- Therefore the executed script for every map admitted today is the compiled
+  `war3map.j`, which the editor writes beside the trigger graph. The WTG is editor
+  source.
+- `compile_editor_triggers` is the caller-selected path. Admission does not call it, so
+  selecting it changes no loaded script.
+- `pcx_play::map_scripts_import` keeps its `war3map.j` behavior: a map with compiled
+  JASS never falls back to the lowered graph.
 
 ## Evidence used
 
-Ground truth is the `war3map.j` the World Editor wrote for each shipped map, which
-the same map archive carries. These are local-only observations from the 1.29b
-install (no assets are committed):
+Ground truth is the `war3map.j` the editor wrote for each shipped map, carried in the
+same archive. These are observations from the local 1.29b install, not committed.
 
-- Human01: `MapInitializationEvent` has no `TriggerRegister` call. The trigger is
-  run from `RunInitializationTriggers` through `ConditionalTriggerExecute`.
+- Human01: `MapInitializationEvent` has no `TriggerRegister` call. The trigger runs
+  from `RunInitializationTriggers` via `ConditionalTriggerExecute`.
 - Disabled triggers keep a `trigger gg_trg_X` declaration and emit no functions or
-  `InitTrig` call.
-- Initially-off triggers call `DisableTrigger` right after `CreateTrigger`.
-- Statement order inside a trigger follows the file. The file stores ECAs grouped
-  by kind, not necessarily events first.
-- `IfThenElse` writes `if ( Trig_X_FuncNNNC() ) then` with the branch actions inline,
-  and `ReturnAction` writes `return`.
-- `ForLoopA` writes `bj_forLoopAIndex` and `bj_forLoopAIndexEnd` (declared in
-  `Blizzard.j`) around a `loop` with `exitwhen`, then the body.
-- The string parameters of a `boolcall` argument are direct wrapper calls. A
-  `boolexpr` argument is `Condition(function F)`.
-- `TriggerRegisterVariableEvent` takes its variable as a quoted `udg_` name
-  (`VarAsString_*`).
-- Numeric literals are stored as string-kind values and written raw. Four-character
-  object codes are written quoted. `boolean` literals are written raw. Other strings
-  are written in double quotes with backslashes escaped.
-- An uninitialized `string` global is set to `""`. TriggerTypeDefaults has no
-  `string` entry, so this comes only from the editor output.
-- Trailing whitespace in a trigger name is dropped from its identifier; leading
+  `InitTrig` call. The 2002 script also omits disabled events and conditions:
+  Human04 `ArthasEmptyCrates` (disabled condition and event) matches exactly in
+  `InitTrig` and `Conditions`.
+- Disabled actions are omitted (Human05Interlude Scene1; Human09 and others).
+- An initially-off trigger calls `DisableTrigger` right after `CreateTrigger`.
+- Statements keep file order within a kind. The file groups ECAs by kind, not necessarily
+  events first.
+- `IfThenElse` writes `if ( Trig_X_FuncNNNC() ) then`, branch actions inline. `ReturnAction`
+  writes `return`.
+- `ForLoopA` writes `bj_forLoopAIndex` / `bj_forLoopAIndexEnd` (declared in `Blizzard.j`)
+  around `loop` / `exitwhen` / `endloop`.
+- A `boolcall` argument is a direct wrapper call. A `boolexpr` argument is
+  `Condition(function F)`.
+- `TriggerRegisterVariableEvent` takes its variable as a quoted `udg_` name.
+- Numeric literals are written raw; four-character object codes quoted; `boolean`
+  literals raw.
+- WCT custom text: the block holds the editor's full text for the trigger, its
+  actions function and `InitTrig_` function, with one NUL inside the length. Human06
+  `Malganis Continuously Attacks Buildings` matches exactly.
+- Uninitialized `string` globals are `""`. TriggerTypeDefaults has no `string` entry.
+  This comes from one map's output (WarCraftIIICredits `CreditMusic`), which matches exactly.
+- Trailing whitespace in a trigger name is dropped from the identifier. Leading
   whitespace becomes `_`.
-- An initially-off `MapInitializationEvent` trigger is not in
-  `RunInitializationTriggers`. One shipped case (NightElf05 The Dragons).
+- An initially-off map-initialization trigger is not in `RunInitializationTriggers`
+  (NightElf05 `The Dragons`, the only shipped case).
 - Initial values are `[TriggerParams]` preset keys (`UnitNull`, `Player03`) or
   literals of the variable's base type.
+- Some 2002 scripts end a function with `endfunction` followed by a comment on the same
+  line, and some use bare-CR line endings. The differential accepts both.
+
+## String literals
+
+WTG string values are decoded text. Each character the lexer defines an escape for
+is written in that escape, using `pcx_script::Esc` (`\" \\ \b \t \r \n \f`). The
+output re-lexes to the input: `lower_wtg` checks a quote literal through
+`pcx_script::lex`. The 2002 scripts write backslashes doubled, which matches.
+`[TriggerParams]` backquoted text is already JASS-escaped and is emitted raw.
 
 ## Differential
 
-`crates/pcx-trig/tests/lower_differential.rs` (ignored; needs `PEACECRAFT3_LEGACY_DIR`
-and `PEACECRAFT3_TRIGGER_EDITION` / `PEACECRAFT3_TRIGGER_VERSION`) compares every
-generated `Trig_*_Actions`, `Trig_*_Conditions`, `InitTrig_*`, `InitGlobals`,
-`InitCustomTriggers` and `RunInitializationTriggers` with the editor's functions of
-the same name. Whitespace is removed and wrapper numbers are normalized.
+`crates/pcx-trig/tests/lower_differential.rs` (ignored; needs `PEACECRAFT3_LEGACY_DIR`,
+`PEACECRAFT3_TRIGGER_EDITION` and `PEACECRAFT3_TRIGGER_VERSION`) compares each generated
+`Trig_*_Actions`, `Trig_*_Conditions`, `InitTrig_*`, `InitGlobals`, `InitCustomTriggers`
+and `RunInitializationTriggers` with the editor's function of the same name. Whitespace
+is removed and wrapper numbers are normalized.
 
-Result on the 40 shipped maps that lower: 9,671 of 10,187 generated functions match
-exactly. 513 more match after two drift normalizations, which are derived from the
-file and never counted as exact:
+Result on the 44 shipped maps (11,201 compared bodies):
 
-- a TriggerData `ScriptName` alias (for example `ForGroupBJ`, `SetHeroLevelBJ`) that
-  the 2002 editor output writes under the plain name;
-- `.blp` textures in TriggerData where the 2002 output has `.tga`.
+- **10,622 exact.**
+- **567 drift-only.** Matched only after two named normalizations: a TriggerData
+  `ScriptName` alias (for example `ForGroupBJ` for `ForGroup`) written under the plain
+  name in the 2002 output, and `.blp` textures in TriggerData versus `.tga` in the
+  2002 output. Reported separately and never counted as exact.
+- **12 residual, all listed:**
+  - 4 `InitCustomTriggers` (Human01, Human02, Human07, Undead02) differ only in call
+    order. The cause is unestablished. One trigger sits among another category's
+    triggers in the editor order (`Destroy TalkThornby`, Human01), which suggests a
+    WTG re-save after compilation. Unverified.
+  - 7 `CommentString` form, all in Human06 (`Initialize Initializations`, `Malganis Death
+    Squad 1`, `Death Squad 2`, `Death Squad 3`, `First Get Arthas Alt`, `First Teleport Cin
+    Skip`, `First Teleport Cinematic`): the editor writes `//text`, the lowering writes
+    `call CommentString("text")`. Human06 is the only map where the editor used the comment
+    form. No shipped rule decides the form for a given statement; the native behavior of
+    `CommentString` is not verified.
+  - 1 `InitGlobals` (Human06): an editor loop default-initializes an integer array,
+    `i>1` bound. Declared arrays have no size in the v4 WTG, and most maps with
+    uninitialized arrays (Human01, Human05, Orc02 and others) match exactly with no loop,
+    so the loop has no WTG source.
 
-3 `InitCustomTriggers` functions differ only in the order of their `InitTrig_` calls.
-The cause is not established. One trigger (`Destroy TalkThornby`, Human01) sits
-among triggers of another category in the editor order, which suggests the WTG was
-re-saved after the script was compiled. That is unverified.
-
-The 2002 script predates the 1.29b TriggerData, so the drift classes are not
-evidence of a lowering error. They are also not proof of 1.29 editor behavior.
+The 2002 script predates the 1.29b TriggerData, so drift is not evidence of a lowering
+error. Drift is also not evidence of 1.29 editor behavior.
 
 ## Census
 
-`lower_original.rs` (ignored) lowers every `war3map.wtg` in the Legacy install:
-40 lower, 4 are refused. The 4 are custom-text triggers (WCT JASS), which are
-refused, not lowered.
+`lower_original.rs` (ignored): all 44 `war3map.wtg` in the Legacy install lower, 0 refused.
 
-## Refused
+## Explicit VM comparison
 
-Each refusal fails the whole map with `LowerError::Unsupported`, `Malformed`,
-`UnknownDefinition`, or `UnknownPreset`. Nothing is skipped silently.
+`crates/pcx-play/tests/editor_trigger_vm.rs` runs the lowered output and a hand-written
+script with the same behavior in the VM under one recording host. The recording host
+logs every native call with code arguments named by their function. The test asserts
+the same native trace, the same final `udg_Count` (6), and that the disabled trigger
+is absent. It covers globals, actions, events, init order and disabled triggers. It
+does not cover timers firing, condition evaluation, or the native game.
 
-- Editor-expanded forms not lowered: `AndMultiple`, `OrMultiple`,
-  `IfThenElseMultiple`, `ForLoopAMultiple`, `ForLoopBMultiple`,
-  `ForLoopVarMultiple`, `ForLoopVar`, `ForForceMultiple`, `ForGroupMultiple`,
-  `CustomScriptCode`. `ForLoopA`, `ForLoopB`, `IfThenElse`, `ReturnAction` and
-  `SetVariable` are lowered.
-- Custom-text triggers and run-on-initialization triggers.
+## Refused (named, whole map)
+
+- Editor-expanded forms with no source in the shipped corpus: `AndMultiple`,
+  `OrMultiple`, `IfThenElseMultiple`, `ForLoopAMultiple`, `ForLoopBMultiple`,
+  `ForLoopVarMultiple`, `ForLoopVar`, `ForForceMultiple`, `ForGroupMultiple`.
+  Probe counts over the 44 shipped maps are 0 for each.
+- `CustomScriptCode`: 0 occurrences in the shipped maps; no evidence for its emission.
+- Run-on-initialization triggers: 0 occurrences in the shipped maps.
+- Initially-off custom-text triggers (no shipped case; the editor text would decide).
 - `MapInitializationEvent` combined with other events.
 - Trigger names that collide after sanitizing.
-- A string literal containing `"` or a line break.
-- An initialized array variable.
+- An initialized array variable (no shipped case).
+- A declared name that is not a JASS identifier.
+- Nesting deeper than 64 (`NESTING_LIMIT`), which bounds the recursion.
 
-## Decisions to check
+## Not verified
 
-- Disabled ECAs are omitted. Measured on disabled actions in an enabled trigger
-  (Human05Interlude Scene1). Conditions and events are assumed the same.
-- A bare string literal in a numeric-typed parameter must be a decimal or a
-  four-character code. Anything else is refused.
-- The BJ `ScriptName` aliases are called, not the TriggerData key. The shipped
-  2002 script differs in those names (see drift). Whether the 1.29 editor calls the
-  alias is unmeasured.
-- `CommentString` is a real call (`call CommentString("...")`), as the editor writes it.
-- Generated identifiers follow the editor's pattern (`Trig_<id>_Actions`,
-  `Trig_<id>_FuncNNNC/A`). `Func` numbering differs from the editor, and nothing
-  depends on it.
-
-## Verification
-
-- `cargo test -p pcx-trig --locked --offline --test lower_wtg`: 14 synthetic tests.
-  Exact JASS for a representative trigger, plus refusals and edge cases.
-- `cargo test -p pcx-play --locked --offline --test lowered_trigger_compile`: the
-  golden output parses and resolves through `pcx_script` against a synthetic
-  prelude. A missing native is refused, so the check is not vacuous.
-- Ignored gates above. Each runs against the read-only Legacy install with
-  explicit environment variables and writes nothing into the install.
-
-Not verified: that the lowered JASS executes with the same behavior. The
-differential compares generated text, not runtime effects. The native game was not
-run.
+- Athena and community GUI maps: no Athena or community `.w3x` is present in the local
+  assets (`find` finds only a system icon). Not verified.
+- Native runtime equivalence beyond the recording-host test.
+- Init order (see residual).
 
 ## Provenance
 
 - 2026-10-20, worker piece 19: lowering module, catalog sections, synthetic and
-  differential gates, this note. Requested by the wave 20 coordinator. Evidence:
-  `crates/pcx-trig/tests/lower_differential.rs` output, Human01 and NightElf05
-  `war3map.j` from the Legacy install (local scratch only).
+  differential gates. Requested by the wave 20 coordinator.
+- Follow-up, same worker: WCT custom text, JASS string escaping via `pcx_script::Esc`,
+  nesting bound, `pcx_play::editor_triggers`, and the VM comparison test. Evidence:
+  the Legacy install's `war3map.j` and `war3map.wct` for the cited maps (local only).

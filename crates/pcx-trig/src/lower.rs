@@ -19,13 +19,17 @@
 //! run-on-initialization triggers, and trigger names that collide after sanitizing.
 
 use crate::catalog::{Catalog, Definition, Kind};
-use crate::{Eca, EcaKind, Param, ParamKind, Sub, SubKind, Trigger, Wtg};
+use crate::{Eca, EcaKind, Param, ParamKind, Sub, SubKind, Trigger, Wct, Wtg, wct_wtg_violations};
+use pcx_script::Esc;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 const VARIABLE_PREFIX: &str = "udg_";
 const TRIGGER_PREFIX: &str = "gg_trg_";
 const INDENT: &str = "    ";
+/// Deepest expression or statement nesting a trigger may have. Deeper input is refused,
+/// which bounds the recursion and the size of the output.
+const NESTING_LIMIT: usize = 64;
 /// The event the editor realizes by running the trigger from `RunInitializationTriggers`.
 const MAP_INITIALIZATION_EVENT: &str = "MapInitializationEvent";
 
@@ -46,7 +50,10 @@ const EDITOR_EXPANDED: [&str; 10] = [
 ];
 
 /// Lowers `wtg` to JASS, using `catalog` for names, preset code text and variable types.
-pub fn lower(wtg: &Wtg<'_>, catalog: &Catalog) -> Result<String, LowerError> {
+pub fn lower(wtg: &Wtg<'_>, wct: &Wct<'_>, catalog: &Catalog) -> Result<String, LowerError> {
+    if let Some(violation) = wct_wtg_violations(wct, wtg).into_iter().next() {
+        return Err(malformed("war3map.wct", violation));
+    }
     let mut globals = String::new();
     let mut init_globals = String::new();
     let mut variables = BTreeMap::new();
@@ -113,7 +120,24 @@ pub fn lower(wtg: &Wtg<'_>, catalog: &Catalog) -> Result<String, LowerError> {
     let mut functions = String::new();
     let mut init_calls = String::new();
     let mut run_on_init = String::new();
-    for trigger in wtg.triggers().iter().filter(|t| t.is_enabled != 0) {
+    for (index, trigger) in wtg
+        .triggers()
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.is_enabled != 0)
+    {
+        if trigger.is_custom != 0 {
+            let block = wct.blocks().get(index).ok_or_else(|| {
+                malformed("war3map.wct", format!("no text block for trigger {index}"))
+            })?;
+            functions.push_str(&custom_text(trigger, &block.text)?);
+            let _ = writeln!(
+                init_calls,
+                "{INDENT}call InitTrig_{}()",
+                trigger_id(text(&trigger.name, "trigger", "trigger name")?)
+            );
+            continue;
+        }
         let mut lowerer = Lowerer {
             catalog,
             variables: &variables,
@@ -121,6 +145,7 @@ pub fn lower(wtg: &Wtg<'_>, catalog: &Catalog) -> Result<String, LowerError> {
             id: String::new(),
             wrappers: String::new(),
             wrapper_count: 0,
+            depth: 0,
         };
         let lowered = lowerer.trigger(trigger)?;
         functions.push_str(&lowerer.wrappers);
@@ -238,7 +263,7 @@ fn initial_value(
     match jass_type {
         "integer" | "real" => number_text(value)
             .ok_or_else(|| malformed(context, format!("numeric initial value {value:?}"))),
-        "string" => string_text(value, context),
+        "string" => Ok(string_text(value)),
         _ if value.is_empty() => Err(malformed(
             context,
             "initialized variable without a value".into(),
@@ -263,14 +288,46 @@ fn number_text(literal: &str) -> Option<String> {
 }
 
 /// A string literal. A quote or line break cannot be written in the file's JASS form.
-fn string_text(value: &str, context: &str) -> Result<String, LowerError> {
-    if value.contains(['"', '\n', '\r']) {
-        return Err(unsupported(
-            context,
-            "string literal with a quote or line break",
-        ));
+/// A JASS string literal for decoded text. Each character the lexer defines an escape
+/// for is written in that escape (`pcx_script::Esc`), so the output re-lexes to `value`.
+fn string_text(value: &str) -> String {
+    const ESCAPES: [Esc; 7] = [
+        Esc::Quote,
+        Esc::Backslash,
+        Esc::Bsp,
+        Esc::Tab,
+        Esc::Cr,
+        Esc::Nl,
+        Esc::Ff,
+    ];
+    let mut out = String::from("\"");
+    for c in value.chars() {
+        match ESCAPES.into_iter().find(|e| e.decoded() == c) {
+            Some(escape) => out.push_str(escape.spelling()),
+            None => out.push(c),
+        }
     }
-    Ok(format!("\"{value}\""))
+    out.push('"');
+    out
+}
+
+/// A custom-text trigger's WCT block, which holds the editor's complete text for the
+/// trigger: its actions function and `InitTrig_` function. The block carries one
+/// NUL terminator inside its length; it is not part of the JASS.
+fn custom_text(trigger: &Trigger, block: &[u8]) -> Result<String, LowerError> {
+    let context = text(&trigger.name, "trigger", "trigger name")?;
+    if trigger.is_initially_off != 0 {
+        return Err(unsupported(context, "initially-off custom text trigger"));
+    }
+    if trigger.run_on_init != 0 {
+        return Err(unsupported(context, "run-on-initialization trigger"));
+    }
+    let body = block.strip_suffix(&[0]).unwrap_or(block);
+    let mut jass = text(body, context, "custom text")?.to_string();
+    if !jass.ends_with('\n') {
+        jass.push('\n');
+    }
+    Ok(jass)
 }
 
 /// The functions one trigger lowers to, minus wrappers, which the caller emits first.
@@ -290,6 +347,21 @@ struct Lowerer<'c> {
     /// Wrapper functions for code and boolexpr parameters of the current trigger.
     wrappers: String,
     wrapper_count: usize,
+    /// Current expression or statement nesting, bounded by [`NESTING_LIMIT`].
+    depth: usize,
+}
+
+impl Lowerer<'_> {
+    fn descend(&mut self) -> Result<(), LowerError> {
+        self.depth += 1;
+        if self.depth > NESTING_LIMIT {
+            return Err(malformed(
+                &self.trigger,
+                format!("nesting deeper than {NESTING_LIMIT}"),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl<'c> Lowerer<'c> {
@@ -297,9 +369,6 @@ impl<'c> Lowerer<'c> {
         self.trigger = text(&trigger.name, "trigger", "trigger name")?.to_string();
         self.id = trigger_id(&self.trigger);
         let id = self.id.clone();
-        if trigger.is_custom != 0 {
-            return Err(unsupported(&self.trigger, "custom text trigger"));
-        }
         if trigger.run_on_init != 0 {
             return Err(unsupported(&self.trigger, "run-on-initialization trigger"));
         }
@@ -384,6 +453,13 @@ impl<'c> Lowerer<'c> {
     /// The statement for an action name with its parameters. Wrapped actions and
     /// branches take the same route, so no statement form escapes this dispatch.
     fn statement(&mut self, name: &str, params: &[Param]) -> Result<String, LowerError> {
+        self.descend()?;
+        let result = self.statement_at(name, params);
+        self.depth -= 1;
+        result
+    }
+
+    fn statement_at(&mut self, name: &str, params: &[Param]) -> Result<String, LowerError> {
         match name {
             "IfThenElse" => self.if_then_else(params),
             "ForLoopA" | "ForLoopB" => self.for_loop(name, params),
@@ -506,6 +582,13 @@ impl<'c> Lowerer<'c> {
     /// takes (empty when none applies). The file stores numeric literals as
     /// string-kind values; they are written raw, and any other string is quoted.
     fn expression(&mut self, param: &Param, expected: &str) -> Result<String, LowerError> {
+        self.descend()?;
+        let result = self.expression_at(param, expected);
+        self.depth -= 1;
+        result
+    }
+
+    fn expression_at(&mut self, param: &Param, expected: &str) -> Result<String, LowerError> {
         match param.kind {
             ParamKind::Preset => {
                 let key = text(&param.value, &self.trigger, "preset key")?;
@@ -519,7 +602,7 @@ impl<'c> Lowerer<'c> {
                 // Backquoted code text is a string literal; double quotes delimit
                 // the code text itself (operators such as `"=="`).
                 if let Some(literal) = code.strip_prefix('`').and_then(|c| c.strip_suffix('`')) {
-                    return self.string_literal(literal);
+                    return Ok(format!("\"{literal}\""));
                 }
                 Ok(code.trim_matches('"').to_string())
             }
@@ -556,7 +639,7 @@ impl<'c> Lowerer<'c> {
                         &self.trigger,
                         format!("boolean literal {literal:?}"),
                     )),
-                    _ => self.string_literal(&literal.replace('\\', "\\\\")),
+                    _ => Ok(string_text(literal)),
                 }
             }
             ParamKind::Function => {
@@ -689,9 +772,5 @@ impl<'c> Lowerer<'c> {
         }
         self.wrappers.push_str("endfunction\n\n");
         name
-    }
-
-    fn string_literal(&self, value: &str) -> Result<String, LowerError> {
-        string_text(value, &self.trigger)
     }
 }

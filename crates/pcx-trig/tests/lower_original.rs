@@ -4,7 +4,7 @@
 
 use pcx_trig::catalog::Catalog;
 use pcx_trig::lower::lower;
-use pcx_trig::{Wtg, extract_trig_file, legacy_dir, map_trig_files, shipped_maps};
+use pcx_trig::{Wct, Wtg, extract_trig_file, legacy_dir, map_trig_files, shipped_maps};
 
 fn env(name: &str) -> String {
     std::env::var(format!("PEACECRAFT3_TRIGGER_{name}"))
@@ -34,7 +34,9 @@ fn shipped_maps_lower_or_report_their_refusal() {
         };
         let bytes = extract_trig_file(&mut set, &map, wtg_name).unwrap();
         let parsed = Wtg::parse(&bytes, &arity).unwrap();
-        match lower(&parsed, &catalog) {
+        let wct_bytes = extract_trig_file(&mut set, &map, "war3map.wct").unwrap();
+        let wct = Wct::parse(&wct_bytes).unwrap();
+        match lower(&parsed, &wct, &catalog) {
             Ok(jass) => {
                 lowered += 1;
                 println!("{map}: lowered, {} bytes of JASS", jass.len());

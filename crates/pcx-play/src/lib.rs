@@ -67,6 +67,7 @@ pub mod group_order_rules;
 pub mod hero_skills;
 pub mod label_sounds;
 pub mod map_admission;
+pub mod editor_triggers;
 pub mod map_scripts_import;
 pub mod map_startup_host;
 pub mod menu_edition;

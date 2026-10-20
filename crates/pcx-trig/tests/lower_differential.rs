@@ -6,7 +6,7 @@
 
 use pcx_trig::catalog::Catalog;
 use pcx_trig::lower::lower;
-use pcx_trig::{Wtg, extract_trig_file, legacy_dir, map_trig_files, shipped_maps};
+use pcx_trig::{Wct, Wtg, extract_trig_file, legacy_dir, map_trig_files, shipped_maps};
 use std::collections::BTreeMap;
 
 const SAMPLES_PER_MAP: usize = 3;
@@ -20,9 +20,11 @@ fn env(name: &str) -> String {
 fn functions(jass: &str) -> BTreeMap<String, Vec<String>> {
     let mut out = BTreeMap::new();
     let mut current: Option<(String, Vec<String>)> = None;
-    for line in jass.lines() {
+    // The editor writes bare-CR line endings in some maps, so CR splits lines too.
+    for line in jass.split(['\n', '\r']) {
         let trimmed = line.trim();
-        if trimmed == "endfunction" {
+        // The 2002 editor sometimes writes `endfunction` followed by a comment on the same line.
+        if trimmed.starts_with("endfunction") {
             if let Some((name, body)) = current.take() {
                 out.insert(name, body);
             }
@@ -103,7 +105,9 @@ fn lowered_trigger_functions_match_the_editor_output_where_they_can() {
         };
         let bytes = extract_trig_file(&mut set, &map, wtg_name).unwrap();
         let parsed = Wtg::parse(&bytes, &arity).unwrap();
-        let Ok(ours_text) = lower(&parsed, &catalog) else {
+        let wct_bytes = extract_trig_file(&mut set, &map, "war3map.wct").unwrap();
+        let wct = Wct::parse(&wct_bytes).unwrap();
+        let Ok(ours_text) = lower(&parsed, &wct, &catalog) else {
             continue;
         };
         let editor_bytes = extract_trig_file(&mut set, &map, "war3map.j").unwrap();

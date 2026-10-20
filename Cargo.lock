@@ -4727,6 +4727,7 @@ version = "0.2.0"
 dependencies = [
  "pcx-map",
  "pcx-mpq",
+ "pcx-script",
  "thiserror 2.0.21",
 ]
 
