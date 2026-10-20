@@ -164,6 +164,14 @@ impl RealOps for Recorder {
 }
 
 impl pcx_script::Host for Recorder {
+    fn begin_script_call(
+        &mut self,
+        name: &str,
+        _args: &[Value],
+    ) -> Result<Option<pcx_script::ScriptCall>, String> {
+        Ok((name == "CallbackReal").then_some(pcx_script::ScriptCall::Return(Value::Int(3))))
+    }
+
     fn real_ops(&self) -> Option<&dyn RealOps> {
         self.policy.then_some(self as &dyn RealOps)
     }
@@ -439,4 +447,12 @@ fn resumed_refusal_reports_the_same_conversion_error() {
         error.message
     );
     assert!(vm.call("direct", &[]).is_ok());
+}
+
+#[test]
+fn native_callback_results_use_the_declared_real_conversion() {
+    let source = "native CallbackReal takes nothing returns real\nfunction read takes nothing returns integer\nreturn CallbackReal()\nendfunction";
+    let program = Arc::new(resolve(&parse(source).unwrap()).unwrap());
+    let mut vm = OwnedVm::new_owned(program, Recorder::new(true));
+    assert_eq!(vm.call("read", &[]).unwrap(), Value::Real(marked(3)));
 }
