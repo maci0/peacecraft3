@@ -586,6 +586,98 @@ fn bounded_sound_starts_preserve_order_repeats_and_resource_ownership() {
     assert!(h.take_sound_starts().is_empty());
 }
 #[test]
+fn stop_cancels_only_unconsumed_starts_of_its_sound() {
+    let with_stop = COMMON.replace(
+        "native StartSound takes sound soundHandle returns nothing",
+        "native StartSound takes sound soundHandle returns nothing\nnative StopSound takes sound s, boolean kill, boolean fade returns nothing",
+    );
+    let mut h = host(&with_stop, "", 8)
+        .with_label_sounds(bank())
+        .unwrap()
+        .with_sound_starts(4)
+        .unwrap();
+    let a = create(&mut h, "Breeze", 45, -7).unwrap();
+    let b = create(&mut h, "Breeze", 8, 9).unwrap();
+    let (Value::Handle(a), Value::Handle(b)) = (a, b) else {
+        panic!("sound identities")
+    };
+    for id in [a, b, a] {
+        h.native("StartSound", &[Value::Handle(id)]).unwrap();
+    }
+    h.native(
+        "StopSound",
+        &[Value::Handle(a), Value::Bool(false), Value::Bool(true)],
+    )
+    .unwrap();
+    assert_eq!(h.pending_sound_starts(), &[b]);
+    assert_eq!(h.take_sound_stops(), [(a, false, true)]);
+    h.native("StartSound", &[Value::Handle(a)]).unwrap();
+    assert_eq!(h.pending_sound_starts(), &[b, a]);
+}
+#[test]
+fn start_stop_sequences_keep_both_queues_in_request_order() {
+    let with_stop = COMMON.replace(
+        "native StartSound takes sound soundHandle returns nothing",
+        "native StartSound takes sound soundHandle returns nothing\nnative StopSound takes sound s, boolean kill, boolean fade returns nothing",
+    );
+    let mut h = host(&with_stop, "", 8)
+        .with_label_sounds(bank())
+        .unwrap()
+        .with_sound_starts(4)
+        .unwrap();
+    let a = create(&mut h, "Breeze", 45, -7).unwrap();
+    let Value::Handle(a) = a else {
+        panic!("sound identity")
+    };
+    let stop = |h: &mut ObjectHost, kill: bool, fade: bool| {
+        h.native(
+            "StopSound",
+            &[Value::Handle(a), Value::Bool(kill), Value::Bool(fade)],
+        )
+        .unwrap();
+    };
+    // Start, Stop, Start: the stop cancels the first start, the second start stays pending.
+    h.native("StartSound", &[Value::Handle(a)]).unwrap();
+    stop(&mut h, false, false);
+    h.native("StartSound", &[Value::Handle(a)]).unwrap();
+    assert_eq!(h.pending_sound_starts(), &[a]);
+    assert_eq!(h.take_sound_stops(), [(a, false, false)]);
+    assert_eq!(h.take_sound_starts(), [a]);
+    // Stop, Start, Stop: both stops are kept in order; the start is cancelled.
+    stop(&mut h, false, false);
+    h.native("StartSound", &[Value::Handle(a)]).unwrap();
+    stop(&mut h, true, true);
+    assert!(h.pending_sound_starts().is_empty());
+    assert_eq!(h.take_sound_stops(), [(a, false, false), (a, true, true)]);
+}
+#[test]
+fn kill_stop_keeps_the_handle_valid_for_a_later_start() {
+    let with_stop = COMMON.replace(
+        "native StartSound takes sound soundHandle returns nothing",
+        "native StartSound takes sound soundHandle returns nothing\nnative StopSound takes sound s, boolean kill, boolean fade returns nothing",
+    );
+    let mut h = host(&with_stop, "", 8)
+        .with_label_sounds(bank())
+        .unwrap()
+        .with_sound_starts(4)
+        .unwrap();
+    let Value::Handle(a) = create(&mut h, "Breeze", 45, -7).unwrap() else {
+        panic!("sound identity")
+    };
+    h.native(
+        "StopSound",
+        &[Value::Handle(a), Value::Bool(true), Value::Bool(false)],
+    )
+    .unwrap();
+    assert_eq!(h.take_sound_stops(), [(a, true, false)]);
+    assert!(
+        h.sound_state(a).is_ok(),
+        "kill does not destroy the identity"
+    );
+    h.native("StartSound", &[Value::Handle(a)]).unwrap();
+    assert_eq!(h.take_sound_starts(), [a]);
+}
+#[test]
 fn bad_start_arguments_and_wrong_or_reserved_families_never_enqueue() {
     let mut e = enums(COMMON, "", 8);
     let fake = e.reserve_identity("sound").unwrap();

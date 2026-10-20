@@ -63,8 +63,8 @@ steps. Elapsed time starts once its real audio sink exists and stops while that
 sink is paused. Frame chunks produce the same step count. The source-backed
 minimum applies even when a script supplied zero. Negative fade arguments remain
 refused instead of adopting the native unsigned-wrap behavior. Fade-out inputs
-remain retained; this change does not add a StopSound consumer or apply a fade-out
-to a naturally completed waveform.
+remain retained and are not applied to a naturally completed waveform. `StopSound`
+lifecycle is in [script-sound-lifecycle.md](script-sound-lifecycle.md).
 
 A voice's `ScriptAudioGain` multiplies the existing effects preference gain. Mute
 and later user preference changes therefore preserve the source gain/envelope.
