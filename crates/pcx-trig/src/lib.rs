@@ -204,6 +204,7 @@
 //!
 //! [`wts`] decodes `war3map.wts` in its own module.
 pub mod catalog;
+pub mod lower;
 pub mod wct;
 pub mod wtg;
 pub mod wts;
