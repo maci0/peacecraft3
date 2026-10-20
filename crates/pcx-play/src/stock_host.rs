@@ -8,8 +8,10 @@
 //! Native default and ceiling behavior remains unmeasured.
 //!
 //! `AddItemToStock` retains one record per `(unit, item id)` pair holding the
-//! two integers the call passed. A repeated pair replaces its integers.
-//! `RemoveItemFromStock` deletes the pair's record and refuses when none exists.
+//! two integers the call passed. A repeated pair overwrites them; the native merge rule is not
+//! qualified (see docs/re-notes/script-stock-slots.md).
+//! `RemoveItemFromStock` deletes the pair's record. An absent pair is a silent no-op: the
+//! native helper at `0xb37f40` returns without an error path.
 //! The native merge rule, restock timing, purchase events and item categories
 //! are not modelled, so the retained integers are not a measured stock state.
 use super::super::{Error, Failure, below};
@@ -330,16 +332,13 @@ impl ObjectHost {
         };
         let unit = self.stock_unit(unit, name)?;
         let state = self.stock.as_mut().expect("stock admitted");
-        let Some(at) = state
+        if let Some(at) = state
             .items
             .iter()
             .position(|row| row.unit == unit && row.item == *item)
-        else {
-            return Err(self
-                .inner
-                .error(name, Failure::StockState("no item stock record")));
-        };
-        state.items.remove(at);
+        {
+            state.items.remove(at);
+        }
         Ok(Value::Null)
     }
 }

@@ -33,18 +33,38 @@ delays, item categories, and marketplace enumeration stay unsupported.
 `AddItemToStock(unit, itemId, currentStock, stockMax)` and
 `RemoveItemFromStock(unit, itemId)` are admitted with the slot natives, under the
 same declaration-source rule. Each `(unit, itemId)` pair keeps the two integers
-its last successful add passed. A repeated add replaces them. `RemoveItemFromStock`
-deletes the pair and refuses `"no item stock record"` when none exists, so no
-removal is reported as success without a record. Item records and per-unit slot
+its last successful add passed. A repeated add overwrites them. `RemoveItemFromStock`
+deletes the pair; an absent pair is a silent no-op. Item records and per-unit slot
 records share `StockBudget::max_records`; a new record past the bound refuses with
 `"stock item records"` or `"stock unit slots"` before `try_reserve`. The unit must
-be a live `unit`, and other families refuse as `WrongFamily`. A `unit` accepts any
-live unit, not only a marketplace: the native rule for that is unmeasured.
+be a live `unit`, and other families refuse as `WrongFamily`.
 
-The stored integers are the call arguments, not a measured stock state. The
-native merge rule for a repeated pair, the effect of `currentStock` and
-`stockMax` on sale and restock, and whether `AddItemToStock` is refused for a
-non-marketplace unit are unverified.
+Native evidence (Warcraft III.exe, SHA256 3f2ed012..570eed, read from the
+existing objdump `.scratch/item-class-re/text.objdump`; addresses are VAs):
+
+- Registration: `push $name; push $impl; call 0x8ccc80` at `0x49e1d3`/`0x49e1d8`
+  registers `RemoveItemFromStock` (name `0xe72e24`) with impl `0x4a5160`;
+  `AddItemToStock` (name `0xe72dd8`) with impl `0x489690`.
+- `0x489690` and `0x4a5160` both convert the unit handle with `0x483940`. A null
+  object returns silently. Otherwise they call `0x6d6570` on the unit object with
+  a field id from `0xb37ba0`. A zero result returns silently, and a non-zero result
+  is the shop component the add or remove runs on.
+- Remove helper `0xb37f40`: scans 12 `item id` entries at shop `+0xd0`. A match
+  clears the entry and calls `0x7fbbd0` and `0x46e070`. No match returns with no
+  error path. Consequence: an absent pair is a silent success, so the host no-op
+  matches native and is not a refusal.
+- Add helper `0xb37430`: scans `count = [shop+0x480]` entries. A match skips
+  insertion and goes to the stock write at `0xb374e2`. With no match and a full
+  table, it selects an existing entry index by comparing per-entry values at
+  `0x3b4` and `0x484`, then overwrites that entry. A full table therefore evicts
+  rather than refusing. This host still refuses at `StockBudget` and is a known
+  deviation.
+
+Unqualified, so not modelled as native: the exact write of `currentStock` and
+`stockMax` on a repeated add (the stock write at `0xb374e2`-`0xb37600` calls
+helpers `0x9a1620`, `0x9a00b0` and virtual calls not yet read), the eviction key
+meaning, whether a non-shop unit ever reaches a non-zero `0x6d6570` result, and
+the effect of `currentStock` and `stockMax` on sale and restock.
 
 `UpdateStockAvailability` (Blizzard.j 9944) reads only `GetItemType` and
 `GetItemLevel`, which were already admitted, and is not affected by this slice.

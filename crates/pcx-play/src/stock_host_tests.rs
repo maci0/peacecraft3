@@ -177,11 +177,9 @@ fn item_stock_records_add_replace_remove_and_share_the_record_budget() {
     vm.call("stock_again", &[]).unwrap();
     assert_eq!(vm.host().item_stock(unit, 1).unwrap(), Some((4, 5)));
     assert_eq!(vm.host().stock_item_records().unwrap(), 1);
-    let absent = vm.call("unstock_absent", &[]).unwrap_err();
-    assert!(
-        absent.to_string().contains("no item stock record"),
-        "{absent}"
-    );
+    let absent = vm.call("unstock_absent", &[]).unwrap();
+    assert_eq!(absent, Value::Null);
+    assert_eq!(vm.host().inner().handles(), placed);
     assert_eq!(vm.host().stock_item_records().unwrap(), 1);
     vm.call("configure", &[]).unwrap();
     assert_eq!(vm.host().stock_unit_records().unwrap(), 1);
