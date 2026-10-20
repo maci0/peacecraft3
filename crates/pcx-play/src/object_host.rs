@@ -71,6 +71,7 @@ pub struct ObjectHost {
     items: Option<item_creation::Admission>,
     item_drops: Option<item_drop::ItemDrops>,
     item_queries: Option<crate::item_class_table::ItemClassTable>,
+    item_sales: Option<crate::item_sales::ItemSaleTable>,
     unit_explosions: Option<unit_explosion::UnitExplosions>,
     player_removal: Option<player_removal::PlayerRemovalState>,
     localized_queries: Option<crate::script_localization::Bank>,
@@ -176,6 +177,7 @@ impl ObjectHost {
             unit_explosions: None,
             item_drops: None,
             item_queries: None,
+            item_sales: None,
             player_removal: None,
             localized_queries: None,
             game_pause: None,
@@ -850,6 +852,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.item_query_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.item_sale_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.item_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -999,6 +1004,9 @@ mod boolexpr_destroy;
 #[path = "item_query_host.rs"]
 mod item_query;
 
+#[path = "item_sale_host.rs"]
+mod item_sale;
+
 #[path = "trigger_host.rs"]
 mod trigger_admission;
 pub use trigger_admission::{
@@ -1044,7 +1052,7 @@ pub use presentation::{CineFilter, FilterSample, PresentationState};
 
 #[path = "stock_host.rs"]
 mod stock;
-pub use stock::StockBudget;
+pub use stock::{ShopCapacity, StockBudget};
 
 #[path = "timer_runtime_host.rs"]
 pub(super) mod timers;
@@ -1123,7 +1131,7 @@ pub use combat::{Combat, CombatActor, CombatTraceEvent, Relation, Weapon};
 
 #[path = "event_delivery_host.rs"]
 mod event_delivery;
-pub use event_delivery::{EventSubject, FiredEvent};
+pub use event_delivery::{EventSubject, FiredEvent, SaleContext};
 
 #[path = "unit_vitals_host.rs"]
 mod unit_vitals;

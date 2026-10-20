@@ -186,7 +186,7 @@ impl ObjectHost {
             .find(|(u, _, _)| *u == unit)
             .map(|(_, _, o)| *o)
     }
-    fn item_flag(&self, item: HandleId, column: &str) -> Result<bool, Error> {
+    pub(crate) fn item_flag(&self, item: HandleId, column: &str) -> Result<bool, Error> {
         let item = self
             .live_item(item)?
             .ok_or_else(|| self.inner.error("inventory", Failure::Identity))?;
@@ -227,7 +227,7 @@ impl ObjectHost {
             )),
         }
     }
-    fn held_slot(&self, unit: HandleId, slot: usize) -> Option<HandleId> {
+    pub(crate) fn held_slot(&self, unit: HandleId, slot: usize) -> Option<HandleId> {
         self.executed_items()
             .find(|(_, r)| r.held_by == Some((unit, slot)))
             .map(|(id, _)| id)
@@ -288,7 +288,7 @@ impl ObjectHost {
     }
     /// Passive strength and agility of one item while held. Powerups and usable items add none.
     /// Refusals are raised here, before the caller writes any state.
-    fn held_attributes(&self, item: HandleId) -> Result<AttributeBonus, Error> {
+    pub(crate) fn held_attributes(&self, item: HandleId) -> Result<AttributeBonus, Error> {
         let Some(rules) = self
             .items
             .as_ref()
@@ -378,7 +378,7 @@ impl ObjectHost {
         Ok(())
     }
 
-    fn add_inventory_item(&mut self, unit: HandleId, item: HandleId) -> Result<bool, Error> {
+    pub(crate) fn add_inventory_item(&mut self, unit: HandleId, item: HandleId) -> Result<bool, Error> {
         let policy = self.inventory_policy(unit)?;
         let Some(record) = self.live_item(item)? else {
             return Ok(false);

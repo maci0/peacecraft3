@@ -1427,3 +1427,47 @@ pub use current_research::ResearchObservation;
 
 #[path = "player_handicap_host.rs"]
 mod handicap;
+
+impl ObjectHost {
+    /// Gold of an admitted player, or `None` when resource state is not admitted.
+    pub(crate) fn owner_gold(&self, player: HandleId) -> Result<Option<i32>, Error> {
+        self.player_resource_value(player, "PLAYER_STATE_RESOURCE_GOLD")
+    }
+
+    /// Lowers an admitted player's gold by `price`. The caller has checked the balance, and
+    /// an overflow refuses before any row changes.
+    pub(crate) fn debit_gold(&mut self, player: HandleId, price: i32) -> Result<(), Error> {
+        let fail = |reason| {
+            self.inner
+                .error(GET_PLAYER_STATE, Failure::PlayerState(reason))
+        };
+        let at = self.player_index(&Value::Handle(player), GET_PLAYER_STATE)?;
+        let state = self.source_constant_enumerand("PLAYER_STATE_RESOURCE_GOLD", "playerstate")?;
+        let current = self
+            .resource_value(at, state)?
+            .ok_or_else(|| fail("gold not admitted"))?;
+        let next = current
+            .checked_sub(price)
+            .ok_or_else(|| fail("gold debit overflow"))?;
+        let players = self.players.as_mut().ok_or_else(|| fail("not admitted"))?;
+        let number = players.rows[at].number;
+        let resources = players
+            .resources
+            .as_mut()
+            .ok_or_else(|| fail("resources not admitted"))?;
+        if let Some(row) = resources
+            .values
+            .iter_mut()
+            .find(|(p, s, _)| *p == number && *s == state)
+        {
+            row.2 = next;
+        } else {
+            resources
+                .values
+                .try_reserve(1)
+                .map_err(|_| fail("resource row capacity"))?;
+            resources.values.push((number, state, next));
+        }
+        Ok(())
+    }
+}

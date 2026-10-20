@@ -617,6 +617,7 @@ fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) ->
         inventory: None,
         inventory_powerup: None,
         item_classes: None,
+        item_sales: None,
         localization: None,
         unit_guards: None,
         player_removal_rules: None,
@@ -970,7 +971,17 @@ fn local_file_source_label_and_explicit_stock_profile_reach_the_same_session() {
     let bound = bind_map(&resolver, fixture.input(3), fixture.limits()).unwrap();
     let mut inputs = host_inputs(Arc::clone(&bound.catalog.0));
     inputs.budgets.stock = Some(StockBudget {
-        max_unit_records: 0,
+        max_records: 0,
+        shop: pcx_play::playercolor_host::ShopCapacity::new(pcx_play::shop_table::ShopTable {
+            origin: AssetIdentity {
+                edition: "synthetic".into(),
+                version: "synthetic".into(),
+                source: "synthetic".into(),
+            },
+            image_sha256: [0; 32],
+            slot_ceiling: 1,
+            entries: 1,
+        }),
     });
     let bytes = bound.catalog_map_bytes.clone();
     let mut identity = fixture.map_id.clone();
@@ -1158,7 +1169,17 @@ fn corrected_host_inputs_retry_a_refused_candidate_without_redelivery() {
 
     let mut inputs = host_inputs(Arc::clone(&catalog));
     inputs.budgets.stock = Some(StockBudget {
-        max_unit_records: 0,
+        max_records: 0,
+        shop: pcx_play::playercolor_host::ShopCapacity::new(pcx_play::shop_table::ShopTable {
+            origin: AssetIdentity {
+                edition: "synthetic".into(),
+                version: "synthetic".into(),
+                source: "synthetic".into(),
+            },
+            image_sha256: [0; 32],
+            slot_ceiling: 1,
+            entries: 1,
+        }),
     });
     app.insert_resource(CampaignHostSupply {
         revision: 7,

@@ -125,7 +125,7 @@ impl ObjectHost {
         Some(self.create_item(args))
     }
 
-    fn create_item(&mut self, args: &[Value]) -> Result<Value, Error> {
+    pub(crate) fn create_item(&mut self, args: &[Value]) -> Result<Value, Error> {
         let fail = |reason| self.inner.error(CREATE, reason);
         let [Value::Int(rawcode), x, y] = args else {
             return Err(fail(Failure::ItemState("expected integer, real, real")));

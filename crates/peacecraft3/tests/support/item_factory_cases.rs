@@ -91,6 +91,15 @@ fn deliver(app: &mut App, revision: u64, items: Option<ItemBudget>, script: &str
         ordinals: BTreeMap::from([("permanent".to_owned(), 0)]),
         default: 0,
     });
+    // Synthetic fixture with no sale rows: this fixture exercises item creation, not sales.
+    inputs.item_sales = Some(pcx_play::item_sales::ItemSaleTable::new(
+        pcx_play::scripts::AssetIdentity {
+            edition: "synthetic item fixture".into(),
+            version: "synthetic".into(),
+            source: "synthetic item fixture".into(),
+        },
+        BTreeMap::new(),
+    ));
     let bytes = Arc::clone(&bound.catalog_map_bytes);
     app.insert_resource(MapRequests {
         bindings: Some(bound),
