@@ -168,9 +168,11 @@ pub mod fog_boundary;
 pub mod hero;
 pub mod messages;
 pub mod meta;
+pub mod misc;
 pub mod object;
 pub mod path;
 pub mod report;
+pub mod selection;
 
 #[cfg(test)]
 mod tests;

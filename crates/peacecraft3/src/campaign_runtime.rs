@@ -105,7 +105,10 @@ impl CampaignRuntime {
                 break;
             };
             let until = self.origin + self.step.as_secs_f64() * tick as f64;
-            match session.advance_timers(until, self.max_expiries_per_tick) {
+            let result = session
+                .advance_timers(until, self.max_expiries_per_tick)
+                .and_then(|count| session.advance_unit_ranges(65536).map(|_| count));
+            match result {
                 Ok(_) => {
                     self.tick = tick;
                     self.pending -= self.step;

@@ -1,5 +1,37 @@
 # Immediate order behavior
 
+## Selected client lookup and activity-order frontier (2026-10-20)
+
+Fresh-game preparation now binds `OrderId` and `OrderId2String` to the selected
+Legacy client's order-registration initializer and its preceding bootstrap registration.
+The shared reader follows
+the initializer's name pointers, integer operands and common call target, checks
+initialized PE ranges and explicit storage/count budgets, and preserves the one
+identical repeated registration. Names and IDs are not copied into a table in the
+source. Lookup uses the original ASCII case-insensitive comparison and C-string
+termination; a missing name returns zero and a missing inverse returns null.
+Both loaded constant native contracts must share their declaration source;
+registration alone does not admit order execution.
+
+The private original-client probe under
+`.scratch/campaign-unit-orders-root-20261020/probe-run-2/` uses two original
+Human01 units immediately after `CreateAllUnits`, with an explicit early return
+before the rest of `main`. Both accept Hold Position, its repeated request, an
+uppercase spelling and its numeric form. The invalid string and null-unit
+request return false. `GetUnitCurrentOrder` remains zero immediately and at the
+three later timer observations. The bandit moves between Stop and the next Hold
+Position request, then retains that position through the last observation. This
+qualifies a limited activity distinction, not a general movement or AI rule.
+The earlier run produced no records because it remained on the original loading
+screen; its screenshot and failure are preserved. Both containers are stopped.
+
+Static dispatch associates the no-target Hold Position admission with the move
+ability class. Full unit eligibility, persistent activity, acquisition, movement,
+collision-cache updates and current-order lifetime still need a shared world
+consumer. **Do not implement `GetUnitCurrentOrder` as the last accepted request.**
+The unchanged application remains unsupported at its first Hold Position call;
+no playable campaign, rendering or three-target gameplay parity is claimed.
+
 `ObjectHost::with_defend_ability` admits the Defend activation state for one
 caller-selected ability alias. Programs without that admission keep the explicit
 unsupported order path. The selected alias, code, on/off strings, requirement and
@@ -128,3 +160,69 @@ immediate order. Its
 [active toggle](https://github.com/Retera/WarsmashModEngine/blob/f9e0aeed4be372d6016519d0e97b384aa873f374/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/abilitybuilder/ability/CAbilityAbilityBuilderActiveToggle.java)
 also checks active state, mana and cooldown. These are reconstruction-source
 references, not native-code evidence or proof that every profile uses that class.
+
+## Explicit movement and activity consumer (2026-10-20, candidate)
+
+The candidate supplies Hold, Stop and point Move on the existing executed-unit
+arena. It decodes their identifiers from three checked comparisons in the same
+selected 1.29 client as the order registry. It does not embed an order table.
+Unit movement class and base speed come from the metadata-associated source
+fields, including map overrides. Unsupported movement classes and active ability
+speed modifiers refuse; missing source fields do not acquire defaults.
+Nonmoving records do not require a numeric speed to be created. A speed query
+still reads their source field and refuses a marker instead of inventing zero.
+
+A point order creates a bounded route against the admitted map pathing and live
+occupancy. Movement writes the canonical accepted unit position and replaces only
+that unit's collision stamp; static pathing and other units' occupancy remain.
+The renderer and range consumer read that record. A location order copies its
+finite destination from a location in the same arena. Removing or moving that
+location does not retarget the order. No separate world or handle aliases exist.
+Hold cancels motion and retains a held state; Stop cancels and releases it. These
+operations preserve an idle scripted animation. Move selects the source Walk
+sequence, and completion or cancellation selects Stand when a model is present.
+
+The application projects movement at the selected logical timer deadline before
+running its callbacks, and through the final requested game time afterward.
+Absolute distance from the order's logical start avoids repeated frame-delta
+addition. Arrival animation starts at the computed arrival time. Projection
+requires the current monotonic game clock and repeated projection at the same
+time does no work. The caller stops on a projection error; already executed
+unit effects are not rolled back.
+
+A separate bounded original-client experiment used one original Human01 unit
+and explicit Move/Hold/Stop requests after the original `CreateAllUnits` call.
+The unsigned experiment archive was re-read: only `war3map.j` changed among the
+17 retained members, and the insertion/early return can be reversed to the source
+script. Its preparation, input journal, 1280×960 captures and fourteen output
+records remain local under `.scratch/campaign-unit-activity-root-20261020/` and
+`.scratch/original-game-vm/unit-motion-1280-1/`. The private container is stopped.
+The output is read as data, never executed.
+
+In this original observation, Move succeeds and immediately becomes the current
+order. Hold and Stop succeed, clear that query to zero, and prevent subsequent
+position change. A later Move succeeds and becomes current again. The reported
+speed remains the selected unit's nominal speed. The original keeps turning
+briefly after Hold even though its position has stopped. This is runtime evidence
+for that sequence under Wine, not a general native movement specification.
+
+The candidate's instantaneous steering and constant speed do **not** match that
+turning/acceleration observation. Its bounded grid route and stable tie policy
+are recreation choices; native path choice, local avoidance and replanning are
+unqualified. Walk playback scaling to actual velocity, autonomous acquisition,
+combat/death, speed effects, other movement classes, queued orders and full
+original/native/WASM trajectory parity remain open. This candidate is not a playable first mission or a completed Hold/Stop
+behavior implementation. Validation receipts must be consulted separately; the
+preceding completed registry checks do not validate this new consumer.
+
+The bounded consumer's final verification is retained in
+`.scratch/campaign-unit-activity-root-20261020/verification-1.json`: 1,378 native
+test executions, twenty actual WASI cases, nineteen cases on the actual Cargo
+browser-target WASM application under Node, strict checks and both builds pass.
+The normal placement producer still matches all 155 original creation requests
+and accepted position pairs. The original probe unit's source-backed nominal
+speed and explicit Move/Hold/repeat-Hold/Stop controls agree without minting new
+handles. This does not compare movement trajectories. The complete unchanged
+Human01 application now passes Hold and refuses `ShowUnit` at Blizzard.j:3412;
+it publishes no session. The separate standalone diagnostic lacks application
+asset loaders and its earlier day/night-model refusal is not the mission frontier.

@@ -9,7 +9,7 @@
 //! | `ID`   | the fourcc, e.g. `uhpm` |
 //! | `field`| the column name in the table named by `slk`, e.g. `HP` |
 //! | `slk`  | which table: `UnitBalance`, `UnitData`, `profile`, `ItemData`, … |
-//! | `index`| the comma slot inside a `Profile` value; `-1` for every SLK row |
+//! | `index`| the comma slot inside a `Profile` value; retained verbatim for SLK rows |
 //! | `type` | the editor's declared type: `int`, `bool`, `real`, `unreal`, `unitList`, … |
 //! | `category`, `changeFlags`, `minVal`, `maxVal`, `useHero`, … | editor-only |
 //!
@@ -189,7 +189,7 @@ pub struct FieldDef {
     pub field: String,
     /// The `slk` column's value, verbatim (`UnitBalance`, `Profile`, …).
     pub slk: String,
-    /// The `index` column's value, `-1` for every SLK-backed row.
+    /// The `index` column's value, retained verbatim even for SLK-backed rows.
     pub index: i32,
     /// The declared type, verbatim.
     pub declared: String,

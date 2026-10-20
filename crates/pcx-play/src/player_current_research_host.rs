@@ -14,7 +14,82 @@ fn key(row: &ResearchObservation) -> (i32, i32, bool) {
     (row.player_number, row.techid, row.specific_only)
 }
 const GET_RESEARCH: &str = "GetPlayerTechResearched";
+const GET_COUNT: &str = "GetPlayerTechCount";
+pub(super) struct UpgradeResearch {
+    pub(super) rules: crate::upgrade_research::Rules,
+    pub(super) active: bool,
+    pub(super) count_admitted: bool,
+}
 impl ObjectHost {
+    /// Admit fresh upgrade counters before any research assignment. Unit/item
+    /// technology counts and upgrade gameplay/stat effects remain separate.
+    pub fn admit_upgrade_research(
+        &mut self,
+        context: &Arc<ParsedMapContext>,
+        rules: crate::upgrade_research::Rules,
+    ) -> Result<(), Error> {
+        let fail = |reason| self.inner.error(GET_RESEARCH, reason);
+        let players = self
+            .players
+            .as_ref()
+            .ok_or_else(|| fail(Failure::PlayerState("players not admitted")))?;
+        if players.current_research.is_some()
+            || players.upgrade_research.is_some()
+            || players.rows.iter().any(|p| !p.tech_researched.is_empty())
+        {
+            return Err(fail(Failure::PlayerState(
+                "upgrade counters require a fresh research state",
+            )));
+        }
+        if rules.catalog.install != context.sources.catalog.source
+            || rules.catalog.edition_version
+                != format!(
+                    "{}; {}",
+                    context.sources.catalog.edition, context.sources.catalog.version
+                )
+        {
+            return Err(fail(Failure::Source));
+        }
+        let budget = TechLimitBudget {
+            max_records: players
+                .research
+                .as_ref()
+                .ok_or_else(|| fail(Failure::PlayerState("research setters not admitted")))?
+                .max_records,
+        };
+        let count_admitted = self.inner.program.natives().get(GET_COUNT).is_some();
+        if count_admitted {
+            Self::contract(
+                &self.inner,
+                GET_COUNT,
+                &["player", "integer", "boolean"],
+                "integer",
+                true,
+                Some("player"),
+            )?;
+            if self.inner.program.natives().get(GET_COUNT).unwrap().source
+                != self
+                    .inner
+                    .program
+                    .natives()
+                    .get("Player")
+                    .ok_or_else(|| fail(Failure::Signature))?
+                    .source
+            {
+                return Err(self.inner.error(GET_COUNT, Failure::Source));
+            }
+        }
+        // Reuse the existing complete getter/setter/context/source validation.
+        self.admit_current_research(context, Vec::new(), budget)?;
+        let players = self.players.as_mut().expect("validated research context");
+        players.current_research = None;
+        players.upgrade_research = Some(UpgradeResearch {
+            rules,
+            active: true,
+            count_admitted,
+        });
+        Ok(())
+    }
     /// Replace current answers on the exact admitted player context, without
     /// minting players or interpreting stored setter levels. The record bound
     /// counts distinct `(player number, techid, specificonly)` queries.
@@ -78,6 +153,11 @@ impl ObjectHost {
             }
         }
         let players = self.players.as_ref().expect("checked player context");
+        if players.upgrade_research.is_some() {
+            return Err(fail(Failure::PlayerState(
+                "upgrade model and observations cannot be mixed",
+            )));
+        }
         for entry in &entries {
             if usize::try_from(entry.player_number)
                 .ok()
@@ -103,6 +183,13 @@ impl ObjectHost {
     }
     /// Retire all current answers without reverting to retained setter levels.
     pub fn invalidate_current_research(&mut self) {
+        if let Some(model) = self
+            .players
+            .as_mut()
+            .and_then(|p| p.upgrade_research.as_mut())
+        {
+            model.active = false;
+        }
         if let Some(entries) = self
             .players
             .as_mut()
@@ -111,13 +198,39 @@ impl ObjectHost {
             entries.clear();
         }
     }
-    pub(super) fn current_research_query(&self, args: &[Value]) -> Result<Value, Error> {
-        let fail = |reason| self.inner.error(GET_RESEARCH, reason);
+    pub(super) fn current_research_query(
+        &self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Value, Error> {
+        let fail = |reason| self.inner.error(name, reason);
         let [player, Value::Int(techid), Value::Bool(specific)] = args else {
             return Err(fail(Failure::PlayerArguments));
         };
-        let at = self.player_index(player, GET_RESEARCH)?;
+        let at = self.player_index(player, name)?;
         let players = self.players.as_ref().expect("checked player identity");
+        if let Some(model) = &players.upgrade_research {
+            if !model.active {
+                return Err(fail(Failure::PlayerState(
+                    "upgrade research is invalidated",
+                )));
+            }
+            if model.rules.maximum(*techid).is_none() {
+                return Err(fail(Failure::PlayerState(
+                    "technology is not an admitted upgrade",
+                )));
+            }
+            let level = players.rows[at]
+                .research_levels
+                .iter()
+                .find(|(id, _)| id == techid)
+                .map_or(model.rules.initial, |(_, level)| *level);
+            return Ok(if name == GET_COUNT {
+                Value::Int(level)
+            } else {
+                Value::Bool(model.rules.researched(level))
+            });
+        }
         let entries = players
             .current_research
             .as_ref()

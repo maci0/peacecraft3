@@ -496,6 +496,80 @@ range and nullable filter. The call returns an event and does not move the unit
 or run the filter. Omitting the budget leaves the native unsupported, so an
 unchanged factory still stops there. Registration is not range delivery.
 
+## Deferred range consumer (2026-10-20)
+
+Normal new-game preparation now admits a bounded range consumer as well as its
+registration budget. Its event identity comes from the selected common's typed
+conversion global, checked against the registration source. The runtime reads
+accepted positions and catalog collision radii from the actual executed unit
+records. It does not substitute creation arguments, `IsUnitInRange`, map-placement
+ordinals or a separate world/VM.
+
+The reconstruction samples a candidate-collision circle at explicit logical
+ticks. Its radius is the executed range plus the candidate's catalog collision
+radius; the anchor's collision radius is not added. This distinguishes the two
+retained boundary cases. Inclusion at exact equality, other eligibility rules,
+native spatial ordering and update cadence remain unqualified. The implementation
+uses a registration/creation-order snapshot and samples final positions, so an
+out-and-back change between samples does not invent an entry. Negative finite
+registrations are still retained, but delivery refuses their unqualified geometry.
+
+Registration never runs the filter. The simulation tick samples membership,
+then executes new entries through the owning VM. Startup itself does not flush
+entries at zero game time, and binding/loading time advances no logical ticks.
+The first candidate incorrectly flushed on completion of `main`; that caller
+was removed after comparison with the retained nonzero-time initial delivery.
+No measured delay constant replaces the still-open native cadence.
+
+The filter sees the actual candidate through `GetFilterUnit` and `GetTriggerUnit`,
+with null triggering trigger and event. Accepted filters establish the owner and
+selected range event for conditions/actions; the candidate stays visible through
+both getters and nested rectangle predicates restore it afterward. The optional
+`GetEnteringUnit` declaration is signature/source checked. Selected native getters
+show that it gates on the same context field as `GetTriggerEventId`, then reads
+the same unit field as `GetTriggerUnit`: it is null during the range filter and
+exposes the candidate during range conditions/actions. This implements no region
+event producer or general unit-event context.
+
+All registered conditions run before deciding whether to run actions, preserving
+the retained trigger evaluator behavior even when an earlier condition is false.
+Trigger lifetime/enabled state is rechecked after filter effects. Destruction or
+disablement suppresses actions; a retained registration can still run its filter.
+The original post-destruction observation covers only one later entry, so complete
+native cleanup timing is not claimed. Callback-list mutation uses snapshots.
+New registrations/births during dispatch join a later sample. False filters still
+join geometric membership; native reevaluation of such filters remains open.
+
+Membership/pending-entry storage and scan/callback work are bounded. A failed
+scan preserves the previous membership and generation. Entries carry an arena
+witness and generation rather than trusting coincident handle numbers. An active
+timer delivery or unfinished range callback cannot be polled over. Callback
+errors preserve earlier effects, clear context and do not replay the same edge.
+
+The native suite passes 604 Host, 26 library, 154 map/application and 419 binary
+cases. Ten range and four trigger cases execute under WASI; strict native/browser
+lint and both full application builds pass. Tests cover shared globals, deferred
+and repeated entries, new births, nested predicate context, disabled/destroyed
+owners, false filters/conditions, callback failures, work limits and stale tickets.
+The application tick test matches state at the same final logical tick under
+steady and uneven frame chunks, including retained tick debt and excluded loading.
+The actual Cargo-built browser-target test module also executes under Node:
+three range cases and fifteen related timer/direct-trigger/runtime regressions
+pass. This is WASM CPU execution, not browser rendering. The normal placement
+loader still matches all 155 retained original creation requests and accepted
+getter bits in the separate creation-cut diagnostic; observed positions are
+expectations only.
+
+Unchanged Human01 through the actual application now gets past range registration
+and refuses `IssueImmediateOrder` at selected Blizzard.j line 7817 during map
+initialization. It publishes no session. The authored initialization issues
+`holdposition`; the existing Defend-only immediate-order branch cannot implement
+that world activity. Live movement, removal/death, collision-cache updates,
+startup suspension, actual order/AI/combat consumers and first-mission playability
+remain open. There is no new original run, rendered/audio comparison or complete
+original/native/WASM simulation claim. Local checks and rejected attempts are
+under `.scratch/campaign-range-root-20261020/`.
+
 
 ## Creation placement on executed identities (2026-10-19)
 
@@ -745,3 +819,70 @@ run. Local commands, source hashes, rejected fixture/compile attempts and the
 removed unqualified creation-color candidate stay in
 `.scratch/campaign-unit-owner-root-20261019/`. No original game was launched for
 this slice, and no original content was committed or uploaded.
+
+## Executed visibility and live world membership (2026-10-20)
+
+`ShowUnit` and `IsUnitHidden` operate on the existing executed unit. Fresh
+`CreateUnit` records start shown, matching the retained original control. The
+optional loaded declarations must share `CreateUnit`'s source, argument/result
+types and constant flags. Missing interfaces stay unsupported. Aliases observe
+the same state; hiding does not destroy a unit, change its owner, clear its
+orders or remove it from existing script groups. Fog, invisibility abilities,
+selection and explicit pause remain distinct systems.
+
+The original Legacy client was tested under Wine with reversible diagnostic
+copies of Human01. All seventeen retained members were re-read for each copy;
+only `war3map.j` changed. Source files stayed unchanged, and the unsigned probes
+make no authenticity claim. The first run's four-unit-wide rectangle failed to
+select its shown control, so its rectangle result is inconclusive. The second
+uses a wider rectangle and verifies the expected shown control before testing
+hiding. A third isolates a hidden range anchor. The three stopped runtimes and
+59 records are retained locally under
+`.scratch/campaign-unit-visibility-root-20261020/` and
+`.scratch/original-game-vm/unit-visibility-1280-{1,2,3}/`.
+
+Observed on the tested unit: hiding leaves its current Move order and does not
+pause it; a hidden Move request succeeds and position continues to advance. A
+second unit can be created at the hidden unit's position, whereas the shown
+control displaces that creation. New rectangle enumerations exclude the hidden
+unit and include it again after showing. A hidden range candidate produces no
+entry until shown. A hidden anchor still delivers entries for visible candidates;
+hiding/showing that anchor alone does not repeat an existing membership. Showing
+can relocate a moving unit to free space while retaining its order.
+
+The implementation removes only the hidden unit's collision stamp. Hidden
+movement retains its activity and updates its accepted position without occupying
+or testing other units' dynamic stamps. Authored ground pathing still applies;
+this boundary is recreation policy, not a claim about every native hidden-pathing
+case. Showing first tests the current position and preserves a free fractional
+position. A blocked position uses the existing bounded placement search. That
+search reads the selected image's rules and the map/catalog geometry, without
+an observed-coordinate table. A relocation rebases remaining motion from the new
+accepted position; it does not jump back to the old path origin. A failed reveal
+leaves visibility, positions and occupancy unchanged.
+
+New spatial enumerations omit hidden candidates. Existing group memberships are
+retained, as required by the map's later `ForGroup(..., ShowUnitShow)` calls. Range
+polls likewise omit hidden candidates and keep hidden anchors. Hiding forgets
+that unit's candidate memberships, allowing a later visible entry. The previously
+documented callback snapshot/order/cadence limits remain; effects inside an
+already selected callback are not newly qualified by this experiment.
+
+The actor consumer hides the existing parent entity, so authored geoset opacity
+stays independent. It defers creating actors for hidden units and samples the
+continuing animation clock on reveal. Native/browser builds check this consumer,
+but this slice has no new rendered original/native/WASM comparison. Related
+passengers, attachments, selection, general death/visibility interactions,
+small-rectangle native raster behavior, all hidden-pathing cases and exact reveal
+search parity remain open. This does not establish a playable mission.
+
+Final checks are retained in
+`.scratch/campaign-unit-visibility-root-20261020/verification-1.json`: 1,385 native
+test executions, 25 actual WASI cases, twenty cases on the actual Cargo
+browser-target WASM application under Node, strict checks and both builds pass.
+The source-backed unit also passes fresh visibility, spatial exclusion/reinclusion,
+hidden collision release and hidden movement/order controls. Its creation-cut
+context still matches all 155 original creation requests and accepted positions.
+Unchanged Human01 application startup passes ShowUnit and next refuses
+`AttachSoundToUnit` at Blizzard.j:2226; it publishes no session. The earlier
+standalone diagnostic's missing day/night loader is not that application's failure.

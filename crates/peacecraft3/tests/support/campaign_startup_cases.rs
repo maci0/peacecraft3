@@ -458,6 +458,11 @@ fn clock() -> StartupClock {
                 len: initializer.len() as u32,
                 digest: digest(&initializer),
             },
+            scale_initializer: SourceWindow {
+                va: 0x301000,
+                len: initializer.len() as u32,
+                digest: digest(&initializer),
+            },
         },
         RuleInputBudget {
             image_bytes: image.len(),
@@ -504,6 +509,10 @@ enum RuleKind {
 }
 
 fn rule(kind: RuleKind) -> Arc<VerifiedNeutralRule> {
+    rule_with_getter(kind, getter(257, -20, 61))
+}
+
+fn rule_with_getter(kind: RuleKind, body: Vec<u8>) -> Arc<VerifiedNeutralRule> {
     let native_name = match kind {
         RuleKind::Passive => NATIVE_NAME,
         RuleKind::Aggressive => AGGRESSIVE_NATIVE_NAME,
@@ -534,7 +543,6 @@ fn rule(kind: RuleKind) -> Arc<VerifiedNeutralRule> {
     let mut name = native_name.as_bytes().to_vec();
     name.push(0);
     let signature = b"()I\0".to_vec();
-    let body = getter(257, -20, 61);
     let head = header();
     let offsets = [0x30usize, 0x100, 0x140, 0x200, 0x300];
     let va = |offset| base + rva + offset as u32;
@@ -1242,6 +1250,9 @@ mod presentation_cases;
 #[path = "force_query_cases.rs"]
 mod force_query_cases;
 
+#[path = "fresh_game_cases.rs"]
+mod fresh_game_cases;
+
 #[path = "message_cases.rs"]
 mod message_cases;
 
@@ -1253,3 +1264,124 @@ mod speed_cases;
 
 #[path = "fog_boundary_cases.rs"]
 mod fog_boundary_cases;
+
+#[test]
+fn source_preparation_error_survives_empty_supply_and_explicit_inputs_recover() {
+    let mut app = App::new();
+    peacecraft3::map_requests::install(&mut app);
+    peacecraft3::campaign_startup::install(&mut app);
+    deliver(&mut app, MAP_OK, 7);
+    let previous = app
+        .world()
+        .resource::<MapScriptSession<MapStartupHost>>()
+        .session_witness()
+        .unwrap();
+    // Deliver a new admitted context without starting it, as a failed producer would.
+    let fixture = fixture(MAP_OK);
+    let reader = fixture.resolver();
+    let bound = bind_map(&reader, fixture.input(8), fixture.limits()).unwrap();
+    let catalog = Arc::clone(&bound.catalog.0);
+    let bytes = Arc::clone(&bound.catalog_map_bytes);
+    app.world_mut().resource_mut::<MapRequests>().bindings = Some(bound);
+    app.insert_resource(CampaignHostSupply {
+        revision: 8,
+        inputs: None,
+    });
+    app.world_mut().resource_mut::<CampaignStartup>().last_error =
+        Some(StartupError::Preparation {
+            binding: 8,
+            reason: "required source is missing".into(),
+        });
+    app.world_mut().write_message(MapRequest {
+        label: "chosen map label".into(),
+        map_member: pcx_assets::AssetPath::new("selected map.w3m").unwrap(),
+        identity: fixture.map_id,
+        binding_revision: 8,
+        payload: MapPayload::Shared(bytes),
+    });
+    app.update();
+    app.update();
+    assert!(
+        matches!(&app.world().resource::<CampaignStartup>().last_error,Some(StartupError::Preparation {binding:8,reason}) if reason=="required source is missing")
+    );
+    assert!(previous.upgrade().is_some());
+    app.world_mut().resource_mut::<CampaignHostSupply>().inputs = Some(host_inputs(catalog));
+    app.update();
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none()
+    );
+    assert!(previous.upgrade().is_none());
+    assert_eq!(session_marker(&mut app), Value::Int(1));
+}
+
+#[test]
+fn post_config_slot_input_reaches_players_created_in_main_without_minting_them_early() {
+    use pcx_play::map_startup_host::SlotObservation;
+    use pcx_script::Host;
+    let script = "globals\nplayer late = null\ntimer before = null\ntimer after = null\nboolean seen = false\nendglobals\nfunction config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\nset before = CreateTimer()\nset late = Player(3)\nset after = CreateTimer()\nset seen = GetPlayerSlotState(late) == Playing\nendfunction\n";
+    let mut map = fixture(script);
+    map.common.extend_from_slice(b"\ntype playerslotstate extends handle\nconstant native ConvertPlayerSlotState takes integer n returns playerslotstate\nnative GetPlayerSlotState takes player p returns playerslotstate\nglobals\nconstant playerslotstate Playing = ConvertPlayerSlotState(29)\nendglobals\n");
+    map.rebuild();
+    let reader = map.resolver();
+    let bound = bind_map(&reader, map.input(1), map.limits()).unwrap();
+    let mut inputs = host_inputs(Arc::clone(&bound.catalog.0));
+    inputs
+        .enumeration
+        .names
+        .push("ConvertPlayerSlotState".into());
+    inputs.post_config.slot_states = Some(vec![SlotObservation {
+        player_number: 3,
+        state_global: "Playing".into(),
+    }]);
+    let bytes = Arc::clone(&bound.catalog_map_bytes);
+    let mut app = App::new();
+    peacecraft3::map_requests::install(&mut app);
+    peacecraft3::campaign_startup::install(&mut app);
+    app.insert_resource(MapRequests {
+        bindings: Some(bound),
+        ..Default::default()
+    });
+    app.insert_resource(CampaignHostSupply {
+        revision: 1,
+        inputs: Some(inputs),
+    });
+    app.world_mut().write_message(MapRequest {
+        label: "synthetic late player".into(),
+        map_member: pcx_assets::AssetPath::new("selected map.w3m").unwrap(),
+        identity: map.map_id,
+        binding_revision: 1,
+        payload: MapPayload::Shared(bytes),
+    });
+    app.update();
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none()
+    );
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    assert_eq!(session.global("seen"), Some(Value::Bool(true)));
+    let handles = ["before", "late", "after"].map(|name| {
+        let Some(Value::Handle(id)) = session.global(name) else {
+            panic!("missing {name}")
+        };
+        id.token()
+    });
+    assert_eq!(handles[1], handles[0] + 1);
+    assert_eq!(handles[2], handles[1] + 1);
+    let host = session.host().unwrap();
+    let omitted = host.native("Player", &[Value::Int(4)]).unwrap();
+    assert!(
+        host.native("GetPlayerSlotState", &[omitted])
+            .unwrap_err()
+            .contains("unset")
+    );
+}
+
+#[path = "unit_range_cases.rs"]
+mod unit_range_cases;

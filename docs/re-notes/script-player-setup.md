@@ -138,10 +138,12 @@ FourCC values.
 `GetPlayerTechResearched` returns boolean and `GetPlayerTechCount` returns
 integer. Both take `specificonly`. `GetPlayerTechCountSimple` passes `true`,
 which does not establish whether that flag is an exact id, a category rollup,
-or something else. `GetPlayerTechCount` and `AddPlayerTechResearched` stay
-unsupported. The boolean getter can separately consume explicit current answers
-as described below; it does not interpret these retained setter levels. An
-absent researched pair is not reported as level 0.
+or something else. Record-only admission leaves `GetPlayerTechCount` and
+`AddPlayerTechResearched` unsupported. The boolean getter can separately consume
+explicit current answers as described below; it does not interpret these retained
+setter levels. An absent raw pair is not reported as level 0. Normal fresh games
+now have a separate [source-bound upgrade counter model](campaign-source-preparation.md#fresh-upgrade-counters-2026-10-20),
+which preserves these raw records while serving applied upgrade levels and counts.
 
 The same retained Human01 Program completes globals and `config`, then stores
 one researched-level record and 65 technology maxima on the existing source
@@ -446,8 +448,9 @@ answers survive. The whole player is retired because cross-tech/category rules
 remain unknown. Failed setters preserve current answers. Refresh and invalidation
 are the caller's responsibility for external runtime changes; context identity
 does not authenticate an observation. Without this opt-in the getter remains
-unsupported. Counts, additional research, simulation effects and a live provider
-remain unsupported.
+unsupported in observation mode. The separate fresh upgrade model supplies known
+upgrade counts; additional research natives, general technology relationships,
+simulation effects and a live external provider remain open.
 
 ### Qualified original startup observation
 

@@ -9,7 +9,11 @@ use peacecraft3::browser_read;
 mod import_assets;
 
 mod button_actions;
+mod campaign_actors;
+mod campaign_diagnostics;
+mod campaign_input;
 mod campaign_messages;
+mod campaign_prepare;
 mod fdf;
 mod glue_menu;
 pub mod hud;
@@ -19,6 +23,8 @@ mod intro;
 mod launch;
 mod launch_gui;
 mod map_source_controls;
+#[cfg(not(target_arch = "wasm32"))]
+mod native_campaign;
 pub mod rich_text;
 pub mod tooltip;
 use peacecraft3::map_requests;

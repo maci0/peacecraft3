@@ -11,7 +11,14 @@ pub struct MapMusicSelection {
 pub(super) struct State {
     max_name_bytes: usize,
     selection: Option<MapMusicSelection>,
+    thematic: Option<String>,
 }
+
+const OPTIONAL: [(&str, &[&str]); 3] = [
+    ("ClearMapMusic", &[]),
+    ("PlayThematicMusic", &["string"]),
+    ("EndThematicMusic", &[]),
+];
 impl ObjectHost {
     /// Admits selection storage only. Track resolution and music playback are
     /// separate consumers; the native's name/index conventions are not invented.
@@ -32,14 +39,35 @@ impl ObjectHost {
             false,
             None,
         )?;
+        let source = &self
+            .inner
+            .program
+            .natives()
+            .get(name)
+            .expect("checked contract")
+            .source;
+        for (optional, args) in OPTIONAL {
+            let Some(native) = self.inner.program.natives().get(optional) else {
+                continue;
+            };
+            Self::contract(&self.inner, optional, args, "nothing", false, None)?;
+            if &native.source != source {
+                return Err(self.inner.error(optional, Failure::Source));
+            }
+        }
         self.map_music = Some(State {
             max_name_bytes,
             selection: None,
+            thematic: None,
         });
         Ok(self)
     }
     pub fn map_music_selection(&self) -> Option<&MapMusicSelection> {
         self.map_music.as_ref()?.selection.as_ref()
+    }
+    /// Executed `PlayThematicMusic` path until `EndThematicMusic`.
+    pub fn thematic_music(&self) -> Option<&str> {
+        self.map_music.as_ref()?.thematic.as_deref()
     }
     pub(super) fn map_music_native(
         &mut self,
@@ -47,6 +75,25 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         let state = self.map_music.as_mut()?;
+        if OPTIONAL.iter().any(|&(n, _)| n == name) {
+            return Some(match (name, args) {
+                ("ClearMapMusic", []) => {
+                    state.selection = None;
+                    Ok(Value::Null)
+                }
+                ("PlayThematicMusic", [Value::Str(path)]) if path.len() <= state.max_name_bytes => {
+                    state.thematic = Some(path.clone());
+                    Ok(Value::Null)
+                }
+                ("EndThematicMusic", []) => {
+                    state.thematic = None;
+                    Ok(Value::Null)
+                }
+                _ => Err(self
+                    .inner
+                    .error(name, Failure::MusicState("invalid music arguments"))),
+            });
+        }
         if name != "SetMapMusic" {
             return None;
         }

@@ -80,6 +80,8 @@ pub enum Failure {
     Expression(String),
     #[error("{0} policy exceeded")]
     Budget(&'static str),
+    #[error("script math: {0}")]
+    ScriptMath(crate::script_random::real::MathError),
     #[error("invalid or reserved handle type {0}")]
     Type(String),
     #[error("unknown handle identity")]
@@ -100,8 +102,12 @@ pub enum Failure {
     UnitState(&'static str),
     #[error("hero skills: {0}")]
     HeroSkills(String),
+    #[error("unit animation: {0}")]
+    UnitAnimation(String),
     #[error("unit placement: {0}")]
     UnitPlacement(String),
+    #[error("unit activity: {0}")]
+    UnitActivity(String),
     #[error("item creation: {0}")]
     ItemState(&'static str),
     #[error("item catalog {requested:?}: {problem:?}")]
@@ -168,6 +174,9 @@ pub struct Conversion {
 }
 #[derive(Debug)]
 enum Entry {
+    Location {
+        point: Option<[f32; 2]>,
+    },
     GameCache {
         filename: String,
         live: bool,
@@ -231,12 +240,23 @@ enum Entry {
     },
     Destructable {
         creation: objects::DestructableCreation,
+        state: objects::DestructableState,
     },
     Unit {
-        record: objects::ExecutedUnit,
+        record: Box<objects::ExecutedUnit>,
     },
+    /// A unit after `RemoveUnit`; its handle stays allocated.
+    RemovedUnit,
+    /// `None` after `DestroyFogModifier`.
+    FogModifier(Option<objects::FogModifier>),
     Item {
         record: objects::ExecutedItem,
+    },
+    Effect {
+        model: String,
+        unit: HandleId,
+        attach_point: String,
+        live: bool,
     },
     /// Trigger identity, with no enabled default unless a runtime input supplies it.
     Trigger {
@@ -573,6 +593,8 @@ impl EnumHost {
     }
     pub fn kind(&self, id: HandleId) -> Result<&str, Error> {
         Ok(match self.entry(id)? {
+            Entry::Location { point: Some(_) } => "location",
+            Entry::Location { point: None } => return Err(self.error("arena", Failure::Identity)),
             Entry::GameCache { live: true, .. } => "gamecache",
             Entry::GameCache { live: false, .. } => {
                 return Err(self.error("arena", Failure::Identity));
@@ -598,7 +620,13 @@ impl EnumHost {
             Entry::CameraSetup { .. } => "camerasetup",
             Entry::Destructable { .. } => "destructable",
             Entry::Item { .. } => "item",
-            Entry::Unit { .. } => "unit",
+            Entry::Effect { live: true, .. } => "effect",
+            Entry::Effect { live: false, .. } => {
+                return Err(self.error("arena", Failure::Identity));
+            }
+            Entry::Unit { .. } | Entry::RemovedUnit => "unit",
+            Entry::FogModifier(Some(_)) => "fogmodifier",
+            Entry::FogModifier(None) => return Err(self.error("arena", Failure::Identity)),
             Entry::Trigger { .. } | Entry::DeadTrigger => "trigger",
             Entry::RegisteredUnitEvent { .. }
             | Entry::RegisteredPlayerUnitEvent(_)
@@ -713,17 +741,22 @@ mod objects;
 pub use objects::{
     AppliedCameraSetup, CameraDestination, CameraFieldRecord, CameraState, CineFilter,
     ConditionBudget, ConditionCallback, DayNightState, DeathEventRegistration, DestructableBudget,
-    DestructableCreation, ExecutedItem, ExecutedUnit, ExecutedUnitState, FileSoundState,
-    FilterBudget, FilterCallback, FilterSample, ForceBudget, GameStateEventRegistration,
-    HeroBudget, HeroProgress, ItemBudget, LabelSoundFlags, MapConfig, MapConfigBudget,
-    MapMusicSelection, MessageBudget, MessageState, ObjectHost, PlayerAdmissionError,
-    PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration, PlayerSettings,
-    PlayerStateRequestBudget, PlayerUnitEventRegistration, PresentationState, QuestBudget,
-    QuestEvent, QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration,
+    DestructableCreation, Environment, ExecutedItem, ExecutedUnit, ExecutedUnitState,
+    FileSoundState, FilterBudget, FilterCallback, FilterSample, ForceBudget,
+    GameStateEventRegistration, HeroBudget, HeroProgress, ItemBudget, LabelSoundFlags, MapConfig,
+    MapConfigBudget, MapMusicSelection, MessageBudget, MessageState, ObjectHost,
+    PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
+    PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration, PresentationState,
+    QuestBudget, QuestEvent, QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration,
     RegionRectRequest, ResearchObservation, SoundProperties, SoundState, StackedSoundAction,
     StackedSoundRequest, StartLocation, StartPriorities, StartPriority, StartupClockState,
-    StartupSettings, StockBudget, TechLimitBudget, TimedMessage, TimerEventRegistration,
-    TimerExpiry, TimerHost, TriggerActionRecord, TriggerBudget, TriggerConditionRegistration,
-    TriggerDelivery, TriggerRuntimeInput, UnitAbilities, UnitBudget, UnitEventRegistration,
-    UnitInRangeRegistration, UnitStateBudget,
+    StartupSettings, StockBudget, TechLimitBudget, TerrainFog, TimedMessage,
+    TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord, TriggerBudget,
+    TriggerConditionRegistration, TriggerDelivery, TriggerRuntimeInput, UnitAbilities,
+    UnitActivity, UnitBudget, UnitEffect, UnitEventRegistration, UnitInRangeRegistration,
+    UnitRangeEntry, UnitStateBudget,
+};
+pub use objects::{
+    CinematicScene, Combat, DestructableState, EventSubject, FiredEvent, FogModifier, Indicator,
+    MinimapPing, Vitals, Weapon,
 };

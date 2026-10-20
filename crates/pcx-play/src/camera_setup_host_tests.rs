@@ -64,7 +64,7 @@ fn create(host: &mut ObjectHost) -> Value {
 }
 
 #[test]
-fn instant_application_snapshots_the_setup_and_refuses_timed_changes_atomically() {
+fn application_snapshots_the_setup_and_refuses_nonfinite_durations_atomically() {
     let mut host = host();
     let setup = create(&mut host);
     let other = create(&mut host);
@@ -111,7 +111,7 @@ fn instant_application_snapshots_the_setup_and_refuses_timed_changes_atomically(
     )
     .unwrap();
     assert_eq!(host.applied_camera_field(field_id).unwrap(), 21.0);
-    for duration in [0.5, -1.0, f32::NAN, f32::INFINITY] {
+    for duration in [f32::NAN, f32::INFINITY] {
         assert!(
             host.native(
                 "CameraSetupApplyForceDuration",
@@ -139,6 +139,13 @@ fn instant_application_snapshots_the_setup_and_refuses_timed_changes_atomically(
         host.applied_camera_setup().unwrap().destination,
         saved.destination
     );
+    // Finite timed applications are accepted and recorded as a new application.
+    host.native(
+        "CameraSetupApplyForceDuration",
+        &[setup, Value::Bool(true), Value::Real(0.5)],
+    )
+    .unwrap();
+    assert_eq!(host.applied_camera_setup().unwrap().sequence, 3);
 }
 
 #[test]

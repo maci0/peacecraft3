@@ -189,6 +189,23 @@ impl<H: Host + Send + Sync + 'static> MapScriptSession<H> {
             .call(&name, args)
             .map_err(|error| execution_failure(&active.context, &mut active.vm, Some(id), error))
     }
+    /// Start trigger actions as one new thread; a sleep parks it in this VM.
+    pub fn run_thread(&mut self, ids: &[FunctionId]) -> Result<(), ScriptSessionError> {
+        let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
+        for &id in ids {
+            function_name(&active.context, id)?;
+        }
+        active.vm.run_thread(ids).map_err(|error| {
+            execution_failure(&active.context, &mut active.vm, ids.first().copied(), error)
+        })
+    }
+    pub fn resume_thread(&mut self, ticket: u64) -> Result<(), ScriptSessionError> {
+        let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
+        active
+            .vm
+            .resume_thread(ticket)
+            .map_err(|error| execution_failure(&active.context, &mut active.vm, None, error))
+    }
     pub fn clear(&mut self) {
         self.active = None;
     }
@@ -224,6 +241,10 @@ fn execution_failure<H: Host>(
 
 #[derive(Debug, thiserror::Error)]
 pub enum TimerSessionError {
+    #[error("range callback work budget exhausted")]
+    RangeBudget,
+    #[error("thread wake budget exhausted")]
+    WakeBudget,
     #[error("trigger condition {id:?} did not return boolean")]
     ConditionResult { id: FunctionId },
     #[error(transparent)]
@@ -242,12 +263,47 @@ impl MapScriptSession<pcx_play::map_startup_host::MapStartupHost> {
         mut budget: usize,
     ) -> Result<usize, TimerSessionError> {
         let mut delivered = 0;
+        let mut activity_work = 65536;
         loop {
+            let wake = self
+                .host()
+                .ok_or(ScriptSessionError::NoSession)?
+                .objects_mut()
+                .next_thread_wake(until)?;
+            if let Some(ticket) = wake {
+                let objects = self
+                    .host()
+                    .ok_or(ScriptSessionError::NoSession)?
+                    .objects_mut();
+                let now = objects.timer_game_time().expect("selected timer clock");
+                objects.advance_unit_activity(now, &mut activity_work)?;
+                budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
+                self.resume_thread(ticket)?;
+                delivered += 1;
+                continue;
+            }
             let expiry = self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
                 .objects_mut()
                 .next_timer_expiry(until, &mut budget)?;
+            let movement = {
+                let objects = self
+                    .host()
+                    .ok_or(ScriptSessionError::NoSession)?
+                    .objects_mut();
+                let now = objects.timer_game_time().expect("selected timer clock");
+                objects.advance_unit_activity(now, &mut activity_work)
+            };
+            if let Err(error) = movement {
+                if let Some(expiry) = expiry {
+                    self.host()
+                        .ok_or(ScriptSessionError::NoSession)?
+                        .objects_mut()
+                        .finish_timer_expiry(expiry)?;
+                }
+                return Err(error.into());
+            }
             let Some(expiry) = expiry else {
                 return Ok(delivered);
             };
@@ -272,10 +328,7 @@ impl MapScriptSession<pcx_play::map_startup_host::MapStartupHost> {
                             accepted &= value;
                         }
                         if accepted {
-                            for &id in &trigger.actions {
-                                let ticket = self.callback_ticket(id)?;
-                                self.call_callback(&ticket, &[])?;
-                            }
+                            self.run_thread(&trigger.actions)?;
                         }
                         Ok(())
                     })();
@@ -299,4 +352,127 @@ impl MapScriptSession<pcx_play::map_startup_host::MapStartupHost> {
             delivered += 1;
         }
     }
+}
+
+/// One completed script/tick boundary; registration itself never invokes a filter.
+/// Effects before a later callback failure remain, as with timed delivery.
+fn drain_unit_ranges(
+    context: &Arc<ParsedMapContext>,
+    vm: &mut OwnedVm<OwnedLocalizedHost<pcx_play::map_startup_host::MapStartupHost>>,
+    mut work: usize,
+) -> Result<usize, TimerSessionError> {
+    if !vm.host().inner.objects().unit_range_runtime_enabled() {
+        return Ok(0);
+    }
+    let entries = vm.host().inner.objects_mut().poll_unit_ranges(&mut work)?;
+    let mut delivered = 0;
+    for entry in entries {
+        let filter = vm
+            .host()
+            .inner
+            .objects_mut()
+            .begin_unit_range_entry(entry)?;
+        let result = (|| -> Result<bool, TimerSessionError> {
+            if let Some(id) = filter {
+                let Value::Bool(accepted) = call_range_callback(context, vm, &mut work, id)? else {
+                    return Err(TimerSessionError::ConditionResult { id });
+                };
+                if !accepted {
+                    return Ok(false);
+                }
+            }
+            let Some(trigger) = vm.host().inner.objects_mut().begin_unit_range_trigger()? else {
+                return Ok(false);
+            };
+            let mut conditions_accepted = true;
+            for id in trigger.conditions {
+                let Value::Bool(accepted) = call_range_callback(context, vm, &mut work, id)? else {
+                    return Err(TimerSessionError::ConditionResult { id });
+                };
+                conditions_accepted &= accepted;
+            }
+            if !conditions_accepted {
+                return Ok(false);
+            }
+            work = work
+                .checked_sub(trigger.actions.len())
+                .ok_or(TimerSessionError::RangeBudget)?;
+            for &id in &trigger.actions {
+                function_name(context, id)?;
+            }
+            vm.run_thread(&trigger.actions).map_err(|error| {
+                execution_failure(context, vm, trigger.actions.first().copied(), error)
+            })?;
+            Ok(true)
+        })();
+        vm.host().inner.objects_mut().finish_unit_range_entry();
+        delivered += usize::from(result?);
+    }
+    Ok(delivered)
+}
+
+impl MapScriptSession<pcx_play::map_startup_host::MapStartupHost> {
+    /// One script boundary: range entries, then region membership and every
+    /// queued event, each as a filtered trigger thread.
+    pub fn advance_unit_ranges(&mut self, work: usize) -> Result<usize, TimerSessionError> {
+        let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
+        let mut delivered = drain_unit_ranges(&active.context, &mut active.vm, work)?;
+        let mut work = work;
+        active
+            .vm
+            .host()
+            .inner
+            .objects_mut()
+            .poll_region_events(&mut work)?;
+        while let Some(fired) = active.vm.host().inner.objects_mut().take_fired_event() {
+            let Some(trigger) = active
+                .vm
+                .host()
+                .inner
+                .objects_mut()
+                .begin_fired_event(&fired)?
+            else {
+                continue;
+            };
+            let result = (|| -> Result<bool, TimerSessionError> {
+                for id in fired.filter.into_iter().chain(trigger.conditions) {
+                    let Value::Bool(accepted) =
+                        call_range_callback(&active.context, &mut active.vm, &mut work, id)?
+                    else {
+                        return Err(TimerSessionError::ConditionResult { id });
+                    };
+                    if !accepted {
+                        return Ok(false);
+                    }
+                }
+                for &id in &trigger.actions {
+                    function_name(&active.context, id)?;
+                }
+                active.vm.run_thread(&trigger.actions).map_err(|error| {
+                    execution_failure(
+                        &active.context,
+                        &mut active.vm,
+                        trigger.actions.first().copied(),
+                        error,
+                    )
+                })?;
+                Ok(true)
+            })();
+            active.vm.host().inner.objects_mut().finish_fired_event();
+            delivered += usize::from(result?);
+        }
+        Ok(delivered)
+    }
+}
+
+fn call_range_callback(
+    context: &Arc<ParsedMapContext>,
+    vm: &mut OwnedVm<OwnedLocalizedHost<pcx_play::map_startup_host::MapStartupHost>>,
+    work: &mut usize,
+    id: FunctionId,
+) -> Result<Value, TimerSessionError> {
+    *work = work.checked_sub(1).ok_or(TimerSessionError::RangeBudget)?;
+    let name = function_name(context, id)?;
+    vm.call(&name, &[])
+        .map_err(|error| execution_failure(context, vm, Some(id), error).into())
 }

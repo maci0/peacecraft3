@@ -71,6 +71,28 @@ pub struct DestructableCreation {
     pub dead: bool,
 }
 
+/// Script-changed runtime state; `dead` starts from the creation variant.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DestructableState {
+    pub invulnerable: bool,
+    pub dead: bool,
+    pub hidden: bool,
+}
+
+const RUNTIME: [(&str, &[&str], &str); 7] = [
+    (
+        "SetDestructableInvulnerable",
+        &["destructable", "boolean"],
+        "nothing",
+    ),
+    ("IsDestructableInvulnerable", &["destructable"], "boolean"),
+    ("KillDestructable", &["destructable"], "nothing"),
+    ("ShowDestructable", &["destructable", "boolean"], "nothing"),
+    ("GetDestructableX", &["destructable"], "real"),
+    ("GetDestructableY", &["destructable"], "real"),
+    ("GetDestructableTypeId", &["destructable"], "integer"),
+];
+
 pub(super) struct Admission {
     max_records: usize,
     records: usize,
@@ -132,6 +154,15 @@ impl ObjectHost {
             }
             spans[index] = Some(native.span);
         }
+        for (name, args, result) in RUNTIME {
+            let Some(native) = self.inner.program.natives().get(name) else {
+                continue;
+            };
+            Self::contract(&self.inner, name, args, result, false, Some(KIND))?;
+            if native.source != source {
+                return Err(self.inner.error(name, Failure::Source));
+            }
+        }
         self.destructables = Some(Admission {
             max_records: budget.max_records,
             records: 0,
@@ -169,7 +200,21 @@ impl ObjectHost {
     /// Executed creation for an identity of this family. Other families are refused.
     pub fn destructable_creation(&self, id: HandleId) -> Result<DestructableCreation, Error> {
         match self.inner.entry(id)? {
-            Entry::Destructable { creation } => Ok(*creation),
+            Entry::Destructable { creation, .. } => Ok(*creation),
+            _ => Err(self.inner.error(SHAPES[0].name, Failure::WrongFamily)),
+        }
+    }
+
+    pub fn executed_destructables(&self) -> impl Iterator<Item = DestructableCreation> + '_ {
+        self.inner.arena.iter().filter_map(|entry| match entry {
+            Entry::Destructable { creation, .. } => Some(*creation),
+            _ => None,
+        })
+    }
+
+    pub fn destructable_state(&self, id: HandleId) -> Result<DestructableState, Error> {
+        match self.inner.entry(id)? {
+            Entry::Destructable { state, .. } => Ok(*state),
             _ => Err(self.inner.error(SHAPES[0].name, Failure::WrongFamily)),
         }
     }
@@ -179,9 +224,66 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
+        if RUNTIME.iter().any(|&(n, ..)| n == name) {
+            self.destructables.as_ref()?;
+            self.inner.program.natives().get(name)?;
+            return Some(self.destructable_runtime(name, args));
+        }
         let index = SHAPES.iter().position(|shape| shape.name == name)?;
         self.destructables.as_ref()?.spans[index]?;
         Some(self.create_destructable(index, args))
+    }
+
+    /// A null destructable is ignored by setters and reads as zero/false, as
+    /// with other widget natives in this host.
+    fn destructable_runtime(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let (target, flag) = match args {
+            [target] => (target, None),
+            [target, Value::Bool(flag)] => (target, Some(*flag)),
+            _ => return Err(self.inner.error(name, Failure::Signature)),
+        };
+        let id = match target {
+            Value::Handle(id) => *id,
+            Value::Null => {
+                return Ok(match name {
+                    "IsDestructableInvulnerable" => Value::Bool(false),
+                    "GetDestructableX" | "GetDestructableY" => Value::Real(0.0),
+                    "GetDestructableTypeId" => Value::Int(0),
+                    _ => Value::Null,
+                });
+            }
+            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+        };
+        if !matches!(
+            self.inner
+                .entry(id)
+                .map_err(|e| self.inner.error(name, e.failure))?,
+            Entry::Destructable { .. }
+        ) {
+            return Err(self.inner.error(name, Failure::WrongFamily));
+        }
+        let Ok(Entry::Destructable { creation, state }) = self.inner.entry_mut(id) else {
+            unreachable!("checked destructable entry");
+        };
+        Ok(match (name, flag) {
+            ("SetDestructableInvulnerable", Some(flag)) => {
+                state.invulnerable = flag;
+                Value::Null
+            }
+            ("ShowDestructable", Some(flag)) => {
+                state.hidden = !flag;
+                Value::Null
+            }
+            ("KillDestructable", None) => {
+                state.dead = true;
+                Value::Null
+            }
+            ("IsDestructableInvulnerable", None) => Value::Bool(state.invulnerable),
+            ("GetDestructableX", None) => Value::Real(creation.x),
+            ("GetDestructableY", None) => Value::Real(creation.y),
+            ("GetDestructableTypeId", None) => Value::Int(creation.objectid),
+            _ => return Err(self.inner.error(name, Failure::Signature)),
+        })
     }
 
     fn admitted(&self) -> Result<&Admission, Error> {
@@ -210,9 +312,16 @@ impl ObjectHost {
         if records >= max_records {
             return Err(fail(Failure::Budget("destructable creation")));
         }
-        let id = self
-            .inner
-            .allocate(Entry::Destructable { creation }, shape.name)?;
+        let id = self.inner.allocate(
+            Entry::Destructable {
+                creation,
+                state: DestructableState {
+                    dead: creation.dead,
+                    ..DestructableState::default()
+                },
+            },
+            shape.name,
+        )?;
         let Some(admitted) = self.destructables.as_mut() else {
             return Err(self
                 .inner

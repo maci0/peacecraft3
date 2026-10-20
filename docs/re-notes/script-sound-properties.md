@@ -56,3 +56,28 @@ This is retained execution state. Sound playback, stacked ambient registration,
 effective label/native assignment precedence, listener/coordinate mapping and
 audible/native parity remain open. Launcher bank preparation and the composed
 gameplay Host factory are also not closed by these tests.
+
+## Unit attachment
+
+`AttachSoundToUnit` is checked when the unit catalog is admitted after sound
+properties, and must share the unit declaration source. It stores the executed
+unit handle in `SoundProperties::attached_unit`, not copied coordinates.
+`ObjectHost::sound_attached_position` reads that unit's current accepted
+position, so the value follows movement, reveal relocation and reattachment.
+A successful `SetSoundPosition` clears the attachment; a refused one leaves both
+fields unchanged.
+
+Static reading of the local Legacy executable (sha256 `3f2ed012...`, bounded
+instruction windows, not a full
+control-flow proof): the native wrapper skips a null sound or unit without
+detaching, applies no 3D guard, and keeps a live unit reference in the sound
+backend. Explicit `SetSoundPosition` releases that reference. The recreation
+follows these rules, but refuses stale and wrong-family handles instead of
+ignoring them. No height or attenuation rule is established, so the getter
+returns ground X/Y only.
+
+Human01 attaches two explicitly 2D dialogue sounds (`SetSoundDuration`, dialogue
+label parameters, fades 10) and later 3D unit sounds. The application consumer in
+`script_audio.rs` still refuses 3D, fades, duration and parameter profiles per
+sound, so these sounds stay silent and appear in the refusal report. Spatial
+playback, listener mapping and audible parity remain open.

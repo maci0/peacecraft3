@@ -734,6 +734,25 @@ fn hydrate(set: &mut [pcx_mpq::MpqArchive]) -> Result<HydratedMenuAssets, String
         };
         match extract_unique(set, &path) {
             Ok(bytes) => {
+                if fdf.frame("EditionButton").is_some() {
+                    let client = client_images();
+                    if let Some(image) = client.pending.as_ref() {
+                        let art = pcx_play::menu_edition::ButtonArt::read(
+                            &image.bytes,
+                            &pcx_play::scripts::AssetIdentity {
+                                source: image.source.clone(),
+                                edition: "selected menu client".into(),
+                                version: "reviewed Legacy 1.29.2.9231".into(),
+                            },
+                            expansion,
+                        )?;
+                        for path in art.textures {
+                            put(&path, None, extract_unique(set, &path)?)?;
+                        }
+                    } else {
+                        notes.push("EDITION_ART_UNAVAILABLE: selected client image missing".into());
+                    }
+                }
                 crate::menu_fog::MenuFog::checked(&fog_table, usize::from(expansion)).map_err(
                     |e| {
                         format!(

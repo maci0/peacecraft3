@@ -16,6 +16,8 @@ use std::sync::Weak;
 pub(crate) struct CampaignMessages {
     session: Option<Weak<()>>,
     root: Option<Entity>,
+    /// Transmission panel and the start time of the scene it shows.
+    scene: Option<(Entity, f64)>,
     font: Option<Handle<Font>>,
     style: Option<MessageStyle>,
     attempted: bool,
@@ -37,6 +39,11 @@ fn remove_root(commands: &mut Commands, state: &mut CampaignMessages) {
     }
     state.visible.clear();
 }
+fn remove_scene(commands: &mut Commands, state: &mut CampaignMessages) {
+    if let Some((root, _)) = state.scene.take() {
+        commands.entity(root).despawn();
+    }
+}
 fn project(
     mut commands: Commands,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
@@ -53,6 +60,7 @@ fn project(
         _ => false,
     } {
         remove_root(&mut commands, &mut state);
+        remove_scene(&mut commands, &mut state);
         if let Some(font) = state.font.take() {
             fonts.remove(font.id());
         }
@@ -72,6 +80,19 @@ fn project(
     if !active {
         return;
     }
+    // A scene shows until it ends or its scene duration elapses.
+    let scene = session.host().and_then(|h| {
+        let objects = h.objects();
+        let now = objects.timer_game_time()?;
+        objects
+            .cinematic_scene()
+            .filter(|s| now < s.started + f64::from(s.scene_duration))
+            .cloned()
+    });
+    if state.scene.map(|(_, at)| at) != scene.as_ref().map(|s| s.started) {
+        remove_scene(&mut commands, &mut state);
+    }
+    let pending_scene = scene.filter(|_| state.scene.is_none());
     let Some(entries) = session.host().and_then(|h| {
         let objects = h.objects();
         let entries: Vec<_> = objects
@@ -80,14 +101,17 @@ fn project(
             .map(|(messages, now)| messages.visible(now).collect())
             .unwrap_or_default();
         let visible: Vec<_> = entries.iter().map(|entry| entry.sequence).collect();
-        (visible != state.visible).then(|| entries.into_iter().cloned().collect::<Vec<_>>())
+        (visible != state.visible || pending_scene.is_some())
+            .then(|| entries.into_iter().cloned().collect::<Vec<_>>())
     }) else {
         return;
     };
-    let visible = entries.iter().map(|entry| entry.sequence).collect();
+    let visible: Vec<u64> = entries.iter().map(|entry| entry.sequence).collect();
     if entries.is_empty() {
         remove_root(&mut commands, &mut state);
-        return;
+        if pending_scene.is_none() {
+            return;
+        }
     }
     if state.font.is_none() {
         if state.attempted {
@@ -145,6 +169,20 @@ fn project(
             }
         }
     }
+    if let Some(scene) = &pending_scene {
+        match paint_scene(
+            &mut commands,
+            scene,
+            state.style.as_ref().expect("loaded style"),
+            state.font.as_ref().expect("loaded font"),
+        ) {
+            Ok(root) => state.scene = Some((root, scene.started)),
+            Err(error) => state.last_error = Some(error),
+        }
+    }
+    if entries.is_empty() || visible == state.visible {
+        return;
+    }
     let result = paint(
         &mut commands,
         &entries,
@@ -165,6 +203,84 @@ fn project(
         }
     }
 }
+/// Transmission panel: speaker and text at the bottom of the campaign view.
+fn paint_scene(
+    commands: &mut Commands,
+    scene: &pcx_play::playercolor_host::CinematicScene,
+    style: &MessageStyle,
+    font: &Handle<Font>,
+) -> Result<Entity, String> {
+    // shortcut: centred bottom panel; render the authored CinematicPanel FDF before
+    // claiming transmission layout parity.
+    let height_vh = style.height / crate::mainmenu::FRAME_H * 100.;
+    if !height_vh.is_finite() || height_vh <= 0.0 {
+        return Err("message font height is unrepresentable".into());
+    }
+    let text = crate::rich_text::parse(&scene.text).map_err(|e| e.to_string())?;
+    if !text.unsupported.is_empty() {
+        return Err("transmission contains unsupported text substitutions".into());
+    }
+    let text_font = TextFont {
+        font: bevy::text::FontSource::Handle(font.clone()),
+        font_size: bevy::text::FontSize::Vh(height_vh),
+        ..default()
+    };
+    let root = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(20.),
+                width: percent(60.),
+                bottom: percent(4.),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+            CampaignHud,
+            Pickable::IGNORE,
+            Name::new("Campaign transmission"),
+        ))
+        .id();
+    let speaker = commands
+        .spawn((
+            Text::new(scene.speaker.clone()),
+            text_font.clone(),
+            // shortcut: the speaker should take the scene's player colour from the
+            // selected TeamColor textures; plain text until that palette is shared.
+            TextColor(Color::WHITE),
+            Pickable::IGNORE,
+        ))
+        .id();
+    let line = commands
+        .spawn((
+            Text::new(""),
+            text_font.clone(),
+            TextColor(Color::WHITE),
+            TextLayout::new(
+                bevy::text::Justify::Left,
+                bevy::text::LineBreak::WordBoundary,
+            ),
+            Pickable::IGNORE,
+        ))
+        .id();
+    for span in text.spans {
+        let color = span
+            .colour
+            .map(|c| Color::srgba(c[0], c[1], c[2], c[3]))
+            .unwrap_or(Color::WHITE);
+        let child = commands
+            .spawn((
+                TextSpan::new(span.text),
+                text_font.clone(),
+                TextColor(color),
+                Pickable::IGNORE,
+            ))
+            .id();
+        commands.entity(line).add_child(child);
+    }
+    commands.entity(root).add_children(&[speaker, line]);
+    Ok(root)
+}
+
 pub(crate) fn paint(
     commands: &mut Commands,
     entries: &[TimedMessage],

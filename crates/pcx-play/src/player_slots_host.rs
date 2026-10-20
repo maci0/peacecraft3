@@ -1,4 +1,4 @@
-//! Explicit current slot-state input on existing player rows.
+//! Explicit current slot-state input, including not-yet-created player rows.
 use super::{Error, Failure, ObjectHost, ParsedMapContext};
 use pcx_script::HandleId;
 use std::sync::Arc;
@@ -14,6 +14,33 @@ impl ObjectHost {
         &mut self,
         context: &Arc<ParsedMapContext>,
         states: &[(HandleId, HandleId)],
+    ) -> Result<(), Error> {
+        let fail = |reason| self.inner.error("GetPlayerSlotState", reason);
+        if states.len() > self.player_slots().unwrap_or(0) {
+            return Err(fail(Failure::Budget("player slot states")));
+        }
+        let mut numbered = Vec::new();
+        numbered
+            .try_reserve_exact(states.len())
+            .map_err(|_| fail(Failure::Capacity))?;
+        for (player, state) in states {
+            let number = self
+                .player_settings(*player)
+                .map_err(|e| fail(e.failure))?
+                .number;
+            numbered.push((number, *state));
+        }
+        self.admit_startup_player_slot_numbers(context, &numbered)
+    }
+    /// Replace explicit `(source slot number, playerslotstate)` startup input.
+    ///
+    /// Entries may precede lazy Player creation. Missing numbers stay unset; no
+    /// player handles are minted. Context, contracts, domains and freshness use
+    /// the same rules as the identity-based admission above.
+    pub fn admit_startup_player_slot_numbers(
+        &mut self,
+        context: &Arc<ParsedMapContext>,
+        states: &[(i32, HandleId)],
     ) -> Result<(), Error> {
         let name = "GetPlayerSlotState";
         let fail = |reason| self.inner.error(name, reason);
@@ -106,9 +133,14 @@ impl ObjectHost {
         if kind != "handle" {
             return Err(fail(Failure::Signature));
         }
-        for (at, (player, state)) in states.iter().enumerate() {
-            self.player_settings(*player).map_err(|e| fail(e.failure))?;
-            if states[..at].iter().any(|(prior, _)| prior == player) {
+        for (at, (number, state)) in states.iter().enumerate() {
+            if usize::try_from(*number)
+                .ok()
+                .is_none_or(|n| n >= players.slots)
+            {
+                return Err(fail(Failure::OutsideDomain(*number)));
+            }
+            if states[..at].iter().any(|(prior, _)| prior == number) {
                 return Err(fail(Failure::PlayerState("duplicate slot-state player")));
             }
             let enumerand = self
@@ -119,20 +151,24 @@ impl ObjectHost {
                 return Err(fail(Failure::OutsideDomain(enumerand)));
             }
         }
+        let mut copy = Vec::new();
+        copy.try_reserve_exact(states.len())
+            .map_err(|_| fail(Failure::Capacity))?;
+        copy.extend_from_slice(states);
         let players = self.players.as_mut().expect("checked player context");
         for row in &mut players.rows {
             row.slot_state = states
                 .iter()
-                .find(|(player, _)| *player == row.identity)
+                .find(|(number, _)| *number == row.number)
                 .map(|(_, state)| *state);
         }
-        players.slot_states_admitted = true;
+        players.slot_states = Some(copy);
         Ok(())
     }
     /// Retire the snapshot on external participation changes; setup assignments stay.
     pub fn invalidate_startup_player_slots(&mut self) {
         if let Some(players) = self.players.as_mut() {
-            players.slot_states_admitted = false;
+            players.slot_states = None;
             for row in &mut players.rows {
                 row.slot_state = None;
             }

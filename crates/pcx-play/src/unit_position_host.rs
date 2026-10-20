@@ -106,33 +106,14 @@ impl ObjectHost {
     }
 
     pub(super) fn prepare_unit_position(
-        &self,
+        &mut self,
         record: &ExecutedUnit,
     ) -> Result<Option<Prepared>, Error> {
-        let Some(placement) = &self.unit_placement else {
+        let Some(placement) = &mut self.unit_placement else {
             return Ok(None);
         };
         let fail = |text| self.inner.error("CreateUnit", Failure::UnitState(text));
-        let movement = text(&record.definition, SlkId::UnitData, "movetp").map_err(fail)?;
-        let path = text(&record.definition, SlkId::UnitData, "pathTex").map_err(fail)?;
-        let radius = match movement {
-            "_" | "none" | "" => None,
-            "foot" | "horse" => {
-                let value =
-                    field(&record.definition, SlkId::UnitBalance, "collision").map_err(fail)?;
-                let radius = match value {
-                    FieldValue::Cell(value) => value.parse::<f32>().ok(),
-                    FieldValue::Override(
-                        pcx_objects::Value::Real(value) | pcx_objects::Value::Unreal(value),
-                    ) => Some(*value),
-                    _ => None,
-                }
-                .filter(|v| v.is_finite() && *v >= 0.0)
-                .ok_or_else(|| fail("finite collision radius required"))?;
-                Some(radius)
-            }
-            _ => return Err(fail("movement type is outside admitted creation placement")),
-        };
+        let (radius, path) = geometry(&record.definition).map_err(fail)?;
         placement
             .prepare([record.x, record.y], radius, path, record.face)
             .map(Some)
@@ -155,6 +136,9 @@ impl ObjectHost {
         let mut found = Vec::new();
         for (index, entry) in self.inner.arena.iter().enumerate() {
             if let Entry::Unit { record } = entry {
+                if !record.shown {
+                    continue;
+                }
                 let [x, y] = record.position.ok_or_else(|| {
                     self.inner
                         .error(name, Failure::UnitState("accepted unit position missing"))
@@ -194,10 +178,30 @@ impl ObjectHost {
             _ => return Err(self.inner.error(name, Failure::WrongFamily)),
         };
         let (group, candidates) = self.rectangle_candidates(group, *rect)?;
-        if candidates.is_empty() {
+        self.begin_unit_enumeration(name, group, candidates, Some(predicate))
+    }
+
+    /// Replace `group` with `candidates` that pass `predicate`, in order. Without a
+    /// predicate every candidate joins immediately.
+    pub(super) fn begin_unit_enumeration(
+        &mut self,
+        name: &str,
+        group: HandleId,
+        candidates: Vec<HandleId>,
+        predicate: Option<FunctionId>,
+    ) -> Result<Option<ScriptCall>, Error> {
+        let Some(predicate) = predicate.filter(|_| !candidates.is_empty()) else {
             self.members.retain(|(g, _)| *g != group);
+            if self.members.len() + candidates.len() > self.group_limit.unwrap_or(0) {
+                return Err(self.inner.error(name, Failure::Budget("group membership")));
+            }
+            self.members
+                .try_reserve(candidates.len())
+                .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+            self.members
+                .extend(candidates.into_iter().map(|unit| (group, unit)));
             return Ok(Some(ScriptCall::Return(Value::Null)));
-        }
+        };
         if self.callbacks.len() >= pcx_script::eval::MAX_CALL_DEPTH as usize {
             return Err(self
                 .inner
@@ -274,6 +278,8 @@ impl ObjectHost {
                         }
                         _ => None,
                     })
+                    .or_else(|| self.range_filter_unit().map(Value::Handle))
+                    .or_else(|| self.events.subject.unit.map(Value::Handle))
                     .unwrap_or(Value::Null))
             } else {
                 Err(self
@@ -337,7 +343,11 @@ fn field<'a>(
         .map_err(|_| "unsupported placement catalog field")
 }
 
-fn text<'a>(definition: &'a Definition, slk: SlkId, column: &str) -> Result<&'a str, &'static str> {
+pub(super) fn text<'a>(
+    definition: &'a Definition,
+    slk: SlkId,
+    column: &str,
+) -> Result<&'a str, &'static str> {
     match field(definition, slk, column)? {
         FieldValue::Cell(value) => Ok(value),
         FieldValue::Override(pcx_objects::Value::Str(value)) => {
@@ -345,4 +355,27 @@ fn text<'a>(definition: &'a Definition, slk: SlkId, column: &str) -> Result<&'a 
         }
         _ => Err("text placement field required"),
     }
+}
+
+pub(super) fn geometry(definition: &Definition) -> Result<(Option<f32>, &str), &'static str> {
+    let movement = text(definition, SlkId::UnitData, "movetp")?;
+    let path = text(definition, SlkId::UnitData, "pathTex")?;
+    let radius = match movement {
+        "_" | "none" | "" => None,
+        "foot" | "horse" => {
+            let value = field(definition, SlkId::UnitBalance, "collision")?;
+            let radius = match value {
+                FieldValue::Cell(value) => value.parse::<f32>().ok(),
+                FieldValue::Override(
+                    pcx_objects::Value::Real(value) | pcx_objects::Value::Unreal(value),
+                ) => Some(*value),
+                _ => None,
+            }
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .ok_or("finite collision radius required")?;
+            Some(radius)
+        }
+        _ => return Err("movement type is outside admitted creation placement"),
+    };
+    Ok((radius, path))
 }

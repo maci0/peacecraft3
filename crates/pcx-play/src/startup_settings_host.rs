@@ -204,6 +204,53 @@ impl ObjectHost {
         self.startup_version = Some(version);
         Ok(())
     }
+    /// Explicit game input from the selected `ConvertGameDifficulty` domain.
+    pub fn admit_game_difficulty(
+        &mut self,
+        context: &Arc<ParsedMapContext>,
+        difficulty: HandleId,
+    ) -> Result<(), Error> {
+        let name = "GetGameDifficulty";
+        let fail = |reason| self.inner.error(name, reason);
+        if self
+            .player_context()
+            .is_none_or(|selected| !Arc::ptr_eq(selected, context))
+        {
+            return Err(fail(Failure::SettingsState("map context is not admitted")));
+        }
+        Self::contract(&self.inner, name, &[], "gamedifficulty", true, None)?;
+        if self
+            .inner
+            .program
+            .natives()
+            .get("SetGameDifficulty")
+            .is_some()
+        {
+            Self::contract(
+                &self.inner,
+                "SetGameDifficulty",
+                &["gamedifficulty"],
+                "nothing",
+                false,
+                None,
+            )?;
+        }
+        let conversion = self
+            .inner
+            .conversions
+            .get("ConvertGameDifficulty")
+            .filter(|c| c.kind == "gamedifficulty")
+            .ok_or_else(|| fail(Failure::Signature))?;
+        let value = self
+            .inner
+            .symbolic_value(difficulty, "gamedifficulty")
+            .map_err(|e| fail(e.failure))?;
+        if !conversion.domain.contains(&value) {
+            return Err(fail(Failure::OutsideDomain(value)));
+        }
+        self.game_difficulty = Some(difficulty);
+        Ok(())
+    }
     pub fn startup_settings(&self) -> Option<StartupSettings> {
         self.startup_settings
     }
@@ -215,85 +262,99 @@ impl ObjectHost {
     pub fn invalidate_startup_settings(&mut self) {
         self.startup_settings = None;
     }
-    fn legacy_campaign_menu_native(&self, args: &[Value]) -> Result<Value, Error> {
+    /// Enumerand of one selected `version` constant initialized by `ConvertVersion`.
+    fn version_constant(&self, name: &str, global: &str, source: &str) -> Result<i32, Error> {
+        let fail = |reason| self.inner.error(name, reason);
+        let declared = self
+            .inner
+            .program
+            .globals()
+            .iter()
+            .find(|g| g.name == global)
+            .ok_or_else(|| fail(Failure::SettingsState("missing version constant")))?;
+        if declared.source != *source {
+            return Err(fail(Failure::Source));
+        }
+        if !declared.is_constant
+            || declared.array
+            || declared.ty.array
+            || declared.ty.kind.name() != "version"
+        {
+            return Err(fail(Failure::Initializer(declared.name.clone())));
+        }
+        let Some(Expr::Call {
+            callee, args: init, ..
+        }) = &declared.init
+        else {
+            return Err(fail(Failure::Initializer(declared.name.clone())));
+        };
+        let (Expr::Ident(conversion, _), [value]) = (callee.as_ref(), init.as_slice()) else {
+            return Err(fail(Failure::Initializer(declared.name.clone())));
+        };
+        if conversion.as_str() != "ConvertVersion" {
+            return Err(fail(Failure::Initializer(declared.name.clone())));
+        }
+        let mut work = 128;
+        super::super::integer(value, 16, &mut work).map_err(fail)
+    }
+
+    /// Frozen Throne: the client returns before reading the race. Reign of Chaos:
+    /// the executed race is retained for the campaign glue screen.
+    fn legacy_campaign_menu_native(&mut self, args: &[Value]) -> Result<Value, Error> {
         let name = "SetCampaignMenuRace";
         let fail = |reason| self.inner.error(name, reason);
         Self::contract(&self.inner, name, &["race"], "nothing", false, None)?;
         Self::contract(&self.inner, "ConvertRace", &["integer"], "race", true, None)?;
-        let source = &self
+        let source = self
             .inner
             .program
             .natives()
             .get("VersionGet")
             .ok_or_else(|| fail(Failure::Signature))?
-            .source;
+            .source
+            .clone();
         if [name, "ConvertRace"].iter().any(|n| {
             self.inner
                 .program
                 .natives()
                 .get(n)
-                .is_none_or(|n| &n.source != source)
+                .is_none_or(|n| n.source != source)
         }) {
             return Err(fail(Failure::Source));
         }
-        let global = self
-            .inner
-            .program
-            .globals()
-            .iter()
-            .find(|g| g.name == "VERSION_FROZEN_THRONE")
-            .ok_or_else(|| {
-                fail(Failure::SettingsState(
-                    "missing Frozen Throne version constant",
-                ))
-            })?;
-        if global.source != *source {
-            return Err(fail(Failure::Source));
-        }
-        if !global.is_constant
-            || global.array
-            || global.ty.array
-            || global.ty.kind.name() != "version"
-        {
-            return Err(fail(Failure::Initializer(global.name.clone())));
-        }
-        let Some(Expr::Call {
-            callee, args: init, ..
-        }) = &global.init
-        else {
-            return Err(fail(Failure::Initializer(global.name.clone())));
-        };
-        let (Expr::Ident(conversion, _), [value]) = (callee.as_ref(), init.as_slice()) else {
-            return Err(fail(Failure::Initializer(global.name.clone())));
-        };
-        if conversion.as_str() != "ConvertVersion" {
-            return Err(fail(Failure::Initializer(global.name.clone())));
-        }
-        let mut work = 128;
-        let expected = super::super::integer(value, 16, &mut work).map_err(fail)?;
         let version = self
             .startup_version
             .ok_or_else(|| fail(Failure::SettingsState("missing explicit runtime version")))?;
-        if self.inner.symbolic_value(version, "version")? != expected {
-            return Err(fail(Failure::SettingsState(
-                "campaign menu selection is unsupported for this runtime version",
-            )));
-        }
-        match args {
-            [Value::Null] => {}
+        let version = self.inner.symbolic_value(version, "version")?;
+        let race = match args {
+            [Value::Null] => None,
             [Value::Handle(race)] => {
                 self.inner
                     .symbolic_value(*race, "race")
                     .map_err(|e| fail(e.failure))?;
+                Some(*race)
             }
             _ => {
                 return Err(fail(Failure::SettingsState(
                     "expected race identity or null",
                 )));
             }
+        };
+        if version == self.version_constant(name, "VERSION_FROZEN_THRONE", &source)? {
+            return Ok(Value::Null);
         }
-        // The selected legacy setter returns before reading race in Frozen Throne mode.
-        Ok(Value::Null)
+        if version == self.version_constant(name, "VERSION_REIGN_OF_CHAOS", &source)? {
+            self.campaign_menu_race = Some(race);
+            return Ok(Value::Null);
+        }
+        Err(fail(Failure::SettingsState(
+            "campaign menu selection is unsupported for this runtime version",
+        )))
+    }
+
+    /// Executed Reign of Chaos `SetCampaignMenuRace`; `Some(None)` is a null race.
+    pub fn campaign_menu_race(&self) -> Option<Option<HandleId>> {
+        self.campaign_menu_race
     }
     pub(super) fn startup_settings_native(
         &mut self,
@@ -302,6 +363,17 @@ impl ObjectHost {
     ) -> Option<Result<Value, Error>> {
         if name == "SetCampaignMenuRace" && self.startup_version.is_some() {
             return Some(self.legacy_campaign_menu_native(args));
+        }
+        if matches!(name, "GetGameDifficulty" | "SetGameDifficulty") {
+            self.game_difficulty?;
+            return Some(match args {
+                [] => Ok(Value::Handle(self.game_difficulty.expect("admitted"))),
+                [Value::Handle(id)] if self.inner.symbolic_value(*id, "gamedifficulty").is_ok() => {
+                    self.game_difficulty = Some(*id);
+                    Ok(Value::Null)
+                }
+                _ => Err(self.inner.error(name, Failure::WrongFamily)),
+            });
         }
         if name == "VersionGet" {
             let version = self.startup_version?;

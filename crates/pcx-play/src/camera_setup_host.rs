@@ -239,16 +239,22 @@ impl ObjectHost {
                 let [Value::Bool(do_pan), Value::Real(duration)] = rest else {
                     return Err(fail("boolean pan and real duration required"));
                 };
-                // shortcut: only instant application, add timed interpolation before admitting pans.
-                if *duration != 0.0 {
-                    return Err(fail("timed camera application is unsupported"));
+                if !duration.is_finite() {
+                    return Err(fail("finite duration required"));
                 }
                 let destination = if *do_pan {
                     self.camera_setup_destination(*setup)?
+                } else if let Some(view) = self.applied_camera_setup() {
+                    view.destination
                 } else {
-                    self.applied_camera_setup()
-                        .ok_or_else(|| fail("non-panning application needs a prior camera target"))?
-                        .destination
+                    let [x, y] = self.camera_target().ok_or_else(|| {
+                        fail("non-panning application needs a prior camera target")
+                    })?;
+                    CameraDestination {
+                        x,
+                        y,
+                        duration: 0.0,
+                    }
                 };
                 let sequence = self
                     .applied_camera_setup()
@@ -261,12 +267,15 @@ impl ObjectHost {
                     .map_err(|_| self.inner.error(name, Failure::Capacity))?;
                 fields.extend_from_slice(source);
                 let admission = self.camera_setups.as_mut().expect("admitted camera setups");
+                let live: Vec<_> = fields.iter().map(|f| (f.enumerand, f.value)).collect();
                 admission.applied = Some(AppliedCameraSetup {
                     sequence,
                     setup: *setup,
                     fields,
                     destination,
                 });
+                let target = do_pan.then_some([destination.x, destination.y]);
+                self.apply_camera_view(&live, target, *duration);
                 Ok(Value::Null)
             }
             "CameraSetupGetField" => {

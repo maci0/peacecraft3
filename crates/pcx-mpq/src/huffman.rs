@@ -64,8 +64,9 @@ impl HuffmanTable {
     /// source build, not a general disassembler. Missing/ambiguous consumers are refused.
     /// The documented fallback is an evidence-backed VA-to-section-offset probe of the
     /// caller's DLL (format-mpq.md); no guessed pointer is substituted on failure.
-    /// The instruction formats are IMUL EAX,imm32; LEA ECX,[EAX+disp32], at
-    /// 0x1500e153 in the evidenced DLL. The immediate and displacement stay local.
+    /// The instruction formats are IMUL EAX,EAX,imm32 then LEA r32,[EAX+disp32]:
+    /// ECX at 0x1500e153 in the evidenced Storm DLL, EAX at 0x44353f in the
+    /// statically linked 1.29.2 client. The immediate and displacement stay local.
     pub fn from_pe(bytes: &[u8], source: impl AsRef<Path>) -> Result<Self, HuffmanError> {
         Self::parse(bytes, source.as_ref()).map_err(|e| HuffmanError::Source {
             source_path: source.as_ref().display().to_string(),
@@ -129,7 +130,8 @@ impl HuffmanTable {
         let mut operands = Vec::new();
         for section in sections.iter().filter(|s| s.code) {
             for code in bytes[section.raw..section.raw + section.raw_size].windows(12) {
-                if code[..2] == [0x69, 0xc0] && code[6..8] == [0x8d, 0x88] {
+                // LEA with mod=10, rm=EAX and any destination register.
+                if code[..2] == [0x69, 0xc0] && code[6] == 0x8d && code[7] & 0xc7 == 0x80 {
                     let stride = dword(code, 2)? as usize;
                     let address = dword(code, 8)?;
                     // The evidenced consumer has 256 byte weights and two control symbols.
@@ -490,9 +492,20 @@ mod tests {
         let mut gap = bytes.clone();
         gap[0x208..0x20c].copy_from_slice(&0x600000u32.to_le_bytes());
         assert!(HuffmanTable::from_pe(&gap, "gap.dll").is_err());
-        let mut ambiguous = bytes;
+        let mut ambiguous = bytes.clone();
         ambiguous.copy_within(0x200..0x20c, 0x20c);
         assert!(HuffmanTable::from_pe(&ambiguous, "ambiguous.dll").is_err());
+        // The statically linked client loads the row into EAX instead of ECX.
+        let mut eax = bytes.clone();
+        eax[0x207] = 0x80;
+        assert_eq!(
+            HuffmanTable::from_pe(&eax, "eax.exe").unwrap().table_va,
+            0x402000
+        );
+        // Other addressing modes are not the evidenced consumer.
+        let mut other = bytes;
+        other[0x207] = 0x81;
+        assert!(HuffmanTable::from_pe(&other, "other.dll").is_err());
     }
 
     #[test]

@@ -89,7 +89,9 @@ impl ObjectHost {
                 Entry::Symbolic { kind, enumerand }
                     if kind == "fgamestate" && *enumerand == state.selector =>
                 {
-                    Ok(Value::Real(state.input.hour()))
+                    Ok(Value::Real(
+                        self.time_of_day().unwrap_or_else(|| state.input.hour()),
+                    ))
                 }
                 Entry::Symbolic { kind, .. } if kind == "fgamestate" => Err(self
                     .inner

@@ -217,6 +217,7 @@ fn deliver_timer_mode(app: &mut App, script: &str, revision: u64, timed: bool) {
             initial_enabled: true,
             timer_event_global: "TEST_TIMER_EVENT".into(),
             max_timed_events: 16,
+            max_parked_threads: 16,
         });
         inputs.enumeration.names.push("ConvertGameEvent".into());
         inputs.enumeration.limits.max_handles = 256;

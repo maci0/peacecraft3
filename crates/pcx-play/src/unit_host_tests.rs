@@ -14,6 +14,114 @@ use std::sync::{Arc, Mutex};
 
 const PLACEMENT_OWNER: i16 = 7;
 
+fn animation_vm(mut fail_first: bool) -> (VmHost, Arc<crate::unit_model::Model>) {
+    let common = script_common_with(
+        "widget",
+        true,
+        "\
+native TimerStart takes timer t, real timeout, boolean periodic, code callback returns nothing
+native TimerGetElapsed takes timer t returns real
+native TimerGetRemaining takes timer t returns real
+native TimerGetTimeout takes timer t returns real
+native GetExpiredTimer takes nothing returns timer
+native SetUnitAnimation takes unit whichUnit, string whichAnimation returns nothing
+",
+    );
+    let ctx = context(300, &common, MAP, "unit-catalog");
+    let (catalog, hits, seen) = counting();
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+    let mut host = object(&ctx, 64)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(Arc::clone(&shared), source(), limits(1))
+        .unwrap()
+        .with_timer_runtime(0.)
+        .unwrap();
+    let model = crate::unit_model::tests::model();
+    let retained = Arc::clone(&model);
+    host.admit_unit_models(move |_| {
+        if std::mem::take(&mut fail_first) {
+            return Err("synthetic unreadable model".into());
+        }
+        Ok(Some(Arc::clone(&retained)))
+    })
+    .unwrap();
+    (
+        VmHost {
+            vm: Arc::clone(&ctx.scripts).owned_vm(host),
+            hits,
+            seen,
+            catalog: shared,
+        },
+        model,
+    )
+}
+
+#[test]
+fn unit_animation_selects_the_retained_model_without_new_unit_or_handle() {
+    let (mut h, model) = animation_vm(false);
+    h.vm.init_globals().unwrap();
+    h.vm.call("main", &[]).unwrap();
+    let Value::Handle(id) = h.vm.global("U") else {
+        panic!("unit")
+    };
+    let host = &mut h.vm.host().inner;
+    let before = host.inner().handles();
+    host.native(
+        "SetUnitAnimation",
+        &[Value::Handle(id), Value::Str("stand defend".into())],
+    )
+    .unwrap();
+    let unit = host.executed_unit(id).unwrap();
+    let state = unit.animation.as_ref().unwrap().clone();
+    assert!(Arc::ptr_eq(&state.model, &model));
+    assert_eq!(state.sample(0.25).unwrap().unwrap().frame, 1450);
+    assert_eq!(
+        host.executed_units().map(|(id, _)| id).collect::<Vec<_>>(),
+        vec![id]
+    );
+    assert_eq!(host.inner().handles(), before);
+    assert!(
+        host.native(
+            "SetUnitAnimation",
+            &[Value::Int(1), Value::Str("Death".into())]
+        )
+        .is_err()
+    );
+    assert_eq!(
+        host.executed_unit(id).unwrap().animation.as_ref().unwrap(),
+        &state
+    );
+    host.native(
+        "SetUnitAnimation",
+        &[Value::Null, Value::Str("Death".into())],
+    )
+    .unwrap();
+    assert_eq!(host.inner().handles(), before);
+}
+
+#[test]
+fn failed_model_read_does_not_allocate_a_unit_or_spend_creation_capacity() {
+    let (mut h, _) = animation_vm(true);
+    h.vm.init_globals().unwrap();
+    assert!(h.vm.call("main", &[]).is_err());
+    assert_eq!(h.vm.host().inner.executed_units().count(), 0);
+    let before = h.vm.host().inner.inner().handles();
+    let Value::Handle(id) = h.vm.call("again", &[]).unwrap() else {
+        panic!("unit")
+    };
+    assert_eq!(h.vm.host().inner.executed_units().count(), 1);
+    assert_eq!(h.vm.host().inner.inner().handles(), before + 1);
+    assert!(
+        h.vm.host()
+            .inner
+            .executed_unit(id)
+            .unwrap()
+            .animation
+            .is_some()
+    );
+}
+
 struct Counting {
     hits: Arc<AtomicUsize>,
     seen: Arc<Mutex<Vec<[u8; 4]>>>,
@@ -416,6 +524,14 @@ fn identity_getters_from_another_source_are_refused() {
             "BlzGetUnitCollisionSize",
             "native BlzGetUnitCollisionSize takes unit u returns real\n",
         ),
+        (
+            "ShowUnit",
+            "native ShowUnit takes unit u, boolean shown returns nothing\n",
+        ),
+        (
+            "IsUnitHidden",
+            "constant native IsUnitHidden takes unit u returns boolean\n",
+        ),
     ] {
         let map = pcx_script::parse_script("").unwrap();
         let primary = pcx_script::parse_script(primary).unwrap();
@@ -460,6 +576,26 @@ fn identity_getters_from_another_source_are_refused() {
 #[test]
 fn identity_getters_validate_the_loaded_signature_before_catalog_use() {
     for (name, declaration) in [
+        (
+            "ShowUnit",
+            "native ShowUnit takes unit u, integer shown returns nothing\n",
+        ),
+        (
+            "ShowUnit",
+            "constant native ShowUnit takes unit u, boolean shown returns nothing\n",
+        ),
+        (
+            "IsUnitHidden",
+            "native IsUnitHidden takes unit u returns boolean\n",
+        ),
+        (
+            "IsUnitHidden",
+            "constant native IsUnitHidden takes timer u returns boolean\n",
+        ),
+        (
+            "IsUnitHidden",
+            "constant native IsUnitHidden takes unit u returns integer\n",
+        ),
         (
             "GetUnitTypeId",
             "constant native GetUnitTypeId takes timer t returns integer\n",
@@ -508,6 +644,19 @@ fn omitted_identity_getters_stay_unsupported() {
     let Value::Handle(unit) = session.vm.global("U") else {
         panic!("unit");
     };
+    for (name, args) in [
+        ("ShowUnit", vec![Value::Handle(unit), Value::Bool(false)]),
+        ("IsUnitHidden", vec![Value::Handle(unit)]),
+    ] {
+        assert!(
+            session
+                .vm
+                .host()
+                .native(name, &args)
+                .unwrap_err()
+                .contains("unsupported")
+        );
+    }
     let missing = session
         .vm
         .host()
@@ -1801,6 +1950,7 @@ fn order_common() -> String {
         globals + 1,
         "native SetUnitOwner takes unit u, player p, boolean changeColor returns nothing\n\
 native IssueImmediateOrder takes unit whichUnit, string order returns boolean\n\
+constant native GetPlayerTechResearched takes player whichPlayer, integer techid, boolean specificOnly returns boolean\n\
 constant native SetPlayerTechResearched takes player whichPlayer, integer techid, integer setToLevel returns nothing\n",
     );
     common
@@ -1892,6 +2042,32 @@ fn refused_tables(tables: &DefaultTables) -> String {
         .with_defend_ability(tables, "Qord")
         .map(|_| String::new())
         .unwrap_or_else(|error| error.to_string())
+}
+
+#[test]
+fn defend_uses_applied_upgrade_levels_without_falling_back_to_raw_requests() {
+    let good = &["Qord", "Qcls", "0", "0", "1", "1", "0", "0", "0", "0"];
+    let tables = order_tables(ORDER_HEADERS, good, "", "1");
+    let (mut vm, _) = order_vm(&tables, true);
+    let context = Arc::clone(vm.host().inner.player_context().unwrap());
+    vm.host()
+        .inner
+        .admit_upgrade_research(
+            &context,
+            crate::upgrade_research::fixture(&context.sources.catalog),
+        )
+        .unwrap();
+    assert!(issue(&mut vm, "A", "engage").is_err());
+    research(&mut vm, *b"Qtec", 9);
+    assert_eq!(issue(&mut vm, "A", "engage").unwrap(), Value::Bool(true));
+    assert_eq!(issue(&mut vm, "A", "release").unwrap(), Value::Bool(true));
+    research(&mut vm, *b"Qtec", -3);
+    assert!(issue(&mut vm, "A", "engage").is_err());
+    research(&mut vm, *b"Qtec", 1);
+    assert_eq!(issue(&mut vm, "A", "engage").unwrap(), Value::Bool(true));
+    assert_eq!(issue(&mut vm, "A", "release").unwrap(), Value::Bool(true));
+    vm.host().inner.invalidate_current_research();
+    assert!(issue(&mut vm, "A", "engage").is_err());
 }
 
 #[test]
@@ -2283,6 +2459,26 @@ fn position_host_program(
     map: &str,
     declarations: &str,
 ) -> ObjectHost {
+    position_host_program_fields(queries, memberships, map, declarations, &[])
+}
+fn position_host_program_fields(
+    queries: usize,
+    memberships: usize,
+    map: &str,
+    declarations: &str,
+    selected: &[([u8; 4], ObjectField)],
+) -> ObjectHost {
+    position_host_admitting(queries, memberships, map, declarations, selected, |h| h)
+}
+/// `before_catalog` admits families the unit catalog checks at its own admission.
+fn position_host_admitting(
+    queries: usize,
+    memberships: usize,
+    map: &str,
+    declarations: &str,
+    selected: &[([u8; 4], ObjectField)],
+    before_catalog: impl FnOnce(ObjectHost) -> ObjectHost,
+) -> ObjectHost {
     let mut extra = String::from(
         "type rect extends agent\ntype group extends agent\ntype boolexpr extends agent\ntype destructable extends widget\nnative CreateDestructable takes integer id, real x, real y, real face, real scale, integer variation returns destructable\n",
     );
@@ -2342,6 +2538,18 @@ fn position_host_program(
         };
         fields.insert(id, field);
     }
+    let mut field = geometry_field(Ok(FieldValue::Cell("8".into())));
+    let meta = field.metadata.as_mut().unwrap();
+    meta.fourcc = *b"S001";
+    meta.field = "spd".into();
+    meta.kind = FieldKind::Real;
+    meta.declared = "real".into();
+    meta.source = FieldSource::Column {
+        slk: SlkId::UnitBalance,
+        column: "spd".into(),
+    };
+    fields.insert(*b"S001", field);
+    fields.extend(selected.iter().cloned());
     let catalog: Arc<dyn ObjectCatalog + Send + Sync> = Arc::new(GeometryCatalog {
         fields,
         hits: Arc::new(AtomicUsize::new(0)),
@@ -2352,7 +2560,14 @@ fn position_host_program(
         "ConvertRacePref",
         "ConvertMapControl",
     ];
-    for name in ["ConvertUnitEvent", "ConvertGameEvent"] {
+    for name in [
+        "ConvertUnitEvent",
+        "ConvertGameEvent",
+        "ConvertUnitState",
+        "ConvertPlayerUnitEvent",
+        "ConvertAllianceType",
+        "ConvertUnitType",
+    ] {
         if ctx.scripts.shared_program().natives().get(name).is_some() {
             conversions.push(name);
         }
@@ -2369,7 +2584,7 @@ fn position_host_program(
         },
     )
     .unwrap();
-    let mut host = ObjectHost::checked(inner)
+    let host = ObjectHost::checked(inner)
         .unwrap()
         .with_map_config(crate::playercolor_host::MapConfigBudget {
             text_bytes: 128,
@@ -2377,8 +2592,16 @@ fn position_host_program(
         })
         .unwrap()
         .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
-        .unwrap()
-        .with_unit_catalog(catalog, source(), limits(8))
+        .unwrap();
+    let mut host = before_catalog(host)
+        .with_unit_catalog(
+            catalog,
+            source(),
+            UnitBudget {
+                max_retained_fields: 4 + selected.len(),
+                ..limits(8)
+            },
+        )
         .unwrap()
         .with_groups(memberships)
         .unwrap()
@@ -2401,7 +2624,7 @@ fn position_host_program(
         host = host
             .with_trigger_admission(crate::playercolor_host::TriggerBudget {
                 max_triggers: 8,
-                max_unit_events: 0,
+                max_unit_events: 8,
                 max_actions: 8,
             })
             .unwrap()
@@ -2415,6 +2638,7 @@ fn position_host_program(
                 initial_enabled: true,
                 timer_event_global: "TEST_TIMER".into(),
                 max_timed_events: 8,
+                max_parked_threads: 8,
             })
             .unwrap();
     }
@@ -2575,3 +2799,13 @@ mod ownership;
 
 #[path = "unit_hero_tests.rs"]
 mod hero;
+
+#[path = "unit_range_runtime_tests.rs"]
+mod range_runtime;
+
+#[path = "unit_activity_tests.rs"]
+mod activity;
+#[path = "combat_tests.rs"]
+mod combat;
+#[path = "unit_runtime_tests.rs"]
+mod runtime;

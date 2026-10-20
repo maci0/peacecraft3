@@ -267,12 +267,12 @@ fn immediate_interface_changes_control_without_changing_the_ui_flag_or_clock() {
     assert_eq!(vm.host().timer_game_time(), None);
 }
 #[test]
-fn unsupported_interface_fades_and_bad_arguments_preserve_the_visible_state() {
+fn invalid_interface_fades_and_bad_arguments_preserve_the_visible_state() {
     let mut h = host(COMMON, "");
     h.admit_presentation(64).unwrap();
     h.native("ShowInterface", &[Value::Bool(false), Value::Real(0.)])
         .unwrap();
-    for duration in [1., -1., f32::INFINITY, f32::NAN] {
+    for duration in [-1., f32::INFINITY, f32::NAN] {
         assert!(
             h.native("ShowInterface", &[Value::Bool(true), Value::Real(duration)])
                 .is_err()
@@ -288,6 +288,11 @@ fn unsupported_interface_fades_and_bad_arguments_preserve_the_visible_state() {
         assert!(h.native(name, &args).is_err());
     }
     assert_eq!(h.presentation().unwrap().interface_visible, Some(false));
+    // A finite fade applies the target state; without a clock no fade time is kept.
+    h.native("ShowInterface", &[Value::Bool(true), Value::Real(1.)])
+        .unwrap();
+    assert_eq!(h.presentation().unwrap().interface_visible, Some(true));
+    assert_eq!(h.presentation().unwrap().interface_fade, None);
 }
 #[test]
 fn optional_interface_and_control_contracts_do_not_admit_foreign_or_missing_calls() {
@@ -311,7 +316,7 @@ fn optional_interface_and_control_contracts_do_not_admit_foreign_or_missing_call
 }
 
 #[test]
-fn disabled_occlusion_requires_an_explicit_renderer_capability_and_never_enables_a_pass() {
+fn occlusion_requires_an_explicit_capability_and_retains_the_executed_flag() {
     let common = format!("{COMMON}\nnative EnableOcclusion takes boolean flag returns nothing\n");
     let mut h = host(&common, "");
     assert!(h.native("EnableOcclusion", &[Value::Bool(false)]).is_err());
@@ -321,11 +326,9 @@ fn disabled_occlusion_requires_an_explicit_renderer_capability_and_never_enables
         h.native("EnableOcclusion", &[Value::Bool(false)]).unwrap(),
         Value::Null
     );
-    assert!(
-        h.native("EnableOcclusion", &[Value::Bool(true)])
-            .unwrap_err()
-            .contains("renderer")
-    );
+    assert_eq!(h.occlusion_enabled(), Some(false));
+    h.native("EnableOcclusion", &[Value::Bool(true)]).unwrap();
+    assert_eq!(h.occlusion_enabled(), Some(true));
     for args in [
         vec![],
         vec![Value::Int(0)],

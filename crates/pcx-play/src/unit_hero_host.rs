@@ -53,7 +53,7 @@ impl UnitAbilities {
 }
 
 pub(super) struct Admission {
-    tables: DefaultTables,
+    tables: std::sync::Arc<DefaultTables>,
     catalog_origin: crate::scripts::AssetIdentity,
     overlay: Overlay,
     rules: Rules,
@@ -68,12 +68,13 @@ impl ObjectHost {
     /// Retain the caller's existing tables; scalar W3A learning-field overrides stay explicit.
     pub fn with_hero_skills(
         mut self,
-        tables: DefaultTables,
+        tables: impl Into<std::sync::Arc<DefaultTables>>,
         catalog_origin: crate::scripts::AssetIdentity,
         overlay: Overlay,
         rules: Rules,
         budget: HeroBudget,
     ) -> Result<Self, Error> {
+        let tables = tables.into();
         let fail = |s: &str| self.inner.error(LEARN, Failure::HeroSkills(s.into()));
         let units = self.admitted_units()?;
         if units.heroes.is_some() || units.records != 0 {

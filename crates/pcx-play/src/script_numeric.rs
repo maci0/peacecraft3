@@ -51,6 +51,7 @@ pub struct NumericPolicy {
     index_shift: u32,
     equality_threshold: f32,
     literal_bytes: usize,
+    math: Option<crate::script_math::ScriptMath>,
 }
 
 fn word(bytes: &[u8], at: usize) -> Option<u32> {
@@ -197,6 +198,7 @@ impl NumericPolicy {
             index_shift,
             equality_threshold,
             literal_bytes,
+            math: None,
         })
     }
 
@@ -223,10 +225,37 @@ impl NumericPolicy {
         Some((word(bytes, at + 1)?, self.integer(value).ok()?))
     }
 
-    fn division(&self, left: u32, right: u32) -> Result<u32, real::MathError> {
+    /// Attach the selected math routines read from the same reviewed image.
+    pub fn with_math(
+        mut self,
+        image: &[u8],
+        binding: &crate::script_math::Binding,
+        budget: RuleInputBudget,
+    ) -> Result<Self, Error> {
+        self.math = Some(crate::script_math::ScriptMath::read(
+            image, binding, &self, budget,
+        )?);
+        Ok(self)
+    }
+    pub fn math(&self) -> Option<&crate::script_math::ScriptMath> {
+        self.math.as_ref()
+    }
+    pub(crate) fn equality_threshold(&self) -> f32 {
+        self.equality_threshold
+    }
+    pub(crate) fn equality_constant_va(&self) -> u32 {
+        self.binding.equality_constant.va
+    }
+
+    /// The shared division helper: equal operands give one, else a reciprocal product.
+    pub(crate) fn division(&self, left: u32, right: u32) -> Result<u32, real::MathError> {
         if left == right {
             return Ok(1.0f32.to_bits());
         }
+        real::mul(left, self.reciprocal(right))
+    }
+
+    pub(crate) fn reciprocal(&self, right: u32) -> u32 {
         let fraction = right & 0x7f_ffff;
         let index = (fraction >> self.index_shift) as usize;
         let repeated = fraction.wrapping_shl(32 - self.index_shift);
@@ -239,12 +268,11 @@ impl NumericPolicy {
             .wrapping_sub(high)
             .wrapping_sub(right & 0x7f80_0000)
             .wrapping_add((2 * 127 - 1) << 23);
-        let reciprocal = if (magnitude.wrapping_sub(1 << 23) as i32) < 0 {
+        if (magnitude.wrapping_sub(1 << 23) as i32) < 0 {
             0
         } else {
             magnitude | (right & (1 << 31))
-        };
-        real::mul(left, reciprocal)
+        }
     }
 
     fn runtime_error(&self, why: impl std::fmt::Display) -> String {

@@ -1697,3 +1697,109 @@ fn legacy_park_errors_keep_the_site_and_resume_relabels_later_errors() {
     assert_eq!(vm.error_source(), Some("the map script"));
     assert!(resumed.message.contains("Boom"));
 }
+
+// ----- threads ------------------------------------------------------------
+
+const THREAD_SRC: &str = "native Sleep takes real r returns nothing
+native Exec takes nothing returns nothing
+native Mark takes integer i returns nothing
+globals
+integer g = 0
+endglobals
+function a takes nothing returns nothing
+    call Mark(1)
+    call Sleep(2.0)
+    call Mark(2)
+endfunction
+function b takes nothing returns nothing
+    call Mark(3)
+endfunction
+function outer takes nothing returns nothing
+    call Mark(0)
+    call Exec()
+    call Mark(4)
+endfunction
+";
+
+#[derive(Default)]
+struct Threads {
+    log: Vec<String>,
+    next: u64,
+    spawn: Vec<crate::value::FunctionId>,
+}
+
+impl crate::Host for Threads {
+    fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        self.log.push(format!("{name} {args:?}"));
+        Ok(Value::Null)
+    }
+    fn suspend(&mut self, name: &str, _: &[Value]) -> bool {
+        name == "Sleep"
+    }
+    fn begin_script_call(
+        &mut self,
+        name: &str,
+        _: &[Value],
+    ) -> Result<Option<crate::ScriptCall>, String> {
+        Ok((name == "Exec").then(|| crate::ScriptCall::Spawn(self.spawn.clone())))
+    }
+    fn park_thread(&mut self) -> Result<u64, String> {
+        self.next += 1;
+        self.log.push(format!("park {}", self.next));
+        Ok(self.next)
+    }
+    fn resume_thread(&mut self, ticket: u64) -> Result<(), String> {
+        self.log.push(format!("resume {ticket}"));
+        Ok(())
+    }
+    fn leave_thread(&mut self) -> Result<(), String> {
+        self.log.push("leave".into());
+        Ok(())
+    }
+}
+
+#[test]
+fn spawned_threads_park_alone_and_resume_with_their_remaining_callbacks() {
+    let program = program_of(THREAD_SRC);
+    let id = |name| program.function_id(name).unwrap();
+    let mut vm = Vm::new(
+        &program,
+        Threads {
+            spawn: vec![id("a"), id("b")],
+            ..Threads::default()
+        },
+    );
+    vm.init_globals().unwrap();
+    assert_eq!(vm.call("outer", &[]).unwrap(), Value::Null);
+    assert_eq!(
+        vm.host().log,
+        [
+            "Mark [Int(0)]",
+            "Mark [Int(1)]",
+            "park 1",
+            "leave",
+            "Mark [Int(4)]"
+        ]
+    );
+    assert_eq!(vm.parked_threads().collect::<Vec<_>>(), [1]);
+    vm.host().log.clear();
+    vm.resume_thread(1).unwrap();
+    assert_eq!(
+        vm.host().log,
+        ["resume 1", "Mark [Int(2)]", "Mark [Int(3)]", "leave"]
+    );
+    assert_eq!(vm.parked_threads().count(), 0);
+    assert!(vm.resume_thread(1).is_err());
+
+    // A top-level thread parks without a leave; its tail runs on resume.
+    vm.host().log.clear();
+    vm.run_thread(&[id("a"), id("b")]).unwrap();
+    assert_eq!(vm.host().log, ["Mark [Int(1)]", "park 2"]);
+    vm.resume_thread(2).unwrap();
+    assert_eq!(vm.parked_threads().count(), 0);
+
+    // Hosts without thread support refuse the park loudly.
+    let mut plain = Vm::new(&program, Probe::default());
+    plain.init_globals().unwrap();
+    assert!(plain.run_thread(&[id("b")]).is_ok());
+}

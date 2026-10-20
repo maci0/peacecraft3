@@ -183,3 +183,38 @@ fn every_partial_player_span_is_refused_without_defaults() {
         ));
     }
 }
+
+#[test]
+fn player_roles_use_the_four_authored_words_without_renumbering_sparse_slots() {
+    for version in [18, 25] {
+        let mut input = fixture(version, &[b"user", b"neutral", b"computer"]);
+        for (&at, words) in
+            input
+                .record_starts
+                .iter()
+                .zip([[8u32, 1, 2, 1], [1, 3, 4, 0], [0, 2, 3, 7]])
+        {
+            for (index, word) in words.into_iter().enumerate() {
+                input.bytes[at + index * 4..at + index * 4 + 4]
+                    .copy_from_slice(&word.to_le_bytes());
+            }
+        }
+        let info = MapInfo::from_bytes(input.bytes.clone()).unwrap();
+        assert_eq!(info.canonical_bytes(), input.bytes);
+        assert_eq!(
+            info.players()
+                .iter()
+                .map(|p| p.number())
+                .collect::<Vec<_>>(),
+            vec![8, 1, 0]
+        );
+        assert_eq!(
+            info.human_players().map(|p| p.number()).collect::<Vec<_>>(),
+            vec![8]
+        );
+        assert_eq!(info.race_counts(), [(2, 1), (3, 1), (4, 1)].into());
+        assert_eq!(info.players()[0].fixed_start(), Some(true));
+        assert_eq!(info.players()[1].fixed_start(), Some(false));
+        assert_eq!(info.players()[2].fixed_start(), None);
+    }
+}

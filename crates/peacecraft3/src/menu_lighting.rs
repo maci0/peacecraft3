@@ -6,10 +6,17 @@ use pcx_play::menu_lighting::Parameters;
 const MAX_LIGHT_BYTES: usize = 1024 * 1024;
 
 pub(crate) fn parameters(install: Option<&std::path::Path>) -> Result<Parameters, String> {
+    with_client_image(install, read_parameters)
+}
+
+pub(crate) fn with_client_image<T>(
+    install: Option<&std::path::Path>,
+    read: impl FnOnce(&str, &[u8]) -> Result<T, String>,
+) -> Result<T, String> {
     #[cfg(target_arch = "wasm32")]
     {
         let _ = install;
-        crate::browser::with_committed_client_image(read_parameters)
+        crate::browser::with_committed_client_image(read)
             .unwrap_or_else(|| Err("menu lighting: selected client image unavailable".into()))
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -26,7 +33,7 @@ pub(crate) fn parameters(install: Option<&std::path::Path>) -> Result<Parameters
             .take(32 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| format!("{}: {e}", path.display()))?;
-        read_parameters(&path.display().to_string(), &bytes)
+        read(&path.display().to_string(), &bytes)
     }
 }
 

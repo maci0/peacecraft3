@@ -41,6 +41,8 @@ pub struct PlayerSettings {
     pub tech_max: Vec<(i32, i32)>,
     /// Executed `SetPlayerTechResearched` pairs. Absence is unset, not level 0.
     pub tech_researched: Vec<(i32, i32)>,
+    /// Applied upgrade counters in the opt-in fresh-game model; raw requests stay above.
+    pub research_levels: Vec<(i32, i32)>,
     /// Executed directed `(other player, alliance setting, value)` assignments.
     /// Absence is unset; `false` is an explicit assignment, never a mirrored default.
     pub alliances: Vec<(HandleId, HandleId, bool)>,
@@ -55,14 +57,14 @@ pub struct PlayerSettings {
 pub struct TechLimitBudget {
     pub max_records: usize,
 }
-/// One stored research pair. Absence is not a numeric level.
+/// A research level from the admitted model or an explicit setter record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TechRead {
     /// Player rows were not admitted, or research was not admitted.
     Unavailable,
     /// The player row or the tech pair is unset.
     Absent,
-    /// The executed `setToLevel`, including an executed 0.
+    /// The applied counter, or the executed `setToLevel` in record-only mode.
     Level(i32),
 }
 /// Caller bound on distinct directed alliance assignments across all player rows.
@@ -88,9 +90,10 @@ pub(super) struct Players {
     alliance: Option<RecordLimits>,
     state_requests: Option<RecordLimits>,
     experience_handicap: Option<crate::player_handicap::Rules>,
-    slot_states_admitted: bool,
+    slot_states: Option<Vec<(i32, HandleId)>>,
     controllers: Option<controllers::Controllers>,
     current_research: Option<Vec<ResearchObservation>>,
+    upgrade_research: Option<current_research::UpgradeResearch>,
     local_player: Option<i32>,
     rows: Vec<PlayerSettings>,
 }
@@ -212,9 +215,10 @@ impl ObjectHost {
             alliance: None,
             state_requests: None,
             experience_handicap: None,
-            slot_states_admitted: false,
+            slot_states: None,
             controllers: None,
             current_research: None,
+            upgrade_research: None,
             local_player: None,
             rows: Vec::new(),
         });
@@ -266,8 +270,9 @@ impl ObjectHost {
     /// leaves the row unchanged. Replacing an existing key updates the level in
     /// place and does not allocate. The integers are not rawcodes, categories,
     /// clamps, or upgrade effects. Current research answers require separate
-    /// explicit admission; `GetPlayerTechCount` remains unsupported. An absent
-    /// pair is not level 0. Argument-shape refusals are this recreation's contract
+    /// explicit admission. Fresh upgrade counters can additionally serve
+    /// `GetPlayerTechCount`; record-only admission leaves it unsupported. An absent
+    /// raw pair is not level 0. Argument-shape refusals are this recreation's contract
     /// checks, not a claim about native exceptional inputs.
     pub fn with_player_tech_researched(mut self, budget: TechLimitBudget) -> Result<Self, Error> {
         let fail = |reason| self.inner.error("SetPlayerTechResearched", reason);
@@ -615,7 +620,7 @@ impl ObjectHost {
         self.players.as_mut().expect("checked context").local_player = Some(number);
         Ok(())
     }
-    pub(super) fn local_player_number(&self) -> Option<i32> {
+    pub fn local_player_number(&self) -> Option<i32> {
         self.players.as_ref()?.local_player
     }
     pub fn player_settings(&self, identity: HandleId) -> Result<&PlayerSettings, Error> {
@@ -625,9 +630,10 @@ impl ObjectHost {
             .and_then(|p| p.rows.get(at))
             .ok_or_else(|| self.inner.error("players", Failure::Identity))
     }
-    /// Stored `SetPlayerTechResearched` level for one player number.
+    /// Applied upgrade level, or retained setter level without a fresh model.
     ///
-    /// [`TechRead::Absent`] is an unset pair. It is not level 0.
+    /// An admitted fresh upgrade has the model's initial level when unset.
+    /// [`TechRead::Absent`] is an unset player or record-only pair, not level 0.
     /// [`TechRead::Unavailable`] means player rows or research admission are
     /// absent. This does not implement `specificonly`.
     pub(super) fn stored_tech_level(&self, number: i32, techid: i32) -> TechRead {
@@ -640,6 +646,17 @@ impl ObjectHost {
         let Some(row) = players.rows.iter().find(|row| row.number == number) else {
             return TechRead::Absent;
         };
+        if let Some(model) = &players.upgrade_research {
+            if !model.active || model.rules.maximum(techid).is_none() {
+                return TechRead::Unavailable;
+            }
+            return TechRead::Level(
+                row.research_levels
+                    .iter()
+                    .find(|(id, _)| *id == techid)
+                    .map_or(model.rules.initial, |(_, level)| *level),
+            );
+        }
         match row
             .tech_researched
             .iter()
@@ -718,14 +735,20 @@ impl ObjectHost {
             return Some(self.set_player_alliance(args));
         }
         if name == "GetPlayerSlotState" {
-            if !players.slot_states_admitted {
-                return None;
-            }
+            players.slot_states.as_ref()?;
             return Some(self.apply_player(name, args));
         }
         if name == "GetPlayerTechResearched" {
-            players.current_research.as_ref()?;
-            return Some(self.current_research_query(args));
+            if players.current_research.is_none() && players.upgrade_research.is_none() {
+                return None;
+            }
+            return Some(self.current_research_query(name, args));
+        }
+        if name == "GetPlayerTechCount" {
+            if !players.upgrade_research.as_ref()?.count_admitted {
+                return None;
+            }
+            return Some(self.current_research_query(name, args));
         }
         let tech = TECH_CONTRACTS.iter().any(|c| c.0 == name);
         let research = RESEARCH_CONTRACTS.iter().any(|c| c.0 == name);
@@ -774,11 +797,17 @@ impl ObjectHost {
                 race_preference: None,
                 race_selectable: None,
                 controller: None,
-                slot_state: None,
+                slot_state: players.slot_states.as_ref().and_then(|states| {
+                    states
+                        .iter()
+                        .find(|(n, _)| n == number)
+                        .map(|(_, state)| *state)
+                }),
                 name: None,
                 on_score_screen: None,
                 tech_max: Vec::new(),
                 tech_researched: Vec::new(),
+                research_levels: Vec::new(),
                 alliances: Vec::new(),
                 state_requests: Vec::new(),
                 experience_handicap: None,
@@ -942,13 +971,35 @@ impl ObjectHost {
                 .map(|(_, maximum)| Value::Int(*maximum))
                 .ok_or_else(|| fail(Failure::PlayerState("tech max is unset"))),
             ("SetPlayerTechResearched", [Value::Int(techid), Value::Int(level)]) => {
-                if let Some(stored) = players.rows[at]
-                    .tech_researched
-                    .iter_mut()
-                    .find(|(id, _)| *id == *techid)
-                {
-                    stored.1 = *level;
+                let applied = if let Some(model) = &players.upgrade_research {
+                    if !model.active {
+                        return Err(fail(Failure::PlayerState(
+                            "upgrade research is invalidated",
+                        )));
+                    }
+                    let current = players.rows[at]
+                        .research_levels
+                        .iter()
+                        .find(|(id, _)| id == techid)
+                        .map_or(model.rules.initial, |(_, level)| *level);
+                    Some(
+                        model
+                            .rules
+                            .target(*techid, current, *level)
+                            .ok_or_else(|| {
+                                fail(Failure::PlayerState(
+                                    "technology is not an admitted upgrade",
+                                ))
+                            })?,
+                    )
                 } else {
+                    None
+                };
+                let stored = players.rows[at]
+                    .tech_researched
+                    .iter()
+                    .position(|(id, _)| id == techid);
+                if stored.is_none() {
                     let (records, max_records) = match players.research.as_ref() {
                         Some(research) => (research.records, research.max_records),
                         None => {
@@ -964,7 +1015,30 @@ impl ObjectHost {
                         .tech_researched
                         .try_reserve(1)
                         .map_err(|_| fail(Failure::Capacity))?;
+                    if applied.is_some() {
+                        players.rows[at]
+                            .research_levels
+                            .try_reserve(1)
+                            .map_err(|_| fail(Failure::Capacity))?;
+                    }
+                }
+                if let Some(stored) = stored {
+                    if let Some(applied) = applied {
+                        let effective = players.rows[at]
+                            .research_levels
+                            .iter_mut()
+                            .find(|(id, _)| id == techid)
+                            .ok_or_else(|| {
+                                fail(Failure::PlayerState("upgrade counter record is missing"))
+                            })?;
+                        effective.1 = applied;
+                    }
+                    players.rows[at].tech_researched[stored].1 = *level;
+                } else {
                     players.rows[at].tech_researched.push((*techid, *level));
+                    if let Some(applied) = applied {
+                        players.rows[at].research_levels.push((*techid, applied));
+                    }
                     let research = players.research.as_mut().ok_or_else(|| {
                         fail(Failure::PlayerState("tech research is not admitted"))
                     })?;

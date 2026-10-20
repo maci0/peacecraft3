@@ -322,4 +322,4 @@ fn retained_budget<'a>(
 }
 #[cfg(test)]
 #[path = "file_sound_tests.rs"]
-mod tests;
+pub(crate) mod tests;

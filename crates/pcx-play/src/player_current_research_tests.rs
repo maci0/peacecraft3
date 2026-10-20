@@ -42,6 +42,155 @@ fn query(h: &mut ObjectHost, player: &Value, tech: i32, specific: bool) -> Resul
         &[player.clone(), Value::Int(tech), Value::Bool(specific)],
     )
 }
+
+#[test]
+fn fresh_upgrade_queries_use_applied_levels_and_preserve_raw_setter_requests() {
+    let map = "globals\nplayer P=Player(0)\ninteger Initial=GetPlayerTechCount(P,5,true)\nendglobals\nfunction change takes nothing returns nothing\ncall SetPlayerTechResearched(P,5,9)\nendfunction\n";
+    let (mut h, ctx) = setup(&common(), map, 1);
+    h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+        .unwrap();
+    let mut vm = h.into_vm();
+    vm.init_globals().unwrap();
+    let p = vm.global("P");
+    assert_eq!(vm.global("Initial"), Value::Int(0));
+    assert_eq!(query(vm.host(), &p, 5, true).unwrap(), Value::Bool(false));
+    let handles = vm.host().inner().handles();
+    vm.call("change", &[]).unwrap();
+    assert_eq!(query(vm.host(), &p, 5, false).unwrap(), Value::Bool(true));
+    assert_eq!(
+        vm.host()
+            .native(
+                "GetPlayerTechCount",
+                &[p.clone(), Value::Int(5), Value::Bool(false)]
+            )
+            .unwrap(),
+        Value::Int(4)
+    );
+    assert_eq!(
+        vm.host().player_settings(id(&p)).unwrap().tech_researched,
+        [(5, 9)]
+    );
+    assert_eq!(
+        vm.host().player_settings(id(&p)).unwrap().research_levels,
+        [(5, 4)]
+    );
+    for tech in [-37, 6] {
+        assert!(
+            vm.host()
+                .native(
+                    "SetPlayerTechResearched",
+                    &[p.clone(), Value::Int(tech), Value::Int(1)]
+                )
+                .is_err()
+        );
+        assert_eq!(
+            vm.host().player_settings(id(&p)).unwrap().research_levels,
+            [(5, 4)]
+        );
+    }
+    vm.host()
+        .native(
+            "SetPlayerTechResearched",
+            &[p.clone(), Value::Int(5), Value::Int(-3)],
+        )
+        .unwrap();
+    assert_eq!(query(vm.host(), &p, 5, true).unwrap(), Value::Bool(false));
+    assert_eq!(
+        vm.host().player_settings(id(&p)).unwrap().tech_researched,
+        [(5, -3)]
+    );
+    assert_eq!(
+        vm.host().player_settings(id(&p)).unwrap().research_levels,
+        [(5, 0)]
+    );
+    assert_eq!(vm.host().inner().handles(), handles);
+    let late = vm.host().native("Player", &[Value::Int(8)]).unwrap();
+    assert_eq!(
+        query(vm.host(), &late, 5, true).unwrap(),
+        Value::Bool(false)
+    );
+    assert!(query(vm.host(), &late, 6, true).is_err());
+    assert!(
+        vm.host()
+            .admit_current_research(
+                &ctx,
+                vec![row(0, 5, true, false)],
+                TechLimitBudget { max_records: 8 }
+            )
+            .is_err()
+    );
+    vm.host().invalidate_current_research();
+    assert!(
+        query(vm.host(), &p, 5, true)
+            .unwrap_err()
+            .contains("invalidated")
+    );
+    assert!(
+        vm.host()
+            .native(
+                "SetPlayerTechResearched",
+                &[p.clone(), Value::Int(5), Value::Int(1)]
+            )
+            .is_err()
+    );
+    assert_eq!(
+        vm.host().player_settings(id(&p)).unwrap().research_levels,
+        [(5, 0)]
+    );
+}
+
+#[test]
+fn upgrade_admission_rejects_nonfresh_or_wrong_contexts_without_switching_query_modes() {
+    let c = common();
+    let (mut h, ctx) = setup(&c, "// map", 2);
+    let wrong = context(301, &c, "// map", "synthetic:current-research");
+    assert!(
+        h.admit_upgrade_research(
+            &wrong,
+            crate::upgrade_research::fixture(&ctx.sources.catalog)
+        )
+        .is_err()
+    );
+    let p = h.native("Player", &[Value::Int(0)]).unwrap();
+    assert!(
+        query(&mut h, &p, 5, true)
+            .unwrap_err()
+            .contains("unsupported")
+    );
+    admit(&mut h, &ctx, vec![row(0, 5, true, true)]);
+    assert!(
+        h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+            .is_err()
+    );
+    assert_eq!(query(&mut h, &p, 5, true).unwrap(), Value::Bool(true));
+    let (mut h, ctx) = setup(&c, "// map", 2);
+    let p = h.native("Player", &[Value::Int(0)]).unwrap();
+    h.native(
+        "SetPlayerTechResearched",
+        &[p.clone(), Value::Int(5), Value::Int(2)],
+    )
+    .unwrap();
+    assert!(
+        h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+            .is_err()
+    );
+    assert_eq!(h.player_settings(id(&p)).unwrap().tech_researched, [(5, 2)]);
+    let c = c.replace(
+        "constant native GetPlayerTechCount",
+        "native GetPlayerTechCount",
+    );
+    let (mut h, ctx) = setup(&c, "// map", 2);
+    assert!(
+        h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+            .is_err()
+    );
+    let p = h.native("Player", &[Value::Int(0)]).unwrap();
+    assert!(
+        query(&mut h, &p, 5, true)
+            .unwrap_err()
+            .contains("unsupported")
+    );
+}
 #[test]
 fn owned_vm_uses_explicit_query_keys_without_replacing_setter_levels_or_minting_players() {
     let map = "globals\nplayer P = Player(0)\nplayer Alias = Player(0)\nplayer Later = null\nendglobals\nfunction config takes nothing returns nothing\ncall SetPlayerTechResearched(P,-37,0)\nendfunction\nfunction late takes nothing returns boolean\nset Later = Player(8)\nreturn GetPlayerTechResearched(Later,-37,true)\nendfunction\n";

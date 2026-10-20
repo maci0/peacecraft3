@@ -58,7 +58,11 @@ use std::sync::Arc;
 /// this is a harness guard against a stack overflow, not a game rule.
 pub const MAX_CALL_DEPTH: u32 = 512;
 
-/// Step budget, so a loop that never exits fails instead of hanging the
+/// Threads one native may start inside another before the first finishes or
+/// parks. A harness guard against host recursion, not a game rule.
+pub const MAX_SPAWN_DEPTH: u32 = 64;
+
+/// Step budget per entry (call, new thread or resumed thread), so a loop that never exits fails instead of hanging the
 /// process. The engine keeps running a runaway loop, so this is a harness
 /// guard, not a game rule.
 pub const MAX_STEPS: u64 = 20_000_000;
@@ -75,6 +79,11 @@ pub trait RealOps {
 pub enum ScriptCall {
     Call(crate::value::FunctionId),
     Return(Value),
+    /// Run these callbacks in order as one new thread, then return `null` to the
+    /// caller. A park inside that thread stores it under [`Host::park_thread`]'s
+    /// ticket and the caller continues. Either way the VM then calls
+    /// [`Host::leave_thread`].
+    Spawn(Vec<crate::value::FunctionId>),
 }
 
 /// Everything the VM cannot decide for itself.
@@ -115,6 +124,22 @@ pub trait Host {
     /// native produces when the thread continues.
     fn suspend(&mut self, _name: &str, _args: &[Value]) -> bool {
         false
+    }
+
+    /// A thread parked at a thread boundary. Return a fresh ticket that a later
+    /// [`Vm::resume_thread`] presents; the host keeps that thread's own context.
+    fn park_thread(&mut self) -> Result<u64, String> {
+        Err("this host cannot park a script thread".into())
+    }
+
+    /// Install the context saved for `ticket` before its thread continues.
+    fn resume_thread(&mut self, _ticket: u64) -> Result<(), String> {
+        Err("this host cannot resume a script thread".into())
+    }
+
+    /// A spawned or resumed thread finished or parked; restore the caller's context.
+    fn leave_thread(&mut self) -> Result<(), String> {
+        Err("this host cannot leave a script thread".into())
     }
 
     /// The body of the map's `war3map.wts` entry `id`, for `TRIGSTR_<id>`.
@@ -298,6 +323,13 @@ enum ExprOut {
     Push(Vec<Zip>),
 }
 
+/// A thread parked at a thread boundary, with the callbacks it has still to run.
+struct Thread {
+    stack: Vec<Activation>,
+    depth: u32,
+    remaining: std::collections::VecDeque<crate::value::FunctionId>,
+}
+
 struct Activation {
     name: String,
     source: String,
@@ -335,6 +367,9 @@ pub struct Vm<'a, H: Host, P: Deref<Target = Program> = &'a Program> {
     /// Set for the duration of `invoke`, `resume` and `init_globals`.
     busy: bool,
     suspended_span: Option<Span>,
+    /// Parked threads by host ticket.
+    parked: BTreeMap<u64, Thread>,
+    spawn_depth: u32,
     #[cfg(test)]
     copied_body_statements: usize,
     #[cfg(test)]
@@ -380,6 +415,8 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             error_source: None,
             busy: false,
             suspended_span: None,
+            parked: BTreeMap::new(),
+            spawn_depth: 0,
             #[cfg(test)]
             copied_body_statements: 0,
             #[cfg(test)]
@@ -500,6 +537,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         self.init_globals()?;
         self.error_source = None;
         self.suspended_span = None;
+        self.steps = 0;
         self.busy = true;
         let result = self.begin(name, args.to_vec(), Span::EMPTY);
         self.busy = false;
@@ -535,6 +573,118 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             self.host.abort_script_calls();
         }
         result
+    }
+
+    /// Start `functions` in order as one new thread on an idle VM. A park stores
+    /// the thread for [`Vm::resume_thread`]; the host keeps its own context.
+    /// The step budget restarts here.
+    pub fn run_thread(
+        &mut self,
+        functions: &[crate::value::FunctionId],
+    ) -> Result<(), crate::Error> {
+        self.enter_thread()?;
+        let result = self.run_functions(functions.iter().copied().collect(), Span::EMPTY);
+        self.exit_thread(result)
+    }
+
+    /// Continue a parked thread by its ticket. `TriggerSleepAction`-style parks
+    /// produce no value, so the parked native receives `null`.
+    pub fn resume_thread(&mut self, ticket: u64) -> Result<(), crate::Error> {
+        self.enter_thread()?;
+        let Some(thread) = self.parked.remove(&ticket) else {
+            self.busy = false;
+            return Err(crate::Error::run(
+                Span::EMPTY,
+                "no script thread parked under this ticket",
+            ));
+        };
+        if let Err(why) = self.host.resume_thread(ticket) {
+            self.busy = false;
+            return Err(crate::Error::run(Span::EMPTY, why));
+        }
+        self.stack = thread.stack;
+        self.depth = thread.depth;
+        if let Some(top) = self.stack.last_mut() {
+            top.incoming = Some(Value::Null);
+        }
+        let result = self
+            .run_functions(thread.remaining, Span::EMPTY)
+            .and_then(|()| {
+                self.host
+                    .leave_thread()
+                    .map_err(|why| crate::Error::run(Span::EMPTY, why))
+            });
+        self.exit_thread(result)
+    }
+
+    /// Tickets of parked threads, ascending.
+    pub fn parked_threads(&self) -> impl Iterator<Item = u64> + '_ {
+        self.parked.keys().copied()
+    }
+
+    fn enter_thread(&mut self) -> Result<(), crate::Error> {
+        self.refuse_reentry()?;
+        if !self.stack.is_empty() {
+            return Err(crate::Error::run(
+                Span::EMPTY,
+                "script thread is suspended; resume it before starting another thread",
+            ));
+        }
+        self.init_globals()?;
+        self.error_source = None;
+        self.suspended_span = None;
+        self.steps = 0;
+        self.busy = true;
+        Ok(())
+    }
+
+    fn exit_thread(&mut self, result: Result<(), crate::Error>) -> Result<(), crate::Error> {
+        self.busy = false;
+        if result.is_err() {
+            self.host.abort_script_calls();
+        }
+        result
+    }
+
+    /// Drive the current stack, then each remaining callback, until the thread
+    /// finishes or parks. A park moves the whole stack into `parked`.
+    fn run_functions(
+        &mut self,
+        mut remaining: std::collections::VecDeque<crate::value::FunctionId>,
+        span: Span,
+    ) -> Result<(), crate::Error> {
+        loop {
+            if self.stack.is_empty() {
+                let Some(id) = remaining.pop_front() else {
+                    return Ok(());
+                };
+                let function = self.program.functions().get(id.index()).ok_or_else(|| {
+                    crate::Error::run(span, "thread callback is not in the loaded program")
+                })?;
+                if !function.params.is_empty() {
+                    return Err(crate::Error::run(span, "thread callback must take nothing"));
+                }
+                let name = function.name.clone();
+                self.push_activation(&name, Vec::new(), span)?;
+            }
+            if let Exec::Suspended = self.drive_until(0)? {
+                let at = self.suspended_span.unwrap_or(span);
+                let ticket = self
+                    .host
+                    .park_thread()
+                    .map_err(|why| crate::Error::run(at, why))?;
+                if self.parked.contains_key(&ticket) {
+                    return Err(crate::Error::run(at, "host reused a parked thread ticket"));
+                }
+                let thread = Thread {
+                    stack: std::mem::take(&mut self.stack),
+                    depth: std::mem::replace(&mut self.depth, 0),
+                    remaining,
+                };
+                self.parked.insert(ticket, thread);
+                return Ok(());
+            }
+        }
     }
 
     fn refuse_reentry(&self) -> Result<(), crate::Error> {
@@ -1808,6 +1958,26 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 outer.push(Zip::ScriptCall { span });
                 Ok(ExprOut::Push(outer))
             }
+            ScriptCall::Spawn(functions) => {
+                if self.spawn_depth >= MAX_SPAWN_DEPTH {
+                    return Err(crate::Error::run(
+                        span,
+                        format!("threads nested past {MAX_SPAWN_DEPTH} spawns"),
+                    ));
+                }
+                let caller = std::mem::take(&mut self.stack);
+                let depth = std::mem::replace(&mut self.depth, 0);
+                self.spawn_depth += 1;
+                let result = self.run_functions(functions.into(), span);
+                self.spawn_depth -= 1;
+                self.stack = caller;
+                self.depth = depth;
+                result?;
+                self.host
+                    .leave_thread()
+                    .map_err(|why| crate::Error::run(span, why))?;
+                self.finish_zip(outer, Value::Null, frame)
+            }
         }
     }
 
@@ -2414,7 +2584,7 @@ mod callback_work_tests {
             }
             fn continue_script_call(&mut self, _: Value) -> Result<ScriptCall, String> {
                 self.calls += 1;
-                Ok(if self.calls < 1000 {
+                Ok(if self.calls < MAX_STEPS as usize {
                     ScriptCall::Call(self.function.unwrap())
                 } else {
                     ScriptCall::Return(Value::Null)
@@ -2424,13 +2594,14 @@ mod callback_work_tests {
         let script = crate::parse_script("native Drive takes code callback returns nothing\nfunction empty takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\ncall Drive(function empty)\nendfunction\n").unwrap();
         let program = crate::resolve(&script).unwrap();
         let mut vm = Vm::new(&program, Chain::default());
-        vm.set_steps_for_test(MAX_STEPS - 100);
+        vm.set_steps_for_test(MAX_STEPS);
         assert!(
             vm.call("main", &[])
                 .unwrap_err()
                 .to_string()
                 .contains("steps")
         );
-        assert!(vm.host().calls < 1000);
+        // The budget restarts per entry and still bounds an empty-bodied chain.
+        assert!(vm.host().calls < MAX_STEPS as usize);
     }
 }

@@ -55,6 +55,8 @@ pub struct PresentationState {
     pub ui_enabled: Option<bool>,
     pub control_enabled: Option<bool>,
     pub interface_visible: Option<bool>,
+    /// Game time and duration of the latest `ShowInterface` fade.
+    pub interface_fade: Option<(f64, f32)>,
     pub world_fog_boundary: Option<bool>,
     pub filter: Option<CineFilter>,
     texture: Option<String>,
@@ -160,6 +162,10 @@ impl ObjectHost {
         self.no_occlusion_pass = true;
         Ok(())
     }
+    /// Executed `EnableOcclusion` flag; `None` until a script sets it.
+    pub fn occlusion_enabled(&self) -> Option<bool> {
+        self.occlusion_enabled
+    }
     pub fn presentation(&self) -> Option<&PresentationState> {
         self.presentation.as_ref()
     }
@@ -170,14 +176,12 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         if name == "EnableOcclusion" && self.no_occlusion_pass {
+            // Retained for an occlusion-fade pass; the current renderer draws none.
             return Some(match args {
-                [Value::Bool(false)] => Ok(Value::Null),
-                [Value::Bool(true)] => Err(self.inner.error(
-                    name,
-                    Failure::Presentation(
-                        "the selected renderer has no active occlusion-fade pass",
-                    ),
-                )),
+                [Value::Bool(enabled)] => {
+                    self.occlusion_enabled = Some(*enabled);
+                    Ok(Value::Null)
+                }
                 _ => Err(self
                     .inner
                     .error(name, Failure::Presentation("expected occlusion boolean"))),
@@ -202,14 +206,15 @@ impl ObjectHost {
             let [Value::Bool(show), Value::Real(duration)] = args else {
                 return Err(fail("expected interface boolean and real duration"));
             };
-            if !duration.is_finite() || *duration != 0.0 {
-                return Err(fail(
-                    "interface fades require a supported transition consumer; only immediate changes are admitted",
-                ));
+            if !duration.is_finite() || *duration < 0.0 {
+                return Err(fail("finite nonnegative interface fade required"));
             }
+            let now = self.timer_game_time();
             let state = self.presentation.as_mut().expect("admitted");
             state.interface_visible = Some(*show);
             state.control_enabled = Some(*show);
+            // The consumer interpolates toward the new visibility from this time.
+            state.interface_fade = now.filter(|_| *duration > 0.0).map(|at| (at, *duration));
             return Ok(Value::Null);
         }
         if name == "EnableWorldFogBoundary" {

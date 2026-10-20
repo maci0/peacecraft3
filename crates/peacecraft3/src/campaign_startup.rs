@@ -30,12 +30,21 @@ pub struct CampaignHostSupply {
     pub inputs: Option<MapStartupInputs>,
 }
 
+/// Explicit replay override for subsequently prepared games; existing sessions stay unchanged.
+#[derive(Resource, Default)]
+pub struct CampaignSeed {
+    pub requested: Option<i32>,
+    pub prepared: Option<i32>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StartupError {
     #[error("host inputs are for binding revision {supply}; the admitted revision is {binding}")]
     InputRevision { supply: u64, binding: u64 },
     #[error("binding revision {binding} has no campaign host inputs")]
     MissingInputs { binding: u64 },
+    #[error("preparing campaign binding {binding}: {reason}")]
+    Preparation { binding: u64, reason: String },
     #[error("{name} is not declared by the admitted map script")]
     MissingEntrypoint { name: &'static str },
     #[error("{name} is not a map-script function that takes nothing and returns nothing")]
@@ -50,6 +59,7 @@ pub struct CampaignStartupSet;
 pub fn install(app: &mut App) {
     app.init_resource::<CampaignStartup>()
         .init_resource::<CampaignHostSupply>()
+        .init_resource::<CampaignSeed>()
         .init_resource::<MapScriptSession<MapStartupHost>>()
         .add_systems(
             Update,
@@ -119,6 +129,11 @@ fn start_admitted_map(
     }) {
         return;
     }
+    if (supply.inputs.is_none() || supply.revision != bindings.revision)
+        && matches!(&startup.last_error, Some(StartupError::Preparation { binding, .. }) if *binding == bindings.revision)
+    {
+        return;
+    }
     if supply.revision != bindings.revision {
         startup.last_error = Some(StartupError::InputRevision {
             supply: supply.revision,
@@ -153,6 +168,7 @@ fn start_admitted_map(
     let reader = sources.for_receipts(&bindings.receipts);
     let edition = context.sources.map.edition.clone();
     let admitted = Arc::clone(&context);
+    let placement_map = Arc::clone(&bindings.catalog_map_bytes);
     let result = session.replace_sequenced(
         Arc::clone(&context),
         move |ctx| {
@@ -169,6 +185,26 @@ fn start_admitted_map(
                 })?;
             Ok::<_, MapStartupError>(match reader {
                 Some(reader) => {
+                    let placement_reader = Arc::clone(&reader);
+                    let placement_context = Arc::clone(host.context());
+                    host = host.with_placement_loader(move |objects, rules, tables| {
+                        crate::campaign_placement::assemble(
+                            &placement_context,
+                            &placement_map,
+                            Arc::clone(&placement_reader),
+                            tables,
+                            objects,
+                            rules,
+                        )
+                    });
+                    if host.objects().timer_game_time().is_some() {
+                        let mut models = crate::campaign_assets::UnitModels::new(
+                            Arc::clone(&reader),
+                            edition.clone(),
+                        );
+                        host.objects_mut()
+                            .admit_unit_models(move |definition| models.load(definition))?;
+                    }
                     let parameter_reader = Arc::clone(&reader);
                     let parameter_edition = edition.clone();
                     let parameter_budget = pcx_play::sound_parameters::BanksBudget {

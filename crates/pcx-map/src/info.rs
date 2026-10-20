@@ -5,7 +5,7 @@
 //!
 //! `war3map.w3i` is the map's own description of how the game is to be set up:
 //! which players exist, what controller each has, which race each plays, which
-//! colour each is, what the camera bounds are, and — critically — which object
+//! start position each has, what the camera bounds are, and — critically — which object
 //! tables the map *forces* and which it merely *suggests*. Without it the map
 //! cannot be set up, so a faithful reimplementation that reads `.w3m` but not
 //! `.w3i` renders terrain and nothing else.
@@ -69,11 +69,10 @@
 //! # Player record
 //!
 //! ```text
-//!  0  4  controller:  0 = none/closed, 1 = human, 2 = computer,
-//!                    3 = neutral/hostile, 4..11 = computer difficulty levels
-//!  4  4  race:        1 = human, 2 = orc, 3 = undead, 4 = night elf
-//!  8  4  start point: 1-based index into the terrain's start-location table
-//! 12  4  colour:      0..11, the player colour index
+//!  0  4  player number (not the record ordinal)
+//!  4  4  controller kind
+//!  8  4  race
+//! 12  4  fixed start-location flag
 //! 16  str name
 //! ..  4  start x
 //! ..  4  start y
@@ -152,10 +151,10 @@ pub const CONTROLLER_COMPUTER: u32 = 2;
 /// Controller kind: a passive, non-hostile player.
 pub const CONTROLLER_NEUTRAL: u32 = 3;
 
-/// Controller kind: computer at the easiest difficulty (and up).
+/// Legacy misnomer for raw controller word 4; this is not a difficulty level.
 pub const CONTROLLER_COMPUTER_EASY: u32 = 4;
 
-/// Controller kind: computer at the hardest difficulty.
+/// Legacy raw word 11, with no established controller meaning.
 pub const CONTROLLER_COMPUTER_INSANE: u32 = 11;
 
 /// Race: human.
@@ -170,23 +169,19 @@ pub const RACE_UNDEAD: u32 = 3;
 /// Race: night elf.
 pub const RACE_NIGHT_ELF: u32 = 4;
 
-/// The start-point index that means "none".
+/// Legacy raw zero constant; player records contain no start-point index.
 pub const START_POINT_NONE: u32 = 0;
 
 /// One player slot.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Player {
-    /// Controller kind. 0..=11 in all shipped files; the meaning of 4..=11 is
-    /// computer difficulty, inferred from the writer's enum ordering rather
-    /// than proved per value.
+    /// Legacy field name for the player-number word. Use [`Self::number`].
     pub controller: u32,
-    /// Race, 1..=4. The four values are the game's own `RACE_*` constants and
-    /// all four occur in the shipped maps.
+    /// Legacy field name for the controller word. Use [`Self::control`].
     pub race: u32,
-    /// 1-based start-point index into the terrain file's start locations.
-    /// Zero means the slot has no fixed start point.
+    /// Legacy field name for the race word. Use [`Self::race_id`].
     pub start_point: u32,
-    /// Player-colour index, 0..=11.
+    /// Legacy field name for the fixed-start word. Use [`Self::fixed_start`].
     pub colour: u32,
     /// Slot name, usually a `TRIGSTR_` reference.
     pub name: String,
@@ -198,6 +193,32 @@ pub struct Player {
     pub ally_priorities: u32,
     /// Set from version 5. Observed as a handicap/difficulty word; unattributed.
     pub ally_mask: u32,
+}
+
+impl Player {
+    /// Authored player number; sparse records must not be renumbered.
+    pub fn number(&self) -> u32 {
+        self.controller
+    }
+
+    /// Authored controller kind, independent of player number and race.
+    pub fn control(&self) -> u32 {
+        self.race
+    }
+
+    /// Authored race word, including unknown values retained from the file.
+    pub fn race_id(&self) -> u32 {
+        self.start_point
+    }
+
+    /// Unknown flag words remain retained but do not become an invented boolean.
+    pub fn fixed_start(&self) -> Option<bool> {
+        match self.colour {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        }
+    }
 }
 
 /// One force (team/alliance) row.
@@ -821,20 +842,19 @@ impl MapInfo {
     /// Note what this is *not*: it is not "slots a human race plays". The
     /// controller word says who is playing the slot, the race word says which
     /// race; the two are independent and every shipped map separates them.
-    /// Most custom maps leave every controller at [`CONTROLLER_NONE`] and let
-    /// the lobby fill them in, so this is usually empty even when the map has
-    /// twelve slots.
+    /// This describes authored controller roles, not occupied lobby slots or
+    /// the identity of the local client.
     pub fn human_players(&self) -> impl Iterator<Item = &Player> {
         self.players
             .iter()
-            .filter(|p| p.controller == CONTROLLER_HUMAN)
+            .filter(|p| p.control() == CONTROLLER_HUMAN)
     }
 
-    /// The slots playing each race, in file order.
+    /// Number of authored slots per race, ordered by race word.
     pub fn race_counts(&self) -> std::collections::BTreeMap<u32, usize> {
         let mut m = std::collections::BTreeMap::new();
         for p in &self.players {
-            *m.entry(p.race).or_insert(0) += 1;
+            *m.entry(p.race_id()).or_insert(0) += 1;
         }
         m
     }
@@ -1059,7 +1079,7 @@ mod tests {
     #[test]
     fn credits_player_slot_is_exact() {
         // Hand-read: one player slot after the loading strings.
-        // controller 0, race 1, start point 1, colour 0,
+        // player 0, user controller, human race, non-fixed start,
         // name "TRIGSTR_010", start (-2240, 512), then the two extra words 0.
         let Some(dir) = install_dir() else { return };
         let Some(i) = info(&dir, MAP_CREDITS) else {
@@ -1067,10 +1087,10 @@ mod tests {
         };
         assert_eq!(i.players().len(), 1);
         let p = &i.players()[0];
-        assert_eq!(p.controller, 0);
-        assert_eq!(p.race, RACE_HUMAN);
-        assert_eq!(p.start_point, 1);
-        assert_eq!(p.colour, 0);
+        assert_eq!(p.number(), 0);
+        assert_eq!(p.control(), CONTROLLER_HUMAN);
+        assert_eq!(p.race_id(), RACE_HUMAN);
+        assert_eq!(p.fixed_start(), Some(false));
         assert_eq!(p.name, "TRIGSTR_010");
         assert_eq!((p.start_x, p.start_y), (-2240.0, 512.0));
         assert_eq!((p.ally_priorities, p.ally_mask), (0, 0));
@@ -1100,8 +1120,8 @@ mod tests {
 
     #[test]
     fn adrenaline_player_slots_are_exact() {
-        // Hand-read from (4)adrenaline.w3m: four human slots, controllers
-        // 0..=3, races all 1, start points 1..=4, colour 0, names
+        // Hand-read from (4)adrenaline.w3m: four user slots, numbers
+        // 0..=3, controllers all 1, races 1..=4, fixed-start 0, names
         // TRIGSTR_010..=TRIGSTR_013, and the two extra words alternating
         // 0/10 and 0/5 in pairs.
         let Some(dir) = install_dir() else { return };
@@ -1110,7 +1130,7 @@ mod tests {
         };
         assert_eq!(i.players().len(), 4);
         let want = [
-            // controller, race, start, colour, name, x, y, ally, mask
+            // player number, controller, race, fixed-start, name, x, y, ally, mask
             (
                 0u32,
                 RACE_HUMAN,
@@ -1137,10 +1157,13 @@ mod tests {
             assert_eq!(p.ally_priorities, w.7, "{:?}", p.name);
             assert_eq!(p.ally_mask, w.8, "{:?}", p.name);
         }
-        // A melee lobby map: controllers 0..=3 are open, every race is human.
+        // Four authored user slots, with one player of each race.
+        assert_eq!(i.human_players().count(), 4);
         let counts = i.race_counts();
-        assert_eq!(counts.len(), 1);
-        assert_eq!(counts.get(&RACE_HUMAN), Some(&4));
+        assert_eq!(counts.len(), 4);
+        for race in [RACE_HUMAN, RACE_ORC, RACE_UNDEAD, RACE_NIGHT_ELF] {
+            assert_eq!(counts.get(&race), Some(&1));
+        }
     }
 
     #[test]

@@ -343,11 +343,15 @@ fn variants_share_one_budget_and_absent_or_bad_declarations_stay_isolated() {
     assert!(budget.contains("destructable creation"), "{budget}");
     assert!(host.destructable_creation(id).unwrap().dead);
     assert_eq!(host.inner().handles(), handles + 1);
-    for name in ["RemoveDestructable", "KillDestructable"] {
-        let refused = host.native(name, &[Value::Handle(id)]).unwrap_err();
-        assert!(refused.contains("unsupported"), "{refused}");
-        assert_eq!(host.destructable_creation(id).unwrap().variation, 3);
-    }
+    let refused = host
+        .native("RemoveDestructable", &[Value::Handle(id)])
+        .unwrap_err();
+    assert!(refused.contains("unsupported"), "{refused}");
+    assert_eq!(host.destructable_creation(id).unwrap().variation, 3);
+    // The declared kill native now marks the runtime state.
+    host.native("KillDestructable", &[Value::Handle(id)])
+        .unwrap();
+    assert!(host.destructable_state(id).unwrap().dead);
     let broken = declarations.replace(
         "native CreateDestructableZ takes integer objectid, real x, real y, real z, real face, real scale, integer variation returns destructable",
         "native CreateDestructableZ takes integer objectid, real x, real y, real z, real face, real scale, integer variation returns widget",

@@ -1,0 +1,1095 @@
+//! Render the published session's executed unit handles and their selected source clips.
+use crate::{mainmenu_scene as model_scene, menu_material::MenuMaterial};
+use bevy::{camera::visibility::RenderLayers, ecs::system::SystemParam, prelude::*};
+use pcx_assets::Resolver;
+use pcx_play::{map_startup_host::MapStartupHost, playercolor_host::ExecutedUnit};
+use pcx_script::HandleId;
+use pcx_sim::world::{Definition, FieldValue};
+use peacecraft3::{
+    browser_configuration::SelectedMapSources, campaign_camera::CampaignCameraSet,
+    map_requests::MapRequests, map_script_session::MapScriptSession,
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Weak},
+};
+
+#[derive(Component)]
+struct UnitActor(HandleId);
+
+struct Actor {
+    root: Entity,
+    model: pcx_gfx::LoadedModel,
+    runtime: pcx_gfx::mdx_runtime::RuntimePlan,
+    geosets: model_scene::Geosets,
+    interval: [u32; 2],
+    opacity: pcx_gfx::mdx_opacity::OpacityPlan,
+    selection: pcx_gfx::mdx_texture_selection::TextureSelectionPlan,
+    uv: pcx_gfx::mdx_uv_translation::UvTranslationPlan,
+    tint: [f32; 3],
+    scale: f32,
+    height: f32,
+    color: i32,
+    image_bytes: usize,
+    vertices: usize,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct UnitActors {
+    session: Option<Weak<()>>,
+    reader: Option<Arc<Resolver>>,
+    actors: BTreeMap<HandleId, Actor>,
+    failed: BTreeMap<HandleId, Option<HandleId>>,
+    image_bytes: usize,
+    vertices: usize,
+    parameters: Option<pcx_play::menu_lighting::Parameters>,
+    parameters_attempted: bool,
+    palette: Option<TeamPalette>,
+    pub last_error: Option<String>,
+}
+
+#[derive(SystemParam)]
+struct DrawAssets<'w> {
+    meshes: ResMut<'w, Assets<Mesh>>,
+    materials: ResMut<'w, Assets<MenuMaterial>>,
+    images: ResMut<'w, Assets<Image>>,
+}
+
+#[derive(SystemParam)]
+struct ActorQueries<'w, 's> {
+    visibility: Query<'w, 's, &'static mut Visibility>,
+    transforms: Query<'w, 's, &'static mut Transform>,
+    actors: Query<'w, 's, (Entity, &'static UnitActor)>,
+    cameras: Query<'w, 's, Entity, With<peacecraft3::campaign_camera::CampaignSceneCamera>>,
+}
+
+fn transform_for(
+    unit: &ExecutedUnit,
+    terrain: &pcx_map::Terrain,
+    scale: f32,
+    height: f32,
+) -> Result<Transform, String> {
+    let [x, y] = unit.position.ok_or("unit has no accepted world position")?;
+    let z = pcx_tera::world::sample_world_z(terrain, x, y)
+        .ok_or("unit position is outside admitted terrain")?
+        + height;
+    let transform = Transform::from_translation(Vec3::new(x, z, -y))
+        .with_rotation(
+            Quat::from_rotation_y(unit.face.to_radians())
+                * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+        )
+        .with_scale(Vec3::splat(scale));
+    if !transform.is_finite() {
+        return Err("nonfinite unit actor transform".into());
+    }
+    Ok(transform)
+}
+
+fn team_color(
+    objects: &pcx_play::playercolor_host::ObjectHost,
+    unit: &ExecutedUnit,
+) -> Result<i32, String> {
+    if let Some(color) = unit.team_color {
+        return objects
+            .inner()
+            .player_color(color)
+            .map_err(|e| e.to_string());
+    }
+    let value = scalar(&unit.definition, "teamColor")?;
+    if value == -1. {
+        unit.creation_color
+            .map(|color| {
+                objects
+                    .inner()
+                    .player_color(color)
+                    .map_err(|e| e.to_string())
+            })
+            .unwrap_or(Ok(unit.executed_owner))
+    } else if value >= 0. && value.fract() == 0. && value < (i32::MAX as f32) {
+        Ok(value as i32)
+    } else {
+        Err("unsupported unit team-color source".into())
+    }
+}
+
+pub(crate) fn install(app: &mut App) {
+    app.init_resource::<UnitActors>()
+        .add_systems(Update, project.after(CampaignCameraSet));
+}
+
+pub(crate) fn scalar(unit: &Definition, column: &str) -> Result<f32, String> {
+    use pcx_objects::editor::{FieldKind, FieldSource, SlkId};
+    let mut matches = unit.fields.iter().filter(|(_, f)| {
+        f.metadata
+            .as_ref()
+            .is_some_and(|m| matches!(&m.source,FieldSource::Column {column:c,..} if c==column))
+    });
+    let (id, field) = matches
+        .next()
+        .ok_or_else(|| format!("missing unit field {column}"))?;
+    if matches.next().is_some() {
+        return Err(format!("ambiguous unit field {column}"));
+    }
+    let metadata = field.metadata.as_ref().expect("selected metadata");
+    if metadata.from != SlkId::UnitMetaData
+        || metadata.fourcc != *id
+        || metadata.index != -1
+        || !(matches!(
+            metadata.kind,
+            FieldKind::Real | FieldKind::Unreal | FieldKind::Int
+        ) || (column == "teamColor"
+            && metadata.kind == FieldKind::Token
+            && metadata.declared == "teamColor"))
+    {
+        return Err(format!("unsupported unit field {column}"));
+    }
+    let number = match &field.value {
+        Ok(FieldValue::Cell(s)) => s.parse::<f32>().map_err(|e| e.to_string())?,
+        Ok(FieldValue::Override(pcx_objects::Value::Int(v))) if metadata.kind == FieldKind::Int => {
+            *v as f32
+        }
+        Ok(FieldValue::Override(pcx_objects::Value::Real(v)))
+            if metadata.kind == FieldKind::Real =>
+        {
+            *v
+        }
+        Ok(FieldValue::Override(pcx_objects::Value::Unreal(v)))
+            if metadata.kind == FieldKind::Unreal =>
+        {
+            *v
+        }
+        Ok(FieldValue::Override(pcx_objects::Value::Str(v)))
+            if metadata.kind == FieldKind::Token =>
+        {
+            std::str::from_utf8(v)
+                .map_err(|e| e.to_string())?
+                .parse::<i32>()
+                .map_err(|e| e.to_string())? as f32
+        }
+        _ => return Err(format!("unsupported unit field {column} value")),
+    };
+    if !number.is_finite() {
+        return Err(format!("nonfinite unit field {column}"));
+    }
+    Ok(number)
+}
+
+#[derive(Clone)]
+struct TeamPalette {
+    prefixes: [String; 2],
+    count: i32,
+}
+impl TeamPalette {
+    fn read(bytes: &[u8]) -> Result<Self, String> {
+        let skin = crate::menu_skin::SkinTable::parse(
+            std::str::from_utf8(bytes).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        let field = |key| {
+            skin.unique_file(key)
+                .map(|v| v.file)
+                .map_err(|e| e.to_string())
+        };
+        let count = field("TeamColors")?
+            .parse::<i32>()
+            .map_err(|e| e.to_string())?;
+        if count <= 0 {
+            return Err("invalid TeamColors count".into());
+        }
+        let normalize = |key| -> Result<String, String> {
+            pcx_assets::AssetPath::new(&field(key)?)
+                .map(|path| path.as_str().to_owned())
+                .map_err(|e| e.to_string())
+        };
+        Ok(Self {
+            prefixes: [normalize("TeamColor")?, normalize("TeamGlow")?],
+            count,
+        })
+    }
+    fn path<'a>(
+        &self,
+        paths: impl Iterator<Item = &'a pcx_assets::AssetPath>,
+        slot: u32,
+        index: i32,
+    ) -> Result<String, String> {
+        let prefix = match slot {
+            1 => &self.prefixes[0],
+            2 => &self.prefixes[1],
+            _ => return Err(format!("unsupported unit replacement slot {slot}")),
+        };
+        if !(0..self.count).contains(&index) {
+            return Err(format!(
+                "replacement colour {index} exceeds source TeamColors"
+            ));
+        }
+        let mut found = paths.filter(|path| {
+            path.as_str()
+                .strip_prefix(prefix)
+                .and_then(|s| s.strip_suffix(".blp"))
+                .and_then(|s| s.parse::<i32>().ok())
+                == Some(index)
+        });
+        let path = found
+            .next()
+            .ok_or_else(|| format!("missing palette {prefix} index {index}"))?;
+        if found.next().is_some() {
+            return Err(format!("ambiguous palette {prefix} index {index}"));
+        }
+        Ok(path.as_str().to_owned())
+    }
+}
+
+// Each source layer gets a draw while keeping the source geometry, GEOA and clocks.
+fn expand_layers(
+    model: &mut pcx_gfx::LoadedModel,
+    runtime: &mut pcx_gfx::mdx_runtime::RuntimePlan,
+    maximum_vertices: usize,
+) -> Result<(usize, Vec<(usize, usize)>), String> {
+    let mut vertices = 0usize;
+    for mesh in &model.meshes {
+        let layers = runtime
+            .materials
+            .get(mesh.material_id as usize)
+            .ok_or("missing actor material")?
+            .layers
+            .len();
+        if layers == 0 {
+            return Err("actor material has no layers".into());
+        }
+        vertices = mesh
+            .positions
+            .len()
+            .checked_mul(layers)
+            .and_then(|n| vertices.checked_add(n))
+            .ok_or("actor layer vertex overflow")?;
+    }
+    if vertices > maximum_vertices {
+        return Err("actor layer vertex budget exceeded".into());
+    }
+    let mut materials = Vec::new();
+    let mut source_layers = Vec::new();
+    let starts: Vec<_> = runtime
+        .materials
+        .iter()
+        .enumerate()
+        .map(|(material_id, material)| {
+            let start = materials.len();
+            for (layer_id, layer) in material.layers.iter().enumerate() {
+                source_layers.push((material_id, layer_id));
+                materials.push(pcx_gfx::mdx_runtime::MaterialBinding {
+                    priority_plane: material.priority_plane,
+                    flags: material.flags,
+                    layers: vec![layer.clone()],
+                });
+            }
+            start
+        })
+        .collect();
+    let mut meshes = Vec::new();
+    let mut geosets = Vec::new();
+    let mut animations = Vec::new();
+    let mut uv_sets = Vec::new();
+    for mesh in &model.meshes {
+        let binding = runtime
+            .geosets
+            .get(mesh.geoset)
+            .ok_or("missing actor geoset")?;
+        if binding.material_id != mesh.material_id as usize {
+            return Err("actor material mismatch".into());
+        }
+        for layer in 0..runtime.materials[binding.material_id].layers.len() {
+            let id = meshes.len();
+            let material = starts[binding.material_id] + layer;
+            let mut draw = mesh.clone();
+            draw.geoset = id;
+            draw.material_id = material as u32;
+            let mut bound = binding.clone();
+            bound.geoset_id = id;
+            bound.material_id = material;
+            bound.animation_records.clear();
+            for &index in &binding.animation_records {
+                let mut animation = runtime
+                    .geoset_animations
+                    .get(index)
+                    .ok_or("missing actor GEOA")?
+                    .clone();
+                animation.geoset_id = id as u32;
+                bound.animation_records.push(animations.len());
+                animations.push(animation);
+            }
+            meshes.push(draw);
+            geosets.push(bound);
+            uv_sets.push(
+                *runtime
+                    .uv_set_counts
+                    .get(mesh.geoset)
+                    .ok_or("missing actor UVAS")?,
+            );
+        }
+    }
+    let mut unbound = Vec::new();
+    for &index in &runtime.unbound_geoset_animations {
+        unbound.push(animations.len());
+        animations.push(
+            runtime
+                .geoset_animations
+                .get(index)
+                .ok_or("missing unbound actor GEOA")?
+                .clone(),
+        );
+    }
+    model.meshes = meshes;
+    runtime.materials = materials;
+    runtime.geosets = geosets;
+    runtime.geoset_animations = animations;
+    runtime.unbound_geoset_animations = unbound;
+    runtime.uv_set_counts = uv_sets;
+    Ok((vertices, source_layers))
+}
+
+struct ActorSource<'a> {
+    reader: &'a Resolver,
+    palette: &'a TeamPalette,
+    unit: &'a ExecutedUnit,
+    terrain: &'a pcx_map::Terrain,
+    id: HandleId,
+    color: i32,
+    now: f64,
+    channel_scale: f32,
+    cutout: f32,
+    available_images: usize,
+    available_vertices: usize,
+}
+#[derive(SystemParam)]
+struct ActorSources<'w> {
+    requests: Res<'w, MapRequests>,
+    sources: Res<'w, SelectedMapSources>,
+    launcher: Res<'w, crate::launch_gui::Launcher>,
+}
+
+impl Actor {
+    fn spawn(
+        commands: &mut Commands,
+        assets: &mut DrawAssets,
+        input: ActorSource,
+    ) -> Result<(Self, usize, usize), String> {
+        let ActorSource {
+            reader,
+            palette,
+            unit,
+            terrain,
+            id,
+            color,
+            now,
+            channel_scale,
+            cutout,
+            available_images,
+            available_vertices,
+        } = input;
+        let animation = unit.animation.as_ref().ok_or("unit model is unavailable")?;
+        let source = &animation.model;
+        let bytes = &source.bytes;
+        let mdl = pcx_mdl::Mdlx::parse(bytes).map_err(|e| e.to_string())?;
+        let mut model = pcx_gfx::load_model(bytes, &source.member).map_err(|e| e.to_string())?;
+        let mut runtime =
+            pcx_gfx::mdx_runtime::RuntimePlan::parse(bytes).map_err(|e| e.to_string())?;
+        let (vertices, source_layers) =
+            expand_layers(&mut model, &mut runtime, available_vertices)?;
+        let mut textures = Vec::new();
+        let mut remaining = available_images;
+        let required: BTreeSet<_> = runtime
+            .geosets
+            .iter()
+            .filter_map(|geoset| {
+                runtime
+                    .materials
+                    .get(geoset.material_id)
+                    .and_then(|m| m.layers.first())
+            })
+            .flat_map(|layer| {
+                std::iter::once(layer.properties.texture_id).chain(
+                    layer
+                        .texture_tracks
+                        .iter()
+                        .flat_map(|t| t.keys.iter().map(|&(_, id)| id)),
+                )
+            })
+            .collect();
+        for (index, texture) in runtime.textures.iter_mut().enumerate() {
+            if !required.contains(&(index as u32)) {
+                continue;
+            }
+            if texture.path.is_empty() {
+                // Empty slots 1/2 use the indexed team-color/glow families; full paths come from the selected inventory.
+                texture.path = match texture.slot {
+                    1 | 2 => palette.path(reader.paths(), texture.slot, color)?,
+                    slot => return Err(format!("unsupported empty unit texture slot {slot}")),
+                };
+            }
+            let raw = reader
+                .resolve_bounded(&texture.path, 16 << 20)
+                .map_err(|e| e.to_string())?;
+            let decoded =
+                pcx_gfx::load_mipmapped_image_bounded(&raw.bytes, &texture.path, remaining)
+                    .map_err(|e| e.to_string())?;
+            remaining = remaining
+                .checked_sub(decoded.rgba_bytes().ok_or("invalid unit image mip chain")?)
+                .ok_or("actor image budget exceeded")?;
+            textures.push(decoded);
+        }
+        let sample = animation
+            .sample(now)?
+            .unwrap_or(pcx_play::unit_model::Sample {
+                interval: [0, 0],
+                frame: 0,
+                elapsed_ms: 0,
+            });
+        let interval = sample.interval;
+        let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&runtime, interval)
+            .map_err(|e| e.to_string())?;
+        let selection = model_scene::texture_selection(&runtime, interval, &source.member)
+            .map_err(|e| e.to_string())?;
+        let uv = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
+            &runtime,
+            interval,
+            &source.member,
+        )
+        .map_err(|e| e.to_string())?;
+        let scale = scalar(&unit.definition, "modelScale")?;
+        if scale <= 0. {
+            return Err("nonpositive unit modelScale".into());
+        }
+        let height = scalar(&unit.definition, "moveHeight")?;
+        let tint = [
+            scalar(&unit.definition, "red")?,
+            scalar(&unit.definition, "green")?,
+            scalar(&unit.definition, "blue")?,
+        ]
+        .map(|v| v * channel_scale);
+        let source_input = model_scene::GeosetSource {
+            m: &mdl,
+            bytes,
+            source: &source.member,
+            model: &model,
+            textures: &textures,
+            runtime: &runtime,
+            selection: &selection,
+            uv_translation: &uv,
+            native_cutout_reference: Some(cutout),
+            material_layers: Some(&source_layers),
+        };
+        model_scene::preflight_geosets(&source_input, &opacity, sample.frame)
+            .map_err(|e| e.to_string())?;
+        let initial_transform = transform_for(unit, terrain, scale, height)?;
+        let root = commands
+            .spawn((initial_transform, Visibility::default(), UnitActor(id)))
+            .id();
+        let mut info = model_scene::SceneInfo::default();
+        let geosets = model_scene::spawn_geosets(
+            commands,
+            model_scene::GeosetAssets {
+                meshes: &mut assets.meshes,
+                materials: &mut assets.materials,
+                images: &mut assets.images,
+            },
+            source_input,
+            &opacity,
+            sample.frame,
+            &mut info,
+            (
+                ChildOf(root),
+                bevy::render::batching::NoAutomaticBatching,
+                RenderLayers::layer(peacecraft3::campaign_camera::RENDER_LAYER),
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+        // shortcut: the current material consumer needs source DNC unit lighting before visual acceptance; no replacement ambient light is invented.
+        Ok((
+            Self {
+                root,
+                model,
+                runtime,
+                geosets,
+                interval,
+                opacity,
+                selection,
+                uv,
+                tint,
+                scale,
+                height,
+                color,
+                image_bytes: available_images - remaining,
+                vertices,
+            },
+            available_images - remaining,
+            vertices,
+        ))
+    }
+    fn update(
+        &mut self,
+        unit: &ExecutedUnit,
+        now: f64,
+        assets: &mut DrawAssets,
+        visibility: &mut Query<&mut Visibility>,
+        transforms: &mut Query<&mut Transform>,
+        terrain: &pcx_map::Terrain,
+    ) -> Result<(), String> {
+        let animation = unit.animation.as_ref().ok_or("unit model is unavailable")?;
+        let sample = animation
+            .sample(now)?
+            .unwrap_or(pcx_play::unit_model::Sample {
+                interval: [0, 0],
+                frame: 0,
+                elapsed_ms: 0,
+            });
+        if self.interval != sample.interval {
+            let opacity =
+                pcx_gfx::mdx_opacity::OpacityPlan::checked(&self.runtime, sample.interval)
+                    .map_err(|e| e.to_string())?;
+            let selection = model_scene::texture_selection(
+                &self.runtime,
+                sample.interval,
+                &animation.model.member,
+            )
+            .map_err(|e| e.to_string())?;
+            let uv = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
+                &self.runtime,
+                sample.interval,
+                &animation.model.member,
+            )
+            .map_err(|e| e.to_string())?;
+            self.opacity = opacity;
+            self.selection = selection;
+            self.uv = uv;
+            self.interval = sample.interval;
+        }
+        if let Ok(mut transform) = transforms.get_mut(self.root) {
+            *transform = transform_for(unit, terrain, self.scale, self.height)?;
+        }
+        model_scene::skin_geosets(
+            model_scene::Rig {
+                interval: self.interval,
+                model: &self.model,
+                bones: self.runtime.joints.joints(),
+                pivots: self.runtime.joints.pivots(),
+                global_durations: &self.runtime.global_sequences,
+                camera_pose: None,
+            },
+            &self.geosets.handles,
+            sample.frame,
+            u32::try_from(sample.elapsed_ms).map_err(|_| "unit global animation clock overflow")?,
+            &mut assets.meshes,
+        )
+        .map_err(|e| e.to_string())?;
+        model_scene::apply_opacity(
+            &self.opacity,
+            &self.geosets.bound,
+            sample.frame,
+            sample.elapsed_ms,
+            &mut assets.materials,
+            visibility,
+        );
+        model_scene::apply_geoset_colour(
+            &self.opacity,
+            &self.geosets.bound,
+            sample.frame,
+            sample.elapsed_ms,
+            &mut assets.materials,
+        )
+        .map_err(|e| e.to_string())?;
+        model_scene::apply_texture_selection(
+            &self.selection,
+            &mut self.geosets.textures,
+            sample.frame,
+            sample.elapsed_ms,
+            &mut assets.materials,
+        )
+        .map_err(|e| e.to_string())?;
+        model_scene::apply_uv_translation(
+            &self.uv,
+            &self.geosets.textures,
+            sample.frame,
+            sample.elapsed_ms,
+            &mut assets.materials,
+        )
+        .map_err(|e| e.to_string())?;
+        for (_, _, handle) in &self.geosets.bound {
+            if let Some(material) = assets.materials.get_mut(handle).as_deref_mut() {
+                let c = material.base.base_color.to_linear();
+                material.base.base_color = Color::linear_rgba(
+                    c.red * self.tint[0],
+                    c.green * self.tint[1],
+                    c.blue * self.tint[2],
+                    c.alpha,
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+fn project(
+    mut commands: Commands,
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+    sources: ActorSources,
+    mut state: ResMut<UnitActors>,
+    mut assets: DrawAssets,
+    mut queries: ActorQueries,
+) {
+    let witness = session.session_witness();
+    if !matches!((&state.session,&witness),(Some(a),Some(b)) if Weak::ptr_eq(a,b)) {
+        for (entity, actor) in &queries.actors {
+            trace!(unit=?actor.0,"retire campaign unit actor");
+            commands.entity(entity).despawn();
+        }
+        *state = UnitActors {
+            session: witness,
+            ..default()
+        };
+    }
+    let Some(context) = session.context().cloned() else {
+        return;
+    };
+    if state.reader.is_none()
+        && sources
+            .requests
+            .admission
+            .shared_context()
+            .is_some_and(|admitted| Arc::ptr_eq(&admitted, &context))
+        && let Some(bindings) = sources.requests.bindings.as_ref()
+    {
+        state.reader = sources.sources.for_receipts(&bindings.receipts);
+    }
+    let Some(reader) = state.reader.clone() else {
+        return;
+    };
+    let Some(host) = session.host() else {
+        return;
+    };
+    let objects = host.objects();
+    let Some(now) = objects.timer_game_time() else {
+        return;
+    };
+    if !state.parameters_attempted {
+        state.parameters_attempted = true;
+        let install = crate::launch_gui::selected_install(&sources.launcher);
+        match crate::menu_lighting::parameters(install.as_deref()) {
+            Ok(v) => state.parameters = Some(v),
+            Err(e) => state.last_error = Some(e),
+        }
+        match reader
+            .resolve_bounded("UI/war3skins.txt", 1 << 20)
+            .map_err(|e| e.to_string())
+            .and_then(|asset| TeamPalette::read(&asset.bytes))
+        {
+            Ok(palette) => state.palette = Some(palette),
+            Err(e) => state.last_error = Some(format!("UI/war3skins.txt: {e}")),
+        }
+    }
+    let Some(palette) = state.palette.clone() else {
+        return;
+    };
+    let Some(parameters) = state.parameters.as_ref() else {
+        return;
+    };
+    let (channel_scale, cutout) = (parameters.channel_scale, parameters.cutout_reference);
+    let live: BTreeSet<_> = objects.executed_units().map(|(id, _)| id).collect();
+    let retired: Vec<_> = state
+        .actors
+        .keys()
+        .copied()
+        .filter(|id| !live.contains(id))
+        .collect();
+    for id in retired {
+        retire(&mut commands, &mut state, id);
+    }
+    for (id, unit) in objects.executed_units() {
+        if let Some(actor) = state.actors.get(&id)
+            && let Ok(mut visibility) = queries.visibility.get_mut(actor.root)
+        {
+            *visibility = if unit.shown {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+        }
+        if !unit.shown {
+            continue;
+        }
+        if unit.animation.is_none() || state.failed.get(&id) == Some(&unit.team_color) {
+            continue;
+        }
+        let color = match team_color(objects, unit) {
+            Ok(v) => v,
+            Err(e) => {
+                state.failed.insert(id, unit.team_color);
+                state.last_error = Some(e);
+                continue;
+            }
+        };
+        if state
+            .actors
+            .get(&id)
+            .is_some_and(|actor| actor.color != color)
+        {
+            retire(&mut commands, &mut state, id);
+        }
+        if !state.actors.contains_key(&id) {
+            let result = Actor::spawn(
+                &mut commands,
+                &mut assets,
+                ActorSource {
+                    reader: &reader,
+                    palette: &palette,
+                    unit,
+                    terrain: &context.terrain,
+                    id,
+                    color,
+                    now,
+                    channel_scale,
+                    cutout,
+                    available_images: (512usize << 20).saturating_sub(state.image_bytes),
+                    available_vertices: 2_000_000usize.saturating_sub(state.vertices),
+                },
+            );
+            match result {
+                Ok((actor, bytes, vertices)) => {
+                    state.image_bytes += bytes;
+                    state.vertices += vertices;
+                    state.actors.insert(id, actor);
+                }
+                Err(e) => {
+                    state.failed.insert(id, unit.team_color);
+                    state.last_error = Some(format!("unit {id:?}: {e}"));
+                    continue;
+                }
+            }
+        }
+        if let Some(actor) = state.actors.get_mut(&id)
+            && let Err(e) = actor.update(
+                unit,
+                now,
+                &mut assets,
+                &mut queries.visibility,
+                &mut queries.transforms,
+                &context.terrain,
+            )
+        {
+            state.last_error = Some(format!("unit {id:?}: {e}"));
+        }
+    }
+    let mut owners = Vec::new();
+    let mut orders = bevy::render::sync_world::MainEntityHashMap::default();
+    for actor in state.actors.values() {
+        let owner = actor.root.into();
+        owners.push(owner);
+        for (ordinal, entity, _) in &actor.geosets.bound {
+            let binding = &actor.runtime.geosets[*ordinal];
+            orders.insert(
+                (*entity).into(),
+                crate::menu_particle_order::SourceOrder {
+                    owner,
+                    priority_plane: actor.runtime.materials[binding.material_id].priority_plane,
+                    kind: crate::menu_particle_order::SourceKind::Geometry,
+                    ordinal: *ordinal as u32,
+                    sort_far_z: false,
+                },
+            );
+        }
+    }
+    let orders = Arc::new(orders);
+    let owners: Arc<[_]> = owners.into();
+    for entity in &queries.cameras {
+        commands
+            .entity(entity)
+            .insert(crate::menu_particle_order::SourceOrderView {
+                owners: Arc::clone(&owners),
+                source: "executed campaign actors".into(),
+                orders: Arc::clone(&orders),
+                max_phase_items: 65536,
+            });
+    }
+}
+
+fn retire(commands: &mut Commands, state: &mut UnitActors, id: HandleId) {
+    if let Some(actor) = state.actors.remove(&id) {
+        commands.entity(actor.root).despawn();
+        state.image_bytes -= actor.image_bytes;
+        state.vertices -= actor.vertices;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pcx_objects::editor::{FieldDef, FieldKind, FieldSource, ObjectKind, SlkId};
+    fn unit() -> ExecutedUnit {
+        let field = FieldDef {
+            fourcc: *b"S001",
+            from: SlkId::UnitMetaData,
+            field: "modelScale".into(),
+            slk: "UnitUI".into(),
+            index: -1,
+            declared: "unreal".into(),
+            kind: FieldKind::Unreal,
+            category: "art".into(),
+            source: FieldSource::Column {
+                slk: SlkId::UnitUi,
+                column: "modelScale".into(),
+            },
+            measured: true,
+        };
+        let id = HandleId::new(std::num::NonZeroU64::new(1).unwrap());
+        ExecutedUnit {
+            definition: Definition {
+                rawcode: *b"U001",
+                base_rawcode: "U001".into(),
+                kind: ObjectKind::Unit,
+                fields: BTreeMap::from([(
+                    *b"S001",
+                    pcx_sim::world::ObjectField {
+                        metadata: Some(field),
+                        value: Ok(FieldValue::Cell("1.25".into())),
+                    },
+                )]),
+                modifications: Vec::new(),
+            },
+            executed_owner: 0,
+            owner: id,
+            team_color: None,
+            creation_color: None,
+            source: pcx_sim::world::Source {
+                install: "synthetic".into(),
+                edition: "test".into(),
+                map: "fixture".into(),
+            },
+            x: 9999.,
+            y: 9999.,
+            position: Some([32., 64.]),
+            face: 90.,
+            acquire_range: None,
+            requested_hero_level: None,
+            requested_show_eye_candy: None,
+            unit_states: Vec::new(),
+            invulnerable: None,
+            admitted_order: None,
+            abilities: None,
+            animation: None,
+            activity: None,
+            shown: true,
+            vitals: None,
+            combat: None,
+        }
+    }
+    fn terrain() -> pcx_map::Terrain {
+        let mut bytes = b"W3E!".to_vec();
+        bytes.extend(11u32.to_le_bytes());
+        bytes.push(b'L');
+        bytes.extend(1u32.to_le_bytes());
+        bytes.extend(1u32.to_le_bytes());
+        bytes.extend(b"Ldrt");
+        bytes.extend(1u32.to_le_bytes());
+        bytes.extend(b"CLdi");
+        bytes.extend(2u32.to_le_bytes());
+        bytes.extend(2u32.to_le_bytes());
+        bytes.extend(0f32.to_le_bytes());
+        bytes.extend(0f32.to_le_bytes());
+        for _ in 0..4 {
+            bytes.extend(8232u16.to_le_bytes());
+            bytes.extend(8192u16.to_le_bytes());
+            bytes.extend([0, 0, 0]);
+        }
+        pcx_map::Terrain::from_bytes(bytes).unwrap()
+    }
+    #[test]
+    fn every_material_layer_keeps_its_texture_opacity_uv_and_geoset_binding() {
+        let mut bytes = b"MDLXVERS".to_vec();
+        bytes.extend(4u32.to_le_bytes());
+        bytes.extend(800u32.to_le_bytes());
+        let mut runtime = pcx_gfx::mdx_runtime::RuntimePlan::parse(&bytes).unwrap();
+        let layer = |index, filter, alpha| pcx_mdl::MaterialLayer {
+            offset: 0,
+            size: 28,
+            properties: pcx_mdl::TexLayer {
+                index,
+                shader_id: filter,
+                blend_mode: 0,
+                filter_mode: filter,
+                shading_flags: 0,
+                coord_id: 0,
+                texture_id: index,
+                texture_anim_id: pcx_mdl::NO_ID,
+                static_alpha: alpha,
+            },
+            alpha_tracks: Vec::new(),
+            texture_tracks: Vec::new(),
+        };
+        runtime
+            .materials
+            .push(pcx_gfx::mdx_runtime::MaterialBinding {
+                priority_plane: -3,
+                flags: 0,
+                layers: vec![layer(0, 0, 0.5), layer(1, 2, 0.8)],
+            });
+        runtime.geosets.push(pcx_gfx::mdx_runtime::GeosetBinding {
+            geoset_id: 0,
+            vertex_count: 1,
+            material_id: 0,
+            animation_records: vec![0],
+            matrix_joint_ids: Vec::new(),
+        });
+        runtime.geoset_animations.push(pcx_mdl::GeosetAnim {
+            offset: 0,
+            len: 28,
+            flags: 0,
+            geoset_id: 0,
+            static_alpha: 0.5,
+            static_colour: [1.; 3],
+            tracks: Vec::new(),
+            trailing: 0,
+        });
+        runtime.uv_set_counts.push(Some(1));
+        for slot in 0..2 {
+            runtime.textures.push(pcx_mdl::Texture {
+                slot,
+                path: format!("fixture-{slot}.blp"),
+                flags: 0,
+            });
+        }
+        let mut model = pcx_gfx::LoadedModel {
+            name: "synthetic layers".into(),
+            minimum_extent: [0.; 3],
+            maximum_extent: [1.; 3],
+            meshes: vec![pcx_gfx::LoadedMesh {
+                positions: vec![[1., 2., 3.]],
+                normals: vec![[0., 0., 1.]],
+                tex_coords: vec![[0.25, 0.75]],
+                indices: Vec::new(),
+                vertex_groups: Vec::new(),
+                bone_indices: Vec::new(),
+                group_counts: Vec::new(),
+                geoset: 0,
+                material_id: 0,
+            }],
+            bone_names: Vec::new(),
+            bone_parents: Vec::new(),
+            sequences: Vec::new(),
+        };
+        assert!(expand_layers(&mut model, &mut runtime, 1).is_err());
+        assert_eq!(model.meshes.len(), 1);
+        assert_eq!(runtime.geosets.len(), 1);
+        assert_eq!(
+            expand_layers(&mut model, &mut runtime, 2).unwrap(),
+            (2, vec![(0, 0), (0, 1)])
+        );
+        assert_eq!(model.meshes.len(), 2);
+        for i in 0..2 {
+            assert_eq!(model.meshes[i].positions, vec![[1., 2., 3.]]);
+            assert_eq!(model.meshes[i].tex_coords, vec![[0.25, 0.75]]);
+            assert_eq!(runtime.geosets[i].geoset_id, i);
+            assert_eq!(runtime.geosets[i].animation_records, vec![i]);
+            assert_eq!(runtime.geoset_animations[i].geoset_id, i as u32);
+            assert_eq!(runtime.materials[i].priority_plane, -3);
+            assert_eq!(
+                runtime.materials[i].layers[0].properties.texture_id,
+                i as u32
+            );
+        }
+        let alpha = pcx_gfx::mdx_opacity::OpacityPlan::checked(&runtime, [0, 1000]).unwrap();
+        assert_eq!(alpha.sample(0, 0, 0), Some(0.25));
+        assert_eq!(alpha.sample(1, 0, 0), Some(0.4));
+        let textures =
+            pcx_gfx::mdx_texture_selection::TextureSelectionPlan::checked(&runtime, [0, 1000])
+                .unwrap();
+        assert_eq!(textures.sample(0, 0, 0), Some(0));
+        assert_eq!(textures.sample(1, 0, 0), Some(1));
+    }
+    #[test]
+    fn actor_uses_accepted_position_terrain_height_and_source_axis_rotation() {
+        let mut unit = unit();
+        let terrain = terrain();
+        let transform = transform_for(&unit, &terrain, 2., 7.).unwrap();
+        assert_eq!(transform.translation, Vec3::new(32., 17., -64.));
+        assert_eq!(transform.scale, Vec3::splat(2.));
+        assert!((transform.rotation * Vec3::X - Vec3::NEG_Z).length() < 0.00001);
+        unit.position = None;
+        assert!(transform_for(&unit, &terrain, 2., 7.).is_err());
+    }
+    #[test]
+    fn actor_scalar_retains_map_overrides_and_rejects_bad_metadata_or_values() {
+        let mut unit = unit();
+        assert_eq!(scalar(&unit.definition, "modelScale").unwrap(), 1.25);
+        unit.definition.fields.get_mut(b"S001").unwrap().value =
+            Ok(FieldValue::Override(pcx_objects::Value::Unreal(2.75)));
+        assert_eq!(scalar(&unit.definition, "modelScale").unwrap(), 2.75);
+        unit.definition.fields.get_mut(b"S001").unwrap().value = Ok(FieldValue::Cell("NaN".into()));
+        assert!(scalar(&unit.definition, "modelScale").is_err());
+        unit.definition
+            .fields
+            .get_mut(b"S001")
+            .unwrap()
+            .metadata
+            .as_mut()
+            .unwrap()
+            .index = 0;
+        assert!(scalar(&unit.definition, "modelScale").is_err());
+    }
+    #[test]
+    fn declared_team_color_enum_keeps_its_string_wire_override() {
+        let mut unit = unit();
+        let field = unit.definition.fields.get_mut(b"S001").unwrap();
+        let metadata = field.metadata.as_mut().unwrap();
+        metadata.kind = FieldKind::Token;
+        metadata.declared = "teamColor".into();
+        metadata.source = FieldSource::Column {
+            slk: SlkId::UnitUi,
+            column: "teamColor".into(),
+        };
+        field.value = Ok(FieldValue::Cell("-1".into()));
+        assert_eq!(scalar(&unit.definition, "teamColor").unwrap(), -1.);
+        unit.definition.fields.get_mut(b"S001").unwrap().value =
+            Ok(FieldValue::Override(pcx_objects::Value::Str(b"7".to_vec())));
+        assert_eq!(scalar(&unit.definition, "teamColor").unwrap(), 7.);
+        unit.definition.fields.get_mut(b"S001").unwrap().value =
+            Ok(FieldValue::Override(pcx_objects::Value::Int(7)));
+        assert!(scalar(&unit.definition, "teamColor").is_err());
+        let field = unit.definition.fields.get_mut(b"S001").unwrap();
+        field.value = Ok(FieldValue::Cell("7".into()));
+        field.metadata.as_mut().unwrap().declared = "unknownEnum".into();
+        assert!(scalar(&unit.definition, "teamColor").is_err());
+    }
+    #[test]
+    fn palette_prefix_and_count_come_from_the_selected_skin() {
+        let source =
+            b"[Default]\nTeamColors=4\nTeamColor=Selected/TeamColor\nTeamGlow=Selected/TeamGlow\n";
+        let palette = TeamPalette::read(source).unwrap();
+        let paths = [
+            "Selected/TeamColor03.blp",
+            "Selected/TeamGlow03.blp",
+            "Other/TeamColor03.blp",
+        ]
+        .map(|s| pcx_assets::AssetPath::new(s).unwrap());
+        assert_eq!(
+            palette.path(paths.iter(), 1, 3).unwrap(),
+            "selected/teamcolor03.blp"
+        );
+        assert_eq!(
+            palette.path(paths.iter(), 2, 3).unwrap(),
+            "selected/teamglow03.blp"
+        );
+        assert!(palette.path(paths.iter(), 1, 4).is_err());
+        assert!(palette.path(paths.iter(), 1, -1).is_err());
+        assert!(palette.path(paths.iter(), 0, 3).is_err());
+        assert!(palette.path(paths.iter(), 1, 2).is_err());
+        assert!(
+            palette
+                .path(paths.iter().chain(std::iter::once(&paths[0])), 1, 3)
+                .is_err()
+        );
+        assert!(TeamPalette::read(b"[Default]\nTeamColors=1\nTeamColor=A\n").is_err());
+        assert!(
+            TeamPalette::read(b"[Default]\nTeamColors=1\nTeamColor=A\nTeamColor=B\nTeamGlow=C\n")
+                .is_err()
+        );
+    }
+}

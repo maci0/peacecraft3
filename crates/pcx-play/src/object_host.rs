@@ -6,6 +6,23 @@ use std::sync::Arc;
 /// Opt-in session objects and authored map/player setup in one bounded arena.
 /// Timer delivery uses explicit game time; world enumeration remains unsupported.
 pub struct ObjectHost {
+    fog_modifiers: bool,
+    selection: Option<Vec<HandleId>>,
+    pings: Vec<indicators::MinimapPing>,
+    cinematic_scene: Option<Option<cinematic_scene::CinematicScene>>,
+    indicators: Option<(Vec<indicators::Indicator>, usize)>,
+    combat: Option<combat::Rules>,
+    events: event_delivery::Delivery,
+    unit_vitals: Option<unit_vitals::Rules>,
+    volume_groups: Option<std::collections::BTreeMap<i32, f32>>,
+    camera_view: Option<camera_view::CameraView>,
+    scene: Option<scene::Environment>,
+    threads: thread::Threads,
+    time_of_day: Option<time_of_day::TimeOfDay>,
+    locations: bool,
+    effects: bool,
+    unit_activity: Option<unit_activity::State>,
+    order_registry: Option<std::sync::Arc<crate::order_registry::Registry>>,
     inner: EnumHost,
     group_limit: Option<usize>,
     members: Vec<(HandleId, HandleId)>,
@@ -23,6 +40,10 @@ pub struct ObjectHost {
     sound_duration: bool,
     sound_properties: bool,
     sound_starts: Vec<HandleId>,
+    /// Game time of each sound's latest start, until it is stopped.
+    sound_playing: std::collections::BTreeMap<HandleId, f64>,
+    /// Executed `StopSound` requests for the audio consumer, in order.
+    sound_stops: Vec<(HandleId, bool, bool)>,
     stacked_sound_limit: Option<usize>,
     stacked_sound_requests: Vec<StackedSoundRequest>,
     startup_clock: Option<clock::StartupClockState>,
@@ -34,6 +55,7 @@ pub struct ObjectHost {
     game_caches: Option<game_caches::State>,
     presentation: Option<presentation::PresentationState>,
     no_occlusion_pass: bool,
+    occlusion_enabled: Option<bool>,
     messages: Option<messages::MessageState>,
     rectangles: bool,
     regions: Option<regions::Admission>,
@@ -47,10 +69,13 @@ pub struct ObjectHost {
     forces: Option<forces::Admission>,
     startup_settings: Option<StartupSettings>,
     startup_version: Option<HandleId>,
+    game_difficulty: Option<HandleId>,
+    campaign_menu_race: Option<Option<HandleId>>,
     stock: Option<stock::State>,
     timers: Option<timers::State>,
     random: Option<random::Random>,
     trigger_runtime: Option<trigger_runtime::State>,
+    unit_range_runtime: Option<unit_ranges::State>,
     callbacks: Vec<NativeCallback>,
 }
 enum NativeCallback {
@@ -90,6 +115,8 @@ impl ObjectHost {
             sound_duration: false,
             sound_properties: false,
             sound_starts: Vec::new(),
+            sound_playing: std::collections::BTreeMap::new(),
+            sound_stops: Vec::new(),
             stacked_sound_limit: None,
             stacked_sound_requests: Vec::new(),
             startup_clock: None,
@@ -101,12 +128,30 @@ impl ObjectHost {
             game_caches: None,
             presentation: None,
             no_occlusion_pass: false,
+            occlusion_enabled: None,
             messages: None,
             rectangles: false,
             regions: None,
             camera_setups: None,
             destructables: None,
             units: None,
+            order_registry: None,
+            unit_activity: None,
+            locations: false,
+            time_of_day: None,
+            threads: thread::Threads::default(),
+            scene: None,
+            camera_view: None,
+            volume_groups: None,
+            unit_vitals: None,
+            events: event_delivery::Delivery::default(),
+            combat: None,
+            indicators: None,
+            cinematic_scene: None,
+            pings: Vec::new(),
+            selection: None,
+            fog_modifiers: false,
+            effects: false,
             items: None,
             triggers: None,
             filters: None,
@@ -114,10 +159,13 @@ impl ObjectHost {
             forces: None,
             startup_settings: None,
             startup_version: None,
+            game_difficulty: None,
+            campaign_menu_race: None,
             stock: None,
             timers: None,
             random: None,
             trigger_runtime: None,
+            unit_range_runtime: None,
             callbacks: Vec::new(),
         })
     }
@@ -450,6 +498,84 @@ impl ObjectHost {
         Err(self.inner.error("DestroyTimer", failure))
     }
 }
+impl ObjectHost {
+    /// `CreateUnitAtLoc` is `CreateUnit` at the location's current point.
+    fn create_unit_at_location(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let name = "CreateUnitAtLoc";
+        Self::contract(
+            &self.inner,
+            name,
+            &["player", "integer", "location", "real"],
+            "unit",
+            false,
+            Some("unit"),
+        )?;
+        let natives = self.inner.program.natives();
+        if natives.get(name).map(|n| &n.source) != natives.get("CreateUnit").map(|n| &n.source) {
+            return Err(self.inner.error(name, Failure::Source));
+        }
+        let [player, id, location, face] = args else {
+            return Err(self.inner.error(name, Failure::Signature));
+        };
+        let [x, y] = self.location_point(location, name)?;
+        let forwarded = [
+            player.clone(),
+            id.clone(),
+            Value::Real(x),
+            Value::Real(y),
+            face.clone(),
+        ];
+        pcx_script::Host::native(self, "CreateUnit", &forwarded)
+            .map_err(|why| self.inner.error(name, Failure::UnitActivity(why)))
+    }
+
+    /// Enumerand of a selected constant `kind` global initialized by an admitted conversion.
+    pub(super) fn source_constant_enumerand(&self, global: &str, kind: &str) -> Result<i32, Error> {
+        let fail = |reason| self.inner.error(global, Failure::UnitState(reason));
+        let declared = self
+            .inner
+            .program
+            .globals()
+            .iter()
+            .find(|g| g.name == global && g.is_constant && !g.array && g.ty.kind.name() == kind)
+            .ok_or_else(|| fail("missing selected constant"))?;
+        let Some(Expr::Call { callee, args, .. }) = &declared.init else {
+            return Err(fail("expected conversion initializer"));
+        };
+        let (Expr::Ident(conversion, _), [arg]) = (callee.as_ref(), args.as_slice()) else {
+            return Err(fail("expected one conversion argument"));
+        };
+        let admitted = self
+            .inner
+            .conversions()
+            .find(|c| c.name == conversion.as_str() && c.kind == kind)
+            .ok_or_else(|| fail("conversion is not admitted"))?;
+        let mut work = 4096;
+        let value = crate::playercolor_host::integer(arg, 64, &mut work)
+            .map_err(|failure| self.inner.error(global, failure))?;
+        if !admitted.domain.contains(&value) {
+            return Err(self.inner.error(global, Failure::OutsideDomain(value)));
+        }
+        Ok(value)
+    }
+
+    /// Selected software math; absent policy leaves these natives unsupported.
+    fn math_native(&self, name: &str, args: &[Value]) -> Option<Result<Value, Error>> {
+        let numeric = self.numeric.as_ref()?;
+        let math = numeric.math()?;
+        let real = |v: &Value| v.as_real();
+        let result = match (name, args) {
+            ("SquareRoot", [x]) => math.square_root_native(numeric, real(x)?),
+            ("Atan2", [y, x]) => math.arctangent2_native(numeric, real(y)?, real(x)?),
+            _ => return None,
+        };
+        Some(
+            result
+                .map(Value::Real)
+                .map_err(|e| self.inner.error(name, Failure::ScriptMath(e))),
+        )
+    }
+}
 impl Host for ObjectHost {
     fn begin_script_call(
         &mut self,
@@ -468,6 +594,12 @@ impl Host for ObjectHost {
         {
             return Ok(Some(call));
         }
+        if let Some(call) = self
+            .begin_selection_call(name, args)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(call));
+        }
         self.begin_trigger_call(name, args)
             .map_err(|e| e.to_string())
     }
@@ -482,12 +614,30 @@ impl Host for ObjectHost {
     }
     fn abort_script_calls(&mut self) {
         self.abort_native_callbacks();
+        self.abort_threads();
+    }
+    fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
+        self.thread_sleep_requested(name, args)
+    }
+    fn park_thread(&mut self) -> Result<u64, String> {
+        self.park_thread_now().map_err(|e| e.to_string())
+    }
+    fn resume_thread(&mut self, ticket: u64) -> Result<(), String> {
+        self.resume_thread_now(ticket).map_err(|e| e.to_string())
+    }
+    fn leave_thread(&mut self) -> Result<(), String> {
+        self.leave_thread_now().map_err(|e| e.to_string())
     }
     fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
         self.numeric.as_ref().map(|p| p as &dyn pcx_script::RealOps)
     }
 
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if name == "CreateUnitAtLoc" && self.locations && self.units.is_some() {
+            return self
+                .create_unit_at_location(args)
+                .map_err(|e| e.to_string());
+        }
         if let Some(result) = self.message_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -503,10 +653,19 @@ impl Host for ObjectHost {
         if let Some(result) = self.trigger_runtime_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.event_response_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.unit_range_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.timer_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.stacked_sound_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.sound_attachment_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.sound_properties_native(name, args) {
@@ -522,6 +681,9 @@ impl Host for ObjectHost {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.map_music_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.time_of_day_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.startup_clock_native(name, args) {
@@ -558,6 +720,57 @@ impl Host for ObjectHost {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.destructable_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.order_registry_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.unit_vitals_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.volume_group_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.unit_removal_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.math_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.camera_view_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.environment_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.thread_sleep_native(name) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.effect_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.location_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.unit_type_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.fog_modifier_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.selection_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.cinematic_scene_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.indicator_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.combat_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.activity_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.unit_native(name, args) {
@@ -688,7 +901,7 @@ pub use camera_setup::{AppliedCameraSetup, CameraDestination, CameraFieldRecord}
 
 #[path = "destructable_host.rs"]
 mod destructables;
-pub use destructables::{DestructableBudget, DestructableCreation};
+pub use destructables::{DestructableBudget, DestructableCreation, DestructableState};
 
 #[path = "unit_host.rs"]
 mod unit_creation;
@@ -762,6 +975,12 @@ mod timer_runtime_tests;
 #[path = "trigger_runtime_host.rs"]
 mod trigger_runtime;
 pub use trigger_runtime::{TriggerDelivery, TriggerRuntimeInput};
+
+#[path = "order_registry_host.rs"]
+mod order_registry;
+#[path = "unit_range_runtime_host.rs"]
+mod unit_ranges;
+pub use unit_ranges::UnitRangeEntry;
 #[cfg(test)]
 #[path = "trigger_runtime_tests.rs"]
 mod trigger_runtime_tests;
@@ -769,3 +988,70 @@ mod trigger_runtime_tests;
 #[path = "message_host.rs"]
 mod messages;
 pub use messages::{MessageBudget, MessageState, TimedMessage};
+
+#[path = "unit_activity_host.rs"]
+mod unit_activity;
+pub use unit_activity::UnitActivity;
+
+#[path = "location_host.rs"]
+mod locations;
+
+#[path = "unit_visibility_host.rs"]
+mod unit_visibility;
+
+#[path = "camera_view_host.rs"]
+mod camera_view;
+
+#[cfg(test)]
+#[path = "state_host_tests.rs"]
+mod state_host_tests;
+
+#[path = "environment_host.rs"]
+mod scene;
+pub use scene::{Environment, TerrainFog};
+
+#[path = "unit_type_host.rs"]
+mod unit_types;
+
+#[path = "fog_modifier_host.rs"]
+mod fog_modifiers;
+pub use fog_modifiers::FogModifier;
+
+#[path = "selection_host.rs"]
+mod selection;
+
+#[path = "cinematic_scene_host.rs"]
+mod cinematic_scene;
+pub use cinematic_scene::CinematicScene;
+
+#[path = "indicator_host.rs"]
+mod indicators;
+pub use indicators::{Indicator, MinimapPing};
+
+#[path = "combat_host.rs"]
+mod combat;
+pub use combat::{Combat, Weapon};
+
+#[path = "event_delivery_host.rs"]
+mod event_delivery;
+pub use event_delivery::{EventSubject, FiredEvent};
+
+#[path = "unit_vitals_host.rs"]
+mod unit_vitals;
+pub use unit_vitals::Vitals;
+
+#[path = "volume_group_host.rs"]
+mod volume_groups;
+
+#[path = "unit_removal_host.rs"]
+mod unit_removal;
+
+#[path = "thread_host.rs"]
+mod thread;
+
+#[path = "time_of_day_host.rs"]
+mod time_of_day;
+
+#[path = "effect_host.rs"]
+mod effects;
+pub use effects::UnitEffect;

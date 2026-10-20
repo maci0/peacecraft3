@@ -860,6 +860,7 @@ pub fn spawn(
             selection: &texture_selection,
             uv_translation: &uv_translation,
             native_cutout_reference: Some(lighting_parameters.cutout_reference),
+            material_layers: None,
         },
         &opacity,
         interval[0],
@@ -978,6 +979,8 @@ pub struct GeosetSource<'a> {
     pub selection: &'a pcx_gfx::mdx_texture_selection::TextureSelectionPlan,
     pub uv_translation: &'a pcx_gfx::mdx_uv_translation::UvTranslationPlan,
     pub native_cutout_reference: Option<f32>,
+    /// Projected material index -> authored MTLS material/layer; absent means layer zero.
+    pub material_layers: Option<&'a [(usize, usize)]>,
 }
 
 /// One geoset's authored id, its entity and its material.
@@ -1012,6 +1015,7 @@ pub fn preflight_geosets<'a>(
         selection,
         uv_translation,
         native_cutout_reference,
+        material_layers,
     } = *input;
     let required = required_texture_images(source, runtime, textures)?;
     let mdl_materials = m
@@ -1065,7 +1069,29 @@ pub fn preflight_geosets<'a>(
             frame,
             0,
         )?;
-        let flags = layer_flags(&mdl_materials, mesh.material_id as usize);
+        let flags = match material_layers {
+            None => layer_flags(&mdl_materials, mesh.material_id as usize),
+            Some(source_layers) => {
+                let &(material, ordinal) = source_layers
+                    .get(binding.material_id)
+                    .ok_or_else(|| fail("missing authored layer projection"))?;
+                let source = mdl_materials
+                    .get(material)
+                    .ok_or_else(|| fail("missing authored material"))?
+                    .checked_layers()
+                    .map_err(|e| SceneError::Decode(e.to_string()))?;
+                let source = source
+                    .get(ordinal)
+                    .ok_or_else(|| fail("missing authored layer"))?;
+                let (alpha_mode, blend_gap) = alpha_mode_of(source.properties.filter_mode);
+                LayerFlags {
+                    unshaded: source.properties.shading_flags & 1 != 0,
+                    alpha_mode,
+                    alpha: source.properties.static_alpha,
+                    blend_gap,
+                }
+            }
+        };
         let mut material = crate::menu_material::checked_source_mode(
             StandardMaterial {
                 base_color,
@@ -3047,6 +3073,7 @@ mod texture_selection_tests {
                 selection: &selection,
                 uv_translation: &uv_translation,
                 native_cutout_reference: None,
+                material_layers: None,
             },
             &opacity,
             interval[0],
@@ -3149,6 +3176,7 @@ mod texture_selection_tests {
             selection: &selection,
             uv_translation: &uv,
             native_cutout_reference: Some(0.61),
+            material_layers: None,
         };
         let prepared = preflight_geosets(&source, &opacity, 100).unwrap();
         assert_eq!(prepared.initial[0].1.base.alpha_mode, AlphaMode::Mask(0.61));
@@ -3430,6 +3458,7 @@ mod texture_selection_tests {
                         selection: &selection,
                         uv_translation: &uv,
                         native_cutout_reference: None,
+                        material_layers: None,
                     },
                     &opacity,
                     100
@@ -3752,6 +3781,7 @@ mod texture_selection_tests {
                 selection: &selection,
                 uv_translation: &uv,
                 native_cutout_reference: None,
+                material_layers: None,
             },
             &opacity,
             100,
@@ -4349,6 +4379,7 @@ mod texture_selection_tests {
                 selection: &selection,
                 uv_translation: &uv,
                 native_cutout_reference: None,
+                material_layers: None,
             },
             &opacity,
             0,

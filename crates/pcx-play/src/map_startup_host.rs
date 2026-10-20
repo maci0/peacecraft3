@@ -20,6 +20,9 @@ use pcx_script::{HandleId, Host, Program, Value};
 use pcx_sim::world::ObjectCatalog;
 use std::sync::Arc;
 
+#[path = "map_new_game.rs"]
+mod new_game;
+
 #[derive(Debug, thiserror::Error)]
 pub enum MapStartupError {
     #[error(transparent)]
@@ -171,23 +174,60 @@ pub struct ControllerObservation {
     pub control_global: String,
 }
 
+/// Explicit recreation new-game input, not the original engine's seed mixer.
+#[derive(Clone, Debug)]
+pub struct NewGameInput {
+    pub seed: i32,
+    pub orders: Option<Arc<crate::order_registry::Registry>>,
+    pub activity: Option<crate::unit_activity::Rules>,
+    /// None leaves research queries unsupported rather than installing defaults.
+    pub research: Option<crate::upgrade_research::Rules>,
+    /// Source rules for a deferred placement cache, after stationary creations.
+    pub placement_rules: Option<crate::unit_placement::Rules>,
+    /// Selected common's unit-range event; absent leaves spatial delivery unset.
+    pub unit_range_event: Option<String>,
+    /// Selected `[Misc]` day rate; absent leaves time-of-day setters unsupported.
+    pub day_cycle: Option<pcx_objects::editor::misc::DayCycle>,
+    /// Selected game camera; absent leaves live camera natives unsupported.
+    pub game_camera: Option<pcx_objects::editor::camera::GameCamera>,
+    /// Selected hero attribute bonuses; absent leaves unit vitals unsupported.
+    pub hero_vitals: Option<pcx_objects::editor::misc::HeroVitals>,
+    /// Selected `[Misc]` combat rules; absent leaves attacks unsupported.
+    pub combat: Option<pcx_objects::editor::misc::CombatRules>,
+}
+
+pub struct ResolvedNewGame {
+    empty: HandleId,
+    playing: HandleId,
+    none: HandleId,
+    creep: HandleId,
+}
+
 /// `None` skips that admission. It does not install a lobby, speed or research default.
 #[derive(Clone, Debug, Default)]
 pub struct PostConfigObservations {
+    /// Initialize the selected RNG before globals and derive a fresh roster after config.
+    /// Participants and local player must be explicit. Do not mix with slot/controller snapshots.
+    pub new_game: Option<NewGameInput>,
     /// This client's explicit source slot; not inferred from participants or controllers.
     pub local_player: Option<i32>,
     pub participants: Option<Vec<i32>>,
     pub settings: Option<SettingsObservation>,
     pub version_global: Option<String>,
+    /// Selected `gamedifficulty` constant, an explicit game input.
+    pub difficulty_global: Option<String>,
+    /// Explicit source numbers, including players not yet created by the script.
     pub slot_states: Option<Vec<SlotObservation>>,
     pub controllers: Option<Vec<ControllerObservation>>,
 }
 
 pub struct ResolvedObservations {
+    pub new_game: Option<ResolvedNewGame>,
     pub local_player: Option<i32>,
     pub participants: Option<Vec<i32>>,
     pub settings: Option<StartupSettings>,
     pub version: Option<HandleId>,
+    pub difficulty: Option<HandleId>,
     pub slot_states: Option<Vec<(i32, HandleId)>>,
     pub controllers: Option<Vec<(i32, HandleId)>>,
 }
@@ -234,11 +274,37 @@ pub struct MapStartupHost {
     inner: NeutralStack,
     research: Option<CurrentResearchInput>,
     day_night_loader: Option<DayNightLoader>,
+    placement_rules: Option<crate::unit_placement::Rules>,
+    placement_tables: Option<Arc<pcx_objects::editor::defaults::DefaultTables>>,
+    placement_loader: Option<PlacementLoader>,
 }
 
 type DayNightLoader = Box<dyn FnMut(&str, &str) -> Result<day_night::Assets, String> + Send + Sync>;
+type PlacementLoader = Box<
+    dyn FnMut(
+            &ObjectHost,
+            &crate::unit_placement::Rules,
+            &pcx_objects::editor::defaults::DefaultTables,
+        ) -> Result<crate::unit_placement::Placement, String>
+        + Send
+        + Sync,
+>;
 
 impl MapStartupHost {
+    pub fn with_placement_loader(
+        mut self,
+        loader: impl FnMut(
+            &ObjectHost,
+            &crate::unit_placement::Rules,
+            &pcx_objects::editor::defaults::DefaultTables,
+        ) -> Result<crate::unit_placement::Placement, String>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.placement_loader = Some(Box::new(loader));
+        self
+    }
     /// Resolve the executed paths on this session's retained source reader.
     pub fn with_day_night_loader(
         mut self,
@@ -270,6 +336,12 @@ impl MapStartupHost {
         context: &Arc<ParsedMapContext>,
         observations: &ResolvedObservations,
     ) -> Result<(), MapStartupError> {
+        let fresh = observations
+            .new_game
+            .as_ref()
+            .map(|roles| self.fresh_observations(context, observations, roles))
+            .transpose()?;
+        let observations = fresh.as_ref().unwrap_or(observations);
         if let Some(number) = observations.local_player {
             self.objects_mut().admit_local_player(context, number)?;
         }
@@ -295,19 +367,13 @@ impl MapStartupHost {
         if let Some(version) = observations.version {
             self.objects_mut().admit_startup_version(context, version)?;
         }
-        if let Some(states) = &observations.slot_states {
-            let mut rows = Vec::new();
-            rows.try_reserve_exact(states.len())
-                .map_err(|_| MapStartupError::Observation("startup slot states".into()))?;
-            for (number, state) in states {
-                let player = self
-                    .objects_mut()
-                    .player_identity(*number)
-                    .ok_or_else(|| MapStartupError::Observation(format!("player {number}")))?;
-                rows.push((player, *state));
-            }
+        if let Some(difficulty) = observations.difficulty {
             self.objects_mut()
-                .admit_startup_player_slots(context, &rows)?;
+                .admit_game_difficulty(context, difficulty)?;
+        }
+        if let Some(states) = &observations.slot_states {
+            self.objects_mut()
+                .admit_startup_player_slot_numbers(context, states)?;
         }
         if let Some(entries) = &observations.controllers {
             self.objects_mut()
@@ -331,6 +397,18 @@ pub fn resolve_observations(
             _ => Err(MapStartupError::Observation(name.to_owned())),
         }
     };
+    let new_game = observations
+        .new_game
+        .as_ref()
+        .map(|_| -> Result<_, MapStartupError> {
+            Ok(ResolvedNewGame {
+                empty: handle("PLAYER_SLOT_STATE_EMPTY")?,
+                playing: handle("PLAYER_SLOT_STATE_PLAYING")?,
+                none: handle("MAP_CONTROL_NONE")?,
+                creep: handle("MAP_CONTROL_CREEP")?,
+            })
+        })
+        .transpose()?;
     let settings = match &observations.settings {
         Some(settings) => Some(StartupSettings {
             speed: handle(&settings.speed_global)?,
@@ -340,6 +418,10 @@ pub fn resolve_observations(
         None => None,
     };
     let version = match &observations.version_global {
+        Some(name) => Some(handle(name)?),
+        None => None,
+    };
+    let difficulty = match &observations.difficulty_global {
         Some(name) => Some(handle(name)?),
         None => None,
     };
@@ -366,10 +448,12 @@ pub fn resolve_observations(
         controllers = Some(resolved);
     }
     Ok(ResolvedObservations {
+        new_game,
         local_player: observations.local_player,
         participants: observations.participants.clone(),
         settings,
         version,
+        difficulty,
         slot_states,
         controllers,
     })
@@ -400,7 +484,7 @@ pub fn assemble(
         catalog,
         defend,
         current_research,
-        post_config: _,
+        post_config,
     } = inputs;
     let enum_host = {
         let names: Vec<&str> = enumeration.names.iter().map(String::as_str).collect();
@@ -459,9 +543,43 @@ pub fn assemble(
         )?
         .with_unit_states(budgets.unit_states)?
         .with_defend_ability(&defend.tables, &defend.alias)?;
+    if context
+        .scripts
+        .program()
+        .natives()
+        .get("Location")
+        .is_some()
+    {
+        object = object.with_locations()?;
+    }
+    if context
+        .scripts
+        .program()
+        .natives()
+        .get("AddSpecialEffectTarget")
+        .is_some()
+    {
+        object = object.with_unit_effects()?;
+    }
+    object = object
+        .with_environment()?
+        .with_volume_groups()?
+        .with_indicators(256)?
+        .with_cinematic_scenes()?
+        .with_selection()?;
+    if context
+        .scripts
+        .program()
+        .natives()
+        .get("Location")
+        .is_some()
+    {
+        object = object.with_fog_modifiers()?;
+    }
+    let tables = Arc::new(defend.tables);
     if let Some(input) = hero_skills {
         object = object.with_hero_skills(
-            defend.tables,
+            Arc::clone(&tables),
             context.sources.catalog.clone(),
             input.abilities,
             input.rules,
@@ -494,7 +612,17 @@ pub fn assemble(
         object = object.with_timer_runtime(now)?;
     }
     if let Some(input) = trigger_runtime {
+        let parked = input.max_parked_threads;
         object = object.with_trigger_runtime(input)?;
+        if context
+            .scripts
+            .program()
+            .natives()
+            .get("TriggerSleepAction")
+            .is_some()
+        {
+            object.admit_thread_sleep(parked)?;
+        }
     }
     if let Some(policy) = numeric {
         object = object.with_script_numeric(policy);
@@ -504,6 +632,37 @@ pub fn assemble(
     }
     if let Some(input) = random {
         object = object.with_script_random(input.policy, input.max_secondary)?;
+    }
+    let mut placement_rules = None;
+    if let Some(input) = post_config.new_game {
+        if let Some(orders) = input.orders {
+            object = object.with_order_registry(orders)?;
+        }
+        if let Some(activity) = input.activity {
+            object.admit_unit_activity(activity, 65536)?;
+        }
+        placement_rules = input.placement_rules;
+        if let Some(event) = input.unit_range_event {
+            object.admit_unit_range_runtime(&event, 65536)?;
+        }
+        if let Some(cycle) = &input.day_cycle {
+            object.admit_time_of_day(cycle)?;
+        }
+        if let Some(camera) = &input.game_camera {
+            object.admit_camera_view(camera)?;
+        }
+        if let Some(bonuses) = input.hero_vitals {
+            object.admit_unit_vitals(bonuses)?;
+        }
+        if let Some(rules) = input.combat {
+            object.admit_combat(rules, "attack")?;
+        }
+        if let Some(rules) = input.research {
+            object.admit_upgrade_research(&context, rules)?;
+        }
+        object
+            .native("SetRandomSeed", &[Value::Int(input.seed)])
+            .map_err(MapStartupError::Observation)?;
     }
     if let Some(input) = terrain_pathing {
         object = object.with_terrain_pathing(input)?;
@@ -525,11 +684,17 @@ pub fn assemble(
     let aggressive =
         SelectedMapNeutralHost::try_new(Arc::clone(&context), rules.aggressive, max_players)?;
     let inner = SelectedMapNeutralHost::try_new(context, rules.passive, aggressive)?;
-    Ok(MapStartupHost {
+    let neutral_passive = inner.selected_result();
+    let mut host = MapStartupHost {
         inner,
         research: current_research,
         day_night_loader: None,
-    })
+        placement_tables: placement_rules.as_ref().map(|_| tables),
+        placement_rules,
+        placement_loader: None,
+    };
+    host.objects_mut().set_neutral_passive(neutral_passive);
+    Ok(host)
 }
 
 impl Host for MapStartupHost {
@@ -549,8 +714,42 @@ impl Host for MapStartupHost {
     fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
         self.inner.real_ops()
     }
+    fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
+        self.inner.suspend(name, args)
+    }
+    fn park_thread(&mut self) -> Result<u64, String> {
+        self.inner.park_thread()
+    }
+    fn resume_thread(&mut self, ticket: u64) -> Result<(), String> {
+        self.inner.resume_thread(ticket)
+    }
+    fn leave_thread(&mut self) -> Result<(), String> {
+        self.inner.leave_thread()
+    }
 
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if name == "CreateUnit"
+            && let Some(rules) = &self.placement_rules
+        {
+            let mut loader = self
+                .placement_loader
+                .take()
+                .ok_or("CreateUnit: fresh placement source loader is missing")?;
+            let result = loader(
+                self.objects(),
+                rules,
+                self.placement_tables
+                    .as_deref()
+                    .ok_or("CreateUnit: placement catalog is missing")?,
+            );
+            self.placement_loader = Some(loader);
+            self.objects_mut()
+                .admit_unit_placement(result?)
+                .map_err(|e| e.to_string())?;
+            self.placement_rules = None;
+            self.placement_tables = None;
+            self.placement_loader = None;
+        }
         if name == "SetDayNightModels"
             && let [Value::Str(terrain), Value::Str(unit)] = args
         {

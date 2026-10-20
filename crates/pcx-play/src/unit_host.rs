@@ -91,6 +91,8 @@ pub struct ExecutedUnit {
     /// Known team-color identity assigned by a color-changing transfer. Initial
     /// unit color stays unknown until its class/creation color rules are supplied.
     pub team_color: Option<HandleId>,
+    /// Assigned creation-player colour, captured before later ownership transfers.
+    pub creation_color: Option<HandleId>,
     pub source: Source,
     pub x: f32,
     pub y: f32,
@@ -123,7 +125,19 @@ pub struct ExecutedUnit {
     pub admitted_order: Option<([u8; 4], bool)>,
     /// Source-backed ability levels and hero counters, when that runtime is admitted.
     pub abilities: Option<UnitAbilities>,
+    pub animation: Option<crate::unit_model::Animation>,
+    pub activity: Option<super::unit_activity::UnitActivity>,
+    /// Runtime ShowUnit state, independent of fog, invisibility and explicit pause.
+    pub shown: bool,
+    /// Live life/mana when vitals are admitted.
+    pub vitals: Option<super::Vitals>,
+    /// Weapon, armor and attack state when combat is admitted.
+    pub combat: Option<super::Combat>,
 }
+
+type ModelLoader = Box<
+    dyn FnMut(&Definition) -> Result<Option<Arc<crate::unit_model::Model>>, String> + Send + Sync,
+>;
 
 struct DefendAbility {
     alias: String,
@@ -165,6 +179,7 @@ pub(super) struct Admission {
     /// Present after [`ObjectHost::with_defend_ability`].
     order: Option<DefendAbility>,
     heroes: Option<hero::Admission>,
+    models: Option<ModelLoader>,
 }
 
 impl Admission {
@@ -226,6 +241,11 @@ impl ObjectHost {
         let invulnerable_span = self.invulnerability_declaration(&declaration_source)?;
         let invulnerable_query_span =
             self.optional_unit_getter(&declaration_source, GET_INVULNERABLE, "boolean")?;
+        self.unit_visibility_declarations(&declaration_source)?;
+        self.unit_removal_declaration(&declaration_source)?;
+        if self.sound_properties {
+            self.sound_attachment_declaration(&declaration_source)?;
+        }
         self.units = Some(Admission {
             catalog,
             source,
@@ -246,6 +266,7 @@ impl ObjectHost {
             unit_state: None,
             order: None,
             heroes: None,
+            models: None,
         });
         Ok(self)
     }
@@ -423,12 +444,97 @@ impl ObjectHost {
         }
     }
 
+    pub fn executed_units(&self) -> impl Iterator<Item = (HandleId, &ExecutedUnit)> {
+        self.inner
+            .arena
+            .iter()
+            .enumerate()
+            .filter_map(|(i, entry)| match entry {
+                Entry::Unit { record } => Some((
+                    self.inner.id(i, NATIVE).expect("allocated identity"),
+                    &**record,
+                )),
+                _ => None,
+            })
+    }
+
+    /// Retain selected model assets on the existing executed units.
+    pub fn admit_unit_models(
+        &mut self,
+        loader: impl FnMut(&Definition) -> Result<Option<Arc<crate::unit_model::Model>>, String>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Result<(), Error> {
+        let units = self.admitted_units()?;
+        if units.records != 0 || units.models.is_some() || self.timer_game_time().is_none() {
+            return Err(self.inner.error(
+                "SetUnitAnimation",
+                Failure::UnitAnimation(
+                    "model loading requires an initial game clock and no created units".into(),
+                ),
+            ));
+        }
+        if let Some(native) = self.inner.program.natives().get("SetUnitAnimation") {
+            Self::contract(
+                &self.inner,
+                "SetUnitAnimation",
+                &["unit", "string"],
+                "nothing",
+                false,
+                Some(KIND),
+            )?;
+            if native.source != units.declaration_source {
+                return Err(self.inner.error("SetUnitAnimation", Failure::Source));
+            }
+        }
+        self.units.as_mut().expect("admitted").models = Some(Box::new(loader));
+        Ok(())
+    }
+
+    fn set_unit_animation(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let name = "SetUnitAnimation";
+        if self.inner.program.natives().get(name).is_none() {
+            return Err(self.inner.error(name, Failure::Signature));
+        }
+        let [unit, Value::Str(sequence)] = args else {
+            return Err(self.inner.error(name, Failure::Signature));
+        };
+        if matches!(unit, Value::Null) {
+            return Ok(Value::Null);
+        }
+        let Value::Handle(unit) = unit else {
+            return Err(self.inner.error(name, Failure::WrongFamily));
+        };
+        let now = self.timer_game_time().ok_or_else(|| {
+            self.inner
+                .error(name, Failure::UnitAnimation("missing game clock".into()))
+        })?;
+        let mut animation = self.executed_unit(*unit)?.animation.clone();
+        if let Some(state) = &mut animation {
+            state
+                .select(sequence, now)
+                .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
+        }
+        let Entry::Unit { record } = self.inner.entry_mut(*unit)? else {
+            unreachable!()
+        };
+        record.animation = animation;
+        Ok(Value::Null)
+    }
+
     pub(super) fn unit_native(
         &mut self,
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         self.units.as_ref()?;
+        if let Some(result) = self.unit_visibility_native(name, args) {
+            return Some(result);
+        }
+        if name == "SetUnitAnimation" && self.units.as_ref()?.models.is_some() {
+            return Some(self.set_unit_animation(args));
+        }
         if let Some(result) = self.hero_native(name, args) {
             return Some(result);
         }
@@ -707,7 +813,13 @@ impl ObjectHost {
                 "collision query requires one unit",
             )));
         };
-        let definition = &self.created_unit(*unit, GET_COLLISION)?.definition;
+        self.unit_collision_radius(*unit, GET_COLLISION)
+            .map(Value::Real)
+    }
+
+    pub(super) fn unit_collision_radius(&self, unit: HandleId, caller: &str) -> Result<f32, Error> {
+        let fail = |reason| self.inner.error(caller, reason);
+        let definition = &self.created_unit(unit, caller)?.definition;
         let mut fields = definition.fields.iter().filter(|(_, field)| {
             field.metadata.as_ref().is_some_and(|meta| {
                 matches!(&meta.source, FieldSource::Column { slk: SlkId::UnitBalance, column } if column == "collision")
@@ -749,7 +861,7 @@ impl ObjectHost {
             ))
         })?;
         // shortcut: catalog geometry only; qualify runtime collision mutations before admitting their setters.
-        Ok(Value::Real(value))
+        Ok(value)
     }
 
     /// `Ok(None)` when the program does not declare the setter. A present
@@ -890,7 +1002,7 @@ impl ObjectHost {
     }
 
     fn set_unit_state(&mut self, args: &[Value]) -> Result<Value, Error> {
-        let (unit, state, value) = {
+        let (unit, state, value, enumerand) = {
             let fail = |reason| self.inner.error(SET_STATE, reason);
             let [Value::Handle(unit), Value::Handle(state), value] = args else {
                 return Err(fail(Failure::UnitState(
@@ -946,7 +1058,7 @@ impl ObjectHost {
             if !replacing && records >= max_records {
                 return Err(fail(Failure::Budget("unit state assignments")));
             }
-            (*unit, *state, value)
+            (*unit, *state, value, enumerand)
         };
         let inserted = match self.inner.entry_mut(unit)? {
             Entry::Unit { record } => {
@@ -979,6 +1091,9 @@ impl ObjectHost {
                         .error(SET_STATE, Failure::UnitState("not admitted"))
                 })?;
             limits.records += 1;
+        }
+        if self.assign_unit_vital(unit, enumerand, value) {
+            self.kill_unit(unit, None)?;
         }
         Ok(Value::Null)
     }
@@ -1097,6 +1212,7 @@ impl ObjectHost {
                 executed_owner: owner_number,
                 owner,
                 team_color: None,
+                creation_color: None,
                 source,
                 x,
                 y,
@@ -1109,20 +1225,49 @@ impl ObjectHost {
                 invulnerable: None,
                 admitted_order,
                 abilities: None,
+                animation: None,
+                activity: None,
+                shown: true,
+                vitals: None,
+                combat: None,
             }
         };
         let mut record = record;
         record.abilities = self.prepare_unit_abilities(&record.definition)?;
+        record.activity = self.prepare_unit_activity(&record.definition)?;
+        record.vitals = self.prepare_unit_vitals(&record.definition)?;
+        record.combat = self.prepare_unit_combat(&record.definition)?;
+        if let Some(loader) = self.units.as_mut().and_then(|u| u.models.as_mut()) {
+            let model = loader(&record.definition)
+                .map_err(|e| self.inner.error(NATIVE, Failure::UnitAnimation(e)))?;
+            if let Some(model) = model {
+                record.animation = Some(
+                    crate::unit_model::Animation::new(
+                        model,
+                        self.timer_game_time().expect("admitted clock"),
+                    )
+                    .map_err(|e| self.inner.error(NATIVE, Failure::UnitAnimation(e)))?,
+                );
+            }
+        }
         let placement = self.prepare_unit_position(&record)?;
+        if record.animation.is_some() {
+            record.creation_color = self.player_settings(record.owner)?.color;
+        }
         if let Some(prepared) = &placement {
             record.position = Some(prepared.position);
         }
-        let id = self.inner.allocate(Entry::Unit { record }, NATIVE)?;
+        let id = self.inner.allocate(
+            Entry::Unit {
+                record: Box::new(record),
+            },
+            NATIVE,
+        )?;
         if let Some(prepared) = placement {
             self.unit_placement
                 .as_mut()
                 .expect("admitted placement")
-                .commit(prepared);
+                .commit(id, prepared);
         }
         let admitted = self
             .units

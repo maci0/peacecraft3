@@ -5,6 +5,7 @@ use crate::neutral_rule_input::Pe;
 use crate::script_random::real;
 use crate::scripts::AssetIdentity;
 use pcx_map::Pathing;
+use pcx_script::HandleId;
 use pcx_sim::world::Source;
 use std::collections::BTreeMap;
 
@@ -29,7 +30,7 @@ fn fail(message: impl Into<String>) -> Error {
     Error(message.into())
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Rules {
     binding: Binding,
     exponent: i32,
@@ -176,6 +177,10 @@ impl Rules {
         (1u32 << self.exponent) as f32
     }
 
+    pub fn ground_mask(&self) -> u8 {
+        self.mask
+    }
+
     pub fn binding(&self) -> &Binding {
         &self.binding
     }
@@ -240,6 +245,7 @@ pub struct Grid {
 
 /// Already decoded pathing texture. Coordinates are cells relative to its centre.
 /// Keeping the decode outside this module reuses the selected texture loader.
+#[derive(Clone)]
 pub struct Footprint {
     pub origin: AssetIdentity,
     pub cells: Vec<[i32; 2]>,
@@ -258,15 +264,21 @@ pub struct Placement {
     grid: Grid,
     rules: Rules,
     footprints: BTreeMap<String, Footprint>,
+    footprint_loader: Option<FootprintLoader>,
     occupied: Vec<u32>,
+    footprint_occupied: Vec<u32>,
+    stamps: Vec<(HandleId, Prepared)>,
     budget: Budget,
 }
+
+type FootprintLoader = Box<dyn FnMut(&str) -> Result<Footprint, String> + Send + Sync>;
 
 #[derive(Debug)]
 pub(crate) struct Prepared {
     pub position: [f32; 2],
     cells: Vec<usize>,
     footprint: Vec<usize>,
+    active: bool,
 }
 
 #[cfg(test)]
@@ -318,14 +330,60 @@ impl Placement {
             .try_reserve_exact(count)
             .map_err(|_| fail("occupancy allocation"))?;
         occupied.resize(count, 0);
+        let mut footprint_occupied = Vec::new();
+        footprint_occupied
+            .try_reserve_exact(count)
+            .map_err(|_| fail("footprint occupancy allocation"))?;
+        footprint_occupied.resize(count, 0);
         Ok(Self {
             source: grid.source.clone(),
             grid,
             rules,
             footprints,
+            footprint_loader: None,
             occupied,
+            footprint_occupied,
+            stamps: Vec::new(),
             budget,
         })
+    }
+
+    /// Load executed footprint paths through the caller's retained source reader.
+    pub fn with_footprint_loader(
+        mut self,
+        loader: impl FnMut(&str) -> Result<Footprint, String> + Send + Sync + 'static,
+    ) -> Self {
+        self.footprint_loader = Some(Box::new(loader));
+        self
+    }
+
+    fn ensure_footprint(&mut self, path: &str) -> Result<(), Error> {
+        if matches!(path, "" | "_" | "none") || self.footprints.contains_key(path) {
+            return Ok(());
+        }
+        let loader = self
+            .footprint_loader
+            .as_mut()
+            .ok_or_else(|| fail(format!("missing selected footprint {path}")))?;
+        let input = loader(path).map_err(fail)?;
+        let count = self
+            .footprints
+            .values()
+            .try_fold(input.cells.len(), |n, f| n.checked_add(f.cells.len()))
+            .ok_or_else(|| fail("footprint count overflow"))?;
+        if count > self.budget.footprint_cells
+            || [
+                &input.origin.source,
+                &input.origin.edition,
+                &input.origin.version,
+            ]
+            .iter()
+            .any(|v| v.trim().is_empty())
+        {
+            return Err(fail("footprint budget or provenance"));
+        }
+        self.footprints.insert(path.into(), input);
+        Ok(())
     }
 
     fn cell(&self, point: [f32; 2]) -> Result<[i32; 2], Error> {
@@ -384,12 +442,43 @@ impl Placement {
     }
 
     pub(crate) fn prepare(
-        &self,
+        &mut self,
         request: [f32; 2],
         radius: Option<f32>,
         path: &str,
         face: f32,
     ) -> Result<Prepared, Error> {
+        self.ensure_footprint(path)?;
+        self.stamps
+            .try_reserve(1)
+            .map_err(|_| fail("unit occupancy allocation"))?;
+        self.candidate(request, radius, path, face, None, true)?
+            .ok_or_else(|| fail("creation placement refused"))
+    }
+
+    fn blocked(&self, i: usize, exclude: Option<&Prepared>) -> bool {
+        self.grid.pathing.cells[i] & self.rules.mask != 0
+            || (exclude.is_none_or(|p| p.active)
+                && (self.occupied[i]
+                    > u32::from(exclude.is_some_and(|p| p.cells.binary_search(&i).is_ok()))
+                    || self.footprint_occupied[i]
+                        > u32::from(
+                            exclude.is_some_and(|p| p.footprint.binary_search(&i).is_ok()),
+                        )))
+    }
+
+    fn candidate(
+        &self,
+        request: [f32; 2],
+        radius: Option<f32>,
+        path: &str,
+        face: f32,
+        exclude: Option<&Prepared>,
+        creation: bool,
+    ) -> Result<Option<Prepared>, Error> {
+        if request.iter().any(|v| !v.is_finite()) {
+            return Err(fail("nonfinite unit position"));
+        }
         let start = self.cell(request)?;
         let wanted = self.grid.domains[self
             .index(i64::from(start[0]), i64::from(start[1]))
@@ -429,13 +518,15 @@ impl Placement {
                     return Ok(false);
                 }
                 let cells = self.rectangle(cell, extents)?;
-                Ok(cells.iter().all(|&i| {
-                    self.grid.pathing.cells[i] & self.rules.mask == 0 && self.occupied[i] == 0
-                }) && self
-                    .index(i64::from(cell[0]), i64::from(cell[1]))
-                    .is_some_and(|i| self.grid.domains[i] == wanted))
+                Ok(cells.iter().all(|&i| !self.blocked(i, exclude))
+                    && self
+                        .index(i64::from(cell[0]), i64::from(cell[1]))
+                        .is_some_and(|i| self.grid.domains[i] == wanted))
             };
             if !good(start)? {
+                if !creation {
+                    return Ok(None);
+                }
                 // shortcut: deterministic perimeter search; qualify platform overlays and native boundary failures before admitting them.
                 let mut found = None;
                 'rings: for ring in
@@ -479,7 +570,11 @@ impl Placement {
                 }
             }
         }
-        let position = self.rules.normalize(position, self.grid.origin)?;
+        let position = if creation {
+            self.rules.normalize(position, self.grid.origin)?
+        } else {
+            position
+        };
         let cell = self.cell(position)?;
         let cells = if let Some(radius) = normalized_radius {
             self.rectangle(cell, self.rules.extents(radius))?
@@ -520,19 +615,341 @@ impl Placement {
                 );
             }
         }
-        Ok(Prepared {
+        footprint.sort_unstable();
+        footprint.dedup();
+        if footprint
+            .iter()
+            .any(|&i| self.footprint_occupied[i] == u32::MAX)
+        {
+            return Err(fail("footprint occupancy overflow"));
+        }
+        Ok(Some(Prepared {
             position,
             cells,
             footprint,
-        })
+            active: exclude.is_none_or(|p| p.active),
+        }))
     }
 
-    pub(crate) fn commit(&mut self, prepared: Prepared) {
-        for i in prepared.cells {
-            self.occupied[i] += 1;
+    pub(crate) fn hide(&mut self, unit: HandleId) -> Result<(), Error> {
+        let stamp = self
+            .stamps
+            .iter_mut()
+            .find(|(id, _)| *id == unit)
+            .map(|(_, p)| p)
+            .ok_or_else(|| fail("unit occupancy is missing"))?;
+        if stamp.active {
+            for &i in &stamp.cells {
+                self.occupied[i] -= 1;
+            }
+            for &i in &stamp.footprint {
+                self.footprint_occupied[i] -= 1;
+            }
+            stamp.active = false;
         }
-        for i in prepared.footprint {
-            self.grid.pathing.cells[i] |= self.rules.mask;
+        Ok(())
+    }
+
+    pub(crate) fn prepare_show(
+        &mut self,
+        unit: HandleId,
+        request: [f32; 2],
+        radius: Option<f32>,
+        path: &str,
+        face: f32,
+    ) -> Result<Prepared, Error> {
+        if !self.stamps.iter().any(|(id, p)| *id == unit && !p.active) {
+            return Err(fail("hidden unit occupancy required"));
+        }
+        self.ensure_footprint(path)?;
+        if let Some(prepared) = self.candidate(request, radius, path, face, None, false)? {
+            return Ok(prepared);
+        }
+        self.candidate(request, radius, path, face, None, true)?
+            .ok_or_else(|| fail("no admitted reveal placement"))
+    }
+
+    pub(crate) fn prepare_motion(
+        &self,
+        unit: HandleId,
+        point: [f32; 2],
+        radius: f32,
+    ) -> Result<Option<Prepared>, Error> {
+        let stamp = self
+            .stamps
+            .iter()
+            .find(|(id, _)| *id == unit)
+            .map(|(_, p)| p)
+            .ok_or_else(|| fail("unit occupancy is missing"))?;
+        if !stamp.footprint.is_empty() {
+            return Err(fail("moving pathing textures are not admitted"));
+        }
+        self.candidate(point, Some(radius), "_", 0.0, Some(stamp), false)
+    }
+
+    pub(crate) fn segment_clear(
+        &self,
+        unit: HandleId,
+        from: [f32; 2],
+        to: [f32; 2],
+        radius: f32,
+        work: &mut usize,
+    ) -> Result<bool, Error> {
+        let delta = [
+            f64::from(to[0]) - f64::from(from[0]),
+            f64::from(to[1]) - f64::from(from[1]),
+        ];
+        let steps = (delta[0].hypot(delta[1]) / (f64::from(self.rules.cell_size()) * 0.5))
+            .ceil()
+            .max(1.);
+        if !steps.is_finite() || steps > *work as f64 {
+            return Err(fail("movement segment work exhausted"));
+        }
+        let steps = steps as usize;
+        let centre = |p: [i32; 2]| {
+            [
+                self.grid.origin[0] + (p[0] as f32 + 0.5) * self.rules.cell_size(),
+                self.grid.origin[1] + (p[1] as f32 + 0.5) * self.rules.cell_size(),
+            ]
+        };
+        let mut previous = self.cell(from)?;
+        for n in 1..=steps {
+            *work = work
+                .checked_sub(1)
+                .ok_or_else(|| fail("movement segment work exhausted"))?;
+            let point = [
+                (f64::from(from[0]) + delta[0] * n as f64 / steps as f64) as f32,
+                (f64::from(from[1]) + delta[1] * n as f64 / steps as f64) as f32,
+            ];
+            if self.prepare_motion(unit, point, radius)?.is_none() {
+                return Ok(false);
+            }
+            let cell = self.cell(point)?;
+            if cell[0] != previous[0] && cell[1] != previous[1] {
+                for p in [[cell[0], previous[1]], [previous[0], cell[1]]] {
+                    *work = work
+                        .checked_sub(1)
+                        .ok_or_else(|| fail("movement segment work exhausted"))?;
+                    if self.prepare_motion(unit, centre(p), radius)?.is_none() {
+                        return Ok(false);
+                    }
+                }
+            }
+            previous = cell;
+        }
+        Ok(true)
+    }
+
+    /// Bounded deterministic cell routing on this same live collision cache.
+    /// shortcut: A* tie order and cell-centre steering are reconstruction policy;
+    /// qualify native path choice, local avoidance and steering before parity claims.
+    pub(crate) fn route(
+        &self,
+        unit: HandleId,
+        start: [f32; 2],
+        target: [f32; 2],
+        radius: f32,
+        work: &mut usize,
+    ) -> Result<Vec<[f32; 2]>, Error> {
+        use std::collections::{BTreeMap, BinaryHeap};
+        #[derive(PartialEq)]
+        struct Open {
+            cost: f64,
+            travelled: f64,
+            cell: usize,
+        }
+        impl Eq for Open {}
+        impl PartialOrd for Open {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        impl Ord for Open {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                other
+                    .cost
+                    .total_cmp(&self.cost)
+                    .then_with(|| other.cell.cmp(&self.cell))
+                    .then_with(|| other.travelled.total_cmp(&self.travelled))
+            }
+        }
+        if self.segment_clear(unit, start, target, radius, work)? {
+            let mut path = Vec::new();
+            path.try_reserve_exact(1)
+                .map_err(|_| fail("route storage"))?;
+            path.push(target);
+            return Ok(path);
+        }
+        // Exhausted work ends the search; the unit then goes as near as it got.
+        let mut charge = || -> bool {
+            match work.checked_sub(1) {
+                Some(left) => {
+                    *work = left;
+                    true
+                }
+                None => false,
+            }
+        };
+        if !charge() {
+            return Err(fail("movement route work exhausted"));
+        }
+        let target_clear = self.prepare_motion(unit, target, radius)?.is_some();
+        let start_cell = self.cell(start)?;
+        let target_cell = self.cell(target)?;
+        let index = |p: [i32; 2]| {
+            self.index(i64::from(p[0]), i64::from(p[1]))
+                .ok_or_else(|| fail("movement cell outside map"))
+        };
+        let begin = index(start_cell)?;
+        let end = index(target_cell).ok();
+        let xy = |i: usize| {
+            [
+                (i % self.grid.pathing.width as usize) as i32,
+                (i / self.grid.pathing.width as usize) as i32,
+            ]
+        };
+        let centre = |p: [i32; 2]| {
+            [
+                self.grid.origin[0] + (p[0] as f32 + 0.5) * self.rules.cell_size(),
+                self.grid.origin[1] + (p[1] as f32 + 0.5) * self.rules.cell_size(),
+            ]
+        };
+        let heuristic = |p: [i32; 2]| {
+            let dx = (i64::from(p[0]) - i64::from(target_cell[0])).unsigned_abs() as f64;
+            let dy = (i64::from(p[1]) - i64::from(target_cell[1])).unsigned_abs() as f64;
+            dx.max(dy) + (std::f64::consts::SQRT_2 - 1.) * dx.min(dy)
+        };
+        let mut frontier = BinaryHeap::new();
+        frontier.try_reserve(1).map_err(|_| fail("route storage"))?;
+        frontier.push(Open {
+            cost: heuristic(start_cell),
+            travelled: 0.,
+            cell: begin,
+        });
+        let mut reached = BTreeMap::new();
+        reached.insert(begin, (0.0, None));
+        // Nearest explored cell to the target: (remaining estimate, travelled, cell).
+        let mut best = (heuristic(start_cell), 0.0, begin);
+        let mut arrived = false;
+        'search: while let Some(open) = frontier.pop() {
+            if !charge() {
+                break;
+            }
+            if open.travelled > reached[&open.cell].0 {
+                continue;
+            }
+            let remaining = heuristic(xy(open.cell));
+            if (remaining, open.travelled) < (best.0, best.1) {
+                best = (remaining, open.travelled, open.cell);
+            }
+            if Some(open.cell) == end && target_clear {
+                best = (0.0, open.travelled, open.cell);
+                arrived = true;
+                break;
+            }
+            let point = xy(open.cell);
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    if dx == 0 && dy == 0 {
+                        continue;
+                    }
+                    let p = [point[0] + dx, point[1] + dy];
+                    let Ok(next) = index(p) else {
+                        continue;
+                    };
+                    let distance = if dx != 0 && dy != 0 {
+                        std::f64::consts::SQRT_2
+                    } else {
+                        1.
+                    };
+                    let travelled = open.travelled + distance;
+                    if reached.get(&next).is_some_and(|(old, _)| *old <= travelled) {
+                        continue;
+                    }
+                    if !charge() {
+                        break 'search;
+                    }
+                    if self.prepare_motion(unit, centre(p), radius)?.is_none() {
+                        continue;
+                    }
+                    if dx != 0 && dy != 0 {
+                        if !charge() {
+                            break 'search;
+                        }
+                        if self
+                            .prepare_motion(unit, centre([p[0], point[1]]), radius)?
+                            .is_none()
+                        {
+                            continue;
+                        }
+                        if !charge() {
+                            break 'search;
+                        }
+                        if self
+                            .prepare_motion(unit, centre([point[0], p[1]]), radius)?
+                            .is_none()
+                        {
+                            continue;
+                        }
+                    }
+                    frontier.try_reserve(1).map_err(|_| fail("route storage"))?;
+                    reached.insert(next, (travelled, Some(open.cell)));
+                    frontier.push(Open {
+                        cost: travelled + heuristic(p),
+                        travelled,
+                        cell: next,
+                    });
+                }
+            }
+        }
+        let mut path = Vec::new();
+        let mut at = best.2;
+        while at != begin {
+            path.try_reserve(1).map_err(|_| fail("route storage"))?;
+            path.push(centre(xy(at)));
+            at = reached[&at].1.ok_or_else(|| fail("broken route"))?;
+        }
+        path.reverse();
+        match path.last_mut() {
+            Some(last) if arrived => *last = target,
+            Some(_) => {}
+            None if arrived => {
+                path.try_reserve(1).map_err(|_| fail("route storage"))?;
+                path.push(target);
+            }
+            // Already as near as the unit can get: stay put.
+            None => {
+                path.try_reserve(1).map_err(|_| fail("route storage"))?;
+                path.push(start);
+            }
+        }
+        Ok(path)
+    }
+
+    pub(crate) fn commit(&mut self, unit: HandleId, prepared: Prepared) {
+        let old = self.stamps.iter().position(|(id, _)| *id == unit);
+        if let Some(at) = old
+            && self.stamps[at].1.active
+        {
+            for &i in &self.stamps[at].1.cells {
+                self.occupied[i] -= 1;
+            }
+            for &i in &self.stamps[at].1.footprint {
+                self.footprint_occupied[i] -= 1;
+            }
+        }
+        if prepared.active {
+            for &i in &prepared.cells {
+                self.occupied[i] += 1;
+            }
+            for &i in &prepared.footprint {
+                self.footprint_occupied[i] += 1;
+            }
+        }
+        if let Some(at) = old {
+            self.stamps[at].1 = prepared;
+        } else {
+            self.stamps.push((unit, prepared));
         }
     }
 }

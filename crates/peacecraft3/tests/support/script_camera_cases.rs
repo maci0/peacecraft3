@@ -175,7 +175,7 @@ pub fn published_camera_uses_executed_fields_and_preserves_session_ownership() {
 
     deliver_camera(
         &mut app,
-        &SCRIPT.replace("true, 0.0)", "true, 2.0)"),
+        &SCRIPT.replace("true, 0.0)", "true, 1.0 / 0.0)"),
         b"[Camera]\nNearZ=5,15",
         2,
     );

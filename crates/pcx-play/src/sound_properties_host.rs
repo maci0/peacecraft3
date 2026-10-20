@@ -15,7 +15,11 @@ pub struct SoundProperties {
     pub cone_orientation: Option<[f32; 3]>,
     pub position: Option<[f32; 3]>,
     pub velocity: Option<[f32; 3]>,
+    /// Live executed unit from AttachSoundToUnit; a later SetSoundPosition clears it.
+    pub attached_unit: Option<HandleId>,
 }
+
+const ATTACH: &str = "AttachSoundToUnit";
 
 const CONTRACTS: &[(&str, &[&str])] = &[
     ("SetSoundChannel", &["sound", "integer"]),
@@ -72,6 +76,78 @@ impl ObjectHost {
         Some(self.assign_sound_property(name, args))
     }
 
+    /// Checked at unit-catalog admission so attachment shares the unit source.
+    pub(super) fn sound_attachment_declaration(&self, source: &str) -> Result<(), Error> {
+        let Some(native) = self.inner.program.natives().get(ATTACH) else {
+            return Ok(());
+        };
+        Self::contract(
+            &self.inner,
+            ATTACH,
+            &["sound", "unit"],
+            "nothing",
+            false,
+            Some("sound"),
+        )?;
+        if native.source != source {
+            return Err(self.inner.error(ATTACH, Failure::Source));
+        }
+        Ok(())
+    }
+
+    pub(super) fn sound_attachment_native(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Option<Result<Value, Error>> {
+        if name != ATTACH
+            || !self.sound_properties
+            || self.units.is_none()
+            || self.inner.program.natives().get(ATTACH).is_none()
+        {
+            return None;
+        }
+        Some((|| {
+            let fail = |failure| self.inner.error(ATTACH, failure);
+            let (sound, unit) = match args {
+                [Value::Handle(sound), Value::Handle(unit)] => (*sound, *unit),
+                // Native wrapper evidence: a null sound or unit skips without detaching.
+                [
+                    Value::Null | Value::Handle(_),
+                    Value::Null | Value::Handle(_),
+                ] => {
+                    return Ok(Value::Null);
+                }
+                _ => return Err(fail(Failure::Signature)),
+            };
+            self.sound_admitted(sound).map_err(|e| fail(e.failure))?;
+            self.executed_unit(unit).map_err(|e| fail(e.failure))?;
+            let at = usize::try_from(sound.token() - 1).map_err(|_| fail(Failure::Identity))?;
+            let (Entry::Sound { properties, .. } | Entry::FileSound { properties, .. }) =
+                &mut self.inner.arena[at]
+            else {
+                return Err(self.inner.error(ATTACH, Failure::WrongFamily));
+            };
+            properties.attached_unit = Some(unit);
+            Ok(Value::Null)
+        })())
+    }
+
+    /// Current accepted ground position of the unit a sound follows, if attached.
+    pub fn sound_attached_position(&self, id: HandleId) -> Result<Option<[f32; 2]>, Error> {
+        let Some(unit) = self.sound_properties(id)?.attached_unit else {
+            return Ok(None);
+        };
+        if matches!(self.inner.entry(unit)?, Entry::RemovedUnit) {
+            return Ok(None);
+        }
+        let record = self.executed_unit(unit)?;
+        record.position.map(Some).ok_or_else(|| {
+            self.inner
+                .error(ATTACH, Failure::UnitState("accepted position missing"))
+        })
+    }
+
     fn assign_sound_property(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
         let fail = |reason| self.inner.error(name, Failure::SoundState(reason));
         let (Value::Handle(id), tail) = args
@@ -116,7 +192,10 @@ impl ObjectHost {
             ("SetSoundConeOrientation", values) => {
                 next.cone_orientation = Some(reals(values).ok_or_else(bad)?)
             }
-            ("SetSoundPosition", values) => next.position = Some(reals(values).ok_or_else(bad)?),
+            ("SetSoundPosition", values) => {
+                next.position = Some(reals(values).ok_or_else(bad)?);
+                next.attached_unit = None;
+            }
             ("SetSoundVelocity", values) => next.velocity = Some(reals(values).ok_or_else(bad)?),
             _ => return Err(bad()),
         }

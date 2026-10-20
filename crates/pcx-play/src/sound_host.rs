@@ -270,6 +270,22 @@ impl ObjectHost {
             false,
             Some("sound"),
         )?;
+        if self
+            .inner
+            .program
+            .natives()
+            .get("GetSoundDuration")
+            .is_some()
+        {
+            Self::contract(
+                &self.inner,
+                "GetSoundDuration",
+                &["sound"],
+                "integer",
+                false,
+                Some("sound"),
+            )?;
+        }
         self.sound_duration = true;
         Ok(self)
     }
@@ -279,11 +295,47 @@ impl ObjectHost {
             _ => Err(self.inner.error("SetSoundDuration", Failure::WrongFamily)),
         }
     }
+    /// Explicit `SetSoundDuration` metadata, else the decoded length in whole
+    /// milliseconds (truncation is a recreation choice).
+    pub fn sound_length_ms(&self, id: HandleId) -> Result<i32, Error> {
+        let name = "GetSoundDuration";
+        if let Some(duration) = self.sound_duration(id)? {
+            return Ok(duration);
+        }
+        let (frames, rate) = match self.inner.entry(id)? {
+            Entry::FileSound { mp3: true, .. } => {
+                let frames = self.file_mp3_state(id)?.resource.frames();
+                (frames.decoded_frames, frames.sample_rate)
+            }
+            _ => {
+                let pcm = self.sound_resource(id)?.pcm();
+                (pcm.frames() as u64, pcm.sample_rate)
+            }
+        };
+        if rate == 0 {
+            return Err(self
+                .inner
+                .error(name, Failure::SoundState("zero sample rate")));
+        }
+        i32::try_from(frames.saturating_mul(1000) / u64::from(rate)).map_err(|_| {
+            self.inner
+                .error(name, Failure::SoundState("length overflows"))
+        })
+    }
+
     pub(super) fn sound_duration_native(
         &mut self,
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
+        if name == "GetSoundDuration" && self.sound_duration {
+            self.inner.program.natives().get(name)?;
+            return Some(match args {
+                [Value::Null] => Ok(Value::Int(0)),
+                [Value::Handle(id)] => self.sound_length_ms(*id).map(Value::Int),
+                _ => Err(self.inner.error(name, Failure::Signature)),
+            });
+        }
         if name != "SetSoundDuration" || !self.sound_duration {
             return None;
         }
@@ -374,11 +426,36 @@ impl ObjectHost {
             false,
             Some("sound"),
         )?;
+        if self.inner.program.natives().get("StopSound").is_some() {
+            Self::contract(
+                &self.inner,
+                "StopSound",
+                &["sound", "boolean", "boolean"],
+                "nothing",
+                false,
+                Some("sound"),
+            )?;
+        }
         std::alloc::Layout::array::<HandleId>(max_pending)
             .map_err(|_| self.inner.error(name, Failure::Capacity))?;
         self.sound_start_limit = Some(max_pending);
         Ok(self)
     }
+    /// Transfers executed `StopSound` requests (sound, kill when done, fade out).
+    pub fn take_sound_stops(&mut self) -> Vec<(HandleId, bool, bool)> {
+        std::mem::take(&mut self.sound_stops)
+    }
+
+    /// Seconds of playback left at the current game time; zero when not playing.
+    pub(super) fn sound_remaining(&self, id: HandleId) -> Result<f64, Error> {
+        let (Some(&started), Some(now)) = (self.sound_playing.get(&id), self.timer_game_time())
+        else {
+            return Ok(0.0);
+        };
+        let length = f64::from(self.sound_length_ms(id)?) / 1000.0;
+        Ok((started + length - now).max(0.0))
+    }
+
     /// Every successful request remains in execution order, including repeats.
     pub fn pending_sound_starts(&self) -> &[HandleId] {
         &self.sound_starts
@@ -443,6 +520,26 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
+        if name == "StopSound" && self.sound_start_limit.is_some() {
+            self.inner.program.natives().get(name)?;
+            return Some(match args {
+                [Value::Null, Value::Bool(_), Value::Bool(_)] => Ok(Value::Null),
+                [Value::Handle(id), Value::Bool(kill), Value::Bool(fade)] => {
+                    match self.sound_admitted(*id) {
+                        Err(e) => Err(self.inner.error(name, e.failure)),
+                        Ok(()) if self.sound_stops.try_reserve(1).is_err() => {
+                            Err(self.inner.error(name, Failure::Capacity))
+                        }
+                        Ok(()) => {
+                            self.sound_playing.remove(id);
+                            self.sound_stops.push((*id, *kill, *fade));
+                            Ok(Value::Null)
+                        }
+                    }
+                }
+                _ => Err(self.inner.error(name, Failure::Signature)),
+            });
+        }
         if name == "StartSound" {
             let limit = self.sound_start_limit?;
             return Some((|| {
@@ -462,6 +559,9 @@ impl ObjectHost {
                     .try_reserve(1)
                     .map_err(|_| self.inner.error(name, Failure::Capacity))?;
                 self.sound_starts.push(*id);
+                if let Some(now) = self.timer_game_time() {
+                    self.sound_playing.insert(*id, now);
+                }
                 Ok(Value::Null)
             })());
         }

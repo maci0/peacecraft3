@@ -120,6 +120,43 @@ pub struct Item {
     pub kind: Kind,
 }
 
+/// Apply the client's overrides without changing the authored layout or borders.
+pub fn edition_button_art(
+    fdf: &Fdf,
+    items: &mut [Item],
+    art: &pcx_play::menu_edition::ButtonArt,
+) -> Result<(), FdfError> {
+    let Some(item) = items.iter_mut().find(|item| item.frame == art.frame) else {
+        return Err(FdfError::UnknownFrame(art.frame.clone()));
+    };
+    let Kind::Button(button) = &mut item.kind else {
+        return Err(missing(&art.frame, "button"));
+    };
+    for (property, expected) in [
+        "ControlBackdrop",
+        "ControlPushedBackdrop",
+        "ControlDisabledBackdrop",
+    ]
+    .into_iter()
+    .zip(&art.backdrops)
+    {
+        if fdf.string(&art.frame, property).as_ref() != Some(expected) {
+            return Err(missing(&art.frame, property));
+        }
+    }
+    let states = [&mut button.normal, &mut button.pushed, &mut button.disabled];
+    if states
+        .iter()
+        .any(|state| state.as_ref().is_none_or(|art| art.background.is_none()))
+    {
+        return Err(missing(&art.frame, "BackdropBackground"));
+    }
+    for (state, path) in states.into_iter().zip(&art.textures) {
+        state.as_mut().expect("checked backdrop").background = Some(path.clone());
+    }
+    Ok(())
+}
+
 fn missing(frame: &str, property: &'static str) -> FdfError {
     FdfError::Missing {
         frame: frame.to_string(),
@@ -1469,6 +1506,85 @@ fn place_shadows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edition_art_changes_all_states_and_preserves_source_chrome() {
+        let fdf = Fdf::parse(
+            r#"
+Frame "GLUEBUTTON" "Switch" {
+    ControlBackdrop "Up",
+    ControlPushedBackdrop "Down",
+    ControlDisabledBackdrop "Disabled",
+}
+Frame "BACKDROP" "Up" {
+    BackdropBackground "old-up.blp",
+    BackdropTileBackground,
+}
+Frame "BACKDROP" "Down" {
+    BackdropBackground "old-down.blp",
+}
+Frame "BACKDROP" "Disabled" {
+    BackdropBackground "old-disabled.blp",
+}
+"#,
+        )
+        .unwrap();
+        let rect = Rect {
+            left: 0.2,
+            bottom: 0.1,
+            width: 0.03,
+            height: 0.04,
+        };
+        let original = button(&fdf, "Switch").unwrap();
+        let mut items = vec![Item {
+            frame: "Switch".into(),
+            rect,
+            kind: Kind::Button(Box::new(original.clone())),
+        }];
+        let mut art = pcx_play::menu_edition::ButtonArt {
+            frame: "Switch".into(),
+            backdrops: ["Up".into(), "Down".into(), "Disabled".into()],
+            textures: [
+                "other-up.blp".into(),
+                "other-down.blp".into(),
+                "other-disabled.blp".into(),
+            ],
+        };
+        for paths in [
+            art.textures.clone(),
+            [
+                "old-up.blp".into(),
+                "old-down.blp".into(),
+                "old-disabled.blp".into(),
+            ],
+        ] {
+            art.textures = paths;
+            edition_button_art(&fdf, &mut items, &art).unwrap();
+            let Kind::Button(current) = &items[0].kind else {
+                panic!("button")
+            };
+            let mut expected = original.clone();
+            for (state, path) in [
+                &mut expected.normal,
+                &mut expected.pushed,
+                &mut expected.disabled,
+            ]
+            .into_iter()
+            .zip(&art.textures)
+            {
+                state.as_mut().unwrap().background = Some(path.clone());
+            }
+            assert_eq!(current.as_ref(), &expected);
+            assert_eq!(items[0].rect, rect);
+        }
+        let before = items.clone();
+        art.backdrops[1] = "unrelated-frame".into();
+        assert!(edition_button_art(&fdf, &mut items, &art).is_err());
+        assert_eq!(
+            items, before,
+            "bad source binding cannot partially change art"
+        );
+    }
 
     #[test]
     fn repeated_named_subtrees_cannot_expand_without_a_bound() {

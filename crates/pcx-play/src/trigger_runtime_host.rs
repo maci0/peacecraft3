@@ -9,6 +9,8 @@ pub struct TriggerRuntimeInput {
     /// Constant `gameevent` global from the selected ConvertGameEvent source.
     pub timer_event_global: String,
     pub max_timed_events: usize,
+    /// Parked `TriggerSleepAction` threads; admitted only when that native is declared.
+    pub max_parked_threads: usize,
 }
 
 pub(super) struct State {
@@ -16,8 +18,8 @@ pub(super) struct State {
     event: HandleId,
     limit: usize,
     retained: usize,
-    active: Option<HandleId>,
-    timer_context: bool,
+    pub(super) active: Option<HandleId>,
+    pub(super) event_context: Option<HandleId>,
 }
 
 pub(super) struct DirectCall {
@@ -170,7 +172,7 @@ impl ObjectHost {
             limit: input.max_timed_events,
             retained: 0,
             active: None,
-            timer_context: false,
+            event_context: None,
         });
         Ok(self)
     }
@@ -198,8 +200,7 @@ impl ObjectHost {
                 Ok(match state.active {
                     None => Value::Null,
                     Some(trigger) if name == "GetTriggeringTrigger" => Value::Handle(trigger),
-                    Some(_) if state.timer_context => Value::Handle(state.event),
-                    Some(_) => Value::Null,
+                    Some(_) => state.event_context.map_or(Value::Null, Value::Handle),
                 })
             } else {
                 Err(self
@@ -278,40 +279,46 @@ impl ObjectHost {
             {
                 continue;
             }
-            let mut conditions = Vec::new();
-            let mut actions = Vec::new();
-            for entry in &self.inner.arena {
-                let (list, function) = match entry {
-                    Entry::TriggerCondition(r) if r.trigger == trigger => {
-                        let function = match self.inner.entry(r.condition)? {
-                            Entry::Condition { .. } => {
-                                self.condition_callback(r.condition)?.function
-                            }
-                            Entry::Filter { .. } => self.filter_callback(r.condition)?.function,
-                            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
-                        };
-                        (&mut conditions, function)
-                    }
-                    Entry::TriggerAction {
-                        trigger: owner,
-                        function,
-                    } if *owner == trigger => (&mut actions, *function),
-                    _ => continue,
-                };
-                list.try_reserve(1)
-                    .map_err(|_| self.inner.error(name, Failure::Capacity))?;
-                list.push(function);
-            }
             deliveries
                 .try_reserve(1)
                 .map_err(|_| self.inner.error(name, Failure::Capacity))?;
-            deliveries.push(TriggerDelivery {
-                trigger,
-                conditions,
-                actions,
-            });
+            deliveries.push(self.trigger_delivery(trigger, name)?);
         }
         Ok(deliveries)
+    }
+
+    pub(super) fn trigger_delivery(
+        &self,
+        trigger: HandleId,
+        name: &str,
+    ) -> Result<TriggerDelivery, Error> {
+        let mut conditions = Vec::new();
+        let mut actions = Vec::new();
+        for entry in &self.inner.arena {
+            let (list, function) = match entry {
+                Entry::TriggerCondition(r) if r.trigger == trigger => {
+                    let function = match self.inner.entry(r.condition)? {
+                        Entry::Condition { .. } => self.condition_callback(r.condition)?.function,
+                        Entry::Filter { .. } => self.filter_callback(r.condition)?.function,
+                        _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+                    };
+                    (&mut conditions, function)
+                }
+                Entry::TriggerAction {
+                    trigger: owner,
+                    function,
+                } if *owner == trigger => (&mut actions, *function),
+                _ => continue,
+            };
+            list.try_reserve(1)
+                .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+            list.push(function);
+        }
+        Ok(TriggerDelivery {
+            trigger,
+            conditions,
+            actions,
+        })
     }
 
     pub fn begin_timer_trigger(
@@ -340,14 +347,14 @@ impl ObjectHost {
             ));
         }
         state.active = Some(record.trigger);
-        state.timer_context = true;
+        state.event_context = Some(state.event);
         Ok(true)
     }
 
     pub fn finish_timer_trigger(&mut self) {
         if let Some(state) = &mut self.trigger_runtime {
             state.active = None;
-            state.timer_context = false;
+            state.event_context = None;
         }
     }
 
@@ -393,6 +400,15 @@ impl ObjectHost {
                 .try_reserve(1)
                 .map_err(|_| self.inner.error(name, Failure::Capacity))?;
             callbacks.push(function);
+        }
+        if !evaluate && !callbacks.is_empty() {
+            // Actions run as one new thread; a sleep parks it and the caller continues.
+            self.enter_spawned_thread();
+            self.trigger_runtime
+                .as_mut()
+                .expect("checked runtime")
+                .active = Some(*trigger);
+            return Ok(Some(pcx_script::ScriptCall::Spawn(callbacks)));
         }
         let state = self.trigger_runtime.as_mut().expect("checked runtime");
         if callbacks.is_empty() {

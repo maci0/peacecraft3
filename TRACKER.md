@@ -50,6 +50,17 @@ issues*.
 
 ## Current recreation work (2026-10-16)
 
+### Human01 runtime frontier (2026-10-20)
+
+- [~] Unchanged Human01 publishes through the normal application path and runs
+      1800 game seconds under `CampaignRuntime` without a script refusal (no
+      player input yet). Added script threads with `TriggerSleepAction`, event
+      delivery (regions, deaths, attacks), combat, time of day, live camera ramps,
+      client software `SquareRoot`/`Atan2`, selection, effects, vitals and about
+      thirty further natives. Application consumers (camera, input, HUD text,
+      effects, audio) remain open; a synthetic software-math test is missing.
+      See `docs/re-notes/campaign-human01-runtime.md`.
+
 ### Campaign and gameplay implementation queue
 
 Each slice below needs a reviewed implementation, real tests and application
@@ -3141,3 +3152,237 @@ repeated, and the public site package was not rebuilt.
   full campaign and deterministic three-target gates. Hero task remains active;
   first Human01 is not playable and the original baseline gate is unchanged.
   See [hero skill state](docs/re-notes/script-hero-skills.md).
+
+### 2026-10-20 — source-derived edition-switch icon states
+
+- [x] The control builder now reads both icon families and their three state
+  bindings from the supplied client. RoC advertises TFT and TFT advertises RoC;
+  FDF layout, borders and dispatch are retained. Browser import follows the
+  same source paths before committing its candidate archive store.
+- [x] Native 579 host-library and 413 menu tests, the explicit original-client
+  reader test, strict native/browser lint and both full builds pass. Actual
+  production WASM imports six source images; three missing-image and one
+  changed-client candidates preserve the previous committed state on refusal.
+- [ ] Fresh window/browser visual checks are refused by local-socket restrictions.
+  Six software-Vulkan offscreen TFT/RoC/TFT captures confirm icon changes at
+  1024×768 and 4K, but the 4K journal loses labels after switching editions.
+  That observation, window/browser rendering, tooltips, background/particle fidelity, public deployment and full
+  three-target equality remain open. The first campaign remains unplayable.
+  See [edition button](docs/re-notes/menu-edition-button.md).
+
+### 2026-10-20 — first-mission source actors and animation in progress
+
+- [x] Unchanged Human01 executes its five authored animation calls on the same
+  unit handles; all 155 creations retain source models. Their position-bit
+  records match the prior original-qualified replay. The next refusal is
+  `IssueImmediateOrder("holdposition")`.
+- [x] An isolated CPU ECS audit accepts all 155 actual actors through the
+  production spawn/update functions, including every material layer: 694 draws,
+  84,818 layer vertices and 109 actors with changing poses. Palette prefixes and
+  count come from the selected skin; enum string overrides are preserved.
+- [x] Native host 583, application 418 and map-integration 148 tests pass, along
+  with four actual WASI cases, strict native/browser checks and both full builds.
+- [ ] Runtime startup state, active orders, source unit lighting, opaque/cutout
+  pass ordering and GPU acceptance remain open. The factory loader and actor
+  consumer are incomplete first-mission work. Human01 is not playable; the
+  original baseline and three-target deterministic/rendered gates are unchanged.
+  See [unit animation](docs/re-notes/script-unit-animation.md).
+
+### 2026-10-20 — map player roles for campaign startup
+
+- [x] Corrected the W3I player-role helpers: player number, controller, race and
+  fixed-start flag are distinct words. Sparse player numbers and canonical
+  bytes are preserved; legacy public fields remain compatible.
+- [x] Synthetic version-18/version-25 cases distinguish a user in slot 8 from a
+  neutral player in slot 1. Native 96 map tests, four actual WASI cases, strict
+  native/browser checks and both application builds pass. Native and WASI
+  source comparisons join all five Human01 player records and exact start
+  positions to its authored configuration with identical results.
+- [ ] Host source preparation now has a producer; runtime startup state remains
+  incomplete. Authored roles do not prove
+  local-client identity or occupied lobby slots. Live orders/world and full
+  first-mission, original/native/WASM determinism and rendered fidelity remain
+  open. See [map player roles](docs/re-notes/map-player-roles.md).
+
+### 2026-10-20 — campaign source-input producer
+
+- [x] Normal native/browser startup prepares source inputs from the admitted
+  resolver and fingerprinted client, with bounded source reads and no copied
+  game-rule defaults. Failed preparation preserves the previous session and
+  matching corrected inputs recover.
+- [x] The supplied Human01 audit constructs the production factory and completes
+  globals/config with 43 source conversion contracts. The selected client reader
+  agrees bit for bit between native and WASI execution, including 128 explicit
+  seed integer/real draw pairs. Native 584 host, 171 library/map and 418 application
+  tests pass, with strict native/browser checks and both full builds.
+- [ ] Runtime startup observations, initial engine seed, live placement/world,
+  orders/combat, initialization scheduling and campaign-selection delivery are
+  unfinished. No real-asset `main`, gameplay, new original-client runtime or
+  rendered-parity check is claimed. Human01 remains unplayable and the original
+  baseline gate is unchanged. See
+  [source preparation](docs/re-notes/campaign-source-preparation.md).
+
+### 2026-10-20 — post-config slot input before lazy player creation
+
+- [x] The production startup factory retains explicitly supplied slot numbers
+  before their `Player` handles exist. Missing states stay unset, rejected input
+  preserves prior state, and controller writes invalidate future entries too.
+  No early player handles or occupancy defaults are introduced.
+- [x] The source-prepared Human01 Host matches all sixteen retained original
+  census entries: five existing players, eleven later creations and zero handles
+  allocated during admission. All 586 Host and 172 library/map tests, five actual
+  WASI slot tests, strict native/browser checks and both full builds pass.
+- [ ] This comparison does not supply ordinary new-game runtime state, execute
+  real-asset `main` or make the first mission playable. The active bootstrap and
+  world/order work remains open. See [slot input](docs/re-notes/script-player-slots.md).
+
+### 2026-10-20 — normal fresh-game state and pre-global RNG seed
+
+- [x] Normal startup derives fresh speed/fog values from the selected client,
+  resolves version and enum identities through loaded common source, and builds
+  the selected single-player roster after config without census defaults.
+  An explicit game seed initializes the source-bound RNG before globals;
+  platform entropy supplies normal launches and a recorded override supports tests.
+- [x] Derived Human01 controller/slot/settings/version state matches the retained
+  original observations. Native/WASI fresh-settings readers agree. All 587 Host,
+  23 library, 151 map/application and 419 binary tests, strict native/browser
+  checks and both full builds pass. Actual application startup with the supplied
+  Legacy archive inventory loads ambient audio sources and reaches the next
+  unsupported `GetPlayerTechResearched` call in `InitSummonableCaps`.
+- [ ] Fresh research, implicit original engine seed policy, live world/orders,
+  startup scheduling and campaign-selection delivery remain open. The real
+  candidate does not publish and Human01 remains unplayable. No new original
+  runtime, audible/GPU verification or full original/native/WASM parity is claimed.
+  See [source preparation](docs/re-notes/campaign-source-preparation.md).
+
+### 2026-10-20 — fresh source-bound upgrade counters
+
+- [x] Normal new games admit upgrade counters before globals on the existing Host.
+  Caps follow stock tables, metadata and map edits. Raw setter requests remain
+  separate from applied levels, and Defend consumes the applied result. Invalid
+  input and invalidation preserve explicit refusals; observation mode stays separate.
+- [x] All 592 Host, 23 library, 151 map/application and 419 binary tests pass,
+  along with eight actual WASI tests, strict native/browser checks, both builds
+  and formatting. Unchanged Human01 now passes `InitSummonableCaps` through the
+  application and reaches unsupported `TriggerRegisterTimerEvent` at BJ1660.
+- [ ] General research effects/relationships and original initialization parity
+  remain open. Trigger runtime supply, startup scheduling, normal world/orders
+  and campaign selection still prevent playability. The failed candidate remains
+  unpublished; no new original runtime or rendered/audio parity is claimed.
+  See [upgrade counters](docs/re-notes/campaign-source-preparation.md#fresh-upgrade-counters-2026-10-20).
+
+### 2026-10-20 — normal timed-trigger runtime supply
+
+- [x] Fresh preparation supplies the existing arena/clock/session trigger runtime.
+  The fresh enabled policy uses the decoded enable operand, supported by retained
+  original behavior. The event identity is decoded and joined to its unique loaded
+  common-source conversion constant. No captured ordinal/default or alternate VM.
+- [x] All 593 Host, 23 library, 151 map/application and 419 binary tests pass,
+  with six actual WASI tests, strict native/browser checks and both full builds.
+  A zero-case WASI selector is excluded; its corrected run executes all four
+  trigger-runtime cases. Unchanged Human01 application startup advances to
+  `TriggerRegisterUnitInRange` at BJ1814 and remains unpublished.
+- [ ] Range transitions need actual positions, membership changes, predicates and
+  delivery through the owned VM. The registration-only API remains disabled in
+  this producer. Main scheduling, normal world/orders, campaign selection and
+  original/native/WASM rendered gameplay parity still prevent playability.
+  See [fresh trigger input](docs/re-notes/campaign-source-preparation.md#fresh-timed-trigger-input-2026-10-20).
+
+### 2026-10-20 — normal creation-placement supply
+
+- [x] Normal startup assembles the existing placement cache from its admitted map,
+  source metadata/edits, pathing textures and executed stationary records before
+  the first unit birth. The same arena owns accepted positions; no observed
+  positions or placement-id aliases enter the producer.
+- [x] All 594 Host, 26 library, 151 map/application and 419 binary tests pass,
+  with eight actual WASI core/parser cases, strict native/browser checks and both
+  full builds. An instrumented creation-cut diagnostic through the normal loader
+  matches all 155 requests and accepted position bits to retained original results.
+- [ ] Unchanged Human01 still refuses range registration at BJ1814 and publishes
+  no session. Actual membership/filter/action delivery, startup scheduling, live
+  world/orders and campaign delivery remain open. Static raster limits and the
+  missing original/native/WASM rendered comparison are explicit; this is not a
+  playable mission. See [placement supply](docs/re-notes/campaign-source-preparation.md#normal-creation-placement-supply-2026-10-20).
+
+### 2026-10-20 — deferred unit-range delivery
+
+- [x] Normal new games admit range registration and a real accepted-position
+  consumer. Logical ticks deliver entry filters, all registered conditions and
+  actions on the owned VM. Context, stale arena/poll tickets, work refusal,
+  disabled/destroyed owners and failure cleanup are covered. Startup/loading
+  itself does not fire entries; no copied position, ordinal or alternate arena.
+- [x] All 604 Host, 26 library, 154 map/application and 419 binary tests pass,
+  plus fourteen actual WASI cases and eighteen application cases on the actual
+  browser-target WASM module under Node. Strict native/browser checks and both
+  builds pass. The 155 original placement comparisons remain exact.
+- [ ] Native range cadence/equality/eligibility/order and full lifecycle remain
+  open, as do live movement/death, activity/AI/combat, startup suspension and
+  ordinary campaign delivery. Unchanged Human01 now refuses `IssueImmediateOrder`
+  at BJ7817 during initialization (`holdposition`); no session is published and
+  the mission is not playable. No new original run or rendered/audio parity claim.
+  See [range delivery](docs/re-notes/script-unit-world.md#deferred-range-consumer-2026-10-20).
+
+### 2026-10-20 — selected order-name registry
+
+- [x] Fresh-game startup supplies checked `OrderId`/`OrderId2String` lookups
+  from both reviewed client registration paths, including the preceding
+  bootstrap entry. All names/IDs come from the selected image; the identical
+  repeated registration, ASCII case comparison and null/missing results are
+  covered without an embedded order table.
+- [x] All 609 Host, 26 library, 154 map and 419 application tests pass, with
+  five actual WASI registry tests, eighteen browser-target WASM application
+  cases, strict native/browser checks and both full builds. The actual startup
+  Host matches 349 source registrations and four original-runtime lookup
+  controls. A bounded original probe retains 23 records; its earlier loading
+  screen failure is preserved and both private containers are stopped.
+- [ ] Hold Position activity, acquisition/movement and coherent live collision
+  occupancy remain open. Repeated Hold requests are accepted by the original,
+  while its current-order query remains zero even during the observed autonomous
+  motion after Stop. Last-request storage would be wrong. Unchanged Human01
+  still refuses Hold Position at BJ7817 and publishes no playable session.
+  Rendering and original/native/WASM gameplay parity remain unverified. See
+  [order behavior](docs/re-notes/script-immediate-orders.md#selected-client-lookup-and-activity-order-frontier-2026-10-20).
+
+### 2026-10-20 — explicit unit activity and live movement
+
+- [x] Fresh startup supplies source-decoded Hold/Stop/Move identifiers on the
+  existing unit arena. Explicit movement consumes metadata-associated movement
+  class/speed and the live map collision cache; Hold/Stop cancel that movement.
+  Location orders copy a destination from the same arena. Motion, queries,
+  range delivery and actor transforms share the accepted unit record.
+- [x] Timer callbacks observe motion at their logical deadline. Repeated projection
+  is idempotent, and fixed-tick tests preserve results across frame chunks and
+  loading delays. Nonmoving source rows need no numeric speed to be created;
+  querying a marker still refuses without an invented value.
+- [x] All 1,378 affected native tests and twenty actual WASI tests pass, with
+  nineteen browser-target WASM application cases under Node, strict native/browser
+  checks and both full builds. All 155 original creation requests and accepted
+  position pairs remain exact. An additional bounded original Wine probe retains
+  fourteen records; nominal speed and explicit order-state controls agree through
+  the normal source-backed Host. The original runtime is stopped.
+- [ ] Original steering, acceleration, Walk playback rate, path choice and local
+  avoidance are not matched. Autonomous acquisition, combat/death, visibility,
+  startup suspension and player controls remain open. Unchanged Human01 now
+  passes its Hold calls and refuses `ShowUnit` at BJ3412, publishing no session.
+  The mission remains unplayable; no rendered original/native/WASM parity claim.
+  See [activity behavior](docs/re-notes/script-immediate-orders.md#explicit-movement-and-activity-consumer-2026-10-20-candidate).
+
+### 2026-10-20 — unit visibility on the owned world
+
+- [x] Checked optional `ShowUnit`/`IsUnitHidden` contracts mutate the canonical unit.
+  Hidden units retain orders and existing groups, continue movement, release their
+  collision occupancy and leave new spatial enumerations. Showing restores valid
+  placement and rebases motion if relocated. Actor parents follow the same state.
+- [x] Three bounded original Wine probes retain 59 records. A wider rectangle
+  corrects an inconclusive narrow control, and a separate experiment establishes
+  that hidden anchors still deliver range entries for visible candidates. All
+  original runtimes are stopped. No original/generated assets are published.
+- [x] All 1,385 affected native tests, 25 actual WASI cases and twenty application
+  cases on the actual browser-target WASM module pass, with strict checks and
+  both full builds. The 155 original creation requests/positions remain exact;
+  the source-backed unit passes visibility, spatial, collision and motion controls.
+- [ ] Related attachments, passengers, selection/death interactions, all hidden
+  pathing/reveal cases, small-rectangle native raster behavior and full rendered
+  parity remain open. Unchanged Human01 passes its visibility calls and now refuses
+  `AttachSoundToUnit` at BJ2226. It publishes no session and remains unplayable.
+  See [executed visibility](docs/re-notes/script-unit-world.md#executed-visibility-and-live-world-membership-2026-10-20).

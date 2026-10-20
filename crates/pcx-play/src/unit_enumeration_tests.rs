@@ -226,7 +226,7 @@ endfunction
     assert_eq!(v.host().inner.memberships(), 0);
 }
 
-const TRIGGERS: &str = r#"
+pub(super) const TRIGGERS: &str = r#"
 type trigger extends agent
 type event extends agent
 type eventid extends handle

@@ -60,7 +60,7 @@ fn mp3_budget() -> Mp3Budget {
         max_samples: 400_000,
     }
 }
-fn mixed_assets() -> Assets {
+pub(crate) fn mixed_assets() -> Assets {
     let pcm = wave();
     let mut encoded = input(MPEG);
     encoded.member = r"Media\tone.bin";
@@ -77,7 +77,7 @@ fn mixed_assets() -> Assets {
     .unwrap()
 }
 
-const PROPERTY_DECLARATIONS: &str =
+pub(crate) const PROPERTY_DECLARATIONS: &str =
     "native SetSoundChannel takes sound s, integer c returns nothing
 native SetSoundVolume takes sound s, integer v returns nothing
 native SetSoundPitch takes sound s, real p returns nothing
@@ -371,6 +371,7 @@ fn sound_properties_preserve_pcm_and_mpeg_identity_and_raw_assignments() {
                 cone_orientation: Some([1.0, -2.0, 3.0]),
                 position: Some([-0.0, f32::MAX, -9.25]),
                 velocity: Some([-7.5, 0.0, 0.25]),
+                attached_unit: None,
             }
         );
         assert_eq!(

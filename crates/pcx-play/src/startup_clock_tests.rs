@@ -33,6 +33,9 @@ fn fixture(hour: i8) -> (Vec<u8>, Binding, RuleInputBudget) {
         0x6a, hour as u8, 0x68, 0x70, 0x30, 0x30, 0, 0xe8, 0x10, 0, 0, 0, 0x83, 0xc4, 8, 0xc3,
     ];
     image[0x220..0x230].copy_from_slice(&code);
+    let mut scale = code;
+    scale[1] = 3;
+    image[0x230..0x240].copy_from_slice(&scale);
     let binding = Binding {
         origin: origin(),
         image_sha256: sha256(&image),
@@ -40,6 +43,11 @@ fn fixture(hour: i8) -> (Vec<u8>, Binding, RuleInputBudget) {
             va: 0x301020,
             len: 16,
             digest: sha256(&code),
+        },
+        scale_initializer: SourceWindow {
+            va: 0x301030,
+            len: 16,
+            digest: sha256(&scale),
         },
     };
     (
@@ -52,7 +60,7 @@ fn fixture(hour: i8) -> (Vec<u8>, Binding, RuleInputBudget) {
         },
     )
 }
-fn input(hour: i8) -> StartupClock {
+pub(crate) fn input(hour: i8) -> StartupClock {
     let (d, b, n) = fixture(hour);
     StartupClock::read(&d, b, n).unwrap()
 }
@@ -86,6 +94,7 @@ fn initial_hour_comes_from_checked_code_not_a_runtime_address_or_fixed_value() {
     for hour in [i8::MIN, -3, 0, 7, 29, i8::MAX] {
         let c = input(hour);
         assert_eq!(c.hour().to_bits(), (hour as f32).to_bits());
+        assert_eq!(c.scale(), 3.0);
         assert_eq!(c.binding().origin.source, "synthetic:clock-PE");
         let mut h = admitted(hour);
         let id = h.native("ConvertFGameState", &[Value::Int(37)]).unwrap();

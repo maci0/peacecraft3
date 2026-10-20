@@ -38,11 +38,11 @@ fn deliver(app: &mut App, revision: u64, enable: bool) {
     app.update();
 }
 #[test]
-pub fn renderer_capability_allows_only_disabling_occlusion() {
+pub fn renderer_capability_admits_the_executed_occlusion_flag() {
     for (capability, enable, accepted) in [
         (false, false, false),
         (true, false, true),
-        (true, true, false),
+        (true, true, true),
     ] {
         let mut app = app(capability);
         deliver(&mut app, 1, enable);
@@ -58,7 +58,7 @@ pub fn renderer_capability_allows_only_disabling_occlusion() {
     }
 }
 #[test]
-pub fn unsupported_occlusion_enable_keeps_the_previous_published_session() {
+pub fn refused_occlusion_candidate_keeps_the_previous_published_session() {
     let mut app = app(true);
     deliver(&mut app, 1, false);
     let witness = app
@@ -66,6 +66,9 @@ pub fn unsupported_occlusion_enable_keeps_the_previous_published_session() {
         .resource::<MapScriptSession<MapStartupHost>>()
         .session_witness()
         .unwrap();
+    // Without the renderer capability the candidate refuses the native.
+    app.world_mut()
+        .remove_resource::<peacecraft3::map_ground::NoOcclusionPass>();
     deliver(&mut app, 2, true);
     assert!(
         app.world()
@@ -80,7 +83,7 @@ pub fn unsupported_occlusion_enable_keeps_the_previous_published_session() {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn browser_campaign_occlusion_gate() -> u32 {
-    renderer_capability_allows_only_disabling_occlusion();
-    unsupported_occlusion_enable_keeps_the_previous_published_session();
+    renderer_capability_admits_the_executed_occlusion_flag();
+    refused_occlusion_candidate_keeps_the_previous_published_session();
     2
 }

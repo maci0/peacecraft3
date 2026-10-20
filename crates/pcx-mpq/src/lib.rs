@@ -765,10 +765,16 @@ impl Install {
 
 impl MpqSet {
     pub fn open_wc3(install_dir: impl AsRef<Path>) -> Result<Self, Error> {
+        Self::open_named(install_dir, &DEFAULT_PRIORITY)
+    }
+
+    /// Open the named archives present in `install_dir`, highest priority first.
+    /// Absent names are skipped; matching is case-insensitive.
+    pub fn open_named(install_dir: impl AsRef<Path>, names: &[&str]) -> Result<Self, Error> {
         let dir = install_dir.as_ref();
         let mut members = Vec::new();
         let mut opened = std::collections::HashSet::new();
-        for name in DEFAULT_PRIORITY {
+        for &name in names {
             let Some(p) = find_archive_ci(dir, name) else {
                 continue;
             };

@@ -41,11 +41,15 @@ fn input(max_timed_events: usize) -> TriggerRuntimeInput {
         initial_enabled: true,
         timer_event_global: "TEST_TIMER".into(),
         max_timed_events,
+        max_parked_threads: 4,
     }
 }
 fn host(common: &str, capacity: usize) -> ObjectHost {
+    host_map(common, "", capacity, 0)
+}
+fn host_map(common: &str, map: &str, capacity: usize, max_actions: usize) -> ObjectHost {
     let common = pcx_script::parse_script(common).unwrap();
-    let map = pcx_script::parse_script("").unwrap();
+    let map = pcx_script::parse_script(map).unwrap();
     let program =
         pcx_script::resolve_with(&map, &[Prelude::new("synthetic:trigger-common", &common)])
             .unwrap();
@@ -67,7 +71,7 @@ fn host(common: &str, capacity: usize) -> ObjectHost {
     .with_trigger_admission(TriggerBudget {
         max_triggers: 8,
         max_unit_events: 0,
-        max_actions: 0,
+        max_actions,
     })
     .unwrap()
     .with_timer_events(8)
@@ -235,5 +239,78 @@ fn admission_checks_selected_source_global_types_contracts_and_lifecycle() {
     assert!(register(&mut h, &t, 1.0, false).is_err());
     assert!(
         matches!(h.with_trigger_runtime(input(2)), Err(e) if matches!(e.failure, Failure::TriggerState(_)))
+    );
+}
+
+const SLEEP_COMMON: &str = "native TriggerAddAction takes trigger t, code f returns triggeraction
+native TriggerExecute takes trigger t returns nothing
+native TriggerEvaluate takes trigger t returns boolean
+native TriggerSleepAction takes real r returns nothing
+native Mark takes integer i returns nothing
+";
+const SLEEP_MAP: &str = "globals
+trigger T = null
+integer g = 0
+endglobals
+function act takes nothing returns nothing
+    set g = g + 1
+    call TriggerSleepAction(2.5)
+    if GetTriggeringTrigger() == T then
+        set g = g + 10
+    endif
+endfunction
+function second takes nothing returns nothing
+    set g = g + 100
+endfunction
+function main takes nothing returns nothing
+    set T = CreateTrigger()
+    call TriggerAddAction(T, function act)
+    call TriggerAddAction(T, function second)
+    call TriggerExecute(T)
+    set g = g + 1000
+endfunction
+";
+
+#[test]
+fn sleeping_actions_park_their_own_thread_and_resume_with_their_trigger() {
+    let common = format!("{COMMON}type triggeraction extends handle\n{SLEEP_COMMON}");
+    let program = {
+        let mut h = host_map(&common, SLEEP_MAP, 32, 8)
+            .with_trigger_runtime(input(2))
+            .unwrap();
+        h.admit_thread_sleep(1).unwrap();
+        assert!(h.admit_thread_sleep(1).is_err());
+        h
+    };
+    let shared = Arc::clone(&program.inner().program);
+    let mut vm = pcx_script::OwnedVm::new_owned(shared, program);
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    // The caller continued while the action thread slept; its tail has not run.
+    assert_eq!(vm.global("g"), Value::Int(1001));
+    assert_eq!(
+        vm.host().native("GetTriggeringTrigger", &[]).unwrap(),
+        Value::Null
+    );
+    assert_eq!(vm.host().parked_thread_count(), 1);
+    assert_eq!(vm.host().next_thread_wake(22.0).unwrap(), None);
+    assert_eq!(vm.host().timer_game_time(), Some(20.0));
+    let ticket = vm.host().next_thread_wake(30.0).unwrap().unwrap();
+    assert_eq!(vm.host().timer_game_time(), Some(22.5));
+    vm.resume_thread(ticket).unwrap();
+    assert_eq!(vm.global("g"), Value::Int(1111));
+    assert_eq!(vm.host().parked_thread_count(), 0);
+    assert_eq!(
+        vm.host().native("GetTriggeringTrigger", &[]).unwrap(),
+        Value::Null
+    );
+    // A second park beyond the admitted limit refuses, as do invalid durations.
+    vm.call("main", &[]).unwrap();
+    let error = vm.call("main", &[]).unwrap_err().message;
+    assert!(error.contains("parked threads"), "{error}");
+    assert!(
+        vm.host()
+            .native("TriggerSleepAction", &[Value::Real(f32::NAN)])
+            .is_err()
     );
 }

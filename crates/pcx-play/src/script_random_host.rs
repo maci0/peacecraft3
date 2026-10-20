@@ -53,6 +53,21 @@ impl ObjectHost {
         Ok(self)
     }
 
+    /// One draw from the shared script RNG, as `GetRandomInt` makes.
+    pub(super) fn draw_random_integer(
+        &mut self,
+        low: i32,
+        high: i32,
+        caller: &str,
+    ) -> Result<i32, Error> {
+        let random = self.random.as_mut().ok_or_else(|| {
+            self.inner
+                .error(caller, Failure::RandomSetup("not admitted"))
+        })?;
+        state::integer(&random.policy, &mut random.state, low, high)
+            .map_err(|error| self.inner.error(caller, Failure::RandomState(error)))
+    }
+
     pub fn script_random_state(&self) -> Option<&State> {
         self.random.as_ref()?.state.as_ref()
     }

@@ -1,4 +1,146 @@
 use super::*;
+fn id(n: u64) -> HandleId {
+    HandleId::new(std::num::NonZeroU64::new(n).unwrap())
+}
+
+#[test]
+fn live_motion_excludes_only_its_own_stamp_and_releases_the_previous_cells() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "motion".into(),
+        },
+        10000,
+    );
+    let first = p.prepare([32., 32.], Some(2.), "_", 0.).unwrap();
+    p.commit(id(1), first);
+    let second = p.prepare([48., 32.], Some(2.), "_", 0.).unwrap();
+    p.commit(id(2), second);
+    assert!(p.prepare_motion(id(1), [32., 32.], 2.).unwrap().is_some());
+    assert!(p.prepare_motion(id(1), [48., 32.], 2.).unwrap().is_none());
+    let moved = p.prepare_motion(id(1), [64., 32.], 2.).unwrap().unwrap();
+    p.commit(id(1), moved);
+    assert_eq!(
+        p.prepare([32., 32.], Some(2.), "_", 0.).unwrap().position,
+        [32., 32.]
+    );
+    assert!(p.prepare_motion(id(1), [48., 32.], 2.).unwrap().is_none());
+    assert!(p.prepare_motion(id(3), [32., 32.], 2.).is_err());
+}
+
+#[test]
+fn overlapping_dynamic_footprints_preserve_other_owners_and_static_pathing() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "footprints".into(),
+        },
+        10000,
+    )
+    .with_footprint_loader(|_| {
+        Ok(Footprint {
+            origin: AssetIdentity {
+                source: "synthetic".into(),
+                edition: "test".into(),
+                version: "test".into(),
+            },
+            cells: vec![[0, 0], [0, 0]],
+        })
+    });
+    let a = p.prepare([32., 32.], None, "fixture.tga", 0.).unwrap();
+    p.commit(id(1), a);
+    let b = p.prepare([32., 32.], None, "fixture.tga", 0.).unwrap();
+    p.commit(id(2), b);
+    let old = 8 * 32 + 8;
+    assert_eq!(p.footprint_occupied[old], 2);
+    let a = p.prepare([64., 32.], None, "fixture.tga", 0.).unwrap();
+    p.commit(id(1), a);
+    assert!(p.blocked(old, None));
+    let b = p.prepare([80., 32.], None, "fixture.tga", 0.).unwrap();
+    p.commit(id(2), b);
+    assert!(!p.blocked(old, None));
+    p.grid.pathing.cells[old] |= p.rules.mask;
+    let a = p.prepare([32., 32.], None, "fixture.tga", 0.).unwrap();
+    p.commit(id(1), a);
+    let a = p.prepare([64., 32.], None, "fixture.tga", 0.).unwrap();
+    p.commit(id(1), a);
+    assert!(p.blocked(old, None));
+}
+
+#[test]
+fn routes_avoid_authored_walls_and_refuse_work_without_changing_occupancy() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "route".into(),
+        },
+        10000,
+    );
+    let a = p.prepare([16., 16.], Some(0.), "_", 0.).unwrap();
+    p.commit(id(1), a);
+    for y in 0..32 {
+        if y != 20 {
+            p.grid.pathing.cells[y * 32 + 10] = p.rules.mask;
+        }
+    }
+    let before = p.occupied.clone();
+    assert!(p.route(id(1), [16., 16.], [64., 16.], 0., &mut 1).is_err());
+    assert_eq!(p.occupied, before);
+    let path = p
+        .route(id(1), [16., 16.], [64., 16.], 0., &mut 10000)
+        .unwrap();
+    assert!(path.len() > 1);
+    assert_eq!(path.last(), Some(&[64., 16.]));
+    let mut previous = [16., 16.];
+    for point in path {
+        assert!(
+            p.segment_clear(id(1), previous, point, 0., &mut 1000)
+                .unwrap()
+        );
+        previous = point;
+    }
+    assert_eq!(p.occupied, before);
+}
+
+#[test]
+fn lazy_footprints_cache_success_and_refuse_oversized_data_before_occupancy_changes() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let source = Source {
+        install: "synthetic".into(),
+        edition: "fixture".into(),
+        map: "world".into(),
+    };
+    let hits = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&hits);
+    let mut p = placement(source, 100).with_footprint_loader(move |path| {
+        count.fetch_add(1, Ordering::SeqCst);
+        Ok(Footprint {
+            origin: AssetIdentity {
+                source: "synthetic texture".into(),
+                edition: "fixture".into(),
+                version: "fixture".into(),
+            },
+            cells: vec![[0, 0]; if path == "too-big.tga" { 65 } else { 1 }],
+        })
+    });
+    let before = p.grid.pathing.cells.clone();
+    assert!(p.prepare([32.0, 32.0], None, "too-big.tga", 0.0).is_err());
+    assert!(!p.footprints.contains_key("too-big.tga"));
+    assert_eq!(p.grid.pathing.cells, before);
+    assert!(p.occupied.iter().all(|x| *x == 0));
+    let prepared = p.prepare([32.0, 32.0], None, "ok.tga", 0.0).unwrap();
+    assert_eq!(p.grid.pathing.cells, before);
+    p.commit(id(1), prepared);
+    p.prepare([40.0, 32.0], None, "ok.tga", 0.0).unwrap();
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+    assert!(p.blocked(8 * 32 + 8, None));
+}
 
 pub(crate) fn fixture(exponent: u32, initial: f32) -> (Vec<u8>, Binding, RuleInputBudget) {
     let (mut bytes, old, mut budget) = crate::terrain_pathing::tests::fixture(exponent, &[8]);
@@ -155,7 +297,7 @@ fn occupancy_and_query_refusal_are_transactional_and_load_independent() {
     let mut p = placement(source.clone(), 1);
     let first = p.prepare([32.0, 32.0], Some(2.0), "_", 0.0).unwrap();
     assert_eq!(first.position, [32.0, 32.0]);
-    p.commit(first);
+    p.commit(id(1), first);
     let before = p.occupied.clone();
     assert!(
         p.prepare([32.0, 32.0], Some(2.0), "_", 0.0)
@@ -167,10 +309,10 @@ fn occupancy_and_query_refusal_are_transactional_and_load_independent() {
     let run = || {
         let mut p = placement(source.clone(), 100);
         let mut positions = Vec::new();
-        for _ in 0..4 {
+        for n in 1..=4 {
             let next = p.prepare([32.0, 32.0], Some(2.0), "_", 0.0).unwrap();
             positions.push(next.position.map(f32::to_bits));
-            p.commit(next);
+            p.commit(id(n), next);
         }
         positions
     };
@@ -220,8 +362,8 @@ fn footprint_rotation_and_missing_texture_refusal_use_the_same_collision_cache()
     let building = p
         .prepare([32.0, 32.0], None, "synthetic.tga", 90.0)
         .unwrap();
-    p.commit(building);
-    assert_eq!(p.grid.pathing.cell(7, 8), Some(p.rules.mask));
+    p.commit(id(1), building);
+    assert!(p.blocked(8 * 32 + 7, None));
     assert_eq!(p.grid.pathing.cell(8, 8), Some(0));
     assert!(
         p.prepare([28.0, 32.0], Some(0.0), "_", 0.0)
@@ -229,4 +371,59 @@ fn footprint_rotation_and_missing_texture_refusal_use_the_same_collision_cache()
             .0
             .contains("budget")
     );
+}
+
+#[test]
+fn hidden_stamps_follow_motion_without_blocking_others_and_reveal_only_in_free_space() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "visibility".into(),
+        },
+        10000,
+    );
+    let a = p.prepare([32., 32.], Some(2.), "_", 0.).unwrap();
+    p.commit(id(1), a);
+    p.hide(id(1)).unwrap();
+    p.hide(id(1)).unwrap();
+    let b = p.prepare([32., 32.], Some(2.), "_", 0.).unwrap();
+    assert_eq!(b.position, [32., 32.]);
+    p.commit(id(2), b);
+    let hidden = p.prepare_motion(id(1), [32., 32.], 2.).unwrap().unwrap();
+    p.commit(id(1), hidden);
+    let revealed = p
+        .prepare_show(id(1), [32., 32.], Some(2.), "_", 0.)
+        .unwrap();
+    assert_ne!(revealed.position, [32., 32.]);
+    p.commit(id(1), revealed);
+    assert!(p.prepare_motion(id(1), [32., 32.], 2.).unwrap().is_none());
+    assert!(p.hide(id(7)).is_err());
+}
+
+#[test]
+fn failed_reveal_preserves_hidden_occupancy_and_never_erases_static_ground() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "visibility".into(),
+        },
+        10000,
+    );
+    let a = p.prepare([32., 32.], Some(2.), "_", 0.).unwrap();
+    p.commit(id(1), a);
+    p.hide(id(1)).unwrap();
+    for cell in &mut p.grid.pathing.cells {
+        *cell |= p.rules.mask;
+    }
+    let occupied = p.occupied.clone();
+    let ground = p.grid.pathing.cells.clone();
+    assert!(
+        p.prepare_show(id(1), [32., 32.], Some(2.), "_", 0.)
+            .is_err()
+    );
+    assert_eq!(p.occupied, occupied);
+    assert_eq!(p.grid.pathing.cells, ground);
+    assert!(!p.stamps[0].1.active);
 }

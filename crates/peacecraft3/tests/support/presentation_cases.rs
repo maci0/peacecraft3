@@ -64,7 +64,7 @@ endfunction
 function enable_ui takes nothing returns nothing
 call EnableUserUI(true)
 endfunction
-function unsupported_fade takes nothing returns nothing
+function timed_fade takes nothing returns nothing
 call ShowInterface(true,1.0)
 endfunction
 
@@ -541,7 +541,7 @@ pub fn immediate_interface_hides_only_the_ordinary_hud_and_preserves_clock_and_s
     );
 }
 #[test]
-pub fn unsupported_interface_fades_and_refused_replacement_keep_the_existing_hud_state() {
+pub fn timed_interface_fades_apply_and_refused_replacement_keeps_the_existing_hud_state() {
     let mut app = app();
     let hud = app
         .world_mut()
@@ -563,9 +563,9 @@ pub fn unsupported_interface_fades_and_refused_replacement_keep_the_existing_hud
             .unwrap()
             .scripts
             .program()
-            .function_id("unsupported_fade")
+            .function_id("timed_fade")
             .unwrap();
-        assert!(session.call_function(id, &[]).is_err());
+        session.call_function(id, &[]).unwrap();
         assert_eq!(
             session
                 .host()
@@ -574,9 +574,10 @@ pub fn unsupported_interface_fades_and_refused_replacement_keep_the_existing_hud
                 .presentation()
                 .unwrap()
                 .interface_visible,
-            Some(false)
+            Some(true)
         );
     }
+    call(&mut app, "hide_interface");
     let extra = EXTRA.replace(
         "native ShowInterface takes boolean show, real duration",
         "native ShowInterface takes boolean show, integer duration",
@@ -606,6 +607,6 @@ pub fn unsupported_interface_fades_and_refused_replacement_keep_the_existing_hud
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn browser_campaign_interface_gate() -> u32 {
     immediate_interface_hides_only_the_ordinary_hud_and_preserves_clock_and_source_visibility();
-    unsupported_interface_fades_and_refused_replacement_keep_the_existing_hud_state();
+    timed_interface_fades_apply_and_refused_replacement_keeps_the_existing_hud_state();
     2
 }

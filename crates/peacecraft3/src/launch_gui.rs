@@ -63,6 +63,10 @@ impl Launcher {
         (&self.source, self.mode)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn mode(&self) -> GameMode {
+        self.mode
+    }
     pub(crate) fn expansion(&self) -> bool {
         self.mode.addon == Addon::Tft
     }
@@ -118,13 +122,13 @@ const BG_FIELD: Color = Color::srgb(0.032, 0.039, 0.043);
 const BG_PILL: Color = Color::srgb(0.075, 0.075, 0.071);
 const BORDER: Color = Color::srgb(0.23, 0.205, 0.145);
 const BORDER_STRONG: Color = Color::srgb(0.69, 0.55, 0.22);
-const TEXT: Color = Color::srgb(0.94, 0.93, 0.88);
+pub(crate) const TEXT: Color = Color::srgb(0.94, 0.93, 0.88);
 const TEXT_DIM: Color = Color::srgb(0.78, 0.77, 0.71);
 const TEXT_FAINT: Color = Color::srgb(0.67, 0.66, 0.60);
 const ACCENT_SOFT: Color = Color::srgb(0.16, 0.14, 0.09);
 const DISABLED_BG: Color = Color::srgb(0.086, 0.098, 0.125);
 const DISABLED_FG: Color = Color::srgb(0.59, 0.58, 0.54);
-const WARN: Color = Color::srgb(0.91, 0.73, 0.40);
+pub(crate) const WARN: Color = Color::srgb(0.91, 0.73, 0.40);
 
 #[derive(Component)]
 struct LauncherText;
@@ -134,7 +138,7 @@ struct LauncherFont(Handle<Font>);
 
 #[derive(Component)]
 #[require(bevy::input_focus::tab_navigation::TabIndex)]
-struct LauncherControl;
+pub(crate) struct LauncherControl;
 
 #[derive(Component)]
 struct LauncherArtwork;
@@ -193,7 +197,7 @@ fn field_radius() -> BorderRadius {
     BorderRadius::all(Val::Rem(0.375))
 }
 
-fn tint(s: impl Into<String>, size: f32, colour: Color) -> impl Bundle {
+pub(crate) fn tint(s: impl Into<String>, size: f32, colour: Color) -> impl Bundle {
     (
         Text(s.into()),
         TextFont {
@@ -288,6 +292,7 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     (configure)(&mut app);
     peacecraft3::map_requests::install(&mut app);
     peacecraft3::campaign_startup::install(&mut app);
+    crate::campaign_prepare::install(&mut app);
     crate::map_source_controls::install(&mut app);
     app.add_plugins(DefaultPlugins.set(window))
         .init_resource::<bevy::picking::ordered::OrderedPointerInput>()
@@ -387,6 +392,11 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
     );
     // Default zoom-list selection and config-read cap are explicit application policies.
     peacecraft3::campaign_camera::install(&mut app, 0, 64 * 1024);
+    crate::campaign_actors::install(&mut app);
+    crate::campaign_input::install(&mut app);
+    crate::campaign_diagnostics::install(&mut app);
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::native_campaign::install(&mut app);
     peacecraft3::campaign_presentation::install(&mut app);
     app.configure_sets(
         Update,
@@ -2310,6 +2320,26 @@ fn build_control_layer(
             |name| navigation.screen.includes(fdf, name),
         )
     };
+    let result = result.and_then(|(mut items, unsupported)| {
+        if items.iter().any(|item| item.frame == "EditionButton") {
+            let install = selected_install(&launcher);
+            let art =
+                crate::menu_lighting::with_client_image(install.as_deref(), |source, image| {
+                    pcx_play::menu_edition::ButtonArt::read(
+                        image,
+                        &pcx_play::scripts::AssetIdentity {
+                            source: source.into(),
+                            edition: "selected menu client".into(),
+                            version: "reviewed Legacy 1.29.2.9231".into(),
+                        },
+                        launcher.expansion(),
+                    )
+                })
+                .map_err(crate::fdf::FdfError::UnknownFrame)?;
+            crate::glue_menu::edition_button_art(fdf, &mut items, &art)?;
+        }
+        Ok((items, unsupported))
+    });
     let mut prepared_preview = None;
     match result {
         Ok((items, unsupported)) => {
@@ -2855,6 +2885,23 @@ fn source_card(root: &mut ChildSpawnerCommands, l: &Launcher) {
         .with_children(|button| {
             button.spawn(tint("Load selected map data", 14.0, TEXT));
         });
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            section(
+                c,
+                "Campaign chapter",
+                Some("From the selected install and edition"),
+            );
+            c.spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    max_height: Val::Rem(16.0),
+                    overflow: Overflow::scroll_y(),
+                    ..default()
+                },
+                crate::native_campaign::ChapterList,
+            ));
+        }
     });
 }
 

@@ -28,11 +28,11 @@ pub struct SourceOrder {
     pub sort_far_z: bool,
 }
 
-/// Present only on a checked admitted background batch's actual camera.
+/// Source batches on their actual camera; each owner retains its own phase slots.
 #[derive(Component, Clone, Debug, ExtractComponent)]
 #[extract_app(RenderApp)]
 pub struct SourceOrderView {
-    pub owner: MainEntity,
+    pub owners: Arc<[MainEntity]>,
     pub source: Arc<str>,
     pub orders: Arc<MainEntityHashMap<SourceOrder>>,
     pub max_phase_items: usize,
@@ -127,22 +127,23 @@ fn order_backgrounds(
     mut phases: ResMut<ViewSortedRenderPhases<Transparent3d>>,
     mut reported: Local<HashSet<MainEntity>>,
 ) {
-    reported.retain(|owner| views.iter().any(|(_, view)| view.owner == *owner));
+    reported.retain(|owner| views.iter().any(|(_, view)| view.owners.contains(owner)));
     for (view, source) in &views {
         let Some(phase) = phases.get_mut(&view.retained_view_entity) else {
             continue;
         };
-        if let Err(failure) =
-            order_phase(phase, source.owner, &source.orders, source.max_phase_items)
-        {
-            // Keep geometry; a refused particle batch must never fall back to Bevy's distance-only submission.
-            phase.items.retain(|_, item| {
-                !source.orders.get(&item.entity.1).is_some_and(|order| {
-                    order.owner == source.owner && order.kind == SourceKind::Particle
-                })
-            });
-            if reported.insert(source.owner) {
-                error!("{}: PRE2 submission disabled: {:?}", source.source, failure);
+        for &owner in source.owners.iter() {
+            if let Err(failure) = order_phase(phase, owner, &source.orders, source.max_phase_items)
+            {
+                // Keep geometry; a refused particle batch must never fall back to Bevy's distance-only submission.
+                phase.items.retain(|_, item| {
+                    !source.orders.get(&item.entity.1).is_some_and(|order| {
+                        order.owner == owner && order.kind == SourceKind::Particle
+                    })
+                });
+                if reported.insert(owner) {
+                    error!("{}: PRE2 submission disabled: {:?}", source.source, failure);
+                }
             }
         }
     }

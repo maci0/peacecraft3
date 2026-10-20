@@ -353,6 +353,15 @@ impl<H: Host> Host for SelectedMapNeutralHost<H> {
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         name != self.rule.native_name && self.inner.suspend(name, args)
     }
+    fn park_thread(&mut self) -> Result<u64, String> {
+        self.inner.park_thread()
+    }
+    fn resume_thread(&mut self, ticket: u64) -> Result<(), String> {
+        self.inner.resume_thread(ticket)
+    }
+    fn leave_thread(&mut self) -> Result<(), String> {
+        self.inner.leave_thread()
+    }
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         if name != self.rule.native_name {
             return self.inner.native(name, args);

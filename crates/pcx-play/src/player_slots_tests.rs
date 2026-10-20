@@ -63,6 +63,61 @@ fn query(h: &mut ObjectHost, p: &Value) -> Result<Value, String> {
     h.native("GetPlayerSlotState", std::slice::from_ref(p))
 }
 #[test]
+fn numbered_slots_cover_later_players_without_allocating_identities_or_filling_omissions() {
+    let (mut h, ctx) = object(&common(), "// map", true);
+    let playing = state(&mut h, 29);
+    let empty = state(&mut h, -17);
+    let count = h.inner().handles();
+    h.admit_startup_player_slot_numbers(&ctx, &[(3, id(&playing)), (5, id(&playing))])
+        .unwrap();
+    assert_eq!(h.inner().handles(), count);
+    assert!(h.player_identity(3).is_none());
+    let a = player(&mut h, 3);
+    let b = player(&mut h, 4);
+    assert_eq!(query(&mut h, &a).unwrap(), playing);
+    assert!(query(&mut h, &b).unwrap_err().contains("unset"));
+    h.admit_startup_player_slot_numbers(&ctx, &[(4, id(&empty)), (5, id(&playing))])
+        .unwrap();
+    assert!(query(&mut h, &a).unwrap_err().contains("unset"));
+    assert_eq!(query(&mut h, &b).unwrap(), empty);
+    let control = h.native("ConvertMapControl", &[Value::Int(91)]).unwrap();
+    h.native("SetPlayerController", &[b, control]).unwrap();
+    let later = player(&mut h, 5);
+    assert!(query(&mut h, &later).unwrap_err().contains("unsupported"));
+    assert!(h.player_settings(id(&later)).unwrap().slot_state.is_none());
+    h.admit_startup_player_slots(&ctx, &[(id(&a), id(&playing))])
+        .unwrap();
+    assert_eq!(query(&mut h, &a).unwrap(), playing);
+    assert!(query(&mut h, &later).unwrap_err().contains("unset"));
+}
+#[test]
+fn invalid_numbered_slot_replacement_preserves_both_existing_and_future_entries() {
+    let (mut h, ctx) = object(&common(), "// map", true);
+    let playing = state(&mut h, 29);
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    h.admit_startup_player_slot_numbers(&ctx, &[(0, id(&playing)), (3, id(&playing))])
+        .unwrap();
+    let a = player(&mut h, 0);
+    let slots = i32::try_from(h.player_slots().unwrap()).unwrap();
+    let handles = h.inner().handles();
+    for rows in [
+        vec![(-1, id(&playing))],
+        vec![(slots, id(&playing))],
+        vec![(3, id(&playing)), (3, id(&playing))],
+        vec![(3, id(&timer))],
+        vec![(3, id(&playing)); usize::try_from(slots).unwrap() + 1],
+    ] {
+        assert!(h.admit_startup_player_slot_numbers(&ctx, &rows).is_err());
+        assert_eq!(query(&mut h, &a).unwrap(), playing);
+        assert!(h.player_identity(3).is_none());
+        assert_eq!(h.inner().handles(), handles);
+    }
+    let wrong = context(301, &common(), "// map", "synthetic:slot-state");
+    assert!(h.admit_startup_player_slot_numbers(&wrong, &[]).is_err());
+    let later = player(&mut h, 3);
+    assert_eq!(query(&mut h, &later).unwrap(), playing);
+}
+#[test]
 fn owned_vm_reads_only_the_explicit_current_slots_without_minting_players_or_defaults() {
     let map = "globals\nplayer A = Player(0)\nplayer Alias = Player(0)\nplayer B = Player(1)\nplayer C = Player(2)\nplayerslotstate Seen = null\nendglobals\nfunction read takes player p returns playerslotstate\nset Seen = GetPlayerSlotState(p)\nreturn Seen\nendfunction\n";
     let (h, ctx) = object(&common(), map, true);

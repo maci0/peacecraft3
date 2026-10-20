@@ -11,6 +11,8 @@ pub struct Binding {
     pub origin: AssetIdentity,
     pub image_sha256: Sha256Digest,
     pub initializer: SourceWindow,
+    /// Initial time-of-day scale, read with the same reviewed shape.
+    pub scale_initializer: SourceWindow,
 }
 #[derive(Debug, thiserror::Error)]
 #[error("startup clock {source_context}: {problem}")]
@@ -33,6 +35,7 @@ pub enum Problem {
 pub struct StartupClock {
     binding: Binding,
     hour: f32,
+    scale: f32,
 }
 impl StartupClock {
     /// Supports only the reviewed x86 `push imm8; push address; call rel32;
@@ -44,7 +47,9 @@ impl StartupClock {
             problem,
         };
         if image.len() > budget.image_bytes
-            || binding.initializer.len as usize > budget.profile_bytes
+            || [&binding.initializer, &binding.scale_initializer]
+                .iter()
+                .any(|w| w.len as usize > budget.profile_bytes)
         {
             return Err(fail(Problem::Budget));
         }
@@ -60,19 +65,27 @@ impl StartupClock {
             return Err(fail(Problem::Identity));
         }
         let pe = Pe::parse(image, budget).map_err(|e| fail(Problem::Image(e)))?;
-        let b = pe
-            .window(&binding.initializer, true)
-            .map_err(|e| fail(Problem::Image(e)))?;
-        if b.len() != 16
-            || b[0] != 0x6a
-            || b[2] != 0x68
-            || b[7] != 0xe8
-            || b[12..] != [0x83, 0xc4, 8, 0xc3]
-        {
-            return Err(fail(Problem::Initializer));
-        }
-        let hour = i8::from_le_bytes([b[1]]) as f32;
-        Ok(Self { binding, hour })
+        let value = |window: &SourceWindow| {
+            let b = pe
+                .window(window, true)
+                .map_err(|e| fail(Problem::Image(e)))?;
+            if b.len() != 16
+                || b[0] != 0x6a
+                || b[2] != 0x68
+                || b[7] != 0xe8
+                || b[12..] != [0x83, 0xc4, 8, 0xc3]
+            {
+                return Err(fail(Problem::Initializer));
+            }
+            Ok(i8::from_le_bytes([b[1]]) as f32)
+        };
+        let hour = value(&binding.initializer)?;
+        let scale = value(&binding.scale_initializer)?;
+        Ok(Self {
+            binding,
+            hour,
+            scale,
+        })
     }
     pub fn binding(&self) -> &Binding {
         &self.binding
@@ -80,8 +93,11 @@ impl StartupClock {
     pub fn hour(&self) -> f32 {
         self.hour
     }
+    pub fn scale(&self) -> f32 {
+        self.scale
+    }
 }
 
 #[cfg(test)]
 #[path = "startup_clock_tests.rs"]
-mod tests;
+pub(crate) mod tests;

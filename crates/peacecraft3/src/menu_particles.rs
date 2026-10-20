@@ -390,7 +390,7 @@ impl Prepared<'_> {
                 policy: self.policy,
             },
             SourceOrderView {
-                owner,
+                owners: Arc::from([owner]),
                 source: self.source,
                 orders: Arc::new(self.orders),
                 max_phase_items: self.policy.max_items,

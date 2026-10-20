@@ -213,6 +213,15 @@ impl<H: Host> Host for LocalizedHost<'_, H> {
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         self.inner.suspend(name, args)
     }
+    fn park_thread(&mut self) -> Result<u64, String> {
+        self.inner.park_thread()
+    }
+    fn resume_thread(&mut self, ticket: u64) -> Result<(), String> {
+        self.inner.resume_thread(ticket)
+    }
+    fn leave_thread(&mut self) -> Result<(), String> {
+        self.inner.leave_thread()
+    }
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         self.inner.native(name, args)
     }
@@ -259,6 +268,15 @@ impl<H: Host> Host for OwnedLocalizedHost<H> {
 
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         self.inner.suspend(name, args)
+    }
+    fn park_thread(&mut self) -> Result<u64, String> {
+        self.inner.park_thread()
+    }
+    fn resume_thread(&mut self, ticket: u64) -> Result<(), String> {
+        self.inner.resume_thread(ticket)
+    }
+    fn leave_thread(&mut self) -> Result<(), String> {
+        self.inner.leave_thread()
     }
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         self.inner.native(name, args)

@@ -32,6 +32,9 @@ pub struct Mission {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexEntry {
     pub id: String,
+    /// The section's first `Header` and `Name` values, as authored.
+    pub header: Option<String>,
+    pub name: Option<String>,
     pub missions: Vec<Mission>,
 }
 
@@ -186,8 +189,18 @@ pub fn parse_campaign_index(
             });
         }
         let missions = missions(member, id, &parsed, limits)?;
+        let first = |field: &str| {
+            parsed
+                .raw_fields(&key, field)
+                .first()
+                .and_then(|(_, raw)| defaults::profile_elements_iter(raw).next())
+                .and_then(Result::ok)
+                .map(str::to_owned)
+        };
         slots.push(CampaignSlot::Entry(IndexEntry {
             id: id.to_owned(),
+            header: first("header"),
+            name: first("name"),
             missions,
         }));
     }
@@ -351,6 +364,8 @@ mod tests {
 // order is the selection screen
 CampaignList="Alpha","Beta"
 [Alpha]
+Header="Alpha Campaign"
+Name="Rise, then fall"
 DefaultOpen=0
 Mission0="H","Name, with comma","Maps\Campaign\Alpha00.w3m"
 Mission1="H2","N2","Maps\Campaign\Alpha01.w3m"
@@ -366,11 +381,19 @@ Mission0="H","N","Maps\Campaign\Beta00.w3m"
             parse_campaign_index("UI\\CampaignStrings.txt", sample().as_bytes(), limits()).unwrap();
         let first = index.first_index_entry().unwrap();
         assert_eq!(first.id, "Alpha");
+        assert_eq!(first.header.as_deref(), Some("Alpha Campaign"));
+        assert_eq!(first.name.as_deref(), Some("Rise, then fall"));
         assert_eq!(first.missions[0].name, "Name, with comma");
         assert_eq!(first.missions[0].map_file, "Maps\\Campaign\\Alpha00.w3m");
         assert!(first.missions[0].uninterpreted.is_empty());
         match &index.slots[1] {
-            CampaignSlot::Entry(second) => assert_eq!(second.id, "Beta"),
+            CampaignSlot::Entry(second) => {
+                assert_eq!(second.id, "Beta");
+                assert_eq!(
+                    (second.header.as_deref(), second.name.as_deref()),
+                    (None, None)
+                );
+            }
             CampaignSlot::Blank => panic!("second slot dropped"),
         }
     }

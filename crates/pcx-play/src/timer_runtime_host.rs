@@ -11,6 +11,8 @@ pub(crate) struct Run {
     periodic: bool,
     handler: Option<FunctionId>,
     sequence: u64,
+    /// Elapsed seconds held by `PauseTimer` until `ResumeTimer`.
+    paused: Option<f64>,
 }
 
 pub(super) struct State {
@@ -43,6 +45,11 @@ impl TimerExpiry {
 }
 
 impl ObjectHost {
+    pub(super) fn timer_delivery_active(&self) -> bool {
+        self.timers
+            .as_ref()
+            .is_some_and(|state| state.active.is_some())
+    }
     /// Opt in before script initialization. No wall clock, speed or pause policy is inferred.
     pub fn with_timer_runtime(mut self, now: f64) -> Result<Self, Error> {
         let fail = |reason| self.inner.error("TimerStart", reason);
@@ -118,6 +125,18 @@ impl ObjectHost {
         if kind != "handle" {
             return Err(fail(Failure::Signature));
         }
+        for optional in ["PauseTimer", "ResumeTimer"] {
+            if self.inner.program.natives().get(optional).is_some() {
+                Self::contract(
+                    &self.inner,
+                    optional,
+                    &["timer"],
+                    "nothing",
+                    false,
+                    Some("timer"),
+                )?;
+            }
+        }
         self.timers = Some(State {
             now,
             sequence: 0,
@@ -128,6 +147,40 @@ impl ObjectHost {
 
     pub fn timer_game_time(&self) -> Option<f64> {
         self.timers.as_ref().map(|state| state.now)
+    }
+
+    /// Earliest pending timer or timed-event deadline.
+    pub(super) fn next_timer_deadline(&self) -> Option<f64> {
+        self.inner
+            .arena
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Timer {
+                    live: true,
+                    run: Some(run),
+                } => run.deadline,
+                Entry::RegisteredTimedEvent { trigger, run }
+                    if matches!(self.inner.entry(*trigger), Ok(Entry::Trigger { .. })) =>
+                {
+                    run.deadline
+                }
+                _ => None,
+            })
+            .min_by(f64::total_cmp)
+    }
+
+    /// Move the clock forward to `at` between deliveries; never backwards.
+    pub(super) fn set_timer_game_time(&mut self, at: f64) -> Result<(), Error> {
+        let fail = |reason| {
+            self.inner
+                .error("timer delivery", Failure::TimerState(reason))
+        };
+        let state = self.timers.as_mut().ok_or_else(|| fail("not admitted"))?;
+        if state.active.is_some() || !at.is_finite() {
+            return Err(fail("invalid time or unfinished expiry"));
+        }
+        state.now = state.now.max(at);
+        Ok(())
     }
 
     fn timer_run(&self, id: HandleId, name: &str) -> Result<Option<Run>, Error> {
@@ -152,6 +205,10 @@ impl ObjectHost {
             "TimerStart" => Some(self.start_timer(args)),
             "TimerGetElapsed" | "TimerGetRemaining" | "TimerGetTimeout" | "GetExpiredTimer" => {
                 Some(self.timer_query(name, args))
+            }
+            "PauseTimer" | "ResumeTimer" => {
+                self.inner.program.natives().get(name)?;
+                Some(self.pause_timer(name, args))
             }
             _ => None,
         }
@@ -204,6 +261,41 @@ impl ObjectHost {
         Ok(Value::Null)
     }
 
+    /// Pause keeps the elapsed time; resume restarts from it. Unstarted,
+    /// expired or already-matching timers are unchanged.
+    fn pause_timer(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let fail = |reason| self.inner.error(name, reason);
+        let timer = match args {
+            [Value::Null] => return Ok(Value::Null),
+            [Value::Handle(timer)] => *timer,
+            _ => return Err(fail(Failure::TimerArguments)),
+        };
+        let Some(mut run) = self.timer_run(timer, name)? else {
+            return Ok(Value::Null);
+        };
+        let now = self
+            .timers
+            .as_ref()
+            .ok_or_else(|| fail(Failure::TimerState("not admitted")))?
+            .now;
+        match (name, run.paused, run.deadline) {
+            ("PauseTimer", None, Some(_)) => {
+                run.paused = Some((now - run.start).clamp(0.0, run.timeout));
+                run.deadline = None;
+            }
+            ("ResumeTimer", Some(held), _) => {
+                run.start = now - held;
+                run.deadline = Some(run.start + run.timeout);
+                run.paused = None;
+            }
+            _ => return Ok(Value::Null),
+        }
+        if let Entry::Timer { run: slot, .. } = self.inner.entry_mut(timer)? {
+            *slot = Some(run);
+        }
+        Ok(Value::Null)
+    }
+
     pub(super) fn new_timer_run(
         &self,
         timeout: f64,
@@ -232,6 +324,7 @@ impl ObjectHost {
             periodic,
             handler,
             sequence,
+            paused: None,
         })
     }
 
@@ -264,7 +357,9 @@ impl ObjectHost {
         let run = self
             .timer_run(*timer, name)?
             .ok_or_else(|| fail(Failure::TimerState("unstarted timer query is unsupported")))?;
-        let elapsed = if run.deadline.is_none() {
+        let elapsed = if let Some(held) = run.paused {
+            held
+        } else if run.deadline.is_none() {
             run.timeout
         } else if let Some(active) = state
             .active

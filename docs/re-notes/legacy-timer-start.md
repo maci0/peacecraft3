@@ -242,6 +242,12 @@ selected conversion and global initializer, then derives the event identity from
 that initializer. No measured event number or enabled default is embedded in
 production code. Omission preserves the previous unsupported paths.
 
+Normal fresh-game preparation now selects the source-decoded enabled operation
+and derives the timed event identity and corresponding common-source global.
+This uses the existing runtime described here; see
+[fresh trigger input](campaign-source-preparation.md#fresh-timed-trigger-input-2026-10-20)
+for its reconstruction policy, verification and remaining range-event refusal.
+
 Timed events retain their runs on event records in the same bounded arena and
 use the existing game-time clock and sequence ordering. They do not allocate a
 script timer. Finite positive deadlines are required, and registration/capacity

@@ -15,7 +15,8 @@ use std::sync::{Arc, Weak};
 
 const MISC_DATA: &str = "UI\\MiscData.txt";
 /// Application render isolation, separate from menu geometry and menu sprite layer 7.
-pub(crate) const RENDER_LAYER: usize = 1;
+pub const RENDER_LAYER: usize = 1;
+const ROLL: &str = "CAMERA_FIELD_ROLL";
 const FIELDS: [&str; 7] = [
     "CAMERA_FIELD_TARGET_DISTANCE",
     "CAMERA_FIELD_FARZ",
@@ -68,11 +69,79 @@ pub fn install(app: &mut App, zoom: usize, read_limit: usize) {
     })
     .add_systems(
         Update,
-        (apply_camera, pause_view)
+        (scroll_camera, apply_camera, pause_view)
             .chain()
             .in_set(CampaignCameraSet)
             .after(CampaignStartupSet),
     );
+}
+
+/// Arrow-key scrolling at the selected `[CameraRates]` speeds, along the live
+/// camera rotation, clamped to the executed camera bounds. Real time paces it;
+/// it is off while scripts disable user control.
+fn scroll_camera(
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    time: Option<Res<Time<Real>>>,
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+    mut view: ResMut<CampaignCamera>,
+) {
+    let (Some(keys), Some(time)) = (keys, time) else {
+        return;
+    };
+    let axis = |plus, minus| f32::from(keys.pressed(plus)) - f32::from(keys.pressed(minus));
+    let (forward, strafe) = (
+        axis(KeyCode::ArrowUp, KeyCode::ArrowDown),
+        axis(KeyCode::ArrowRight, KeyCode::ArrowLeft),
+    );
+    if !view.active() || (forward == 0.0 && strafe == 0.0) {
+        return;
+    }
+    let rotation = session.global("CAMERA_FIELD_ROTATION");
+    let Some(host) = session.host() else {
+        return;
+    };
+    let objects = host.objects_mut();
+    if objects
+        .presentation()
+        .is_some_and(|p| p.control_enabled == Some(false))
+    {
+        return;
+    }
+    let (Some([x, y]), Some([forward_rate, strafe_rate])) =
+        (objects.camera_target(), objects.camera_scroll_rates())
+    else {
+        return;
+    };
+    let angle = match rotation {
+        Some(Value::Handle(field)) => objects.camera_field(field).ok().flatten(),
+        _ => None,
+    };
+    let Some(angle) = angle else {
+        return;
+    };
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let dt = time.delta_secs();
+    let mut target = [
+        x + (cos * forward * forward_rate + sin * strafe * strafe_rate) * dt,
+        y + (sin * forward * forward_rate - cos * strafe * strafe_rate) * dt,
+    ];
+    if let Some(bounds) = objects.camera_state().and_then(|c| c.bounds) {
+        let corners = bounds.as_chunks::<2>().0;
+        for axis in 0..2 {
+            let low = corners
+                .iter()
+                .map(|c| c[axis])
+                .fold(f32::INFINITY, f32::min);
+            let high = corners
+                .iter()
+                .map(|c| c[axis])
+                .fold(f32::NEG_INFINITY, f32::max);
+            target[axis] = target[axis].clamp(low, high);
+        }
+    }
+    if let Err(error) = objects.scroll_camera(target) {
+        view.last_error = Some(error.to_string());
+    }
 }
 
 fn clear(commands: &mut Commands, camera: &mut CampaignCamera) {
@@ -138,17 +207,17 @@ fn apply_camera(
         return;
     }
     camera.ready = true;
-    let Some(sequence) = session.host().and_then(|host| {
-        host.objects()
-            .applied_camera_setup()
-            .map(|view| view.sequence)
-    }) else {
-        return;
-    };
-    if camera.attempted == Some(sequence) {
+    let has_target = session.host().is_some_and(|host| {
+        let objects = host.objects();
+        objects.camera_target().is_some() || objects.applied_camera_setup().is_some()
+    });
+    if !has_target {
         return;
     }
     if camera.near.is_none() {
+        if camera.attempted.is_some() {
+            return;
+        }
         let Some(bindings) = requests.bindings.as_ref() else {
             return;
         };
@@ -169,7 +238,7 @@ fn apply_camera(
                 Some("campaign camera has no source reader for its binding receipts".into());
             return;
         };
-        camera.attempted = Some(sequence);
+        camera.attempted = Some(0);
         match reader.resolve_bounded(MISC_DATA, camera.read_limit as u64) {
             Ok(asset) => match pcx_objects::editor::camera::near_clip(
                 &asset.bytes,
@@ -192,7 +261,6 @@ fn apply_camera(
             }
         }
     }
-    camera.attempted = Some(sequence);
     let result = executed_pose(
         &mut session,
         &context.terrain,
@@ -221,7 +289,7 @@ fn apply_camera(
         }
         Err(error) => {
             camera.last_error = Some(format!(
-                "{}: camera application {sequence}: {error}",
+                "{}: live camera: {error}",
                 context.sources.map.source
             ))
         }
@@ -239,9 +307,6 @@ fn executed_pose(
         .host()
         .ok_or("campaign session is absent")?
         .objects();
-    let view = objects
-        .applied_camera_setup()
-        .ok_or("camera application is absent")?;
     let mut values = [0.0; 7];
     for (index, handle) in handles.into_iter().enumerate() {
         let Some(Value::Handle(field)) = handle else {
@@ -250,11 +315,27 @@ fn executed_pose(
                 FIELDS[index]
             ));
         };
-        values[index] = objects
-            .applied_camera_field(field)
-            .map_err(|error| error.to_string())?;
+        // The live camera wins; without it the last instant application stands.
+        values[index] = match objects.camera_field(field).map_err(|e| e.to_string())? {
+            Some(value) => value,
+            None if FIELDS[index] == ROLL && objects.applied_camera_field(field).is_err() => {
+                // No setup or game camera sets roll: the view has no roll rotation.
+                0.0
+            }
+            None => objects
+                .applied_camera_field(field)
+                .map_err(|error| error.to_string())?,
+        };
     }
-    let [x, y] = [view.destination.x, view.destination.y];
+    let [x, y] = match objects.camera_target() {
+        Some(target) => target,
+        None => {
+            let view = objects
+                .applied_camera_setup()
+                .ok_or("camera target is absent")?;
+            [view.destination.x, view.destination.y]
+        }
+    };
     let z = pcx_tera::world::sample_world_z(terrain, x, y)
         .ok_or("camera target lies outside the terrain surface")?;
     pose(values, [x, y, z], near)

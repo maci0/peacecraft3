@@ -5,6 +5,59 @@ use pcx_play::{
     scripts::{AssetIdentity, ScriptAsset},
 };
 
+/// Session-owned cache; the same source model is retained on every executed unit.
+pub(crate) struct UnitModels {
+    reader: std::sync::Arc<Resolver>,
+    edition: String,
+    models: std::collections::BTreeMap<String, std::sync::Arc<pcx_play::unit_model::Model>>,
+    remaining_bytes: usize,
+}
+
+impl UnitModels {
+    pub(crate) fn new(reader: std::sync::Arc<Resolver>, edition: String) -> Self {
+        Self {
+            reader,
+            edition,
+            models: Default::default(),
+            remaining_bytes: 128 << 20,
+        }
+    }
+
+    pub(crate) fn load(
+        &mut self,
+        definition: &pcx_sim::world::Definition,
+    ) -> Result<Option<std::sync::Arc<pcx_play::unit_model::Model>>, String> {
+        let Some(path) = pcx_play::unit_model::model_path(definition)? else {
+            return Ok(None);
+        };
+        let key = path.replace('\\', "/").to_ascii_lowercase();
+        if let Some(model) = self.models.get(&key) {
+            return Ok(Some(std::sync::Arc::clone(model)));
+        }
+        if self.models.len() >= 512 {
+            return Err("unit model count budget exceeded".into());
+        }
+        let asset = self
+            .reader
+            .resolve_bounded(&path, self.remaining_bytes.min(16 << 20) as u64)
+            .map_err(|e| format!("{path}: {e}"))?;
+        let (_, origin) = identity(&asset, &self.edition, 16 << 10)?;
+        let size = asset.bytes.len();
+        let model = std::sync::Arc::new(pcx_play::unit_model::Model::read(
+            origin,
+            path,
+            asset.bytes.into(),
+            16 << 20,
+        )?);
+        self.remaining_bytes = self
+            .remaining_bytes
+            .checked_sub(size)
+            .ok_or("unit model aggregate byte budget exceeded")?;
+        self.models.insert(key, std::sync::Arc::clone(&model));
+        Ok(Some(model))
+    }
+}
+
 pub(crate) fn day_night(
     reader: &Resolver,
     edition: &str,
@@ -99,6 +152,34 @@ struct ParameterTable {
 }
 
 impl SoundSources {
+    pub(crate) fn empty_label_bank(
+        &self,
+        budget: pcx_play::label_sounds::Budget,
+    ) -> Result<pcx_play::label_sounds::SoundBank, String> {
+        let source = self
+            .tables
+            .iter()
+            .find(|source| {
+                source.table.headers().any(|(_, name)| name == "FileNames")
+                    && source
+                        .table
+                        .headers()
+                        .any(|(_, name)| name == "DirectoryBase")
+            })
+            .ok_or("selected sources contain no sound constructor table")?;
+        pcx_play::label_sounds::SoundBank::read(
+            ScriptAsset {
+                label: &source.label,
+                bytes: &source.asset.bytes,
+            },
+            source.origin.clone(),
+            &source.column,
+            &[],
+            budget,
+        )
+        .map_err(|e| e.to_string())
+    }
+
     /// SoundInfo is the lookup namespace; actual table names/columns/rows come
     /// from the selected inventory and table headers, not a chapter manifest.
     pub(crate) fn read(
@@ -287,7 +368,7 @@ impl SoundSources {
     }
 }
 
-fn identity(
+pub(crate) fn identity(
     asset: &pcx_assets::ResolvedAsset,
     edition: &str,
     limit: usize,
@@ -311,4 +392,28 @@ fn identity(
             source: serde_json::to_string(&asset.provenance).map_err(|error| error.to_string())?,
         },
     ))
+}
+
+#[cfg(test)]
+mod preparation_tests {
+    use super::*;
+    #[test]
+    fn absent_constructor_table_is_not_replaced_with_synthetic_sound_content() {
+        let sources = SoundSources { tables: Vec::new() };
+        let budget = pcx_play::label_sounds::Budget {
+            table_bytes: 1024,
+            coordinates: pcx_slq::CoordinateLimits {
+                max_row: 16,
+                max_column: 16,
+            },
+            sounds: 1,
+            resource_bytes: 1024,
+            total_resource_bytes: 1024,
+            metadata_bytes: 1024,
+        };
+        let error = sources
+            .empty_label_bank(budget)
+            .expect_err("missing source table");
+        assert_eq!(error, "selected sources contain no sound constructor table");
+    }
 }
