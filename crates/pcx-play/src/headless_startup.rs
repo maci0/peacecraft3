@@ -4,6 +4,7 @@
 //! The steps are the application's campaign path (`native_campaign::configuration`,
 //! `map_requests` binding, `campaign_prepare`) without its Bevy systems. Every game value comes
 //! from the install's archives and the map bytes. The identity labels match the application's.
+use crate::campaign_host::{self, advance_tick};
 use crate::campaign_inputs::{self, MapSources};
 use crate::install_source::{
     InstallSource, MAX_AGGREGATE_BYTES, MAX_ASSET_BYTES, MAX_LISTED_PATHS,
@@ -11,8 +12,9 @@ use crate::install_source::{
 use crate::map_admission::{
     IdentifiedScript, MapAdmissionBudget, MapAdmissionInputs, ParsedMapContext, prepare_map_context,
 };
+use crate::map_script_session::MapScriptSession;
 use crate::map_scripts_import::MapScriptBudget;
-use crate::map_startup_host::{MapStartupHost, assemble};
+use crate::map_startup_host::MapStartupHost;
 use crate::scripts::{AssetIdentity, ScriptAsset};
 use pcx_assets::{ArchiveLayer, GameMode, Resolver};
 use pcx_map::Map;
@@ -21,8 +23,12 @@ use pcx_objects::editor::{Editor, EditorReadLimits, Overlay};
 use pcx_sim::world::{Definition, MetadataCatalog, ObjectCatalog, ResolutionProblem};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 const EXECUTABLE: &str = "Warcraft III.exe";
+/// A headless host has no renderer. Occluder fading is presentation only, so this host declares
+/// the same no-fading capability as the application renderer (`map_ground::NoOcclusionPass`).
+const NO_OCCLUSION_FADING: bool = true;
 const COMMON_SCRIPT: &str = "Scripts\\common.j";
 const BLIZZARD_SCRIPT: &str = "Scripts\\Blizzard.j";
 /// The application's client identity labels. Changing them changes every session identity.
@@ -75,13 +81,20 @@ pub enum StartupError {
     #[error("startup inputs: {0}")]
     Inputs(String),
     #[error("startup host: {0}")]
-    Host(String),
+    Entrypoint(String),
+    #[error("script session: {0}")]
+    Session(String),
+    #[error("campaign clock: {0}")]
+    Clock(String),
 }
 
 /// The admitted context and the production host built from it.
 pub struct Startup {
     pub context: Arc<ParsedMapContext>,
-    pub host: MapStartupHost,
+    pub session: MapScriptSession<MapStartupHost>,
+    /// Game time when the session was published, and the ticks stepped since.
+    origin: f64,
+    tick: u64,
 }
 
 /// Object definitions from the install's unit and item metadata plus the map's overrides.
@@ -226,11 +239,64 @@ pub fn start(
         edition: CLIENT_EDITION.into(),
         version: CLIENT_VERSION.into(),
     };
+    let reader = Arc::new(resolver);
     let inputs = campaign_inputs::prepare_new_game(
-        &context, &sources, &resolver, &image, client, seed, expansion,
+        &context, &sources, &reader, &image, client, seed, expansion,
     )
     .map_err(StartupError::Inputs)?;
-    let host = assemble(Arc::clone(&context), inputs)
-        .map_err(|error| StartupError::Host(error.to_string()))?;
-    Ok(Startup { context, host })
+    let config = campaign_host::entry_id(&context, "config")
+        .map_err(|error| StartupError::Entrypoint(error.to_string()))?;
+    let main = campaign_host::entry_id(&context, "main")
+        .map_err(|error| StartupError::Entrypoint(error.to_string()))?;
+    let post = inputs.post_config.clone();
+    let admitted = Arc::clone(&context);
+    let placement_map = Arc::clone(&sources.map_bytes);
+    let mut session = MapScriptSession::<MapStartupHost>::default();
+    session
+        .replace_sequenced(
+            Arc::clone(&context),
+            move |ctx| {
+                campaign_host::create_host(
+                    ctx,
+                    inputs,
+                    Some(reader),
+                    placement_map,
+                    NO_OCCLUSION_FADING,
+                )
+            },
+            &[config, main],
+            move |vm, completed| campaign_host::apply_after_config(vm, &admitted, completed, &post),
+        )
+        .map_err(|error| StartupError::Session(error.to_string()))?;
+    let origin = session
+        .host()
+        .and_then(|host| host.objects().timer_game_time())
+        .ok_or(StartupError::Clock(
+            "the admitted map has no game clock".into(),
+        ))?;
+    Ok(Startup {
+        context,
+        session,
+        origin,
+        tick: 0,
+    })
+}
+
+/// The campaign clock's step and expiry budget: the application's launcher values
+/// (`peacecraft3::launch_gui`), one 64 Hz tick per frame step.
+const CLOCK_STEP_MICROS: u64 = 15_625;
+const MAX_EXPIRIES_PER_TICK: usize = 4096;
+
+impl Startup {
+    /// Steps the admitted session `ticks` times on the campaign clock.
+    pub fn step_clock(&mut self, ticks: u64) -> Result<(), StartupError> {
+        for _ in 0..ticks {
+            self.tick += 1;
+            let step = Duration::from_micros(CLOCK_STEP_MICROS).as_secs_f64();
+            let until = self.origin + step * self.tick as f64;
+            advance_tick(&mut self.session, until, MAX_EXPIRIES_PER_TICK)
+                .map_err(|error| StartupError::Clock(error.to_string()))?;
+        }
+        Ok(())
+    }
 }

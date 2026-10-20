@@ -4675,6 +4675,7 @@ dependencies = [
  "pcx-script",
  "pcx-sim",
  "pcx-slq",
+ "pcx-tga",
  "pcx-trig",
  "serde_json",
  "sha2",
