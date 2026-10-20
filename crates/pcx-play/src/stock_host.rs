@@ -89,6 +89,19 @@ pub(super) struct State {
     max_records: usize,
 }
 
+/// Index of the cell to evict among `ages`: the greatest age as a signed 32-bit value, lowest
+/// index on a tie. The native compare is `jle`, so an age that wrapped to negative is the
+/// least recent. `ages` is never empty when this is called with a non-zero count.
+fn oldest_cell(ages: &[u32]) -> usize {
+    (1..ages.len()).fold(0, |oldest, i| {
+        if (ages[i] as i32) > (ages[oldest] as i32) {
+            i
+        } else {
+            oldest
+        }
+    })
+}
+
 /// Unsigned clamp of a stored slot count to the engine ceiling, as `cmovb` performs it.
 fn effective_count(slots: i32, ceiling: u32) -> usize {
     (slots as u32).min(ceiling) as usize
@@ -161,13 +174,7 @@ impl State {
         let victim = match (0..count).find(|&i| shop.cells[i].item == Some(item)) {
             Some(found) => found,
             None if count == 0 => 0,
-            None => (1..count).fold(0, |oldest, i| {
-                if shop.ages[i] > shop.ages[oldest] {
-                    i
-                } else {
-                    oldest
-                }
-            }),
+            None => oldest_cell(&shop.ages[..count]),
         };
         if shop.cells[victim].stock.is_none() && self.records() >= self.max_records {
             return Err(Failure::Budget("stock item records"));
@@ -476,3 +483,7 @@ impl ObjectHost {
         Ok(Value::Null)
     }
 }
+
+#[cfg(test)]
+#[path = "stock_host_cells_tests.rs"]
+mod cell_tests;
