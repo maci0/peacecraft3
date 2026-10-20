@@ -7,6 +7,7 @@
 
 mod support;
 
+use pcx_net::session::SessionIdentity;
 use pcx_net::{
     Datagram, encode_input_payload,
     host::local_world,
@@ -24,17 +25,17 @@ const RIGHT_OWNER: u8 = 1;
 const RIGHT_START_X: i32 = 2 * FX_ONE;
 
 fn join(server: &Server, token: &str) -> SessionClient {
-    SessionClient::connect(&server.address(), token).expect("join")
+    SessionClient::connect(&server.address(), token, server.identity()).expect("join")
 }
 
 fn start() -> Server {
-    Server::start(local_world(), 1, None)
+    Server::start(local_world(), 1)
 }
 
 #[test]
 fn reconnect_token_is_validated_before_any_socket_is_opened() {
     assert!(matches!(
-        SessionClient::connect("127.0.0.1:9", "not-a-token"),
+        SessionClient::connect("127.0.0.1:9", "not-a-token", &SessionIdentity([0; 32])),
         Err(ClientError::Token)
     ));
 }
@@ -184,4 +185,19 @@ fn disconnect_stops_the_departed_units_order_and_reconnect_reclaims_the_slot() {
         "reconnect rewound authority"
     );
     assert_eq!(owned(&first, LEFT_OWNER).x, frozen);
+}
+
+#[test]
+fn a_peer_expecting_a_different_identity_is_refused_at_the_greeting() {
+    let server = start();
+    let mut other = server.identity().clone();
+    other.0[0] ^= 1;
+    match SessionClient::connect(&server.address(), TOKEN_LEFT, &other) {
+        Err(ClientError::Identity { expected, host }) => {
+            assert_eq!(expected, other.to_hex());
+            assert_eq!(host, server.identity().to_hex());
+        }
+        Err(error) => panic!("refused for the wrong reason: {error}"),
+        Ok(_) => panic!("joined a session with a different identity"),
+    }
 }

@@ -60,11 +60,16 @@ function selectionFlags(view, at, count) {
 }
 
 export class PeacecraftSession extends EventTarget {
-  constructor(url, token = null) {
+  // `identity` is the session identity this page derived from its own inputs. The host must
+  // announce exactly this value before any world is shown or any command is sent.
+  constructor(url, identity, token = null) {
     super();
     this.url = url;
     this.token = token ?? Array.from(crypto.getRandomValues(new Uint8Array(16)), x => x.toString(16).padStart(2, '0')).join('');
     if (!/^[0-9a-f]{32}$/i.test(this.token)) throw new Error('Invalid reconnect token');
+    if (!/^[0-9a-f]{64}$/.test(identity)) throw new Error('Expected session identity must be 64 lowercase hex digits');
+    this.identity = identity;
+    this.verified = false;
     this.socket = null;
     this.player = null;
     this.world = null;
@@ -75,6 +80,7 @@ export class PeacecraftSession extends EventTarget {
     if (this.socket && this.socket.readyState < WebSocket.CLOSING) throw new Error('Already connected');
     this.player = null;
     this.world = null;
+    this.verified = false;
     this.lastInputTick = -1n;
     const socket = new WebSocket(this.url);
     this.socket = socket;
@@ -86,10 +92,17 @@ export class PeacecraftSession extends EventTarget {
         if (typeof data === 'string') {
           const hello = JSON.parse(data);
           if (hello.error) { this.dispatchEvent(new CustomEvent('rejected', { detail: hello.error })); return; }
+          if (hello.session !== this.identity) {
+            this.dispatchEvent(new CustomEvent('rejected', { detail: { reason: 'identity', expected: this.identity, host: hello.session ?? null } }));
+            socket.close(4001, 'Session identity mismatch');
+            return;
+          }
           if (!Number.isInteger(hello.player) || hello.player < 0 || hello.player >= 16) throw new Error('Invalid player slot');
           this.player = hello.player;
+          this.verified = true;
           this.dispatchEvent(new CustomEvent('joined', { detail: hello }));
         } else {
+          if (!this.verified) return;
           const world = decodeSnapshot(data);
           if (this.world && world.tick < this.world.tick) return;
           this.world = world;
@@ -100,7 +113,7 @@ export class PeacecraftSession extends EventTarget {
         socket.close(1002, 'Invalid server packet');
       }
     });
-    socket.addEventListener('close', () => { if (socket === this.socket) { this.player = null; this.dispatchEvent(new Event('disconnected')); } });
+    socket.addEventListener('close', () => { if (socket === this.socket) { this.player = null; this.verified = false; this.dispatchEvent(new Event('disconnected')); } });
     socket.addEventListener('error', () => this.dispatchEvent(new CustomEvent('error', { detail: 'Session connection failed' })));
   }
 
@@ -135,6 +148,7 @@ export class PeacecraftSession extends EventTarget {
   }
 
   #send(bytes) {
+    if (!this.verified) throw new Error('Session identity is not verified');
     if (this.socket?.readyState !== WebSocket.OPEN) throw new Error('Session is disconnected');
     if (this.socket.bufferedAmount > 65536) throw new Error('Session connection is too slow');
     this.socket.send(bytes);

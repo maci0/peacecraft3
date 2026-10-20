@@ -9,15 +9,16 @@ WebRTC P2P is not the first transport: it still needs an application signaling c
 ```sh
 cargo run --locked -p pcx-net --features session-server --example session_server
 python3 -m http.server 8931 --bind 127.0.0.1 --directory web
-# Optional: admit an unchanged local map before listening.
-cargo run --locked -p pcx-net --features session-server --example session_server -- 127.0.0.1:8932 --install DIR --map FILE
+# The identity a page must expect, from an independent process (same source, same seed):
+PCX_SESSION_IDENTITY=$(cargo run -q --locked -p pcx-net --features session-server --example session_server -- --print-identity | awk '{print $3}')
 ```
 
 The host defaults to `ws://127.0.0.1:8932`. In a browser page served from the second command:
 
 ```js
 const { PeacecraftSession } = await import('/network.js');
-const session = new PeacecraftSession('ws://127.0.0.1:8932');
+const session = new PeacecraftSession('ws://127.0.0.1:8932', identity); // identity: the expected 64-hex value
+// The page shows no state and sends nothing until the host announces this identity.
 session.addEventListener('world', ({ detail }) => console.log(detail));
 session.addEventListener('rejected', ({ detail }) => console.error(detail));
 session.connect();
@@ -59,7 +60,7 @@ old order after their owner disconnects.
 
 ## What is working, and what remains
 
-This is a real browser-to-Rust command and state path, **not a completed Warcraft multiplayer match**. The current `pcx-sim` only supports selection, movement and stop. Without `--map`, the host initializes one unit per slot. With `--install DIR --map FILE`, it admits that unchanged local map: mobile units keep their authored positions, and the admitted pathing blocks movement (`docs/re-notes/native-session-peers.md`). Combat, economy, original lobby behavior, matchmaking and the game's input/render adapter are not wired into this session. `peacecraft3` currently has no gameplay caller of `pcx-net` or `pcx-sim`; `network.js` is a module for that adapter, not an Online Play button that pretends a match exists.
+This is a real browser-to-Rust command and state path, **not a completed Warcraft multiplayer match**. The current `pcx-sim` only supports selection, movement and stop. The host runs the harness world (one unit per slot). `--map FILE` refuses the map with its reasons, because map startup is not wired (`docs/re-notes/native-session-peers.md`). Combat, economy, original lobby behavior, matchmaking and the game's input/render adapter are not wired into this session. `peacecraft3` currently has no gameplay caller of `pcx-net` or `pcx-sim`; `network.js` is a module for that adapter, not an Online Play button that pretends a match exists.
 
 This host is for local development. There are no accounts, isolated rooms, persistent matches, Origin restrictions or TLS termination. Reconnect tokens are random browser-generated bearer tokens; protect them and use `wss://` once public hosting is implemented. Sixteen player slots remain reserved for the host's lifetime. No public service has been deployed.
 
@@ -71,15 +72,18 @@ Core regression tests exercise same-tick commands from both players, identity sp
 
 Seven admission tests exercise partial reads/writes, deterministic per-poll work ceilings, deadline expiry, invalid upgrades and unrestricted I/O after completion. They preserve Tungstenite's refusal of bytes after the HTTP request. The two-browser check also passed with an additional incomplete TCP upgrade held open. No original assets were served or transmitted in that run. Native tests and strict native/WASM compilation passed; the native TCP host does not run in WASM.
 
-With `playwright-core` installed separately:
+With `playwright-core` installed separately, and `PCX_SESSION_IDENTITY` set as above:
 
 ```sh
 node crates/pcx-net/examples/check_browser_session.mjs /absolute/path/to/playwright-core/index.mjs
+node crates/pcx-net/examples/check_browser_identity.mjs /absolute/path/to/playwright-core/index.mjs
 ```
+
+The identity check runs a page that expects a different identity. It must be refused with no binary frame sent and no state shown, while the counterpart page joins.
 
 The script expects both local servers above. Chromium defaults to `/usr/bin/chromium`; set `CHROMIUM` for a different executable. Successful output records the player slots and ticks compared. It proves the current movement simulation and transport, not unimplemented original game rules or UI.
 
-Native peers run the same protocol over loopback sockets: `cargo test -p pcx-net --features session-server --test local_peers`. The admitted-map native gate is `cargo test -p pcx-net --features session-server --test map_peers -- --ignored` with the `PCX_SESSION_*` variables named in its module comment. The headless check also passed against a host started with `--install` and `--map` (two browser peers, zero page errors); browser peers do not verify the map identity. Details and remaining gaps are in `docs/re-notes/native-session-peers.md`.
+Native peers run the same protocol over loopback sockets: `cargo test -p pcx-net --features session-server --test local_peers`. Map files are refused by `cargo test -p pcx-net --features session-server --test map_peers -- --ignored` with the variables named in its source. Details and remaining gaps are in `docs/re-notes/native-session-peers.md`.
 
 ## Selection regression checks
 

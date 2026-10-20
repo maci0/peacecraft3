@@ -14,8 +14,10 @@ use std::{
 use pcx_sim::{FX_ONE, TICK_MS, World};
 use tungstenite::{Message, WebSocket, protocol::WebSocketConfig};
 
+use sha2::{Digest, Sha256};
+
 use crate::{
-    Peer,
+    Peer, encode_world_payload,
     session::{MAX_PACKET_BYTES, MAX_PLAYERS, Session, SessionIdentity},
 };
 
@@ -61,7 +63,7 @@ pub fn local_world() -> World {
 pub struct Host {
     listener: TcpListener,
     session: Session,
-    identity: Option<SessionIdentity>,
+    identity: SessionIdentity,
     connections: BTreeMap<Peer, Connection>,
     pending: Vec<admission::Pending<TcpStream>>,
     slots: BTreeMap<String, u8>,
@@ -70,19 +72,14 @@ pub struct Host {
 }
 
 impl Host {
-    /// `identity` is announced to every joining peer; `None` means an unadmitted harness world.
-    pub fn bind(
-        address: &str,
-        world: World,
-        seed: u64,
-        identity: Option<SessionIdentity>,
-    ) -> io::Result<Self> {
+    /// Every joining peer is told this session's identity and must verify it before play.
+    pub fn bind(address: &str, world: World, seed: u64) -> io::Result<Self> {
         let listener = TcpListener::bind(address)?;
         listener.set_nonblocking(true)?;
         Ok(Self {
             listener,
+            identity: session_identity(&world, seed),
             session: Session::new(world, seed),
-            identity,
             connections: BTreeMap::new(),
             pending: Vec::new(),
             slots: BTreeMap::new(),
@@ -173,13 +170,10 @@ impl Host {
                             break;
                         }
                         connection.player = Some(player);
-                        let hello = match &self.identity {
-                            Some(identity) => format!(
-                                "{{\"player\":{player},\"tickMs\":{TICK_MS},\"session\":\"{}\"}}",
-                                identity.to_hex()
-                            ),
-                            None => format!("{{\"player\":{player},\"tickMs\":{TICK_MS}}}"),
-                        };
+                        let hello = format!(
+                            "{{\"player\":{player},\"tickMs\":{TICK_MS},\"session\":\"{}\"}}",
+                            self.identity.to_hex()
+                        );
                         if !send(connection, Message::Text(hello.into()))
                             || !send(connection, Message::Binary(self.session.snapshot().into()))
                         {
@@ -247,4 +241,13 @@ impl Host {
         }
         Ok(())
     }
+}
+
+/// The identity of a session: its seed and initial world. Peers compare it before play.
+pub fn session_identity(world: &World, seed: u64) -> SessionIdentity {
+    let mut hash = Sha256::new();
+    hash.update(b"pcx-session-world-v1\n");
+    hash.update(seed.to_le_bytes());
+    hash.update(encode_world_payload(world));
+    SessionIdentity(hash.finalize().into())
 }

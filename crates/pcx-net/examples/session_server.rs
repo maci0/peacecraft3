@@ -1,9 +1,12 @@
 //! Local session host.
 //!
-//! cargo run -p pcx-net --features session-server --example session_server -- [ADDRESS] [--install DIR --map FILE]
+//! cargo run -p pcx-net --features session-server --example session_server -- [ADDRESS]
+//! cargo run -p pcx-net --features session-server --example session_server -- --print-identity
+//! cargo run -p pcx-net --features session-server --example session_server -- --map FILE
 //!
-//! Without `--install` and `--map` the host runs the harness world with no map identity.
-//! With them, it admits the map from the install directory before listening.
+//! Serving prints `PeaceCraft session listening on ...` on stdout. `--print-identity`
+//! prints `session identity <hex>` on stdout and binds nothing. Diagnostics go to stderr.
+//! `--map` refuses the map with its reasons: map play is not wired to the production startup.
 #[cfg(not(target_arch = "wasm32"))]
 use std::{
     path::PathBuf,
@@ -13,7 +16,7 @@ use std::{
 
 #[cfg(not(target_arch = "wasm32"))]
 use pcx_net::{
-    host::{Host, local_world},
+    host::{Host, local_world, session_identity},
     map_session,
 };
 
@@ -24,106 +27,125 @@ const SERVICE_INTERVAL: Duration = Duration::from_millis(1);
 #[cfg(not(target_arch = "wasm32"))]
 const SESSION_SEED: u64 = 1;
 #[cfg(not(target_arch = "wasm32"))]
-const USAGE: &str = "usage: session_server [ADDRESS] [--install DIR --map FILE]";
-
+const USAGE: &str = "usage: session_server [ADDRESS] | --print-identity | --map FILE";
+/// Exit code for a map this host refuses as unsupported.
 #[cfg(not(target_arch = "wasm32"))]
-struct Serve {
-    address: String,
-    map: Option<(PathBuf, PathBuf)>,
-}
+const EXIT_UNSUPPORTED_MAP: u8 = 3;
 
 #[cfg(not(target_arch = "wasm32"))]
 enum Command {
     Help,
-    Serve(Serve),
+    PrintIdentity,
+    Serve { address: String },
+    Map { path: PathBuf },
+}
+
+/// Usage errors exit 2; runtime failures exit 1.
+#[cfg(not(target_arch = "wasm32"))]
+enum Failure {
+    Usage(String),
+    Runtime(String),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn parse(mut args: impl Iterator<Item = String>) -> Result<Command, String> {
+fn parse(mut args: impl Iterator<Item = String>) -> Result<Command, Failure> {
     let mut address = None;
-    let mut install = None;
     let mut map = None;
+    let mut print_identity = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-h" | "--help" => return Ok(Command::Help),
-            "--install" => {
-                install = Some(PathBuf::from(
-                    args.next().ok_or("--install needs a directory")?,
-                ))
+            "--print-identity" => print_identity = true,
+            "--map" => {
+                let path = args
+                    .next()
+                    .ok_or_else(|| Failure::Usage("--map needs a file".into()))?;
+                map = Some(PathBuf::from(path));
             }
-            "--map" => map = Some(PathBuf::from(args.next().ok_or("--map needs a file")?)),
-            flag if flag.starts_with('-') => return Err(format!("unknown option {flag}")),
+            flag if flag.starts_with('-') => {
+                return Err(Failure::Usage(format!("unknown option {flag}")));
+            }
             _ if address.is_none() => address = Some(arg),
-            _ => return Err("only one ADDRESS is accepted".into()),
+            _ => return Err(Failure::Usage("only one ADDRESS is accepted".into())),
         }
     }
-    let map = match (install, map) {
-        (None, None) => None,
-        (Some(install), Some(map)) => Some((install, map)),
-        _ => return Err("--install and --map must be given together".into()),
-    };
-    Ok(Command::Serve(Serve {
-        address: address.unwrap_or_else(|| DEFAULT_ADDRESS.into()),
-        map,
-    }))
+    match (print_identity, map, address) {
+        (true, None, None) => Ok(Command::PrintIdentity),
+        (true, _, _) => Err(Failure::Usage(
+            "--print-identity takes no other arguments".into(),
+        )),
+        (false, Some(path), None) => Ok(Command::Map { path }),
+        (false, Some(_), Some(_)) => Err(Failure::Usage(
+            "--map does not take an ADDRESS; it refuses before listening".into(),
+        )),
+        (false, None, address) => Ok(Command::Serve {
+            address: address.unwrap_or_else(|| DEFAULT_ADDRESS.into()),
+        }),
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn serve(options: Serve) -> Result<(), String> {
-    let (world, identity, mode) = match &options.map {
-        None => (
-            local_world(),
-            None,
-            "local movement simulation, not a complete Warcraft match".to_string(),
-        ),
-        Some((install, map_path)) => {
-            let bytes =
-                std::fs::read(map_path).map_err(|e| format!("{}: {e}", map_path.display()))?;
-            let label = map_path.display().to_string();
-            let session = map_session::admit(install, &bytes, &label, SESSION_SEED)
-                .map_err(|e| format!("{label}: {e}"))?;
-            eprintln!(
-                "admitted {label}: {} units, excluded {:?}",
-                session.report.units, session.report.excluded
-            );
-            println!("session identity {}", session.identity.to_hex());
-            (
-                session.world,
-                Some(session.identity),
-                format!("admitted map {label}; not a complete Warcraft match"),
-            )
-        }
-    };
-    let mut host = Host::bind(&options.address, world, SESSION_SEED, identity)
-        .map_err(|e| format!("{}: {e}", options.address))?;
+fn refuse_map(path: &std::path::Path) -> Result<ExitCode, Failure> {
+    let bytes =
+        std::fs::read(path).map_err(|e| Failure::Runtime(format!("{}: {e}", path.display())))?;
+    let label = path.display().to_string();
+    let reasons = map_session::assess(&bytes, &label)
+        .map_err(|e| Failure::Runtime(format!("{label}: {e}")))?;
+    eprintln!("error: {label} is not playable by this host:");
+    for reason in &reasons {
+        eprintln!("  - {reason}");
+    }
+    Ok(ExitCode::from(EXIT_UNSUPPORTED_MAP))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn serve(address: &str) -> Result<(), Failure> {
+    let mut host = Host::bind(address, local_world(), SESSION_SEED)
+        .map_err(|e| Failure::Runtime(format!("{address}: {e}")))?;
     println!(
-        "PeaceCraft session listening on ws://{}; {mode}",
-        options.address
+        "PeaceCraft session listening on ws://{address}; local movement simulation, not a complete Warcraft match"
     );
     loop {
-        host.poll(Instant::now()).map_err(|e| e.to_string())?;
+        host.poll(Instant::now())
+            .map_err(|e| Failure::Runtime(e.to_string()))?;
         std::thread::sleep(SERVICE_INTERVAL);
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn main() -> ExitCode {
-    match parse(std::env::args().skip(1)) {
-        Ok(Command::Help) => {
+fn run(args: impl Iterator<Item = String>) -> Result<ExitCode, Failure> {
+    match parse(args)? {
+        Command::Help => {
             println!("{USAGE}");
-            ExitCode::SUCCESS
+            Ok(ExitCode::SUCCESS)
         }
-        Err(message) => {
+        Command::PrintIdentity => {
+            println!(
+                "session identity {}",
+                session_identity(&local_world(), SESSION_SEED).to_hex()
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Map { path } => refuse_map(&path),
+        Command::Serve { address } => {
+            serve(&address)?;
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn main() -> ExitCode {
+    match run(std::env::args().skip(1)) {
+        Ok(code) => code,
+        Err(Failure::Usage(message)) => {
             eprintln!("error: {message}\n{USAGE}");
             ExitCode::from(2)
         }
-        Ok(Command::Serve(options)) => match serve(options) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(message) => {
-                eprintln!("error: {message}");
-                ExitCode::FAILURE
-            }
-        },
+        Err(Failure::Runtime(message)) => {
+            eprintln!("error: {message}");
+            ExitCode::FAILURE
+        }
     }
 }
 

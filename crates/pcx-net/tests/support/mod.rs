@@ -13,7 +13,7 @@ use std::{
 };
 
 use pcx_net::{
-    host::Host,
+    host::{Host, session_identity},
     session::SessionIdentity,
     session_client::{Received, SessionClient},
 };
@@ -26,15 +26,16 @@ pub const MAX_MESSAGES: usize = 2_000;
 
 pub struct Server {
     address: SocketAddr,
+    identity: SessionIdentity,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<io::Result<()>>>,
 }
 
 impl Server {
     /// Runs the host poll loop on its own thread until dropped.
-    pub fn start(world: World, seed: u64, identity: Option<SessionIdentity>) -> Self {
-        let mut host =
-            Host::bind("127.0.0.1:0", world, seed, identity).expect("bind loopback host");
+    pub fn start(world: World, seed: u64) -> Self {
+        let identity = session_identity(&world, seed);
+        let mut host = Host::bind("127.0.0.1:0", world, seed).expect("bind loopback host");
         let address = host.local_addr().expect("host address");
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
@@ -47,6 +48,7 @@ impl Server {
         });
         Self {
             address,
+            identity,
             stop,
             thread: Some(thread),
         }
@@ -54,6 +56,11 @@ impl Server {
 
     pub fn address(&self) -> String {
         self.address.to_string()
+    }
+
+    /// The identity a peer must verify before play; derived from the host's own world and seed.
+    pub fn identity(&self) -> &SessionIdentity {
+        &self.identity
     }
 }
 
