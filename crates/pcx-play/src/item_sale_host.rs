@@ -145,7 +145,10 @@ impl ObjectHost {
         let price = self
             .item_sales
             .as_ref()
-            .ok_or_else(|| self.inner.error(name, Failure::ItemState("item sales not admitted")))?
+            .ok_or_else(|| {
+                self.inner
+                    .error(name, Failure::ItemState("item sales not admitted"))
+            })?
             .row(item)
             .map(|row| row.gold)
             .ok_or_else(|| {
@@ -161,9 +164,10 @@ impl ObjectHost {
             return Ok(PurchaseOutcome::Refused(PurchaseRefusal::BuyerUnavailable));
         }
         let owner = buyer_record.owner;
-        let gold = self
-            .owner_gold(owner)?
-            .ok_or_else(|| self.inner.error(name, Failure::PlayerState("gold not admitted")))?;
+        let gold = self.owner_gold(owner)?.ok_or_else(|| {
+            self.inner
+                .error(name, Failure::PlayerState("gold not admitted"))
+        })?;
         if gold < price {
             return Ok(PurchaseOutcome::Refused(PurchaseRefusal::InsufficientGold));
         }
@@ -216,9 +220,7 @@ impl ObjectHost {
         for (trigger, filter, event) in events {
             self.push_reserved_event(trigger, filter, subject, Some(event));
         }
-        Ok(PurchaseOutcome::Sold {
-            item: item_handle,
-        })
+        Ok(PurchaseOutcome::Sold { item: item_handle })
     }
 }
 

@@ -1008,7 +1008,6 @@ constant playerstate PLAYER_STATE_FOOD_CAP_CEILING=ConvertPlayerState(6)
 endglobals
 "#;
 
-
 /// Sale-test catalog: `P001` is a powerup row, every other rawcode is a plain sellable item.
 struct SaleItems;
 impl ObjectCatalog for SaleItems {
@@ -1169,7 +1168,13 @@ struct SaleState {
     handles: usize,
 }
 
-fn sale_state(h: &mut ObjectHost, owner: &Value, shop: &Value, buyer: &Value, item: i32) -> SaleState {
+fn sale_state(
+    h: &mut ObjectHost,
+    owner: &Value,
+    shop: &Value,
+    buyer: &Value,
+    item: i32,
+) -> SaleState {
     let gold_setting = h.native("ConvertPlayerState", &[Value::Int(1)]).unwrap();
     let gold = h
         .native("GetPlayerState", &[owner.clone(), gold_setting])
@@ -1224,7 +1229,9 @@ fn sold(outcome: &crate::playercolor_host::PurchaseOutcome) -> Option<HandleId> 
     }
 }
 
-fn refusal(outcome: &crate::playercolor_host::PurchaseOutcome) -> crate::playercolor_host::PurchaseRefusal {
+fn refusal(
+    outcome: &crate::playercolor_host::PurchaseOutcome,
+) -> crate::playercolor_host::PurchaseRefusal {
     match outcome {
         crate::playercolor_host::PurchaseOutcome::Refused(r) => *r,
         crate::playercolor_host::PurchaseOutcome::Sold { .. } => panic!("expected a refusal"),
@@ -1253,9 +1260,7 @@ fn sale_debits_gold_places_the_item_decrements_stock_and_delivers_completed_stat
     .unwrap();
     let before = sale_state(&mut h, &owner, &shop, &buyer, I001);
     assert_eq!(before.gold, Value::Int(120));
-    let outcome = h
-        .purchase_stock_item(id(&shop), id(&buyer), I001)
-        .unwrap();
+    let outcome = h.purchase_stock_item(id(&shop), id(&buyer), I001).unwrap();
     let sold_item = sold(&outcome).expect("sale succeeds");
     let after = sale_state(&mut h, &owner, &shop, &buyer, I001);
     assert_eq!(after.gold, Value::Int(70), "debited by the loaded price");
@@ -1265,14 +1270,21 @@ fn sale_debits_gold_places_the_item_decrements_stock_and_delivers_completed_stat
     let fired = h.take_fired_event().expect("sell event queued");
     h.begin_fired_event(&fired).unwrap().unwrap();
     assert_eq!(h.native("GetSellingUnit", &[]).unwrap(), shop);
-    assert_eq!(h.native("GetSoldItem", &[]).unwrap(), Value::Handle(sold_item));
+    assert_eq!(
+        h.native("GetSoldItem", &[]).unwrap(),
+        Value::Handle(sold_item)
+    );
     // Callback sees the completed sale.
     let during = sale_state(&mut h, &owner, &shop, &buyer, I001);
     assert_eq!(during.gold, Value::Int(70));
     assert_eq!(during.stock, Some((1, 2)));
     assert!(during.held.contains(&Value::Handle(sold_item)));
     h.finish_fired_event();
-    assert_eq!(h.native("GetSellingUnit", &[]).unwrap(), Value::Null, "no context after delivery");
+    assert_eq!(
+        h.native("GetSellingUnit", &[]).unwrap(),
+        Value::Null,
+        "no context after delivery"
+    );
     assert_eq!(h.native("GetSoldItem", &[]).unwrap(), Value::Null);
     assert!(h.take_fired_event().is_none());
 }
@@ -1301,9 +1313,14 @@ fn sale_with_insufficient_gold_refuses_and_changes_nothing() {
     set_gold(&mut h, &owner, 49);
     stock(&mut h, &shop, I001, 2);
     let t = h.native("CreateTrigger", &[]).unwrap();
-    let sell = h.native("ConvertPlayerUnitEvent", &[Value::Int(274)]).unwrap();
-    h.native("TriggerRegisterPlayerUnitEvent", &[t, owner.clone(), sell, Value::Null])
+    let sell = h
+        .native("ConvertPlayerUnitEvent", &[Value::Int(274)])
         .unwrap();
+    h.native(
+        "TriggerRegisterPlayerUnitEvent",
+        &[t, owner.clone(), sell, Value::Null],
+    )
+    .unwrap();
     let before = sale_state(&mut h, &owner, &shop, &buyer, I001);
     let outcome = h.purchase_stock_item(id(&shop), id(&buyer), I001).unwrap();
     assert_eq!(
@@ -1376,7 +1393,9 @@ fn item_budget_refusal_is_an_error_that_changes_nothing() {
     stock(&mut h, &shop, I001, 2);
     item(&mut h, 48.);
     let before = sale_state(&mut h, &owner, &shop, &buyer, I001);
-    let err = h.purchase_stock_item(id(&shop), id(&buyer), I001).unwrap_err();
+    let err = h
+        .purchase_stock_item(id(&shop), id(&buyer), I001)
+        .unwrap_err();
     assert!(err.to_string().contains("item creation"), "{err}");
     assert_eq!(sale_state(&mut h, &owner, &shop, &buyer, I001), before);
     assert!(h.take_fired_event().is_none());
@@ -1410,10 +1429,19 @@ fn consecutive_sales_deliver_their_own_context_and_never_leak() {
     set_gold(&mut h, &owner, 500);
     stock(&mut h, &shop, I001, 2);
     let t = h.native("CreateTrigger", &[]).unwrap();
-    let sell = h.native("ConvertPlayerUnitEvent", &[Value::Int(274)]).unwrap();
-    h.native("TriggerRegisterPlayerUnitEvent", &[t, owner.clone(), sell, Value::Null])
+    let sell = h
+        .native("ConvertPlayerUnitEvent", &[Value::Int(274)])
         .unwrap();
-    assert_eq!(h.native("GetSoldItem", &[]).unwrap(), Value::Null, "no context before a sale");
+    h.native(
+        "TriggerRegisterPlayerUnitEvent",
+        &[t, owner.clone(), sell, Value::Null],
+    )
+    .unwrap();
+    assert_eq!(
+        h.native("GetSoldItem", &[]).unwrap(),
+        Value::Null,
+        "no context before a sale"
+    );
     let first = sold(&h.purchase_stock_item(id(&shop), id(&buyer), I001).unwrap()).unwrap();
     let second = sold(&h.purchase_stock_item(id(&shop), id(&buyer), I001).unwrap()).unwrap();
     let f1 = h.take_fired_event().unwrap();
@@ -1422,7 +1450,11 @@ fn consecutive_sales_deliver_their_own_context_and_never_leak() {
     h.begin_fired_event(&f1).unwrap().unwrap();
     assert_eq!(h.native("GetSoldItem", &[]).unwrap(), Value::Handle(first));
     h.finish_fired_event();
-    assert_eq!(h.native("GetSoldItem", &[]).unwrap(), Value::Null, "first context ends");
+    assert_eq!(
+        h.native("GetSoldItem", &[]).unwrap(),
+        Value::Null,
+        "first context ends"
+    );
     h.begin_fired_event(&f2).unwrap().unwrap();
     assert_eq!(h.native("GetSoldItem", &[]).unwrap(), Value::Handle(second));
     h.finish_fired_event();

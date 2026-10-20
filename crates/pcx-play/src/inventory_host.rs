@@ -215,7 +215,11 @@ impl ObjectHost {
     }
 
     /// A boolean `ItemData` column of an unexecuted definition, read the same way as an item.
-    pub(crate) fn definition_flag(&self, definition: &pcx_sim::world::Definition, column: &str) -> Result<bool, Error> {
+    pub(crate) fn definition_flag(
+        &self,
+        definition: &pcx_sim::world::Definition,
+        column: &str,
+    ) -> Result<bool, Error> {
         let mut fields = definition.fields.iter().filter(|(id,field)| {
             field.metadata.as_ref().is_some_and(|metadata| metadata.fourcc==**id
                 && matches!(metadata.kind,pcx_objects::editor::FieldKind::Bool|pcx_objects::editor::FieldKind::Int)
