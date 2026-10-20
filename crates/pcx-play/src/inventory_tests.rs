@@ -5,6 +5,7 @@ use crate::neutral_player::sha256;
 use crate::playercolor_host::{UseCheck, UseCommit, UseGrant};
 use pcx_objects::editor::Overlay;
 use pcx_script::HandleId;
+use crate::playercolor_host::{CooldownScope, UseCheck, UseCommit, UseGrant};
 
 const CALLS: &str = r#"
 type item extends widget
@@ -685,10 +686,15 @@ fn inventory_death_and_drop_flags_and_ordinary_unit_lifecycle_remain_distinct() 
 
 /// Inventory host with the game clock and item use admitted. Potions are `P001` rows.
 fn open_with_item_use() -> ObjectHost {
+    open_with_cooldown_scope(CooldownScope::SharedGroup)
+}
+
+fn open_with_cooldown_scope(scope: CooldownScope) -> ObjectHost {
     open()
         .with_item_use(
             crate::item_use_rules::Rules::new(tables("2"), Overlay::default()),
             8,
+            scope,
         )
         .unwrap()
 }
@@ -842,11 +848,9 @@ fn a_grant_from_another_host_session_refuses_even_with_the_same_handles() {
     assert!(second.commit_item_use(own).is_ok());
 }
 
-#[test]
-fn two_holders_share_one_group_readiness_in_this_recreation_native_scope_unverified() {
-    // Current recreation coupling: the cooldown key is the group alone. Whether the original binds it
-    // per unit, per item or per group is not established, so this asserts the present behavior only.
-    let mut h = open_with_item_use();
+/// Two holders, each with one potion of the same group. A's use at t=0 is the only event.
+fn two_holder_readiness(scope: CooldownScope) -> UseCheck {
+    let mut h = open_with_cooldown_scope(scope);
     let a = id(&unit(&mut h, 16.));
     let b = id(&unit(&mut h, 32.));
     let pa = potion(&mut h);
@@ -854,10 +858,24 @@ fn two_holders_share_one_group_readiness_in_this_recreation_native_scope_unverif
     give(&mut h, a, pa);
     give(&mut h, b, pb);
     h.commit_item_use(grant(h.check_item_use(a, pa))).unwrap();
+    h.check_item_use(b, pb).unwrap()
+}
+
+/// Provisional: the source does not establish whether holders share a group's cooldown.
+#[test]
+fn two_holders_under_the_shared_group_scope_wait_on_one_ready_time() {
     assert_eq!(
-        h.check_item_use(b, pb).unwrap(),
+        two_holder_readiness(CooldownScope::SharedGroup),
         UseCheck::OnCooldown { remaining: 20.0 }
     );
+}
+
+#[test]
+fn two_holders_under_the_per_holder_scope_each_wait_on_their_own_ready_time() {
+    assert!(matches!(
+        two_holder_readiness(CooldownScope::PerHolder),
+        UseCheck::Ready(_)
+    ));
 }
 
 #[test]

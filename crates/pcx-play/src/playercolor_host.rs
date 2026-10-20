@@ -791,4 +791,4 @@ pub use objects::{
     DialogButton, DialogQuitRequest, DialogState, EventSubject, FiredEvent, FogModifier,
     GameExitRequest, Indicator, MinimapPing, Relation, ScriptDialog, Vitals, Weapon,
 };
-pub use objects::{UseCheck, UseCommit, UseGrant};
+pub use objects::{CooldownScope, UseCheck, UseCommit, UseGrant};

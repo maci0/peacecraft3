@@ -128,10 +128,13 @@ pub fn prepare_new_game(
         &game_profiles,
         8 << 20,
     )?);
-    inputs.item_use = Some(crate::item_use_rules::Rules::new(
-        Arc::clone(&inputs.defend.tables),
-        abilities.clone(),
-    ));
+    inputs.item_use = Some(crate::map_startup_host::ItemUseInput {
+        rules: crate::item_use_rules::Rules::new(
+            Arc::clone(&inputs.defend.tables),
+            abilities.clone(),
+        ),
+        cooldown_scope: crate::playercolor_host::CooldownScope::SharedGroup,
+    });
     inputs.inventory_powerup = Some(crate::inventory_powerup::Rules::read(
         Arc::clone(&inputs.defend.tables),
         abilities,

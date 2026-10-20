@@ -272,6 +272,13 @@ pub struct ResolvedObservations {
 #[path = "sound_playback.rs"]
 pub mod sound_playback;
 
+/// Item charge and cooldown admission. `cooldown_scope` is the caller's explicit choice, since the
+/// source does not establish which holders share a cooldown group.
+pub struct ItemUseInput {
+    pub rules: crate::item_use_rules::Rules,
+    pub cooldown_scope: crate::playercolor_host::CooldownScope,
+}
+
 pub struct MapStartupInputs {
     pub enumeration: EnumContracts,
     pub rules: NeutralRuleSet,
@@ -295,7 +302,7 @@ pub struct MapStartupInputs {
     /// Required with item budgets: sale rules derived from the loaded item metadata.
     pub item_sales: Option<crate::item_sales::ItemSaleTable>,
     /// Required with item budgets: charge and cooldown rules from the selected ItemData and ability rows.
-    pub item_use: Option<crate::item_use_rules::Rules>,
+    pub item_use: Option<ItemUseInput>,
     pub localization: Option<crate::script_localization::Bank>,
     pub unit_guards: Option<UnitGuardsInput>,
     pub player_removal_rules: Option<crate::player_removal_rules::Rules>,
@@ -823,7 +830,7 @@ pub fn assemble(
         let item_use = item_use.ok_or_else(|| {
             MapStartupError::Observation("item use requires charge and cooldown rules".into())
         })?;
-        object = object.with_item_use(item_use, items.max_records)?;
+        object = object.with_item_use(item_use.rules, items.max_records, item_use.cooldown_scope)?;
         let classes = item_classes.ok_or_else(|| {
             MapStartupError::Observation("item queries require derived item classes".into())
         })?;
