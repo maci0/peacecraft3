@@ -10,7 +10,10 @@ use std::sync::{Arc, Weak};
 
 use bevy::{ecs::system::SystemParam, prelude::*, window::PrimaryWindow};
 use pcx_objects::editor::selection::SelectionCircles;
-use pcx_play::map_startup_host::MapStartupHost;
+use pcx_play::{
+    map_startup_host::MapStartupHost,
+    player_command_log::{PlayerCommand, PlayerCommandLog},
+};
 use pcx_script::{HandleId, Host, Value};
 use peacecraft3::{
     browser_configuration::SelectedMapSources,
@@ -34,6 +37,15 @@ pub(crate) struct CampaignInput {
     attempted: bool,
     session: Option<Weak<()>>,
     pub last_error: Option<String>,
+    /// Accepted player commands of the prepared session, in clock order.
+    pub commands: PlayerCommandLog,
+}
+
+/// Records an accepted command. A refused record is kept in `last_error`, not dropped.
+fn record_command(input: &mut CampaignInput, clock: Option<f64>, command: PlayerCommand) {
+    if let Err(error) = input.commands.record(clock, command) {
+        input.last_error = Some(error.to_string());
+    }
 }
 
 pub(crate) fn install(app: &mut App) {
@@ -102,8 +114,11 @@ fn load_circles(
         (None, None) => true,
         _ => false,
     } {
+        // The command log belongs to the prepared session, begun before this session attached.
+        let commands = std::mem::take(&mut input.commands);
         *input = CampaignInput {
             session: witness,
+            commands,
             ..default()
         };
     }
@@ -161,8 +176,15 @@ fn end_cinematic(
     let Some(host) = session.host() else {
         return;
     };
+    let clock = host.objects_mut().timer_game_time();
     match host.objects_mut().fire_local_player_event(END_CINEMATIC) {
-        Ok(fired) => debug!("{END_CINEMATIC}: {fired} registrations queued"),
+        Ok(fired) => {
+            debug!("{END_CINEMATIC}: {fired} registrations queued");
+            let command = PlayerCommand::LocalEvent {
+                name: END_CINEMATIC.into(),
+            };
+            record_command(&mut input, clock, command);
+        }
         Err(error) => input.last_error = Some(error.to_string()),
     }
 }
@@ -314,6 +336,12 @@ fn click(
     if select {
         if let Some(unit) = picked {
             objects.select_units(&[unit], !additive);
+            let clock = objects.timer_game_time();
+            let command = PlayerCommand::Select {
+                units: vec![unit],
+                replace: !additive,
+            };
+            record_command(&mut input, clock, command);
         }
         return;
     }
@@ -331,42 +359,69 @@ fn click(
         })
         .collect();
     for unit in owned {
-        let result = if let Some(item) = item_hit.filter(|&id| {
+        let (result, command) = if let Some(item) = item_hit.filter(|&id| {
             objects
                 .executed_item(id)
                 .is_ok_and(|item| item.held_by.is_none())
         }) {
-            objects.native(
+            let result = objects.native(
                 "IssueTargetOrder",
                 &[
                     Value::Handle(unit),
                     Value::Str("smart".into()),
                     Value::Handle(item),
                 ],
-            )
+            );
+            let command = PlayerCommand::Target {
+                unit,
+                order: "smart".into(),
+                target: item,
+            };
+            (result, command)
         } else {
             match picked.filter(|&target| objects.is_enemy(unit, target)) {
-                Some(target) => objects.native(
-                    "IssueTargetOrder",
-                    &[
-                        Value::Handle(unit),
-                        Value::Str("attack".into()),
-                        Value::Handle(target),
-                    ],
-                ),
-                None => objects.native(
-                    "IssuePointOrder",
-                    &[
-                        Value::Handle(unit),
-                        Value::Str("move".into()),
-                        Value::Real(point[0]),
-                        Value::Real(point[1]),
-                    ],
-                ),
+                Some(target) => {
+                    let result = objects.native(
+                        "IssueTargetOrder",
+                        &[
+                            Value::Handle(unit),
+                            Value::Str("attack".into()),
+                            Value::Handle(target),
+                        ],
+                    );
+                    let command = PlayerCommand::Target {
+                        unit,
+                        order: "attack".into(),
+                        target,
+                    };
+                    (result, command)
+                }
+                None => {
+                    let result = objects.native(
+                        "IssuePointOrder",
+                        &[
+                            Value::Handle(unit),
+                            Value::Str("move".into()),
+                            Value::Real(point[0]),
+                            Value::Real(point[1]),
+                        ],
+                    );
+                    let command = PlayerCommand::Point {
+                        unit,
+                        order: "move".into(),
+                        x: point[0],
+                        y: point[1],
+                    };
+                    (result, command)
+                }
             }
         };
-        if let Err(error) = result {
-            input.last_error = Some(error);
+        match result {
+            Ok(_) => {
+                let clock = objects.timer_game_time();
+                record_command(&mut input, clock, command);
+            }
+            Err(error) => input.last_error = Some(error),
         }
     }
 }

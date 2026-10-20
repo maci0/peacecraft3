@@ -1,6 +1,7 @@
 //! Normal application producer for the existing admitted-map startup inputs.
+use crate::campaign_input::CampaignInput;
 use bevy::prelude::*;
-use pcx_play::map_admission::ParsedMapContext;
+use pcx_play::{map_admission::ParsedMapContext, player_command_log::StartIdentity};
 use peacecraft3::{
     browser_configuration::SelectedMapSources,
     campaign_startup::{
@@ -33,6 +34,7 @@ fn prepare(
     mut supply: ResMut<CampaignHostSupply>,
     mut startup: ResMut<CampaignStartup>,
     mut seed: ResMut<CampaignSeed>,
+    mut input: ResMut<CampaignInput>,
 ) {
     let (Some(bindings), Some(outcome), Some(context)) = (
         requests.bindings.as_ref(),
@@ -91,6 +93,9 @@ fn prepare(
     match result {
         Ok((inputs, chosen_seed)) => {
             seed.prepared = Some(chosen_seed);
+            input
+                .commands
+                .begin(StartIdentity::from_context(chosen_seed, &context));
             info!("Campaign new-game seed: {chosen_seed}");
             supply.revision = bindings.revision;
             supply.inputs = Some(inputs);
