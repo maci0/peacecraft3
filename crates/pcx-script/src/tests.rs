@@ -1421,3 +1421,19 @@ fn reals_in_stmt(st: &Stmt, total: &mut usize, lossy: &mut usize) {
 }
 
 use std::fmt::Write as _;
+
+#[test]
+fn doubled_backslash_in_a_string_literal_decodes_to_one_backslash() {
+    // Map scripts spell paths with doubled backslashes (`SetSkyModel`), so the
+    // runtime value is the single-backslash path.
+    let lexed = crate::lexer::lex(r#"constant string A = "Environment\\Sky\\X.mdl""#).unwrap();
+    let literal = lexed
+        .tokens
+        .iter()
+        .find_map(|t| match &t.kind {
+            crate::lexer::Tok::Str(s) => Some(s.decoded()),
+            _ => None,
+        })
+        .expect("one string literal");
+    assert_eq!(literal, r"Environment\Sky\X.mdl");
+}

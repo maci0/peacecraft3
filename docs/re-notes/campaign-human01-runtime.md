@@ -68,8 +68,9 @@ atan2(-1,-1) = -2.3561945); no original-runtime comparison yet.
 - `AddSpecialEffectTarget`/`DestroyEffect`: effect records on units; destroying
   null or destroyed effects is accepted (Human01 destroys one variable twice).
   Rendering at attachment points is not implemented.
-- `SetSkyModel`, `SetTerrainFogEx`, `ResetTerrainFog`: retained arguments for the
-  renderer; no sky or fog rendering yet.
+- `SetSkyModel`: drawn as the dome in [campaign-sky.md](campaign-sky.md).
+- `SetTerrainFogEx`, `ResetTerrainFog`: retained arguments for the renderer; no
+  fog rendering yet.
 - Destructables: invulnerability, kill, show/hide and X/Y/type getters. Death
   events and pathing changes on kill are not implemented.
 - `SetUnitFacing`/`SetUnitFacingTimed`/`GetUnitFacing`: shorter-arc linear turn

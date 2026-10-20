@@ -126,6 +126,7 @@ constant native GetCameraBoundMinY takes nothing returns real
 constant native GetCameraBoundMaxX takes nothing returns real
 constant native GetCameraBoundMaxY takes nothing returns real
 native SetDayNightModels takes string terrain, string units returns nothing
+native SetSkyModel takes string skyModelFile returns nothing
 native CreateMIDISound takes string label, integer a, integer b returns sound
 native CreateSoundFromLabel takes string label, boolean looping, boolean is3d, boolean stop, integer fadeIn, integer fadeOut returns sound
 native StartSound takes sound s returns nothing
@@ -613,7 +614,7 @@ fn rule_with_getter(kind: RuleKind, body: Vec<u8>) -> Arc<VerifiedNeutralRule> {
     Arc::new(imported.expect(native_name))
 }
 
-fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) -> MapStartupInputs {
+pub(crate) fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) -> MapStartupInputs {
     MapStartupInputs {
         inventory: None,
         inventory_powerup: None,
@@ -716,7 +717,7 @@ fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) ->
     }
 }
 
-fn fixture(script: &str) -> Fixture {
+pub(crate) fn fixture(script: &str) -> Fixture {
     let mut fixture = Fixture::new(1);
     fixture.common = COMMON.as_bytes().to_vec();
     fixture
@@ -1253,6 +1254,9 @@ mod script_camera_cases;
 
 #[path = "campaign_asset_cases.rs"]
 mod campaign_asset_cases;
+
+#[path = "campaign_sky_cases.rs"]
+mod campaign_sky_cases;
 
 #[path = "player_unit_event_cases.rs"]
 mod player_unit_event_cases;

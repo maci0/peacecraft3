@@ -97,12 +97,17 @@ fn path(definition: &Definition) -> Result<String, String> {
         _ => return Err("item model path is not text".into()),
     }
     .trim();
+    model_member(path)
+}
+
+/// Binary `.mdx` member for a script or item `.mdl`/`.mdx` reference.
+pub(super) fn model_member(path: &str) -> Result<String, String> {
     if matches!(path, "" | "_" | "-")
         || path.len() > 16 << 10
         || path.chars().any(char::is_control)
         || path.contains(',')
     {
-        return Err("missing or unsupported item model path".into());
+        return Err("missing or unsupported model path".into());
     }
     let path = pcx_mdl::binary_model_path(path);
     let name = path.rsplit(['/', '\\']).next().expect("nonempty path");
@@ -111,8 +116,42 @@ fn path(definition: &Definition) -> Result<String, String> {
     } else if name.to_ascii_lowercase().ends_with(".mdx") {
         Ok(path)
     } else {
-        Err("unsupported item model extension".into())
+        Err("unsupported model extension".into())
     }
+}
+
+/// Read one source-identified binary model within `budget` bytes.
+pub(super) fn read_model(
+    reader: &pcx_assets::Resolver,
+    edition: &str,
+    member: String,
+    budget: usize,
+) -> Result<Arc<pcx_play::unit_model::Model>, String> {
+    let asset = reader
+        .resolve_bounded(&member, budget.min(16 << 20) as u64)
+        .map_err(|error| error.to_string())?;
+    let origin = pcx_play::scripts::AssetIdentity {
+        edition: edition.to_owned(),
+        version: asset
+            .provenance
+            .source
+            .version
+            .clone()
+            .unwrap_or_else(|| "unversioned source".into()),
+        source: serde_json::to_string(&asset.provenance).map_err(|error| error.to_string())?,
+    };
+    if [&origin.edition, &origin.version, &origin.source]
+        .iter()
+        .any(|value| value.len() > 16 << 10)
+    {
+        return Err("model provenance budget exceeded".into());
+    }
+    Ok(Arc::new(pcx_play::unit_model::Model::read(
+        origin,
+        member,
+        asset.bytes.into(),
+        budget.min(16 << 20),
+    )?))
 }
 
 pub(super) fn load(
@@ -134,32 +173,8 @@ pub(super) fn load(
     let remaining = (256usize << 20)
         .checked_sub(*source_bytes)
         .ok_or("item model byte budget exceeded")?;
-    let asset = reader
-        .resolve_bounded(&path, remaining.min(16 << 20) as u64)
-        .map_err(|error| error.to_string())?;
-    let origin = pcx_play::scripts::AssetIdentity {
-        edition: edition.to_owned(),
-        version: asset
-            .provenance
-            .source
-            .version
-            .clone()
-            .unwrap_or_else(|| "unversioned source".into()),
-        source: serde_json::to_string(&asset.provenance).map_err(|error| error.to_string())?,
-    };
-    if [&origin.edition, &origin.version, &origin.source]
-        .iter()
-        .any(|value| value.len() > 16 << 10)
-    {
-        return Err("item model provenance budget exceeded".into());
-    }
-    let size = asset.bytes.len();
-    let model = Arc::new(pcx_play::unit_model::Model::read(
-        origin,
-        path,
-        asset.bytes.into(),
-        remaining.min(16 << 20),
-    )?);
+    let model = read_model(reader, edition, path, remaining)?;
+    let size = model.bytes.len();
     let animation = pcx_play::unit_model::Animation::new(Arc::clone(&model), now)?;
     models.insert(key, model);
     *source_bytes += size;

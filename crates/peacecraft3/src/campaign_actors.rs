@@ -7,10 +7,14 @@ use pcx_script::HandleId;
 
 #[path = "campaign_item_model.rs"]
 mod item_model;
+#[path = "campaign_sky.rs"]
+mod sky;
 use pcx_sim::world::{Definition, FieldValue};
 use peacecraft3::{
-    browser_configuration::SelectedMapSources, campaign_camera::CampaignCameraSet,
-    map_requests::MapRequests, map_script_session::MapScriptSession,
+    browser_configuration::SelectedMapSources,
+    campaign_camera::{CampaignCameraSet, CampaignSceneCamera},
+    map_requests::MapRequests,
+    map_script_session::MapScriptSession,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -54,6 +58,7 @@ pub(crate) struct UnitActors {
     parameters: Option<pcx_play::menu_lighting::Parameters>,
     parameters_attempted: bool,
     palette: Option<TeamPalette>,
+    sky: sky::Sky,
     pub last_error: Option<String>,
 }
 
@@ -131,9 +136,10 @@ struct DrawAssets<'w> {
 #[derive(SystemParam)]
 struct ActorQueries<'w, 's> {
     visibility: Query<'w, 's, &'static mut Visibility>,
-    transforms: Query<'w, 's, &'static mut Transform>,
+    transforms: Query<'w, 's, &'static mut Transform, Without<CampaignSceneCamera>>,
     actors: Query<'w, 's, (Entity, &'static UnitActor)>,
-    cameras: Query<'w, 's, Entity, With<peacecraft3::campaign_camera::CampaignSceneCamera>>,
+    cameras: Query<'w, 's, Entity, With<CampaignSceneCamera>>,
+    scene: sky::SceneCameras<'w, 's>,
 }
 
 fn transform_for(
@@ -427,6 +433,8 @@ enum Visual<'a> {
         &'a pcx_play::playercolor_host::ExecutedItem,
         &'a pcx_play::unit_model::Animation,
     ),
+    /// The sky dome centred on the scene camera eye.
+    Sky(&'a pcx_play::unit_model::Animation, Vec3),
 }
 impl<'a> Visual<'a> {
     fn animation(self) -> Result<&'a pcx_play::unit_model::Animation, String> {
@@ -435,13 +443,19 @@ impl<'a> Visual<'a> {
                 .animation
                 .as_ref()
                 .ok_or_else(|| "unit model is unavailable".into()),
-            Self::Item(_, animation) => Ok(animation),
+            Self::Item(_, animation) | Self::Sky(animation, _) => Ok(animation),
         }
     }
     fn face(self) -> f32 {
         match self {
             Self::Unit(unit) => unit.face,
-            Self::Item(..) => 0.0,
+            Self::Item(..) | Self::Sky(..) => 0.0,
+        }
+    }
+    fn layer(self) -> usize {
+        match self {
+            Self::Sky(..) => sky::RENDER_LAYER,
+            Self::Unit(_) | Self::Item(..) => peacecraft3::campaign_camera::RENDER_LAYER,
         }
     }
     fn transform(
@@ -451,6 +465,9 @@ impl<'a> Visual<'a> {
         height: f32,
     ) -> Result<Transform, String> {
         match self {
+            Self::Sky(_, eye) => {
+                Ok(Transform::from_translation(eye).with_scale(Vec3::splat(scale)))
+            }
             Self::Unit(unit) => transform_for(unit, terrain, scale, height),
             Self::Item(item, _) => {
                 let z = pcx_tera::world::sample_world_z(terrain, item.x, item.y)
@@ -476,6 +493,8 @@ impl<'a> Visual<'a> {
             )),
             Self::Item(item, _) => item_model::properties(&item.definition, channel_scale)
                 .map(|(scale, tint)| (scale, 0.0, tint)),
+            // The dome is authored in world units and carries no script tint, so no channel scale applies.
+            Self::Sky(..) => Ok((sky::MODEL_SCALE, 0.0, [1.0; 3])),
         }
     }
 }
@@ -485,7 +504,7 @@ struct ActorSource<'a> {
     palette: &'a TeamPalette,
     visual: Visual<'a>,
     terrain: &'a pcx_map::Terrain,
-    id: HandleId,
+    id: Option<HandleId>,
     color: i32,
     now: f64,
     channel_scale: f32,
@@ -621,9 +640,11 @@ impl Actor {
         model_scene::preflight_geosets(&source_input, &opacity, sample.frame)
             .map_err(|e| e.to_string())?;
         let initial_transform = visual.transform(terrain, scale, height)?;
-        let root = commands
-            .spawn((initial_transform, Visibility::default(), UnitActor(id)))
-            .id();
+        let mut root = commands.spawn((initial_transform, Visibility::default()));
+        if let Some(id) = id {
+            root.insert(UnitActor(id));
+        }
+        let root = root.id();
         let mut info = model_scene::SceneInfo::default();
         let geosets = model_scene::spawn_geosets(
             commands,
@@ -639,7 +660,7 @@ impl Actor {
             (
                 ChildOf(root),
                 bevy::render::batching::NoAutomaticBatching,
-                RenderLayers::layer(peacecraft3::campaign_camera::RENDER_LAYER),
+                RenderLayers::layer(visual.layer()),
             ),
         )
         .map_err(|e| e.to_string())?;
@@ -676,7 +697,10 @@ impl Actor {
         visual: Visual,
         now: f64,
         assets: &mut DrawAssets,
-        (visibility, transforms): (&mut Query<&mut Visibility>, &mut Query<&mut Transform>),
+        (visibility, transforms): (
+            &mut Query<&mut Visibility>,
+            &mut Query<&mut Transform, Without<CampaignSceneCamera>>,
+        ),
         terrain: &pcx_map::Terrain,
         light: Option<(
             &pcx_play::day_night::Sun,
@@ -806,6 +830,7 @@ fn project(
             trace!(unit=?actor.0,"retire campaign unit actor");
             commands.entity(entity).despawn();
         }
+        sky::release(&mut commands, &mut state, &mut queries.scene);
         *state = UnitActors {
             session: witness,
             ..default()
@@ -930,7 +955,7 @@ fn project(
                     palette: &palette,
                     visual: Visual::Unit(unit),
                     terrain: &context.terrain,
-                    id,
+                    id: Some(id),
                     color,
                     now,
                     channel_scale,
@@ -1007,7 +1032,7 @@ fn project(
                     palette: &palette,
                     visual,
                     terrain: &context.terrain,
-                    id,
+                    id: Some(id),
                     // Items do not carry a team-color override; reject replaceable team slots below.
                     color: 0,
                     now,
@@ -1043,6 +1068,25 @@ fn project(
             state.last_error = Some(format!("item {id:?}: {error}"));
         }
     }
+    sky::project(
+        &mut commands,
+        &mut state,
+        &mut assets,
+        &mut queries,
+        sky::Input {
+            script: objects
+                .environment()
+                .and_then(|e| e.sky_model.clone())
+                .flatten(),
+            reader: &reader,
+            edition: &context.sources.map.edition,
+            palette: &palette,
+            terrain: &context.terrain,
+            now,
+            channel_scale,
+            cutout,
+        },
+    );
     let mut owners = Vec::new();
     let mut orders = bevy::render::sync_world::MainEntityHashMap::default();
     for actor in state.actors.values() {
