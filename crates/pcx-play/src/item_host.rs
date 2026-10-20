@@ -138,13 +138,17 @@ impl ObjectHost {
             .as_real()
             .filter(|v| v.is_finite())
             .ok_or_else(|| fail(Failure::ItemState("finite real coordinate required")))?;
-        let admitted = self.items.as_ref().expect("dispatch requires admission");
-        if admitted.records >= admitted.budget.max_records {
-            return Err(fail(Failure::Budget("item creation")));
-        }
-        if self.inner.handles() >= self.inner.max_handles {
-            return Err(fail(Failure::Capacity));
-        }
+        Ok(Value::Handle(self.create_item_record(*rawcode, x, y, None)?))
+    }
+
+    /// The source definition of an item rawcode, checked against the admitted catalog. This
+    /// reads only, so a caller can classify an item before any budget or handle is spent.
+    pub(crate) fn item_definition(&self, rawcode: i32) -> Result<Definition, Error> {
+        let fail = |reason| self.inner.error(CREATE, reason);
+        let admitted = self
+            .items
+            .as_ref()
+            .ok_or_else(|| fail(Failure::ItemState("item catalog not admitted")))?;
         let requested = rawcode.to_be_bytes();
         let catalog_error = |problem| {
             fail(Failure::ItemCatalog {
@@ -165,6 +169,29 @@ impl ObjectHost {
                 actual: definition.kind,
             }));
         }
+        Ok(definition)
+    }
+
+    /// Creates one item record, optionally already held by `held_by`. Every refusal (item budget,
+    /// handle capacity, catalog, retained-field budget) is checked before the handle is allocated,
+    /// so a refused creation leaves the arena, handle counter and record count unchanged.
+    pub(crate) fn create_item_record(
+        &mut self,
+        rawcode: i32,
+        x: f32,
+        y: f32,
+        held_by: Option<(HandleId, usize)>,
+    ) -> Result<HandleId, Error> {
+        let fail = |reason| self.inner.error(CREATE, reason);
+        let admitted = self.items.as_ref().expect("dispatch requires admission");
+        if admitted.records >= admitted.budget.max_records {
+            return Err(fail(Failure::Budget("item creation")));
+        }
+        if self.inner.handles() >= self.inner.max_handles {
+            return Err(fail(Failure::Capacity));
+        }
+        let definition = self.item_definition(rawcode)?;
+        let admitted = self.items.as_ref().expect("dispatch requires admission");
         if definition.fields.len() > admitted.budget.max_retained_fields {
             return Err(fail(Failure::Budget("item retained fields")));
         }
@@ -176,7 +203,7 @@ impl ObjectHost {
             source: admitted.source.clone(),
             x,
             y,
-            held_by: None,
+            held_by,
             invulnerable: None,
             droppable: None,
             drop_on_death: None,
@@ -185,13 +212,6 @@ impl ObjectHost {
         };
         let id = self.inner.allocate(Entry::Item { record }, CREATE)?;
         self.items.as_mut().expect("admission retained").records += 1;
-        Ok(Value::Handle(id))
+        Ok(id)
     }
 }
-
-#[cfg(test)]
-#[path = "item_host_tests.rs"]
-mod tests;
-
-#[path = "inventory_host.rs"]
-mod inventory;

@@ -509,9 +509,32 @@ mod cell_tests;
 
 const SELL: &str = "purchase";
 
+/// A loaded stock cell that a sale may decrement, located once by [`ObjectHost::stock_sale_cell`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StockCell {
+    shop_at: usize,
+    cell: usize,
+    current: i32,
+}
+
+impl StockCell {
+    pub(crate) fn current(self) -> i32 {
+        self.current
+    }
+}
+
 impl ObjectHost {
     /// Loaded `currentStock` for one item in one shop. `None` when the item has no cell.
     pub(crate) fn stock_count(&self, shop: HandleId, item: i32) -> Result<Option<i32>, Error> {
+        Ok(self.stock_sale_cell(shop, item)?.map(StockCell::current))
+    }
+
+    /// The cell that holds `item` in `shop`, with its loaded count. Reads only.
+    pub(crate) fn stock_sale_cell(
+        &self,
+        shop: HandleId,
+        item: i32,
+    ) -> Result<Option<StockCell>, Error> {
         self.admitted_stock(ADD_ITEM)?;
         self.stock_unit(&Value::Handle(shop), SELL)?;
         let state = self.admitted_stock(ADD_ITEM)?;
@@ -519,29 +542,31 @@ impl ObjectHost {
             state.shops[at]
                 .cells
                 .iter()
-                .find(|c| c.item == Some(item))
-                .and_then(|c| c.stock)
-                .map(|(current, _)| current)
+                .enumerate()
+                .find(|(_, c)| c.item == Some(item))
+                .and_then(|(cell, c)| {
+                    c.stock.map(|(current, _)| StockCell {
+                        shop_at: at,
+                        cell,
+                        current,
+                    })
+                })
         }))
     }
 
-    /// Lowers the loaded `currentStock` of one item by one sale. The caller has checked it is
-    /// positive. A cell at zero stays until the script removes it.
-    pub(crate) fn take_one_stock(&mut self, shop: HandleId, item: i32) -> Result<(), Error> {
-        let inner = &self.inner;
-        let missing = || inner.error(SELL, Failure::StockState("no loaded stock to sell"));
-        let state = self.stock.as_mut().ok_or_else(missing)?;
-        let cell = state
-            .shop_index(shop)
-            .and_then(|at| {
-                state.shops[at]
-                    .cells
-                    .iter_mut()
-                    .find(|c| c.item == Some(item))
-            })
-            .and_then(|c| c.stock.as_mut())
-            .ok_or_else(missing)?;
-        cell.0 = cell.0.checked_sub(1).ok_or_else(missing)?;
-        Ok(())
+    /// Lowers the loaded count of a located cell by one sale. The cell was located with a
+    /// positive count in the same host state, and no write between the two reaches the stock
+    /// table, so the indices are valid and the decrement cannot fail.
+    pub(crate) fn apply_stock_sale(&mut self, cell: StockCell) {
+        let state = self
+            .stock
+            .as_mut()
+            .expect("located stock implies admitted stock");
+        let count = &mut state.shops[cell.shop_at].cells[cell.cell]
+            .stock
+            .as_mut()
+            .expect("located cell holds stock")
+            .0;
+        *count -= 1;
     }
 }
