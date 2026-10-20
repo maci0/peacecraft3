@@ -1,4 +1,7 @@
-//! Placed units/items, using native 0x551cc0/0x5520d0 framing.
+//! Placed units and their drop sets. The framing is checked against shipped campaign
+//! files (`tests/campaign_item_sets.rs`). It is not native-derived: earlier notes cited
+//! 0x551cc0 and 0x5520d0, but REA resolves them to `FUN_00551870` (race preference) and
+//! `FUN_00552040` (game option flags), which read no placed-unit records.
 use crate::{Error, Map};
 pub const UNITS_NAME: &str = "war3mapUnits.doo";
 
@@ -42,6 +45,10 @@ pub struct UnitPlacement {
     pub life: i32,
     pub mana: i32,
     pub item_table: Option<i32>,
+    /// Drop sets. Each word pair is `[item rawcode, chance]`: the rawcode is the
+    /// little-endian `u32` of the four file bytes, the chance is an integer weight.
+    /// Campaign maps emit one `RandomDistAddItem(rawcode, chance)` per pair
+    /// (`docs/re-notes/item-drops.md`).
     pub item_sets: Vec<Vec<[u32; 2]>>,
     pub post_drop_word: u32,
     pub post_drop_float: f32,
@@ -309,8 +316,8 @@ mod tests {
             u32::MAX,
             1,
             1,
-            33,
             0x41424344,
+            33,
             100,
         ] {
             data.extend(word.to_le_bytes());
@@ -358,7 +365,7 @@ mod tests {
             assert_eq!(unit.position, [1., 2., 3.]);
             assert_eq!(unit.control_word, 24);
             assert_eq!(unit.life, -10);
-            assert_eq!(unit.item_sets, [vec![[33, 0x41424344]]]);
+            assert_eq!(unit.item_sets, [vec![[0x41424344, 33]]]);
             assert_eq!(unit.inventory, [[5, 0x11223344]]);
             assert_eq!(unit.abilities, [[0x41424344, 1, 6]]);
             assert_eq!(unit.random, expected);

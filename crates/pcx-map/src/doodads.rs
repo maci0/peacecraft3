@@ -29,9 +29,9 @@
 //! 38  4   creation number (the World Editor's per-instance id)
 //! ```
 //!
-//! Version 7 carries **no item-drop data**: no `item_table_pointer`, no
-//! `item_sets_count`, no item sets. Version 8+ records are wider by those
-//! fields and are **refused** — no shipped file proves where they sit.
+//! Version 7 carries **no item-drop data**. Version 8 (accepted, no shipped file)
+//! adds a signed `table_id` and per-set pairs ahead of the creation number. The
+//! offsets are not proven against shipped bytes: all 132 shipped files are version 7.
 //!
 //! Terrain-doodad record, 16 bytes (cliff/terrain-palette placements):
 //!
@@ -64,8 +64,8 @@ use crate::Error;
 /// File magic.
 pub const DOO_MAGIC: [u8; 4] = *b"W3do";
 
-/// The only version either shipped build writes. Version 8+ adds item-drop
-/// fields this crate has not proved and is refused.
+/// The only version either shipped build writes. Version 8 is also accepted; its
+/// item-drop layout is unproven against shipped bytes (see the module docs).
 pub const DOO_VERSION: u32 = 7;
 
 /// Byte length of one version-7 instance record.
@@ -117,7 +117,8 @@ pub struct TerrainDoodad {
     pub grid_y: u32,
 }
 
-/// Version-8 authored item-table selector and sets of stored word pairs.
+/// Version-8 authored item-table selector and drop sets. Each pair is two stored words. The `[rawcode, chance]` order from `units.rs`
+/// is assumed here, not proven for version 8.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemDropData {
     pub table_id: i32,
