@@ -334,8 +334,9 @@ unresolved.
 
 Static-camera diagnostic, one original run (Legacy 1.29.2.9231, 1280x960 at 96 DPI,
 stopped afterwards). The first launch refused: the fixed slow lane was not walkable,
-so no units spawned. The second run started on the map's start key press, not during
-loading. The begin record and an on-screen message (`PCXDIAG start`) confirm the
+so no units spawned. Its records existed about 45 s after launch, before any key press.
+The second run's records appeared only after a key press on the chapter card. The cause
+of that difference is unexplained. The begin record and an on-screen message (`PCXDIAG start`) confirm the
 probe ran. Fog records changed from enabled and masked to disabled. Both orders were
 accepted at game clock 1.0 s. The clock file was rewritten each tick and held 400
 tick records by the end.
