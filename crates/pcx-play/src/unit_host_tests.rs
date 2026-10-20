@@ -2565,6 +2565,7 @@ fn position_host_admitting(
         "ConvertGameEvent",
         "ConvertUnitState",
         "ConvertPlayerUnitEvent",
+        "ConvertPlayerState",
         "ConvertAllianceType",
         "ConvertUnitType",
         "ConvertFGameState",

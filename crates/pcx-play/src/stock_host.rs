@@ -524,11 +524,6 @@ impl StockCell {
 }
 
 impl ObjectHost {
-    /// Loaded `currentStock` for one item in one shop. `None` when the item has no cell.
-    pub(crate) fn stock_count(&self, shop: HandleId, item: i32) -> Result<Option<i32>, Error> {
-        Ok(self.stock_sale_cell(shop, item)?.map(StockCell::current))
-    }
-
     /// The cell that holds `item` in `shop`, with its loaded count. Reads only.
     pub(crate) fn stock_sale_cell(
         &self,

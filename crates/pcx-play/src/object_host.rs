@@ -1147,6 +1147,7 @@ pub use combat::{Combat, CombatActor, CombatTraceEvent, Relation, Weapon};
 #[path = "event_delivery_host.rs"]
 mod event_delivery;
 pub use event_delivery::{EventSubject, FiredEvent, SaleContext};
+pub use item_sale::{PurchaseOutcome, PurchaseRefusal};
 
 #[path = "unit_vitals_host.rs"]
 mod unit_vitals;
