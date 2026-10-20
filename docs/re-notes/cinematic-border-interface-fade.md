@@ -43,18 +43,51 @@ differential with unequal authored insets.
 
 ## Interface fades: verified branch and helpers
 
-`ShowInterface(show, duration)` is `0x5F3958` (the entry with the `push 0xff`
-reference of the earlier evidence). Verified in its body:
+Native entry chain (exe SHA256 `3f2ed012…570eed`, `objdump` reads):
+
+1. Name and signature: `ShowInterface` is at VA `0xE75168` and its signature
+   `(BR)V` at `0xE75160`. Two registrar call groups push these operands:
+   - primary, VA `0x49F827`–`0x49F836`: `push 0xE75160; push 0xE75168; push
+     0x4ABF40; call 0x8CCC80`. Handler `0x4ABF40`.
+   - stub, VA `0xCBAB0F`–`0xCBAB1E`: the same name and signature with handler
+     `0xCBDA30`. That handler is `xor eax,eax; ret`, a no-op returning zero.
+     This registrar family has about 340 calls.
+2. `0x8CCC80(handler, name, sig)` parses the signature and calls `0x8C8F30` with
+   the registry from `0x45DF90(5)`. In `0x8C8F30`, an existing name jumps to the
+   shared tail at `0x8C8FA7`, which stores the handler at record `+0x1C` and the
+   signature at `+0x24`. Duplicate names therefore overwrite the handler, so the
+   last registration wins. Which registrar runs last is not established.
+3. Primary handler `0x4ABF40`: `push 0; push 1; call 0x5EC5E0` gets the object
+   (`eax`). It reads the duration as a float through `[ebp+0xC]`, then calls
+   `0x5F3760` with `ecx = eax`, the show flag, and the float. `0x5EC5E0` is not
+   decoded.
+4. `0x5F3760` is the body, not a wrapper: `push ebp` at `0x5F3760`, `ret 8` at
+   `0x5F3955`, `0x5F3A6C`, `0x5F3C54` and `0x5F3CDA`. `[ebp+8]` is the show flag
+   (`cmp [ebp+8],0` at `0x5F37A3`) and `[ebp+0xC]` is the duration (`movss` at
+   `0x5F387A` and `0x5F3B79`).
+
+The show branch (`[ebp+8] != 0`) compares the duration at `0x5F387F`. Its
+`jbe 0x5F3958` takes a duration at or below `0.0` to the immediate branch at
+`0x5F3958`. That branch then writes state `4`. The hide branch (`show == 0`,
+reached at `0x5F3A6F`) compares at `0x5F3B7E`, and `jbe 0x5F3C57` takes the
+immediate path there. The earlier label of `0x5F3958` as the whole function was
+wrong; it is a branch target inside `0x5F3760`.
+
+Verified in the hide body:
 
 - `0x5F3B7E`: `comiss xmm0, [0xE68BC8]` compares the duration with `0.0`
   (`0xE68BC8` holds `0x00000000`).
 - `0x5F3B8B`: `jbe 0x5F3C57`, so a duration at or below `0.0` takes the
   immediate branch. `comiss` with NaN also sets the flags that `jbe` tests.
-- `0x5F3B91` (duration above `0.0`): writes `1` to `[esi+0x18C]`, calls the
-  vtable at `[eax+0x6C]`, then calls helpers `0x5BF740` (type `0x1D`, frame
-  `[esi+0x468]`), `0x5BF6C0` (type `0x1C`, frame `[esi+0x45C]`), `0x5BF6C0` (type `0`,
-  frame `[esi+0x464]`) and `0x5BF380` (type `0x1E`, frame `[esi+0x440]`). Each passes
-  the duration float.
+- Hide body (`show == 0`), `0x5F3B91` (duration above `0.0`): writes `1` to
+  `[esi+0x18C]`, calls the vtable at `[eax+0x6C]`, then calls helpers `0x5BF740`
+  (type `0x1D`, frame `[esi+0x468]`), `0x5BF6C0` (type `0x1C`, frame
+  `[esi+0x45C]`), `0x5BF6C0` (type `0`, frame `[esi+0x464]`) and `0x5BF380`
+  (type `0x1E`, frame `[esi+0x440]`). Each passes the duration float.
+- Show body (`show != 0`), `0x5F3892` (duration above `0.0`): writes `2` to
+  `[esi+0x18C]`, then calls `0x5BF400` (type `0x1D`, frame `[esi+0x468]`),
+  `0x5BF380` (type `0x1C`, frame `[esi+0x45C]`), `0x5BF380` (type `0`, frame
+  `[esi+0x464]`) and `0x5BF6C0` (type `0x1E`, frame `[esi+0x440]`).
 - `0x5BF380`: when its frame argument is nonzero and the duration is not `0.0`
   (`ucomiss` and `jnp`), it stores the frame at `+0x38`, phase `0` at `+0x34`,
   the duration at `+0x2C`, and two further arguments at `+0x3C` and `+0x40`, then
