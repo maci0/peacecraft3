@@ -3,6 +3,8 @@ use super::*;
 use crate::inventory::{InventoryBudget, Policy, Rules};
 use crate::inventory_powerup::{AttributeBonus, Rules as PowerupRules};
 use crate::inventory_powerup_host::{grant_strength, reprice_life};
+use crate::item_heal::heal_life;
+use crate::playercolor_host::UseCheck;
 use pcx_objects::editor::{FieldSource, SlkId};
 use pcx_sim::world::FieldValue;
 
@@ -39,6 +41,8 @@ const CALLS: &[(&str, &[&str], &str, bool)] = &[
     ("IsItemInvulnerable", &["item"], "boolean", false),
     ("SetItemDroppable", &["item", "boolean"], "nothing", false),
     ("SetItemDropOnDeath", &["item", "boolean"], "nothing", false),
+    ("UnitUseItem", &["unit", "item"], "boolean", false),
+    ("UnitUseItemTarget", &["unit", "item", "widget"], "boolean", false),
 ];
 impl ObjectHost {
     pub fn with_inventory(mut self, rules: Rules, budget: InventoryBudget) -> Result<Self, Error> {
@@ -586,18 +590,111 @@ impl ObjectHost {
         }
         Some(self.inventory_call(name, args))
     }
+    /// `UnitUseItem` and `UnitUseItemTarget` for a held usable healing item. Every check that can
+    /// decline the use runs before any write and returns `false`, as the native reports a use that
+    /// did not happen. Order: prepare (no writes), `check_item_use`, `commit_item_use` (charges and
+    /// cooldown), then the heal and the perishable removal. A refusal leaves the state unchanged.
+    /// Source-unqualified cases return `false` and are not fatal: dead targets, and targets beyond
+    /// the source `Rng1` range (the native movement behavior is not modeled here).
+    fn unit_use_item(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let fail = |reason: String| self.inner.error(name, Failure::ItemUse(reason));
+        let (unit, item, target_arg) = match args {
+            [Value::Handle(u), Value::Handle(i)] => (*u, *i, None),
+            [Value::Handle(u), Value::Handle(i), Value::Handle(t)] => (*u, *i, Some(*t)),
+            _ => return Ok(Value::Bool(false)),
+        };
+        match self.inner.entry(unit)? {
+            Entry::RemovedUnit => return Ok(Value::Bool(false)),
+            Entry::Unit { .. } => {}
+            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+        }
+        let Some(record) = self.live_item(item)? else {
+            return Ok(Value::Bool(false));
+        };
+        if record.held_by.map(|(owner, _)| owner) != Some(unit)
+            || !self.inventory_policy(unit)?.use_items
+        {
+            return Ok(Value::Bool(false));
+        }
+        let state = self.inventory_state()?;
+        let rules = state
+            .attributes
+            .as_ref()
+            .ok_or_else(|| fail("healing rules are not admitted".into()))?;
+        let Some(amount) = rules
+            .heal_effect(&record.definition)
+            .map_err(|e| self.inner.error(name, Failure::UnitActivity(e)))?
+        else {
+            return Ok(Value::Bool(false));
+        };
+        let range = match target_arg {
+            Some(_) => Some(
+                rules
+                    .heal_range(&record.definition)
+                    .map_err(|e| self.inner.error(name, Failure::UnitActivity(e)))?,
+            ),
+            None => None,
+        };
+        let target = match target_arg {
+            None => unit,
+            Some(t) => match self.inner.entry(t)? {
+                Entry::RemovedUnit => return Ok(Value::Bool(false)),
+                Entry::Unit { .. } => t,
+                _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+            },
+        };
+        let target_record = self.executed_unit(target)?;
+        if target_record.combat.as_ref().is_some_and(|c| c.dead) {
+            return Ok(Value::Bool(false));
+        }
+        let vitals = target_record
+            .vitals
+            .ok_or_else(|| fail("target vitals are not admitted".into()))?;
+        if let Some(range) = range {
+            let from = self.executed_unit(unit)?.position;
+            let to = self.executed_unit(target)?.position;
+            let (Some(from), Some(to)) = (from, to) else {
+                return Ok(Value::Bool(false));
+            };
+            if (from[0] - to[0]).hypot(from[1] - to[1]) > range {
+                return Ok(Value::Bool(false));
+            }
+        }
+        let life = heal_life(vitals.life, vitals.max_life, amount as f32)
+            .map_err(|e| self.inner.error(name, Failure::UnitActivity(e)))?;
+        let grant = match self.check_item_use(unit, item)? {
+            UseCheck::Ready(grant) => grant,
+            UseCheck::OnCooldown { .. } | UseCheck::NoCharges | UseCheck::NotHeld => {
+                return Ok(Value::Bool(false));
+            }
+        };
+        let commit = self.commit_item_use(grant)?;
+        if let Entry::Unit { record } = self.inner.entry_mut(target)?
+            && let Some(vitals) = &mut record.vitals
+        {
+            vitals.life = life;
+        }
+        if commit.remove {
+            *self.inner.entry_mut(item)? = Entry::RemovedItem;
+        }
+        Ok(Value::Bool(true))
+    }
+
     fn inventory_call(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
         let fail = || self.inner.error(name, Failure::Signature);
         let spec = CALLS.iter().find(|c| c.0 == name).ok_or_else(fail)?;
         if args.len() != spec.1.len()
             || args.iter().zip(spec.1).any(|(value, kind)| match *kind {
-                "unit" | "item" => !matches!(value, Value::Handle(_) | Value::Null),
+                "unit" | "item" | "widget" => !matches!(value, Value::Handle(_) | Value::Null),
                 "integer" => !matches!(value, Value::Int(_)),
                 "boolean" => !matches!(value, Value::Bool(_)),
                 _ => true,
             })
         {
             return Err(fail());
+        }
+        if matches!(name, "UnitUseItem" | "UnitUseItemTarget") {
+            return self.unit_use_item(name, args);
         }
         let null = || match name {
             "UnitHasItem" | "UnitAddItem" | "IsItemInvulnerable" => Value::Bool(false),

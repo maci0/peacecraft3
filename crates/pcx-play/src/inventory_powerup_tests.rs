@@ -783,10 +783,8 @@ fn healing_refuses_negative_amounts_unfinite_ranges_and_missing_registration() {
     assert!(healing_rules("250", "-")
         .heal_range(&catalog_item("phea"))
         .is_err());
-    assert!(armor_rules("3")
-        .heal_effect(&catalog_item("parm"))
-        .unwrap_err()
-        .contains("not admitted"));
+    // `parm` is not usable, so it has no use and no effect, even without a healing registration.
+    assert_eq!(armor_rules("3").heal_effect(&catalog_item("parm")).unwrap(), None);
 }
 
 /// Explicit local gate: the reviewed 25-byte healing registration reads from the selected client

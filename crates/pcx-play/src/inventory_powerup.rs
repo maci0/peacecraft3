@@ -21,17 +21,17 @@ const PASSIVE_WINDOW: u32 = 0xbc9ce0;
 const ARMOR_WINDOW: u32 = 0xbc9d40;
 /// Registration call for the healing class (source `AIhe`). Its base comes from a call, so the
 /// window is longer than the immediate-base shape. Reviewed at `0xbf0520`.
-const HEAL_WINDOW: u32 = 0xbf0520;
+pub(crate) const HEAL_WINDOW: u32 = 0xbf0520;
 const HEAL_WINDOW_LEN: usize = 25;
 const BASE_FN_LEN: usize = 6;
-const REGISTER_FN: u32 = 0x7f6360;
+pub(crate) const REGISTER_FN: u32 = 0x7f6360;
 const CLASS_WINDOW_LEN: usize = 24;
-const PUSH_IMM32: u8 = 0x68;
-const PUSH_EAX: u8 = 0x50;
-const CALL_REL32: u8 = 0xe8;
-const MOV_EAX_IMM32: u8 = 0xb8;
-const RET: u8 = 0xc3;
-const CLEANUP_RET: [u8; 4] = [0x83, 0xc4, 0x0c, RET];
+pub(crate) const PUSH_IMM32: u8 = 0x68;
+pub(crate) const PUSH_EAX: u8 = 0x50;
+pub(crate) const CALL_REL32: u8 = 0xe8;
+pub(crate) const MOV_EAX_IMM32: u8 = 0xb8;
+pub(crate) const RET: u8 = 0xc3;
+pub(crate) const CLEANUP_RET: [u8; 4] = [0x83, 0xc4, 0x0c, RET];
 const MAX_IMAGE_BYTES: usize = 32 << 20;
 const IMAGE_BUDGET: RuleInputBudget = RuleInputBudget {
     image_bytes: MAX_IMAGE_BYTES,

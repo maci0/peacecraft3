@@ -15,6 +15,10 @@ type item extends widget
 native CreateItem takes integer i, real x, real y returns item
 native UnitAddItem takes unit u, item i returns boolean
 native UnitRemoveItem takes unit u, item i returns nothing
+native UnitUseItem takes unit whichUnit, item whichItem returns boolean
+native UnitUseItemTarget takes unit whichUnit, item whichItem, widget target returns boolean
+native GetItemCharges takes item whichItem returns integer
+native SetItemCharges takes item whichItem, integer count returns nothing
 native UnitHasItem takes unit u, item i returns boolean
 native GetItemX takes item i returns real
 native GetItemTypeId takes item i returns integer
@@ -67,20 +71,26 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["uact", "AIsm", "0", "1", "1", "1"],
             &["parm", "AId1", "0", "0", "0", "-"],
             &["parx", "AId8", "0", "0", "0", "-"],
+            &["phea", "AIh1", "0", "1", "1", "1"],
+            &["phcd", "AIh1", "0", "1", "1", "2"],
+            &["phsm", "AIh2", "0", "1", "1", "1"],
         ],
     );
     let abilities = sylk(
         &[
-            "alias", "code", "levels", "DataA1", "DataB1", "DataC1", "DataD1", "DataE1",
+            "alias", "code", "levels", "DataA1", "DataB1", "DataC1", "DataD1", "DataE1", "Rng1",
+            "Cool1",
         ],
         &[
-            &["L000", "Xinv", "1", "2", "1", "1", "1", "1"],
-            &["AIsm", "AIsm", "1", "0", "0", "7", "0", "0"],
-            &["AIs4", "AIab", "1", "0", "0", "5", "0", "0"],
-            &["AIa4", "AIab", "1", "2", "0", "0", "0", "0"],
-            &["AIi4", "AIab", "1", "0", "3", "0", "0", "0"],
-            &["AId1", "AIde", "1", "1", "0", "0", "0", "0"],
-            &["AId8", "AIde", "1", "8", "0", "0", "0", "0"],
+            &["L000", "Xinv", "1", "2", "1", "1", "1", "1", "-", "-"],
+            &["AIsm", "AIsm", "1", "0", "0", "7", "0", "0", "-", "-"],
+            &["AIs4", "AIab", "1", "0", "0", "5", "0", "0", "-", "-"],
+            &["AIa4", "AIab", "1", "2", "0", "0", "0", "0", "-", "-"],
+            &["AIi4", "AIab", "1", "0", "3", "0", "0", "0", "-", "-"],
+            &["AId1", "AIde", "1", "1", "0", "0", "0", "0", "-", "-"],
+            &["AId8", "AIde", "1", "8", "0", "0", "0", "0", "-", "-"],
+            &["AIh1", "AIhe", "1", "250", "0", "0", "0", "0", "100", "20"],
+            &["AIh2", "AIhe", "1", "250", "0", "0", "0", "0", "10", "20"],
         ],
     );
     let metadata = sylk(
@@ -176,6 +186,16 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "AId1",
                 "",
             ],
+            &[
+                "Ihpg",
+                "Data",
+                "AbilityData",
+                "-1",
+                "int",
+                "1",
+                "AIh1,AIh2",
+                "",
+            ],
         ],
     );
     Arc::new(
@@ -210,6 +230,32 @@ fn registration(source: &str, base: &str) -> Vec<u8> {
     w
 }
 
+/// Healing registration in the reviewed 25-byte layout, with its base function at a fixed offset.
+fn healing_registration() -> Vec<u8> {
+    use crate::inventory_powerup::{CALL_REL32, CLEANUP_RET, HEAL_WINDOW, PUSH_EAX, PUSH_IMM32, REGISTER_FN};
+    let base_va = i64::from(HEAL_WINDOW) + 0x100;
+    let rel_base = (base_va - (i64::from(HEAL_WINDOW) + 10)) as i32;
+    let rel_register = (i64::from(REGISTER_FN) - (i64::from(HEAL_WINDOW) + 21)) as i32;
+    let mut w = vec![PUSH_IMM32, 1, 2, 3, 4, CALL_REL32];
+    w.extend(rel_base.to_le_bytes());
+    w.push(PUSH_EAX);
+    w.push(PUSH_IMM32);
+    w.extend(b"AIhe".iter().rev());
+    w.push(CALL_REL32);
+    w.extend(rel_register.to_le_bytes());
+    w.extend(CLEANUP_RET);
+    w
+}
+
+/// The base function the healing window calls: `mov eax, "AAsm"; ret`.
+fn healing_base() -> Vec<u8> {
+    use crate::inventory_powerup::{MOV_EAX_IMM32, RET};
+    let mut b = vec![MOV_EAX_IMM32];
+    b.extend(b"AAsm".iter().rev());
+    b.push(RET);
+    b
+}
+
 struct PowerupItems;
 
 impl ObjectCatalog for PowerupItems {
@@ -219,7 +265,34 @@ impl ObjectCatalog for PowerupItems {
         } else {
             "0"
         };
-        let fields = [(*b"ipow", "powerup", powerup)]
+        // Charge, perishable, cooldown and ability fields for the two healing rows: `phea` has no
+        // cooldown group; `phcd` has two charges and cooldown group `AIhe`.
+        let mut rows = vec![(*b"ipow", "powerup", powerup)];
+        match &rawcode {
+            b"phea" => rows.extend([
+                (*b"iuse", "uses", "1"),
+                (*b"iper", "perishable", "1"),
+                (*b"iicd", "ignoreCD", "0"),
+                (*b"icid", "cooldownID", ""),
+                (*b"iabi", "abilList", "AIh1"),
+            ]),
+            b"phsm" => rows.extend([
+                (*b"iuse", "uses", "1"),
+                (*b"iper", "perishable", "1"),
+                (*b"iicd", "ignoreCD", "0"),
+                (*b"icid", "cooldownID", ""),
+                (*b"iabi", "abilList", "AIh2"),
+            ]),
+            b"phcd" => rows.extend([
+                (*b"iuse", "uses", "2"),
+                (*b"iper", "perishable", "1"),
+                (*b"iicd", "ignoreCD", "0"),
+                (*b"icid", "cooldownID", "AIhe"),
+                (*b"iabi", "abilList", "AIh1"),
+            ]),
+            _ => {}
+        }
+        let fields = rows
             .into_iter()
             .map(|(id, column, value)| {
                 let mut field = geometry_field(Ok(FieldValue::Cell(value.into())));
@@ -289,6 +362,8 @@ fn open() -> Fixture {
         &registration("AIab", "APbo"),
         &registration("AIde", "APbo"),
     )
+    .unwrap()
+    .with_heal(&healing_registration(), &healing_base())
     .unwrap();
     let mut h = h
         .with_order_registry(registry)
@@ -316,7 +391,7 @@ fn open() -> Fixture {
             source(),
             ItemBudget {
                 max_records: 16,
-                max_retained_fields: 4,
+                max_retained_fields: 8,
                 max_modifications: 0,
             },
         )
@@ -336,7 +411,14 @@ fn open() -> Fixture {
         mana_per_intelligence: 15.0,
     })
     .unwrap();
-    let mut h = h.with_inventory_powerup(tome).unwrap();
+    let mut h = h
+        .with_inventory_powerup(tome)
+        .unwrap()
+        .with_item_use(
+            crate::item_use_rules::Rules::new(powerup_tables(), Overlay::default()),
+            8,
+        )
+        .unwrap();
     h.admit_unit_activity(activity, 65536).unwrap();
     h.native("SetRandomSeed", &[Value::Int(7)]).unwrap();
     h.admit_combat(combat, "alpha").unwrap();
@@ -902,4 +984,136 @@ fn held_armor_changes_real_damage_and_its_drop_restores_it() {
     h.native("UnitRemoveItem", &[Value::Handle(ordinary), Value::Handle(armor)])
         .unwrap();
     assert_eq!(h.roll_damage(hero, weapon, ordinary).unwrap(), bare);
+}
+
+fn use_item(h: &mut ObjectHost, unit: HandleId, potion: HandleId) -> Result<Value, String> {
+    h.native("UnitUseItem", &[Value::Handle(unit), Value::Handle(potion)])
+}
+
+fn use_item_on(h: &mut ObjectHost, unit: HandleId, potion: HandleId, target: HandleId) -> Result<Value, String> {
+    h.native(
+        "UnitUseItemTarget",
+        &[Value::Handle(unit), Value::Handle(potion), Value::Handle(target)],
+    )
+}
+
+fn set_life(h: &mut ObjectHost, unit: HandleId, life: f32) {
+    let state = life_state(h);
+    h.native("SetUnitState", &[Value::Handle(unit), state, Value::Real(life)])
+        .unwrap();
+}
+
+fn life_of(h: &ObjectHost, unit: HandleId) -> f32 {
+    h.unit_vitals(unit).unwrap().unwrap().life
+}
+
+#[test]
+fn unit_use_heals_the_holder_by_the_source_amount_and_removes_a_perishable_potion() {
+    let Fixture { mut h, hero, .. } = open();
+    h.set_timer_game_time(1.0).unwrap();
+    let max = h.unit_vitals(hero).unwrap().unwrap().max_life;
+    set_life(&mut h, hero, max / 2.0);
+    let potion = item(&mut h, b"phea", 0.0);
+    assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
+    assert_eq!(use_item(&mut h, hero, potion), Ok(Value::Bool(true)));
+    assert_eq!(life_of(&h, hero), max / 2.0 + 250.0);
+    assert_eq!(
+        h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(potion)]),
+        Ok(Value::Bool(false))
+    );
+    assert!(h.executed_items().all(|(id, _)| id != potion));
+}
+
+#[test]
+fn targeted_use_clamps_to_maximum_and_out_of_range_is_false_without_writes() {
+    let Fixture { mut h, hero, ordinary } = open();
+    h.set_timer_game_time(1.0).unwrap();
+    let potion = item(&mut h, b"phea", 0.0);
+    assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
+    let ordinary_max = h.unit_vitals(ordinary).unwrap().unwrap().max_life;
+    set_life(&mut h, ordinary, ordinary_max - 100.0);
+    assert_eq!(use_item_on(&mut h, hero, potion, ordinary), Ok(Value::Bool(true)));
+    assert_eq!(life_of(&h, ordinary), ordinary_max);
+    assert_eq!(
+        h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(potion)]),
+        Ok(Value::Bool(false))
+    );
+}
+
+#[test]
+fn use_refuses_without_writes_when_not_held_or_not_a_use() {
+    let Fixture { mut h, hero, ordinary } = open();
+    h.set_timer_game_time(1.0).unwrap();
+    let max = h.unit_vitals(hero).unwrap().unwrap().max_life;
+    set_life(&mut h, hero, max / 2.0);
+    let before = life_of(&h, hero);
+    let potion = item(&mut h, b"phea", 0.0);
+    assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
+    assert_eq!(use_item(&mut h, ordinary, potion), Ok(Value::Bool(false)));
+    assert_eq!(life_of(&h, hero), before);
+    assert_eq!(
+        h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(potion)]),
+        Ok(Value::Bool(true))
+    );
+    let armor = item(&mut h, b"parm", 0.0);
+    assert_eq!(add(&mut h, hero, armor), Ok(Value::Bool(true)));
+    assert_eq!(use_item(&mut h, hero, armor), Ok(Value::Bool(false)));
+    assert_eq!(life_of(&h, hero), before);
+}
+
+#[test]
+fn charges_and_group_cooldown_refuse_without_writes_until_the_group_is_ready() {
+    let Fixture { mut h, hero, .. } = open();
+    h.set_timer_game_time(1.0).unwrap();
+    let max = h.unit_vitals(hero).unwrap().unwrap().max_life;
+    set_life(&mut h, hero, max / 2.0);
+    let potion = item(&mut h, b"phcd", 0.0);
+    assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
+    assert_eq!(use_item(&mut h, hero, potion), Ok(Value::Bool(true)));
+    let after_first = life_of(&h, hero);
+    assert_eq!(after_first, max / 2.0 + 250.0);
+    // Cooling down: refused, and the second charge is still there.
+    assert_eq!(use_item(&mut h, hero, potion), Ok(Value::Bool(false)));
+    assert_eq!(life_of(&h, hero), after_first);
+    assert_eq!(
+        h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(potion)]),
+        Ok(Value::Bool(true))
+    );
+    // Ready again: the last charge is used and the perishable potion is removed.
+    h.set_timer_game_time(25.0).unwrap();
+    assert_eq!(use_item(&mut h, hero, potion), Ok(Value::Bool(true)));
+    assert_eq!(life_of(&h, hero), (after_first + 250.0).min(max));
+    assert!(h.executed_items().all(|(id, _)| id != potion));
+}
+
+#[test]
+fn out_of_range_target_is_false_for_a_short_range_potion() {
+    let Fixture { mut h, hero, .. } = open();
+    h.set_timer_game_time(1.0).unwrap();
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    let far = match h
+        .native(
+            "CreateUnit",
+            &[
+                player,
+                Value::Int(i32::from_be_bytes(*b"u001")),
+                Value::Real(50.0),
+                Value::Real(0.0),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap()
+    {
+        Value::Handle(id) => id,
+        other => panic!("unit handle, got {other:?}"),
+    };
+    let potion = item(&mut h, b"phsm", 0.0);
+    assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
+    let far_life = life_of(&h, far);
+    assert_eq!(use_item_on(&mut h, hero, potion, far), Ok(Value::Bool(false)));
+    assert_eq!(life_of(&h, far), far_life);
+    assert_eq!(
+        h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(potion)]),
+        Ok(Value::Bool(true))
+    );
 }
