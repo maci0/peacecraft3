@@ -179,6 +179,9 @@ pub fn prepare_new_game(
         })
         .map(|p| i32::try_from(p.number()).map_err(|_| "participant player number".to_string()))
         .collect::<Result<Vec<_>, _>>()?;
+    let default_difficulty_fallback =
+        pcx_play::default_difficulty_image::native_default_fallback(image)
+            .map_err(|e| format!("GetDefaultDifficulty fallback: {e}"))?;
     inputs.post_config = PostConfigObservations {
         new_game: Some(NewGameInput {
             seed,
@@ -206,6 +209,9 @@ pub fn prepare_new_game(
         }),
         // ponytail: Normal until the campaign menu offers the difficulty choice.
         difficulty_global: Some("MAP_DIFFICULTY_NORMAL".into()),
+        default_difficulty: Some(DefaultDifficultyObservation::NoProfile {
+            native_fallback: default_difficulty_fallback,
+        }),
         version_global: Some(
             if expansion {
                 "VERSION_FROZEN_THRONE"

@@ -251,6 +251,70 @@ impl ObjectHost {
         self.game_difficulty = Some(difficulty);
         Ok(())
     }
+    /// Admits `GetDefaultDifficulty`/`SetDefaultDifficulty` with a fallback ordinal from the
+    /// selected image. The ordinal must lie in the selected `ConvertGameDifficulty` domain.
+    /// Current difficulty stays separate; admission is all-or-nothing.
+    pub fn admit_default_difficulty(
+        &mut self,
+        context: &Arc<ParsedMapContext>,
+        fallback: i32,
+    ) -> Result<(), Error> {
+        let name = "GetDefaultDifficulty";
+        let fail = |reason| self.inner.error(name, reason);
+        if self
+            .player_context()
+            .is_none_or(|selected| !Arc::ptr_eq(selected, context))
+        {
+            return Err(fail(Failure::SettingsState("map context is not admitted")));
+        }
+        Self::contract(&self.inner, name, &[], "gamedifficulty", false, None)?;
+        Self::contract(
+            &self.inner,
+            "SetDefaultDifficulty",
+            &["gamedifficulty"],
+            "nothing",
+            false,
+            None,
+        )?;
+        let anchor = self
+            .inner
+            .program
+            .natives()
+            .get("CreateTimer")
+            .ok_or_else(|| fail(Failure::Signature))?
+            .source
+            .clone();
+        for native in [name, "SetDefaultDifficulty"] {
+            if self
+                .inner
+                .program
+                .natives()
+                .get(native)
+                .is_none_or(|n| n.source != anchor)
+            {
+                return Err(self.inner.error(native, Failure::Source));
+            }
+        }
+        let conversion = self
+            .inner
+            .conversions
+            .get("ConvertGameDifficulty")
+            .filter(|c| c.kind == "gamedifficulty")
+            .ok_or_else(|| fail(Failure::Signature))?;
+        if !conversion.domain.contains(&fallback) {
+            return Err(fail(Failure::OutsideDomain(fallback)));
+        }
+        let converted = self
+            .inner
+            .convert_for("ConvertGameDifficulty", &[Value::Int(fallback)]);
+        let Value::Handle(handle) = converted.map_err(|e| self.inner.error(name, e.failure))?
+        else {
+            return Err(self.inner.error(name, Failure::Signature));
+        };
+        self.default_difficulty = Some(handle);
+        Ok(())
+    }
+
     pub fn startup_settings(&self) -> Option<StartupSettings> {
         self.startup_settings
     }
@@ -370,6 +434,22 @@ impl ObjectHost {
                 [] => Ok(Value::Handle(self.game_difficulty.expect("admitted"))),
                 [Value::Handle(id)] if self.inner.symbolic_value(*id, "gamedifficulty").is_ok() => {
                     self.game_difficulty = Some(*id);
+                    Ok(Value::Null)
+                }
+                _ => Err(self.inner.error(name, Failure::WrongFamily)),
+            });
+        }
+        if matches!(name, "GetDefaultDifficulty" | "SetDefaultDifficulty") {
+            self.default_difficulty?;
+            return Some(match args {
+                [] if name == "GetDefaultDifficulty" => {
+                    Ok(Value::Handle(self.default_difficulty.expect("admitted")))
+                }
+                [Value::Handle(id)]
+                    if name == "SetDefaultDifficulty"
+                        && self.inner.symbolic_value(*id, "gamedifficulty").is_ok() =>
+                {
+                    self.default_difficulty = Some(*id);
                     Ok(Value::Null)
                 }
                 _ => Err(self.inner.error(name, Failure::WrongFamily)),

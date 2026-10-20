@@ -81,6 +81,7 @@ pub struct ObjectHost {
     startup_settings: Option<StartupSettings>,
     startup_version: Option<HandleId>,
     game_difficulty: Option<HandleId>,
+    default_difficulty: Option<HandleId>,
     campaign_menu_race: Option<Option<HandleId>>,
     stock: Option<stock::State>,
     timers: Option<timers::State>,
@@ -182,6 +183,7 @@ impl ObjectHost {
             startup_settings: None,
             startup_version: None,
             game_difficulty: None,
+            default_difficulty: None,
             campaign_menu_race: None,
             stock: None,
             timers: None,
@@ -979,10 +981,10 @@ pub use item_creation::{ExecutedItem, ItemBudget};
 #[path = "unit_explosion_host.rs"]
 mod unit_explosion;
 
-#[path = "item_drop_host.rs"]
-mod item_drop;
 #[path = "boolexpr_destroy_host.rs"]
 mod boolexpr_destroy;
+#[path = "item_drop_host.rs"]
+mod item_drop;
 
 #[path = "item_query_host.rs"]
 mod item_query;

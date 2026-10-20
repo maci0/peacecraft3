@@ -230,7 +230,8 @@ fn admission_checks_loaded_interface_and_ancestry_sources_without_copying_edges(
 }
 
 #[test]
-fn null_destruction_is_a_no_op_and_destroying_a_wrapper_frees_it_and_requires_its_source_declaration() {
+fn null_destruction_is_a_no_op_and_destroying_a_wrapper_frees_it_and_requires_its_source_declaration()
+ {
     let common = COMMON.replace(
         "native DestroyFilter",
         "native DestroyBoolExpr takes boolexpr b returns nothing\nnative DestroyFilter",

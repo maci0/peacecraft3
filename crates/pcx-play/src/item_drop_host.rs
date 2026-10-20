@@ -64,7 +64,10 @@ impl ObjectHost {
         if self.live_item(*item)?.is_none() {
             return Err(fail(Failure::ItemState("absent item")));
         }
-        let drops = self.item_drops.as_mut().expect("dispatch requires admission");
+        let drops = self
+            .item_drops
+            .as_mut()
+            .expect("dispatch requires admission");
         if !drops.unit_ids.contains_key(item) && drops.unit_ids.len() >= drops.max_records {
             return Err(fail(Failure::Budget("item drop origins")));
         }

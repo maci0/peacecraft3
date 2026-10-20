@@ -53,7 +53,10 @@ fn destroying_a_filter_frees_it_and_every_later_use_refuses() {
         vm.host().filter_callback(id).unwrap_err().failure,
         Failure::Identity
     );
-    assert!(vm.call("kill_filter", &[]).is_err(), "a second destroy refuses");
+    assert!(
+        vm.call("kill_filter", &[]).is_err(),
+        "a second destroy refuses"
+    );
 }
 
 #[test]
@@ -91,7 +94,10 @@ fn a_non_boolexpr_handle_refuses_and_stays_live() {
 
 #[test]
 fn admission_requires_the_declared_boolexpr_parameter() {
-    let wrong = COMMON.replace(DECLARATION, "native DestroyBoolExpr takes timer e returns nothing");
+    let wrong = COMMON.replace(
+        DECLARATION,
+        "native DestroyBoolExpr takes timer e returns nothing",
+    );
     let refused = ObjectHost::checked(enums(&wrong))
         .unwrap()
         .with_conditions(ConditionBudget { max_records: 4 })

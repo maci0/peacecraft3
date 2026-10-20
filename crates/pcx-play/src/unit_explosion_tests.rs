@@ -3,7 +3,8 @@ use crate::playercolor_host::{EnumHost, Limits};
 use pcx_script::{Host, Prelude};
 use std::sync::Arc;
 
-const DECLARATION: &str = "native SetUnitExploded takes unit whichUnit, boolean exploded returns nothing";
+const DECLARATION: &str =
+    "native SetUnitExploded takes unit whichUnit, boolean exploded returns nothing";
 const BASE: &str = "\
 type agent extends handle
 type timer extends agent
@@ -43,10 +44,21 @@ fn host(max_units: usize) -> ObjectHost {
 
 #[test]
 fn admission_requires_the_declared_unit_and_boolean_signature_once() {
-    let wrong = enums("native SetUnitExploded takes unit whichUnit, integer exploded returns nothing");
-    assert!(ObjectHost::checked(wrong).unwrap().with_unit_explosions(1).is_err());
+    let wrong =
+        enums("native SetUnitExploded takes unit whichUnit, integer exploded returns nothing");
+    assert!(
+        ObjectHost::checked(wrong)
+            .unwrap()
+            .with_unit_explosions(1)
+            .is_err()
+    );
     let missing = enums("");
-    assert!(ObjectHost::checked(missing).unwrap().with_unit_explosions(1).is_err());
+    assert!(
+        ObjectHost::checked(missing)
+            .unwrap()
+            .with_unit_explosions(1)
+            .is_err()
+    );
     assert!(host(1).with_unit_explosions(1).is_err());
 }
 
@@ -54,7 +66,10 @@ fn admission_requires_the_declared_unit_and_boolean_signature_once() {
 fn a_timer_handle_refuses_and_retains_nothing() {
     let mut h = host(4);
     let timer = h.native("CreateTimer", &[]).unwrap();
-    assert!(h.native("SetUnitExploded", &[timer, Value::Bool(true)]).is_err());
+    assert!(
+        h.native("SetUnitExploded", &[timer, Value::Bool(true)])
+            .is_err()
+    );
     assert_eq!(h.unit_explosions.as_ref().unwrap().flags.len(), 0);
 }
 
@@ -62,13 +77,19 @@ fn a_timer_handle_refuses_and_retains_nothing() {
 fn a_non_boolean_flag_refuses() {
     let mut h = host(4);
     let timer = h.native("CreateTimer", &[]).unwrap();
-    assert!(h.native("SetUnitExploded", &[timer, Value::Int(1)]).is_err());
+    assert!(
+        h.native("SetUnitExploded", &[timer, Value::Int(1)])
+            .is_err()
+    );
 }
 
 #[test]
 fn an_unadmitted_host_does_not_answer_the_native() {
     let mut h = ObjectHost::checked(enums(DECLARATION)).unwrap();
-    assert!(h.native("SetUnitExploded", &[Value::Null, Value::Bool(true)]).is_err());
+    assert!(
+        h.native("SetUnitExploded", &[Value::Null, Value::Bool(true)])
+            .is_err()
+    );
 }
 
 /// The same signature from another selected source does not match the admitted unit catalog.

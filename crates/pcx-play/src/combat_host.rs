@@ -11,11 +11,11 @@
 //! that acquisition policy during travel and resumes its accepted endpoint after
 //! losing a target; native interrupt/resume and event nesting remain unqualified.
 use super::{Entry, Error, EventSubject, Failure, ObjectHost};
+use crate::inventory_powerup::AttributeBonus;
 use pcx_objects::editor::misc::{ATTACK_TYPES, CombatRules, DEFENSE_TYPES};
 use pcx_objects::editor::{FieldSource, SlkId};
 use pcx_script::{HandleId, Value};
 use pcx_sim::world::{Definition, FieldValue};
-use crate::inventory_powerup::AttributeBonus;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Relation {
@@ -346,7 +346,7 @@ impl ObjectHost {
             .rules;
         let bonus = self.unit_hero_bonus(unit)?;
         Self::derive_hero_combat(&record.definition, progress, bonus, rules)
-        .map_err(|error| self.inner.error("combat", Failure::UnitActivity(error)))
+            .map_err(|error| self.inner.error("combat", Failure::UnitActivity(error)))
     }
 
     pub(super) fn combat_attack_order(&self, unit: HandleId) -> Option<i32> {
@@ -541,7 +541,11 @@ impl ObjectHost {
             }
             if let Some(animation) = &mut record.animation {
                 exploded_presented = exploded && animation.has_sequence("death explode");
-                let sequence = if exploded_presented { "death explode" } else { "death" };
+                let sequence = if exploded_presented {
+                    "death explode"
+                } else {
+                    "death"
+                };
                 animation
                     .select(sequence, now)
                     .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
@@ -622,9 +626,8 @@ impl ObjectHost {
             (combat.armor, combat.defense)
         };
         // Hero armor derives from agility; held armor points are a separate item bonus.
-        let armor = armor
-            + self.hero_combat_bonuses(target)?.armor
-            + self.held_armor_bonus(target)? as f32;
+        let armor =
+            armor + self.hero_combat_bonuses(target)?.armor + self.held_armor_bonus(target)? as f32;
         let primary_damage = self.hero_combat_bonuses(source)?.damage;
         let mut roll = weapon.base;
         for _ in 0..weapon.dice.max(0) {

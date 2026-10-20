@@ -68,6 +68,7 @@ pub mod hero_skills;
 pub mod label_sounds;
 pub mod map_admission;
 pub mod map_scripts_import;
+pub mod default_difficulty_image;
 pub mod map_startup_host;
 pub mod menu_edition;
 pub mod menu_lighting;

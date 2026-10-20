@@ -19,12 +19,25 @@ native DialogDisplay takes player p, dialog d, boolean visible returns nothing
 native TriggerRegisterDialogButtonEvent takes trigger t, button b returns event
 type dialogevent extends eventid
 constant native ConvertDialogEvent takes integer n returns dialogevent
+type gamedifficulty extends handle
+constant native ConvertGameDifficulty takes integer i returns gamedifficulty
+native SetGameDifficulty takes gamedifficulty whichdifficulty returns nothing
+constant native GetGameDifficulty takes nothing returns gamedifficulty
+native GetDefaultDifficulty takes nothing returns gamedifficulty
+native SetDefaultDifficulty takes gamedifficulty g returns nothing
 globals
 constant dialogevent EVENT_DIALOG_BUTTON_CLICK = ConvertDialogEvent(90)
+constant gamedifficulty MAP_DIFFICULTY_NORMAL = ConvertGameDifficulty(1)
+constant gamedifficulty MAP_DIFFICULTY_HARD = ConvertGameDifficulty(2)
 endglobals
 ";
 
-/// Mirrors `CustomDefeatQuitBJ`: the quit button's action pauses, then ends the game.
+/// Synthetic no-profile fallback, deliberately not the current `MAP_DIFFICULTY_NORMAL`
+/// input, so the Quit can only take the default when it is the value the native returns.
+const SYNTHETIC_DEFAULT_FALLBACK: i32 = 2;
+
+/// Mirrors `CustomDefeatQuitBJ`. The defeat reset sets the current difficulty to the default,
+/// so `EndGame` reports the score only when the default, not the current input, was applied.
 const QUIT_SCRIPT: &str = "\
 globals
 player p = Player(0)
@@ -34,7 +47,12 @@ trigger listener = CreateTrigger()
 endglobals
 function quitAction takes nothing returns nothing
 call PauseGame(false)
+call SetGameDifficulty(GetDefaultDifficulty())
+if GetGameDifficulty() == MAP_DIFFICULTY_HARD then
 call EndGame(true)
+else
+call EndGame(false)
+endif
 endfunction
 function config takes nothing returns nothing
 endfunction
@@ -94,10 +112,17 @@ fn publish_with_assets(
     );
     deliver_timer_with_assets(app, script, revision, &common, assets, |inputs| {
         inputs.post_config.local_player = Some(0);
-        inputs
-            .enumeration
-            .names
-            .extend(["ConvertGameEvent".into(), "ConvertDialogEvent".into()]);
+        inputs.post_config.difficulty_global = Some("MAP_DIFFICULTY_NORMAL".into());
+        inputs.post_config.default_difficulty = Some(
+            pcx_play::map_startup_host::DefaultDifficultyObservation::NoProfile {
+                native_fallback: SYNTHETIC_DEFAULT_FALLBACK,
+            },
+        );
+        inputs.enumeration.names.extend([
+            "ConvertGameEvent".into(),
+            "ConvertDialogEvent".into(),
+            "ConvertGameDifficulty".into(),
+        ]);
         inputs.enumeration.limits.max_handles = 256;
         inputs.trigger_runtime = Some(pcx_play::playercolor_host::TriggerRuntimeInput {
             initial_enabled: true,
