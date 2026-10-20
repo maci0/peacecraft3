@@ -140,6 +140,7 @@ pub(crate) fn file_sound(
 
 pub(crate) struct SoundSources {
     tables: Vec<ParameterTable>,
+    environments: Vec<pcx_play::sound_environment::SoundEnvironment>,
 }
 
 struct ParameterTable {
@@ -188,6 +189,7 @@ impl SoundSources {
         budget: pcx_play::sound_parameters::BanksBudget,
     ) -> Result<Self, String> {
         let mut tables = Vec::new();
+        let mut environments = Vec::new();
         let mut remaining = budget.total_table_bytes;
         for (visited, path) in reader
             .paths()
@@ -207,6 +209,24 @@ impl SoundSources {
             let table = pcx_slq::Table::parse_bounded(&asset.bytes, budget.coordinates)
                 .map_err(|e| format!("{path}: {e}"))?;
             let has = |field| table.headers().any(|(_, name)| name == field);
+            if has("EnvironmentType") {
+                let found = pcx_play::sound_environment::from_table(&table)
+                    .map_err(|e| format!("{path}: {e}"))?;
+                for environment in found {
+                    if environments.iter().any(
+                        |known: &pcx_play::sound_environment::SoundEnvironment| {
+                            known.name == environment.name
+                        },
+                    ) {
+                        return Err(format!(
+                            "{path}: duplicate sound environment {}",
+                            environment.name
+                        ));
+                    }
+                    environments.push(environment);
+                }
+                continue;
+            }
             // Lookup/reference tables can carry SoundLabel without sound parameters.
             if !has("Volume") && !has("Flags") {
                 continue;
@@ -252,7 +272,15 @@ impl SoundSources {
                 profile,
             });
         }
-        Ok(Self { tables })
+        Ok(Self {
+            tables,
+            environments,
+        })
+    }
+
+    /// Environment records from every `EnvironmentType` table in the selected sources.
+    pub(crate) fn environments(&self) -> &[pcx_play::sound_environment::SoundEnvironment] {
+        &self.environments
     }
 
     fn source(&self, label: &str, metadata: usize, pcm: bool) -> Result<&ParameterTable, String> {

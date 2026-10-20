@@ -351,6 +351,7 @@ pub fn prepare(
         rules,
         budgets: budgets(),
         camera: source.camera,
+        sound_environments: sound_sources.environments().to_vec(),
         // Executed-path loaders attached by campaign_startup fill these stores.
         day_night: pcx_play::day_night::Assets::read(
             &[],
