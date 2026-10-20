@@ -206,14 +206,16 @@ impl ObjectHost {
             let [Value::Bool(show), Value::Real(duration)] = args else {
                 return Err(fail("expected interface boolean and real duration"));
             };
-            if !duration.is_finite() || *duration < 0.0 {
-                return Err(fail("finite nonnegative interface fade required"));
+            if !duration.is_finite() {
+                return Err(fail("finite interface fade duration required"));
             }
             let now = self.timer_game_time();
             let state = self.presentation.as_mut().expect("admitted");
             state.interface_visible = Some(*show);
             state.control_enabled = Some(*show);
-            // The consumer interpolates toward the new visibility from this time.
+            // Native ShowInterface animates only for a duration above 0.0 (`comiss` then `jbe`
+            // to the immediate branch, which also takes non-positive values). See
+            // docs/re-notes/cinematic-border-interface-fade.md.
             state.interface_fade = now.filter(|_| *duration > 0.0).map(|at| (at, *duration));
             return Ok(Value::Null);
         }

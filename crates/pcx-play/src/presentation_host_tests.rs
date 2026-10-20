@@ -272,7 +272,7 @@ fn invalid_interface_fades_and_bad_arguments_preserve_the_visible_state() {
     h.admit_presentation(64).unwrap();
     h.native("ShowInterface", &[Value::Bool(false), Value::Real(0.)])
         .unwrap();
-    for duration in [-1., f32::INFINITY, f32::NAN] {
+    for duration in [f32::INFINITY, f32::NAN] {
         assert!(
             h.native("ShowInterface", &[Value::Bool(true), Value::Real(duration)])
                 .is_err()
@@ -280,6 +280,13 @@ fn invalid_interface_fades_and_bad_arguments_preserve_the_visible_state() {
         assert_eq!(h.presentation().unwrap().interface_visible, Some(false));
         assert_eq!(h.presentation().unwrap().control_enabled, Some(false));
     }
+    // Native ShowInterface takes the immediate branch for a duration at or below 0.0.
+    h.native("ShowInterface", &[Value::Bool(true), Value::Real(-1.)])
+        .unwrap();
+    assert_eq!(h.presentation().unwrap().interface_visible, Some(true));
+    assert_eq!(h.presentation().unwrap().interface_fade, None);
+    h.native("ShowInterface", &[Value::Bool(false), Value::Real(0.)])
+        .unwrap();
     for (name, args) in [
         ("ShowInterface", vec![Value::Bool(true), Value::Int(0)]),
         ("EnableUserControl", vec![Value::Int(1)]),
