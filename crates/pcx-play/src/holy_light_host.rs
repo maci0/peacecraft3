@@ -1,29 +1,35 @@
-//! Holy Light (`AHhb`): a timed heal of a friendly living unit or damage to an enemy undead unit.
+//! Holy Light (`AHhb`): a timed heal of an allied living unit, or damage to an enemy undead unit.
 //!
-//! The rank's `levels`, `Cost`, `Cool`, `Rng`, `DataA` and `targs` come from
-//! `Units\AbilityData.slk`. The order string comes from the row's `AbilityFunc`
-//! `Order`. A cast that is out of range walks the caster into range first.
-//! Undead damage is `DataA / UNDEAD_DAMAGE_DIVISOR`; the divisor is the tooltip
-//! wording "half damage" (`Units\HumanAbilityStrings.txt`), not a numeric column.
+//! Per learned rank, `levels`, `Cost`, `Cool`, `Rng`, `DataA` and `targs` come from
+//! `Units\AbilityData.slk`. The order string is the row's `AbilityFunc` `Order`, the
+//! hotkey its `Hotkey`, and the art its `Targetart` with `Targetattach`. Undead damage
+//! is `DataA / 2`, admitted only when each `UberTip` names "half damage".
 //!
-//! Not implemented: cast and target art (`Targetart` is not attached), and the
-//! Air/Ground movement filter (`targs` must list both tokens, or the cast refuses).
-//! Cast range is measured between unit positions, without collision radii; that
-//! geometry is not yet qualified against the native cast-range check.
-use super::{Entry, Error, EventSubject, Failure, ObjectHost, combat};
+//! Ally, enemy and undead classes use the explicit player alliance table and the
+//! `UnitBalance` `type` list. Cast range is measured between unit positions with no
+//! collision radii. Qualifying that geometry needs native range evidence.
+//!
+//! Not implemented: the spell's armor and attack type. Undead damage bypasses target
+//! armor until a native check qualifies it. Art has no expiry: it lasts until the
+//! same target is hit again, or until the script destroys it. Air/Ground filters
+//! require both `targs` tokens.
+use super::{Entry, Error, Failure, ObjectHost, combat};
 use pcx_objects::editor::SlkId;
 use pcx_script::HandleId;
 use std::collections::BTreeMap;
 
 /// The implementation is bound to this row, as the campaign selects it with
-/// `SelectHeroSkill(unit, 'AHhb')`. Its order string is read from the row.
+/// `SelectHeroSkill(unit, 'AHhb')`. Its order and art come from the row.
 const ABILITY: [u8; 4] = *b"AHhb";
 /// Native that dispatches the order, used as error context.
 const NATIVE: &str = "IssueTargetOrder";
 /// Animation sequence played on cast when the unit model has one.
 const CAST_SEQUENCE: &str = "spell";
-/// Tooltip "deal half damage to an enemy Undead unit" (`Units\HumanAbilityStrings.txt`).
-const UNDEAD_DAMAGE_DIVISOR: f32 = 2.0;
+/// Attach point used when the row authors no `Targetattach`. Inference: the model root.
+const DEFAULT_ATTACH: &str = "origin";
+/// `UberTip` wording that names the undead ratio, and the divisor it stands for.
+const UNDEAD_RATIO_TEXT: &str = "half damage";
+const HALF: f32 = 2.0;
 /// `targs` tokens this cast evaluates. Any other token refuses.
 const TARGET_TOKENS: [&str; 7] = [
     "air",
@@ -37,10 +43,20 @@ const TARGET_TOKENS: [&str; 7] = [
 
 pub(super) struct Rules {
     order: i32,
+    undead_divisor: f32,
+    art: Art,
     /// Game time each caster may cast again.
     ready_at: BTreeMap<HandleId, f64>,
     /// Accepted casts still walking into range, by caster.
     pending: BTreeMap<HandleId, HandleId>,
+    /// Live art effect on each target.
+    art_on: BTreeMap<HandleId, HandleId>,
+}
+
+#[derive(Clone)]
+struct Art {
+    model: String,
+    attach: String,
 }
 
 struct Filter {
@@ -54,20 +70,21 @@ struct Spell {
     cooldown: f64,
     range: f32,
     amount: f32,
+    undead_divisor: f32,
     filter: Filter,
-}
-
-/// Holy Light as a player command: the hotkey that arms it, and the order number a target click issues.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Command {
-    pub hotkey: char,
-    pub order: i32,
 }
 
 #[derive(Clone, Copy)]
 enum Effect {
     Heal(f32),
     Damage(f32),
+}
+
+/// A player command: the hotkey that arms it, and the order number a target click issues.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Command {
+    pub hotkey: char,
+    pub order: i32,
 }
 
 fn target_filter(targs: &str) -> Result<Filter, String> {
@@ -91,12 +108,17 @@ impl ObjectHost {
         self.inner.error(NATIVE, Failure::HeroSkills(reason))
     }
 
-    /// Needs combat (which dispatches the order) and hero skills (which resolve ranks).
+    /// Needs combat (dispatches the order), hero skills (resolves ranks) and unit
+    /// effects (shows the `Targetart`). Every profile it reads must be authored.
     pub fn admit_holy_light(&mut self) -> Result<(), Error> {
-        if self.holy_light.is_some() || self.combat.is_none() || !self.has_hero_skills() {
-            return Err(
-                self.holy_error("holy light needs combat and hero skills, admitted once".into())
-            );
+        if self.holy_light.is_some()
+            || self.combat.is_none()
+            || !self.has_hero_skills()
+            || !self.effects
+        {
+            return Err(self.holy_error(
+                "holy light needs combat, hero skills and unit effects, admitted once".into(),
+            ));
         }
         let name = self
             .hero_ability_profile(ABILITY, "Order")
@@ -107,16 +129,38 @@ impl ObjectHost {
             .and_then(|r| r.id(&name))
             .filter(|id| *id != -1)
             .ok_or_else(|| self.holy_error(format!("order {name} is not registered")))?;
+        let model = self
+            .hero_ability_profile(ABILITY, "Targetart")
+            .map_err(|e| self.holy_error(e))?;
+        let attach = self
+            .hero_ability_profiles(ABILITY, "Targetattach")
+            .map_err(|e| self.holy_error(e))?
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| DEFAULT_ATTACH.into());
+        let tips = self
+            .hero_ability_profiles(ABILITY, "UberTip")
+            .map_err(|e| self.holy_error(e))?;
+        if tips.is_empty() || !tips.iter().all(|tip| tip.contains(UNDEAD_RATIO_TEXT)) {
+            return Err(self.holy_error(format!("UberTip does not state the {UNDEAD_RATIO_TEXT}")));
+        }
         self.holy_light = Some(Rules {
             order,
+            undead_divisor: HALF,
+            art: Art { model, attach },
             ready_at: BTreeMap::new(),
             pending: BTreeMap::new(),
+            art_on: BTreeMap::new(),
         });
         Ok(())
     }
 
+    /// The order number that casts Holy Light, when admitted.
+    pub(super) fn holy_light_order(&self) -> Option<i32> {
+        self.holy_light.as_ref().map(|rules| rules.order)
+    }
+
     /// The command this unit gets from a learned Holy Light, or `None` without a learned rank.
-    /// The hotkey is the row's `Hotkey` profile, a single letter.
     pub fn holy_light_command(&self, unit: HandleId) -> Result<Option<Command>, Error> {
         let Some(rules) = self.holy_light.as_ref() else {
             return Ok(None);
@@ -141,12 +185,7 @@ impl ObjectHost {
         }
     }
 
-    /// The order number that casts Holy Light, when admitted.
-    pub(super) fn holy_light_order(&self) -> Option<i32> {
-        self.holy_light.as_ref().map(|rules| rules.order)
-    }
-
-    /// Drops a walking cast when its caster takes another order.
+    /// Drops a walking cast when its caster dies, is removed or takes another order.
     pub(super) fn forget_holy_cast(&mut self, caster: HandleId) {
         if let Some(rules) = &mut self.holy_light {
             rules.pending.remove(&caster);
@@ -183,6 +222,7 @@ impl ObjectHost {
             cooldown: f64::from(number("Cool")?),
             range: number("Rng")? as f32,
             amount: number("DataA")? as f32,
+            undead_divisor: self.holy_light.as_ref().map_or(HALF, |r| r.undead_divisor),
             filter: target_filter(&targs).map_err(|e| self.holy_error(e))?,
         }))
     }
@@ -202,7 +242,8 @@ impl ObjectHost {
     }
 
     /// The effect this spell would have on `target`, or `None` when the target is not
-    /// eligible. Checks liveness, self, ancient and the enemy/friend class rules.
+    /// eligible. Enemies must be undead. Allies (same player or passive alliance) must
+    /// be living, unless `targs` allows any class.
     fn holy_effect(
         &self,
         caster: HandleId,
@@ -217,12 +258,16 @@ impl ObjectHost {
             return Ok(None);
         }
         if self.is_enemy(caster, target) {
-            return Ok((undead).then_some(Effect::Damage(spell.amount / UNDEAD_DAMAGE_DIVISOR)));
+            return Ok(undead.then_some(Effect::Damage(spell.amount / spell.undead_divisor)));
+        }
+        if !self.is_ally(caster, target) {
+            return Ok(None);
         }
         let mechanical = self.unit_has_class(target, "mechanical")?;
-        let neutral = self.neutral_passive_owner(target);
-        let organic = !undead && !mechanical;
-        Ok((!neutral && (organic || !spell.filter.organic)).then_some(Effect::Heal(spell.amount)))
+        if spell.filter.organic && (undead || mechanical) {
+            return Ok(None);
+        }
+        Ok(Some(Effect::Heal(spell.amount)))
     }
 
     fn holy_cooling_or_short_of_mana(&self, caster: HandleId, spell: &Spell, now: f64) -> bool {
@@ -283,6 +328,7 @@ impl ObjectHost {
         Ok(())
     }
 
+    /// Rechecks learned rank, target, cooldown and mana, then casts in range or walks.
     fn step_holy_cast(
         &mut self,
         caster: HandleId,
@@ -309,22 +355,21 @@ impl ObjectHost {
                 .error(NATIVE, Failure::UnitState("unit position missing")));
         };
         if combat::distance(from, to) <= spell.range {
-            if self
-                .live(caster)
-                .is_some_and(|u| u.activity.as_ref().is_some_and(|a| a.moving()))
-            {
+            if self.is_moving(caster) {
                 self.steer_unit(caster, None, NATIVE)?;
             }
             return self.apply_holy_cast(caster, target, &spell, effect, now);
         }
-        let idle = !self
-            .live(caster)
-            .and_then(|u| u.activity.as_ref())
-            .is_some_and(|a| a.moving());
-        if idle {
+        if !self.is_moving(caster) {
             self.steer_unit(caster, Some(to), NATIVE)?;
         }
         Ok(())
+    }
+
+    fn is_moving(&self, unit: HandleId) -> bool {
+        self.live(unit)
+            .and_then(|u| u.activity.as_ref())
+            .is_some_and(|a| a.moving())
     }
 
     /// The walking cast ends: its caster stops moving toward the target.
@@ -366,50 +411,25 @@ impl ObjectHost {
         played.map_err(|e| self.inner.error(NATIVE, Failure::UnitAnimation(e)))?;
         match effect {
             Effect::Damage(damage) => self.damage_unit(caster, target, damage)?,
-            Effect::Heal(amount) => {
-                if let Entry::Unit { record } = self.inner.entry_mut(target)?
-                    && let Some(vitals) = &mut record.vitals
-                {
-                    vitals.life = (vitals.life + amount).min(vitals.max_life);
-                }
-            }
+            Effect::Heal(amount) => self.heal_unit(target, amount)?,
         }
+        self.attach_holy_art(target)?;
         self.queue_spell_effect(caster, target)
     }
 
-    /// `EVENT_UNIT_SPELL_EFFECT` and `EVENT_PLAYER_UNIT_SPELL_EFFECT` for the caster,
-    /// each naming the target through `GetSpellTargetUnit`.
-    fn queue_spell_effect(&mut self, caster: HandleId, target: HandleId) -> Result<(), Error> {
-        let unit_event = self.source_constant_enumerand("EVENT_UNIT_SPELL_EFFECT", "unitevent")?;
-        let player_event =
-            self.source_constant_enumerand("EVENT_PLAYER_UNIT_SPELL_EFFECT", "playerunitevent")?;
-        let owner = self.executed_unit(caster)?.owner;
-        let subject = EventSubject {
-            unit: Some(caster),
-            spell_target: Some(target),
-            ..EventSubject::default()
+    /// Shows the `Targetart` on the target. The previous art on that target ends first.
+    fn attach_holy_art(&mut self, target: HandleId) -> Result<(), Error> {
+        let Some(rules) = self.holy_light.as_mut() else {
+            return Ok(());
         };
-        let mut fired = Vec::new();
-        for entry in &self.inner.arena {
-            match entry {
-                Entry::RegisteredUnitEvent {
-                    trigger,
-                    unit,
-                    unitevent,
-                    enumerand,
-                } if *unit == caster && *enumerand == unit_event => {
-                    fired.push((*trigger, None, Some(*unitevent), None));
-                }
-                Entry::RegisteredPlayerUnitEvent(r)
-                    if r.player == owner && r.enumerand == player_event =>
-                {
-                    fired.push((r.trigger, r.filter, Some(r.playerunitevent), Some(r.player)));
-                }
-                _ => {}
-            }
+        let previous = rules.art_on.remove(&target);
+        let art = rules.art.clone();
+        if let Some(previous) = previous {
+            self.destroy_unit_effect(previous)?;
         }
-        for (trigger, filter, event, player) in fired {
-            self.queue_event(trigger, filter, EventSubject { player, ..subject }, event)?;
+        let effect = self.add_unit_effect(&art.model, target, &art.attach)?;
+        if let Some(rules) = &mut self.holy_light {
+            rules.art_on.insert(target, effect);
         }
         Ok(())
     }

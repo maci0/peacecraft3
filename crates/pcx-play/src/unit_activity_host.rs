@@ -726,6 +726,7 @@ impl ObjectHost {
     }
 
     pub(super) fn forget_unit_activity(&mut self, unit: HandleId) {
+        self.forget_holy_cast(unit);
         if let Some(state) = &mut self.unit_activity {
             state.active.retain(|&u| u != unit);
         }

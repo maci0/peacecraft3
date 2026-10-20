@@ -622,8 +622,8 @@ impl ObjectHost {
         Ok(cell.text.trim().to_owned())
     }
 
-    /// The single non-empty `AbilityFunc`/`AbilityData` profile value under `key`, for an alias.
-    pub(crate) fn hero_ability_profile(&self, alias: [u8; 4], key: &str) -> Result<String, String> {
+    /// Non-empty `AbilityFunc`/`AbilityData`/strings profile values under `key`, in authored order.
+    pub(crate) fn hero_ability_profiles(&self, alias: [u8; 4], key: &str) -> Result<Vec<String>, String> {
         let input = self.heroes_admission()?;
         let (base, _) = input.base(alias)?;
         let cells = input
@@ -634,13 +634,18 @@ impl ObjectHost {
         if let Some(bad) = cells.iter().find(|c| c.parse_error.is_some()) {
             return Err(format!("{alias:?}: malformed {key} profile {:?}", bad.text));
         }
-        let values: Vec<&str> = cells
+        Ok(cells
             .iter()
             .map(|c| c.text.trim())
             .filter(|t| !matches!(*t, "" | "_" | "-"))
-            .collect();
-        match values.as_slice() {
-            [one] => Ok((*one).to_owned()),
+            .map(str::to_owned)
+            .collect())
+    }
+
+    /// The single profile value under `key`; zero or several values refuse.
+    pub(crate) fn hero_ability_profile(&self, alias: [u8; 4], key: &str) -> Result<String, String> {
+        match self.hero_ability_profiles(alias, key)?.as_slice() {
+            [one] => Ok(one.clone()),
             [] => Err(format!("{alias:?}: no {key} profile")),
             _ => Err(format!("{alias:?}: ambiguous {key} profile")),
         }

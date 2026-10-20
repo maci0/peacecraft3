@@ -302,14 +302,76 @@ impl ObjectHost {
         Ok(())
     }
 
-    /// Owner is the neutral passive player, which spells do not heal or damage as allies or enemies.
-    pub(super) fn neutral_passive_owner(&self, unit: HandleId) -> bool {
-        let (Some(rules), Ok(record)) = (self.combat.as_ref(), self.executed_unit(unit)) else {
+    /// Same player, or an explicit passive alliance from the caster's owner. Neutral
+    /// passive units are allies only through such an alliance, never by owner number.
+    pub(super) fn is_ally(&self, caster: HandleId, target: HandleId) -> bool {
+        let (Ok(caster), Ok(target)) = (self.executed_unit(caster), self.executed_unit(target)) else {
             return false;
         };
-        self.player_settings(record.owner)
-            .is_ok_and(|p| Some(p.number) == rules.neutral_passive)
+        let (Ok(a), Ok(b)) = (self.player_settings(caster.owner), self.player_settings(target.owner)) else {
+            return false;
+        };
+        let Some(rules) = self.combat.as_ref() else {
+            return false;
+        };
+        a.identity == b.identity
+            || a.alliances.iter().any(|(other, setting, value)| {
+                *other == b.identity
+                    && *value
+                    && self
+                        .inner
+                        .symbolic_value(*setting, "alliancetype")
+                        .is_ok_and(|v| v == rules.passive)
+            })
     }
+
+    /// Restores `amount` life, capped at max life.
+    pub(super) fn heal_unit(&mut self, target: HandleId, amount: f32) -> Result<(), Error> {
+        if let Entry::Unit { record } = self.inner.entry_mut(target)?
+            && let Some(vitals) = &mut record.vitals
+        {
+            vitals.life = (vitals.life + amount).min(vitals.max_life);
+        }
+        Ok(())
+    }
+
+    /// `EVENT_UNIT_SPELL_EFFECT` and `EVENT_PLAYER_UNIT_SPELL_EFFECT` for a caster whose
+    /// spell took effect on `target`; `GetSpellTargetUnit` reads the target.
+    pub(super) fn queue_spell_effect(&mut self, caster: HandleId, target: HandleId) -> Result<(), Error> {
+        let unit_event = self.source_constant_enumerand("EVENT_UNIT_SPELL_EFFECT", "unitevent")?;
+        let player_event =
+            self.source_constant_enumerand("EVENT_PLAYER_UNIT_SPELL_EFFECT", "playerunitevent")?;
+        let owner = self.executed_unit(caster)?.owner;
+        let subject = EventSubject {
+            unit: Some(caster),
+            spell_target: Some(target),
+            ..EventSubject::default()
+        };
+        let mut fired = Vec::new();
+        for entry in &self.inner.arena {
+            match entry {
+                Entry::RegisteredUnitEvent {
+                    trigger,
+                    unit,
+                    unitevent,
+                    enumerand,
+                } if *unit == caster && *enumerand == unit_event => {
+                    fired.push((*trigger, None, Some(*unitevent), None));
+                }
+                Entry::RegisteredPlayerUnitEvent(r)
+                    if r.player == owner && r.enumerand == player_event =>
+                {
+                    fired.push((r.trigger, r.filter, Some(r.playerunitevent), Some(r.player)));
+                }
+                _ => {}
+            }
+        }
+        for (trigger, filter, event, player) in fired {
+            self.queue_event(trigger, filter, EventSubject { player, ..subject }, event)?;
+        }
+        Ok(())
+    }
+
 
     pub fn set_neutral_passive(&mut self, number: i32) {
         if let Some(rules) = &mut self.combat {

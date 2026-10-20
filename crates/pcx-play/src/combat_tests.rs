@@ -1310,7 +1310,7 @@ fn holy_tables() -> DefaultTables {
         }
     }
     slk.push_str("E\r\n");
-    let profile = "[AHhb]\r\nOrder=alpha\r\nHotkey=T\r\n";
+    let profile = "[AHhb]\r\nOrder=alpha\r\nHotkey=T\r\nTargetart=Abilities\\Spells\\Human\\HolyBolt\\HolyBoltSpecialArt.mdl\r\nUberTip=\"deal half damage to an enemy Undead unit.\"\r\n";
     DefaultTables::from_bytes(
         Identity {
             install: source().install,
@@ -1367,6 +1367,9 @@ constant playerunitevent EVENT_PLAYER_UNIT_SPELL_EFFECT = ConvertPlayerUnitEvent
 constant unittype UNIT_TYPE_UNDEAD = ConvertUnitType(2)
 constant unittype UNIT_TYPE_ANCIENT = ConvertUnitType(3)
 endglobals
+type effect extends agent
+native AddSpecialEffectTarget takes string model, widget target, string attachPoint returns effect
+native DestroyEffect takes effect e returns nothing
 native SelectHeroSkill takes unit u, integer ability returns nothing
 type unittype extends handle
 constant native ConvertUnitType takes integer i returns unittype
@@ -1390,7 +1393,7 @@ fn holy_open(types: &str, abilities: &str, heroes: &str) -> (Vm, [HandleId; 4]) 
         super::activity::ORDERS
     );
     let (registry, activity) = super::activity::rules();
-    let mut h = position_host_admitting(1000, 16, HOLY_MAP, &extra, &fields, |h| h)
+    let h = position_host_admitting(1000, 16, HOLY_MAP, &extra, &fields, |h| h)
         .with_locations()
         .unwrap()
         .with_player_unit_events(8)
@@ -1405,6 +1408,7 @@ fn holy_open(types: &str, abilities: &str, heroes: &str) -> (Vm, [HandleId; 4]) 
         .unwrap()
         .with_script_random(Arc::new(crate::script_random::profile::fixture()), 64)
         .unwrap();
+    let mut h = h.with_unit_effects().unwrap();
     let origin = crate::scripts::AssetIdentity {
         source: source().install,
         edition: "fixture".into(),
@@ -1643,4 +1647,62 @@ fn learned_holy_light_names_its_hotkey_and_order_to_the_player_command() {
     assert_eq!((command.hotkey, command.order), ('T', 431));
     let (mut vm, [h, _, _, _]) = holy_open("", UNLEARNED, NOTHING);
     assert!(vm.host().inner.holy_light_command(h).unwrap().is_none());
+}
+
+#[test]
+fn a_passive_alliance_makes_an_enemy_living_unit_a_heal_target() {
+    let (mut vm, [h, _, e, _]) = holy_open("", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    let life_state = vm_global(&vm, "UNIT_STATE_LIFE");
+    vm.host()
+        .inner
+        .native("SetUnitState", &[Value::Handle(e), life_state, Value::Real(100.0)])
+        .unwrap();
+    assert!(!holy_cast(&mut vm, h, e), "enemy organic before the alliance");
+    let alliance = vm_global(&vm, "ALLIANCE_PASSIVE");
+    let h_owner = vm.host().inner.native("Player", &[Value::Int(4)]).unwrap();
+    let e_owner = vm.host().inner.native("Player", &[Value::Int(5)]).unwrap();
+    vm.host()
+        .inner
+        .native(
+            "SetPlayerAlliance",
+            &[h_owner, e_owner, alliance, Value::Bool(true)],
+        )
+        .unwrap();
+    assert!(holy_cast(&mut vm, h, e));
+    assert_eq!(holy_life(&mut vm, e), 300.0);
+}
+
+#[test]
+fn the_targetart_shows_on_the_target_and_a_recast_replaces_it() {
+    let (mut vm, [h, f, _, _]) = holy_open("", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    assert!(holy_cast(&mut vm, h, f));
+    let art: Vec<_> = vm.host().inner.unit_effects().collect();
+    assert_eq!(art.len(), 1, "{art:?}");
+    let (_, effect) = art[0];
+    assert_eq!(effect.unit, f);
+    assert_eq!(effect.model, "Abilities\\Spells\\Human\\HolyBolt\\HolyBoltSpecialArt.mdl");
+    assert_eq!(effect.attach_point, "origin", "no Targetattach is authored");
+    step(&mut vm, 5.0);
+    assert!(holy_cast(&mut vm, h, f));
+    assert_eq!(vm.host().inner.unit_effects().count(), 1);
+}
+
+#[test]
+fn killing_the_caster_cancels_a_walking_cast() {
+    let (mut vm, [h, _, _, g]) = holy_open("", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    let life_state = vm_global(&vm, "UNIT_STATE_LIFE");
+    vm.host()
+        .inner
+        .native("SetUnitState", &[Value::Handle(g), life_state, Value::Real(100.0)])
+        .unwrap();
+    assert!(holy_cast(&mut vm, h, g));
+    vm.host()
+        .inner
+        .native("KillUnit", &[Value::Handle(h)])
+        .unwrap();
+    step(&mut vm, 30.0);
+    assert_eq!(holy_life(&mut vm, g), 100.0);
 }

@@ -35,9 +35,38 @@ fn holy_light_row_order_and_undead_type_come_from_the_install() {
         [number("DataA1"), number("DataA2"), number("DataA3")],
         [200, 400, 600]
     );
-    assert_eq!(number("Cost1"), 65);
-    assert_eq!(number("Cool1"), 5);
-    assert_eq!(number("Rng1"), 800);
+    for rank in 1..=3 {
+        assert_eq!(number(&format!("Cost{rank}")), 65, "rank {rank}");
+        assert_eq!(number(&format!("Cool{rank}")), 5, "rank {rank}");
+        assert_eq!(number(&format!("Rng{rank}")), 800, "rank {rank}");
+        let targs = ability
+            .cell(SlkId::AbilityData, &format!("targs{rank}"))
+            .expect("targs cell")
+            .text;
+        assert!(targs.split(',').any(|token| token == "organic"), "{targs}");
+    }
+    let art: Vec<&str> = ability
+        .profile("Targetart")
+        .iter()
+        .map(|cell| cell.text.trim())
+        .collect();
+    assert_eq!(
+        art,
+        ["Abilities\\Spells\\Human\\HolyBolt\\HolyBoltSpecialArt.mdl"]
+    );
+    assert!(
+        ability.profile("Targetattach").is_empty(),
+        "no attach point is authored"
+    );
+    let tips: Vec<&str> = ability
+        .profile("UberTip")
+        .iter()
+        .map(|cell| cell.text)
+        .collect();
+    assert!(
+        !tips.is_empty() && tips.iter().all(|tip| tip.contains("half damage")),
+        "{tips:?}"
+    );
 
     let orders: Vec<&str> = ability
         .profile("Order")
