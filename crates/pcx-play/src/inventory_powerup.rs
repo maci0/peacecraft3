@@ -196,6 +196,26 @@ impl Rules {
         }
     }
 
+    /// Whether a healing item's single ability needs a selected target: its authored `targs1` is
+    /// not `_`. A missing `targs1` cell refuses, since the selection convention is not guessed.
+    pub fn heal_requires_target(&self, definition: &Definition) -> Result<bool, String> {
+        let item = self.item_row(definition)?;
+        let abilities = item_text(item, "abilList")?;
+        let [alias] = abilities.split(',').map(str::trim).collect::<Vec<_>>()[..] else {
+            return Err("healing target needs exactly one ability".into());
+        };
+        let targets = self
+            .tables
+            .object(Family::Ability, alias)
+            .map_err(|e| e.to_string())?
+            .cell(SlkId::AbilityData, "targs1")
+            .map_err(|e| e.to_string())?
+            .text
+            .trim()
+            .to_owned();
+        Ok(targets != "_")
+    }
+
     /// Cast range (`Rng1`, level 1) of an item's single ability, from the source row. Overrides
     /// of the range field are not applied here, and that is not qualified.
     pub fn heal_range(&self, definition: &Definition) -> Result<f32, String> {

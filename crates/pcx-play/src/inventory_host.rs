@@ -592,6 +592,48 @@ impl ObjectHost {
         }
         Some(self.inventory_call(name, args))
     }
+    /// Input command from an inventory slot: the local player activates an item held by one of its
+    /// units. A unit owned by another player, a non-healing item and an item the unit does not hold
+    /// return `false` with no write. An item whose authored target is not `_` needs a selected
+    /// target; no target selection is qualified here, so it refuses with a diagnostic. Control,
+    /// dialog and HUD ownership are checked by the input layer before this call.
+    pub fn player_activate_held_item(
+        &mut self,
+        local_player: i32,
+        unit: HandleId,
+        item: HandleId,
+    ) -> Result<bool, Error> {
+        let owner = self.executed_unit(unit)?.owner;
+        if self.player_settings(owner)?.number != local_player {
+            return Ok(false);
+        }
+        let Some(record) = self.live_item(item)? else {
+            return Ok(false);
+        };
+        let state = self.inventory_state()?;
+        let rules = state
+            .attributes
+            .as_ref()
+            .ok_or_else(|| self.inner.error("inventory", Failure::ItemUse("healing rules are not admitted".into())))?;
+        let is_use = rules
+            .heal_effect(&record.definition)
+            .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))?
+            .is_some();
+        if !is_use {
+            return Ok(false);
+        }
+        let targeted = rules
+            .heal_requires_target(&record.definition)
+            .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))?;
+        if targeted {
+            return Err(self.inner.error(
+                "inventory",
+                Failure::ItemUse("targeted item use needs a selected target, which is not qualified".into()),
+            ));
+        }
+        self.activate_held_item(unit, item)
+    }
+
     /// Player activation of a held item on its holder. The command boundary is recreated here: the
     /// authored order id for inventory item use is not yet qualified from the client, so an input
     /// layer calls this directly rather than through an order. It shares the `UnitUseItem` path.
@@ -689,6 +731,16 @@ impl ObjectHost {
         let (owner, use_events) = self.use_event_plan(unit)?;
         self.reserve_event_delivery(use_events.len())?;
         let commit = self.commit_item_use(grant)?;
+        if let Entry::Unit { record } = self.inner.entry_mut(target)?
+            && let Some(vitals) = &mut record.vitals
+        {
+            vitals.life = life;
+        }
+        if commit.remove {
+            *self.inner.entry_mut(item)? = Entry::RemovedItem;
+        }
+        // Queued last: a trigger that runs from the queue sees the healed life, the charge and the
+        // removal. The queue only records the event here, so no trigger runs inside this call.
         for (trigger, filter, event) in use_events {
             let subject = EventSubject {
                 unit: Some(unit),
@@ -697,14 +749,6 @@ impl ObjectHost {
                 ..EventSubject::default()
             };
             self.queue_event(trigger, filter, subject, Some(event))?;
-        }
-        if let Entry::Unit { record } = self.inner.entry_mut(target)?
-            && let Some(vitals) = &mut record.vitals
-        {
-            vitals.life = life;
-        }
-        if commit.remove {
-            *self.inner.entry_mut(item)? = Entry::RemovedItem;
         }
         Ok(Value::Bool(true))
     }

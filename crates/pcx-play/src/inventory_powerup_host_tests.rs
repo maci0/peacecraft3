@@ -75,23 +75,25 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["phea", "AIh1", "0", "1", "1", "1"],
             &["phcd", "AIh1", "0", "1", "1", "2"],
             &["phsm", "AIh2", "0", "1", "1", "1"],
+            &["phtg", "AIh3", "0", "1", "1", "1"],
         ],
     );
     let abilities = sylk(
         &[
             "alias", "code", "levels", "DataA1", "DataB1", "DataC1", "DataD1", "DataE1", "Rng1",
-            "Cool1",
+            "Cool1", "targs1",
         ],
         &[
-            &["L000", "Xinv", "1", "2", "1", "1", "1", "1", "-", "-"],
-            &["AIsm", "AIsm", "1", "0", "0", "7", "0", "0", "-", "-"],
-            &["AIs4", "AIab", "1", "0", "0", "5", "0", "0", "-", "-"],
-            &["AIa4", "AIab", "1", "2", "0", "0", "0", "0", "-", "-"],
-            &["AIi4", "AIab", "1", "0", "3", "0", "0", "0", "-", "-"],
-            &["AId1", "AIde", "1", "1", "0", "0", "0", "0", "-", "-"],
-            &["AId8", "AIde", "1", "8", "0", "0", "0", "0", "-", "-"],
-            &["AIh1", "AIhe", "1", "250", "0", "0", "0", "0", "100", "20"],
-            &["AIh2", "AIhe", "1", "250", "0", "0", "0", "0", "10", "20"],
+            &["L000", "Xinv", "1", "2", "1", "1", "1", "1", "-", "-", "_"],
+            &["AIsm", "AIsm", "1", "0", "0", "7", "0", "0", "-", "-", "_"],
+            &["AIs4", "AIab", "1", "0", "0", "5", "0", "0", "-", "-", "_"],
+            &["AIa4", "AIab", "1", "2", "0", "0", "0", "0", "-", "-", "_"],
+            &["AIi4", "AIab", "1", "0", "3", "0", "0", "0", "-", "-", "_"],
+            &["AId1", "AIde", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
+            &["AId8", "AIde", "1", "8", "0", "0", "0", "0", "-", "-", "_"],
+            &["AIh1", "AIhe", "1", "250", "0", "0", "0", "0", "100", "20", "_"],
+            &["AIh2", "AIhe", "1", "250", "0", "0", "0", "0", "10", "20", "_"],
+            &["AIh3", "AIhe", "1", "250", "0", "0", "0", "0", "100", "20", "ground,air"],
         ],
     );
     let metadata = sylk(
@@ -194,7 +196,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "-1",
                 "int",
                 "1",
-                "AIh1,AIh2",
+                "AIh1,AIh2,AIh3",
                 "",
             ],
         ],
@@ -276,6 +278,13 @@ impl ObjectCatalog for PowerupItems {
                 (*b"iicd", "ignoreCD", "0"),
                 (*b"icid", "cooldownID", ""),
                 (*b"iabi", "abilList", "AIh1"),
+            ]),
+            b"phtg" => rows.extend([
+                (*b"iuse", "uses", "1"),
+                (*b"iper", "perishable", "1"),
+                (*b"iicd", "ignoreCD", "0"),
+                (*b"icid", "cooldownID", ""),
+                (*b"iabi", "abilList", "AIh3"),
             ]),
             b"phsm" => rows.extend([
                 (*b"iuse", "uses", "1"),
@@ -1171,4 +1180,86 @@ fn player_activation_uses_the_same_path_as_the_native_and_removes_the_potion() {
     assert!(h.executed_items().all(|(id, _)| id != potion));
     // A second activation of a removed potion does nothing.
     assert!(!h.activate_held_item(hero, potion).unwrap());
+}
+
+fn owner_number(h: &ObjectHost, unit: HandleId) -> i32 {
+    let owner = h.executed_unit(unit).unwrap().owner;
+    h.player_settings(owner).unwrap().number
+}
+
+#[test]
+fn input_by_the_owning_player_heals_and_removes_the_potion() {
+    let Fixture { mut h, hero, .. } = open();
+    h.set_timer_game_time(1.0).unwrap();
+    let max = h.unit_vitals(hero).unwrap().unwrap().max_life;
+    set_life(&mut h, hero, max / 2.0);
+    let potion = item(&mut h, b"phea", 0.0);
+    assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
+    let local = owner_number(&h, hero);
+    assert!(h.player_activate_held_item(local, hero, potion).unwrap());
+    assert_eq!(life_of(&h, hero), max / 2.0 + 250.0);
+    assert!(h.executed_items().all(|(id, _)| id != potion));
+}
+
+#[test]
+fn input_from_another_player_or_for_an_unheld_item_changes_nothing() {
+    let Fixture { mut h, hero, ordinary } = open();
+    h.set_timer_game_time(1.0).unwrap();
+    let max = h.unit_vitals(hero).unwrap().unwrap().max_life;
+    set_life(&mut h, hero, max / 2.0);
+    let before = life_of(&h, hero);
+    let potion = item(&mut h, b"phea", 0.0);
+    assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
+    let local = owner_number(&h, hero);
+    assert!(!h.player_activate_held_item(local + 1, hero, potion).unwrap());
+    // The owning player's input for a unit that does not hold the item is refused too.
+    assert!(!h.player_activate_held_item(local, ordinary, potion).unwrap());
+    assert_eq!(life_of(&h, hero), before);
+    assert_eq!(
+        h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(potion)]),
+        Ok(Value::Bool(true))
+    );
+}
+
+#[test]
+fn input_refuses_a_targeted_item_without_any_write() {
+    let Fixture { mut h, hero, .. } = open();
+    h.set_timer_game_time(1.0).unwrap();
+    let max = h.unit_vitals(hero).unwrap().unwrap().max_life;
+    set_life(&mut h, hero, max / 2.0);
+    let before = life_of(&h, hero);
+    let targeted = item(&mut h, b"phtg", 0.0);
+    assert_eq!(add(&mut h, hero, targeted), Ok(Value::Bool(true)));
+    let local = owner_number(&h, hero);
+    let err = h.player_activate_held_item(local, hero, targeted).unwrap_err();
+    assert!(format!("{err:?}").contains("target"), "{err:?}");
+    assert_eq!(life_of(&h, hero), before);
+    assert_eq!(
+        h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(targeted)]),
+        Ok(Value::Bool(true))
+    );
+}
+
+#[test]
+fn use_event_callback_observes_the_healed_life_and_the_charge_already_spent() {
+    let Fixture { mut h, hero, .. } = open();
+    h.set_timer_game_time(1.0).unwrap();
+    let max = h.unit_vitals(hero).unwrap().unwrap().max_life;
+    set_life(&mut h, hero, max / 2.0);
+    let trigger = register_player_event(&mut h, hero, 50);
+    let potion = item(&mut h, b"phcd", 0.0);
+    assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
+    let local = owner_number(&h, hero);
+    assert!(h.player_activate_held_item(local, hero, potion).unwrap());
+    let fired = h.take_fired_event().expect("use event queued");
+    assert_eq!(fired.trigger, trigger);
+    // The trigger runs from the queue: the heal and the spent charge are already in place.
+    h.begin_fired_event(&fired).unwrap().unwrap();
+    assert_eq!(life_of(&h, hero), max / 2.0 + 250.0);
+    assert_eq!(
+        h.native("GetItemCharges", &[Value::Handle(potion)]),
+        Ok(Value::Int(1))
+    );
+    assert_eq!(h.native("GetManipulatedItem", &[]), Ok(Value::Handle(potion)));
+    h.finish_fired_event();
 }
