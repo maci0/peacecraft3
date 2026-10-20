@@ -33,6 +33,7 @@ pub fn install(app: &mut App) {
     app.add_systems(
         Update,
         pause_for_movie
+            .after(peacecraft3::campaign_camera::CampaignCameraSet)
             .before(apply_user_volume)
             .after(crate::intro::IntroUpdate)
             .after(crate::launch_gui::MenuActions)
@@ -183,11 +184,25 @@ struct MenuMusic;
 #[cfg(not(target_arch = "wasm32"))]
 fn pause_for_movie(
     intro: Res<crate::intro::Intro>,
+    campaign: Option<Res<peacecraft3::campaign_camera::CampaignCamera>>,
     mut music: Query<(&mut PlaybackSettings, Option<&AudioSink>), With<MenuMusic>>,
 ) {
+    sync_menu_music(
+        intro.playing(),
+        campaign.as_ref().is_some_and(|camera| camera.active()),
+        &mut music,
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn sync_menu_music(
+    intro_playing: bool,
+    campaign_active: bool,
+    music: &mut Query<(&mut PlaybackSettings, Option<&AudioSink>), With<MenuMusic>>,
+) {
     use bevy::audio::AudioSinkPlayback;
-    for (mut playback, sink) in &mut music {
-        playback.paused = intro.playing();
+    for (mut playback, sink) in music.iter_mut() {
+        playback.paused = intro_playing || campaign_active;
         if let Some(sink) = sink {
             if playback.paused {
                 sink.pause();
@@ -646,6 +661,39 @@ mod tests {
         assert!(playback.paused);
         assert_eq!(playback.volume, bevy::audio::Volume::Linear(0.6 * 0.25));
         assert!(world.get::<AudioSink>(music).is_none());
+    }
+
+    #[test]
+    fn pending_menu_music_obeys_campaign_return_and_intro_ownership() {
+        let mut world = World::new();
+        let music = world.spawn((MenuMusic, PlaybackSettings::LOOP)).id();
+        let other = world.spawn(PlaybackSettings::LOOP).id();
+        // Exercise the same playback synchronization used before an AudioSink
+        // exists, including returning to the menu while the intro still owns audio.
+        for (intro, campaign, expected) in [
+            (false, false, false),
+            (false, true, true),
+            (true, true, true),
+            (true, false, true),
+            (false, false, false),
+            (false, true, true),
+            (false, false, false),
+        ] {
+            world
+                .run_system_once(
+                    move |mut music: Query<
+                        (&mut PlaybackSettings, Option<&AudioSink>),
+                        With<MenuMusic>,
+                    >| sync_menu_music(intro, campaign, &mut music),
+                )
+                .unwrap();
+            assert_eq!(
+                world.get::<PlaybackSettings>(music).unwrap().paused,
+                expected
+            );
+            assert!(!world.get::<PlaybackSettings>(other).unwrap().paused);
+            assert!(world.get::<AudioSink>(music).is_none());
+        }
     }
 
     #[test]
