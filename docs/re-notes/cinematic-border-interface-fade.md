@@ -64,10 +64,31 @@ reference of the earlier evidence). Verified in its body:
   handle at `+0x14`. Its getter `0x840A00` returns the timer value through
   `0x83FB10` only while the handle is set.
 
-Not established: the timer and callback bodies (`0x840370`, `0x840AA0`,
-`0x83FB10`), the value that `0x5BF380`/`0x840980` write to frame alpha or
-position, and the easing or step. No interpolation curve is recorded here. The
-duration-to-curve mapping stays unimplemented until those are read.
+Timer and value path (verified by the same `objdump` reads):
+
+- `0x840370(seconds, callback 0x840AA0, context)`: calls `0x846030` with the
+  float timeout and the callback, and keeps the returned timer handle. This is a
+  one-shot timer in the game timer manager (manager `0x1160640`).
+- `0x840AA0` (expiry): copies the context's `+0x18` into global `0x10E011C`, and
+  the float at `*arg0` into global `0x10E0124`. A zero `+0xC` clears the state
+  and calls the listener vtable `+0xC` with `0x10E0114`. A nonzero `+0xC` re-arms
+  through `0x840A20`, which cancels and starts a new timer with the stored
+  `+0x10` seconds.
+- `0x840A00` (getter): returns `0.0` when the handle at `+0x14` is zero or
+  `+0xC` is nonzero. Otherwise it returns `0x83FB10(handle)`.
+- `0x83FB10`: looks up the timer and returns `0x845ED0(manager, handle)`, then
+  releases its reference.
+- `0x845ED0`: `remaining = max(0, deadline_ms - now_ms) * 0.001`, with `0.001`
+  stored as float `0x3A83126F` at `0xE8DF60`. Remaining time is seconds, and it
+  is zero once the deadline passes. `now_ms` comes from `0x796C90`, an indirect
+  jump into the clock import.
+
+So the fade's observable value is the seconds left on a one-shot timer of the
+authored duration, clamped at zero. It falls linearly in game time from the
+duration to zero. Not established: how the frame consumer maps remaining seconds
+to alpha or position, which track type (`0x1C`, `0x1D`, `0x1E`) reads which
+getter, and whether the full track uses the duration as its denominator. No
+alpha curve is recorded here, so no interpolation is implemented.
 
 ## Consumer state
 
