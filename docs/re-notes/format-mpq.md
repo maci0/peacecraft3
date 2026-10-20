@@ -419,3 +419,16 @@ operand is visible in both binaries, which is evidence of the code, not a deriva
 The two encodings differ, so one bounded shape does not cover both. The native oracle
 reproduces the value for the corpus, which does not prove it is source-derived.
 The ADPCM path is therefore only partly source-derived.
+
+### Independent ADPCM initialization reference (2026-10-21)
+
+The initial channel index is also specified by an independent published MPQ
+implementation: StormLib's [ADPCM header](https://github.com/ladislav-zezula/StormLib/blob/116135c27e8c0dcf8ea0a0c549a6d737ce10fc73/src/adpcm/adpcm.h)
+defines `INITIAL_ADPCM_STEP_INDEX` as `0x2C`; its
+[encoder and decoder](https://github.com/ladislav-zezula/StormLib/blob/116135c27e8c0dcf8ea0a0c549a6d737ce10fc73/src/adpcm/adpcm.cpp)
+initialize each channel from that same definition. This qualifies the existing
+index of 44 as MPQ ADPCM format initialization, independently of a measured game
+asset. It supersedes the missing-independent-reference caveat above. It does not
+qualify the original client's mixer or prove complete decoder parity. The step
+and adjustment tables still come from the selected executable; no additional
+upstream source is imported.
