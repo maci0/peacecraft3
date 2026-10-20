@@ -40,3 +40,37 @@ and ends short. The fixed work count is derived in the test. Second-block-in-a-t
 behavior has no reproducing fixture yet.
 
 These results do not establish original collision radii or native movement.
+
+## Accepted spans for consumers
+
+`ObjectHost::advance_unit_activity_spans(now, work, &mut Vec<AcceptedSpan>)`
+projects the same motion as `advance_unit_activity` and appends what it accepted.
+`AcceptedSpan { unit, from, to, start, end, moving }` is on host game time:
+
+- A moving span is one straight accepted segment, from its accepted start point to
+  its accepted end point. Times come from the same arithmetic that credits distance:
+  `started + credited / speed`. Spans never interpolate across a detour.
+- A non-moving span (`moving: false`, `from == to`) covers a stop: the unit stood at
+  `from` from `start` to `end`. It covers a blocked tail, from the last credited
+  point to the tick, including a blocked tail that a replan then leaves.
+- Zero-length spans are omitted. After a unit's last span, no span is emitted until its
+  next motion. Consumers treat that interval as standing at the last `to`.
+- Within one call, each unit's spans are contiguous in time and position. Across
+  calls, the first span starts at the previous call's last credited time and
+  position. A pause rebases `started`, so contiguity there holds to floating-point
+  rounding, not bit for bit.
+- Relocations and placements outside motion (`SetUnitPosition`, reveal, creation)
+  emit no span. A consumer must reconcile the record position at call boundaries.
+
+Bound: each span is emitted in a branch that has already charged at least one unit
+of the caller's `work`, so a call appends at most its budget on entry. A call
+that fails removes the spans it appended. Motion effects of the failed call are
+not rolled back; the caller stops the session, as before.
+
+Blocked stops sample the segment every half cell at each tick, so their positions
+depend on the tick partition. Unblocked movement is partition-independent in
+position. Span boundaries follow the projection calls, so a consumer that needs
+blocked stops at a fixed cadence must project at that cadence.
+
+Order retention after a stop is not modelled here. `GetUnitCurrentOrder` reads
+the moving state, and the spans carry no order data.

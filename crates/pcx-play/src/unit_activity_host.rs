@@ -58,6 +58,79 @@ struct Motion {
     started: f64,
 }
 
+/// One accepted interval of a unit's movement on host game time.
+///
+/// `moving` spans cover one straight accepted segment from `from` to `to`.
+/// Non-moving spans cover a stop: the unit stood at `from` from `start` to `end`.
+/// Spans of one call are contiguous per unit. No span covers time when the unit
+/// has no motion, so after the last span the consumer treats the unit as standing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AcceptedSpan {
+    pub unit: HandleId,
+    pub from: [f32; 2],
+    pub to: [f32; 2],
+    pub start: f64,
+    pub end: f64,
+    pub moving: bool,
+}
+
+/// Caller-owned output of one advance. `limit` is the work budget on entry;
+/// every span is paid for by at least one work unit, so `limit` is never reached.
+struct SpanSink<'a> {
+    spans: &'a mut Vec<AcceptedSpan>,
+    base: usize,
+    limit: usize,
+}
+
+impl SpanSink<'_> {
+    fn segment(
+        &mut self,
+        unit: HandleId,
+        from: [f32; 2],
+        to: [f32; 2],
+        start: f64,
+        end: f64,
+    ) -> Result<(), &'static str> {
+        if start >= end {
+            return Ok(());
+        }
+        if self.spans.len() - self.base >= self.limit {
+            return Err("accepted span limit exceeded");
+        }
+        self.spans
+            .try_reserve(1)
+            .map_err(|_| "accepted span storage")?;
+        self.spans.push(AcceptedSpan {
+            unit,
+            from,
+            to,
+            start,
+            end,
+            moving: from != to,
+        });
+        Ok(())
+    }
+}
+
+/// Host time at which `motion` has credited `credited` distance at `speed`.
+fn credited_time(motion: &Motion, speed: f32, credited: f64) -> f64 {
+    motion.started + credited / f64::from(speed)
+}
+
+fn emit(
+    sink: &mut Option<SpanSink<'_>>,
+    unit: HandleId,
+    from: [f32; 2],
+    to: [f32; 2],
+    start: f64,
+    end: f64,
+) -> Result<(), &'static str> {
+    match sink {
+        Some(sink) => sink.segment(unit, from, to, start, end),
+        None => Ok(()),
+    }
+}
+
 impl UnitActivity {
     pub fn held(&self) -> bool {
         self.held
@@ -570,6 +643,36 @@ impl ObjectHost {
     /// Project explicit motion at one logical game time. Work is deterministic;
     /// a failure preserves prior effects and the caller must stop this session.
     pub fn advance_unit_activity(&mut self, now: f64, work: &mut usize) -> Result<usize, Error> {
+        self.advance_activity(now, work, None)
+    }
+
+    /// [`Self::advance_unit_activity`] that also appends the accepted spans of this
+    /// projection to `spans`. Each span is paid for by at least one unit of `work`,
+    /// so a call appends at most its budget on entry. On error the spans appended by
+    /// this call are removed; motion effects of the failed call are not rolled back.
+    pub fn advance_unit_activity_spans(
+        &mut self,
+        now: f64,
+        work: &mut usize,
+        spans: &mut Vec<AcceptedSpan>,
+    ) -> Result<usize, Error> {
+        self.advance_activity(now, work, Some(spans))
+    }
+
+    fn advance_activity(
+        &mut self,
+        now: f64,
+        work: &mut usize,
+        out: Option<&mut Vec<AcceptedSpan>>,
+    ) -> Result<usize, Error> {
+        let mut sink = out.map(|spans| {
+            let base = spans.len();
+            SpanSink {
+                spans,
+                base,
+                limit: *work,
+            }
+        });
         let Some(state) = &self.unit_activity else {
             return Ok(0);
         };
@@ -617,7 +720,7 @@ impl ObjectHost {
                     }
                     _ => return Err(self.inner.error("unit activity", Failure::WrongFamily)),
                 };
-                let result = self.advance_motion(unit, speed, now, &mut motion, work);
+                let result = self.advance_motion(unit, speed, now, &mut motion, work, &mut sink);
                 if let Entry::Unit { record } = self.inner.entry_mut(unit)?
                     && motion.next < motion.path.len()
                 {
@@ -645,6 +748,8 @@ impl ObjectHost {
                 .as_mut()
                 .expect("activity")
                 .projected_through = now;
+        } else if let Some(sink) = &mut sink {
+            sink.spans.truncate(sink.base);
         }
         result
     }
@@ -943,6 +1048,7 @@ impl ObjectHost {
         now: f64,
         motion: &mut Motion,
         work: &mut usize,
+        sink: &mut Option<SpanSink<'_>>,
     ) -> Result<usize, Error> {
         let fail = |detail: &str| {
             self.inner
@@ -993,6 +1099,23 @@ impl ObjectHost {
             if free {
                 let last = end && motion.next + 1 == motion.path.len();
                 let stand_at = motion.started + (motion.prefix + length) / f64::from(speed);
+                let credited = if end {
+                    motion.prefix + length
+                } else {
+                    distance
+                };
+                emit(
+                    sink,
+                    unit,
+                    from,
+                    point,
+                    credited_time(motion, speed, motion.last_distance),
+                    credited_time(motion, speed, credited),
+                )
+                .map_err(|detail| {
+                    self.inner
+                        .error("unit activity", Failure::UnitActivity(detail.into()))
+                })?;
                 if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                     record.position = Some(point);
                     if delta != [0., 0.] {
@@ -1053,16 +1176,30 @@ impl ObjectHost {
                                 Failure::UnitActivity("clear sample is no longer clear".into()),
                             )
                         })?;
-                    self.unit_placement
-                        .as_mut()
-                        .expect("placement")
-                        .commit(unit, prepared);
                     let reached = if end {
                         motion.prefix + length
                     } else {
                         distance
                     };
-                    motion.last_distance += fraction * (reached - motion.last_distance);
+                    let credited =
+                        motion.last_distance + fraction * (reached - motion.last_distance);
+                    emit(
+                        sink,
+                        unit,
+                        from,
+                        stop,
+                        credited_time(motion, speed, motion.last_distance),
+                        credited_time(motion, speed, credited),
+                    )
+                    .map_err(|detail| {
+                        self.inner
+                            .error("unit activity", Failure::UnitActivity(detail.into()))
+                    })?;
+                    self.unit_placement
+                        .as_mut()
+                        .expect("placement")
+                        .commit(unit, prepared);
+                    motion.last_distance = credited;
                     if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                         record.position = Some(stop);
                         if delta != [0., 0.] {
@@ -1072,6 +1209,19 @@ impl ObjectHost {
                     }
                     origin = stop;
                 }
+                // Stationary from the stop to this tick. A pause rebases `started` below, so this must come first.
+                emit(
+                    sink,
+                    unit,
+                    origin,
+                    origin,
+                    credited_time(motion, speed, motion.last_distance),
+                    now,
+                )
+                .map_err(|detail| {
+                    self.inner
+                        .error("unit activity", Failure::UnitActivity(detail.into()))
+                })?;
                 // One replan per tick: a blocked segment that stays blocked waits for the next tick.
                 if replanned {
                     motion.started = now - motion.last_distance / f64::from(speed);
@@ -1113,6 +1263,23 @@ impl ObjectHost {
                         Failure::UnitActivity("clear sample is no longer clear".into()),
                     )
                 })?;
+            let credited = if end {
+                motion.prefix + length
+            } else {
+                distance
+            };
+            emit(
+                sink,
+                unit,
+                from,
+                point,
+                credited_time(motion, speed, motion.last_distance),
+                credited_time(motion, speed, credited),
+            )
+            .map_err(|detail| {
+                self.inner
+                    .error("unit activity", Failure::UnitActivity(detail.into()))
+            })?;
             self.unit_placement
                 .as_mut()
                 .expect("placement")

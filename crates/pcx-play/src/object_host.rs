@@ -1061,7 +1061,7 @@ pub use messages::{MessageBudget, MessageState, TimedMessage};
 
 #[path = "unit_activity_host.rs"]
 mod unit_activity;
-pub use unit_activity::UnitActivity;
+pub use unit_activity::{AcceptedSpan, UnitActivity};
 
 #[path = "location_host.rs"]
 mod locations;

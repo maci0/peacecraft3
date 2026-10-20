@@ -933,8 +933,13 @@ fn enclosed_motion_stops_without_progress_and_spends_no_work_on_later_ticks() {
         "a replan with no progress stops the unit"
     );
     assert_eq!(first, ENCLOSED_TICK_WORK);
-    assert_eq!(tick_work(&mut vm, 4.), 0);
-    assert_eq!(tick_work(&mut vm, 6.), 0);
+    // Stays put at the probe's 0.0625 s cadence with no new order: no route search
+    // and no credited movement. The order query after a stop is not asserted; see
+    // docs/re-notes/unit-collision-replanning.md.
+    for step in 1..=104 {
+        let now = 2. + f64::from(step) * 0.0625;
+        assert_eq!(tick_work(&mut vm, now), 0, "work after the stop at {now}");
+    }
     assert_eq!(position(&mut vm, a), [18., 16.]);
 }
 
@@ -1024,4 +1029,119 @@ fn obstruction_after_long_travel_grants_no_distance_on_the_replan_tick() {
         "{travelled} exceeds speed {speed} over two seconds"
     );
     assert!(resumed != stopped, "the unit resumes on the new route");
+}
+
+/// One projection through the span handoff; returns the work it spent.
+fn tick_spans(
+    vm: &mut Vm,
+    now: f64,
+    spans: &mut Vec<crate::playercolor_host::AcceptedSpan>,
+) -> usize {
+    const BUDGET: usize = 65536;
+    let h = &mut vm.host().inner;
+    assert!(h.next_timer_expiry(now, &mut 1000).unwrap().is_none());
+    let mut work = BUDGET;
+    h.advance_unit_activity_spans(now, &mut work, spans)
+        .unwrap();
+    BUDGET - work
+}
+
+#[test]
+fn accepted_spans_chain_across_projections_and_cover_a_blocked_stop_on_host_time() {
+    use crate::playercolor_host::AcceptedSpan;
+    let mut vm = open();
+    let a = unit(&vm, "A");
+    let speed = move_speed(&mut vm, a);
+    vm.call("move", &[]).unwrap();
+    let mut spans: Vec<AcceptedSpan> = Vec::new();
+    tick_spans(&mut vm, 2., &mut spans);
+    assert_eq!(
+        spans,
+        [AcceptedSpan {
+            unit: a,
+            from: [16., 16.],
+            to: [32., 16.],
+            start: 0.,
+            end: 2.,
+            moving: true,
+        }]
+    );
+    {
+        let h = &mut vm.host().inner;
+        position_create(h, 48., 16.).unwrap();
+    }
+    let appended = spans.len();
+    let work = tick_spans(&mut vm, 10., &mut spans);
+    // Eight units of a 40-unit span stop on the sample before cell 11 (x 44): travelled 10 units in 1.25 s.
+    assert_eq!(
+        spans[appended..],
+        [
+            AcceptedSpan {
+                unit: a,
+                from: [32., 16.],
+                to: [42., 16.],
+                start: 2.,
+                end: 3.25,
+                moving: true,
+            },
+            AcceptedSpan {
+                unit: a,
+                from: [42., 16.],
+                to: [42., 16.],
+                start: 3.25,
+                end: 10.,
+                moving: false,
+            },
+        ]
+    );
+    assert!(spans.len() - appended <= work, "spans are paid for by work");
+    let appended = spans.len();
+    for now in (12..=40).step_by(2).map(f64::from) {
+        tick_spans(&mut vm, now, &mut spans);
+    }
+    let fresh = &spans[appended..];
+    assert_eq!(fresh.first().map(|s| s.start), Some(10.));
+    assert_eq!(fresh.first().map(|s| s.from), Some([42., 16.]));
+    for pair in spans.windows(2) {
+        assert_eq!(pair[0].end, pair[1].start, "spans are contiguous in time");
+        assert_eq!(pair[0].to, pair[1].from, "spans are contiguous in position");
+    }
+    for span in spans.iter().filter(|s| s.moving) {
+        let travelled = (span.to[0] - span.from[0]).hypot(span.to[1] - span.from[1]);
+        assert!(
+            f64::from(travelled) <= f64::from(speed) * (span.end - span.start) + 1e-4,
+            "{span:?} exceeds speed {speed}"
+        );
+    }
+    assert_eq!(
+        spans.last().map(|s| s.to),
+        Some(position(&mut vm, a)),
+        "the consumer's last point is the accepted position"
+    );
+}
+
+#[test]
+fn failed_span_projection_removes_its_spans_from_the_callers_buffer() {
+    use crate::playercolor_host::AcceptedSpan;
+    let mut vm = open();
+    unit(&vm, "A");
+    vm.call("move", &[]).unwrap();
+    let mut spans: Vec<AcceptedSpan> = Vec::new();
+    tick_spans(&mut vm, 2., &mut spans);
+    {
+        let h = &mut vm.host().inner;
+        position_create(h, 48., 16.).unwrap();
+    }
+    let before = spans.clone();
+    // Budget 22: the unit tick and loop step cost 2, the 20-sample clear check fits,
+    // six samples are then spent before the blocked one, leaving 14. The replan route
+    // needs a 15-sample segment, so it refuses after the partial stop and tail were emitted.
+    let h = &mut vm.host().inner;
+    assert!(h.next_timer_expiry(10., &mut 1000).unwrap().is_none());
+    assert!(
+        h.advance_unit_activity_spans(10., &mut 22, &mut spans)
+            .is_err(),
+        "the replan runs out of work after spans were emitted"
+    );
+    assert_eq!(spans, before, "a failed projection leaves no spans behind");
 }
