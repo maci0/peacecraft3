@@ -48,11 +48,12 @@ source and file facts, not a run.
 - The Scout Tower row `hwtw` in `unitweapons.slk` has `weapsOn = 0`. Scout Towers
   therefore do not attack. They are not the attacker.
 
-Inference: the w3i and the script start Player(1) and Player(9) without an alliance.
-The recreation therefore treats them as enemies, as it does for Player(8). Team
-membership alone does not change that. No original runtime or native evidence has
-established whether the selected client makes team members allied at start. The
-team-to-alliance hypothesis is not established and is not implemented.
+Inference: the script and the w3i do not put Player(1) and Player(9) in an alliance,
+and this recreation keeps them hostile. The zero force flags and zero ally masks do
+not disprove native initial team alliances. The selected client's startup rule for
+same-team players is unverified, so the same-team hypothesis stays open. Team
+membership is not treated as alliance in the recreation, and `SetPlayerTeam`
+semantics are unchanged.
 
 Observed in `.scratch/gui-item-20261020/runs/checkpoint-2/gui.log`: hero life is 650
 at clock 0 and first drops at clock 12.375 (610.29). It reaches 0 at clock 34.25
@@ -71,3 +72,25 @@ record the attacker, owner or rawcode of any hit.
 - Invulnerability and pause are not applied in the intro. The prior note's claim
   that invulnerability is not consumed by combat is out of date: `weapon_target`
   filters protected targets. Pausing (`PauseUnit`) is still unsupported.
+
+## Diagnostic trace and replay
+
+`ObjectHost::enable_combat_trace` records acquisitions, explicit target orders and
+weapon damage with source and target handle, owner handle, current player number,
+rawcode, logical clock and life before the hit. It is off by default and changes no
+outcome. Synthetic tests: `combat_tests::combat_trace_*` and
+`explicit_target_order_attacks_a_passive_ally_while_acquisition_skips_it`. The
+passive-ally test shows that `SetPlayerAlliance` is directed: a passive setting from
+one owner to another does not stop the other side from acquiring it.
+
+The headless Human01 driver is `.scratch/first-hit/` (ignored). It is a copy of the
+production source-audit driver, with the trace enabled before the runtime loop and
+printed afterwards. It runs the unchanged map through the production startup path
+with no player input.
+
+- Build: `cargo build -p peacecraft3 --lib --locked --offline` (Bevy; root slot), then
+  `python3 .scratch/first-hit/compile_first_hit.py`.
+- Run: `python3 .scratch/first-hit/run_first_hit.py`, which writes
+  `.scratch/first-hit/run-N/stdout` with `COMBAT TRACE` and `TRACE i` lines.
+
+No replay has been run on this branch yet, so the first attacker is not established.
