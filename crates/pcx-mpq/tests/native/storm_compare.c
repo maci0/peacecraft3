@@ -21,8 +21,14 @@ static unsigned char *read_bytes(FILE *input,uint32_t size,unsigned padding){
     if(!bytes||fread(bytes,1,size,input)!=size){free(bytes);return NULL;}return bytes;
 }
 __declspec(dllimport) BOOL WINAPI pcxStormOpenArchive(LPCSTR,DWORD,DWORD,HANDLE*);
+/* Writes Storm's own archive-open bytes to dir/<name with separators as underscores>. */
+static void dump_native(const char *directory,const unsigned char *name,const unsigned char *bytes,DWORD size){
+    char path[MAX_PATH];size_t n=strlen((const char*)name);if(n+strlen(directory)+2>sizeof(path))return;
+    snprintf(path,sizeof(path),"%s\\",directory);for(size_t i=0;i<n;i++){char c=(char)name[i];path[strlen(directory)+1+i]=(c=='\\'||c=='/')?'_':c;}
+    path[strlen(directory)+1+n]=0;FILE *out=fopen(path,"wb");if(!out)return;fwrite(bytes,1,size,out);fclose(out);
+}
 int main(int argc,char **argv){
-    if(argc!=3){fprintf(stderr,"usage: storm_compare <archive> <PXC1-stream>\n");return 2;}
+    if(argc!=3 && argc!=4){fprintf(stderr,"usage: storm_compare <archive> <PXC1-stream> [native-dump-dir]\n");return 2;}
     /* Dynamic LoadLibrary triggers this DLL's alternate cipher seed (17bf0).
      * Keep a real PE import so process attachment uses the shipped static path. */
     volatile OpenArchive static_import=pcxStormOpenArchive;(void)static_import;
@@ -65,6 +71,7 @@ int main(int argc,char **argv){
                 if(!native||!rf(file,native,native_size,&got,NULL)){read_refused++;}
                 else if(got==size&&native_size==size&&!memcmp(native,expected,size)){open_identical++;}
                 else {open_mismatched++;}
+                if(native&&argc==4&&got==native_size){dump_native(argv[3],name,native,got);}
                 free(native);
             }
             cf(file);
