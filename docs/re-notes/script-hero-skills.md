@@ -77,3 +77,5 @@ open. Initial ability levels here do not by themselves implement combat effects.
 Normal Host preparation, live actors and controls, first-campaign completion and
 original/native/WASM deterministic/rendered parity remain unfinished. No original
 assets were committed or uploaded, and no public site deployment occurred.
+
+Holy Light, the first source-used spell effect, is in [holy light ability](holy-light-ability.md).

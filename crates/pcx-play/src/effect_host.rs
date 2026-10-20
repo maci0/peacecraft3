@@ -65,6 +65,35 @@ impl ObjectHost {
             })
     }
 
+    /// Attaches a live effect to an executed unit. Scripts and spell art share this path.
+    pub(super) fn add_unit_effect(
+        &mut self,
+        model: &str,
+        unit: HandleId,
+        attach_point: &str,
+    ) -> Result<HandleId, Error> {
+        self.executed_unit(unit)
+            .map_err(|e| self.inner.error(ADD, e.failure))?;
+        let entry = Entry::Effect {
+            model: model.into(),
+            unit,
+            attach_point: attach_point.into(),
+            live: true,
+        };
+        self.inner.allocate(entry, ADD)
+    }
+
+    /// Ends a live effect. Destroyed or null handles are accepted without change.
+    pub(super) fn destroy_unit_effect(&mut self, effect: HandleId) -> Result<(), Error> {
+        match self.inner.entry_mut(effect)? {
+            Entry::Effect { live, .. } => {
+                *live = false;
+                Ok(())
+            }
+            _ => Err(self.inner.error(DESTROY, Failure::WrongFamily)),
+        }
+    }
+
     pub(super) fn effect_native(
         &mut self,
         name: &str,
@@ -81,17 +110,7 @@ impl ObjectHost {
                     Value::Handle(unit),
                     Value::Str(attach_point),
                 ],
-            ) => {
-                self.executed_unit(*unit)
-                    .map_err(|e| self.inner.error(name, e.failure))?;
-                let entry = Entry::Effect {
-                    model: model.clone(),
-                    unit: *unit,
-                    attach_point: attach_point.clone(),
-                    live: true,
-                };
-                self.inner.allocate(entry, name).map(Value::Handle)
-            }
+            ) => self.add_unit_effect(model, *unit, attach_point).map(Value::Handle),
             (ADD, [Value::Str(_), Value::Null, Value::Str(_)]) => Err(self.inner.error(
                 name,
                 Failure::UnitState("null target behavior is not established"),

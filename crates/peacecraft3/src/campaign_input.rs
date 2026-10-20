@@ -34,6 +34,8 @@ pub(crate) struct CampaignInput {
     attempted: bool,
     session: Option<Weak<()>>,
     pub last_error: Option<String>,
+    /// A command armed by its hotkey, waiting for a target click in the session that armed it.
+    pub command: Option<ArmedCommand>,
 }
 
 pub(crate) fn install(app: &mut App) {
@@ -41,7 +43,7 @@ pub(crate) fn install(app: &mut App) {
         .add_systems(
             Update,
             (
-                (load_circles, click)
+                (command_hotkey, load_circles, click)
                     .chain()
                     .after(crate::campaign_hud::CampaignHudSet)
                     .after(crate::campaign_inventory::CampaignInventorySet)
@@ -205,6 +207,146 @@ fn ground_point(ray: Ray3d, terrain: &pcx_map::Terrain, far: f32) -> Option<[f32
     None
 }
 
+/// A unit command armed by its hotkey. It belongs to the session that armed it.
+#[derive(Clone)]
+pub(crate) struct ArmedCommand {
+    order: i32,
+    session: Weak<()>,
+}
+
+impl ArmedCommand {
+    fn is_for(&self, session: Option<Weak<()>>) -> bool {
+        session.is_some_and(|session| Weak::ptr_eq(&session, &self.session))
+    }
+}
+
+/// What a pointer press does while a command is armed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArmedPointer {
+    /// No command is armed: the press is ordinary selection or orders.
+    Pass,
+    /// Right click, or a left click without a unit target, disarms the command.
+    Cancel,
+    /// A left click on a unit issues the armed order to the selected casters.
+    Issue(i32),
+}
+
+fn armed_pointer(armed: Option<i32>, select: bool, right: bool, has_target: bool) -> ArmedPointer {
+    match armed {
+        None => ArmedPointer::Pass,
+        Some(_) if right => ArmedPointer::Cancel,
+        Some(order) if select && has_target => ArmedPointer::Issue(order),
+        Some(_) if select => ArmedPointer::Cancel,
+        Some(_) => ArmedPointer::Pass,
+    }
+}
+
+/// Camera, HUD, inventory, dialogs and local control must all let input reach the session.
+fn commands_open(
+    view: &CampaignCamera,
+    hud: &crate::campaign_hud::CampaignHud,
+    inventory: &crate::campaign_inventory::CampaignInventory,
+    dialogs: &crate::campaign_script_dialogs::CampaignScriptDialogs,
+    host: &MapStartupHost,
+) -> bool {
+    let objects = host.objects();
+    view.active()
+        && !hud.quest_log_open
+        && !hud.pointer_consumed
+        && !inventory.pointer_consumed
+        && !dialogs.input_blocked()
+        && !objects
+            .presentation()
+            .is_some_and(|p| p.control_enabled == Some(false))
+        && !objects.local_player_settings().is_some_and(|local| {
+            objects
+                .player_removal_state()
+                .and_then(|state| state.get(local.identity))
+                .is_some_and(|result| result.left)
+        })
+}
+
+/// Arms the Holy Light-style command when its hotkey is pressed while an owned selected
+/// unit has it. Input closed by a dialog, HUD or control change disarms it.
+fn command_hotkey(
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    view: Res<CampaignCamera>,
+    hud: Res<crate::campaign_hud::CampaignHud>,
+    inventory: Res<crate::campaign_inventory::CampaignInventory>,
+    dialogs: Res<crate::campaign_script_dialogs::CampaignScriptDialogs>,
+    mut input: ResMut<CampaignInput>,
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+) {
+    let Some(keys) = keys else {
+        return;
+    };
+    let witness = session.session_witness();
+    let Some(host) = session.host() else {
+        input.command = None;
+        return;
+    };
+    if !commands_open(&view, &hud, &inventory, &dialogs, host) {
+        input.command = None;
+        return;
+    }
+    let objects = host.objects();
+    let local = objects.local_player_number();
+    let armed = objects
+        .selection()
+        .iter()
+        .copied()
+        .filter(|&u| {
+            objects
+                .executed_unit(u)
+                .ok()
+                .and_then(|r| objects.player_settings(r.owner).ok())
+                .is_some_and(|p| Some(p.number) == local)
+        })
+        .filter_map(|u| objects.holy_light_command(u).ok().flatten())
+        .find(|command| letter_key(command.hotkey).is_some_and(|k| keys.just_pressed(k)));
+    if let (Some(command), Some(session)) = (armed, witness) {
+        input.command = Some(ArmedCommand {
+            order: command.order,
+            session,
+        });
+    }
+}
+
+/// Keyboard key of an ASCII letter hotkey from the ability's `Hotkey` profile.
+fn letter_key(letter: char) -> Option<KeyCode> {
+    const LETTERS: [KeyCode; 26] = [
+        KeyCode::KeyA,
+        KeyCode::KeyB,
+        KeyCode::KeyC,
+        KeyCode::KeyD,
+        KeyCode::KeyE,
+        KeyCode::KeyF,
+        KeyCode::KeyG,
+        KeyCode::KeyH,
+        KeyCode::KeyI,
+        KeyCode::KeyJ,
+        KeyCode::KeyK,
+        KeyCode::KeyL,
+        KeyCode::KeyM,
+        KeyCode::KeyN,
+        KeyCode::KeyO,
+        KeyCode::KeyP,
+        KeyCode::KeyQ,
+        KeyCode::KeyR,
+        KeyCode::KeyS,
+        KeyCode::KeyT,
+        KeyCode::KeyU,
+        KeyCode::KeyV,
+        KeyCode::KeyW,
+        KeyCode::KeyX,
+        KeyCode::KeyY,
+        KeyCode::KeyZ,
+    ];
+    letter
+        .is_ascii_uppercase()
+        .then(|| LETTERS[usize::from(letter as u8 - b'A')])
+}
+
 #[derive(SystemParam)]
 struct Picking<'w, 's> {
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
@@ -311,6 +453,57 @@ fn click(
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(id, _)| id);
     debug!(?point, ?picked, select, "campaign pointer hit");
+    let armed = input
+        .command
+        .as_ref()
+        .filter(|armed| armed.is_for(session.session_witness()))
+        .map(|armed| armed.order);
+    input.command = armed.and(input.command.take());
+    match armed_pointer(armed, select, order, picked.is_some()) {
+        ArmedPointer::Pass => {}
+        ArmedPointer::Cancel => {
+            input.command = None;
+            return;
+        }
+        ArmedPointer::Issue(command) => {
+            input.command = None;
+            let Some(target) = picked else {
+                return;
+            };
+            let local = objects.local_player_number();
+            let casters: Vec<HandleId> = objects
+                .selection()
+                .iter()
+                .copied()
+                .filter(|&u| {
+                    objects
+                        .holy_light_command(u)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|c| c.order == command)
+                        && objects
+                            .executed_unit(u)
+                            .ok()
+                            .and_then(|r| objects.player_settings(r.owner).ok())
+                            .is_some_and(|p| Some(p.number) == local)
+                })
+                .collect();
+            for unit in casters {
+                let result = objects.native(
+                    "IssueTargetOrderById",
+                    &[
+                        Value::Handle(unit),
+                        Value::Int(command),
+                        Value::Handle(target),
+                    ],
+                );
+                if let Err(error) = result {
+                    input.last_error = Some(error);
+                }
+            }
+            return;
+        }
+    }
     if select {
         if let Some(unit) = picked {
             objects.select_units(&[unit], !additive);
@@ -456,5 +649,35 @@ mod tests {
             ground_point(Ray3d::new(origin, Dir3::X), &terrain, 5000.0),
             None
         );
+    }
+
+    #[test]
+    fn armed_pointer_issues_on_a_unit_click_and_cancels_on_right_or_ground_clicks() {
+        assert_eq!(armed_pointer(None, true, false, true), ArmedPointer::Pass);
+        assert_eq!(armed_pointer(Some(9), true, false, true), ArmedPointer::Issue(9));
+        assert_eq!(armed_pointer(Some(9), true, false, false), ArmedPointer::Cancel);
+        assert_eq!(armed_pointer(Some(9), false, true, true), ArmedPointer::Cancel);
+        assert_eq!(armed_pointer(Some(9), false, false, false), ArmedPointer::Pass);
+    }
+
+    #[test]
+    fn armed_command_belongs_only_to_the_session_that_armed_it() {
+        let first = Arc::new(());
+        let second = Arc::new(());
+        let armed = ArmedCommand {
+            order: 9,
+            session: Arc::downgrade(&first),
+        };
+        assert!(armed.is_for(Some(Arc::downgrade(&first))));
+        assert!(!armed.is_for(Some(Arc::downgrade(&second))));
+        assert!(!armed.is_for(None));
+    }
+
+    #[test]
+    fn hotkey_letters_map_to_keys_and_other_characters_do_not() {
+        assert_eq!(letter_key('T'), Some(KeyCode::KeyT));
+        assert_eq!(letter_key('Z'), Some(KeyCode::KeyZ));
+        assert_eq!(letter_key('1'), None);
+        assert_eq!(letter_key('t'), None);
     }
 }

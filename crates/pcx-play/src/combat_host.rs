@@ -76,7 +76,7 @@ pub(super) struct Rules {
 }
 
 /// `None` is an omitted SLK cell, which is empty.
-fn column<'a>(
+pub(super) fn column<'a>(
     d: &'a Definition,
     slk: SlkId,
     wanted: &str,
@@ -136,7 +136,7 @@ fn number(value: &FieldValue, name: &str) -> Result<Option<f32>, String> {
         .ok_or_else(|| format!("unit field {name} is not a finite number"))
 }
 
-fn text<'a>(value: &'a FieldValue, name: &str) -> Result<&'a str, String> {
+pub(super) fn text<'a>(value: &'a FieldValue, name: &str) -> Result<&'a str, String> {
     match value {
         FieldValue::Cell(s) => Ok(s.trim()),
         FieldValue::Override(pcx_objects::Value::Str(bytes)) => {
@@ -345,7 +345,7 @@ impl ObjectHost {
     }
 }
 
-fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
+pub(super) fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
 
@@ -393,6 +393,77 @@ impl ObjectHost {
         });
         Ok(())
     }
+
+    /// Same player, or an explicit passive alliance from the caster's owner. Neutral
+    /// passive units are allies only through such an alliance, never by owner number.
+    pub(super) fn is_ally(&self, caster: HandleId, target: HandleId) -> bool {
+        let (Ok(caster), Ok(target)) = (self.executed_unit(caster), self.executed_unit(target)) else {
+            return false;
+        };
+        let (Ok(a), Ok(b)) = (self.player_settings(caster.owner), self.player_settings(target.owner)) else {
+            return false;
+        };
+        let Some(rules) = self.combat.as_ref() else {
+            return false;
+        };
+        a.identity == b.identity
+            || a.alliances.iter().any(|(other, setting, value)| {
+                *other == b.identity
+                    && *value
+                    && self
+                        .inner
+                        .symbolic_value(*setting, "alliancetype")
+                        .is_ok_and(|v| v == rules.passive)
+            })
+    }
+
+    /// Restores `amount` life, capped at max life.
+    pub(super) fn heal_unit(&mut self, target: HandleId, amount: f32) -> Result<(), Error> {
+        if let Entry::Unit { record } = self.inner.entry_mut(target)?
+            && let Some(vitals) = &mut record.vitals
+        {
+            vitals.life = (vitals.life + amount).min(vitals.max_life);
+        }
+        Ok(())
+    }
+
+    /// `EVENT_UNIT_SPELL_EFFECT` and `EVENT_PLAYER_UNIT_SPELL_EFFECT` for a caster whose
+    /// spell took effect on `target`; `GetSpellTargetUnit` reads the target.
+    pub(super) fn queue_spell_effect(&mut self, caster: HandleId, target: HandleId) -> Result<(), Error> {
+        let unit_event = self.source_constant_enumerand("EVENT_UNIT_SPELL_EFFECT", "unitevent")?;
+        let player_event =
+            self.source_constant_enumerand("EVENT_PLAYER_UNIT_SPELL_EFFECT", "playerunitevent")?;
+        let owner = self.executed_unit(caster)?.owner;
+        let subject = EventSubject {
+            unit: Some(caster),
+            spell_target: Some(target),
+            ..EventSubject::default()
+        };
+        let mut fired = Vec::new();
+        for entry in &self.inner.arena {
+            match entry {
+                Entry::RegisteredUnitEvent {
+                    trigger,
+                    unit,
+                    unitevent,
+                    enumerand,
+                } if *unit == caster && *enumerand == unit_event => {
+                    fired.push((*trigger, None, Some(*unitevent), None));
+                }
+                Entry::RegisteredPlayerUnitEvent(r)
+                    if r.player == owner && r.enumerand == player_event =>
+                {
+                    fired.push((r.trigger, r.filter, Some(r.playerunitevent), Some(r.player)));
+                }
+                _ => {}
+            }
+        }
+        for (trigger, filter, event, player) in fired {
+            self.queue_event(trigger, filter, EventSubject { player, ..subject }, event)?;
+        }
+        Ok(())
+    }
+
 
     pub fn set_neutral_passive(&mut self, number: i32) {
         if let Some(rules) = &mut self.combat {
@@ -457,6 +528,7 @@ impl ObjectHost {
 
     /// Another order replaces the unit's attack target.
     pub(super) fn clear_combat_target(&mut self, unit: HandleId) {
+        self.forget_holy_cast(unit);
         if let Ok(Entry::Unit { record }) = self.inner.entry_mut(unit)
             && let Some(combat) = &mut record.combat
         {
@@ -467,7 +539,7 @@ impl ObjectHost {
         }
     }
 
-    fn live(&self, unit: HandleId) -> Option<&super::ExecutedUnit> {
+    pub(super) fn live(&self, unit: HandleId) -> Option<&super::ExecutedUnit> {
         match self.inner.entry(unit).ok()? {
             Entry::Unit { record }
                 if record.shown && record.combat.as_ref().is_some_and(|c| !c.dead) =>
@@ -579,6 +651,7 @@ impl ObjectHost {
         }
         self.inner.program.natives().get(name)?;
         let attack_order = rules.attack_order;
+        let holy_light_order = self.holy_light_order();
         Some((|| {
             if name == KILL {
                 return match args {
@@ -600,6 +673,12 @@ impl ObjectHost {
                 (ORDER_BY_ID, Value::Int(id)) => Some(*id),
                 _ => return Err(self.inner.error(name, Failure::Signature)),
             };
+            if order.is_some() && order == holy_light_order {
+                let (Value::Handle(unit), Value::Handle(target)) = (unit, target) else {
+                    return Ok(Value::Bool(false));
+                };
+                return Ok(Value::Bool(self.order_holy_light(*unit, *target)?));
+            }
             if order != Some(attack_order) {
                 return Err(self.inner.error(
                     name,
@@ -718,7 +797,8 @@ impl ObjectHost {
         Ok(())
     }
 
-    fn deal_weapon_damage(
+    /// Lethal or partial life loss from a damage source (weapon or spell). Kills name `source` as killer.
+    pub(super) fn damage_unit(
         &mut self,
         source: HandleId,
         target: HandleId,
@@ -799,8 +879,9 @@ impl ObjectHost {
             missiles.into_iter().partition(|m| m.impact_at <= now);
         self.combat.as_mut().expect("combat").missiles = pending;
         for missile in due {
-            self.deal_weapon_damage(missile.source, missile.target, missile.damage)?;
+            self.damage_unit(missile.source, missile.target, missile.damage)?;
         }
+        self.advance_holy_light(now)?;
         let units: Vec<HandleId> = self
             .executed_units()
             .filter(|(_, u)| {
@@ -1010,7 +1091,7 @@ impl ObjectHost {
                                 damage,
                             });
                         }
-                        None => self.deal_weapon_damage(unit, swung, damage)?,
+                        None => self.damage_unit(unit, swung, damage)?,
                     }
                 }
                 _ => {}
