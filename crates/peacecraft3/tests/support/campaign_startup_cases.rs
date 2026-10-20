@@ -129,6 +129,7 @@ native SetDayNightModels takes string terrain, string units returns nothing
 native CreateMIDISound takes string label, integer a, integer b returns sound
 native CreateSoundFromLabel takes string label, boolean looping, boolean is3d, boolean stop, integer fadeIn, integer fadeOut returns sound
 native StartSound takes sound s returns nothing
+native StopSound takes sound s, boolean kill, boolean fade returns nothing
 native SetMapMusic takes string name, boolean random, integer index returns nothing
 native CreateSound takes string file, boolean looping, boolean is3d, boolean stop, integer fadeIn, integer fadeOut, string eax returns sound
 native SetSoundParamsFromLabel takes sound s, string label returns nothing

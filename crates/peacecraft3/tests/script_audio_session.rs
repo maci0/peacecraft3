@@ -332,16 +332,11 @@ endfunction
         assert_eq!(voices(&mut app), before);
         let played = app.world().resource::<ScriptAudioReport>().played;
         app.update();
-        assert_eq!(app.world().resource::<ScriptAudioReport>().played, played);
-        assert_eq!(voices(&mut app), before);
-        assert!(
-            app.world()
-                .resource::<ScriptAudioReport>()
-                .last_refusal
-                .as_deref()
-                .unwrap()
-                .contains("repeat")
+        assert_eq!(
+            app.world().resource::<ScriptAudioReport>().played,
+            played + 1
         );
+        assert_eq!(voices(&mut app).len(), before.len());
         assert!(
             app.world_mut()
                 .resource_mut::<MapScriptSession<MapStartupHost>>()
@@ -396,6 +391,58 @@ endfunction
         assert_eq!(
             app.world().resource::<Assets<AudioSource>>().iter().count(),
             1
+        );
+    }
+
+    #[test]
+    fn finished_voice_releases_its_shared_source_once_and_stop_releases_the_last() {
+        let pcm = tone();
+        let mut app = app(ScriptAudioLimits {
+            max_staged_bytes: pcm.len(),
+            max_live_bytes: pcm.len(),
+        });
+        deliver_sound(&mut app, SOUND_SCRIPT, &pcm, 8);
+        let (oneshot, looping) = {
+            let mut query = app.world_mut().query::<(Entity, &ScriptVoice)>();
+            let rows: Vec<_> = query
+                .iter(app.world())
+                .map(|(entity, voice)| (entity, voice.looping, voice.handle))
+                .collect();
+            let oneshot = rows.iter().find(|row| !row.1).unwrap();
+            let looping = rows.iter().find(|row| row.1).unwrap();
+            ((oneshot.0), looping.2)
+        };
+        app.world_mut()
+            .entity_mut(oneshot)
+            .remove::<AudioPlayer<AudioSource>>();
+        app.update();
+        app.update();
+        assert_eq!(voices(&mut app).len(), 1, "the looping voice stays");
+        assert_eq!(
+            app.world().resource::<Assets<AudioSource>>().iter().count(),
+            1,
+            "one live reference remains after the finished voice is released"
+        );
+        app.world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native(
+                "StopSound",
+                &[
+                    pcx_script::Value::Handle(looping),
+                    pcx_script::Value::Bool(false),
+                    pcx_script::Value::Bool(false),
+                ],
+            )
+            .unwrap();
+        app.update();
+        assert!(voices(&mut app).is_empty());
+        assert_eq!(
+            app.world().resource::<Assets<AudioSource>>().iter().count(),
+            0,
+            "the last reference releases the source exactly once"
         );
     }
 
@@ -458,7 +505,7 @@ endfunction
     }
 
     #[test]
-    fn repeated_active_start_is_reported_until_its_playback_behavior_is_admitted() {
+    fn repeated_active_start_restarts_its_voice_without_a_second_one() {
         let mut app = app(ScriptAudioLimits {
             max_staged_bytes: 1024,
             max_live_bytes: 1024,
@@ -470,7 +517,42 @@ endfunction
         );
         deliver_sound(&mut app, &script, &pcm, 7);
         assert_eq!(voices(&mut app).len(), 2);
-        assert_eq!(app.world().resource::<ScriptAudioReport>().refusal_count, 1);
+        assert_eq!(app.world().resource::<ScriptAudioReport>().refusal_count, 0);
+        let (earlier, looping) = {
+            let mut query = app.world_mut().query::<(Entity, &ScriptVoice)>();
+            query
+                .iter(app.world())
+                .find(|(_, voice)| voice.looping)
+                .map(|(entity, voice)| (entity, voice.handle))
+                .unwrap()
+        };
+        app.world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native("StartSound", &[pcx_script::Value::Handle(looping)])
+            .unwrap();
+        app.update();
+        assert!(app.world().get_entity(earlier).is_err());
+        let after = voices(&mut app);
+        assert_eq!(after.len(), 2, "a restart replaces the voice");
+        assert!(
+            after
+                .iter()
+                .any(|(entity, looped)| *looped && *entity != earlier)
+        );
+        assert_eq!(app.world().resource::<ScriptAudioReport>().refusal_count, 0);
+    }
+
+    #[test]
+    fn stop_retires_a_live_looping_voice_and_reports_unapplied_fade() {
+        let pcm = tone();
+        let mut app = app(ScriptAudioLimits {
+            max_staged_bytes: pcm.len(),
+            max_live_bytes: pcm.len(),
+        });
+        deliver_sound(&mut app, SOUND_SCRIPT, &pcm, 7);
         let looping = {
             let mut query = app.world_mut().query::<&ScriptVoice>();
             query
@@ -484,22 +566,70 @@ endfunction
             .host()
             .unwrap()
             .objects_mut()
-            .native("StartSound", &[pcx_script::Value::Handle(looping)])
+            .native(
+                "StopSound",
+                &[
+                    pcx_script::Value::Handle(looping),
+                    pcx_script::Value::Bool(false),
+                    pcx_script::Value::Bool(true),
+                ],
+            )
             .unwrap();
         app.update();
-        assert_eq!(
-            voices(&mut app).len(),
-            2,
-            "an unmeasured repeat must not create an extra looping voice"
-        );
+        assert!(voices(&mut app).iter().all(|(_, looped)| !looped));
         let report = app.world().resource::<ScriptAudioReport>();
-        assert_eq!(report.refusal_count, 2);
         assert!(
             report
-                .last_refusal
+                .last_partial
                 .as_deref()
-                .is_some_and(|reason| reason.contains("repeat"))
+                .is_some_and(|reason| reason.contains("fade-out"))
         );
+        assert_eq!(report.refusal_count, 0);
+    }
+
+    #[test]
+    fn start_stop_start_in_one_publish_leaves_exactly_the_second_voice() {
+        let mut app = app(ScriptAudioLimits {
+            max_staged_bytes: 1024,
+            max_live_bytes: 1024,
+        });
+        let pcm = tone();
+        let script = SOUND_SCRIPT.replace(
+            "call StartSound(looped)",
+            "call StartSound(looped)\ncall StopSound(looped, false, false)\ncall StartSound(looped)",
+        );
+        deliver_sound(&mut app, &script, &pcm, 9);
+        let looping: Vec<_> = voices(&mut app)
+            .into_iter()
+            .filter(|(_, looped)| *looped)
+            .collect();
+        assert_eq!(
+            looping.len(),
+            1,
+            "the second start is the only looping voice"
+        );
+        assert_eq!(app.world().resource::<ScriptAudioReport>().refusal_count, 0);
+        assert_eq!(app.world().resource::<ScriptAudioReport>().played, 2);
+    }
+
+    #[test]
+    fn stop_silences_a_looping_voice_and_cancels_its_unconsumed_start() {
+        let mut app = app(ScriptAudioLimits {
+            max_staged_bytes: 1024,
+            max_live_bytes: 1024,
+        });
+        let pcm = tone();
+        let script = SOUND_SCRIPT.replace(
+            "call StartSound(looped)",
+            "call StartSound(looped)\ncall StopSound(looped, false, false)\ncall StartSound(looped)\ncall StopSound(looped, false, false)",
+        );
+        deliver_sound(&mut app, &script, &pcm, 7);
+        app.update();
+        assert!(
+            voices(&mut app).iter().all(|(_, looped)| !looped),
+            "the final stop silences the looping voice"
+        );
+        assert_eq!(app.world().resource::<ScriptAudioReport>().refusal_count, 0);
     }
 
     #[test]
@@ -541,9 +671,13 @@ endfunction
         finished_oneshot_is_reclaimed_and_the_looping_voice_stays();
         staged_limit_leaves_the_factory_queue_unpublished();
         production_factory_derives_playback_ceiling_from_its_admitted_bank();
-        repeated_active_start_is_reported_until_its_playback_behavior_is_admitted();
+        repeated_active_start_restarts_its_voice_without_a_second_one();
+        stop_retires_a_live_looping_voice_and_reports_unapplied_fade();
+        start_stop_start_in_one_publish_leaves_exactly_the_second_voice();
+        stop_silences_a_looping_voice_and_cancels_its_unconsumed_start();
         a_finished_handle_can_start_again_in_the_same_reclaim_pass();
-        9
+        finished_voice_releases_its_shared_source_once_and_stop_releases_the_last();
+        13
     }
 
     #[cfg(target_arch = "wasm32")]

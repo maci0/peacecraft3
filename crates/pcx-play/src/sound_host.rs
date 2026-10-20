@@ -457,6 +457,8 @@ impl ObjectHost {
     }
 
     /// Every successful request remains in execution order, including repeats.
+    /// A successful `StopSound` drops that identity's unconsumed starts; the
+    /// stop itself waits in `take_sound_stops`, which the consumer applies first.
     pub fn pending_sound_starts(&self) -> &[HandleId] {
         &self.sound_starts
     }
@@ -532,6 +534,7 @@ impl ObjectHost {
                         }
                         Ok(()) => {
                             self.sound_playing.remove(id);
+                            self.sound_starts.retain(|pending| pending != id);
                             self.sound_stops.push((*id, *kill, *fade));
                             Ok(Value::Null)
                         }

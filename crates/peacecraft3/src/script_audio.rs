@@ -26,7 +26,7 @@ use pcx_play::playercolor_host::ObjectHost;
 use pcx_play::playercolor_host::SoundProperties;
 use pcx_play::scripts::AssetIdentity;
 use pcx_script::HandleId;
-use std::{collections::HashSet, sync::Weak};
+use std::{collections::HashMap, sync::Weak};
 use tracing::warn;
 #[path = "script_audio_mix.rs"]
 mod mix;
@@ -173,10 +173,16 @@ pub struct ScriptVoice {
 #[derive(Resource, Default)]
 struct ScriptAudioMemory {
     sources: Vec<LiveSource>,
-    playing: HashSet<HandleId>,
+    /// One live voice per sound identity in the current session.
+    playing: HashMap<HandleId, LiveVoice>,
     profile: Option<(Weak<()>, Result<PlaybackProfile, String>)>,
     mixed: Vec<mix::Active>,
     next_serial: u64,
+}
+
+struct LiveVoice {
+    entity: Entity,
+    source: Handle<AudioSource>,
 }
 
 struct LiveSource {
@@ -297,6 +303,14 @@ fn play_published_script_sounds(
         return;
     };
     let objects = host.objects_mut();
+    // Stops run first: the host already dropped any unconsumed start of a stopped identity.
+    stop_sounds(
+        &objects.take_sound_stops(),
+        &mut commands,
+        &mut assets,
+        &mut memory,
+        &mut report,
+    );
     if objects.pending_sound_starts().is_empty() {
         return;
     }
@@ -350,7 +364,13 @@ fn reclaim_script_voices(
         if !current_voice || oneshot_completed(voice.looping, has_player, sink_empty) {
             finished.push((entity, voice.source.clone()));
         } else {
-            memory.playing.insert(voice.handle);
+            memory.playing.insert(
+                voice.handle,
+                LiveVoice {
+                    entity,
+                    source: voice.source.clone(),
+                },
+            );
             if let Some(mixed) = mixed {
                 memory.mixed.push(mix::Active {
                     voice: mixed.clone(),
@@ -432,6 +452,32 @@ struct Prepared {
     bytes: Option<Vec<u8>>,
 }
 
+/// Silences each stopped identity's live voice, looping or not. Native
+/// `StopSound(kill=true)` releases the backend voice after any fade call, so
+/// kill stops at once. A fade without kill starts the native fade-out ramp,
+/// which this consumer does not apply; the voice stops at once and the report says so.
+fn stop_sounds(
+    stops: &[(HandleId, bool, bool)],
+    commands: &mut Commands,
+    assets: &mut Assets<AudioSource>,
+    memory: &mut ScriptAudioMemory,
+    report: &mut ScriptAudioReport,
+) {
+    for &(id, kill, fade) in stops {
+        if let Some(live) = memory.playing.remove(&id) {
+            memory.mixed.retain(|active| active.entity != live.entity);
+            commands.entity(live.entity).despawn();
+            memory.release(assets, &live.source);
+        }
+        if fade && !kill {
+            let token = id.token();
+            report.last_partial = Some(format!(
+                "sound {token}: StopSound fade-out ramp not applied; stopped immediately"
+            ));
+        }
+    }
+}
+
 fn publish_queued_starts(
     objects: &mut ObjectHost,
     session: &Weak<()>,
@@ -458,9 +504,6 @@ fn publish_queued_starts(
     classified
         .try_reserve_exact(ids.len())
         .map_err(|_| "script audio start list allocation failed".to_string())?;
-    let mut seen = HashSet::new();
-    seen.try_reserve(ids.len())
-        .map_err(|_| "script audio start identity allocation failed".to_string())?;
     let mut simulated: Vec<_> = memory
         .mixed
         .iter()
@@ -468,34 +511,33 @@ fn publish_queued_starts(
         .collect();
     let mut serial = memory.next_serial;
     for id in ids {
-        if memory.playing.contains(&id) || !seen.insert(id) {
-            classified.push(Classified::Refuse(
-                id,
-                "repeat StartSound on an active handle has no admitted playback behavior".into(),
-            ));
-        } else {
-            let mut classified_sound = classify(objects, id, profile.clone())?;
-            if let Classified::Play(plan) = &mut classified_sound
-                && let Some(voice) = &mut plan.mix
-                && let Some(policy) = profile.as_ref().and_then(|profile| profile.mix.as_ref())
-            {
-                voice.serial = serial;
-                serial = serial
-                    .checked_add(1)
-                    .ok_or("script audio start serial overflowed")?;
-                match mix::admission(simulated.iter(), voice, policy) {
-                    Ok(victim) => {
-                        plan.victim = victim;
-                        if let Some(victim) = victim {
-                            simulated.retain(|voice| voice.id != victim);
-                        }
-                        simulated.push(voice.clone());
+        // A repeat replaces its identity's voice, so that voice never counts against capacity.
+        let mut classified_sound = classify(objects, id, profile.clone())?;
+        if let Classified::Play(plan) = &mut classified_sound
+            && let Some(voice) = &mut plan.mix
+            && let Some(policy) = profile.as_ref().and_then(|profile| profile.mix.as_ref())
+        {
+            voice.serial = serial;
+            serial = serial
+                .checked_add(1)
+                .ok_or("script audio start serial overflowed")?;
+            match mix::admission(
+                simulated.iter().filter(|other| other.id != id),
+                voice,
+                policy,
+            ) {
+                Ok(victim) => {
+                    plan.victim = victim;
+                    simulated.retain(|other| other.id != id);
+                    if let Some(victim) = victim {
+                        simulated.retain(|other| other.id != victim);
                     }
-                    Err(reason) => classified_sound = Classified::Refuse(id, reason),
+                    simulated.push(voice.clone());
                 }
+                Err(reason) => classified_sound = Classified::Refuse(id, reason),
             }
-            classified.push(classified_sound);
         }
+        classified.push(classified_sound);
     }
     let mut staged = 0usize;
     let mut added_live = 0usize;
@@ -590,6 +632,12 @@ fn publish_queued_starts(
                 report.refusal_count = report.refusal_count.saturating_add(1);
             }
             Ok((voice, plan)) => {
+                // A repeat StartSound restarts its identity: the earlier voice stops here.
+                if let Some(old) = memory.playing.remove(&voice.handle) {
+                    memory.mixed.retain(|active| active.entity != old.entity);
+                    commands.entity(old.entity).despawn();
+                    memory.release(assets, &old.source);
+                }
                 if let Some(victim) = plan.victim
                     && let Some(at) = memory
                         .mixed
@@ -610,7 +658,7 @@ fn publish_queued_starts(
                 if let Some(speed) = plan.speed {
                     playback.speed = speed;
                 }
-                memory.playing.insert(voice.handle);
+                let handle = voice.handle;
                 let rate = voice.fade_in_rate;
                 let mut entity = commands.spawn((
                     AudioPlayer(source.clone()),
@@ -621,6 +669,13 @@ fn publish_queued_starts(
                         channel: plan.channel,
                     },
                 ));
+                memory.playing.insert(
+                    handle,
+                    LiveVoice {
+                        entity: entity.id(),
+                        source: source.clone(),
+                    },
+                );
                 if let Some(mixed) = plan.mix {
                     entity.insert(mixed.clone());
                     memory.mixed.push(mix::Active {
@@ -965,7 +1020,8 @@ fn creation_block(
         return Some("3D placement is not played");
     }
     if stop_when_out_of_range {
-        return Some("out-of-range stop is not played");
+        // The per-frame range check is measured; its dispatch action is not.
+        return Some("out-of-range dispatch action is unidentified; not played");
     }
     if !eax.is_empty() {
         return Some("EAX profile is not played");
@@ -1213,6 +1269,7 @@ mod tests {
     use pcx_play::sound_parameters::{Bank, Budget as ParameterBudget};
     use pcx_script::{Host, Prelude, Value};
     use pcx_slq::CoordinateLimits;
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     const COMMON: &str = "\
@@ -1721,6 +1778,19 @@ endglobals
             assert_eq!(world.resource::<ScriptAudioReport>().played, 3);
             assert_eq!(world.resource::<ScriptAudioReport>().refusal_count, 0);
         }
+    }
+
+    #[test]
+    fn out_of_range_flag_refuses_with_the_unidentified_action_named() {
+        assert_eq!(creation_block(false, false, "", 0, 0, None), None);
+        assert_eq!(
+            creation_block(false, true, "", 0, 0, None),
+            Some("out-of-range dispatch action is unidentified; not played")
+        );
+        assert_eq!(
+            creation_block(true, true, "", 0, 0, None),
+            Some("3D placement is not played")
+        );
     }
 
     #[test]
