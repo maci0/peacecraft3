@@ -128,3 +128,75 @@ Runbook (not run; needs a root GUI slot):
   checked against that file.
 - The production command and tick stream, with seed and initial-world capture,
   so the Save control records real campaign play.
+
+## Production command log
+
+`pcx_play::player_command_log::PlayerCommandLog` holds the accepted player
+commands of the prepared campaign session. It is data only.
+
+- Recording point: once per command, after the authoritative native accepts it
+  (`crates/peacecraft3/src/campaign_input.rs`). Selection records after
+  `select_units`. Orders record per unit after `IssueTargetOrder` or
+  `IssuePointOrder` returns `Ok`. End-of-cinematic records after
+  `fire_local_player_event` returns `Ok`. Script-issued natives are not recorded.
+- Fault model: the first record that cannot be kept (missing start, missing or
+  non-finite clock, clock running backwards, entry bound reached) faults the log.
+  The fault is sticky, the game keeps running, and `last_error` shows the fault.
+  The log records nothing after a fault. Commands accepted after a fault are
+  unrecorded, so the log can never be saved as a replay.
+- Bound: `MAX_LOG_ENTRIES` entries per session.
+- Start identity: `StartIdentity::from_context` reads the admitted
+  `ParsedMapContext`. It carries the seed, the map label, the SHA-256 of the
+  admitted map bytes (`map_sha256`), and the existing `sources` identities for
+  the map, common, Blizzard and catalog archives. The FNV-1a `map_digest` is a
+  reproducibility checksum only and is not used as identity.
+- Save readiness: `save_readiness()` refuses with `Faulted`, `NoStart`, or
+  `NoInitialSnapshot`. The last is always returned for now.
+
+Not captured: the initial state a replay starts from. Deterministic playback
+from map init needs the campaign VM, globals, object and timer state at the
+first accepted command, and the seed-driven RNG state. The native `Session`
+container does not carry any of these, so it cannot substitute. Until the
+snapshot exists, Save must refuse with `NoInitialSnapshot`.
+
+## Original sample qualification (2026-10-20)
+
+Source: `Warcraft III.exe` Legacy 1.29.2.9231 (SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`), custom
+1v1 on Booty Bay, player `replay1` (Random race, Team 1) against Computer
+(Normal) (Random, Team 2), 100% handicap. Match ended by F10 menu, End Game,
+Quit Mission. The game wrote `Replay/LastReplay.w3g` at match end, before any
+Save Replay click. Sample: 6041 bytes, SHA-256
+`7055a5ac8ef45a8e176d7bb7d9abea9baac597761b47cbfec4e94bd57574f5a7`. Export
+receipt: `.scratch/replay-sample-1/replays/match-1.json` (local, not committed).
+
+Verified against the bytes:
+
+- Bytes 0–27: `Warcraft III recorded game` `1a 00`.
+- Header size 68 (`0x44`). Compressed-file size 6041 equals the file length.
+- Header version 1. Decompressed size 10570. Two blocks.
+- Bytes 48–51: `PX3W`. Game version 29 (1.29). Build 6060. Flags `0x0000`.
+- Replay length 73625 ms, which matches the score screen's 0:01:13.
+- Block framing: u16 compressed size, u16 uncompressed size (8192), u32 field,
+  then a zlib stream beginning `78 01`. Block 0 is at 68 with compressed size
+  4560. Block 1 is at 4636 with compressed size 1397. The file ends at 6041.
+- Each block inflates to 8192 bytes. The content ends at 10570 across both
+  blocks. The rest is zero padding, so the header's decompressed size is the
+  real content length.
+- Records are continuous across the block boundary. Block 0 ends with a
+  `1f 02 00 …` time-slot record, and block 1 starts mid-record.
+- Inflated block 0 starts `10 01 00 00 00 01 "replay1" 00 01 00 "Local Game" 00 …`.
+  This is observed, not yet decoded against a record table.
+
+Not established:
+
+- The block u32 field (`7f65725c` in block 0). It matches none of adler32 or
+  crc32 over the inflated or the compressed bytes (`.scratch/w3g_checksum.py`).
+- Header bytes 64–67 (`3d d5 55 eb`). Meaning unknown.
+- Record ids and layouts beyond the observed time-slot shape. Player, game-info
+  and action records are not decoded.
+- Whether a writer can reproduce the unknown fields.
+
+Consequence: the W3G writer stays unimplemented. It needs the two unknown fields
+identified and a decoded record table. Without them the file cannot be written
+with byte fidelity, and nothing in this repository should claim otherwise.
