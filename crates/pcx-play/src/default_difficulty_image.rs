@@ -96,7 +96,7 @@ impl<'a> Pe<'a> {
         sections
             .try_reserve_exact(count)
             .map_err(|_| FallbackError::Sections("allocation"))?;
-        for header in headers.chunks_exact(SECTION_HEADER_LEN) {
+        for header in headers.as_chunks::<SECTION_HEADER_LEN>().0 {
             let virtual_size = le32(header, 8).ok_or(FallbackError::Sections("size"))?;
             let rva = le32(header, 12).ok_or(FallbackError::Sections("address"))?;
             let raw_size = le32(header, 16).ok_or(FallbackError::Sections("raw size"))?;
