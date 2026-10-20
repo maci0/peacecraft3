@@ -77,8 +77,8 @@ Camera and terrain use a separate application render layer, excluding menu
 geometry. The view activates only over the same admitted terrain as its published
 VM. A refused session replacement keeps the old view; a successful replacement
 removes it and reads the new source clip. An invalid replacement camera does not
-leave the old session's camera mounted. Escape suspends/resumes this view and
-excludes suspended elapsed time through a separate runtime pause input; it does
+leave the old session's camera mounted. The selected `GlobalStrings.fdf`
+`KEY_MENU` suspends/resumes this view and excludes suspended elapsed time through a separate runtime pause input; it does
 not clear an explicit simulation pause. The retained launcher/menu is a temporary
 return surface, not a recreation of the original in-game pause menu.
 

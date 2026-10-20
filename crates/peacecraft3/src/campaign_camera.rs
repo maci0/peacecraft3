@@ -38,6 +38,8 @@ pub struct CampaignCamera {
     session: Option<Weak<()>>,
     attempted: Option<u64>,
     near: Option<f32>,
+    pub menu_key: Option<Result<KeyCode, String>>,
+    pub menu_key_receipt: Option<AssetReceipt>,
     visible: bool,
     ready: bool,
     pub entity: Option<Entity>,
@@ -61,6 +63,8 @@ pub fn install(app: &mut App, zoom: usize, read_limit: usize) {
         session: None,
         attempted: None,
         near: None,
+        menu_key: None,
+        menu_key_receipt: None,
         visible: true,
         ready: false,
         entity: None,
@@ -150,10 +154,62 @@ fn clear(commands: &mut Commands, camera: &mut CampaignCamera) {
     }
     camera.attempted = None;
     camera.near = None;
+    camera.menu_key = None;
+    camera.menu_key_receipt = None;
     camera.clip_receipt = None;
     camera.last_error = None;
     camera.visible = true;
     camera.ready = false;
+}
+
+const GLOBAL_STRINGS: &str = "UI\\FrameDef\\GlobalStrings.fdf";
+
+fn menu_key(text: &str) -> Result<KeyCode, String> {
+    let value = crate::global_strings::global_string(text, "KEY_MENU")
+        .ok_or_else(|| format!("{GLOBAL_STRINGS}: missing KEY_MENU"))?;
+    let key = if let Some((_, highlighted)) = value.split_once("|C") {
+        let (_, text) = highlighted
+            .split_at_checked(8)
+            .filter(|(color, _)| color.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .ok_or_else(|| format!("{GLOBAL_STRINGS}: malformed KEY_MENU color"))?;
+        text.split_once("|R")
+            .map(|(key, _)| key)
+            .ok_or_else(|| format!("{GLOBAL_STRINGS}: unterminated KEY_MENU highlight"))?
+    } else {
+        value.as_str()
+    };
+    // Function-key names are a keyboard format, not selected asset values.
+    let keys = [
+        KeyCode::F1,
+        KeyCode::F2,
+        KeyCode::F3,
+        KeyCode::F4,
+        KeyCode::F5,
+        KeyCode::F6,
+        KeyCode::F7,
+        KeyCode::F8,
+        KeyCode::F9,
+        KeyCode::F10,
+        KeyCode::F11,
+        KeyCode::F12,
+        KeyCode::F13,
+        KeyCode::F14,
+        KeyCode::F15,
+        KeyCode::F16,
+        KeyCode::F17,
+        KeyCode::F18,
+        KeyCode::F19,
+        KeyCode::F20,
+        KeyCode::F21,
+        KeyCode::F22,
+        KeyCode::F23,
+        KeyCode::F24,
+    ];
+    key.strip_prefix('F')
+        .and_then(|number| number.parse::<usize>().ok())
+        .and_then(|number| number.checked_sub(1))
+        .and_then(|index| keys.get(index).copied())
+        .ok_or_else(|| format!("{GLOBAL_STRINGS}: unsupported KEY_MENU {value:?}"))
 }
 
 fn pause_view(
@@ -164,9 +220,10 @@ fn pause_view(
 ) {
     if view.entity.is_some()
         && let Some(mut keys) = keys
-        && keys.just_pressed(KeyCode::Escape)
+        && let Some(Ok(key)) = view.menu_key
+        && keys.just_pressed(key)
     {
-        keys.clear_just_pressed(KeyCode::Escape);
+        keys.clear_just_pressed(key);
         view.visible = !view.visible;
     }
     if let Some(mut runtime) = runtime {
@@ -238,6 +295,15 @@ fn apply_camera(
                 Some("campaign camera has no source reader for its binding receipts".into());
             return;
         };
+        camera.menu_key = Some((|| {
+            let asset = reader
+                .resolve_bounded(GLOBAL_STRINGS, camera.read_limit as u64)
+                .map_err(|error| format!("{GLOBAL_STRINGS}: {error}"))?;
+            camera.menu_key_receipt = Some(receipt(&asset));
+            let text = std::str::from_utf8(&asset.bytes)
+                .map_err(|error| format!("{GLOBAL_STRINGS}: {error}"))?;
+            menu_key(text)
+        })());
         camera.attempted = Some(0);
         match reader.resolve_bounded(MISC_DATA, camera.read_limit as u64) {
             Ok(asset) => match pcx_objects::editor::camera::near_clip(
@@ -397,6 +463,26 @@ fn pose(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn menu_key_follows_selected_strings_and_refuses_unknown_names() {
+        use super::*;
+        assert_eq!(menu_key("KEY_MENU \"F7\",\n"), Ok(KeyCode::F7));
+        assert_eq!(menu_key("KEY_MENU \"F12\",\n"), Ok(KeyCode::F12));
+        assert_eq!(
+            menu_key("KEY_MENU \"Menu (|Cabc12345F9|R)\",\n"),
+            Ok(KeyCode::F9)
+        );
+        for text in [
+            "",
+            "KEY_MENU \"F0\",",
+            "KEY_MENU \"F25\",",
+            "KEY_MENU \"unknown\",",
+            "KEY_MENU \"Menu (|CbadF9|R)\",",
+            "KEY_MENU \"Menu (|Cabc12345F9)\",",
+        ] {
+            assert!(menu_key(text).is_err());
+        }
+    }
     use super::*;
 
     #[test]

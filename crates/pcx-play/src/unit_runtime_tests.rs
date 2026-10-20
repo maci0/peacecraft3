@@ -13,6 +13,8 @@ native TriggerRegisterLeaveRegion takes trigger t, region g, boolexpr f returns 
 native RemoveUnit takes unit u returns nothing
 native SetUnitFacingTimed takes unit u, real a, real d returns nothing
 native SetUnitPathing takes unit u, boolean b returns nothing
+native SetUnitPosition takes unit u, real x, real y returns nothing
+native SetUnitPositionLoc takes unit u, location l returns nothing
 native CreateUnitAtLoc takes player id, integer unitid, location whichLocation, real face returns unit
 constant native IsUnitType takes unit u, unittype t returns boolean
 native ClearSelection takes nothing returns nothing
@@ -256,4 +258,42 @@ fn unit_effects_keep_authored_strings_until_destroyed_or_their_unit_is_removed()
         )
         .is_err()
     );
+}
+
+#[test]
+fn set_unit_position_places_like_a_reveal_unless_pathing_is_off() {
+    let (mut vm, a, _) = open();
+    let h = &mut vm.host().inner;
+    let at = |h: &ObjectHost| h.executed_unit(a).unwrap().position.unwrap();
+    let set = |h: &mut ObjectHost, x: f32, y: f32| {
+        h.native(
+            "SetUnitPosition",
+            &[Value::Handle(a), Value::Real(x), Value::Real(y)],
+        )
+    };
+    // B occupies x=80, so A lands on the nearest free placement.
+    set(h, 80.0, 16.0).unwrap();
+    let [x, _] = at(h);
+    assert!(x != 80.0 && x != 16.0, "{x}");
+    let location = h
+        .native("Location", &[Value::Real(16.0), Value::Real(16.0)])
+        .unwrap();
+    h.native("SetUnitPositionLoc", &[Value::Handle(a), location])
+        .unwrap();
+    assert_eq!(at(h), [16.0, 16.0]);
+    // Placement refusal must preserve both the record and its collision stamp.
+    assert!(set(h, f32::MAX, 16.0).is_err());
+    assert_eq!(at(h), [16.0, 16.0]);
+    set(h, 16.0, 16.0).unwrap();
+    assert!(set(h, f32::NAN, 16.0).is_err());
+    assert_eq!(at(h), [16.0, 16.0]);
+    h.native(
+        "SetUnitPosition",
+        &[Value::Null, Value::Real(1.0), Value::Real(1.0)],
+    )
+    .unwrap();
+    h.native("SetUnitPathing", &[Value::Handle(a), Value::Bool(false)])
+        .unwrap();
+    set(h, 80.0, 16.0).unwrap();
+    assert_eq!(at(h), [80.0, 16.0]);
 }

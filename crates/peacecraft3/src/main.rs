@@ -15,6 +15,7 @@ mod campaign_hud;
 mod campaign_input;
 mod campaign_messages;
 mod campaign_prepare;
+mod campaign_selection;
 mod fdf;
 mod glue_menu;
 pub mod hud;

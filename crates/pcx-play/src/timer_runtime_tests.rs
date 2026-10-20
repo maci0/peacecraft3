@@ -126,14 +126,19 @@ fn invalid_start_time_identity_or_callback_keeps_the_previous_run() {
             .is_err()
     );
     start(&mut h, &timer, 1.0, false);
-    for timeout in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+    for (timeout, periodic) in [
+        (0.0, true),
+        (-1.0, false),
+        (f32::NAN, false),
+        (f32::INFINITY, false),
+    ] {
         assert!(
             h.native(
                 "TimerStart",
                 &[
                     timer.clone(),
                     Value::Real(timeout),
-                    Value::Bool(false),
+                    Value::Bool(periodic),
                     Value::Null
                 ]
             )
@@ -328,4 +333,14 @@ fn ambiguous_timer_start_sources_refuse_runtime_admission() {
     )
     .unwrap();
     assert!(matches!(host.with_timer_runtime(0.0), Err(error) if error.failure == Failure::Source));
+}
+#[test]
+fn zero_one_shot_timeout_expires_at_the_current_boundary() {
+    let mut h = host();
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    start(&mut h, &timer, 0.0, false);
+    assert_eq!(query(&mut h, "TimerGetRemaining", &timer), Value::Real(0.0));
+    let mut budget = 4;
+    assert!(h.next_timer_expiry(20.0, &mut budget).unwrap().is_some());
+    assert_eq!(h.native("GetExpiredTimer", &[]).unwrap(), timer);
 }

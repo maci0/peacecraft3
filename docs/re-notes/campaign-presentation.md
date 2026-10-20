@@ -50,7 +50,8 @@ A failed replacement texture preserves the previous successful display and
 reports the source error. Successful session replacement clears old image and
 material assets; leaving the campaign deactivates its UI camera. HUD roots target
 that camera, while a transparent picking barrier and activation gate consume the
-UI flag. Escape/menu view suspension remains available.
+UI flag. The selected `GlobalStrings.fdf` `KEY_MENU` suspends the view; Escape fires
+`EVENT_PLAYER_END_CINEMATIC` for the local player.
 
 Rendering uses the existing 3D stack's linear compositing space, with an explicit
 transfer from the filter's numeric source RGB after texture/tint multiplication.

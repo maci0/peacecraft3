@@ -21,6 +21,7 @@ struct Stages<'w> {
     runtime: Option<Res<'w, CampaignRuntime>>,
     actors: Option<Res<'w, crate::campaign_actors::UnitActors>>,
     input: Option<Res<'w, crate::campaign_input::CampaignInput>>,
+    selection: Option<Res<'w, crate::campaign_selection::CampaignSelection>>,
     hud: Option<Res<'w, crate::campaign_hud::CampaignHud>>,
     hud_prepare: Option<Res<'w, crate::hud_render::HudPrepare>>,
 }
@@ -33,6 +34,7 @@ fn report(stages: Stages, mut reported: ResMut<Reported>) {
         runtime,
         actors,
         input,
+        selection,
         hud,
         hud_prepare,
     } = stages;
@@ -45,13 +47,28 @@ fn report(stages: Stages, mut reported: ResMut<Reported>) {
             "campaign ground",
             ground.and_then(|g| g.last_error.as_ref().map(ToString::to_string)),
         ),
-        ("campaign camera", camera.and_then(|c| c.last_error.clone())),
+        (
+            "campaign camera",
+            camera.as_ref().and_then(|c| c.last_error.clone()),
+        ),
+        (
+            "campaign menu key",
+            camera.and_then(|c| {
+                c.menu_key
+                    .as_ref()
+                    .and_then(|key| key.as_ref().err().cloned())
+            }),
+        ),
         (
             "campaign runtime",
             runtime.and_then(|r| r.last_error.as_ref().map(ToString::to_string)),
         ),
         ("campaign units", actors.and_then(|a| a.last_error.clone())),
         ("campaign input", input.and_then(|i| i.last_error.clone())),
+        (
+            "campaign selection",
+            selection.and_then(|s| s.last_error.clone()),
+        ),
         ("campaign hud", hud.and_then(|h| h.last_error.clone())),
         ("hud mount", hud_prepare.and_then(|h| h.refusal.clone())),
     ];

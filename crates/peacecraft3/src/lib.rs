@@ -13,6 +13,7 @@ pub mod campaign_placement;
 pub mod campaign_presentation;
 pub mod campaign_runtime;
 pub mod campaign_startup;
+pub mod global_strings;
 pub mod map_admission;
 pub mod map_binding;
 pub mod map_ground;

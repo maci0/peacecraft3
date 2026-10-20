@@ -1,4 +1,5 @@
-//! Positive-timeout timers on the existing arena, driven by caller game time.
+//! Timers on the existing arena, driven by caller game time. Timeouts are
+//! positive, or zero for a one-shot that expires at the next boundary.
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_script::value::FunctionId;
 use pcx_script::{HandleId, Value};
@@ -308,7 +309,15 @@ impl ObjectHost {
             .timers
             .as_ref()
             .ok_or_else(|| fail(Failure::TimerState("not admitted")))?;
-        let deadline = deadline(state.now, timeout).ok_or_else(|| {
+        // A one-shot zero timeout expires at the next boundary (recreation choice;
+        // `CinematicFadeBJ` passes zero durations). Periodic zero stays refused.
+        let immediate = timeout == 0.0 && !periodic;
+        let deadline = if immediate {
+            Some(state.now)
+        } else {
+            deadline(state.now, timeout)
+        };
+        let deadline = deadline.ok_or_else(|| {
             fail(Failure::TimerState(
                 "timeout must produce a finite later deadline",
             ))

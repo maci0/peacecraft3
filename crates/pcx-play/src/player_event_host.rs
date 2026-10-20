@@ -171,3 +171,31 @@ impl ObjectHost {
         Ok(Value::Handle(id))
     }
 }
+
+impl ObjectHost {
+    /// Queue every local-player registration of the constant `playerevent`
+    /// global `event` (`EVENT_PLAYER_END_CINEMATIC` on Escape) for delivery at
+    /// the next script boundary. Returns how many registrations fired.
+    pub fn fire_local_player_event(&mut self, event: &str) -> Result<usize, Error> {
+        self.retained_player_events()?;
+        let enumerand = self.source_constant_enumerand(event, "playerevent")?;
+        let Some(local) = self.local_player_settings().map(|p| p.identity) else {
+            return Err(self
+                .inner
+                .error(event, Failure::PlayerState("local player is not admitted")));
+        };
+        let mut fired = Vec::new();
+        for (index, entry) in self.inner.arena.iter().enumerate() {
+            if let Entry::RegisteredPlayerEvent(record) = entry
+                && record.player == local
+                && record.enumerand == enumerand
+            {
+                fired.push((self.inner.id(index, event)?, record.trigger));
+            }
+        }
+        for &(id, trigger) in &fired {
+            self.queue_event(trigger, None, Default::default(), Some(id))?;
+        }
+        Ok(fired.len())
+    }
+}

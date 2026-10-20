@@ -285,3 +285,33 @@ fn foreign_declaration_and_missing_selected_domain_refuse_admission() {
         .unwrap();
     assert!(matches!(h.with_player_events(1),Err(e) if e.failure==Failure::Signature));
 }
+
+#[test]
+fn local_player_events_queue_only_matching_local_registrations() {
+    let common = common().replacen(
+        DECLARATION,
+        &format!("{DECLARATION}constant native GetLocalPlayer takes nothing returns player\n"),
+        1,
+    );
+    let (ctx, h) = host(&common, EMPTY_MAP, 32);
+    let mut h = h.with_player_events(4).unwrap();
+    let register = |h: &mut ObjectHost, number: i32, event: i32| {
+        let trigger = h.native("CreateTrigger", &[]).unwrap();
+        let player = h.native("Player", &[Value::Int(number)]).unwrap();
+        let event = h
+            .native("ConvertPlayerEvent", &[Value::Int(event)])
+            .unwrap();
+        h.native(REGISTER, &[trigger.clone(), player, event])
+            .unwrap();
+        id(&trigger)
+    };
+    let local = register(&mut h, 4, 61);
+    register(&mut h, 4, 69);
+    register(&mut h, 5, 61);
+    assert!(h.fire_local_player_event("PLAYER_SAMPLE").is_err());
+    h.admit_local_player(&ctx, 4).unwrap();
+    assert!(h.fire_local_player_event("MISSING_SAMPLE").is_err());
+    assert_eq!(h.fire_local_player_event("PLAYER_SAMPLE").unwrap(), 1);
+    assert_eq!(h.take_fired_event().unwrap().trigger, local);
+    assert!(h.take_fired_event().is_none());
+}

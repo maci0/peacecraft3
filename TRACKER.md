@@ -3387,3 +3387,32 @@ repeated, and the public site package was not rebuilt.
   parity remain open. Unchanged Human01 passes its visibility calls and now refuses
   `AttachSoundToUnit` at BJ2226. It publishes no session and remains unplayable.
   See [executed visibility](docs/re-notes/script-unit-world.md#executed-visibility-and-live-world-membership-2026-10-20).
+
+
+### 2026-10-20 — cinematic skip and selection circles
+
+- [x] Escape queues the selected local-player end-cinematic registrations on the
+  owned VM. The launcher suspension key follows the selected highlighted
+  `GlobalStrings.fdf` `KEY_MENU`, with a retained byte receipt and explicit
+  missing/unsupported-state diagnostics.
+- [x] Zero one-shot cinematic timers expire at the current scheduler boundary;
+  invalid/zero-periodic starts retain the old run. Scripted unit relocation uses
+  the canonical record and prepares collision occupancy atomically. These timing,
+  placement and motion-retention rules remain stated recreation choices.
+- [x] Source selection bands/scales/colors supply ground circles, sharing the
+  local owner's directional alliance rule. Settings/materials retire with their
+  session; mismatched map bindings cannot supply replacement textures.
+- [x] All 1,411 affected native tests and 643 actual WASI cases pass, plus 32
+  exported integration cases on the actual browser-target WASM module under
+  Node. Strict native/browser Clippy, formatting and both full builds pass.
+  The stable-source Human01 driver publishes normally, queues four local
+  registrations at 20 seconds, and advances 19,200 ticks to 300 seconds without
+  a runtime error. Its explicit compatibility catalog and separate diagnostic
+  main refusal remain recorded; this is not a chapter-completion result.
+- [x] A fresh native Xvfb/Vulkan software-rendered launch enters Human01, and
+  Escape replaces the opening cinematic with the overhead mission view/HUD.
+- [ ] Native zero-delay/teleport equivalence, selection-circle slope/projection
+  parity, complete HUD content, missing sound placement/fades, mission completion
+  and synchronized original/native/browser comparison up to 4K remain open.
+  Receipts and captures stay local under `.scratch/campaign-controls-20261020/`
+  and `.scratch/campaign-time-of-day-root-20261020/controls-confirmed-20261020/`.

@@ -201,6 +201,18 @@ impl ObjectHost {
             ("SetUnitFacing", &["unit", "real"][..], "nothing", false),
             ("SetUnitPathing", &["unit", "boolean"][..], "nothing", false),
             (
+                "SetUnitPosition",
+                &["unit", "real", "real"][..],
+                "nothing",
+                false,
+            ),
+            (
+                "SetUnitPositionLoc",
+                &["unit", "location"][..],
+                "nothing",
+                false,
+            ),
+            (
                 "SetUnitFacingTimed",
                 &["unit", "real", "real"][..],
                 "nothing",
@@ -271,6 +283,9 @@ impl ObjectHost {
         }
         if name == "SetUnitPathing" {
             return Some(self.pathing_native(args));
+        }
+        if matches!(name, "SetUnitPosition" | "SetUnitPositionLoc") {
+            return Some(self.position_native(name, args));
         }
         let (hold, stop, movement, route_work) = (
             state.rules.hold,
@@ -691,6 +706,52 @@ impl ObjectHost {
         }
         if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
             record.activity.as_mut().expect("activity").pathing_off = !on;
+        }
+        Ok(Value::Null)
+    }
+
+    /// Moves a unit to the nearest placement for the point, as `ShowUnit` places a
+    /// revealed unit; hidden or pathing-off units take the point as is. A moving
+    /// unit keeps its order from the new position (recreation choice).
+    fn position_native(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let fail = |detail: &str| self.inner.error(name, Failure::UnitActivity(detail.into()));
+        let (unit, target) = match args {
+            [Value::Null, ..] => return Ok(Value::Null),
+            [Value::Handle(unit), x, y] => match (x.as_real(), y.as_real()) {
+                (Some(x), Some(y)) if x.is_finite() && y.is_finite() => (*unit, [x, y]),
+                _ => return Err(fail("finite coordinates required")),
+            },
+            [Value::Handle(unit), location] => (*unit, self.location_point(location, name)?),
+            _ => return Err(fail("unit and point required")),
+        };
+        let record = self.executed_unit(unit)?;
+        let activity = record
+            .activity
+            .as_ref()
+            .ok_or_else(|| fail("activity missing"))?;
+        let occupies = record.shown && !activity.pathing_off && self.unit_placement.is_some();
+        let (face, moving) = (record.face, activity.moving());
+        let mut position = target;
+        if occupies {
+            let (radius, path) = super::unit_positions::geometry(&record.definition)
+                .map_err(|s| self.inner.error(name, Failure::UnitState(s)))?;
+            let path = path.to_owned();
+            let placement = self.unit_placement.as_mut().expect("placement");
+            let prepared = placement
+                .prepare_relocation(unit, target, radius, &path, face)
+                .map_err(|e| {
+                    self.inner
+                        .error(name, Failure::UnitPlacement(e.to_string()))
+                })?;
+            position = prepared.position;
+            placement.commit(unit, prepared);
+        }
+        let now = self.timer_game_time();
+        if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
+            record.position = Some(position);
+            if let (true, Some(activity), Some(now)) = (moving, &mut record.activity, now) {
+                activity.relocated(position, now);
+            }
         }
         Ok(Value::Null)
     }

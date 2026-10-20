@@ -292,3 +292,19 @@ Commands, failed checks and final validation remain local in
 `.scratch/timed-trigger-root-20261018/implementation/`. Original payloads are not
 published. No additional original-client run was needed for this implementation,
 and no rendered gameplay, public-site or 100-consecutive baseline gate is closed.
+
+
+## Zero one-shot cinematic timers (2026-10-20)
+
+The selected BJ cinematic-fade helper supplies a zero-duration one-shot timer on
+Human01's cancellation path. The timer consumer now accepts that request at its
+current logical deadline, delivering it at the next scheduler boundary. A zero
+periodic timeout, negative/nonfinite timeout or overflowing later deadline still
+refuses before replacing the existing run. Existing expiry and VM work budgets
+also bound callbacks that repeatedly rearm zero timers.
+
+This is an explicit recreation policy motivated by shipped script calls, not a
+new measurement of native zero-delay scheduling. The earlier positive-only
+scope above describes the preceding implementation. Synthetic tests exercise
+zero expiry and preserve the old run on invalid starts; native rounding, exact
+same-boundary order and edge-delay fidelity remain open.

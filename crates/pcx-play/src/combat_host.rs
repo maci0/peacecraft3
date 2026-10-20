@@ -14,6 +14,13 @@ use pcx_objects::editor::{FieldSource, SlkId};
 use pcx_script::{HandleId, Value};
 use pcx_sim::world::{Definition, FieldValue};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Relation {
+    Friend,
+    Neutral,
+    Enemy,
+}
+
 const ORDER: &str = "IssueTargetOrder";
 const ORDER_BY_ID: &str = "IssueTargetOrderById";
 const KILL: &str = "KillUnit";
@@ -287,11 +294,12 @@ impl ObjectHost {
     }
 
     fn hostile(&self, attacker: &super::ExecutedUnit, target: &super::ExecutedUnit) -> bool {
+        self.hostile_owners(attacker.owner, target.owner)
+    }
+
+    fn hostile_owners(&self, attacker: HandleId, target: HandleId) -> bool {
         let rules = self.combat.as_ref().expect("combat");
-        let (Ok(a), Ok(b)) = (
-            self.player_settings(attacker.owner),
-            self.player_settings(target.owner),
-        ) else {
+        let (Ok(a), Ok(b)) = (self.player_settings(attacker), self.player_settings(target)) else {
             return false;
         };
         if Some(b.number) == rules.neutral_passive || a.identity == b.identity {
@@ -304,6 +312,27 @@ impl ObjectHost {
                     .inner
                     .symbolic_value(*setting, "alliancetype")
                     .is_ok_and(|v| v == rules.passive)
+        })
+    }
+
+    /// How the local player regards `unit`'s owner, for selection circle colours:
+    /// its own units and passive allies are friends, Neutral Passive is neutral,
+    /// everyone else an enemy (the same alliance rule as [`Self::is_enemy`]).
+    pub fn local_relation(&self, unit: HandleId) -> Option<Relation> {
+        let rules = self.combat.as_ref()?;
+        let Entry::Unit { record } = self.inner.entry(unit).ok()? else {
+            return None;
+        };
+        let owner = self.player_settings(record.owner).ok()?;
+        let local = self.local_player_settings()?;
+        Some(if owner.identity == local.identity {
+            Relation::Friend
+        } else if Some(owner.number) == rules.neutral_passive {
+            Relation::Neutral
+        } else if self.hostile_owners(local.identity, owner.identity) {
+            Relation::Enemy
+        } else {
+            Relation::Friend
         })
     }
 

@@ -758,5 +758,5 @@ pub use objects::{
 };
 pub use objects::{
     CinematicScene, Combat, DestructableState, EventSubject, FiredEvent, FogModifier, Indicator,
-    MinimapPing, Vitals, Weapon,
+    MinimapPing, Relation, Vitals, Weapon,
 };

@@ -226,3 +226,52 @@ handles. This does not compare movement trajectories. The complete unchanged
 Human01 application now passes Hold and refuses `ShowUnit` at Blizzard.j:3412;
 it publishes no session. The separate standalone diagnostic lacks application
 asset loaders and its earlier day/night-model refusal is not the mission frontier.
+
+
+## Scripted relocation and cinematic cancellation (2026-10-20)
+
+`SetUnitPosition` and `SetUnitPositionLoc` now update the existing accepted unit
+record. Location arguments resolve on the same arena; finite coordinates are
+required. Visible units with pathing enabled use the existing bounded placement
+search, excluding their own occupancy. Preparation leaves the old stamp intact
+until success, so a refused placement cannot release collision occupancy. Hidden
+or pathing-disabled units retain the requested point. Moving units rebase their
+existing route at the current logical clock.
+
+Reusing reveal placement and retaining motion are recreation choices, not newly
+measured native teleport rules. Route replanning, native edge placement and all
+combat interactions remain unqualified. Synthetic coverage checks collision
+avoidance, location resolution, invalid-coordinate refusal, subsequent valid
+placement and pathing-disabled exact positioning.
+
+Escape queues registrations of the selected constant
+`EVENT_PLAYER_END_CINEMATIC` for the admitted local player. The existing owned
+VM event consumer runs their conditions/actions and context. It remains available
+when cinematic scripts disable ordinary unit control. The launcher suspension
+key is read from the selected `UI\FrameDef\GlobalStrings.fdf` `KEY_MENU`, with
+its byte receipt retained; missing/unsupported key text is reported. The old
+Escape suspension binding no longer consumes the map's skip event. The camera
+integration fixture uses a different function key to prevent a copied binding
+from passing the test.
+
+Selected circles consume the existing source selection bands, unit scale and
+relation colors, with local-to-owner passive alliances shared with combat. The
+renderer uses a flat alpha-blended ground quad with an explicit depth-bias
+policy. Diameter interpretation, slope clipping, extension selection and rendered
+native parity remain unqualified. Selection settings and material caches retire
+with their owning session; failures appear in campaign diagnostics. No original
+assets or derived copies enter version control.
+
+
+Verification for this slice passes 643 playback cases natively and under actual
+WASI, 768 application/library/map/audio-session cases natively, and 32 exported
+integration cases from the actual Cargo browser-WASM module under Node. Strict
+native/browser Clippy and both complete application builds pass. The final
+stable-source driver queues four matching local registrations at 20 seconds and
+advances Human01 to 300 seconds (19,200 logical ticks) without a runtime error.
+The separately labeled compatibility-catalog and diagnostic-main limitations in
+its receipt remain; this does not establish chapter completion. A fresh native
+Xvfb/Vulkan software-rendered smoke also skips the cinematic into the mission
+view/HUD. No fresh original-client or browser rendering comparison was performed.
+Receipts remain in `.scratch/campaign-controls-20261020/` and
+`.scratch/campaign-time-of-day-root-20261020/controls-confirmed-20261020/`.

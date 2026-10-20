@@ -4,6 +4,8 @@ use pcx_script::HandleId;
 type Vm = pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>;
 
 const DECLARATIONS: &str = r#"
+constant native GetLocalPlayer takes nothing returns player
+native SetPlayerAlliance takes player a, player b, alliancetype s, boolean v returns nothing
 type unitstate extends handle
 type playerunitevent extends eventid
 type alliancetype extends handle
@@ -118,6 +120,8 @@ fn open(fields: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId) {
     let (registry, activity) = super::activity::rules();
     let mut h = h
         .with_unit_states(crate::playercolor_host::UnitStateBudget { max_records: 8 })
+        .unwrap()
+        .with_player_alliances(crate::playercolor_host::PlayerAllianceBudget { max_records: 8 })
         .unwrap()
         .with_order_registry(registry)
         .unwrap()
@@ -321,4 +325,38 @@ fn attacks_and_deaths_queue_their_registered_triggers_with_event_responses() {
     assert_eq!(h.native("GetDyingUnit", &[]).unwrap(), Value::Handle(b));
     assert_eq!(h.native("GetKillingUnit", &[]).unwrap(), Value::Null);
     h.finish_fired_event();
+}
+
+#[test]
+fn selection_relation_tracks_local_owner_passive_owner_and_directional_alliances() {
+    use crate::playercolor_host::Relation;
+    let (mut vm, a, b) = open(&armed("100", "normal"));
+    let alliance = vm.global("ALLIANCE_PASSIVE");
+    let h = &mut vm.host().inner;
+    assert_eq!(h.local_relation(a), None);
+    let context = Arc::clone(h.player_context().unwrap());
+    h.admit_local_player(&context, 4).unwrap();
+    assert_eq!(h.local_relation(a), Some(Relation::Friend));
+    assert_eq!(h.local_relation(b), Some(Relation::Enemy));
+    let local = h.native("Player", &[Value::Int(4)]).unwrap();
+    let other = h.native("Player", &[Value::Int(5)]).unwrap();
+    h.native(
+        "SetPlayerAlliance",
+        &[
+            other.clone(),
+            local.clone(),
+            alliance.clone(),
+            Value::Bool(true),
+        ],
+    )
+    .unwrap();
+    assert_eq!(h.local_relation(b), Some(Relation::Enemy));
+    h.native(
+        "SetPlayerAlliance",
+        &[local, other, alliance, Value::Bool(true)],
+    )
+    .unwrap();
+    assert_eq!(h.local_relation(b), Some(Relation::Friend));
+    h.set_neutral_passive(5);
+    assert_eq!(h.local_relation(b), Some(Relation::Neutral));
 }

@@ -1030,7 +1030,7 @@ pub use indicators::{Indicator, MinimapPing};
 
 #[path = "combat_host.rs"]
 mod combat;
-pub use combat::{Combat, Weapon};
+pub use combat::{Combat, Relation, Weapon};
 
 #[path = "event_delivery_host.rs"]
 mod event_delivery;

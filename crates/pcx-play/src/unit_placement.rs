@@ -669,6 +669,25 @@ impl Placement {
             .ok_or_else(|| fail("no admitted reveal placement"))
     }
 
+    pub(crate) fn prepare_relocation(
+        &mut self,
+        unit: HandleId,
+        request: [f32; 2],
+        radius: Option<f32>,
+        path: &str,
+        face: f32,
+    ) -> Result<Prepared, Error> {
+        self.ensure_footprint(path)?;
+        let stamp = self
+            .stamps
+            .iter()
+            .find(|(id, _)| *id == unit)
+            .map(|(_, stamp)| stamp)
+            .ok_or_else(|| fail("unit occupancy is missing"))?;
+        self.candidate(request, radius, path, face, Some(stamp), true)?
+            .ok_or_else(|| fail("no admitted relocation placement"))
+    }
+
     pub(crate) fn prepare_motion(
         &self,
         unit: HandleId,

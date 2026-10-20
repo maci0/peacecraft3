@@ -68,14 +68,20 @@ fn deliver_camera_for_player(
     let mut f = fixture(script);
     f.common = format!("{COMMON}{CAMERA_COMMON}").into_bytes();
     f.rebuild();
-    let resolver = Arc::new(f.resolver_with_assets(std::collections::BTreeMap::from([(
-        "UI\\MiscData.txt".into(),
-        crate::binding::Reply::Bytes(config.to_vec()),
-    )])));
+    let resolver = Arc::new(f.resolver_with_assets(std::collections::BTreeMap::from([
+        (
+            "UI\\MiscData.txt".into(),
+            crate::binding::Reply::Bytes(config.to_vec()),
+        ),
+        (
+            "UI\\FrameDef\\GlobalStrings.fdf".into(),
+            crate::binding::Reply::Bytes(b"KEY_MENU \"Menu (|Cabc12345F7|R)\",\n".to_vec()),
+        ),
+    ])));
     let mut requests = MapRequests::default();
     let mut sources = SelectedMapSources::default();
     let mut limits = f.limits();
-    limits.reader.max_listed_paths += 1; // The selected camera config is one additional member.
+    limits.reader.max_listed_paths += 2; // Selected camera config and menu-key strings.
     let outcome = requests.replace_selected(&mut sources, resolver, f.input(revision), limits);
     assert!(outcome.result.is_ok(), "{:?}", outcome.result);
     let mut inputs = host_inputs(Arc::clone(&requests.bindings.as_ref().unwrap().catalog.0));
@@ -160,6 +166,17 @@ pub fn published_camera_uses_executed_fields_and_preserves_session_ownership() {
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::Escape);
     app.update();
+    assert!(
+        app.world().resource::<CampaignCamera>().active(),
+        "Escape is reserved for player events"
+    );
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .clear();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::F7);
+    app.update();
     assert!(!app.world().resource::<CampaignCamera>().active());
     assert!(!app.world().get::<Camera>(entity).unwrap().is_active);
     assert!(
@@ -170,7 +187,7 @@ pub fn published_camera_uses_executed_fields_and_preserves_session_ownership() {
     app.update();
     assert!(
         !app.world().resource::<CampaignCamera>().active(),
-        "held Escape does not toggle again"
+        "held selected menu key does not toggle again"
     );
 
     deliver_camera(

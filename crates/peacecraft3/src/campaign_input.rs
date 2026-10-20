@@ -5,7 +5,9 @@
 //! ground point; Shift adds. Right click attacks an enemy under the cursor or
 //! moves to the ground point, for selected units the local player owns. Orders go
 //! through the same order natives scripts use. Input is off while scripts disable
-//! user control.
+//! user control. Escape raises the local player's end-cinematic event.
+use std::sync::{Arc, Weak};
+
 use bevy::{ecs::system::SystemParam, prelude::*, window::PrimaryWindow};
 use pcx_objects::editor::selection::SelectionCircles;
 use pcx_play::map_startup_host::MapStartupHost;
@@ -19,6 +21,7 @@ use peacecraft3::{
 };
 
 const MISC_DATA: &str = "UI\\MiscData.txt";
+const END_CINEMATIC: &str = "EVENT_PLAYER_END_CINEMATIC";
 /// Bound on selection circle bands read from the profile.
 const MAX_BANDS: usize = 16;
 /// Ray-march stride and bisection count for cursor picking (numerical method only).
@@ -29,12 +32,13 @@ const REFINE_STEPS: usize = 24;
 pub(crate) struct CampaignInput {
     pub circles: Option<SelectionCircles>,
     attempted: bool,
+    session: Option<Weak<()>>,
     pub last_error: Option<String>,
 }
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<CampaignInput>()
-        .add_systems(Update, (load_circles, click).chain());
+        .add_systems(Update, ((load_circles, click).chain(), end_cinematic));
 }
 
 fn load_circles(
@@ -43,12 +47,36 @@ fn load_circles(
     sources: Res<SelectedMapSources>,
     session: Res<MapScriptSession<MapStartupHost>>,
 ) {
+    let witness = session.session_witness();
+    if !match (&input.session, &witness) {
+        (Some(old), Some(new)) => Weak::ptr_eq(old, new),
+        (None, None) => true,
+        _ => false,
+    } {
+        *input = CampaignInput {
+            session: witness,
+            ..default()
+        };
+    }
     if input.attempted || session.context().is_none() {
         return;
     }
     let Some(bindings) = requests.bindings.as_ref() else {
         return;
     };
+    if !requests
+        .admission
+        .shared_context()
+        .as_ref()
+        .zip(session.context())
+        .is_some_and(|(admitted, active)| Arc::ptr_eq(admitted, active))
+        || !requests
+            .published_receipts
+            .as_ref()
+            .is_some_and(|published| Arc::ptr_eq(published, &bindings.receipts))
+    {
+        return;
+    }
     let Some(reader) = sources.for_receipts(&bindings.receipts) else {
         return;
     };
@@ -60,6 +88,26 @@ fn load_circles(
     {
         Ok(circles) => input.circles = Some(circles),
         Err(error) => input.last_error = Some(format!("{MISC_DATA}: {error}")),
+    }
+}
+
+/// Escape raises the local player's `EVENT_PLAYER_END_CINEMATIC`; the original
+/// raises it on every Escape press, not only during cinematics.
+fn end_cinematic(
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    view: Res<CampaignCamera>,
+    mut input: ResMut<CampaignInput>,
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+) {
+    if !keys.is_some_and(|k| k.just_pressed(KeyCode::Escape)) || !view.active() {
+        return;
+    }
+    let Some(host) = session.host() else {
+        return;
+    };
+    match host.objects_mut().fire_local_player_event(END_CINEMATIC) {
+        Ok(fired) => debug!("{END_CINEMATIC}: {fired} registrations queued"),
+        Err(error) => input.last_error = Some(error.to_string()),
     }
 }
 
@@ -239,6 +287,27 @@ mod tests {
             bytes.extend([0, 0, 0]);
         }
         pcx_map::Terrain::from_bytes(bytes).unwrap()
+    }
+
+    #[test]
+    fn clearing_session_discards_the_previous_selection_source_attempt() {
+        let witness = std::sync::Arc::new(());
+        let mut app = App::new();
+        app.insert_resource(CampaignInput {
+            attempted: true,
+            session: Some(std::sync::Arc::downgrade(&witness)),
+            last_error: Some("old source".into()),
+            ..default()
+        })
+        .init_resource::<MapRequests>()
+        .init_resource::<SelectedMapSources>()
+        .init_resource::<MapScriptSession<MapStartupHost>>()
+        .add_systems(Update, load_circles);
+        app.update();
+        let input = app.world().resource::<CampaignInput>();
+        assert!(!input.attempted);
+        assert!(input.session.is_none());
+        assert!(input.last_error.is_none());
     }
 
     #[test]
