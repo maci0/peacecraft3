@@ -110,7 +110,7 @@ pub fn panel_codec_mask(error: &ReadError) -> Option<u8> {
     match source.cause.as_ref() {
         pcx_mpq::ExtractionCause::Mpq(pcx_mpq::Error::Payload(
             pcx_mpq::payload::PayloadError::UnsupportedCompression {
-                mask: mask @ (0x01 | 0x41 | 0x81),
+                mask: mask @ (0x01 | 0x40 | 0x41 | 0x80 | 0x81),
             },
         )) => Some(*mask),
         _ => None,
@@ -153,13 +153,13 @@ mod panel_codec_tests {
 
     #[test]
     fn only_known_single_source_codec_capability_may_omit_a_sound() {
-        for mask in [0x01, 0x41, 0x81] {
+        for mask in [0x01, 0x40, 0x41, 0x80, 0x81] {
             assert_eq!(panel_codec_mask(&bounded(codec(mask), 1)), Some(mask));
             for sources in [0, 2] {
                 assert_eq!(panel_codec_mask(&bounded(codec(mask), sources)), None);
             }
         }
-        for mask in [0, 0x04, 0x05, 0x40, 0x80, 0x82, 0xff] {
+        for mask in [0, 0x04, 0x05, 0x82, 0xff] {
             assert_eq!(panel_codec_mask(&bounded(codec(mask), 1)), None);
         }
     }
@@ -384,7 +384,11 @@ pub fn read_bounded(
             continue;
         }
         let origin = origin(ordinal, archive);
-        let bytes = match archive.extract_bounded(&member, budget, policy.huffman) {
+        // Archive tables come from the staged codec source at commit. A per-call table
+        // in the policy takes precedence; no executable is discovered here.
+        let imported = archive.codec_table().cloned();
+        let codec = policy.huffman.or(imported.as_ref());
+        let bytes = match archive.extract_bounded(&member, budget, codec) {
             Ok(bytes) => bytes,
             Err(error) => {
                 return Err(ReadError::BoundedExtraction {

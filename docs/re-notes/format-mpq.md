@@ -292,3 +292,120 @@ crate were resolved with fixed-array chunks, temporary reader lifetimes and
 let chains; no lint suppression was added. No dependency or manifest change
 was required. No git mutation was performed and original assets, runtime
 imports and comparison streams stayed local and uncommitted.
+
+## 2026-10-20: Legacy codec source and WAV verification
+
+### Legacy Huffman weights
+
+`Warcraft III.exe` (Legacy 1.29.2, SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`) holds the
+Huffman weight table in `.rdata` at VA `0xe6ada0`. Its consumer has the Storm shape:
+`IMUL EAX,EAX,258` at VA `0x443537`, then `LEA EAX,[EAX+disp32]` whose displacement at
+`0x44353f` is the table address. `HuffmanTable::from_pe` reads 66,048 file-backed
+bytes with no zero fill. The compatibility `Storm.dll` table has 25,408 zero-filled
+bytes.
+
+`MpqArchive::extract` takes `Storm.dll` from the archive directory and falls back to
+`Warcraft III.exe`. `native_campaign` imports the same executable explicitly.
+
+### Native Storm oracle (primary evidence)
+
+The compatibility-tree `Storm.dll` (SHA-256
+`eecc42b05a91413dee10588a654c6cca05836e7513af6c7c568a56124bf97d0a`) was run under
+Wine through `tests/native/storm_compare.c`. It opened the Legacy `War3.mpq` and read
+each `.wav` member through Storm's archive API. The sector decoder, ordinal 552, was
+called on the packed sectors. Native results against the Rust output:
+
+- All 2,716 `.wav` members: payload sectors and archive-open bytes identical, 0 mismatches,
+  0 refusals. Reproduced 2026-10-20 with retained receipts under
+  `.scratch/native-oracle-final/` (commands, hashes, logs, digests, negative controls).
+  Status: reproduced, not yet qualified by root. The oracle is compat `Storm.dll` under
+  Wine, not the Legacy 1.29 runtime or the MILES PCM path.
+- A flipped byte in one expected sector is reported as a mismatch (negative control).
+- Native archive-open bytes are dumped per member and compared by
+  `tests/local_huffman.rs::original_wav_members_match_storm_archive_open_bytes`
+  (ignored; needs `PEACECRAFT3_FORMAT_MPQ` and `PEACECRAFT3_STORM_NATIVE_DIR`).
+
+So the Huffman and ADPCM stages agree with Storm's own decoder, and the Legacy exe
+table decodes every WAV member to the same bytes as the compatibility table. The
+Storm DLL run is a Wine-hosted native execution, not Legacy runtime proof.
+
+### Attributes CRC is not a decoder oracle for ADPCM members
+
+`(attributes)` CRC32 matches the decoded bytes for all 6,463 non-WAV members that
+decode. For the 2,716 `.wav` members, a direct sector-mask scan shows the partition is
+exact: all 11 matches have only zlib (`0x02`) sectors, and all 2,705 mismatches contain
+an ADPCM mask (`0x40` or `0x80`). Native Storm agrees with our output on every member.
+
+The CRC-to-ADPCM correlation is consistent with the CRC describing the original 16-bit
+PCM before lossy ADPCM encoding. That is an inference: no MPQ format source was checked
+for attributes semantics, and no pre-encoding original was available. Decoder fidelity
+rests on the native oracle. The CRC does not gate WAV decoding.
+
+Measurement tool: `cargo run -p pcx-mpq --example attributes_crc -- <archive> <suffix>`.
+
+### Remaining gates
+
+- Sample-level fidelity is established against the Storm archive-open bytes. Actual
+  playback and the MILES PCM path are not verified.
+- The native gate needs a local dump: build `storm_compare.exe` with
+  `i686-w64-mingw32-gcc` and `storm.def`, then run it under Wine with the compatibility
+  `Storm.dll` beside it and a `PXC1` stream from `export_storm_comparison`.
+
+### ADPCM tables come from the codec source
+
+The 89 step values and the 32 index adjustments are no longer compiled into
+`pcx-mpq`. `HuffmanTable::from_pe` locates them in the codec source's file-backed
+section bytes. The step run must be strictly increasing, start above zero and end at
+`0x7fff`. The index run is the 32 dwords directly before it, each in `-1..=8`.
+
+Exactly one step run must match. Zero matches give `adpcm: None`, so ADPCM sectors
+refuse with `UnsupportedCompression`. Two matches are a source error.
+
+Observed locations, both unique in their sources:
+
+| Source | Steps VA | Index VA |
+| --- | --- | --- |
+| compat `Storm.dll` (SHA-256 `eecc42b0…`) | `0x15042ad8` | `0x15042a58` |
+| Legacy `Warcraft III.exe` (SHA-256 `3f2ed012…`) | `0xe6ac38` | `0xe6abb8` |
+
+Both sources hold the same bytes, which shows the two binaries agree. It does not
+establish that the values are an independent format invariant. The 89-entry step
+sequence resembles the public IMA ADPCM step table. The index adjustments have
+32 entries with every even entry -1. This was not checked against a primary IMA reference
+here, so neither point is treated as a constant.
+
+Decoder fidelity to the compat Storm oracle is reproduced for all 2,716 WAV members
+(status above).
+The initial index of 44 per channel is still a literal in `payload.rs`. It is not
+covered by the source-derived table path.
+
+### Codec source flow in the browser and bounded readers
+
+- `peacecraft3::browser::commit_archive_import` parses the staged client image with
+  `HuffmanTable::from_pe` and gives the table to every archive in the transaction.
+  An absent or unparsable image is a commit note. The archives still commit, and only
+  members that need the codec refuse.
+- `MpqArchive::set_codec_table` and `codec_table` expose the imported table. Bounded
+  readers (`peacecraft3::browser_read::read_bounded`, `pcx-assets` bounded reads) use a
+  per-call table when given and otherwise the archive's imported table. The clone per
+  read is about 64 KiB of weights.
+- No executable is discovered in the browser. `stored_asset_bounded` still refuses a
+  per-call table through the `"no-huffman"` policy.
+- Pure mono ADPCM sectors (`0x40`) occur in shipped Legacy WAVs: 9 sectors in 9 members
+  (first-byte scan, verbatim sectors excluded). They are in the native oracle set.
+  The panel rule (`panel_codec_mask`) treats `0x40`/`0x80` like `0x41`/`0x81` as
+  single-source codec capability: without a codec source the sound is omitted and
+  reported as a gap, not decoded.
+
+### Test fixtures
+
+Unit tests use synthetic run pairs generated by formula: steps `7 + 367*i` with the
+final value `0x7fff`, and index adjustments alternating `-1` and `i % 9`. Expected
+decoder samples come from an independent script. No observed production table value
+appears in test code.
+
+Still literal: the initial ADPCM index of 44 per channel. It has no independent format
+citation and no source operand is derived for it yet. The native oracle reproduces it
+for the corpus, which is not a source-derived proof. The ADPCM path is therefore only
+partly source-derived.

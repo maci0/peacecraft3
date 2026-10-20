@@ -426,6 +426,25 @@ fn read_tables<R: Read + Seek>(
     Ok((hashes, blocks))
 }
 
+/// Huffman weights come from the archive directory's `Storm.dll`, else its
+/// `Warcraft III.exe`. Legacy 1.29 ships no Storm.dll and links the weights into
+/// the executable; the same table decodes its WAV members identically.
+fn codec_source(directory: &Path) -> std::io::Result<Option<PathBuf>> {
+    let (mut storm, mut game) = (None, None);
+    for entry in std::fs::read_dir(directory)? {
+        let candidate = entry?.path();
+        let name = candidate
+            .file_name()
+            .map(|name| name.to_string_lossy().to_ascii_lowercase());
+        match name.as_deref() {
+            Some("storm.dll") => storm = Some(candidate),
+            Some("warcraft iii.exe") => game = Some(candidate),
+            _ => {}
+        }
+    }
+    Ok(storm.or(game))
+}
+
 impl MpqArchive {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref().to_path_buf();
@@ -452,9 +471,20 @@ impl MpqArchive {
         source: impl AsRef<Path>,
     ) -> Result<(), huffman::HuffmanError> {
         let table = huffman::HuffmanTable::from_pe(bytes, source)?;
+        self.set_codec_table(table);
+        Ok(())
+    }
+
+    /// Codec tables this archive uses for Huffman and ADPCM sectors. Once set, file
+    /// discovery is off, so the tables come only from the caller.
+    pub fn set_codec_table(&mut self, table: huffman::HuffmanTable) {
         self.huffman = Some(table);
         self.huffman_checked = true;
-        Ok(())
+    }
+
+    /// The table imported by [`MpqArchive::set_codec_table`] or [`MpqArchive::set_huffman_table`].
+    pub fn codec_table(&self) -> Option<&huffman::HuffmanTable> {
+        self.huffman.as_ref()
     }
 
     pub fn path(&self) -> &Path {
@@ -588,24 +618,14 @@ impl MpqArchive {
         };
         match decode(self.huffman.as_ref()) {
             Err(payload::PayloadError::UnsupportedCompression { mask })
-                if mask & 1 != 0
+                if payload::needs_codec_tables(mask)
                     && self.huffman.is_none()
                     && !self.huffman_checked
                     && matches!(self.file, Source::File(_)) =>
             {
                 self.huffman_checked = true;
                 let directory = self.path.parent().unwrap_or(Path::new("."));
-                let mut source = None;
-                for entry in std::fs::read_dir(directory)? {
-                    let candidate = entry?.path();
-                    if candidate.file_name().is_some_and(|name| {
-                        name.to_string_lossy().eq_ignore_ascii_case("Storm.dll")
-                    }) {
-                        source = Some(candidate);
-                        break;
-                    }
-                }
-                let Some(source) = source else {
+                let Some(source) = codec_source(directory)? else {
                     return Err(payload::PayloadError::UnsupportedCompression { mask }.into());
                 };
                 self.huffman = Some(
@@ -1219,18 +1239,151 @@ mod memory_tests {
                 payload::PayloadError::UnsupportedCompression { mask: 1 }
             ))
         ));
+        // Legacy has no Storm.dll: the directory's executable is the source.
+        std::fs::write(directory.join("Warcraft III.exe"), b"foreign exe").unwrap();
+        assert!(matches!(
+            make_archive().extract("fixture"),
+            Err(Error::Payload(payload::PayloadError::Huffman(
+                huffman::HuffmanError::Source { source_path, .. }
+            ))) if source_path.ends_with("Warcraft III.exe")
+        ));
+        // Storm.dll wins when both are present, and a bad source is never skipped.
         std::fs::write(directory.join("Storm.dll"), b"foreign DLL").unwrap();
         assert!(matches!(
             make_archive().extract("fixture"),
             Err(Error::Payload(payload::PayloadError::Huffman(
-                huffman::HuffmanError::Source { .. }
-            )))
+                huffman::HuffmanError::Source { source_path, .. }
+            ))) if source_path.ends_with("Storm.dll")
         ));
         assert!(matches!(
             make_archive().set_huffman_table(b"MZ", "truncated.dll"),
             Err(huffman::HuffmanError::Source { .. })
         ));
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A malformed Storm.dll is refused and never replaced by a valid executable beside it.
+    /// Storm.dll is the sole source once present.
+    #[test]
+    fn malformed_storm_does_not_fall_back_to_a_valid_executable() {
+        let directory =
+            std::env::temp_dir().join(format!("pcx-mpq-codec-priority-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("synthetic.mpq");
+        std::fs::write(&path, [1u8, 0]).unwrap();
+        let (name1, name2) = hash::hash_string_both("fixture");
+        let make_archive = || MpqArchive {
+            file: Source::File(BufReader::new(File::open(&path).unwrap())),
+            path: path.clone(),
+            header: Header::default(),
+            hashes: vec![HashEntry {
+                name1,
+                name2,
+                block_index: 0,
+                ..HashEntry::default()
+            }],
+            blocks: vec![BlockEntry {
+                file_pos: 0,
+                file_size: 4,
+                compressed_size: 2,
+                flags: flags::EXISTING | flags::SINGLE_UNIT | flags::COMPRESS,
+            }],
+            huffman: None,
+            huffman_checked: false,
+        };
+        let valid_exe = huffman::tests::synthetic_pe();
+        std::fs::write(directory.join("Warcraft III.exe"), &valid_exe).unwrap();
+        std::fs::write(directory.join("Storm.dll"), b"malformed DLL").unwrap();
+        let outcome = make_archive().extract("fixture");
+        std::fs::remove_dir_all(&directory).unwrap();
+        assert!(
+            matches!(
+                outcome,
+                Err(Error::Payload(payload::PayloadError::Huffman(
+                    huffman::HuffmanError::Source { ref source_path, .. }
+                ))) if source_path.ends_with("Storm.dll")
+            ),
+            "{outcome:?}"
+        );
+    }
+
+    /// Without Storm.dll a valid Warcraft III.exe is the codec source: discovery accepts it,
+    /// so the Huffman stage runs instead of refusing the mask.
+    #[test]
+    fn valid_executable_is_accepted_when_storm_is_absent() {
+        let directory =
+            std::env::temp_dir().join(format!("pcx-mpq-codec-exe-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("synthetic.mpq");
+        std::fs::write(&path, [1u8, 0]).unwrap();
+        std::fs::write(
+            directory.join("Warcraft III.exe"),
+            huffman::tests::synthetic_pe(),
+        )
+        .unwrap();
+        let (name1, name2) = hash::hash_string_both("fixture");
+        let mut archive = MpqArchive {
+            file: Source::File(BufReader::new(File::open(&path).unwrap())),
+            path: path.clone(),
+            header: Header::default(),
+            hashes: vec![HashEntry {
+                name1,
+                name2,
+                block_index: 0,
+                ..HashEntry::default()
+            }],
+            blocks: vec![BlockEntry {
+                file_pos: 0,
+                file_size: 4,
+                compressed_size: 2,
+                flags: flags::EXISTING | flags::SINGLE_UNIT | flags::COMPRESS,
+            }],
+            huffman: None,
+            huffman_checked: false,
+        };
+        let outcome = archive.extract("fixture");
+        std::fs::remove_dir_all(&directory).unwrap();
+        // The synthetic weights in row one are empty, so the stream is refused as corrupt.
+        assert!(
+            matches!(
+                outcome,
+                Err(Error::Payload(payload::PayloadError::Huffman(
+                    huffman::HuffmanError::Corrupt
+                )))
+            ),
+            "{outcome:?}"
+        );
+    }
+
+    /// A codec table imported into an archive is what `codec_table` reports; a refused source
+    /// leaves the archive without one.
+    #[test]
+    fn imported_codec_table_is_reported_and_refused_sources_leave_none() {
+        let (name1, name2) = hash::hash_string_both("fixture");
+        let mut archive = MpqArchive {
+            file: Source::Memory(vec![1u8, 0]),
+            path: PathBuf::from("memory.mpq"),
+            header: Header::default(),
+            hashes: vec![HashEntry {
+                name1,
+                name2,
+                block_index: 0,
+                ..HashEntry::default()
+            }],
+            blocks: Vec::new(),
+            huffman: None,
+            huffman_checked: false,
+        };
+        assert!(archive.codec_table().is_none());
+        assert!(archive.set_huffman_table(b"MZ", "truncated.dll").is_err());
+        assert!(archive.codec_table().is_none());
+        let table =
+            huffman::HuffmanTable::from_pe(&huffman::tests::synthetic_pe(), "fixture.dll").unwrap();
+        archive.set_codec_table(table);
+        assert_eq!(
+            archive.codec_table().map(|table| table.table_va),
+            Some(0x402000)
+        );
     }
 
     /// An archive opened from memory must behave exactly like one opened from
