@@ -1,13 +1,13 @@
 //! Selected-source creation collision cache on the existing executed identities.
+use crate::{
+    map_admission::ParsedMapContext,
+    playercolor_host::ObjectHost,
+    unit_placement::{Budget, Footprint, Grid, Placement, Rules},
+};
 use pcx_assets::{AssetPath, Resolver};
 use pcx_objects::editor::{
     FieldSource, Overlay, SlkId,
     defaults::{DefaultTables, Family},
-};
-use pcx_play::{
-    map_admission::ParsedMapContext,
-    playercolor_host::ObjectHost,
-    unit_placement::{Budget, Footprint, Grid, Placement, Rules},
 };
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -254,7 +254,7 @@ impl Textures {
             .reader
             .resolve_bounded(path, self.remaining_bytes.min(1 << 20) as u64)
             .map_err(|e| e.to_string())?;
-        let (_, origin) = pcx_play::campaign_assets::identity(&asset, &self.edition, 16 << 10)?;
+        let (_, origin) = crate::campaign_assets::identity(&asset, &self.edition, 16 << 10)?;
         let header = pcx_tga::Header::parse(&asset.bytes).map_err(|e| e.to_string())?;
         let count = usize::from(header.width) * usize::from(header.height);
         if count > FOOTPRINT_CELLS

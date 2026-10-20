@@ -1,11 +1,11 @@
 //! Local PC3 campaign profile storage, separate from original W3V files.
-use pcx_play::{
+use crate::{
     game_cache::{Budget, Storage},
     map_startup_host::MapStartupHost,
 };
 use std::sync::Arc;
 
-pub(crate) fn attach(host: &mut MapStartupHost) -> Result<(), pcx_play::playercolor_host::Error> {
+pub fn attach(host: &mut MapStartupHost) -> Result<(), crate::playercolor_host::Error> {
     if host
         .context()
         .scripts

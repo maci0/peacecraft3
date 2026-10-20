@@ -18,6 +18,20 @@ pub struct MapSources {
     pub catalog: Arc<dyn ObjectCatalog + Send + Sync>,
 }
 
+/// Client identity of the selected executable image. The version is the SHA-256 of the exact
+/// bytes, the same digest the placement, activity and settings readers admit by hash.
+pub fn client_identity(image: &[u8], source: &str) -> AssetIdentity {
+    let digest: String = crate::neutral_player::sha256(image)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    AssetIdentity {
+        source: source.into(),
+        edition: "selected campaign client".into(),
+        version: format!("sha256 {digest}"),
+    }
+}
+
 /// Zoom index the application camera also selects for its near clip.
 const GAME_CAMERA_ZOOM: usize = 0;
 

@@ -5,9 +5,7 @@
 //! successful admission and caller-supplied host inputs.
 
 pub mod campaign_boundary;
-mod campaign_cache;
 pub mod campaign_camera;
-pub mod campaign_placement;
 pub mod campaign_presentation;
 pub mod campaign_runtime;
 pub mod campaign_score;

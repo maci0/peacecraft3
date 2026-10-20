@@ -77,11 +77,7 @@ fn prepare(
                 &map_sources(bindings),
                 &reader,
                 image,
-                pcx_play::scripts::AssetIdentity {
-                    source: source.into(),
-                    edition: "selected campaign client".into(),
-                    version: "reviewed Legacy 1.29.2.9231".into(),
-                },
+                pcx_play::campaign_inputs::client_identity(image, source),
                 chosen_seed,
                 launcher.expansion(),
             )
