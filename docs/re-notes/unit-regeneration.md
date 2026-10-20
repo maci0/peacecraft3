@@ -126,8 +126,24 @@ therefore lies inside one clock segment. Multiple changes in one projection inte
 compose: the composition test splits a span across two rebases and checks the sum.
 Clock arms are validated before the advance, so a rejected call has no effect. An
 advance that refuses (for example a blight unit) refuses the clock change too.
-The end-to-end test with units and a clock is not yet written; the fixtures lack
-the `ConvertFGameState` conversion and the startup clock.
+End-to-end tests (`combat_tests.rs`, fixture `open_clocked`: startup clock at hour 9,
+admitted time-of-day, real unit pools):
+
+- `clock_rebases_integrate_each_span_once_for_day_and_night_regeneration`: the clock
+  moves to t=6 without projecting units, then scale changes. Day gives 13 and night 17
+  from life 5 over 20 s. Without the advance, the span is refused with
+  "span predates the time-of-day rebase". The mutation check confirmed the test
+  fails on that refusal when the advance is removed.
+- `rejected_clock_change_leaves_pools_and_clock_unchanged`: NaN scale and hour are
+  refused before any integration; pools, scale and the later result are unchanged.
+- `units_created_mid_run_and_revived_units_do_not_regenerate_retroactively`: a unit
+  created at t=5 regenerates from 5, and a unit killed at t=10 and set to 5 life at
+  t=13 gains nothing until its clock reaches t=20.
+- `moving_unit_regenerates_at_its_rate_while_it_travels`: the unit moves 56 units and
+  gains its rate unchanged.
+
+Ordering is not evidenced natively. The moving-unit test checks the rate only, since
+no blight or motion-dependent eligibility exists yet.
 
 ## Dead, revived and created units
 
