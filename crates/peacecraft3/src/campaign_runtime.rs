@@ -141,11 +141,8 @@ impl CampaignRuntime {
                 break;
             };
             let until = self.origin + self.step.as_secs_f64() * tick as f64;
-            let result = pcx_play::campaign_host::advance_tick(
-                &mut **session,
-                until,
-                self.max_expiries_per_tick,
-            );
+            let result =
+                pcx_play::campaign_host::advance_tick(session, until, self.max_expiries_per_tick);
             match result {
                 Ok(_) => {
                     self.tick = tick;

@@ -729,6 +729,23 @@ fn budgets(shop: crate::playercolor_host::ShopCapacity) -> MapStartupBudgets {
     }
 }
 
+/// The Holy Light `Targetart` model, read by the same binary-model path rule that the
+/// day/night models use.
+fn holy_light_art(reader: &Resolver, tables: &DefaultTables) -> Result<Vec<u8>, String> {
+    let object = tables
+        .object(Family::Ability, &pcx_objects::fourcc_text(HOLY_LIGHT_ROW))
+        .map_err(|e| e.to_string())?;
+    let cells = object.profile("Targetart");
+    let [model] = cells.as_slice() else {
+        return Err("Holy Light needs exactly one Targetart".into());
+    };
+    let member = pcx_mdl::binary_model_path(model.text.trim());
+    let asset = reader
+        .resolve_bounded(&member, 8 << 20)
+        .map_err(|e| e.to_string())?;
+    Ok(asset.bytes)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -767,21 +784,4 @@ mod tests {
         .unwrap();
         assert!(super::conversion_global(&program, "ConvertGameEvent", 19).is_err());
     }
-}
-
-/// The Holy Light `Targetart` model, read by the same binary-model path rule that the
-/// day/night models use.
-fn holy_light_art(reader: &Resolver, tables: &DefaultTables) -> Result<Vec<u8>, String> {
-    let object = tables
-        .object(Family::Ability, &pcx_objects::fourcc_text(HOLY_LIGHT_ROW))
-        .map_err(|e| e.to_string())?;
-    let cells = object.profile("Targetart");
-    let [model] = cells.as_slice() else {
-        return Err("Holy Light needs exactly one Targetart".into());
-    };
-    let member = pcx_mdl::binary_model_path(model.text.trim());
-    let asset = reader
-        .resolve_bounded(&member, 8 << 20)
-        .map_err(|e| e.to_string())?;
-    Ok(asset.bytes)
 }

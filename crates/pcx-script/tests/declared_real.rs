@@ -355,7 +355,7 @@ fn unbound_real_declarations_use_the_same_cast_as_unbound_i2r() {
     check(false, "direct", &[], |vm, value| {
         assert_eq!(value, cast3);
         assert_eq!(vm.global("stored"), cast3);
-        assert_eq!(value, Value::Real(3_i32 as f32));
+        assert_eq!(value, Value::Real(3_f32));
     });
     check(false, "wide", &[], |_, value| {
         assert_eq!(value, Value::Real(WIDE as f32));

@@ -1791,7 +1791,9 @@ endglobals
         );
         assert_eq!(
             creation_block(true, true, "", 0, 0, None),
-            Some("3D placement is not played")
+            Some(
+                "3D placement is not played: native attenuation, cutoff and listener mapping are unmeasured"
+            )
         );
     }
 
