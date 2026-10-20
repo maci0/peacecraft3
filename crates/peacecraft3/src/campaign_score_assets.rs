@@ -14,6 +14,8 @@ use std::sync::Arc;
 pub struct ScoreScreenAssets {
     layout: Option<ScoreScreenLayout>,
     loaded_for: Option<Arc<ParsedMapContext>>,
+    /// The selected resolver the layout was read through; its art is read through it too.
+    resolver: Option<Arc<Resolver>>,
 }
 
 impl ScoreScreenAssets {
@@ -25,6 +27,12 @@ impl ScoreScreenAssets {
             .is_some_and(|loaded| Arc::ptr_eq(loaded, context))
             .then_some(self.layout.as_ref())
             .flatten()
+    }
+
+    /// The resolver behind the layout loaded for exactly `context`.
+    pub fn source_for(&self, context: &Arc<ParsedMapContext>) -> Option<Arc<Resolver>> {
+        self.layout_for(context)?;
+        self.resolver.clone()
     }
 
     /// Whether a load was attempted for exactly `context`, successful or not.
@@ -60,7 +68,8 @@ pub fn load(resolver: &Resolver) -> Result<ScoreScreenLayout, String> {
         .map(|(p, t)| (p.as_str(), t.as_str()))
         .collect();
     let strings = read_text(resolver, GLOBAL_STRINGS_FDF)?;
-    ScoreScreenLayout::parse(&screen, &borrowed, &strings).map_err(|e| format!("{SCORE_SCREEN_FDF}: {e:?}"))
+    ScoreScreenLayout::parse(&screen, &borrowed, &strings)
+        .map_err(|e| format!("{SCORE_SCREEN_FDF}: {e:?}"))
 }
 
 /// Caches one load attempt per context. A distinct context drops the previous layout before
@@ -97,7 +106,12 @@ pub fn load_assets(
     let Some(ScoreScreen::Refused { context, .. }) = &state.0 else {
         return;
     };
-    let ScoreScreenAssets { layout, loaded_for } = &mut *assets;
+    let ScoreScreenAssets {
+        layout,
+        loaded_for,
+        resolver: source,
+    } = &mut *assets;
+    let mut selected = None;
     let attempt = refresh(layout, loaded_for, context, || {
         let same_session = requests
             .admission
@@ -111,10 +125,17 @@ pub fn load_assets(
             .as_ref()
             .and_then(|b| b.resolver.clone())
             .ok_or("admitted map has no retained selected resolver")?;
-        load(&resolver)
+        let loaded = load(&resolver)?;
+        selected = Some(resolver);
+        Ok(loaded)
     });
-    if let Err(e) = attempt {
-        warn!("score screen refused: {e}");
+    match attempt {
+        Ok(true) => *source = selected,
+        Ok(false) => {}
+        Err(e) => {
+            *source = None;
+            warn!("score screen refused: {e}");
+        }
     }
 }
 
@@ -139,13 +160,19 @@ mod tests {
         let (mut slot, mut loaded) = (None, None);
         let a = Arc::new(1u8);
         let b = Arc::new(2u8);
-        assert_eq!(refresh(&mut slot, &mut loaded, &a, || Ok(layout())), Ok(true));
+        assert_eq!(
+            refresh(&mut slot, &mut loaded, &a, || Ok(layout())),
+            Ok(true)
+        );
         assert!(slot.is_some(), "context A loads its layout");
         let refused = refresh(&mut slot, &mut loaded, &b, || {
             Err("ScoreScreen.fdf: missing".to_owned())
         });
         assert_eq!(refused, Err("ScoreScreen.fdf: missing".to_owned()));
-        assert!(slot.is_none(), "B's failed attempt leaves no A layout usable");
+        assert!(
+            slot.is_none(),
+            "B's failed attempt leaves no A layout usable"
+        );
         assert!(Arc::ptr_eq(loaded.as_ref().unwrap(), &b));
     }
 
@@ -155,7 +182,10 @@ mod tests {
         let a = Arc::new(1u8);
         let b = Arc::new(2u8);
         refresh(&mut slot, &mut loaded, &a, || Ok(layout())).unwrap();
-        assert_eq!(refresh(&mut slot, &mut loaded, &b, || Ok(layout())), Ok(true));
+        assert_eq!(
+            refresh(&mut slot, &mut loaded, &b, || Ok(layout())),
+            Ok(true)
+        );
         assert!(slot.is_some());
         let attempts = Cell::new(0);
         assert_eq!(

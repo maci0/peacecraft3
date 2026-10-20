@@ -554,4 +554,4 @@ pub fn browser_campaign_runtime_gate() -> u32 {
 mod game_pause;
 
 #[path = "script_game_exit_cases.rs"]
-mod game_exit;
+pub(crate) mod game_exit;

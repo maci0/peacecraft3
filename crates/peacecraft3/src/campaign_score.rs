@@ -99,7 +99,10 @@ mod tests {
 
     #[test]
     fn save_replay_is_refused_and_ok_only_dismisses() {
-        assert_eq!(outcome(ScoreAction::SaveReplay), ActionOutcome::ReplayUnsupported);
+        assert_eq!(
+            outcome(ScoreAction::SaveReplay),
+            ActionOutcome::ReplayUnsupported
+        );
         assert_eq!(outcome(ScoreAction::Ok), ActionOutcome::Dismiss);
     }
 

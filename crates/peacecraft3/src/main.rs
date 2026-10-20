@@ -10,13 +10,14 @@ mod import_assets;
 
 mod button_actions;
 mod campaign_actors;
-mod campaign_score_view;
 mod campaign_diagnostics;
 mod campaign_hud;
 mod campaign_input;
 mod campaign_inventory;
 mod campaign_messages;
 mod campaign_prepare;
+mod campaign_score_model;
+mod campaign_score_view;
 mod campaign_script_dialogs;
 mod campaign_selection;
 use peacecraft3::fdf;
@@ -102,6 +103,16 @@ mod admission;
 #[path = "../tests/support/map_binding_cases.rs"]
 mod binding;
 #[cfg(all(test, target_arch = "wasm32"))]
+#[path = "../tests/support/map_fixtures.rs"]
+mod fixtures;
+// Shared startup fixture for the native production-path tests (`test-fixtures`).
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+#[path = "../tests/support/map_binding_cases.rs"]
+mod binding;
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+#[path = "../tests/support/campaign_startup_cases.rs"]
+mod campaign_startup_cases;
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
 #[path = "../tests/support/map_fixtures.rs"]
 mod fixtures;
 #[cfg(all(test, target_arch = "wasm32"))]
