@@ -81,7 +81,9 @@ pub struct ExecutedUnit {
     /// Player handle passed to the executed `CreateUnit` call.
     pub owner: HandleId,
     pub source: Source,
+    /// Executed `CreateUnit` x. Live acceptance is still unresolved.
     pub x: f32,
+    /// Executed `CreateUnit` y. Live acceptance is still unresolved.
     pub y: f32,
     pub face: f32,
     /// Executed `SetUnitAcquireRange` real. `None` means the native has not

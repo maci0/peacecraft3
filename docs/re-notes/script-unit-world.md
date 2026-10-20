@@ -378,3 +378,61 @@ position/collision constants or assumed polling interval is added. Live placemen
 session-scoped world identity, world-driven event delivery and the required
 four-result RNG factory gate remain open. The factory still refuses
 `TriggerRegisterUnitInRange` after one exact RNG result.
+
+## Accepted-position gap (2026-10-18)
+
+`CreateUnit` at `0x663ca0` calls the factory `0x687ca0`. The placement routine
+at `0x6be040` clamps the request through `0x7f4a60`, then builds pathing-cell
+indices with trunc-toward-zero of `(coordinate - origin) / 2^5`. The division
+is the exponent adjustment `add eax, 0xfd800000`, guarded by the `0x3000000`
+underflow test. That is the same power-of-two cell size the terrain predicate
+reads from the image. Collision remains virtual slot `0x168`. `GetUnitX` still
+reaches virtual slot `0xB8` and `0x7fe810`, which multiplies the stored
+cell-space value by `2^5` and adds the origin.
+
+The search wrapper `0x7fce70` calls `0x8aef10`. When its limit argument is `-1`,
+the immediate `0x20` is substituted. Success writes `cell_space * 2^5 + origin`
+back to the request pointers (exponent add `0x2800000`). Failure leaves the
+clamped request, and `0x4e00f0` runs only when both the shape lookup and that
+search result are non-null. `0x4e00f0` aligns a truncated coordinate to a
+multiple of 64 and can add the runtime float at `0x113bde4`. That address is
+past the file image.
+
+Reclassifying the retained 155 constructor pairs against the parsed terrain
+origin and this cell size leaves two results. 146 getters equal
+`floor(logged_request * 4) / 4`. The other 9 are pathing-cell centers. Their
+rawcodes are `nshe` (five, collision 16), `nvil` (two, collision 16), `nC22`
+(collision 16) and `nban` (collision 31). 63 logged axes match that floor and
+disagree with truncation toward zero, so the getter quantum is a different
+operation from the search's cell index. 85 of the quarter matches are also
+finer than an integer floor.
+
+No decoded instruction in this chain is that quarter floor. File-backed floats
+on the nearby path are `0x10db050` = `0x38d1b717` (nearest `0.0001`),
+`0x10db120` = `0x33d6bf95` (nearest `1e-7`), `0x10db0ac` = `0.5` and
+`0x10db0d4` = `1.5`. The last two select a deformation band in `0x8bc900`.
+The band offsets `0x112d810` and `0x112d83c` are outside
+the file image, as is `0x113bde4`. The position write continues through
+`0x800280`, `0x8bc740` and `0x8c3050`. Those offsets and that call are the open
+branch. A blanket quarter snap would also miss the 9 cell-center moves.
+
+`ExecutedUnit.x` and `ExecutedUnit.y` stay the executed request. Window
+listings and the pair classification remain local under
+`.scratch/grok-active-three-20261018/unit-placement/analysis/`. No new runtime
+was launched.
+
+### Bounded probe
+
+One init-time run on this image and Human01, two creations:
+
+1. Create one footman at a fractional point the 19-request probe accepted
+   without moving, chosen so the request is not a multiple of `1/4`. Record
+   the `GetUnitX`/`GetUnitY` bit patterns, the two dwords `0x8b6ea0` copies
+   from spatial slots `+0x40` and `+0x44`, and the floats at node `+0x78` and
+   `+0x80`.
+2. Repeat for one creation that same probe moved onto a cell center.
+3. After load, record the runtime floats at `0x112d810`, `0x112d83c` and
+   `0x113bde4`.
+
+That separates a cell-space fixed-point quantum from the deformation offsets.
+It does not need the 155-stream replay, range registration, or another map.

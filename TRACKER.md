@@ -2421,3 +2421,19 @@ repeated, and the public site package was not rebuilt.
   world identity. No placeholder join or range registration is added; the
   unchanged-map four-result RNG gate remains failed after one exact result.
   See [the evidence and limits](docs/re-notes/script-unit-world.md).
+
+### 2026-10-18, placement search decoded, getter quantum still open
+
+- [~] Image windows for `CreateUnit` (`0x663ca0` to `0x687ca0`) and placement
+  `0x6be040` convert requests to pathing cells with trunc-toward-zero of
+  `(coordinate - origin) / 2^5`, the same cell size as the terrain predicate.
+  Search success writes a cell-space point back through that scale. Failure
+  leaves the clamped request. Collision stays virtual slot `0x168`; `GetUnitX`
+  stays virtual slot `0xB8`.
+- [~] The retained 155 constructor pairs split into 146 floor-quarter getters
+  and 9 pathing-cell centers (`nshe`, `nvil`, `nC22`, `nban`). 63 logged axes
+  match that floor and disagree with trunc-toward-zero. No instruction in the
+  decoded chain is the quarter floor. Deformation thresholds `0.5` and `1.5`
+  are file-backed; their offsets and `0x8c3050` remain unread. Request
+  coordinates stay on `ExecutedUnit`. The bounded probe is in
+  [the placement gap](docs/re-notes/script-unit-world.md#accepted-position-gap-2026-10-18).
