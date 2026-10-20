@@ -133,6 +133,8 @@ pub struct ExecutedUnit {
     pub vitals: Option<super::Vitals>,
     /// Weapon, armor and attack state when combat is admitted.
     pub combat: Option<super::Combat>,
+    /// Permanent strength granted by automatic powerups, added to derived STR. Zero before any grant.
+    pub permanent_strength: i32,
 }
 
 type ModelLoader = Box<
@@ -1257,6 +1259,7 @@ impl ObjectHost {
                 activity: None,
                 shown: true,
                 vitals: None,
+                permanent_strength: 0,
                 combat: None,
             }
         };

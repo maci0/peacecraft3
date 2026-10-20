@@ -1,6 +1,8 @@
 use super::super::EventSubject;
 use super::*;
 use crate::inventory::{InventoryBudget, Policy, Rules};
+use crate::inventory_powerup::{AttributeBonus, Rules as PowerupRules};
+use crate::inventory_powerup_host::{grant_strength, reprice_life};
 use pcx_objects::editor::{FieldSource, SlkId};
 use pcx_sim::world::FieldValue;
 
@@ -10,6 +12,7 @@ pub(super) struct State {
     pickup: i32,
     drop: i32,
     pending: Vec<(HandleId, HandleId, i32)>,
+    attributes: Option<PowerupRules>,
 }
 const CALLS: &[(&str, &[&str], &str, bool)] = &[
     ("UnitHasItem", &["unit", "item"], "boolean", false),
@@ -99,7 +102,31 @@ impl ObjectHost {
             pickup,
             drop,
             pending: Vec::new(),
+            attributes: None,
         });
+        Ok(self)
+    }
+    /// Admits automatic powerup activation. Grants change unit life pools, so vitals must be admitted first.
+    pub fn with_inventory_powerup(mut self, rules: PowerupRules) -> Result<Self, Error> {
+        if self.unit_vitals.is_none() {
+            return Err(self.inner.error(
+                "inventory",
+                Failure::ItemState("unit vitals required before powerup grants"),
+            ));
+        }
+        let Some(state) = self.items.as_mut().and_then(|s| s.inventory.as_mut()) else {
+            return Err(self.inner.error(
+                "inventory",
+                Failure::ItemState("inventory must be admitted before powerups"),
+            ));
+        };
+        if state.attributes.is_some() {
+            return Err(self.inner.error(
+                "inventory",
+                Failure::ItemState("powerup rules already admitted"),
+            ));
+        }
+        state.attributes = Some(rules);
         Ok(self)
     }
     fn inventory_state(&self) -> Result<&State, Error> {
@@ -133,14 +160,14 @@ impl ObjectHost {
     pub fn can_drop_inventory_item(&self, unit: HandleId, item: HandleId) -> Result<bool, Error> {
         Ok(self.inventory_policy(unit)?.drop_items
             && self
-                .inventory_item(item)?
+                .live_item(item)?
                 .is_some_and(|r| r.held_by.is_some_and(|(u, _)| u == unit))
             && self.item_flag(item, "droppable")?)
     }
     pub fn can_use_inventory_item(&self, unit: HandleId, item: HandleId) -> Result<bool, Error> {
         Ok(self.inventory_policy(unit)?.use_items
             && self
-                .inventory_item(item)?
+                .live_item(item)?
                 .is_some_and(|r| r.held_by.is_some_and(|(u, _)| u == unit))
             && self.item_flag(item, "usable")?)
     }
@@ -159,16 +186,9 @@ impl ObjectHost {
             .find(|(u, _, _)| *u == unit)
             .map(|(_, _, o)| *o)
     }
-    fn inventory_item(&self, item: HandleId) -> Result<Option<&ExecutedItem>, Error> {
-        match self.inner.entry(item)? {
-            Entry::Item { record } => Ok(Some(record)),
-            Entry::RemovedItem => Ok(None),
-            _ => Err(self.inner.error("inventory", Failure::WrongFamily)),
-        }
-    }
     fn item_flag(&self, item: HandleId, column: &str) -> Result<bool, Error> {
         let item = self
-            .inventory_item(item)?
+            .live_item(item)?
             .ok_or_else(|| self.inner.error("inventory", Failure::Identity))?;
         if column == "drop"
             && let Some(value) = item.drop_on_death
@@ -266,13 +286,108 @@ impl ObjectHost {
         }
         Ok(())
     }
+    /// Passive strength and agility of one item while held. Powerups and usable items add none.
+    /// Refusals are raised here, before the caller writes any state.
+    fn held_attributes(&self, item: HandleId) -> Result<AttributeBonus, Error> {
+        let Some(rules) = self
+            .items
+            .as_ref()
+            .and_then(|s| s.inventory.as_ref())
+            .and_then(|s| s.attributes.as_ref())
+        else {
+            return Ok(AttributeBonus::default());
+        };
+        let record = self
+            .live_item(item)?
+            .ok_or_else(|| self.inner.error("inventory", Failure::ItemState("item not live")))?;
+        let held = rules
+            .held_attributes(&record.definition)
+            .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))?;
+        Ok(held.unwrap_or_default())
+    }
+
+    /// Flat hero bonus of a unit: retained powerup strength plus passive bonuses of held items.
+    pub(crate) fn unit_hero_bonus(&self, unit: HandleId) -> Result<AttributeBonus, Error> {
+        let mut bonus = AttributeBonus {
+            strength: self.executed_unit(unit)?.permanent_strength,
+            agility: 0,
+            armor: 0,
+        };
+        let held: Vec<HandleId> = self
+            .executed_items()
+            .filter(|(_, r)| r.held_by.is_some_and(|(owner, _)| owner == unit))
+            .map(|(id, _)| id)
+            .collect();
+        for item in held {
+            let passive = self.held_attributes(item)?;
+            let overflow = || {
+                self.inner.error(
+                    "inventory",
+                    Failure::UnitActivity("held hero attribute overflows".into()),
+                )
+            };
+            bonus.strength = bonus
+                .strength
+                .checked_add(passive.strength)
+                .ok_or_else(overflow)?;
+            bonus.agility = bonus.agility.checked_add(passive.agility).ok_or_else(overflow)?;
+            bonus.armor = bonus.armor.checked_add(passive.armor).ok_or_else(overflow)?;
+        }
+        Ok(bonus)
+    }
+
+    /// Armor points from held passive items, added to the unit's armor by damage. Zero for units
+    /// that hold no armor items, hero or not.
+    pub(crate) fn held_armor_bonus(&self, unit: HandleId) -> Result<i32, Error> {
+        Ok(self.unit_hero_bonus(unit)?.armor)
+    }
+
+    /// Life pools after `delta` strength on a hero, or `None` for units without hero pools.
+    fn held_strength_life(&self, unit: HandleId, delta: i32) -> Result<Option<(f32, f32)>, Error> {
+        if delta == 0 {
+            return Ok(None);
+        }
+        let record = self.executed_unit(unit)?;
+        let Some(vitals) = record.vitals else {
+            return Ok(None);
+        };
+        if !record.definition.rawcode[0].is_ascii_uppercase() {
+            return Ok(None);
+        }
+        let life_per_strength = self.life_per_strength().ok_or_else(|| {
+            self.inner.error(
+                "inventory",
+                Failure::UnitState("unit vitals required before strength changes"),
+            )
+        })?;
+        reprice_life(vitals.life, vitals.max_life, life_per_strength, delta)
+            .map(Some)
+            .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))
+    }
+
+    fn set_life_pools(&mut self, unit: HandleId, pools: Option<(f32, f32)>) -> Result<(), Error> {
+        let Some((life, max_life)) = pools else {
+            return Ok(());
+        };
+        if let Entry::Unit { record } = self.inner.entry_mut(unit)?
+            && let Some(vitals) = &mut record.vitals
+        {
+            vitals.life = life;
+            vitals.max_life = max_life;
+        }
+        Ok(())
+    }
+
     fn add_inventory_item(&mut self, unit: HandleId, item: HandleId) -> Result<bool, Error> {
         let policy = self.inventory_policy(unit)?;
-        let Some(record) = self.inventory_item(item)? else {
+        let Some(record) = self.live_item(item)? else {
             return Ok(false);
         };
         if record.held_by.is_some_and(|(owner, _)| owner == unit) {
             return Ok(true);
+        }
+        if record.claimed {
+            return Ok(false);
         }
         if !policy.get_items
             || self
@@ -284,14 +399,30 @@ impl ObjectHost {
             return Ok(false);
         }
         if self.item_flag(item, "powerup")? {
+            return self.activate_powerup(unit, item);
+        }
+        // Passive refusals and life changes are staged before any slot, event or state write.
+        let passive = self.held_attributes(item)?;
+        // Strength and agility are hero attributes. A non-hero holder has no modeled effect, so a
+        // stat item is refused rather than accepted as a silent no-op.
+        if (passive.strength != 0 || passive.agility != 0)
+            && !self
+                .executed_unit(unit)?
+                .definition
+                .rawcode[0]
+                .is_ascii_uppercase()
+        {
             return Err(self.inner.error(
                 "inventory",
-                Failure::ItemState("automatic-use powerup effects are not admitted"),
+                Failure::UnitActivity(
+                    "passive strength or agility on a non-hero is unsupported".into(),
+                ),
             ));
         }
         let Some(slot) = (0..policy.slots).find(|&s| self.held_slot(unit, s).is_none()) else {
             return Ok(false);
         };
+        let pools = self.held_strength_life(unit, passive.strength)?;
         let holder = record.held_by;
         let mut changes = vec![(unit, true)];
         if let Some((owner, _)) = holder {
@@ -299,12 +430,73 @@ impl ObjectHost {
         }
         self.reserve_item_events(&changes)?;
         if let Some((owner, _)) = holder {
+            // The owner's drop reprices its own life with the same passive amount.
             self.drop_inventory_item(owner, item)?;
         }
+        self.set_life_pools(unit, pools)?;
         if let Entry::Item { record } = self.inner.entry_mut(item)? {
             record.held_by = Some((unit, slot));
         }
         self.item_event(unit, item, true)?;
+        Ok(true)
+    }
+    /// Automatic powerup: the source effect, then the pickup event, then consumption once the
+    /// pickup delivery finishes. Fallible reads and queueing run before the first write, so a
+    /// refused grant changes nothing. A claimed item cannot be granted again.
+    fn activate_powerup(&mut self, unit: HandleId, item: HandleId) -> Result<bool, Error> {
+        let fail = |s: &'static str| self.inner.error("inventory", Failure::ItemState(s));
+        let effect = {
+            let state = self.inventory_state()?;
+            let rules = state
+                .attributes
+                .as_ref()
+                .ok_or_else(|| fail("automatic powerup effects are not admitted"))?;
+            let definition = &self
+                .live_item(item)?
+                .ok_or_else(|| fail("powerup item is not live"))?
+                .definition;
+            rules
+                .strength_effect(definition)
+                .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))?
+                .ok_or_else(|| fail("powerup flag disagrees with the source row"))?
+        };
+        let life_per_strength = self
+            .life_per_strength()
+            .ok_or_else(|| fail("unit vitals required before powerup grants"))?;
+        let record = self.executed_unit(unit)?;
+        if !record.definition.rawcode[0].is_ascii_uppercase() {
+            return Err(fail("automatic strength powerups require a hero"));
+        }
+        let vitals = record
+            .vitals
+            .ok_or_else(|| fail("hero vitals missing for powerup grant"))?;
+        let grant = grant_strength(
+            record.permanent_strength,
+            vitals.life,
+            vitals.max_life,
+            life_per_strength,
+            effect,
+        )
+        .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))?;
+        // Queue the pickup before the first write: queueing is the only fallible step left.
+        self.reserve_item_events(&[(unit, true)])?;
+        self.item_event(unit, item, true)?;
+        let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
+            return Err(self
+                .inner
+                .error("inventory", Failure::UnitState("unit entry changed")));
+        };
+        record.permanent_strength = grant.strength;
+        if let Some(vitals) = &mut record.vitals {
+            vitals.life = grant.life;
+            vitals.max_life = grant.max_life;
+        }
+        let Entry::Item { record } = self.inner.entry_mut(item)? else {
+            return Err(self.inner.error("inventory", Failure::WrongFamily));
+        };
+        record.held_by = None;
+        record.claimed = true;
+        self.settle_powerup_item(Some(item));
         Ok(true)
     }
     fn drop_inventory_item(&mut self, unit: HandleId, item: HandleId) -> Result<(), Error> {
@@ -313,12 +505,15 @@ impl ObjectHost {
                 .error("inventory", Failure::ItemState("unit position missing"))
         })?;
         if !self
-            .inventory_item(item)?
+            .live_item(item)?
             .is_some_and(|r| r.held_by.is_some_and(|(u, _)| u == unit))
         {
             return Ok(());
         }
+        let passive = self.held_attributes(item)?;
+        let pools = self.held_strength_life(unit, -passive.strength)?;
         self.reserve_item_events(&[(unit, false)])?;
+        self.set_life_pools(unit, pools)?;
         if let Entry::Item { record } = self.inner.entry_mut(item)? {
             record.held_by = None;
             record.x = position[0];
@@ -454,7 +649,7 @@ impl ObjectHost {
                 return Err(fail());
             };
             let held = self
-                .inventory_item(*item)?
+                .live_item(*item)?
                 .is_some_and(|r| r.held_by.is_some_and(|(u, _)| u == *first));
             return match name {
                 "UnitHasItem" => Ok(Value::Bool(held)),
@@ -466,7 +661,7 @@ impl ObjectHost {
                 _ => Err(fail()),
             };
         }
-        let Some(record) = self.inventory_item(*first)? else {
+        let Some(record) = self.live_item(*first)? else {
             return Ok(null());
         };
         match name {
@@ -550,10 +745,11 @@ impl ObjectHost {
         order: i32,
         name: &str,
     ) -> Result<bool, Error> {
-        let Some(record) = self.inventory_item(item)? else {
+        let Some(record) = self.live_item(item)? else {
             return Ok(false);
         };
         if record.held_by.is_some()
+            || record.claimed
             || self
                 .executed_unit(unit)?
                 .combat
@@ -563,14 +759,12 @@ impl ObjectHost {
             return Ok(false);
         }
         let destination = [record.x, record.y];
-        if self.item_flag(item, "powerup")? {
-            return Err(self.inner.error(
-                name,
-                Failure::ItemState("automatic-use powerup effects are not admitted"),
-            ));
-        }
+        // Automatic powerups bypass the slot check, so a full inventory still takes them.
+        let powerup = self.item_flag(item, "powerup")?;
         let policy = self.inventory_policy(unit)?;
-        if !policy.get_items || (0..policy.slots).all(|s| self.held_slot(unit, s).is_some()) {
+        if !policy.get_items
+            || (!powerup && (0..policy.slots).all(|s| self.held_slot(unit, s).is_some()))
+        {
             return Ok(false);
         }
         let position = self.executed_unit(unit)?.position.ok_or_else(|| {
@@ -634,11 +828,11 @@ impl ObjectHost {
                 self.inner
                     .error("inventory", Failure::Budget("pickup tick work"))
             })?;
-            let Some(record) = self.inventory_item(item)? else {
+            let Some(record) = self.live_item(item)? else {
                 self.cancel_inventory_order(unit);
                 continue;
             };
-            if record.held_by.is_some() {
+            if record.held_by.is_some() || record.claimed {
                 self.cancel_inventory_order(unit);
                 continue;
             }

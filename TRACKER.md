@@ -3600,12 +3600,62 @@ repeated, and the public site package was not rebuilt.
   item art and text. Native rendered behavior remains unverified. Applying the
   decoded cover UV crop, asset-load rollback and effective verbose-tooltip
   preference handling remain open; item use/drag/drop explicitly refuse.
-- [ ] The stateful authored ledger route reaches quest discovery and camp combat,
-  then refuses `GroupPointOrderLoc` at 172.2188 seconds. Group-order drafts stay
-  outside this checkpoint. Authored pickup/return and the strength reward remain
-  unverified; chapter completion and campaign transitions remain open.
+- [ ] The stateful authored ledger route reaches quest discovery and camp combat.
+  Its current frontier is in the 2026-10-20 checkpoint entry below. Authored
+  pickup/return and the strength reward remain unverified; chapter completion and
+  campaign transitions remain open.
 - [x] Checkpoint validation: 733 shared-host tests and 812 application tests
   pass, including all four pause runtime cases. Selected original localization,
   pause declaration, guard operand and inventory layout gates pass. Strict native
   and browser all-target Clippy pass. Rendered inventory/dialog comparison and
   browser runtime execution for this checkpoint remain unverified.
+
+### 2026-10-20: checkpoint: group orders, game exit, score layout, items, armor, explosion flag
+
+Supersedes the earlier 2026-10-20 entries for this checkpoint. Their claims of
+unwired score input, click handling, and FDF or header restrictions are out of date.
+
+- [x] Group orders: the six `Group*Order*` natives admit through
+  `ObjectHost::with_group_orders` after groups, unit activity and the order registry.
+  `group_order_rules::Rules` reads the point member cap from the bounded enumeration
+  pushes (12 on the supplied image) and checks the immediate `-1` sentinel. Duplicate
+  admission refuses. Evidence: `cargo test -p pcx-play group_` (exit 0),
+  `PCX_GROUP_ORDER_IMAGE=<supplied exe> ... supplied_group_order_image -- --ignored`
+  (exit 0). See [group orders](docs/re-notes/script-group-orders.md).
+- [x] Game exit: `EndGame` records a bounded request and the calling thread continues.
+  The runtime takes requests after `advance_campaign`, inside `CampaignExitSet`. The score
+  consumer runs after that set. Evidence: `cargo test -p pcx-play game_exit` (exit 0),
+  `cargo test -p peacecraft3` (exit 0, 849 passed, 0 failed). The quit-button fixture
+  exercises the request path.
+- [x] Score request handoff: a score request keeps the exiting session context. The
+  selected `ScoreScreen.fdf`, its includes, and `GlobalStrings.fdf` load through that
+  session's resolver, once per context. A context that fails to load keeps no layout.
+  Evidence: same-update and missing-UI handoff tests in `script_game_exit_cases.rs`.
+- [x] Score layout and view: the FDF parser accepts `Frame"TEXT"` (compact) and
+  `Frame "TEXT"` (spaced), and refuses unterminated quotes. Labels are scoped to the
+  score root. OK dismisses the request; Save Replay is refused and keeps it. Evidence:
+  parser and button tests pass in the peacecraft3 suite (exit 0); original
+  `PCX_SCORE_UI_DIR` gate (exit 0).
+- [~] Score counters and replay: `GetPlayerScore` is declared by the selected `common.j`
+  but no native implements it, so rows stay refused. Save Replay has no replay writer.
+  No values are zero-filled.
+- [ ] Score skin and model art: not implemented. The glue texture loader reads from the
+  install directory, not the selected resolver, and `MODEL` frames are not drawn.
+- [x] Items: `SetItemDropID` is retained setter state for the drop origin. It is not a
+  drop-origin query, and no drop behavior is implemented. `GetItemLevel` reads `ilev`.
+  `GetItemType` maps `icla` through the class compare chain of the selected executable
+  (`PCX_WAR3_EXE` gate, exit 0, version 1.29.2.9231). Evidence: `cargo test -p pcx-play
+  item_drop` and `item_query`, and the peacecraft3 suite, all exit 0.
+- [x] Passive armor: held armor adds to the target's armor in `roll_damage`, once. Hero
+  armor derives from agility only. Evidence: `held_armor_changes_real_damage_and_its_drop_restores_it`
+  (exit 0). Overflow of the held armor sum is guarded but not tested.
+- [~] Explosion flag: `SetUnitExploded` admits against the selected `common.j`
+  declaration, anchored to the admitted `CreateUnit` source. A foreign-source declaration
+  refuses. The flag survives `KillUnit`. The selected `nC25` model has ordinary `Death`
+  but no `Death Explode` sequence. The unimplemented parts are the native explosion effect
+  and its corpse consumer. Evidence: `cargo test -p pcx-play unit_explosion` (exit 0).
+- [~] Stock and quest route: `UpdateStockAvailability` is a BJ function on the verified
+  ledger path. Stock-management branches outside that path are unverified. The ledger
+  route 3 reached quest pickup at 222 s and return at 250 s, quest complete at 251 s.
+  The strength reward was not observed. Chapter victory is unverified and not reached. Restart and load are unsupported.
+- [ ] Rendered parity for score, explosion, and inventory presentation is unverified.

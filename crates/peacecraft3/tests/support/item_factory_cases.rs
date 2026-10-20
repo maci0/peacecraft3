@@ -8,6 +8,9 @@ use std::collections::BTreeMap;
 const EXTRA: &str = "\
 type item extends widget
 native CreateItem takes integer typeId, real x, real y returns item
+native SetItemDropID takes item whichItem, integer unitId returns nothing
+native GetItemLevel takes item whichItem returns integer
+native GetItemType takes item whichItem returns itemtype
 ";
 const MAP: &str = "\
 globals
@@ -77,6 +80,17 @@ fn deliver(app: &mut App, revision: u64, items: Option<ItemBudget>, script: &str
     let bound = bind_map(&resolver, input, limits).unwrap();
     let mut inputs = host_inputs(Arc::clone(&bound.catalog.0));
     inputs.budgets.items = items;
+    // Synthetic class table matching the declared `ConvertItemType(0)` conversion.
+    inputs.item_classes = Some(pcx_play::item_class_table::ItemClassTable {
+        origin: pcx_play::scripts::AssetIdentity {
+            edition: "synthetic item fixture".into(),
+            version: "synthetic".into(),
+            source: "synthetic item fixture".into(),
+        },
+        image_sha256: [0; 32],
+        ordinals: BTreeMap::from([("permanent".to_owned(), 0)]),
+        default: 0,
+    });
     let bytes = Arc::clone(&bound.catalog_map_bytes);
     app.insert_resource(MapRequests {
         bindings: Some(bound),
@@ -118,7 +132,9 @@ fn published_item_retains_the_parsed_catalog_source_and_executed_coordinates() {
         app.world()
             .resource::<CampaignStartup>()
             .last_error
-            .is_none()
+            .is_none(),
+        "{:?}",
+        app.world().resource::<CampaignStartup>().last_error
     );
     let catalog = Arc::clone(
         &app.world()
@@ -170,7 +186,9 @@ fn item_refusals_preserve_the_published_session_and_valid_replacement_retires_it
         app.world()
             .resource::<CampaignStartup>()
             .last_error
-            .is_none()
+            .is_none(),
+        "{:?}",
+        app.world().resource::<CampaignStartup>().last_error
     );
     let (witness, context, made) = {
         let session = app.world().resource::<MapScriptSession<MapStartupHost>>();
@@ -241,7 +259,9 @@ fn item_refusals_preserve_the_published_session_and_valid_replacement_retires_it
         app.world()
             .resource::<CampaignStartup>()
             .last_error
-            .is_none()
+            .is_none(),
+        "{:?}",
+        app.world().resource::<CampaignStartup>().last_error
     );
     assert!(witness.upgrade().is_none());
 }

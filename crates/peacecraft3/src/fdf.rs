@@ -255,13 +255,13 @@ impl Fdf {
                 }
                 continue;
             }
-            // A header is `Frame` followed by whitespace. `FrameFont` (and any
-            // other `Frame…` property) also starts with `Frame`, and treating it
-            // as a header would invent a frame.
-            if let Some(rest) = line
-                .strip_prefix("Frame")
-                .filter(|r| r.is_empty() || r.starts_with(' ') || r.starts_with('\t'))
-            {
+            // A header is `Frame` followed by whitespace or the type's quote (shipped
+            // `ScoreScreen.fdf` writes `Frame"TEXT"`). `FrameFont` (and any other
+            // `Frame…` property) also starts with `Frame`, and treating it as a header
+            // would invent a frame.
+            if let Some(rest) = line.strip_prefix("Frame").filter(|r| {
+                r.is_empty() || r.starts_with(' ') || r.starts_with('\t') || r.starts_with('"')
+            }) {
                 if let Some(Open::Texture { frame, index }) = stack.last().copied() {
                     return Err(FdfError::Unsupported {
                         frame: self.frames[frame].name.clone(),
@@ -1096,5 +1096,27 @@ Frame "FRAME" "Plate" {
                 ..
             }) if value.contains("Frame inside Texture")
         ));
+    }
+
+    #[test]
+    fn frame_header_accepts_compact_and_spaced_syntax_and_refuses_unbalanced_quotes() {
+        let block = |header: &str| format!("{header} {{\n    Width 0.1,\n}}\n");
+        for header in [
+            "Frame\"TEXT\" \"ScoreLabel\"",
+            "Frame \"TEXT\" \"ScoreLabel\"",
+            "Frame\t\"TEXT\" \"ScoreLabel\"",
+        ] {
+            let mut f = Fdf::default();
+            f.parse_into(&block(header)).unwrap_or_else(|e| panic!("{header}: {e:?}"));
+            assert_eq!(f.frame("ScoreLabel").map(|x| x.kind.as_str()), Some("TEXT"));
+        }
+        for header in [
+            "Frame \"TEXT\" \"ScoreLabel",
+            "Frame \"TEXT ScoreLabel\"",
+            "Frame \"TEXT\" ScoreLabel\"",
+        ] {
+            let mut f = Fdf::default();
+            assert!(f.parse_into(&block(header)).is_err(), "{header} must be refused");
+        }
     }
 }

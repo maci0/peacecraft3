@@ -26,6 +26,11 @@ pub struct ExecutedItem {
     pub invulnerable: Option<bool>,
     pub droppable: Option<bool>,
     pub drop_on_death: Option<bool>,
+    /// Automatic powerup whose grant was applied and whose pickup delivery is pending.
+    /// Queries still see the live item; pickup and held-slot paths refuse it.
+    pub claimed: bool,
+    /// Set once a claimed powerup has no queued pickup left. Removed from listings and queries.
+    pub consumed: bool,
 }
 
 pub(super) struct Admission {
@@ -81,9 +86,21 @@ impl ObjectHost {
             .iter()
             .enumerate()
             .filter_map(|(at, entry)| match entry {
-                Entry::Item { record } => Some((self.inner.id(at, CREATE).ok()?, record)),
+                Entry::Item { record } if !record.consumed => {
+                    Some((self.inner.id(at, CREATE).ok()?, record))
+                }
                 _ => None,
             })
+    }
+
+    /// Canonical item lookup for every inventory and query path: a consumed powerup and a
+    /// removed handle both read as absent, a non-item handle is a family error.
+    pub(super) fn live_item(&self, item: HandleId) -> Result<Option<&ExecutedItem>, Error> {
+        match self.inner.entry(item)? {
+            Entry::Item { record } => Ok((!record.consumed).then_some(record)),
+            Entry::RemovedItem => Ok(None),
+            _ => Err(self.inner.error("item", Failure::WrongFamily)),
+        }
     }
 
     pub fn executed_item(&self, id: HandleId) -> Result<&ExecutedItem, Error> {
@@ -163,6 +180,8 @@ impl ObjectHost {
             invulnerable: None,
             droppable: None,
             drop_on_death: None,
+            claimed: false,
+            consumed: false,
         };
         let id = self.inner.allocate(Entry::Item { record }, CREATE)?;
         self.items.as_mut().expect("admission retained").records += 1;

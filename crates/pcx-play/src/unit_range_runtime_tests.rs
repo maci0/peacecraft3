@@ -328,3 +328,31 @@ fn optional_entering_unit_getter_is_checked_and_omission_stays_unsupported() {
         assert!(!h.unit_range_runtime_enabled());
     }
 }
+
+#[test]
+fn a_filter_named_by_a_unit_in_range_registration_refuses_destruction_and_stays_live() {
+    let source = SCENE
+        .replace("unit A=null", "boolexpr FL=null\nunit A=null")
+        .replace(
+            "call TriggerRegisterUnitInRange(T,A,32.0,Filter(function enter))",
+            "set FL=Filter(function enter)\ncall TriggerRegisterUnitInRange(T,A,32.0,FL)",
+        )
+        + "function kill takes nothing returns nothing\ncall DestroyBoolExpr(FL)\nendfunction\n";
+    let declarations = format!(
+        "{}native DestroyBoolExpr takes boolexpr e returns nothing\n",
+        declarations()
+    );
+    let mut h = position_host_program(100, 16, &source, &declarations)
+        .with_unit_in_range(8)
+        .unwrap();
+    h.admit_unit_range_runtime("TEST_RANGE", 4).unwrap();
+    let ctx = Arc::clone(h.player_context().unwrap());
+    let mut v = Arc::clone(&ctx.scripts).owned_vm(h);
+    v.init_globals().unwrap();
+    v.call("setup", &[]).unwrap();
+    let Value::Handle(filter) = v.global("FL") else {
+        panic!("FL is a filter handle")
+    };
+    assert!(v.call("kill", &[]).is_err(), "a named filter refuses destruction");
+    assert!(v.host().inner.filter_callback(filter).is_ok(), "the filter stays live");
+}

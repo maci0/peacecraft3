@@ -138,6 +138,7 @@ impl ObjectHost {
             .map_err(|e| self.inner.error(NATIVE, e.failure))?
         {
             Entry::Filter { function } => *function,
+            Entry::DeadBoolExpr => return Err(self.inner.error(NATIVE, Failure::Identity)),
             _ => return Err(self.inner.error(NATIVE, Failure::WrongFamily)),
         };
         let declared = callback(&self.inner.program, function)
@@ -156,14 +157,7 @@ impl ObjectHost {
     ) -> Option<Result<Value, Error>> {
         let admitted = self.filters.as_ref()?;
         if name == "DestroyBoolExpr" && admitted.destroy_null {
-            return Some(if matches!(args, [Value::Null]) {
-                Ok(Value::Null)
-            } else {
-                Err(self.inner.error(
-                    name,
-                    Failure::FilterState("non-null boolean-expression destruction is unsupported"),
-                ))
-            });
+            return Some(self.destroy_boolexpr(args));
         }
         if name != NATIVE {
             return None;

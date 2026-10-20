@@ -15,6 +15,7 @@ use pcx_objects::editor::misc::{ATTACK_TYPES, CombatRules, DEFENSE_TYPES};
 use pcx_objects::editor::{FieldSource, SlkId};
 use pcx_script::{HandleId, Value};
 use pcx_sim::world::{Definition, FieldValue};
+use crate::inventory_powerup::AttributeBonus;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Relation {
@@ -220,6 +221,7 @@ impl ObjectHost {
     pub(crate) fn derive_hero_combat(
         definition: &Definition,
         progress: Option<(i32, i32)>,
+        bonus: AttributeBonus,
         rules: &CombatRules,
     ) -> Result<HeroBonuses, String> {
         if !definition.rawcode[0].is_ascii_uppercase() {
@@ -229,7 +231,7 @@ impl ObjectHost {
                 speed: 1.0,
             });
         }
-        let attribute = |name: &str| Self::derive_hero_attribute(definition, progress, name);
+        let attribute = |name: &str| Self::derive_hero_attribute(definition, progress, bonus, name);
         let primary =
             column(definition, SlkId::UnitBalance, "Primary")?.ok_or("hero Primary is empty")?;
         let primary = text(primary, "Primary")?;
@@ -311,9 +313,11 @@ impl ObjectHost {
             return Ok(None);
         };
         let result = || {
+            // A unit being created holds no powerup strength and no held passive items.
             Self::derive_hero_combat(
                 d,
                 self.hero_initial_level().map(|level| (level, level)),
+                AttributeBonus::default(),
                 &input.rules,
             )?;
             read_combat(d)
@@ -340,8 +344,9 @@ impl ObjectHost {
                     .error("combat", Failure::UnitState("combat missing"))
             })?
             .rules;
-        Self::derive_hero_combat(&record.definition, progress, rules)
-            .map_err(|error| self.inner.error("combat", Failure::UnitActivity(error)))
+        let bonus = self.unit_hero_bonus(unit)?;
+        Self::derive_hero_combat(&record.definition, progress, bonus, rules)
+        .map_err(|error| self.inner.error("combat", Failure::UnitActivity(error)))
     }
 
     pub(super) fn combat_attack_order(&self, unit: HandleId) -> Option<i32> {
@@ -522,6 +527,9 @@ impl ObjectHost {
         }
         self.forget_hidden_unit_ranges(unit);
         self.forget_unit_activity(unit);
+        // Candidate explosion sequence: the source name is not verified (see unit_explosion_host).
+        let exploded = self.unit_exploded(unit) == Some(true);
+        let mut exploded_presented = false;
         if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
             let combat = record.combat.as_mut().expect("live combat");
             combat.dead = true;
@@ -532,10 +540,15 @@ impl ObjectHost {
                 vitals.life = 0.0;
             }
             if let Some(animation) = &mut record.animation {
+                exploded_presented = exploded && animation.has_sequence("death explode");
+                let sequence = if exploded_presented { "death explode" } else { "death" };
                 animation
-                    .select("death", now)
+                    .select(sequence, now)
                     .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
             }
+        }
+        if exploded && !exploded_presented {
+            self.note_unrendered_explosion(unit);
         }
         let rules = self.combat.as_ref().expect("combat");
         let (player_death, unit_death) = (rules.player_death, rules.unit_death);
@@ -593,7 +606,7 @@ impl ObjectHost {
         Ok(())
     }
 
-    fn roll_damage(
+    pub(crate) fn roll_damage(
         &mut self,
         source: HandleId,
         weapon: Weapon,
@@ -608,7 +621,10 @@ impl ObjectHost {
                 .ok_or_else(|| self.inner.error(name, Failure::UnitState("combat missing")))?;
             (combat.armor, combat.defense)
         };
-        let armor = armor + self.hero_combat_bonuses(target)?.armor;
+        // Hero armor derives from agility; held armor points are a separate item bonus.
+        let armor = armor
+            + self.hero_combat_bonuses(target)?.armor
+            + self.held_armor_bonus(target)? as f32;
         let primary_damage = self.hero_combat_bonuses(source)?.damage;
         let mut roll = weapon.base;
         for _ in 0..weapon.dice.max(0) {

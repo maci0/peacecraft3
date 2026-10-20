@@ -68,6 +68,13 @@ impl ObjectHost {
         Ok(())
     }
 
+    /// Life per strength point from the admitted hero bonuses; `None` when vitals are not admitted.
+    pub(super) fn life_per_strength(&self) -> Option<f32> {
+        self.unit_vitals
+            .as_ref()
+            .map(|rules| rules.bonuses.life_per_strength)
+    }
+
     pub(super) fn prepare_unit_vitals(
         &self,
         definition: &Definition,
@@ -117,10 +124,12 @@ impl ObjectHost {
             .map(|h| h.level);
         let old = self.hero_initial_level().zip(current);
         let new = self.hero_initial_level().map(|initial| (initial, next));
+        let bonus = self.unit_hero_bonus(unit)?;
+        let definition = &record.definition;
         let result = || -> Result<Vitals, String> {
             let delta = |name: &str, coefficient: f32| -> Result<f32, String> {
-                Ok((Self::derive_hero_attribute(&record.definition, new, name)?
-                    - Self::derive_hero_attribute(&record.definition, old, name)?)
+                Ok((Self::derive_hero_attribute(definition, new, bonus, name)?
+                    - Self::derive_hero_attribute(definition, old, bonus, name)?)
                     * coefficient)
             };
             let life = delta("STR", rules.bonuses.life_per_strength)?;

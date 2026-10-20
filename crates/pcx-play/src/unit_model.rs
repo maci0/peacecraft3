@@ -146,6 +146,10 @@ impl Animation {
             started: now,
         })
     }
+    /// Whether the model declares a sequence matching `name`. `select` ignores misses.
+    pub fn has_sequence(&self, name: &str) -> bool {
+        self.model.select(name).is_some()
+    }
     pub fn select(&mut self, name: &str, now: f64) -> Result<(), String> {
         if !now.is_finite() || now < self.started {
             return Err("invalid unit animation game time".into());

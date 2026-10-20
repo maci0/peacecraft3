@@ -47,6 +47,7 @@ fn fresh_roster_keeps_executed_controllers_and_only_occupies_selected_slots() {
         new_game: Some(NewGameInput {
             orders: None,
             activity: None,
+            group_orders: None,
             seed: 0,
             research: None,
             placement_rules: None,

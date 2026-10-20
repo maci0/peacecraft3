@@ -63,6 +63,7 @@ pub mod diff;
 pub mod file_sounds;
 pub mod game_cache;
 pub mod generator;
+pub mod group_order_rules;
 pub mod hero_skills;
 pub mod label_sounds;
 pub mod map_admission;
@@ -136,5 +137,8 @@ pub mod player_removal_rules;
 pub mod selection_circle;
 
 pub mod inventory_layout;
+pub mod inventory_powerup;
+pub mod inventory_powerup_host;
+pub mod item_class_table;
 pub mod script_localization;
 pub mod unit_guard_rules;

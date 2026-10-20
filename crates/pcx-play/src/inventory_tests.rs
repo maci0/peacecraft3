@@ -171,7 +171,7 @@ fn tables(slots: &str) -> Arc<DefaultTables> {
         .unwrap(),
     )
 }
-fn order_inputs() -> (
+pub(super) fn order_inputs() -> (
     Arc<crate::order_registry::Registry>,
     crate::unit_activity::Rules,
 ) {

@@ -27,6 +27,7 @@ pub struct ObjectHost {
     order_registry: Option<std::sync::Arc<crate::order_registry::Registry>>,
     inner: EnumHost,
     group_limit: Option<usize>,
+    group_orders: Option<crate::group_order_rules::Rules>,
     members: Vec<(HandleId, HandleId)>,
     config: Option<MapConfig>,
     players: Option<players::Players>,
@@ -65,9 +66,13 @@ pub struct ObjectHost {
     destructables: Option<destructables::Admission>,
     units: Option<unit_creation::Admission>,
     items: Option<item_creation::Admission>,
+    item_drops: Option<item_drop::ItemDrops>,
+    item_queries: Option<crate::item_class_table::ItemClassTable>,
+    unit_explosions: Option<unit_explosion::UnitExplosions>,
     player_removal: Option<player_removal::PlayerRemovalState>,
     localized_queries: Option<crate::script_localization::Bank>,
     game_pause: Option<Option<bool>>,
+    game_exit: Option<game_exit::GameExits>,
     guards: Option<unit_guards::GuardState>,
     triggers: Option<trigger_admission::Admission>,
     filters: Option<filters::Admission>,
@@ -107,6 +112,7 @@ impl ObjectHost {
             cheat_queries: None,
             inner,
             group_limit: None,
+            group_orders: None,
             members: Vec::new(),
             config: None,
             players: None,
@@ -161,9 +167,13 @@ impl ObjectHost {
             fog_modifiers: false,
             effects: false,
             items: None,
+            unit_explosions: None,
+            item_drops: None,
+            item_queries: None,
             player_removal: None,
             localized_queries: None,
             game_pause: None,
+            game_exit: None,
             guards: None,
             triggers: None,
             filters: None,
@@ -192,6 +202,7 @@ impl ObjectHost {
                 .condition_callback(id)
                 .map(|_| ())
                 .map_err(|e| fail(e.failure)),
+            Entry::DeadBoolExpr => Err(fail(Failure::Identity)),
             _ => Err(fail(Failure::WrongFamily)),
         }
     }
@@ -794,6 +805,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.game_pause_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.game_exit_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.player_removal_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -806,6 +820,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.activity_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.group_order_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.unit_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -813,6 +830,15 @@ impl Host for ObjectHost {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.unit_position_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.unit_explosion_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.item_drop_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.item_query_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.item_native(name, args) {
@@ -949,6 +975,17 @@ mod unit_positions;
 #[path = "item_host.rs"]
 mod item_creation;
 pub use item_creation::{ExecutedItem, ItemBudget};
+
+#[path = "unit_explosion_host.rs"]
+mod unit_explosion;
+
+#[path = "item_drop_host.rs"]
+mod item_drop;
+#[path = "boolexpr_destroy_host.rs"]
+mod boolexpr_destroy;
+
+#[path = "item_query_host.rs"]
+mod item_query;
 
 #[path = "trigger_host.rs"]
 mod trigger_admission;
@@ -1104,6 +1141,13 @@ pub use player_removal::{PlayerRemoval, PlayerRemovalBudget, PlayerRemovalState}
 mod game_pause;
 #[path = "localized_queries_host.rs"]
 mod localized_queries;
+
+#[path = "group_order_host.rs"]
+mod group_orders;
+
+#[path = "game_exit_host.rs"]
+mod game_exit;
+pub use game_exit::GameExitRequest;
 
 #[path = "unit_guard_host.rs"]
 mod unit_guards;

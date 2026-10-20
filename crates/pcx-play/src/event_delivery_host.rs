@@ -161,6 +161,8 @@ impl ObjectHost {
         if matches!(self.inner.entry(fired.trigger)?, Entry::DeadTrigger)
             || self.trigger_enabled(fired.trigger)? == Some(false)
         {
+            // No delivery means no finish call, so the powerup settles here.
+            self.settle_powerup_item(fired.subject.item);
             return Ok(None);
         }
         let delivery = self.trigger_delivery(fired.trigger, name)?;
@@ -180,8 +182,29 @@ impl ObjectHost {
             state.active = None;
             state.event_context = None;
         }
+        let item = self.events.subject.item;
         self.events.subject = EventSubject::default();
         self.events.active = false;
+        self.settle_powerup_item(item);
+    }
+
+    /// Consumes a claimed powerup once no pickup event for that item is still queued.
+    pub(crate) fn settle_powerup_item(&mut self, item: Option<HandleId>) {
+        let Some(item) = item else { return };
+        if self
+            .events
+            .queue
+            .iter()
+            .any(|e| e.subject.item == Some(item))
+        {
+            return;
+        }
+        // A claimed handle was validated as an item when its grant was staged.
+        if let Ok(Entry::Item { record }) = self.inner.entry_mut(item)
+            && record.claimed
+        {
+            record.consumed = true;
+        }
     }
 
     pub(super) fn event_response_native(

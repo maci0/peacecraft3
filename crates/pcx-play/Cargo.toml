@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 description = "Play-test harness: scenarios, deterministic runner, trace schema, trace diff"
 
+[features]
+# Synthetic layout fixtures for dependent crates' tests; not part of any shipped build.
+test-fixtures = []
+
 [dependencies]
 pcx-sim.workspace = true
 pcx-objects.workspace = true

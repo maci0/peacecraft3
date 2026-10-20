@@ -10,6 +10,7 @@ mod import_assets;
 
 mod button_actions;
 mod campaign_actors;
+mod campaign_score_view;
 mod campaign_diagnostics;
 mod campaign_hud;
 mod campaign_input;
@@ -18,7 +19,7 @@ mod campaign_messages;
 mod campaign_prepare;
 mod campaign_script_dialogs;
 mod campaign_selection;
-mod fdf;
+use peacecraft3::fdf;
 mod glue_menu;
 pub mod hud;
 pub mod hud_assets;

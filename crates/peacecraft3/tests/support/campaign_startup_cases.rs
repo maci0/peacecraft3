@@ -37,6 +37,7 @@ use std::sync::Arc;
 
 const COMMON: &str = "\
 type agent extends handle
+type itemtype extends handle
 type timer extends agent
 type group extends agent
 type widget extends agent
@@ -105,6 +106,10 @@ native GetPlayerName takes player p returns string
 native SetPlayerOnScoreScreen takes player p, boolean b returns nothing
 native SetPlayerAlliance takes player p, player other, alliancetype which, boolean value returns nothing
 constant native ConvertAllianceType takes integer i returns alliancetype
+constant native ConvertItemType takes integer i returns itemtype
+globals
+constant itemtype ITEM_TYPE_PERMANENT = ConvertItemType(0)
+endglobals
 native SetPlayerState takes player p, playerstate which, integer value returns nothing
 constant native ConvertPlayerState takes integer i returns playerstate
 constant native SetPlayerTechMaxAllowed takes player p, integer tech, integer maximum returns nothing
@@ -164,6 +169,7 @@ constant native ConvertCameraField takes integer i returns camerafield
 constant native ConvertUnitEvent takes integer i returns unitevent
 native CreateDestructable takes integer objectid, real x, real y, real face, real scale, integer variation returns destructable
 native CreateUnit takes player p, integer unitid, real x, real y, real face returns unit
+native SetUnitExploded takes unit whichUnit, boolean exploded returns nothing
 native SetUnitState takes unit which, unitstate state, real value returns nothing
 native IssueImmediateOrder takes unit which, string order returns boolean
 native CreateTrigger takes nothing returns trigger
@@ -310,6 +316,7 @@ fn budgets() -> MapStartupBudgets {
         quests: None,
         dialogs: None,
         items: None,
+        game_exit: 16,
     }
 }
 
@@ -608,6 +615,8 @@ fn rule_with_getter(kind: RuleKind, body: Vec<u8>) -> Arc<VerifiedNeutralRule> {
 fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) -> MapStartupInputs {
     MapStartupInputs {
         inventory: None,
+        inventory_powerup: None,
+        item_classes: None,
         localization: None,
         unit_guards: None,
         player_removal_rules: None,
@@ -627,6 +636,7 @@ fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) ->
                 "ConvertPlayerState",
                 "ConvertAllianceType",
                 "ConvertUnitEvent",
+                "ConvertItemType",
             ]
             .into_iter()
             .map(str::to_owned)

@@ -16,6 +16,7 @@ constant native GetUnitState takes unit u, unitstate s returns real
 native SetUnitState takes unit u, unitstate s, real v returns nothing
 native IssueTargetOrder takes unit u, string o, widget t returns boolean
 native KillUnit takes unit u returns nothing
+native SetUnitExploded takes unit whichUnit, boolean exploded returns nothing
 native SetUnitInvulnerable takes unit u, boolean flag returns nothing
 native GetRandomInt takes integer a, integer b returns integer
 native GetRandomReal takes real a, real b returns real
@@ -160,6 +161,8 @@ fn open_selected(
         .with_unit_states(crate::playercolor_host::UnitStateBudget { max_records: 8 })
         .unwrap()
         .with_player_alliances(crate::playercolor_host::PlayerAllianceBudget { max_records: 8 })
+        .unwrap()
+        .with_unit_explosions(8)
         .unwrap()
         .with_order_registry(registry)
         .unwrap()
@@ -925,7 +928,7 @@ fn missing_hero_state_or_attributes_and_invalid_derived_speed_refuse() {
     let mut invalid = combat;
     invalid.attack_speed_per_agility = -1.0;
     assert!(
-        ObjectHost::derive_hero_combat(&definition, Some((3, 3)), &invalid)
+        ObjectHost::derive_hero_combat(&definition, Some((3, 3)), Default::default(), &invalid)
             .unwrap_err()
             .contains("non-positive attack speed")
     );
@@ -940,18 +943,18 @@ fn missing_hero_state_or_attributes_and_invalid_derived_speed_refuse() {
         } else {
             bad.fields.remove(field);
         }
-        assert!(ObjectHost::derive_hero_combat(&bad, Some((3, 4)), &rules()).is_err());
+        assert!(ObjectHost::derive_hero_combat(&bad, Some((3, 4)), Default::default(), &rules()).is_err());
     }
-    assert!(ObjectHost::derive_hero_combat(&definition, Some((3, 2)), &rules()).is_err());
+    assert!(ObjectHost::derive_hero_combat(&definition, Some((3, 2)), Default::default(), &rules()).is_err());
     let ordinary = vm.host().inner.executed_unit(b).unwrap().definition.clone();
     assert_eq!(
-        ObjectHost::derive_hero_combat(&ordinary, None, &invalid)
+        ObjectHost::derive_hero_combat(&ordinary, None, Default::default(), &invalid)
             .unwrap()
             .speed,
         1.0
     );
     assert!(
-        ObjectHost::derive_hero_combat(&definition, None, &rules())
+        ObjectHost::derive_hero_combat(&definition, None, Default::default(), &rules())
             .unwrap_err()
             .contains("admitted initial and current levels")
     );
@@ -1249,3 +1252,27 @@ mod hero_vital_updates;
 
 #[path = "unit_guard_tests.rs"]
 mod guard_positions;
+
+#[cfg(test)]
+#[path = "inventory_powerup_host_tests.rs"]
+mod powerup_host;
+
+#[test]
+fn set_unit_exploded_then_kill_unit_retains_the_flag_through_the_death_path() {
+    // Melee: the missile path needs a positive missile speed, which this test does not model.
+    let (mut vm, a, _b) = open(&armed("100", "normal"));
+    let h = &mut vm.host().inner;
+    assert_eq!(h.unit_exploded(a), None);
+    h.native("SetUnitExploded", &[Value::Handle(a), Value::Bool(true)])
+        .unwrap();
+    assert_eq!(h.unit_exploded(a), Some(true));
+    h.native("KillUnit", &[Value::Handle(a)]).unwrap();
+    assert!(h.executed_unit(a).unwrap().combat.as_ref().unwrap().dead);
+    assert_eq!(h.unit_exploded(a), Some(true), "the flag outlives the death");
+    // The fixture unit has no model, so no explosion sequence exists: the death is recorded unrendered.
+    assert!(h.exploded_death_unrendered(a));
+    // Unverified policy: a dead unit is accepted. This pins the current host behavior.
+    h.native("SetUnitExploded", &[Value::Handle(a), Value::Bool(false)])
+        .unwrap();
+    assert_eq!(h.unit_exploded(a), Some(false));
+}

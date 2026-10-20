@@ -230,7 +230,7 @@ fn admission_checks_loaded_interface_and_ancestry_sources_without_copying_edges(
 }
 
 #[test]
-fn null_boolean_expression_cleanup_preserves_wrappers_and_requires_its_source_declaration() {
+fn null_destruction_is_a_no_op_and_destroying_a_wrapper_frees_it_and_requires_its_source_declaration() {
     let common = COMMON.replace(
         "native DestroyFilter",
         "native DestroyBoolExpr takes boolexpr b returns nothing\nnative DestroyFilter",
@@ -249,11 +249,13 @@ fn null_boolean_expression_cleanup_preserves_wrappers_and_requires_its_source_de
         );
     }
     assert_eq!(h.inner().handles(), before);
-    assert!(
+    // A live wrapper is freed by the declared native; later lookups refuse (boolexpr_destroy_tests).
+    assert_eq!(
         h.native("DestroyBoolExpr", std::slice::from_ref(&wrapper))
-            .is_err()
+            .unwrap(),
+        Value::Null
     );
-    assert_eq!(h.filter_callback(id(&wrapper)).unwrap().function, callback);
+    assert!(h.filter_callback(id(&wrapper)).is_err());
     assert!(
         host(8, 2)
             .native("DestroyBoolExpr", &[Value::Null])

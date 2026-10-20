@@ -33,6 +33,9 @@ pub struct Tooltip {
     pub edge_flags: u32,
     pub background_repeat: bool,
     pub edge_repeat: bool,
+    /// Descriptor index selected by the native tooltip checkbox read. Its name and
+    /// fallback come from `Defaults::discover` on the same image.
+    pub preference_index: u32,
     points: [(u32, u32); 2],
 }
 #[derive(Clone, Debug)]
@@ -252,6 +255,7 @@ impl Rules {
             edge_flags,
             background_repeat,
             edge_repeat,
+            preference_index: u32::from(operand(&mut read, 0x6491aa, &[0x6a], 1)?[0]),
         };
         if [
             tooltip.description_cap,
@@ -502,17 +506,19 @@ impl Rules {
     }
 }
 
-#[cfg(test)]
-mod tests {
+/// Synthetic layouts for unit and ECS tests in dependent crates. These values
+/// are not the supplied client's data.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod fixtures {
     use super::*;
-    fn origin() -> AssetIdentity {
+    pub fn origin() -> AssetIdentity {
         AssetIdentity {
             source: "synthetic inventory image".into(),
             edition: "fixture".into(),
             version: "fixture".into(),
         }
     }
-    fn fixture() -> Rules {
+    pub fn synthetic() -> Rules {
         Rules {
             origin: origin(),
             image_sha256: sha256(b"synthetic"),
@@ -576,13 +582,21 @@ mod tests {
                 edge_flags: 0xff,
                 background_repeat: true,
                 edge_repeat: true,
+                preference_index: 2,
                 points: [(6, 2), (2, 6)],
             },
         }
     }
+}
+#[cfg(test)]
+mod tests {
+    use super::{
+        fixtures::{origin, synthetic},
+        *,
+    };
     #[test]
     fn relative_inventory_and_tooltip_geometry_follow_the_supplied_operands() {
-        let mut rules = fixture();
+        let mut rules = synthetic();
         let first = rules.slot(0).unwrap();
         let second = rules.slot(1).unwrap();
         let third = rules.slot(2).unwrap();
@@ -635,6 +649,30 @@ mod tests {
                 .unwrap_err()
                 .contains("instruction")
         );
+    }
+    #[test]
+    fn cover_source_rectangle_is_admitted_only_as_ordered_unit_uv() {
+        let decode = |uv: [f32; 4]| {
+            // Stored order is the inverse of the `cover_uv` field order.
+            let stored = [uv[1], uv[0], uv[3], uv[2]];
+            let bytes = stored
+                .iter()
+                .flat_map(|f| f.to_le_bytes())
+                .collect::<Vec<_>>();
+            Rules::decode(origin(), sha256(b"fixture"), move |va, _, _| match va {
+                0x887ce5 => Ok(vec![0x83, 0xe0, 1]),
+                0x8750db | 0x875141 | 0x61e8bd => Ok(vec![0x6a, 0]),
+                0x61e8d6 => Ok(vec![0x0f, 0x28, 5, 0x00, 0x10, 0x00, 0x00]),
+                0x1000 => Ok(bytes.clone()),
+                _ => Err(format!("stopped at {va:#x}")),
+            })
+        };
+        let error = |uv| decode(uv).unwrap_err();
+        assert!(error([0.5, 0., 0.4, 1.]).contains("cover source UV"));
+        assert!(error([0., 0.5, 1., 0.4]).contains("cover source UV"));
+        assert!(error([0., 0., 1.5, 1.]).contains("cover source UV"));
+        assert!(error([0., f32::NAN, 1., 1.]).contains("cover source UV"));
+        assert!(error([0., 0.2, 1., 1.]).contains("stopped at 0x640ea8"));
     }
     #[test]
     #[ignore = "requires PCX_PLAYER_RESOURCE_IMAGE selecting the explicitly supplied reviewed client"]

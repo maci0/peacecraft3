@@ -114,6 +114,7 @@ impl ObjectHost {
             .map_err(|e| self.inner.error(NATIVE, e.failure))?
         {
             Entry::Condition { function } => *function,
+            Entry::DeadBoolExpr => return Err(self.inner.error(NATIVE, Failure::Identity)),
             _ => return Err(self.inner.error(NATIVE, Failure::WrongFamily)),
         };
         let declared = callback(&self.inner.program, function)

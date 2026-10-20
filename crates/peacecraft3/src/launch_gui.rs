@@ -416,6 +416,9 @@ pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
             4096,
         ),
     );
+    peacecraft3::campaign_score::install(&mut app);
+    peacecraft3::campaign_score_assets::install(&mut app);
+    crate::campaign_score_view::install(&mut app);
     crate::intro::install(&mut app);
     app.configure_sets(
         Update,

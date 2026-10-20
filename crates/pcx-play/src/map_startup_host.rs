@@ -93,6 +93,8 @@ pub struct MapStartupBudgets {
     pub dialogs: Option<DialogBudget>,
     /// None keeps `CreateItem` unsupported.
     pub items: Option<ItemBudget>,
+    /// Pending `EndGame` requests awaiting the campaign consumer.
+    pub game_exit: usize,
 }
 
 pub struct EnumContracts {
@@ -189,6 +191,8 @@ pub struct NewGameInput {
     pub seed: i32,
     pub orders: Option<Arc<crate::order_registry::Registry>>,
     pub activity: Option<crate::unit_activity::Rules>,
+    /// Selected client's group-order rules; absent leaves group orders unsupported.
+    pub group_orders: Option<crate::group_order_rules::Rules>,
     /// None leaves research queries unsupported rather than installing defaults.
     pub research: Option<crate::upgrade_research::Rules>,
     /// Source rules for a deferred placement cache, after stationary creations.
@@ -257,6 +261,10 @@ pub struct MapStartupInputs {
     pub sound_playback: Option<sound_playback::Rules>,
     pub resources: Option<crate::player_resources::Rules>,
     pub inventory: Option<crate::inventory::Rules>,
+    /// Requires vitals and inventory admission; absent leaves automatic powerups unsupported.
+    pub inventory_powerup: Option<crate::inventory_powerup::Rules>,
+    /// Required with item budgets: class ordinals derived from the selected executable.
+    pub item_classes: Option<crate::item_class_table::ItemClassTable>,
     pub localization: Option<crate::script_localization::Bank>,
     pub unit_guards: Option<UnitGuardsInput>,
     pub player_removal_rules: Option<crate::player_removal_rules::Rules>,
@@ -500,6 +508,8 @@ pub fn assemble(
         sound_playback,
         resources,
         inventory,
+        inventory_powerup,
+        item_classes,
         localization,
         unit_guards,
         player_removal_rules,
@@ -575,6 +585,8 @@ pub fn assemble(
         )?
         .with_unit_states(budgets.unit_states)?
         .with_defend_ability(&defend.tables, &defend.alias)?;
+    // Retained SetUnitExploded flags only; explosion presentation is not implemented.
+    object = object.with_unit_explosions(budgets.units.max_records)?;
     if let Some(rules) = resources {
         object = object.with_player_resources(rules)?;
     }
@@ -661,6 +673,7 @@ pub fn assemble(
     if let Some(budget) = budgets.regions {
         object = object.with_regions(budget)?;
     }
+    object = object.with_game_exit(budgets.game_exit)?;
     if let Some(now) = timer_time {
         object = object.with_timer_runtime(now)?;
     }
@@ -699,6 +712,9 @@ pub fn assemble(
         }
         if let Some(activity) = input.activity {
             object.admit_unit_activity(activity, 65536)?;
+        }
+        if let Some(rules) = input.group_orders {
+            object = object.with_group_orders(rules)?;
         }
         placement_rules = input.placement_rules;
         if let Some(event) = input.unit_range_event {
@@ -743,6 +759,11 @@ pub fn assemble(
     }
     if let Some(items) = budgets.items {
         object = object.with_item_catalog(catalog, context.world.source.clone(), items)?;
+        object = object.with_item_drops(items.max_records)?;
+        let classes = item_classes.ok_or_else(|| {
+            MapStartupError::Observation("item queries require derived item classes".into())
+        })?;
+        object = object.with_item_queries(classes)?;
     }
     match (inventory, budgets.inventory) {
         (Some(rules), Some(budget)) => object = object.with_inventory(rules, budget)?,
@@ -752,6 +773,9 @@ pub fn assemble(
                 "inventory rules and budget must be supplied together".into(),
             ));
         }
+    }
+    if let Some(rules) = inventory_powerup {
+        object = object.with_inventory_powerup(rules)?;
     }
     let slots = SelectedMapNeutralHost::try_new(Arc::clone(&context), rules.slots, object)?;
     let extra = SelectedMapNeutralHost::try_new(Arc::clone(&context), rules.extra, slots)?;

@@ -12,6 +12,7 @@ type triggercondition extends agent
 native Condition takes code f returns conditionfunc
 native Filter takes code f returns filterfunc
 native TriggerAddCondition takes trigger t, boolexpr c returns triggercondition
+native DestroyBoolExpr takes boolexpr e returns nothing
 ";
 const MAP: &str = "\
 globals
@@ -34,6 +35,9 @@ set C = Condition(function predicate)
 set A = TriggerAddCondition(T,C)
 set B = TriggerAddCondition(T,F)
 set D = TriggerAddCondition(T,C)
+endfunction
+function kill takes nothing returns nothing
+call DestroyBoolExpr(C)
 endfunction
 ";
 fn common() -> String {
@@ -212,4 +216,15 @@ fn admission_is_explicit_source_bound_and_nonrepeatable() {
     assert!(
         matches!(h.with_trigger_admission(trigger_limits(4,0)).unwrap().with_trigger_conditions(usize::MAX),Err(e) if e.failure==Failure::Capacity)
     );
+}
+
+#[test]
+fn a_wrapper_retained_by_a_trigger_condition_refuses_destruction_and_stays_live() {
+    let (ctx, h) = host(3);
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(h);
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    let c = id(&vm.global("C"));
+    assert!(vm.call("kill", &[]).is_err(), "a retained wrapper refuses destruction");
+    assert!(vm.host().inner.condition_callback(c).is_ok(), "the wrapper stays live");
 }

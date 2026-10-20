@@ -39,6 +39,7 @@ pub fn prepare_new_game(
         client.clone(),
     )?);
     let activity = pcx_play::campaign_client::unit_activity(image, client.clone(), &orders)?;
+    let group_orders = pcx_play::group_order_rules::Rules::reviewed_legacy(image, client.clone())?;
     inputs.budgets.unit_in_range = Some(65536);
     inputs.trigger_runtime = Some(pcx_play::playercolor_host::TriggerRuntimeInput {
         initial_enabled: triggers.initial_enabled,
@@ -104,17 +105,24 @@ pub fn prepare_new_game(
     if let Some(bytes) = &map_misc {
         game_profiles.push((bindings.map_label.as_str(), bytes.as_slice()));
     }
+    let abilities = inputs
+        .hero_skills
+        .as_ref()
+        .ok_or("inventory requires selected ability overlays")?
+        .abilities
+        .clone();
     inputs.inventory = Some(pcx_play::inventory::Rules::read(
         Arc::clone(&inputs.defend.tables),
-        inputs
-            .hero_skills
-            .as_ref()
-            .ok_or("inventory requires selected ability overlays")?
-            .abilities
-            .clone(),
+        abilities.clone(),
         Arc::clone(&orders),
         &game_profiles,
         8 << 20,
+    )?);
+    inputs.inventory_powerup = Some(pcx_play::inventory_powerup::Rules::read(
+        Arc::clone(&inputs.defend.tables),
+        abilities,
+        image,
+        client.clone(),
     )?);
     inputs.budgets.inventory = Some(pcx_play::inventory::InventoryBudget {
         max_slots_per_unit: 4096,
@@ -176,6 +184,7 @@ pub fn prepare_new_game(
             seed,
             orders: Some(orders),
             activity: Some(activity),
+            group_orders: Some(group_orders),
             research: Some(research),
             placement_rules: Some(placement_rules),
             unit_range_event: Some("EVENT_UNIT_TARGET_IN_RANGE".into()),
@@ -326,8 +335,12 @@ pub fn prepare(
     };
     let labels = sound_sources.empty_label_bank(label_budget)?;
     let constructors = vec![sound_sources.empty_label_bank(label_budget)?];
+    let item_classes =
+        pcx_play::item_class_table::derive(image, client.clone()).map_err(|e| e.to_string())?;
     Ok(MapStartupInputs {
+        item_classes: Some(item_classes),
         inventory: None,
+        inventory_powerup: None,
         unit_guards: None,
         localization: Some(localization(reader, image, &client)?),
         player_removal_rules: Some(pcx_play::player_removal_rules::Rules::reviewed_legacy(
@@ -659,6 +672,7 @@ fn budgets() -> MapStartupBudgets {
             max_retained_fields: 4096,
             max_modifications: 4096,
         }),
+        game_exit: 65536,
     }
 }
 

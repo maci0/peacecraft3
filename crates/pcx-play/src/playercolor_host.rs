@@ -278,6 +278,7 @@ enum Entry {
         enabled: Option<bool>,
     },
     DeadTrigger,
+    DeadBoolExpr,
     RegisteredTimedEvent {
         trigger: HandleId,
         run: objects::timers::Run,
@@ -648,6 +649,7 @@ impl EnumHost {
             Entry::FogModifier(Some(_)) => "fogmodifier",
             Entry::FogModifier(None) => return Err(self.error("arena", Failure::Identity)),
             Entry::Trigger { .. } | Entry::DeadTrigger => "trigger",
+            Entry::DeadBoolExpr => return Err(self.error("arena", Failure::Identity)),
             Entry::RegisteredDialogEvent { .. }
             | Entry::RegisteredUnitEvent { .. }
             | Entry::RegisteredPlayerUnitEvent(_)
@@ -780,6 +782,6 @@ pub use objects::{
 };
 pub use objects::{
     CinematicScene, Combat, DestructableState, DialogBudget, DialogButton, DialogQuitRequest,
-    DialogState, EventSubject, FiredEvent, FogModifier, Indicator, MinimapPing, Relation,
-    ScriptDialog, Vitals, Weapon,
+    DialogState, EventSubject, FiredEvent, FogModifier, GameExitRequest, Indicator, MinimapPing,
+    Relation, ScriptDialog, Vitals, Weapon,
 };

@@ -1145,6 +1145,7 @@ mod tests {
             shown: true,
             vitals: None,
             combat: None,
+            permanent_strength: 0,
         }
     }
     fn terrain() -> pcx_map::Terrain {

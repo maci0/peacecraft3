@@ -56,6 +56,26 @@ impl CampaignCamera {
     pub fn active(&self) -> bool {
         self.ready && self.visible && self.entity.is_some()
     }
+
+    /// Admitted, visible projection for the inventory ECS tests, which cannot reach the
+    /// private camera state. Built only with the `test-fixtures` feature.
+    #[cfg(feature = "test-fixtures")]
+    pub fn active_for_test(entity: Entity) -> Self {
+        Self {
+            zoom: 0,
+            read_limit: 0,
+            session: None,
+            attempted: None,
+            near: None,
+            menu_key: None,
+            menu_key_receipt: None,
+            visible: true,
+            ready: true,
+            entity: Some(entity),
+            clip_receipt: None,
+            last_error: None,
+        }
+    }
 }
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]

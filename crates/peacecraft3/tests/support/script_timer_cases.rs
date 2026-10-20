@@ -1,6 +1,7 @@
 //! Timer delivery through the production factory and its one published VM.
 use super::*;
 use peacecraft3::map_script_session::TimerSessionError;
+use std::collections::BTreeMap;
 
 pub(super) const TIMER_COMMON: &str = "\
 native PauseGame takes boolean paused returns nothing
@@ -232,12 +233,29 @@ fn deliver_timer_with(
     common: &str,
     configure: impl FnOnce(&mut MapStartupInputs),
 ) {
+    deliver_timer_with_assets(app, script, revision, common, BTreeMap::new(), configure);
+}
+
+/// `assets` are extra selected-source files; the bindings retain the resolver that reads them.
+fn deliver_timer_with_assets(
+    app: &mut App,
+    script: &str,
+    revision: u64,
+    common: &str,
+    assets: BTreeMap<String, crate::binding::Reply>,
+    configure: impl FnOnce(&mut MapStartupInputs),
+) {
     let mut map = fixture(script);
     map.common.extend_from_slice(TIMER_COMMON.as_bytes());
     map.common.extend_from_slice(common.as_bytes());
     map.rebuild();
-    let resolver = map.resolver();
-    let bound = bind_map(&resolver, map.input(revision), map.limits()).unwrap();
+    let asset_count = assets.len();
+    let resolver = Arc::new(map.resolver_with_assets(assets));
+    // The selected-source extras are listed by the same resolver, so the listing bound grows.
+    let mut limits = map.limits();
+    limits.reader.max_listed_paths += asset_count;
+    let mut bound = bind_map(&resolver, map.input(revision), limits).unwrap();
+    bound.resolver = Some(Arc::clone(&resolver));
     let mut inputs = host_inputs(Arc::clone(&bound.catalog.0));
     inputs.timer_time = Some(10.0);
     configure(&mut inputs);
@@ -524,8 +542,16 @@ pub fn browser_campaign_runtime_gate() -> u32 {
     game_pause::runtime_rebases_a_mid_tick_pause_and_discards_paused_wall_time();
     game_pause::queued_dialog_resume_runs_while_the_simulation_clock_is_paused();
     game_pause::paused_session_preserves_parked_threads_until_game_time_resumes();
-    7
+    game_exit::normal_quit_button_in_paused_state_ends_the_session_in_the_delivering_update();
+    game_exit::second_end_game_past_the_queue_bound_fails_the_callback_and_keeps_the_first_request(
+    );
+    game_exit::ended_session_stays_ended_without_runtime_errors_across_later_updates();
+    game_exit::replacement_session_starts_without_inherited_exit_and_keeps_running();
+    11
 }
 
 #[path = "script_game_pause_cases.rs"]
 mod game_pause;
+
+#[path = "script_game_exit_cases.rs"]
+mod game_exit;

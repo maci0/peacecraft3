@@ -1,11 +1,16 @@
 //! Application pacing for the published campaign VM. Simulation time is tick based.
 use crate::{
+    campaign_camera::CampaignCamera,
     campaign_startup::CampaignStartupSet,
     map_script_session::{MapScriptSession, TimerSessionError},
 };
 use bevy::prelude::*;
-use pcx_play::map_startup_host::MapStartupHost;
-use std::{sync::Weak, time::Duration};
+use pcx_play::{map_admission::ParsedMapContext, map_startup_host::MapStartupHost};
+use pcx_script::Value;
+use std::{
+    sync::{Arc, Weak},
+    time::Duration,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CampaignRuntimeError {
@@ -165,8 +170,22 @@ impl CampaignRuntime {
 pub fn install(app: &mut App, runtime: CampaignRuntime) {
     // Time<Real> is sampled before startup. Bind on the following frame so loading is excluded.
     app.insert_resource(runtime)
-        .add_systems(Update, advance_campaign.before(CampaignStartupSet));
+        .init_resource::<CampaignExitResult>()
+        .add_systems(
+            Update,
+            (
+                advance_campaign.before(CampaignStartupSet),
+                take_game_exit
+                    .in_set(CampaignExitSet)
+                    .after(advance_campaign),
+            ),
+        );
 }
+
+/// Ends the session for executed exits. Systems ordered `.after(CampaignExitSet)`
+/// observe the session's `CampaignExitResult` snapshot in the same update.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CampaignExitSet;
 
 fn advance_campaign(
     time: Res<Time<Real>>,
@@ -175,4 +194,87 @@ fn advance_campaign(
 ) {
     // Real time only paces ticks. Time<Virtual>'s frame clamp would discard load debt.
     runtime.advance(&mut session, time.delta());
+}
+
+/// Local player's game result, from the `PLAYER_GAME_RESULT_*` globals the script loaded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LocalGameResult {
+    Victory,
+    Defeat,
+    Tie,
+    Neutral,
+}
+
+const GAME_RESULT_GLOBALS: [(LocalGameResult, &str); 4] = [
+    (LocalGameResult::Victory, "PLAYER_GAME_RESULT_VICTORY"),
+    (LocalGameResult::Defeat, "PLAYER_GAME_RESULT_DEFEAT"),
+    (LocalGameResult::Tie, "PLAYER_GAME_RESULT_TIE"),
+    (LocalGameResult::Neutral, "PLAYER_GAME_RESULT_NEUTRAL"),
+];
+
+/// State of one campaign exit, captured before its VM is dropped.
+pub struct CampaignExitSnapshot {
+    /// Any executed `EndGame(true)` in the exit. Choosing any-true over other
+    /// combinations is host policy; the native's multi-call behavior is not verified.
+    pub score_screen: bool,
+    /// Simulation clock; `None` when the timer is not admitted.
+    pub game_time: Option<f64>,
+    /// `None` when the local player has no admitted removal record.
+    pub local_result: Option<LocalGameResult>,
+    /// Map context of the exiting session, for resolving its assets.
+    pub context: Arc<ParsedMapContext>,
+}
+
+/// Single-slot handoff for the score presentation. A later exit replaces an
+/// unconsumed snapshot.
+#[derive(Resource, Default)]
+pub struct CampaignExitResult(Option<CampaignExitSnapshot>);
+
+impl CampaignExitResult {
+    pub fn take(&mut self) -> Option<CampaignExitSnapshot> {
+        self.0.take()
+    }
+}
+
+/// Ends the campaign session for executed `EndGame` requests. Ordered after
+/// `advance_campaign`, the only place queued callbacks are delivered, so a request
+/// recorded by a delivered callback is taken in the same frame. Requests come from
+/// the active host only, so a cleared or replaced session cannot deliver them.
+fn take_game_exit(
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+    mut exit: ResMut<CampaignExitResult>,
+    view: Option<ResMut<CampaignCamera>>,
+) {
+    let Some(context) = session.context().cloned() else {
+        return;
+    };
+    let globals = GAME_RESULT_GLOBALS.map(|(result, name)| (result, session.global(name)));
+    let Some(host) = session.host() else {
+        return;
+    };
+    let requests = host.objects_mut().take_game_exit_requests();
+    if requests.is_empty() {
+        return;
+    }
+    let objects = host.objects();
+    let local_result = objects
+        .local_player_number()
+        .and_then(|number| objects.player_identity(number))
+        .and_then(|player| objects.player_removal_state()?.get(player))
+        .and_then(|record| {
+            globals.iter().find_map(|(result, value)| {
+                matches!(value, Some(Value::Handle(id)) if *id == record.game_result)
+                    .then_some(*result)
+            })
+        });
+    exit.0 = Some(CampaignExitSnapshot {
+        score_screen: requests.iter().any(|request| request.score_screen),
+        game_time: objects.timer_game_time(),
+        local_result,
+        context,
+    });
+    session.clear();
+    if let Some(mut view) = view {
+        view.suspend();
+    }
 }
