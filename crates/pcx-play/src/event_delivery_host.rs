@@ -18,6 +18,15 @@ pub struct EventSubject {
     pub dialog: Option<HandleId>,
     pub button: Option<HandleId>,
     pub player: Option<HandleId>,
+    /// Shop sale in progress: the seller and the sold item, set only by a queued sale.
+    pub sale: Option<SaleContext>,
+}
+
+/// One completed sale, delivered to its sell-event triggers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SaleContext {
+    pub shop: HandleId,
+    pub item: HandleId,
 }
 
 #[derive(Debug)]
@@ -39,8 +48,10 @@ pub(super) struct Delivery {
     region_known: BTreeSet<HandleId>,
 }
 
-const RESPONSES: [&str; 11] = [
+const RESPONSES: [&str; 13] = [
     "GetTriggerUnit",
+    "GetSellingUnit",
+    "GetSoldItem",
     "GetManipulatedItem",
     "GetManipulatingUnit",
     "GetEnteringUnit",
@@ -232,6 +243,8 @@ impl ObjectHost {
         let value = match name {
             "GetKillingUnit" | "GetAttacker" => subject.source,
             "GetManipulatedItem" => subject.item,
+            "GetSellingUnit" => subject.sale.map(|sale| sale.shop),
+            "GetSoldItem" => subject.sale.map(|sale| sale.item),
             "GetManipulatingUnit" => subject.unit,
             "GetClickedDialog" => subject.dialog,
             "GetClickedButton" => subject.button,

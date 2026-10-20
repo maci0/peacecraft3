@@ -506,3 +506,42 @@ impl ObjectHost {
 #[cfg(test)]
 #[path = "stock_host_cells_tests.rs"]
 mod cell_tests;
+
+const SELL: &str = "purchase";
+
+impl ObjectHost {
+    /// Loaded `currentStock` for one item in one shop. `None` when the item has no cell.
+    pub(crate) fn stock_count(&self, shop: HandleId, item: i32) -> Result<Option<i32>, Error> {
+        self.admitted_stock(ADD_ITEM)?;
+        self.stock_unit(&Value::Handle(shop), SELL)?;
+        let state = self.admitted_stock(ADD_ITEM)?;
+        Ok(state.shop_index(shop).and_then(|at| {
+            state.shops[at]
+                .cells
+                .iter()
+                .find(|c| c.item == Some(item))
+                .and_then(|c| c.stock)
+                .map(|(current, _)| current)
+        }))
+    }
+
+    /// Lowers the loaded `currentStock` of one item by one sale. The caller has checked it is
+    /// positive. A cell at zero stays until the script removes it.
+    pub(crate) fn take_one_stock(&mut self, shop: HandleId, item: i32) -> Result<(), Error> {
+        let inner = &self.inner;
+        let missing = || inner.error(SELL, Failure::StockState("no loaded stock to sell"));
+        let state = self.stock.as_mut().ok_or_else(missing)?;
+        let cell = state
+            .shop_index(shop)
+            .and_then(|at| {
+                state.shops[at]
+                    .cells
+                    .iter_mut()
+                    .find(|c| c.item == Some(item))
+            })
+            .and_then(|c| c.stock.as_mut())
+            .ok_or_else(missing)?;
+        cell.0 = cell.0.checked_sub(1).ok_or_else(missing)?;
+        Ok(())
+    }
+}
