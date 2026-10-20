@@ -6,7 +6,7 @@ const { chromium } = await import(pathToFileURL(process.argv[2]).href);
 const base = process.argv[3] ?? 'http://127.0.0.1:8931';
 const socketUrl = process.argv[4] ?? 'ws://127.0.0.1:8932';
 // The expected identity comes from an independent counterpart run, never from the host under test:
-// `session_server --print-identity`. The page refuses to show state or send without it.
+// `session_server identity`. The page refuses to show state or send without it.
 const identity = process.env.PCX_SESSION_IDENTITY ?? (() => { throw new Error('set PCX_SESSION_IDENTITY to the counterpart identity'); })();
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] });
 try {

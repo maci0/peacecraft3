@@ -7,10 +7,10 @@ WebRTC P2P is not the first transport: it still needs an application signaling c
 ## Run locally
 
 ```sh
-cargo run --locked -p pcx-net --features session-server --example session_server
+cargo run --locked -p pcx-net --features session-server --bin session_server
 python3 -m http.server 8931 --bind 127.0.0.1 --directory web
 # The identity a page must expect, from an independent process (same source, same seed):
-PCX_SESSION_IDENTITY=$(cargo run -q --locked -p pcx-net --features session-server --example session_server -- --print-identity | awk '{print $3}')
+PCX_SESSION_IDENTITY=$(cargo run -q --locked -p pcx-net --features session-server --bin session_server -- identity | awk '{print $3}')
 ```
 
 The host defaults to `ws://127.0.0.1:8932`. In a browser page served from the second command:

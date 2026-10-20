@@ -1,7 +1,7 @@
 // Identity gate for the browser session client, run against a session_server it did not configure.
 // Pass an installed playwright-core module as argv[2]. The static server and session host from the
 // browser session check must already be running. PCX_SESSION_IDENTITY is the counterpart identity,
-// from `session_server --print-identity`, never from the host under test.
+// from `session_server identity`, never from the host under test.
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 

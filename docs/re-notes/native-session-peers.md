@@ -27,7 +27,7 @@ own inputs and compares it with the greeting before play:
 
 The expected value must come from an independent counterpart, not from the host
 under test. For the harness world, that counterpart is
-`session_server --print-identity`.
+`session_server identity`.
 
 ## Scheduling and latency
 
@@ -58,7 +58,7 @@ It is not a game value.
 ## Map refusal
 
 `pcx_net::map_session::assess(map_bytes, label)` lists what keeps a map from
-being playable. `session_server --map FILE` prints those reasons to stderr and
+being playable. `session_server check-map --map FILE` prints those reasons to stderr and
 exits 3, without listening. The reasons are:
 
 - `random-selection`: random placements. The unit is chosen at creation from
@@ -119,10 +119,18 @@ slot, so it is not verified here.
 - Playable maps (see the production startup above).
 - Owner-to-player mapping and random-placement decoding.
 - The original's unit speed and collision. Harness movement is not game movement.
-- CLI conformance with clispec v0.3 is not claimed. The spec needs a `schema` command,
-  a declared top-level `clispec` version, a JSON format flag, declared exit codes and
-  outcomes, and an error envelope on stderr. `--print-identity` is one plain-text data line
-  on stdout, and diagnostics go to stderr. Adopting the spec is a separate decision.
+- CLI surface, per `AGENTS.md` (The CLI Spec v0.3 candidate, pinned at
+  `tools/original-game-reference/schema/clispec-v0.3.json`, hash in its `CHECKSUMS.txt`):
+  `session_server` is a binary (`src/bin/session_server.rs`). It has the commands
+  `schema`, `identity`, `check-map` and `serve`, and a global `--format json|text`
+  (default text, declared in `output`). Errors are `usage` (2), `runtime_failed` (1)
+  and `unsupported_map` (3). In JSON mode each error is one envelope line on stderr.
+  Legacy `--print-identity` and `--map FILE` remain aliases. `serve` keeps its text
+  listening line on stdout.
+  Checked: `tests/cli_process.rs` (12 pass, 1 gated real-map test) and
+  `tools/session-server/test_schema.py` (3 pass, `schema` validated with jsonschema
+  against the pinned bytes). Full CLI Spec conformance is not claimed. The spec's
+  conformance tooling has not been run.
 - Game input, lobby, combat, economy, and the original Battle.net and W3GS paths.
 
 ## Extraction for the production adapter (branch-local)
