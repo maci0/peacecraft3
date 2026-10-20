@@ -174,3 +174,44 @@ Status: the channel is a generic registry key shared by the trigger and handle
 layer. Which record receives the expiry value at `+0x10`, and the frame mapping
 from that value to alpha, are not yet established. This page makes no alpha curve
 claim from the timer alone.
+
+## Registrar containment and mode (shared with all native workers)
+
+Image as above. Spans come from the padding and `E8`/`E9` scans in the local
+scratch tools. No Ghidra run is recorded here.
+
+- Primary registrar `A`: entry `0x49B3C0`, end `0x4A19E1`, 1275 calls to
+  `0x8CCC80`. It contains the primary `ShowInterface` group at `0x49F827`
+  (handler `0x4ABF40`). Callers (`E8`/`E9`): `0x42EE7C` in the function at
+  `0x42ECC0`, which references `SystemSurvey.exe`, `UI\FrameDef\FrameDef.toc` and
+  `UI\war3skins.txt` (startup UI); `0x476AC6` in the function at `0x4767D0`, with
+  no strings; and `0x47918E` in the function at `0x4790D0`, which references
+  `war3map` (map load).
+- Stub registrar `B`: entry `0xCB66A0`, end `0xCBD6C2`, 1399 calls to `0x8CCC80`.
+  It begins with a one-time guard (`cmp [0x11B9C00],0`) and contains the stub
+  `ShowInterface` group at `0xCBAB0F` (handler `0xCBDA30`, `xor eax,eax; ret`).
+  Its only direct caller is `0xCBD781` in the function at `0xCBD760`. That
+  function references `common.j`, `blizzard.j`, `common.ai` and the diagnostic
+  `bad 'extra' enum`, so it is the script set-up path. Nothing in the image calls
+  `0xCBD760` directly or stores its address, so its own caller is indirect.
+- Registry: `0x45DF90(5)` reads the registry for kind `5` from
+  `TlsGetValue([0x113B518])`, via the wrapper at `0x7C2FC0`. So the registry is
+  per-thread. The TLS wrapper `0x7C2FF0` (`TlsSetValue`) is called from
+  `0x45DFDD`, `0x45DFFC` (the TLS initialization in `0x45DFD0`) and `0xCBDD2B`,
+  `0xCBE407` (the script context teardown). Both registrars therefore write the
+  registry of whichever thread and context is current at the call.
+
+Consequence: the "last registration wins" overwrite (`0x8C8F30` shared tail) is
+only a conflict when `A` and `B` run on the same thread registry. That is not
+established. If they do not share a registry, the primary handler belongs to the
+map or game VM and the stub belongs to the script set-up VM.
+
+Open questions for the next native slot:
+1. Whether `B`'s caller `0xCBD760` runs on the same thread as the map VM, and
+   which indirect call reaches it.
+2. Whether `A`'s callers `0x42ECC0` and `0x4790D0` run in a thread context that
+   `0xCBD760` reuses.
+
+Runtime observation, not claimed here: a captured hide/show of the interface in
+a real map run would show the primary handler's side effects. Compile-time
+checks alone would not reach `0x4ABF40`.
