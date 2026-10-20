@@ -2,9 +2,9 @@ use super::*;
 use crate::camera_margins::SourceWindow;
 use crate::inventory::{InventoryBudget, Rules};
 use crate::neutral_player::sha256;
+use crate::playercolor_host::{UseCheck, UseCommit, UseGrant};
 use pcx_objects::editor::Overlay;
 use pcx_script::HandleId;
-use crate::playercolor_host::{UseCheck, UseCommit, UseGrant};
 
 const CALLS: &str = r#"
 type item extends widget
@@ -51,7 +51,9 @@ fn tables(slots: &str) -> Arc<DefaultTables> {
             "Cool1",
         ],
         &[
-            &["L000", "Xinv", "1", "0", "0", slots, "0", "1", "1", "1", "0"],
+            &[
+                "L000", "Xinv", "1", "0", "0", slots, "0", "1", "1", "1", "0",
+            ],
             &["AIh1", "AIhe", "1", "0", "0", "0", "0", "0", "0", "0", "20"],
         ],
     );
@@ -242,7 +244,11 @@ impl ObjectCatalog for Items {
         ];
         let mut rows = base.to_vec();
         if rawcode == *b"W001" {
-            rows.extend([(*b"iuse", "uses", "-"), (*b"iper", "perishable", "0"), (*b"iicd", "ignoreCD", "0")]);
+            rows.extend([
+                (*b"iuse", "uses", "-"),
+                (*b"iper", "perishable", "0"),
+                (*b"iicd", "ignoreCD", "0"),
+            ]);
         }
         if rawcode == *b"P001" {
             rows.extend([
@@ -255,19 +261,19 @@ impl ObjectCatalog for Items {
             ]);
         }
         let fields = rows
-        .into_iter()
-        .map(|(id, column, value)| {
-            let mut field = geometry_field(Ok(FieldValue::Cell(value.into())));
-            let m = field.metadata.as_mut().unwrap();
-            m.fourcc = id;
-            m.kind = FieldKind::Bool;
-            m.source = FieldSource::Column {
-                slk: SlkId::ItemData,
-                column: column.into(),
-            };
-            (id, field)
-        })
-        .collect();
+            .into_iter()
+            .map(|(id, column, value)| {
+                let mut field = geometry_field(Ok(FieldValue::Cell(value.into())));
+                let m = field.metadata.as_mut().unwrap();
+                m.fourcc = id;
+                m.kind = FieldKind::Bool;
+                m.source = FieldSource::Column {
+                    slk: SlkId::ItemData,
+                    column: column.into(),
+                };
+                (id, field)
+            })
+            .collect();
         Ok(definition(
             rawcode,
             pcx_objects::fourcc_text(rawcode),
@@ -680,7 +686,10 @@ fn inventory_death_and_drop_flags_and_ordinary_unit_lifecycle_remain_distinct() 
 /// Inventory host with the game clock and item use admitted. Potions are `P001` rows.
 fn open_with_item_use() -> ObjectHost {
     open()
-        .with_item_use(crate::item_use_rules::Rules::new(tables("2"), Overlay::default()), 8)
+        .with_item_use(
+            crate::item_use_rules::Rules::new(tables("2"), Overlay::default()),
+            8,
+        )
         .unwrap()
 }
 
@@ -699,7 +708,8 @@ fn potion(h: &mut ObjectHost) -> HandleId {
 
 fn give(h: &mut ObjectHost, unit: HandleId, item: HandleId) {
     assert_eq!(
-        h.native("UnitAddItem", &[Value::Handle(unit), Value::Handle(item)]).unwrap(),
+        h.native("UnitAddItem", &[Value::Handle(unit), Value::Handle(item)])
+            .unwrap(),
         Value::Bool(true)
     );
 }
@@ -731,9 +741,18 @@ fn use_path_checks_the_holder_then_commits_one_charge_and_the_group_cooldown() {
     let g = grant(h.check_item_use(a, p));
     assert_eq!((g.unit(), g.item(), g.time()), (a, p, 0.0));
     let commit = h.commit_item_use(g).unwrap();
-    assert_eq!(commit, UseCommit { charges: Some(1), remove: false });
+    assert_eq!(
+        commit,
+        UseCommit {
+            charges: Some(1),
+            remove: false
+        }
+    );
     assert_eq!(charges_of(&mut h, p), Value::Int(1));
-    assert_eq!(h.check_item_use(a, p).unwrap(), UseCheck::OnCooldown { remaining: 20.0 });
+    assert_eq!(
+        h.check_item_use(a, p).unwrap(),
+        UseCheck::OnCooldown { remaining: 20.0 }
+    );
 }
 
 #[test]
@@ -751,11 +770,16 @@ fn a_transfer_between_check_and_commit_makes_the_grant_stale_without_writes() {
     let mut h = open_with_item_use();
     let (a, b, p) = holder_setup(&mut h);
     let g = grant(h.check_item_use(a, p));
-    h.native("UnitRemoveItem", &[Value::Handle(a), Value::Handle(p)]).unwrap();
+    h.native("UnitRemoveItem", &[Value::Handle(a), Value::Handle(p)])
+        .unwrap();
     give(&mut h, b, p);
     assert!(h.commit_item_use(g).is_err());
     assert_eq!(charges_of(&mut h, p), Value::Int(2));
-    assert!(h.check_item_use(b, p).map(|c| matches!(c, UseCheck::Ready(_))).unwrap());
+    assert!(
+        h.check_item_use(b, p)
+            .map(|c| matches!(c, UseCheck::Ready(_)))
+            .unwrap()
+    );
 }
 
 #[test]
@@ -763,7 +787,8 @@ fn a_drop_between_check_and_commit_makes_the_grant_stale() {
     let mut h = open_with_item_use();
     let (a, _, p) = holder_setup(&mut h);
     let g = grant(h.check_item_use(a, p));
-    h.native("UnitRemoveItem", &[Value::Handle(a), Value::Handle(p)]).unwrap();
+    h.native("UnitRemoveItem", &[Value::Handle(a), Value::Handle(p)])
+        .unwrap();
     assert!(h.commit_item_use(g).is_err());
     assert_eq!(charges_of(&mut h, p), Value::Int(2));
 }
@@ -779,7 +804,8 @@ fn removing_the_item_between_check_and_commit_refuses_and_reads_zero() {
 }
 
 #[test]
-fn a_delayed_commit_after_the_game_clock_advances_refuses_and_a_fresh_check_starts_at_the_new_time() {
+fn a_delayed_commit_after_the_game_clock_advances_refuses_and_a_fresh_check_starts_at_the_new_time()
+{
     let mut h = open_with_item_use();
     let (a, _, p) = holder_setup(&mut h);
     let stale = grant(h.check_item_use(a, p));
@@ -790,9 +816,15 @@ fn a_delayed_commit_after_the_game_clock_advances_refuses_and_a_fresh_check_star
     let fresh = grant(h.check_item_use(a, p));
     assert_eq!(fresh.time(), 1.0);
     h.commit_item_use(fresh).unwrap();
-    assert_eq!(h.check_item_use(a, p).unwrap(), UseCheck::OnCooldown { remaining: 20.0 });
+    assert_eq!(
+        h.check_item_use(a, p).unwrap(),
+        UseCheck::OnCooldown { remaining: 20.0 }
+    );
     h.set_timer_game_time(20.5).unwrap();
-    assert_eq!(h.check_item_use(a, p).unwrap(), UseCheck::OnCooldown { remaining: 0.5 });
+    assert_eq!(
+        h.check_item_use(a, p).unwrap(),
+        UseCheck::OnCooldown { remaining: 0.5 }
+    );
 }
 
 #[test]
@@ -822,7 +854,10 @@ fn two_holders_share_one_group_readiness_in_this_recreation_native_scope_unverif
     give(&mut h, a, pa);
     give(&mut h, b, pb);
     h.commit_item_use(grant(h.check_item_use(a, pa))).unwrap();
-    assert_eq!(h.check_item_use(b, pb).unwrap(), UseCheck::OnCooldown { remaining: 20.0 });
+    assert_eq!(
+        h.check_item_use(b, pb).unwrap(),
+        UseCheck::OnCooldown { remaining: 20.0 }
+    );
 }
 
 #[test]
@@ -831,7 +866,10 @@ fn a_refused_effect_drops_the_grant_and_leaves_charges_and_cooldown_untouched() 
     let (a, _, p) = holder_setup(&mut h);
     drop(grant(h.check_item_use(a, p)));
     assert_eq!(charges_of(&mut h, p), Value::Int(2));
-    assert!(matches!(h.check_item_use(a, p).unwrap(), UseCheck::Ready(_)));
+    assert!(matches!(
+        h.check_item_use(a, p).unwrap(),
+        UseCheck::Ready(_)
+    ));
 }
 
 #[test]
@@ -862,10 +900,14 @@ fn the_last_charge_marks_the_perishable_potion_for_removal() {
 fn zero_charges_refuse_the_use_without_a_cooldown_or_writes() {
     let mut h = open_with_item_use();
     let (a, _, p) = holder_setup(&mut h);
-    h.native("SetItemCharges", &[Value::Handle(p), Value::Int(0)]).unwrap();
+    h.native("SetItemCharges", &[Value::Handle(p), Value::Int(0)])
+        .unwrap();
     assert_eq!(h.check_item_use(a, p).unwrap(), UseCheck::NoCharges);
     assert_eq!(charges_of(&mut h, p), Value::Int(0));
-    assert!(matches!(h.check_item_use(a, p).unwrap(), UseCheck::NoCharges));
+    assert!(matches!(
+        h.check_item_use(a, p).unwrap(),
+        UseCheck::NoCharges
+    ));
 }
 
 fn wand(h: &mut ObjectHost) -> HandleId {
@@ -892,12 +934,25 @@ fn an_uncharged_item_without_a_group_commits_each_check_as_its_own_use_at_one_ti
     give(&mut h, a, w);
     let first = grant(h.check_item_use(a, w));
     let second = grant(h.check_item_use(a, w));
-    assert_eq!(h.commit_item_use(first).unwrap(), UseCommit { charges: None, remove: false });
-    assert_eq!(h.commit_item_use(second).unwrap(), UseCommit { charges: None, remove: false });
+    assert_eq!(
+        h.commit_item_use(first).unwrap(),
+        UseCommit {
+            charges: None,
+            remove: false
+        }
+    );
+    assert_eq!(
+        h.commit_item_use(second).unwrap(),
+        UseCommit {
+            charges: None,
+            remove: false
+        }
+    );
 }
 
 #[test]
-fn a_second_ready_check_for_a_charged_grouped_item_refuses_on_commit_after_the_first_starts_the_group() {
+fn a_second_ready_check_for_a_charged_grouped_item_refuses_on_commit_after_the_first_starts_the_group()
+ {
     let mut h = open_with_item_use();
     let (a, _, p) = holder_setup(&mut h);
     let first = grant(h.check_item_use(a, p));

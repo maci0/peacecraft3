@@ -32,7 +32,11 @@ mod tests {
 
     #[test]
     fn heal_refuses_dead_units_and_invalid_pools_without_a_value() {
-        assert!(heal_life(0.0, 500.0, 250.0).unwrap_err().contains("dead unit"));
+        assert!(
+            heal_life(0.0, 500.0, 250.0)
+                .unwrap_err()
+                .contains("dead unit")
+        );
         assert!(heal_life(600.0, 500.0, 1.0).is_err());
         assert!(heal_life(10.0, 0.0, 1.0).is_err());
         assert!(heal_life(10.0, 500.0, -1.0).is_err());

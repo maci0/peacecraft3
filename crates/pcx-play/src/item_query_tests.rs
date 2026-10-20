@@ -1,12 +1,14 @@
 use super::super::ItemBudget;
-use crate::item_class_table::ItemClassTable;
 use super::*;
+use crate::item_class_table::ItemClassTable;
 use crate::playercolor_host::{EnumHost, Limits};
-use pcx_objects::editor::ObjectKind;
-use pcx_objects::Value as FieldOverride;
 use crate::scripts::AssetIdentity;
+use pcx_objects::Value as FieldOverride;
+use pcx_objects::editor::ObjectKind;
 use pcx_script::{HandleId, Host, Prelude};
-use pcx_sim::world::{Definition, FieldProblem, FieldValue, ObjectCatalog, ObjectField, ResolutionProblem, Source};
+use pcx_sim::world::{
+    Definition, FieldProblem, FieldValue, ObjectCatalog, ObjectField, ResolutionProblem, Source,
+};
 use std::collections::BTreeMap;
 
 const DECLARATION: &str = "\
@@ -42,7 +44,13 @@ impl ObjectCatalog for Catalog {
         let cell = |text: &str| Ok(FieldValue::Cell(text.into()));
         let mut fields = BTreeMap::new();
         let mut put = |fourcc: &[u8; 4], value| {
-            fields.insert(*fourcc, ObjectField { metadata: None, value });
+            fields.insert(
+                *fourcc,
+                ObjectField {
+                    metadata: None,
+                    value,
+                },
+            );
         };
         match &rawcode {
             b"LVL3" => {
@@ -147,7 +155,11 @@ fn item(h: &mut ObjectHost, rawcode: &[u8; 4]) -> HandleId {
     let Value::Handle(id) = h
         .native(
             "CreateItem",
-            &[Value::Int(i32::from_be_bytes(*rawcode)), Value::Real(0.0), Value::Real(0.0)],
+            &[
+                Value::Int(i32::from_be_bytes(*rawcode)),
+                Value::Real(0.0),
+                Value::Real(0.0),
+            ],
         )
         .unwrap()
     else {
@@ -170,13 +182,30 @@ fn itemtype(h: &mut ObjectHost, n: i32) -> Value {
 #[test]
 fn admission_checks_declarations_and_ordinals_against_the_program_once() {
     let convert = "constant native ConvertItemType takes integer i returns itemtype\nglobals\nconstant itemtype ITEM_TYPE_PERMANENT = ConvertItemType(0)\nendglobals\n";
-    let wrong_level = enums(&format!("native GetItemLevel takes item whichItem returns real\nnative GetItemType takes item whichItem returns itemtype\n{convert}"));
-    assert!(ObjectHost::checked(wrong_level).unwrap().with_item_queries(classes()).is_err());
+    let wrong_level = enums(&format!(
+        "native GetItemLevel takes item whichItem returns real\nnative GetItemType takes item whichItem returns itemtype\n{convert}"
+    ));
+    assert!(
+        ObjectHost::checked(wrong_level)
+            .unwrap()
+            .with_item_queries(classes())
+            .is_err()
+    );
     let missing = enums(convert);
-    assert!(ObjectHost::checked(missing).unwrap().with_item_queries(classes()).is_err());
+    assert!(
+        ObjectHost::checked(missing)
+            .unwrap()
+            .with_item_queries(classes())
+            .is_err()
+    );
     let mut outside = classes();
     outside.ordinals.insert("powerup".to_owned(), 99);
-    assert!(ObjectHost::checked(enums(DECLARATION)).unwrap().with_item_queries(outside).is_err());
+    assert!(
+        ObjectHost::checked(enums(DECLARATION))
+            .unwrap()
+            .with_item_queries(outside)
+            .is_err()
+    );
     assert!(host().with_item_queries(classes()).is_err());
 }
 
@@ -194,11 +223,20 @@ fn level_is_the_authored_cell_or_typed_override_and_refuses_otherwise() {
 fn type_is_the_program_identity_of_the_class_ordinal() {
     let mut h = host();
     let permanent = item(&mut h, b"LVL3");
-    assert_eq!(h.native("GetItemType", &[Value::Handle(permanent)]), Ok(itemtype(&mut h, 0)));
+    assert_eq!(
+        h.native("GetItemType", &[Value::Handle(permanent)]),
+        Ok(itemtype(&mut h, 0))
+    );
     let powerup = item(&mut h, b"OVRD");
-    assert_eq!(h.native("GetItemType", &[Value::Handle(powerup)]), Ok(itemtype(&mut h, 2)));
+    assert_eq!(
+        h.native("GetItemType", &[Value::Handle(powerup)]),
+        Ok(itemtype(&mut h, 2))
+    );
     let upper = item(&mut h, b"UPPR");
-    assert_eq!(h.native("GetItemType", &[Value::Handle(upper)]), Ok(itemtype(&mut h, 1)));
+    assert_eq!(
+        h.native("GetItemType", &[Value::Handle(upper)]),
+        Ok(itemtype(&mut h, 1))
+    );
 }
 
 #[test]
@@ -206,16 +244,25 @@ fn unmatched_and_missing_classes_take_the_chain_default() {
     let mut h = host();
     // The 1.29b chain compares against "miscellanous", so the correct spelling is unmatched.
     let misc = item(&mut h, b"MISC");
-    assert_eq!(h.native("GetItemType", &[Value::Handle(misc)]), Ok(itemtype(&mut h, 7)));
+    assert_eq!(
+        h.native("GetItemType", &[Value::Handle(misc)]),
+        Ok(itemtype(&mut h, 7))
+    );
     let classless = item(&mut h, b"NOCL");
-    assert_eq!(h.native("GetItemType", &[Value::Handle(classless)]), Ok(itemtype(&mut h, 7)));
+    assert_eq!(
+        h.native("GetItemType", &[Value::Handle(classless)]),
+        Ok(itemtype(&mut h, 7))
+    );
 }
 
 #[test]
 fn queries_refuse_a_non_item_handle_and_a_wrong_argument() {
     let mut h = host();
     let timer = h.native("CreateTimer", &[]).unwrap();
-    assert!(h.native("GetItemLevel", std::slice::from_ref(&timer)).is_err());
+    assert!(
+        h.native("GetItemLevel", std::slice::from_ref(&timer))
+            .is_err()
+    );
     assert!(h.native("GetItemType", &[timer]).is_err());
     assert!(h.native("GetItemLevel", &[Value::Real(1.0)]).is_err());
 }

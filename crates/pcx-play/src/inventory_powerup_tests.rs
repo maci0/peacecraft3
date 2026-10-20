@@ -104,15 +104,7 @@ fn tables(tome: &Tome) -> Arc<DefaultTables> {
                 "3",
                 tome.use_specific,
             ],
-            &[
-                "Idef",
-                "Data",
-                "AbilityData",
-                "-1",
-                "int",
-                "1",
-                "AId1",
-            ],
+            &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1"],
         ],
     );
     Arc::new(
@@ -525,7 +517,11 @@ fn local_campaign_item_placement_census() {
         let bytes = std::fs::read(path).unwrap();
         let map = pcx_map::Map::parse(&bytes).unwrap();
         let units = map.units().unwrap();
-        eprintln!("map {:?} instances={}", path.file_name(), units.instances.len());
+        eprintln!(
+            "map {:?} instances={}",
+            path.file_name(),
+            units.instances.len()
+        );
         let mut kinds = std::collections::BTreeSet::new();
         for placement in &units.instances {
             kinds.insert(String::from_utf8_lossy(&placement.type_id).into_owned());
@@ -564,7 +560,14 @@ fn local_campaign_item_placement_census() {
 /// Armor fixture: `parm` holds `AId1`, admitted by `Idef`; `parx` holds `AId8`, which is not.
 fn armor_rules(amount: &str) -> Rules {
     let items = sylk(
-        &["itemID", "abilList", "powerup", "usable", "perishable", "uses"],
+        &[
+            "itemID",
+            "abilList",
+            "powerup",
+            "usable",
+            "perishable",
+            "uses",
+        ],
         &[
             &["parm", "AId1", "0", "0", "0", "-"],
             &["parx", "AId8", "0", "0", "0", "-"],
@@ -643,7 +646,10 @@ fn armor_row_outside_the_idef_admission_refuses() {
     let err = armor_rules("3")
         .held_attributes(&catalog_item("parx"))
         .unwrap_err();
-    assert!(err.contains("armor metadata does not admit ability AId8"), "{err}");
+    assert!(
+        err.contains("armor metadata does not admit ability AId8"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -683,7 +689,10 @@ fn healing_window_reads_the_source_class_and_the_constant_base() {
         class_from_call_window(&heal_window("AIhe"), &base_code("AAsm")).unwrap(),
         ("AIhe".to_string(), "AAsm".to_string())
     );
-    assert_eq!(call_target(&heal_window("AIhe"), 5).unwrap(), HEAL_WINDOW + 0x100);
+    assert_eq!(
+        call_target(&heal_window("AIhe"), 5).unwrap(),
+        HEAL_WINDOW + 0x100
+    );
 }
 
 #[test]
@@ -705,7 +714,14 @@ fn healing_window_refuses_near_matches_without_a_value() {
 /// the armor row `AId1`, and `Ihpg` admits `AIh1` only.
 fn healing_rules(amount: &str, range: &str) -> Rules {
     let items = sylk(
-        &["itemID", "abilList", "powerup", "usable", "perishable", "uses"],
+        &[
+            "itemID",
+            "abilList",
+            "powerup",
+            "usable",
+            "perishable",
+            "uses",
+        ],
         &[
             &["phea", "AIh1", "0", "1", "1", "1"],
             &["tarm", "AId1", "0", "0", "0", "-"],
@@ -776,15 +792,22 @@ fn healing_amount_and_range_come_from_the_admitted_source_row() {
 
 #[test]
 fn healing_refuses_negative_amounts_unfinite_ranges_and_missing_registration() {
-    assert!(healing_rules("-5", "100")
-        .heal_effect(&catalog_item("phea"))
-        .unwrap_err()
-        .contains("negative healing"));
-    assert!(healing_rules("250", "-")
-        .heal_range(&catalog_item("phea"))
-        .is_err());
+    assert!(
+        healing_rules("-5", "100")
+            .heal_effect(&catalog_item("phea"))
+            .unwrap_err()
+            .contains("negative healing")
+    );
+    assert!(
+        healing_rules("250", "-")
+            .heal_range(&catalog_item("phea"))
+            .is_err()
+    );
     // `parm` is not usable, so it has no use and no effect, even without a healing registration.
-    assert_eq!(armor_rules("3").heal_effect(&catalog_item("parm")).unwrap(), None);
+    assert_eq!(
+        armor_rules("3").heal_effect(&catalog_item("parm")).unwrap(),
+        None
+    );
 }
 
 /// Explicit local gate: the reviewed 25-byte healing registration reads from the selected client

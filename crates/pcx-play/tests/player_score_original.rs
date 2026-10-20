@@ -33,9 +33,8 @@ fn selected_common_admits_player_score_counters() {
 
     let common = pcx_script::parse_script(std::str::from_utf8(&bytes).unwrap()).unwrap();
     let map = pcx_script::parse_script("").unwrap();
-    let program = Arc::new(
-        pcx_script::resolve_with(&map, &[Prelude::new(LABEL, &common)]).unwrap(),
-    );
+    let program =
+        Arc::new(pcx_script::resolve_with(&map, &[Prelude::new(LABEL, &common)]).unwrap());
     let enums = EnumHost::checked_selected(
         program,
         "selected install map",

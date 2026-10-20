@@ -364,7 +364,12 @@ pub(super) fn geometry(definition: &Definition) -> Result<(Option<f32>, &str), &
     let radius = match movement {
         "_" | "none" | "" => None,
         "foot" | "horse" => {
-            let value = field(definition, SlkId::UnitBalance, "collision", &[FieldKind::Real, FieldKind::Unreal])?;
+            let value = field(
+                definition,
+                SlkId::UnitBalance,
+                "collision",
+                &[FieldKind::Real, FieldKind::Unreal],
+            )?;
             let radius = match value {
                 FieldValue::Cell(value) => value.parse::<f32>().ok(),
                 FieldValue::Override(

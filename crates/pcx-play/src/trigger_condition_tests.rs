@@ -225,6 +225,12 @@ fn a_wrapper_retained_by_a_trigger_condition_refuses_destruction_and_stays_live(
     vm.init_globals().unwrap();
     vm.call("main", &[]).unwrap();
     let c = id(&vm.global("C"));
-    assert!(vm.call("kill", &[]).is_err(), "a retained wrapper refuses destruction");
-    assert!(vm.host().inner.condition_callback(c).is_ok(), "the wrapper stays live");
+    assert!(
+        vm.call("kill", &[]).is_err(),
+        "a retained wrapper refuses destruction"
+    );
+    assert!(
+        vm.host().inner.condition_callback(c).is_ok(),
+        "the wrapper stays live"
+    );
 }

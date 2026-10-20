@@ -32,11 +32,19 @@ impl ObjectHost {
     /// `PLAYER_SCORE_*` constant's ordinal in that domain.
     pub fn with_player_scores(mut self) -> Result<Self, Error> {
         if self.player_scores.is_some() {
-            return Err(self
-                .inner
-                .error(GET, Failure::PlayerScore("player scores already admitted".into())));
+            return Err(self.inner.error(
+                GET,
+                Failure::PlayerScore("player scores already admitted".into()),
+            ));
         }
-        Self::contract(&self.inner, GET, &["player", "playerscore"], "integer", true, None)?;
+        Self::contract(
+            &self.inner,
+            GET,
+            &["player", "playerscore"],
+            "integer",
+            true,
+            None,
+        )?;
         let domain = self
             .inner
             .conversions()
@@ -55,9 +63,10 @@ impl ObjectHost {
         for name in names {
             let ordinal = self.source_constant_enumerand(&name, COUNTER_KIND)?;
             if !domain.contains(&ordinal) {
-                return Err(self
-                    .inner
-                    .error(GET, Failure::PlayerScore(format!("{name} is outside the score domain"))));
+                return Err(self.inner.error(
+                    GET,
+                    Failure::PlayerScore(format!("{name} is outside the score domain")),
+                ));
             }
             counters.push(PlayerScoreCounter {
                 name,
@@ -71,10 +80,12 @@ impl ObjectHost {
 
     /// Counters of an admitted program for one player number. `None` before admission.
     pub fn player_score_snapshot(&self, number: i32) -> Option<PlayerScoreSnapshot> {
-        self.player_scores.as_ref().map(|counters| PlayerScoreSnapshot {
-            player: number,
-            counters: counters.clone(),
-        })
+        self.player_scores
+            .as_ref()
+            .map(|counters| PlayerScoreSnapshot {
+                player: number,
+                counters: counters.clone(),
+            })
     }
 
     pub(super) fn player_score_native(
@@ -90,21 +101,27 @@ impl ObjectHost {
 
     fn get_player_score(&self, args: &[Value]) -> Result<Value, Error> {
         let [Value::Handle(player), Value::Handle(score)] = args else {
-            return Err(self
-                .inner
-                .error(GET, Failure::PlayerScore("expected a player and a score".into())));
+            return Err(self.inner.error(
+                GET,
+                Failure::PlayerScore("expected a player and a score".into()),
+            ));
         };
         if !matches!(self.inner.entry(*player)?, Entry::Player { .. }) {
             return Err(self.inner.error(GET, Failure::WrongFamily));
         }
         let ordinal = self.inner.symbolic_value(*score, COUNTER_KIND)?;
-        let counters = self.player_scores.as_ref().expect("dispatch requires admission");
+        let counters = self
+            .player_scores
+            .as_ref()
+            .expect("dispatch requires admission");
         let counter = counters
             .iter()
             .find(|c| c.ordinal == ordinal)
             .ok_or_else(|| {
-                self.inner
-                    .error(GET, Failure::PlayerScore("score is not a selected constant".into()))
+                self.inner.error(
+                    GET,
+                    Failure::PlayerScore("score is not a selected constant".into()),
+                )
             })?;
         // Refuse rather than report a zero for a counter with no verified source.
         Err(self.inner.error(

@@ -11,11 +11,11 @@
 //! that acquisition policy during travel and resumes its accepted endpoint after
 //! losing a target; native interrupt/resume and event nesting remain unqualified.
 use super::{Entry, Error, EventSubject, Failure, ObjectHost};
+use crate::inventory_powerup::AttributeBonus;
 use pcx_objects::editor::misc::{ATTACK_TYPES, CombatRules, DEFENSE_TYPES};
 use pcx_objects::editor::{FieldSource, SlkId};
 use pcx_script::{HandleId, Value};
 use pcx_sim::world::{Definition, FieldValue};
-use crate::inventory_powerup::AttributeBonus;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Relation {
@@ -397,10 +397,14 @@ impl ObjectHost {
     /// Same player, or an explicit passive alliance from the caster's owner. Neutral
     /// passive units are allies only through such an alliance, never by owner number.
     pub(super) fn is_ally(&self, caster: HandleId, target: HandleId) -> bool {
-        let (Ok(caster), Ok(target)) = (self.executed_unit(caster), self.executed_unit(target)) else {
+        let (Ok(caster), Ok(target)) = (self.executed_unit(caster), self.executed_unit(target))
+        else {
             return false;
         };
-        let (Ok(a), Ok(b)) = (self.player_settings(caster.owner), self.player_settings(target.owner)) else {
+        let (Ok(a), Ok(b)) = (
+            self.player_settings(caster.owner),
+            self.player_settings(target.owner),
+        ) else {
             return false;
         };
         let Some(rules) = self.combat.as_ref() else {
@@ -429,7 +433,11 @@ impl ObjectHost {
 
     /// `EVENT_UNIT_SPELL_EFFECT` and `EVENT_PLAYER_UNIT_SPELL_EFFECT` for a caster whose
     /// spell took effect on `target`; `GetSpellTargetUnit` reads the target.
-    pub(super) fn queue_spell_effect(&mut self, caster: HandleId, target: HandleId) -> Result<(), Error> {
+    pub(super) fn queue_spell_effect(
+        &mut self,
+        caster: HandleId,
+        target: HandleId,
+    ) -> Result<(), Error> {
         let unit_event = self.source_constant_enumerand("EVENT_UNIT_SPELL_EFFECT", "unitevent")?;
         let player_event =
             self.source_constant_enumerand("EVENT_PLAYER_UNIT_SPELL_EFFECT", "playerunitevent")?;
@@ -463,7 +471,6 @@ impl ObjectHost {
         }
         Ok(())
     }
-
 
     pub fn set_neutral_passive(&mut self, number: i32) {
         if let Some(rules) = &mut self.combat {
@@ -509,7 +516,7 @@ impl ObjectHost {
             .rules;
         let bonus = self.unit_hero_bonus(unit)?;
         Self::derive_hero_combat(&record.definition, progress, bonus, rules)
-        .map_err(|error| self.inner.error("combat", Failure::UnitActivity(error)))
+            .map_err(|error| self.inner.error("combat", Failure::UnitActivity(error)))
     }
 
     pub(super) fn combat_attack_order(&self, unit: HandleId) -> Option<i32> {
@@ -753,7 +760,11 @@ impl ObjectHost {
             }
             if let Some(animation) = &mut record.animation {
                 exploded_presented = exploded && animation.has_sequence("death explode");
-                let sequence = if exploded_presented { "death explode" } else { "death" };
+                let sequence = if exploded_presented {
+                    "death explode"
+                } else {
+                    "death"
+                };
                 animation
                     .select(sequence, now, None)
                     .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
@@ -845,9 +856,8 @@ impl ObjectHost {
             (combat.armor, combat.defense)
         };
         // Hero armor derives from agility; held armor points are a separate item bonus.
-        let armor = armor
-            + self.hero_combat_bonuses(target)?.armor
-            + self.held_armor_bonus(target)? as f32;
+        let armor =
+            armor + self.hero_combat_bonuses(target)?.armor + self.held_armor_bonus(target)? as f32;
         let primary_damage = self.hero_combat_bonuses(source)?.damage;
         let mut roll = weapon.base;
         for _ in 0..weapon.dice.max(0) {

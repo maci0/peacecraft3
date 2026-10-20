@@ -120,8 +120,12 @@ OK_WHITE \"|cffffffffO|rK\",
 ";
 
     fn layout() -> ScoreScreenLayout {
-        ScoreScreenLayout::parse(SCREEN, &[("UI\\FrameDef\\Glue\\Templates.fdf", TEMPLATES)], STRINGS)
-            .unwrap()
+        ScoreScreenLayout::parse(
+            SCREEN,
+            &[("UI\\FrameDef\\Glue\\Templates.fdf", TEMPLATES)],
+            STRINGS,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -133,7 +137,9 @@ OK_WHITE \"|cffffffffO|rK\",
     fn a_named_include_must_be_supplied() {
         assert_eq!(
             ScoreScreenLayout::parse(SCREEN, &[], STRINGS).err(),
-            Some(LayoutError::MissingInclude("UI\\FrameDef\\Glue\\Templates.fdf".into()))
+            Some(LayoutError::MissingInclude(
+                "UI\\FrameDef\\Glue\\Templates.fdf".into()
+            ))
         );
     }
 
@@ -142,7 +148,12 @@ OK_WHITE \"|cffffffffO|rK\",
         let l = layout();
         assert_eq!(
             l.rect("ScoreScreenElapsedTime", (0.8, 0.6)).unwrap(),
-            Rect { left: 0.0, bottom: 0.0, width: 0.1, height: 0.02 }
+            Rect {
+                left: 0.0,
+                bottom: 0.0,
+                width: 0.1,
+                height: 0.02
+            }
         );
         assert_eq!(l.rect(ROOT_FRAME, (0.8, 0.6)).unwrap().width, 0.8);
     }
@@ -152,10 +163,16 @@ OK_WHITE \"|cffffffffO|rK\",
         let l = layout();
         assert_eq!(l.label("ScoreScreenElapsedTime").unwrap(), "Elapsed Time:");
         assert_eq!(l.label("ScoreScreenOk").unwrap(), "|cffffffffO|rK");
-        assert_eq!(l.label(ROOT_FRAME), Err(LayoutError::NoText(ROOT_FRAME.into())));
-        let no_strings =
-            ScoreScreenLayout::parse(SCREEN, &[("UI\\FrameDef\\Glue\\Templates.fdf", TEMPLATES)], "")
-                .unwrap();
+        assert_eq!(
+            l.label(ROOT_FRAME),
+            Err(LayoutError::NoText(ROOT_FRAME.into()))
+        );
+        let no_strings = ScoreScreenLayout::parse(
+            SCREEN,
+            &[("UI\\FrameDef\\Glue\\Templates.fdf", TEMPLATES)],
+            "",
+        )
+        .unwrap();
         assert_eq!(
             no_strings.label("ScoreScreenOk"),
             Err(LayoutError::MissingString("OK_WHITE".into()))
@@ -171,16 +188,15 @@ OK_WHITE \"|cffffffffO|rK\",
         let Some(dir) = std::env::var_os("PCX_SCORE_UI_DIR") else {
             return;
         };
-        let read = |name: &str| std::fs::read_to_string(std::path::Path::new(&dir).join(name)).unwrap();
+        let read =
+            |name: &str| std::fs::read_to_string(std::path::Path::new(&dir).join(name)).unwrap();
         let screen = read("ScoreScreen.fdf");
         let include_names: Vec<String> = includes(&screen)
             .iter()
             .map(|p| p.rsplit('\\').next().unwrap().to_owned())
             .collect();
-        let texts: Vec<(String, String)> = include_names
-            .iter()
-            .map(|n| (n.clone(), read(n)))
-            .collect();
+        let texts: Vec<(String, String)> =
+            include_names.iter().map(|n| (n.clone(), read(n))).collect();
         let borrowed: Vec<(&str, &str)> = includes(&screen)
             .into_iter()
             .zip(texts.iter().map(|(_, t)| t.as_str()))
@@ -188,7 +204,11 @@ OK_WHITE \"|cffffffffO|rK\",
         let strings = read("GlobalStrings.fdf");
         let layout = ScoreScreenLayout::parse(&screen, &borrowed, &strings).unwrap();
         assert!(layout.rect(ROOT_FRAME, (0.8, 0.6)).unwrap().width > 0.0);
-        for frame in ["ScoreScreenElapsedTimeLabel", "ScoreScreenOkText", "ScoreScreenTeamsText"] {
+        for frame in [
+            "ScoreScreenElapsedTimeLabel",
+            "ScoreScreenOkText",
+            "ScoreScreenTeamsText",
+        ] {
             assert!(layout.label(frame).is_ok(), "{frame}");
         }
     }

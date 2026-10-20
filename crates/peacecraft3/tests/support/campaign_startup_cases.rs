@@ -614,7 +614,9 @@ fn rule_with_getter(kind: RuleKind, body: Vec<u8>) -> Arc<VerifiedNeutralRule> {
     Arc::new(imported.expect(native_name))
 }
 
-pub(crate) fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) -> MapStartupInputs {
+pub(crate) fn host_inputs(
+    catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>,
+) -> MapStartupInputs {
     MapStartupInputs {
         inventory: None,
         inventory_powerup: None,

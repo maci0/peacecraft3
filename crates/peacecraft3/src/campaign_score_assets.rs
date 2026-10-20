@@ -60,7 +60,8 @@ pub fn load(resolver: &Resolver) -> Result<ScoreScreenLayout, String> {
         .map(|(p, t)| (p.as_str(), t.as_str()))
         .collect();
     let strings = read_text(resolver, GLOBAL_STRINGS_FDF)?;
-    ScoreScreenLayout::parse(&screen, &borrowed, &strings).map_err(|e| format!("{SCORE_SCREEN_FDF}: {e:?}"))
+    ScoreScreenLayout::parse(&screen, &borrowed, &strings)
+        .map_err(|e| format!("{SCORE_SCREEN_FDF}: {e:?}"))
 }
 
 /// Caches one load attempt per context. A distinct context drops the previous layout before
@@ -139,13 +140,19 @@ mod tests {
         let (mut slot, mut loaded) = (None, None);
         let a = Arc::new(1u8);
         let b = Arc::new(2u8);
-        assert_eq!(refresh(&mut slot, &mut loaded, &a, || Ok(layout())), Ok(true));
+        assert_eq!(
+            refresh(&mut slot, &mut loaded, &a, || Ok(layout())),
+            Ok(true)
+        );
         assert!(slot.is_some(), "context A loads its layout");
         let refused = refresh(&mut slot, &mut loaded, &b, || {
             Err("ScoreScreen.fdf: missing".to_owned())
         });
         assert_eq!(refused, Err("ScoreScreen.fdf: missing".to_owned()));
-        assert!(slot.is_none(), "B's failed attempt leaves no A layout usable");
+        assert!(
+            slot.is_none(),
+            "B's failed attempt leaves no A layout usable"
+        );
         assert!(Arc::ptr_eq(loaded.as_ref().unwrap(), &b));
     }
 
@@ -155,7 +162,10 @@ mod tests {
         let a = Arc::new(1u8);
         let b = Arc::new(2u8);
         refresh(&mut slot, &mut loaded, &a, || Ok(layout())).unwrap();
-        assert_eq!(refresh(&mut slot, &mut loaded, &b, || Ok(layout())), Ok(true));
+        assert_eq!(
+            refresh(&mut slot, &mut loaded, &b, || Ok(layout())),
+            Ok(true)
+        );
         assert!(slot.is_some());
         let attempts = Cell::new(0);
         assert_eq!(

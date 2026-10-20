@@ -1008,9 +1008,15 @@ fn missing_hero_state_or_attributes_and_invalid_derived_speed_refuse() {
         } else {
             bad.fields.remove(field);
         }
-        assert!(ObjectHost::derive_hero_combat(&bad, Some((3, 4)), Default::default(), &rules()).is_err());
+        assert!(
+            ObjectHost::derive_hero_combat(&bad, Some((3, 4)), Default::default(), &rules())
+                .is_err()
+        );
     }
-    assert!(ObjectHost::derive_hero_combat(&definition, Some((3, 2)), Default::default(), &rules()).is_err());
+    assert!(
+        ObjectHost::derive_hero_combat(&definition, Some((3, 2)), Default::default(), &rules())
+            .is_err()
+    );
     let ordinary = vm.host().inner.executed_unit(b).unwrap().definition.clone();
     assert_eq!(
         ObjectHost::derive_hero_combat(&ordinary, None, Default::default(), &invalid)
@@ -1333,7 +1339,11 @@ fn set_unit_exploded_then_kill_unit_retains_the_flag_through_the_death_path() {
     assert_eq!(h.unit_exploded(a), Some(true));
     h.native("KillUnit", &[Value::Handle(a)]).unwrap();
     assert!(h.executed_unit(a).unwrap().combat.as_ref().unwrap().dead);
-    assert_eq!(h.unit_exploded(a), Some(true), "the flag outlives the death");
+    assert_eq!(
+        h.unit_exploded(a),
+        Some(true),
+        "the flag outlives the death"
+    );
     // The fixture unit has no model, so no explosion sequence exists: the death is recorded unrendered.
     assert!(h.exploded_death_unrendered(a));
     // Unverified policy: a dead unit is accepted. This pins the current host behavior.
@@ -1341,7 +1351,6 @@ fn set_unit_exploded_then_kill_unit_retains_the_flag_through_the_death_path() {
         .unwrap();
     assert_eq!(h.unit_exploded(a), Some(false));
 }
-
 
 #[test]
 fn hold_position_attacks_only_within_reach_and_never_chases_a_departing_target() {
@@ -1501,7 +1510,11 @@ fn combat_trace_records_an_explicit_target_order_before_its_damage() {
     assert_eq!(
         h.native(
             "IssueTargetOrder",
-            &[Value::Handle(a), Value::Str("alpha".into()), Value::Handle(b)]
+            &[
+                Value::Handle(a),
+                Value::Str("alpha".into()),
+                Value::Handle(b)
+            ]
         )
         .unwrap(),
         Value::Bool(true)
@@ -1514,8 +1527,15 @@ fn combat_trace_records_an_explicit_target_order_before_its_damage() {
         panic!("first event {:?}", events[0]);
     };
     assert_eq!(target.unit, b);
-    assert!(matches!(events.get(1), Some(CombatTraceEvent::Damage { .. })));
-    assert!(!events.iter().any(|e| matches!(e, CombatTraceEvent::Acquired { .. })));
+    assert!(matches!(
+        events.get(1),
+        Some(CombatTraceEvent::Damage { .. })
+    ));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, CombatTraceEvent::Acquired { .. }))
+    );
 }
 
 #[test]
@@ -1559,7 +1579,11 @@ fn explicit_target_order_attacks_a_passive_ally_while_acquisition_skips_it() {
     assert_eq!(
         h.native(
             "IssueTargetOrder",
-            &[Value::Handle(a), Value::Str("alpha".into()), Value::Handle(b)]
+            &[
+                Value::Handle(a),
+                Value::Str("alpha".into()),
+                Value::Handle(b)
+            ]
         )
         .unwrap(),
         Value::Bool(true)
@@ -1817,9 +1841,27 @@ fn moving_unit_regenerates_at_its_rate_while_it_travels() {
 /// Holy Light rows: `AHhb` (three ranks, `Order=alpha` here) and the hero component `Yher`.
 fn holy_tables() -> DefaultTables {
     let headers = [
-        "alias", "code", "levels", "reqLevel", "levelSkip", "hero", "DataA1", "DataA2", "DataA3",
-        "Cost1", "Cost2", "Cost3", "Cool1", "Cool2", "Cool3", "Rng1", "Rng2", "Rng3", "targs1",
-        "targs2", "targs3",
+        "alias",
+        "code",
+        "levels",
+        "reqLevel",
+        "levelSkip",
+        "hero",
+        "DataA1",
+        "DataA2",
+        "DataA3",
+        "Cost1",
+        "Cost2",
+        "Cost3",
+        "Cool1",
+        "Cool2",
+        "Cool3",
+        "Rng1",
+        "Rng2",
+        "Rng3",
+        "targs1",
+        "targs2",
+        "targs3",
     ];
     let targs = "air,ground,organic,notself,invu,vuln,nonancient";
     let rows: [Vec<&str>; 2] = [
@@ -1828,8 +1870,27 @@ fn holy_tables() -> DefaultTables {
             "5", "60", "60", "60", targs, targs, targs,
         ],
         vec![
-            "Yher", "Yher", "1", "0", "0", "1", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
-            "0", "0", "air,ground,invu,vuln", "air,ground,invu,vuln", "air,ground,invu,vuln",
+            "Yher",
+            "Yher",
+            "1",
+            "0",
+            "0",
+            "1",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "air,ground,invu,vuln",
+            "air,ground,invu,vuln",
+            "air,ground,invu,vuln",
         ],
     ];
     let mut slk = String::from("ID;PWXL;N;E\r\n");
@@ -1932,11 +1993,41 @@ fn holy_open_with_art(
     art_end_ms: u32,
 ) -> (Vm, [HandleId; 4]) {
     let mut fields = hero_fields("STR");
-    fields.push(column(b"H001", SlkId::UnitBalance, "HP", FieldKind::Int, "1000"));
-    fields.push(column(b"H003", SlkId::UnitBalance, "mana0", FieldKind::Int, "300"));
-    fields.push(column(b"A010", SlkId::UnitBalance, "type", FieldKind::Token, types));
-    fields.push(column(b"A008", SlkId::UnitAbilities, "abilList", FieldKind::Token, abilities));
-    fields.push(column(b"A009", SlkId::UnitAbilities, "heroAbilList", FieldKind::Token, heroes));
+    fields.push(column(
+        b"H001",
+        SlkId::UnitBalance,
+        "HP",
+        FieldKind::Int,
+        "1000",
+    ));
+    fields.push(column(
+        b"H003",
+        SlkId::UnitBalance,
+        "mana0",
+        FieldKind::Int,
+        "300",
+    ));
+    fields.push(column(
+        b"A010",
+        SlkId::UnitBalance,
+        "type",
+        FieldKind::Token,
+        types,
+    ));
+    fields.push(column(
+        b"A008",
+        SlkId::UnitAbilities,
+        "abilList",
+        FieldKind::Token,
+        abilities,
+    ));
+    fields.push(column(
+        b"A009",
+        SlkId::UnitAbilities,
+        "heroAbilList",
+        FieldKind::Token,
+        heroes,
+    ));
     let extra = format!(
         "{}\n{}{DECLARATIONS}{HOLY_DECLARATIONS}",
         enumeration::TRIGGERS,
@@ -2083,8 +2174,14 @@ fn ancient_undead_and_enemy_organic_and_mana_refusals_leave_state_unchanged() {
     let (mut vm, [h, f, e, _]) = holy_open("undead,ancient", LEARNED, NOTHING);
     vm.call("prime", &[]).unwrap();
     let (enemy, mana) = (holy_life(&mut vm, e), holy_mana(&mut vm, h));
-    assert!(!holy_cast(&mut vm, h, e), "ancient is excluded by nonancient");
-    assert_eq!((holy_life(&mut vm, e), holy_mana(&mut vm, h)), (enemy, mana));
+    assert!(
+        !holy_cast(&mut vm, h, e),
+        "ancient is excluded by nonancient"
+    );
+    assert_eq!(
+        (holy_life(&mut vm, e), holy_mana(&mut vm, h)),
+        (enemy, mana)
+    );
     assert!(!holy_cast(&mut vm, f, h), "caster without the ability");
     let (mut vm, [h, f, e, _]) = holy_open("", LEARNED, NOTHING);
     vm.call("prime", &[]).unwrap();
@@ -2094,7 +2191,10 @@ fn ancient_undead_and_enemy_organic_and_mana_refusals_leave_state_unchanged() {
     let mana_state = vm_global(&vm, "UNIT_STATE_MANA");
     vm.host()
         .inner
-        .native("SetUnitState", &[Value::Handle(h), mana_state, Value::Real(10.0)])
+        .native(
+            "SetUnitState",
+            &[Value::Handle(h), mana_state, Value::Real(10.0)],
+        )
         .unwrap();
     assert!(!holy_cast(&mut vm, h, f), "insufficient mana");
     assert_eq!(holy_life(&mut vm, f), 100.0);
@@ -2107,7 +2207,10 @@ fn out_of_range_orders_walk_the_caster_into_range_then_cast_once() {
     let life_state = vm_global(&vm, "UNIT_STATE_LIFE");
     vm.host()
         .inner
-        .native("SetUnitState", &[Value::Handle(g), life_state, Value::Real(100.0)])
+        .native(
+            "SetUnitState",
+            &[Value::Handle(g), life_state, Value::Real(100.0)],
+        )
         .unwrap();
     let (life, mana) = (holy_life(&mut vm, g), holy_mana(&mut vm, h));
     assert!(holy_cast(&mut vm, h, g), "accepted and walking");
@@ -2133,7 +2236,8 @@ fn a_new_order_cancels_a_walking_cast_without_spending_mana() {
     vm.call("prime", &[]).unwrap();
     let (life, mana) = (holy_life(&mut vm, g), holy_mana(&mut vm, h));
     assert!(holy_cast(&mut vm, h, g));
-    vm.call("attack_enemy", &[Value::Handle(h), Value::Handle(e)]).unwrap();
+    vm.call("attack_enemy", &[Value::Handle(h), Value::Handle(e)])
+        .unwrap();
     step(&mut vm, 30.0);
     assert_eq!(holy_life(&mut vm, g), life);
     assert_eq!(holy_mana(&mut vm, h), mana);
@@ -2154,7 +2258,11 @@ fn ranks_are_learned_with_skill_points_and_each_rank_uses_its_own_row() {
     step(&mut vm, 10.0);
     holy_learn(&mut vm, holy_code());
     assert!(holy_cast(&mut vm, h, f));
-    assert_eq!(holy_life(&mut vm, f), 1000.0, "rank three heals DataA3, capped at max life");
+    assert_eq!(
+        holy_life(&mut vm, f),
+        1000.0,
+        "rank three heals DataA3, capped at max life"
+    );
 }
 
 #[test]
@@ -2163,7 +2271,11 @@ fn spell_effect_event_names_the_target_and_fires_once_per_cast() {
     vm.call("prime", &[]).unwrap();
     vm.call("listen", &[]).unwrap();
     assert!(holy_cast(&mut vm, h, f));
-    let fired = vm.host().inner.take_fired_event().expect("spell effect event");
+    let fired = vm
+        .host()
+        .inner
+        .take_fired_event()
+        .expect("spell effect event");
     assert_eq!(fired.subject.unit, Some(h));
     assert_eq!(fired.subject.spell_target, Some(f));
     assert!(vm.host().inner.take_fired_event().is_none());
@@ -2175,7 +2287,10 @@ fn invulnerable_undead_is_targetable_but_takes_no_damage() {
     vm.call("prime", &[]).unwrap();
     vm.host()
         .inner
-        .native("SetUnitInvulnerable", &[Value::Handle(e), Value::Bool(true)])
+        .native(
+            "SetUnitInvulnerable",
+            &[Value::Handle(e), Value::Bool(true)],
+        )
         .unwrap();
     let enemy = holy_life(&mut vm, e);
     let mana = holy_mana(&mut vm, h);
@@ -2206,9 +2321,15 @@ fn a_passive_alliance_makes_an_enemy_living_unit_a_heal_target() {
     let life_state = vm_global(&vm, "UNIT_STATE_LIFE");
     vm.host()
         .inner
-        .native("SetUnitState", &[Value::Handle(e), life_state, Value::Real(100.0)])
+        .native(
+            "SetUnitState",
+            &[Value::Handle(e), life_state, Value::Real(100.0)],
+        )
         .unwrap();
-    assert!(!holy_cast(&mut vm, h, e), "enemy organic before the alliance");
+    assert!(
+        !holy_cast(&mut vm, h, e),
+        "enemy organic before the alliance"
+    );
     let alliance = vm_global(&vm, "ALLIANCE_PASSIVE");
     let h_owner = vm.host().inner.native("Player", &[Value::Int(4)]).unwrap();
     let e_owner = vm.host().inner.native("Player", &[Value::Int(5)]).unwrap();
@@ -2232,7 +2353,10 @@ fn the_targetart_shows_on_the_target_and_a_recast_replaces_it() {
     assert_eq!(art.len(), 1, "{art:?}");
     let (_, effect) = art[0];
     assert_eq!(effect.unit, f);
-    assert_eq!(effect.model, "Abilities\\Spells\\Human\\HolyBolt\\HolyBoltSpecialArt.mdl");
+    assert_eq!(
+        effect.model,
+        "Abilities\\Spells\\Human\\HolyBolt\\HolyBoltSpecialArt.mdl"
+    );
     assert_eq!(effect.attach_point, "origin", "no Targetattach is authored");
     step(&mut vm, 5.0);
     assert!(holy_cast(&mut vm, h, f));
@@ -2246,7 +2370,10 @@ fn killing_the_caster_cancels_a_walking_cast() {
     let life_state = vm_global(&vm, "UNIT_STATE_LIFE");
     vm.host()
         .inner
-        .native("SetUnitState", &[Value::Handle(g), life_state, Value::Real(100.0)])
+        .native(
+            "SetUnitState",
+            &[Value::Handle(g), life_state, Value::Real(100.0)],
+        )
         .unwrap();
     assert!(holy_cast(&mut vm, h, g));
     vm.host()
@@ -2281,7 +2408,11 @@ fn the_art_retires_when_its_only_sequence_ends() {
     assert!(holy_cast(&mut vm, h, f));
     assert_eq!(vm.host().inner.unit_effects().count(), 1);
     step(&mut vm, 2.0);
-    assert_eq!(vm.host().inner.unit_effects().count(), 1, "still in its sequence");
+    assert_eq!(
+        vm.host().inner.unit_effects().count(),
+        1,
+        "still in its sequence"
+    );
     step(&mut vm, 3.0);
     assert_eq!(vm.host().inner.unit_effects().count(), 0, "sequence ended");
 }
@@ -2293,11 +2424,23 @@ fn overlapping_art_from_two_casts_keeps_each_lifetime_on_its_own_clock() {
     assert!(holy_cast(&mut vm, h, f));
     step(&mut vm, 5.0);
     assert!(holy_cast(&mut vm, h, f));
-    assert_eq!(vm.host().inner.unit_effects().count(), 2, "both live at t=5");
+    assert_eq!(
+        vm.host().inner.unit_effects().count(),
+        2,
+        "both live at t=5"
+    );
     step(&mut vm, 9.0);
-    assert_eq!(vm.host().inner.unit_effects().count(), 1, "first ended at t=8");
+    assert_eq!(
+        vm.host().inner.unit_effects().count(),
+        1,
+        "first ended at t=8"
+    );
     step(&mut vm, 14.0);
-    assert_eq!(vm.host().inner.unit_effects().count(), 0, "second ended at t=13");
+    assert_eq!(
+        vm.host().inner.unit_effects().count(),
+        0,
+        "second ended at t=13"
+    );
 }
 
 #[test]
@@ -2305,7 +2448,10 @@ fn art_retires_on_the_clock_after_its_caster_dies() {
     let (mut vm, [h, f, _, _]) = holy_open("", LEARNED, NOTHING);
     vm.call("prime", &[]).unwrap();
     assert!(holy_cast(&mut vm, h, f));
-    vm.host().inner.native("KillUnit", &[Value::Handle(h)]).unwrap();
+    vm.host()
+        .inner
+        .native("KillUnit", &[Value::Handle(h)])
+        .unwrap();
     step(&mut vm, 3.0);
     assert_eq!(vm.host().inner.unit_effects().count(), 0);
 }
@@ -2315,7 +2461,10 @@ fn removing_the_target_ends_its_art_and_the_clock_cannot_revive_it() {
     let (mut vm, [h, f, _, _]) = holy_open("", LEARNED, NOTHING);
     vm.call("prime", &[]).unwrap();
     assert!(holy_cast(&mut vm, h, f));
-    vm.host().inner.native("RemoveUnit", &[Value::Handle(f)]).unwrap();
+    vm.host()
+        .inner
+        .native("RemoveUnit", &[Value::Handle(f)])
+        .unwrap();
     // RemoveUnit ends every effect attached to the removed unit, as unit_removal_host does.
     assert_eq!(vm.host().inner.unit_effects().count(), 0);
     step(&mut vm, 3.0);

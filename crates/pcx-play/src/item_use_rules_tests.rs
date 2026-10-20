@@ -2,7 +2,7 @@ use super::*;
 use pcx_objects::editor::defaults::Identity;
 use pcx_objects::editor::{EditorReadLimits, ObjectKind, SlkId};
 use pcx_objects::{Mod, ValueType};
-use pcx_sim::world::{ObjectField, ObjectCatalog};
+use pcx_sim::world::{ObjectCatalog, ObjectField};
 
 fn sylk(headers: &[&str], rows: &[&[&str]]) -> Vec<u8> {
     let mut text = String::from("ID;PWXL;N;E\r\n");
@@ -55,7 +55,13 @@ fn item(cells: &[(&[u8; 4], Option<&str>)]) -> Definition {
                 Some(text) => Ok(FieldValue::Cell((*text).into())),
                 None => Err(FieldProblem::Missing),
             };
-            (**fourcc, ObjectField { metadata: None, value })
+            (
+                **fourcc,
+                ObjectField {
+                    metadata: None,
+                    value,
+                },
+            )
         })
         .collect();
     Definition {
@@ -83,8 +89,16 @@ fn uses_cell_is_the_initial_charge_model() {
     let r = rules(Overlay::default());
     assert_eq!(r.charges(&potion("-")), Ok(Charges::Uncharged));
     assert_eq!(r.charges(&potion("3")), Ok(Charges::Charged(3)));
-    assert!(r.charges(&potion("many")).unwrap_err().contains("not a charge count"));
-    assert!(r.charges(&potion("-1")).unwrap_err().contains("not a charge count"));
+    assert!(
+        r.charges(&potion("many"))
+            .unwrap_err()
+            .contains("not a charge count")
+    );
+    assert!(
+        r.charges(&potion("-1"))
+            .unwrap_err()
+            .contains("not a charge count")
+    );
     let missing = item(&[(b"iuse", None)]);
     assert!(r.charges(&missing).unwrap_err().contains("not derived"));
     assert!(r.charges(&item(&[])).unwrap_err().contains("absent"));
@@ -94,10 +108,7 @@ fn uses_cell_is_the_initial_charge_model() {
 fn perishable_reads_its_boolean_flag() {
     let r = rules(Overlay::default());
     assert_eq!(r.perishable(&potion("1")), Ok(true));
-    assert_eq!(
-        r.perishable(&item(&[(b"iper", Some("0"))])),
-        Ok(false)
-    );
+    assert_eq!(r.perishable(&item(&[(b"iper", Some("0"))])), Ok(false));
     assert!(r.perishable(&item(&[(b"iper", Some("yes"))])).is_err());
 }
 
@@ -117,7 +128,10 @@ fn cooldown_group_and_duration_come_from_the_items_level_one_ability() {
 #[test]
 fn an_absent_or_empty_cooldown_id_names_no_group() {
     let r = rules(Overlay::default());
-    assert_eq!(r.cooldown(&item(&[(b"icid", None), (b"iabi", None)])), Ok(None));
+    assert_eq!(
+        r.cooldown(&item(&[(b"icid", None), (b"iabi", None)])),
+        Ok(None)
+    );
     assert_eq!(
         r.cooldown(&item(&[(b"icid", Some("")), (b"iabi", Some("AIh1"))])),
         Ok(None)
@@ -136,7 +150,10 @@ fn ignore_cooldown_keeps_the_group_but_lifts_the_wait() {
         },
     );
     let cooldown = r.cooldown(&def).unwrap().unwrap();
-    assert_eq!((cooldown.group.as_str(), cooldown.ignores_wait), ("AIhe", true));
+    assert_eq!(
+        (cooldown.group.as_str(), cooldown.ignores_wait),
+        ("AIhe", true)
+    );
 }
 
 #[test]
@@ -147,9 +164,21 @@ fn a_group_needs_exactly_one_ability_and_refuses_otherwise() {
         (b"iabi", Some("AIh1,AIh2")),
         (b"iicd", Some("0")),
     ]);
-    assert!(r.cooldown(&mixed).unwrap_err().contains("exactly one ability"));
-    let none = item(&[(b"icid", Some("AIhe")), (b"iabi", Some("_")), (b"iicd", Some("0"))]);
-    assert!(r.cooldown(&none).unwrap_err().contains("exactly one ability"));
+    assert!(
+        r.cooldown(&mixed)
+            .unwrap_err()
+            .contains("exactly one ability")
+    );
+    let none = item(&[
+        (b"icid", Some("AIhe")),
+        (b"iabi", Some("_")),
+        (b"iicd", Some("0")),
+    ]);
+    assert!(
+        r.cooldown(&none)
+            .unwrap_err()
+            .contains("exactly one ability")
+    );
 }
 
 #[test]
@@ -179,7 +208,14 @@ fn w3a_cooldown_override_replaces_the_base_level_one_value() {
             end_word: 0,
         }],
     );
-    assert_eq!(rules(overlay).cooldown(&potion("1")).unwrap().unwrap().seconds, 12.5);
+    assert_eq!(
+        rules(overlay)
+            .cooldown(&potion("1"))
+            .unwrap()
+            .unwrap()
+            .seconds,
+        12.5
+    );
 }
 
 #[test]
@@ -195,7 +231,14 @@ fn w3a_override_of_another_level_leaves_the_base_value() {
             end_word: 0,
         }],
     );
-    assert_eq!(rules(overlay).cooldown(&potion("1")).unwrap().unwrap().seconds, 20.0);
+    assert_eq!(
+        rules(overlay)
+            .cooldown(&potion("1"))
+            .unwrap()
+            .unwrap()
+            .seconds,
+        20.0
+    );
 }
 
 #[test]
@@ -211,7 +254,12 @@ fn a_negative_or_indexed_cooldown_override_refuses() {
             end_word: 0,
         }],
     );
-    assert!(rules(overlay).cooldown(&potion("1")).unwrap_err().contains("nonnegative"));
+    assert!(
+        rules(overlay)
+            .cooldown(&potion("1"))
+            .unwrap_err()
+            .contains("nonnegative")
+    );
     let mut indexed = Overlay::default();
     indexed.mods.insert(
         "AIh1".into(),
@@ -223,7 +271,12 @@ fn a_negative_or_indexed_cooldown_override_refuses() {
             end_word: 0,
         }],
     );
-    assert!(rules(indexed).cooldown(&potion("1")).unwrap_err().contains("indexed"));
+    assert!(
+        rules(indexed)
+            .cooldown(&potion("1"))
+            .unwrap_err()
+            .contains("indexed")
+    );
 }
 
 /// Original-input gate: every selected `ItemData` row resolves through the metadata catalog, and
@@ -280,11 +333,20 @@ fn local_original_item_use_census_derives_every_row() {
             Ok(Charges::Uncharged) => uncharged += 1,
             Err(e) => panic!("{raw}: charges refused: {e}"),
         }
-        rules.perishable(&definition).unwrap_or_else(|e| panic!("{raw}: {e}"));
-        if rules.cooldown(&definition).unwrap_or_else(|e| panic!("{raw}: cooldown refused: {e}")).is_some() {
+        rules
+            .perishable(&definition)
+            .unwrap_or_else(|e| panic!("{raw}: {e}"));
+        if rules
+            .cooldown(&definition)
+            .unwrap_or_else(|e| panic!("{raw}: cooldown refused: {e}"))
+            .is_some()
+        {
             grouped += 1;
         }
     }
-    println!("census rows={} charged={charged} uncharged={uncharged} grouped={grouped}", raws.len());
+    println!(
+        "census rows={} charged={charged} uncharged={uncharged} grouped={grouped}",
+        raws.len()
+    );
     assert_eq!(charged + uncharged, raws.len());
 }

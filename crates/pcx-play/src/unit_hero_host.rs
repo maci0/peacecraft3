@@ -698,7 +698,11 @@ impl ObjectHost {
     }
 
     /// Non-empty `AbilityFunc`/`AbilityData`/strings profile values under `key`, in authored order.
-    pub(crate) fn hero_ability_profiles(&self, alias: [u8; 4], key: &str) -> Result<Vec<String>, String> {
+    pub(crate) fn hero_ability_profiles(
+        &self,
+        alias: [u8; 4],
+        key: &str,
+    ) -> Result<Vec<String>, String> {
         let input = self.heroes_admission()?;
         let (base, _) = input.base(alias)?;
         let cells = input

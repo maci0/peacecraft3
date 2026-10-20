@@ -106,7 +106,10 @@ fn deliver(app: &mut App, revision: u64, items: Option<ItemBudget>, script: &str
             install: "synthetic item fixture".into(),
             edition_version: "synthetic".into(),
         },
-        &[(pcx_objects::editor::SlkId::AbilityData.path(), ability.as_slice())],
+        &[(
+            pcx_objects::editor::SlkId::AbilityData.path(),
+            ability.as_slice(),
+        )],
         &[],
         pcx_objects::editor::EditorReadLimits {
             max_listed_paths: 4,

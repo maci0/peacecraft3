@@ -49,6 +49,9 @@ fn placed_drop_sets_match_generated_drop_calls() {
         .collect();
     placed.sort_unstable();
     let generated = script_drop_entries(&script);
-    assert!(!generated.is_empty(), "script has no RandomDistAddItem calls");
+    assert!(
+        !generated.is_empty(),
+        "script has no RandomDistAddItem calls"
+    );
     assert_eq!(placed, generated);
 }

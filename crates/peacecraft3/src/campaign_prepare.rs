@@ -1,7 +1,9 @@
 //! Normal application producer for the existing admitted-map startup inputs.
 use crate::campaign_input::CampaignInput;
 use bevy::prelude::*;
-use pcx_play::{campaign_inputs::MapSources, map_admission::ParsedMapContext, player_command_log::StartIdentity};
+use pcx_play::{
+    campaign_inputs::MapSources, map_admission::ParsedMapContext, player_command_log::StartIdentity,
+};
 use peacecraft3::{
     browser_configuration::SelectedMapSources,
     campaign_startup::{

@@ -353,6 +353,12 @@ fn a_filter_named_by_a_unit_in_range_registration_refuses_destruction_and_stays_
     let Value::Handle(filter) = v.global("FL") else {
         panic!("FL is a filter handle")
     };
-    assert!(v.call("kill", &[]).is_err(), "a named filter refuses destruction");
-    assert!(v.host().inner.filter_callback(filter).is_ok(), "the filter stays live");
+    assert!(
+        v.call("kill", &[]).is_err(),
+        "a named filter refuses destruction"
+    );
+    assert!(
+        v.host().inner.filter_callback(filter).is_ok(),
+        "the filter stays live"
+    );
 }

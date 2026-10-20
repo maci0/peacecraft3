@@ -1,12 +1,13 @@
+use super::super::ItemBudget;
 use super::*;
 use crate::playercolor_host::{EnumHost, Limits};
-use super::super::ItemBudget;
+use pcx_objects::editor::ObjectKind;
 use pcx_script::{Host, Prelude};
 use pcx_sim::world::{Definition, ObjectCatalog, ResolutionProblem, Source};
-use pcx_objects::editor::ObjectKind;
 use std::collections::BTreeMap;
 
-const DECLARATION: &str = "native SetItemDropID takes item whichItem, integer unitId returns nothing\n";
+const DECLARATION: &str =
+    "native SetItemDropID takes item whichItem, integer unitId returns nothing\n";
 const BASE: &str = "\
 type agent extends handle
 type timer extends agent
@@ -82,7 +83,11 @@ fn item(h: &mut ObjectHost, x: f32) -> HandleId {
     let Value::Handle(id) = h
         .native(
             "CreateItem",
-            &[Value::Int(i32::from_be_bytes(*b"ITM1")), Value::Real(x), Value::Real(0.0)],
+            &[
+                Value::Int(i32::from_be_bytes(*b"ITM1")),
+                Value::Real(x),
+                Value::Real(0.0),
+            ],
         )
         .unwrap()
     else {
@@ -111,10 +116,12 @@ fn set_records_the_executed_integer_for_each_item() {
     let a = item(&mut h, 1.0);
     let b = item(&mut h, 2.0);
     assert_eq!(h.item_drop_id(a), None);
-    h.native("SetItemDropID", &[Value::Handle(a), Value::Int(1234)]).unwrap();
+    h.native("SetItemDropID", &[Value::Handle(a), Value::Int(1234)])
+        .unwrap();
     assert_eq!(h.item_drop_id(a), Some(1234));
     assert_eq!(h.item_drop_id(b), None);
-    h.native("SetItemDropID", &[Value::Handle(a), Value::Int(-7)]).unwrap();
+    h.native("SetItemDropID", &[Value::Handle(a), Value::Int(-7)])
+        .unwrap();
     assert_eq!(h.item_drop_id(a), Some(-7));
 }
 
@@ -130,7 +137,10 @@ fn refuses_a_non_item_handle_and_leaves_the_table_unchanged() {
 fn refuses_a_real_where_the_integer_is_declared() {
     let mut h = host(4);
     let a = item(&mut h, 1.0);
-    assert!(h.native("SetItemDropID", &[Value::Handle(a), Value::Real(1.0)]).is_err());
+    assert!(
+        h.native("SetItemDropID", &[Value::Handle(a), Value::Real(1.0)])
+            .is_err()
+    );
     assert_eq!(h.item_drop_id(a), None);
 }
 
@@ -139,15 +149,23 @@ fn budget_bounds_items_with_drop_origins_but_not_resets() {
     let mut h = host(1);
     let a = item(&mut h, 1.0);
     let b = item(&mut h, 2.0);
-    h.native("SetItemDropID", &[Value::Handle(a), Value::Int(1)]).unwrap();
-    assert!(h.native("SetItemDropID", &[Value::Handle(b), Value::Int(2)]).is_err());
+    h.native("SetItemDropID", &[Value::Handle(a), Value::Int(1)])
+        .unwrap();
+    assert!(
+        h.native("SetItemDropID", &[Value::Handle(b), Value::Int(2)])
+            .is_err()
+    );
     assert_eq!(h.item_drop_id(b), None);
-    h.native("SetItemDropID", &[Value::Handle(a), Value::Int(3)]).unwrap();
+    h.native("SetItemDropID", &[Value::Handle(a), Value::Int(3)])
+        .unwrap();
     assert_eq!(h.item_drop_id(a), Some(3));
 }
 
 #[test]
 fn unadmitted_host_does_not_dispatch_the_native() {
     let mut h = ObjectHost::checked(enums(DECLARATION)).unwrap();
-    assert!(h.native("SetItemDropID", &[Value::Null, Value::Int(1)]).is_err());
+    assert!(
+        h.native("SetItemDropID", &[Value::Null, Value::Int(1)])
+            .is_err()
+    );
 }

@@ -142,7 +142,10 @@ impl ObjectHost {
         let price = self
             .item_sales
             .as_ref()
-            .ok_or_else(|| self.inner.error(name, Failure::ItemState("item sales not admitted")))?
+            .ok_or_else(|| {
+                self.inner
+                    .error(name, Failure::ItemState("item sales not admitted"))
+            })?
             .row(item)
             .map(|row| row.gold)
             .ok_or_else(|| {
@@ -158,9 +161,10 @@ impl ObjectHost {
             return Ok(PurchaseOutcome::Refused(PurchaseRefusal::BuyerUnavailable));
         }
         let owner = buyer_record.owner;
-        let gold = self
-            .owner_gold(owner)?
-            .ok_or_else(|| self.inner.error(name, Failure::PlayerState("gold not admitted")))?;
+        let gold = self.owner_gold(owner)?.ok_or_else(|| {
+            self.inner
+                .error(name, Failure::PlayerState("gold not admitted"))
+        })?;
         if gold < price {
             return Ok(PurchaseOutcome::Refused(PurchaseRefusal::InsufficientGold));
         }
@@ -171,7 +175,8 @@ impl ObjectHost {
         let Some(slot) = (0..policy.slots).find(|&s| self.held_slot(buyer, s).is_none()) else {
             return Ok(PurchaseOutcome::Refused(PurchaseRefusal::NoFreeSlot));
         };
-        let sell = self.source_constant_enumerand("EVENT_PLAYER_UNIT_SELL_ITEM", "playerunitevent")?;
+        let sell =
+            self.source_constant_enumerand("EVENT_PLAYER_UNIT_SELL_ITEM", "playerunitevent")?;
         let mut triggers = Vec::new();
         for entry in &self.inner.arena {
             if let Entry::RegisteredPlayerUnitEvent(r) = entry
@@ -219,9 +224,7 @@ impl ObjectHost {
         for (trigger, filter, event) in triggers {
             self.queue_event(trigger, filter, subject, Some(event))?;
         }
-        Ok(PurchaseOutcome::Sold {
-            item: item_handle,
-        })
+        Ok(PurchaseOutcome::Sold { item: item_handle })
     }
 
     fn check_event_filter(&self, id: HandleId) -> Result<(), Error> {
@@ -235,9 +238,10 @@ impl ObjectHost {
     fn create_item_at(&mut self, item: i32, x: f32, y: f32) -> Result<HandleId, Error> {
         match self.create_item(&[Value::Int(item), Value::Real(x), Value::Real(y)])? {
             Value::Handle(handle) => Ok(handle),
-            _ => Err(self
-                .inner
-                .error("purchase", Failure::ItemState("created item is not a handle"))),
+            _ => Err(self.inner.error(
+                "purchase",
+                Failure::ItemState("created item is not a handle"),
+            )),
         }
     }
 

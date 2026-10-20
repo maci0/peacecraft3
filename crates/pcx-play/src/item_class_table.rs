@@ -78,9 +78,7 @@ impl<'a> Image<'a> {
 
     /// NUL-terminated lowercase ASCII name at `va` inside `.rdata` only.
     fn name_at(&self, va: u32) -> Option<&'a [u8]> {
-        let rel = va
-            .checked_sub(self.image_base.checked_add(self.rdata.rva)?)?
-            as usize;
+        let rel = va.checked_sub(self.image_base.checked_add(self.rdata.rva)?)? as usize;
         let tail = self.rdata.bytes.get(rel..)?;
         let len = tail.iter().take(MAX_NAME_LEN + 1).position(|&b| b == 0)?;
         let name = &tail[..len];
@@ -89,7 +87,11 @@ impl<'a> Image<'a> {
 
     /// Start of the function containing `offset`: the last prologue at or before it.
     pub(crate) fn function_start(&self, offset: usize) -> Option<usize> {
-        self.text.bytes.get(..=offset)?.windows(3).rposition(|w| w == PROLOGUE)
+        self.text
+            .bytes
+            .get(..=offset)?
+            .windows(3)
+            .rposition(|w| w == PROLOGUE)
     }
 
     /// Offset of the next prologue after `start`, or the end of `.text`.
@@ -109,7 +111,9 @@ impl<'a> Image<'a> {
             if code.get(j) != Some(&CALL) {
                 continue;
             }
-            let Some(rel) = i32_at(code, j + 1) else { continue };
+            let Some(rel) = i32_at(code, j + 1) else {
+                continue;
+            };
             let target = j as i64 + 5 + i64::from(rel);
             if let Some(t) = usize::try_from(target).ok().filter(|&t| t < code.len()) {
                 out.insert(t);
@@ -138,9 +142,15 @@ fn chain_entries(image: &Image<'_>, start: usize) -> Vec<Entry> {
         {
             continue;
         }
-        let Some(va) = u32_at(code, j + 1) else { continue };
-        let Some(name) = image.name_at(va) else { continue };
-        let Some(rel) = i32_at(code, j + 7) else { continue };
+        let Some(va) = u32_at(code, j + 1) else {
+            continue;
+        };
+        let Some(name) = image.name_at(va) else {
+            continue;
+        };
+        let Some(rel) = i32_at(code, j + 7) else {
+            continue;
+        };
         let Some(target) = usize::try_from(j as i64 + 11 + i64::from(rel)).ok() else {
             continue;
         };
@@ -211,7 +221,9 @@ pub fn derive(exe: &[u8], origin: AssetIdentity) -> Result<ItemClassTable, ItemC
     if references.next().is_some() {
         return Err(ItemClassError::AmbiguousAnchor);
     }
-    let loader = image.function_start(reference).ok_or(ItemClassError::Chain)?;
+    let loader = image
+        .function_start(reference)
+        .ok_or(ItemClassError::Chain)?;
     // The chain is in a function the loader calls, directly or through one row builder.
     let mut candidates = BTreeSet::new();
     for callee in image.callees(loader) {
@@ -233,8 +245,8 @@ pub fn derive(exe: &[u8], origin: AssetIdentity) -> Result<ItemClassTable, ItemC
     }
     let mut ordinals = BTreeMap::new();
     for entry in &entries {
-        let ordinal = entry_ordinal(code, entry.offset)
-            .ok_or(ItemClassError::OrdinalForm(entry.offset))?;
+        let ordinal =
+            entry_ordinal(code, entry.offset).ok_or(ItemClassError::OrdinalForm(entry.offset))?;
         if ordinals.insert(entry.name.clone(), ordinal).is_some() {
             return Err(ItemClassError::Chain);
         }

@@ -192,7 +192,10 @@ impl Rules {
                 }
                 Ok(Some(amount))
             }
-            _ => Err(format!("mixed healing ability list on {} is unsupported", item.rawcode())),
+            _ => Err(format!(
+                "mixed healing ability list on {} is unsupported",
+                item.rawcode()
+            )),
         }
     }
 

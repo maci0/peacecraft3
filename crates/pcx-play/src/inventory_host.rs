@@ -42,7 +42,12 @@ const CALLS: &[(&str, &[&str], &str, bool)] = &[
     ("SetItemDroppable", &["item", "boolean"], "nothing", false),
     ("SetItemDropOnDeath", &["item", "boolean"], "nothing", false),
     ("UnitUseItem", &["unit", "item"], "boolean", false),
-    ("UnitUseItemTarget", &["unit", "item", "widget"], "boolean", false),
+    (
+        "UnitUseItemTarget",
+        &["unit", "item", "widget"],
+        "boolean",
+        false,
+    ),
 ];
 /// Trigger, filter and registered event of each use-event registration of a player.
 type UseEventPlan = Vec<(HandleId, Option<HandleId>, HandleId)>;
@@ -303,9 +308,10 @@ impl ObjectHost {
         else {
             return Ok(AttributeBonus::default());
         };
-        let record = self
-            .live_item(item)?
-            .ok_or_else(|| self.inner.error("inventory", Failure::ItemState("item not live")))?;
+        let record = self.live_item(item)?.ok_or_else(|| {
+            self.inner
+                .error("inventory", Failure::ItemState("item not live"))
+        })?;
         let held = rules
             .held_attributes(&record.definition)
             .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))?;
@@ -336,8 +342,14 @@ impl ObjectHost {
                 .strength
                 .checked_add(passive.strength)
                 .ok_or_else(overflow)?;
-            bonus.agility = bonus.agility.checked_add(passive.agility).ok_or_else(overflow)?;
-            bonus.armor = bonus.armor.checked_add(passive.armor).ok_or_else(overflow)?;
+            bonus.agility = bonus
+                .agility
+                .checked_add(passive.agility)
+                .ok_or_else(overflow)?;
+            bonus.armor = bonus
+                .armor
+                .checked_add(passive.armor)
+                .ok_or_else(overflow)?;
         }
         Ok(bonus)
     }
@@ -384,7 +396,11 @@ impl ObjectHost {
         Ok(())
     }
 
-    pub(crate) fn add_inventory_item(&mut self, unit: HandleId, item: HandleId) -> Result<bool, Error> {
+    pub(crate) fn add_inventory_item(
+        &mut self,
+        unit: HandleId,
+        item: HandleId,
+    ) -> Result<bool, Error> {
         let policy = self.inventory_policy(unit)?;
         let Some(record) = self.live_item(item)? else {
             return Ok(false);
@@ -412,11 +428,7 @@ impl ObjectHost {
         // Strength and agility are hero attributes. A non-hero holder has no modeled effect, so a
         // stat item is refused rather than accepted as a silent no-op.
         if (passive.strength != 0 || passive.agility != 0)
-            && !self
-                .executed_unit(unit)?
-                .definition
-                .rawcode[0]
-                .is_ascii_uppercase()
+            && !self.executed_unit(unit)?.definition.rawcode[0].is_ascii_uppercase()
         {
             return Err(self.inner.error(
                 "inventory",
@@ -611,10 +623,12 @@ impl ObjectHost {
             return Ok(false);
         };
         let state = self.inventory_state()?;
-        let rules = state
-            .attributes
-            .as_ref()
-            .ok_or_else(|| self.inner.error("inventory", Failure::ItemUse("healing rules are not admitted".into())))?;
+        let rules = state.attributes.as_ref().ok_or_else(|| {
+            self.inner.error(
+                "inventory",
+                Failure::ItemUse("healing rules are not admitted".into()),
+            )
+        })?;
         let is_use = rules
             .heal_effect(&record.definition)
             .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))?
@@ -628,7 +642,9 @@ impl ObjectHost {
         if targeted {
             return Err(self.inner.error(
                 "inventory",
-                Failure::ItemUse("targeted item use needs a selected target, which is not qualified".into()),
+                Failure::ItemUse(
+                    "targeted item use needs a selected target, which is not qualified".into(),
+                ),
             ));
         }
         self.activate_held_item(unit, item)
@@ -756,10 +772,7 @@ impl ObjectHost {
     /// Use-event registrations of the holder's player, as (trigger, filter, event). The owner
     /// comes from the unit's current player. Every filter is validated here, so queueing after
     /// the commit has no failing lookup.
-    fn use_event_plan(
-        &self,
-        unit: HandleId,
-    ) -> Result<(HandleId, UseEventPlan), Error> {
+    fn use_event_plan(&self, unit: HandleId) -> Result<(HandleId, UseEventPlan), Error> {
         let owner = self.executed_unit(unit)?.owner;
         let enumerand =
             self.source_constant_enumerand("EVENT_PLAYER_UNIT_USE_ITEM", "playerunitevent")?;

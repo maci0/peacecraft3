@@ -1,5 +1,5 @@
 use super::*;
-use crate::pe_image::{PE32_MAGIC, PE_OFFSET_AT, SECTION_LEN};
+use crate::pe_image::{PE_OFFSET_AT, PE32_MAGIC, SECTION_LEN};
 
 const IMAGE_BASE: u32 = 0x40_0000;
 const TEXT_RVA: u32 = 0x1000;
@@ -18,7 +18,9 @@ const NAMES: [&str; 3] = ["permanent", "charged", "miscellanous"];
 const TAILS: [&[u8]; 3] = [
     &[0x85, 0xc0, 0x75, 0x09, 0x5e, 0x5d, 0xc3, 0, 0, 0, 0, 0],
     &[0x85, 0xc0, 0x75, 0x09, 0xb8, 1, 0, 0, 0, 0x5e, 0x5d, 0xc3],
-    &[0xf7, 0xd8, 0x1b, 0xc0, 0xf7, 0xd8, 0x83, 0xc0, 0x06, 0x5e, 0x5d, 0xc3],
+    &[
+        0xf7, 0xd8, 0x1b, 0xc0, 0xf7, 0xd8, 0x83, 0xc0, 0x06, 0x5e, 0x5d, 0xc3,
+    ],
 ];
 
 /// What the synthetic image contains beyond the well-formed 1.29b-shaped chain.
@@ -36,7 +38,13 @@ struct Shape<'a> {
 
 fn call(at: usize, target: usize) -> [u8; 5] {
     let rel = target as i64 - (at as i64 + 5);
-    [0xe8, rel as u8, (rel >> 8) as u8, (rel >> 16) as u8, (rel >> 24) as u8]
+    [
+        0xe8,
+        rel as u8,
+        (rel >> 8) as u8,
+        (rel >> 16) as u8,
+        (rel >> 24) as u8,
+    ]
 }
 
 fn origin() -> AssetIdentity {
@@ -120,7 +128,14 @@ fn assemble(code: &[u8], rdata: &[u8]) -> Vec<u8> {
     out[opt + 28..opt + 32].copy_from_slice(&IMAGE_BASE.to_le_bytes());
     let sections = [
         (TEXT_HDR, *TEXT, TEXT_RVA, code, text_len, TEXT_RAW),
-        (RDATA_HDR, *RDATA, TEXT_RVA + SECTION_RVA_STEP, rdata, rdata_len, rdata_raw),
+        (
+            RDATA_HDR,
+            *RDATA,
+            TEXT_RVA + SECTION_RVA_STEP,
+            rdata,
+            rdata_len,
+            rdata_raw,
+        ),
     ];
     for (at, name, va, body, len, raw) in sections {
         out[at..at + 8].copy_from_slice(&name);
@@ -152,15 +167,28 @@ fn derives_names_and_ordinals_and_keeps_the_image_identity() {
             ("permanent".to_owned(), 0),
         ])
     );
-    assert_eq!(derive(&exe, origin()).unwrap(), table, "derivation is deterministic");
+    assert_eq!(
+        derive(&exe, origin()).unwrap(),
+        table,
+        "derivation is deterministic"
+    );
 }
 
 #[test]
 fn refuses_non_pe_and_truncated_input() {
-    assert!(matches!(derive(b"not an image", origin()), Err(ItemClassError::Image(_))));
+    assert!(matches!(
+        derive(b"not an image", origin()),
+        Err(ItemClassError::Image(_))
+    ));
     let exe = image(&Shape::default());
-    assert!(matches!(derive(&exe[..0x200], origin()), Err(ItemClassError::Image(_))));
-    assert!(matches!(derive(&exe[..0x30], origin()), Err(ItemClassError::Image(_))));
+    assert!(matches!(
+        derive(&exe[..0x200], origin()),
+        Err(ItemClassError::Image(_))
+    ));
+    assert!(matches!(
+        derive(&exe[..0x30], origin()),
+        Err(ItemClassError::Image(_))
+    ));
 }
 
 #[test]
@@ -168,33 +196,61 @@ fn refuses_section_offsets_and_addresses_that_overflow_or_leave_the_image() {
     let exe = image(&Shape::default());
     let mut raw_beyond = exe.clone();
     set_u32(&mut raw_beyond, RDATA_HDR + 20, u32::MAX - 0x10);
-    assert!(matches!(derive(&raw_beyond, origin()), Err(ItemClassError::Image(_))));
+    assert!(matches!(
+        derive(&raw_beyond, origin()),
+        Err(ItemClassError::Image(_))
+    ));
     let mut rva_overflow = exe.clone();
     set_u32(&mut rva_overflow, TEXT_HDR + 12, 0xffff_f000);
-    assert!(matches!(derive(&rva_overflow, origin()), Err(ItemClassError::Image(_))));
+    assert!(matches!(
+        derive(&rva_overflow, origin()),
+        Err(ItemClassError::Image(_))
+    ));
     let mut too_many = exe.clone();
     too_many[0x44 + 2..0x44 + 4].copy_from_slice(&200u16.to_le_bytes());
-    assert!(matches!(derive(&too_many, origin()), Err(ItemClassError::Image(_))));
+    assert!(matches!(
+        derive(&too_many, origin()),
+        Err(ItemClassError::Image(_))
+    ));
     let mut not_pe32 = exe.clone();
     not_pe32[0x58..0x5a].copy_from_slice(&0x20bu16.to_le_bytes());
-    assert!(matches!(derive(&not_pe32, origin()), Err(ItemClassError::Image(_))));
+    assert!(matches!(
+        derive(&not_pe32, origin()),
+        Err(ItemClassError::Image(_))
+    ));
     let mut duplicate = exe.clone();
     duplicate[RDATA_HDR..RDATA_HDR + 8].copy_from_slice(TEXT);
-    assert!(matches!(derive(&duplicate, origin()), Err(ItemClassError::Image(_))));
+    assert!(matches!(
+        derive(&duplicate, origin()),
+        Err(ItemClassError::Image(_))
+    ));
 }
 
 #[test]
 fn anchor_must_be_a_single_rdata_occurrence() {
-    let missing = image(&Shape { path_missing: true, ..Shape::default() });
+    let missing = image(&Shape {
+        path_missing: true,
+        ..Shape::default()
+    });
     assert_eq!(derive(&missing, origin()), Err(ItemClassError::Anchor));
-    let twice = image(&Shape { extra_rdata: PATH_NUL, ..Shape::default() });
-    assert_eq!(derive(&twice, origin()), Err(ItemClassError::AmbiguousAnchor));
+    let twice = image(&Shape {
+        extra_rdata: PATH_NUL,
+        ..Shape::default()
+    });
+    assert_eq!(
+        derive(&twice, origin()),
+        Err(ItemClassError::AmbiguousAnchor)
+    );
 }
 
 #[test]
 fn a_spoofed_path_outside_rdata_is_not_an_anchor() {
     let spoof = [PATH, &[0u8][..]].concat();
-    let exe = image(&Shape { path_missing: true, extra_text: spoof, ..Shape::default() });
+    let exe = image(&Shape {
+        path_missing: true,
+        extra_text: spoof,
+        ..Shape::default()
+    });
     assert_eq!(derive(&exe, origin()), Err(ItemClassError::Anchor));
 }
 
@@ -204,19 +260,28 @@ fn a_second_code_reference_to_the_path_is_ambiguous() {
     let path_va = rdata_va + 1;
     let mut second = vec![PUSH_IMM32];
     second.extend_from_slice(&path_va.to_le_bytes());
-    let exe = image(&Shape { extra_text: second, ..Shape::default() });
+    let exe = image(&Shape {
+        extra_text: second,
+        ..Shape::default()
+    });
     assert_eq!(derive(&exe, origin()), Err(ItemClassError::AmbiguousAnchor));
 }
 
 #[test]
 fn refuses_a_chain_that_is_missing_or_has_an_unrecognized_compare_form() {
-    let no_entries = image(&Shape { tails: Some(&[]), ..Shape::default() });
+    let no_entries = image(&Shape {
+        tails: Some(&[]),
+        ..Shape::default()
+    });
     assert_eq!(derive(&no_entries, origin()), Err(ItemClassError::Chain));
     let unknown = image(&Shape {
         tails: Some(&[TAILS[0], &[0x90; 12], TAILS[2]]),
         ..Shape::default()
     });
-    assert!(matches!(derive(&unknown, origin()), Err(ItemClassError::OrdinalForm(_))));
+    assert!(matches!(
+        derive(&unknown, origin()),
+        Err(ItemClassError::OrdinalForm(_))
+    ));
 }
 
 /// Original-input gate: `PCX_WAR3_EXE` names a local executable whose version resource is
@@ -228,7 +293,8 @@ fn original_executable_yields_the_chain_and_its_identity() {
     };
     let exe = std::fs::read(&path).expect("readable executable");
     assert!(
-        exe.windows(b"1.29.2.9231".len()).any(|w| w == b"1.29.2.9231"),
+        exe.windows(b"1.29.2.9231".len())
+            .any(|w| w == b"1.29.2.9231"),
         "version resource is 1.29.2.9231"
     );
     let origin = AssetIdentity {

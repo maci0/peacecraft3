@@ -7,9 +7,9 @@
 //! the engine also returns for an invalid item handle. A missing or consumed item answers
 //! level 0, the zero value `GetItemTypeId` uses.
 
+use super::super::{Error, Failure};
 use super::ObjectHost;
 use crate::item_class_table::ItemClassTable;
-use super::super::{Error, Failure};
 use pcx_objects::Value as FieldOverride;
 use pcx_script::Value;
 use pcx_sim::world::{FieldProblem, FieldValue};
@@ -39,9 +39,10 @@ impl ObjectHost {
             .ok_or_else(|| self.inner.error(CONVERT, Failure::Signature))?;
         let ordinals = classes.ordinals.values().copied().chain([classes.default]);
         if ordinals.clone().any(|n| !domain.contains(&n)) {
-            return Err(self
-                .inner
-                .error(TYPE, Failure::ItemState("class ordinal is not a program item type")));
+            return Err(self.inner.error(
+                TYPE,
+                Failure::ItemState("class ordinal is not a program item type"),
+            ));
         }
         self.item_queries = Some(classes);
         Ok(self)
@@ -60,28 +61,51 @@ impl ObjectHost {
 
     fn query_item(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
         let [Value::Handle(item)] = args else {
-            return Err(self.inner.error(name, Failure::ItemState("expected one item handle")));
+            return Err(self
+                .inner
+                .error(name, Failure::ItemState("expected one item handle")));
         };
         let live = self.live_item(*item)?;
-        let classes = self.item_queries.as_ref().expect("dispatch requires admission");
+        let classes = self
+            .item_queries
+            .as_ref()
+            .expect("dispatch requires admission");
         let default = classes.default;
         if name == LEVEL {
             let Some(record) = live else {
                 return Ok(Value::Int(0));
             };
-            return authored_level(record.definition.fields.get(&LEVEL_FOURCC).map(|f| &f.value))
-                .map(Value::Int)
-                .ok_or_else(|| self.inner.error(name, Failure::ItemState("authored item level is not derived")));
+            return authored_level(
+                record
+                    .definition
+                    .fields
+                    .get(&LEVEL_FOURCC)
+                    .map(|f| &f.value),
+            )
+            .map(Value::Int)
+            .ok_or_else(|| {
+                self.inner.error(
+                    name,
+                    Failure::ItemState("authored item level is not derived"),
+                )
+            });
         }
         let ordinal = match live {
             None => default,
             Some(record) => {
-                let text = class_text(record.definition.fields.get(&CLASS_FOURCC).map(|f| &f.value));
+                let text = class_text(
+                    record
+                        .definition
+                        .fields
+                        .get(&CLASS_FOURCC)
+                        .map(|f| &f.value),
+                );
                 match text {
                     Err(()) => {
-                        return Err(self
-                            .inner
-                            .error(name, Failure::ItemState("authored item class is not derived")));
+                        return Err(self.inner.error(
+                            name,
+                            Failure::ItemState("authored item class is not derived"),
+                        ));
                     }
                     Ok(None) => default,
                     Ok(Some(text)) => classes

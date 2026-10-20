@@ -46,7 +46,11 @@ fn every_selected_counter_refuses_before_and_after_a_combat_death() {
     assert_eq!(
         h.native(
             "IssueTargetOrder",
-            &[Value::Handle(a), Value::Str("alpha".into()), Value::Handle(b)],
+            &[
+                Value::Handle(a),
+                Value::Str("alpha".into()),
+                Value::Handle(b)
+            ],
         )
         .unwrap(),
         Value::Bool(true)

@@ -2807,10 +2807,10 @@ mod range_runtime;
 
 #[path = "unit_activity_tests.rs"]
 mod activity;
-#[path = "group_order_tests.rs"]
-mod group_orders;
 #[path = "combat_tests.rs"]
 mod combat;
+#[path = "group_order_tests.rs"]
+mod group_orders;
 #[path = "unit_runtime_tests.rs"]
 mod runtime;
 

@@ -1,11 +1,13 @@
-use super::super::ItemBudget;
 use super::super::Entry;
+use super::super::ItemBudget;
 use super::*;
 use crate::playercolor_host::{EnumHost, Limits};
 use pcx_objects::editor::defaults::{DefaultTables, Identity};
 use pcx_objects::editor::{EditorReadLimits, ObjectKind, Overlay, SlkId};
 use pcx_script::{Host, Prelude};
-use pcx_sim::world::{Definition, FieldValue, ObjectCatalog, ObjectField, ResolutionProblem, Source};
+use pcx_sim::world::{
+    Definition, FieldValue, ObjectCatalog, ObjectField, ResolutionProblem, Source,
+};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -161,7 +163,11 @@ fn item(h: &mut ObjectHost, raw: &[u8; 4]) -> HandleId {
     let Value::Handle(id) = h
         .native(
             "CreateItem",
-            &[Value::Int(i32::from_be_bytes(*raw)), Value::Real(0.0), Value::Real(0.0)],
+            &[
+                Value::Int(i32::from_be_bytes(*raw)),
+                Value::Real(0.0),
+                Value::Real(0.0),
+            ],
         )
         .unwrap()
     else {
@@ -175,16 +181,23 @@ fn charges(h: &mut ObjectHost, id: HandleId) -> Value {
 }
 
 fn set(h: &mut ObjectHost, id: HandleId, count: i32) {
-    h.native("SetItemCharges", &[Value::Handle(id), Value::Int(count)]).unwrap();
+    h.native("SetItemCharges", &[Value::Handle(id), Value::Int(count)])
+        .unwrap();
 }
 
 #[test]
 fn admission_requires_items_and_the_declared_natives_once() {
     let base = ObjectHost::checked(enums()).unwrap();
-    assert!(base.with_item_use(rules(), 1).is_err(), "items are required first");
+    assert!(
+        base.with_item_use(rules(), 1).is_err(),
+        "items are required first"
+    );
     let h = host(4);
     assert!(h.item_use.is_some());
-    assert!(host(4).with_item_use(rules(), 4).is_err(), "second admission refuses");
+    assert!(
+        host(4).with_item_use(rules(), 4).is_err(),
+        "second admission refuses"
+    );
 }
 
 #[test]
@@ -199,8 +212,15 @@ fn get_reads_the_authored_count_and_set_replaces_it() {
 #[test]
 fn null_item_reads_zero_and_writes_nothing_as_the_binary_does() {
     let mut h = host(4);
-    assert_eq!(h.native("GetItemCharges", &[Value::Null]).unwrap(), Value::Int(0));
-    assert_eq!(h.native("SetItemCharges", &[Value::Null, Value::Int(3)]).unwrap(), Value::Null);
+    assert_eq!(
+        h.native("GetItemCharges", &[Value::Null]).unwrap(),
+        Value::Int(0)
+    );
+    assert_eq!(
+        h.native("SetItemCharges", &[Value::Null, Value::Int(3)])
+            .unwrap(),
+        Value::Null
+    );
     assert!(h.item_use.as_ref().unwrap().charges.is_empty());
 }
 
@@ -227,7 +247,10 @@ fn uncharged_items_read_zero_and_non_item_handles_refuse() {
     let mut h = host(4);
     let wand = item(&mut h, b"WAND");
     assert_eq!(charges(&mut h, wand), Value::Int(0));
-    assert!(h.native("SetItemCharges", &[Value::Handle(wand), Value::Real(1.0)]).is_err());
+    assert!(
+        h.native("SetItemCharges", &[Value::Handle(wand), Value::Real(1.0)])
+            .is_err()
+    );
     assert!(h.native("GetItemCharges", &[Value::Real(1.0)]).is_err());
 }
 
@@ -245,7 +268,10 @@ fn the_charge_table_is_bounded_by_the_item_budget() {
     let a = item(&mut h, b"POT1");
     let b = item(&mut h, b"POT2");
     set(&mut h, a, 1);
-    assert!(h.native("SetItemCharges", &[Value::Handle(b), Value::Int(1)]).is_err());
+    assert!(
+        h.native("SetItemCharges", &[Value::Handle(b), Value::Int(1)])
+            .is_err()
+    );
     set(&mut h, a, 4);
     assert_eq!(charges(&mut h, a), Value::Int(4));
 }

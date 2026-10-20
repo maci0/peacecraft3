@@ -25,9 +25,10 @@ impl ObjectHost {
     /// number of units that carry a flag.
     pub fn with_unit_explosions(mut self, max_units: usize) -> Result<Self, Error> {
         if self.unit_explosions.is_some() {
-            return Err(self
-                .inner
-                .error(NATIVE, Failure::UnitState("unit explosions already admitted")));
+            return Err(self.inner.error(
+                NATIVE,
+                Failure::UnitState("unit explosions already admitted"),
+            ));
         }
         Self::contract(
             &self.inner,

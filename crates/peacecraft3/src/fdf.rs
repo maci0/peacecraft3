@@ -1107,7 +1107,8 @@ Frame "FRAME" "Plate" {
             "Frame\t\"TEXT\" \"ScoreLabel\"",
         ] {
             let mut f = Fdf::default();
-            f.parse_into(&block(header)).unwrap_or_else(|e| panic!("{header}: {e:?}"));
+            f.parse_into(&block(header))
+                .unwrap_or_else(|e| panic!("{header}: {e:?}"));
             assert_eq!(f.frame("ScoreLabel").map(|x| x.kind.as_str()), Some("TEXT"));
         }
         for header in [
@@ -1116,7 +1117,10 @@ Frame "FRAME" "Plate" {
             "Frame \"TEXT\" ScoreLabel\"",
         ] {
             let mut f = Fdf::default();
-            assert!(f.parse_into(&block(header)).is_err(), "{header} must be refused");
+            assert!(
+                f.parse_into(&block(header)).is_err(),
+                "{header} must be refused"
+            );
         }
     }
 }

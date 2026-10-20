@@ -67,7 +67,9 @@ impl Rules {
         }
         let target = |va: u32, window: &[u8]| -> Result<u32, String> {
             let displacement = i32::from_le_bytes(
-                window[9..13].try_into().map_err(|_| "truncated group enumeration call")?,
+                window[9..13]
+                    .try_into()
+                    .map_err(|_| "truncated group enumeration call")?,
             );
             Ok(va.wrapping_add(13).wrapping_add_signed(displacement))
         };
@@ -106,7 +108,9 @@ fn bounded_push(window: &[u8], intervening: &[u8]) -> Result<BoundedPush, String
     {
         return Err(unsupported());
     }
-    let callback = window.get(callback_at + 1..callback_at + 5).ok_or_else(unsupported)?;
+    let callback = window
+        .get(callback_at + 1..callback_at + 5)
+        .ok_or_else(unsupported)?;
     Ok(BoundedPush {
         limit: window[2],
         callback: callback.try_into().map_err(|_| unsupported())?,
@@ -120,7 +124,9 @@ pub(crate) mod tests {
     use std::collections::BTreeMap;
     fn windows(limit: u8) -> BTreeMap<u32, Vec<u8>> {
         let prepare = vec![0x50, 0x6a, limit, 0x68, 0x44, 0x33, 0x22, 0x11];
-        let point_prepare = vec![0x50, 0x6a, limit, 0x89, 0x4d, 0xe0, 0x8b, 0xca, 0x68, 0x44, 0x33, 0x22, 0x11];
+        let point_prepare = vec![
+            0x50, 0x6a, limit, 0x89, 0x4d, 0xe0, 0x8b, 0xca, 0x68, 0x44, 0x33, 0x22, 0x11,
+        ];
         let delivery = |va: u32, cap: u8| {
             let mut bytes = vec![0x50, 0x6a, cap, 0x68, 0x88, 0x77, 0x66, 0x55, 0xe8];
             bytes.extend_from_slice(&(0x12345678u32.wrapping_sub(va + 13) as i32).to_le_bytes());
@@ -133,34 +139,55 @@ pub(crate) mod tests {
             (0x5030ee, delivery(0x5030ee, limit)),
         ])
     }
-    fn decode_with(windows: &BTreeMap<u32, Vec<u8>>, origin: AssetIdentity, digest: Sha256Digest) -> Result<Rules, String> {
+    fn decode_with(
+        windows: &BTreeMap<u32, Vec<u8>>,
+        origin: AssetIdentity,
+        digest: Sha256Digest,
+    ) -> Result<Rules, String> {
         Rules::decode(origin, digest, |va, n| {
-            windows.get(&va).filter(|v|v.len()==n).cloned().ok_or_else(||"missing synthetic window".into())
+            windows
+                .get(&va)
+                .filter(|v| v.len() == n)
+                .cloned()
+                .ok_or_else(|| "missing synthetic window".into())
         })
     }
     pub(crate) fn rules(binding: Binding, limit: u8) -> Rules {
         decode_with(&windows(limit), binding.origin, binding.image_sha256).unwrap()
     }
     fn origin() -> AssetIdentity {
-        AssetIdentity {source:"synthetic:group-order-image".into(),edition:"synthetic".into(),version:"test".into()}
+        AssetIdentity {
+            source: "synthetic:group-order-image".into(),
+            edition: "synthetic".into(),
+            version: "test".into(),
+        }
     }
     #[test]
     fn group_order_limit_is_decoded_and_preparation_relationships_are_checked() {
         for limit in [1, 3, 19] {
-            assert_eq!(decode_with(&windows(limit),origin(),[0;32]).unwrap().point_member_limit(),usize::from(limit));
+            assert_eq!(
+                decode_with(&windows(limit), origin(), [0; 32])
+                    .unwrap()
+                    .point_member_limit(),
+                usize::from(limit)
+            );
         }
-        for at in [0x502da2,0x5030c2,0x5030ee] {
-            let mut data=windows(3);data.get_mut(&at).unwrap()[2]=4;
-            assert!(decode_with(&data,origin(),[0;32]).is_err());
+        for at in [0x502da2, 0x5030c2, 0x5030ee] {
+            let mut data = windows(3);
+            data.get_mut(&at).unwrap()[2] = 4;
+            assert!(decode_with(&data, origin(), [0; 32]).is_err());
         }
-        let mut data=windows(3);data.get_mut(&0x502dd0).unwrap()[2]=3;
-        assert!(decode_with(&data,origin(),[0;32]).is_err());
-        let mut data=windows(3);data.get_mut(&0x5030ee).unwrap()[9]^=1;
-        assert!(decode_with(&data,origin(),[0;32]).is_err());
-        let mut data=windows(3);data.get_mut(&0x5030c2).unwrap()[9]^=1;
-        assert!(decode_with(&data,origin(),[0;32]).is_err());
-        assert!(decode_with(&windows(0),origin(),[0;32]).is_err());
-        assert!(decode_with(&windows(255),origin(),[0;32]).is_err());
+        let mut data = windows(3);
+        data.get_mut(&0x502dd0).unwrap()[2] = 3;
+        assert!(decode_with(&data, origin(), [0; 32]).is_err());
+        let mut data = windows(3);
+        data.get_mut(&0x5030ee).unwrap()[9] ^= 1;
+        assert!(decode_with(&data, origin(), [0; 32]).is_err());
+        let mut data = windows(3);
+        data.get_mut(&0x5030c2).unwrap()[9] ^= 1;
+        assert!(decode_with(&data, origin(), [0; 32]).is_err());
+        assert!(decode_with(&windows(0), origin(), [0; 32]).is_err());
+        assert!(decode_with(&windows(255), origin(), [0; 32]).is_err());
     }
     #[test]
     fn bounded_push_requires_authored_intervening_instructions_at_their_offset() {
@@ -174,7 +201,9 @@ pub(crate) mod tests {
         changed[4] ^= 1;
         assert!(bounded_push(&changed, &moves).is_err());
         // A callback-looking byte later in the window is not a search hit.
-        let mut shifted = vec![0x50, 0x6a, 3, 0x90, 0x90, 0x90, 0x90, 0x90, 0x68, 1, 2, 3, 4];
+        let mut shifted = vec![
+            0x50, 0x6a, 3, 0x90, 0x90, 0x90, 0x90, 0x90, 0x68, 1, 2, 3, 4,
+        ];
         assert!(bounded_push(&shifted, &[]).is_err());
         shifted.truncate(7);
         assert!(bounded_push(&shifted, &[]).is_err());
@@ -198,10 +227,19 @@ pub(crate) mod tests {
     #[test]
     #[ignore = "requires locally supplied selected Warcraft III.exe"]
     fn supplied_group_order_image_qualifies_native_bounds() {
-        let path=std::env::var("PCX_GROUP_ORDER_IMAGE").expect("set PCX_GROUP_ORDER_IMAGE to the selected local executable");
-        let image=std::fs::read(&path).unwrap();
-        let rules=Rules::reviewed_legacy(&image,AssetIdentity {source:path,edition:"selected Legacy executable".into(),version:"VERSIONINFO 1.29.2.9231".into()}).unwrap();
-        assert!(rules.point_member_limit()>0);
-        assert_eq!(rules.image_sha256,sha256(&image));
+        let path = std::env::var("PCX_GROUP_ORDER_IMAGE")
+            .expect("set PCX_GROUP_ORDER_IMAGE to the selected local executable");
+        let image = std::fs::read(&path).unwrap();
+        let rules = Rules::reviewed_legacy(
+            &image,
+            AssetIdentity {
+                source: path,
+                edition: "selected Legacy executable".into(),
+                version: "VERSIONINFO 1.29.2.9231".into(),
+            },
+        )
+        .unwrap();
+        assert!(rules.point_member_limit() > 0);
+        assert_eq!(rules.image_sha256, sha256(&image));
     }
 }

@@ -57,7 +57,9 @@ pub(super) struct ItemUse {
 pub enum UseCheck {
     Ready(UseGrant),
     /// Game seconds until the item's cooldown group is ready.
-    OnCooldown { remaining: f64 },
+    OnCooldown {
+        remaining: f64,
+    },
     NoCharges,
     /// The item is not held by the unit.
     NotHeld,
@@ -109,12 +111,20 @@ impl ObjectHost {
                 .error(GET, Failure::ItemUse("item use already admitted".into())));
         }
         if self.items.is_none() {
-            return Err(self
-                .inner
-                .error(GET, Failure::ItemUse("item use requires item admission".into())));
+            return Err(self.inner.error(
+                GET,
+                Failure::ItemUse("item use requires item admission".into()),
+            ));
         }
         Self::contract(&self.inner, GET, &["item"], "integer", false, None)?;
-        Self::contract(&self.inner, SET, &["item", "integer"], "nothing", false, None)?;
+        Self::contract(
+            &self.inner,
+            SET,
+            &["item", "integer"],
+            "nothing",
+            false,
+            None,
+        )?;
         self.item_use = Some(ItemUse {
             rules,
             max_records,
@@ -172,7 +182,9 @@ impl ObjectHost {
             && !state.ready_at.contains_key(&cooldown.group)
             && state.ready_at.len() >= state.max_records
         {
-            return Err(self.inner.error(GET, Failure::Budget("item cooldown groups")));
+            return Err(self
+                .inner
+                .error(GET, Failure::Budget("item cooldown groups")));
         }
         let state = self.item_use.as_mut().expect("session matched");
         if let Some(count) = remaining {
@@ -190,13 +202,17 @@ impl ObjectHost {
     }
 
     fn use_clock(&self) -> Result<f64, Error> {
-        let now = self
-            .timer_game_time()
-            .ok_or_else(|| self.inner.error("item use", Failure::ItemUse("game clock is not admitted".into())))?;
+        let now = self.timer_game_time().ok_or_else(|| {
+            self.inner.error(
+                "item use",
+                Failure::ItemUse("game clock is not admitted".into()),
+            )
+        })?;
         if !now.is_finite() {
-            return Err(self
-                .inner
-                .error("item use", Failure::ItemUse("game clock is not finite".into())));
+            return Err(self.inner.error(
+                "item use",
+                Failure::ItemUse("game clock is not finite".into()),
+            ));
         }
         Ok(now)
     }

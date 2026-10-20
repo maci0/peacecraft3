@@ -11,10 +11,12 @@
 use crate::launch::{Addon, AssetMode, Behaviour, GameMode};
 use bevy::{prelude::*, ui_widgets::Button};
 use pcx_assets::{ArchiveLayer, ContentSource, Resolver};
-use pcx_play::install_source::{InstallSource, MAX_ASSET_BYTES, MAX_AGGREGATE_BYTES, MAX_LISTED_PATHS};
 use pcx_objects::editor::campaign_index::{CampaignSlot, IndexLimits, parse_campaign_index};
 use pcx_objects::editor::{EditorReadLimits, SlkId};
 use pcx_play::MapScriptBudget;
+use pcx_play::install_source::{
+    InstallSource, MAX_AGGREGATE_BYTES, MAX_ASSET_BYTES, MAX_LISTED_PATHS,
+};
 use pcx_play::map_admission::MapAdmissionBudget;
 use pcx_play::scripts::AssetIdentity;
 use peacecraft3::browser_configuration::{Configuration, ConfigurationInbox, Member, Poll};

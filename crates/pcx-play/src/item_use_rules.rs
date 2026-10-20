@@ -4,9 +4,9 @@
 //! `iicd` (ignoreCD), `icid` (cooldownID) and `iabi` (abilList). The duration is the item's one
 //! ability's level-1 `acdn` (`Cool`) with W3A overrides applied. Values come from the definition
 //! fields and the ability overlay, so the selected install is the only source.
+use pcx_objects::Value as OverrideValue;
 use pcx_objects::editor::defaults::{DefaultTables, Family};
 use pcx_objects::editor::{FieldKind, Overlay};
-use pcx_objects::Value as OverrideValue;
 use pcx_sim::world::{Definition, FieldProblem, FieldValue};
 use std::sync::Arc;
 
@@ -103,7 +103,9 @@ impl Rules {
             .find(|m| m.field == COOLDOWN && m.selectors.is_none_or(|s| s[0] == COOLDOWN_LEVEL))
         {
             if entry.selectors.is_some_and(|s| s[1] != 0) {
-                return Err(format!("indexed cooldown override on {alias} is unsupported"));
+                return Err(format!(
+                    "indexed cooldown override on {alias} is unsupported"
+                ));
             }
             let OverrideValue::Real(seconds) = entry.value else {
                 return Err(format!("noninteger cooldown override on {alias}"));
@@ -118,9 +120,7 @@ impl Rules {
             .level_cell("Cool", COOLDOWN_LEVEL)
             .map_err(|e| e.to_string())?;
         match cell.typed(FieldKind::Real).map_err(|e| e.to_string())? {
-            pcx_objects::editor::defaults::Value::Real(seconds) => {
-                finite_seconds(seconds, alias)
-            }
+            pcx_objects::editor::defaults::Value::Real(seconds) => finite_seconds(seconds, alias),
             _ => Err(format!("cooldown of {alias} is not real")),
         }
     }

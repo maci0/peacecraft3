@@ -476,20 +476,40 @@ fn purchase_without_loaded_stock_refuses_and_changes_no_state() {
     assert!(outcome(host, 1).contains("NotInStock"));
     host.native(
         "AddItemToStock",
-        &[Value::Handle(shop), Value::Int(1), Value::Int(0), Value::Int(1)],
+        &[
+            Value::Handle(shop),
+            Value::Int(1),
+            Value::Int(0),
+            Value::Int(1),
+        ],
     )
     .unwrap();
-    assert!(outcome(host, 1).contains("NotInStock"), "zero stock is not sold");
+    assert!(
+        outcome(host, 1).contains("NotInStock"),
+        "zero stock is not sold"
+    );
     host.native(
         "AddItemToStock",
-        &[Value::Handle(shop), Value::Int(2), Value::Int(3), Value::Int(3)],
+        &[
+            Value::Handle(shop),
+            Value::Int(2),
+            Value::Int(3),
+            Value::Int(3),
+        ],
     )
     .unwrap();
     host.native("SetItemTypeSlots", &[Value::Handle(shop), Value::Int(0)])
         .unwrap();
-    assert!(outcome(host, 2).contains("NotInStock"), "a cell cleared by a shrink is stale");
+    assert!(
+        outcome(host, 2).contains("NotInStock"),
+        "a cell cleared by a shrink is stale"
+    );
     assert_eq!(host.item_stock(shop, 2).unwrap(), None);
-    assert_eq!(host.stock_item_records().unwrap(), 0, "a shrink to zero clears every cell");
+    assert_eq!(
+        host.stock_item_records().unwrap(),
+        0,
+        "a shrink to zero clears every cell"
+    );
     let wrong = host.purchase_stock_item(timer, shop, 1);
     assert!(wrong.is_err(), "a timer is not a shop");
     assert_eq!(host.inner().handles(), handles, "no item was created");

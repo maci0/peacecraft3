@@ -1006,10 +1006,10 @@ pub use item_creation::{ExecutedItem, ItemBudget};
 #[path = "unit_explosion_host.rs"]
 mod unit_explosion;
 
-#[path = "item_drop_host.rs"]
-mod item_drop;
 #[path = "boolexpr_destroy_host.rs"]
 mod boolexpr_destroy;
+#[path = "item_drop_host.rs"]
+mod item_drop;
 
 #[path = "item_query_host.rs"]
 mod item_query;
@@ -1085,11 +1085,11 @@ mod order_registry;
 mod unit_ranges;
 pub use unit_ranges::UnitRangeEntry;
 #[cfg(test)]
-#[path = "trigger_runtime_tests.rs"]
-mod trigger_runtime_tests;
-#[cfg(test)]
 #[path = "editor_trigger_runtime_tests.rs"]
 mod editor_trigger_runtime_tests;
+#[cfg(test)]
+#[path = "trigger_runtime_tests.rs"]
+mod trigger_runtime_tests;
 
 #[path = "message_host.rs"]
 mod messages;

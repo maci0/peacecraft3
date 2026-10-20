@@ -95,9 +95,25 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["AIi4", "AIab", "1", "0", "3", "0", "0", "0", "-", "-", "_"],
             &["AId1", "AIde", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
             &["AId8", "AIde", "1", "8", "0", "0", "0", "0", "-", "-", "_"],
-            &["AIh1", "AIhe", "1", "250", "0", "0", "0", "0", "100", "20", "_"],
-            &["AIh2", "AIhe", "1", "250", "0", "0", "0", "0", "10", "20", "_"],
-            &["AIh3", "AIhe", "1", "250", "0", "0", "0", "0", "100", "20", "ground,air"],
+            &[
+                "AIh1", "AIhe", "1", "250", "0", "0", "0", "0", "100", "20", "_",
+            ],
+            &[
+                "AIh2", "AIhe", "1", "250", "0", "0", "0", "0", "10", "20", "_",
+            ],
+            &[
+                "AIh3",
+                "AIhe",
+                "1",
+                "250",
+                "0",
+                "0",
+                "0",
+                "0",
+                "100",
+                "20",
+                "ground,air",
+            ],
         ],
     );
     let metadata = sylk(
@@ -183,16 +199,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "AIsm,AIxm,AIs4,AIa4,AIi4",
                 "",
             ],
-            &[
-                "Idef",
-                "Data",
-                "AbilityData",
-                "-1",
-                "int",
-                "1",
-                "AId1",
-                "",
-            ],
+            &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1", ""],
             &[
                 "Ihpg",
                 "Data",
@@ -239,7 +246,9 @@ fn registration(source: &str, base: &str) -> Vec<u8> {
 
 /// Healing registration in the reviewed 25-byte layout, with its base function at a fixed offset.
 fn healing_registration() -> Vec<u8> {
-    use crate::inventory_powerup::{CALL_REL32, CLEANUP_RET, HEAL_WINDOW, PUSH_EAX, PUSH_IMM32, REGISTER_FN};
+    use crate::inventory_powerup::{
+        CALL_REL32, CLEANUP_RET, HEAL_WINDOW, PUSH_EAX, PUSH_IMM32, REGISTER_FN,
+    };
     let base_va = i64::from(HEAL_WINDOW) + 0x100;
     let rel_base = (base_va - (i64::from(HEAL_WINDOW) + 10)) as i32;
     let rel_register = (i64::from(REGISTER_FN) - (i64::from(HEAL_WINDOW) + 21)) as i32;
@@ -919,8 +928,11 @@ fn held_armor_on_a_hero_is_derived_and_removed_on_drop() {
     // Armor is not a strength change: pools and strength damage stay at their base values.
     assert_eq!(strength_and_agility(&mut h, hero), before);
     assert_eq!(damage(&h, hero), HERO_STR * PRIMARY_DAMAGE);
-    h.native("UnitRemoveItem", &[Value::Handle(hero), Value::Handle(armor)])
-        .unwrap();
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(armor)],
+    )
+    .unwrap();
     assert_eq!(h.held_armor_bonus(hero).unwrap(), 0);
 }
 
@@ -963,11 +975,17 @@ fn armor_row_outside_the_admission_refuses_atomically() {
     let before = strength_and_agility(&mut h, hero);
     let refused = item(&mut h, b"parx", 0.0);
     let err = add(&mut h, hero, refused).unwrap_err();
-    assert!(err.contains("armor metadata does not admit ability AId8"), "{err}");
+    assert!(
+        err.contains("armor metadata does not admit ability AId8"),
+        "{err}"
+    );
     assert_eq!(h.held_armor_bonus(hero).unwrap(), 0);
     assert_eq!(strength_and_agility(&mut h, hero), before);
     assert_eq!(
-        h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(refused)]),
+        h.native(
+            "UnitHasItem",
+            &[Value::Handle(hero), Value::Handle(refused)]
+        ),
         Ok(Value::Bool(false))
     );
 }
@@ -997,8 +1015,11 @@ fn held_armor_changes_real_damage_and_its_drop_restores_it() {
     assert_eq!(add(&mut h, ordinary, armor), Ok(Value::Bool(true)));
     let armored = h.roll_damage(hero, weapon, ordinary).unwrap();
     assert!(armored < bare, "armor reduces damage: {armored} < {bare}");
-    h.native("UnitRemoveItem", &[Value::Handle(ordinary), Value::Handle(armor)])
-        .unwrap();
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(ordinary), Value::Handle(armor)],
+    )
+    .unwrap();
     assert_eq!(h.roll_damage(hero, weapon, ordinary).unwrap(), bare);
 }
 
@@ -1006,17 +1027,29 @@ fn use_item(h: &mut ObjectHost, unit: HandleId, potion: HandleId) -> Result<Valu
     h.native("UnitUseItem", &[Value::Handle(unit), Value::Handle(potion)])
 }
 
-fn use_item_on(h: &mut ObjectHost, unit: HandleId, potion: HandleId, target: HandleId) -> Result<Value, String> {
+fn use_item_on(
+    h: &mut ObjectHost,
+    unit: HandleId,
+    potion: HandleId,
+    target: HandleId,
+) -> Result<Value, String> {
     h.native(
         "UnitUseItemTarget",
-        &[Value::Handle(unit), Value::Handle(potion), Value::Handle(target)],
+        &[
+            Value::Handle(unit),
+            Value::Handle(potion),
+            Value::Handle(target),
+        ],
     )
 }
 
 fn set_life(h: &mut ObjectHost, unit: HandleId, life: f32) {
     let state = life_state(h);
-    h.native("SetUnitState", &[Value::Handle(unit), state, Value::Real(life)])
-        .unwrap();
+    h.native(
+        "SetUnitState",
+        &[Value::Handle(unit), state, Value::Real(life)],
+    )
+    .unwrap();
 }
 
 fn life_of(h: &ObjectHost, unit: HandleId) -> f32 {
@@ -1042,13 +1075,20 @@ fn unit_use_heals_the_holder_by_the_source_amount_and_removes_a_perishable_potio
 
 #[test]
 fn targeted_use_clamps_to_maximum_and_out_of_range_is_false_without_writes() {
-    let Fixture { mut h, hero, ordinary } = open();
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
     h.set_timer_game_time(1.0).unwrap();
     let potion = item(&mut h, b"phea", 0.0);
     assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
     let ordinary_max = h.unit_vitals(ordinary).unwrap().unwrap().max_life;
     set_life(&mut h, ordinary, ordinary_max - 100.0);
-    assert_eq!(use_item_on(&mut h, hero, potion, ordinary), Ok(Value::Bool(true)));
+    assert_eq!(
+        use_item_on(&mut h, hero, potion, ordinary),
+        Ok(Value::Bool(true))
+    );
     assert_eq!(life_of(&h, ordinary), ordinary_max);
     assert_eq!(
         h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(potion)]),
@@ -1058,7 +1098,11 @@ fn targeted_use_clamps_to_maximum_and_out_of_range_is_false_without_writes() {
 
 #[test]
 fn use_refuses_without_writes_when_not_held_or_not_a_use() {
-    let Fixture { mut h, hero, ordinary } = open();
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
     h.set_timer_game_time(1.0).unwrap();
     let max = h.unit_vitals(hero).unwrap().unwrap().max_life;
     set_life(&mut h, hero, max / 2.0);
@@ -1126,7 +1170,10 @@ fn out_of_range_target_is_false_for_a_short_range_potion() {
     let potion = item(&mut h, b"phsm", 0.0);
     assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
     let far_life = life_of(&h, far);
-    assert_eq!(use_item_on(&mut h, hero, potion, far), Ok(Value::Bool(false)));
+    assert_eq!(
+        use_item_on(&mut h, hero, potion, far),
+        Ok(Value::Bool(false))
+    );
     assert_eq!(life_of(&h, far), far_life);
     assert_eq!(
         h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(potion)]),
@@ -1164,8 +1211,14 @@ fn a_successful_use_queues_one_use_event_and_a_refused_use_queues_none() {
     let fired = h.take_fired_event().expect("use event queued");
     assert_eq!(fired.trigger, trigger);
     h.begin_fired_event(&fired).unwrap().unwrap();
-    assert_eq!(h.native("GetManipulatedItem", &[]), Ok(Value::Handle(potion)));
-    assert_eq!(h.native("GetManipulatingUnit", &[]), Ok(Value::Handle(hero)));
+    assert_eq!(
+        h.native("GetManipulatedItem", &[]),
+        Ok(Value::Handle(potion))
+    );
+    assert_eq!(
+        h.native("GetManipulatingUnit", &[]),
+        Ok(Value::Handle(hero))
+    );
     h.finish_fired_event();
     assert!(h.take_fired_event().is_none());
     // Cooling down: the refused use queues nothing.
@@ -1209,7 +1262,11 @@ fn input_by_the_owning_player_heals_and_removes_the_potion() {
 
 #[test]
 fn input_from_another_player_or_for_an_unheld_item_changes_nothing() {
-    let Fixture { mut h, hero, ordinary } = open();
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
     h.set_timer_game_time(1.0).unwrap();
     let max = h.unit_vitals(hero).unwrap().unwrap().max_life;
     set_life(&mut h, hero, max / 2.0);
@@ -1217,9 +1274,15 @@ fn input_from_another_player_or_for_an_unheld_item_changes_nothing() {
     let potion = item(&mut h, b"phea", 0.0);
     assert_eq!(add(&mut h, hero, potion), Ok(Value::Bool(true)));
     let local = owner_number(&h, hero);
-    assert!(!h.player_activate_held_item(local + 1, hero, potion).unwrap());
+    assert!(
+        !h.player_activate_held_item(local + 1, hero, potion)
+            .unwrap()
+    );
     // The owning player's input for a unit that does not hold the item is refused too.
-    assert!(!h.player_activate_held_item(local, ordinary, potion).unwrap());
+    assert!(
+        !h.player_activate_held_item(local, ordinary, potion)
+            .unwrap()
+    );
     assert_eq!(life_of(&h, hero), before);
     assert_eq!(
         h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(potion)]),
@@ -1237,11 +1300,16 @@ fn input_refuses_a_targeted_item_without_any_write() {
     let targeted = item(&mut h, b"phtg", 0.0);
     assert_eq!(add(&mut h, hero, targeted), Ok(Value::Bool(true)));
     let local = owner_number(&h, hero);
-    let err = h.player_activate_held_item(local, hero, targeted).unwrap_err();
+    let err = h
+        .player_activate_held_item(local, hero, targeted)
+        .unwrap_err();
     assert!(format!("{err:?}").contains("target"), "{err:?}");
     assert_eq!(life_of(&h, hero), before);
     assert_eq!(
-        h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(targeted)]),
+        h.native(
+            "UnitHasItem",
+            &[Value::Handle(hero), Value::Handle(targeted)]
+        ),
         Ok(Value::Bool(true))
     );
 }
@@ -1266,7 +1334,10 @@ fn use_event_callback_observes_the_healed_life_and_the_charge_already_spent() {
         h.native("GetItemCharges", &[Value::Handle(potion)]),
         Ok(Value::Int(1))
     );
-    assert_eq!(h.native("GetManipulatedItem", &[]), Ok(Value::Handle(potion)));
+    assert_eq!(
+        h.native("GetManipulatedItem", &[]),
+        Ok(Value::Handle(potion))
+    );
     h.finish_fired_event();
 }
 

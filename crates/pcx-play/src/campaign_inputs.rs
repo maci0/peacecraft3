@@ -361,8 +361,7 @@ pub fn prepare(
     };
     let item_classes =
         crate::item_class_table::derive(image, client.clone()).map_err(|e| e.to_string())?;
-    let shop_table =
-        crate::shop_table::derive(image, client.clone()).map_err(|e| e.to_string())?;
+    let shop_table = crate::shop_table::derive(image, client.clone()).map_err(|e| e.to_string())?;
     let shop = crate::playercolor_host::ShopCapacity::new(shop_table);
     let item_sales = crate::item_sales::derive(&tables, &item_classes, client.clone())
         .map_err(|e| e.to_string())?;
