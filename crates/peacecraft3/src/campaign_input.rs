@@ -423,6 +423,7 @@ fn click(
     let item_hit = session
         .session_witness()
         .and_then(|witness| actors.item_hit(ray, far, &witness));
+    let witness = session.session_witness();
     let Some(host) = session.host() else {
         return;
     };
@@ -456,7 +457,7 @@ fn click(
     let armed = input
         .command
         .as_ref()
-        .filter(|armed| armed.is_for(session.session_witness()))
+        .filter(|armed| armed.is_for(witness.clone()))
         .map(|armed| armed.order);
     input.command = armed.and(input.command.take());
     match armed_pointer(armed, select, order, picked.is_some()) {
@@ -654,10 +655,22 @@ mod tests {
     #[test]
     fn armed_pointer_issues_on_a_unit_click_and_cancels_on_right_or_ground_clicks() {
         assert_eq!(armed_pointer(None, true, false, true), ArmedPointer::Pass);
-        assert_eq!(armed_pointer(Some(9), true, false, true), ArmedPointer::Issue(9));
-        assert_eq!(armed_pointer(Some(9), true, false, false), ArmedPointer::Cancel);
-        assert_eq!(armed_pointer(Some(9), false, true, true), ArmedPointer::Cancel);
-        assert_eq!(armed_pointer(Some(9), false, false, false), ArmedPointer::Pass);
+        assert_eq!(
+            armed_pointer(Some(9), true, false, true),
+            ArmedPointer::Issue(9)
+        );
+        assert_eq!(
+            armed_pointer(Some(9), true, false, false),
+            ArmedPointer::Cancel
+        );
+        assert_eq!(
+            armed_pointer(Some(9), false, true, true),
+            ArmedPointer::Cancel
+        );
+        assert_eq!(
+            armed_pointer(Some(9), false, false, false),
+            ArmedPointer::Pass
+        );
     }
 
     #[test]

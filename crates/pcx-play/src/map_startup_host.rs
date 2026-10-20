@@ -155,10 +155,15 @@ pub struct UnitGuardsInput {
     pub source: pcx_objects::editor::misc::CombatRules,
 }
 
+/// The Holy Light row, which the implementation is bound to.
+pub const HOLY_LIGHT_ROW: [u8; 4] = *b"AHhb";
+
 pub struct HeroSkillsInput {
     pub rules: crate::hero_skills::Rules,
     pub abilities: pcx_objects::editor::Overlay,
     pub budget: crate::playercolor_host::HeroBudget,
+    /// Bytes of the Holy Light `Targetart` model. `None` leaves Holy Light unadmitted.
+    pub holy_light_art: Option<Vec<u8>>,
 }
 
 pub struct CurrentResearchInput {
@@ -646,6 +651,9 @@ pub fn assemble(
         object = object.with_localized_queries(bank)?;
     }
     let tables = defend.tables;
+    let holy_light_art = hero_skills
+        .as_ref()
+        .and_then(|input| input.holy_light_art.clone());
     if let Some(input) = hero_skills {
         object = object.with_hero_skills(
             Arc::clone(&tables),
@@ -744,8 +752,8 @@ pub fn assemble(
         }
         if let Some(rules) = input.combat {
             object.admit_combat(rules, "attack")?;
-            if object.has_hero_skills() {
-                object.admit_holy_light()?;
+            if let (true, Some(art)) = (object.has_hero_skills(), holy_light_art.as_deref()) {
+                object.admit_holy_light(art)?;
             }
         }
         if let Some(rules) = input.research {

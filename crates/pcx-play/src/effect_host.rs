@@ -42,18 +42,22 @@ impl ObjectHost {
         Ok(self)
     }
 
+    /// Live effects at the current game time. An effect with `expires_at` is over once the
+    /// clock reaches it, so its state is derived from the clock rather than stored.
     pub fn unit_effects(&self) -> impl Iterator<Item = (HandleId, UnitEffect<'_>)> {
+        let now = self.timer_game_time();
         self.inner
             .arena
             .iter()
             .enumerate()
-            .filter_map(|(i, entry)| match entry {
+            .filter_map(move |(i, entry)| match entry {
                 Entry::Effect {
                     model,
                     unit,
                     attach_point,
                     live: true,
-                } => Some((
+                    expires_at,
+                } if !expires_at.zip(now).is_some_and(|(end, now)| now >= end) => Some((
                     self.inner.id(i, ADD).expect("allocated identity"),
                     UnitEffect {
                         model,
@@ -71,6 +75,7 @@ impl ObjectHost {
         model: &str,
         unit: HandleId,
         attach_point: &str,
+        expires_at: Option<f64>,
     ) -> Result<HandleId, Error> {
         self.executed_unit(unit)
             .map_err(|e| self.inner.error(ADD, e.failure))?;
@@ -79,19 +84,9 @@ impl ObjectHost {
             unit,
             attach_point: attach_point.into(),
             live: true,
+            expires_at,
         };
         self.inner.allocate(entry, ADD)
-    }
-
-    /// Ends a live effect. Destroyed or null handles are accepted without change.
-    pub(super) fn destroy_unit_effect(&mut self, effect: HandleId) -> Result<(), Error> {
-        match self.inner.entry_mut(effect)? {
-            Entry::Effect { live, .. } => {
-                *live = false;
-                Ok(())
-            }
-            _ => Err(self.inner.error(DESTROY, Failure::WrongFamily)),
-        }
     }
 
     pub(super) fn effect_native(
@@ -110,7 +105,9 @@ impl ObjectHost {
                     Value::Handle(unit),
                     Value::Str(attach_point),
                 ],
-            ) => self.add_unit_effect(model, *unit, attach_point).map(Value::Handle),
+            ) => self
+                .add_unit_effect(model, *unit, attach_point, None)
+                .map(Value::Handle),
             (ADD, [Value::Str(_), Value::Null, Value::Str(_)]) => Err(self.inner.error(
                 name,
                 Failure::UnitState("null target behavior is not established"),

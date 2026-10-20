@@ -274,6 +274,7 @@ pub fn prepare(
     let edition = &context.sources.map.edition;
     let tables = defaults(reader, &context.sources.catalog)?;
     let defend = defend_alias(&tables)?;
+    let holy_light_art = holy_light_art(reader, &tables)?;
     let map = pcx_map::Map::parse(&map_sources.map_bytes).map_err(|e| e.to_string())?;
     let budget = pcx_mpq::checked::ReadBudget {
         max_archive_bytes: 64 << 20,
@@ -439,6 +440,7 @@ pub fn prepare(
         hero_skills: Some(HeroSkillsInput {
             rules: source.hero,
             abilities,
+            holy_light_art: Some(holy_light_art),
             budget: crate::playercolor_host::HeroBudget {
                 abilities_per_unit: 128,
                 overlay_objects: 4096,
@@ -746,4 +748,21 @@ mod tests {
         .unwrap();
         assert!(super::conversion_global(&program, "ConvertGameEvent", 19).is_err());
     }
+}
+
+/// The Holy Light `Targetart` model, read by the same binary-model path rule that the
+/// day/night models use.
+fn holy_light_art(reader: &Resolver, tables: &DefaultTables) -> Result<Vec<u8>, String> {
+    let object = tables
+        .object(Family::Ability, HOLY_LIGHT_ROW)
+        .map_err(|e| e.to_string())?;
+    let cells = object.profile("Targetart");
+    let [model] = cells.as_slice() else {
+        return Err("Holy Light needs exactly one Targetart".into());
+    };
+    let member = pcx_mdl::binary_model_path(model.text.trim());
+    let asset = reader
+        .resolve_bounded(&member, 8 << 20)
+        .map_err(|e| e.to_string())?;
+    Ok(asset.bytes)
 }
