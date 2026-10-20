@@ -76,28 +76,17 @@ Melee maps often place only start locations and let the map script create
 units. A placement-only census therefore misses units and does not show a
 playable map. Nothing here invents starting units.
 
-## Production startup required
+## Production startup adapter
 
-Playable maps need the existing production startup to run headlessly and feed
-this host. The chain lives in the Bevy app today:
+`pcx_play::headless_startup` prepares a selected install and map through the same
+`campaign_inputs`, `campaign_host` and `map_script_session` code as the application.
+The application supplies a Bevy resource wrapper around that shared session.
+Map source bytes, the resolver, executable identity, edition and seed remain
+explicit inputs; no separate placement-only world is substituted.
 
-- `peacecraft3/src/campaign_prepare.rs` calls
-  `peacecraft3::campaign_inputs::prepare_new_game(context, bindings, reader,
-  image, identity, seed, expansion)`. It needs `MapBindings` from
-  `peacecraft3/src/map_requests.rs`, and that module depends on Bevy.
-- `pcx_play::map_startup_host::assemble(context, MapStartupInputs)` builds the
-  `MapStartupHost`, and `pcx_play::playercolor_host::ObjectHost` holds the unit
-  arena.
-- `peacecraft3/src/map_script_session.rs` drives `war3map.j` and creation
-  triggers. The timer, unit-activity and callback paths are there too.
-
-Publishing the startup needs a Bevy-free entry point in `pcx-play` or a
-non-Bevy `peacecraft3` module. That entry point must take the parsed map context,
-the source reader and the selected executable, and return the object arena. The
-session host would then read units, owners and movement from that arena. Owners
-come from the startup roster, and random placements from the authored tables
-with the selected RNG policy. Building and running that path needs a root build
-slot, so it is not verified here.
+The network host still serves the harness world. Connecting the production object
+arena, owners, source movement and command delivery to the network authority
+remains open. A successful headless startup does not make a map network-playable.
 
 ## Tests
 
@@ -133,7 +122,7 @@ slot, so it is not verified here.
   conformance tooling has not been run.
 - Game input, lobby, combat, economy, and the original Battle.net and W3GS paths.
 
-## Extraction for the production adapter (branch-local)
+## Earlier extraction checkpoint
 
 Startup preparation moved out of the Bevy crate into `pcx-play`, with no change to
 its logic:
@@ -156,3 +145,11 @@ Still Bevy-coupled, and needed for a headless startup: `map_requests::prepare` a
 `MapBindings` (binding and receipts), `native_campaign::configuration` (the install
 `Resolver` and script identities), `map_script_session` (`war3map.j` and creation
 triggers), and the assembly in `campaign_startup`.
+
+
+## Integration checkpoint
+
+The later extraction also moves cache, placement and script-session ownership into
+`pcx-play`. `campaign_host::create_host` and its post-configuration helpers are
+shared by the application startup and the selected-install headless driver.
+The earlier Bevy-coupling list above describes the preceding checkpoint.

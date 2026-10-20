@@ -1,8 +1,10 @@
 # Campaign score screen
 
-Status: evidence only. No score presentation is implemented. `EndGame(true)`
-still ends the session and the exit consumer logs that the score screen is
-unsupported.
+Status: `EndGame(true)` retains an exit snapshot for the source-backed score
+layout and background-model consumer. OK dismisses the screen; Save Replay
+refuses because no production replay writer exists. Player-score admission
+retains the selected constants, but every counter remains unqualified and absent.
+Rendered placement and original-client parity remain open.
 
 ## Source evidence
 
@@ -32,18 +34,16 @@ unsupported.
 
 ## Not established
 
-- Score values. Row contents and column meanings are not yet derived. The
-  per-player source is partly established: `GetPlayerScore` answers only
-  `PLAYER_SCORE_UNITS_KILLED`, see [player score counters](player-score-counters.md).
+- Score values. Row contents and column meanings are not yet derived. See [player score counters](player-score-counters.md): `GetPlayerScore`
+  refuses counters without a verified source.
 - Button semantics. OK returns to the caller in the original; Save Replay and
   Replay Saved have no implemented replay writer here, so they must refuse.
 - Restart, load and campaign transition after the screen.
 - Rendered placement, fonts and text. No rendered comparison exists.
 
-## Handoff needs
+## Integrated request lifetime
 
-- A request snapshot taken before the session is cleared: `score_screen`
-  (boolean), the defeat state, and the simulation time. The exit consumer
-  owns the clear, so it must retain this snapshot before clearing.
-- A score-data source that refuses, rather than zero-fills, any value the
-  simulation does not track.
+The exit consumer retains the request, local result, logical game time and source
+context before clearing the session. The score consumer takes each snapshot once.
+Source replacement and dismissal release the prior scene. Unsupported score
+values remain absent; they are not zero-filled.
