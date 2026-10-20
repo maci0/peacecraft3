@@ -962,7 +962,9 @@ fn creation_block(
     duration: Option<i32>,
 ) -> Option<&'static str> {
     if is_3d {
-        return Some("3D placement is not played");
+        return Some(
+            "3D placement is not played: native attenuation, cutoff and listener mapping are unmeasured",
+        );
     }
     if stop_when_out_of_range {
         return Some("out-of-range stop is not played");
@@ -1980,7 +1982,8 @@ endglobals
                 .resource::<ScriptAudioReport>()
                 .last_refusal
                 .as_deref()
-                .is_some_and(|text| text.contains("3D placement"))
+                .is_some_and(|text| text
+                    .contains("native attenuation, cutoff and listener mapping are unmeasured"))
         );
     }
 
