@@ -856,9 +856,10 @@ fn two_holder_readiness() -> UseCheck {
     h.check_item_use(b, pb).unwrap()
 }
 
-/// The source does not establish whether holders share a group's cooldown.
+// Pins the current recreation key (the group alone) and is not evidence of original fidelity. The
+// native scope (per unit, per item or per group) is unqualified; see docs/re-notes/item-charges-cooldown.md.
 #[test]
-fn two_holders_share_one_group_readiness_in_this_recreation_native_scope_unverified() {
+fn unqualified_current_group_key_couples_two_holders_pinned_not_established() {
     assert_eq!(
         two_holder_readiness(),
         UseCheck::OnCooldown { remaining: 20.0 }
