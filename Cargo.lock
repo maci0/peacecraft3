@@ -4645,8 +4645,11 @@ dependencies = [
  "crc32fast",
  "pcx-map",
  "pcx-mpq",
+ "pcx-objects",
+ "pcx-play",
  "pcx-sim",
  "sha1",
+ "sha2",
  "thiserror 2.0.21",
  "tungstenite",
 ]

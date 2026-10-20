@@ -8,7 +8,7 @@ use tungstenite::{Message, WebSocket, client::client, handshake::HandshakeError}
 
 use crate::{
     CodecError, Datagram, decode, decode_world_payload, encode, encode_input_payload,
-    session::{MAX_COMMANDS_PER_TICK, MAX_PLAYERS},
+    session::{MAX_COMMANDS_PER_TICK, MAX_PLAYERS, SessionIdentity},
 };
 
 // Commands are submitted this many ticks ahead of the newest snapshot, as
@@ -29,6 +29,11 @@ pub enum ClientError {
     Codec(#[from] CodecError),
     #[error("unexpected session message: {0}")]
     Protocol(String),
+    #[error("host session {host:?} does not match this peer's admitted session {expected}")]
+    Identity {
+        expected: String,
+        host: Option<String>,
+    },
     #[error("a tick carries at most the session limit of commands; this batch has {0}")]
     TooManyCommands(usize),
 }
@@ -45,6 +50,7 @@ pub enum Received {
 pub struct SessionClient {
     socket: WebSocket<TcpStream>,
     player: u8,
+    identity: Option<SessionIdentity>,
     /// Tick of the newest snapshot received.
     latest_tick: u64,
     /// Tick of the newest input submitted, if any.
@@ -70,20 +76,43 @@ impl SessionClient {
             }
         })?;
         socket.send(Message::Text(token.into()))?;
-        let player = match socket.read()? {
+        let (player, identity) = match socket.read()? {
             Message::Text(hello) => parse_hello(&hello)?,
             other => return Err(ClientError::Protocol(format!("{other:?}"))),
         };
         Ok(Self {
             socket,
             player,
+            identity,
             latest_tick: 0,
             last_input: None,
         })
     }
 
+    /// Joins like [`SessionClient::connect`], then refuses unless the host announces
+    /// exactly `expected`. The socket closes on refusal, before any command is sent.
+    pub fn connect_admitted(
+        address: &str,
+        token: &str,
+        expected: &SessionIdentity,
+    ) -> Result<Self, ClientError> {
+        let client = Self::connect(address, token)?;
+        if client.identity.as_ref() != Some(expected) {
+            return Err(ClientError::Identity {
+                expected: expected.to_hex(),
+                host: client.identity.as_ref().map(SessionIdentity::to_hex),
+            });
+        }
+        Ok(client)
+    }
+
     pub fn player(&self) -> u8 {
         self.player
+    }
+
+    /// The identity the host announced, or `None` for an unadmitted host.
+    pub fn identity(&self) -> Option<&SessionIdentity> {
+        self.identity.as_ref()
     }
 
     /// Submits this player's commands for the next free tick ahead of the newest snapshot.
@@ -137,25 +166,57 @@ impl SessionClient {
     }
 }
 
-/// Parses the host's `{"player":N,"tickMs":M}` greeting. The host writes this exact shape.
-fn parse_hello(hello: &str) -> Result<u8, ClientError> {
-    let player = hello
+/// Parses the host's greeting: `{"player":N,"tickMs":M}`, plus `,"session":"<hex>"` when
+/// the host admitted a map. Anything else is refused.
+fn parse_hello(hello: &str) -> Result<(u8, Option<SessionIdentity>), ClientError> {
+    let refused = || ClientError::Protocol(hello.to_string());
+    let body = hello
         .strip_prefix("{\"player\":")
-        .and_then(|rest| rest.split(',').next())
+        .and_then(|rest| rest.strip_suffix('}'))
+        .ok_or_else(refused)?;
+    let mut fields = body.split(',');
+    let player = fields
+        .next()
         .and_then(|digits| digits.parse::<u8>().ok())
         .filter(|player| *player < MAX_PLAYERS)
-        .ok_or_else(|| ClientError::Protocol(hello.to_string()))?;
-    Ok(player)
+        .ok_or_else(refused)?;
+    fields
+        .next()
+        .and_then(|field| field.strip_prefix("\"tickMs\":"))
+        .and_then(|ms| ms.parse::<u32>().ok())
+        .ok_or_else(refused)?;
+    let identity = match fields.next() {
+        None => None,
+        Some(field) => {
+            let hex = field
+                .strip_prefix("\"session\":\"")
+                .and_then(|rest| rest.strip_suffix('"'))
+                .ok_or_else(refused)?;
+            Some(SessionIdentity::from_hex(hex).ok_or_else(refused)?)
+        }
+    };
+    if fields.next().is_some() {
+        return Err(refused());
+    }
+    Ok((player, identity))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const DIGEST: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
     #[test]
-    fn greeting_yields_the_assigned_slot() {
-        assert_eq!(parse_hello("{\"player\":3,\"tickMs\":25}").unwrap(), 3);
-        assert_eq!(parse_hello("{\"player\":15,\"tickMs\":25}").unwrap(), 15);
+    fn greeting_yields_the_assigned_slot_and_optional_identity() {
+        assert_eq!(
+            parse_hello("{\"player\":3,\"tickMs\":25}").unwrap(),
+            (3, None)
+        );
+        let admitted = format!("{{\"player\":15,\"tickMs\":25,\"session\":\"{DIGEST}\"}}");
+        let (player, identity) = parse_hello(&admitted).unwrap();
+        assert_eq!(player, 15);
+        assert_eq!(identity.unwrap().to_hex(), DIGEST);
     }
 
     #[test]
@@ -166,6 +227,11 @@ mod tests {
             "{\"player\":256,\"tickMs\":25}",
             "{\"error\":\"nope\"}",
             "{\"tickMs\":25}",
+            "{\"player\":1}",
+            "{\"player\":1,\"tickMs\":25,\"session\":\"abc\"}",
+            "{\"player\":1,\"tickMs\":25,\"session\":\"ZZ\"}",
+            "{\"player\":1,\"tickMs\":25,\"session\":\"00\",\"extra\":1}",
+            "{\"player\":1,\"tickMs\":25}trailing",
         ] {
             assert!(
                 matches!(parse_hello(bad), Err(ClientError::Protocol(_))),

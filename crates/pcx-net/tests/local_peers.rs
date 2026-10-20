@@ -5,27 +5,16 @@
 //! silent host fails these tests rather than hanging them.
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{
-    io,
-    net::SocketAddr,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread::{self, JoinHandle},
-    time::{Duration, Instant},
-};
+mod support;
 
 use pcx_net::{
     Datagram, encode_input_payload,
-    host::{Host, local_world},
+    host::local_world,
     session_client::{ClientError, Received, SessionClient},
 };
-use pcx_sim::{Command, FX_ONE, MOVE_SPEED, Unit, World};
+use pcx_sim::{Command, FX_ONE, MOVE_SPEED, World};
+use support::{MAX_MESSAGES, Server, TOKEN_LEFT, TOKEN_RIGHT, owned, snapshot, until};
 
-const TOKEN_LEFT: &str = "0123456789abcdef0123456789abcdef";
-const TOKEN_RIGHT: &str = "fedcba9876543210fedcba9876543210";
-const MAX_MESSAGES: usize = 400;
 const LEFT_TARGET: i32 = FX_ONE;
 const RIGHT_TARGET: i32 = 3 * FX_ONE;
 // Far enough that no test reaches it before the disconnect it exercises.
@@ -34,76 +23,12 @@ const LEFT_OWNER: u8 = 0;
 const RIGHT_OWNER: u8 = 1;
 const RIGHT_START_X: i32 = 2 * FX_ONE;
 
-struct Server {
-    address: SocketAddr,
-    stop: Arc<AtomicBool>,
-    thread: Option<JoinHandle<io::Result<()>>>,
+fn join(server: &Server, token: &str) -> SessionClient {
+    SessionClient::connect(&server.address(), token).expect("join")
 }
 
-impl Server {
-    fn start() -> Self {
-        let mut host = Host::bind("127.0.0.1:0", local_world(), 1).expect("bind loopback host");
-        let address = host.local_addr().expect("host address");
-        let stop = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&stop);
-        let thread = thread::spawn(move || {
-            while !flag.load(Ordering::Relaxed) {
-                host.poll(Instant::now())?;
-                thread::sleep(Duration::from_millis(1));
-            }
-            Ok(())
-        });
-        Self {
-            address,
-            stop,
-            thread: Some(thread),
-        }
-    }
-
-    fn join(&self, token: &str) -> SessionClient {
-        SessionClient::connect(&self.address.to_string(), token).expect("join")
-    }
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            thread
-                .join()
-                .expect("host thread panicked")
-                .expect("host poll failed");
-        }
-    }
-}
-
-fn snapshot(peer: &mut SessionClient) -> World {
-    match peer.receive().expect("snapshot") {
-        Received::Snapshot(world) => world,
-        Received::Rejected(refusal) => panic!("unexpected refusal: {refusal}"),
-    }
-}
-
-/// Reads snapshots until one satisfies `done`.
-fn until(peer: &mut SessionClient, mut done: impl FnMut(&World) -> bool) -> Vec<World> {
-    let mut seen = Vec::new();
-    for _ in 0..MAX_MESSAGES {
-        let world = snapshot(peer);
-        let finished = done(&world);
-        seen.push(world);
-        if finished {
-            return seen;
-        }
-    }
-    panic!("condition not reached within {MAX_MESSAGES} snapshots");
-}
-
-fn owned(world: &World, owner: u8) -> &Unit {
-    world
-        .units
-        .iter()
-        .find(|unit| unit.owner == owner)
-        .expect("owner has a unit")
+fn start() -> Server {
+    Server::start(local_world(), 1, None)
 }
 
 #[test]
@@ -116,9 +41,9 @@ fn reconnect_token_is_validated_before_any_socket_is_opened() {
 
 #[test]
 fn two_peers_see_identical_authority_and_each_unit_moves_exactly_to_its_target() {
-    let server = Server::start();
-    let mut left = server.join(TOKEN_LEFT);
-    let mut right = server.join(TOKEN_RIGHT);
+    let server = start();
+    let mut left = join(&server, TOKEN_LEFT);
+    let mut right = join(&server, TOKEN_RIGHT);
     assert_eq!((left.player(), right.player()), (LEFT_OWNER, RIGHT_OWNER));
 
     // Commands are submitted from the newest snapshot, so sync each peer first.
@@ -174,9 +99,9 @@ fn two_peers_see_identical_authority_and_each_unit_moves_exactly_to_its_target()
 
 #[test]
 fn a_forged_player_is_refused_and_the_other_slot_gains_no_order() {
-    let server = Server::start();
-    let mut left = server.join(TOKEN_LEFT);
-    let mut right = server.join(TOKEN_RIGHT);
+    let server = start();
+    let mut left = join(&server, TOKEN_LEFT);
+    let mut right = join(&server, TOKEN_RIGHT);
     snapshot(&mut left);
 
     // Identity is checked before the tick, so tick 0 is only a placeholder.
@@ -215,9 +140,9 @@ fn a_forged_player_is_refused_and_the_other_slot_gains_no_order() {
 
 #[test]
 fn disconnect_stops_the_departed_units_order_and_reconnect_reclaims_the_slot() {
-    let server = Server::start();
-    let mut left = server.join(TOKEN_LEFT);
-    let mut right = server.join(TOKEN_RIGHT);
+    let server = start();
+    let mut left = join(&server, TOKEN_LEFT);
+    let mut right = join(&server, TOKEN_RIGHT);
     snapshot(&mut left);
     left.submit(&[Command::Move {
         x: FAR_TARGET,
@@ -247,7 +172,7 @@ fn disconnect_stops_the_departed_units_order_and_reconnect_reclaims_the_slot() {
         );
     }
 
-    let mut again = server.join(TOKEN_LEFT);
+    let mut again = join(&server, TOKEN_LEFT);
     assert_eq!(
         again.player(),
         LEFT_OWNER,
