@@ -304,15 +304,28 @@ lanes, game-clock record every tick) builds and resolves. It is not yet run. The
 period estimator on game-clock time recovers the three candidate periods on a
 synthetic signal to within 6 ms. That check does not measure real uncertainty.
 
-Sampled Walk poses (`mdlx pose`, selected Legacy archives, 10 ms steps). The Moon
-Priestess Walk is 634 ms with named foot bones (`BONE_Foot*`, `BONE_LEG*`). Each foot
-bone's height repeats once per cycle, with half-cycle autocorrelation between −0.18
-and −0.88, so the two feet alternate within one cycle. The Watcher's named leg bones
-do not animate in Walk; its footfall bone is unresolved. Foot-height tracks built
-for each candidate rate recover the candidate periods to within 5 ms. At 2P, the
-UnitUI-walk candidate scores 0.971, above its P score of 0.931. So a 2P rival can
-outscore the candidate lag, and the first-peak rule does not resolve it. Pose and
-period results are model-plane and game-clock quantities, not projected pixels.
+Sampled Walk poses (scratch harness over `pcx_mdl::bone_matrices` and the runtime's
+single-matrix-per-group skin; not a public command, selected Legacy archives,
+10 ms steps). Skinned vertices count as moving when any axis differs between
+sampled times. Exact equality is the only motion test; no threshold is applied.
+
+- Moon Priestess Walk (634 ms): 471 of 529 vertices move. The contact region is the
+  lowest 10% of moving rest vertices, driven by named foot and leg joints. Its mean
+  contact height has half-cycle autocorrelation −0.835 and full-cycle 0.962, so it
+  repeats once per Walk.
+- Watcher Walk (900 ms): 59 of 596 vertices move. Their lowest drivers are `Plane05`,
+  `Plane04` and `Object06`, not the named leg bones (`LegLeftLow`, `LegRightLow`),
+  which drive no moving vertex. The contact mean height ranges about 10 units over
+  the cycle. Half-cycle autocorrelation is 0.290, so footfall multiplicity is not
+  resolved for this observable. Joint names are labels, not proof of foot role.
+
+Earlier per-bone foot tracks (BONE_Foot* heights, step 10 ms) are antiperiodic at
+half cycle, −0.18 to −0.88. Foot-height tracks built for each candidate rate recover
+the candidate periods to within 5 ms. At 2P, the UnitUI-walk candidate scores 0.971,
+above its P score of 0.931. This is retained evidence, not a selection rule: a 2P
+rival can outscore the candidate lag. Pose and period results are model-plane and
+game-clock quantities, not projected pixels. The sampled cycle is the interval
+length; the cyclic wrap to the first row is approximate because the end pose differs.
 
 Chord-versus-path on the Emoo's 35 moving callbacks: chord sum 533.3 units, maximum
 turn between adjacent chords 51.5 degrees, arc-model shortfall about 0.8 units.

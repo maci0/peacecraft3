@@ -201,76 +201,9 @@ fn main() -> ExitCode {
             let _ = tag::GEOS;
         }
 
-        // Bone world translations at each sampled sequence time, in model units. The
-        // lowest bone's height over a cycle counts footfalls; the root tracks travel.
-        "pose" => {
-            let (Some(path), Some(name)) = (args.get(3), args.get(4)) else {
-                eprintln!("usage: mdlx pose <install_dir> <model.mdx> <sequence> [step_ms]");
-                return ExitCode::from(2);
-            };
-            let step: u32 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(10);
-            if step == 0 {
-                eprintln!("step must be positive");
-                return ExitCode::from(2);
-            }
-            let d = match set.extract(path) {
-                Ok(d) => d,
-                Err(e) => {
-                    eprintln!("{path}: {e}");
-                    return ExitCode::from(1);
-                }
-            };
-            let m = match Mdlx::parse(&d) {
-                Ok(m) => m,
-                Err(e) => {
-                    eprintln!("{path}: {e}");
-                    return ExitCode::from(1);
-                }
-            };
-            let sequences = m.sequences(&d).unwrap_or_default();
-            let Some(sequence) = sequences.iter().find(|s| s.name.eq_ignore_ascii_case(name))
-            else {
-                eprintln!("{path}: no sequence named {name}");
-                return ExitCode::from(1);
-            };
-            let bones = m.bones(&d).unwrap_or_default();
-            let mut parents = std::collections::HashMap::new();
-            for bone in &bones {
-                parents.insert(bone.object_id, bone.parent_id);
-            }
-            for node in m.nodes(&d, tag::HELP).unwrap_or_default() {
-                parents.insert(node.object_id, node.parent_id);
-            }
-            let pivots = m.pivots(&d).unwrap_or_default();
-            let parent = |id: u32| parents.get(&id).and_then(|&p| u32::try_from(p).ok());
-            println!(
-                "# {path} sequence {} interval {}..{} ms step {step} bones {}",
-                sequence.name,
-                sequence.interval_start,
-                sequence.interval_end,
-                bones.len()
-            );
-            println!("elapsed_ms\tbone\tname\tx\ty\tz");
-            let mut ms = sequence.interval_start;
-            while ms <= sequence.interval_end {
-                let world = pcx_mdl::bone_matrices(&bones, &parent, &pivots, ms);
-                for (index, (bone, matrix)) in bones.iter().zip(&world).enumerate() {
-                    println!(
-                        "{}\t{index}\t{}\t{}\t{}\t{}",
-                        ms - sequence.interval_start,
-                        bone.name,
-                        matrix[12],
-                        matrix[13],
-                        matrix[14]
-                    );
-                }
-                ms += step;
-            }
-        }
-
         other => {
             eprintln!("unknown command {other}");
-            eprintln!("usage: mdlx <rank|info|dump|pose> ...");
+            eprintln!("usage: mdlx <rank|info|dump> ...");
             return ExitCode::from(2);
         }
     }
