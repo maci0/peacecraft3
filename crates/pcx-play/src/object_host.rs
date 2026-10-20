@@ -984,10 +984,10 @@ pub use item_creation::{ExecutedItem, ItemBudget};
 #[path = "unit_explosion_host.rs"]
 mod unit_explosion;
 
-#[path = "item_drop_host.rs"]
-mod item_drop;
 #[path = "boolexpr_destroy_host.rs"]
 mod boolexpr_destroy;
+#[path = "item_drop_host.rs"]
+mod item_drop;
 
 #[path = "item_query_host.rs"]
 mod item_query;
@@ -1117,6 +1117,7 @@ pub use combat::{Combat, Relation, Weapon};
 #[path = "event_delivery_host.rs"]
 mod event_delivery;
 pub use event_delivery::{EventSubject, FiredEvent, SaleContext};
+pub use item_sale::{PurchaseOutcome, PurchaseRefusal};
 
 #[path = "unit_vitals_host.rs"]
 mod unit_vitals;

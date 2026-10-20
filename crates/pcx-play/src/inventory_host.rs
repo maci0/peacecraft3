@@ -200,7 +200,16 @@ impl ObjectHost {
         {
             return Ok(value);
         }
-        let mut fields = item.definition.fields.iter().filter(|(id,field)| {
+        self.definition_flag(&item.definition, column)
+    }
+
+    /// A boolean `ItemData` column of an unexecuted definition, read the same way as an item.
+    pub(crate) fn definition_flag(
+        &self,
+        definition: &pcx_sim::world::Definition,
+        column: &str,
+    ) -> Result<bool, Error> {
+        let mut fields = definition.fields.iter().filter(|(id,field)| {
             field.metadata.as_ref().is_some_and(|metadata| metadata.fourcc==**id
                 && matches!(metadata.kind,pcx_objects::editor::FieldKind::Bool|pcx_objects::editor::FieldKind::Int)
                 && matches!(&metadata.source,FieldSource::Column{slk:SlkId::ItemData,column:source}if source==column))
@@ -288,6 +297,26 @@ impl ObjectHost {
     }
     /// Passive strength and agility of one item while held. Powerups and usable items add none.
     /// Refusals are raised here, before the caller writes any state.
+    /// Passive bonus of an unexecuted definition. Without admitted attribute rules there is no
+    /// passive bonus, as for a held item, so the classification matches the pickup path.
+    pub(crate) fn definition_passive(
+        &self,
+        definition: &pcx_sim::world::Definition,
+    ) -> Result<AttributeBonus, Error> {
+        let Some(rules) = self
+            .items
+            .as_ref()
+            .and_then(|s| s.inventory.as_ref())
+            .and_then(|s| s.attributes.as_ref())
+        else {
+            return Ok(AttributeBonus::default());
+        };
+        let held = rules
+            .held_attributes(definition)
+            .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))?;
+        Ok(held.unwrap_or_default())
+    }
+
     pub(crate) fn held_attributes(&self, item: HandleId) -> Result<AttributeBonus, Error> {
         let Some(rules) = self
             .items
@@ -297,9 +326,10 @@ impl ObjectHost {
         else {
             return Ok(AttributeBonus::default());
         };
-        let record = self
-            .live_item(item)?
-            .ok_or_else(|| self.inner.error("inventory", Failure::ItemState("item not live")))?;
+        let record = self.live_item(item)?.ok_or_else(|| {
+            self.inner
+                .error("inventory", Failure::ItemState("item not live"))
+        })?;
         let held = rules
             .held_attributes(&record.definition)
             .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))?;
@@ -330,8 +360,14 @@ impl ObjectHost {
                 .strength
                 .checked_add(passive.strength)
                 .ok_or_else(overflow)?;
-            bonus.agility = bonus.agility.checked_add(passive.agility).ok_or_else(overflow)?;
-            bonus.armor = bonus.armor.checked_add(passive.armor).ok_or_else(overflow)?;
+            bonus.agility = bonus
+                .agility
+                .checked_add(passive.agility)
+                .ok_or_else(overflow)?;
+            bonus.armor = bonus
+                .armor
+                .checked_add(passive.armor)
+                .ok_or_else(overflow)?;
         }
         Ok(bonus)
     }
@@ -378,7 +414,11 @@ impl ObjectHost {
         Ok(())
     }
 
-    pub(crate) fn add_inventory_item(&mut self, unit: HandleId, item: HandleId) -> Result<bool, Error> {
+    pub(crate) fn add_inventory_item(
+        &mut self,
+        unit: HandleId,
+        item: HandleId,
+    ) -> Result<bool, Error> {
         let policy = self.inventory_policy(unit)?;
         let Some(record) = self.live_item(item)? else {
             return Ok(false);
@@ -406,11 +446,7 @@ impl ObjectHost {
         // Strength and agility are hero attributes. A non-hero holder has no modeled effect, so a
         // stat item is refused rather than accepted as a silent no-op.
         if (passive.strength != 0 || passive.agility != 0)
-            && !self
-                .executed_unit(unit)?
-                .definition
-                .rawcode[0]
-                .is_ascii_uppercase()
+            && !self.executed_unit(unit)?.definition.rawcode[0].is_ascii_uppercase()
         {
             return Err(self.inner.error(
                 "inventory",

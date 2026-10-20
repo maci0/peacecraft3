@@ -772,9 +772,9 @@ pub use objects::{
     PlayerRemoval, PlayerRemovalBudget, PlayerRemovalState, PlayerSettings,
     PlayerStateRequestBudget, PlayerUnitEventRegistration, PresentationState, QuestBudget,
     QuestEvent, QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration,
-    RegionRectRequest, ResearchObservation, SoundProperties, SoundState, StackedSoundAction,
-    StackedSoundRequest, StartLocation, StartPriorities, StartPriority, StartupClockState,
-    StartupSettings, ShopCapacity, StockBudget, TechLimitBudget, TerrainFog, TimedMessage,
+    RegionRectRequest, ResearchObservation, ShopCapacity, SoundProperties, SoundState,
+    StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
+    StartupClockState, StartupSettings, StockBudget, TechLimitBudget, TerrainFog, TimedMessage,
     TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord, TriggerBudget,
     TriggerConditionRegistration, TriggerDelivery, TriggerRuntimeInput, UnitAbilities,
     UnitActivity, UnitBudget, UnitEffect, UnitEventRegistration, UnitGuard,
@@ -783,5 +783,5 @@ pub use objects::{
 pub use objects::{
     CinematicScene, Combat, DestructableState, DialogBudget, DialogButton, DialogQuitRequest,
     DialogState, EventSubject, FiredEvent, FogModifier, GameExitRequest, Indicator, MinimapPing,
-    Relation, ScriptDialog, Vitals, Weapon,
+    PurchaseOutcome, PurchaseRefusal, Relation, ScriptDialog, Vitals, Weapon,
 };

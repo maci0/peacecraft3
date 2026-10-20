@@ -654,3 +654,489 @@ fn inventory_death_and_drop_flags_and_ordinary_unit_lifecycle_remain_distinct() 
     ordinary.forget_inventory_unit(id(&value), false).unwrap();
     ordinary.forget_inventory_unit(id(&value), true).unwrap();
 }
+
+// Combined sale fixture: the inventory fixture plus player gold, stock, sale rules and the
+// sell-item event. Only declarations needed by the transaction are added.
+const SALE_CALLS: &str = r#"
+type timer extends agent
+type itemtype extends handle
+type playerstate extends handle
+native CreateTimer takes nothing returns timer
+native SetAllItemTypeSlots takes integer slots returns nothing
+native SetAllUnitTypeSlots takes integer slots returns nothing
+native SetUnitTypeSlots takes unit whichUnit, integer slots returns nothing
+native SetItemTypeSlots takes unit whichUnit, integer slots returns nothing
+native AddItemToStock takes unit whichUnit, integer itemId, integer currentStock, integer stockMax returns nothing
+native RemoveItemFromStock takes unit whichUnit, integer itemId returns nothing
+native IsItemIdSellable takes integer itemId returns boolean
+native ChooseRandomItemEx takes itemtype whichType, integer level returns integer
+constant native ConvertItemType takes integer i returns itemtype
+constant native ConvertPlayerState takes integer i returns playerstate
+native SetPlayerState takes player p, playerstate setting, integer value returns nothing
+constant native GetPlayerState takes player p, playerstate setting returns integer
+constant native GetSellingUnit takes nothing returns unit
+constant native GetSoldItem takes nothing returns item
+globals
+constant playerunitevent EVENT_PLAYER_UNIT_SELL_ITEM=ConvertPlayerUnitEvent(274)
+constant playerstate PLAYER_STATE_RESOURCE_GOLD=ConvertPlayerState(1)
+constant playerstate PLAYER_STATE_RESOURCE_LUMBER=ConvertPlayerState(2)
+constant playerstate PLAYER_STATE_RESOURCE_FOOD_USED=ConvertPlayerState(5)
+constant playerstate PLAYER_STATE_RESOURCE_FOOD_CAP=ConvertPlayerState(4)
+constant playerstate PLAYER_STATE_FOOD_CAP_CEILING=ConvertPlayerState(6)
+endglobals
+"#;
+
+/// Sale-test catalog: `P001` is a powerup row, every other rawcode is a plain sellable item.
+struct SaleItems;
+impl ObjectCatalog for SaleItems {
+    fn resolve(&self, rawcode: [u8; 4]) -> Result<Definition, ResolutionProblem> {
+        let powerup = if rawcode == *b"P001" { "1" } else { "0" };
+        let fields = [
+            (*b"ipow", "powerup", powerup),
+            (*b"idro", "droppable", "1"),
+            (*b"idrp", "drop", "0"),
+            (*b"iuse", "usable", "0"),
+        ]
+        .into_iter()
+        .map(|(id, column, value)| {
+            let mut field = geometry_field(Ok(FieldValue::Cell(value.into())));
+            let m = field.metadata.as_mut().unwrap();
+            m.fourcc = id;
+            m.kind = FieldKind::Bool;
+            m.source = FieldSource::Column {
+                slk: SlkId::ItemData,
+                column: column.into(),
+            };
+            (id, field)
+        })
+        .collect();
+        Ok(definition(
+            rawcode,
+            pcx_objects::fourcc_text(rawcode),
+            ObjectKind::Item,
+            fields,
+        ))
+    }
+}
+
+/// The inventory fixture with gold for the owner, a stock budget, sale rules for `I001`
+/// (price `price`) and `P001` (price 10), and an item-record budget of `item_budget`.
+fn open_sale(price: i32, item_budget: usize) -> ObjectHost {
+    use crate::item_sales::{ItemSale, ItemSaleTable};
+    let declarations = format!(
+        "{}\n{}\n{}\n{}",
+        enumeration::TRIGGERS,
+        activity::ORDERS,
+        CALLS,
+        SALE_CALLS
+    );
+    let fields = [(*b"uabi", ability_field("abilList", "L000"))];
+    let h = position_host_admitting(65536, 16, "// inventory", &declarations, &fields, |h| {
+        h.with_player_state_requests(crate::playercolor_host::PlayerStateRequestBudget {
+            max_records: 8,
+        })
+        .unwrap()
+        .with_player_resources(crate::player_resources::fixture::rules())
+        .unwrap()
+    });
+    let tables = tables("2");
+    let (registry, activity) = order_inputs();
+    let rules = Rules::read(
+        Arc::clone(&tables),
+        Overlay::default(),
+        Arc::clone(&registry),
+        &[(
+            "synthetic MiscGame",
+            b"[Misc]\nPickupItemRange=5\nDropItemRange=7\nGiveItemRange=9",
+        )],
+        1024,
+    )
+    .unwrap();
+    let origin = crate::scripts::AssetIdentity {
+        source: "synthetic sale".into(),
+        edition: "fixture".into(),
+        version: "fixture".into(),
+    };
+    let sales = ItemSaleTable::new(
+        origin.clone(),
+        BTreeMap::from([
+            (
+                i32::from_be_bytes(*b"I001"),
+                ItemSale {
+                    level: Some(1),
+                    class_ordinal: 0,
+                    gold: price,
+                    sellable: Some(true),
+                },
+            ),
+            (
+                i32::from_be_bytes(*b"P001"),
+                ItemSale {
+                    level: Some(1),
+                    class_ordinal: 0,
+                    gold: 10,
+                    sellable: Some(true),
+                },
+            ),
+        ]),
+    );
+    let shop = crate::shop_table::ShopTable {
+        origin,
+        image_sha256: [0; 32],
+        slot_ceiling: 11,
+        entries: 12,
+    };
+    let h = h
+        .with_order_registry(registry)
+        .unwrap()
+        .with_player_unit_events(8)
+        .unwrap()
+        .with_hero_skills(
+            Arc::clone(&tables),
+            crate::scripts::AssetIdentity {
+                source: "synthetic inventory".into(),
+                edition: "fixture".into(),
+                version: "fixture".into(),
+            },
+            Overlay::default(),
+            crate::hero_skills::tests::rules(),
+            crate::playercolor_host::HeroBudget {
+                abilities_per_unit: 8,
+                overlay_objects: 4,
+                modifications_per_ability: 8,
+            },
+        )
+        .unwrap();
+    let mut h = h
+        .with_item_catalog(
+            Arc::new(SaleItems),
+            source(),
+            crate::playercolor_host::ItemBudget {
+                max_records: item_budget,
+                max_retained_fields: 4,
+                max_modifications: 0,
+            },
+        )
+        .unwrap()
+        .with_inventory(
+            rules,
+            InventoryBudget {
+                max_slots_per_unit: 9,
+                max_pending_orders: 4,
+            },
+        )
+        .unwrap()
+        .with_stock(crate::playercolor_host::StockBudget {
+            max_records: 16,
+            shop: crate::playercolor_host::ShopCapacity::new(shop),
+        })
+        .unwrap()
+        .with_item_sales(sales)
+        .unwrap();
+    h.admit_unit_activity(activity, 65536).unwrap();
+    h
+}
+
+/// Owner gold, shop stock, buyer inventory, handles and the sell-event queue at one point.
+#[derive(Debug, PartialEq)]
+struct SaleState {
+    gold: Value,
+    stock: Option<(i32, i32)>,
+    held: Vec<Value>,
+    handles: usize,
+}
+
+fn sale_state(
+    h: &mut ObjectHost,
+    owner: &Value,
+    shop: &Value,
+    buyer: &Value,
+    item: i32,
+) -> SaleState {
+    let gold_setting = h.native("ConvertPlayerState", &[Value::Int(1)]).unwrap();
+    let gold = h
+        .native("GetPlayerState", &[owner.clone(), gold_setting])
+        .unwrap();
+    let slots = h
+        .native("UnitInventorySize", std::slice::from_ref(buyer))
+        .unwrap();
+    let Value::Int(slots) = slots else {
+        panic!("inventory size")
+    };
+    let mut held = Vec::new();
+    for slot in 0..slots {
+        held.push(
+            h.native("UnitItemInSlot", &[buyer.clone(), Value::Int(slot)])
+                .unwrap(),
+        );
+    }
+    SaleState {
+        gold,
+        stock: h.item_stock(id(shop), item).unwrap(),
+        held,
+        handles: h.inner().handles(),
+    }
+}
+
+fn set_gold(h: &mut ObjectHost, owner: &Value, amount: i32) {
+    let gold_setting = h.native("ConvertPlayerState", &[Value::Int(1)]).unwrap();
+    h.native(
+        "SetPlayerState",
+        &[owner.clone(), gold_setting, Value::Int(amount)],
+    )
+    .unwrap();
+}
+
+fn stock(h: &mut ObjectHost, shop: &Value, item: i32, current: i32) {
+    h.native("SetItemTypeSlots", &[shop.clone(), Value::Int(4)])
+        .unwrap();
+    h.native(
+        "AddItemToStock",
+        &[
+            shop.clone(),
+            Value::Int(item),
+            Value::Int(current),
+            Value::Int(current),
+        ],
+    )
+    .unwrap();
+}
+
+fn sold(outcome: &crate::playercolor_host::PurchaseOutcome) -> Option<HandleId> {
+    match outcome {
+        crate::playercolor_host::PurchaseOutcome::Sold { item } => Some(*item),
+        crate::playercolor_host::PurchaseOutcome::Refused(_) => None,
+    }
+}
+
+fn refusal(
+    outcome: &crate::playercolor_host::PurchaseOutcome,
+) -> crate::playercolor_host::PurchaseRefusal {
+    match outcome {
+        crate::playercolor_host::PurchaseOutcome::Refused(r) => *r,
+        crate::playercolor_host::PurchaseOutcome::Sold { .. } => panic!("expected a refusal"),
+    }
+}
+
+const I001: i32 = i32::from_be_bytes(*b"I001");
+const P001: i32 = i32::from_be_bytes(*b"P001");
+
+#[test]
+fn sale_debits_gold_places_the_item_decrements_stock_and_delivers_completed_state() {
+    let mut h = open_sale(50, 8);
+    let shop = unit(&mut h, 16.);
+    let buyer = unit(&mut h, 32.);
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    set_gold(&mut h, &owner, 120);
+    stock(&mut h, &shop, I001, 2);
+    let t = h.native("CreateTrigger", &[]).unwrap();
+    let sell = h
+        .native("ConvertPlayerUnitEvent", &[Value::Int(274)])
+        .unwrap();
+    h.native(
+        "TriggerRegisterPlayerUnitEvent",
+        &[t, owner.clone(), sell, Value::Null],
+    )
+    .unwrap();
+    let before = sale_state(&mut h, &owner, &shop, &buyer, I001);
+    assert_eq!(before.gold, Value::Int(100));
+    let outcome = h.purchase_stock_item(id(&shop), id(&buyer), I001).unwrap();
+    let sold_item = sold(&outcome).expect("sale succeeds");
+    let after = sale_state(&mut h, &owner, &shop, &buyer, I001);
+    assert_eq!(after.gold, Value::Int(50), "debited by the loaded price");
+    assert_eq!(after.stock, Some((1, 2)), "one loaded stock unit sold");
+    assert_eq!(after.handles, before.handles + 1, "one item created");
+    assert!(after.held.contains(&Value::Handle(sold_item)));
+    let fired = h.take_fired_event().expect("sell event queued");
+    h.begin_fired_event(&fired).unwrap().unwrap();
+    assert_eq!(h.native("GetSellingUnit", &[]).unwrap(), shop);
+    assert_eq!(
+        h.native("GetSoldItem", &[]).unwrap(),
+        Value::Handle(sold_item)
+    );
+    // Callback sees the completed sale.
+    let during = sale_state(&mut h, &owner, &shop, &buyer, I001);
+    assert_eq!(during.gold, Value::Int(50));
+    assert_eq!(during.stock, Some((1, 2)));
+    assert!(during.held.contains(&Value::Handle(sold_item)));
+    h.finish_fired_event();
+    assert_eq!(
+        h.native("GetSellingUnit", &[]).unwrap(),
+        Value::Null,
+        "no context after delivery"
+    );
+    assert_eq!(h.native("GetSoldItem", &[]).unwrap(), Value::Null);
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn sale_price_comes_from_the_loaded_row_not_a_default() {
+    let mut h = open_sale(70, 8);
+    let shop = unit(&mut h, 16.);
+    let buyer = unit(&mut h, 32.);
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    set_gold(&mut h, &owner, 100);
+    stock(&mut h, &shop, I001, 1);
+    h.purchase_stock_item(id(&shop), id(&buyer), I001).unwrap();
+    assert_eq!(
+        sale_state(&mut h, &owner, &shop, &buyer, I001).gold,
+        Value::Int(30)
+    );
+}
+
+#[test]
+fn sale_with_insufficient_gold_refuses_and_changes_nothing() {
+    let mut h = open_sale(50, 8);
+    let shop = unit(&mut h, 16.);
+    let buyer = unit(&mut h, 32.);
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    set_gold(&mut h, &owner, 49);
+    stock(&mut h, &shop, I001, 2);
+    let t = h.native("CreateTrigger", &[]).unwrap();
+    let sell = h
+        .native("ConvertPlayerUnitEvent", &[Value::Int(274)])
+        .unwrap();
+    h.native(
+        "TriggerRegisterPlayerUnitEvent",
+        &[t, owner.clone(), sell, Value::Null],
+    )
+    .unwrap();
+    let before = sale_state(&mut h, &owner, &shop, &buyer, I001);
+    let outcome = h.purchase_stock_item(id(&shop), id(&buyer), I001).unwrap();
+    assert_eq!(
+        refusal(&outcome),
+        crate::playercolor_host::PurchaseRefusal::InsufficientGold
+    );
+    assert_eq!(sale_state(&mut h, &owner, &shop, &buyer, I001), before);
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn sale_into_a_full_inventory_refuses_and_changes_nothing() {
+    let mut h = open_sale(50, 8);
+    let shop = unit(&mut h, 16.);
+    let buyer = unit(&mut h, 32.);
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    set_gold(&mut h, &owner, 500);
+    stock(&mut h, &shop, I001, 2);
+    let slots = match h
+        .native("UnitInventorySize", std::slice::from_ref(&buyer))
+        .unwrap()
+    {
+        Value::Int(n) => n,
+        other => panic!("inventory size {other:?}"),
+    };
+    for _ in 0..slots {
+        let filler = item(&mut h, 48.);
+        assert_eq!(
+            h.native("UnitAddItem", &[buyer.clone(), filler]).unwrap(),
+            Value::Bool(true)
+        );
+    }
+    let before = sale_state(&mut h, &owner, &shop, &buyer, I001);
+    let outcome = h.purchase_stock_item(id(&shop), id(&buyer), I001).unwrap();
+    assert_eq!(
+        refusal(&outcome),
+        crate::playercolor_host::PurchaseRefusal::NoFreeSlot
+    );
+    assert_eq!(sale_state(&mut h, &owner, &shop, &buyer, I001), before);
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn unsupported_powerup_is_refused_before_any_item_is_created() {
+    // Item budget of one record: a refusal that created the item would spend it.
+    let mut h = open_sale(10, 1);
+    let shop = unit(&mut h, 16.);
+    let buyer = unit(&mut h, 32.);
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    set_gold(&mut h, &owner, 100);
+    stock(&mut h, &shop, P001, 1);
+    let before = sale_state(&mut h, &owner, &shop, &buyer, P001);
+    let outcome = h.purchase_stock_item(id(&shop), id(&buyer), P001).unwrap();
+    assert_eq!(
+        refusal(&outcome),
+        crate::playercolor_host::PurchaseRefusal::UnsupportedItem
+    );
+    assert_eq!(sale_state(&mut h, &owner, &shop, &buyer, P001), before);
+    // The budget is intact: one ordinary creation still succeeds.
+    item(&mut h, 48.);
+}
+
+#[test]
+fn item_budget_refusal_is_an_error_that_changes_nothing() {
+    let mut h = open_sale(50, 1);
+    let shop = unit(&mut h, 16.);
+    let buyer = unit(&mut h, 32.);
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    set_gold(&mut h, &owner, 100);
+    stock(&mut h, &shop, I001, 2);
+    item(&mut h, 48.);
+    let before = sale_state(&mut h, &owner, &shop, &buyer, I001);
+    let err = h
+        .purchase_stock_item(id(&shop), id(&buyer), I001)
+        .unwrap_err();
+    assert!(err.to_string().contains("item creation"), "{err}");
+    assert_eq!(sale_state(&mut h, &owner, &shop, &buyer, I001), before);
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn stale_stock_from_a_cleared_cell_refuses_without_changes() {
+    let mut h = open_sale(50, 8);
+    let shop = unit(&mut h, 16.);
+    let buyer = unit(&mut h, 32.);
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    set_gold(&mut h, &owner, 100);
+    stock(&mut h, &shop, I001, 2);
+    h.native("SetItemTypeSlots", &[shop.clone(), Value::Int(0)])
+        .unwrap();
+    let before = sale_state(&mut h, &owner, &shop, &buyer, I001);
+    let outcome = h.purchase_stock_item(id(&shop), id(&buyer), I001).unwrap();
+    assert_eq!(
+        refusal(&outcome),
+        crate::playercolor_host::PurchaseRefusal::NotInStock
+    );
+    assert_eq!(sale_state(&mut h, &owner, &shop, &buyer, I001), before);
+}
+
+#[test]
+fn consecutive_sales_deliver_their_own_context_and_never_leak() {
+    let mut h = open_sale(50, 8);
+    let shop = unit(&mut h, 16.);
+    let buyer = unit(&mut h, 32.);
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    set_gold(&mut h, &owner, 500);
+    stock(&mut h, &shop, I001, 2);
+    let t = h.native("CreateTrigger", &[]).unwrap();
+    let sell = h
+        .native("ConvertPlayerUnitEvent", &[Value::Int(274)])
+        .unwrap();
+    h.native(
+        "TriggerRegisterPlayerUnitEvent",
+        &[t, owner.clone(), sell, Value::Null],
+    )
+    .unwrap();
+    assert_eq!(
+        h.native("GetSoldItem", &[]).unwrap(),
+        Value::Null,
+        "no context before a sale"
+    );
+    let first = sold(&h.purchase_stock_item(id(&shop), id(&buyer), I001).unwrap()).unwrap();
+    let second = sold(&h.purchase_stock_item(id(&shop), id(&buyer), I001).unwrap()).unwrap();
+    let f1 = h.take_fired_event().unwrap();
+    let f2 = h.take_fired_event().unwrap();
+    assert!(h.take_fired_event().is_none());
+    h.begin_fired_event(&f1).unwrap().unwrap();
+    assert_eq!(h.native("GetSoldItem", &[]).unwrap(), Value::Handle(first));
+    h.finish_fired_event();
+    assert_eq!(
+        h.native("GetSoldItem", &[]).unwrap(),
+        Value::Null,
+        "first context ends"
+    );
+    h.begin_fired_event(&f2).unwrap().unwrap();
+    assert_eq!(h.native("GetSoldItem", &[]).unwrap(), Value::Handle(second));
+    h.finish_fired_event();
+    assert_eq!(h.native("GetSellingUnit", &[]).unwrap(), Value::Null);
+}
