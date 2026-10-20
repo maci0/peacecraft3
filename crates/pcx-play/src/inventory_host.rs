@@ -3,6 +3,8 @@ use super::*;
 use crate::inventory::{InventoryBudget, Policy, Rules};
 use crate::inventory_powerup::{AttributeBonus, Rules as PowerupRules};
 use crate::inventory_powerup_host::{grant_strength, reprice_life};
+use crate::item_heal::heal_life;
+use crate::playercolor_host::UseCheck;
 use pcx_objects::editor::{FieldSource, SlkId};
 use pcx_sim::world::FieldValue;
 
@@ -39,7 +41,11 @@ const CALLS: &[(&str, &[&str], &str, bool)] = &[
     ("IsItemInvulnerable", &["item"], "boolean", false),
     ("SetItemDroppable", &["item", "boolean"], "nothing", false),
     ("SetItemDropOnDeath", &["item", "boolean"], "nothing", false),
+    ("UnitUseItem", &["unit", "item"], "boolean", false),
+    ("UnitUseItemTarget", &["unit", "item", "widget"], "boolean", false),
 ];
+/// Trigger, filter and registered event of each use-event registration of a player.
+type UseEventPlan = Vec<(HandleId, Option<HandleId>, HandleId)>;
 impl ObjectHost {
     pub fn with_inventory(mut self, rules: Rules, budget: InventoryBudget) -> Result<Self, Error> {
         let fail = |s| self.inner.error("inventory", Failure::ItemState(s));
@@ -586,18 +592,210 @@ impl ObjectHost {
         }
         Some(self.inventory_call(name, args))
     }
+    /// Input command from an inventory slot: the local player activates an item held by one of its
+    /// units. A unit owned by another player, a non-healing item and an item the unit does not hold
+    /// return `false` with no write. An item whose authored target is not `_` needs a selected
+    /// target; no target selection is qualified here, so it refuses with a diagnostic. Control,
+    /// dialog and HUD ownership are checked by the input layer before this call.
+    pub fn player_activate_held_item(
+        &mut self,
+        local_player: i32,
+        unit: HandleId,
+        item: HandleId,
+    ) -> Result<bool, Error> {
+        let owner = self.executed_unit(unit)?.owner;
+        if self.player_settings(owner)?.number != local_player {
+            return Ok(false);
+        }
+        let Some(record) = self.live_item(item)? else {
+            return Ok(false);
+        };
+        let state = self.inventory_state()?;
+        let rules = state
+            .attributes
+            .as_ref()
+            .ok_or_else(|| self.inner.error("inventory", Failure::ItemUse("healing rules are not admitted".into())))?;
+        let is_use = rules
+            .heal_effect(&record.definition)
+            .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))?
+            .is_some();
+        if !is_use {
+            return Ok(false);
+        }
+        let targeted = rules
+            .heal_requires_target(&record.definition)
+            .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))?;
+        if targeted {
+            return Err(self.inner.error(
+                "inventory",
+                Failure::ItemUse("targeted item use needs a selected target, which is not qualified".into()),
+            ));
+        }
+        self.activate_held_item(unit, item)
+    }
+
+    /// Player activation of a held item on its holder. The command boundary is recreated here: the
+    /// authored order id for inventory item use is not yet qualified from the client, so an input
+    /// layer calls this directly rather than through an order. It shares the `UnitUseItem` path.
+    pub fn activate_held_item(&mut self, unit: HandleId, item: HandleId) -> Result<bool, Error> {
+        match self.unit_use_item("UnitUseItem", &[Value::Handle(unit), Value::Handle(item)])? {
+            Value::Bool(used) => Ok(used),
+            other => Err(self.inner.error(
+                "UnitUseItem",
+                Failure::ItemUse(format!("use returned {other:?}")),
+            )),
+        }
+    }
+
+    /// `UnitUseItem` and `UnitUseItemTarget` for a held usable healing item. Every check that can
+    /// decline the use runs before any write and returns `false`, as the native reports a use that
+    /// did not happen. Order: prepare (no writes), `check_item_use`, `commit_item_use` (charges and
+    /// cooldown), then the heal and the perishable removal. A refusal leaves the state unchanged.
+    /// Source-unqualified cases return `false` and are not fatal: dead targets, and targets beyond
+    /// the source `Rng1` range (the native movement behavior is not modeled here).
+    fn unit_use_item(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let fail = |reason: String| self.inner.error(name, Failure::ItemUse(reason));
+        let (unit, item, target_arg) = match args {
+            [Value::Handle(u), Value::Handle(i)] => (*u, *i, None),
+            [Value::Handle(u), Value::Handle(i), Value::Handle(t)] => (*u, *i, Some(*t)),
+            _ => return Ok(Value::Bool(false)),
+        };
+        match self.inner.entry(unit)? {
+            Entry::RemovedUnit => return Ok(Value::Bool(false)),
+            Entry::Unit { .. } => {}
+            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+        }
+        let Some(record) = self.live_item(item)? else {
+            return Ok(Value::Bool(false));
+        };
+        if record.held_by.map(|(owner, _)| owner) != Some(unit)
+            || !self.inventory_policy(unit)?.use_items
+        {
+            return Ok(Value::Bool(false));
+        }
+        let state = self.inventory_state()?;
+        let rules = state
+            .attributes
+            .as_ref()
+            .ok_or_else(|| fail("healing rules are not admitted".into()))?;
+        let Some(amount) = rules
+            .heal_effect(&record.definition)
+            .map_err(|e| self.inner.error(name, Failure::UnitActivity(e)))?
+        else {
+            return Ok(Value::Bool(false));
+        };
+        let range = match target_arg {
+            Some(_) => Some(
+                rules
+                    .heal_range(&record.definition)
+                    .map_err(|e| self.inner.error(name, Failure::UnitActivity(e)))?,
+            ),
+            None => None,
+        };
+        let target = match target_arg {
+            None => unit,
+            Some(t) => match self.inner.entry(t)? {
+                Entry::RemovedUnit => return Ok(Value::Bool(false)),
+                Entry::Unit { .. } => t,
+                _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+            },
+        };
+        let target_record = self.executed_unit(target)?;
+        if target_record.combat.as_ref().is_some_and(|c| c.dead) {
+            return Ok(Value::Bool(false));
+        }
+        let vitals = target_record
+            .vitals
+            .ok_or_else(|| fail("target vitals are not admitted".into()))?;
+        if let Some(range) = range {
+            let from = self.executed_unit(unit)?.position;
+            let to = self.executed_unit(target)?.position;
+            let (Some(from), Some(to)) = (from, to) else {
+                return Ok(Value::Bool(false));
+            };
+            if (from[0] - to[0]).hypot(from[1] - to[1]) > range {
+                return Ok(Value::Bool(false));
+            }
+        }
+        let life = heal_life(vitals.life, vitals.max_life, amount as f32)
+            .map_err(|e| self.inner.error(name, Failure::UnitActivity(e)))?;
+        let grant = match self.check_item_use(unit, item)? {
+            UseCheck::Ready(grant) => grant,
+            UseCheck::OnCooldown { .. } | UseCheck::NoCharges | UseCheck::NotHeld => {
+                return Ok(Value::Bool(false));
+            }
+        };
+        // Effect boundary. Everything that can refuse runs before `commit_item_use`, and the commit
+        // refuses before any write. After the commit, queue capacity was reserved and every queued
+        // trigger was validated, so the remaining steps cannot refuse.
+        let (owner, use_events) = self.use_event_plan(unit)?;
+        self.reserve_event_delivery(use_events.len())?;
+        let commit = self.commit_item_use(grant)?;
+        if let Entry::Unit { record } = self.inner.entry_mut(target)?
+            && let Some(vitals) = &mut record.vitals
+        {
+            vitals.life = life;
+        }
+        if commit.remove {
+            *self.inner.entry_mut(item)? = Entry::RemovedItem;
+        }
+        // Queued last: a trigger that runs from the queue sees the healed life, the charge and the
+        // removal. The queue only records the event here, so no trigger runs inside this call.
+        for (trigger, filter, event) in use_events {
+            let subject = EventSubject {
+                unit: Some(unit),
+                item: Some(item),
+                player: Some(owner),
+                ..EventSubject::default()
+            };
+            self.queue_event(trigger, filter, subject, Some(event))?;
+        }
+        Ok(Value::Bool(true))
+    }
+
+    /// Use-event registrations of the holder's player, as (trigger, filter, event). The owner
+    /// comes from the unit's current player. Every filter is validated here, so queueing after
+    /// the commit has no failing lookup.
+    fn use_event_plan(
+        &self,
+        unit: HandleId,
+    ) -> Result<(HandleId, UseEventPlan), Error> {
+        let owner = self.executed_unit(unit)?.owner;
+        let enumerand =
+            self.source_constant_enumerand("EVENT_PLAYER_UNIT_USE_ITEM", "playerunitevent")?;
+        let mut plan = Vec::new();
+        for entry in &self.inner.arena {
+            if let Entry::RegisteredPlayerUnitEvent(r) = entry
+                && r.player == owner
+                && r.enumerand == enumerand
+            {
+                if let Some(filter) = r.filter {
+                    match self.inner.entry(filter)? {
+                        Entry::Condition { .. } | Entry::Filter { .. } => {}
+                        _ => return Err(self.inner.error("inventory", Failure::WrongFamily)),
+                    }
+                }
+                plan.push((r.trigger, r.filter, r.playerunitevent));
+            }
+        }
+        Ok((owner, plan))
+    }
+
     fn inventory_call(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
         let fail = || self.inner.error(name, Failure::Signature);
         let spec = CALLS.iter().find(|c| c.0 == name).ok_or_else(fail)?;
         if args.len() != spec.1.len()
             || args.iter().zip(spec.1).any(|(value, kind)| match *kind {
-                "unit" | "item" => !matches!(value, Value::Handle(_) | Value::Null),
+                "unit" | "item" | "widget" => !matches!(value, Value::Handle(_) | Value::Null),
                 "integer" => !matches!(value, Value::Int(_)),
                 "boolean" => !matches!(value, Value::Bool(_)),
                 _ => true,
             })
         {
             return Err(fail());
+        }
+        if matches!(name, "UnitUseItem" | "UnitUseItemTarget") {
+            return self.unit_use_item(name, args);
         }
         let null = || match name {
             "UnitHasItem" | "UnitAddItem" | "IsItemInvulnerable" => Value::Bool(false),

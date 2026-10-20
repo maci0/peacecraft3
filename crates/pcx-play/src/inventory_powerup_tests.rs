@@ -653,3 +653,146 @@ fn negative_authored_armor_refuses() {
         .unwrap_err();
     assert!(err.contains("negative armor"), "{err}");
 }
+
+/// Healing window with its base function at `HEAL_BASE_VA`, in the reviewed 25-byte layout.
+fn heal_window(source: &str) -> Vec<u8> {
+    let base_va = i64::from(HEAL_WINDOW) + 0x100;
+    let rel_base = (base_va - (i64::from(HEAL_WINDOW) + 10)) as i32;
+    let rel_register = (i64::from(REGISTER_FN) - (i64::from(HEAL_WINDOW) + 21)) as i32;
+    let mut w = vec![PUSH_IMM32, 1, 2, 3, 4, CALL_REL32];
+    w.extend(rel_base.to_le_bytes());
+    w.push(PUSH_EAX);
+    w.push(PUSH_IMM32);
+    w.extend(source.bytes().rev());
+    w.push(CALL_REL32);
+    w.extend(rel_register.to_le_bytes());
+    w.extend(CLEANUP_RET);
+    w
+}
+
+fn base_code(base: &str) -> Vec<u8> {
+    let mut b = vec![MOV_EAX_IMM32];
+    b.extend(base.bytes().rev());
+    b.push(RET);
+    b
+}
+
+#[test]
+fn healing_window_reads_the_source_class_and_the_constant_base() {
+    assert_eq!(
+        class_from_call_window(&heal_window("AIhe"), &base_code("AAsm")).unwrap(),
+        ("AIhe".to_string(), "AAsm".to_string())
+    );
+    assert_eq!(call_target(&heal_window("AIhe"), 5).unwrap(), HEAL_WINDOW + 0x100);
+}
+
+#[test]
+fn healing_window_refuses_near_matches_without_a_value() {
+    let mut immediate_base = heal_window("AIhe");
+    immediate_base[5] = PUSH_IMM32;
+    assert!(class_from_call_window(&immediate_base, &base_code("AAsm")).is_err());
+    let mut wrong_register = heal_window("AIhe");
+    wrong_register[17] ^= 1;
+    assert!(class_from_call_window(&wrong_register, &base_code("AAsm")).is_err());
+    assert!(class_from_call_window(&heal_window("AIhe")[..24], &base_code("AAsm")).is_err());
+    let mut not_constant = base_code("AAsm");
+    not_constant[0] = 0x90;
+    assert!(class_from_call_window(&heal_window("AIhe"), &not_constant).is_err());
+    assert!(class_from_call_window(&heal_window("AIhe"), &base_code("AAs")).is_err());
+}
+
+/// Healing fixture: `phea` uses `AIh1` (code `AIhe`, amount `DataA1`, range `Rng1`), `tarm` holds
+/// the armor row `AId1`, and `Ihpg` admits `AIh1` only.
+fn healing_rules(amount: &str, range: &str) -> Rules {
+    let items = sylk(
+        &["itemID", "abilList", "powerup", "usable", "perishable", "uses"],
+        &[
+            &["phea", "AIh1", "0", "1", "1", "1"],
+            &["tarm", "AId1", "0", "0", "0", "-"],
+        ],
+    );
+    let abilities = sylk(
+        &["alias", "code", "levels", "DataA1", "Rng1"],
+        &[
+            &["AIh1", "AIhe", "1", amount, range],
+            &["AId1", "AIde", "1", "1", "-"],
+        ],
+    );
+    let meta = sylk(
+        &["ID", "field", "slk", "index", "type", "data", "useSpecific"],
+        &[
+            &["Iagi", "Data", "AbilityData", "-1", "int", "1", "AIsm,AIxm"],
+            &["Iint", "Data", "AbilityData", "-1", "int", "2", "AIsm,AIxm"],
+            &["Istr", "Data", "AbilityData", "-1", "int", "3", "AIsm,AIxm"],
+            &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1"],
+            &["Ihpg", "Data", "AbilityData", "-1", "int", "1", "AIh1"],
+        ],
+    );
+    let tables = Arc::new(
+        DefaultTables::from_bytes(
+            Identity {
+                install: "synthetic healing".into(),
+                edition_version: "fixture".into(),
+            },
+            &[
+                (SlkId::ItemData.path(), &items),
+                (SlkId::AbilityData.path(), &abilities),
+                (SlkId::AbilityMetaData.path(), &meta),
+            ],
+            &[],
+            EditorReadLimits {
+                max_listed_paths: 4,
+                max_asset_bytes: 65536,
+                max_aggregate_input_bytes: 131072,
+            },
+        )
+        .unwrap(),
+    );
+    Rules::decode(
+        tables,
+        Overlay::default(),
+        AssetIdentity {
+            source: "synthetic".into(),
+            edition: "synthetic".into(),
+            version: "test".into(),
+        },
+        [0; 32],
+        &window("AIsm", "AIxm"),
+        &window("AIab", "APbo"),
+        &window("AIde", "APbo"),
+    )
+    .unwrap()
+    .with_heal(&heal_window("AIhe"), &base_code("AAsm"))
+    .unwrap()
+}
+
+#[test]
+fn healing_amount_and_range_come_from_the_admitted_source_row() {
+    let rules = healing_rules("250", "100");
+    assert_eq!(rules.heal_effect(&catalog_item("phea")).unwrap(), Some(250));
+    assert_eq!(rules.heal_range(&catalog_item("phea")).unwrap(), 100.0);
+    assert_eq!(rules.heal_effect(&catalog_item("tarm")).unwrap(), None);
+}
+
+#[test]
+fn healing_refuses_negative_amounts_unfinite_ranges_and_missing_registration() {
+    assert!(healing_rules("-5", "100")
+        .heal_effect(&catalog_item("phea"))
+        .unwrap_err()
+        .contains("negative healing"));
+    assert!(healing_rules("250", "-")
+        .heal_range(&catalog_item("phea"))
+        .is_err());
+    // `parm` is not usable, so it has no use and no effect, even without a healing registration.
+    assert_eq!(armor_rules("3").heal_effect(&catalog_item("parm")).unwrap(), None);
+}
+
+/// Explicit local gate: the reviewed 25-byte healing registration reads from the selected client
+/// image, and the selected catalog's `phea` row gives its authored heal amount and range.
+#[test]
+#[ignore = "requires PCX_TOME_CLIENT and PCX_TOME_CATALOG selected local assets"]
+fn local_original_healing_registration_and_phea_row() {
+    let (_, rules) = selected_install();
+    assert_eq!(rules.heal_effect(&catalog_item("phea")).unwrap(), Some(250));
+    assert_eq!(rules.heal_range(&catalog_item("phea")).unwrap(), 100.0);
+}
