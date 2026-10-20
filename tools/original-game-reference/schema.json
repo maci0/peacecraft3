@@ -217,6 +217,44 @@
       }
     },
     {
+      "name": "export-replay",
+      "description": "Copy the single Wine-prefix Warcraft III/Replay/LastReplay.w3g into the run as <label>.w3g with a receipt. Refuses a running container, zero or several candidates, links, files over 32 MiB and an existing label. Copies bytes only; the file layout is not parsed.",
+      "effects": "non_idempotent",
+      "output_kind": "data",
+      "cardinality": "single",
+      "args": [
+        {
+          "name": "--run-dir",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "--label",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "stdout_schema": {
+        "type": "object",
+        "properties": {
+          "replay": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "replay",
+          "sha256",
+          "bytes"
+        ]
+      }
+    },
+    {
       "name": "key",
       "description": "Send one key chord; repeating sends it again.",
       "effects": "non_idempotent",

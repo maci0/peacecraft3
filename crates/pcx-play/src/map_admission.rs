@@ -6,6 +6,7 @@ use pcx_map::{
 };
 use pcx_mpq::checked::{CheckedArchive, ReadBudget, ReadError};
 use pcx_sim::world::{ImportError, ImportedWorld, ObjectCatalog, Source};
+use sha2::Digest;
 
 use std::sync::Arc;
 
@@ -76,6 +77,7 @@ pub enum MapAdmissionError {
     #[error(transparent)]
     World(#[from] ImportError),
 }
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MapInputSources {
     pub map: AssetIdentity,
     pub common: AssetIdentity,
@@ -89,6 +91,8 @@ pub struct ParsedMapContext {
     pub required_fields: Vec<[u8; 4]>,
     pub input_budget: MapAdmissionBudget,
     pub map_digest: SourceDigest,
+    /// SHA-256 of the admitted map bytes. Use this for identity; `map_digest` is FNV-1a, a checksum only.
+    pub map_sha256: [u8; 32],
     pub world_member_digests: Vec<SourceDigest>,
     pub terrain: Terrain,
     pub alignment: GridAlignment,
@@ -325,6 +329,7 @@ pub fn prepare_map_context<C: ObjectCatalog>(
         label: label.into(),
         hash: pcx_script::fnv1a64(input.map.raw()),
     };
+    let map_sha256 = sha2::Sha256::digest(input.map.raw()).into();
     let admission_witness = crate::neutral_player::AdmissionWitness::new(
         input.map.raw(),
         world.info.raw(),
@@ -343,6 +348,7 @@ pub fn prepare_map_context<C: ObjectCatalog>(
             catalog: input.catalog_identity.clone(),
         },
         map_digest,
+        map_sha256,
         world_member_digests: digests,
         terrain,
         alignment,

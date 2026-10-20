@@ -26,8 +26,11 @@ use pcx_sim::{Input, World, step, validate_input};
 #[cfg(not(target_arch = "wasm32"))]
 pub mod transport;
 
+pub mod w3g;
+
 pub mod bnet;
 pub mod classic_frame;
+pub mod replay;
 pub mod rollback;
 pub mod session;
 

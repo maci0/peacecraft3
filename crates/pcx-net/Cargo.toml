@@ -14,6 +14,7 @@ name = "session_server"
 required-features = ["session-server"]
 
 [dependencies]
+flate2.workspace = true
 pcx-sim.workspace = true
 pcx-mpq.workspace = true
 pcx-map.workspace = true
