@@ -1434,13 +1434,14 @@ impl ObjectHost {
         self.player_resource_value(player, "PLAYER_STATE_RESOURCE_GOLD")
     }
 
-    /// Lowers an admitted player's gold by `price`. The caller has checked the balance, and
-    /// an overflow refuses before any row changes.
-    pub(crate) fn debit_gold(&mut self, player: HandleId, price: i32) -> Result<(), Error> {
-        let fail = |reason| {
-            self.inner
-                .error(GET_PLAYER_STATE, Failure::PlayerState(reason))
-        };
+    /// Reads and reserves a gold debit without writing it. The row for the owner is found or its
+    /// capacity reserved here, so [`ObjectHost::apply_gold_debit`] cannot fail.
+    pub(crate) fn prepare_gold_debit(
+        &mut self,
+        player: HandleId,
+        price: i32,
+    ) -> Result<GoldDebit, Error> {
+        let fail = |reason| self.inner.error(GET_PLAYER_STATE, Failure::PlayerState(reason));
         let at = self.player_index(&Value::Handle(player), GET_PLAYER_STATE)?;
         let state = self.source_constant_enumerand("PLAYER_STATE_RESOURCE_GOLD", "playerstate")?;
         let current = self
@@ -1455,19 +1456,48 @@ impl ObjectHost {
             .resources
             .as_mut()
             .ok_or_else(|| fail("resources not admitted"))?;
-        if let Some(row) = resources
+        let index = resources
             .values
-            .iter_mut()
-            .find(|(p, s, _)| *p == number && *s == state)
-        {
-            row.2 = next;
-        } else {
+            .iter()
+            .position(|(p, s, _)| *p == number && *s == state);
+        if index.is_none() {
             resources
                 .values
                 .try_reserve(1)
                 .map_err(|_| fail("resource row capacity"))?;
-            resources.values.push((number, state, next));
         }
-        Ok(())
+        Ok(GoldDebit {
+            number,
+            state,
+            index,
+            next,
+        })
     }
+
+    /// Writes a prepared debit. Its row exists or its capacity was reserved, so this is infallible.
+    pub(crate) fn apply_gold_debit(&mut self, debit: GoldDebit) {
+        let players = self
+            .players
+            .as_mut()
+            .expect("prepared debit implies admitted players");
+        let resources = players
+            .resources
+            .as_mut()
+            .expect("prepared debit implies admitted resources");
+        match debit.index {
+            Some(index) => resources.values[index].2 = debit.next,
+            None => resources
+                .values
+                .push((debit.number, debit.state, debit.next)),
+        }
+    }
+}
+
+/// A gold debit that has been checked and whose row is ready.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GoldDebit {
+    number: i32,
+    state: i32,
+    index: Option<usize>,
+    next: i32,
 }

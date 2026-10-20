@@ -782,6 +782,6 @@ pub use objects::{
 };
 pub use objects::{
     CinematicScene, Combat, DestructableState, DialogBudget, DialogButton, DialogQuitRequest,
-    DialogState, EventSubject, FiredEvent, FogModifier, GameExitRequest, Indicator, MinimapPing,
+    DialogState, EventSubject, FiredEvent, PurchaseOutcome, PurchaseRefusal, FogModifier, GameExitRequest, Indicator, MinimapPing,
     Relation, ScriptDialog, Vitals, Weapon,
 };

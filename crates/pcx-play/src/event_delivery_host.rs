@@ -121,6 +121,38 @@ impl ObjectHost {
             .map_err(|_| self.inner.error("event delivery", Failure::Capacity))
     }
 
+    /// Resolves an event filter the way `queue_event` does, so a caller can check it before a write.
+    pub(super) fn resolve_event_filter(
+        &self,
+        filter: Option<HandleId>,
+    ) -> Result<Option<FunctionId>, Error> {
+        Ok(match filter {
+            None => None,
+            Some(id) => Some(match self.inner.entry(id)? {
+                Entry::Condition { .. } => self.condition_callback(id)?.function,
+                Entry::Filter { .. } => self.filter_callback(id)?.function,
+                _ => return Err(self.inner.error("event delivery", Failure::WrongFamily)),
+            }),
+        })
+    }
+
+    /// Pushes an event into capacity that `reserve_event_delivery` already reserved. The push
+    /// cannot allocate, so it has no failure path.
+    pub(super) fn push_reserved_event(
+        &mut self,
+        trigger: HandleId,
+        filter: Option<FunctionId>,
+        subject: EventSubject,
+        event: Option<HandleId>,
+    ) {
+        self.events.queue.push_back(FiredEvent {
+            trigger,
+            filter,
+            subject,
+            event,
+        });
+    }
+
     pub(super) fn queue_event(
         &mut self,
         trigger: HandleId,
