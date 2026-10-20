@@ -23,6 +23,7 @@ struct Stages<'w> {
     input: Option<Res<'w, crate::campaign_input::CampaignInput>>,
     selection: Option<Res<'w, crate::campaign_selection::CampaignSelection>>,
     hud: Option<Res<'w, crate::campaign_hud::CampaignHud>>,
+    messages: Option<Res<'w, crate::campaign_messages::CampaignMessages>>,
     hud_prepare: Option<Res<'w, crate::hud_render::HudPrepare>>,
 }
 
@@ -36,6 +37,7 @@ fn report(stages: Stages, mut reported: ResMut<Reported>) {
         input,
         selection,
         hud,
+        messages,
         hud_prepare,
     } = stages;
     let current = [
@@ -70,6 +72,10 @@ fn report(stages: Stages, mut reported: ResMut<Reported>) {
             selection.and_then(|s| s.last_error.clone()),
         ),
         ("campaign hud", hud.and_then(|h| h.last_error.clone())),
+        (
+            "campaign messages",
+            messages.and_then(|m| m.last_error.clone()),
+        ),
         ("hud mount", hud_prepare.and_then(|h| h.refusal.clone())),
     ];
     reported.0.resize(current.len(), None);

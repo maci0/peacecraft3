@@ -259,7 +259,7 @@ pub fn prepare(
     )?;
     let rules = NeutralRuleSet::discover_first_family(
         image,
-        client,
+        client.clone(),
         pcx_play::neutral_player::DiscoveryBudget {
             image: pcx_play::neutral_player::RuleInputBudget {
                 image_bytes: 32 << 20,
@@ -323,6 +323,10 @@ pub fn prepare(
         .map_err(|e| e.to_string())?,
         sound_parameters: pcx_play::sound_parameters::Banks::read(&[], sound_budget)
             .map_err(|e| e.to_string())?,
+        sound_playback: Some(sound_playback::Rules::reviewed_legacy(
+            image,
+            client.clone(),
+        )?),
         clock: StartupClockInput {
             clock: source.clock,
             global_name: "GAME_STATE_TIME_OF_DAY".into(),

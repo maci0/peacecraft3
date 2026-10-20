@@ -68,16 +68,24 @@ fn deliver_camera_for_player(
     let mut f = fixture(script);
     f.common = format!("{COMMON}{CAMERA_COMMON}").into_bytes();
     f.rebuild();
-    let resolver = Arc::new(f.resolver_with_assets(std::collections::BTreeMap::from([
-        (
-            "UI\\MiscData.txt".into(),
-            crate::binding::Reply::Bytes(config.to_vec()),
-        ),
-        (
-            "UI\\FrameDef\\GlobalStrings.fdf".into(),
-            crate::binding::Reply::Bytes(b"KEY_MENU \"Menu (|Cabc12345F7|R)\",\n".to_vec()),
-        ),
-    ])));
+    let resolver = Arc::new(
+        f.resolver_with_assets(std::collections::BTreeMap::from([
+            (
+                "UI\\MiscData.txt".into(),
+                crate::binding::Reply::Bytes(config.to_vec()),
+            ),
+            (
+                "UI\\FrameDef\\GlobalStrings.fdf".into(),
+                crate::binding::Reply::Bytes(
+                    [
+                        b"KEY_MENU \"Menu (|Cabc12345F7|R)\",\n".as_slice(),
+                        &[b' '; 8192],
+                    ]
+                    .concat(),
+                ),
+            ),
+        ])),
+    );
     let mut requests = MapRequests::default();
     let mut sources = SelectedMapSources::default();
     let mut limits = f.limits();
@@ -112,6 +120,7 @@ pub fn published_camera_uses_executed_fields_and_preserves_session_ownership() {
     deliver_camera(&mut app, SCRIPT, b"[Camera]\nNearZ=3,9", 1);
     let view = app.world().resource::<CampaignCamera>();
     assert!(view.last_error.is_none(), "{:?}", view.last_error);
+    assert_eq!(view.menu_key, Some(Ok(KeyCode::F7)));
     let entity = view.entity.unwrap();
     assert!(view.active());
     assert_eq!(
@@ -127,6 +136,22 @@ pub fn published_camera_uses_executed_fields_and_preserves_session_ownership() {
         panic!("perspective")
     };
     assert_eq!((projection.near, projection.far), (9.0, 900.0));
+    app.world_mut().resource_mut::<CampaignCamera>().suspend();
+    app.update();
+    assert!(!app.world().resource::<CampaignCamera>().active());
+    assert!(
+        app.world()
+            .resource::<peacecraft3::campaign_runtime::CampaignRuntime>()
+            .view_paused
+    );
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::F7);
+    app.update();
+    assert!(app.world().resource::<CampaignCamera>().active());
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .reset(KeyCode::F7);
     let previous = *app.world().get::<Transform>(entity).unwrap();
     let function = app
         .world()

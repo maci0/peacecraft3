@@ -37,6 +37,7 @@ pub(crate) struct CampaignSelection {
     quad: Option<Handle<Mesh>>,
     materials: BTreeMap<(String, [u8; 4]), Handle<StandardMaterial>>,
     pub last_error: Option<String>,
+    last_counts: Option<(usize, usize, usize)>,
 }
 
 pub(crate) fn install(app: &mut App) {
@@ -112,12 +113,33 @@ fn draw(
         state.session = witness;
         state.materials.clear();
         state.last_error = None;
+        state.last_counts = None;
         for (entity, ..) in &drawn {
             commands.entity(entity).despawn();
         }
         return;
     }
-    let wanted = wanted_circles(&mut session, &input, &ground);
+    let wanted = wanted_circles(&mut session, &input, &ground, &mut state.last_error);
+    let wanted_count = wanted.len();
+    let selected_count = session
+        .host()
+        .map_or(0, |host| host.objects().selection().len());
+    if selected_count > 0 {
+        if input.circles.is_none() {
+            state.last_error = Some(format!(
+                "selected units have no SelectionCircle profile: {:?}",
+                input.last_error
+            ));
+        } else if !ground
+            .context
+            .as_ref()
+            .zip(session.context())
+            .is_some_and(|(ground, active)| Arc::ptr_eq(ground, active))
+        {
+            state.last_error =
+                Some("selection terrain does not belong to the active script session".into());
+        }
+    }
     let quad = state
         .quad
         .get_or_insert_with(|| meshes.add(Plane3d::default().mesh().size(1.0, 1.0)))
@@ -144,6 +166,9 @@ fn draw(
             Some(material) => material.clone(),
             None => {
                 let Some(reader) = reader.as_ref() else {
+                    state.last_error = Some(
+                        "selection circles have no resolver for the published map receipts".into(),
+                    );
                     continue;
                 };
                 match load_material(reader, &look, images, materials) {
@@ -160,6 +185,12 @@ fn draw(
         };
         placed.insert(unit, (transform, material));
     }
+    let counts = (selected_count, wanted_count, placed.len());
+    if state.last_counts != Some(counts) {
+        tracing::debug!(selected = counts.0, wanted = counts.1, placed = counts.2,
+            error = ?state.last_error, "campaign selection circle projection");
+        state.last_counts = Some(counts);
+    }
     for (entity, circle, mut transform, mut material) in &mut drawn {
         match placed.remove(&circle.0) {
             Some((next, handle)) => {
@@ -170,6 +201,21 @@ fn draw(
         }
     }
     for (unit, (transform, material)) in placed {
+        if let Some(context) = ground.context.as_ref() {
+            let center = transform.translation;
+            let half_size = transform.scale.x / 2.0;
+            let footprint = [-1.0, 0.0, 1.0].map(|dx| {
+                [-1.0, 0.0, 1.0].map(|dy| {
+                    pcx_tera::world::sample_world_z(
+                        &context.terrain,
+                        center.x + dx * half_size,
+                        -center.z + dy * half_size,
+                    )
+                })
+            });
+            tracing::debug!(?unit, ?center, diameter = transform.scale.x,
+                ?footprint, material = ?material.id(), "campaign selection circle spawn");
+        }
         commands.spawn((
             SelectionCircle(unit),
             Mesh3d(quad.clone()),
@@ -186,6 +232,7 @@ fn wanted_circles(
     session: &mut MapScriptSession<MapStartupHost>,
     input: &crate::campaign_input::CampaignInput,
     ground: &GroundPublication,
+    last_error: &mut Option<String>,
 ) -> Wanted {
     if !ground
         .context
@@ -203,23 +250,38 @@ fn wanted_circles(
         return Vec::new();
     };
     let objects = host.objects();
-    objects
-        .selection()
-        .iter()
-        .filter_map(|&id| {
-            let unit = objects.executed_unit(id).ok()?;
+    let mut wanted = Vec::new();
+    for &id in objects.selection() {
+        let circle = (|| -> Result<_, String> {
+            let unit = objects
+                .executed_unit(id)
+                .map_err(|error| error.to_string())?;
             if !unit.shown || unit.combat.as_ref().is_some_and(|c| c.dead) {
-                return None;
+                return Ok(None);
             }
-            let [x, y] = unit.position?;
-            let z = pcx_tera::world::sample_world_z(&context.terrain, x, y)?;
-            let scale = crate::campaign_actors::scalar(&unit.definition, "scale").ok()?;
+            let [x, y] = unit.position.ok_or("missing unit position")?;
+            let z = pcx_tera::world::sample_world_z(&context.terrain, x, y)
+                .ok_or("unit position outside admitted terrain")?;
+            let scale = crate::campaign_actors::scalar(&unit.definition, "scale")?;
             let size = scale * circles.scale_factor;
-            let look = circle_look(circles, size, objects.local_relation(id)?)?;
+            let relation = objects
+                .local_relation(id)
+                .ok_or("missing local-player relationship")?;
+            let look =
+                circle_look(circles, size, relation).ok_or("missing selection texture band")?;
             let transform = Transform::from_xyz(x, z, -y).with_scale(Vec3::new(size, 1.0, size));
-            transform.is_finite().then_some((id, transform, look))
-        })
-        .collect()
+            if !transform.is_finite() {
+                return Err("non-finite circle transform".into());
+            }
+            Ok(Some((id, transform, look)))
+        })();
+        match circle {
+            Ok(Some(circle)) => wanted.push(circle),
+            Ok(None) => {}
+            Err(error) => *last_error = Some(format!("selection circle for unit {id:?}: {error}")),
+        }
+    }
+    wanted
 }
 
 fn load_material(
@@ -233,6 +295,17 @@ fn load_material(
         .map_err(|e| format!("{path}: {e}"))?;
     let texture = pcx_gfx::load_image_bounded(&raw.bytes, path, MAX_TEXTURE_BYTES)
         .map_err(|e| e.to_string())?;
+    let alpha_range = texture
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|rgba| rgba[3])
+        .fold((u8::MAX, u8::MIN), |(min, max), alpha| {
+            (min.min(alpha), max.max(alpha))
+        });
+    tracing::debug!(%path, argb = ?[a, r, g, b], width = texture.width,
+        height = texture.height, ?alpha_range, "campaign selection circle material");
     let image = images.add(pcx_gfx::viewer::rgba_image(&texture));
     Ok(materials.add(StandardMaterial {
         base_color: Color::srgba_u8(*r, *g, *b, *a),
@@ -272,7 +345,16 @@ mod tests {
             .init_resource::<Assets<StandardMaterial>>()
             .init_resource::<Assets<Image>>()
             .add_systems(Update, draw);
+        let circle = app
+            .world_mut()
+            .spawn((
+                SelectionCircle(HandleId::new(std::num::NonZeroU64::new(1).unwrap())),
+                Transform::default(),
+                MeshMaterial3d::<StandardMaterial>::default(),
+            ))
+            .id();
         app.update();
+        assert!(app.world().get_entity(circle).is_err());
         let state = app.world().resource::<CampaignSelection>();
         assert!(state.session.is_none());
         assert!(state.materials.is_empty());

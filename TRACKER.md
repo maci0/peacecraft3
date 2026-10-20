@@ -3416,3 +3416,49 @@ repeated, and the public site package was not rebuilt.
   and synchronized original/native/browser comparison up to 4K remain open.
   Receipts and captures stay local under `.scratch/campaign-controls-20261020/`
   and `.scratch/campaign-time-of-day-root-20261020/controls-confirmed-20261020/`.
+
+
+### 2026-10-20 — campaign transmission, quests and attack responses
+
+- [x] Executed cinematic scenes project source-authored speech/speaker frames,
+  portrait backing and supported border pieces. FDF, skin, font and image
+  identities remain local and session-owned; unsupported unequal-inset background
+  layers are reported. Portrait models and player-colour interpretation remain
+  open. See [transmission panel](docs/re-notes/campaign-transmission-panel.md).
+- [x] Source upper Quests/Menu controls and QuestDialog project discovered,
+  enabled live quests and item state. Completed pointer/keyboard activations use
+  the shared event queue, including fast press/release; modal Escape/pointer
+  consumption precedes world input. Resource balances are not fabricated.
+  See [upper controls](docs/re-notes/campaign-upper-controls.md).
+- [x] Player-unit attacked registrations and point attack-move orders deliver
+  Human01's authored bandit response through the existing combat/activity paths.
+  Destination retention, acquisition and resumed travel are stated recreation
+  policies. See [attack responses](docs/re-notes/script-attack-move.md).
+- [x] Cursor rays can enter admitted terrain from outside its bounds; invalid
+  samples no longer abort every such click. Menu-key strings use their own bounded
+  read policy rather than the smaller camera-configuration budget.
+- [~] Non-spatial supported sound rows retain source volume/pitch/duration and
+  executable-derived fade timing. Actual Human01 voices still refuse unsupported
+  channel/list preemption flags with exact source-row diagnostics.
+  See [dialogue audio](docs/re-notes/campaign-dialogue-audio.md).
+- [x] Native click selection and right-click travel visibly render the green
+  circle after moving a footman onto open ground. Initial model/terrain overlap
+  concealed it; the flat-plane slope limitation remains explicit.
+- [ ] Script-created button dialogs have no executed Host state or button-event
+  consumer. Full cinematic/quest styling, selection-circle rendered parity,
+  original/native/browser comparison up to 4K and chapter completion remain open.
+
+- [x] Final stable-source validation: 1,433 affected native cases, two explicit
+  local original-FDF checks, 653 actual WASI cases and 47 exported cases on actual
+  browser-target WASM under Node pass. Strict native/browser all-target Clippy,
+  formatting and full native/browser builds pass. Node execution does not prove
+  browser rendering.
+- [x] Human01's late cinematic skip reproduced an order against an existing
+  removed-unit tombstone. Supported activity orders now return false without
+  revival; wrong-family and unknown handles still error. This return behavior is
+  labeled a recreation policy. The stable-source production-factory driver runs
+  both skip-at-20 and skip-at-48 paths for 19,200 ticks to 300 seconds without a
+  runtime error. Its explicit compatibility stock catalog and independent
+  diagnostic-main refusal remain recorded; this is not chapter completion.
+  Verification stays local under `.scratch/campaign-integration-20261020-v8/`
+  and `.scratch/campaign-time-of-day-root-20261020/integrated-v8-skip48-20261020/`.

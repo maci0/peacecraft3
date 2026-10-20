@@ -331,7 +331,7 @@ impl ObjectHost {
         };
         if !getter
             && (if point {
-                order != movement
+                order != movement && !self.is_attack_order(order)
             } else {
                 order != hold && order != stop
             })
@@ -354,9 +354,23 @@ impl ObjectHost {
             _ => return Some(Err(fail("unit handle required"))),
         };
         Some((|| {
-            let record = self
-                .executed_unit(unit)
-                .map_err(|e| self.inner.error(name, e.failure))?;
+            // Removed units retain their family; accepted order forms refuse without reviving them.
+            if !getter
+                && matches!(
+                    self.inner
+                        .entry(unit)
+                        .map_err(|e| self.inner.error(name, e.failure))?,
+                    Entry::RemovedUnit
+                )
+            {
+                return Ok(Value::Bool(false));
+            }
+            let record = self.executed_unit(unit).map_err(|e| {
+                self.inner.error(
+                    name,
+                    Failure::UnitActivity(format!("unit argument {unit:?}: {}", e.failure)),
+                )
+            })?;
             let activity = record.activity.as_ref().ok_or_else(|| {
                 self.inner.error(
                     name,
@@ -387,6 +401,9 @@ impl ObjectHost {
                     })
                 });
             }
+            if record.combat.as_ref().is_some_and(|c| c.dead) {
+                return Ok(Value::Bool(false));
+            }
             let now = self.timer_game_time().ok_or_else(|| {
                 self.inner
                     .error(name, Failure::UnitActivity("clock not admitted".into()))
@@ -394,7 +411,15 @@ impl ObjectHost {
             let moving = point;
             let motion = if point {
                 let [x, y] = if location {
-                    self.location_point(&args[2], name)?
+                    self.location_point(&args[2], name).map_err(|e| {
+                        self.inner.error(
+                            name,
+                            Failure::UnitActivity(format!(
+                                "location argument {:?}: {}",
+                                args[2], e.failure
+                            )),
+                        )
+                    })?
                 } else {
                     let [_, _, Value::Real(x), Value::Real(y)] = args else {
                         return Err(self.inner.error(name, Failure::Signature));
@@ -454,6 +479,11 @@ impl ObjectHost {
                 }
                 None
             };
+            let attack_destination = if point && self.is_attack_order(order) {
+                motion.as_ref().and_then(|m| m.path.last().copied())
+            } else {
+                None
+            };
             let was_moving = activity.moving();
             let mut animation = record.animation.clone();
             if (moving || was_moving)
@@ -494,6 +524,11 @@ impl ObjectHost {
                 _ => {}
             }
             self.clear_combat_target(unit);
+            if let Entry::Unit { record } = self.inner.entry_mut(unit)?
+                && let Some(combat) = &mut record.combat
+            {
+                combat.attack_destination = attack_destination;
+            }
             Ok(Value::Bool(true))
         })())
     }

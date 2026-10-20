@@ -42,7 +42,7 @@ impl EdgePiece {
     ];
 
     /// The `BackdropCornerFlags` token that enables this piece.
-    fn flag(self) -> &'static str {
+    pub(crate) fn flag(self) -> &'static str {
         match self {
             Self::Left => "L",
             Self::Right => "R",
@@ -458,14 +458,14 @@ impl UiMaterial for AdditiveImage {
 /// divided by the authored tile size, so resizing changes physical tile dimensions
 /// with the UI while preserving authored repeats independently on each axis.
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
-struct BackdropImage {
+pub(crate) struct BackdropImage {
     #[texture(0)]
     #[sampler(1)]
-    texture: Handle<Image>,
+    pub(crate) texture: Handle<Image>,
     #[uniform(2)]
-    uv_transform: Vec4,
+    pub(crate) uv_transform: Vec4,
     #[uniform(3)]
-    uv_rows: Vec4,
+    pub(crate) uv_rows: Vec4,
 }
 
 impl UiMaterial for BackdropImage {
@@ -687,7 +687,7 @@ fn spawn_backdrop(commands: &mut Commands, parent: Entity, art: &Backdrop, size:
 }
 
 /// Conventional nine-slice placement; corners shrink together to fit small frames.
-fn edge_rect(piece: EdgePiece, size: Vec2, corner: f32) -> Rect {
+pub(crate) fn edge_rect(piece: EdgePiece, size: Vec2, corner: f32) -> Rect {
     let c = corner.min(size.x * 0.5).min(size.y * 0.5);
     let (left, bottom, width, height) = match piece {
         EdgePiece::Left => (0.0, c, c, size.y - 2.0 * c),
@@ -1204,14 +1204,14 @@ fn art_bytes(install: Option<&std::path::Path>, path: &str) -> Option<Vec<u8>> {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum ArtError {
+pub(crate) enum ArtError {
     #[error("{width}x{height}: expected a horizontal eight-square edge strip")]
     UnsupportedEdgeShape { width: u32, height: u32 },
 }
 
 /// Implementation policy, not a claim about native atlas internals: slots are
 /// L,R,T,B,UL,UR,BL,BR; horizontal edge sampling rotates clockwise.
-fn edge_source_rect(
+pub(crate) fn edge_source_rect(
     piece: EdgePiece,
     width: u32,
     height: u32,
@@ -1240,7 +1240,7 @@ fn edge_source_rect(
 
 /// Horizontal edge slots are stored vertically; rotate their sampling clockwise.
 /// This is a reconstruction convention supported by the source strip and corners.
-fn horizontal_edge_material(
+pub(crate) fn horizontal_edge_material(
     texture: Handle<Image>,
     rect: bevy::math::Rect,
     image_size: Vec2,

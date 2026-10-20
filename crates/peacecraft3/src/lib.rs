@@ -20,6 +20,8 @@ pub mod map_ground;
 pub mod map_requests;
 pub mod map_script_session;
 pub mod script_audio;
+#[path = "menu_panel_volume.rs"]
+pub mod sound_volume;
 
 /// Explicit browser memory/archive reads with caller budgets and codec input.
 pub mod browser_read;

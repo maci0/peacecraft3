@@ -90,6 +90,7 @@ type UserVolumeQuery<'w, 's> = Query<
         Option<&'static mut AudioSink>,
         &'static mut PlaybackSettings,
         Option<&'static AuthoredVolume>,
+        Option<&'static peacecraft3::script_audio::ScriptAudioGain>,
         Has<MenuMusic>,
     ),
     Or<(
@@ -100,13 +101,15 @@ type UserVolumeQuery<'w, 's> = Query<
 
 fn apply_user_volume(settings: Res<crate::menu_settings::Backend>, mut sinks: UserVolumeQuery) {
     use bevy::audio::AudioSinkPlayback;
-    for (sink, mut playback, base, music) in &mut sinks {
+    for (sink, mut playback, base, script_gain, music) in &mut sinks {
         let gain = if music {
             settings.audio.effective_music()
         } else {
             settings.audio.effective_effects()
         };
-        playback.volume = bevy::audio::Volume::Linear(base.map_or(1.0, |base| base.0) * gain);
+        playback.volume = bevy::audio::Volume::Linear(
+            base.map_or(1.0, |base| base.0) * script_gain.map_or(1.0, |gain| gain.0) * gain,
+        );
         if let Some(mut sink) = sink {
             sink.set_volume(playback.volume);
         }
@@ -743,6 +746,15 @@ mod script_volume_tests {
         assert_eq!(
             world.get::<PlaybackSettings>(voice).unwrap().volume,
             bevy::audio::Volume::Linear(0.25)
+        );
+        world
+            .entity_mut(voice)
+            .insert(peacecraft3::script_audio::ScriptAudioGain(0.4));
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(
+            world.get::<PlaybackSettings>(voice).unwrap().volume,
+            bevy::audio::Volume::Linear(0.1)
         );
         world
             .resource_mut::<crate::menu_settings::Backend>()

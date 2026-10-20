@@ -7,7 +7,9 @@
 //! enemy in acquire range; units are enemies unless the attacker's owner has
 //! an explicit passive alliance toward the target's owner, and Neutral Passive
 //! units are never acquired automatically; dice draw from the shared script
-//! RNG; armor uses the factor in the usual reduction curve.
+//! RNG; armor uses the factor in the usual reduction curve. Attack-move reuses
+//! that acquisition policy during travel and resumes its accepted endpoint after
+//! losing a target; native interrupt/resume and event nesting remain unqualified.
 use super::{Entry, Error, EventSubject, Failure, ObjectHost};
 use pcx_objects::editor::misc::{ATTACK_TYPES, CombatRules, DEFENSE_TYPES};
 use pcx_objects::editor::{FieldSource, SlkId};
@@ -48,6 +50,8 @@ pub struct Combat {
     ready_at: f64,
     swing: Option<(HandleId, f64)>,
     chase: Option<[f32; 2]>,
+    /// Retained accepted attack-move endpoint while acquisition interrupts travel.
+    pub attack_destination: Option<[f32; 2]>,
 }
 
 struct Missile {
@@ -66,6 +70,7 @@ pub(super) struct Rules {
     player_death: i32,
     unit_death: i32,
     unit_attacked: i32,
+    player_attacked: i32,
     missiles: Vec<Missile>,
 }
 
@@ -200,6 +205,7 @@ fn read_combat(d: &Definition) -> Result<Combat, String> {
         ready_at: f64::NEG_INFINITY,
         swing: None,
         chase: None,
+        attack_destination: None,
     })
 }
 
@@ -245,6 +251,8 @@ impl ObjectHost {
                 .source_constant_enumerand("EVENT_PLAYER_UNIT_DEATH", "playerunitevent")?,
             unit_death: self.source_constant_enumerand("EVENT_UNIT_DEATH", "unitevent")?,
             unit_attacked: self.source_constant_enumerand("EVENT_UNIT_ATTACKED", "unitevent")?,
+            player_attacked: self
+                .source_constant_enumerand("EVENT_PLAYER_UNIT_ATTACKED", "playerunitevent")?,
             missiles: Vec::new(),
         });
         Ok(())
@@ -268,7 +276,15 @@ impl ObjectHost {
     pub(super) fn combat_attack_order(&self, unit: HandleId) -> Option<i32> {
         let rules = self.combat.as_ref()?;
         let record = self.executed_unit(unit).ok()?;
-        record.combat.as_ref()?.target.map(|_| rules.attack_order)
+        let combat = record.combat.as_ref()?;
+        (combat.target.is_some() || combat.attack_destination.is_some())
+            .then_some(rules.attack_order)
+    }
+
+    pub(super) fn is_attack_order(&self, order: i32) -> bool {
+        self.combat
+            .as_ref()
+            .is_some_and(|rules| rules.attack_order == order)
     }
 
     /// Another order replaces the unit's attack target.
@@ -279,6 +295,7 @@ impl ObjectHost {
             combat.target = None;
             combat.swing = None;
             combat.chase = None;
+            combat.attack_destination = None;
         }
     }
 
@@ -428,6 +445,7 @@ impl ObjectHost {
         if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
             let combat = record.combat.as_mut().expect("live combat");
             combat.dead = true;
+            combat.attack_destination = None;
             combat.target = None;
             combat.swing = None;
             if let Some(vitals) = &mut record.vitals {
@@ -538,9 +556,9 @@ impl ObjectHost {
         let units: Vec<HandleId> = self
             .executed_units()
             .filter(|(_, u)| {
-                u.combat
-                    .as_ref()
-                    .is_some_and(|c| !c.dead && c.weapon.is_some())
+                u.combat.as_ref().is_some_and(|c| {
+                    !c.dead && (c.weapon.is_some() || c.attack_destination.is_some())
+                })
             })
             .map(|(id, _)| id)
             .collect();
@@ -549,14 +567,29 @@ impl ObjectHost {
                 continue;
             };
             let combat = record.combat.as_ref().expect("live combat");
-            let weapon = combat.weapon.expect("armed");
+            let Some(weapon) = combat.weapon else {
+                if !record.activity.as_ref().is_some_and(|a| a.moving())
+                    && let Entry::Unit { record } = self.inner.entry_mut(unit)?
+                {
+                    record.combat.as_mut().expect("combat").attack_destination = None;
+                }
+                continue;
+            };
             let Some(position) = record.position else {
                 continue;
             };
             let idle = !record.activity.as_ref().is_some_and(|a| a.moving());
             let held = record.activity.as_ref().is_some_and(|a| a.held());
-            let mut target = combat.target.filter(|t| self.live(*t).is_some());
-            if target.is_none() && idle && weapon.acquire > 0.0 {
+            let destination = combat.attack_destination;
+            let previous_target = combat.target;
+            let resume = previous_target.is_some()
+                || record
+                    .activity
+                    .as_ref()
+                    .and_then(|a| a.destination())
+                    .is_some_and(|p| Some(p) != destination);
+            let mut target = previous_target.filter(|t| self.live(*t).is_some());
+            if target.is_none() && (idle || destination.is_some()) && weapon.acquire > 0.0 {
                 target = self
                     .executed_units()
                     .filter(|(id, other)| {
@@ -577,10 +610,19 @@ impl ObjectHost {
             if target != combat.target {
                 self.clear_combat_target(unit);
                 if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
-                    record.combat.as_mut().expect("combat").target = target;
+                    let combat = record.combat.as_mut().expect("combat");
+                    combat.target = target;
+                    combat.attack_destination = destination;
                 }
             }
             let Some(target) = target else {
+                if let Some(destination) = destination {
+                    if resume {
+                        self.steer_unit(unit, Some(destination), name)?;
+                    } else if idle && let Entry::Unit { record } = self.inner.entry_mut(unit)? {
+                        record.combat.as_mut().expect("combat").attack_destination = None;
+                    }
+                }
                 continue;
             };
             let target_position = self
@@ -635,7 +677,9 @@ impl ObjectHost {
                                 .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
                         }
                     }
-                    let attacked = self.combat.as_ref().expect("combat").unit_attacked;
+                    let rules = self.combat.as_ref().expect("combat");
+                    let (attacked, player_attacked) = (rules.unit_attacked, rules.player_attacked);
+                    let owner = self.executed_unit(target)?.owner;
                     let fired: Vec<_> = self
                         .inner
                         .arena
@@ -647,7 +691,12 @@ impl ObjectHost {
                                 unitevent,
                                 enumerand,
                             } if *u == target && *enumerand == attacked => {
-                                Some((*trigger, *unitevent))
+                                Some((*trigger, None, *unitevent))
+                            }
+                            Entry::RegisteredPlayerUnitEvent(r)
+                                if r.player == owner && r.enumerand == player_attacked =>
+                            {
+                                Some((r.trigger, r.filter, r.playerunitevent))
                             }
                             _ => None,
                         })
@@ -657,8 +706,8 @@ impl ObjectHost {
                         source: Some(unit),
                         ..EventSubject::default()
                     };
-                    for (trigger, event) in fired {
-                        self.queue_event(trigger, None, subject, Some(event))?;
+                    for (trigger, filter, event) in fired {
+                        self.queue_event(trigger, filter, subject, Some(event))?;
                     }
                 }
                 Some((swung, hit_at)) if now >= hit_at => {

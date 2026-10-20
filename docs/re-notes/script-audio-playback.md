@@ -1,5 +1,9 @@
 # Published script-sound playback
 
+For the later source-timed non-spatial dialogue/gain consumer, see
+[campaign dialogue audio](campaign-dialogue-audio.md). The restricted profile
+described below remains the fallback when those source rules are unavailable.
+
 `peacecraft3::script_audio::install` registers playback in `ScriptAudioPlayback`,
 after `campaign_startup::CampaignStartupSet`. It reads the published
 `MapScriptSession<MapStartupHost>` queue. A failed replacement keeps the current

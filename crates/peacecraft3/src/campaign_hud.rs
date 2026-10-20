@@ -6,6 +6,10 @@
 //! skin section comes from the local player's executed race preference constant
 //! (`RACE_PREF_<NAME>` matched case-insensitively to a skin section), followed by
 //! `[Default]`. An unset race refuses; no race is assumed.
+#[path = "campaign_upper_buttons.rs"]
+mod upper_buttons;
+pub(crate) use upper_buttons::{CampaignHudAction, CampaignHudSet};
+
 use bevy::prelude::*;
 use pcx_play::map_startup_host::MapStartupHost;
 use peacecraft3::{
@@ -42,9 +46,14 @@ const BUDGETS: HudBudgets = HudBudgets {
 pub(crate) struct CampaignHud {
     attempted: bool,
     pub last_error: Option<String>,
+    pub quest_log_open: bool,
+    pub quest_escape_consumed: bool,
+    pub pointer_consumed: bool,
+    pub control_receipts: Vec<peacecraft3::map_binding::AssetReceipt>,
 }
 
 pub(crate) fn install(app: &mut App) {
+    upper_buttons::install(app);
     app.init_resource::<CampaignHud>()
         .add_systems(Update, produce_policy);
 }

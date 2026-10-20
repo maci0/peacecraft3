@@ -14,7 +14,7 @@ use pcx_play::map_startup_host::MapStartupHost;
 use pcx_script::{HandleId, Host, Value};
 use peacecraft3::{
     browser_configuration::SelectedMapSources,
-    campaign_camera::{CampaignCamera, CampaignSceneCamera},
+    campaign_camera::{CampaignCamera, CampaignCameraSet, CampaignSceneCamera},
     map_ground::GroundPublication,
     map_requests::MapRequests,
     map_script_session::MapScriptSession,
@@ -38,7 +38,28 @@ pub(crate) struct CampaignInput {
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<CampaignInput>()
-        .add_systems(Update, ((load_circles, click).chain(), end_cinematic));
+        .add_systems(
+            Update,
+            (
+                (load_circles, click)
+                    .chain()
+                    .after(crate::campaign_hud::CampaignHudSet),
+                end_cinematic.after(crate::campaign_hud::CampaignHudSet),
+            ),
+        )
+        .add_systems(Update, hud_menu.before(CampaignCameraSet));
+}
+
+fn hud_menu(
+    mut actions: MessageReader<crate::campaign_hud::CampaignHudAction>,
+    mut view: ResMut<CampaignCamera>,
+) {
+    if actions
+        .read()
+        .any(|action| matches!(action, crate::campaign_hud::CampaignHudAction::Menu))
+    {
+        view.suspend();
+    }
 }
 
 fn load_circles(
@@ -96,10 +117,15 @@ fn load_circles(
 fn end_cinematic(
     keys: Option<Res<ButtonInput<KeyCode>>>,
     view: Res<CampaignCamera>,
+    hud: Res<crate::campaign_hud::CampaignHud>,
     mut input: ResMut<CampaignInput>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
-    if !keys.is_some_and(|k| k.just_pressed(KeyCode::Escape)) || !view.active() {
+    if !keys.is_some_and(|k| k.just_pressed(KeyCode::Escape))
+        || !view.active()
+        || hud.quest_log_open
+        || hud.quest_escape_consumed
+    {
         return;
     }
     let Some(host) = session.host() else {
@@ -115,25 +141,36 @@ fn end_cinematic(
 /// view ray down to the sampled terrain surface.
 fn ground_point(ray: Ray3d, terrain: &pcx_map::Terrain, far: f32) -> Option<[f32; 2]> {
     let height = |p: Vec3| pcx_tera::world::sample_world_z(terrain, p.x, -p.z).map(|z| p.y - z);
-    let mut previous = 0.0;
+    if !far.is_finite() || far <= 0.0 {
+        return None;
+    }
+    let mut previous = None;
     let mut t = MARCH_STEP;
     while t <= far {
-        let above = height(ray.get_point(t))?;
-        if above <= 0.0 {
-            let (mut low, mut high) = (previous, t);
-            for _ in 0..REFINE_STEPS {
-                let mid = (low + high) * 0.5;
-                if height(ray.get_point(mid))? > 0.0 {
-                    low = mid;
-                } else {
-                    high = mid;
+        if let Some(above) = height(ray.get_point(t)) {
+            if above <= 0.0 {
+                // Only bracket a surface crossing with two admitted samples.
+                let (mut low, mut high) = (previous?, t);
+                for _ in 0..REFINE_STEPS {
+                    let mid = (low + high) * 0.5;
+                    if height(ray.get_point(mid))? > 0.0 {
+                        low = mid;
+                    } else {
+                        high = mid;
+                    }
                 }
+                let hit = ray.get_point(high);
+                return Some([hit.x, -hit.z]);
             }
-            let hit = ray.get_point(high);
-            return Some([hit.x, -hit.z]);
+            previous = Some(t);
+        } else {
+            previous = None;
         }
-        previous = t;
-        t += MARCH_STEP;
+        let next = t + MARCH_STEP;
+        if next <= t {
+            return None;
+        }
+        t = next;
     }
     None
 }
@@ -159,6 +196,7 @@ fn click(
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
     picking: Picking,
+    hud: Res<crate::campaign_hud::CampaignHud>,
     mut input: ResMut<CampaignInput>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
@@ -173,7 +211,7 @@ fn click(
     };
     let select = mouse.just_pressed(MouseButton::Left);
     let order = mouse.just_pressed(MouseButton::Right);
-    if !(select || order) || !view.active() {
+    if !(select || order) || !view.active() || hud.quest_log_open || hud.pointer_consumed {
         return;
     }
     let (Ok(window), Ok((camera, transform, projection))) = (windows.single(), cameras.single())
@@ -219,6 +257,7 @@ fn click(
         })
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(id, _)| id);
+    debug!(?point, ?picked, select, "campaign pointer hit");
     if select {
         if let Some(unit) = picked {
             objects.select_units(&[unit], !additive);
@@ -328,5 +367,26 @@ mod tests {
         // Leaving the admitted terrain is no hit, not a clamped guess.
         let away = Ray3d::new(origin, Dir3::new(Vec3::new(-1.0, -0.01, 0.0)).unwrap());
         assert_eq!(ground_point(away, &terrain, 5000.0), None);
+    }
+    #[test]
+    fn cursor_rays_can_enter_the_map_before_crossing_its_surface() {
+        let terrain = terrain();
+        let surface = pcx_tera::world::sample_world_z(&terrain, 40.0, 70.0).unwrap();
+        let target = Vec3::new(40.0, surface, -70.0);
+        for offset in [Vec3::new(-200.0, 300.0, 0.0), Vec3::new(0.0, 300.0, 200.0)] {
+            let origin = target + offset;
+            let ray = Ray3d::new(origin, Dir3::new(target - origin).unwrap());
+            let [x, y] = ground_point(ray, &terrain, 5000.0).unwrap();
+            assert!((x - 40.0).abs() < 0.01 && (y - 70.0).abs() < 0.01);
+            for far in [50.0, 0.0, f32::NAN, f32::INFINITY] {
+                assert_eq!(ground_point(ray, &terrain, far), None);
+            }
+        }
+        // Entering below the surface is not a surface intersection.
+        let origin = target + Vec3::new(-200.0, -50.0, 0.0);
+        assert_eq!(
+            ground_point(Ray3d::new(origin, Dir3::X), &terrain, 5000.0),
+            None
+        );
     }
 }

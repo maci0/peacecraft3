@@ -129,6 +129,10 @@ impl MapScripts {
     pub fn program(&self) -> &Program {
         &self.program
     }
+    /// Exact retained source selected by a resolved declaration's source label.
+    pub fn source(&self, label: &str) -> Option<&str> {
+        self.sources.get(label).map(String::as_str)
+    }
     /// Share this exact compiled program with a session-owned Host.
     pub fn shared_program(&self) -> Arc<Program> {
         Arc::clone(&self.program)
@@ -366,6 +370,25 @@ mod tests {
             }),
         )
     }
+    #[test]
+    fn source_lookup_keeps_exact_labels_and_text() {
+        let common = b"native Capture takes string text returns nothing\n";
+        let blizzard = b"function Helper takes nothing returns nothing\nendfunction\n";
+        let map = b"function main takes nothing returns nothing\nendfunction\n";
+        let scripts = load(common, blizzard, map, None).unwrap();
+        assert_eq!(scripts.source("common.j"), std::str::from_utf8(common).ok());
+        assert_eq!(
+            scripts.source("Blizzard.j"),
+            std::str::from_utf8(blizzard).ok()
+        );
+        assert_eq!(
+            scripts.source("map/war3map.j"),
+            std::str::from_utf8(map).ok()
+        );
+        assert_eq!(scripts.source("blizzard.j"), None);
+        assert_eq!(scripts.source("the map script"), None);
+    }
+
     #[test]
     fn both_localized_hosts_forward_a_park_without_executing_the_native() {
         struct Park;

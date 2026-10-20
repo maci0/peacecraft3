@@ -48,6 +48,11 @@ pub struct CampaignCamera {
 }
 
 impl CampaignCamera {
+    /// Suspend gameplay through the same view policy as the selected menu key.
+    pub fn suspend(&mut self) {
+        self.visible = false;
+    }
+
     pub fn active(&self) -> bool {
         self.ready && self.visible && self.entity.is_some()
     }
@@ -162,6 +167,8 @@ fn clear(commands: &mut Commands, camera: &mut CampaignCamera) {
     camera.ready = false;
 }
 
+// Application read budget, independent of the camera configuration budget.
+const MAX_MENU_STRINGS_BYTES: u64 = 1 << 20;
 const GLOBAL_STRINGS: &str = "UI\\FrameDef\\GlobalStrings.fdf";
 
 fn menu_key(text: &str) -> Result<KeyCode, String> {
@@ -297,7 +304,7 @@ fn apply_camera(
         };
         camera.menu_key = Some((|| {
             let asset = reader
-                .resolve_bounded(GLOBAL_STRINGS, camera.read_limit as u64)
+                .resolve_bounded(GLOBAL_STRINGS, MAX_MENU_STRINGS_BYTES)
                 .map_err(|error| format!("{GLOBAL_STRINGS}: {error}"))?;
             camera.menu_key_receipt = Some(receipt(&asset));
             let text = std::str::from_utf8(&asset.bytes)

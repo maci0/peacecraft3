@@ -19,6 +19,7 @@ native KillUnit takes unit u returns nothing
 native GetRandomInt takes integer a, integer b returns integer
 native GetRandomReal takes real a, real b returns real
 native SetRandomSeed takes integer s returns nothing
+native TriggerRegisterPlayerUnitEvent takes trigger t, player p, playerunitevent e, boolexpr f returns event
 native TriggerRegisterUnitEvent takes trigger t, unit u, unitevent e returns event
 constant native GetDyingUnit takes nothing returns unit
 constant native GetKillingUnit takes nothing returns unit
@@ -28,6 +29,7 @@ constant unitstate UNIT_STATE_LIFE = ConvertUnitState(0)
 constant unitstate UNIT_STATE_MAX_LIFE = ConvertUnitState(1)
 constant unitstate UNIT_STATE_MANA = ConvertUnitState(2)
 constant unitstate UNIT_STATE_MAX_MANA = ConvertUnitState(3)
+constant playerunitevent EVENT_PLAYER_UNIT_ATTACKED = ConvertPlayerUnitEvent(117)
 constant playerunitevent EVENT_PLAYER_UNIT_DEATH = ConvertPlayerUnitEvent(20)
 constant unitevent EVENT_UNIT_DEATH = ConvertUnitEvent(53)
 constant unitevent EVENT_UNIT_ATTACKED = ConvertUnitEvent(54)
@@ -46,6 +48,12 @@ endglobals
 function setup takes nothing returns nothing
 set A=CreateUnit(Player(4),'u001',16.0,16.0,0.0)
 set B=CreateUnit(Player(5),'u001',48.0,16.0,180.0)
+endfunction
+function attack_filter takes nothing returns boolean
+return GetFilterUnit()==B and GetTriggerUnit()==B and GetAttacker()==A
+endfunction
+function filter_value takes nothing returns boolexpr
+return Filter(function attack_filter)
 endfunction
 function listen takes nothing returns nothing
 set Died=CreateTrigger()
@@ -119,6 +127,10 @@ fn open(fields: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId) {
     let h = position_host_admitting(1000, 16, MAP, &extra, fields, |h| h);
     let (registry, activity) = super::activity::rules();
     let mut h = h
+        .with_locations()
+        .unwrap()
+        .with_player_unit_events(8)
+        .unwrap()
         .with_unit_states(crate::playercolor_host::UnitStateBudget { max_records: 8 })
         .unwrap()
         .with_player_alliances(crate::playercolor_host::PlayerAllianceBudget { max_records: 8 })
@@ -359,4 +371,363 @@ fn selection_relation_tracks_local_owner_passive_owner_and_directional_alliances
     assert_eq!(h.local_relation(b), Some(Relation::Friend));
     h.set_neutral_passive(5);
     assert_eq!(h.local_relation(b), Some(Relation::Neutral));
+}
+
+#[test]
+fn player_attacked_events_match_the_current_owner_and_keep_filters_and_event_context() {
+    let (mut vm, a, b) = open(&armed("64", "normal"));
+    let filter = vm.call("filter_value", &[]).unwrap();
+    let attacked = vm.global("EVENT_PLAYER_UNIT_ATTACKED");
+    let death = vm.global("EVENT_PLAYER_UNIT_DEATH");
+    let h = &mut vm.host().inner;
+    let victim = Value::Handle(h.executed_unit(b).unwrap().owner);
+    let attacker = Value::Handle(h.executed_unit(a).unwrap().owner);
+    let mut matching = Vec::new();
+    for (owner, kind, predicate) in [
+        (victim.clone(), attacked.clone(), Value::Null),
+        (attacker, attacked.clone(), Value::Null),
+        (victim.clone(), death, Value::Null),
+        (victim.clone(), attacked.clone(), filter),
+        (victim.clone(), attacked.clone(), Value::Null),
+        (victim, attacked.clone(), Value::Null),
+    ] {
+        let trigger = h.native("CreateTrigger", &[]).unwrap();
+        h.native(
+            "TriggerRegisterPlayerUnitEvent",
+            &[trigger.clone(), owner, kind, predicate],
+        )
+        .unwrap();
+        matching.push(trigger);
+    }
+    h.native(
+        "IssueTargetOrder",
+        &[
+            Value::Handle(a),
+            Value::Str("alpha".into()),
+            Value::Handle(b),
+        ],
+    )
+    .unwrap();
+    let start = h.timer_game_time().unwrap();
+    step(&mut vm, start + 0.1);
+    let h = &mut vm.host().inner;
+    // Pending events still respect changes to their trigger before delivery.
+    h.native("DisableTrigger", &[matching[4].clone()]).unwrap();
+    h.native("DestroyTrigger", &[matching[5].clone()]).unwrap();
+    let first = h.take_fired_event().unwrap();
+    assert_eq!(Value::Handle(first.trigger), matching[0]);
+    assert!(first.filter.is_none());
+    h.begin_fired_event(&first).unwrap().unwrap();
+    assert_eq!(h.native("GetTriggerEventId", &[]).unwrap(), attacked);
+    assert_eq!(h.native("GetTriggerUnit", &[]).unwrap(), Value::Handle(b));
+    assert_eq!(h.native("GetAttacker", &[]).unwrap(), Value::Handle(a));
+    h.finish_fired_event();
+    let filtered = h.take_fired_event().unwrap();
+    assert_eq!(Value::Handle(filtered.trigger), matching[3]);
+    assert!(filtered.filter.is_some());
+    h.begin_fired_event(&filtered).unwrap().unwrap();
+    assert_eq!(vm.call("attack_filter", &[]).unwrap(), Value::Bool(true));
+    let h = &mut vm.host().inner;
+    h.finish_fired_event();
+    for expected in &matching[4..] {
+        let fired = h.take_fired_event().unwrap();
+        assert_eq!(Value::Handle(fired.trigger), *expected);
+        assert!(h.begin_fired_event(&fired).unwrap().is_none());
+    }
+    assert!(h.take_fired_event().is_none());
+    assert_eq!(h.native("GetAttacker", &[]).unwrap(), Value::Null);
+    assert_eq!(h.native("GetFilterUnit", &[]).unwrap(), Value::Null);
+}
+
+#[test]
+fn point_attack_acquires_while_moving_and_resumes_then_finishes_its_destination() {
+    let mut fields = armed("8", "normal");
+    fields.push(column(
+        b"S001",
+        SlkId::UnitBalance,
+        "spd",
+        FieldKind::Real,
+        "32",
+    ));
+    fields
+        .iter_mut()
+        .find(|(id, _)| id == b"W005")
+        .unwrap()
+        .1
+        .value = Ok(FieldValue::Cell("40".into()));
+    let (mut vm, a, b) = open(&fields);
+    let h = &mut vm.host().inner;
+    // Keep the target from acquiring/chasing so the attack-move must find it.
+    let alliance = h.native("ConvertAllianceType", &[Value::Int(0)]).unwrap();
+    h.native(
+        "SetPlayerAlliance",
+        &[
+            Value::Handle(h.executed_unit(b).unwrap().owner),
+            Value::Handle(h.executed_unit(a).unwrap().owner),
+            alliance,
+            Value::Bool(true),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        h.native(
+            "IssuePointOrder",
+            &[
+                Value::Handle(a),
+                Value::Str("alpha".into()),
+                Value::Real(96.0),
+                Value::Real(16.0)
+            ]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    let start = h.timer_game_time().unwrap();
+    step(&mut vm, start + 0.1);
+    assert_eq!(
+        vm.host()
+            .inner
+            .executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .target,
+        Some(b)
+    );
+    step(&mut vm, start + 14.0);
+    let h = &mut vm.host().inner;
+    assert!(h.executed_unit(b).unwrap().combat.as_ref().unwrap().dead);
+    assert_eq!(h.executed_unit(a).unwrap().position, Some([96.0, 16.0]));
+    assert_eq!(
+        h.native("GetUnitCurrentOrder", &[Value::Handle(a)])
+            .unwrap(),
+        Value::Int(0)
+    );
+    assert!(
+        h.executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .attack_destination
+            .is_none()
+    );
+}
+
+#[test]
+fn replacement_orders_cancel_the_retained_attack_move_destination() {
+    let mut fields = armed("8", "normal");
+    fields.push(column(
+        b"S001",
+        SlkId::UnitBalance,
+        "spd",
+        FieldKind::Real,
+        "32",
+    ));
+    let (mut vm, a, b) = open(&fields);
+    let h = &mut vm.host().inner;
+    for (name, tail) in [
+        ("IssueImmediateOrder", vec![Value::Str("beta".into())]),
+        ("IssueImmediateOrder", vec![Value::Str("alpha".into())]),
+        (
+            "IssuePointOrder",
+            vec![
+                Value::Str("gamma".into()),
+                Value::Real(80.0),
+                Value::Real(32.0),
+            ],
+        ),
+        (
+            "IssueTargetOrder",
+            vec![Value::Str("alpha".into()), Value::Handle(b)],
+        ),
+    ] {
+        h.native(
+            "IssuePointOrder",
+            &[
+                Value::Handle(a),
+                Value::Str("alpha".into()),
+                Value::Real(96.0),
+                Value::Real(16.0),
+            ],
+        )
+        .unwrap();
+        assert!(
+            h.executed_unit(a)
+                .unwrap()
+                .combat
+                .as_ref()
+                .unwrap()
+                .attack_destination
+                .is_some()
+        );
+        let args = [vec![Value::Handle(a)], tail].concat();
+        assert_eq!(h.native(name, &args).unwrap(), Value::Bool(true));
+        assert!(
+            h.executed_unit(a)
+                .unwrap()
+                .combat
+                .as_ref()
+                .unwrap()
+                .attack_destination
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn attack_move_point_and_location_variants_copy_the_admitted_destination() {
+    for name in [
+        "IssuePointOrderById",
+        "IssuePointOrderLoc",
+        "IssuePointOrderByIdLoc",
+    ] {
+        let mut fields = armed("8", "normal");
+        fields.push(column(
+            b"S001",
+            SlkId::UnitBalance,
+            "spd",
+            FieldKind::Real,
+            "32",
+        ));
+        let (mut vm, a, _) = open(&fields);
+        let h = &mut vm.host().inner;
+        let location = h
+            .native("Location", &[Value::Real(96.0), Value::Real(48.0)])
+            .unwrap();
+        let order = if name.contains("ById") {
+            h.native("OrderId", &[Value::Str("alpha".into())]).unwrap()
+        } else {
+            Value::Str("alpha".into())
+        };
+        let mut args = vec![Value::Handle(a), order];
+        if name.ends_with("Loc") {
+            args.push(location.clone());
+        } else {
+            args.extend([Value::Real(96.0), Value::Real(48.0)]);
+        }
+        assert_eq!(h.native(name, &args).unwrap(), Value::Bool(true));
+        h.native(
+            "MoveLocation",
+            &[location.clone(), Value::Real(112.0), Value::Real(80.0)],
+        )
+        .unwrap();
+        h.native("RemoveLocation", &[location]).unwrap();
+        let start = h.timer_game_time().unwrap();
+        step(&mut vm, start + 5.0);
+        let h = &mut vm.host().inner;
+        assert_eq!(h.executed_unit(a).unwrap().position, Some([96.0, 48.0]));
+        assert_eq!(
+            h.native("GetUnitCurrentOrder", &[Value::Handle(a)])
+                .unwrap(),
+            Value::Int(0)
+        );
+    }
+}
+
+#[test]
+fn invalid_attack_move_arguments_preserve_the_previous_activity_and_combat() {
+    let mut fields = armed("8", "normal");
+    fields.push(column(
+        b"S001",
+        SlkId::UnitBalance,
+        "spd",
+        FieldKind::Real,
+        "32",
+    ));
+    let (mut vm, a, b) = open(&fields);
+    let h = &mut vm.host().inner;
+    let location = h
+        .native("Location", &[Value::Real(96.0), Value::Real(48.0)])
+        .unwrap();
+    h.native(
+        "IssueTargetOrder",
+        &[
+            Value::Handle(a),
+            Value::Str("alpha".into()),
+            Value::Handle(b),
+        ],
+    )
+    .unwrap();
+    let before = h.executed_unit(a).unwrap().clone();
+    for (unit, destination, expected) in [
+        (location.clone(), location, "unit argument"),
+        (Value::Handle(a), Value::Handle(b), "location argument"),
+    ] {
+        let error = h
+            .native(
+                "IssuePointOrderLoc",
+                &[unit, Value::Str("alpha".into()), destination],
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+        assert_eq!(h.executed_unit(a).unwrap().activity, before.activity);
+        assert_eq!(h.executed_unit(a).unwrap().combat, before.combat);
+    }
+    h.native("KillUnit", &[Value::Handle(a)]).unwrap();
+    assert_eq!(
+        h.native(
+            "IssuePointOrder",
+            &[
+                Value::Handle(a),
+                Value::Str("alpha".into()),
+                Value::Real(96.0),
+                Value::Real(48.0)
+            ]
+        )
+        .unwrap(),
+        Value::Bool(false)
+    );
+    assert!(
+        h.executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .attack_destination
+            .is_none()
+    );
+}
+
+#[test]
+fn unarmed_attack_move_finishes_without_acquiring_a_target() {
+    let mut fields = armed("8", "normal");
+    fields.push(column(
+        b"S001",
+        SlkId::UnitBalance,
+        "spd",
+        FieldKind::Real,
+        "32",
+    ));
+    fields
+        .iter_mut()
+        .find(|(id, _)| id == b"W001")
+        .unwrap()
+        .1
+        .value = Ok(FieldValue::Cell("0".into()));
+    let (mut vm, a, _) = open(&fields);
+    let h = &mut vm.host().inner;
+    assert_eq!(
+        h.native(
+            "IssuePointOrder",
+            &[
+                Value::Handle(a),
+                Value::Str("alpha".into()),
+                Value::Real(96.0),
+                Value::Real(48.0)
+            ]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    let start = h.timer_game_time().unwrap();
+    step(&mut vm, start + 5.0);
+    let h = &mut vm.host().inner;
+    assert_eq!(h.executed_unit(a).unwrap().position, Some([96.0, 48.0]));
+    assert_eq!(
+        h.native("GetUnitCurrentOrder", &[Value::Handle(a)])
+            .unwrap(),
+        Value::Int(0)
+    );
 }

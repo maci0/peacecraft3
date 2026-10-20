@@ -232,6 +232,9 @@ pub struct ResolvedObservations {
     pub controllers: Option<Vec<(i32, HandleId)>>,
 }
 
+#[path = "sound_playback.rs"]
+pub mod sound_playback;
+
 pub struct MapStartupInputs {
     pub enumeration: EnumContracts,
     pub rules: NeutralRuleSet,
@@ -242,6 +245,7 @@ pub struct MapStartupInputs {
     pub label_sound_creation: Vec<SoundBank>,
     pub file_sounds: file_sounds::Assets,
     pub sound_parameters: Banks,
+    pub sound_playback: Option<sound_playback::Rules>,
     pub clock: StartupClockInput,
     /// Explicit game time for positive-timeout timers; absent keeps TimerStart unsupported.
     pub timer_time: Option<f64>,
@@ -271,6 +275,7 @@ type NeutralStack = SelectedMapNeutralHost<
 >;
 
 pub struct MapStartupHost {
+    sound_playback: Option<sound_playback::Rules>,
     inner: NeutralStack,
     research: Option<CurrentResearchInput>,
     day_night_loader: Option<DayNightLoader>,
@@ -291,6 +296,9 @@ type PlacementLoader = Box<
 >;
 
 impl MapStartupHost {
+    pub fn sound_playback(&self) -> Option<&sound_playback::Rules> {
+        self.sound_playback.as_ref()
+    }
     pub fn with_placement_loader(
         mut self,
         loader: impl FnMut(
@@ -473,6 +481,7 @@ pub fn assemble(
         label_sound_creation,
         file_sounds,
         sound_parameters,
+        sound_playback,
         clock,
         timer_time,
         trigger_runtime,
@@ -686,6 +695,7 @@ pub fn assemble(
     let inner = SelectedMapNeutralHost::try_new(context, rules.passive, aggressive)?;
     let neutral_passive = inner.selected_result();
     let mut host = MapStartupHost {
+        sound_playback,
         inner,
         research: current_research,
         day_night_loader: None,

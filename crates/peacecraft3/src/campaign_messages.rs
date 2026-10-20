@@ -1,4 +1,5 @@
 //! Executed timed text on the published campaign UI camera.
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use pcx_objects::editor::messages::MessageStyle;
 use pcx_play::{map_startup_host::MapStartupHost, playercolor_host::TimedMessage};
@@ -12,12 +13,17 @@ use peacecraft3::{
 };
 use std::sync::Weak;
 
+#[path = "campaign_dialogue.rs"]
+mod dialogue;
+
 #[derive(Resource, Default)]
 pub(crate) struct CampaignMessages {
     session: Option<Weak<()>>,
     root: Option<Entity>,
     /// Transmission panel and the start time of the scene it shows.
     scene: Option<(Entity, f64)>,
+    dialogue: Option<dialogue::DialogueAssets>,
+    dialogue_attempted: bool,
     font: Option<Handle<Font>>,
     style: Option<MessageStyle>,
     attempted: bool,
@@ -44,15 +50,31 @@ fn remove_scene(commands: &mut Commands, state: &mut CampaignMessages) {
         commands.entity(root).despawn();
     }
 }
+#[derive(SystemParam)]
+struct MessageAssets<'w, 's> {
+    fonts: ResMut<'w, Assets<Font>>,
+    images: ResMut<'w, Assets<Image>>,
+    materials: ResMut<'w, Assets<crate::glue_menu::BackdropImage>>,
+    nodes: Query<'w, 's, &'static mut Node>,
+}
+fn set_active(node: &mut Node, active: bool) {
+    node.display = if active { Display::Flex } else { Display::None };
+}
 fn project(
     mut commands: Commands,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
     view: Res<CampaignCamera>,
     sources: Res<SelectedMapSources>,
     requests: Res<MapRequests>,
-    mut fonts: ResMut<Assets<Font>>,
+    assets: MessageAssets,
     mut state: ResMut<CampaignMessages>,
 ) {
+    let MessageAssets {
+        mut fonts,
+        mut images,
+        mut materials,
+        mut nodes,
+    } = assets;
     let witness = session.session_witness();
     if !match (&state.session, &witness) {
         (Some(a), Some(b)) => Weak::ptr_eq(a, b),
@@ -61,6 +83,9 @@ fn project(
     } {
         remove_root(&mut commands, &mut state);
         remove_scene(&mut commands, &mut state);
+        if let Some(dialogue) = state.dialogue.take() {
+            dialogue.release(&mut images, &mut fonts, &mut materials);
+        }
         if let Some(font) = state.font.take() {
             fonts.remove(font.id());
         }
@@ -70,12 +95,14 @@ fn project(
         };
     }
     let active = view.active();
-    if let Some(root) = state.root {
-        commands.entity(root).insert(if active {
-            Visibility::Visible
-        } else {
-            Visibility::Hidden
-        });
+    for root in state
+        .root
+        .into_iter()
+        .chain(state.scene.map(|(root, _)| root))
+    {
+        if let Ok(mut node) = nodes.get_mut(root) {
+            set_active(&mut node, active);
+        }
     }
     if !active {
         return;
@@ -91,6 +118,9 @@ fn project(
     });
     if state.scene.map(|(_, at)| at) != scene.as_ref().map(|s| s.started) {
         remove_scene(&mut commands, &mut state);
+        if let Some(dialogue) = state.dialogue.as_mut() {
+            dialogue.clear_materials(&mut materials);
+        }
     }
     let pending_scene = scene.filter(|_| state.scene.is_none());
     let Some(entries) = session.host().and_then(|h| {
@@ -113,29 +143,65 @@ fn project(
             return;
         }
     }
+    let (Some(context), Some(bindings)) = (session.context(), requests.bindings.as_ref()) else {
+        return;
+    };
+    if !requests
+        .admission
+        .shared_context()
+        .as_ref()
+        .is_some_and(|selected| std::sync::Arc::ptr_eq(selected, context))
+        || !requests
+            .published_receipts
+            .as_ref()
+            .is_some_and(|published| std::sync::Arc::ptr_eq(published, &bindings.receipts))
+    {
+        return;
+    }
+    let Some(reader) = sources.for_receipts(&bindings.receipts) else {
+        return;
+    };
+    if let Some(scene) = &pending_scene {
+        if !state.dialogue_attempted {
+            let race = session.host().and_then(|host| {
+                host.objects()
+                    .local_race_preference_constant()
+                    .ok()
+                    .flatten()
+            });
+            state.dialogue_attempted = true;
+            let result = race
+                .as_deref()
+                .and_then(|race| race.strip_prefix("RACE_PREF_"))
+                .ok_or_else(|| "transmission has no local race preference".to_string())
+                .and_then(|race| {
+                    dialogue::DialogueAssets::load(&reader, race, &mut images, &mut fonts)
+                });
+            match result {
+                Ok(dialogue) => {
+                    state.receipts.extend(dialogue.receipts.clone());
+                    if !dialogue.unsupported.is_empty() {
+                        state.last_error = Some(dialogue.unsupported.join("; "));
+                    }
+                    state.dialogue = Some(dialogue);
+                }
+                Err(error) => state.last_error = Some(error),
+            }
+        }
+        if let Some(dialogue) = state.dialogue.as_mut() {
+            match dialogue.paint(&mut commands, scene, &images, &mut materials) {
+                Ok(root) => state.scene = Some((root, scene.started)),
+                Err(error) => state.last_error = Some(error),
+            }
+        }
+    }
+    if entries.is_empty() {
+        return;
+    }
     if state.font.is_none() {
         if state.attempted {
             return;
         }
-        let (Some(context), Some(bindings)) = (session.context(), requests.bindings.as_ref())
-        else {
-            return;
-        };
-        if !requests
-            .admission
-            .shared_context()
-            .as_ref()
-            .is_some_and(|selected| std::sync::Arc::ptr_eq(selected, context))
-            || !requests
-                .published_receipts
-                .as_ref()
-                .is_some_and(|published| std::sync::Arc::ptr_eq(published, &bindings.receipts))
-        {
-            return;
-        }
-        let Some(reader) = sources.for_receipts(&bindings.receipts) else {
-            return;
-        };
         state.attempted = true;
         let result = (|| {
             let misc = reader
@@ -161,7 +227,7 @@ fn project(
             Ok((style, font, receipts)) => {
                 state.font = Some(fonts.add(font));
                 state.style = Some(style);
-                state.receipts = receipts;
+                state.receipts.extend(receipts);
             }
             Err(error) => {
                 state.last_error = Some(error);
@@ -169,18 +235,7 @@ fn project(
             }
         }
     }
-    if let Some(scene) = &pending_scene {
-        match paint_scene(
-            &mut commands,
-            scene,
-            state.style.as_ref().expect("loaded style"),
-            state.font.as_ref().expect("loaded font"),
-        ) {
-            Ok(root) => state.scene = Some((root, scene.started)),
-            Err(error) => state.last_error = Some(error),
-        }
-    }
-    if entries.is_empty() || visible == state.visible {
+    if visible == state.visible {
         return;
     }
     let result = paint(
@@ -194,7 +249,14 @@ fn project(
             remove_root(&mut commands, &mut state);
             state.root = Some(root);
             state.visible = visible;
-            state.last_error = None;
+            if !state.dialogue_attempted
+                || state
+                    .dialogue
+                    .as_ref()
+                    .is_some_and(|dialogue| dialogue.unsupported.is_empty())
+            {
+                state.last_error = None;
+            }
         }
         Err(error) => {
             remove_root(&mut commands, &mut state);
@@ -203,84 +265,6 @@ fn project(
         }
     }
 }
-/// Transmission panel: speaker and text at the bottom of the campaign view.
-fn paint_scene(
-    commands: &mut Commands,
-    scene: &pcx_play::playercolor_host::CinematicScene,
-    style: &MessageStyle,
-    font: &Handle<Font>,
-) -> Result<Entity, String> {
-    // shortcut: centred bottom panel; render the authored CinematicPanel FDF before
-    // claiming transmission layout parity.
-    let height_vh = style.height / crate::mainmenu::FRAME_H * 100.;
-    if !height_vh.is_finite() || height_vh <= 0.0 {
-        return Err("message font height is unrepresentable".into());
-    }
-    let text = crate::rich_text::parse(&scene.text).map_err(|e| e.to_string())?;
-    if !text.unsupported.is_empty() {
-        return Err("transmission contains unsupported text substitutions".into());
-    }
-    let text_font = TextFont {
-        font: bevy::text::FontSource::Handle(font.clone()),
-        font_size: bevy::text::FontSize::Vh(height_vh),
-        ..default()
-    };
-    let root = commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: percent(20.),
-                width: percent(60.),
-                bottom: percent(4.),
-                flex_direction: FlexDirection::Column,
-                ..default()
-            },
-            CampaignHud,
-            Pickable::IGNORE,
-            Name::new("Campaign transmission"),
-        ))
-        .id();
-    let speaker = commands
-        .spawn((
-            Text::new(scene.speaker.clone()),
-            text_font.clone(),
-            // shortcut: the speaker should take the scene's player colour from the
-            // selected TeamColor textures; plain text until that palette is shared.
-            TextColor(Color::WHITE),
-            Pickable::IGNORE,
-        ))
-        .id();
-    let line = commands
-        .spawn((
-            Text::new(""),
-            text_font.clone(),
-            TextColor(Color::WHITE),
-            TextLayout::new(
-                bevy::text::Justify::Left,
-                bevy::text::LineBreak::WordBoundary,
-            ),
-            Pickable::IGNORE,
-        ))
-        .id();
-    for span in text.spans {
-        let color = span
-            .colour
-            .map(|c| Color::srgba(c[0], c[1], c[2], c[3]))
-            .unwrap_or(Color::WHITE);
-        let child = commands
-            .spawn((
-                TextSpan::new(span.text),
-                text_font.clone(),
-                TextColor(color),
-                Pickable::IGNORE,
-            ))
-            .id();
-        commands.entity(line).add_child(child);
-    }
-    commands.entity(root).add_children(&[speaker, line]);
-    Ok(root)
-}
-
 pub(crate) fn paint(
     commands: &mut Commands,
     entries: &[TimedMessage],
@@ -364,6 +348,48 @@ pub(crate) fn paint(
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+    #[test]
+    fn campaign_nodes_hide_and_restore_without_erasing_layout() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let parent = app
+            .world_mut()
+            .spawn((
+                Node {
+                    left: percent(23.),
+                    ..default()
+                },
+                CampaignHud,
+            ))
+            .id();
+        let child = app
+            .world_mut()
+            .spawn((Node::default(), Visibility::Visible))
+            .id();
+        app.world_mut().entity_mut(parent).add_child(child);
+        app.world_mut()
+            .run_system_once(|mut nodes: Query<&mut Node, With<CampaignHud>>| {
+                let mut node = nodes.single_mut().unwrap();
+                set_active(&mut node, false);
+            })
+            .unwrap();
+        assert_eq!(
+            app.world().get::<Node>(parent).unwrap().display,
+            Display::None
+        );
+        assert_eq!(
+            *app.world().get::<Visibility>(child).unwrap(),
+            Visibility::Visible
+        );
+        app.world_mut()
+            .run_system_once(|mut nodes: Query<&mut Node, With<CampaignHud>>| {
+                set_active(&mut nodes.single_mut().unwrap(), true);
+            })
+            .unwrap();
+        let node = app.world().get::<Node>(parent).unwrap();
+        assert_eq!(node.display, Display::Flex);
+        assert_eq!(node.left, percent(23.));
+    }
     #[test]
     fn message_text_preserves_authored_colours_and_scales_with_the_view() {
         let mut app = App::new();

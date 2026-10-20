@@ -22,10 +22,8 @@ use pcx_mdl::binary_model_path;
 use crate::mainmenu_scene as scene;
 #[path = "menu_panel_phases.rs"]
 mod phases;
-#[path = "menu_panel_volume.rs"]
-mod volume;
+pub use peacecraft3::sound_volume::VolumeScale;
 use phases::{Clip, Clock, Owner, Phase};
-pub use volume::VolumeScale;
 
 pub const BLIZZARD_SCRIPT: &str = r"Scripts\Blizzard.j";
 const MAX_MODEL_BYTES: usize = 16 * 1024 * 1024;

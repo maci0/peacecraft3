@@ -1,0 +1,115 @@
+//! Selected-client audio-update timing; no source audio or measured operands.
+use crate::{
+    neutral_player::{RuleInputBudget, Sha256Digest, sha256},
+    neutral_rule_input::Pe,
+    scripts::AssetIdentity,
+};
+
+#[derive(Clone, Debug)]
+pub struct Rules {
+    pub origin: AssetIdentity,
+    pub image_sha256: Sha256Digest,
+    update_seconds: f32,
+    minimum_fade_step: u32,
+}
+
+impl Rules {
+    pub fn update_seconds(&self) -> f32 {
+        self.update_seconds
+    }
+    pub fn minimum_fade_step(&self) -> u32 {
+        self.minimum_fade_step
+    }
+    /// Reviewed instruction locations are bindings; their operands remain source data.
+    pub fn reviewed_legacy(image: &[u8], origin: AssetIdentity) -> Result<Self, String> {
+        let fail = |reason: &str| format!("sound playback {}: {reason}", origin.source);
+        if image.len() > 32 << 20
+            || sha256(image) != crate::menu_lighting::REVIEWED_IMAGE
+            || [&origin.source, &origin.edition, &origin.version]
+                .iter()
+                .any(|s| s.trim().is_empty())
+        {
+            return Err(fail("unsupported client identity"));
+        }
+        let pe = Pe::parse(
+            image,
+            RuleInputBudget {
+                image_bytes: 32 << 20,
+                profile_bytes: 64 << 10,
+                sections: 96,
+            },
+        )
+        .map_err(|e| fail(&e.to_string()))?;
+        let timer = pe
+            .read_from(0x5dbe77, true)
+            .map_err(|e| fail(&e.to_string()))?;
+        let minimum = pe
+            .read_from(0x5d67ce, true)
+            .map_err(|e| fail(&e.to_string()))?;
+        let (update_seconds, minimum_fade_step) = operands(timer, minimum).map_err(fail)?;
+        Ok(Self {
+            origin,
+            image_sha256: sha256(image),
+            update_seconds,
+            minimum_fade_step,
+        })
+    }
+}
+
+fn operands(timer: &[u8], minimum: &[u8]) -> Result<(f32, u32), &'static str> {
+    let timer = timer.get(..7).ok_or("truncated audio timer instruction")?;
+    let minimum = minimum
+        .get(..5)
+        .ok_or("truncated fade minimum instruction")?;
+    if timer[..3] != [0xc7, 0x04, 0x24] || minimum[0] != 0xba {
+        return Err("unsupported audio timer/fade instructions");
+    }
+    let seconds = f32::from_le_bytes(timer[3..].try_into().unwrap());
+    let step = u32::from_le_bytes(minimum[1..].try_into().unwrap());
+    if !seconds.is_finite() || seconds <= 0.0 || step == 0 {
+        return Err("invalid audio timer/fade operands");
+    }
+    Ok((seconds, step))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn timer_and_fade_operands_follow_synthetic_instructions() {
+        let mut timer = vec![0xc7, 0x04, 0x24];
+        timer.extend(0.25f32.to_le_bytes());
+        let mut minimum = vec![0xba];
+        minimum.extend(3u32.to_le_bytes());
+        assert_eq!(operands(&timer, &minimum), Ok((0.25, 3)));
+        for len in 0..timer.len() {
+            assert!(operands(&timer[..len], &minimum).is_err());
+        }
+        for len in 0..minimum.len() {
+            assert!(operands(&timer, &minimum[..len]).is_err());
+        }
+        for seconds in [0.0, -1.0, f32::INFINITY, f32::NAN] {
+            timer[3..].copy_from_slice(&seconds.to_le_bytes());
+            assert!(operands(&timer, &minimum).is_err());
+        }
+        timer[3..].copy_from_slice(&0.5f32.to_le_bytes());
+        minimum[1..].copy_from_slice(&0u32.to_le_bytes());
+        assert!(operands(&timer, &minimum).is_err());
+        minimum[1..].copy_from_slice(&2u32.to_le_bytes());
+        timer[0] = 0x90;
+        assert!(operands(&timer, &minimum).is_err());
+    }
+    #[test]
+    fn unqualified_client_is_refused_before_instruction_reads() {
+        let error = Rules::reviewed_legacy(
+            &[],
+            AssetIdentity {
+                source: "synthetic:client".into(),
+                edition: "synthetic".into(),
+                version: "test".into(),
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("synthetic:client") && error.contains("identity"));
+    }
+}

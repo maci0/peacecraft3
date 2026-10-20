@@ -4,9 +4,10 @@
 //! The queue stores sound identities, not setting snapshots. Each consumed
 //! start samples that identity's current creation inputs, properties and
 //! parameter assignment.
-//! Playback is the recorded non-spatial, zero-fade profile. 3D, EAX, distance,
-//! channel, fade, duration, parameter rows and unmapped volume/pitch are
-//! reported and are not replaced with another mix. `PlaybackSettings::LOOP` and
+//! Non-spatial dialogue and explicit gain/pitch use source-backed volume and
+//! audio-update timing when supplied. 3D, EAX, distance and unhandled parameter
+//! profiles remain refused; channel categories report their shared effects bus.
+//! Native duration stays metadata and never trims a waveform. `PlaybackSettings::LOOP` and
 //! `Remove` select lifetime only. Their backend gain and speed are not source
 //! measurements.
 //! PCM uses `DecoderWave`'s fmt/data-first view. MP3 keeps its encoded bytes.
@@ -28,6 +29,53 @@ use pcx_script::HandleId;
 use std::{collections::HashSet, sync::Weak};
 use tracing::warn;
 
+/// Per-voice source gain, including the source-timed fade. User gain multiplies it.
+#[derive(Component)]
+pub struct ScriptAudioGain(pub f32);
+
+/// Native duration is query metadata; it does not trim the encoded resource.
+#[derive(Component)]
+pub struct ScriptAudioMetadata {
+    pub duration: Option<i32>,
+    pub channel: Option<i32>,
+}
+
+#[derive(Clone, Copy)]
+struct PlaybackProfile {
+    maximum: f32,
+    update_seconds: f32,
+    minimum_fade_step: u32,
+}
+
+#[derive(Component)]
+struct FadeIn {
+    elapsed: f64,
+    period: f64,
+    increment: f64,
+    target: f32,
+}
+
+fn advance_fades(
+    time: Res<Time<Real>>,
+    mut voices: Query<(&mut FadeIn, &mut ScriptAudioGain, &AudioSink)>,
+) {
+    for (mut fade, mut gain, sink) in &mut voices {
+        gain.0 = fade.advance(time.delta_secs_f64(), sink.is_paused());
+    }
+}
+
+impl FadeIn {
+    fn advance(&mut self, delta: f64, paused: bool) -> f32 {
+        if !paused {
+            self.elapsed += delta;
+        }
+        self.sample()
+    }
+    fn sample(&self) -> f32 {
+        ((self.elapsed / self.period).floor() * self.increment).min(f64::from(self.target)) as f32
+    }
+}
+
 /// Optional caller caps for one batch and the retained source cache.
 /// Without an override, both ceilings come from the published Host's admitted
 /// encoded bank bytes. This does not bound backend decoder or total heap usage.
@@ -43,6 +91,7 @@ pub struct ScriptAudioReport {
     pub last_refusal: Option<String>,
     pub refusal_count: u64,
     pub played: u64,
+    pub last_partial: Option<String>,
 }
 
 #[derive(Clone, Component)]
@@ -66,6 +115,7 @@ pub struct ScriptVoice {
 struct ScriptAudioMemory {
     sources: Vec<LiveSource>,
     playing: HashSet<HandleId>,
+    profile: Option<(Weak<()>, Result<PlaybackProfile, String>)>,
 }
 
 struct LiveSource {
@@ -81,6 +131,7 @@ pub struct ScriptAudioPlayback;
 
 pub fn install(app: &mut App) {
     app.init_resource::<ScriptAudioReport>()
+        .init_resource::<Time<Real>>()
         .init_resource::<ScriptAudioMemory>()
         .init_resource::<Assets<AudioSource>>()
         .init_resource::<MapScriptSession<MapStartupHost>>()
@@ -89,6 +140,12 @@ pub fn install(app: &mut App) {
             play_published_script_sounds
                 .in_set(ScriptAudioPlayback)
                 .after(crate::campaign_startup::CampaignStartupSet),
+        )
+        .add_systems(
+            Update,
+            advance_fades
+                .in_set(ScriptAudioPlayback)
+                .after(play_published_script_sounds),
         );
 }
 
@@ -110,8 +167,52 @@ fn play_published_script_sounds(
         current.as_ref(),
     );
     let Some(witness) = current else {
+        memory.profile = None;
         return;
     };
+    if !memory
+        .profile
+        .as_ref()
+        .is_some_and(|(previous, _)| Weak::ptr_eq(previous, &witness))
+    {
+        let profile = (|| -> Result<PlaybackProfile, String> {
+            let context = session
+                .context()
+                .cloned()
+                .ok_or("published script context missing")?;
+            let helper = context
+                .scripts
+                .program()
+                .function("SetSoundVolumeBJ")
+                .ok_or_else(|| {
+                    format!(
+                        "{:?}: sound-volume helper missing",
+                        context.sources.blizzard
+                    )
+                })?;
+            let source = context.scripts.source(&helper.source).ok_or_else(|| {
+                format!("{}: retained sound-volume source missing", helper.source)
+            })?;
+            let maximum = crate::sound_volume::VolumeScale::checked(source.as_bytes())
+                .map_err(|e| format!("{}: {e}", helper.source))?
+                .maximum;
+            let rules = session
+                .host()
+                .and_then(|host| host.sound_playback())
+                .ok_or_else(|| format!("{:?}: source audio timing missing", context.sources.map))?;
+            Ok(PlaybackProfile {
+                maximum,
+                update_seconds: rules.update_seconds(),
+                minimum_fade_step: rules.minimum_fade_step(),
+            })
+        })();
+        memory.profile = Some((witness.clone(), profile));
+    }
+    let profile_error = memory
+        .profile
+        .as_ref()
+        .and_then(|(_, value)| value.as_ref().err())
+        .cloned();
     let Some(host) = session.host() else {
         return;
     };
@@ -132,6 +233,7 @@ fn play_published_script_sounds(
             }
         },
     };
+    let previous_refusals = report.refusal_count;
     if let Err(error) = publish_queued_starts(
         objects,
         &witness,
@@ -142,6 +244,13 @@ fn play_published_script_sounds(
         &mut report,
     ) {
         remember(&mut report, &error);
+    }
+    if report.refusal_count != previous_refusals
+        && let Some(error) = profile_error
+        && let Some(reason) = &mut report.last_refusal
+    {
+        reason.push_str(&format!("; playback profile unavailable: {error}"));
+        warn!("{reason}");
     }
 }
 
@@ -191,6 +300,7 @@ enum Classified {
     Refuse(HandleId, String),
 }
 
+#[derive(Clone, Copy)]
 struct PlayPlan {
     id: HandleId,
     encoded_mp3: bool,
@@ -199,6 +309,11 @@ struct PlayPlan {
     fade_out_rate: i32,
     sha256: [u8; 32],
     byte_len: usize,
+    gain: Option<f32>,
+    speed: Option<f32>,
+    duration: Option<i32>,
+    profile: Option<PlaybackProfile>,
+    channel: Option<i32>,
 }
 
 impl PlayPlan {
@@ -237,6 +352,12 @@ fn publish_queued_starts(
     if objects.pending_sound_starts().is_empty() {
         return Ok(());
     }
+    let profile = memory
+        .profile
+        .as_ref()
+        .filter(|(witness, _)| Weak::ptr_eq(witness, session))
+        .and_then(|(_, value)| value.as_ref().ok())
+        .copied();
     let mut ids = Vec::new();
     ids.try_reserve_exact(objects.pending_sound_starts().len())
         .map_err(|_| "script audio start list allocation failed".to_string())?;
@@ -255,7 +376,7 @@ fn publish_queued_starts(
                 "repeat StartSound on an active handle has no admitted playback behavior".into(),
             ));
         } else {
-            classified.push(classify(objects, id)?);
+            classified.push(classify(objects, id, profile)?);
         }
     }
     let mut staged = 0usize;
@@ -323,18 +444,21 @@ fn publish_queued_starts(
     for item in prepared {
         match item {
             Err(refusal) => ready.push(Err(refusal)),
-            Ok(prepared) => match commit_source(objects, assets, memory, session, prepared) {
-                Ok(voice) => {
-                    committed.push(voice.source.clone());
-                    ready.push(Ok(voice));
-                }
-                Err(error) => {
-                    for handle in committed {
-                        memory.release(assets, &handle);
+            Ok(prepared) => {
+                let plan = prepared.plan;
+                match commit_source(objects, assets, memory, session, prepared) {
+                    Ok(voice) => {
+                        committed.push(voice.source.clone());
+                        ready.push(Ok((voice, plan)));
                     }
-                    return Err(error);
+                    Err(error) => {
+                        for handle in committed {
+                            memory.release(assets, &handle);
+                        }
+                        return Err(error);
+                    }
                 }
-            },
+            }
         }
     }
     objects.take_sound_starts();
@@ -346,15 +470,49 @@ fn publish_queued_starts(
                 report.last_refusal = Some(format!("sound {token}: {reason}"));
                 report.refusal_count = report.refusal_count.saturating_add(1);
             }
-            Ok(voice) => {
-                let playback = if voice.looping {
+            Ok((voice, plan)) => {
+                let mut playback = if voice.looping {
                     PlaybackSettings::LOOP
                 } else {
                     PlaybackSettings::REMOVE
                 };
                 let source = voice.source.clone();
+                if let Some(speed) = plan.speed {
+                    playback.speed = speed;
+                }
                 memory.playing.insert(voice.handle);
-                commands.spawn((AudioPlayer(source), playback, voice));
+                let rate = voice.fade_in_rate;
+                let mut entity = commands.spawn((
+                    AudioPlayer(source),
+                    playback,
+                    voice,
+                    ScriptAudioMetadata {
+                        duration: plan.duration,
+                        channel: plan.channel,
+                    },
+                ));
+                if let Some(gain) = plan.gain {
+                    entity.insert(ScriptAudioGain(gain));
+                    if let Some(profile) = plan.profile {
+                        let step = (rate as u32).max(profile.minimum_fade_step);
+                        entity.insert((
+                            ScriptAudioGain(0.0),
+                            FadeIn {
+                                elapsed: 0.0,
+                                period: f64::from(profile.update_seconds),
+                                increment: f64::from(step) / f64::from(profile.maximum),
+                                target: gain,
+                            },
+                        ));
+                    }
+                }
+                if let Some(channel) = plan.channel {
+                    let notice = format!(
+                        "script sound channel {channel} uses the shared effects bus; category mixing is not implemented"
+                    );
+                    warn!("{notice}");
+                    report.last_partial = Some(notice);
+                }
                 report.played = report.played.saturating_add(1);
             }
         }
@@ -363,11 +521,16 @@ fn publish_queued_starts(
     Ok(())
 }
 
-fn classify(objects: &ObjectHost, id: HandleId) -> Result<Classified, String> {
+fn classify(
+    objects: &ObjectHost,
+    id: HandleId,
+    profile: Option<PlaybackProfile>,
+) -> Result<Classified, String> {
     if let Ok(state) = objects.file_mp3_state(id) {
         return plan_file(
             objects,
             id,
+            profile,
             Observed {
                 encoded_mp3: true,
                 byte_len: state.resource.bytes().len(),
@@ -386,6 +549,7 @@ fn classify(objects: &ObjectHost, id: HandleId) -> Result<Classified, String> {
         return plan_file(
             objects,
             id,
+            profile,
             Observed {
                 encoded_mp3: false,
                 byte_len: state.resource.bytes().len(),
@@ -410,6 +574,7 @@ fn classify(objects: &ObjectHost, id: HandleId) -> Result<Classified, String> {
     plan_file(
         objects,
         id,
+        profile,
         Observed {
             encoded_mp3: false,
             byte_len: state.resource.bytes().len(),
@@ -428,26 +593,118 @@ fn classify(objects: &ObjectHost, id: HandleId) -> Result<Classified, String> {
 fn plan_file(
     objects: &ObjectHost,
     id: HandleId,
+    profile: Option<PlaybackProfile>,
     observed: Observed<'_>,
 ) -> Result<Classified, String> {
     if let Some(reason) = creation_block(
         observed.is_3d,
         observed.stop_when_out_of_range,
         observed.eax,
-        observed.fade_in_rate,
-        observed.fade_out_rate,
-        observed.duration,
+        if profile.is_some() {
+            0
+        } else {
+            observed.fade_in_rate
+        },
+        if profile.is_some() {
+            0
+        } else {
+            observed.fade_out_rate
+        },
+        if profile.is_some() {
+            None
+        } else {
+            observed.duration
+        },
     ) {
         return Ok(Classified::Refuse(id, reason.to_string()));
     }
     let properties = *objects
         .sound_properties(id)
         .map_err(|error| error.to_string())?;
-    if let Some(reason) = property_block(&properties) {
-        return Ok(Classified::Refuse(id, reason.to_string()));
-    }
-    if let Some(reason) = parameter_block(objects, id)? {
+    let mut supported = properties;
+    let mut gain = None;
+    let mut speed = None;
+    let mut duration = None;
+    let mut channel = None;
+    if let Some(profile) = profile {
+        if observed.fade_in_rate < 0 || observed.fade_out_rate < 0 {
+            return Ok(Classified::Refuse(
+                id,
+                "negative fade rates are not played".into(),
+            ));
+        }
+        let assignment = objects
+            .sound_parameter_assignment(id)
+            .map_err(|e| e.to_string())?;
+        let volume = match assignment {
+            Some(assignment) => match assignment.parameters {
+                pcx_play::sound_parameters::ParameterValues::Dialogue(parameters)
+                    if parameters.flags == "0" =>
+                {
+                    Some(parameters.values.volume)
+                }
+                pcx_play::sound_parameters::ParameterValues::Dialogue(parameters) => {
+                    return Ok(Classified::Refuse(
+                        id,
+                        format!(
+                            "dialogue parameter label {:?}, row {}, source {} ({:?}): unsupported Flags={:?}; channel/list saturation and preemption are not implemented",
+                            parameters.label,
+                            parameters.row,
+                            assignment.source.source_label,
+                            assignment.source.origin,
+                            parameters.flags,
+                        ),
+                    ));
+                }
+                pcx_play::sound_parameters::ParameterValues::Full(parameters) => {
+                    return Ok(Classified::Refuse(
+                        id,
+                        format!(
+                            "full numeric parameter label {:?}, row {}, source {} ({:?}): effective priority/channel, pitch variance and attenuation are not implemented; values={:?}, Flags={:?}, EAXFlags={:?}",
+                            parameters.label,
+                            parameters.row,
+                            assignment.source.source_label,
+                            assignment.source.origin,
+                            parameters.values,
+                            parameters.flags,
+                            parameters.eax_flags,
+                        ),
+                    ));
+                }
+            },
+            None => None,
+        };
+        if let Some(volume) = properties.volume.or(volume) {
+            let volume = volume as f32;
+            if !(0.0..=profile.maximum).contains(&volume) {
+                return Ok(Classified::Refuse(
+                    id,
+                    "sound volume exceeds source range".into(),
+                ));
+            }
+            gain = Some(volume / profile.maximum);
+        } else if observed.fade_in_rate != 0 || observed.fade_out_rate != 0 {
+            return Ok(Classified::Refuse(
+                id,
+                "fade requires an explicit source target volume".into(),
+            ));
+        }
+        speed = properties.pitch;
+        if speed.is_some_and(|pitch| pitch <= 0.0) {
+            return Ok(Classified::Refuse(
+                id,
+                "nonpositive pitch is not played".into(),
+            ));
+        }
+        duration = observed.duration;
+        channel = supported.channel.take();
+        supported.volume = None;
+        supported.pitch = None;
+    } else if let Some(reason) = parameter_block(objects, id)? {
         return Ok(Classified::Refuse(id, reason));
+    }
+    if let Some(reason) = property_block(&supported) {
+        return Ok(Classified::Refuse(id, reason.to_string()));
     }
     Ok(Classified::Play(PlayPlan {
         id,
@@ -457,6 +714,11 @@ fn plan_file(
         fade_out_rate: observed.fade_out_rate,
         sha256: observed.sha256,
         byte_len: observed.byte_len,
+        gain,
+        speed,
+        duration,
+        profile,
+        channel,
     }))
 }
 
@@ -752,6 +1014,7 @@ endglobals
     #[derive(Resource)]
     struct Fixture {
         host: ObjectHost,
+        profile: Option<PlaybackProfile>,
     }
 
     #[derive(Resource)]
@@ -896,7 +1159,10 @@ endglobals
         world.init_resource::<ScriptAudioMemory>();
         world.insert_resource(limits);
         world.insert_resource(Witness(Arc::downgrade(&Arc::new(()))));
-        world.insert_resource(Fixture { host });
+        world.insert_resource(Fixture {
+            host,
+            profile: None,
+        });
         world
     }
 
@@ -910,8 +1176,10 @@ endglobals
                  mut report: ResMut<ScriptAudioReport>,
                  mut memory: ResMut<ScriptAudioMemory>,
                  limits: Res<ScriptAudioLimits>| {
+                    let Fixture { host, profile } = &mut *fixture;
+                    memory.profile = profile.map(|profile| (witness.0.clone(), Ok(profile)));
                     publish_queued_starts(
-                        &mut fixture.host,
+                        host,
                         &witness.0,
                         *limits,
                         &mut memory,
@@ -933,6 +1201,239 @@ endglobals
         ScriptAudioLimits {
             max_staged_bytes: bytes,
             max_live_bytes: bytes,
+        }
+    }
+
+    fn profile() -> PlaybackProfile {
+        PlaybackProfile {
+            maximum: 100.0,
+            update_seconds: 0.25,
+            minimum_fade_step: 3,
+        }
+    }
+
+    #[test]
+    fn fade_clock_preserves_pauses_and_frame_partition() {
+        let fade = || FadeIn {
+            elapsed: 0.0,
+            period: 0.25,
+            increment: 0.1,
+            target: 0.8,
+        };
+        let mut whole = fade();
+        let mut chunks = fade();
+        assert_eq!(whole.advance(0.75, false), 0.3);
+        for delta in [0.125, 0.25, 0.375] {
+            chunks.advance(delta, false);
+        }
+        assert_eq!(chunks.sample(), whole.sample());
+        assert_eq!(chunks.advance(100.0, true), 0.3);
+        assert_eq!(chunks.elapsed, 0.75);
+        assert_eq!(chunks.advance(100.0, false), 0.8);
+    }
+
+    #[test]
+    fn dialogue_source_volume_and_flag_refusals_preserve_receipt() {
+        for flags in ["0", "CHANNELFULLPREEMPT|LISTFULLPREEMPT"] {
+            use pcx_play::sound_parameters::{Banks, BanksBudget, Input, Profile};
+            let mut slk = String::from("ID;PWXL;N;E\r\n");
+            let rows = [
+                [
+                    "Selector",
+                    "DirectoryBase",
+                    "FileNames",
+                    "Volume",
+                    "Flags",
+                    "version",
+                ],
+                ["Speech", "Voice", "a.wav", "40", flags, "3"],
+            ];
+            for (y, row) in rows.iter().enumerate() {
+                for (x, value) in row.iter().enumerate() {
+                    slk.push_str(&format!("C;X{};Y{};K\"{value}\"\r\n", x + 1, y + 1));
+                }
+            }
+            slk.push_str("E\r\n");
+            let bytes = pcm(16, false);
+            let assets = SoundAssets::read(
+                &[file_input(r"Media\a.wav", "synthetic:pcm", &bytes)],
+                file_budget(bytes.len(), 1),
+            )
+            .unwrap();
+            let banks = Banks::read(
+                &[Input {
+                    asset: ScriptAsset {
+                        label: "synthetic:dialogue",
+                        bytes: slk.as_bytes(),
+                    },
+                    origin: &origin(),
+                    label_column: "Selector",
+                    labels: &["Speech"],
+                    profile: Profile::Dialogue,
+                }],
+                BanksBudget {
+                    banks: 1,
+                    table_bytes: slk.len(),
+                    total_table_bytes: slk.len(),
+                    coordinates: CoordinateLimits {
+                        max_row: 8,
+                        max_column: 8,
+                    },
+                    definitions: 1,
+                    metadata_bytes: 512,
+                },
+            )
+            .unwrap();
+            let mut object_host = host(assets).with_sound_parameter_banks(banks).unwrap();
+            let id = start(
+                &mut object_host,
+                &create(r"Media\a.wav", false, false, false, 0, 0, ""),
+            );
+            object_host
+                .native(
+                    "SetSoundParamsFromLabel",
+                    &[Value::Handle(id), Value::Str("Speech".into())],
+                )
+                .unwrap();
+            let mut world = world_for(object_host, limits_for(bytes.len()));
+            world.resource_mut::<Fixture>().profile = Some(profile());
+            publish(&mut world).unwrap();
+            if flags != "0" {
+                assert_eq!(count::<ScriptVoice>(&mut world), 0);
+                let reason = world
+                    .resource::<ScriptAudioReport>()
+                    .last_refusal
+                    .as_deref()
+                    .unwrap();
+                for expected in [
+                    "Speech",
+                    "row 2",
+                    "synthetic:dialogue",
+                    "synthetic:archive",
+                    "CHANNELFULLPREEMPT|LISTFULLPREEMPT",
+                    "preemption",
+                ] {
+                    assert!(reason.contains(expected), "missing {expected:?}: {reason}");
+                }
+                continue;
+            }
+            let mut query = world.query::<(&ScriptVoice, &FadeIn)>();
+            let (voice, fade) = query.single(&world).unwrap();
+            assert_eq!(voice.source_label, "synthetic:pcm");
+            assert_eq!(fade.target, 0.4);
+            assert_eq!(
+                fade.increment, 0.03,
+                "zero input uses source-decoded minimum step"
+            );
+            let assignment = world
+                .resource::<Fixture>()
+                .host
+                .sound_parameter_assignment(id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(assignment.source.source_label, "synthetic:dialogue");
+            assert_eq!(assignment.source.origin, &origin());
+        }
+    }
+
+    #[test]
+    fn explicit_nonspatial_settings_publish_source_gain_and_timed_fade() {
+        let bytes = pcm(16, false);
+        let assets = SoundAssets::read(
+            &[file_input(r"Media\a.wav", "synthetic:pcm", &bytes)],
+            file_budget(bytes.len(), 1),
+        )
+        .unwrap();
+        let mut object_host = host(assets);
+        let id = start(
+            &mut object_host,
+            &create(r"Media\a.wav", false, false, false, 10, 7, ""),
+        );
+        for (native, value) in [
+            ("SetSoundVolume", Value::Int(50)),
+            ("SetSoundChannel", Value::Int(4)),
+            ("SetSoundPitch", Value::Real(1.5)),
+            ("SetSoundDuration", Value::Int(1)),
+        ] {
+            object_host
+                .native(native, &[Value::Handle(id), value])
+                .unwrap();
+        }
+        let mut world = world_for(object_host, limits_for(bytes.len()));
+        world.resource_mut::<Fixture>().profile = Some(profile());
+        publish(&mut world).unwrap();
+        let mut query = world.query::<(
+            &ScriptVoice,
+            &ScriptAudioGain,
+            &mut FadeIn,
+            &PlaybackSettings,
+            &ScriptAudioMetadata,
+        )>();
+        let (voice, gain, mut fade, playback, metadata) = query.single_mut(&mut world).unwrap();
+        assert_eq!(voice.handle, id);
+        assert_eq!(gain.0, 0.0);
+        assert_eq!(playback.speed, 1.5);
+        assert_eq!(
+            playback.duration, None,
+            "native duration is metadata, not a waveform crop"
+        );
+        assert_eq!(metadata.duration, Some(1));
+        assert_eq!(metadata.channel, Some(4));
+        fade.elapsed = 0.249;
+        assert_eq!(fade.sample(), 0.0);
+        fade.elapsed = 0.25;
+        assert_eq!(fade.sample(), 0.1);
+        fade.elapsed = 100.0;
+        assert_eq!(fade.sample(), 0.5);
+        assert_eq!(world.resource::<ScriptAudioReport>().played, 1);
+        assert!(
+            world
+                .resource::<ScriptAudioReport>()
+                .last_partial
+                .as_deref()
+                .unwrap()
+                .contains("channel 4")
+        );
+    }
+
+    #[test]
+    fn source_profile_refuses_missing_volume_and_invalid_effective_numbers() {
+        for (native, value, expected) in [
+            ("SetSoundPitch", Value::Real(0.0), "pitch"),
+            ("SetSoundVolume", Value::Int(101), "volume"),
+            ("SetSoundChannel", Value::Int(4), "target volume"),
+        ] {
+            let bytes = pcm(16, false);
+            let assets = SoundAssets::read(
+                &[file_input(r"Media\a.wav", "synthetic:pcm", &bytes)],
+                file_budget(bytes.len(), 1),
+            )
+            .unwrap();
+            let mut object_host = host(assets);
+            let id = start(
+                &mut object_host,
+                &create(r"Media\a.wav", false, false, false, 10, 7, ""),
+            );
+            object_host
+                .native(native, &[Value::Handle(id), value])
+                .unwrap();
+            if native == "SetSoundPitch" {
+                object_host
+                    .native("SetSoundVolume", &[Value::Handle(id), Value::Int(50)])
+                    .unwrap();
+            }
+            let mut world = world_for(object_host, limits_for(0));
+            world.resource_mut::<Fixture>().profile = Some(profile());
+            publish(&mut world).unwrap();
+            assert_eq!(count::<ScriptVoice>(&mut world), 0);
+            assert!(
+                world
+                    .resource::<ScriptAudioReport>()
+                    .last_refusal
+                    .as_deref()
+                    .unwrap()
+                    .contains(expected)
+            );
         }
     }
 
@@ -1468,6 +1969,10 @@ E\r\n";
         parameter_assignment_and_midi_are_refused_without_a_player();
         empty_published_session_retires_script_voices_and_leaves_other_entities();
         canonical_pcm_uses_the_installed_decoder_without_a_device();
-        11
+        explicit_nonspatial_settings_publish_source_gain_and_timed_fade();
+        source_profile_refuses_missing_volume_and_invalid_effective_numbers();
+        dialogue_source_volume_and_flag_refusals_preserve_receipt();
+        fade_clock_preserves_pauses_and_frame_partition();
+        15
     }
 }

@@ -103,7 +103,8 @@ fn host(route_work: usize) -> ObjectHost {
 fn host_fields(route_work: usize, fields: &[([u8; 4], ObjectField)]) -> ObjectHost {
     use crate::file_sounds::tests::{PROPERTY_DECLARATIONS, mixed_assets};
     let extra = format!(
-        "{}\n{ORDERS}type sound extends agent\n{SOUNDS}{PROPERTY_DECLARATIONS}",
+        "{}\n{ORDERS}native RemoveUnit takes unit u returns nothing
+type sound extends agent\n{SOUNDS}{PROPERTY_DECLARATIONS}",
         enumeration::TRIGGERS
     );
     let sounds = |h: ObjectHost| {
@@ -740,4 +741,69 @@ fn attached_sounds_follow_the_accepted_unit_until_an_explicit_position_detaches(
     }
     assert_eq!(h.sound_attached_position(s).unwrap(), None);
     assert_eq!(h.inner().handles(), handles);
+}
+
+#[test]
+fn removed_units_refuse_supported_orders_without_accepting_other_handle_families() {
+    let mut vm = open();
+    let (a, b) = (unit(&vm, "A"), unit(&vm, "B"));
+    let h = &mut vm.host().inner;
+    let location = h
+        .native("Location", &[Value::Real(72.0), Value::Real(32.0)])
+        .unwrap();
+    let hold = h.native("OrderId", &[Value::Str("alpha".into())]).unwrap();
+    let movement = h.native("OrderId", &[Value::Str("gamma".into())]).unwrap();
+    h.native("RemoveUnit", &[Value::Handle(a)]).unwrap();
+    assert_eq!(h.inner().kind(a).unwrap(), "unit");
+    let before = h.executed_unit(b).unwrap().clone();
+    let handles = h.inner().handles();
+    for (name, tail) in [
+        ("IssueImmediateOrder", vec![Value::Str("alpha".into())]),
+        ("IssueImmediateOrderById", vec![hold]),
+        (
+            "IssuePointOrder",
+            vec![
+                Value::Str("gamma".into()),
+                Value::Real(72.0),
+                Value::Real(32.0),
+            ],
+        ),
+        (
+            "IssuePointOrderById",
+            vec![movement.clone(), Value::Real(72.0), Value::Real(32.0)],
+        ),
+        (
+            "IssuePointOrderLoc",
+            vec![Value::Str("gamma".into()), location.clone()],
+        ),
+        ("IssuePointOrderByIdLoc", vec![movement, location.clone()]),
+    ] {
+        let args = [vec![Value::Handle(a)], tail.clone()].concat();
+        assert_eq!(h.native(name, &args).unwrap(), Value::Bool(false), "{name}");
+        let wrong_family = [vec![location.clone()], tail.clone()].concat();
+        assert!(h.native(name, &wrong_family).is_err(), "{name}");
+        let unknown = Value::Handle(HandleId::new(std::num::NonZeroU64::new(u64::MAX).unwrap()));
+        let unknown = [vec![unknown], tail].concat();
+        assert!(
+            h.native(name, &unknown)
+                .unwrap_err()
+                .contains("unknown handle"),
+            "{name}"
+        );
+        assert!(h.executed_unit(a).is_err());
+        assert_eq!(h.executed_unit(b).unwrap(), &before);
+        assert_eq!(h.inner().handles(), handles);
+    }
+    // A later live unit cannot revive the removed identity.
+    let new = position_create(h, 16.0, 16.0).unwrap();
+    assert_ne!(new, Value::Handle(a));
+    assert!(h.executed_unit(a).is_err());
+    assert_eq!(
+        h.native(
+            "IssueImmediateOrder",
+            &[Value::Handle(a), Value::Str("alpha".into())]
+        )
+        .unwrap(),
+        Value::Bool(false)
+    );
 }
