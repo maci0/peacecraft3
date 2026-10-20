@@ -1277,28 +1277,22 @@ fn set_unit_exploded_then_kill_unit_retains_the_flag_through_the_death_path() {
     assert_eq!(h.unit_exploded(a), Some(false));
 }
 
-/// `AHhb` (Holy Light, its `AbilityFunc` `Order` names the admitted order) and the hero component `Yher`.
+/// Holy Light rows: `AHhb` (three ranks, `Order=alpha` here) and the hero component `Yher`.
 fn holy_tables() -> DefaultTables {
     let headers = [
-        "alias", "code", "levels", "reqLevel", "levelSkip", "hero", "DataA1", "Cost1", "Cool1",
-        "Rng1", "targs1",
+        "alias", "code", "levels", "reqLevel", "levelSkip", "hero", "DataA1", "DataA2", "DataA3",
+        "Cost1", "Cost2", "Cost3", "Cool1", "Cool2", "Cool3", "Rng1", "Rng2", "Rng3", "targs1",
+        "targs2", "targs3",
     ];
-    let rows = [
-        [
-            "AHhb",
-            "AHhb",
-            "3",
-            "1",
-            "0",
-            "1",
-            "200",
-            "65",
-            "5",
-            "60",
-            "air,ground,organic,notself,invu,vuln,nonancient",
+    let targs = "air,ground,organic,notself,invu,vuln,nonancient";
+    let rows: [Vec<&str>; 2] = [
+        vec![
+            "AHhb", "AHhb", "3", "1", "0", "1", "200", "400", "600", "65", "65", "65", "5", "5",
+            "5", "60", "60", "60", targs, targs, targs,
         ],
-        [
-            "Yher", "Yher", "1", "0", "0", "1", "0", "0", "0", "0", "air,ground,invu,vuln",
+        vec![
+            "Yher", "Yher", "1", "0", "0", "1", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
+            "0", "0", "air,ground,invu,vuln", "air,ground,invu,vuln", "air,ground,invu,vuln",
         ],
     ];
     let mut slk = String::from("ID;PWXL;N;E\r\n");
@@ -1316,7 +1310,7 @@ fn holy_tables() -> DefaultTables {
         }
     }
     slk.push_str("E\r\n");
-    let profile = "[AHhb]\r\nOrder=alpha\r\n";
+    let profile = "[AHhb]\r\nOrder=alpha\r\nHotkey=T\r\n";
     DefaultTables::from_bytes(
         Identity {
             install: source().install,
@@ -1339,6 +1333,7 @@ unit H=null
 unit F=null
 unit E=null
 unit G=null
+trigger T=null
 endglobals
 function setup takes nothing returns nothing
 set H=CreateUnit(Player(4),'H001',16.0,16.0,0.0)
@@ -1350,25 +1345,47 @@ function prime takes nothing returns nothing
 call SetUnitState(H,UNIT_STATE_MANA,200.0)
 call SetUnitState(F,UNIT_STATE_LIFE,100.0)
 endfunction
+function listen takes nothing returns nothing
+set T=CreateTrigger()
+call TriggerRegisterUnitEvent(T,H,EVENT_UNIT_SPELL_EFFECT)
+endfunction
+function learn takes integer ability returns nothing
+call SelectHeroSkill(H,ability)
+endfunction
 function cast takes unit c, unit t returns boolean
 return IssueTargetOrder(c,"alpha",t)
 endfunction
+function attack_enemy takes unit c, unit t returns nothing
+call IssueTargetOrder(c,"beta",t)
+endfunction
 "#;
 
-/// Holy Light caster `H` (hero, learned `AHhb` at rank one), friendly `F`, enemy `E`, far friend `G`.
-/// Every unit shares one fixture definition, so `types` is the `UnitBalance` `type` list of all of them.
-fn holy_open(types: &str) -> (Vm, [HandleId; 4]) {
+const HOLY_DECLARATIONS: &str = r#"
+globals
+constant unitevent EVENT_UNIT_SPELL_EFFECT = ConvertUnitEvent(294)
+constant playerunitevent EVENT_PLAYER_UNIT_SPELL_EFFECT = ConvertPlayerUnitEvent(277)
+constant unittype UNIT_TYPE_UNDEAD = ConvertUnitType(2)
+constant unittype UNIT_TYPE_ANCIENT = ConvertUnitType(3)
+endglobals
+native SelectHeroSkill takes unit u, integer ability returns nothing
+type unittype extends handle
+constant native ConvertUnitType takes integer i returns unittype
+native IsUnitType takes unit u, unittype t returns boolean
+constant native GetSpellTargetUnit takes nothing returns unit
+"#;
+
+/// Holy Light caster `H` (hero), friendly `F`, enemy `E`, far friend `G` (120 units away).
+/// Every unit shares one fixture definition, so `types` is the `type` list of all of them.
+/// `abilities` and `heroes` fill the `abilList` and `heroAbilList` of the caster.
+fn holy_open(types: &str, abilities: &str, heroes: &str) -> (Vm, [HandleId; 4]) {
     let mut fields = hero_fields("STR");
-    for (id, slk, name, kind, value) in [
-        (b"H001", SlkId::UnitBalance, "HP", FieldKind::Int, "1000"),
-        (b"H003", SlkId::UnitBalance, "mana0", FieldKind::Int, "300"),
-        (b"A010", SlkId::UnitBalance, "type", FieldKind::Token, types),
-        (b"A008", SlkId::UnitAbilities, "abilList", FieldKind::Token, "AHhb"),
-    ] {
-        fields.push(column(id, slk, name, kind, value));
-    }
+    fields.push(column(b"H001", SlkId::UnitBalance, "HP", FieldKind::Int, "1000"));
+    fields.push(column(b"H003", SlkId::UnitBalance, "mana0", FieldKind::Int, "300"));
+    fields.push(column(b"A010", SlkId::UnitBalance, "type", FieldKind::Token, types));
+    fields.push(column(b"A008", SlkId::UnitAbilities, "abilList", FieldKind::Token, abilities));
+    fields.push(column(b"A009", SlkId::UnitAbilities, "heroAbilList", FieldKind::Token, heroes));
     let extra = format!(
-        "{}\n{}{DECLARATIONS}",
+        "{}\n{}{DECLARATIONS}{HOLY_DECLARATIONS}",
         enumeration::TRIGGERS,
         super::activity::ORDERS
     );
@@ -1414,7 +1431,7 @@ fn holy_open(types: &str) -> (Vm, [HandleId; 4]) {
     })
     .unwrap();
     h.admit_combat(rules(), "beta").unwrap();
-    h.admit_holy_light("alpha").unwrap();
+    h.admit_holy_light().unwrap();
     h.set_neutral_passive(15);
     let context = Arc::clone(h.player_context().unwrap());
     let mut vm = context.scripts.clone().owned_vm(h);
@@ -1446,9 +1463,23 @@ fn holy_mana(vm: &mut Vm, unit: HandleId) -> f32 {
     vm.host().inner.unit_vitals(unit).unwrap().unwrap().mana
 }
 
+fn holy_learn(vm: &mut Vm, ability: i32) {
+    vm.call("learn", &[Value::Int(ability)]).unwrap();
+}
+
+const LEARNED: &str = "AHhb";
+const UNLEARNED: &str = "_";
+const LEARNABLE: &str = "AHhb";
+const NOTHING: &str = "_";
+
+/// `AHhb` as `Value::Int` rawcode, as scripts pass it.
+fn holy_code() -> i32 {
+    i32::from_be_bytes(*b"AHhb")
+}
+
 #[test]
 fn holy_light_heals_a_friendly_living_unit_and_waits_out_its_cooldown() {
-    let (mut vm, [h, f, _, _]) = holy_open("");
+    let (mut vm, [h, f, _, _]) = holy_open("", LEARNED, NOTHING);
     vm.call("prime", &[]).unwrap();
     let mana = holy_mana(&mut vm, h);
     assert_eq!(holy_life(&mut vm, f), 100.0);
@@ -1456,7 +1487,6 @@ fn holy_light_heals_a_friendly_living_unit_and_waits_out_its_cooldown() {
     assert_eq!(holy_life(&mut vm, f), 300.0);
     assert_eq!(holy_mana(&mut vm, h), mana - 65.0);
     assert!(!holy_cast(&mut vm, h, f), "cooldown refuses the recast");
-    assert_eq!(holy_life(&mut vm, f), 300.0);
     step(&mut vm, 5.0);
     assert!(holy_cast(&mut vm, h, f));
     assert_eq!(holy_life(&mut vm, f), 500.0);
@@ -1464,7 +1494,7 @@ fn holy_light_heals_a_friendly_living_unit_and_waits_out_its_cooldown() {
 
 #[test]
 fn holy_light_damages_an_enemy_undead_unit_for_half_the_heal_amount() {
-    let (mut vm, [h, f, e, _]) = holy_open("undead");
+    let (mut vm, [h, f, e, _]) = holy_open("undead", LEARNED, NOTHING);
     vm.call("prime", &[]).unwrap();
     let enemy = holy_life(&mut vm, e);
     assert!(!holy_cast(&mut vm, h, f), "friendly undead is not organic");
@@ -1473,19 +1503,40 @@ fn holy_light_damages_an_enemy_undead_unit_for_half_the_heal_amount() {
 }
 
 #[test]
-fn holy_light_refuses_enemy_organic_out_of_reach_and_low_mana_without_changes() {
-    let (mut vm, [h, f, e, g]) = holy_open("");
-    vm.call("prime", &[]).unwrap();
-    let (enemy, far, mana) = (
-        holy_life(&mut vm, e),
-        holy_life(&mut vm, g),
-        holy_mana(&mut vm, h),
+fn unit_type_undead_reads_the_type_token_column_through_the_placement_reader() {
+    let (mut vm, [_, _, e, _]) = holy_open("undead", LEARNED, NOTHING);
+    let undead = vm.global("UNIT_TYPE_UNDEAD");
+    let check = |vm: &mut Vm, unit| {
+        vm.host()
+            .inner
+            .native("IsUnitType", &[Value::Handle(unit), undead.clone()])
+            .unwrap()
+    };
+    assert_eq!(check(&mut vm, e), Value::Bool(true));
+    let (mut vm, [_, _, e, _]) = holy_open("", LEARNED, NOTHING);
+    let undead = vm.global("UNIT_TYPE_UNDEAD");
+    assert_eq!(
+        vm.host()
+            .inner
+            .native("IsUnitType", &[Value::Handle(e), undead])
+            .unwrap(),
+        Value::Bool(false)
     );
-    assert!(!holy_cast(&mut vm, h, e), "enemy organic is not a target");
-    assert!(!holy_cast(&mut vm, h, g), "friend beyond reach");
+}
+
+#[test]
+fn ancient_undead_and_enemy_organic_and_mana_refusals_leave_state_unchanged() {
+    let (mut vm, [h, f, e, _]) = holy_open("undead,ancient", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    let (enemy, mana) = (holy_life(&mut vm, e), holy_mana(&mut vm, h));
+    assert!(!holy_cast(&mut vm, h, e), "ancient is excluded by nonancient");
+    assert_eq!((holy_life(&mut vm, e), holy_mana(&mut vm, h)), (enemy, mana));
     assert!(!holy_cast(&mut vm, f, h), "caster without the ability");
-    assert_eq!((holy_life(&mut vm, e), holy_life(&mut vm, g)), (enemy, far));
-    assert_eq!(holy_mana(&mut vm, h), mana);
+    let (mut vm, [h, f, e, _]) = holy_open("", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    let enemy = holy_life(&mut vm, e);
+    assert!(!holy_cast(&mut vm, h, e), "enemy organic is not a target");
+    assert_eq!(holy_life(&mut vm, e), enemy);
     let mana_state = vm_global(&vm, "UNIT_STATE_MANA");
     vm.host()
         .inner
@@ -1493,4 +1544,103 @@ fn holy_light_refuses_enemy_organic_out_of_reach_and_low_mana_without_changes() 
         .unwrap();
     assert!(!holy_cast(&mut vm, h, f), "insufficient mana");
     assert_eq!(holy_life(&mut vm, f), 100.0);
+}
+
+#[test]
+fn out_of_range_orders_walk_the_caster_into_range_then_cast_once() {
+    let (mut vm, [h, _, _, g]) = holy_open("", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    let life_state = vm_global(&vm, "UNIT_STATE_LIFE");
+    vm.host()
+        .inner
+        .native("SetUnitState", &[Value::Handle(g), life_state, Value::Real(100.0)])
+        .unwrap();
+    let (life, mana) = (holy_life(&mut vm, g), holy_mana(&mut vm, h));
+    assert!(holy_cast(&mut vm, h, g), "accepted and walking");
+    assert_eq!((holy_life(&mut vm, g), holy_mana(&mut vm, h)), (life, mana));
+    let mut until = 0.0;
+    while holy_life(&mut vm, g) == life && until < 60.0 {
+        until += 0.5;
+        step(&mut vm, until);
+    }
+    assert_eq!(holy_life(&mut vm, g), life + 200.0);
+    assert_eq!(holy_mana(&mut vm, h), mana - 65.0);
+    let at = vm.host().inner.executed_unit(h).unwrap().position.unwrap();
+    let goal = vm.host().inner.executed_unit(g).unwrap().position.unwrap();
+    let gap = ((at[0] - goal[0]).powi(2) + (at[1] - goal[1]).powi(2)).sqrt();
+    assert!(gap <= 60.0, "{at:?} {goal:?}");
+    step(&mut vm, until + 10.0);
+    assert_eq!(holy_life(&mut vm, g), life + 200.0, "no second cast");
+}
+
+#[test]
+fn a_new_order_cancels_a_walking_cast_without_spending_mana() {
+    let (mut vm, [h, _, e, g]) = holy_open("", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    let (life, mana) = (holy_life(&mut vm, g), holy_mana(&mut vm, h));
+    assert!(holy_cast(&mut vm, h, g));
+    vm.call("attack_enemy", &[Value::Handle(h), Value::Handle(e)]).unwrap();
+    step(&mut vm, 30.0);
+    assert_eq!(holy_life(&mut vm, g), life);
+    assert_eq!(holy_mana(&mut vm, h), mana);
+}
+
+#[test]
+fn ranks_are_learned_with_skill_points_and_each_rank_uses_its_own_row() {
+    let (mut vm, [h, f, _, _]) = holy_open("", UNLEARNED, LEARNABLE);
+    vm.call("prime", &[]).unwrap();
+    assert!(!holy_cast(&mut vm, h, f), "not learned yet");
+    holy_learn(&mut vm, holy_code());
+    assert!(holy_cast(&mut vm, h, f));
+    assert_eq!(holy_life(&mut vm, f), 300.0, "rank one heals DataA1");
+    step(&mut vm, 5.0);
+    holy_learn(&mut vm, holy_code());
+    assert!(holy_cast(&mut vm, h, f));
+    assert_eq!(holy_life(&mut vm, f), 700.0, "rank two heals DataA2");
+    step(&mut vm, 10.0);
+    holy_learn(&mut vm, holy_code());
+    assert!(holy_cast(&mut vm, h, f));
+    assert_eq!(holy_life(&mut vm, f), 1000.0, "rank three heals DataA3, capped at max life");
+}
+
+#[test]
+fn spell_effect_event_names_the_target_and_fires_once_per_cast() {
+    let (mut vm, [h, f, _, _]) = holy_open("", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    vm.call("listen", &[]).unwrap();
+    assert!(holy_cast(&mut vm, h, f));
+    let fired = vm.host().inner.take_fired_event().expect("spell effect event");
+    assert_eq!(fired.subject.unit, Some(h));
+    assert_eq!(fired.subject.spell_target, Some(f));
+    assert!(vm.host().inner.take_fired_event().is_none());
+}
+
+#[test]
+fn invulnerable_undead_is_targetable_but_takes_no_damage() {
+    let (mut vm, [h, _, e, _]) = holy_open("undead", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    vm.host()
+        .inner
+        .native("SetUnitInvulnerable", &[Value::Handle(e), Value::Bool(true)])
+        .unwrap();
+    let enemy = holy_life(&mut vm, e);
+    let mana = holy_mana(&mut vm, h);
+    assert!(holy_cast(&mut vm, h, e));
+    assert_eq!(holy_life(&mut vm, e), enemy);
+    assert_eq!(holy_mana(&mut vm, h), mana - 65.0);
+}
+
+#[test]
+fn learned_holy_light_names_its_hotkey_and_order_to_the_player_command() {
+    let (mut vm, [h, _, _, _]) = holy_open("", LEARNED, NOTHING);
+    let command = vm
+        .host()
+        .inner
+        .holy_light_command(h)
+        .unwrap()
+        .expect("learned Holy Light");
+    // The activity fixture registers `alpha` as order 431.
+    assert_eq!((command.hotkey, command.order), ('T', 431));
+    let (mut vm, [h, _, _, _]) = holy_open("", UNLEARNED, NOTHING);
+    assert!(vm.host().inner.holy_light_command(h).unwrap().is_none());
 }

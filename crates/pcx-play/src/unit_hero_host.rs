@@ -622,33 +622,28 @@ impl ObjectHost {
         Ok(cell.text.trim().to_owned())
     }
 
-    /// The learned ability with rank above zero whose `AbilityFunc` `Order` names `order`.
-    pub(crate) fn learned_ability_for_order(
-        &self,
-        abilities: &UnitAbilities,
-        order: &str,
-    ) -> Result<Option<([u8; 4], i32)>, String> {
+    /// The single non-empty `AbilityFunc`/`AbilityData` profile value under `key`, for an alias.
+    pub(crate) fn hero_ability_profile(&self, alias: [u8; 4], key: &str) -> Result<String, String> {
         let input = self.heroes_admission()?;
-        let mut found = None;
-        for (alias, rank) in abilities.levels().filter(|(_, rank)| *rank > 0) {
-            let (base, _) = input.base(alias)?;
-            let orders = input
-                .tables
-                .object(Family::Ability, base)
-                .map_err(|e| e.to_string())?
-                .profile("Order");
-            if orders.iter().any(|c| c.parse_error.is_some()) {
-                return Err(format!("{alias:?}: malformed Order profile"));
-            }
-            if orders
-                .iter()
-                .any(|c| c.text.trim().eq_ignore_ascii_case(order))
-                && found.replace((alias, rank)).is_some()
-            {
-                return Err(format!("ambiguous ability for order {order}"));
-            }
+        let (base, _) = input.base(alias)?;
+        let cells = input
+            .tables
+            .object(Family::Ability, base)
+            .map_err(|e| e.to_string())?
+            .profile(key);
+        if let Some(bad) = cells.iter().find(|c| c.parse_error.is_some()) {
+            return Err(format!("{alias:?}: malformed {key} profile {:?}", bad.text));
         }
-        Ok(found)
+        let values: Vec<&str> = cells
+            .iter()
+            .map(|c| c.text.trim())
+            .filter(|t| !matches!(*t, "" | "_" | "-"))
+            .collect();
+        match values.as_slice() {
+            [one] => Ok((*one).to_owned()),
+            [] => Err(format!("{alias:?}: no {key} profile")),
+            _ => Err(format!("{alias:?}: ambiguous {key} profile")),
+        }
     }
 }
 

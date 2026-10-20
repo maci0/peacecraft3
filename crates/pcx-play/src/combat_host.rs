@@ -302,6 +302,15 @@ impl ObjectHost {
         Ok(())
     }
 
+    /// Owner is the neutral passive player, which spells do not heal or damage as allies or enemies.
+    pub(super) fn neutral_passive_owner(&self, unit: HandleId) -> bool {
+        let (Some(rules), Ok(record)) = (self.combat.as_ref(), self.executed_unit(unit)) else {
+            return false;
+        };
+        self.player_settings(record.owner)
+            .is_ok_and(|p| Some(p.number) == rules.neutral_passive)
+    }
+
     pub fn set_neutral_passive(&mut self, number: i32) {
         if let Some(rules) = &mut self.combat {
             rules.neutral_passive = Some(number);
@@ -365,6 +374,7 @@ impl ObjectHost {
 
     /// Another order replaces the unit's attack target.
     pub(super) fn clear_combat_target(&mut self, unit: HandleId) {
+        self.forget_holy_cast(unit);
         if let Ok(Entry::Unit { record }) = self.inner.entry_mut(unit)
             && let Some(combat) = &mut record.combat
         {
@@ -479,7 +489,7 @@ impl ObjectHost {
                 let (Value::Handle(unit), Value::Handle(target)) = (unit, target) else {
                     return Ok(Value::Bool(false));
                 };
-                return Ok(Value::Bool(self.cast_holy_light(*unit, *target)?));
+                return Ok(Value::Bool(self.order_holy_light(*unit, *target)?));
             }
             if order != Some(attack_order) {
                 return Err(self.inner.error(
@@ -592,7 +602,8 @@ impl ObjectHost {
         Ok(())
     }
 
-    pub(super) fn deal_weapon_damage(
+    /// Lethal or partial life loss from a damage source (weapon or spell). Kills name `source` as killer.
+    pub(super) fn damage_unit(
         &mut self,
         source: HandleId,
         target: HandleId,
@@ -663,8 +674,9 @@ impl ObjectHost {
             missiles.into_iter().partition(|m| m.impact_at <= now);
         self.combat.as_mut().expect("combat").missiles = pending;
         for missile in due {
-            self.deal_weapon_damage(missile.source, missile.target, missile.damage)?;
+            self.damage_unit(missile.source, missile.target, missile.damage)?;
         }
+        self.advance_holy_light(now)?;
         let units: Vec<HandleId> = self
             .executed_units()
             .filter(|(_, u)| {
@@ -859,7 +871,7 @@ impl ObjectHost {
                                 damage,
                             });
                         }
-                        None => self.deal_weapon_damage(unit, swung, damage)?,
+                        None => self.damage_unit(unit, swung, damage)?,
                     }
                 }
                 _ => {}

@@ -328,10 +328,11 @@ fn field<'a>(
     definition: &'a Definition,
     slk: SlkId,
     column: &str,
+    kinds: &[FieldKind],
 ) -> Result<&'a FieldValue, &'static str> {
     let mut found = definition.fields.iter().filter(|(id, f)| f.metadata.as_ref().is_some_and(|m|
         m.fourcc == **id && m.from == SlkId::UnitMetaData && m.index == -1
-        && if slk == SlkId::UnitBalance { matches!(m.kind, FieldKind::Real | FieldKind::Unreal) } else { m.kind == FieldKind::Token }
+        && kinds.contains(&m.kind)
         && matches!(&m.source, FieldSource::Column { slk: s, column: c } if *s == slk && c == column)));
     let (_, value) = found.next().ok_or("missing placement catalog field")?;
     if found.next().is_some() {
@@ -348,7 +349,7 @@ pub(super) fn text<'a>(
     slk: SlkId,
     column: &str,
 ) -> Result<&'a str, &'static str> {
-    match field(definition, slk, column)? {
+    match field(definition, slk, column, &[FieldKind::Token])? {
         FieldValue::Cell(value) => Ok(value),
         FieldValue::Override(pcx_objects::Value::Str(value)) => {
             std::str::from_utf8(value).map_err(|_| "non-UTF8 placement field")
@@ -363,7 +364,7 @@ pub(super) fn geometry(definition: &Definition) -> Result<(Option<f32>, &str), &
     let radius = match movement {
         "_" | "none" | "" => None,
         "foot" | "horse" => {
-            let value = field(definition, SlkId::UnitBalance, "collision")?;
+            let value = field(definition, SlkId::UnitBalance, "collision", &[FieldKind::Real, FieldKind::Unreal])?;
             let radius = match value {
                 FieldValue::Cell(value) => value.parse::<f32>().ok(),
                 FieldValue::Override(

@@ -18,13 +18,15 @@ pub struct EventSubject {
     pub dialog: Option<HandleId>,
     pub button: Option<HandleId>,
     pub player: Option<HandleId>,
+    /// Target of the spell whose effect fired the event (`GetSpellTargetUnit`).
+    pub spell_target: Option<HandleId>,
 }
 
 #[derive(Debug)]
 pub struct FiredEvent {
     pub trigger: HandleId,
     pub filter: Option<FunctionId>,
-    subject: EventSubject,
+    pub subject: EventSubject,
     event: Option<HandleId>,
 }
 
@@ -39,7 +41,8 @@ pub(super) struct Delivery {
     region_known: BTreeSet<HandleId>,
 }
 
-const RESPONSES: [&str; 11] = [
+const RESPONSES: [&str; 12] = [
+    "GetSpellTargetUnit",
     "GetTriggerUnit",
     "GetManipulatedItem",
     "GetManipulatingUnit",
@@ -236,6 +239,7 @@ impl ObjectHost {
             "GetClickedDialog" => subject.dialog,
             "GetClickedButton" => subject.button,
             "GetTriggerPlayer" => subject.player,
+            "GetSpellTargetUnit" => subject.spell_target,
             _ if subject.unit.is_some() => subject.unit,
             // Fall through to range delivery, which owns its own responses.
             "GetTriggerUnit" | "GetEnteringUnit" if self.range_context().is_some() => return None,

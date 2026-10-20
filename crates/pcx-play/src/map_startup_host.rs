@@ -732,7 +732,7 @@ pub fn assemble(
         if let Some(rules) = input.combat {
             object.admit_combat(rules, "attack")?;
             if object.has_hero_skills() {
-                object.admit_holy_light("holybolt")?;
+                object.admit_holy_light()?;
             }
         }
         if let Some(rules) = input.research {

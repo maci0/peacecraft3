@@ -34,6 +34,8 @@ pub(crate) struct CampaignInput {
     attempted: bool,
     session: Option<Weak<()>>,
     pub last_error: Option<String>,
+    /// Order number of a command armed by its hotkey, waiting for a target click.
+    pub command_order: Option<i32>,
 }
 
 pub(crate) fn install(app: &mut App) {
@@ -41,7 +43,7 @@ pub(crate) fn install(app: &mut App) {
         .add_systems(
             Update,
             (
-                (load_circles, click)
+                (command_hotkey, load_circles, click)
                     .chain()
                     .after(crate::campaign_hud::CampaignHudSet)
                     .after(crate::campaign_inventory::CampaignInventorySet)
@@ -205,6 +207,74 @@ fn ground_point(ray: Ray3d, terrain: &pcx_map::Terrain, far: f32) -> Option<[f32
     None
 }
 
+/// Arms a unit command when its hotkey is pressed while an owned selected unit has it.
+/// The next left click on a unit issues the order to every selected owned caster.
+fn command_hotkey(
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    mut input: ResMut<CampaignInput>,
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+) {
+    let Some(keys) = keys else {
+        return;
+    };
+    let Some(host) = session.host() else {
+        return;
+    };
+    let objects = host.objects_mut();
+    let local = objects.local_player_number();
+    let armed = objects
+        .selection()
+        .iter()
+        .copied()
+        .filter(|&u| {
+            objects
+                .executed_unit(u)
+                .ok()
+                .and_then(|r| objects.player_settings(r.owner).ok())
+                .is_some_and(|p| Some(p.number) == local)
+        })
+        .filter_map(|u| objects.holy_light_command(u).ok().flatten())
+        .find(|command| letter_key(command.hotkey).is_some_and(|k| keys.just_pressed(k)));
+    if let Some(command) = armed {
+        input.command_order = Some(command.order);
+    }
+}
+
+/// Keyboard key of an ASCII letter hotkey from the ability's `Hotkey` profile.
+fn letter_key(letter: char) -> Option<KeyCode> {
+    const LETTERS: [KeyCode; 26] = [
+        KeyCode::KeyA,
+        KeyCode::KeyB,
+        KeyCode::KeyC,
+        KeyCode::KeyD,
+        KeyCode::KeyE,
+        KeyCode::KeyF,
+        KeyCode::KeyG,
+        KeyCode::KeyH,
+        KeyCode::KeyI,
+        KeyCode::KeyJ,
+        KeyCode::KeyK,
+        KeyCode::KeyL,
+        KeyCode::KeyM,
+        KeyCode::KeyN,
+        KeyCode::KeyO,
+        KeyCode::KeyP,
+        KeyCode::KeyQ,
+        KeyCode::KeyR,
+        KeyCode::KeyS,
+        KeyCode::KeyT,
+        KeyCode::KeyU,
+        KeyCode::KeyV,
+        KeyCode::KeyW,
+        KeyCode::KeyX,
+        KeyCode::KeyY,
+        KeyCode::KeyZ,
+    ];
+    letter
+        .is_ascii_uppercase()
+        .then(|| LETTERS[usize::from(letter as u8 - b'A')])
+}
+
 #[derive(SystemParam)]
 struct Picking<'w, 's> {
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
@@ -311,6 +381,42 @@ fn click(
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(id, _)| id);
     debug!(?point, ?picked, select, "campaign pointer hit");
+    if let Some(command) = input.command_order.take() {
+        if let (true, Some(target)) = (select, picked) {
+            let local = objects.local_player_number();
+            let casters: Vec<HandleId> = objects
+                .selection()
+                .iter()
+                .copied()
+                .filter(|&u| {
+                    objects
+                        .holy_light_command(u)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|c| c.order == command)
+                        && objects
+                            .executed_unit(u)
+                            .ok()
+                            .and_then(|r| objects.player_settings(r.owner).ok())
+                            .is_some_and(|p| Some(p.number) == local)
+                })
+                .collect();
+            for unit in casters {
+                let result = objects.native(
+                    "IssueTargetOrderById",
+                    &[
+                        Value::Handle(unit),
+                        Value::Int(command),
+                        Value::Handle(target),
+                    ],
+                );
+                if let Err(error) = result {
+                    input.last_error = Some(error);
+                }
+            }
+        }
+        return;
+    }
     if select {
         if let Some(unit) = picked {
             objects.select_units(&[unit], !additive);
