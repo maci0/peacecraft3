@@ -117,3 +117,27 @@ immediately; no rendered fade exists.
 Parser and host tests do not prove rendered alpha or native timing. The
 transmission panel's ignored gate, which needs a local original FDF directory,
 covers the border source. The inset order gate waits for the native handler above.
+
+Channel sites (static, `objdump`; FO-to-VA by `+0x400C00`):
+
+- `0x468E50`: when global `0x113B6B0` holds an object, calls its vtable `+8` with
+  `1`, clears the global, then pushes channel `0x10EC880`, id `-2`, flag `1` into
+  `0x458090` on registry `0x112D7A0`. This is the unregister or cancel side.
+- `0x469310`: pushes flag `1`, id `-2` and channel `0x10EC880` into `0x4580F0` on
+  registry `0x112D7A0`, then walks a linked list at `[ebx+4]`. It moves matching
+  records and returns through `ret 0xC`.
+- `0x469400` (the site at VA `0x469406`): calls `0x440610` with channel
+  `0x10EC880`, id `-2` and `eax+0x20`. It zeroes the returned record's `+0xC`
+  through `+0x1C` (`0x46941C`–`0x46943F`). This is the get-or-create slot that the
+  registration path initializes.
+- `0x4692E0` (slot `+0xC`): calls the argument's vtable `+4`, then `0x440C70` with
+  the argument, channel `0x10EC880`, id `-2` and `0`.
+- `0x440C70` and `0x440610` share a prologue. Both check global `0x1130F3C`, call
+  `0x43B640` and `0x441870` when it is clear, and raise error code `0x8510007D` or
+  `0x85100081` on a null argument. They are the generic handle dispatch and
+  lookup, not fade-specific code.
+
+Status: the channel is a generic registry key shared by the trigger and handle
+layer. Which record receives the expiry value at `+0x10`, and the frame mapping
+from that value to alpha, are not yet established. This page makes no alpha curve
+claim from the timer alone.
