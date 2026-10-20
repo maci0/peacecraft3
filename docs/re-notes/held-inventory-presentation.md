@@ -142,3 +142,43 @@ Not yet established: pickup and hover on a rendered frame, rendered slot icon an
   exposes it, and trigger-action handles can't be enumerated. A read-only accessor in
   `pcx-play` would close this. That is a shared-source edit, so it waits for a
   coordinated window.
+
+## Defeat Quit pointer run (checkpoint-4, 2026-10-20 15:06)
+
+- Two authored dialogs were visible: revision 11 and revision 22. The observer now
+  selects the maximum revision, as production does. Revision 22 has four rendered
+  buttons: Restart, Reduce Difficulty, Load Game, Quit Campaign.
+- The pointer click at the logged Quit centre (440, 485) activated Load Game.
+  Evidence: `CustomDefeatLoadBJ` ran `DisplayLoadDialog`, which is not implemented
+  (`DisplayLoadDialog` run error, 15:06:39). The screenshot shows the Quit label at
+  about y=531 and Load at about y=477, so the logged centres are 46 px too high on
+  every button. The fixture's centre basis is wrong; the pointer mapping is not
+  yet shown to be wrong.
+- The earlier `session cleared` result was a false positive. The startup session
+  line matched the wait. The driver now counts new session-clear lines after the click.
+- Pickup: control stayed false until the Defeat pause (36.17 game seconds). The
+  pickup gate is therefore not reachable in this path without a source-level
+  change to the intro, which is not in scope here.
+- Next: the observer must derive button positions from the rendered layout chain
+  (parent translations and sizes), not the bare node translation. This needs one
+  fixture rebuild.
+
+## Defeat Quit pointer basis, resolved (checkpoint-6)
+
+- Pointer mapping is the identity: after `xdotool mousemove --window` to (440, 485), Bevy
+  reports `cursor=Some(440, 485)` in a 880x860 physical window at scale 1.
+- The 46 px offset was a stale layout snapshot. The first newest-dialog record (revision 22)
+  printed Quit at y=485 before caption measurement moved the panel. A later record of the
+  same dialog printed y=532, which matches the rendered Quit label. The fixture reprints
+  only when its state key changes, and the key includes the cursor, so the second record
+  appeared only after the pointer moved. The driver now selects the last record of the
+  newest revision, after the centre has been unchanged for about 2 s.
+- Authored Quit: the real pointer click at (440, 532) reached `CustomDefeatQuitBJ`. The pause
+  flag changed to false, then the callback failed at `Scripts\Blizzard.j:5326:28` with
+  `GetDefaultDifficulty` not implemented, before `EndGame(true)`. No session clear occurred,
+  so this run establishes the callback entry, not the clear.
+- Remaining blocker: the native `GetDefaultDifficulty` (and then `EndGame` through the
+  same callback) is not implemented. This is outside the inventory slice.
+- Pickup remains unreachable: control is false until the defeat pause, and hero life falls
+  to 0 before then. Whether the early death is faithful is for the combat/alliance
+  investigation (wave10). The original source is unchanged.
