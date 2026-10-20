@@ -1,7 +1,7 @@
 use super::*;
 use crate::playercolor_host::{EnumHost, Limits};
 use crate::sound_environment::from_table;
-use crate::sound_environment::tests::sheet;
+use crate::sound_environment::tests::{sheet, synthetic_properties};
 use pcx_script::{Host, Prelude};
 use std::sync::Arc;
 
@@ -72,7 +72,7 @@ fn admitted_call_selects_the_exact_record_and_refuses_unknown_names_atomically()
     let mut dungeon = DEFAULT;
     dungeon[0] = "\"Dungeon\"";
     let mut h = host(COMMON)
-        .with_sound_environments(environments(&[DEFAULT, dungeon]))
+        .with_sound_environments(environments(&[DEFAULT, dungeon]), synthetic_properties())
         .unwrap();
     assert!(h.sound_environment().is_none());
 
@@ -100,13 +100,17 @@ fn admitted_call_selects_the_exact_record_and_refuses_unknown_names_atomically()
 
 #[test]
 fn admission_refuses_empty_records_and_a_second_admission() {
-    assert!(host(COMMON).with_sound_environments(Vec::new()).is_err());
+    assert!(
+        host(COMMON)
+            .with_sound_environments(Vec::new(), synthetic_properties())
+            .is_err()
+    );
     let admitted = host(COMMON)
-        .with_sound_environments(environments(&[DEFAULT]))
+        .with_sound_environments(environments(&[DEFAULT]), synthetic_properties())
         .unwrap();
     assert!(
         admitted
-            .with_sound_environments(environments(&[DEFAULT]))
+            .with_sound_environments(environments(&[DEFAULT]), synthetic_properties())
             .is_err()
     );
 }
@@ -119,7 +123,34 @@ fn admission_refuses_a_native_with_a_different_signature() {
     );
     assert!(
         host(&wrong)
-            .with_sound_environments(environments(&[DEFAULT]))
+            .with_sound_environments(environments(&[DEFAULT]), synthetic_properties())
             .is_err()
+    );
+}
+
+#[test]
+fn the_selected_record_carries_its_clamped_values_and_a_refused_call_keeps_the_previous_ones() {
+    let mut wide = DEFAULT;
+    wide[0] = "\"Wide\"";
+    wide[5] = "500";
+    let mut h = host(COMMON)
+        .with_sound_environments(environments(&[DEFAULT, wide]), synthetic_properties())
+        .unwrap();
+    assert!(h.sound_environment_applied().is_none());
+
+    select(&mut h, &[Value::Str("Default".into())]).unwrap();
+    let applied = h.sound_environment_applied().unwrap();
+    assert_eq!(applied.effect_volume, 1.0);
+    assert_eq!(applied.writes.len(), 13);
+    assert_eq!(
+        applied.writes[2].value,
+        crate::sound_environment::ProviderValue::Float(10.0)
+    );
+
+    select(&mut h, &[Value::Str("Wide".into())]).unwrap();
+    assert_eq!(h.sound_environment().unwrap().name, "Wide");
+    assert_eq!(
+        h.sound_environment_applied().unwrap().writes[2].value,
+        crate::sound_environment::ProviderValue::Float(100.0)
     );
 }
