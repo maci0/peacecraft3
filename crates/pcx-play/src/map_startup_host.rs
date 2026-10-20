@@ -259,9 +259,8 @@ pub struct MapStartupInputs {
     pub file_sounds: file_sounds::Assets,
     pub sound_parameters: Banks,
     /// Every `EnvironmentType` record from the selected sources; empty keeps NewSoundEnvironment unsupported.
-    pub sound_environments: Vec<crate::sound_environment::SoundEnvironment>,
-    /// EAX property rows of the selected executable; required with `sound_environments`.
-    pub sound_environment_properties: Vec<crate::sound_environment::EaxProperty>,
+    /// Records and executable tables; absent keeps NewSoundEnvironment unsupported.
+    pub sound_environments: Option<crate::sound_environment::SoundEnvironmentInput>,
     pub sound_playback: Option<sound_playback::Rules>,
     pub resources: Option<crate::player_resources::Rules>,
     pub inventory: Option<crate::inventory::Rules>,
@@ -510,7 +509,6 @@ pub fn assemble(
         file_sounds,
         sound_parameters,
         sound_environments,
-        sound_environment_properties,
         sound_playback,
         resources,
         inventory,
@@ -618,8 +616,8 @@ pub fn assemble(
         object = object.with_unit_effects()?;
     }
     object = object.with_environment()?.with_volume_groups()?;
-    if !sound_environments.is_empty() {
-        object = object.with_sound_environments(sound_environments, sound_environment_properties)?;
+    if let Some(input) = sound_environments {
+        object = object.with_sound_environments(input)?;
     }
     if let Some(rules) = &sound_playback {
         object.configure_volume_group_playback(rules.group_policy());

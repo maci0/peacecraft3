@@ -635,6 +635,7 @@ impl ObjectHost {
         let result = result.and_then(|moved| {
             self.advance_combat()?;
             self.advance_inventory(work)?;
+            self.advance_sound_environments();
             Ok(moved)
         });
         if result.is_ok() {

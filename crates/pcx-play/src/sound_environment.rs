@@ -142,6 +142,17 @@ const SIB_INDEX4_DISP32: u8 = 0xbd;
 const MODRM_SIB: u8 = 0x04;
 /// `push dword ptr [edx*4 + disp32]`.
 const PUSH_INDEX4: [u8; 3] = [0xff, 0x34, 0x95];
+/// First entry of the room-name table. Its string is unique in `.rdata`.
+const ROOM_FIRST: &[u8] = b"GENERIC\0";
+/// Room-name table length. The native's search loop bound is `cmp esi, 0x1a`.
+const ROOM_COUNT: usize = 26;
+/// Room-name table end; the last entry of the native's list.
+const ROOM_LAST: &str = "PSYCHOTIC";
+
+/// Window after an applied change inside which a call is scheduled, in milliseconds.
+/// The native passes `0x1388` (5000) as the first argument of its scheduler at two call
+/// sites; the local gate checks those immediates in the executable.
+pub const NATIVE_WINDOW_MS: u32 = 0x1388;
 
 /// Clamp range of one property row, from the executable.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -154,6 +165,14 @@ pub enum PropertyRange {
 pub struct EaxProperty {
     pub name: String,
     pub range: PropertyRange,
+}
+
+/// Executable tables that `NewSoundEnvironment` reads: the property rows and the room
+/// names. Index `k` of `rooms` is the room index the native passes to the 3D provider.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EnvironmentTables {
+    pub properties: Vec<EaxProperty>,
+    pub rooms: Vec<String>,
 }
 
 /// Value handed to `AIL_set_3D_provider_preference`, after clamping.
@@ -169,26 +188,41 @@ pub struct ProviderWrite {
     pub value: ProviderValue,
 }
 
-/// One record applied through the native: the clamped `EAX effect volume` (kept by the
-/// native in its own global, not sent to the provider) and the thirteen provider writes.
+/// Values one record produces. `room` is `None` when its `RoomType` is not in the
+/// executable's room table: the native stores -1 and skips the room call.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Applied {
     pub effect_volume: f32,
     pub writes: Vec<ProviderWrite>,
+    pub room: Option<usize>,
+}
+
+/// Everything `NewSoundEnvironment` needs from the selected sources: the records from the
+/// sound tables, the executable tables, and the native's window in milliseconds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SoundEnvironmentInput {
+    pub records: Vec<SoundEnvironment>,
+    pub tables: EnvironmentTables,
+    pub window_ms: u32,
+}
+
+/// Reads both executable tables. Each is located from code or data anchors, and each
+/// must match its expected shape exactly.
+pub fn tables(exe: &[u8]) -> Result<EnvironmentTables, String> {
+    let pe = PeSections::parse(exe).map_err(|e| format!("executable: {e}"))?;
+    Ok(EnvironmentTables {
+        properties: read_properties(&pe, &EAX_NAMES)?,
+        rooms: read_rooms(&pe)?,
+    })
 }
 
 /// Property rows of the selected executable, read from the row table and name table
 /// that its `NewSoundEnvironment` path addresses. Both tables are located from code
 /// operands, so no address is fixed in this crate.
-pub fn eax_properties(exe: &[u8]) -> Result<Vec<EaxProperty>, String> {
-    read_properties(exe, &EAX_NAMES)
-}
-
-fn read_properties(exe: &[u8], expected: &[&str]) -> Result<Vec<EaxProperty>, String> {
-    let pe = PeSections::parse(exe).map_err(|e| format!("executable: {e}"))?;
-    let text = pe.section(TEXT).ok_or("executable has no .text section")?;
+fn read_properties(pe: &PeSections<'_>, expected: &[&str]) -> Result<Vec<EaxProperty>, String> {
+    let text = pe.section(TEXT)?.ok_or("executable has no .text section")?;
     let rdata = pe
-        .section(RDATA)
+        .section(RDATA)?
         .ok_or("executable has no .rdata section")?;
     let rdata_start = u64::from(pe.image_base) + u64::from(rdata.rva);
     let rdata_end = rdata_start + rdata.bytes.len() as u64;
@@ -214,7 +248,7 @@ fn read_properties(exe: &[u8], expected: &[&str]) -> Result<Vec<EaxProperty>, St
             0,
         )
         .ok_or("EAX name pointer is truncated")?;
-        let name = c_string(&pe, name_va)?;
+        let name = c_string(pe, name_va)?;
         let range = if kind == KIND_FLOAT {
             PropertyRange::Float {
                 min: f32::from_bits(u32_at(row, 4).ok_or("EAX row")?),
@@ -256,6 +290,40 @@ fn read_properties(exe: &[u8], expected: &[&str]) -> Result<Vec<EaxProperty>, St
         }
     }
     Ok(properties)
+}
+
+/// The room names the native matches a `RoomType` against, in index order. The array
+/// is the unique run of pointers whose first entry is the unique `GENERIC` string.
+fn read_rooms(pe: &PeSections<'_>) -> Result<Vec<String>, String> {
+    let first = pe.find_va(ROOM_FIRST);
+    let [first] = first.as_slice() else {
+        return Err(format!("room table anchor occurs {} times", first.len()));
+    };
+    let slots = pe.find_va(&first.to_le_bytes());
+    let [slot] = slots.as_slice() else {
+        return Err(format!("room table pointer occurs {} times", slots.len()));
+    };
+    let mut rooms = Vec::with_capacity(ROOM_COUNT);
+    for index in 0..ROOM_COUNT {
+        let at = slot
+            .checked_add((index * 4) as u32)
+            .ok_or("room table overflows")?;
+        let pointer = u32_at(
+            pe.va_bytes(at, 4)
+                .ok_or("room table ends before its entries")?,
+            0,
+        )
+        .ok_or("room table pointer is truncated")?;
+        let name = c_string(pe, pointer)?;
+        if rooms.contains(&name) {
+            return Err(format!("duplicate room name {name:?}"));
+        }
+        rooms.push(name);
+    }
+    if rooms.last().map(String::as_str) != Some(ROOM_LAST) {
+        return Err(format!("room table ends with {:?}", rooms.last()));
+    }
+    Ok(rooms)
 }
 
 /// Displacement `base` of the unique cluster `[edi*4+base]`, `+4`, `+8`, `+12`, `+16`
@@ -303,28 +371,29 @@ fn c_string(pe: &PeSections<'_>, va: u32) -> Result<String, String> {
     for offset in 0..MAX_NAME_BYTES {
         let at = va
             .checked_add(offset as u32)
-            .ok_or("EAX name address overflows")?;
+            .ok_or("name address overflows")?;
         let byte = pe
             .va_bytes(at, 1)
             .and_then(|b| b.first().copied())
-            .ok_or("EAX name is outside the image")?;
+            .ok_or("name is outside the image")?;
         if byte == 0 {
             return Ok(name);
         }
         if !(0x20..0x7f).contains(&byte) {
-            return Err("EAX name is not printable ASCII".into());
+            return Err("name is not printable ASCII".into());
         }
         name.push(char::from(byte));
     }
-    Err("EAX name exceeds its byte limit".into())
+    Err("name exceeds its byte limit".into())
 }
 
 /// Applies one record the way the native does: each value is clamped to its row's
-/// range, the effect volume goes to the native's own global, and the rest are writes.
+/// range, the effect volume is the native's own global, and the rest are provider writes.
 pub fn apply(
     environment: &SoundEnvironment,
-    properties: &[EaxProperty],
+    tables: &EnvironmentTables,
 ) -> Result<Applied, String> {
+    let properties = &tables.properties;
     if properties.len() != EAX_NAMES.len() {
         return Err("EAX property table does not match the reverb fields".into());
     }
@@ -360,9 +429,14 @@ pub fn apply(
             }),
         }
     }
+    let room = tables
+        .rooms
+        .iter()
+        .position(|name| *name == environment.room_type);
     Ok(Applied {
         effect_volume: effect_volume.ok_or("EAX effect volume is missing")?,
         writes,
+        room,
     })
 }
 

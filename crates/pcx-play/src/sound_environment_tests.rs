@@ -1,6 +1,6 @@
 use super::*;
 use crate::pe_image::tests::{DATA, IMAGE_BASE, synthetic_image};
-use crate::pe_image::{RDATA, TEXT};
+use crate::pe_image::{PeSections, RDATA, TEXT};
 
 const COLUMNS: [&str; 17] = [
     "EnvironmentType",
@@ -154,15 +154,46 @@ fn shipped_environment_table_yields_its_authored_records() {
     assert_eq!(environments[0].reverb.reflections, -2250.0);
 }
 
+/// Room names in the executable's order, used by the fixtures and host tests.
+pub(crate) const ROOMS: [&str; 26] = [
+    "GENERIC",
+    "PADDEDCELL",
+    "ROOM",
+    "BATHROOM",
+    "LIVINGROOM",
+    "STONEOOM",
+    "AUDITORIUM",
+    "CONCERTHALL",
+    "CAVE",
+    "ARENA",
+    "HANGAR",
+    "CARPETEDHALLWAY",
+    "HALLWAY",
+    "STONECORRIDOR",
+    "ALLEY",
+    "FOREST",
+    "CITY",
+    "MOUNTAINS",
+    "QUARRY",
+    "PLAIN",
+    "PARKINGLOT",
+    "SEWERPIPE",
+    "UNDERWATER",
+    "DRUGGED",
+    "DIZZY",
+    "PSYCHOTIC",
+];
+
 /// Property table of the three names used by the derivation fixtures.
 const FIXTURE_NAMES: [&str; 3] = ["EAX effect volume", "EAX decay time", "EAX room"];
 const ROWS_VA: u32 = IMAGE_BASE + 0x2000;
 const NAMES_VA: u32 = IMAGE_BASE + 0x3000;
 
-/// Synthetic image: `.text` holds the operands that address the row table (`[edi*4+X]`,
-/// stride 20 across `X`, `X+4`, ..., `X+16`) and the name table (`push [edx*4+Y]`);
-/// `.rdata` holds rows and strings; `.data` holds the name pointers.
-fn fixture_exe(names: &[&str], rows: &[[u8; ROW_LEN]]) -> Vec<u8> {
+/// Synthetic image. `.text` holds the operands that address the row table (`[edi*4+X]`,
+/// stride 20 across `X`, `X+4`, ..., `X+16`) and the name table (`push [edx*4+Y]`).
+/// `.rdata` holds the rows, the strings, and the room-name pointer array; `.data` holds
+/// the property-name pointers.
+fn fixture_exe(names: &[&str], rows: &[[u8; ROW_LEN]], rooms: &[&str]) -> Vec<u8> {
     let mut text = Vec::new();
     for step in [0u32, 4, 8, 12, 16] {
         text.extend_from_slice(&[0x8b, 0x04, 0xbd]);
@@ -181,6 +212,18 @@ fn fixture_exe(names: &[&str], rows: &[[u8; ROW_LEN]]) -> Vec<u8> {
         rdata.extend_from_slice(name.as_bytes());
         rdata.push(0);
         pointers.extend_from_slice(&(IMAGE_BASE + 0x2000 + at).to_le_bytes());
+    }
+    let mut room_at = Vec::new();
+    for name in rooms {
+        room_at.push(rdata.len() as u32);
+        rdata.extend_from_slice(name.as_bytes());
+        rdata.push(0);
+    }
+    while !rdata.len().is_multiple_of(4) {
+        rdata.push(0);
+    }
+    for at in room_at {
+        rdata.extend_from_slice(&(IMAGE_BASE + 0x2000 + at).to_le_bytes());
     }
     synthetic_image(&[
         (TEXT, 0x1000, &text),
@@ -211,12 +254,20 @@ fn fixture_rows() -> Vec<[u8; ROW_LEN]> {
     ]
 }
 
+fn props(exe: &[u8], expected: &[&str]) -> Result<Vec<EaxProperty>, String> {
+    let pe = PeSections::parse(exe)?;
+    read_properties(&pe, expected)
+}
+
+fn room_table(exe: &[u8]) -> Result<Vec<String>, String> {
+    read_rooms(&PeSections::parse(exe)?)
+}
+
 #[test]
 fn rows_and_names_come_from_the_code_addressed_tables_in_order() {
-    let exe = fixture_exe(&FIXTURE_NAMES, &fixture_rows());
-    let properties = read_properties(&exe, &FIXTURE_NAMES).unwrap();
+    let exe = fixture_exe(&FIXTURE_NAMES, &fixture_rows(), &ROOMS);
     assert_eq!(
-        properties,
+        props(&exe, &FIXTURE_NAMES).unwrap(),
         vec![
             EaxProperty {
                 name: "EAX effect volume".into(),
@@ -238,19 +289,16 @@ fn rows_and_names_come_from_the_code_addressed_tables_in_order() {
             },
         ]
     );
+    assert_eq!(room_table(&exe).unwrap(), ROOMS);
 }
 
 #[test]
 fn a_name_or_row_count_that_disagrees_with_the_expected_table_is_refused() {
-    let exe = fixture_exe(&FIXTURE_NAMES, &fixture_rows());
+    let exe = fixture_exe(&FIXTURE_NAMES, &fixture_rows(), &ROOMS);
     let renamed = ["EAX effect volume", "EAX damping", "EAX room"];
+    assert!(props(&exe, &renamed).unwrap_err().contains("where"));
     assert!(
-        read_properties(&exe, &renamed)
-            .unwrap_err()
-            .contains("where")
-    );
-    assert!(
-        read_properties(&exe, &FIXTURE_NAMES[..2])
+        props(&exe, &FIXTURE_NAMES[..2])
             .unwrap_err()
             .contains("expected 2")
     );
@@ -260,22 +308,36 @@ fn a_name_or_row_count_that_disagrees_with_the_expected_table_is_refused() {
 fn a_missing_operand_cluster_or_inverted_range_is_refused() {
     let no_operands = synthetic_image(&[(TEXT, 0x1000, &[0xc3]), (RDATA, 0x2000, &[0; 40])]);
     assert!(
-        read_properties(&no_operands, &FIXTURE_NAMES)
+        props(&no_operands, &FIXTURE_NAMES)
             .unwrap_err()
             .contains("no EAX row table")
     );
     let mut inverted = fixture_rows();
     inverted[0] = row(KIND_FLOAT, [1f32.to_bits(), 0f32.to_bits(), 0, 0]);
-    let exe = fixture_exe(&FIXTURE_NAMES, &inverted);
+    let exe = fixture_exe(&FIXTURE_NAMES, &inverted, &ROOMS);
     assert!(
-        read_properties(&exe, &FIXTURE_NAMES)
+        props(&exe, &FIXTURE_NAMES)
             .unwrap_err()
             .contains("invalid float range")
     );
 }
 
+#[test]
+fn room_table_is_refused_when_its_anchor_repeats_or_its_shape_differs() {
+    // A second GENERIC string makes the anchor ambiguous.
+    let mut twice = ROOMS.to_vec();
+    twice[1] = "GENERIC";
+    let exe = fixture_exe(&FIXTURE_NAMES, &fixture_rows(), &twice);
+    assert!(room_table(&exe).is_err());
+    // The table must end at PSYCHOTIC; 25 entries are read as 26 and refused.
+    let mut short = ROOMS.to_vec();
+    short[25] = "NOWHERE";
+    let exe = fixture_exe(&FIXTURE_NAMES, &fixture_rows(), &short);
+    assert!(room_table(&exe).unwrap_err().contains("ends with"));
+}
+
 /// Property rows with the same ranges as the executable's, for host and apply tests.
-pub(crate) fn synthetic_properties() -> Vec<EaxProperty> {
+pub(crate) fn synthetic_tables() -> EnvironmentTables {
     let float = |name: &str, min: f32, max: f32| EaxProperty {
         name: name.into(),
         range: PropertyRange::Float { min, max },
@@ -284,7 +346,7 @@ pub(crate) fn synthetic_properties() -> Vec<EaxProperty> {
         name: name.into(),
         range: PropertyRange::Int { min, max },
     };
-    vec![
+    let properties = vec![
         float(EAX_NAMES[0], 0.0, 1.0),
         float(EAX_NAMES[1], 0.1, 20.0),
         float(EAX_NAMES[2], 0.0, 2.0),
@@ -299,18 +361,22 @@ pub(crate) fn synthetic_properties() -> Vec<EaxProperty> {
         float(EAX_NAMES[11], 0.0, 0.1),
         float(EAX_NAMES[12], 0.1, 10.0),
         float(EAX_NAMES[13], -100.0, 0.0),
-    ]
+    ];
+    EnvironmentTables {
+        properties,
+        rooms: ROOMS.iter().map(|room| (*room).to_owned()).collect(),
+    }
 }
 
 #[test]
-fn apply_clamps_each_value_to_its_row_and_keeps_the_effect_volume_out_of_the_writes() {
+fn apply_clamps_each_value_and_keeps_the_effect_volume_out_of_the_writes() {
     let mut dungeon = DEFAULT;
     dungeon[0] = "\"Dungeon\"";
     dungeon[3] = "3.2";
     dungeon[5] = "300";
     dungeon[7] = "-20000";
     let environments = parse(&sheet(&[dungeon])).unwrap();
-    let applied = apply(&environments[0], &synthetic_properties()).unwrap();
+    let applied = apply(&environments[0], &synthetic_tables()).unwrap();
     assert_eq!(applied.effect_volume, 1.0);
     assert_eq!(applied.writes.len(), 13);
     assert_eq!(applied.writes[0].name, "EAX decay time");
@@ -320,39 +386,69 @@ fn apply_clamps_each_value_to_its_row_and_keeps_the_effect_volume_out_of_the_wri
     assert_eq!(applied.writes[2].value, ProviderValue::Float(100.0));
     assert_eq!(applied.writes[4].name, "EAX2 room");
     assert_eq!(applied.writes[4].value, ProviderValue::Int(-10000));
+    // MOUNTAINS is index 17 of the executable's room table.
+    assert_eq!(applied.room, Some(17));
 }
 
 #[test]
-fn apply_refuses_a_fractional_int_cell_and_a_short_property_table() {
+fn an_unknown_room_type_applies_with_no_room_index() {
+    let mut unknown = DEFAULT;
+    unknown[1] = "\"NOWHERE\"";
+    let environments = parse(&sheet(&[unknown])).unwrap();
+    let applied = apply(&environments[0], &synthetic_tables()).unwrap();
+    assert_eq!(applied.room, None);
+    assert_eq!(applied.writes.len(), 13);
+}
+
+#[test]
+fn apply_refuses_a_fractional_int_cell_and_a_mismatched_property_table() {
     let mut bad = DEFAULT;
     bad[7] = "0.5";
     let environments = parse(&sheet(&[bad])).unwrap();
-    assert!(apply(&environments[0], &synthetic_properties()).is_err());
-    assert!(apply(&environments[0], &synthetic_properties()[..3]).is_err());
+    assert!(apply(&environments[0], &synthetic_tables()).is_err());
+    let mut short = synthetic_tables();
+    short.properties.truncate(3);
+    let environments = parse(&sheet(&[DEFAULT])).unwrap();
+    assert!(apply(&environments[0], &short).is_err());
 }
 
 /// Explicit local original gate: `PEACECRAFT3_INSTALL` (or `PEACECRAFT3_LEGACY_DIR`)
 /// names a Legacy install whose `Warcraft III.exe` is the selected executable.
 #[test]
 #[ignore = "requires PEACECRAFT3_INSTALL or PEACECRAFT3_LEGACY_DIR pointing at a local Legacy install"]
-fn shipped_executable_yields_the_fourteen_eax_rows_in_order() {
+fn shipped_executable_yields_the_environment_tables_and_window_call_sites() {
     let dir = std::env::var_os("PEACECRAFT3_INSTALL")
         .or_else(|| std::env::var_os("PEACECRAFT3_LEGACY_DIR"))
         .expect("set PEACECRAFT3_INSTALL or PEACECRAFT3_LEGACY_DIR");
     let exe = std::fs::read(std::path::Path::new(&dir).join("Warcraft III.exe"))
         .expect("read Warcraft III.exe");
-    let properties = eax_properties(&exe).expect("derive EAX rows");
-    let names: Vec<&str> = properties.iter().map(|p| p.name.as_str()).collect();
+    let tables = tables(&exe).expect("derive environment tables");
+    let names: Vec<&str> = tables.properties.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(names, EAX_NAMES);
     assert_eq!(
-        properties[0].range,
+        tables.properties[0].range,
         PropertyRange::Float { min: 0.0, max: 1.0 }
     );
     assert_eq!(
-        properties[5].range,
+        tables.properties[5].range,
         PropertyRange::Int {
             min: -10000,
             max: 0
         }
     );
+    assert_eq!(tables.rooms.len(), 26);
+    assert_eq!(tables.rooms[5], "STONEOOM");
+    assert_eq!(tables.rooms[25], "PSYCHOTIC");
+
+    // The two scheduler callers push 0x1388 and call the same target, 0x5d6f70.
+    let pe = PeSections::parse(&exe).expect("sections");
+    for push_va in [0x0042_eea0u32, 0x0053_4cc4] {
+        let push = pe.va_bytes(push_va, 10).expect("call site inside .text");
+        assert_eq!(&push[..5], &[0x68, 0x88, 0x13, 0x00, 0x00]);
+        assert_eq!(push[5], 0xe8);
+        let rel = i32::from_le_bytes(push[6..10].try_into().unwrap());
+        let target = (push_va + 10).wrapping_add_signed(rel);
+        assert_eq!(target, 0x005d_6f70);
+    }
+    assert_eq!(NATIVE_WINDOW_MS, 0x1388);
 }

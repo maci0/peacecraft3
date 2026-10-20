@@ -696,8 +696,7 @@ fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) ->
             },
         )
         .expect("sound parameters"),
-        sound_environments: Vec::new(),
-        sound_environment_properties: Vec::new(),
+        sound_environments: None,
         clock: StartupClockInput {
             clock: clock(),
             global_name: "CLOCK".into(),

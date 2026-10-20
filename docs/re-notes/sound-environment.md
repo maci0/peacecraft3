@@ -1,49 +1,65 @@
 # Sound environments (`NewSoundEnvironment`)
 
-`ObjectHost::with_sound_environments(records, properties)` admits `NewSoundEnvironment`
-from the loaded declaration (`takes string environmentName returns nothing`, same contract
-checker as the other natives). Records come from every `UI\SoundInfo` table whose header
-row contains `EnvironmentType` (`SoundSources::read`, `crates/peacecraft3/src/campaign_assets.rs`).
-Property rows come from the selected `Warcraft III.exe` (`pcx_play::sound_environment::eax_properties`).
-An empty record set is not admitted, so the native stays an explicit refusal.
+`ObjectHost::with_sound_environments(SoundEnvironmentInput)` admits the native from the
+loaded declaration (`takes string environmentName returns nothing`). The input holds the
+records from every `UI\SoundInfo` table with an `EnvironmentType` header
+(`SoundSources::read`, `crates/peacecraft3/src/campaign_assets.rs`), the executable
+tables (`pcx_play::sound_environment::tables`), and the window in milliseconds
+(`NATIVE_WINDOW_MS`). Admission applies every record against the tables, so a record
+that cannot be written (fractional int cell, missing row) refuses admission. Without
+admission the native stays an explicit refusal.
 
-## What the host does
+## Host state
 
-- `pcx_play::sound_environment::from_table` derives one record per `EnvironmentType` row:
-  name, `RoomType`, `DisplayText` and fourteen reverb cells. Cells parse as finite `f32`;
-  a missing column, malformed number, empty or repeated name is refused.
-- `eax_properties(exe)` reads fourteen rows from the executable. The row table is found
-  from code: the unique cluster of `[edi*4 + base + {0,4,8,12,16}]` displacements inside
-  `.rdata`, stride 20. The name table is the unique `push [edx*4 + disp]` displacement in
-  `.text`. Rows are read while the kind is 0 (float: `[min, max]` as f32 at +4/+8) or 1
-  (int: `[min, max]` as i32 at +12/+16). Any other kind ends the table. The read names must
-  equal the fourteen EAX names in `Reverb` field order, or the table is refused.
-- `apply(record, properties)` clamps each cell to its row's range. The first row
-  (`EAX effect volume`) is the native's own global; the other thirteen are provider
-  preference writes. Int rows require integral cells.
-- The call selects the record whose name equals the argument exactly. Unknown names,
-  wrong arguments and values that fail `apply` refuse and keep the previous selection.
-  Before the first successful call, `sound_environment()` and `sound_environment_applied()`
-  return `None`.
+The host follows the native's control flow. Times are game seconds
+(`timer_game_time`, zero when no timer clock exists). The executable's scale constant
+`1000.0` (`0xe78350`) converts the window from milliseconds.
 
-`sound_environment_applied()` is not a delivery. The host has no 3D provider, so the
-provider writes are values the native would pass to Miles when a provider is open. Nothing
-is sent.
+- A call at time `t` first runs any callback due by `t`. Then:
+  - `in_window` is true when `last_change` is set and `t <= last_change + window`.
+  - When a callback is pending or `in_window`, the name is buffered.
+  - `in_window`: a callback is queued at `t + window` and the pending flag is set. The
+    outcome is `Scheduled { fire_at }`. `last_change` is not updated.
+  - Otherwise the named record is applied now and `last_change = t`.
+- A callback at its time `f` clears the pending flag, applies the buffered name, and
+  sets `last_change = f`. Queued callbacks each run. The first one clears the flag even
+  while another is queued.
+- An unknown name applies nothing, but still sets `last_change` to the call time. The
+  outcome is `NoRecord`.
+- An applied record's outcome depends on the provider state (`ProviderState`):
+  - `Unqualified` (no report yet): `Validated(values)`. Nothing is sent.
+  - `Closed`: `ProviderClosed(values)`. The native skips every provider call.
+  - `Open(id)`: `Delivered { provider, values }`. The effect-volume global and the
+    provider writes are sent. The room write follows the room rule below.
+- `sound_environment()` is the record the last known-name lookup selected.
+  `sound_environment_delivery()` is the latest outcome, scheduled or applied.
+  `sound_environment_applied()` is `Some` only for `Delivered`.
+- `advance_sound_environments()` runs once per unit-activity tick
+  (`unit_activity_host.rs`). Each call also runs callbacks due by the current time.
+
+A new host starts with no state, which is the session-replacement path. No reset path
+is decoded. A provider change does not re-deliver an earlier record. Whether the native
+re-applies on reopen is not established.
 
 ## Native path (static, `Warcraft III.exe`, sha256 `3f2ed012…570eed`)
 
-Decoded with bounded capstone scripts (no execution). Local output lives under
-`.scratch/sound-env-static/`; the scripts read the spatial-root helper module read-only.
+Decoded with bounded capstone scripts (no execution). Output lives under
+`.scratch/sound-env-static/`.
 
-| Address | Role | Evidence |
-|---|---|---|
-| `0x4a39c0` | `NewSoundEnvironment` body: calls `0x469010` on the argument, stores the result back as the argument, tail-jumps to `0x5d83e0` | `NewSoundEnvironment.json` |
-| `0x469010` | Returns `[arg+8]->[+0x1c]` or `0` | `body-469010.json` |
-| `0x5d83e0` | Shared body. Copies the name to `0x113cd98` (`0x104`) when pending flag `0x113d624` is set. Reads `GetTickCount` (IAT `0xe661a8`) against last change `0x113d628` plus `0x10dc6bc`. If inside that window, copies the name and schedules `0x5be250` through `0x840370`, storing the handle at `0x113d624`. Otherwise applies now and stores the tick in `0x113d628`. | `body-5d83e0.json` |
-| `0x5be250` | Scheduled apply: clears `0x113d624`, looks up the name in table `0x113d504` (`0x5cf8e0`), calls `0x7a0090` (room) and `0x79ff90` (properties) | `body-5be250.json` |
-| `0x7a0090` | If provider handle `0x1140650` is nonzero and `0x1140aa4` bit 0 is clear: `AIL_set_3D_room_type` (IAT `0xe66904`, arg = room index) | `body-7a0090.json` |
-| `0x79ff90` | Loop over 12-byte items `{index, float, int}`: clamps to row range (table `0xeb7500`, stride 20); index 0 to global `0x10dd990`; others `AIL_set_3D_provider_preference` (IAT `0xe66908`) with name from `0x10dd9f0`. No provider, no call. | `body-79ff90.json` |
-| `0x840370` | Schedules the callback. Callee not decoded. Its first argument is the window value divided by `0xe78350` (`1000.0` in the image), so the unit is likely seconds from milliseconds (inference). | `exe-values.json` |
+| Address | Role |
+|---|---|
+| `0x4a39c0` | Native body. Passes its argument through `0x469010` and tail-jumps to `0x5d83e0`. |
+| `0x5d83e0` | Shared body: window test against `0x113d628` plus `0x10dc6bc`, `GetTickCount` (IAT `0xe661a8`), buffer copy into `0x113cd98`, scheduling through `0x840370`, direct apply. |
+| `0x5be250` | Callback: clears `0x113d624`, looks up the buffered name, applies, sets the tick. |
+| `0x5cf8e0` | Name lookup in table `0x113d504`. The table is filled from parsed `EnvironmentSounds` rows by `0x5cd2d0`. |
+| `0x5caf40` (record builder) | Reads 14 reverb cells as float and int, then the room name. The room index is the name's position in the 26-entry array at `0xe900e0`, or `-1` when absent (loop bound `cmp esi, 0x1a`). |
+| `0x7a0090` | When provider `0x1140650` is open and `0x1140aa4` bit 0 is clear: `AIL_set_3D_room_type` (IAT `0xe66904`). Index `-1` fails `cmp eax, 0x1a; jae` and skips the call. |
+| `0x79ff90` | Returns at once when no provider is open. Otherwise clamps each item to its row range. Index 0 writes the global `0x10dd990`; the others call `AIL_set_3D_provider_preference` (IAT `0xe66908`) with the name from `0x10dd9f0`. |
+| `0x5d6f70` | Scheduler setter: stores its first argument into `0x10dc6bc`. Callers at `0x42eea5` and `0x534cc9` pass `0x1388` (5000 ms). |
+
+The room names are the executable's own strings, `GENERIC` through `PSYCHOTIC`. One
+spelling is `STONEOOM` (index 5), as the image contains it. The pointer array is found
+from the unique `GENERIC` string and its unique pointer.
 
 The property rows, read from the image:
 
@@ -64,43 +80,56 @@ The property rows, read from the image:
 | 12 | EAX2 room rolloff | float | 0.1 .. 10 |
 | 13 | EAX2 air absorption | float | -100 .. 0 |
 
-Row 14 has kind `0x7f800000` and ends the table. The ranges above were read from the image
-with `.scratch/sound-env-static/read_exe_values.py` and match the gate test
-`shipped_executable_yields_the_fourteen_eax_rows_in_order`.
+Row 14 has kind `0x7f800000` and ends the table. The gate
+`shipped_executable_yields_the_environment_tables_and_window_call_sites` checks every row
+name, the room table, and the two window call sites (`68 88 13 00 00`, then `call 0x5d6f70`).
 
-The EAX names match the `Reverb` field order of `UI\SoundInfo\EnvironmentSounds.slk`. The
-`RoomType` cells (`MOUNTAINS`, `PLAIN`, `PSYCHOTIC`) are EAX preset names. The
-`0x1a` bound in `0x5be250` (26 entries) is consistent with the EAX preset list. The
-name-to-index map in table `0x113d504` is not decoded.
+## Evidence classes
+
+- Decoded from code: the paths above, the room lookup and its `-1` skip, the window
+  value and its two call sites, the callback and pending-flag handling, the provider
+  gates.
+- Read from the image: the property rows and the room names.
+- Inference: the window unit. The scale constant `1000` suggests milliseconds to
+  seconds, and game timers are in seconds. Callback order for equal times. The record
+  builder is assumed to produce all 14 items in column order.
 
 ## Not established
 
-- **Room type.** The host does not apply it. The native passes an index in `0..26` to
-  `AIL_set_3D_room_type`, but the mapping from `RoomType` names to indices lives in
-  table `0x113d504`, which is not decoded.
-- **Cooldown window.** The window value is `0x10dc6bc`, initialised from a dword at
-  `0x10dc6d4` (`17680068`), and written by the function at `0x5d7000` from its first
-  argument (`-1` keeps the current value). The host applies immediately and has no window.
-- **Item list composition.** The item list's source is the record's `+0x20`/`+0x24`
-  fields. Whether it always contains all fourteen rows in this order is not established.
-  The host assumes it does.
-- **Provider.** No 3D provider is opened in this host. Whether a real Miles provider
-  opens on the target machine is not established.
-- **Audio.** No audio consumer renders reverb. `TRACKER.md` still lists EAX as an explicit
-  refusal. That remains true until a consumer uses these values.
-- **Case sensitivity and unknown names.** The native's behavior is not established. This
-  host compares names exactly and refuses unknown names.
+- **Room gate.** The byte at `0x1140aa4` has writers at `0x79ecf3` and `0x79fe96`. Their
+  meaning is not decoded. A `Delivered` outcome may still hide a room write the native
+  skips.
+- **Clock.** The native uses `GetTickCount`, which is wall time. The host uses game time.
+  This is a recreation choice. A scheduled apply may land at a different moment from the
+  native's wall-clock callback.
+- **Initial window.** `last_change` starts unset, so the first call always applies at
+  once. The native's zero-initialised tick would open a window only for the first 5 s of
+  process time. Not checked against a live run.
+- **Name comparison.** `0x433490` tail-calls `0xa77598`, then `0xa77604`. The case rule
+  is not decoded. Shipped table names are uppercase, so the rule does not show in them.
+- **Window source.** The value is gate-verified at its two call sites, not derived at
+  runtime. Deriving it needs call-site analysis.
+- **Provider identity.** `ProviderId` is an opaque number the audio owner supplies. The
+  identity and lifecycle contract with the audio worker (02) is pending root
+  coordination.
+- **Audio.** No audio consumer applies these values. `TRACKER.md` still lists EAX as an
+  explicit refusal.
 
 ## Tests
 
-- `crates/pcx-play/src/sound_environment_tests.rs`: SLK parsing, row/name derivation on a
-  synthetic image (`pe_image::tests::synthetic_image`), refusal of wrong names, counts and
-  inverted ranges, clamp and apply behavior, and two explicit gates:
-  - `shipped_environment_table_yields_its_authored_records`: the local `EnvironmentSounds.slk`.
-  - `shipped_executable_yields_the_fourteen_eax_rows_in_order`: the local `Warcraft III.exe`.
-  Run them with
+- `sound_environment_tests.rs`: SLK parsing; row and room derivation on a synthetic
+  image (`pe_image::tests::synthetic_image`); anchor and shape refusals; clamp and apply;
+  an unknown room; a fractional int cell and a mismatched table. Ignored gates:
+  `shipped_environment_table_yields_its_authored_records` (the local
+  `EnvironmentSounds.slk`) and `shipped_executable_yields_the_environment_tables_and_window_call_sites`
+  (the local `Warcraft III.exe`). Run with
   `PEACECRAFT3_LEGACY_DIR=<Legacy dir> cargo test -p pcx-play -- --ignored shipped`.
-- `crates/pcx-play/src/sound_environment_host_tests.rs`: admission, selection, clamped
-  values, atomic refusal, second admission, signature mismatch.
-- `crates/pcx-play/src/pe_image_tests.rs`: section lookup, bounded VA reads, malformed headers.
-  `item_class_table` now reads sections through the same reader; its tests cover the move.
+- `sound_environment_host_tests.rs`: admission refusals; no-provider validation; closed
+  and open delivery; scheduling inside the window; the pending flag with two queued
+  callbacks; a call past the window while a callback is queued; unknown names and their
+  effect on the window; atomic refusal of wrong arguments.
+- `pe_image_tests.rs`: section lookup, repeated names refused only when queried, VA
+  reads, malformed headers.
+- `item_class_table` reads sections through `pe_image`. Its existing tests cover the
+  ambiguous and overflow cases. The table derived from the real executable is identical
+  before and after the move; its `image_sha256` begins `3f2ed012`.

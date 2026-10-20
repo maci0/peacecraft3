@@ -85,12 +85,38 @@ impl<'a> PeSections<'a> {
         })
     }
 
-    /// The first section with `name`. Callers that need uniqueness check the result.
-    pub fn section(&self, name: &SectionName) -> Option<&Section<'a>> {
-        self.sections
+    /// The only section named `name`: `Ok(None)` when absent, `Err` when repeated. The
+    /// repeat check runs here, not in `parse`, so unrelated duplicate names stay accepted.
+    pub fn section(&self, name: &SectionName) -> Result<Option<&Section<'a>>, &'static str> {
+        let mut matches = self
+            .sections
             .iter()
-            .find(|(n, _)| n == name)
-            .map(|(_, section)| section)
+            .filter(|(n, _)| n == name)
+            .map(|(_, s)| s);
+        let first = matches.next();
+        if matches.next().is_some() {
+            return Err("duplicate section");
+        }
+        Ok(first)
+    }
+
+    /// Virtual addresses of every occurrence of `needle` inside a section's raw data.
+    pub fn find_va(&self, needle: &[u8]) -> Vec<u32> {
+        let mut found = Vec::new();
+        for (_, section) in &self.sections {
+            let Some(base) = self.image_base.checked_add(section.rva) else {
+                continue;
+            };
+            found.extend(
+                section
+                    .bytes
+                    .windows(needle.len().max(1))
+                    .enumerate()
+                    .filter(|(_, w)| *w == needle)
+                    .filter_map(|(at, _)| base.checked_add(at as u32)),
+            );
+        }
+        found
     }
 
     /// Bytes at a virtual address inside one section's raw data, or `None` when the

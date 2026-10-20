@@ -62,17 +62,17 @@ impl<'a> Image<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, ItemClassError> {
         let bad = ItemClassError::Image;
         let pe = PeSections::parse(data).map_err(bad)?;
-        let section = |name| {
-            pe.section(name)
-                .map(|s| Section {
-                    rva: s.rva,
-                    bytes: s.bytes,
-                })
+        let section = |name, missing| -> Result<Section<'a>, ItemClassError> {
+            let found = pe.section(name).map_err(bad)?.ok_or(bad(missing))?;
+            Ok(Section {
+                rva: found.rva,
+                bytes: found.bytes,
+            })
         };
         Ok(Self {
             image_base: pe.image_base,
-            text: section(TEXT).ok_or(bad("no .text section"))?,
-            rdata: section(RDATA).ok_or(bad("no .rdata section"))?,
+            text: section(TEXT, "no .text section")?,
+            rdata: section(RDATA, "no .rdata section")?,
         })
     }
 
