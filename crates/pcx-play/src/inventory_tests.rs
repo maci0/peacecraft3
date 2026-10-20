@@ -3,7 +3,6 @@ use crate::camera_margins::SourceWindow;
 use crate::inventory::{InventoryBudget, Rules};
 use crate::neutral_player::sha256;
 use crate::playercolor_host::{UseCheck, UseCommit, UseGrant};
-use crate::playercolor_host::{UseCheck, UseCommit, UseGrant};
 use pcx_objects::editor::Overlay;
 use pcx_script::HandleId;
 

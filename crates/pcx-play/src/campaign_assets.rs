@@ -427,7 +427,10 @@ mod preparation_tests {
     use super::*;
     #[test]
     fn absent_constructor_table_is_not_replaced_with_synthetic_sound_content() {
-        let sources = SoundSources { tables: Vec::new() };
+        let sources = SoundSources {
+            tables: Vec::new(),
+            environments: Vec::new(),
+        };
         let budget = crate::label_sounds::Budget {
             table_bytes: 1024,
             coordinates: pcx_slq::CoordinateLimits {
