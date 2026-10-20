@@ -319,8 +319,9 @@ called on the packed sectors. Native results against the Rust output:
 - All 2,716 `.wav` members: payload sectors and archive-open bytes identical, 0 mismatches,
   0 refusals. Reproduced 2026-10-20 with retained receipts under
   `.scratch/native-oracle-final/` (commands, hashes, logs, digests, negative controls).
-  Status: reproduced, not yet qualified by root. The oracle is compat `Storm.dll` under
-  Wine, not the Legacy 1.29 runtime or the MILES PCM path.
+  Qualification: root reviewed the retained byte-comparison receipts (native run, streaming
+  digest comparison, both negative controls). The oracle is compat `Storm.dll` under Wine.
+  It is not the Legacy 1.29 runtime, not the MILES PCM path, and not audible playback.
 - A flipped byte in one expected sector is reported as a mismatch (negative control).
 - Native archive-open bytes are dumped per member and compared by
   `tests/local_huffman.rs::original_wav_members_match_storm_archive_open_bytes`
@@ -388,8 +389,8 @@ covered by the source-derived table path.
   members that need the codec refuse.
 - `MpqArchive::set_codec_table` and `codec_table` expose the imported table. Bounded
   readers (`peacecraft3::browser_read::read_bounded`, `pcx-assets` bounded reads) use a
-  per-call table when given and otherwise the archive's imported table. The clone per
-  read is about 64 KiB of weights.
+  per-call table when given and otherwise the archive's imported table. The archive holds
+  the table in an `Arc`, so each read clones the handle, not the weights.
 - No executable is discovered in the browser. `stored_asset_bounded` still refuses a
   per-call table through the `"no-huffman"` policy.
 - Pure mono ADPCM sectors (`0x40`) occur in shipped Legacy WAVs: 9 sectors in 9 members
@@ -405,7 +406,16 @@ final value `0x7fff`, and index adjustments alternating `-1` and `i % 9`. Expect
 decoder samples come from an independent script. No observed production table value
 appears in test code.
 
-Still literal: the initial ADPCM index of 44 per channel. It has no independent format
-citation and no source operand is derived for it yet. The native oracle reproduces it
-for the corpus, which is not a source-derived proof. The ADPCM path is therefore only
-partly source-derived.
+Still literal: the initial ADPCM index of 44 per channel (`payload.rs`). It has no
+independent format citation, so it is not established as a format invariant. The
+operand is visible in both binaries, which is evidence of the code, not a derivation:
+
+- compat `Storm.dll`: `mov ecx,0x2c` at VA `0x1500d24c`, stored to two index slots
+  (`mov [esp+0x18],ecx`, `mov [esp+0x1c],ecx`), before the step read at `0x1500d35a`.
+- Legacy `Warcraft III.exe`: `mov DWORD PTR [ebp-0x40],0x2c` and
+  `mov DWORD PTR [ebp-0x3c],0x2c` at `0x443d73`/`0x443d7a`, with a second pair at
+  `0x443fb4`, before the step read at `0x443e4d`.
+
+The two encodings differ, so one bounded shape does not cover both. The native oracle
+reproduces the value for the corpus, which does not prove it is source-derived.
+The ADPCM path is therefore only partly source-derived.
