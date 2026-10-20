@@ -319,3 +319,56 @@ member matched the patched script.
 Next: the game clock appears frozen after dismissal. Diagnosis (for example a
 modal, a runtime error, or the sleep not advancing game time) needs its own
 bounded diagnostic before this probe is rerun.
+
+## Blight probe: non-blocking redesign and startup diagnostic (2026-10-20)
+
+The probe no longer waits in `main`. Its phases run in one self-referencing timer
+callback (`PCXB_OnTick`), armed with `TimerStart`. `main` creates the clock and tick
+timers, writes on-disk marks, runs the stock `InitBlizzard` and `InitGlobals` between
+pre/post marks, creates the units, arms a 5 s startup timer, and returns.
+Each mark is a separate `PreloadGenEnd` file named `PCXB-mark-<seq>-<tag>-<run>.txt`.
+Phase records are written at each phase end.
+
+Checks in `.scratch/blight-probe/src` (ignored; receipts in `out/`):
+
+- `structure_check.py`: call graph from `main`, from both probe callbacks, and from the
+  stock timer callbacks reached from `main`. Calls are edges; `function NAME` references
+  are asynchronous and not edges. Fails if `TriggerSleepAction` is reachable. Synthetic
+  positive and negative cases pass (`test_structure_check.py`).
+- `forward_check.py`: fails if a probe function or `main` references a function defined
+  later. Stock `Blizzard.j` defines each function before its first use, and the probe
+  follows that rule.
+- Both variants resolve against the selected `common.j` and `Blizzard.j`. The read audit
+  has no unknown names.
+
+Failed attempts, all preserved as receipts:
+
+1. The first redesign's `main` never created `PCXB_Clock`, so the first mark read a
+   null timer and the run stopped with no on-disk markers. Fixed in `build_main.py`.
+2. The next build had a `@HEADER@` placeholder left in `main`, because the filler ran
+   only on the probe functions. Fixed by filling the whole block.
+3. The next build failed in-game with a JASS error dialog, which the captures show. The
+   cause was a forward reference: `PCXB_NextPhase` referenced `PCXB_PhaseEnd` before its
+   definition. Fixed by merging the two into `PCXB_OnTick`.
+
+Startup-only diagnostic, variant `phases=0`, run `4fd93d0868c2`, one container, stopped
+and cleaned up:
+
+| marker (on disk) | game time (s) |
+|---|---|
+| main-entry | 0.000 |
+| pre-InitBlizzard, post-InitBlizzard, pre-InitGlobals, post-InitGlobals | 0.000 |
+| units-created | 0.000 |
+| main-return-dispatch | 0.000 |
+| startup-timer-fired | 5.000 |
+
+`main` returned before the timer fired, and the game timer advanced 5 s after it
+returned. The marker set and the copied files are in `out/phases-0/markers`, with the
+receipt in `out/phases-0/startup-receipt.json`. One Space key was sent 86 s after
+launch, while the timer marker had not appeared; the marker appeared during the
+following poll. The key's effect is therefore unattributed. The final capture shows the
+HUD over a black world, with no probe units and no chapter card. Visual scope is
+separate from timing scope.
+
+The full blight sequence (`phases=1`) has not run. It compiles and passes the structural
+and forward checks, but it stays unlaunched until this prerequisite is accepted.
