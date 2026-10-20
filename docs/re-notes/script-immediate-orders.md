@@ -304,6 +304,21 @@ lanes, game-clock record every tick) builds and resolves. It is not yet run. The
 period estimator on game-clock time recovers the three candidate periods on a
 synthetic signal to within 6 ms. That check does not measure real uncertainty.
 
+Sampled Walk poses (`mdlx pose`, selected Legacy archives, 10 ms steps). The Moon
+Priestess Walk is 634 ms with named foot bones (`BONE_Foot*`, `BONE_LEG*`). Each foot
+bone's height repeats once per cycle, with half-cycle autocorrelation between −0.18
+and −0.88, so the two feet alternate within one cycle. The Watcher's named leg bones
+do not animate in Walk; its footfall bone is unresolved. Foot-height tracks built
+for each candidate rate recover the candidate periods to within 5 ms. At 2P, the
+UnitUI-walk candidate scores 0.971, above its P score of 0.931. So a 2P rival can
+outscore the candidate lag, and the first-peak rule does not resolve it. Pose and
+period results are model-plane and game-clock quantities, not projected pixels.
+
+Chord-versus-path on the Emoo's 35 moving callbacks: chord sum 533.3 units, maximum
+turn between adjacent chords 51.5 degrees, arc-model shortfall about 0.8 units.
+That model does not bound corners between samples, so the corner remainder stays
+unresolved.
+
 The ratio source is therefore undecided: SEQS `move_speed`, UnitUI `walk`, or
 another authored field. No native code or original-client capture checks any of
 them. The Hive Workshop forum thread
