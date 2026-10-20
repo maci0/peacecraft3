@@ -8,8 +8,11 @@ boolexpr parameter. Custom-text triggers emit their WCT block verbatim. Names co
 `UI\TriggerData.txt` (`ScriptName` alias when authored), preset code text from
 `[TriggerParams]`, and variable types from `[TriggerTypes]`.
 
-`pcx_play::editor_triggers::compile_editor_triggers` parses, lowers and compiles the
-member bytes as an explicit map script. Admission does not call it.
+`pcx_play::editor_triggers` is the explicit editor-source path:
+- `compile_editor_triggers` parses, lowers and compiles WTG/WCT member bytes.
+- `compile_editor_map_scripts` reads `war3map.wtg` and `war3map.wct` from an archive through
+  `Map::extract_checked` with the caller's `ReadBudget`. It never reads `war3map.j`.
+Admission does not call either function.
 
 ## Script source at runtime (measured in source)
 
@@ -20,8 +23,8 @@ member bytes as an explicit map script. Admission does not call it.
 - Therefore the executed script for every map admitted today is the compiled
   `war3map.j`, which the editor writes beside the trigger graph. The WTG is editor
   source.
-- `compile_editor_triggers` is the caller-selected path. Admission does not call it, so
-  selecting it changes no loaded script.
+- The explicit path is caller-selected. Admission does not call it, so selecting it
+  changes no loaded script.
 - `pcx_play::map_scripts_import` keeps its `war3map.j` behavior: a map with compiled
   JASS never falls back to the lowered graph.
 
@@ -60,6 +63,9 @@ same archive. These are observations from the local 1.29b install, not committed
   (NightElf05 `The Dragons`, the only shipped case).
 - Initial values are `[TriggerParams]` preset keys (`UnitNull`, `Player03`) or
   literals of the variable's base type.
+- `CommentString` is a no-op stub in Blizzard.j (its comment says so). The lowering writes
+  each line of its text as a `//` comment, the same form the editor writes for it in
+  Human06. Both forms are excluded from the differential.
 - Some 2002 scripts end a function with `endfunction` followed by a comment on the same
   line, and some use bare-CR line endings. The differential accepts both.
 
@@ -86,21 +92,18 @@ Result on the 44 shipped maps (11,201 compared bodies):
   `ScriptName` alias (for example `ForGroupBJ` for `ForGroup`) written under the plain
   name in the 2002 output, and `.blp` textures in TriggerData versus `.tga` in the
   2002 output. Reported separately and never counted as exact.
-- **12 residual, all listed:**
-  - 4 `InitCustomTriggers` (Human01, Human02, Human07, Undead02) differ only in call
-    order. The cause is unestablished. One trigger sits among another category's
-    triggers in the editor order (`Destroy TalkThornby`, Human01), which suggests a
-    WTG re-save after compilation. Unverified.
-  - 7 `CommentString` form, all in Human06 (`Initialize Initializations`, `Malganis Death
-    Squad 1`, `Death Squad 2`, `Death Squad 3`, `First Get Arthas Alt`, `First Teleport Cin
-    Skip`, `First Teleport Cinematic`): the editor writes `//text`, the lowering writes
-    `call CommentString("text")`. Human06 is the only map where the editor used the comment
-    form. No shipped rule decides the form for a given statement; the native behavior of
-    `CommentString` is not verified.
-  - 1 `InitGlobals` (Human06): an editor loop default-initializes an integer array,
-    `i>1` bound. Declared arrays have no size in the v4 WTG, and most maps with
-    uninitialized arrays (Human01, Human05, Orc02 and others) match exactly with no loop,
-    so the loop has no WTG source.
+- **5 residual, all listed:**
+  - 4 `InitCustomTriggers` (Human01, Human02, Human07, Undead02): call order only. The cause
+    is unestablished. One trigger sits among another category's triggers in the editor
+    order (`Destroy TalkThornby`, Human01), which suggests a WTG re-save after compilation.
+    Unverified.
+  - 1 `InitGlobals` (Human06): an editor loop default-initializes an integer array (`i>1`
+    bound). Declared arrays have no size in the v4 WTG, and most maps with uninitialized
+    arrays (Human01, Human05, Orc02 and others) match exactly with no loop, so the loop has
+    no WTG source.
+- Excluded by design: `CommentString` statements, in both forms. Seven Human06 bodies
+  differ only in that form (the editor writes `//text`). Blizzard.j defines `CommentString`
+  as a no-op stub, so the form is not a behavior difference.
 
 The 2002 script predates the 1.29b TriggerData, so drift is not evidence of a lowering
 error. Drift is also not evidence of 1.29 editor behavior.
@@ -147,3 +150,25 @@ does not cover timers firing, condition evaluation, or the native game.
 - Follow-up, same worker: WCT custom text, JASS string escaping via `pcx_script::Esc`,
   nesting bound, `pcx_play::editor_triggers`, and the VM comparison test. Evidence:
   the Legacy install's `war3map.j` and `war3map.wct` for the cited maps (local only).
+
+## Editor source and runtime differential (added)
+
+- `compile_editor_map_scripts` (archive) and `compile_editor_triggers` (bytes) are tested
+  in `crates/pcx-play/tests/editor_trigger_map.rs`. A map whose `war3map.j` is invalid JASS
+  compiles through the editor path, which proves it is not read. A map without
+  `war3map.wtg` is refused by member name.
+- `crates/pcx-play/src/editor_trigger_runtime_tests.rs` runs the lowered graph and a
+  hand-written script on the existing object arena, trigger host and timer host, with the
+  same clock and firing budget. The graph has an initialized global, an enabled timer
+  trigger, a trigger refused by a false condition, and a trigger accepted by a true
+  condition. Both runs must deliver the same callbacks, condition results and final globals,
+  and the final count must be 16.
+- Evidence scope: a synthetic TriggerData, a synthetic Blizzard.j stub for
+  `TriggerRegisterTimerEventSingle`, and a hand-written compiled script. This is the trigger
+  host contract only, not the native game and not a shipped map.
+- Object globals (`gg_unit_*`, `gg_rct_*`, and similar) are not bound by this path. The
+  existing placement helpers (`unit_placement`, `pcx_map::Units`) carry no script name, and
+  the editor's naming rule (`gg_unit_<type>_<nnnn>`) and creation order are not derived from
+  the file. A graph that names an unbound global is refused by name at compile time
+  (`an_object_global_the_path_does_not_bind_is_refused_by_name`). Shipped trigger graphs
+  reference such globals, so the explicit path cannot compile a stock map yet.

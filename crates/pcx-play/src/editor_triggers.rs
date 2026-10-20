@@ -6,12 +6,24 @@
 //! the two sources are not merged.
 
 use crate::scripts::{AssetIdentity, MapScripts, ScriptAsset};
+use pcx_map::{Map, MapMemberError};
+use pcx_mpq::checked::ReadBudget;
 use pcx_trig::catalog::Catalog;
 use pcx_trig::lower::{LowerError, lower};
 use pcx_trig::{Wct, Wtg};
 
 /// Label of the lowered source, retained in diagnostics and provenance.
 pub const LOWERED_LABEL: &str = "lowered war3map.wtg";
+
+#[derive(Debug, thiserror::Error)]
+pub enum EditorMapError {
+    #[error(transparent)]
+    Member(#[from] MapMemberError),
+    #[error("map has no {0}")]
+    MissingMember(&'static str),
+    #[error(transparent)]
+    Triggers(#[from] EditorTriggerError),
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum EditorTriggerError {
@@ -53,3 +65,30 @@ pub fn compile_editor_triggers(
     )
     .map_err(EditorTriggerError::Compile)
 }
+
+/// Compiles the editor triggers of an admitted map archive. Reads only
+/// `war3map.wtg` and `war3map.wct`, through the checked member reader with the
+/// caller's budget; it never reads `war3map.j`.
+pub fn compile_editor_map_scripts(
+    map: &Map<'_>,
+    source_label: &str,
+    identity: AssetIdentity,
+    common: ScriptAsset<'_>,
+    blizzard: ScriptAsset<'_>,
+    catalog: &Catalog,
+    budget: ReadBudget,
+) -> Result<MapScripts, EditorMapError> {
+    let member = |name: &'static str| {
+        map.extract_checked(source_label, name, budget)?
+            .ok_or(EditorMapError::MissingMember(name))
+    };
+    let wtg = member("war3map.wtg")?;
+    let wct = member("war3map.wct")?;
+    Ok(compile_editor_triggers(
+        identity, common, blizzard, &wtg, &wct, catalog,
+    )?)
+}
+
+#[cfg(test)]
+#[path = "../tests/support/editor_fixture.rs"]
+pub(crate) mod editor_fixture;

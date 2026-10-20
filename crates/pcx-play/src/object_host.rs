@@ -1054,6 +1054,9 @@ pub use unit_ranges::UnitRangeEntry;
 #[cfg(test)]
 #[path = "trigger_runtime_tests.rs"]
 mod trigger_runtime_tests;
+#[cfg(test)]
+#[path = "editor_trigger_runtime_tests.rs"]
+mod editor_trigger_runtime_tests;
 
 #[path = "message_host.rs"]
 mod messages;

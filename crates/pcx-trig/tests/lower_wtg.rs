@@ -334,7 +334,7 @@ function Trig_Hello_World_Actions takes nothing returns nothing
     call DisplayTextToPlayer(Player(0), \"hi there\")
     call RunLater(1, function Trig_Hello_World_Func001A)
     call Gate(Condition(function Trig_Hello_World_Func002C))
-    call CommentString(\"note\")
+    // note
 endfunction
 
 function Trig_Hello_World_Conditions takes nothing returns boolean

@@ -467,6 +467,25 @@ impl<'c> Lowerer<'c> {
                 self.definition(name, Kind::Action)?;
                 Ok("return".into())
             }
+            "CommentString" => {
+                let [comment] = params else {
+                    return Err(malformed(&self.trigger, "CommentString arity".into()));
+                };
+                if comment.kind != ParamKind::Str {
+                    return Err(malformed(
+                        &self.trigger,
+                        "CommentString text that is not a string".into(),
+                    ));
+                }
+                // Blizzard.j defines CommentString as a stub that does nothing, and the
+                // editor writes the same text as a `//` comment. Each line stays a comment.
+                let text = text(&comment.value, &self.trigger, "comment")?;
+                Ok(text
+                    .split(['\r', '\n'])
+                    .map(|line| format!("// {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
             "SetVariable" => {
                 let [target, value] = params else {
                     return Err(malformed(&self.trigger, "SetVariable arity".into()));

@@ -40,10 +40,17 @@ fn functions(jass: &str) -> BTreeMap<String, Vec<String>> {
     out
 }
 
+/// A comment statement: a `//` line, or `call CommentString` (a no-op stub in Blizzard.j).
+/// The comparison leaves both forms out, because the editor writes either for the same text.
+fn is_comment_statement(line: &str) -> bool {
+    line.starts_with("//") || line.starts_with("call CommentString(")
+}
+
 /// Whitespace removed, and every wrapper suffix `_FuncNNN[A-Z]?` replaced by `_FUNC`.
 fn normalize(body: &[String]) -> String {
     let joined: String = body
         .iter()
+        .filter(|l| !is_comment_statement(l))
         .flat_map(|l| l.chars())
         .filter(|c| !c.is_whitespace())
         .collect();
