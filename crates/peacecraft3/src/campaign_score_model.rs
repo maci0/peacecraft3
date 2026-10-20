@@ -218,6 +218,7 @@ pub fn spawn_backgrounds(
                 uv_translation: &plan.uv,
                 native_cutout_reference: None,
                 material_layers: None,
+                culls_back_faces: false,
             },
             &plan.opacity,
             plan.interval[0],
