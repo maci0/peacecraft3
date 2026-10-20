@@ -288,7 +288,7 @@ impl ObjectHost {
     }
     /// Passive strength and agility of one item while held. Powerups and usable items add none.
     /// Refusals are raised here, before the caller writes any state.
-    fn held_attributes(&self, item: HandleId) -> Result<AttributeBonus, Error> {
+    pub(crate) fn held_attributes(&self, item: HandleId) -> Result<AttributeBonus, Error> {
         let Some(rules) = self
             .items
             .as_ref()

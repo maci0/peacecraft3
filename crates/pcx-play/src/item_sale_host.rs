@@ -101,6 +101,7 @@ impl ObjectHost {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PurchaseRefusal {
     NotInStock,
+    UnsupportedItem,
     InsufficientGold,
     BuyerUnavailable,
     InventoryDisabled,
@@ -116,16 +117,17 @@ pub enum PurchaseOutcome {
 impl ObjectHost {
     /// Sells one loaded stock item from `shop` to `buyer`.
     ///
-    /// Every check reads state first: stock count, the sale row's gold cost, the buyer's
-    /// liveness, owner gold, inventory policy and a free slot. Only then are the item created
-    /// and moved into the buyer, the owner's gold lowered by the cost, the stock cell decremented,
-    /// and the sell event queued with its sale context. A failure after the first write is an
-    /// error, not a partial sale, because the checks above cover every refusal.
+    /// Reads come first. Refusals cover stock, sale price, buyer liveness, owner gold, the
+    /// inventory policy, a free slot, an item the held-bonus path would have to model
+    /// (powerup or passive bonus), and an event queue with no room. After the checks the item
+    /// is created at the shop's position, placed directly into the buyer's free slot, the
+    /// owner's gold is lowered, the stock cell is decremented, and the sell event is queued.
     ///
-    /// Observable reconstruction: the native order handler is not read, so the order of the
-    /// debit, transfer and event delivery is this sequence, not a measured one. The created item
-    /// starts at the origin and is moved into the buyer at once. Buying a powerup activates it
-    /// through the inventory transfer path, which is unverified for shop sales.
+    /// Observable reconstruction, not measured ordering: the native order handler is unread.
+    /// The item is placed without the pickup route, so no pickup event fires for a sale.
+    /// Passive and powerup items are refused as unsupported rather than placed without their
+    /// effect. The only fallible write after creation is the placement, which is preceded by
+    /// the same slot read, so a failure there rolls the created item back to removed.
     pub fn purchase_stock_item(
         &mut self,
         shop: HandleId,
@@ -133,35 +135,32 @@ impl ObjectHost {
         item: i32,
     ) -> Result<PurchaseOutcome, Error> {
         let name = "purchase";
-        let Some(current) = self.stock_count(shop, item)? else {
-            return Ok(PurchaseOutcome::Refused(PurchaseRefusal::NotInStock));
-        };
-        if current <= 0 {
-            return Ok(PurchaseOutcome::Refused(PurchaseRefusal::NotInStock));
+        match self.stock_count(shop, item)? {
+            Some(current) if current > 0 => {}
+            _ => return Ok(PurchaseOutcome::Refused(PurchaseRefusal::NotInStock)),
         }
         let price = self
             .item_sales
             .as_ref()
-            .ok_or_else(|| {
-                self.inner
-                    .error(name, Failure::ItemState("item sales not admitted"))
-            })?
+            .ok_or_else(|| self.inner.error(name, Failure::ItemState("item sales not admitted")))?
             .row(item)
             .map(|row| row.gold)
             .ok_or_else(|| {
                 self.inner
                     .error(name, Failure::ItemState("sold item has no sale row"))
             })?;
-        let seller = self.executed_unit(shop)?.owner;
+        let (seller, shop_x, shop_y) = {
+            let record = self.executed_unit(shop)?;
+            (record.owner, record.x, record.y)
+        };
         let buyer_record = self.executed_unit(buyer)?;
         if buyer_record.combat.as_ref().is_some_and(|c| c.dead) {
             return Ok(PurchaseOutcome::Refused(PurchaseRefusal::BuyerUnavailable));
         }
         let owner = buyer_record.owner;
-        let gold = self.owner_gold(owner)?.ok_or_else(|| {
-            self.inner
-                .error(name, Failure::PlayerState("gold not admitted"))
-        })?;
+        let gold = self
+            .owner_gold(owner)?
+            .ok_or_else(|| self.inner.error(name, Failure::PlayerState("gold not admitted")))?;
         if gold < price {
             return Ok(PurchaseOutcome::Refused(PurchaseRefusal::InsufficientGold));
         }
@@ -169,11 +168,10 @@ impl ObjectHost {
         if !policy.get_items {
             return Ok(PurchaseOutcome::Refused(PurchaseRefusal::InventoryDisabled));
         }
-        if (0..policy.slots).all(|slot| self.held_slot(buyer, slot).is_some()) {
+        let Some(slot) = (0..policy.slots).find(|&s| self.held_slot(buyer, s).is_none()) else {
             return Ok(PurchaseOutcome::Refused(PurchaseRefusal::NoFreeSlot));
-        }
-        let sell =
-            self.source_constant_enumerand("EVENT_PLAYER_UNIT_SELL_ITEM", "playerunitevent")?;
+        };
+        let sell = self.source_constant_enumerand("EVENT_PLAYER_UNIT_SELL_ITEM", "playerunitevent")?;
         let mut triggers = Vec::new();
         for entry in &self.inner.arena {
             if let Entry::RegisteredPlayerUnitEvent(r) = entry
@@ -183,18 +181,31 @@ impl ObjectHost {
                 triggers.push((r.trigger, r.filter, r.playerunitevent));
             }
         }
-        // Writes start here. Every fallible step after this is either reserved or verified above.
-        self.reserve_event_delivery(triggers.len())?;
-        let created = self.create_item(&[Value::Int(item), Value::Real(0.0), Value::Real(0.0)])?;
-        let Value::Handle(item_handle) = created else {
-            return Err(self
-                .inner
-                .error(name, Failure::ItemState("created item is not a handle")));
+        for &(_, filter, _) in &triggers {
+            if let Some(filter) = filter {
+                self.check_event_filter(filter)?;
+            }
+        }
+        let item_handle = self.create_item_at(item, shop_x, shop_y)?;
+        let refusal = match self.live_item(item_handle)? {
+            Some(_) if self.item_flag(item_handle, "powerup")? => {
+                Some(PurchaseRefusal::UnsupportedItem)
+            }
+            Some(_) => {
+                let bonus = self.held_attributes(item_handle)?;
+                (bonus.strength != 0 || bonus.agility != 0 || bonus.armor != 0)
+                    .then_some(PurchaseRefusal::UnsupportedItem)
+            }
+            None => Some(PurchaseRefusal::UnsupportedItem),
         };
-        if !self.add_inventory_item(buyer, item_handle)? {
-            return Err(self
-                .inner
-                .error(name, Failure::ItemState("transfer refused after checks")));
+        if let Some(refusal) = refusal {
+            self.remove_created_item(item_handle);
+            return Ok(PurchaseOutcome::Refused(refusal));
+        }
+        // Writes. The slot read above is current because nothing else has run since.
+        self.reserve_event_delivery(triggers.len())?;
+        if let Entry::Item { record } = self.inner.entry_mut(item_handle)? {
+            record.held_by = Some((buyer, slot));
         }
         self.debit_gold(owner, price)?;
         self.take_one_stock(shop, item)?;
@@ -208,7 +219,33 @@ impl ObjectHost {
         for (trigger, filter, event) in triggers {
             self.queue_event(trigger, filter, subject, Some(event))?;
         }
-        Ok(PurchaseOutcome::Sold { item: item_handle })
+        Ok(PurchaseOutcome::Sold {
+            item: item_handle,
+        })
+    }
+
+    fn check_event_filter(&self, id: HandleId) -> Result<(), Error> {
+        match self.inner.entry(id)? {
+            Entry::Condition { .. } => self.condition_callback(id).map(|_| ()),
+            Entry::Filter { .. } => self.filter_callback(id).map(|_| ()),
+            _ => Err(self.inner.error("purchase", Failure::WrongFamily)),
+        }
+    }
+
+    fn create_item_at(&mut self, item: i32, x: f32, y: f32) -> Result<HandleId, Error> {
+        match self.create_item(&[Value::Int(item), Value::Real(x), Value::Real(y)])? {
+            Value::Handle(handle) => Ok(handle),
+            _ => Err(self
+                .inner
+                .error("purchase", Failure::ItemState("created item is not a handle"))),
+        }
+    }
+
+    /// Undoes a creation that has not been placed or announced.
+    fn remove_created_item(&mut self, item: HandleId) {
+        if let Ok(entry) = self.inner.entry_mut(item) {
+            *entry = Entry::RemovedItem;
+        }
     }
 }
 
