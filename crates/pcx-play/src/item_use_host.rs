@@ -204,7 +204,9 @@ impl ObjectHost {
             return Err(self.inner.error(GET, Failure::Budget("item charges")));
         }
         if let Some(cooldown) = &grant.cooldown
-            && !state.ready_at.contains_key(&cooldown_key(state.scope, grant.unit, &cooldown.group))
+            && !state
+                .ready_at
+                .contains_key(&cooldown_key(state.scope, grant.unit, &cooldown.group))
             && state.ready_at.len() >= state.max_records
         {
             return Err(self
@@ -216,9 +218,10 @@ impl ObjectHost {
             state.charges.insert(grant.item, count);
         }
         if let Some(cooldown) = &grant.cooldown {
-            state
-                .ready_at
-                .insert(cooldown_key(state.scope, grant.unit, &cooldown.group), now + cooldown.seconds);
+            state.ready_at.insert(
+                cooldown_key(state.scope, grant.unit, &cooldown.group),
+                now + cooldown.seconds,
+            );
         }
         Ok(UseCommit {
             charges: remaining,
@@ -271,7 +274,11 @@ impl ObjectHost {
             if cooldown.ignores_wait {
                 return Err(fail("ignoreCD cooldown semantics are unverified".into()));
             }
-            if let Some(ready) = state.ready_at.get(&cooldown_key(state.scope, unit, &cooldown.group)).filter(|r| **r > now) {
+            if let Some(ready) = state
+                .ready_at
+                .get(&cooldown_key(state.scope, unit, &cooldown.group))
+                .filter(|r| **r > now)
+            {
                 return Ok(UseCheck::OnCooldown {
                     remaining: ready - now,
                 });

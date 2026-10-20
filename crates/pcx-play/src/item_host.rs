@@ -138,7 +138,9 @@ impl ObjectHost {
             .as_real()
             .filter(|v| v.is_finite())
             .ok_or_else(|| fail(Failure::ItemState("finite real coordinate required")))?;
-        Ok(Value::Handle(self.create_item_record(*rawcode, x, y, None)?))
+        Ok(Value::Handle(
+            self.create_item_record(*rawcode, x, y, None)?,
+        ))
     }
 
     /// The source definition of an item rawcode, checked against the admitted catalog. This

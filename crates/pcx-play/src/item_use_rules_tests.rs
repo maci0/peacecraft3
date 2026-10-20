@@ -164,29 +164,76 @@ fn ignore_cooldown_keeps_the_group_but_lifts_the_wait() {
 #[test]
 fn a_group_needs_one_listed_ability_as_its_duration_source() {
     let r = rules(Overlay::default());
-    let mixed = item(&[(b"icid", Some("AIhe")), (b"iabi", Some("AIh1,AIh2")), (b"iicd", Some("0"))]);
-    assert!(r.cooldown(&mixed).unwrap_err().contains("duration source unresolved, 2 item abilities"));
-    let none = item(&[(b"icid", Some("AIhe")), (b"iabi", Some("_")), (b"iicd", Some("0"))]);
-    assert!(r.cooldown(&none).unwrap_err().contains("duration source unresolved, 0 item abilities"));
-    let absent = item(&[(b"icid", Some("AIhe")), (b"iabi", Some("Xnope")), (b"iicd", Some("0"))]);
-    assert!(r.cooldown(&absent).is_err(), "an absent ability row is not skipped");
+    let mixed = item(&[
+        (b"icid", Some("AIhe")),
+        (b"iabi", Some("AIh1,AIh2")),
+        (b"iicd", Some("0")),
+    ]);
+    assert!(
+        r.cooldown(&mixed)
+            .unwrap_err()
+            .contains("duration source unresolved, 2 item abilities")
+    );
+    let none = item(&[
+        (b"icid", Some("AIhe")),
+        (b"iabi", Some("_")),
+        (b"iicd", Some("0")),
+    ]);
+    assert!(
+        r.cooldown(&none)
+            .unwrap_err()
+            .contains("duration source unresolved, 0 item abilities")
+    );
+    let absent = item(&[
+        (b"icid", Some("AIhe")),
+        (b"iabi", Some("Xnope")),
+        (b"iicd", Some("0")),
+    ]);
+    assert!(
+        r.cooldown(&absent).is_err(),
+        "an absent ability row is not skipped"
+    );
 }
 
 #[test]
 fn the_group_identity_is_separate_from_the_duration_alias() {
     let r = rules(Overlay::default());
     // The group names no ability of the item, and it still shares the group with its one ability.
-    let other = item(&[(b"icid", Some("ZZZZ")), (b"iabi", Some("AIh1")), (b"iicd", Some("0"))]);
+    let other = item(&[
+        (b"icid", Some("ZZZZ")),
+        (b"iabi", Some("AIh1")),
+        (b"iicd", Some("0")),
+    ]);
     assert_eq!(
         r.cooldown(&other).unwrap().unwrap(),
-        Cooldown { group: "ZZZZ".into(), seconds: 20.0, ignores_wait: false }
+        Cooldown {
+            group: "ZZZZ".into(),
+            seconds: 20.0,
+            ignores_wait: false
+        }
     );
     // A group equal to one of several listed aliases or codes never selects a duration source.
-    let direct = item(&[(b"icid", Some("AIzz")), (b"iabi", Some("AIh1,AIzz")), (b"iicd", Some("0"))]);
-    assert!(r.cooldown(&direct).unwrap_err().contains("2 item abilities"));
-    let code = item(&[(b"icid", Some("AIhe")), (b"iabi", Some("AIzz,AIh1")), (b"iicd", Some("0"))]);
+    let direct = item(&[
+        (b"icid", Some("AIzz")),
+        (b"iabi", Some("AIh1,AIzz")),
+        (b"iicd", Some("0")),
+    ]);
+    assert!(
+        r.cooldown(&direct)
+            .unwrap_err()
+            .contains("2 item abilities")
+    );
+    let code = item(&[
+        (b"icid", Some("AIhe")),
+        (b"iabi", Some("AIzz,AIh1")),
+        (b"iicd", Some("0")),
+    ]);
     assert!(r.cooldown(&code).unwrap_err().contains("2 item abilities"));
-    let single_alias = item(&[(b"icid", Some("AIzz")), (b"iabi", Some("AIzz")), (b"iicd", Some("0"))]);
+    let single_alias = item(&[
+        (b"icid", Some("AIzz")),
+        (b"iabi", Some("AIzz")),
+        (b"iicd", Some("0")),
+    ]);
     assert_eq!(r.cooldown(&single_alias).unwrap().unwrap().seconds, 5.0);
 }
 
@@ -362,8 +409,14 @@ fn local_original_item_use_census_derives_every_row() {
             grouped += 1;
         }
     }
-    println!("census rows={} charged={charged} uncharged={uncharged} grouped={grouped}", raws.len());
-    println!("census refused usable rows={}: {refused_usable:?}", refused_usable.len());
+    println!(
+        "census rows={} charged={charged} uncharged={uncharged} grouped={grouped}",
+        raws.len()
+    );
+    println!(
+        "census refused usable rows={}: {refused_usable:?}",
+        refused_usable.len()
+    );
     for (reason, count) in &refused_passive {
         println!("census refused passive rows={count}: {reason}");
     }

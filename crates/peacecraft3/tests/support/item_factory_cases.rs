@@ -119,7 +119,10 @@ fn deliver(app: &mut App, revision: u64, items: Option<ItemBudget>, script: &str
     )
     .expect("synthetic ability tables");
     inputs.item_use = Some(pcx_play::map_startup_host::ItemUseInput {
-        rules: pcx_play::item_use_rules::Rules::new(Arc::new(defaults), pcx_objects::editor::Overlay::default()),
+        rules: pcx_play::item_use_rules::Rules::new(
+            Arc::new(defaults),
+            pcx_objects::editor::Overlay::default(),
+        ),
         cooldown_scope: pcx_play::playercolor_host::CooldownScope::SharedGroup,
     });
     let bytes = Arc::clone(&bound.catalog_map_bytes);

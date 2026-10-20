@@ -830,7 +830,8 @@ pub fn assemble(
         let item_use = item_use.ok_or_else(|| {
             MapStartupError::Observation("item use requires charge and cooldown rules".into())
         })?;
-        object = object.with_item_use(item_use.rules, items.max_records, item_use.cooldown_scope)?;
+        object =
+            object.with_item_use(item_use.rules, items.max_records, item_use.cooldown_scope)?;
         let classes = item_classes.ok_or_else(|| {
             MapStartupError::Observation("item queries require derived item classes".into())
         })?;

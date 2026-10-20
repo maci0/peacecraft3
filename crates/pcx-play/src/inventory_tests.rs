@@ -2,10 +2,10 @@ use super::*;
 use crate::camera_margins::SourceWindow;
 use crate::inventory::{InventoryBudget, Rules};
 use crate::neutral_player::sha256;
+use crate::playercolor_host::{CooldownScope, UseCheck, UseCommit, UseGrant};
 use crate::playercolor_host::{UseCheck, UseCommit, UseGrant};
 use pcx_objects::editor::Overlay;
 use pcx_script::HandleId;
-use crate::playercolor_host::{CooldownScope, UseCheck, UseCommit, UseGrant};
 
 const CALLS: &str = r#"
 type item extends widget
