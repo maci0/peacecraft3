@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use pcx_sim::{Command, FX_ONE, Input, PlayerInput, World};
 
+use crate::replay::Recorder;
 use crate::{Datagram, Peer, Server, decode, decode_input_payload, encode, encode_world_payload};
 
 pub const MAX_PLAYERS: u8 = 16;
@@ -22,23 +23,73 @@ pub enum SessionError {
     Duplicate,
     #[error("{0}")]
     Tick(String),
+    #[error("{0}")]
+    Replay(&'static str),
 }
 
 pub struct Session {
     server: Server,
+    seed: u64,
     peers: BTreeMap<Peer, u8>,
     inputs: BTreeMap<u64, BTreeMap<u8, Vec<Command>>>,
     stops_pending: [bool; MAX_PLAYERS as usize],
+    recorder: Option<Recorder>,
+}
+
+/// True when every command fits the packet limits and the sim's coordinate range.
+pub(crate) fn commands_in_bounds(commands: &[Command]) -> bool {
+    commands.len() <= MAX_COMMANDS_PER_TICK
+        && commands.iter().all(|c| match c {
+            Command::Move { x, y } | Command::Select { x, y } => {
+                (-COORDINATE_LIMIT..=COORDINATE_LIMIT).contains(x)
+                    && (-COORDINATE_LIMIT..=COORDINATE_LIMIT).contains(y)
+            }
+            _ => true,
+        })
+}
+
+/// Clears move targets of units owned by a disconnected player, whatever their selection.
+pub(crate) fn stop_owned_moves(world: &mut World, owners: &[u8]) {
+    for unit in &mut world.units {
+        if owners.contains(&unit.owner) {
+            unit.move_target = None;
+        }
+    }
 }
 
 impl Session {
     pub fn new(world: World, seed: u64) -> Self {
         Self {
             server: Server::new(world, seed),
+            seed,
             peers: BTreeMap::new(),
             inputs: BTreeMap::new(),
             stops_pending: [false; MAX_PLAYERS as usize],
+            recorder: None,
         }
+    }
+
+    /// Starts a replay of this session from its current world.
+    ///
+    /// Only tick 0 qualifies: playback reseeds the RNG, and the RNG state after
+    /// earlier ticks is not in the snapshot. Admitted movement is not stored; the
+    /// caller passes the same admission to [`crate::replay::play`], and the final
+    /// digest refuses a different one.
+    pub fn start_recording(&mut self, map_sha1: [u8; 20]) -> Result<(), SessionError> {
+        if self.recorder.is_some() {
+            return Err(SessionError::Replay("this session is already recording"));
+        }
+        if self.world().tick != 0 {
+            return Err(SessionError::Replay("a replay starts at tick 0 only"));
+        }
+        self.recorder = Some(Recorder::new(self.world(), self.seed, map_sha1));
+        Ok(())
+    }
+
+    /// Ends recording and returns the replay bytes, or `None` when not recording.
+    pub fn stop_recording(&mut self) -> Option<Vec<u8>> {
+        let recorder = self.recorder.take()?;
+        Some(recorder.finish(self.world()))
     }
 
     pub fn world(&self) -> &World {
@@ -91,15 +142,7 @@ impl Session {
                     return Err(SessionError::Identity);
                 }
                 let commands = decode_input_payload(&payload).map_err(|_| SessionError::Packet)?;
-                if commands.len() > MAX_COMMANDS_PER_TICK
-                    || commands.iter().any(|c| match c {
-                        Command::Move { x, y } | Command::Select { x, y } => {
-                            !(-COORDINATE_LIMIT..=COORDINATE_LIMIT).contains(x)
-                                || !(-COORDINATE_LIMIT..=COORDINATE_LIMIT).contains(y)
-                        }
-                        _ => false,
-                    })
-                {
+                if !commands_in_bounds(&commands) {
                     return Err(SessionError::Packet);
                 }
                 pcx_sim::validate_input(
@@ -132,19 +175,11 @@ impl Session {
     /// the existing sim still resolves movement, even if a browser disconnects.
     pub fn advance(&mut self) -> Vec<u8> {
         // Disconnect stops every owned unit, independently of UI selection.
-        if self.stops_pending.contains(&true) {
-            for unit in &mut self.server.world.units {
-                if self
-                    .stops_pending
-                    .get(usize::from(unit.owner))
-                    .copied()
-                    .unwrap_or(false)
-                {
-                    unit.move_target = None;
-                }
-            }
-            self.stops_pending.fill(false);
-        }
+        let stopped: Vec<u8> = (0..MAX_PLAYERS)
+            .filter(|p| self.stops_pending[usize::from(*p)])
+            .collect();
+        stop_owned_moves(&mut self.server.world, &stopped);
+        self.stops_pending.fill(false);
         let tick = self.world().tick;
         let commands = self
             .inputs
@@ -153,8 +188,12 @@ impl Session {
             .into_iter()
             .map(|(player, commands)| PlayerInput { player, commands })
             .collect();
+        let input = Input { tick, commands };
+        if let Some(recorder) = &mut self.recorder {
+            recorder.push(stopped, &input);
+        }
         self.server
-            .accept(Input { tick, commands })
+            .accept(input)
             .expect("session batches match the authoritative tick");
         assert!(self.server.advance());
         self.snapshot()

@@ -28,6 +28,7 @@ pub mod transport;
 
 pub mod bnet;
 pub mod classic_frame;
+pub mod replay;
 pub mod rollback;
 pub mod session;
 
