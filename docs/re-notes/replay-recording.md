@@ -193,10 +193,60 @@ Not established:
 - The block u32 field (`7f65725c` in block 0). It matches none of adler32 or
   crc32 over the inflated or the compressed bytes (`.scratch/w3g_checksum.py`).
 - Header bytes 64–67 (`3d d5 55 eb`). Meaning unknown.
-- Record ids and layouts beyond the observed time-slot shape. Player, game-info
-  and action records are not decoded.
+- Action payload meaning (`w3g_actions.txt` is not in this repository).
 - Whether a writer can reproduce the unknown fields.
 
 Consequence: the W3G writer stays unimplemented. It needs the two unknown fields
 identified and a decoded record table. Without them the file cannot be written
 with byte fidelity, and nothing in this repository should claim otherwise.
+
+## W3G reader (structure only)
+
+`crates/pcx-net/src/w3g.rs` reads the layout from the public notes
+`scopatz/w3g` `w3g_format.txt` (CC0-1.0, checked with `gh api`; the file is
+58178 bytes). The reader decodes the header, zlib blocks, startup records, and
+replay data blocks 0x17, 0x1E/0x1F, 0x22, 0x2F. Every item is read by its id and
+length. Shapes outside the notes are refused, not skipped: ladder player records,
+chat 0x20, block 0x23, leave reasons outside 0x01/0x0C/0x0E, and any startup
+value that differs from the notes.
+
+Verified on the Legacy 1.29.2.9231 sample:
+
+- Header CRC32 over the 68 bytes with its own field zeroed equals the stored
+  value. The reader checks it.
+- Startup: `0x110`, host record (`replay1`, custom), game name `Local Game`,
+  encoded string, PlayerCount 24, GameType 9, LanguageID 0, no player list,
+  GameStart record (2 slots, seed `0x04b3ff52`, select mode 0, 2 start spots),
+  blocks `1a`, `1b`, `1c`. The replay data begins at 156. The reader derives this
+  from the decoded prefix, not from a stored offset.
+- Replay data: 939 time slots, 939 checksums, one countdown-free leave record
+  (reason 12, player 1, result 7, trailer 1). The walk ends exactly at the
+  content end.
+
+Deviation from the notes: the first encoded string is the map path
+(`Maps/(2)BootyBay.w3m`), not a bare map name. After the creator and an empty
+string come 20 bytes the notes do not describe. They are not the map's SHA-1
+(checked against the installed map file). They contain zero bytes. The reader
+keeps them raw as `encoded_tail`. The field is null-delimited, so this cannot
+move the record boundaries.
+
+Not established, kept raw:
+
+- The u32 at offset 4 of each data block. It matches neither CRC32 nor Adler-32
+  over the inflated block, the compressed payload, or the block header with the
+  field zeroed.
+- The u32 value in each checksum record (`0x22`).
+- `encoded_tail` (20 bytes).
+- The game-settings bit meanings and the 4-byte map checksum inside them.
+
+Structural proof, not fidelity. A parsed replay does not show that the game
+reproduces it. The writer is not implemented. Its blockers are the three raw
+fields above plus a round-trip against a second sample.
+
+Gates: `cargo test -p pcx-net --lib w3g` (13 synthetic tests: exact decode,
+encode/decode round trip, every truncation refused, every header byte change
+refused, CRC-only change refused, corrupt zlib, nonzero padding, short content,
+startup and replay-data refusals, a fake slot chain inside the settings, a slot-like
+player name). Local original gate:
+`PCX_W3G_SAMPLE=<path> cargo test -p pcx-net --test w3g_sample -- --ignored`.
+The sample is never committed.

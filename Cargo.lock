@@ -4643,6 +4643,7 @@ name = "pcx-net"
 version = "0.2.0"
 dependencies = [
  "crc32fast",
+ "flate2",
  "pcx-map",
  "pcx-mpq",
  "pcx-sim",
