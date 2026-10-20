@@ -77,6 +77,8 @@ node crates/pcx-net/examples/check_browser_session.mjs /absolute/path/to/playwri
 
 The script expects both local servers above. Chromium defaults to `/usr/bin/chromium`; set `CHROMIUM` for a different executable. Successful output records the player slots and ticks compared. It proves the current movement simulation and transport, not unimplemented original game rules or UI.
 
+Native peers run the same protocol over loopback sockets: `cargo test -p pcx-net --features session-server --test local_peers`. Details and remaining gaps are in `docs/re-notes/native-session-peers.md`.
+
 ## Selection regression checks
 
 The integrated native simulation/network suite passes 115 tests; actual WASI

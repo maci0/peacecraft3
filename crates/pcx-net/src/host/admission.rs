@@ -194,7 +194,7 @@ mod tests {
         let mut input = b"GET / HTTP/1.1\r\nX: ".to_vec();
         input.extend(std::iter::repeat_n(b'a', BYTES_PER_POLL * 4));
         let (mut pending, stream) = fixture(&input, 64, usize::MAX);
-        let mut session = pcx_net::session::Session::new(pcx_sim::World::empty(), 1);
+        let mut session = crate::session::Session::new(pcx_sim::World::empty(), 1);
         for tick in 1..=4 {
             assert!(poll(&mut pending, &stream).unwrap().is_none());
             session.advance();

@@ -13,6 +13,10 @@ session-server = ["dep:tungstenite"]
 name = "session_server"
 required-features = ["session-server"]
 
+[[test]]
+name = "local_peers"
+required-features = ["session-server"]
+
 [dependencies]
 pcx-sim.workspace = true
 pcx-mpq.workspace = true
