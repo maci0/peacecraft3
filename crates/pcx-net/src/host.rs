@@ -233,11 +233,8 @@ impl Host {
                     false
                 }
             });
-            // Bound catch-up work after scheduler delays.
+            // Keep overdue ticks owed; each service pass still advances at most one.
             self.next_tick += TICK_INTERVAL;
-            if self.next_tick < now {
-                self.next_tick = now + TICK_INTERVAL;
-            }
         }
         Ok(())
     }
@@ -250,4 +247,23 @@ pub fn session_identity(world: &World, seed: u64) -> SessionIdentity {
     hash.update(seed.to_le_bytes());
     hash.update(encode_world_payload(world));
     SessionIdentity(hash.finalize().into())
+}
+
+#[cfg(test)]
+mod tick_debt_tests {
+    use super::*;
+
+    #[test]
+    fn delayed_polls_preserve_each_logical_tick() {
+        let mut host = Host::bind("127.0.0.1:0", local_world(), 11).unwrap();
+        let first = host.next_tick;
+        let now = first + TICK_INTERVAL * 9;
+        for tick in 1..=10 {
+            host.poll(now).unwrap();
+            assert_eq!(host.session.world().tick, tick);
+        }
+        assert_eq!(host.next_tick, first + TICK_INTERVAL * 10);
+        host.poll(now).unwrap();
+        assert_eq!(host.session.world().tick, 10);
+    }
 }

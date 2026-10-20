@@ -422,7 +422,10 @@ fn real_ops_refusal_is_the_run_error_and_global_init_caches_it() {
         "{}",
         first.message
     );
-    assert_eq!(&bad[first.span.start as usize..first.span.end as usize], "-8");
+    assert_eq!(
+        &bad[first.span.start as usize..first.span.end as usize],
+        "-8"
+    );
 }
 
 #[test]

@@ -350,7 +350,11 @@ fn zero_one_shot_timeout_expires_at_the_current_boundary() {
 /// depend on how many times `now` is published between firings.
 #[test]
 fn equal_final_game_time_is_independent_of_until_chunking() {
-    let schedules: [&[f64]; 3] = [&[24.0], &[21.0, 21.5, 22.25, 24.0], &[20.5, 21.25, 23.0, 24.0]];
+    let schedules: [&[f64]; 3] = [
+        &[24.0],
+        &[21.0, 21.5, 22.25, 24.0],
+        &[20.5, 21.25, 23.0, 24.0],
+    ];
     let runs = schedules.map(drive_until);
     let expected = runs[0].clone();
     for run in &runs[1..] {

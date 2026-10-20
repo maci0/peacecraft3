@@ -240,11 +240,7 @@ fn open_session() -> Session {
 }
 
 fn peer_for(player: u8) -> Peer {
-    if player == 0 {
-        Peer(10)
-    } else {
-        Peer(11)
-    }
+    if player == 0 { Peer(10) } else { Peer(11) }
 }
 
 fn deliver(session: &mut Session, order: &TickOrder) {
@@ -257,7 +253,10 @@ fn deliver(session: &mut Session, order: &TickOrder) {
 }
 
 fn orders_for(tick: u64) -> Vec<TickOrder> {
-    script().into_iter().filter(|order| order.tick == tick).collect()
+    script()
+        .into_iter()
+        .filter(|order| order.tick == tick)
+        .collect()
 }
 
 fn input_for(tick: u64) -> Input {
@@ -393,7 +392,10 @@ fn tick_keyed_orders_match_across_arrival_lookahead_and_bounded_work() {
     }
     let stale = client.reconcile_detailed(snapshot_world(&reference[0]));
     assert_eq!(stale.correction, Correction::Stale { tick: 1 });
-    assert_eq!(encode_world_payload(client.predicted()), payload(&reference[2]));
+    assert_eq!(
+        encode_world_payload(client.predicted()),
+        payload(&reference[2])
+    );
 
     let mut ahead = Client::with_limits(
         initial_world(),
@@ -414,7 +416,10 @@ fn tick_keyed_orders_match_across_arrival_lookahead_and_bounded_work() {
             resimulated: 1
         }
     );
-    assert_eq!(encode_world_payload(ahead.predicted()), payload(&reference[1]));
+    assert_eq!(
+        encode_world_payload(ahead.predicted()),
+        payload(&reference[1])
+    );
 }
 
 #[test]

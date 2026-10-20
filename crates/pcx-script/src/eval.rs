@@ -1966,7 +1966,12 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     .begin_script_call(callee, &argv)
                     .map_err(|why| crate::Error::run(span, why))?
                 {
-                    return self.dispatch_script_call(call, span, frame, park_real_return(outer, &ret, span));
+                    return self.dispatch_script_call(
+                        call,
+                        span,
+                        frame,
+                        park_real_return(outer, &ret, span),
+                    );
                 }
                 match self.host.native(callee, &argv) {
                     Ok(value) => {
