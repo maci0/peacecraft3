@@ -762,10 +762,10 @@ mod tests;
 #[path = "object_host.rs"]
 mod objects;
 pub use objects::{
-    AppliedCameraSetup, CameraDestination, CameraFieldRecord, CameraState, CineFilter,
-    ConditionBudget, ConditionCallback, DayNightState, DeathEventRegistration, DestructableBudget,
-    DestructableCreation, Environment, ExecutedItem, ExecutedUnit, ExecutedUnitState,
-    FileSoundState, FilterBudget, FilterCallback, FilterSample, ForceBudget,
+    AcceptedSpan, AppliedCameraSetup, CameraDestination, CameraFieldRecord, CameraState,
+    CineFilter, ConditionBudget, ConditionCallback, DayNightState, DeathEventRegistration,
+    DestructableBudget, DestructableCreation, Environment, ExecutedItem, ExecutedUnit,
+    ExecutedUnitState, FileSoundState, FilterBudget, FilterCallback, FilterSample, ForceBudget,
     GameStateEventRegistration, GuardBudget, GuardState, HeroBudget, HeroProgress, ItemBudget,
     LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection, MessageBudget, MessageState,
     ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
