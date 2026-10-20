@@ -623,6 +623,41 @@ impl ObjectHost {
     pub fn local_player_number(&self) -> Option<i32> {
         self.players.as_ref()?.local_player
     }
+    pub fn local_player_settings(&self) -> Option<&PlayerSettings> {
+        let players = self.players.as_ref()?;
+        players
+            .rows
+            .iter()
+            .find(|row| Some(row.number) == players.local_player)
+    }
+    /// Constant `racepreference` global whose value the local player's executed
+    /// `SetPlayerRacePreference` holds, or None while either is unset.
+    pub fn local_race_preference_constant(&self) -> Result<Option<String>, Error> {
+        const KIND: &str = "racepreference";
+        let Some(id) = self
+            .local_player_settings()
+            .and_then(|row| row.race_preference)
+        else {
+            return Ok(None);
+        };
+        let value = self.inner.symbolic_value(id, KIND)?;
+        let names: Vec<&str> = self
+            .inner
+            .program
+            .globals()
+            .iter()
+            .filter(|g| g.is_constant && !g.array && g.ty.kind.name() == KIND)
+            .map(|g| g.name.as_str())
+            .filter(|name| self.source_constant_enumerand(name, KIND).ok() == Some(value))
+            .collect();
+        match names.as_slice() {
+            [name] => Ok(Some((*name).to_string())),
+            _ => Err(self.inner.error(
+                "SetPlayerRacePreference",
+                Failure::UnitState("race preference is not one selected constant"),
+            )),
+        }
+    }
     pub fn player_settings(&self, identity: HandleId) -> Result<&PlayerSettings, Error> {
         let at = self.player_index(&Value::Handle(identity), "players")?;
         self.players

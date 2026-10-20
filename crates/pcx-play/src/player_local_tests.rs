@@ -112,3 +112,34 @@ fn owning_vm_camera_style_branch_uses_selected_identity_and_new_sessions_start_u
         assert!(fresh.call("applies", &[]).is_err());
     }
 }
+
+#[test]
+fn local_race_preference_names_its_selected_constant() {
+    let (mut host, ctx) = selected(DECLARATION, "// map");
+    assert_eq!(host.local_race_preference_constant().unwrap(), None);
+    host.admit_local_player(&ctx, 2).unwrap();
+    let local = player(&mut host, 2);
+    assert_eq!(host.local_race_preference_constant().unwrap(), None);
+    let other = player(&mut host, 3);
+    let race = host.native("ConvertRacePref", &[Value::Int(-5)]).unwrap();
+    host.native("SetPlayerRacePreference", &[other, race.clone()])
+        .unwrap();
+    assert_eq!(host.local_race_preference_constant().unwrap(), None);
+    host.native("SetPlayerRacePreference", &[local.clone(), race])
+        .unwrap();
+    assert_eq!(
+        host.local_race_preference_constant().unwrap().as_deref(),
+        Some("R")
+    );
+    let (mut twice, ctx) = selected(
+        DECLARATION,
+        "globals\nconstant racepreference S = ConvertRacePref(-5)\nendglobals\n",
+    );
+    twice.admit_local_player(&ctx, 2).unwrap();
+    let local = player(&mut twice, 2);
+    let race = twice.native("ConvertRacePref", &[Value::Int(-5)]).unwrap();
+    twice
+        .native("SetPlayerRacePreference", &[local, race])
+        .unwrap();
+    assert!(twice.local_race_preference_constant().is_err());
+}

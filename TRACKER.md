@@ -1016,8 +1016,9 @@ milestone, regardless of unit-test count.
       inheritance instead of silently producing rectangles. Application tests
       and a seven-case actual WASM source-leaf gate pass. A caller-qualified HUD
       renderer is installed, with exact admitted-context/receipt checks and
-      atomic resource replacement. Automatic map-to-HUD policy, rendered/native
-      parity and command dispatch remain open. See `hud-derivation.md`.
+      atomic resource replacement. The campaign path now produces the ConsoleUI
+      policy (`campaign_hud.rs`); resource bar, buttons, minimap, portrait,
+      rendered/native parity and command dispatch remain open. See `hud-derivation.md`.
       Shared FDF parsing now preserves nested ConsoleUI texture records without
       closing their frame or leaking properties. Both explicitly selected local
       ConsoleUI members parse; 13 actual WASI parser cases pass. Selected ConsoleUI

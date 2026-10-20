@@ -422,6 +422,55 @@ pub fn resolve(input: &HudInput) -> Result<ResolvedHud, HudError> {
     })
 }
 
+/// Image members the `Texture` blocks of `roots`' derived frames name, after
+/// skin lookup in `race_sections` order and `DecorateFileNames` suffixes that
+/// `has` reports present. Feeds a policy's image reads; backdrop art is not
+/// collected, so a frame that needs it refuses at [`resolve`].
+///
+/// # Errors
+///
+/// [`HudError`] when the FDF, skin or a texture `File` cannot be resolved.
+pub fn texture_members(
+    fdf_texts: &[String],
+    skin_text: &str,
+    race_sections: &[String],
+    roots: &[&str],
+    viewport: (f32, f32),
+    suffixes: &[String],
+    has: &dyn Fn(&str) -> bool,
+) -> Result<Vec<String>, HudError> {
+    let mut fdf = Fdf::default();
+    for text in fdf_texts {
+        fdf.parse_into(text)
+            .map_err(|error| HudError::Fdf(Box::new(error)))?;
+    }
+    let skin = SkinTable::parse(skin_text).map_err(|error| HudError::Skin(Box::new(error)))?;
+    let layout = crate::hud::derive(&fdf, roots, viewport)
+        .map_err(|error| HudError::Fdf(Box::new(error)))?;
+    let mut members = Vec::new();
+    for frame in &layout.frames {
+        let Some(source) = fdf.frame(&frame.name) else {
+            continue;
+        };
+        let decorate = fdf.flag(&frame.name, "DecorateFileNames");
+        for block in &source.textures {
+            let file = required_texture(&frame.name, &block.records, "File")?;
+            let path = resolve_art_path(
+                &skin,
+                &unquote(&file),
+                race_sections,
+                decorate,
+                suffixes,
+                has,
+            )?;
+            if !members.contains(&path) {
+                members.push(path);
+            }
+        }
+    }
+    Ok(members)
+}
+
 /// Percentages of `inner` inside `outer`. Y-up rectangles become a Y-down top.
 pub fn relative_box(inner: Rect, outer: Rect) -> Result<RelativeBox, HudError> {
     if !(outer.width > 0.0 && outer.height > 0.0) {
@@ -701,7 +750,7 @@ fn plan_textures(
             &input.race_sections,
             decorate,
             &input.decorate_suffixes,
-            images,
+            &|path| images.contains_key(path),
         )?;
         let (image_width, image_height) = probe_header(input, &path, images, sizes)?;
         let (uv, flip_x, flip_y) = match optional_texture(&frame.name, &block.records, "TexCoord")?
@@ -765,7 +814,7 @@ fn plan_backdrop(
         &input.race_sections,
         fdf.flag(&frame.name, "DecorateFileNames"),
         &input.decorate_suffixes,
-        images,
+        &|path| images.contains_key(path),
     )?;
     let (width, height) = probe_header(input, &path, images, sizes)?;
     Ok(vec![PlannedArt {
@@ -966,7 +1015,7 @@ fn resolve_art_path(
     order: &[String],
     decorate: bool,
     suffixes: &[String],
-    images: &HashMap<&str, &[u8]>,
+    has: &dyn Fn(&str) -> bool,
 ) -> Result<String, HudError> {
     if token.is_empty() {
         return Err(HudError::Image {
@@ -977,7 +1026,7 @@ fn resolve_art_path(
     let base = skin_file(skin, token, order)?
         .map(|binding| binding.file)
         .unwrap_or_else(|| token.to_string());
-    if images.contains_key(base.as_str()) {
+    if has(&base) {
         return Ok(base);
     }
     if !decorate || base.contains('.') {
@@ -989,7 +1038,7 @@ fn resolve_art_path(
     let matches: Vec<String> = suffixes
         .iter()
         .map(|suffix| format!("{base}{suffix}"))
-        .filter(|candidate| images.contains_key(candidate.as_str()))
+        .filter(|candidate| has(candidate))
         .collect();
     match matches.as_slice() {
         [path] => Ok(path.clone()),
@@ -1896,6 +1945,39 @@ MasterFont=fonts/body.ttf
         assert_eq!(text.spans[0].colour, Some([1.0, 0.0, 0.0, 1.0]));
         assert_eq!(text.notes, vec!["adapter-note".to_string()]);
         assert_ne!(text.spans[0].colour, Some(text.highlight));
+    }
+
+    #[test]
+    fn texture_members_follow_skin_order_suffixes_and_dedupe() {
+        let fdf = "Frame \"SIMPLEFRAME\" \"Root\" {\n    DecorateFileNames,\n    Texture {\n        File \"TileA\",\n        Width 0.1,\n        Height 0.1,\n        Anchor TOPLEFT,0,0,\n    }\n    Texture {\n        File \"TileB\",\n        Width 0.1,\n        Height 0.1,\n        Anchor TOPRIGHT,0,0,\n    }\n    Texture {\n        File \"TileA\",\n        Width 0.1,\n        Height 0.1,\n        Anchor BOTTOMLEFT,0,0,\n    }\n}\n".to_string();
+        let skin = "[Orc]\nTileA=orc\\a\n[Default]\nTileA=base\\a\nTileB=base\\b.tga\n";
+        let present = ["orc\\a.blp", "base\\a.blp", "base\\b.tga"];
+        let members = |sections: &[&str], has: &dyn Fn(&str) -> bool| {
+            let sections: Vec<String> = sections.iter().map(|s| (*s).to_string()).collect();
+            texture_members(
+                std::slice::from_ref(&fdf),
+                skin,
+                &sections,
+                &["Root"],
+                (0.8, 0.6),
+                &[".blp".into()],
+                has,
+            )
+        };
+        let has = |path: &str| present.contains(&path);
+        assert_eq!(
+            members(&["Orc", "Default"], &has).unwrap(),
+            ["orc\\a.blp", "base\\b.tga"]
+        );
+        assert_eq!(
+            members(&["Human", "Default"], &has).unwrap(),
+            ["base\\a.blp", "base\\b.tga"]
+        );
+        let missing = |path: &str| path != "orc\\a.blp" && present.contains(&path);
+        assert!(matches!(
+            members(&["Orc", "Default"], &missing),
+            Err(HudError::Image { .. })
+        ));
     }
 
     fn tga_header(width: u16, height: u16) -> Vec<u8> {

@@ -11,6 +11,7 @@ mod import_assets;
 mod button_actions;
 mod campaign_actors;
 mod campaign_diagnostics;
+mod campaign_hud;
 mod campaign_input;
 mod campaign_messages;
 mod campaign_prepare;

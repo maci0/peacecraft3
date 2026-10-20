@@ -44,9 +44,16 @@ WASM run separately checks six malformed refusals and one valid layout. The
 private baseline/review evidence remains in `.scratch/catjam-supervision/`.
 
 Unresolved:
-- The renderer is installed in the application, but no automatic map-to-HUD
-  policy producer supplies its roots, race order, member names or budgets yet.
-  An installed renderer alone does not display an in-game HUD.
+- `campaign_hud.rs` produces the policy for the published campaign session:
+  `ConsoleUI` from `UI\FrameDef\UI\ConsoleUI.fdf`, `UI\war3skins.txt` with the
+  skin section matched case-insensitively to the local player's executed
+  `RACE_PREF_<NAME>` constant, then `[Default]`, and the `Texture` files those
+  resolve to (`hud_assets::texture_members`, `.blp` decoration). An unset race
+  refuses. Human01 mounts the Human tiles. Other console frames (resource bar,
+  upper buttons, minimap, portrait, command card) are not mounted.
+- The world is drawn behind the whole console, so transparent console texels
+  show terrain. Whether the original clips the world viewport above the console
+  is unmeasured.
 - Native HUD behavior beyond anchor/extent derivation is not established by
   parser or layout data.
 
