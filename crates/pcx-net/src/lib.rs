@@ -31,8 +31,14 @@ pub mod w3g;
 pub mod bnet;
 pub mod classic_frame;
 pub mod replay;
+#[cfg(all(feature = "session-server", not(target_arch = "wasm32")))]
+pub mod host;
+#[cfg(all(feature = "session-server", not(target_arch = "wasm32")))]
+pub mod map_session;
 pub mod rollback;
 pub mod session;
+#[cfg(all(feature = "session-server", not(target_arch = "wasm32")))]
+pub mod session_client;
 
 /// How a transport delivers commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

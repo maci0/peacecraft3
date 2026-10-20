@@ -13,6 +13,42 @@ pub const MAX_COMMANDS_PER_TICK: usize = 32;
 // Keep subtraction inside the sim's i32 fixed-point range, including opposite edges.
 pub const COORDINATE_LIMIT: i32 = 16_000 * FX_ONE;
 
+/// Digest of one admitted session start: executable, map, movement profile, seed and
+/// initial world. Peers compare it before play; it is not a secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionIdentity(pub [u8; 32]);
+
+impl SessionIdentity {
+    pub fn to_hex(&self) -> String {
+        self.0.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// Accepts exactly 64 lowercase hex digits, the form `to_hex` writes.
+    pub fn from_hex(text: &str) -> Option<Self> {
+        if text.len() != 64 {
+            return None;
+        }
+        let digits = text
+            .bytes()
+            .map(|c| {
+                let lower = c.is_ascii_digit() || c.is_ascii_lowercase();
+                (lower)
+                    .then(|| (c as char).to_digit(16))
+                    .flatten()
+                    .map(|d| d as u8)
+            })
+            .collect::<Option<Vec<u8>>>()?;
+        let (pairs, []) = digits.as_chunks::<2>() else {
+            return None;
+        };
+        let mut out = [0u8; 32];
+        for (byte, [high, low]) in out.iter_mut().zip(pairs) {
+            *byte = high << 4 | low;
+        }
+        Some(Self(out))
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
     #[error("peer is not assigned to that player")]
@@ -204,6 +240,18 @@ impl Session {
 mod tests {
     use super::*;
     use crate::encode_input_payload;
+
+    #[test]
+    fn identity_hex_round_trips_and_refuses_other_text() {
+        let identity = SessionIdentity([0xab; 32]);
+        assert_eq!(
+            SessionIdentity::from_hex(&identity.to_hex()),
+            Some(identity)
+        );
+        assert!(SessionIdentity::from_hex(&"AB".repeat(32)).is_none());
+        assert!(SessionIdentity::from_hex(&"a".repeat(63)).is_none());
+        assert!(SessionIdentity::from_hex(&"g".repeat(64)).is_none());
+    }
 
     fn order(tick: u64, player: u8, x: i32) -> Vec<u8> {
         encode(&Datagram::Input {

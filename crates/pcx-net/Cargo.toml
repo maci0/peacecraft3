@@ -7,10 +7,23 @@ license.workspace = true
 description = "Transports, command codec and authoritative lockstep server"
 
 [features]
-session-server = ["dep:tungstenite"]
+session-server = ["dep:tungstenite", "dep:sha2", "dep:serde_json"]
 
-[[example]]
+[[bin]]
 name = "session_server"
+path = "src/bin/session_server.rs"
+required-features = ["session-server"]
+
+[[test]]
+name = "local_peers"
+required-features = ["session-server"]
+
+[[test]]
+name = "map_peers"
+required-features = ["session-server"]
+
+[[test]]
+name = "cli_process"
 required-features = ["session-server"]
 
 [dependencies]
@@ -24,6 +37,8 @@ sha1 = "0.11.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tungstenite = { version = "0.30", optional = true, default-features = false, features = ["handshake"] }
+sha2 = { workspace = true, optional = true }
+serde_json = { version = "1.0.154", optional = true }
 
 [lints]
 workspace = true

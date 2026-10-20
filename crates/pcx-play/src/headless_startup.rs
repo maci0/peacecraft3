@@ -1,0 +1,236 @@
+//! Source-derived map startup without the Bevy application.
+//!
+//! One selected install and one map file go in; the production `MapStartupHost` comes out.
+//! The steps are the application's campaign path (`native_campaign::configuration`,
+//! `map_requests` binding, `campaign_prepare`) without its Bevy systems. Every game value comes
+//! from the install's archives and the map bytes. The identity labels match the application's.
+use crate::campaign_inputs::{self, MapSources};
+use crate::install_source::{
+    InstallSource, MAX_AGGREGATE_BYTES, MAX_ASSET_BYTES, MAX_LISTED_PATHS,
+};
+use crate::map_admission::{
+    IdentifiedScript, MapAdmissionBudget, MapAdmissionInputs, ParsedMapContext, prepare_map_context,
+};
+use crate::map_scripts_import::MapScriptBudget;
+use crate::map_startup_host::{MapStartupHost, assemble};
+use crate::scripts::{AssetIdentity, ScriptAsset};
+use pcx_assets::{ArchiveLayer, GameMode, Resolver};
+use pcx_map::Map;
+use pcx_objects::ObjectFile;
+use pcx_objects::editor::{Editor, EditorReadLimits, Overlay};
+use pcx_sim::world::{Definition, MetadataCatalog, ObjectCatalog, ResolutionProblem};
+use std::path::Path;
+use std::sync::Arc;
+
+const EXECUTABLE: &str = "Warcraft III.exe";
+const COMMON_SCRIPT: &str = "Scripts\\common.j";
+const BLIZZARD_SCRIPT: &str = "Scripts\\Blizzard.j";
+/// The application's client identity labels. Changing them changes every session identity.
+const CLIENT_EDITION: &str = "selected campaign client";
+const CLIENT_VERSION: &str = "reviewed Legacy 1.29.2.9231";
+const MAP_READ_BUDGET: pcx_mpq::checked::ReadBudget = pcx_mpq::checked::ReadBudget {
+    max_archive_bytes: 64 << 20,
+    max_archive_table_bytes: 8 << 20,
+    max_raw_packed_bytes: 16 << 20,
+    max_decoded_bytes: 16 << 20,
+};
+const EDITOR_LIMITS: EditorReadLimits = EditorReadLimits {
+    max_listed_paths: MAX_LISTED_PATHS,
+    max_asset_bytes: MAX_ASSET_BYTES,
+    max_aggregate_input_bytes: MAX_AGGREGATE_BYTES,
+};
+/// Operating ceilings for one startup, the same values the application's binding path uses.
+const SCRIPT_BUDGET: MapScriptBudget = MapScriptBudget {
+    max_script_bytes: MAX_ASSET_BYTES,
+    max_wts_bytes: MAX_ASSET_BYTES,
+    max_archive_bytes: MAX_ASSET_BYTES,
+    max_archive_table_bytes: MAX_ASSET_BYTES,
+    max_raw_packed_bytes: MAX_ASSET_BYTES,
+    max_decoded_bytes: MAX_ASSET_BYTES,
+    max_prelude_bytes: MAX_ASSET_BYTES,
+    max_aggregate_input_bytes: MAX_AGGREGATE_BYTES,
+};
+const ADMISSION_BUDGET: MapAdmissionBudget = MapAdmissionBudget {
+    scripts: SCRIPT_BUDGET,
+    terrain_bytes: MAX_ASSET_BYTES,
+    info_bytes: MAX_ASSET_BYTES,
+    pathing_bytes: MAX_ASSET_BYTES,
+    units_bytes: MAX_ASSET_BYTES,
+    aggregate_input_bytes: MAX_AGGREGATE_BYTES,
+    required_fields: 0,
+};
+
+#[derive(Debug, thiserror::Error)]
+pub enum StartupError {
+    #[error("install: {0}")]
+    Install(String),
+    #[error("{member}: {message}")]
+    Member { member: String, message: String },
+    #[error("map: {0}")]
+    Map(String),
+    #[error("catalog: {0}")]
+    Catalog(String),
+    #[error("admission: {0}")]
+    Admission(String),
+    #[error("startup inputs: {0}")]
+    Inputs(String),
+    #[error("startup host: {0}")]
+    Host(String),
+}
+
+/// The admitted context and the production host built from it.
+pub struct Startup {
+    pub context: Arc<ParsedMapContext>,
+    pub host: MapStartupHost,
+}
+
+/// Object definitions from the install's unit and item metadata plus the map's overrides.
+/// The map's own unit and item overlays stay separate, as the application keeps them.
+struct OwnedCatalog {
+    editor: Editor,
+    units: Overlay,
+    items: Overlay,
+}
+
+impl ObjectCatalog for OwnedCatalog {
+    fn resolve(&self, rawcode: [u8; 4]) -> Result<Definition, ResolutionProblem> {
+        MetadataCatalog {
+            editor: &self.editor,
+            units: &self.units,
+            items: &self.items,
+        }
+        .resolve(rawcode)
+    }
+}
+
+fn map_overlay(map: &Map<'_>, label: &str, member: &'static str) -> Result<Overlay, StartupError> {
+    let raw = map
+        .extract_checked(label, member, MAP_READ_BUDGET)
+        .map_err(|error| StartupError::Map(error.to_string()))?;
+    let Some(raw) = raw else {
+        return Ok(Overlay::default());
+    };
+    let file =
+        ObjectFile::parse(member, &raw).map_err(|error| StartupError::Map(error.to_string()))?;
+    Ok(Overlay::of(&file))
+}
+
+/// Starts the map at `map_bytes` (labelled `map_label`) on the install at `install`.
+///
+/// `mode` selects the asset policy, and `expansion` must agree with it. `seed` is the new-game
+/// seed, supplied by the caller and never defaulted here.
+pub fn start(
+    install: &Path,
+    mode: GameMode,
+    map_label: &str,
+    map_bytes: &[u8],
+    seed: i32,
+    expansion: bool,
+) -> Result<Startup, StartupError> {
+    let exe_path = install.join(EXECUTABLE);
+    let image = std::fs::read(&exe_path)
+        .map_err(|error| StartupError::Install(format!("{}: {error}", exe_path.display())))?;
+    let source = InstallSource::open(install).map_err(StartupError::Install)?;
+    let resolver = Resolver::new(
+        mode,
+        None,
+        vec![ArchiveLayer {
+            priority: 0,
+            source: Box::new(source),
+        }],
+    )
+    .map_err(|error| StartupError::Install(error.to_string()))?;
+
+    let edition = format!("{:?} selected install", mode.addon);
+    let read = |member: &str| -> Result<Vec<u8>, StartupError> {
+        resolver
+            .resolve_bounded(member, MAX_ASSET_BYTES as u64)
+            .map(|asset| asset.bytes)
+            .map_err(|error| StartupError::Member {
+                member: member.into(),
+                message: error.to_string(),
+            })
+    };
+    let common_bytes = read(COMMON_SCRIPT)?;
+    let blizzard_bytes = read(BLIZZARD_SCRIPT)?;
+    let script_identity = |member: &str| AssetIdentity {
+        edition: edition.clone(),
+        version: "selected install".into(),
+        source: member.into(),
+    };
+    let common_identity = script_identity(COMMON_SCRIPT);
+    let blizzard_identity = script_identity(BLIZZARD_SCRIPT);
+    let catalog_identity = AssetIdentity {
+        edition: edition.clone(),
+        version: "selected install".into(),
+        source: install.display().to_string(),
+    };
+    let map_identity = AssetIdentity {
+        edition: edition.clone(),
+        version: "map bytes".into(),
+        source: map_label.into(),
+    };
+
+    let map = Map::parse(map_bytes).map_err(|error| StartupError::Map(error.to_string()))?;
+    let editor = Editor::from_reader(install, &[], EDITOR_LIMITS, |member| {
+        match resolver.resolve_bounded(member, MAX_ASSET_BYTES as u64) {
+            Ok(asset) => Ok(Some(asset.bytes)),
+            Err(pcx_assets::Error::MissingAsset { .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
+    })
+    .map_err(|error| StartupError::Catalog(error.to_string()))?;
+    let catalog = Arc::new(OwnedCatalog {
+        editor,
+        units: map_overlay(&map, map_label, "war3map.w3u")?,
+        items: map_overlay(&map, map_label, "war3map.w3t")?,
+    });
+
+    let context = Arc::new(
+        prepare_map_context(
+            MapAdmissionInputs {
+                map: &map,
+                map_label,
+                map_identity: &map_identity,
+                common: IdentifiedScript {
+                    identity: &common_identity,
+                    asset: ScriptAsset {
+                        label: COMMON_SCRIPT,
+                        bytes: &common_bytes,
+                    },
+                },
+                blizzard: IdentifiedScript {
+                    identity: &blizzard_identity,
+                    asset: ScriptAsset {
+                        label: BLIZZARD_SCRIPT,
+                        bytes: &blizzard_bytes,
+                    },
+                },
+                catalog_identity: &catalog_identity,
+                catalog: catalog.as_ref(),
+                required_fields: &[],
+            },
+            ADMISSION_BUDGET,
+        )
+        .map_err(|error| StartupError::Admission(error.to_string()))?,
+    );
+
+    let sources = MapSources {
+        map_label: map_label.into(),
+        map_bytes: Arc::from(map_bytes),
+        catalog_identity,
+        catalog: catalog as Arc<dyn ObjectCatalog + Send + Sync>,
+    };
+    let client = AssetIdentity {
+        source: install.display().to_string(),
+        edition: CLIENT_EDITION.into(),
+        version: CLIENT_VERSION.into(),
+    };
+    let inputs = campaign_inputs::prepare_new_game(
+        &context, &sources, &resolver, &image, client, seed, expansion,
+    )
+    .map_err(StartupError::Inputs)?;
+    let host = assemble(Arc::clone(&context), inputs)
+        .map_err(|error| StartupError::Host(error.to_string()))?;
+    Ok(Startup { context, host })
+}

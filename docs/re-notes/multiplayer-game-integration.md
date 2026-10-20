@@ -4,7 +4,7 @@
 
 `pcx-net::session::Session` owns the authoritative movement server, binds a peer
 to a player, merges per-player input batches, and sends world snapshots. The
-native `session_server` example and `web/network.js::PeacecraftSession` already
+native `session_server` binary and `web/network.js::PeacecraftSession` already
 exercise two browser clients. Admission is now nonblocking and bounded. This is
 a movement transport, not a running original map or completed multiplayer match.
 

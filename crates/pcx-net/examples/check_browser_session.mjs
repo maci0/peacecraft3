@@ -5,6 +5,9 @@ import { pathToFileURL } from 'node:url';
 const { chromium } = await import(pathToFileURL(process.argv[2]).href);
 const base = process.argv[3] ?? 'http://127.0.0.1:8931';
 const socketUrl = process.argv[4] ?? 'ws://127.0.0.1:8932';
+// The expected identity comes from an independent counterpart run, never from the host under test:
+// `session_server identity`. The page refuses to show state or send without it.
+const identity = process.env.PCX_SESSION_IDENTITY ?? (() => { throw new Error('set PCX_SESSION_IDENTITY to the counterpart identity'); })();
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] });
 try {
   const pages = await Promise.all([browser.newPage(), browser.newPage()]);
@@ -14,9 +17,9 @@ try {
     page.on('websocket', socket => sockets.push(socket.url()));
     page.on('pageerror', error => pageErrors.push(error.message));
     await page.goto(`${base}/network.js`);
-    await page.evaluate(async ({ base, socketUrl }) => {
+    await page.evaluate(async ({ base, socketUrl, identity }) => {
       const { PeacecraftSession } = await import(`${base}/network.js`);
-      window.session = new PeacecraftSession(socketUrl);
+      window.session = new PeacecraftSession(socketUrl, identity);
       window.worlds = new Map(); window.rejected = []; window.errors = [];
       session.addEventListener('world', ({ detail }) => {
         worlds.set(detail.tick.toString(), JSON.stringify(detail, (_, v) => typeof v === 'bigint' ? v.toString() : v));
@@ -25,7 +28,7 @@ try {
       session.addEventListener('rejected', ({ detail }) => rejected.push(detail));
       session.addEventListener('error', ({ detail }) => errors.push(detail));
       session.connect();
-    }, { base, socketUrl });
+    }, { base, socketUrl, identity });
     await page.waitForFunction(() => session.player !== null && session.world !== null);
   }
   const [a, b] = pages;

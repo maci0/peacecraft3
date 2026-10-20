@@ -7,7 +7,7 @@ Performance regression gates must use fixed work and deterministic counters, not
 The existing `crates` and `tools` tree had no performance benchmark harness or wall-clock speed assertions. The following timing checks are functional rather than performance budgets and remain separate:
 
 - `intro.rs`: a locally installed decoder must eventually produce a frame, and skipping must cancel/reap it promptly. These explicitly ignored media/runtime tests use liveness deadlines, not a throughput baseline.
-- `pcx-net/transport.rs` and `examples/session_server.rs`: discovery, handshake and connection timeouts are protocol/liveness behavior.
+- `pcx-net/transport.rs` and `src/host.rs` (run by the `session_server` binary): discovery, handshake and connection timeouts are protocol/liveness behavior.
 - `menu_panel.rs`, `mainmenu_scene.rs`, and `menu_sprites.rs`: animation tests advance an injected simulation clock or inspect authored clip lengths. They do not measure host execution time.
 - Browser checks use timeouts to wait for observable state. These are functional failure bounds, not FPS gates.
 
