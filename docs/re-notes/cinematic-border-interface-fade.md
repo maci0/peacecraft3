@@ -90,6 +90,19 @@ to alpha or position, which track type (`0x1C`, `0x1D`, `0x1E`) reads which
 getter, and whether the full track uses the duration as its denominator. No
 alpha curve is recorded here, so no interpolation is implemented.
 
+Notification object (verified):
+
+- `0xE5BCA0` stores vtable `0xE6DD6C` into the static object at `0x10E0114`. The
+  object's `+0x8` is `0x10E011C` (kind) and `+0x10` is `0x10E0124` (float). The
+  expiry callback writes these only by absolute address, and no code reads them
+  by absolute address. Readers must reach them through the object pointer.
+- Vtable slot `+0xC` is `0x4692E0`. It calls slot `+4` of its argument, then
+  dispatches through `0x440C70` on channel `0x10EC880` with id `-2`. The other
+  channel references are in `.text` at VA `0x468E66`, `0x4692F5`, `0x46931A` and
+  `0x469406`. Those are the candidate registration or fire sites, not yet read.
+- Next reader: the handler on channel `0x10EC880` that loads `+0x10` from the
+  notification object. Its alpha or position mapping is still open.
+
 ## Consumer state
 
 `crates/pcx-play/src/presentation_host.rs`: a finite `ShowInterface` sets the
