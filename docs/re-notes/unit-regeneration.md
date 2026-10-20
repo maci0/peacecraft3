@@ -199,7 +199,7 @@ byte-identical `Units\UnitBalance.slk`, SHA-256
 | `hfoo` | control, non-hero | 420 | 420 | 0.25 | always |
 
 - Rawcodes are lowercase, so neither unit uses the hero rawcode convention.
-  `Ucrl` and other uppercase blight rows are heroes and are excluded.
+  Uppercase rawcodes follow the repo's hero convention and are excluded. `Ucrl` is a hero (`HeroCryptLord`).
 - Reset life 100 is valid for both: it is above zero and at most min(340, 420).
 - Rate expectation is `regenHP × elapsed`, using the timer that the probe records.
   No gain threshold is used.
