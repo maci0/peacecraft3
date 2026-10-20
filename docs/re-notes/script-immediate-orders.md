@@ -332,6 +332,20 @@ turn between adjacent chords 51.5 degrees, arc-model shortfall about 0.8 units.
 That model does not bound corners between samples, so the corner remainder stays
 unresolved.
 
+Static-camera diagnostic, one original run (Legacy 1.29.2.9231, 1280x960 at 96 DPI,
+stopped afterwards). The first launch refused: the fixed slow lane was not walkable,
+so no units spawned. The second run started on the map's start key press, not during
+loading. The begin record and an on-screen message (`PCXDIAG start`) confirm the
+probe ran. Fog records changed from enabled and masked to disabled. Both orders were
+accepted at game clock 1.0 s. The clock file was rewritten each tick and held 400
+tick records by the end.
+
+Not established: unit visibility and the camera. Units were not identified in frame
+differences. The camera target read back as the start point, not the requested
+midpoint, so the request may not have applied. The camera fields are in radians:
+1.222, 5.306 and 1.571 are 70.0, 304.0 and 90.0 degrees. The projection conversion
+was corrected. No track or candidate discrimination follows from this run.
+
 The ratio source is therefore undecided: SEQS `move_speed`, UnitUI `walk`, or
 another authored field. No native code or original-client capture checks any of
 them. The Hive Workshop forum thread
