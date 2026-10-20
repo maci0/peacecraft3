@@ -95,21 +95,23 @@ fn incompatible_argument_count_type_and_result_signatures_refuse_before_intrinsi
 }
 #[test]
 fn exact_supplied_contracts_keep_both_existing_conversion_results() {
-    for (declaration, call, implementation, expected) in [
+    for (declaration, call, returns, implementation, expected) in [
         (
             "constant native I2R takes integer authoredName returns real\n",
             "I2R(-17)",
+            "real",
             NativeImpl::IntToReal,
             Value::Real(-17.0),
         ),
         (
             "native R2I takes real authoredName returns integer\n",
             "R2I(-17.75)",
+            "integer",
             NativeImpl::RealToInt,
             Value::Int(-17),
         ),
     ] {
-        let map = format!("function main takes nothing returns real\nreturn {call}\nendfunction\n");
+        let map = format!("function main takes nothing returns {returns}\nreturn {call}\nendfunction\n");
         let scripts = compile(declaration, &map);
         let name = call.split('(').next().unwrap();
         match scripts.program().natives().call(name) {
