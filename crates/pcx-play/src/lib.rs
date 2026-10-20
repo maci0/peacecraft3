@@ -140,6 +140,7 @@ pub mod inventory_layout;
 pub mod inventory_powerup;
 pub mod inventory_powerup_host;
 pub mod item_class_table;
+pub mod item_use_rules;
 pub(crate) mod item_heal;
 pub mod script_localization;
 pub mod unit_guard_rules;

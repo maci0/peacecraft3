@@ -118,6 +118,10 @@ pub fn prepare_new_game(
         &game_profiles,
         8 << 20,
     )?);
+    inputs.item_use = Some(pcx_play::item_use_rules::Rules::new(
+        Arc::clone(&inputs.defend.tables),
+        abilities.clone(),
+    ));
     inputs.inventory_powerup = Some(pcx_play::inventory_powerup::Rules::read(
         Arc::clone(&inputs.defend.tables),
         abilities,
@@ -339,6 +343,7 @@ pub fn prepare(
         pcx_play::item_class_table::derive(image, client.clone()).map_err(|e| e.to_string())?;
     Ok(MapStartupInputs {
         item_classes: Some(item_classes),
+        item_use: None,
         inventory: None,
         inventory_powerup: None,
         unit_guards: None,

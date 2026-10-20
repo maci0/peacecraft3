@@ -91,6 +91,25 @@ fn deliver(app: &mut App, revision: u64, items: Option<ItemBudget>, script: &str
         ordinals: BTreeMap::from([("permanent".to_owned(), 0)]),
         default: 0,
     });
+    let ability = super::sylk(&["alias", "code", "levels", "Cool1"], &[]);
+    let defaults = pcx_objects::editor::defaults::DefaultTables::from_bytes(
+        pcx_objects::editor::defaults::Identity {
+            install: "synthetic item fixture".into(),
+            edition_version: "synthetic".into(),
+        },
+        &[(pcx_objects::editor::SlkId::AbilityData.path(), ability.as_slice())],
+        &[],
+        pcx_objects::editor::EditorReadLimits {
+            max_listed_paths: 4,
+            max_asset_bytes: 4 << 10,
+            max_aggregate_input_bytes: 8 << 10,
+        },
+    )
+    .expect("synthetic ability tables");
+    inputs.item_use = Some(pcx_play::item_use_rules::Rules::new(
+        Arc::new(defaults),
+        pcx_objects::editor::Overlay::default(),
+    ));
     let bytes = Arc::clone(&bound.catalog_map_bytes);
     app.insert_resource(MapRequests {
         bindings: Some(bound),
