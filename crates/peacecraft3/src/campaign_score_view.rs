@@ -300,6 +300,26 @@ mod lifecycle_tests {
         assert!(app.world().get_entity(unrelated_entity).is_ok());
         click_quit(&mut app);
         app.update();
+        let Some(ScoreScreen::Refused { context, .. }) =
+            &app.world().resource::<ScoreScreenState>().0
+        else {
+            panic!("quit did not request a score screen");
+        };
+        assert!(
+            app.world()
+                .resource::<ScoreScreenAssets>()
+                .layout_for(context)
+                .is_some(),
+            "selected score layout was not loaded"
+        );
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<ScoreScreenRoot>>()
+                .iter(app.world())
+                .count(),
+            1,
+            "one score root is present"
+        );
 
         let (root, owned) = {
             let mut roots = app

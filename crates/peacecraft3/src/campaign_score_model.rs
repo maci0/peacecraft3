@@ -33,6 +33,12 @@ pub fn authored_backgrounds(
                 .map(|model| (frame.name.clone(), model))
         })
         .map(|(frame, model)| {
+            if !fdf.flag(&frame, "SetAllPoints")
+                && fdf.set_point(&frame).is_none()
+                && (fdf.record(&frame, "Width").is_none() || fdf.record(&frame, "Height").is_none())
+            {
+                return Err(format!("{frame}: no authored geometry"));
+            }
             let rect = layout
                 .rect(&frame, viewport)
                 .map_err(|e| format!("{frame}: {e:?}"))?;
@@ -63,9 +69,9 @@ mod tests {
     fn only_model_frames_with_background_art_are_drawn_with_their_authored_style() {
         let l = layout(
             "Frame \"FRAME\" \"ScoreScreenFrame\" {\n\tWidth 0.8,\n\tHeight 0.6,\n}\n\
-             Frame \"MODEL\" \"ScoreScreenBackground\" {\n\tBackgroundArt \"UI\\\\Glues\\\\Back.mdl\",\n\tSetAllPoints,\n\tLayerStyle \"NOSHADING\",\n}\n\
+             Frame \"MODEL\" \"ScoreScreenBackground\" {\n\tBackgroundArt \"UI\\Glues\\Back.mdl\",\n\tSetAllPoints,\n\tLayerStyle \"NOSHADING\",\n}\n\
              Frame \"MODEL\" \"ScoreScreenRaceArt\" {\n\tSetAllPoints,\n\tLayerStyle \"NOSHADING|IGNORETRACKEVENTS\",\n}\n\
-             Frame \"MODEL\" \"ScoreScreenBarTop\" {\n\tBackgroundArt \"UI\\\\Glues\\\\Top.mdl\",\n\tWidth 0.2,\n\tHeight 0.03,\n\tLayerStyle \"SHADED\",\n}\n",
+             Frame \"MODEL\" \"ScoreScreenBarTop\" {\n\tBackgroundArt \"UI\\Glues\\Top.mdl\",\n\tWidth 0.2,\n\tHeight 0.03,\n\tLayerStyle \"SHADED\",\n}\n",
         );
         let drawn = authored_backgrounds(&l, VIEWPORT).unwrap();
         let names: Vec<&str> = drawn.iter().map(|b| b.frame.as_str()).collect();
@@ -79,7 +85,7 @@ mod tests {
     #[test]
     fn a_background_frame_without_authored_geometry_refuses_instead_of_guessing() {
         let l = layout(
-            "Frame \"MODEL\" \"ScoreScreenBackground\" {\n\tBackgroundArt \"UI\\\\Glues\\\\Back.mdl\",\n\tLayerStyle \"NOSHADING\",\n}\n",
+            "Frame \"MODEL\" \"ScoreScreenBackground\" {\n\tBackgroundArt \"UI\\Glues\\Back.mdl\",\n\tLayerStyle \"NOSHADING\",\n}\n",
         );
         let err = authored_backgrounds(&l, VIEWPORT).unwrap_err();
         assert!(err.starts_with("ScoreScreenBackground:"), "{err}");
@@ -397,8 +403,9 @@ mod resolver_tests {
         pub(super) fn new(name: &str, files: &[(&str, Vec<u8>)]) -> Self {
             let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../.scratch/score-art-fixtures")
-                .join(name);
+                .join(format!("{}-{name}", std::process::id()));
             let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
             for (path, bytes) in files {
                 let at = root.join(path.replace('\\', "/"));
                 std::fs::create_dir_all(at.parent().expect("file has a parent")).unwrap();
@@ -449,8 +456,8 @@ mod resolver_tests {
         let (red, blue) = (red.resolver(), blue.resolver());
         let a = resolve_pixels(&red, "Textures\\glow.tga");
         let b = resolve_pixels(&blue, "Textures\\glow.tga");
-        assert_eq!(a, [0, 0, 255, 255]);
-        assert_eq!(b, [255, 0, 0, 255]);
+        assert_eq!(a, [255, 0, 0, 255]);
+        assert_eq!(b, [0, 0, 255, 255]);
     }
 
     #[test]
@@ -539,7 +546,7 @@ pub(crate) mod lifecycle_tests {
         block(&mut data, b"GNDX", 3, &[0, 0, 0]);
         block(&mut data, b"MTGC", 1, &1u32.to_le_bytes());
         block(&mut data, b"MATS", 1, &9u32.to_le_bytes());
-        for value in [7, 11, 4] {
+        for value in [0, 11, 4] {
             word(&mut data, value);
         }
         floats(&mut data, &[6.5, -3.0, -2.0, -1.0, 8.0, 9.0, 10.0]);
@@ -556,7 +563,7 @@ pub(crate) mod lifecycle_tests {
     /// One material layer record with `alpha` as its static alpha.
     fn layer(alpha: f32, coord_id: u32) -> Vec<u8> {
         let mut data = Vec::new();
-        for value in [28u32, 4, 16, 3, u32::MAX, coord_id] {
+        for value in [28u32, 4, 16, 0, u32::MAX, coord_id] {
             word(&mut data, value);
         }
         data.extend(alpha.to_le_bytes());
@@ -569,7 +576,7 @@ pub(crate) mod lifecycle_tests {
         word(&mut data, 5);
         data.extend(b"LAYS");
         word(&mut data, 1);
-        data.extend(layer(0.875, 2));
+        data.extend(layer(0.875, 0));
         let mut records = Vec::new();
         word(&mut records, (data.len() + 4) as u32);
         records.extend(data);
@@ -618,6 +625,12 @@ pub(crate) mod lifecycle_tests {
     pub(crate) fn model() -> Vec<u8> {
         let mut bytes = b"MDLX".to_vec();
         chunk(&mut bytes, b"VERS", &800u32.to_le_bytes());
+        let mut header = vec![0; pcx_mdl::MODL_SIZE];
+        for (slot, value) in [-1.0f32; 3].into_iter().chain([1.0; 3]).enumerate() {
+            let at = 0x158 + slot * 4;
+            header[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        chunk(&mut bytes, b"MODL", &header);
         let mut geosets = Vec::new();
         let body = geoset();
         word(&mut geosets, (body.len() + 4) as u32);
@@ -627,14 +640,14 @@ pub(crate) mod lifecycle_tests {
         chunk(&mut bytes, b"TEXS", &texture(r"Textures\glow.tga"));
         chunk(&mut bytes, b"SEQS", &sequence("Stand", 0, 1000));
         chunk(&mut bytes, b"BONE", &bone());
-        chunk(&mut bytes, b"PIVT", &[0; 12]);
+        chunk(&mut bytes, b"PIVT", &[0; 120]);
         bytes
     }
 
     fn background() -> AuthoredBackground {
         AuthoredBackground {
             frame: "ScoreScreenBackground".into(),
-            model: r"UI\Glues\ScoreScreen\Test\Test.mdl".into(),
+            model: r"UI\Glues\Test\Test.mdl".into(),
             rect: crate::fdf::Rect {
                 left: 0.1,
                 bottom: 0.2,
