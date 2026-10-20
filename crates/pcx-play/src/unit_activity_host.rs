@@ -743,6 +743,7 @@ impl ObjectHost {
         });
         self.unit_activity.as_mut().expect("activity").active = active;
         let result = result.and_then(|moved| {
+            self.advance_unit_regen(now)?;
             self.advance_combat()?;
             self.advance_inventory(work)?;
             Ok(moved)

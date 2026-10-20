@@ -1,6 +1,6 @@
 use super::*;
 use crate::playercolor_host::{CombatActor, CombatTraceEvent};
-use pcx_objects::editor::misc::{CombatRules, HeroVitals};
+use pcx_objects::editor::misc::{CombatRules, DayCycle, HeroVitals};
 use pcx_script::HandleId;
 type Vm = pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>;
 
@@ -46,12 +46,16 @@ const MAP: &str = r#"
 globals
 unit A=null
 unit B=null
+unit C=null
 trigger Died=null
 trigger Hit=null
 endglobals
 function setup takes nothing returns nothing
 set A=CreateUnit(Player(4),'u001',16.0,16.0,0.0)
 set B=CreateUnit(Player(5),'u001',48.0,16.0,180.0)
+endfunction
+function spawn takes nothing returns nothing
+set C=CreateUnit(Player(4),'u001',16.0,16.0,0.0)
 endfunction
 function protect takes nothing returns nothing
 call SetUnitInvulnerable(B,true)
@@ -101,6 +105,9 @@ fn armed(range: &str, weapon: &str) -> Vec<([u8; 4], ObjectField)> {
         column(b"H003", B, "mana0", Int, "-"),
         column(b"H004", B, "def", Int, "2"),
         column(b"H005", B, "defType", Token, "medium"),
+        column(b"H006", B, "regenHP", Real, "0"),
+        column(b"H007", B, "regenMana", Real, "-"),
+        column(b"H008", B, "regenType", Token, "none"),
         column(b"W001", W, "weapsOn", Int, "1"),
         column(b"W002", W, "atkType1", Token, "pierce"),
         column(b"W003", W, "weapTp1", Token, weapon),
@@ -142,17 +149,58 @@ fn open_selected(
     heroes: Option<crate::hero_skills::Rules>,
     combat: CombatRules,
 ) -> (Vm, HandleId, HandleId) {
+    open_fixture(fields, heroes, combat, false)
+}
+
+/// The same fixture with the source fgamestate clock and time-of-day admitted at hour 9.
+fn open_clocked(
+    fields: &[([u8; 4], ObjectField)],
+    combat: CombatRules,
+) -> (Vm, HandleId, HandleId) {
+    open_fixture(fields, None, combat, true)
+}
+
+/// Clock declarations: the stock `CLOCK` handle and the stock dawn/dusk window.
+const CLOCK_DECLARATIONS: &str = r#"
+type fgamestate extends handle
+constant native ConvertFGameState takes integer i returns fgamestate
+constant native GetFloatGameState takes fgamestate s returns real
+native SetFloatGameState takes fgamestate s, real v returns nothing
+native SuspendTimeOfDay takes boolean b returns nothing
+native SetTimeOfDayScale takes real r returns nothing
+native GetTimeOfDayScale takes nothing returns real
+globals
+constant fgamestate CLOCK = ConvertFGameState(2)
+constant real bj_TOD_DAWN = 6.00
+constant real bj_TOD_DUSK = 18.00
+endglobals
+"#;
+
+fn open_fixture(
+    fields: &[([u8; 4], ObjectField)],
+    heroes: Option<crate::hero_skills::Rules>,
+    combat: CombatRules,
+    clock: bool,
+) -> (Vm, HandleId, HandleId) {
     let extra = format!(
-        "{}\n{}{DECLARATIONS}",
+        "{}\n{}{DECLARATIONS}{}",
         enumeration::TRIGGERS,
-        super::activity::ORDERS
+        super::activity::ORDERS,
+        if clock { CLOCK_DECLARATIONS } else { "" }
     );
     let map = if heroes.is_some() {
         MAP.replacen("'u001'", "'H001'", 1)
     } else {
         MAP.into()
     };
-    let h = position_host_admitting(1000, 16, &map, &extra, fields, |h| h);
+    let h = position_host_admitting(1000, 16, &map, &extra, fields, |h| {
+        if clock {
+            h.with_startup_clock(crate::startup_clock::tests::input(9), "CLOCK", 64, 16, 1000)
+                .unwrap()
+        } else {
+            h
+        }
+    });
     let (registry, activity) = super::activity::rules();
     let mut h = h
         .with_locations()
@@ -204,10 +252,20 @@ fn open_selected(
             .unwrap();
     }
     h.admit_unit_activity(activity, 65536).unwrap();
+    if clock {
+        h.admit_time_of_day(&DayCycle {
+            day_length: 480.0,
+            day_hours: 24.0,
+            sources: vec!["synthetic".into()],
+        })
+        .unwrap();
+    }
     h.native("SetRandomSeed", &[Value::Int(7)]).unwrap();
     h.admit_unit_vitals(HeroVitals {
         life_per_strength: 25.0,
         mana_per_intelligence: 15.0,
+        life_regen_per_strength: 0.0,
+        mana_regen_per_intelligence: 0.0,
     })
     .unwrap();
     h.admit_combat(combat, "alpha").unwrap();
@@ -223,7 +281,6 @@ fn open_selected(
     let (a, b) = (id(&vm, "A"), id(&vm, "B"));
     (vm, a, b)
 }
-
 fn step(vm: &mut Vm, until: f64) {
     let h = &mut vm.host().inner;
     while h.timer_game_time().unwrap() < until {
@@ -1508,4 +1565,244 @@ fn explicit_target_order_attacks_a_passive_ally_while_acquisition_skips_it() {
         h.combat_trace().unwrap().events()[0],
         CombatTraceEvent::Ordered { .. }
     ));
+}
+
+/// `armed` with regeneration rates and a 50-point mana pool. Keys `H002`/`H003`
+/// override the base mana columns, and `H006`..`H008` the regeneration columns.
+fn regen_fields(
+    life_per_second: &str,
+    life_type: &str,
+    mana_per_second: &str,
+) -> Vec<([u8; 4], ObjectField)> {
+    let mut fields = armed("64", "normal");
+    for (id, column_name, kind, value) in [
+        (b"H002", "manaN", FieldKind::Int, "50"),
+        (b"H003", "mana0", FieldKind::Int, "0"),
+        (b"H006", "regenHP", FieldKind::Real, life_per_second),
+        (b"H007", "regenMana", FieldKind::Real, mana_per_second),
+        (b"H008", "regenType", FieldKind::Token, life_type),
+    ] {
+        fields.push(column(id, SlkId::UnitBalance, column_name, kind, value));
+    }
+    fields
+}
+
+fn set_pools(vm: &mut Vm, unit: HandleId, life: f32, mana: f32) {
+    let state = |vm: &mut Vm, name: &str| vm.global(name);
+    for (name, value) in [("UNIT_STATE_LIFE", life), ("UNIT_STATE_MANA", mana)] {
+        let property = state(vm, name);
+        vm.host()
+            .inner
+            .native(
+                "SetUnitState",
+                &[Value::Handle(unit), property, Value::Real(value)],
+            )
+            .unwrap();
+    }
+}
+
+fn pools(vm: &mut Vm, unit: HandleId) -> (f32, f32) {
+    let v = vm.host().inner.unit_vitals(unit).unwrap().unwrap();
+    (v.life, v.mana)
+}
+
+#[test]
+fn regeneration_integrates_stock_rates_and_caps_at_maxima_for_any_tick_chunking() {
+    let fields = regen_fields("0.25", "always", "0.5");
+    let (mut whole, a, b) = open(&fields);
+    let (mut stepped, c, d) = open(&fields);
+    set_pools(&mut whole, a, 5.0, 0.0);
+    set_pools(&mut whole, b, 19.9, 49.0);
+    set_pools(&mut stepped, c, 5.0, 0.0);
+    set_pools(&mut stepped, d, 19.9, 49.0);
+    whole
+        .host()
+        .inner
+        .next_timer_expiry(10.0, &mut 100)
+        .unwrap();
+    whole
+        .host()
+        .inner
+        .advance_unit_activity(10.0, &mut 65536)
+        .unwrap();
+    step(&mut stepped, 10.0);
+    // 5 + 0.25 * 10 and 0 + 0.5 * 10 are exact; the second unit hits both maxima.
+    assert_eq!(pools(&mut whole, a), (7.5, 5.0));
+    assert_eq!(pools(&mut stepped, c), (7.5, 5.0));
+    assert_eq!(pools(&mut whole, b), (20.0, 50.0));
+    assert_eq!(pools(&mut stepped, d), (20.0, 50.0));
+}
+
+#[test]
+fn regeneration_never_applies_to_units_without_rate_or_with_none() {
+    let fields = regen_fields("0", "none", "0");
+    let (mut vm, a, _) = open(&fields);
+    set_pools(&mut vm, a, 5.0, 0.0);
+    step(&mut vm, 10.0);
+    assert_eq!(pools(&mut vm, a), (5.0, 0.0));
+}
+
+#[test]
+fn night_and_blight_regeneration_refuse_without_their_source_state() {
+    for (life_type, reason) in [
+        (
+            "night",
+            "day/night regeneration needs the admitted time-of-day window",
+        ),
+        ("blight", "blight regeneration needs terrain blight state"),
+    ] {
+        let fields = regen_fields("0.25", life_type, "0");
+        let (mut vm, a, _) = open(&fields);
+        set_pools(&mut vm, a, 5.0, 0.0);
+        vm.host().inner.next_timer_expiry(1.0, &mut 100).unwrap();
+        let error = vm
+            .host()
+            .inner
+            .advance_unit_activity(1.0, &mut 65536)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(reason), "{life_type}: {error}");
+        // The refused span is not integrated: the pool and projection clock are unchanged.
+        assert_eq!(pools(&mut vm, a), (5.0, 0.0));
+    }
+}
+
+#[test]
+fn dead_units_do_not_regenerate_and_their_clock_still_advances() {
+    let fields = regen_fields("0.25", "always", "0.5");
+    let (mut vm, a, _) = open(&fields);
+    vm.host()
+        .inner
+        .native("KillUnit", &[Value::Handle(a)])
+        .unwrap();
+    // Life above zero on a dead unit isolates the dead flag from the lifeless check.
+    set_pools(&mut vm, a, 5.0, 0.0);
+    step(&mut vm, 10.0);
+    let vitals = vm.host().inner.unit_vitals(a).unwrap().unwrap();
+    assert_eq!((vitals.life, vitals.mana), (5.0, 0.0));
+    assert_eq!(vitals.regen.through, 10.0);
+}
+
+fn clock_hour(vm: &mut Vm, hour: f64) -> Result<Value, String> {
+    let clock = vm.global("CLOCK");
+    vm.host()
+        .inner
+        .native("SetFloatGameState", &[clock, Value::Real(hour as f32)])
+}
+
+fn clock_scale(vm: &mut Vm, scale: f32) -> Result<Value, String> {
+    vm.host()
+        .inner
+        .native("SetTimeOfDayScale", &[Value::Real(scale)])
+}
+
+fn assert_pools(vm: &mut Vm, unit: HandleId, life: f32, mana: f32) {
+    let (l, m) = pools(vm, unit);
+    assert!(
+        (l - life).abs() < 1e-3 && (m - mana).abs() < 1e-3,
+        "pools ({l}, {m}) != ({life}, {mana})"
+    );
+}
+
+#[test]
+fn clock_rebases_integrate_each_span_once_for_day_and_night_regeneration() {
+    // Hour 17.5 at scale 1 (0.05 h/s). The clock moves to t=6 without projecting the
+    // unit, then scale 2 (0.1 h/s) rebases there: 0 to 6 s is at 0.05 h/s (all day),
+    // 6 to 8 s at 0.1 h/s reaches dusk, so day spans 8 s of 20 s.
+    for (life_type, expected) in [("day", 13.0), ("night", 17.0)] {
+        let fields = regen_fields("1", life_type, "0");
+        let (mut vm, a, _) = open_clocked(&fields, rules());
+        set_pools(&mut vm, a, 5.0, 0.0);
+        clock_hour(&mut vm, 17.5).unwrap();
+        clock_scale(&mut vm, 1.0).unwrap();
+        step(&mut vm, 4.0);
+        vm.host().inner.next_timer_expiry(6.0, &mut 8).unwrap();
+        clock_scale(&mut vm, 2.0).unwrap();
+        step(&mut vm, 20.0);
+        assert_pools(&mut vm, a, expected, 0.0);
+    }
+}
+
+#[test]
+fn rejected_clock_change_leaves_pools_and_clock_unchanged() {
+    let fields = regen_fields("1", "day", "0");
+    let (mut vm, a, _) = open_clocked(&fields, rules());
+    set_pools(&mut vm, a, 5.0, 0.0);
+    clock_hour(&mut vm, 17.5).unwrap();
+    clock_scale(&mut vm, 1.0).unwrap();
+    step(&mut vm, 4.0);
+    let before = pools(&mut vm, a);
+    assert!(clock_scale(&mut vm, f32::NAN).is_err());
+    assert!(clock_hour(&mut vm, f64::NAN).is_err());
+    assert_eq!(pools(&mut vm, a), before);
+    assert_eq!(
+        vm.host().inner.native("GetTimeOfDayScale", &[]).unwrap(),
+        Value::Real(1.0)
+    );
+    // Scale 1 reaches dusk at t=10, so day covers 10 s of the 20 s span.
+    step(&mut vm, 20.0);
+    assert_pools(&mut vm, a, 15.0, 0.0);
+}
+
+#[test]
+fn mid_run_units_and_manually_lifed_dead_units_gain_no_retroactive_regeneration() {
+    let fields = regen_fields("1", "always", "0");
+    let (mut vm, a, _) = open(&fields);
+    set_pools(&mut vm, a, 5.0, 0.0);
+    step(&mut vm, 5.0);
+    vm.call("spawn", &[]).unwrap();
+    let c = match vm.global("C") {
+        Value::Handle(id) => id,
+        other => panic!("spawned unit: {other:?}"),
+    };
+    set_pools(&mut vm, c, 5.0, 0.0);
+    step(&mut vm, 10.0);
+    assert_pools(&mut vm, a, 15.0, 0.0);
+    assert_pools(&mut vm, c, 10.0, 0.0);
+
+    // Manual fixture policy, not a revive: the dead flag stays set and SetUnitState writes life.
+    // ReviveHero/ReviveHeroLoc are declared by common.j but not admitted by this host.
+    vm.host()
+        .inner
+        .native("KillUnit", &[Value::Handle(a)])
+        .unwrap();
+    step(&mut vm, 13.0);
+    set_pools(&mut vm, a, 5.0, 0.0);
+    step(&mut vm, 20.0);
+    assert_pools(&mut vm, a, 5.0, 0.0);
+    assert_eq!(
+        vm.host()
+            .inner
+            .unit_vitals(a)
+            .unwrap()
+            .unwrap()
+            .regen
+            .through,
+        20.0
+    );
+}
+
+#[test]
+fn moving_unit_regenerates_at_its_rate_while_it_travels() {
+    let fields = regen_fields("1", "always", "0");
+    let (mut vm, a, _) = open(&fields);
+    set_pools(&mut vm, a, 5.0, 0.0);
+    let ordered = vm
+        .host()
+        .inner
+        .native(
+            "IssuePointOrder",
+            &[
+                Value::Handle(a),
+                Value::Str("gamma".into()),
+                Value::Real(72.0),
+                Value::Real(16.0),
+            ],
+        )
+        .unwrap();
+    assert_eq!(ordered, Value::Bool(true));
+    step(&mut vm, 10.0);
+    assert_pools(&mut vm, a, 15.0, 0.0);
+    let position = vm.host().inner.executed_unit(a).unwrap().position.unwrap();
+    assert!((position[0] - 72.0).abs() < 1e-3, "{position:?}");
 }

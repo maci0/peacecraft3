@@ -261,20 +261,33 @@ impl DayCycle {
     }
 }
 
-/// Hero attribute bonuses (`Misc/StrHitPointBonus`, `Misc/IntManaBonus`).
+/// Hero attribute bonuses (`Misc/StrHitPointBonus`, `Misc/IntManaBonus`) and
+/// per-attribute regeneration rates (`Misc/StrRegenBonus`, `Misc/IntRegenBonus`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HeroVitals {
     pub life_per_strength: f32,
     pub mana_per_intelligence: f32,
+    pub life_regen_per_strength: f32,
+    pub mana_regen_per_intelligence: f32,
 }
 
 impl HeroVitals {
     pub fn read(profiles: &[(&str, &[u8])], max_bytes: usize) -> Result<Self, String> {
-        let ([life, mana], _) =
-            misc_scalars(profiles, ["StrHitPointBonus", "IntManaBonus"], max_bytes)?;
+        let ([life, mana, life_regen, mana_regen], _) = misc_scalars(
+            profiles,
+            [
+                "StrHitPointBonus",
+                "IntManaBonus",
+                "StrRegenBonus",
+                "IntRegenBonus",
+            ],
+            max_bytes,
+        )?;
         Ok(Self {
             life_per_strength: life.ok_or("missing Misc/StrHitPointBonus")?,
             mana_per_intelligence: mana.ok_or("missing Misc/IntManaBonus")?,
+            life_regen_per_strength: life_regen.ok_or("missing Misc/StrRegenBonus")?,
+            mana_regen_per_intelligence: mana_regen.ok_or("missing Misc/IntRegenBonus")?,
         })
     }
 }
@@ -386,10 +399,16 @@ mod tests {
 
     #[test]
     fn hero_vitals_read_attribute_bonuses() {
-        let base = b"[Misc]\nStrHitPointBonus=7\nIntManaBonus=3.5\n";
+        let base = b"[Misc]\nStrHitPointBonus=7\nIntManaBonus=3.5\nStrRegenBonus=0.05\nIntRegenBonus=0.5\n";
         let map = b"[Misc]\nIntManaBonus=4\n";
         let v = HeroVitals::read(&[("stock", base), ("map", map)], 256).unwrap();
         assert_eq!((v.life_per_strength, v.mana_per_intelligence), (7.0, 4.0));
+        assert_eq!(
+            (v.life_regen_per_strength, v.mana_regen_per_intelligence),
+            (0.05, 0.5)
+        );
         assert!(HeroVitals::read(&[("bad", b"[Misc]\nIntManaBonus=1\n")], 256).is_err());
+        let no_regen = b"[Misc]\nStrHitPointBonus=7\nIntManaBonus=3.5\n";
+        assert!(HeroVitals::read(&[("stock", no_regen)], 256).is_err());
     }
 }

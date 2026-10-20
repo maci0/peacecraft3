@@ -1,13 +1,41 @@
 //! Live life and mana on executed units, from each unit's resolved
 //! `UnitBalance` columns plus selected hero attribute bonuses. State names
 //! resolve through the script's own `UNIT_STATE_*` constants.
+//!
+//! Regeneration integrates the per-second rates over game time between
+//! advances. Day and night eligibility uses the admitted time-of-day clock.
 use super::unit_activity::balance_real;
 use super::{Entry, Error, Failure, ObjectHost};
+use pcx_objects::editor::FieldSource;
 use pcx_objects::editor::misc::HeroVitals;
+use pcx_objects::editor::{FieldKind, SlkId};
 use pcx_script::{HandleId, Value};
-use pcx_sim::world::Definition;
+use pcx_sim::world::{Definition, FieldValue};
 
 const GET: &str = "GetUnitState";
+const REGEN: &str = "unit regeneration";
+
+/// `UnitBalance` `regenType` tokens. Only the four stock tokens and `day` are admitted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RegenType {
+    Always,
+    Day,
+    Night,
+    Never,
+    /// Blight terrain regeneration. Blight ground state is not modelled.
+    Blight,
+}
+
+/// Per-second rates before the hero attribute terms, and the life eligibility token.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Regen {
+    pub life_per_second: f32,
+    pub mana_per_second: f32,
+    pub life_type: RegenType,
+    /// Game time through which this unit's regeneration is integrated. Set to the
+    /// creation time, so a unit never regenerates for time before it existed.
+    pub through: f64,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Vitals {
@@ -15,6 +43,7 @@ pub struct Vitals {
     pub max_life: f32,
     pub mana: f32,
     pub max_mana: f32,
+    pub regen: Regen,
 }
 
 pub(super) struct Rules {
@@ -23,15 +52,51 @@ pub(super) struct Rules {
     states: [i32; 4],
 }
 
-/// An SLK `-` cell is empty; an empty mana column is no mana pool.
-fn mana_column(definition: &Definition, column: &str) -> Result<f32, String> {
+/// An SLK `-` cell is empty and reads as zero for a numeric column.
+fn balance_or_empty(definition: &Definition, column: &str) -> Result<f32, String> {
     match balance_real(definition, column) {
-        Err(_) if definition.fields.values().any(|f| {
-            f.metadata.as_ref().is_some_and(|m| {
-                matches!(&m.source, pcx_objects::editor::FieldSource::Column { column: c, .. } if c == column)
-            }) && matches!(&f.value, Ok(pcx_sim::world::FieldValue::Cell(s)) if s.trim() == "-")
-        }) => Ok(0.0),
+        Err(_)
+            if definition.fields.values().any(|f| {
+                f.metadata.as_ref().is_some_and(
+                    |m| matches!(&m.source, FieldSource::Column { column: c, .. } if c == column),
+                ) && matches!(&f.value, Ok(FieldValue::Cell(s)) if s.trim() == "-")
+            }) =>
+        {
+            Ok(0.0)
+        }
         other => other,
+    }
+}
+
+/// The `UnitBalance` `regenType` token of a resolved unit.
+fn regen_type(definition: &Definition) -> Result<RegenType, String> {
+    let mut matches = definition.fields.iter().filter(|(id, f)| {
+        f.metadata.as_ref().is_some_and(|m| {
+            m.fourcc == **id
+                && m.from == SlkId::UnitMetaData
+                && matches!(m.index, -1 | 0)
+                && m.kind == FieldKind::Token
+                && matches!(&m.source, FieldSource::Column { slk: SlkId::UnitBalance, column } if column == "regenType")
+        })
+    });
+    let (_, field) = matches.next().ok_or("missing unit balance regenType")?;
+    if matches.next().is_some() {
+        return Err("ambiguous unit balance regenType".into());
+    }
+    let FieldValue::Cell(token) = field
+        .value
+        .as_ref()
+        .map_err(|e| format!("regenType: {e:?}"))?
+    else {
+        return Err("unsupported unit balance regenType field".into());
+    };
+    match token.trim() {
+        "always" => Ok(RegenType::Always),
+        "day" => Ok(RegenType::Day),
+        "night" => Ok(RegenType::Night),
+        "none" => Ok(RegenType::Never),
+        "blight" => Ok(RegenType::Blight),
+        other => Err(format!("unsupported regenType {other}")),
     }
 }
 
@@ -45,6 +110,13 @@ impl ObjectHost {
             return Err(self.inner.error(
                 GET,
                 Failure::UnitState("vitals require the unit catalog and no created units, once"),
+            ));
+        }
+        // Regeneration advances with the unit activity projection, so it needs that clock.
+        if self.unit_activity.is_none() {
+            return Err(self.inner.error(
+                GET,
+                Failure::UnitState("vitals regeneration requires admitted unit activity"),
             ));
         }
         Self::contract(
@@ -84,8 +156,16 @@ impl ObjectHost {
         };
         let fail = |e: String| self.inner.error(GET, Failure::UnitActivity(e));
         let mut max_life = balance_real(definition, "HP").map_err(fail)?;
-        let mut max_mana = mana_column(definition, "manaN").map_err(fail)?;
-        let mut mana = mana_column(definition, "mana0").map_err(fail)?;
+        let mut max_mana = balance_or_empty(definition, "manaN").map_err(fail)?;
+        let mut mana = balance_or_empty(definition, "mana0").map_err(fail)?;
+        let regen = Regen {
+            life_per_second: balance_or_empty(definition, "regenHP").map_err(fail)?,
+            mana_per_second: balance_or_empty(definition, "regenMana").map_err(fail)?,
+            life_type: regen_type(definition).map_err(fail)?,
+            through: self
+                .timer_game_time()
+                .ok_or_else(|| fail("regeneration requires the game clock".into()))?,
+        };
         if definition.rawcode[0].is_ascii_uppercase() {
             let strength = balance_real(definition, "STR").map_err(fail)?;
             let intelligence = balance_real(definition, "INT").map_err(fail)?;
@@ -98,6 +178,7 @@ impl ObjectHost {
             max_life,
             mana: mana.min(max_mana),
             max_mana,
+            regen,
         }))
     }
 
@@ -143,6 +224,115 @@ impl ObjectHost {
 
     pub fn unit_vitals(&self, unit: HandleId) -> Result<Option<Vitals>, Error> {
         Ok(self.executed_unit(unit)?.vitals)
+    }
+
+    /// Integrate each unit's life and mana regeneration from its own clock to `now`.
+    /// Dead and nonpositive-life units do not regenerate. Errors leave every pool
+    /// and clock unchanged, so a retry integrates the same spans.
+    pub(super) fn advance_unit_regen(&mut self, now: f64) -> Result<(), Error> {
+        let Some(rules) = &self.unit_vitals else {
+            return Ok(());
+        };
+        let bonuses = rules.bonuses;
+        let fail = |e: String| self.inner.error(REGEN, Failure::UnitActivity(e));
+        if !now.is_finite() {
+            return Err(fail("finite game time required".into()));
+        }
+        let units: Vec<HandleId> = self
+            .executed_units()
+            .filter(|(_, u)| u.vitals.is_some())
+            .map(|(id, _)| id)
+            .collect();
+        let mut next = Vec::with_capacity(units.len());
+        for unit in units {
+            let record = self.executed_unit(unit)?;
+            let vitals = record.vitals.expect("filtered to vitals");
+            let from = vitals.regen.through;
+            if now < from {
+                return Err(fail("unit regeneration clock moved backwards".into()));
+            }
+            if now == from {
+                continue;
+            }
+            // The clock still moves on a dead or lifeless unit, so a later revive
+            // cannot regenerate across the dead span.
+            if record.combat.as_ref().is_some_and(|c| c.dead) || vitals.life <= 0.0 {
+                next.push((unit, vitals.life, vitals.mana));
+                continue;
+            }
+            let elapsed = now - from;
+            let (life_rate, mana_rate) = self.regen_rates(unit, &bonuses)?;
+            let daytime = self.daytime_between(from, now);
+            let day = || match &daytime {
+                Ok(Some(seconds)) => Ok(*seconds),
+                Ok(None) => Err(fail(
+                    "day/night regeneration needs the admitted time-of-day window".into(),
+                )),
+                Err(reason) => Err(fail(reason.clone())),
+            };
+            let life_seconds = if life_rate == 0.0 {
+                0.0
+            } else {
+                match vitals.regen.life_type {
+                    RegenType::Always => elapsed,
+                    RegenType::Never => 0.0,
+                    RegenType::Day => day()?,
+                    RegenType::Night => elapsed - day()?,
+                    RegenType::Blight => {
+                        return Err(fail(
+                            "blight regeneration needs terrain blight state".into(),
+                        ));
+                    }
+                }
+            };
+            let life =
+                (f64::from(vitals.life) + life_rate * life_seconds).min(f64::from(vitals.max_life));
+            let mana = (f64::from(vitals.mana) + mana_rate * elapsed)
+                .clamp(0.0, f64::from(vitals.max_mana));
+            next.push((unit, life as f32, mana as f32));
+        }
+        for (unit, life, mana) in next {
+            if let Entry::Unit { record } = self.inner.entry_mut(unit)?
+                && let Some(vitals) = &mut record.vitals
+            {
+                vitals.life = life;
+                vitals.mana = mana;
+                vitals.regen.through = now;
+            }
+        }
+        Ok(())
+    }
+
+    /// Per-second life and mana rates: the stock `UnitBalance` columns, plus the hero
+    /// `Misc/StrRegenBonus` and `Misc/IntRegenBonus` terms from derived STR and INT.
+    fn regen_rates(&self, unit: HandleId, bonuses: &HeroVitals) -> Result<(f64, f64), Error> {
+        let record = self.executed_unit(unit)?;
+        let vitals = record.vitals.expect("filtered to vitals");
+        let mut life = f64::from(vitals.regen.life_per_second);
+        let mut mana = f64::from(vitals.regen.mana_per_second);
+        if record.definition.rawcode[0].is_ascii_uppercase() {
+            let progress = self.hero_initial_level().zip(
+                record
+                    .abilities
+                    .as_ref()
+                    .and_then(|a| a.hero.as_ref())
+                    .map(|h| h.level),
+            );
+            let bonus = self.unit_hero_bonus(unit)?;
+            let derive = |name: &str| {
+                Self::derive_hero_attribute(&record.definition, progress, bonus, name)
+                    .map_err(|e| self.inner.error(REGEN, Failure::UnitActivity(e)))
+            };
+            life += f64::from(derive("STR")?) * f64::from(bonuses.life_regen_per_strength);
+            mana += f64::from(derive("INT")?) * f64::from(bonuses.mana_regen_per_intelligence);
+        }
+        if !(life.is_finite() && life >= 0.0 && mana.is_finite() && mana >= 0.0) {
+            return Err(self.inner.error(
+                REGEN,
+                Failure::UnitActivity("invalid regeneration rate".into()),
+            ));
+        }
+        Ok((life, mana))
     }
 
     /// `SetUnitState` on an admitted state: life and mana stay within their
@@ -223,6 +413,7 @@ fn adjust_hero_vitals(old: Vitals, life_delta: f32, mana_delta: f32) -> Result<V
         max_life: old.max_life + life_delta,
         mana: old.mana + mana_delta,
         max_mana: old.max_mana + mana_delta,
+        regen: old.regen,
     };
     if [
         old.life,
@@ -258,11 +449,18 @@ mod tests {
     use super::*;
     #[test]
     fn hero_vital_delta_preserves_absolute_deficit_and_clamps_mana() {
+        let regen = Regen {
+            life_per_second: 0.25,
+            mana_per_second: 0.01,
+            life_type: RegenType::Always,
+            through: 0.0,
+        };
         let old = Vitals {
             life: 40.0,
             max_life: 100.0,
             mana: 7.0,
             max_mana: 40.0,
+            regen,
         };
         let next = adjust_hero_vitals(old, 25.0, 15.0).unwrap();
         assert_eq!(
@@ -271,7 +469,8 @@ mod tests {
                 life: 65.0,
                 max_life: 125.0,
                 mana: 22.0,
-                max_mana: 55.0
+                max_mana: 55.0,
+                regen,
             }
         );
         assert_ne!(next.life / next.max_life, old.life / old.max_life);
@@ -282,7 +481,8 @@ mod tests {
                 life: 25.0,
                 max_life: 85.0,
                 mana: 0.0,
-                max_mana: 30.0
+                max_mana: 30.0,
+                regen,
             }
         );
         for (life, mana) in [
