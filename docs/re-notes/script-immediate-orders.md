@@ -270,6 +270,24 @@ a measured screen speed that these frames do not yield. The next capture needs a
 static background (for example, a non-following camera on a flat, textured area)
 and a wall-to-game clock calibration from frame events.
 
+Obstruction, from the same run's records. Emoo reached (-2417.4, 1794.3) at game
+clock 3.25 s and stopped. Its move order stayed current until 5.25 s, then cleared
+with no script call in between: the probe issues orders only at 1.0 s and 4.0 s,
+and the 4.0 s order belongs to the other unit. Whether the clear was a route
+timeout, a path failure or another native cause is not established.
+
+Displacement on the timer clock: the Emoo's straight segment (game clock 1.0 to
+2.75 s) covers 427.8 units, 244.5 units per game second against a reported
+`GetUnitMoveSpeed` of 320 (ratio 0.76). The Watcher over 4.0 to 8.5 s, which
+includes stops and a detour, gives 0.73. The gap exceeds the clock's 62.5 ms
+step, so it is not timer quantization. Its cause (clock scale, movement scale or
+path) is unresolved, and it bears on any rate rule that uses spd.
+
+A static-camera diagnostic (`probe-diag.j`, Human01 source ground, runtime-chosen
+clear strip checked against `IsTerrainPathable`, fast and slow units in parallel
+lanes, game-clock record every tick) builds and resolves. It is not yet run. The
+period estimator on game-clock time recovers the three candidate periods on a
+synthetic signal to within 6 ms. That check does not measure real uncertainty.
 
 The ratio source is therefore undecided: SEQS `move_speed`, UnitUI `walk`, or
 another authored field. No native code or original-client capture checks any of
