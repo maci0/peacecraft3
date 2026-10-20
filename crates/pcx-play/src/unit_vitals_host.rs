@@ -94,6 +94,44 @@ impl ObjectHost {
         }))
     }
 
+    /// Stage the vital side of a level change before changing hero counters.
+    /// Native level-up applies the change in attribute contribution to both pools.
+    pub(super) fn prepare_hero_vital_level(
+        &self,
+        unit: HandleId,
+        next: i32,
+    ) -> Result<Option<Vitals>, Error> {
+        let Some(rules) = &self.unit_vitals else {
+            return Ok(None);
+        };
+        let record = self.executed_unit(unit)?;
+        let Some(vitals) = record.vitals else {
+            return Err(self
+                .inner
+                .error("SetHeroLevel", Failure::UnitState("vitals missing")));
+        };
+        let current = record
+            .abilities
+            .as_ref()
+            .and_then(|a| a.hero.as_ref())
+            .map(|h| h.level);
+        let old = self.hero_initial_level().zip(current);
+        let new = self.hero_initial_level().map(|initial| (initial, next));
+        let result = || -> Result<Vitals, String> {
+            let delta = |name: &str, coefficient: f32| -> Result<f32, String> {
+                Ok((Self::derive_hero_attribute(&record.definition, new, name)?
+                    - Self::derive_hero_attribute(&record.definition, old, name)?)
+                    * coefficient)
+            };
+            let life = delta("STR", rules.bonuses.life_per_strength)?;
+            let mana = delta("INT", rules.bonuses.mana_per_intelligence)?;
+            adjust_hero_vitals(vitals, life, mana)
+        };
+        result()
+            .map(Some)
+            .map_err(|e| self.inner.error("SetHeroLevel", Failure::UnitActivity(e)))
+    }
+
     pub fn unit_vitals(&self, unit: HandleId) -> Result<Option<Vitals>, Error> {
         Ok(self.executed_unit(unit)?.vitals)
     }
@@ -166,5 +204,85 @@ impl ObjectHost {
                 [vitals.life, vitals.max_life, vitals.mana, vitals.max_mana][slot],
             ))
         })())
+    }
+}
+
+/// Preserve explicit maximum changes and the absolute deficit, rather than a percentage.
+fn adjust_hero_vitals(old: Vitals, life_delta: f32, mana_delta: f32) -> Result<Vitals, String> {
+    let mut next = Vitals {
+        life: old.life + life_delta,
+        max_life: old.max_life + life_delta,
+        mana: old.mana + mana_delta,
+        max_mana: old.max_mana + mana_delta,
+    };
+    if [
+        old.life,
+        old.max_life,
+        old.mana,
+        old.max_mana,
+        life_delta,
+        mana_delta,
+        next.life,
+        next.max_life,
+        next.mana,
+        next.max_mana,
+    ]
+    .iter()
+    .any(|n| !n.is_finite())
+        || next.max_life <= 0.0
+        || next.max_mana < 0.0
+    {
+        return Err("invalid derived hero vital pools".into());
+    }
+    if old.life <= 0.0 || next.life <= 0.0 {
+        return Err(
+            "hero vital change across the living/dead minimum boundary is not derived".into(),
+        );
+    }
+    next.life = next.life.min(next.max_life);
+    next.mana = next.mana.clamp(0.0, next.max_mana);
+    Ok(next)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn hero_vital_delta_preserves_absolute_deficit_and_clamps_mana() {
+        let old = Vitals {
+            life: 40.0,
+            max_life: 100.0,
+            mana: 7.0,
+            max_mana: 40.0,
+        };
+        let next = adjust_hero_vitals(old, 25.0, 15.0).unwrap();
+        assert_eq!(
+            next,
+            Vitals {
+                life: 65.0,
+                max_life: 125.0,
+                mana: 22.0,
+                max_mana: 55.0
+            }
+        );
+        assert_ne!(next.life / next.max_life, old.life / old.max_life);
+        let lower = adjust_hero_vitals(old, -15.0, -10.0).unwrap();
+        assert_eq!(
+            lower,
+            Vitals {
+                life: 25.0,
+                max_life: 85.0,
+                mana: 0.0,
+                max_mana: 30.0
+            }
+        );
+        for (life, mana) in [
+            (-40.0, 0.0),
+            (f32::INFINITY, 0.0),
+            (0.0, f32::NAN),
+            (0.0, -41.0),
+        ] {
+            assert!(adjust_hero_vitals(old, life, mana).is_err());
+        }
     }
 }

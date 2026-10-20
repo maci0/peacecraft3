@@ -3526,9 +3526,9 @@ repeated, and the public site package was not rebuilt.
   the actual saved music/effects gains remain zero and their file hash is
   unchanged. The dedicated sink and owned process were removed afterward.
   This verifies output routing, not physical speakers or original-game parity.
-- [ ] The menu music lifecycle still ignores active campaigns. Inventory and
-  pickup events, normal defeat removal, upkeep, full mission/campaign progression
-  and original/native/browser rendering comparisons remain open.
+- [x] Menu music now pauses during campaign or intro ownership and resumes on
+  return. The lifecycle regression and selected-original preplayback gate pass.
+  Full mission/campaign progression and original/native/browser comparisons remain open.
 
 - [x] Final v15 frozen-source checks pass: 1,556 affected native cases, ten explicit
   original-source gates, 758 actual WASI cases, 51 cases on browser-target WASM
@@ -3539,3 +3539,45 @@ repeated, and the public site package was not rebuilt.
   successful circle gate. Local records stay under
   `.scratch/campaign-gameplay-20261020-v15/` and
   `.scratch/campaign-objective-20261020/normal-gui-v15/`.
+
+
+### 2026-10-20 — inventory, result transitions and live presentation
+
+- [x] Inventory capacity/permissions derive from selected ability metadata, W3A
+  overlays and profiles. Canonical ground/held/removed item identities, slot and
+  ownership queries, routed pickup, response events and death/removal policies
+  execute in the shared Host. Powerup effects and unsupported item actions refuse.
+- [x] Ground items render their resolved model, scale and colors through the
+  existing model/material renderer. Pointer targeting intersects source model
+  bounds and issues a real pickup order. A private native fixture visibly renders
+  a synthetic ledger, right-clicks its projected model bounds, and observes the
+  same item held in Arthas's slot with its ground actor retired. This is a
+  component/input gate, not authored ledger quest completion. Inventory icons,
+  item use/passive effects and drag/drop/give controls remain open.
+- [x] Source-qualified `RemovePlayer` preserves the VM and player/controller
+  identity, retains sticky results and queues typed result events. The unchanged
+  no-input Human01 defeat path passes removal and now stops at
+  `GetLocalizedString` in the defeat helper. Localization, hotkeys and simulation
+  pause still block the authored defeat dialog.
+- [x] Hero level changes update maximum/current life and mana by the source
+  attribute contribution delta, preserving missing resources and explicit maxima.
+  Unqualified living/dead boundary transitions refuse atomically.
+- [x] Upkeep labels consume effective food, selected-edition thresholds and
+  selected localized strings, including custom-rank fallback and inline colors.
+  A normal native Human01 view visibly displays No Upkeep. Observer presentation
+  and economic tax behavior are separate remaining requirements.
+- [x] Selection projection reads the native image height offset and strict texture
+  band boundary from the selected executable. A normal native automatic Escape
+  capture shows the initial selected hero's green rim around its blue aura;
+  no manual selection workaround or inferred size doubling is used. Original-game
+  and browser rendered comparison remain open.
+- [x] Frozen-source v17 gates: 1,585 affected native cases, 15 explicit local
+  original-source gates, 781 actual WASI cases, 51 browser-target WASM cases under
+  Node, strict native/browser all-target Clippy, formatting and full native/browser
+  builds pass. Evidence stays local in `.scratch/campaign-gameplay-20261020-v17/`
+  and `.scratch/campaign-objective-20261020/`.
+- [ ] The unchanged production-factory route advances through four of seven
+  authored rectangles before `RemoveGuardPosition` refuses at 112.2256 seconds.
+  These are route points, not completed objectives. AI guard management, authored
+  ledger pickup/return, chapter victory, campaign transitions, networking and the
+  required unmodified community maps remain unfinished.

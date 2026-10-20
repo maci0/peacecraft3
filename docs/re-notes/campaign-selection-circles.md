@@ -50,8 +50,10 @@ The circle image now conforms to the admitted rendered ground. Each intersected
 tile uses the ground renderer's `[00,10,11]` and `[00,11,01]` triangles; each triangle
 is clipped against the source-sized circle square, and the resulting polygon is
 triangulated without crossing a ground-triangle boundary. Clip intersections
-interpolate the original corner positions. No vertical lift or bilinear surface
-approximation is added. The existing render depth bias resolves coplanarity.
+interpolate the original corner positions. Vertex elevations add the selection
+image Z offset read from the exact admitted client image; no screenshot fit or
+bilinear surface approximation supplies that offset. Render depth bias remains
+an additional recreation choice.
 
 UV coordinates still span the original square, with V increasing toward world
 negative Y, matching the previous Plane3d texture orientation. Clipping at map
@@ -60,7 +62,8 @@ texture-band choice and relationship tint are unchanged. Each circle owns its
 mesh; position/size changes replace that mesh's contents, unchanged transforms
 reuse it, deselection removes it, and session replacement retires all owned mesh
 assets. The circle's transform retains the existing center height, while local
-vertex elevations cancel that center to land on the actual rendered triangles.
+vertex elevations cancel that center to follow actual rendered triangles plus
+the admitted native offset.
 
 The renderer refuses a footprint intersecting more than 256 terrain tiles before
 allocating geometry. This is an explicit rendering-work bound, not a game rule or
@@ -74,13 +77,56 @@ selection, including actual mesh-asset retirement. These new checks await the
 coordinated build and rendered validation; the v7 observation above predates this
 projection change.
 
-Unqualified recreation choices remain: interpreting scaled size as diameter,
-adding `.blp` to the authored texture name, and render depth bias. Exact original
-projection behavior and original radius-versus-diameter semantics remain explicit
-fidelity work; no screenshot fit or guessed size multiplier was added. Projection
+## Native size and placement evidence
+
+Read-only original-byte analysis of the locally supplied Legacy executable
+(version `1.29.2.9231`, SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`)
+establishes that scaled size is full width. The UnitUI `scale` descriptor at
+`0x6b444c` reaches the type-cache selection value through `0x6b8860`,
+`0x695386`, and `0x5d2920`. CUnit's size virtual (`0x664e40` / `0x664d10`)
+multiplies it by the source profile's `ScaleFactor`. Selection image creation
+(`0x665370` / `0x703350`) passes full size and a half-size origin separately.
+Image creation (`0x73b0a0`) retains both; terrain projection (`0x73cd70`) starts
+at world position minus origin and divides UV deltas by full size. No radius
+multiplier is warranted by this native-code evidence.
+
+Native texture-band lookup at `0x70f20c` advances at equality: the first threshold
+strictly greater than size wins. The recreation now uses that strict boundary.
+Native terrain-image projection at `0x73d093` reads a per-image-type Z-offset
+table. The new `pcx_play::selection_circle::Parameters` admits only the reviewed
+whole-image identity, reads the selection type operand from `0x7033cb`, reads
+the table-address operand from `0x73d093`, and fetches that type's float from the
+supplied image. The measured offset is never embedded as a fallback. The selected
+native installation or committed browser client supplies the bytes through the
+existing selected-client reader. Missing, altered or unsupported client images
+produce explicit selection diagnostics; a session replacement discards admission.
+The separate conditional `[SelectionCircle] ImageWalkableZOffset` concerns
+walkable surfaces and is not substituted for this ordinary image-type offset.
+
+Synthetic PE fixtures vary image type, table contents and offset, reject malformed
+instructions/ranges/non-finite values, and prove that altered images cannot pass
+production identity admission. Mesh fixtures check changed height with identical
+UVs and footprint. The ignored `original_selection_offset_comes_from_selected_image`
+gate requires `PCX_SELECTION_CLIENT_IMAGE`; original data remains local. These
+checks establish parsing/geometry, not successful initial-position pixels. The
+normal-v15 initial hero capture still lacked clear green-ring evidence before
+this offset change; actual post-change native/browser comparison remains owed.
+
+Unqualified recreation choices remain: adding `.blp` to the authored texture name,
+render depth bias and exact clipping/tessellation. Projection
 matches the currently rendered ground; walkable doodad surfaces and future cliff
 geometry require their actual surface data before this can cover those cases.
 The moving-footman capture is not a matched original-client or browser comparison.
 No source bytes or generated original assets are included here. The target is
 1.29b; runtime resolver receipts retain selected source provenance rather than
 assuming all locally supplied archives share that version.
+
+
+The v17 normal native run selects Arthas through the unchanged cinematic-skip
+script. Its capture shows a green selection rim around the blue aura, with one
+selected/wanted/placed circle and the selected executable's admitted image offset.
+No later manual click is used as proof. This establishes native application
+visibility at that initial position; it is not an original-client or browser
+render comparison. Local evidence:
+`.scratch/campaign-objective-20261020/normal-gui-v17/after-skip.png` and `gui.log`.

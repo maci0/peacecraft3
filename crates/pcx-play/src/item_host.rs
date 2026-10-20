@@ -1,4 +1,4 @@
-//! Source-catalog item definitions and executed creation arguments, not world state.
+//! Canonical source-catalog item identities, ground positions and inventory ownership.
 use super::super::{Entry, Error, Failure, below};
 use super::ObjectHost;
 use pcx_objects::editor::ObjectKind;
@@ -22,6 +22,10 @@ pub struct ExecutedItem {
     pub source: Source,
     pub x: f32,
     pub y: f32,
+    pub held_by: Option<(HandleId, usize)>,
+    pub invulnerable: Option<bool>,
+    pub droppable: Option<bool>,
+    pub drop_on_death: Option<bool>,
 }
 
 pub(super) struct Admission {
@@ -29,6 +33,7 @@ pub(super) struct Admission {
     source: Source,
     budget: ItemBudget,
     records: usize,
+    inventory: Option<inventory::State>,
 }
 
 impl ObjectHost {
@@ -65,8 +70,20 @@ impl ObjectHost {
             source,
             budget,
             records: 0,
+            inventory: None,
         });
         Ok(self)
+    }
+
+    pub fn executed_items(&self) -> impl Iterator<Item = (HandleId, &ExecutedItem)> {
+        self.inner
+            .arena
+            .iter()
+            .enumerate()
+            .filter_map(|(at, entry)| match entry {
+                Entry::Item { record } => Some((self.inner.id(at, CREATE).ok()?, record)),
+                _ => None,
+            })
     }
 
     pub fn executed_item(&self, id: HandleId) -> Result<&ExecutedItem, Error> {
@@ -142,6 +159,10 @@ impl ObjectHost {
             source: admitted.source.clone(),
             x,
             y,
+            held_by: None,
+            invulnerable: None,
+            droppable: None,
+            drop_on_death: None,
         };
         let id = self.inner.allocate(Entry::Item { record }, CREATE)?;
         self.items.as_mut().expect("admission retained").records += 1;
@@ -152,3 +173,6 @@ impl ObjectHost {
 #[cfg(test)]
 #[path = "item_host_tests.rs"]
 mod tests;
+
+#[path = "inventory_host.rs"]
+mod inventory;

@@ -261,6 +261,7 @@ enum Entry {
     },
     /// A unit after `RemoveUnit`; its handle stays allocated.
     RemovedUnit,
+    RemovedItem,
     /// `None` after `DestroyFogModifier`.
     FogModifier(Option<objects::FogModifier>),
     Item {
@@ -638,7 +639,7 @@ impl EnumHost {
             }
             Entry::CameraSetup { .. } => "camerasetup",
             Entry::Destructable { .. } => "destructable",
-            Entry::Item { .. } => "item",
+            Entry::Item { .. } | Entry::RemovedItem => "item",
             Entry::Effect { live: true, .. } => "effect",
             Entry::Effect { live: false, .. } => {
                 return Err(self.error("arena", Failure::Identity));
@@ -766,8 +767,9 @@ pub use objects::{
     GameStateEventRegistration, HeroBudget, HeroProgress, ItemBudget, LabelSoundFlags, MapConfig,
     MapConfigBudget, MapMusicSelection, MessageBudget, MessageState, ObjectHost,
     PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
-    PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration, PresentationState,
-    QuestBudget, QuestEvent, QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration,
+    PlayerRemoval, PlayerRemovalBudget, PlayerRemovalState, PlayerSettings,
+    PlayerStateRequestBudget, PlayerUnitEventRegistration, PresentationState, QuestBudget,
+    QuestEvent, QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration,
     RegionRectRequest, ResearchObservation, SoundProperties, SoundState, StackedSoundAction,
     StackedSoundRequest, StartLocation, StartPriorities, StartPriority, StartupClockState,
     StartupSettings, StockBudget, TechLimitBudget, TerrainFog, TimedMessage,

@@ -646,3 +646,96 @@ fn supplied_resolved_human_units_support_normal_food_queries() {
     );
     marker_food_queries(ResolvedFoodCatalog(definitions), rules, false);
 }
+
+#[test]
+fn effective_upkeep_follows_food_ownership_and_counter_assignments_without_consuming_requests() {
+    use crate::playercolor_host::UnitBudget;
+    let (_, host) = fixture(&resource_common(), "// upkeep projection", true);
+    let mut host = host
+        .with_player_state_requests(PlayerStateRequestBudget { max_records: 1 })
+        .unwrap()
+        .with_player_resources(crate::player_resources::fixture::rules_with_upkeep())
+        .unwrap()
+        .with_unit_catalog(
+            Arc::new(FoodCatalog),
+            pcx_sim::world::Source {
+                install: "synthetic".into(),
+                edition: "synthetic".into(),
+                map: "upkeep".into(),
+            },
+            UnitBudget {
+                max_records: 2,
+                max_retained_fields: 2,
+                max_modifications: 0,
+            },
+        )
+        .unwrap();
+    let a = host.native("Player", &[Value::Int(0)]).unwrap();
+    let b = host.native("Player", &[Value::Int(1)]).unwrap();
+    let unit = host
+        .native(
+            "CreateUnit",
+            &[
+                a.clone(),
+                Value::Int(i32::from_be_bytes(*b"hfoo")),
+                Value::Real(0.),
+                Value::Real(0.),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        host.player_resource_value(id(&a), "PLAYER_STATE_RESOURCE_FOOD_USED")
+            .unwrap(),
+        Some(20)
+    );
+    assert_eq!(
+        host.player_upkeep_label(id(&a))
+            .unwrap()
+            .unwrap()
+            .primary_key,
+        "NONE_SYNTHETIC"
+    );
+    let state = host.native("ConvertPlayerState", &[Value::Int(5)]).unwrap();
+    host.native(
+        "SetPlayerState",
+        &[a.clone(), state.clone(), Value::Int(31)],
+    )
+    .unwrap();
+    assert_eq!(
+        host.player_upkeep_label(id(&a))
+            .unwrap()
+            .unwrap()
+            .primary_key,
+        "HIGH_SYNTHETIC"
+    );
+    host.native("SetUnitOwner", &[unit, b.clone(), Value::Bool(false)])
+        .unwrap();
+    assert_eq!(
+        host.player_resource_value(id(&a), "PLAYER_STATE_RESOURCE_FOOD_USED")
+            .unwrap(),
+        Some(29)
+    );
+    assert_eq!(
+        host.player_upkeep_label(id(&a))
+            .unwrap()
+            .unwrap()
+            .primary_key,
+        "LOW_SYNTHETIC"
+    );
+    assert_eq!(
+        host.player_settings(id(&a)).unwrap().state_requests,
+        [(id(&state), 31)]
+    );
+    assert_eq!(
+        host.player_upkeep_label(id(&b))
+            .unwrap()
+            .unwrap()
+            .primary_key,
+        "NONE_SYNTHETIC"
+    );
+    assert_eq!(
+        host.player_settings(id(&a)).unwrap().state_requests.len(),
+        1
+    );
+}

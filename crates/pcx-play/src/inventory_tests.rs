@@ -1,0 +1,656 @@
+use super::*;
+use crate::camera_margins::SourceWindow;
+use crate::inventory::{InventoryBudget, Rules};
+use crate::neutral_player::sha256;
+use pcx_objects::editor::Overlay;
+use pcx_script::HandleId;
+
+const CALLS: &str = r#"
+type item extends widget
+type playerunitevent extends eventid
+constant native ConvertPlayerUnitEvent takes integer i returns playerunitevent
+native TriggerRegisterPlayerUnitEvent takes trigger t, player p, playerunitevent e, boolexpr b returns event
+constant native GetTriggerUnit takes nothing returns unit
+constant native GetTriggerPlayer takes nothing returns player
+constant native GetManipulatingUnit takes nothing returns unit
+constant native GetManipulatedItem takes nothing returns item
+native CreateItem takes integer i, real x, real y returns item
+native RemoveItem takes item i returns nothing
+native UnitHasItem takes unit u, item i returns boolean
+native UnitAddItem takes unit u, item i returns boolean
+native UnitRemoveItem takes unit u, item i returns nothing
+native UnitItemInSlot takes unit u, integer i returns item
+native UnitRemoveItemFromSlot takes unit u, integer i returns item
+native UnitInventorySize takes unit u returns integer
+native SetItemDroppable takes item i, boolean b returns nothing
+native SetItemDropOnDeath takes item i, boolean b returns nothing
+native SetItemInvulnerable takes item i, boolean b returns nothing
+native IsItemInvulnerable takes item i returns boolean
+native IssueTargetOrder takes unit u, string o, widget target returns boolean
+globals
+constant playerunitevent EVENT_PLAYER_UNIT_PICKUP_ITEM=ConvertPlayerUnitEvent(-71)
+constant playerunitevent EVENT_PLAYER_UNIT_DROP_ITEM=ConvertPlayerUnitEvent(99)
+endglobals
+"#;
+fn tables(slots: &str) -> Arc<DefaultTables> {
+    let data = sylk(
+        &[
+            "alias",
+            "code",
+            "levels",
+            "reqLevel",
+            "levelSkip",
+            "DataA1",
+            "DataB1",
+            "DataC1",
+            "DataD1",
+            "DataE1",
+        ],
+        &[&["L000", "Xinv", "1", "0", "0", slots, "0", "1", "1", "1"]],
+    );
+    let meta = sylk(
+        &[
+            "ID",
+            "field",
+            "slk",
+            "index",
+            "type",
+            "category",
+            "data",
+            "useSpecific",
+            "maxVal",
+        ],
+        &[
+            &[
+                "alev",
+                "levels",
+                "AbilityData",
+                "-1",
+                "int",
+                "data",
+                "0",
+                "",
+                "1",
+            ],
+            &[
+                "arlv",
+                "reqLevel",
+                "AbilityData",
+                "-1",
+                "int",
+                "data",
+                "0",
+                "",
+                "0",
+            ],
+            &[
+                "alsk",
+                "levelSkip",
+                "AbilityData",
+                "-1",
+                "int",
+                "data",
+                "0",
+                "",
+                "0",
+            ],
+            &[
+                "inv1",
+                "Data",
+                "AbilityData",
+                "-1",
+                "int",
+                "data",
+                "1",
+                "L000",
+                "9",
+            ],
+            &[
+                "inv2",
+                "Data",
+                "AbilityData",
+                "-1",
+                "bool",
+                "data",
+                "2",
+                "L000",
+                "1",
+            ],
+            &[
+                "inv3",
+                "Data",
+                "AbilityData",
+                "-1",
+                "bool",
+                "data",
+                "3",
+                "L000",
+                "1",
+            ],
+            &[
+                "inv4",
+                "Data",
+                "AbilityData",
+                "-1",
+                "bool",
+                "data",
+                "4",
+                "L000",
+                "1",
+            ],
+            &[
+                "inv5",
+                "Data",
+                "AbilityData",
+                "-1",
+                "bool",
+                "data",
+                "5",
+                "L000",
+                "1",
+            ],
+        ],
+    );
+    Arc::new(
+        DefaultTables::from_bytes(
+            Identity {
+                install: "synthetic inventory".into(),
+                edition_version: "fixture".into(),
+            },
+            &[
+                (SlkId::AbilityData.path(), &data),
+                (SlkId::AbilityMetaData.path(), &meta),
+            ],
+            &[],
+            pcx_objects::editor::EditorReadLimits {
+                max_listed_paths: 2,
+                max_asset_bytes: 65536,
+                max_aggregate_input_bytes: 131072,
+            },
+        )
+        .unwrap(),
+    )
+}
+fn order_inputs() -> (
+    Arc<crate::order_registry::Registry>,
+    crate::unit_activity::Rules,
+) {
+    let (mut image, mut binding, budget) = crate::order_registry::tests::fixture([431, 744]);
+    let mut code = image[0x220..0x220 + binding.initializer.len as usize - 2].to_vec();
+    for (address, id) in [(0x301450u32, 937i32), (0x301460, 1133)] {
+        code.push(0x68);
+        code.extend_from_slice(&address.to_le_bytes());
+        code.push(0x68);
+        code.extend_from_slice(&id.to_le_bytes());
+        code.extend_from_slice(&[0x8b, 0xce, 0xe8]);
+        let next = binding.initializer.va + code.len() as u32 + 4;
+        code.extend_from_slice(&binding.register.wrapping_sub(next).to_le_bytes());
+    }
+    code.extend_from_slice(&[0x5e, 0xc3]);
+    image[0x220..0x220 + code.len()].copy_from_slice(&code);
+    binding.initializer.len = code.len() as u32;
+    binding.initializer.digest = sha256(&code);
+    image[0x650..0x656].copy_from_slice(b"smart\0");
+    image[0x660..0x668].copy_from_slice(b"getitem\0");
+    let mut put = |at: usize, prefix: &[u8], id: i32| {
+        let mut b = prefix.to_vec();
+        b.extend_from_slice(&id.to_le_bytes());
+        image[at..at + b.len()].copy_from_slice(&b);
+        SourceWindow {
+            va: 0x301000 + at as u32 - 0x200,
+            len: b.len() as u32,
+            digest: sha256(&b),
+        }
+    };
+    let hold = put(0x320, &[0x3d], 431);
+    let stop = put(0x330, &[0x81, 0xfb], 744);
+    let movement = put(0x340, &[0x3d], 1631);
+    binding.image_sha256 = sha256(&image);
+    let registry = Arc::new(
+        crate::order_registry::Registry::read(&image, binding.clone(), budget, 8, 80).unwrap(),
+    );
+    let rules = crate::unit_activity::Rules::read(
+        &image,
+        crate::unit_activity::Binding {
+            origin: binding.origin,
+            image_sha256: binding.image_sha256,
+            hold,
+            stop,
+            movement,
+        },
+        &registry,
+        budget,
+    )
+    .unwrap();
+    (registry, rules)
+}
+struct Items;
+impl ObjectCatalog for Items {
+    fn resolve(&self, rawcode: [u8; 4]) -> Result<Definition, ResolutionProblem> {
+        let fields = [
+            (*b"ipow", "powerup", "0"),
+            (*b"idro", "droppable", "1"),
+            (*b"idrp", "drop", "0"),
+            (*b"iuse", "usable", "0"),
+        ]
+        .into_iter()
+        .map(|(id, column, value)| {
+            let mut field = geometry_field(Ok(FieldValue::Cell(value.into())));
+            let m = field.metadata.as_mut().unwrap();
+            m.fourcc = id;
+            m.kind = FieldKind::Bool;
+            m.source = FieldSource::Column {
+                slk: SlkId::ItemData,
+                column: column.into(),
+            };
+            (id, field)
+        })
+        .collect();
+        Ok(definition(
+            rawcode,
+            pcx_objects::fourcc_text(rawcode),
+            ObjectKind::Item,
+            fields,
+        ))
+    }
+}
+fn open() -> ObjectHost {
+    open_with_abilities(true)
+}
+fn open_with_abilities(admit: bool) -> ObjectHost {
+    let declarations = format!("{}\n{}\n{}", enumeration::TRIGGERS, activity::ORDERS, CALLS);
+    let fields = [(*b"uabi", ability_field("abilList", "L000"))];
+    let h = position_host_admitting(65536, 16, "// inventory", &declarations, &fields, |h| h);
+    let tables = tables("2");
+    let (registry, activity) = order_inputs();
+    let rules = Rules::read(
+        Arc::clone(&tables),
+        Overlay::default(),
+        Arc::clone(&registry),
+        &[(
+            "synthetic MiscGame",
+            b"[Misc]\nPickupItemRange=5\nDropItemRange=7\nGiveItemRange=9",
+        )],
+        1024,
+    )
+    .unwrap();
+    let h = h
+        .with_order_registry(registry)
+        .unwrap()
+        .with_player_unit_events(8)
+        .unwrap();
+    let h = if admit {
+        h.with_hero_skills(
+            tables,
+            crate::scripts::AssetIdentity {
+                source: "synthetic inventory".into(),
+                edition: "fixture".into(),
+                version: "fixture".into(),
+            },
+            Overlay::default(),
+            crate::hero_skills::tests::rules(),
+            crate::playercolor_host::HeroBudget {
+                abilities_per_unit: 8,
+                overlay_objects: 4,
+                modifications_per_ability: 8,
+            },
+        )
+        .unwrap()
+    } else {
+        h
+    };
+    let mut h = h
+        .with_item_catalog(
+            Arc::new(Items),
+            source(),
+            crate::playercolor_host::ItemBudget {
+                max_records: 8,
+                max_retained_fields: 4,
+                max_modifications: 0,
+            },
+        )
+        .unwrap()
+        .with_inventory(
+            rules,
+            InventoryBudget {
+                max_slots_per_unit: 9,
+                max_pending_orders: 4,
+            },
+        )
+        .unwrap();
+    h.admit_unit_activity(activity, 65536).unwrap();
+    h
+}
+fn unit(h: &mut ObjectHost, x: f32) -> Value {
+    let p = h.native("Player", &[Value::Int(4)]).unwrap();
+    h.native(
+        "CreateUnit",
+        &[
+            p,
+            Value::Int(i32::from_be_bytes(*b"u001")),
+            Value::Real(x),
+            Value::Real(16.),
+            Value::Real(0.),
+        ],
+    )
+    .unwrap()
+}
+fn item(h: &mut ObjectHost, x: f32) -> Value {
+    h.native(
+        "CreateItem",
+        &[
+            Value::Int(i32::from_be_bytes(*b"I001")),
+            Value::Real(x),
+            Value::Real(16.),
+        ],
+    )
+    .unwrap()
+}
+fn id(v: &Value) -> HandleId {
+    let Value::Handle(id) = v else {
+        panic!("handle")
+    };
+    *id
+}
+#[test]
+fn inventory_slots_transfer_drop_remove_and_null_lifetimes_are_canonical() {
+    let mut h = open();
+    let a = unit(&mut h, 16.);
+    let b = unit(&mut h, 32.);
+    let first = item(&mut h, 48.);
+    let second = item(&mut h, 64.);
+    let third = item(&mut h, 80.);
+    assert_eq!(
+        h.native("UnitHasItem", &[a.clone(), first.clone()])
+            .unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        h.native("UnitInventorySize", std::slice::from_ref(&a))
+            .unwrap(),
+        Value::Int(2)
+    );
+    for i in [&first, &second] {
+        assert_eq!(
+            h.native("UnitAddItem", &[a.clone(), i.clone()]).unwrap(),
+            Value::Bool(true)
+        );
+    }
+    assert_eq!(
+        h.native("UnitAddItem", &[a.clone(), third.clone()])
+            .unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        h.native("UnitItemInSlot", &[a.clone(), Value::Int(0)])
+            .unwrap(),
+        first
+    );
+    assert_eq!(
+        h.native("UnitAddItem", &[b.clone(), first.clone()])
+            .unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        h.native("UnitHasItem", &[a.clone(), first.clone()])
+            .unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        h.native("UnitRemoveItemFromSlot", &[b.clone(), Value::Int(0)])
+            .unwrap(),
+        first
+    );
+    assert_eq!(h.executed_item(id(&first)).unwrap().held_by, None);
+    assert_eq!(h.executed_item(id(&first)).unwrap().x, 32.);
+    h.native("RemoveItem", std::slice::from_ref(&second))
+        .unwrap();
+    assert_eq!(
+        h.native("UnitHasItem", &[a.clone(), second]).unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        h.native("UnitHasItem", &[a, Value::Null]).unwrap(),
+        Value::Bool(false)
+    );
+}
+#[test]
+fn pickup_routes_then_delivers_real_item_unit_player_context() {
+    let mut h = open();
+    let a = unit(&mut h, 16.);
+    let target = item(&mut h, 80.);
+    let t = h.native("CreateTrigger", &[]).unwrap();
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    let event = h
+        .native("ConvertPlayerUnitEvent", &[Value::Int(-71)])
+        .unwrap();
+    h.native(
+        "TriggerRegisterPlayerUnitEvent",
+        &[t, player.clone(), event, Value::Null],
+    )
+    .unwrap();
+    assert_eq!(
+        h.native(
+            "IssueTargetOrder",
+            &[a.clone(), Value::Str("getitem".into()), target.clone()]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        h.native("UnitHasItem", &[a.clone(), target.clone()])
+            .unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        h.native("GetUnitCurrentOrder", std::slice::from_ref(&a))
+            .unwrap(),
+        Value::Int(1133)
+    );
+    h.next_timer_expiry(9., &mut 1000).unwrap();
+    h.advance_unit_activity(9., &mut 65536).unwrap();
+    assert_eq!(
+        h.native("UnitHasItem", &[a.clone(), target.clone()])
+            .unwrap(),
+        Value::Bool(true)
+    );
+    let fired = h.take_fired_event().unwrap();
+    h.begin_fired_event(&fired).unwrap().unwrap();
+    assert_eq!(h.native("GetManipulatedItem", &[]).unwrap(), target);
+    assert_eq!(h.native("GetManipulatingUnit", &[]).unwrap(), a);
+    assert_eq!(h.native("GetTriggerPlayer", &[]).unwrap(), player);
+    h.finish_fired_event();
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn inventory_source_capacity_overlays_and_permission_flags_drive_policy() {
+    let (registry, _) = order_inputs();
+    let profiles = [(
+        "synthetic",
+        b"[Misc]\nPickupItemRange=3\nDropItemRange=4\nGiveItemRange=5".as_slice(),
+    )];
+    let mut overlay = Overlay::default();
+    let modification = |field, value| pcx_objects::Mod {
+        field,
+        value_type: pcx_objects::ValueType::Int,
+        selectors: Some([1, 0]),
+        value: pcx_objects::Value::Int(value),
+        end_word: 0,
+    };
+    overlay.mods.insert(
+        "L000".into(),
+        vec![
+            modification(*b"inv1", 4),
+            modification(*b"inv4", 0),
+            modification(*b"inv2", 1),
+        ],
+    );
+    let rules = Rules::read(tables("2"), overlay, Arc::clone(&registry), &profiles, 1024).unwrap();
+    let policy = rules.policy([(*b"L000", 1)].into_iter(), 9).unwrap();
+    assert_eq!(policy.slots, 4);
+    assert!(!policy.get_items);
+    assert!(policy.drop_on_death);
+    assert!(rules.policy([(*b"L000", 1)].into_iter(), 3).is_err());
+    assert!(
+        rules
+            .policy([(*b"L000", 1), (*b"L000", 1)].into_iter(), 9)
+            .is_err()
+    );
+    assert!(
+        Rules::read(
+            tables("2"),
+            Overlay::default(),
+            registry,
+            &[("missing", b"[Misc]\nPickupItemRange=3")],
+            1024
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn inventory_refusals_preserve_ground_ownership_and_pending_replacement() {
+    let mut h = open();
+    let a = unit(&mut h, 16.);
+    let target = item(&mut h, 80.);
+    assert!(h.native("UnitAddItem", &[a.clone(), a.clone()]).is_err());
+    assert!(
+        h.native("UnitHasItem", &[Value::Null, Value::Int(1)])
+            .is_err()
+    );
+    assert_eq!(h.executed_item(id(&target)).unwrap().held_by, None);
+    h.native(
+        "IssueTargetOrder",
+        &[a.clone(), Value::Str("smart".into()), target.clone()],
+    )
+    .unwrap();
+    h.native(
+        "IssueImmediateOrder",
+        &[a.clone(), Value::Str("beta".into())],
+    )
+    .unwrap();
+    h.next_timer_expiry(20., &mut 1000).unwrap();
+    h.advance_unit_activity(20., &mut 65536).unwrap();
+    assert_eq!(
+        h.native("UnitHasItem", &[a.clone(), target.clone()])
+            .unwrap(),
+        Value::Bool(false)
+    );
+    h.native("UnitAddItem", &[a.clone(), target.clone()])
+        .unwrap();
+    h.forget_inventory_unit(id(&a), true).unwrap();
+    assert_eq!(h.executed_item(id(&target)).unwrap().held_by, None);
+}
+
+#[test]
+#[ignore = "requires PCX_INVENTORY_CATALOG retained selected source copy and PCX_PLAYER_RESOURCE_IMAGE selected original executable"]
+fn supplied_inventory_sources_produce_hart_policy() {
+    use pcx_objects::editor::defaults::Family;
+    let root = std::path::PathBuf::from(
+        std::env::var("PCX_INVENTORY_CATALOG").expect("PCX_INVENTORY_CATALOG"),
+    );
+    let image_path = std::env::var("PCX_PLAYER_RESOURCE_IMAGE").expect("PCX_PLAYER_RESOURCE_IMAGE");
+    let owned: Vec<_> = SlkId::ALL
+        .iter()
+        .filter_map(|id| {
+            std::fs::read(root.join(id.path().replace('\\', "/").to_ascii_lowercase()))
+                .ok()
+                .map(|bytes| (id.path(), bytes))
+        })
+        .collect();
+    let supplied: Vec<_> = owned
+        .iter()
+        .map(|(path, bytes)| (*path, bytes.as_slice()))
+        .collect();
+    let tables = Arc::new(
+        DefaultTables::from_bytes(
+            Identity {
+                install: root.display().to_string(),
+                edition_version: "explicit selected original source copy".into(),
+            },
+            &supplied,
+            &[],
+            pcx_objects::editor::EditorReadLimits {
+                max_listed_paths: 128,
+                max_asset_bytes: 16 << 20,
+                max_aggregate_input_bytes: 128 << 20,
+            },
+        )
+        .unwrap(),
+    );
+    let image = std::fs::read(&image_path).unwrap();
+    let registry = Arc::new(
+        crate::campaign_client::order_registry(
+            &image,
+            crate::scripts::AssetIdentity {
+                source: image_path,
+                edition: "Legacy".into(),
+                version: "caller selected; image digest checked".into(),
+            },
+        )
+        .unwrap(),
+    );
+    let misc = std::fs::read(root.join("units/miscgame.txt")).unwrap();
+    let rules = Rules::read(
+        Arc::clone(&tables),
+        Overlay::default(),
+        registry,
+        &[("selected Units/MiscGame.txt", &misc)],
+        8 << 20,
+    )
+    .unwrap();
+    let table = tables.editor().table(SlkId::UnitAbilities).unwrap();
+    let row = tables.editor().row(SlkId::UnitAbilities, "Hart").unwrap();
+    let list = table
+        .get(row, table.column_of("abilList").unwrap())
+        .unwrap();
+    let aliases: Vec<_> = list
+        .split(',')
+        .map(|s| {
+            let object = tables.object(Family::Ability, s.trim()).unwrap();
+            let first = *object.level_columns().keys().next().unwrap();
+            (
+                s.trim().as_bytes().try_into().unwrap(),
+                i32::try_from(first).unwrap(),
+            )
+        })
+        .collect();
+    let policy = rules.policy(aliases.into_iter(), 128).unwrap();
+    assert!(policy.slots > 0 && policy.get_items && policy.drop_items && policy.use_items);
+    eprintln!(
+        "original Hart inventory policy={policy:?} pickup_range={} source={:?} assets={:?}",
+        rules.pickup_range,
+        tables.identity(),
+        tables.assets()
+    );
+}
+
+#[test]
+fn inventory_death_and_drop_flags_and_ordinary_unit_lifecycle_remain_distinct() {
+    let mut h = open();
+    let unit = unit(&mut h, 16.);
+    let item = item(&mut h, 32.);
+    h.native("UnitAddItem", &[unit.clone(), item.clone()])
+        .unwrap();
+    assert!(h.can_drop_inventory_item(id(&unit), id(&item)).unwrap());
+    assert!(!h.can_use_inventory_item(id(&unit), id(&item)).unwrap());
+    h.native("SetItemDroppable", &[item.clone(), Value::Bool(false)])
+        .unwrap();
+    assert!(!h.can_drop_inventory_item(id(&unit), id(&item)).unwrap());
+    h.forget_inventory_unit(id(&unit), false).unwrap();
+    assert_eq!(
+        h.native("UnitHasItem", &[unit.clone(), item.clone()])
+            .unwrap(),
+        Value::Bool(true)
+    );
+    h.native("SetItemDropOnDeath", &[item.clone(), Value::Bool(true)])
+        .unwrap();
+    h.forget_inventory_unit(id(&unit), false).unwrap();
+    assert_eq!(h.executed_item(id(&item)).unwrap().held_by, None);
+    let mut ordinary = open_with_abilities(false);
+    let value = self::unit(&mut ordinary, 16.);
+    assert!(ordinary.inventory_policy(id(&value)).is_err());
+    ordinary.forget_inventory_unit(id(&value), false).unwrap();
+    ordinary.forget_inventory_unit(id(&value), true).unwrap();
+}

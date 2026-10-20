@@ -515,3 +515,6 @@ mod handicap;
 
 #[path = "dialog_host_tests.rs"]
 mod script_dialogs;
+
+#[path = "player_removal_tests.rs"]
+mod player_removal;

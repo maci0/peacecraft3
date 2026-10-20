@@ -777,6 +777,36 @@ impl ObjectHost {
         let state = self.source_constant_enumerand(source_global, "playerstate")?;
         self.resource_value(at, state)
     }
+    /// Source-selected upkeep localization binding for an effective participant.
+    /// Observer/watch-target presentation is not projected by this API.
+    pub fn player_upkeep_label(
+        &self,
+        player: HandleId,
+    ) -> Result<Option<crate::player_resources::UpkeepLabel>, String> {
+        let at = self
+            .player_index(&Value::Handle(player), GET_PLAYER_STATE)
+            .map_err(|e| e.to_string())?;
+        let Some(resources) = self.players.as_ref().and_then(|p| p.resources.as_ref()) else {
+            return Ok(None);
+        };
+        if let Some(state) = resources.rules.upkeep_food_state()
+            && resources.states[2] != state
+        {
+            return Err("upkeep food state disagrees with selected source enum".into());
+        }
+        let Some(food) = self
+            .resource_value(at, resources.states[2])
+            .map_err(|e| e.to_string())?
+        else {
+            return Ok(None);
+        };
+        let version = self
+            .startup_version
+            .map(|id| self.inner.symbolic_value(id, "version"))
+            .transpose()
+            .map_err(|e| e.to_string())?;
+        resources.rules.upkeep_label(food, version).map(Some)
+    }
     fn get_player_state(&self, args: &[Value]) -> Result<Value, Error> {
         let [player, Value::Handle(setting)] = args else {
             return Err(self.inner.error(GET_PLAYER_STATE, Failure::PlayerArguments));
@@ -986,6 +1016,30 @@ impl ObjectHost {
                     .position(|row| row.number == number && row.identity == *id)
             })
             .ok_or_else(|| self.inner.error(name, Failure::Identity))
+    }
+    /// Update the effective current slot without retiring the player's identity,
+    /// controller or the other explicit startup participation entries.
+    pub(super) fn mark_removed_player_slot(
+        &mut self,
+        player: HandleId,
+        left: HandleId,
+    ) -> Result<(), Error> {
+        let at = self.player_index(&Value::Handle(player), "RemovePlayer")?;
+        let fail = |failure| self.inner.error("RemovePlayer", failure);
+        let players = self.players.as_mut().expect("validated player row");
+        let number = players.rows[at].number;
+        let slot = players
+            .slot_states
+            .as_mut()
+            .and_then(|states| states.iter_mut().find(|(n, _)| *n == number))
+            .ok_or_else(|| {
+                fail(Failure::PlayerState(
+                    "current player slot snapshot is not admitted",
+                ))
+            })?;
+        slot.1 = left;
+        players.rows[at].slot_state = Some(left);
+        Ok(())
     }
     pub(super) fn player_native(
         &mut self,

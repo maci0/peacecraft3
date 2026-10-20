@@ -2,6 +2,9 @@
 use crate::neutral_player::{RuleInputBudget, Sha256Digest, sha256};
 use crate::neutral_rule_input::Pe;
 use crate::scripts::AssetIdentity;
+#[path = "player_upkeep.rs"]
+mod upkeep;
+pub use upkeep::UpkeepLabel;
 
 #[derive(Clone, Debug)]
 pub struct Rules {
@@ -13,6 +16,7 @@ pub struct Rules {
     pub(crate) money_states: [i32; 2],
     pub(crate) money_scale: i32,
     pub(crate) money_maximum: i32,
+    upkeep: Result<upkeep::Upkeep, String>,
     food_limit: Option<i32>,
     food_defaults: Vec<i32>,
     pub(crate) food_marker_default: i32,
@@ -482,7 +486,21 @@ impl Rules {
                 Ok((value as i32).clamp(*minimum, *ceiling_maximum))
             })
             .transpose()?;
+        let upkeep = upkeep::Upkeep::discover(
+            &pe,
+            version_global,
+            profiles,
+            budget.profile_bytes,
+            (
+                i32::from(get[36] as i8),
+                1u32.checked_shl(u32::from(get[39]))
+                    .ok_or_else(|| fail("state stride"))?,
+                call(get, get_va, 43).ok_or_else(|| fail("counter getter target"))?,
+            ),
+        )
+        .map_err(|e| fail(&e));
         Ok(Self {
+            upkeep,
             origin,
             image_sha256: sha256(image),
             profile_sources,
@@ -505,6 +523,19 @@ impl Rules {
             .filter(|index| *index < self.food_defaults.len())
             .unwrap_or(0);
         self.food_defaults.get(version).copied()
+    }
+    pub(crate) fn upkeep_label(
+        &self,
+        food: i32,
+        version: Option<i32>,
+    ) -> Result<UpkeepLabel, String> {
+        self.upkeep
+            .as_ref()
+            .map_err(Clone::clone)?
+            .label(food, version)
+    }
+    pub(crate) fn upkeep_food_state(&self) -> Option<i32> {
+        self.upkeep.as_ref().ok().map(|u| u.food_state)
     }
     pub(crate) fn money(&self, value: i32) -> i32 {
         let raw = value.wrapping_mul(self.money_scale);
@@ -804,6 +835,21 @@ pub(crate) mod fixture {
                 ..budget
             },
         )
+    }
+    pub fn rules_with_upkeep() -> Rules {
+        let (_, origin, _) = image();
+        let (mut image, budget) = super::upkeep::tests::fixture();
+        image[0x1202..0x1206].copy_from_slice(&0x90u32.to_le_bytes());
+        Rules::discover(
+            &image,
+            origin,
+            &[(
+                "synthetic upkeep",
+                b"[Misc]\nFoodCeiling=73\nSyntheticUsage=20,30\n",
+            )],
+            budget,
+        )
+        .unwrap()
     }
     pub fn rules() -> Rules {
         let (image, origin, budget) = image();

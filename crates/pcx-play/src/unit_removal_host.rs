@@ -39,22 +39,21 @@ impl ObjectHost {
                 [Value::Handle(unit)] => *unit,
                 _ => return Err(self.inner.error(REMOVE, Failure::Signature)),
             };
-            match self
+            let shown = match self
                 .inner
                 .entry(unit)
                 .map_err(|e| self.inner.error(REMOVE, e.failure))?
             {
                 Entry::RemovedUnit => return Ok(Value::Null),
-                Entry::Unit { record } if record.shown => {
-                    if let Some(placement) = &mut self.unit_placement {
-                        placement.hide(unit).map_err(|e| {
-                            self.inner
-                                .error(REMOVE, Failure::UnitPlacement(e.to_string()))
-                        })?;
-                    }
-                }
-                Entry::Unit { .. } => {}
+                Entry::Unit { record } => record.shown,
                 _ => return Err(self.inner.error(REMOVE, Failure::WrongFamily)),
+            };
+            self.forget_inventory_unit(unit, true)?;
+            if shown && let Some(placement) = &mut self.unit_placement {
+                placement.hide(unit).map_err(|e| {
+                    self.inner
+                        .error(REMOVE, Failure::UnitPlacement(e.to_string()))
+                })?;
             }
             self.forget_hidden_unit_ranges(unit);
             self.forget_unit_activity(unit);

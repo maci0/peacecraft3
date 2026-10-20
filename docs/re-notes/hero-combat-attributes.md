@@ -55,13 +55,10 @@ new impact-time reevaluation. No Get/SetHeroStr/Agi/Int implementation currently
 exists, so this change adds no such native surface. General item/ability stat
 bonuses, XP awards and level-up effects remain separate work.
 
-## Remaining level/vitals gap
+## Level/vitals integration
 
-Unit vitals still apply base STR/INT bonuses only during creation.
-`unit_vitals_host::prepare_unit_vitals` initializes max life and max mana, while
-SetHeroLevel updates only hero counters/skill points. It does not recompute max
-life/mana from growth, and this slice deliberately does not introduce a guessed
-heal/current-resource adjustment rule. A following vitals slice should share the
-live attribute derivation and qualify how level changes interact with current
-resources and explicit SetUnitState maximum overrides, rather than add another
-independent growth formula.
+Live level changes now stage life/mana contribution differences through the same
+attribute helper, preserving explicit maxima and absolute missing resources.
+See [Live hero vital updates](hero-vital-level-updates.md) for selected native
+current-resource evidence, tests and the explicitly unsupported living/dead
+minimum boundary. General item/ability attribute effects remain separate work.

@@ -48,6 +48,8 @@ impl From<PlayerAdmissionError> for MapStartupError {
 
 #[derive(Clone, Copy, Debug)]
 pub struct MapStartupBudgets {
+    pub inventory: Option<crate::inventory::InventoryBudget>,
+    pub player_removal: Option<crate::playercolor_host::PlayerRemovalBudget>,
     pub groups: usize,
     pub map_config: MapConfigBudget,
     pub players: PlayerBudget,
@@ -142,7 +144,7 @@ pub struct RandomInput {
 }
 
 pub struct DefendSelection {
-    pub tables: DefaultTables,
+    pub tables: Arc<DefaultTables>,
     pub alias: String,
 }
 
@@ -249,6 +251,8 @@ pub struct MapStartupInputs {
     pub sound_parameters: Banks,
     pub sound_playback: Option<sound_playback::Rules>,
     pub resources: Option<crate::player_resources::Rules>,
+    pub inventory: Option<crate::inventory::Rules>,
+    pub player_removal_rules: Option<crate::player_removal_rules::Rules>,
     pub cheats: Option<crate::cheat_rules::Rules>,
     pub dialog_layout: Option<crate::dialog_layout::Rules>,
     pub clock: StartupClockInput,
@@ -488,6 +492,8 @@ pub fn assemble(
         sound_parameters,
         sound_playback,
         resources,
+        inventory,
+        player_removal_rules,
         cheats,
         dialog_layout,
         clock,
@@ -601,7 +607,7 @@ pub fn assemble(
     {
         object = object.with_fog_modifiers()?;
     }
-    let tables = Arc::new(defend.tables);
+    let tables = defend.tables;
     if let Some(input) = hero_skills {
         object = object.with_hero_skills(
             Arc::clone(&tables),
@@ -629,6 +635,15 @@ pub fn assemble(
     }
     if let Some(limit) = budgets.player_events {
         object = object.with_player_events(limit)?;
+    }
+    match (player_removal_rules, budgets.player_removal) {
+        (Some(rules), Some(budget)) => object = object.with_player_removal(rules, budget)?,
+        (None, None) => {}
+        _ => {
+            return Err(MapStartupError::Observation(
+                "player removal rules and budget must be supplied together".into(),
+            ));
+        }
     }
     if let Some(budget) = budgets.regions {
         object = object.with_regions(budget)?;
@@ -706,6 +721,15 @@ pub fn assemble(
     }
     if let Some(items) = budgets.items {
         object = object.with_item_catalog(catalog, context.world.source.clone(), items)?;
+    }
+    match (inventory, budgets.inventory) {
+        (Some(rules), Some(budget)) => object = object.with_inventory(rules, budget)?,
+        (None, None) => {}
+        _ => {
+            return Err(MapStartupError::Observation(
+                "inventory rules and budget must be supplied together".into(),
+            ));
+        }
     }
     let slots = SelectedMapNeutralHost::try_new(Arc::clone(&context), rules.slots, object)?;
     let extra = SelectedMapNeutralHost::try_new(Arc::clone(&context), rules.extra, slots)?;

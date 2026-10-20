@@ -65,6 +65,7 @@ pub struct ObjectHost {
     destructables: Option<destructables::Admission>,
     units: Option<unit_creation::Admission>,
     items: Option<item_creation::Admission>,
+    player_removal: Option<player_removal::PlayerRemovalState>,
     triggers: Option<trigger_admission::Admission>,
     filters: Option<filters::Admission>,
     conditions: Option<conditions::Admission>,
@@ -157,6 +158,7 @@ impl ObjectHost {
             fog_modifiers: false,
             effects: false,
             items: None,
+            player_removal: None,
             triggers: None,
             filters: None,
             conditions: None,
@@ -777,6 +779,12 @@ impl Host for ObjectHost {
         if let Some(result) = self.indicator_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.inventory_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.player_removal_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.combat_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -1072,3 +1080,7 @@ pub use effects::UnitEffect;
 
 #[path = "cheat_host.rs"]
 mod cheat_queries;
+
+#[path = "player_removal_host.rs"]
+mod player_removal;
+pub use player_removal::{PlayerRemoval, PlayerRemovalBudget, PlayerRemovalState};

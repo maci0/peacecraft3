@@ -38,6 +38,9 @@ pub struct UnitAbilities {
     learnable: Vec<Skill>,
 }
 impl UnitAbilities {
+    pub fn levels(&self) -> impl Iterator<Item = ([u8; 4], i32)> + '_ {
+        self.levels.iter().copied()
+    }
     pub fn level(&self, ability: [u8; 4]) -> i32 {
         self.levels
             .iter()
@@ -65,6 +68,13 @@ pub(super) struct Admission {
 }
 
 impl ObjectHost {
+    pub(crate) fn unit_implicit_hero_alias(&self) -> Option<[u8; 4]> {
+        self.units
+            .as_ref()?
+            .heroes
+            .as_ref()
+            .map(|input| input.rules.hero_alias)
+    }
     pub(crate) fn hero_initial_level(&self) -> Option<i32> {
         self.units
             .as_ref()?
@@ -463,9 +473,13 @@ impl ObjectHost {
             "EVENT_UNIT_HERO_LEVEL",
             "EVENT_PLAYER_HERO_LEVEL",
         )?;
+        let vitals = self.prepare_hero_vital_level(*unit, next)?;
         let Entry::Unit { record } = self.inner.entry_mut(*unit)? else {
             unreachable!()
         };
+        if let Some(vitals) = vitals {
+            record.vitals = Some(vitals);
+        }
         record.requested_hero_level = Some(*level);
         record.requested_show_eye_candy = Some(*eye);
         let hero = record
@@ -651,3 +665,6 @@ fn unit_class_level(definition: &Definition) -> Result<i32, String> {
         _ => Err("unsupported UnitBalance/level".into()),
     }
 }
+
+#[path = "unit_hero_attribute.rs"]
+mod attributes;

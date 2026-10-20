@@ -2809,3 +2809,6 @@ mod activity;
 mod combat;
 #[path = "unit_runtime_tests.rs"]
 mod runtime;
+
+#[path = "inventory_tests.rs"]
+mod inventory;

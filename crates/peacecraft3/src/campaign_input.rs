@@ -220,6 +220,7 @@ struct Picking<'w, 's> {
     view: Res<'w, CampaignCamera>,
     ground: Res<'w, GroundPublication>,
     dialogs: Res<'w, crate::campaign_script_dialogs::CampaignScriptDialogs>,
+    actors: Res<'w, crate::campaign_actors::UnitActors>,
 }
 
 fn click(
@@ -236,6 +237,7 @@ fn click(
         view,
         ground,
         dialogs,
+        actors,
     } = picking;
     let (Some(mouse), Some(circles)) = (mouse, input.circles.clone()) else {
         return;
@@ -272,6 +274,9 @@ fn click(
     };
     let additive =
         keys.is_some_and(|k| k.pressed(KeyCode::ShiftLeft) || k.pressed(KeyCode::ShiftRight));
+    let item_hit = session
+        .session_witness()
+        .and_then(|witness| actors.item_hit(ray, far, &witness));
     let Some(host) = session.host() else {
         return;
     };
@@ -280,6 +285,14 @@ fn click(
         .presentation()
         .is_some_and(|p| p.control_enabled == Some(false))
     {
+        return;
+    }
+    if objects.local_player_settings().is_some_and(|local| {
+        objects
+            .player_removal_state()
+            .and_then(|state| state.get(local.identity))
+            .is_some_and(|result| result.left)
+    }) {
         return;
     }
     let picked = objects
@@ -314,24 +327,39 @@ fn click(
         })
         .collect();
     for unit in owned {
-        let result = match picked.filter(|&target| objects.is_enemy(unit, target)) {
-            Some(target) => objects.native(
+        let result = if let Some(item) = item_hit.filter(|&id| {
+            objects
+                .executed_item(id)
+                .is_ok_and(|item| item.held_by.is_none())
+        }) {
+            objects.native(
                 "IssueTargetOrder",
                 &[
                     Value::Handle(unit),
-                    Value::Str("attack".into()),
-                    Value::Handle(target),
+                    Value::Str("smart".into()),
+                    Value::Handle(item),
                 ],
-            ),
-            None => objects.native(
-                "IssuePointOrder",
-                &[
-                    Value::Handle(unit),
-                    Value::Str("move".into()),
-                    Value::Real(point[0]),
-                    Value::Real(point[1]),
-                ],
-            ),
+            )
+        } else {
+            match picked.filter(|&target| objects.is_enemy(unit, target)) {
+                Some(target) => objects.native(
+                    "IssueTargetOrder",
+                    &[
+                        Value::Handle(unit),
+                        Value::Str("attack".into()),
+                        Value::Handle(target),
+                    ],
+                ),
+                None => objects.native(
+                    "IssuePointOrder",
+                    &[
+                        Value::Handle(unit),
+                        Value::Str("move".into()),
+                        Value::Real(point[0]),
+                        Value::Real(point[1]),
+                    ],
+                ),
+            }
         };
         if let Err(error) = result {
             input.last_error = Some(error);

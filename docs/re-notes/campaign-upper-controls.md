@@ -65,8 +65,16 @@ never treated as balances. The food separator is neutral mathematical notation,
 an explicit recreation choice until a native source-format binding is retained.
 A local compatibility Game.dll printable-string scan found several candidate
 ratio formats but no resource-bar call-site binding; those bytes do not establish
-native usage or the target release. Upkeep remains blank with a diagnostic until
-an effective source-qualified tier is available.
+native usage or the target release. Upkeep now projects the effective food counter
+through selected client threshold/default-table operands and admitted ordered Misc
+profiles. Its label keys, custom-tier key/suffix formats and byte capacities come
+from the same client image; selected GlobalStrings supplies localized text and
+inline colours. Threshold equality stays in the lower tier. Short whole-list
+overrides use the native indexed-reader initializer for missing elements.
+Unsupported token forms, source shapes, missing strings, over-capacity text or
+unknown version stay explicit diagnostics; other counters remain available.
+The participant projection does not implement observer/watch-target presentation
+or economic gold/lumber tax effects.
 
 Image/final font payloads share an application aggregate cap; frame/image values
 come from the assets. Repeated effective values do not rewrite Text components.
@@ -86,5 +94,7 @@ cinematic skip, and the authored F9 key opens the quest log. The displayed food
 count changes as the script transfers units; no food parse refusal remains for
 authored numeric markers. These local screenshots are under
 `.scratch/campaign-objective-20261020/normal-gui-v15/`. They establish visible
-widgets and input, not original/native numerical or visual parity. Upkeep remains
-explicitly unavailable until its source-derived tier consumer is installed.
+widgets and input, not original/native numerical or visual parity. This capture
+predates the upkeep consumer. Synthetic boundary/override/localization fixtures
+and the explicit selected-image decoder gate do not prove rendered or native
+runtime upkeep parity; no synchronized original-client comparison was performed.

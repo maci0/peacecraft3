@@ -30,6 +30,7 @@ struct ResourceBar {
 }
 struct Source {
     receipts: Vec<AssetReceipt>,
+    globals: String,
     width: f32,
     height: f32,
     labels: Vec<Label>,
@@ -160,22 +161,40 @@ fn project(
     let Some(source) = state.source.as_mut() else {
         return;
     };
-    let (values, mut errors) = balances(host.objects());
+    let (values, mut errors) = balances(host.objects(), &source.globals);
     for label in &mut source.labels {
         let mut value = values.get(label.name.as_str()).cloned().unwrap_or_default();
-        if label
-            .length
-            .is_some_and(|limit| value.chars().count() > limit)
-        {
-            errors.push(format!(
-                "{}: effective value exceeds authored TextLength",
-                label.name
-            ));
-            value.clear();
-        }
+        let parsed = match resource_runs(&value, label.length) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                errors.push(format!("{}: {error}", label.name));
+                value.clear();
+                crate::rich_text::parse("").expect("empty markup")
+            }
+        };
         if label.rendered != value {
             if let Some(entity) = label.entity {
-                commands.entity(entity).insert(Text::new(value.clone()));
+                commands
+                    .entity(entity)
+                    .despawn_children()
+                    .insert(Text::default());
+                for span in parsed.spans {
+                    let colour = span.colour.unwrap_or(label.style.colour);
+                    let child = commands
+                        .spawn((
+                            TextSpan::new(span.text),
+                            TextFont {
+                                font: source.fonts[&label.style.font].clone().into(),
+                                font_size: bevy::text::FontSize::Vh(
+                                    label.style.height / crate::mainmenu::FRAME_H * 100.,
+                                ),
+                                ..default()
+                            },
+                            TextColor(Color::srgba(colour[0], colour[1], colour[2], colour[3])),
+                        ))
+                        .id();
+                    commands.entity(entity).add_child(child);
+                }
             }
             label.rendered = value;
         }
@@ -275,6 +294,7 @@ fn load(
     let skin = SkinTable::parse(&text(reader, super::SKIN, &mut receipts)?)
         .map_err(|error| error.to_string())?;
     let sections = super::race_sections(&skin, race?)?;
+    let globals = text(reader, r"UI\FrameDef\GlobalStrings.fdf", &mut receipts)?;
     let fdf = Fdf::parse(&normalize(&text(reader, MEMBER, &mut receipts)?)?)
         .map_err(|error| format!("{MEMBER}: {error}"))?;
     let width = dimension(fdf.width(ROOT), ROOT)?;
@@ -393,6 +413,7 @@ fn load(
         }
     }
     Ok(Source {
+        globals,
         receipts,
         width,
         height,
@@ -487,7 +508,7 @@ fn paint(commands: &mut Commands, source: &mut Source) -> Entity {
     }
     root
 }
-fn balances(objects: &ObjectHost) -> (HashMap<&'static str, String>, Vec<String>) {
+fn balances(objects: &ObjectHost, globals: &str) -> (HashMap<&'static str, String>, Vec<String>) {
     let mut values = HashMap::new();
     let mut errors = Vec::new();
     let Some(player) = objects
@@ -525,12 +546,85 @@ fn balances(objects: &ObjectHost) -> (HashMap<&'static str, String>, Vec<String>
         // Neutral mathematical separator is a recreation choice; no authored format binding is established.
         values.insert("ResourceBarSupplyText", format!("{used}/{cap}"));
     }
-    errors.push("ResourceBarUpkeepText: effective upkeep tier is unavailable".into());
+    match objects.player_upkeep_label(player) {
+        Ok(Some(binding)) => match upkeep_text(globals, &binding) {
+            Ok(text) => {
+                values.insert("ResourceBarUpkeepText", text);
+            }
+            Err(error) => errors.push(format!("ResourceBarUpkeepText: {error}")),
+        },
+        Ok(None) => {
+            errors.push("ResourceBarUpkeepText: effective upkeep admission unavailable".into())
+        }
+        Err(error) => errors.push(format!("ResourceBarUpkeepText: {error}")),
+    }
     (values, errors)
+}
+fn resource_runs(value: &str, length: Option<usize>) -> Result<crate::rich_text::RichText, String> {
+    let parsed = crate::rich_text::parse(value).map_err(|e| e.to_string())?;
+    if !parsed.unsupported.is_empty() {
+        return Err("unsupported resource text substitution".into());
+    }
+    if length.is_some_and(|limit| {
+        parsed
+            .spans
+            .iter()
+            .map(|s| s.text.chars().count())
+            .sum::<usize>()
+            > limit
+    }) {
+        return Err("effective value exceeds authored TextLength".into());
+    }
+    Ok(parsed)
+}
+fn upkeep_text(
+    globals: &str,
+    binding: &pcx_play::player_resources::UpkeepLabel,
+) -> Result<String, String> {
+    let text = if let Some(text) = menu_text::global_string(globals, &binding.primary_key) {
+        text
+    } else if let Some((key, suffix)) = &binding.fallback {
+        let text = menu_text::global_string(globals, key)
+            .ok_or_else(|| format!("missing upkeep global string {key}"))?;
+        format!("{text}{suffix}")
+    } else {
+        return Err(format!(
+            "missing upkeep global string {}",
+            binding.primary_key
+        ));
+    };
+    // Do not silently split UTF-8 or colour markup at a native byte-buffer bound.
+    if text.len() >= binding.capacity {
+        return Err("localized upkeep exceeds native destination capacity".into());
+    }
+    Ok(text)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn upkeep_localization_uses_primary_then_source_fallback_and_preserves_colour() {
+        let globals =
+            "StringList {\n PRIMARY \"|cffff0000Changed\",\n FALLBACK \"|cff00ff00Other\",\n}\n";
+        let mut binding = pcx_play::player_resources::UpkeepLabel {
+            primary_key: "PRIMARY".into(),
+            fallback: Some(("FALLBACK".into(), " (7)".into())),
+            capacity: 100,
+        };
+        let text = upkeep_text(globals, &binding).unwrap();
+        let parsed = resource_runs(&text, Some(7)).unwrap();
+        assert_eq!(parsed.spans[0].text, "Changed");
+        assert_eq!(parsed.spans[0].colour, Some([1., 0., 0., 1.]));
+        binding.primary_key = "ABSENT".into();
+        assert_eq!(
+            upkeep_text(globals, &binding).unwrap(),
+            "|cff00ff00Other (7)"
+        );
+        binding.capacity = 4;
+        assert!(upkeep_text(globals, &binding).is_err());
+        assert!(resource_runs(&text, Some(6)).is_err());
+        assert!(resource_runs("|cBAD", None).is_err());
+    }
     #[test]
     fn source_templates_keep_icon_inheritance_and_counter_anchor_offsets() {
         let input = "Texture \"Icon\" {\nWidth 0.023,\nHeight 0.017,\n}\nString \"Counter\" {\nFont \"Face\",0.014,\nHeight 0.02,\nTextLength 6,\n}\nFrame \"SIMPLEFRAME\" \"ResourceBarFrame\" {\nWidth 0.31,\nHeight 0.04,\nTexture INHERITS \"Icon\" {\nAnchor TOPLEFT,0.013,-0.002,\nFile \"Gold\",\n}\nString \"Value\" INHERITS \"Counter\" {\nAnchor TOPRIGHT,-0.04,-0.003,\n}\n}\n";

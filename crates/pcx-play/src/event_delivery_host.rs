@@ -11,6 +11,7 @@ use std::collections::{BTreeSet, VecDeque};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EventSubject {
     pub unit: Option<HandleId>,
+    pub item: Option<HandleId>,
     /// Killing or attacking unit.
     pub source: Option<HandleId>,
     pub destructable: Option<HandleId>,
@@ -38,8 +39,10 @@ pub(super) struct Delivery {
     region_known: BTreeSet<HandleId>,
 }
 
-const RESPONSES: [&str; 9] = [
+const RESPONSES: [&str; 11] = [
     "GetTriggerUnit",
+    "GetManipulatedItem",
+    "GetManipulatingUnit",
     "GetEnteringUnit",
     "GetLeavingUnit",
     "GetDyingUnit",
@@ -51,6 +54,12 @@ const RESPONSES: [&str; 9] = [
 ];
 
 impl ObjectHost {
+    pub(super) fn reserve_event_delivery(&mut self, count: usize) -> Result<(), Error> {
+        self.events
+            .queue
+            .try_reserve(count)
+            .map_err(|_| self.inner.error("event delivery", Failure::Capacity))
+    }
     pub(super) fn check_trigger_player_response(&self, source: &str) -> Result<(), Error> {
         let name = "GetTriggerPlayer";
         if self.inner.program.natives().get(name).is_none()
@@ -199,6 +208,8 @@ impl ObjectHost {
         }
         let value = match name {
             "GetKillingUnit" | "GetAttacker" => subject.source,
+            "GetManipulatedItem" => subject.item,
+            "GetManipulatingUnit" => subject.unit,
             "GetClickedDialog" => subject.dialog,
             "GetClickedButton" => subject.button,
             "GetTriggerPlayer" => subject.player,

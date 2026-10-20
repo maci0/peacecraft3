@@ -4,6 +4,9 @@ use bevy::{camera::visibility::RenderLayers, ecs::system::SystemParam, prelude::
 use pcx_assets::Resolver;
 use pcx_play::{map_startup_host::MapStartupHost, playercolor_host::ExecutedUnit};
 use pcx_script::HandleId;
+
+#[path = "campaign_item_model.rs"]
+mod item_model;
 use pcx_sim::world::{Definition, FieldValue};
 use peacecraft3::{
     browser_configuration::SelectedMapSources, campaign_camera::CampaignCameraSet,
@@ -34,6 +37,7 @@ struct Actor {
     vertices: usize,
     /// Geosets whose authored material is lit, captured before sun lighting.
     lit: Vec<bool>,
+    world_transform: Transform,
 }
 
 #[derive(Resource, Default)]
@@ -41,6 +45,9 @@ pub(crate) struct UnitActors {
     session: Option<Weak<()>>,
     reader: Option<Arc<Resolver>>,
     actors: BTreeMap<HandleId, Actor>,
+    item_animations: BTreeMap<HandleId, pcx_play::unit_model::Animation>,
+    item_models: BTreeMap<String, Arc<pcx_play::unit_model::Model>>,
+    item_source_bytes: usize,
     failed: BTreeMap<HandleId, Option<HandleId>>,
     image_bytes: usize,
     vertices: usize,
@@ -48,6 +55,70 @@ pub(crate) struct UnitActors {
     parameters_attempted: bool,
     palette: Option<TeamPalette>,
     pub last_error: Option<String>,
+}
+
+impl UnitActors {
+    pub(crate) fn item_hit(&self, ray: Ray3d, far: f32, session: &Weak<()>) -> Option<HandleId> {
+        if !self
+            .session
+            .as_ref()
+            .is_some_and(|current| Weak::ptr_eq(current, session))
+        {
+            return None;
+        }
+        self.item_animations
+            .keys()
+            .filter_map(|id| {
+                let actor = self.actors.get(id)?;
+                let inverse = actor.world_transform.to_matrix().inverse();
+                let distance = bounds_hit(
+                    inverse.transform_point3(ray.origin),
+                    inverse.transform_vector3(*ray.direction),
+                    Vec3::from_array(actor.model.minimum_extent),
+                    Vec3::from_array(actor.model.maximum_extent),
+                    far,
+                )?;
+                Some((*id, distance))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(id, _)| id)
+    }
+}
+
+fn bounds_hit(
+    origin: Vec3,
+    direction: Vec3,
+    minimum: Vec3,
+    maximum: Vec3,
+    far: f32,
+) -> Option<f32> {
+    if !origin.is_finite()
+        || !direction.is_finite()
+        || !minimum.is_finite()
+        || !maximum.is_finite()
+        || !far.is_finite()
+        || far <= 0.0
+        || minimum.cmpge(maximum).any()
+    {
+        return None;
+    }
+    let (mut near, mut end) = (0.0_f32, far);
+    for axis in 0..3 {
+        if direction[axis] == 0.0 {
+            if origin[axis] < minimum[axis] || origin[axis] > maximum[axis] {
+                return None;
+            }
+        } else {
+            let a = (minimum[axis] - origin[axis]) / direction[axis];
+            let b = (maximum[axis] - origin[axis]) / direction[axis];
+            near = near.max(a.min(b));
+            end = end.min(a.max(b));
+            if near > end {
+                return None;
+            }
+        }
+    }
+    Some(near)
 }
 
 #[derive(SystemParam)]
@@ -349,10 +420,70 @@ fn expand_layers(
     Ok((vertices, source_layers))
 }
 
+#[derive(Clone, Copy)]
+enum Visual<'a> {
+    Unit(&'a ExecutedUnit),
+    Item(
+        &'a pcx_play::playercolor_host::ExecutedItem,
+        &'a pcx_play::unit_model::Animation,
+    ),
+}
+impl<'a> Visual<'a> {
+    fn animation(self) -> Result<&'a pcx_play::unit_model::Animation, String> {
+        match self {
+            Self::Unit(unit) => unit
+                .animation
+                .as_ref()
+                .ok_or_else(|| "unit model is unavailable".into()),
+            Self::Item(_, animation) => Ok(animation),
+        }
+    }
+    fn face(self) -> f32 {
+        match self {
+            Self::Unit(unit) => unit.face,
+            Self::Item(..) => 0.0,
+        }
+    }
+    fn transform(
+        self,
+        terrain: &pcx_map::Terrain,
+        scale: f32,
+        height: f32,
+    ) -> Result<Transform, String> {
+        match self {
+            Self::Unit(unit) => transform_for(unit, terrain, scale, height),
+            Self::Item(item, _) => {
+                let z = pcx_tera::world::sample_world_z(terrain, item.x, item.y)
+                    .ok_or("item outside admitted terrain")?;
+                // shortcut: model origin is grounded without a facing override; qualify native item orientation before claiming parity.
+                Ok(Transform::from_translation(Vec3::new(item.x, z, -item.y))
+                    .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
+                    .with_scale(Vec3::splat(scale)))
+            }
+        }
+    }
+    fn properties(self, channel_scale: f32) -> Result<(f32, f32, [f32; 3]), String> {
+        match self {
+            Self::Unit(unit) => Ok((
+                scalar(&unit.definition, "modelScale")?,
+                scalar(&unit.definition, "moveHeight")?,
+                [
+                    scalar(&unit.definition, "red")?,
+                    scalar(&unit.definition, "green")?,
+                    scalar(&unit.definition, "blue")?,
+                ]
+                .map(|v| v * channel_scale),
+            )),
+            Self::Item(item, _) => item_model::properties(&item.definition, channel_scale)
+                .map(|(scale, tint)| (scale, 0.0, tint)),
+        }
+    }
+}
+
 struct ActorSource<'a> {
     reader: &'a Resolver,
     palette: &'a TeamPalette,
-    unit: &'a ExecutedUnit,
+    visual: Visual<'a>,
     terrain: &'a pcx_map::Terrain,
     id: HandleId,
     color: i32,
@@ -378,7 +509,7 @@ impl Actor {
         let ActorSource {
             reader,
             palette,
-            unit,
+            visual,
             terrain,
             id,
             color,
@@ -388,13 +519,21 @@ impl Actor {
             available_images,
             available_vertices,
         } = input;
-        let animation = unit.animation.as_ref().ok_or("unit model is unavailable")?;
+        let animation = visual.animation()?;
         let source = &animation.model;
         let bytes = &source.bytes;
         let mdl = pcx_mdl::Mdlx::parse(bytes).map_err(|e| e.to_string())?;
         let mut model = pcx_gfx::load_model(bytes, &source.member).map_err(|e| e.to_string())?;
         let mut runtime =
             pcx_gfx::mdx_runtime::RuntimePlan::parse(bytes).map_err(|e| e.to_string())?;
+        if matches!(visual, Visual::Item(..))
+            && (0..3).any(|axis| model.minimum_extent[axis] >= model.maximum_extent[axis])
+        {
+            return Err(format!(
+                "{}: unsupported degenerate item picking bounds",
+                source.member
+            ));
+        }
         let (vertices, source_layers) =
             expand_layers(&mut model, &mut runtime, available_vertices)?;
         let mut textures = Vec::new();
@@ -422,6 +561,12 @@ impl Actor {
                 continue;
             }
             if texture.path.is_empty() {
+                if matches!(visual, Visual::Item(..)) {
+                    return Err(format!(
+                        "item has unsupported replaceable texture slot {}",
+                        texture.slot
+                    ));
+                }
                 // Empty slots 1/2 use the indexed team-color/glow families; full paths come from the selected inventory.
                 texture.path = match texture.slot {
                     1 | 2 => palette.path(reader.paths(), texture.slot, color)?,
@@ -457,17 +602,10 @@ impl Actor {
             &source.member,
         )
         .map_err(|e| e.to_string())?;
-        let scale = scalar(&unit.definition, "modelScale")?;
-        if scale <= 0. {
-            return Err("nonpositive unit modelScale".into());
+        let (scale, height, tint) = visual.properties(channel_scale)?;
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err("nonpositive actor model scale".into());
         }
-        let height = scalar(&unit.definition, "moveHeight")?;
-        let tint = [
-            scalar(&unit.definition, "red")?,
-            scalar(&unit.definition, "green")?,
-            scalar(&unit.definition, "blue")?,
-        ]
-        .map(|v| v * channel_scale);
         let source_input = model_scene::GeosetSource {
             m: &mdl,
             bytes,
@@ -482,7 +620,7 @@ impl Actor {
         };
         model_scene::preflight_geosets(&source_input, &opacity, sample.frame)
             .map_err(|e| e.to_string())?;
-        let initial_transform = transform_for(unit, terrain, scale, height)?;
+        let initial_transform = visual.transform(terrain, scale, height)?;
         let root = commands
             .spawn((initial_transform, Visibility::default(), UnitActor(id)))
             .id();
@@ -527,6 +665,7 @@ impl Actor {
                 image_bytes: available_images - remaining,
                 vertices,
                 lit,
+                world_transform: initial_transform,
             },
             available_images - remaining,
             vertices,
@@ -534,7 +673,7 @@ impl Actor {
     }
     fn update(
         &mut self,
-        unit: &ExecutedUnit,
+        visual: Visual,
         now: f64,
         assets: &mut DrawAssets,
         (visibility, transforms): (&mut Query<&mut Visibility>, &mut Query<&mut Transform>),
@@ -544,7 +683,7 @@ impl Actor {
             &pcx_play::menu_lighting::Parameters,
         )>,
     ) -> Result<(), String> {
-        let animation = unit.animation.as_ref().ok_or("unit model is unavailable")?;
+        let animation = visual.animation()?;
         let sample = animation
             .sample(now)?
             .unwrap_or(pcx_play::unit_model::Sample {
@@ -573,8 +712,9 @@ impl Actor {
             self.uv = uv;
             self.interval = sample.interval;
         }
+        self.world_transform = visual.transform(terrain, self.scale, self.height)?;
         if let Ok(mut transform) = transforms.get_mut(self.root) {
-            *transform = transform_for(unit, terrain, self.scale, self.height)?;
+            *transform = self.world_transform;
         }
         let skeleton = model_scene::skin_geosets(
             model_scene::Rig {
@@ -636,7 +776,7 @@ impl Actor {
         }
         if let Some((sun, parameters)) = light {
             // The model faces +X at zero facing: undo the unit's facing around Z.
-            let (sin, cos) = unit.face.to_radians().sin_cos();
+            let (sin, cos) = visual.face().to_radians().sin_cos();
             let [x, y, z] = sun.direction;
             let direction = Vec3::new(x * cos + y * sin, -x * sin + y * cos, z);
             crate::menu_lighting::apply_sun(
@@ -731,7 +871,16 @@ fn project(
         _ => None,
     };
     let (channel_scale, cutout) = (parameters.channel_scale, parameters.cutout_reference);
-    let live: BTreeSet<_> = objects.executed_units().map(|(id, _)| id).collect();
+    let live: BTreeSet<_> = objects
+        .executed_units()
+        .map(|(id, _)| id)
+        .chain(
+            objects
+                .executed_items()
+                .filter(|(_, item)| item.held_by.is_none())
+                .map(|(id, _)| id),
+        )
+        .collect();
     let retired: Vec<_> = state
         .actors
         .keys()
@@ -779,7 +928,7 @@ fn project(
                 ActorSource {
                     reader: &reader,
                     palette: &palette,
-                    unit,
+                    visual: Visual::Unit(unit),
                     terrain: &context.terrain,
                     id,
                     color,
@@ -805,7 +954,7 @@ fn project(
         }
         if let Some(actor) = state.actors.get_mut(&id)
             && let Err(e) = actor.update(
-                unit,
+                Visual::Unit(unit),
                 now,
                 &mut assets,
                 (&mut queries.visibility, &mut queries.transforms),
@@ -814,6 +963,84 @@ fn project(
             )
         {
             state.last_error = Some(format!("unit {id:?}: {e}"));
+        }
+    }
+    for (id, item) in objects
+        .executed_items()
+        .filter(|(_, item)| item.held_by.is_none())
+    {
+        if state.failed.contains_key(&id) {
+            continue;
+        }
+        if !state.item_animations.contains_key(&id) {
+            let UnitActors {
+                item_models,
+                item_source_bytes,
+                ..
+            } = &mut *state;
+            match item_model::load(
+                &reader,
+                &item.definition,
+                &context.sources.map.edition,
+                now,
+                item_models,
+                item_source_bytes,
+            ) {
+                Ok(animation) => {
+                    state.item_animations.insert(id, animation);
+                }
+                Err(error) => {
+                    state.failed.insert(id, None);
+                    state.last_error = Some(format!("item {id:?}: {error}"));
+                    continue;
+                }
+            }
+        }
+        let animation = state.item_animations[&id].clone();
+        let visual = Visual::Item(item, &animation);
+        if !state.actors.contains_key(&id) {
+            let result = Actor::spawn(
+                &mut commands,
+                &mut assets,
+                ActorSource {
+                    reader: &reader,
+                    palette: &palette,
+                    visual,
+                    terrain: &context.terrain,
+                    id,
+                    // Items do not carry a team-color override; reject replaceable team slots below.
+                    color: 0,
+                    now,
+                    channel_scale,
+                    cutout,
+                    available_images: (512usize << 20).saturating_sub(state.image_bytes),
+                    available_vertices: 2_000_000usize.saturating_sub(state.vertices),
+                },
+            );
+            match result {
+                Ok((actor, bytes, vertices)) => {
+                    state.image_bytes += bytes;
+                    state.vertices += vertices;
+                    state.actors.insert(id, actor);
+                }
+                Err(error) => {
+                    state.failed.insert(id, None);
+                    state.last_error = Some(format!("item {id:?}: {error}"));
+                    continue;
+                }
+            }
+        }
+        if let Some(actor) = state.actors.get_mut(&id)
+            && let Err(error) = actor.update(
+                visual,
+                now,
+                &mut assets,
+                (&mut queries.visibility, &mut queries.transforms),
+                &context.terrain,
+                sun.as_ref().map(|s| (s, &parameters)),
+            )
+        {
+            state.last_error = Some(format!("item {id:?}: {error}"));
         }
     }
     let mut owners = Vec::new();
@@ -850,6 +1077,7 @@ fn project(
 }
 
 fn retire(commands: &mut Commands, state: &mut UnitActors, id: HandleId) {
+    state.item_animations.remove(&id);
     if let Some(actor) = state.actors.remove(&id) {
         commands.entity(actor.root).despawn();
         state.image_bytes -= actor.image_bytes;
@@ -939,6 +1167,42 @@ mod tests {
         }
         pcx_map::Terrain::from_bytes(bytes).unwrap()
     }
+    #[test]
+    fn source_model_bounds_pick_only_forward_finite_intersections() {
+        let min = Vec3::new(-2.0, -3.0, -4.0);
+        let max = Vec3::new(2.0, 3.0, 4.0);
+        assert_eq!(
+            bounds_hit(Vec3::new(-10.0, 0.0, 0.0), Vec3::X, min, max, 100.0),
+            Some(8.0)
+        );
+        assert_eq!(
+            bounds_hit(Vec3::new(-10.0, 0.0, 0.0), Vec3::NEG_X, min, max, 100.0),
+            None
+        );
+        assert_eq!(
+            bounds_hit(Vec3::new(-10.0, 5.0, 0.0), Vec3::X, min, max, 100.0),
+            None
+        );
+        assert_eq!(
+            bounds_hit(Vec3::new(-10.0, 0.0, 0.0), Vec3::X, min, max, 7.0),
+            None
+        );
+        assert_eq!(bounds_hit(Vec3::ZERO, Vec3::X, min, max, 100.0), Some(0.0));
+        for far in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(bounds_hit(Vec3::ZERO, Vec3::X, min, max, far), None);
+        }
+        assert_eq!(bounds_hit(Vec3::ZERO, Vec3::X, min, min, 100.0), None);
+        let state = UnitActors::default();
+        assert_eq!(
+            state.item_hit(
+                Ray3d::new(Vec3::ZERO, Dir3::X),
+                100.0,
+                &Arc::downgrade(&Arc::new(()))
+            ),
+            None
+        );
+    }
+
     #[test]
     fn every_material_layer_keeps_its_texture_opacity_uv_and_geoset_binding() {
         let mut bytes = b"MDLXVERS".to_vec();

@@ -229,28 +229,7 @@ impl ObjectHost {
                 speed: 1.0,
             });
         }
-        let (initial, current) =
-            progress.ok_or("hero combat requires admitted initial and current levels")?;
-        let gained = current
-            .checked_sub(initial)
-            .filter(|gained| *gained >= 0)
-            .ok_or("hero combat level is below the admitted initial level")?;
-        let required = |name: &str| {
-            column(definition, SlkId::UnitBalance, name)?
-                .map(|value| number(value, name))
-                .transpose()?
-                .flatten()
-                .ok_or_else(|| format!("hero unit field {name} is empty"))
-        };
-        let attribute = |name: &str| -> Result<f32, String> {
-            // Integer attributes retain fractional growth until the live level is evaluated.
-            let value =
-                (required(name)? + required(&format!("{name}plus"))? * gained as f32).floor();
-            if !value.is_finite() || value < 0.0 {
-                return Err(format!("invalid derived hero attribute {name}"));
-            }
-            Ok(value)
-        };
+        let attribute = |name: &str| Self::derive_hero_attribute(definition, progress, name);
         let primary =
             column(definition, SlkId::UnitBalance, "Primary")?.ok_or("hero Primary is empty")?;
         let primary = text(primary, "Primary")?;
@@ -507,6 +486,7 @@ impl ObjectHost {
             if !can_attack || self.weapon_target(target).is_none() || unit == target {
                 return Ok(Value::Bool(false));
             }
+            self.cancel_inventory_order(unit);
             self.clear_combat_target(unit);
             if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                 record.combat.as_mut().expect("live combat").target = Some(target);
@@ -530,6 +510,7 @@ impl ObjectHost {
         };
         let owner = record.owner;
         let now = self.timer_game_time().unwrap_or(0.0);
+        self.forget_inventory_unit(unit, false)?;
         self.steer_unit(unit, None, name)?;
         if let Some(placement) = &mut self.unit_placement {
             placement.hide(unit).map_err(|e| {

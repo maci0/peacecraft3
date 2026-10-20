@@ -8,10 +8,14 @@ const MAX_TILES: u64 = 256;
 /// Two tile triangles, each clipped by four square edges, at most five fan triangles.
 const MAX_VERTICES_PER_TILE: usize = 2 * 5 * 3;
 
-pub(super) fn project(terrain: &Terrain, transform: &Transform) -> Result<Mesh, String> {
+pub(super) fn project(
+    terrain: &Terrain,
+    transform: &Transform,
+    z_offset: f32,
+) -> Result<Mesh, String> {
     let center = transform.translation;
     let size = transform.scale.x;
-    if !transform.is_finite() || size <= 0.0 {
+    if !transform.is_finite() || size <= 0.0 || !z_offset.is_finite() || z_offset < 0.0 {
         return Err("circle footprint must have finite positive size".into());
     }
     let [cx, cy] = [center.x, -center.z];
@@ -69,8 +73,13 @@ pub(super) fn project(terrain: &Terrain, transform: &Transform) -> Result<Mesh, 
                 }
                 for index in 1..polygon.len().saturating_sub(1) {
                     let world = [polygon[0], polygon[index], polygon[index + 1]];
-                    let local = world
-                        .map(|p| Vec3::new((p.x - cx) / size, p.z - center.y, -(p.y - cy) / size));
+                    let local = world.map(|p| {
+                        Vec3::new(
+                            (p.x - cx) / size,
+                            p.z + z_offset - center.y,
+                            -(p.y - cy) / size,
+                        )
+                    });
                     let Some(normal) = (local[1] - local[0])
                         .cross(local[2] - local[0])
                         .try_normalize()
@@ -177,7 +186,7 @@ mod tests {
         );
         let transform =
             Transform::from_xyz(176.0, 7.0, -64.0).with_scale(Vec3::new(176.0, 1.0, 176.0));
-        let mesh = project(&terrain, &transform).unwrap();
+        let mesh = project(&terrain, &transform, 0.0).unwrap();
         let positions = mesh
             .attribute(Mesh::ATTRIBUTE_POSITION)
             .unwrap()
@@ -228,7 +237,7 @@ mod tests {
         let terrain = terrain(1, 1, &[8192; 4]);
         let transform =
             Transform::from_xyz(32.0, 0.0, 48.0).with_scale(Vec3::new(128.0, 1.0, 128.0));
-        let mesh = project(&terrain, &transform).unwrap();
+        let mesh = project(&terrain, &transform, 0.0).unwrap();
         let positions = mesh
             .attribute(Mesh::ATTRIBUTE_POSITION)
             .unwrap()
@@ -246,31 +255,64 @@ mod tests {
     }
 
     #[test]
+    fn admitted_offset_changes_height_without_changing_footprint_or_uvs() {
+        let terrain = terrain(1, 1, &[8192, 8256, 8288, 8224]);
+        let transform =
+            Transform::from_xyz(96.0, 15.0, -16.0).with_scale(Vec3::new(72.0, 1.0, 72.0));
+        let base = project(&terrain, &transform, 0.0).unwrap();
+        for offset in [0.375, 17.25] {
+            let raised = project(&terrain, &transform, offset).unwrap();
+            assert_eq!(
+                base.attribute(Mesh::ATTRIBUTE_UV_0),
+                raised.attribute(Mesh::ATTRIBUTE_UV_0)
+            );
+            let Some(VertexAttributeValues::Float32x3(a)) =
+                base.attribute(Mesh::ATTRIBUTE_POSITION)
+            else {
+                panic!("positions")
+            };
+            let Some(VertexAttributeValues::Float32x3(b)) =
+                raised.attribute(Mesh::ATTRIBUTE_POSITION)
+            else {
+                panic!("positions")
+            };
+            for (a, b) in a.iter().zip(b) {
+                assert_eq!([a[0], a[2]], [b[0], b[2]]);
+                assert!((b[1] - a[1] - offset).abs() < 0.0001);
+            }
+        }
+        for offset in [f32::NAN, f32::INFINITY, -0.5] {
+            assert!(project(&terrain, &transform, offset).is_err());
+        }
+    }
+
+    #[test]
     fn invalid_sizes_outside_footprints_and_tile_budget_refuse_before_geometry() {
         let terrain = terrain(17, 17, &[8192; 18 * 18]);
         for size in [0.0, -1.0, f32::NAN, f32::INFINITY] {
             assert!(
                 project(
                     &terrain,
-                    &Transform::default().with_scale(Vec3::new(size, 1.0, size))
+                    &Transform::default().with_scale(Vec3::new(size, 1.0, size)),
+                    0.0,
                 )
                 .is_err()
             );
         }
         let bounded =
             Transform::from_xyz(1056.0, 0.0, -976.0).with_scale(Vec3::new(2048.0, 1.0, 2048.0));
-        let mesh = project(&terrain, &bounded).unwrap();
+        let mesh = project(&terrain, &bounded, 0.0).unwrap();
         assert_eq!(mesh.count_vertices(), MAX_TILES as usize * 2 * 3);
         let outside = Transform::from_xyz(-1024.0, 0.0, 1024.0).with_scale(Vec3::splat(32.0));
         assert!(
-            project(&terrain, &outside)
+            project(&terrain, &outside, 0.0)
                 .unwrap_err()
                 .contains("covers 0 terrain tiles")
         );
         let huge =
             Transform::from_xyz(1024.0, 0.0, -1024.0).with_scale(Vec3::new(4096.0, 1.0, 4096.0));
         assert!(
-            project(&terrain, &huge)
+            project(&terrain, &huge, 0.0)
                 .unwrap_err()
                 .contains("covers 289 terrain tiles")
         );
@@ -279,6 +321,6 @@ mod tests {
             1.0,
             f32::MIN_POSITIVE,
         ));
-        assert!(project(&terrain, &tiny).is_err());
+        assert!(project(&terrain, &tiny, 0.0).is_err());
     }
 }

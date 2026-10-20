@@ -259,6 +259,8 @@ fn empty_bank(label: &str) -> SoundBank {
 
 fn budgets() -> MapStartupBudgets {
     MapStartupBudgets {
+        inventory: None,
+        player_removal: None,
         groups: 8,
         map_config: MapConfigBudget {
             text_bytes: 64,
@@ -362,7 +364,7 @@ fn defend() -> DefendSelection {
     )
     .expect("synthetic defend tables");
     DefendSelection {
-        tables,
+        tables: Arc::new(tables),
         alias: "Dfnd".into(),
     }
 }
@@ -605,6 +607,8 @@ fn rule_with_getter(kind: RuleKind, body: Vec<u8>) -> Arc<VerifiedNeutralRule> {
 
 fn host_inputs(catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>) -> MapStartupInputs {
     MapStartupInputs {
+        inventory: None,
+        player_removal_rules: None,
         random: None,
         terrain_pathing: None,
         numeric: None,

@@ -129,3 +129,8 @@ pub mod player_resources;
 
 pub mod cheat_rules;
 pub mod dialog_layout;
+
+#[path = "inventory_rules.rs"]
+pub mod inventory;
+pub mod player_removal_rules;
+pub mod selection_circle;

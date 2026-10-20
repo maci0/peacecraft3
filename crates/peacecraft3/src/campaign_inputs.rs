@@ -34,7 +34,10 @@ pub fn prepare_new_game(
     let settings = pcx_play::campaign_client::fresh_settings(image, client.clone())?;
     let placement_rules = pcx_play::campaign_client::placement_rules(image, client.clone())?;
     let triggers = pcx_play::campaign_client::fresh_triggers(image, client.clone())?;
-    let orders = pcx_play::campaign_client::order_registry(image, client.clone())?;
+    let orders = Arc::new(pcx_play::campaign_client::order_registry(
+        image,
+        client.clone(),
+    )?);
     let activity = pcx_play::campaign_client::unit_activity(image, client.clone(), &orders)?;
     inputs.budgets.unit_in_range = Some(65536);
     inputs.trigger_runtime = Some(pcx_play::playercolor_host::TriggerRuntimeInput {
@@ -101,6 +104,22 @@ pub fn prepare_new_game(
     if let Some(bytes) = &map_misc {
         game_profiles.push((bindings.map_label.as_str(), bytes.as_slice()));
     }
+    inputs.inventory = Some(pcx_play::inventory::Rules::read(
+        Arc::clone(&inputs.defend.tables),
+        inputs
+            .hero_skills
+            .as_ref()
+            .ok_or("inventory requires selected ability overlays")?
+            .abilities
+            .clone(),
+        Arc::clone(&orders),
+        &game_profiles,
+        8 << 20,
+    )?);
+    inputs.budgets.inventory = Some(pcx_play::inventory::InventoryBudget {
+        max_slots_per_unit: 4096,
+        max_pending_orders: 65536,
+    });
     let hero_vitals = pcx_objects::editor::misc::HeroVitals::read(&game_profiles, 8 << 20)?;
     let combat = pcx_objects::editor::misc::CombatRules::read(&game_profiles, 8 << 20)?;
     let camera_config = reader
@@ -151,7 +170,7 @@ pub fn prepare_new_game(
     inputs.post_config = PostConfigObservations {
         new_game: Some(NewGameInput {
             seed,
-            orders: Some(Arc::new(orders)),
+            orders: Some(orders),
             activity: Some(activity),
             research: Some(research),
             placement_rules: Some(placement_rules),
@@ -304,6 +323,11 @@ pub fn prepare(
     let labels = sound_sources.empty_label_bank(label_budget)?;
     let constructors = vec![sound_sources.empty_label_bank(label_budget)?];
     Ok(MapStartupInputs {
+        inventory: None,
+        player_removal_rules: Some(pcx_play::player_removal_rules::Rules::reviewed_legacy(
+            image,
+            client.clone(),
+        )?),
         enumeration: enum_contracts(context)?,
         rules,
         budgets: budgets(),
@@ -374,7 +398,7 @@ pub fn prepare(
         terrain_pathing: None,
         catalog: Arc::clone(&bindings.catalog.0),
         defend: DefendSelection {
-            tables,
+            tables: Arc::new(tables),
             alias: defend,
         },
         current_research: None,
@@ -517,6 +541,11 @@ fn defend_alias(tables: &DefaultTables) -> Result<String, String> {
 fn budgets() -> MapStartupBudgets {
     use pcx_play::playercolor_host::*;
     MapStartupBudgets {
+        inventory: None,
+        player_removal: Some(PlayerRemovalBudget {
+            max_players: 10000,
+            max_event_deliveries: 65536,
+        }),
         groups: 10000,
         map_config: MapConfigBudget {
             text_bytes: 1 << 20,

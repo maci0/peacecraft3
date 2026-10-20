@@ -5,9 +5,8 @@
 //! `ScaleFactor`, the texture is the first band whose `Size##` holds that size
 //! (the last band takes the rest), and the ARGB tint is `ColorFriend`,
 //! `ColorNeutral` or `ColorEnemy` by the local player's relation to the owner.
-//! Recreation choices, unqualified against the original: the size is the
-//! circle's diameter, its image is clipped onto the admitted ground triangles,
-//! and the texture name takes a `.blp` suffix.
+//! Native image code establishes full-width size and a source-client Z offset.
+//! Recreation choices: clipping onto admitted ground triangles and `.blp` suffix.
 use std::{
     collections::BTreeMap,
     sync::{Arc, Weak},
@@ -40,6 +39,7 @@ pub(crate) struct CampaignSelection {
     materials: BTreeMap<(String, [u8; 4]), Handle<StandardMaterial>>,
     pub last_error: Option<String>,
     last_counts: Option<(usize, usize, usize)>,
+    placement: Option<Result<pcx_play::selection_circle::Parameters, String>>,
 }
 
 pub(crate) fn install(app: &mut App) {
@@ -56,7 +56,7 @@ fn circle_look(
     let band = circles
         .bands
         .iter()
-        .find(|band| band.max_size.is_none_or(|max| size <= max))?;
+        .find(|band| band.max_size.is_none_or(|max| size < max))?;
     let colour = match relation {
         Relation::Friend => circles.friend,
         Relation::Neutral => circles.neutral,
@@ -71,6 +71,7 @@ struct Inputs<'w> {
     requests: Res<'w, MapRequests>,
     sources: Res<'w, SelectedMapSources>,
     ground: Res<'w, GroundPublication>,
+    launcher: Option<Res<'w, crate::launch_gui::Launcher>>,
 }
 
 #[derive(SystemParam)]
@@ -101,6 +102,7 @@ fn draw(
         requests,
         sources,
         ground,
+        launcher,
     } = inputs;
     let DrawAssets {
         meshes,
@@ -120,12 +122,46 @@ fn draw(
         }
         state.last_error = None;
         state.last_counts = None;
+        state.placement = None;
         for (entity, ..) in &drawn {
             commands.entity(entity).despawn();
         }
         return;
     }
-    let wanted = wanted_circles(&mut session, &input, &ground, &mut state.last_error);
+    let mut wanted = wanted_circles(&mut session, &input, &ground, &mut state.last_error);
+    let z_offset = if wanted.is_empty() {
+        None
+    } else {
+        let placement = state.placement.get_or_insert_with(|| {
+            let install = launcher
+                .as_deref()
+                .and_then(crate::launch_gui::selected_install);
+            crate::menu_lighting::with_client_image(install.as_deref(), |source, image| {
+                pcx_play::selection_circle::Parameters::read(
+                    image,
+                    pcx_play::scripts::AssetIdentity {
+                        source: source.into(),
+                        edition: "selected campaign client".into(),
+                        version: "reviewed Legacy 1.29.2.9231 selection image profile".into(),
+                    },
+                )
+                .inspect(|parameters| {
+                    tracing::debug!(source = %parameters.origin.source,
+                        version = %parameters.origin.version, z_offset = parameters.z_offset,
+                        "campaign selection native placement admitted");
+                })
+            })
+        });
+        match placement {
+            Ok(parameters) => Some(parameters.z_offset),
+            Err(error) => {
+                let error = error.clone();
+                state.last_error = Some(error);
+                wanted.clear();
+                None
+            }
+        }
+    };
     let wanted_count = wanted.len();
     let selected_count = session
         .host()
@@ -191,7 +227,11 @@ fn draw(
                 let Some(context) = ground.context.as_ref() else {
                     continue;
                 };
-                let projected = match projection::project(&context.terrain, &transform) {
+                let projected = match projection::project(
+                    &context.terrain,
+                    &transform,
+                    z_offset.expect("wanted circles have admitted placement"),
+                ) {
                     Ok(projected) => projected,
                     Err(error) => {
                         state.last_error =
@@ -253,7 +293,7 @@ fn draw(
                 })
             });
             tracing::debug!(?unit, ?center, diameter = transform.scale.x,
-                ?footprint, material = ?material.id(), "campaign selection circle spawn");
+                ?footprint, ?z_offset, material = ?material.id(), "campaign selection circle spawn");
         }
         commands.spawn((
             SelectionCircle(unit),
@@ -368,6 +408,7 @@ mod tests {
         let mut state = CampaignSelection {
             session: Some(std::sync::Arc::downgrade(&witness)),
             last_error: Some("old source".into()),
+            placement: Some(Err("old placement source".into())),
             ..default()
         };
         state
@@ -409,6 +450,7 @@ mod tests {
         assert!(app.world().resource::<Assets<Mesh>>().get(&mesh).is_none());
         let state = app.world().resource::<CampaignSelection>();
         assert!(state.session.is_none());
+        assert!(state.placement.is_none());
         assert!(state.materials.is_empty());
         assert!(state.meshes.is_empty());
         assert!(state.last_error.is_none());
@@ -458,11 +500,11 @@ mod tests {
             enemy: [9, 10, 11, 12],
         };
         assert_eq!(
-            circle_look(&circles, 100.0, Relation::Friend),
+            circle_look(&circles, 99.5, Relation::Friend),
             Some(("small.blp".into(), [1, 2, 3, 4]))
         );
         assert_eq!(
-            circle_look(&circles, 100.5, Relation::Enemy),
+            circle_look(&circles, 100.0, Relation::Enemy),
             Some(("large.blp".into(), [9, 10, 11, 12]))
         );
         assert_eq!(

@@ -1243,3 +1243,6 @@ fn explicit_protection_does_not_override_script_kill_or_direct_life_assignment()
             .dead
     );
 }
+
+#[path = "unit_hero_vital_tests.rs"]
+mod hero_vital_updates;

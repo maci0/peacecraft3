@@ -1,6 +1,64 @@
 //! `[Misc]` settings from explicitly ordered stock/map profiles.
 use super::defaults::{parse_config_profile, profile_elements};
 
+/// An ordered profile integer list, replacing the entire earlier list. Missing
+/// elements use the caller's source-derived initializer; excess elements are ignored.
+/// Decimal tokens are admitted without float conversion. Other native token
+/// forms (base prefixes, FourCC and partial parses) remain explicitly unsupported.
+pub fn misc_integer_list(
+    profiles: &[(&str, &[u8])],
+    key: &str,
+    width: usize,
+    missing: i32,
+    max_bytes: usize,
+) -> Result<Option<Vec<i32>>, String> {
+    let mut value = None;
+    let mut total = 0usize;
+    if width > max_bytes / size_of::<i32>() {
+        return Err("misc integer list output budget".into());
+    }
+    for &(member, bytes) in profiles {
+        total = total
+            .checked_add(bytes.len())
+            .and_then(|n| n.checked_add(member.len()))
+            .ok_or("misc profile size overflow")?;
+        if member.is_empty() || total > max_bytes {
+            return Err(format!("{member}: misc profile byte budget or identity"));
+        }
+        let profile = parse_config_profile(bytes, member).map_err(|e| e.to_string())?;
+        if let Some(error) = profile.unresolved().first() {
+            return Err(error.to_string());
+        }
+        let fields = profile.raw_fields("misc", &key.to_ascii_lowercase());
+        if fields.is_empty() {
+            continue;
+        }
+        let [(_, raw)] = fields.as_slice() else {
+            return Err(format!("{member}: duplicate Misc/{key}"));
+        };
+        let elements = profile_elements(raw).map_err(|e| format!("{member}: {e}"))?;
+        let mut list = vec![missing; width];
+        for (target, token) in list.iter_mut().zip(elements) {
+            // Native base-zero parsing differs for a leading zero; refuse that
+            // spelling rather than silently interpreting an octal token as decimal.
+            let digits = token.trim_start_matches(['+', '-']);
+            if digits.is_empty()
+                || !digits.bytes().all(|b| b.is_ascii_digit())
+                || (digits.len() > 1 && digits.starts_with('0'))
+            {
+                return Err(format!(
+                    "{member}: unsupported integer token Misc/{key}: {token}"
+                ));
+            }
+            *target = token
+                .parse()
+                .map_err(|_| format!("{member}: integer overflow Misc/{key}"))?;
+        }
+        value = Some(list);
+    }
+    Ok(value)
+}
+
 /// Later supplied profiles override earlier ones; duplicates within a profile
 /// refuse. Each key must be one finite value; absent keys stay `None`.
 pub fn misc_scalars<const N: usize>(
@@ -224,6 +282,30 @@ impl HeroVitals {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn integer_lists_preserve_precision_whole_override_and_source_padding() {
+        let profiles = [
+            ("stock", b"[Misc]\nCount=16777217,9,11,13\n".as_slice()),
+            ("map", b"[Misc]\nCount=3\n"),
+        ];
+        assert_eq!(
+            misc_integer_list(&profiles, "Count", 3, -7, 512).unwrap(),
+            Some(vec![3, -7, -7])
+        );
+        assert_eq!(
+            misc_integer_list(&profiles[..1], "Count", 3, -7, 512).unwrap(),
+            Some(vec![16777217, 9, 11])
+        );
+        assert_eq!(
+            misc_integer_list(&profiles, "Absent", 3, -7, 512).unwrap(),
+            None
+        );
+        for value in ["0x10", "017", "3.5", "2147483648", "1\nCount=2"] {
+            let bytes = format!("[Misc]\nCount={value}\n");
+            assert!(misc_integer_list(&[("map", bytes.as_bytes())], "Count", 3, 0, 512).is_err());
+        }
+        assert!(misc_integer_list(&profiles, "Count", 3, 0, 1).is_err());
+    }
     #[test]
     fn selected_profiles_supply_day_rate_and_map_overrides() {
         let base = b"[Misc]\n// fixture\nDayLength=37.5\nDayHours=11\n";

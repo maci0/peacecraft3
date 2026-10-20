@@ -399,11 +399,16 @@ impl ObjectHost {
             })?;
             if getter {
                 return Ok(if name == "GetUnitCurrentOrder" {
-                    Value::Int(match self.combat_attack_order(unit) {
-                        Some(attack) => attack,
-                        None if activity.moving() => movement,
-                        None => 0,
-                    })
+                    Value::Int(
+                        match self
+                            .inventory_order(unit)
+                            .or_else(|| self.combat_attack_order(unit))
+                        {
+                            Some(attack) => attack,
+                            None if activity.moving() => movement,
+                            None => 0,
+                        },
+                    )
                 } else {
                     if record.admitted_order.is_some_and(|(_, active)| active) {
                         return Err(self.inner.error(
@@ -543,6 +548,7 @@ impl ObjectHost {
                 }
                 _ => {}
             }
+            self.cancel_inventory_order(unit);
             self.clear_combat_target(unit);
             if let Entry::Unit { record } = self.inner.entry_mut(unit)?
                 && let Some(combat) = &mut record.combat
@@ -621,7 +627,11 @@ impl ObjectHost {
             _ => true,
         });
         self.unit_activity.as_mut().expect("activity").active = active;
-        let result = result.and_then(|moved| self.advance_combat().map(|()| moved));
+        let result = result.and_then(|moved| {
+            self.advance_combat()?;
+            self.advance_inventory(work)?;
+            Ok(moved)
+        });
         if result.is_ok() {
             self.unit_activity
                 .as_mut()
