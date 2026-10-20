@@ -1,20 +1,20 @@
 //! Source preparation follows executed paths, never a chapter-specific asset list.
-use pcx_assets::Resolver;
-use pcx_play::{
+use crate::{
     day_night::{Assets, Budget, ModelInput},
     scripts::{AssetIdentity, ScriptAsset},
 };
+use pcx_assets::Resolver;
 
 /// Session-owned cache; the same source model is retained on every executed unit.
-pub(crate) struct UnitModels {
+pub struct UnitModels {
     reader: std::sync::Arc<Resolver>,
     edition: String,
-    models: std::collections::BTreeMap<String, std::sync::Arc<pcx_play::unit_model::Model>>,
+    models: std::collections::BTreeMap<String, std::sync::Arc<crate::unit_model::Model>>,
     remaining_bytes: usize,
 }
 
 impl UnitModels {
-    pub(crate) fn new(reader: std::sync::Arc<Resolver>, edition: String) -> Self {
+    pub fn new(reader: std::sync::Arc<Resolver>, edition: String) -> Self {
         Self {
             reader,
             edition,
@@ -23,11 +23,11 @@ impl UnitModels {
         }
     }
 
-    pub(crate) fn load(
+    pub fn load(
         &mut self,
         definition: &pcx_sim::world::Definition,
-    ) -> Result<Option<std::sync::Arc<pcx_play::unit_model::Model>>, String> {
-        let Some(path) = pcx_play::unit_model::model_path(definition)? else {
+    ) -> Result<Option<std::sync::Arc<crate::unit_model::Model>>, String> {
+        let Some(path) = crate::unit_model::model_path(definition)? else {
             return Ok(None);
         };
         let key = path.replace('\\', "/").to_ascii_lowercase();
@@ -43,7 +43,7 @@ impl UnitModels {
             .map_err(|e| format!("{path}: {e}"))?;
         let (_, origin) = identity(&asset, &self.edition, 16 << 10)?;
         let size = asset.bytes.len();
-        let model = std::sync::Arc::new(pcx_play::unit_model::Model::read(
+        let model = std::sync::Arc::new(crate::unit_model::Model::read(
             origin,
             path,
             asset.bytes.into(),
@@ -58,7 +58,7 @@ impl UnitModels {
     }
 }
 
-pub(crate) fn day_night(
+pub fn day_night(
     reader: &Resolver,
     edition: &str,
     paths: [&str; 2],
@@ -106,13 +106,13 @@ pub(crate) fn day_night(
     Assets::read(&inputs, budget).map_err(|error| format!("SetDayNightModels: {error}"))
 }
 
-pub(crate) fn file_sound(
+pub fn file_sound(
     reader: &Resolver,
     edition: &str,
     member: &str,
-    budget: pcx_play::file_sounds::Budget,
-    mp3: pcx_play::file_sounds::Mp3Budget,
-) -> Result<pcx_play::file_sounds::Assets, String> {
+    budget: crate::file_sounds::Budget,
+    mp3: crate::file_sounds::Mp3Budget,
+) -> Result<crate::file_sounds::Assets, String> {
     // Application metadata cap also bounds adapter identity formatting before copies.
     let metadata = budget.metadata_bytes.min(16 << 10);
     if member.len() > metadata || edition.len() > metadata || budget.resources == 0 {
@@ -123,8 +123,8 @@ pub(crate) fn file_sound(
         .map_err(|error| format!("CreateSound {member}: {error}"))?;
     let (label, origin) = identity(&asset, edition, metadata)
         .map_err(|error| format!("CreateSound {member}: {error}"))?;
-    pcx_play::file_sounds::Assets::read_encoded(
-        &[pcx_play::file_sounds::SoundInput {
+    crate::file_sounds::Assets::read_encoded(
+        &[crate::file_sounds::SoundInput {
             member,
             asset: ScriptAsset {
                 label: &label,
@@ -138,7 +138,7 @@ pub(crate) fn file_sound(
     .map_err(|error| format!("CreateSound {member}: {error}"))
 }
 
-pub(crate) struct SoundSources {
+pub struct SoundSources {
     tables: Vec<ParameterTable>,
 }
 
@@ -148,14 +148,14 @@ struct ParameterTable {
     origin: AssetIdentity,
     table: pcx_slq::Table,
     column: String,
-    profile: Option<pcx_play::sound_parameters::Profile>,
+    profile: Option<crate::sound_parameters::Profile>,
 }
 
 impl SoundSources {
-    pub(crate) fn empty_label_bank(
+    pub fn empty_label_bank(
         &self,
-        budget: pcx_play::label_sounds::Budget,
-    ) -> Result<pcx_play::label_sounds::SoundBank, String> {
+        budget: crate::label_sounds::Budget,
+    ) -> Result<crate::label_sounds::SoundBank, String> {
         let source = self
             .tables
             .iter()
@@ -167,7 +167,7 @@ impl SoundSources {
                         .any(|(_, name)| name == "DirectoryBase")
             })
             .ok_or("selected sources contain no sound constructor table")?;
-        pcx_play::label_sounds::SoundBank::read(
+        crate::label_sounds::SoundBank::read(
             ScriptAsset {
                 label: &source.label,
                 bytes: &source.asset.bytes,
@@ -182,10 +182,10 @@ impl SoundSources {
 
     /// SoundInfo is the lookup namespace; actual table names/columns/rows come
     /// from the selected inventory and table headers, not a chapter manifest.
-    pub(crate) fn read(
+    pub fn read(
         reader: &Resolver,
         edition: &str,
-        budget: pcx_play::sound_parameters::BanksBudget,
+        budget: crate::sound_parameters::BanksBudget,
     ) -> Result<Self, String> {
         let mut tables = Vec::new();
         let mut remaining = budget.total_table_bytes;
@@ -233,13 +233,13 @@ impl SoundSources {
                 "EAXFlags",
             ];
             let profile = if has("Volume") && has("Flags") && full.iter().all(|field| has(*field)) {
-                Some(pcx_play::sound_parameters::Profile::Full)
+                Some(crate::sound_parameters::Profile::Full)
             } else if full.iter().all(|field| !has(*field))
                 && ["Volume", "Flags", "version", "DirectoryBase", "FileNames"]
                     .iter()
                     .all(|field| has(*field))
             {
-                Some(pcx_play::sound_parameters::Profile::Dialogue)
+                Some(crate::sound_parameters::Profile::Dialogue)
             } else {
                 None
             };
@@ -275,13 +275,13 @@ impl SoundSources {
         Ok(source)
     }
 
-    pub(crate) fn label_sound(
+    pub fn label_sound(
         &self,
         reader: &Resolver,
         edition: &str,
         label: &str,
-        budget: pcx_play::label_sounds::Budget,
-    ) -> Result<pcx_play::label_sounds::SoundBank, String> {
+        budget: crate::label_sounds::Budget,
+    ) -> Result<crate::label_sounds::SoundBank, String> {
         let source = self.source(label, budget.metadata_bytes, true)?;
         let mut rows = source
             .table
@@ -321,14 +321,14 @@ impl SoundSources {
             .map_err(|e| format!("{label} -> {member}: {e}"))?;
         let (resource_label, origin) =
             identity(&asset, edition, budget.metadata_bytes.min(16 << 10))?;
-        pcx_play::label_sounds::SoundBank::read(
+        crate::label_sounds::SoundBank::read(
             ScriptAsset {
                 label: &source.label,
                 bytes: &source.asset.bytes,
             },
             source.origin.clone(),
             &source.column,
-            &[pcx_play::label_sounds::SoundInput {
+            &[crate::label_sounds::SoundInput {
                 label,
                 member: &member,
                 asset: ScriptAsset {
@@ -342,17 +342,17 @@ impl SoundSources {
         .map_err(|e| e.to_string())
     }
 
-    pub(crate) fn bind(
+    pub fn bind(
         &self,
         label: &str,
-        budget: pcx_play::sound_parameters::BanksBudget,
-    ) -> Result<pcx_play::sound_parameters::Banks, String> {
+        budget: crate::sound_parameters::BanksBudget,
+    ) -> Result<crate::sound_parameters::Banks, String> {
         let source = self.source(label, budget.metadata_bytes, false)?;
         let profile = source
             .profile
             .ok_or_else(|| format!("{}: unsupported sound parameter schema", source.label))?;
-        pcx_play::sound_parameters::Banks::read(
-            &[pcx_play::sound_parameters::Input {
+        crate::sound_parameters::Banks::read(
+            &[crate::sound_parameters::Input {
                 asset: ScriptAsset {
                     label: &source.label,
                     bytes: &source.asset.bytes,
@@ -368,7 +368,7 @@ impl SoundSources {
     }
 }
 
-pub(crate) fn identity(
+pub fn identity(
     asset: &pcx_assets::ResolvedAsset,
     edition: &str,
     limit: usize,
@@ -400,7 +400,7 @@ mod preparation_tests {
     #[test]
     fn absent_constructor_table_is_not_replaced_with_synthetic_sound_content() {
         let sources = SoundSources { tables: Vec::new() };
-        let budget = pcx_play::label_sounds::Budget {
+        let budget = crate::label_sounds::Budget {
             table_bytes: 1024,
             coordinates: pcx_slq::CoordinateLimits {
                 max_row: 16,

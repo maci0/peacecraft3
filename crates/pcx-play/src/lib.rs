@@ -55,7 +55,9 @@
 
 pub mod camera_margins;
 pub mod campaign;
+pub mod campaign_assets;
 pub mod campaign_client;
+pub mod campaign_inputs;
 pub mod cinematics;
 pub mod custom_scripts;
 pub mod day_night;

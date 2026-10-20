@@ -119,6 +119,32 @@ slot, so it is not verified here.
 - Playable maps (see the production startup above).
 - Owner-to-player mapping and random-placement decoding.
 - The original's unit speed and collision. Harness movement is not game movement.
-- Structured CLI output or a schema. Not implemented, and no CLI conformance is
-  claimed.
+- CLI conformance with clispec v0.3 is not claimed. The spec needs a `schema` command,
+  a declared top-level `clispec` version, a JSON format flag, declared exit codes and
+  outcomes, and an error envelope on stderr. `--print-identity` is one plain-text data line
+  on stdout, and diagnostics go to stderr. Adopting the spec is a separate decision.
 - Game input, lobby, combat, economy, and the original Battle.net and W3GS paths.
+
+## Extraction for the production adapter (branch-local)
+
+Startup preparation moved out of the Bevy crate into `pcx-play`, with no change to
+its logic:
+
+- `crates/pcx-play/src/campaign_inputs.rs` (from `peacecraft3/src/campaign_inputs.rs`):
+  `prepare_new_game` and `prepare`, which return `MapStartupInputs`. Its map
+  inputs are the new `MapSources { map_label, map_bytes, catalog_identity,
+  catalog }`, which replaces `MapBindings`.
+- `crates/pcx-play/src/campaign_assets.rs` (from `peacecraft3/src/campaign_assets.rs`):
+  identities, day/night, file-sound and unit-model sources. Visibility is now `pub`.
+- Callers: `peacecraft3/src/campaign_prepare.rs` is the adapter. Its `map_sources`
+  builds `MapSources` from `MapBindings`. `campaign_startup.rs` and
+  `campaign_placement.rs` now name `pcx_play::campaign_assets`.
+
+Verified: `cargo check -p pcx-play --all-targets --offline` exits 0. The
+`peacecraft3` crate has not been compiled: it needs the Bevy build, which is
+waiting for a root build slot.
+
+Still Bevy-coupled, and needed for a headless startup: `map_requests::prepare` and
+`MapBindings` (binding and receipts), `native_campaign::configuration` (the install
+`Resolver` and script identities), `map_script_session` (`war3map.j` and creation
+triggers), and the assembly in `campaign_startup`.

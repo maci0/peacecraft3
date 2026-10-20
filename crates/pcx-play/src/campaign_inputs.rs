@@ -1,12 +1,22 @@
 //! Prepare the existing startup factory from the admitted source reader.
-use crate::{campaign_assets, map_requests::MapBindings};
+use crate::campaign_assets;
+use crate::{map_admission::ParsedMapContext, map_startup_host::*, scripts::AssetIdentity};
 use pcx_assets::Resolver;
 use pcx_objects::editor::{
     EditorReadLimits, SlkId,
     defaults::{DefaultTables, Family, Identity},
 };
-use pcx_play::{map_admission::ParsedMapContext, map_startup_host::*, scripts::AssetIdentity};
+use pcx_sim::world::ObjectCatalog;
 use std::sync::Arc;
+
+/// Map sources startup preparation reads from the admitted map. The application builds this from
+/// its map bindings; `map_bytes` is the exact catalog map those bindings selected.
+pub struct MapSources {
+    pub map_label: String,
+    pub map_bytes: Arc<[u8]>,
+    pub catalog_identity: AssetIdentity,
+    pub catalog: Arc<dyn ObjectCatalog + Send + Sync>,
+}
 
 /// Zoom index the application camera also selects for its near clip.
 const GAME_CAMERA_ZOOM: usize = 0;
@@ -15,7 +25,7 @@ const GAME_CAMERA_ZOOM: usize = 0;
 /// Explicit seed and selected edition are game inputs, not map-derived defaults.
 pub fn prepare_new_game(
     context: &Arc<ParsedMapContext>,
-    bindings: &MapBindings,
+    map_sources: &MapSources,
     reader: &Resolver,
     image: &[u8],
     client: AssetIdentity,
@@ -30,18 +40,18 @@ pub fn prepare_new_game(
         return Err("fresh campaign requires an explicit choice among multiple human slots".into());
     }
     let local = i32::try_from(local.number()).map_err(|_| "local player number")?;
-    let mut inputs = prepare(context, bindings, reader, image, client.clone())?;
-    let settings = pcx_play::campaign_client::fresh_settings(image, client.clone())?;
-    let placement_rules = pcx_play::campaign_client::placement_rules(image, client.clone())?;
-    let triggers = pcx_play::campaign_client::fresh_triggers(image, client.clone())?;
-    let orders = Arc::new(pcx_play::campaign_client::order_registry(
+    let mut inputs = prepare(context, map_sources, reader, image, client.clone())?;
+    let settings = crate::campaign_client::fresh_settings(image, client.clone())?;
+    let placement_rules = crate::campaign_client::placement_rules(image, client.clone())?;
+    let triggers = crate::campaign_client::fresh_triggers(image, client.clone())?;
+    let orders = Arc::new(crate::campaign_client::order_registry(
         image,
         client.clone(),
     )?);
-    let activity = pcx_play::campaign_client::unit_activity(image, client.clone(), &orders)?;
-    let group_orders = pcx_play::group_order_rules::Rules::reviewed_legacy(image, client.clone())?;
+    let activity = crate::campaign_client::unit_activity(image, client.clone(), &orders)?;
+    let group_orders = crate::group_order_rules::Rules::reviewed_legacy(image, client.clone())?;
     inputs.budgets.unit_in_range = Some(65536);
-    inputs.trigger_runtime = Some(pcx_play::playercolor_host::TriggerRuntimeInput {
+    inputs.trigger_runtime = Some(crate::playercolor_host::TriggerRuntimeInput {
         initial_enabled: triggers.initial_enabled,
         timer_event_global: conversion_global(
             context.scripts.program(),
@@ -51,10 +61,10 @@ pub fn prepare_new_game(
         max_timed_events: 65536,
         max_parked_threads: 65536,
     });
-    let map = pcx_map::Map::parse(&bindings.catalog_map_bytes).map_err(|e| e.to_string())?;
+    let map = pcx_map::Map::parse(&map_sources.map_bytes).map_err(|e| e.to_string())?;
     let edits = map
         .extract_checked(
-            &bindings.map_label,
+            &map_sources.map_label,
             "war3map.w3q",
             pcx_mpq::checked::ReadBudget {
                 max_archive_bytes: 64 << 20,
@@ -71,7 +81,7 @@ pub fn prepare_new_game(
         campaign_assets::identity(&stock_misc, &context.sources.map.edition, 16 << 10)?;
     let map_misc = map
         .extract_checked(
-            &bindings.map_label,
+            &map_sources.map_label,
             "war3mapMisc.txt",
             pcx_mpq::checked::ReadBudget {
                 max_archive_bytes: 64 << 20,
@@ -83,13 +93,13 @@ pub fn prepare_new_game(
         .map_err(|e| e.to_string())?;
     let mut day_profiles = vec![(stock_label.as_str(), stock_misc.bytes.as_slice())];
     if let Some(bytes) = &map_misc {
-        day_profiles.push((bindings.map_label.as_str(), bytes.as_slice()));
+        day_profiles.push((map_sources.map_label.as_str(), bytes.as_slice()));
     }
-    inputs.resources = Some(pcx_play::player_resources::Rules::discover(
+    inputs.resources = Some(crate::player_resources::Rules::discover(
         image,
         client.clone(),
         &day_profiles,
-        pcx_play::neutral_player::RuleInputBudget {
+        crate::neutral_player::RuleInputBudget {
             image_bytes: 32 << 20,
             profile_bytes: 8 << 20,
             sections: 96,
@@ -103,7 +113,7 @@ pub fn prepare_new_game(
         campaign_assets::identity(&game_misc, &context.sources.map.edition, 16 << 10)?;
     let mut game_profiles = vec![(game_label.as_str(), game_misc.bytes.as_slice())];
     if let Some(bytes) = &map_misc {
-        game_profiles.push((bindings.map_label.as_str(), bytes.as_slice()));
+        game_profiles.push((map_sources.map_label.as_str(), bytes.as_slice()));
     }
     let abilities = inputs
         .hero_skills
@@ -111,27 +121,27 @@ pub fn prepare_new_game(
         .ok_or("inventory requires selected ability overlays")?
         .abilities
         .clone();
-    inputs.inventory = Some(pcx_play::inventory::Rules::read(
+    inputs.inventory = Some(crate::inventory::Rules::read(
         Arc::clone(&inputs.defend.tables),
         abilities.clone(),
         Arc::clone(&orders),
         &game_profiles,
         8 << 20,
     )?);
-    inputs.inventory_powerup = Some(pcx_play::inventory_powerup::Rules::read(
+    inputs.inventory_powerup = Some(crate::inventory_powerup::Rules::read(
         Arc::clone(&inputs.defend.tables),
         abilities,
         image,
         client.clone(),
     )?);
-    inputs.budgets.inventory = Some(pcx_play::inventory::InventoryBudget {
+    inputs.budgets.inventory = Some(crate::inventory::InventoryBudget {
         max_slots_per_unit: 4096,
         max_pending_orders: 65536,
     });
     let hero_vitals = pcx_objects::editor::misc::HeroVitals::read(&game_profiles, 8 << 20)?;
     let combat = pcx_objects::editor::misc::CombatRules::read(&game_profiles, 8 << 20)?;
     inputs.unit_guards = Some(UnitGuardsInput {
-        native: pcx_play::unit_guard_rules::Rules::reviewed_legacy(image, client.clone())?,
+        native: crate::unit_guard_rules::Rules::reviewed_legacy(image, client.clone())?,
         source: combat.clone(),
     });
     let camera_config = reader
@@ -152,13 +162,13 @@ pub fn prepare_new_game(
         })
         .transpose()?
         .unwrap_or_default();
-    let research = pcx_play::upgrade_research::Rules::read(
+    let research = crate::upgrade_research::Rules::read(
         image,
         client,
         &inputs.defend.tables,
         &upgrades,
         inputs.catalog.as_ref(),
-        pcx_play::upgrade_research::Budget {
+        crate::upgrade_research::Budget {
             upgrades: 10000,
             modifications_per_upgrade: 4096,
         },
@@ -247,20 +257,20 @@ fn conversion_global(
 
 pub fn prepare(
     context: &Arc<ParsedMapContext>,
-    bindings: &MapBindings,
+    map_sources: &MapSources,
     reader: &Resolver,
     image: &[u8],
     client: AssetIdentity,
 ) -> Result<MapStartupInputs, String> {
-    if context.sources.catalog != bindings.catalog_identity
-        || context.map_digest.hash != pcx_mpq::fnv1a64(&bindings.catalog_map_bytes)
+    if context.sources.catalog != map_sources.catalog_identity
+        || context.map_digest.hash != pcx_mpq::fnv1a64(&map_sources.map_bytes)
     {
         return Err("campaign preparation inputs differ from the admitted map/catalog".into());
     }
     let edition = &context.sources.map.edition;
     let tables = defaults(reader, &context.sources.catalog)?;
     let defend = defend_alias(&tables)?;
-    let map = pcx_map::Map::parse(&bindings.catalog_map_bytes).map_err(|e| e.to_string())?;
+    let map = pcx_map::Map::parse(&map_sources.map_bytes).map_err(|e| e.to_string())?;
     let budget = pcx_mpq::checked::ReadBudget {
         max_archive_bytes: 64 << 20,
         max_archive_table_bytes: 8 << 20,
@@ -268,7 +278,7 @@ pub fn prepare(
         max_decoded_bytes: 4 << 20,
     };
     let map_misc = map
-        .extract_checked(&bindings.map_label, "war3mapMisc.txt", budget)
+        .extract_checked(&map_sources.map_label, "war3mapMisc.txt", budget)
         .map_err(|e| e.to_string())?;
     let stock_misc = reader
         .resolve_bounded("Units/MiscGame.txt", 4 << 20)
@@ -276,11 +286,11 @@ pub fn prepare(
     let (stock_label, _) = campaign_assets::identity(&stock_misc, edition, 16 << 10)?;
     let mut progression = vec![(stock_label.as_str(), stock_misc.bytes.as_slice())];
     if let Some(bytes) = &map_misc {
-        progression.push((bindings.map_label.as_str(), bytes.as_slice()));
+        progression.push((map_sources.map_label.as_str(), bytes.as_slice()));
     }
     let progression = pcx_objects::editor::hero::Progression::read(&progression, 8 << 20)?;
     let ability_bytes = map
-        .extract_checked(&bindings.map_label, "war3map.w3a", budget)
+        .extract_checked(&map_sources.map_label, "war3map.w3a", budget)
         .map_err(|e| e.to_string())?;
     let abilities = match ability_bytes {
         Some(bytes) => pcx_objects::editor::Overlay::of(
@@ -292,7 +302,7 @@ pub fn prepare(
         .resolve_bounded("UI/MiscData.txt", 2 << 20)
         .map_err(|e| e.to_string())?;
     let (_, camera_origin) = campaign_assets::identity(&camera_config, edition, 16 << 10)?;
-    let source = pcx_play::campaign_client::read(
+    let source = crate::campaign_client::read(
         image,
         client.clone(),
         &camera_config.bytes,
@@ -302,8 +312,8 @@ pub fn prepare(
     let rules = NeutralRuleSet::discover_first_family(
         image,
         client.clone(),
-        pcx_play::neutral_player::DiscoveryBudget {
-            image: pcx_play::neutral_player::RuleInputBudget {
+        crate::neutral_player::DiscoveryBudget {
+            image: crate::neutral_player::RuleInputBudget {
                 image_bytes: 32 << 20,
                 profile_bytes: 64 << 10,
                 sections: 96,
@@ -313,7 +323,7 @@ pub fn prepare(
         },
     )
     .map_err(|e| e.to_string())?;
-    let sound_budget = pcx_play::sound_parameters::BanksBudget {
+    let sound_budget = crate::sound_parameters::BanksBudget {
         banks: 64,
         table_bytes: 4 << 20,
         total_table_bytes: 64 << 20,
@@ -325,7 +335,7 @@ pub fn prepare(
         metadata_bytes: 1 << 20,
     };
     let sound_sources = campaign_assets::SoundSources::read(reader, edition, sound_budget)?;
-    let label_budget = pcx_play::label_sounds::Budget {
+    let label_budget = crate::label_sounds::Budget {
         table_bytes: 4 << 20,
         coordinates: sound_budget.coordinates,
         sounds: 128,
@@ -336,14 +346,14 @@ pub fn prepare(
     let labels = sound_sources.empty_label_bank(label_budget)?;
     let constructors = vec![sound_sources.empty_label_bank(label_budget)?];
     let item_classes =
-        pcx_play::item_class_table::derive(image, client.clone()).map_err(|e| e.to_string())?;
+        crate::item_class_table::derive(image, client.clone()).map_err(|e| e.to_string())?;
     Ok(MapStartupInputs {
         item_classes: Some(item_classes),
         inventory: None,
         inventory_powerup: None,
         unit_guards: None,
         localization: Some(localization(reader, image, &client)?),
-        player_removal_rules: Some(pcx_play::player_removal_rules::Rules::reviewed_legacy(
+        player_removal_rules: Some(crate::player_removal_rules::Rules::reviewed_legacy(
             image,
             client.clone(),
         )?),
@@ -352,9 +362,9 @@ pub fn prepare(
         budgets: budgets(),
         camera: source.camera,
         // Executed-path loaders attached by campaign_startup fill these stores.
-        day_night: pcx_play::day_night::Assets::read(
+        day_night: crate::day_night::Assets::read(
             &[],
-            pcx_play::day_night::Budget {
+            crate::day_night::Budget {
                 models: 32,
                 model_bytes: 16 << 20,
                 total_bytes: 64 << 20,
@@ -364,9 +374,9 @@ pub fn prepare(
         .map_err(|e| e.to_string())?,
         label_sounds: labels,
         label_sound_creation: constructors,
-        file_sounds: pcx_play::file_sounds::Assets::read(
+        file_sounds: crate::file_sounds::Assets::read(
             &[],
-            pcx_play::file_sounds::Budget {
+            crate::file_sounds::Budget {
                 resources: 256,
                 resource_bytes: 64 << 20,
                 total_bytes: 128 << 20,
@@ -374,18 +384,18 @@ pub fn prepare(
             },
         )
         .map_err(|e| e.to_string())?,
-        sound_parameters: pcx_play::sound_parameters::Banks::read(&[], sound_budget)
+        sound_parameters: crate::sound_parameters::Banks::read(&[], sound_budget)
             .map_err(|e| e.to_string())?,
         sound_playback: Some(sound_playback::Rules::reviewed_legacy(
             image,
             client.clone(),
         )?),
         resources: None,
-        cheats: Some(pcx_play::cheat_rules::Rules::reviewed_legacy(
+        cheats: Some(crate::cheat_rules::Rules::reviewed_legacy(
             image,
             client.clone(),
         )?),
-        dialog_layout: Some(pcx_play::dialog_layout::Rules::reviewed_legacy(
+        dialog_layout: Some(crate::dialog_layout::Rules::reviewed_legacy(
             image,
             client.clone(),
         )?),
@@ -408,14 +418,14 @@ pub fn prepare(
         hero_skills: Some(HeroSkillsInput {
             rules: source.hero,
             abilities,
-            budget: pcx_play::playercolor_host::HeroBudget {
+            budget: crate::playercolor_host::HeroBudget {
                 abilities_per_unit: 128,
                 overlay_objects: 4096,
                 modifications_per_ability: 4096,
             },
         }),
         terrain_pathing: None,
-        catalog: Arc::clone(&bindings.catalog.0),
+        catalog: Arc::clone(&map_sources.catalog),
         defend: DefendSelection {
             tables: Arc::new(tables),
             alias: defend,
@@ -430,9 +440,9 @@ fn localization(
     reader: &Resolver,
     image: &[u8],
     client: &AssetIdentity,
-) -> Result<pcx_play::script_localization::Bank, String> {
-    use pcx_play::script_localization::{Bank, Budget, Rules};
-    use pcx_play::scripts::ScriptAsset;
+) -> Result<crate::script_localization::Bank, String> {
+    use crate::script_localization::{Bank, Budget, Rules};
+    use crate::scripts::ScriptAsset;
     let strings = reader
         .resolve_bounded("UI/FrameDef/GlobalStrings.fdf", 4 << 20)
         .map_err(|error| error.to_string())?;
@@ -494,7 +504,7 @@ fn enum_contracts(context: &ParsedMapContext) -> Result<EnumContracts, String> {
     Ok(EnumContracts {
         context: format!("campaign source {:?}", context.sources.common),
         names: names.into_iter().collect(),
-        limits: pcx_play::playercolor_host::Limits {
+        limits: crate::playercolor_host::Limits {
             max_handles: 100000,
             admission_steps: 1 << 20,
             expression_depth: 64,
@@ -595,7 +605,7 @@ fn defend_alias(tables: &DefaultTables) -> Result<String, String> {
 }
 
 fn budgets() -> MapStartupBudgets {
-    use pcx_play::playercolor_host::*;
+    use crate::playercolor_host::*;
     MapStartupBudgets {
         inventory: None,
         player_removal: Some(PlayerRemovalBudget {

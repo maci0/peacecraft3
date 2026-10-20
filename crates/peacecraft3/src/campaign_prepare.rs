@@ -1,12 +1,12 @@
 //! Normal application producer for the existing admitted-map startup inputs.
 use bevy::prelude::*;
-use pcx_play::map_admission::ParsedMapContext;
+use pcx_play::{campaign_inputs::MapSources, map_admission::ParsedMapContext};
 use peacecraft3::{
     browser_configuration::SelectedMapSources,
     campaign_startup::{
         CampaignHostSupply, CampaignSeed, CampaignStartup, CampaignStartupSet, StartupError,
     },
-    map_requests::{MapRequestSet, MapRequests},
+    map_requests::{MapBindings, MapRequestSet, MapRequests},
 };
 use std::sync::{Arc, Weak};
 
@@ -72,9 +72,9 @@ fn prepare(
             .ok_or("admitted map has no matching source reader")?;
         let install = crate::launch_gui::selected_install(&launcher);
         crate::menu_lighting::with_client_image(install.as_deref(), |source, image| {
-            peacecraft3::campaign_inputs::prepare_new_game(
+            pcx_play::campaign_inputs::prepare_new_game(
                 &context,
-                bindings,
+                &map_sources(bindings),
                 &reader,
                 image,
                 pcx_play::scripts::AssetIdentity {
@@ -103,6 +103,16 @@ fn prepare(
                 reason,
             });
         }
+    }
+}
+
+/// The application's bindings, as the Bevy-free startup preparation reads them.
+fn map_sources(bindings: &MapBindings) -> MapSources {
+    MapSources {
+        map_label: bindings.map_label.clone(),
+        map_bytes: Arc::clone(&bindings.catalog_map_bytes),
+        catalog_identity: bindings.catalog_identity.clone(),
+        catalog: Arc::clone(&bindings.catalog.0),
     }
 }
 

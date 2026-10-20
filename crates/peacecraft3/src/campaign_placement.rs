@@ -254,7 +254,7 @@ impl Textures {
             .reader
             .resolve_bounded(path, self.remaining_bytes.min(1 << 20) as u64)
             .map_err(|e| e.to_string())?;
-        let (_, origin) = crate::campaign_assets::identity(&asset, &self.edition, 16 << 10)?;
+        let (_, origin) = pcx_play::campaign_assets::identity(&asset, &self.edition, 16 << 10)?;
         let header = pcx_tga::Header::parse(&asset.bytes).map_err(|e| e.to_string())?;
         let count = usize::from(header.width) * usize::from(header.height);
         if count > FOOTPRINT_CELLS

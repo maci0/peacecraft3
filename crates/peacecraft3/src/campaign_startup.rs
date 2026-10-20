@@ -198,7 +198,7 @@ fn start_admitted_map(
                         )
                     });
                     if host.objects().timer_game_time().is_some() {
-                        let mut models = crate::campaign_assets::UnitModels::new(
+                        let mut models = pcx_play::campaign_assets::UnitModels::new(
                             Arc::clone(&reader),
                             edition.clone(),
                         );
@@ -232,7 +232,7 @@ fn start_admitted_map(
                             }
                             parameter_sources
                                 .get_or_init(|| {
-                                    crate::campaign_assets::SoundSources::read(
+                                    pcx_play::campaign_assets::SoundSources::read(
                                         &parameter_reader,
                                         &parameter_edition,
                                         parameter_budget,
@@ -268,7 +268,7 @@ fn start_admitted_map(
                             }
                             sound_sources
                                 .get_or_init(|| {
-                                    crate::campaign_assets::SoundSources::read(
+                                    pcx_play::campaign_assets::SoundSources::read(
                                         &label_reader,
                                         &label_edition,
                                         parameter_budget,
@@ -294,7 +294,7 @@ fn start_admitted_map(
                             remaining_sounds = remaining_sounds
                                 .checked_sub(1)
                                 .ok_or("CreateSound: session source-load budget exhausted")?;
-                            crate::campaign_assets::file_sound(
+                            pcx_play::campaign_assets::file_sound(
                                 &sound_reader,
                                 &sound_edition,
                                 member,
@@ -317,7 +317,7 @@ fn start_admitted_map(
                             .checked_sub(1)
                             .ok_or("SetDayNightModels: session source-load budget exhausted")?;
                         // Application input limits, not lighting values or native engine limits.
-                        crate::campaign_assets::day_night(
+                        pcx_play::campaign_assets::day_night(
                             &reader,
                             &edition,
                             [terrain, unit],

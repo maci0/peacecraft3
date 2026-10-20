@@ -4665,6 +4665,7 @@ dependencies = [
 name = "pcx-play"
 version = "0.2.0"
 dependencies = [
+ "pcx-assets",
  "pcx-map",
  "pcx-mdl",
  "pcx-mpq",
@@ -4673,6 +4674,7 @@ dependencies = [
  "pcx-sim",
  "pcx-slq",
  "pcx-trig",
+ "serde_json",
  "sha2",
  "symphonia 0.6.1",
  "thiserror 2.0.21",
