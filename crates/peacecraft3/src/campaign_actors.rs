@@ -32,6 +32,8 @@ struct Actor {
     color: i32,
     image_bytes: usize,
     vertices: usize,
+    /// Geosets whose authored material is lit, captured before sun lighting.
+    lit: Vec<bool>,
 }
 
 #[derive(Resource, Default)]
@@ -503,7 +505,11 @@ impl Actor {
             ),
         )
         .map_err(|e| e.to_string())?;
-        // shortcut: the current material consumer needs source DNC unit lighting before visual acceptance; no replacement ambient light is invented.
+        let lit = geosets
+            .bound
+            .iter()
+            .map(|(_, _, handle)| assets.materials.get(handle).is_some_and(|m| !m.base.unlit))
+            .collect();
         Ok((
             Self {
                 root,
@@ -520,6 +526,7 @@ impl Actor {
                 color,
                 image_bytes: available_images - remaining,
                 vertices,
+                lit,
             },
             available_images - remaining,
             vertices,
@@ -530,9 +537,12 @@ impl Actor {
         unit: &ExecutedUnit,
         now: f64,
         assets: &mut DrawAssets,
-        visibility: &mut Query<&mut Visibility>,
-        transforms: &mut Query<&mut Transform>,
+        (visibility, transforms): (&mut Query<&mut Visibility>, &mut Query<&mut Transform>),
         terrain: &pcx_map::Terrain,
+        light: Option<(
+            &pcx_play::day_night::Sun,
+            &pcx_play::menu_lighting::Parameters,
+        )>,
     ) -> Result<(), String> {
         let animation = unit.animation.as_ref().ok_or("unit model is unavailable")?;
         let sample = animation
@@ -566,7 +576,7 @@ impl Actor {
         if let Ok(mut transform) = transforms.get_mut(self.root) {
             *transform = transform_for(unit, terrain, self.scale, self.height)?;
         }
-        model_scene::skin_geosets(
+        let skeleton = model_scene::skin_geosets(
             model_scene::Rig {
                 interval: self.interval,
                 model: &self.model,
@@ -623,6 +633,20 @@ impl Actor {
                     c.alpha,
                 );
             }
+        }
+        if let Some((sun, parameters)) = light {
+            // The model faces +X at zero facing: undo the unit's facing around Z.
+            let (sin, cos) = unit.face.to_radians().sin_cos();
+            let [x, y, z] = sun.direction;
+            let direction = Vec3::new(x * cos + y * sin, -x * sin + y * cos, z);
+            crate::menu_lighting::apply_sun(
+                &animation.model.member,
+                &self.model,
+                &skeleton,
+                (&self.geosets.handles, &self.geosets.bound, &self.lit),
+                (direction, sun, parameters),
+                (&mut assets.meshes, &mut assets.materials),
+            )?;
         }
         Ok(())
     }
@@ -689,8 +713,22 @@ fn project(
     let Some(palette) = state.palette.clone() else {
         return;
     };
-    let Some(parameters) = state.parameters.as_ref() else {
+    let Some(parameters) = state.parameters.clone() else {
         return;
+    };
+    // Units take the selected unit day/night light at the current time of day.
+    let sun = match (
+        objects.day_night_state().and_then(|s| s.selected()),
+        objects.day_fraction(),
+    ) {
+        (Some([_, unit_light]), Some(fraction)) => match unit_light.sun(fraction) {
+            Ok(sun) => Some(sun),
+            Err(error) => {
+                state.last_error = Some(error);
+                None
+            }
+        },
+        _ => None,
     };
     let (channel_scale, cutout) = (parameters.channel_scale, parameters.cutout_reference);
     let live: BTreeSet<_> = objects.executed_units().map(|(id, _)| id).collect();
@@ -770,9 +808,9 @@ fn project(
                 unit,
                 now,
                 &mut assets,
-                &mut queries.visibility,
-                &mut queries.transforms,
+                (&mut queries.visibility, &mut queries.transforms),
                 &context.terrain,
+                sun.as_ref().map(|s| (s, &parameters)),
             )
         {
             state.last_error = Some(format!("unit {id:?}: {e}"));

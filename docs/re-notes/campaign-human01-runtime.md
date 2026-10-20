@@ -31,6 +31,17 @@ initializers (`0x401300`, `0x401460`). `SetFloatGameState` (time of day),
 `GetFloatGameState` are supported. The cycle starts unsuspended (recreation
 choice). Time-of-day game-state event delivery is not implemented.
 
+## Unit sun (`day_night.rs`, `menu_lighting.rs`, `campaign_actors.rs`)
+
+`BoundModel::sun` samples the selected unit day/night model's single unparented
+directional light at the current day fraction along its first sequence: `KLAC`
+colour, `KLBC` ambient, static intensities, and one fixed `KGRT` key turning the
+node's -Z into the travel direction (the -Z axis is an inference). Other light
+tracks refuse. Campaign actors light every lit geoset per vertex with
+ambient + diffuse * max(0, n . -direction) in the actor's facing frame; the
+original's shader stage and clamping are unqualified. The selected terrain
+day/night model is not sampled; terrain keeps its setup lighting.
+
 ## Live camera (`camera_view_host.rs`)
 
 Game-camera fields come from `UI\MiscData.txt` `[Camera]` at the application's

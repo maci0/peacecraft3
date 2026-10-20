@@ -344,3 +344,55 @@ fn actual_owned_vm_selects_loaded_models_without_new_handles_or_fallbacks() {
         "units.mdl"
     );
 }
+/// `model(0.125)` with a fixed node rotation key and a 0..173 day sequence.
+fn sun_model(rotation: Option<[f32; 4]>) -> Vec<u8> {
+    let mut d = model(0.125);
+    // MDLX, VERS chunk, then the LITE chunk: payload at 24, node ends at 124.
+    if let Some(q) = rotation {
+        let mut track = b"KGRT".to_vec();
+        for v in [1u32, 0, u32::MAX, 0] {
+            track.extend(v.to_le_bytes());
+        }
+        for v in q {
+            track.extend(v.to_le_bytes());
+        }
+        let grow = track.len() as u32;
+        d.splice(124..124, track);
+        for at in [20, 24, 28] {
+            let size = u32::from_le_bytes(d[at..at + 4].try_into().unwrap()) + grow;
+            d[at..at + 4].copy_from_slice(&size.to_le_bytes());
+        }
+    }
+    let mut sequence = vec![0u8; 132];
+    sequence[..3].copy_from_slice(b"Day");
+    sequence[84..88].copy_from_slice(&173u32.to_le_bytes());
+    chunk(b"SEQS", &sequence, &mut d);
+    d
+}
+#[test]
+fn sun_samples_colour_tracks_along_the_day_sequence_and_rotates_down_axis() {
+    let half = std::f32::consts::FRAC_1_SQRT_2;
+    let bytes = sun_model(Some([half, 0.0, 0.0, half]));
+    let a = Assets::read(&[input("units.mdl", &bytes)], budget()).unwrap();
+    let m = &a.models()[0];
+    let dawn = m.sun(0.0).unwrap();
+    assert_eq!(dawn.colour, [0.125, 0.2, 0.3]);
+    assert_eq!(m.sun(1.0).unwrap().colour, [0.6, 0.7, 0.8]);
+    assert_eq!(dawn.intensity, 2.5);
+    assert_eq!(dawn.ambient_colour, [0.625, 0.875, 1.25]);
+    assert_eq!(dawn.ambient_intensity, 3.5);
+    // 90 degrees about +X turns -Z onto +Y.
+    let [x, y, z] = dawn.direction;
+    assert!(x.abs() < 1e-6 && (y - 1.0).abs() < 1e-6 && z.abs() < 1e-6);
+    for fraction in [-0.1, 1.1, f32::NAN] {
+        assert!(m.sun(fraction).is_err());
+    }
+    let unrotated = sun_model(None);
+    let a = Assets::read(&[input("units.mdl", &unrotated)], budget()).unwrap();
+    assert!(
+        a.models()[0]
+            .sun(0.5)
+            .unwrap_err()
+            .contains("missing fixed rotation key")
+    );
+}

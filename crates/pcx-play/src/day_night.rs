@@ -175,3 +175,91 @@ impl Assets {
 #[cfg(test)]
 #[path = "day_night_tests.rs"]
 mod tests;
+
+/// One sampled directional sun: travel direction in game space (z up), with
+/// raw colours and intensities for the client's light submission.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sun {
+    pub direction: [f32; 3],
+    pub colour: [f32; 3],
+    pub intensity: f32,
+    pub ambient_colour: [f32; 3],
+    pub ambient_intensity: f32,
+}
+
+impl BoundModel {
+    /// The model's single directional light at `day_fraction` (0..1 of the day)
+    /// along its first sequence. Colour (`KLAC`) and ambient (`KLBC`) tracks are
+    /// sampled at that frame; the rotation must be one fixed `KGRT` key. The
+    /// light travels along its node's local -Z, the export convention the
+    /// authored key turns downward (an inference, not a native trace).
+    pub fn sun(&self, day_fraction: f32) -> Result<Sun, String> {
+        let fail = |reason: &str| format!("{}: day/night sun: {reason}", self.script_path);
+        let [light] = self.lights.as_slice() else {
+            return Err(fail("expected exactly one light"));
+        };
+        if light.kind != pcx_mdl::LightKind::Directional || light.parent_id != -1 {
+            return Err(fail("light is not an unparented directional light"));
+        }
+        if !day_fraction.is_finite() || !(0.0..=1.0).contains(&day_fraction) {
+            return Err(fail("day fraction outside 0..1"));
+        }
+        let model = Mdlx::parse(&self.bytes).map_err(|e| fail(&e.to_string()))?;
+        let sequence = model
+            .sequences(&self.bytes)
+            .map_err(|e| fail(&e.to_string()))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| fail("no day sequence"))?;
+        let span = sequence
+            .interval_end
+            .saturating_sub(sequence.interval_start);
+        let frame = sequence.interval_start + (f64::from(span) * f64::from(day_fraction)) as u32;
+        let mut diffuse = light.colour;
+        let mut ambient = light.ambient_colour;
+        let mut rotation = None;
+        for track in light.node_tracks.iter().chain(&light.tracks) {
+            let anim = pcx_mdl::AnimTrack {
+                magic: track.magic,
+                count: track.count,
+                interpolation: track.interpolation,
+                global_seq_id: track.global_seq_id,
+                raw: track.raw.clone(),
+            };
+            match &track.magic {
+                b"KLAC" => diffuse = pcx_mdl::sample_colour(&anim, frame),
+                b"KLBC" => ambient = pcx_mdl::sample_colour(&anim, frame),
+                b"KGRT" if track.count == 1 && track.raw.len() >= 20 => {
+                    let (q, _) = track.raw[4..20].as_chunks::<4>();
+                    rotation = Some(std::array::from_fn(|i| f32::from_le_bytes(q[i])));
+                }
+                _ => return Err(fail("unsupported light track")),
+            }
+        }
+        let [x, y, z, w] = rotation.ok_or_else(|| fail("missing fixed rotation key"))?;
+        // Rotate (0, 0, -1) by the unit quaternion.
+        let direction = [
+            -2.0 * (x * z + w * y),
+            -2.0 * (y * z - w * x),
+            -(1.0 - 2.0 * (x * x + y * y)),
+        ];
+        let sun = Sun {
+            direction,
+            colour: diffuse,
+            intensity: light.intensity,
+            ambient_colour: ambient,
+            ambient_intensity: light.ambient_intensity,
+        };
+        if sun
+            .direction
+            .iter()
+            .chain(&sun.colour)
+            .chain(&sun.ambient_colour)
+            .chain([&sun.intensity, &sun.ambient_intensity])
+            .any(|v| !v.is_finite())
+        {
+            return Err(fail("nonfinite sampled light"));
+        }
+        Ok(sun)
+    }
+}

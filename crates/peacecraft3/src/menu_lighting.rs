@@ -388,6 +388,64 @@ fn channels(colour: [f32; 3]) -> Vec3 {
     Vec3::from_array(colour.map(|n| f32::from((n * f32::from(u8::MAX)) as u8)))
 }
 
+/// Gouraud lighting by one directional sun, in the client's packed channels:
+/// `clamp(ambient + diffuse * max(0, n . -direction)) * material colour`.
+/// `direction` is the sun's travel direction in the model's own space. Geosets
+/// whose authored material is unlit (`lit[i] == false`) keep their colour.
+pub(crate) fn apply_sun(
+    source: &str,
+    model: &pcx_gfx::LoadedModel,
+    skeleton: &pcx_gfx::Skeleton,
+    (handles, bound, lit): (
+        &[Handle<Mesh>],
+        &[crate::mainmenu_scene::BoundGeoset],
+        &[bool],
+    ),
+    (direction, sun, parameters): (Vec3, &pcx_play::day_night::Sun, &Parameters),
+    (meshes, materials): (
+        &mut Assets<Mesh>,
+        &mut Assets<crate::menu_material::MenuMaterial>,
+    ),
+) -> Result<(), String> {
+    if model.meshes.len() != handles.len()
+        || handles.len() != bound.len()
+        || bound.len() != lit.len()
+    {
+        return Err(format!("{source}: sun lighting binding count mismatch"));
+    }
+    let towards = -direction.try_normalize().ok_or("zero sun direction")?;
+    let diffuse = channels(sun.colour) * (sun.intensity * parameters.channel_scale);
+    let ambient = channels(sun.ambient_colour) * (sun.ambient_intensity * parameters.channel_scale);
+    for (index, ((rest, handle), (_, _, material))) in
+        model.meshes.iter().zip(handles).zip(bound).enumerate()
+    {
+        if !lit[index] {
+            continue;
+        }
+        let mut material = materials
+            .get_mut(material)
+            .ok_or("sun lighting material ownership lost")?;
+        let colour = material.base.base_color.to_linear().to_f32_array();
+        let mut mesh = meshes
+            .get_mut(handle)
+            .ok_or("sun lighting mesh ownership lost")?;
+        let normals = normals(rest, skeleton).map_err(|e| format!("{source}: {e}"))?;
+        let tint = Vec3::from_array([colour[0], colour[1], colour[2]]);
+        let colours: Vec<[f32; 4]> = normals
+            .iter()
+            .map(|n| {
+                let rgb = ((ambient + diffuse * n.dot(towards).max(0.0)) * tint)
+                    .clamp(Vec3::ZERO, Vec3::ONE);
+                [rgb.x, rgb.y, rgb.z, 1.0]
+            })
+            .collect();
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
+        material.base.base_color = crate::menu_composition::colour([1.0, 1.0, 1.0, colour[3]]);
+        material.base.unlit = true;
+    }
+    Ok(())
+}
+
 fn normals(
     mesh: &pcx_gfx::LoadedMesh,
     skeleton: &pcx_gfx::Skeleton,

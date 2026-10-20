@@ -71,6 +71,13 @@ impl ObjectHost {
         Ok(())
     }
 
+    /// Current fraction of the day in 0..1, or None before admission.
+    pub fn day_fraction(&self) -> Option<f32> {
+        let state = self.time_of_day.as_ref()?;
+        let hour = state.hour_at(self.timer_game_time()?);
+        Some((hour / state.day_hours).rem_euclid(1.0) as f32)
+    }
+
     /// Current hour, or None before admission.
     pub fn time_of_day(&self) -> Option<f32> {
         let now = self.timer_game_time()?;
