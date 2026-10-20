@@ -171,7 +171,7 @@ impl ObjectHost {
     }
 
     /// Move the clock forward to `at` between deliveries; never backwards.
-    pub(super) fn set_timer_game_time(&mut self, at: f64) -> Result<(), Error> {
+    pub(crate) fn set_timer_game_time(&mut self, at: f64) -> Result<(), Error> {
         let fail = |reason| {
             self.inner
                 .error("timer delivery", Failure::TimerState(reason))

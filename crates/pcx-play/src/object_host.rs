@@ -68,6 +68,7 @@ pub struct ObjectHost {
     items: Option<item_creation::Admission>,
     item_drops: Option<item_drop::ItemDrops>,
     item_queries: Option<crate::item_class_table::ItemClassTable>,
+    item_use: Option<item_use::ItemUse>,
     unit_explosions: Option<unit_explosion::UnitExplosions>,
     player_removal: Option<player_removal::PlayerRemovalState>,
     localized_queries: Option<crate::script_localization::Bank>,
@@ -170,6 +171,7 @@ impl ObjectHost {
             unit_explosions: None,
             item_drops: None,
             item_queries: None,
+            item_use: None,
             player_removal: None,
             localized_queries: None,
             game_pause: None,
@@ -841,6 +843,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.item_query_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.item_use_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.item_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -986,6 +991,10 @@ mod boolexpr_destroy;
 
 #[path = "item_query_host.rs"]
 mod item_query;
+
+#[path = "item_use_host.rs"]
+mod item_use;
+pub use item_use::{UseCheck, UseCommit, UseGrant};
 
 #[path = "trigger_host.rs"]
 mod trigger_admission;
