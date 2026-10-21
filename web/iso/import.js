@@ -1,6 +1,12 @@
 import { discoverIso, sliceIsoFile } from '../iso.js';
 import { directEngineFile } from './engine-member.js';
 
+export function defaultIsoCandidate(candidates) {
+  const eligible = candidates.filter(candidate => candidate.archiveSize <= 512 * 1024 * 1024);
+  const base = eligible.filter(candidate => /(?:^|[\\/:])war3\.mpq(?:;\d+)?$/i.test(candidate.path));
+  return base.length === 1 ? base[0] : eligible.length === 1 && candidates.length === 1 ? eligible[0] : null;
+}
+
 // Resource budgets, not measured game data. Each archive is copied separately.
 export async function importIsoCandidates(file, discovery, selected, api, {
   signal, onProgress, maxArchiveBytes = 512 * 1024 * 1024,

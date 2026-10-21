@@ -349,12 +349,15 @@ pub fn skin_scene_source(
     skin: &crate::menu_skin::SkinTable,
     expansion: bool,
 ) -> Result<String, crate::menu_skin::SkinError> {
-    let file = skin
-        .unique_file(&format!(
-            "GlueSpriteLayerBackground_V{}",
-            u32::from(expansion)
-        ))?
-        .file;
+    let key = format!("GlueSpriteLayerBackground_V{}", u32::from(expansion));
+    let file = match skin.unique_file(&key) {
+        Ok(binding) => binding,
+        Err(crate::menu_skin::SkinError::UnknownFace(_)) if !expansion => {
+            skin.unique_file("GlueSpriteLayerBackground")?
+        }
+        Err(error) => return Err(error),
+    }
+    .file;
     Ok(
         match file.len().checked_sub(4).and_then(|at| file.get(at..)) {
             Some(ext) if ext.eq_ignore_ascii_case(".mdl") => {
@@ -2479,6 +2482,16 @@ mod tests {
             texture_served_name_in(r"Textures\SKY2.blp", directory),
             texture_served_name(r"Textures\SKY2.blp")
         );
+    }
+
+    #[test]
+    fn base_scene_accepts_the_authored_unversioned_skin_binding() {
+        let skin = crate::menu_skin::SkinTable::parse(
+            "[Default]\nGlueSpriteLayerBackground=UI\\Glues\\MainMenu\\MainMenu3d\\MainMenu3d.mdl\n",
+        )
+        .unwrap();
+        assert_eq!(skin_scene_source(&skin, false).unwrap(), SCENE_ART);
+        assert!(skin_scene_source(&skin, true).is_err());
     }
 
     #[test]

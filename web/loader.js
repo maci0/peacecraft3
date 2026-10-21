@@ -25,7 +25,7 @@ import init, {
   enable_local_demo, local_menu_editions, open_local_menu, active_local_menu_edition,
   menu_state,
 } from './pkg/peacecraft3.js';
-import { discoverIso, importIsoCandidates } from './iso/import.js';
+import { defaultIsoCandidate, discoverIso, importIsoCandidates } from './iso/import.js';
 import { clickDescriptor } from './iso/audio.js';
 import { createLoadingProgress, monitorWasmDownload } from './loading.js';
 import { createInstallerDecoder, stageStoredInstallerFiles } from './iso/installer-import.js';
@@ -528,15 +528,16 @@ isoInput.addEventListener('change', async () => {
       isoDiscovery = { ...isoDiscovery, candidates: inspected.candidates, installer: inspected.diagnostic };
     }
     isoProvenance.textContent = JSON.stringify({ provenance: isoDiscovery.provenance, diagnostics: isoDiscovery.diagnostics, installer: isoDiscovery.installer }, null, 2);
+    const defaultCandidate = defaultIsoCandidate(isoDiscovery.candidates);
     isoDiscovery.candidates.forEach((candidate, index) => {
       const label = document.createElement('label'), input = document.createElement('input');
-      input.type = 'checkbox'; input.value = String(index); input.checked = isoDiscovery.candidates.length === 1;
+      input.type = 'checkbox'; input.value = String(index); input.checked = candidate === defaultCandidate;
       label.append(input, document.createTextNode(` ${candidate.path} — ${candidate.archiveSize.toLocaleString()} bytes${candidate.validation === 'directory-only' ? ' (installer file; header checked during extraction)' : ` at ${candidate.offset}`}`));
       isoCandidates.append(label);
     });
     isoLoading.complete(isoDiscovery.installer
-      ? `${isoDiscovery.candidates.length} MPQ-named installer files found. Imports use stored base files; language patches are not applied. Select an archive to preview its supplied menu.`
-      : `${isoDiscovery.candidates.length} readable MPQ archives found; edition/build not established`);
+      ? `${isoDiscovery.candidates.length} MPQ-named installer files found. Imports use stored base files; language patches are not applied. ${defaultCandidate ? 'Archive selected by default for the menu.' : 'Choose one archive; no unique eligible base archive was found.'}`
+      : `${isoDiscovery.candidates.length} readable MPQ archives found; ${defaultCandidate ? 'archive selected by default' : 'choose one archive'}; edition/build not established`);
     if (!isoDiscovery.candidates.length) {
       const codes = [...new Set(isoDiscovery.diagnostics.filter(d => d.code.startsWith('UNSUPPORTED_')).map(d => d.code))];
       isoLoading.error(`No readable MPQ archives found. ${codes.join(', ') || 'No supported payload signature'}. Import details show the local decoder blocker.`);

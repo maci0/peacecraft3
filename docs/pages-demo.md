@@ -31,6 +31,13 @@ only selected members are written to temporary browser storage. MPQ-named files
 must also pass their actual payload header check: nine movie members contain
 AVI data and cannot be staged as archives.
 
+When discovery finds one unique, budget-eligible `war3.mpq`, the demo selects it
+by default for the base menu. A single discovered archive is also selected.
+Multiple archives with no unique base require a choice; the demo does not guess
+which copy of a conflicting member should win. The selection remains editable.
+Base skins with an unversioned `GlueSpriteLayerBackground` binding also resolve
+their scene from that authored value.
+
 Imports expose the stored base files before language patches. The patch format
 and application remain unverified; no installer release label establishes game
 archive identity. Other FreeArc chains, including the EXE-filter block, remain

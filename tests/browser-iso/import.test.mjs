@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { discoverIso, importIsoCandidates } from '../../web/iso/import.js';
+import { defaultIsoCandidate, discoverIso, importIsoCandidates } from '../../web/iso/import.js';
 import { soundRows, clickDescriptor } from '../../web/iso/audio.js';
 import { isoFixture, mpqFixture, menuMembers, clickMetadata } from './fixtures.mjs';
 function adapter(failAt) {
@@ -18,6 +18,15 @@ async function source() {
   const file = new File([isoFixture([{ name: 'PAYLOAD.BIN;1', bytes: mpqFixture(menuMembers()) }])], 'authored.iso');
   return { file, discovery: await discoverIso(file) };
 }
+test('unique base archive is the default without guessing priority among conflicting archives', () => {
+  const base = { path: '/DATA.ARC::war3.mpq', archiveSize: 40 };
+  const expansion = { path: '/DATA.ARC::War3x.mpq', archiveSize: 30 };
+  assert.equal(defaultIsoCandidate([expansion, base]), base);
+  assert.equal(defaultIsoCandidate([base, { ...base }]), null);
+  assert.equal(defaultIsoCandidate([expansion, { path: '/DATA.ARC::War3Patch.mpq', archiveSize: 20 }]), null);
+  assert.equal(defaultIsoCandidate([{ path: '/WAR3.MPQ;1', archiveSize: 40 }]).path, '/WAR3.MPQ;1');
+  assert.equal(defaultIsoCandidate([{ ...base, archiveSize: 513 * 1024 * 1024 }]), null);
+});
 test('browser importer stages bounded archive content and commits once', async () => {
   const { file, discovery } = await source(), api = adapter();
   const result = await importIsoCandidates(file, discovery, discovery.candidates, api);
