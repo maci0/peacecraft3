@@ -80,8 +80,10 @@ fn panel() -> Node {
         max_width: Val::Percent(100.0),
         flex_shrink: 0.0,
         flex_direction: FlexDirection::Column,
-        padding: UiRect::all(Val::Rem(0.5)),
-        row_gap: Val::Rem(0.25),
+        padding: UiRect::all(Val::Rem(0.55)),
+        border: UiRect::all(Val::Px(1.0)),
+        border_radius: BorderRadius::all(Val::Px(5.0)),
+        row_gap: Val::Rem(0.35),
         ..default()
     }
 }
@@ -127,27 +129,28 @@ fn setup(mut commands: Commands) {
                 panel(),
                 Visibility::Hidden,
                 OverlayRoot,
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.8)),
+                BackgroundColor(Color::srgba(0.015, 0.025, 0.025, 0.58)),
+                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.18)),
                 Pickable::IGNORE,
             ))
             .with_children(|panel| {
                 panel.spawn((
-                    Text::new("FPS -  - ms"),
+                    Text::new("FPS                 -\nFrame interval      - ms"),
                     TextFont {
-                        font_size: bevy::text::FontSize::Rem(1.0),
+                        font_size: bevy::text::FontSize::Rem(0.85),
                         ..default()
                     },
-                    TextColor(Color::WHITE),
+                    TextColor(Color::srgb(0.88, 0.94, 0.91)),
                     Pickable::IGNORE,
                     CounterText,
                 ));
                 panel.spawn((
                     Text::new("Frame-time history unavailable"),
                     TextFont {
-                        font_size: bevy::text::FontSize::Rem(0.75),
+                        font_size: bevy::text::FontSize::Rem(0.65),
                         ..default()
                     },
-                    TextColor(Color::WHITE),
+                    TextColor(Color::srgb(0.66, 0.75, 0.73)),
                     Pickable::IGNORE,
                     GraphLabel,
                 ));
@@ -155,12 +158,12 @@ fn setup(mut commands: Commands) {
                     .spawn((
                         Node {
                             width: Val::Percent(100.0),
-                            height: Val::Rem(4.0),
+                            height: Val::Rem(3.0),
                             align_items: AlignItems::End,
                             overflow: Overflow::clip(),
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
+                        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.12)),
                         Pickable::IGNORE,
                     ))
                     .with_children(|graph| {
@@ -173,7 +176,7 @@ fn setup(mut commands: Commands) {
                                     height: Val::Px(1.0),
                                     ..default()
                                 },
-                                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.12)),
+                                BackgroundColor(Color::srgba(0.7, 0.85, 0.9, 0.12)),
                                 Pickable::IGNORE,
                             ));
                         }
@@ -186,7 +189,7 @@ fn setup(mut commands: Commands) {
                                     height: Val::Percent(0.0),
                                     ..default()
                                 },
-                                BackgroundColor(Color::srgb(0.35, 0.8, 1.0)),
+                                BackgroundColor(Color::srgba(0.35, 0.8, 1.0, 0.55)),
                                 Pickable::IGNORE,
                                 GraphBar(index),
                             ));
@@ -216,17 +219,18 @@ fn setup(mut commands: Commands) {
                 },
                 Visibility::Hidden,
                 DebugRoot,
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.8)),
+                BackgroundColor(Color::srgba(0.015, 0.025, 0.025, 0.58)),
+                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.18)),
                 Pickable::IGNORE,
             ))
             .with_children(|panel| {
                 panel.spawn((
                     Text::new("Debug (F7)"),
                     TextFont {
-                        font_size: bevy::text::FontSize::Rem(0.8),
+                        font_size: bevy::text::FontSize::Rem(0.75),
                         ..default()
                     },
-                    TextColor(Color::WHITE),
+                    TextColor(Color::srgb(0.88, 0.94, 0.91)),
                     Pickable::IGNORE,
                     debug::DebugText,
                 ));
@@ -313,9 +317,14 @@ fn refresh(
         counter.0.clear();
         match (fps, frame_ms) {
             (Some(fps), Some(ms)) => {
-                let _ = write!(counter.0, "FPS {fps:.0}  {ms:.1} ms");
+                let _ = write!(
+                    counter.0,
+                    "FPS              {fps:>8.2}\nFrame interval   {ms:>8.2} ms"
+                );
             }
-            _ => counter.0.push_str("FPS -  - ms"),
+            _ => counter
+                .0
+                .push_str("FPS                    -\nFrame interval         - ms"),
         }
     }
     for mut label in &mut labels {

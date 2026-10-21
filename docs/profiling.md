@@ -29,6 +29,10 @@ Unavailable memory reports are labelled rather than replaced with zero.
 Both panels start hidden and do not intercept input. F8 stays on the right;
 F7 uses the left side. If the window cannot fit both widths, F7 wraps beneath
 F8 instead of overlapping it.
+The compact panels use a translucent charcoal background, quiet borders and
+aligned frame metrics. F7 separates renderer/scene data from campaign data and
+reports total mesh assets alongside CPU-retained vertices and indices; these
+remain asset counts rather than rendered geometry or GPU buffer totals.
 They share a full-window UI camera separate from the original menu's authored
 viewport. When both are hidden the camera does no rendering, and panel sampling
 and formatting stop. Focus the game window or browser canvas before using the
