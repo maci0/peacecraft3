@@ -1314,7 +1314,10 @@ impl ObjectHost {
             *work = work.checked_sub(1).ok_or_else(|| {
                 self.inner.error(
                     "unit activity",
-                    Failure::UnitActivity("movement work exhausted".into()),
+                    Failure::UnitActivity(format!(
+                        "movement work exhausted for {unit:?} at {now}: goal {:?}, waypoint {}/{}, started {}, credited {}",
+                        motion.goal, motion.next, motion.path.len(), motion.started, motion.last_distance,
+                    )),
                 )
             })?;
             let target = motion.path[motion.next];

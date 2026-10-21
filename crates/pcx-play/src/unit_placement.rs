@@ -787,7 +787,7 @@ impl Placement {
         radius: f32,
         work: &mut usize,
     ) -> Result<Vec<[f32; 2]>, Error> {
-        use std::collections::{BTreeMap, BinaryHeap};
+        use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
         #[derive(PartialEq)]
         struct Open {
             cost: f64,
@@ -855,6 +855,55 @@ impl Placement {
             let dy = (i64::from(p[1]) - i64::from(target_cell[1])).unsigned_abs() as f64;
             dx.max(dy) + (std::f64::consts::SQRT_2 - 1.) * dx.min(dy)
         };
+        let nearest = if target_clear {
+            0.0
+        } else {
+            // Visit destination cells in octile-distance order, ignoring connectivity.
+            // This proves a lower bound; the forward search still has to reach it.
+            let mut candidates = BinaryHeap::new();
+            candidates
+                .try_reserve(1)
+                .map_err(|_| fail("route storage"))?;
+            let goal = index(target_cell)?;
+            candidates.push(Open {
+                cost: 0.0,
+                travelled: 0.0,
+                cell: goal,
+            });
+            let mut seen = BTreeSet::from([goal]);
+            let mut nearest = f64::INFINITY;
+            while let Some(open) = candidates.pop() {
+                if !charge() {
+                    return Err(fail("movement route work exhausted proving nearest target"));
+                }
+                let point = xy(open.cell);
+                if self.prepare_motion(unit, centre(point), radius)?.is_some() {
+                    nearest = open.cost;
+                    break;
+                }
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        if dx == 0 && dy == 0 {
+                            continue;
+                        }
+                        let p = [point[0] + dx, point[1] + dy];
+                        if let Ok(next) = index(p)
+                            && seen.insert(next)
+                        {
+                            candidates
+                                .try_reserve(1)
+                                .map_err(|_| fail("route storage"))?;
+                            candidates.push(Open {
+                                cost: heuristic(p),
+                                travelled: 0.0,
+                                cell: next,
+                            });
+                        }
+                    }
+                }
+            }
+            nearest
+        };
         let mut frontier = BinaryHeap::new();
         frontier.try_reserve(1).map_err(|_| fail("route storage"))?;
         frontier.push(Open {
@@ -881,6 +930,9 @@ impl Placement {
             if Some(open.cell) == end && target_clear {
                 best = (0.0, open.travelled, open.cell);
                 arrived = true;
+                break;
+            }
+            if !target_clear && remaining <= nearest {
                 break;
             }
             let point = xy(open.cell);

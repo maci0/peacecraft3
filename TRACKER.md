@@ -3226,6 +3226,17 @@ open. See [natural sleep](docs/re-notes/unit-natural-sleep.md).
 - [ ] Player-owned script painting, overlap/removal, terrain presentation and
   native regeneration timing remain open. See [terrain blight](docs/re-notes/terrain-blight.md).
 
+### 2026-10-21 — bounded search for blocked movement goals
+
+- [x] Stop forward A* at a proven nearest clear-cell distance rather than
+  continuing to consume the shared movement budget. Caller limits are retained.
+  Cardinal, diagonal and larger blocked areas have deterministic work and
+  route-clearance coverage; disabling termination fails the regression.
+- [x] Selected Human03 passes the 256-tick startup/order/control gate.
+- [ ] The longer headless run stops at tick 257 on `SetUnitLookAt`, so campaign
+  acceptance and rendered/native path fidelity remain open. See
+  [collision replanning](docs/re-notes/unit-collision-replanning.md#blocked-destination-search-termination-2026-10-21).
+
 ### 2026-10-20 — source-derived edition-switch icon states
 
 - [x] The control builder now reads both icon families and their three state

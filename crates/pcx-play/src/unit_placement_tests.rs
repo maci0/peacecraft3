@@ -106,6 +106,78 @@ fn routes_avoid_authored_walls_and_refuse_work_without_changing_occupancy() {
 }
 
 #[test]
+fn blocked_goals_stop_searching_when_the_nearest_cell_is_proven() {
+    for layout in 0..3 {
+        let mut p = placement(
+            Source {
+                install: "synthetic".into(),
+                edition: "test".into(),
+                map: "blocked goal".into(),
+            },
+            10000,
+        );
+        let start = [16.0, 16.0];
+        let target = [64.0, 64.0];
+        let unit = p.prepare(start, Some(0.0), "_", 0.0).unwrap();
+        p.commit(id(1), unit);
+        let goal = p.cell(target).unwrap();
+        let mut block = |dx, dy| {
+            let at = p
+                .index(i64::from(goal[0] + dx), i64::from(goal[1] + dy))
+                .unwrap();
+            p.grid.pathing.cells[at] |= p.rules.mask;
+        };
+        block(0, 0);
+        if layout == 1 {
+            for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                block(dx, dy);
+            }
+        }
+        if layout == 2 {
+            for dy in -2..=2 {
+                for dx in -2..=2 {
+                    block(dx, dy);
+                }
+            }
+        }
+        let before = p.occupied.clone();
+        let limit = p.grid.pathing.cells.len();
+        let mut small = limit;
+        let path = p.route(id(1), start, target, 0.0, &mut small).unwrap();
+        assert!(
+            small > 0,
+            "layout {layout}: nearest goal found but the search spent its whole budget"
+        );
+        let mut large = 10000;
+        assert_eq!(
+            p.route(id(1), start, target, 0.0, &mut large).unwrap(),
+            path
+        );
+        assert_eq!(
+            limit - small,
+            10000 - large,
+            "work must depend on the search, not its limit"
+        );
+        let last = p.cell(*path.last().unwrap()).unwrap();
+        let delta = [last[0] - goal[0], last[1] - goal[1]].map(i32::abs);
+        if layout == 1 {
+            assert_eq!(delta, [1, 1]);
+        } else if layout == 2 {
+            assert_eq!(delta[0].max(delta[1]), 3);
+            assert_eq!(delta[0].min(delta[1]), 0);
+        } else {
+            assert_eq!(delta[0] + delta[1], 1);
+        }
+        let mut from = start;
+        for to in path {
+            assert!(p.segment_clear(id(1), from, to, 0.0, &mut 1000).unwrap());
+            from = to;
+        }
+        assert_eq!(p.occupied, before);
+    }
+}
+
+#[test]
 fn lazy_footprints_cache_success_and_refuse_oversized_data_before_occupancy_changes() {
     use std::sync::{
         Arc,

@@ -41,6 +41,57 @@ behavior has no reproducing fixture yet.
 
 These results do not establish original collision radii or native movement.
 
+## Blocked destination search termination (2026-10-21)
+
+The recreation's A* stopped on reaching an exact clear destination, but a blocked
+destination had no equivalent success condition. Even after finding its closest
+standable cell, the search kept exploring until the budget or the reachable
+component ended. A valid fallback route could therefore spend the entire shared
+projection budget before movement or another unit could run.
+
+For a blocked destination, a bounded best-first scan now proves the minimum
+octile distance of any clear cell from that destination. It visits cells in
+distance order without treating obstacles as connectivity barriers. Each tested
+cell consumes route work, and heap allocation is fallible. The forward A* still
+tests actual reachability and diagonal corner clearance; it stops when it reaches
+the proven distance. If every nearest cell is disconnected, it continues its
+existing bounded search and fallback policy. No timer, retry delay, source speed,
+collision threshold or caller work limit is changed.
+
+This preserves the existing grid objective: nearest reachable cell, then shortest
+travel with the existing heap tie order. It does not establish that native
+pathfinding uses that objective or algorithm. The extra lower-bound scan may
+itself refuse when the caller supplies insufficient work; it does not invent a
+clear endpoint when that proof is incomplete.
+
+The synthetic regression covers a blocked cell with a clear cardinal neighbor,
+a blocked cross whose nearest cells are diagonal, and a larger blocked square.
+Both a grid-sized budget and a larger budget must return identical paths and
+spend identical work, leaving work available. Every returned segment must be
+clear, and occupancy must remain unchanged. The regression fails on the earlier
+search because it spends the full small budget. Limits remain covered by the
+existing exhausted-route and failed-span tests.
+
+Disabling the proven-distance termination makes the regression fail again on
+layout 0: the route spends its complete grid-sized budget. The real condition
+was restored before the final aggregate checks.
+
+Selected unchanged Human03 originally exhausted movement work at tick 155 on a
+skeleton's blocked destination. An adjacent-cell-only proof passed that point
+but found the same defect at tick 230 on a larger blocked area, motivating the
+general distance proof. These are recreation diagnostics, not original-client
+runtime evidence. The general proof passes the selected Human03 256-tick gate:
+two independent ordered starts agree, and the uncommanded control differs.
+A longer bounded headless diagnostic reaches tick 257, then refuses the
+unimplemented `SetUnitLookAt` at Human03.j:2606. No cinematic-skip input was sent
+before that failure. This is not whole-map acceptance or rendered/native parity.
+Final private-target checks pass: complete `pcx-play` package 1,180 / 0 failed /
+46 ignored, strict all-target clippy, WASM playback library, native app all-target
+check with test-fixtures, and formatting on changed Rust files. These compile and
+host-runtime checks do not qualify native or rendered pathfinding.
+The three selected original-input startup/order/profile/patrol regression gates
+also pass, separately from the Human03 progression gate above.
+
 ## Large creation radii
 
 The selected Legacy executable's classifier at `0x8bc926..0x8bc979` selects four

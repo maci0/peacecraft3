@@ -1644,3 +1644,10 @@ instead of sampling the final position. Unchanged Human03 reaches tick 155 and
 then exhausts movement work; campaign acceptance is still open. Player-owned
 `SetBlight*` changes, blight rendering and native eligibility/tick comparison
 remain open; see [terrain blight](docs/re-notes/terrain-blight.md).
+
+Movement-search follow-up (2026-10-21): blocked destinations now have a bounded
+nearest-clear-cell distance proof, allowing forward A* to stop once no closer
+endpoint is possible. Caller work limits and movement rules are unchanged.
+Human03 passes the 256-tick startup/order gate and next refuses `SetUnitLookAt`
+at tick 257. Whole-map execution and native/rendered path parity remain open;
+see [collision replanning](docs/re-notes/unit-collision-replanning.md#blocked-destination-search-termination-2026-10-21).
