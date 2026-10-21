@@ -160,6 +160,13 @@ impl ObjectHost {
         Some(self.time_of_day.as_ref()?.hour_at(now) as f32)
     }
 
+    pub(super) fn natural_sleep_night(&self) -> Option<bool> {
+        let state = self.time_of_day.as_ref()?;
+        let [dawn, dusk] = state.day_window?;
+        let hour = state.hour_at(self.timer_game_time()?);
+        Some(hour < dawn || hour >= dusk)
+    }
+
     pub(super) fn time_of_day_native(
         &mut self,
         name: &str,

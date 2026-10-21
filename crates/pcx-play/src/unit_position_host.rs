@@ -324,7 +324,7 @@ impl ObjectHost {
     }
 }
 
-fn field<'a>(
+pub(super) fn field<'a>(
     definition: &'a Definition,
     slk: SlkId,
     column: &str,

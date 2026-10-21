@@ -1621,3 +1621,10 @@ bytes or an absent profile, includes that input in admission identity and keeps
 saves in session-owned storage. Callers can export saves for the next map; the
 application retains its existing local persistence. This closes an ambient-input
 gap, not the remaining multiplayer/campaign fidelity gates.
+
+Natural-sleep follow-up (2026-10-21): unit permission reads metadata-backed
+`UnitData.canSleep` and map overrides. The existing activity loop now handles
+idle night sleep, wake and combat suppression. Unchanged Human03 passes creep
+sleep setup and next refuses a location order; its startup patrol path is still
+unsupported. Permanent/spell sleep, presentation and native wake timing remain
+open; see [natural sleep](docs/re-notes/unit-natural-sleep.md).

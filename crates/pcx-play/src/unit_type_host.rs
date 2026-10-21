@@ -1,6 +1,6 @@
 //! `IsUnitType` from each unit's resolved definition and live state. Type
 //! names resolve through the script's own `UNIT_TYPE_*` constants. Status
-//! types (stunned, sleeping, ...) read false because no buffs are simulated.
+//! types without a modeled effect (stunned, ...) read false. Natural sleep uses live unit state.
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_objects::editor::SlkId;
 use pcx_script::Value;
@@ -67,6 +67,8 @@ impl ObjectHost {
             } else if is("UNIT_TYPE_DEAD") {
                 record.combat.as_ref().is_some_and(|c| c.dead)
                     || record.vitals.is_some_and(|v| v.life <= 0.0)
+            } else if is("UNIT_TYPE_SLEEPING") {
+                record.is_sleeping()
             } else if is("UNIT_TYPE_STRUCTURE") {
                 structure
             } else if is("UNIT_TYPE_FLYING") {

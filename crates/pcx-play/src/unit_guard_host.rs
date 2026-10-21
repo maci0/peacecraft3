@@ -330,7 +330,8 @@ impl ObjectHost {
             state.records.retain(|(id, _)| *id != unit);
         }
     }
-    pub(super) fn guard_ordered(&mut self, unit: HandleId) {
+    pub(super) fn unit_ordered(&mut self, unit: HandleId) {
+        self.wake_natural_sleep(unit);
         if let Some(state) = &mut self.guards
             && let Some((_, g)) = state.records.iter_mut().find(|(id, _)| *id == unit)
         {

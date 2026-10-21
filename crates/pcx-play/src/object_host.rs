@@ -1121,6 +1121,10 @@ mod unit_visibility;
 #[path = "unit_pause_host.rs"]
 mod unit_pause;
 
+#[path = "unit_sleep_host.rs"]
+mod unit_sleep;
+pub use unit_sleep::UnitSleep;
+
 #[path = "camera_view_host.rs"]
 mod camera_view;
 

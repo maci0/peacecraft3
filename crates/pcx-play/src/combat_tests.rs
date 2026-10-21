@@ -2,6 +2,8 @@ use super::*;
 use crate::playercolor_host::{CombatActor, CombatTraceEvent};
 use pcx_objects::editor::misc::{CombatRules, DayCycle, HeroVitals};
 use pcx_script::HandleId;
+#[path = "unit_sleep_tests.rs"]
+mod natural_sleep;
 type Vm = pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>;
 
 const DECLARATIONS: &str = r#"
@@ -181,6 +183,13 @@ constant real bj_TOD_DUSK = 18.00
 endglobals
 "#;
 
+const SLEEP_DECLARATIONS: &str = r#"
+native UnitAddSleep takes unit u, boolean add returns nothing
+native UnitCanSleep takes unit u returns boolean
+native UnitIsSleeping takes unit u returns boolean
+native UnitWakeUp takes unit u returns nothing
+"#;
+
 fn open_fixture(
     fields: &[([u8; 4], ObjectField)],
     heroes: Option<crate::hero_skills::Rules>,
@@ -188,10 +197,17 @@ fn open_fixture(
     clock: bool,
 ) -> (Vm, HandleId, HandleId) {
     let extra = format!(
-        "{}\n{}{DECLARATIONS}{}",
+        "{}\n{}{DECLARATIONS}{}{}",
         enumeration::TRIGGERS,
         super::activity::ORDERS,
-        if clock { CLOCK_DECLARATIONS } else { "" }
+        if clock { CLOCK_DECLARATIONS } else { "" },
+        if fields.iter().any(|(_, f)| f.metadata.as_ref().is_some_and(
+            |m| matches!(&m.source, FieldSource::Column {column, ..} if column == "canSleep")
+        )) {
+            SLEEP_DECLARATIONS
+        } else {
+            ""
+        },
     );
     let map = if heroes.is_some() {
         MAP.replacen("'u001'", "'H001'", 1)

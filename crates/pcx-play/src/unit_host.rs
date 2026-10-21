@@ -133,6 +133,8 @@ pub struct ExecutedUnit {
     pub shown: bool,
     /// Start of an explicit PauseUnit interval on host game time.
     pub paused_since: Option<f64>,
+    /// Natural sleep state when admitted from the selected unit definition.
+    pub sleep: Option<super::unit_sleep::UnitSleep>,
     /// Live life/mana when vitals are admitted.
     pub vitals: Option<super::Vitals>,
     /// Weapon, armor and attack state when combat is admitted.
@@ -249,6 +251,7 @@ impl ObjectHost {
             self.optional_unit_getter(&declaration_source, GET_INVULNERABLE, "boolean")?;
         self.unit_visibility_declarations(&declaration_source)?;
         self.unit_pause_declarations(&declaration_source)?;
+        self.unit_sleep_declarations(&declaration_source)?;
         self.unit_removal_declaration(&declaration_source)?;
         if self.sound_properties {
             self.sound_attachment_declaration(&declaration_source)?;
@@ -540,6 +543,9 @@ impl ObjectHost {
             return Some(result);
         }
         if let Some(result) = self.unit_pause_native(name, args) {
+            return Some(result);
+        }
+        if let Some(result) = self.unit_sleep_native(name, args) {
             return Some(result);
         }
         if name == "SetUnitAnimation" && self.units.as_ref()?.models.is_some() {
@@ -1303,12 +1309,14 @@ impl ObjectHost {
                 activity: None,
                 shown: true,
                 paused_since: None,
+                sleep: None,
                 vitals: None,
                 permanent_strength: 0,
                 combat: None,
             }
         };
         let mut record = record;
+        record.sleep = self.prepare_unit_sleep(&record.definition)?;
         record.abilities = self.prepare_unit_abilities(&record.definition)?;
         if let Some(saved) = saved {
             let abilities = record.abilities.as_mut().ok_or_else(|| {
@@ -1469,6 +1477,7 @@ impl ObjectHost {
                 if let Some(bit) = record.admitted_order.as_mut() {
                     bit.1 = next;
                 }
+                self.wake_natural_sleep(unit);
                 Some(Ok(Value::Bool(true)))
             }
             Ok(_) => Some(Err(self.inner.error(ORDER, Failure::WrongFamily))),

@@ -3189,6 +3189,18 @@ acceptance remain open. See [hero events](docs/re-notes/script-hero-skills.md#he
 - [ ] Original W3V compatibility, full unit payload fidelity and multiplayer
   campaign play remain open. See [profile admission](docs/re-notes/script-game-caches.md#headless-profile-admission-2026-10-21).
 
+### 2026-10-21 — natural unit sleep
+
+Four natural-sleep natives now use the
+existing unit record and activity loop. Source permission, map overrides,
+night/day transitions, acquisition suppression, damage retaliation, accepted
+movement wake, lifecycle and bounded work have synthetic coverage. Full playback
+package: 1,162 passed / 0 failed / 45 ignored; strict clippy and WASM pass.
+The app all-target fixture check and both selected Human01 headless gates pass.
+Human03 next refuses `IssuePointOrderLoc` at Blizzard.j:7800, after creep setup.
+Permanent/spell sleep, native wake timing/proximity and presentation remain
+open. See [natural sleep](docs/re-notes/unit-natural-sleep.md).
+
 ### 2026-10-20 — source-derived edition-switch icon states
 
 - [x] The control builder now reads both icon families and their three state

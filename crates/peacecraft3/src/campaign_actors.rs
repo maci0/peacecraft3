@@ -1204,6 +1204,7 @@ mod tests {
             activity: None,
             shown: true,
             paused_since: None,
+            sleep: None,
             vitals: None,
             combat: None,
             permanent_strength: 0,

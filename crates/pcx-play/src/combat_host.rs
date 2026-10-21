@@ -718,7 +718,7 @@ impl ObjectHost {
             if !can_attack || self.weapon_target(target).is_none() || unit == target {
                 return Ok(Value::Bool(false));
             }
-            self.guard_ordered(unit);
+            self.unit_ordered(unit);
             self.cancel_inventory_order(unit);
             self.clear_combat_target(unit);
             if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
@@ -761,6 +761,7 @@ impl ObjectHost {
         }
         self.forget_hidden_unit_ranges(unit);
         self.forget_unit_activity(unit);
+        self.wake_natural_sleep(unit);
         // Candidate explosion sequence: the source name is not verified (see unit_explosion_host).
         let exploded = self.unit_exploded(unit) == Some(true);
         let mut exploded_presented = false;
@@ -835,6 +836,9 @@ impl ObjectHost {
         };
         let life_before = record.vitals.map(|v| v.life);
         let life = life_before.unwrap_or(0.0) - damage;
+        if damage > 0.0 {
+            self.wake_natural_sleep(target);
+        }
         self.record_combat(|h| {
             Some(CombatTraceEvent::Damage {
                 source: h.combat_actor(source)?,
@@ -912,6 +916,7 @@ impl ObjectHost {
             .filter(|(_, u)| {
                 u.combat.as_ref().is_some_and(|c| {
                     u.paused_since.is_none()
+                        && !u.is_sleeping()
                         && !c.dead
                         && (c.weapon.is_some() || c.attack_destination.is_some())
                 })

@@ -336,6 +336,7 @@ impl ObjectHost {
             rules.pending.insert(caster, target);
         }
         self.step_holy_cast(caster, target, now)?;
+        self.wake_natural_sleep(caster);
         Ok(true)
     }
 

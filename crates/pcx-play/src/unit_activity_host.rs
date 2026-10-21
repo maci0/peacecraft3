@@ -651,7 +651,7 @@ impl ObjectHost {
                 }
                 _ => {}
             }
-            self.guard_ordered(unit);
+            self.unit_ordered(unit);
             self.cancel_inventory_order(unit);
             self.clear_combat_target(unit);
             if let Entry::Unit { record } = self.inner.entry_mut(unit)?
@@ -709,6 +709,7 @@ impl ObjectHost {
         if now == state.projected_through {
             return Ok(0);
         }
+        self.advance_unit_sleep(work)?;
         let mut active = std::mem::take(&mut self.unit_activity.as_mut().expect("activity").active);
         let result = (|| {
             let mut moved = 0;
