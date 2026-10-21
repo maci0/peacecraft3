@@ -14,7 +14,7 @@
 //! non-looping sequence; target removal also retires it. Air/Ground filters
 //! require both `targs` tokens.
 use super::{Entry, Error, Failure, ObjectHost, combat};
-use pcx_objects::editor::SlkId;
+use pcx_objects::editor::{FieldKind, SlkId};
 use pcx_script::HandleId;
 use std::collections::BTreeMap;
 
@@ -259,18 +259,31 @@ impl ObjectHost {
         if rank > levels {
             return Err(self.holy_error(format!("rank {rank} outside {levels} levels")));
         }
-        let number = |stem: &str| {
-            self.hero_ability_number(ABILITY, &format!("{stem}{rank}"))
-                .map_err(|e| self.holy_error(e))
+        let number = |stem: &str, kind| {
+            let raw = self
+                .hero_ability_level_cell(ABILITY, stem, rank, kind)
+                .map_err(|e| self.holy_error(e))?;
+            let value = if kind == FieldKind::Int {
+                raw.parse::<i32>()
+                    .map(|value| value as f32)
+                    .map_err(|e| e.to_string())
+            } else {
+                raw.parse::<f32>().map_err(|e| e.to_string())
+            }
+            .map_err(|detail| self.holy_error(format!("invalid {stem}{rank}: {detail}")))?;
+            if !value.is_finite() || value < 0.0 {
+                return Err(self.holy_error(format!("{stem}{rank} must be finite and nonnegative")));
+            }
+            Ok(value)
         };
         let targs = self
-            .hero_ability_text(ABILITY, &format!("targs{rank}"))
+            .hero_ability_level_cell(ABILITY, "targs", rank, FieldKind::Token)
             .map_err(|e| self.holy_error(e))?;
         Ok(Some(Spell {
-            cost: number("Cost")? as f32,
-            cooldown: f64::from(number("Cool")?),
-            range: number("Rng")? as f32,
-            amount: number("DataA")? as f32,
+            cost: number("Cost", FieldKind::Int)?,
+            cooldown: f64::from(number("Cool", FieldKind::Unreal)?),
+            range: number("Rng", FieldKind::Unreal)?,
+            amount: number("DataA", FieldKind::Real)?,
             undead_divisor: self.holy_light.as_ref().map_or(HALF, |r| r.undead_divisor),
             filter: target_filter(&targs).map_err(|e| self.holy_error(e))?,
         }))

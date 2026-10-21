@@ -275,7 +275,7 @@ Human01 gate checks every rank's snapshot against the installed AbilityData cost
 column and the live unit pools/pause flag. Affected core/app strict all-target
 Clippy, WASM and native app tests pass. Receipts are local under
 `.scratch/command-readiness/`. No new F7 rows or button states are published by
-this core checkpoint. Holy Light still reads several numeric columns through
-the older integer-only helper; fractional authored values need a typed read.
+this core checkpoint. The subsequent fractional-field change replaces Holy
+Light's older integer-only read (see `holy-light-ability.md`).
 The selected `common.j` declares ability cooldown query/reset natives, whose
 script wiring remains open.

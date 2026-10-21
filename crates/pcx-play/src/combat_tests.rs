@@ -2104,6 +2104,10 @@ fn moving_unit_regenerates_at_its_rate_while_it_travels() {
 
 /// Holy Light rows: `AHhb` (three ranks, `Order=alpha` here) and the hero component `Yher`.
 fn holy_tables() -> DefaultTables {
+    holy_tables_with(&[])
+}
+
+fn holy_tables_with(edits: &[(&str, &str)]) -> DefaultTables {
     let headers = [
         "alias",
         "code",
@@ -2137,7 +2141,7 @@ fn holy_tables() -> DefaultTables {
         "Area3",
     ];
     let targs = "air,ground,organic,notself,invu,vuln,nonancient";
-    let rows: [Vec<&str>; 3] = [
+    let mut rows: [Vec<&str>; 3] = [
         vec![
             "AHhb", "AHhb", "3", "1", "0", "1", "200", "400", "600", "65", "65", "65", "5", "5",
             "5", "60", "60", "60", targs, targs, targs,
@@ -2171,6 +2175,100 @@ fn holy_tables() -> DefaultTables {
             "11", "17",
         ],
     ];
+    for &(column, value) in edits {
+        let index = headers
+            .iter()
+            .position(|header| *header == column)
+            .expect("fixture column");
+        rows[0][index] = value;
+    }
+    let metadata = sylk(
+        &[
+            "ID", "field", "slk", "index", "type", "category", "repeat", "data",
+        ],
+        &[
+            &[
+                "fCoo",
+                "Cool",
+                "AbilityData",
+                "-1",
+                "unreal",
+                "stats",
+                "1",
+                "0",
+            ],
+            &[
+                "fRng",
+                "Rng",
+                "AbilityData",
+                "-1",
+                "unreal",
+                "stats",
+                "1",
+                "0",
+            ],
+            &[
+                "fAmt",
+                "Data",
+                "AbilityData",
+                "-1",
+                "real",
+                "stats",
+                "1",
+                "1",
+            ],
+            &[
+                "fCos",
+                "Cost",
+                "AbilityData",
+                "-1",
+                "int",
+                "stats",
+                "1",
+                "0",
+            ],
+            &[
+                "fTar",
+                "targs",
+                "AbilityData",
+                "-1",
+                "targetList",
+                "stats",
+                "1",
+                "0",
+            ],
+            &[
+                "fLev",
+                "levels",
+                "AbilityData",
+                "-1",
+                "int",
+                "stats",
+                "0",
+                "0",
+            ],
+            &[
+                "fReq",
+                "reqLevel",
+                "AbilityData",
+                "-1",
+                "int",
+                "stats",
+                "0",
+                "0",
+            ],
+            &[
+                "fSkp",
+                "levelSkip",
+                "AbilityData",
+                "-1",
+                "int",
+                "stats",
+                "0",
+                "0",
+            ],
+        ],
+    );
     let mut slk = String::from("ID;PWXL;N;E\r\n");
     for (column, name) in headers.iter().enumerate() {
         slk.push_str(&format!("C;X{};Y1;K\"{name}\"\r\n", column + 1));
@@ -2192,7 +2290,10 @@ fn holy_tables() -> DefaultTables {
             install: source().install,
             edition_version: "fixture".into(),
         },
-        &[(SlkId::AbilityData.path(), slk.as_bytes())],
+        &[
+            (SlkId::AbilityData.path(), slk.as_bytes()),
+            (SlkId::AbilityMetaData.path(), &metadata),
+        ],
         &[(
             "Units\\HumanAbilityFunc.txt",
             format!("{profile}\r\n[AHwe]\r\nOrder=gamma\r\nHotkey=W\r\n").as_bytes(),
@@ -2345,6 +2446,26 @@ fn holy_open_with_model(
     art_end_ms: u32,
     model: Option<Arc<crate::unit_model::Model>>,
 ) -> (Vm, [HandleId; 4]) {
+    holy_open_with_inputs(
+        types,
+        abilities,
+        heroes,
+        art_end_ms,
+        model,
+        holy_tables(),
+        Default::default(),
+    )
+}
+
+fn holy_open_with_inputs(
+    types: &str,
+    abilities: &str,
+    heroes: &str,
+    art_end_ms: u32,
+    model: Option<Arc<crate::unit_model::Model>>,
+    tables: DefaultTables,
+    overlay: pcx_objects::editor::Overlay,
+) -> (Vm, [HandleId; 4]) {
     let mut fields = hero_fields("STR");
     fields.push(column(
         b"Smp0",
@@ -2417,18 +2538,19 @@ fn holy_open_with_model(
         edition: "fixture".into(),
         version: "fixture".into(),
     };
+    let hero_budget = crate::playercolor_host::HeroBudget {
+        abilities_per_unit: 8,
+        overlay_objects: overlay.mods.len() + overlay.custom.len(),
+        modifications_per_ability: overlay
+            .mods
+            .values()
+            .chain(overlay.custom.values().map(|(_, mods)| mods))
+            .map(Vec::len)
+            .max()
+            .unwrap_or(0),
+    };
     h = h
-        .with_hero_skills(
-            holy_tables(),
-            origin,
-            Default::default(),
-            hero_rules().0,
-            crate::playercolor_host::HeroBudget {
-                abilities_per_unit: 8,
-                overlay_objects: 0,
-                modifications_per_ability: 0,
-            },
-        )
+        .with_hero_skills(tables, origin, overlay, hero_rules().0, hero_budget)
         .unwrap();
     h.admit_unit_activity(activity, 65536).unwrap();
     h.native("SetRandomSeed", &[Value::Int(7)]).unwrap();
@@ -2521,6 +2643,205 @@ fn holy_light_heals_a_friendly_living_unit_and_waits_out_its_cooldown() {
     );
     assert!(holy_cast(&mut vm, h, f));
     assert_eq!(holy_life(&mut vm, f), 500.0);
+}
+
+#[test]
+fn holy_fractional_source_cells_reach_range_healing_and_cooldown_without_truncation() {
+    let tables = holy_tables_with(&[("Cool1", "1.25"), ("Rng1", "31.5"), ("DataA1", "20.25")]);
+    let (mut vm, [caster, target, _, _]) = holy_open_with_inputs(
+        "",
+        LEARNED,
+        NOTHING,
+        HOLY_ART_END_MS,
+        None,
+        tables,
+        Default::default(),
+    );
+    vm.call("prime", &[]).unwrap();
+    assert!(holy_cast(&mut vm, caster, target));
+    assert_eq!(
+        holy_life(&mut vm, target),
+        100.,
+        "32 units is outside the fractional range"
+    );
+    assert_eq!(holy_mana(&mut vm, caster), 200.);
+    let owner = vm.host().inner.executed_unit(caster).unwrap().owner;
+    let target = match vm
+        .host()
+        .inner
+        .native(
+            "CreateUnit",
+            &[
+                Value::Handle(owner),
+                Value::Int(i32::from_be_bytes(*b"u001")),
+                Value::Real(47.5),
+                Value::Real(16.),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap()
+    {
+        Value::Handle(unit) => unit,
+        other => panic!("fractional target: {other:?}"),
+    };
+    let life_state = vm.global("UNIT_STATE_LIFE");
+    vm.host()
+        .inner
+        .native(
+            "SetUnitState",
+            &[Value::Handle(target), life_state, Value::Real(100.)],
+        )
+        .unwrap();
+    assert!(holy_cast(&mut vm, caster, target));
+    assert_eq!(holy_life(&mut vm, target), 120.25);
+    assert_eq!(holy_mana(&mut vm, caster), 135.);
+    assert_eq!(
+        vm.host()
+            .inner
+            .holy_light_readiness(caster)
+            .unwrap()
+            .unwrap()
+            .cooldown_remaining,
+        1.25
+    );
+    step(&mut vm, 1.0);
+    assert!(!holy_cast(&mut vm, caster, target));
+    step(&mut vm, 1.25);
+    assert!(holy_cast(&mut vm, caster, target));
+    assert_eq!(holy_life(&mut vm, target), 140.5);
+}
+
+#[test]
+fn holy_nonfinite_and_negative_source_cells_refuse_before_effects_or_payment() {
+    for (column, value) in [
+        ("Cool1", "NaN"),
+        ("Rng1", "inf"),
+        ("DataA1", "-1"),
+        ("Cost1", "-1"),
+        ("Cost1", "2147483648"),
+    ] {
+        let tables = holy_tables_with(&[(column, value)]);
+        let (mut vm, [caster, target, _, _]) = holy_open_with_inputs(
+            "",
+            LEARNED,
+            NOTHING,
+            HOLY_ART_END_MS,
+            None,
+            tables,
+            Default::default(),
+        );
+        vm.call("prime", &[]).unwrap();
+        assert!(
+            vm.host().inner.holy_light_readiness(caster).is_err(),
+            "{column}"
+        );
+        assert!(
+            vm.host()
+                .inner
+                .native(
+                    "IssueTargetOrder",
+                    &[
+                        Value::Handle(caster),
+                        Value::Str("alpha".into()),
+                        Value::Handle(target)
+                    ]
+                )
+                .is_err(),
+            "{column}"
+        );
+        assert_eq!(holy_life(&mut vm, target), 100.);
+        assert_eq!(holy_mana(&mut vm, caster), 200.);
+    }
+}
+
+#[test]
+fn holy_ranked_map_edits_use_metadata_types_and_leave_other_ranks_authored() {
+    let mut overlay = pcx_objects::editor::Overlay::default();
+    let real = |field, value_type, value| pcx_objects::Mod {
+        field,
+        value_type,
+        selectors: Some([1, 0]),
+        value: pcx_objects::Value::Real(value),
+        end_word: 0,
+    };
+    overlay.mods.insert(
+        "AHhb".into(),
+        vec![
+            real(*b"fCoo", pcx_objects::ValueType::Unreal, 1.5),
+            real(*b"fRng", pcx_objects::ValueType::Unreal, 32.5),
+            real(*b"fAmt", pcx_objects::ValueType::Real, 20.25),
+            pcx_objects::Mod {
+                field: *b"fCos",
+                value_type: pcx_objects::ValueType::Int,
+                selectors: Some([1, 0]),
+                value: pcx_objects::Value::Int(7),
+                end_word: 0,
+            },
+        ],
+    );
+    let (mut vm, [caster, target, _, _]) = holy_open_with_inputs(
+        "",
+        UNLEARNED,
+        LEARNABLE,
+        HOLY_ART_END_MS,
+        None,
+        holy_tables(),
+        overlay,
+    );
+    holy_learn(&mut vm, holy_code());
+    vm.call("prime", &[]).unwrap();
+    assert!(holy_cast(&mut vm, caster, target));
+    assert_eq!(holy_life(&mut vm, target), 120.25);
+    assert_eq!(holy_mana(&mut vm, caster), 193.);
+    assert_eq!(
+        vm.host()
+            .inner
+            .holy_light_readiness(caster)
+            .unwrap()
+            .unwrap()
+            .cooldown_remaining,
+        1.5
+    );
+    vm.host()
+        .inner
+        .native(
+            "SetHeroLevel",
+            &[Value::Handle(caster), Value::Int(3), Value::Bool(false)],
+        )
+        .unwrap();
+    vm.call("learn", &[Value::Int(holy_code())]).unwrap();
+    assert_eq!(
+        vm.host()
+            .inner
+            .executed_unit(caster)
+            .unwrap()
+            .abilities
+            .as_ref()
+            .unwrap()
+            .level(*b"AHhb"),
+        2
+    );
+    step(&mut vm, 1.5);
+    assert_eq!(
+        vm.host()
+            .inner
+            .holy_light_readiness(caster)
+            .unwrap()
+            .unwrap()
+            .mana_cost,
+        65.
+    );
+    assert!(holy_cast(&mut vm, caster, target));
+    assert_eq!(holy_life(&mut vm, target), 520.25);
+    assert_eq!(
+        vm.host()
+            .inner
+            .holy_light_readiness(caster)
+            .unwrap()
+            .unwrap()
+            .cooldown_remaining,
+        5.
+    );
 }
 
 #[test]
