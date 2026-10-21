@@ -9,6 +9,7 @@ pub(crate) struct CachedUnit {
     pub edition: String,
     pub hero: Option<[i32; 2]>,
     pub abilities: Vec<([u8; 4], i32)>,
+    pub cooldowns: Vec<([u8; 4], i32, u32)>,
     pub permanent_strength: i32,
     /// Life, maximum life, mana, maximum mana as exact f32 bits.
     pub pools: [u32; 4],
@@ -41,6 +42,19 @@ impl CachedUnit {
                 .is_some_and(|[level, points]| level < 0 || points < 0)
             || self.abilities.iter().any(|(_, level)| *level < 0)
             || self.abilities.windows(2).any(|a| a[0].0 >= a[1].0)
+            || self.cooldowns.iter().any(|(alias, rank, bits)| {
+                *rank < 1
+                    || !self
+                        .abilities
+                        .iter()
+                        .any(|(a, level)| a == alias && *level > 0)
+                    || !f32::from_bits(*bits).is_finite()
+                    || f32::from_bits(*bits) < 0.0
+            })
+            || self
+                .cooldowns
+                .windows(2)
+                .any(|a| (a[0].0, a[0].1) >= (a[1].0, a[1].1))
             || self.items.iter().any(|item| item.charges < 0)
             || self.items.windows(2).any(|a| a[0].slot >= a[1].slot)
         {
@@ -55,7 +69,7 @@ impl CachedUnit {
             bytes: Vec::new(),
             limit,
         };
-        out.bytes(b"PC3UNIT\x01")?;
+        out.bytes(b"PC3UNIT\x02")?;
         out.bytes(&self.rawcode)?;
         out.bytes(&self.client_sha256)?;
         out.text(&self.install)?;
@@ -84,6 +98,12 @@ impl CachedUnit {
                 out.bytes(&[flag.map_or(0, |v| if v { 2 } else { 1 })])?;
             }
         }
+        out.number(self.cooldowns.len())?;
+        for (alias, rank, bits) in &self.cooldowns {
+            out.bytes(alias)?;
+            out.bytes(&rank.to_le_bytes())?;
+            out.bytes(&bits.to_le_bytes())?;
+        }
         Ok(out.bytes)
     }
 
@@ -92,9 +112,11 @@ impl CachedUnit {
             return Err("cached unit byte policy exceeded".into());
         }
         let mut input = Reader { bytes, cursor: 0 };
-        if input.take(8)? != b"PC3UNIT\x01" {
-            return Err("unsupported cached unit format/version".into());
-        }
+        let version = match input.take(8)? {
+            b"PC3UNIT\x01" => 1,
+            b"PC3UNIT\x02" => 2,
+            _ => return Err("unsupported cached unit format/version".into()),
+        };
         let rawcode = input.take(4)?.try_into().expect("four bytes");
         let client_sha256 = input.take(32)?.try_into().expect("SHA-256 bytes");
         let install = input.text(limit)?;
@@ -151,6 +173,23 @@ impl CachedUnit {
                 flags,
             });
         }
+        let mut cooldowns = Vec::new();
+        if version >= 2 {
+            let count = input.number()?;
+            if count > (bytes.len() - input.cursor) / 12 {
+                return Err("truncated cached cooldowns".into());
+            }
+            cooldowns
+                .try_reserve_exact(count)
+                .map_err(|_| "cached cooldown allocation failed")?;
+            for _ in 0..count {
+                cooldowns.push((
+                    input.take(4)?.try_into().expect("four bytes"),
+                    integer(&mut input)?,
+                    u32::from_le_bytes(input.take(4)?.try_into().expect("four bytes")),
+                ));
+            }
+        }
         if input.cursor != bytes.len() {
             return Err("trailing cached unit bytes".into());
         }
@@ -161,6 +200,7 @@ impl CachedUnit {
             edition,
             hero,
             abilities,
+            cooldowns,
             permanent_strength,
             pools,
             items,
@@ -187,6 +227,7 @@ pub(super) mod tests {
             edition: "fixture".into(),
             hero: Some([3, 1]),
             abilities: vec![(*b"A001", 2)],
+            cooldowns: vec![(*b"A001", 2, 1.25f32.to_bits())],
             permanent_strength: 7,
             pools: [123.5f32, 750., 0., 50.].map(f32::to_bits),
             items: vec![CachedItem {
@@ -197,6 +238,25 @@ pub(super) mod tests {
             }],
         }
     }
+    #[test]
+    fn old_unit_payloads_still_decode_and_cooldown_records_are_validated() {
+        let mut saved = fixture();
+        saved.cooldowns.clear();
+        let mut old = saved.encode(1024).unwrap();
+        old[7] = 1;
+        old.truncate(old.len() - 4); // Version one ended immediately after inventory.
+        assert_eq!(CachedUnit::decode(&old, 1024).unwrap(), saved);
+        for cooldowns in [
+            vec![(*b"A001", 0, 1f32.to_bits())],
+            vec![(*b"A001", 1, f32::NAN.to_bits())],
+            vec![(*b"B001", 1, 1f32.to_bits())],
+            vec![(*b"A001", 1, 1f32.to_bits()); 2],
+        ] {
+            saved.cooldowns = cooldowns;
+            assert!(saved.encode(1024).is_err());
+        }
+    }
+
     #[test]
     fn unit_snapshot_roundtrip_is_bounded_and_rejects_truncation_and_invalid_progress() {
         let saved = fixture();

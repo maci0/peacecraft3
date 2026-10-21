@@ -217,7 +217,7 @@ impl ObjectHost {
         Ok(Some(Spell {
             cost,
             area: number("Area", FieldKind::Unreal)? as f32,
-            cooldown: number("Cool", FieldKind::Unreal)?,
+            cooldown: f64::from(self.ability_cooldown_duration(caster, ABILITY, rank)?),
             duration,
             count,
             unit,

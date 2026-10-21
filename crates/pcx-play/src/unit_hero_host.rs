@@ -66,6 +66,7 @@ mod cached_tests {
                 skill_points: 1,
             }),
             levels: vec![(*b"B001", 1)],
+            cooldowns: vec![],
             learnable: vec![Skill {
                 alias: *b"A001",
                 maximum: 3,
@@ -81,6 +82,7 @@ mod cached_tests {
             edition: "fixture".into(),
             hero: Some([3, 1]),
             abilities: vec![(*b"A001", 2), (*b"B001", 1)],
+            cooldowns: vec![(*b"A001", 2, 1.125f32.to_bits())],
             permanent_strength: 0,
             pools: [5f32, 10., 1., 2.].map(f32::to_bits),
             items: vec![],
@@ -88,6 +90,7 @@ mod cached_tests {
         let mut restored = original.clone();
         restored.restore_cached(&saved, &rules, budget).unwrap();
         assert_eq!(restored.level(*b"A001"), 2);
+        assert_eq!(restored.cooldowns, saved.cooldowns);
         assert_eq!(
             restored.hero,
             Some(HeroProgress {
@@ -143,8 +146,13 @@ pub struct UnitAbilities {
     pub hero: Option<HeroProgress>,
     levels: Vec<([u8; 4], i32)>,
     learnable: Vec<Skill>,
+    /// Per-unit, one-based rank overrides; durations retain their exact f32 bits.
+    pub(super) cooldowns: Vec<([u8; 4], i32, u32)>,
 }
 impl UnitAbilities {
+    pub(crate) fn cooldowns(&self) -> &[([u8; 4], i32, u32)] {
+        &self.cooldowns
+    }
     pub fn levels(&self) -> impl Iterator<Item = ([u8; 4], i32)> + '_ {
         self.levels.iter().copied()
     }
@@ -212,6 +220,7 @@ impl UnitAbilities {
         let mut candidate = self.clone();
         candidate.levels = levels;
         candidate.hero = hero;
+        candidate.cooldowns = saved.cooldowns.clone();
         let capacity = candidate.capacity()?;
         if candidate
             .hero
@@ -237,7 +246,7 @@ pub(super) struct Admission {
     ability: bool,
     /// Admitted `GetHeroStr`, `GetHeroAgi`, `GetHeroInt` in `ATTRIBUTES` order.
     attributes: [bool; 3],
-    cooldown_natives: [bool; 2],
+    cooldown_natives: [bool; 4],
 }
 
 impl ObjectHost {
@@ -252,6 +261,17 @@ impl ObjectHost {
             .heroes
             .as_ref()
             .ok_or_else(|| fail("cached ability rules missing"))?;
+        for (alias, rank, _) in &saved.cooldowns {
+            if *rank
+                > input
+                    .number(*alias, "levels")
+                    .map_err(|e| self.hero_error("RestoreUnit", e))?
+            {
+                return Err(fail("cached cooldown rank exceeds current source levels"));
+            }
+            self.hero_ability_level_cell(*alias, "Cool", *rank, FieldKind::Unreal)
+                .map_err(|e| self.hero_error("RestoreUnit", e))?;
+        }
         state
             .restore_cached(saved, &input.rules, input.budget)
             .map_err(|detail| self.hero_error("RestoreUnit", detail))
@@ -360,17 +380,10 @@ impl ObjectHost {
                 }
             }
         }
-        let mut cooldown_natives = [false; 2];
-        for (index, (name, result)) in cooldown::NATIVES.into_iter().enumerate() {
+        let mut cooldown_natives = [false; 4];
+        for (index, (name, params, result)) in cooldown::NATIVES.into_iter().enumerate() {
             if let Some(native) = self.inner.program.natives().get(name) {
-                Self::contract(
-                    &self.inner,
-                    name,
-                    &["unit", "integer"],
-                    result,
-                    false,
-                    Some(KIND),
-                )?;
+                Self::contract(&self.inner, name, params, result, false, Some(KIND))?;
                 if native.source != units.declaration_source {
                     return Err(self.inner.error(name, Failure::Source));
                 }
@@ -405,6 +418,7 @@ impl ObjectHost {
                 hero: None,
                 levels: Vec::new(),
                 learnable: Vec::new(),
+                cooldowns: Vec::new(),
             };
             for alias in ability_list(definition, "abilList", input.budget.abilities_per_unit)? {
                 // Resolve the same alias even when a custom row shares a stock code.
@@ -497,7 +511,7 @@ impl ObjectHost {
         let input = self.units.as_ref()?.heroes.as_ref()?;
         if let Some(index) = cooldown::NATIVES
             .iter()
-            .position(|(native, _)| *native == name)
+            .position(|(native, _, _)| *native == name)
         {
             return input.cooldown_natives[index].then(|| self.ability_cooldown_call(name, args));
         }

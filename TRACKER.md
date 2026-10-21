@@ -2,6 +2,12 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] Per-unit cooldown duration get/set is connected to the two implemented
+  spell classes, preserving active deadlines and recreation unit-cache state.
+  Selected-client wrappers use one-based levels. Core/app suites, selected
+  Human01 rank checks, strict Clippy and affected WASM checks pass; other classes,
+  whole-unit reset, and native timing/cache parity remain open.
+
 ### 2026-10-22: Learned command buttons
 
 - [~] Holy Light and Water Elemental have a receipt-bound command-card renderer
