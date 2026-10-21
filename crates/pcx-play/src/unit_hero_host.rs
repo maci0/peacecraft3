@@ -246,7 +246,7 @@ pub(super) struct Admission {
     ability: bool,
     /// Admitted `GetHeroStr`, `GetHeroAgi`, `GetHeroInt` in `ATTRIBUTES` order.
     attributes: [bool; 3],
-    cooldown_natives: [bool; 4],
+    cooldown_natives: [bool; cooldown::NATIVES.len()],
 }
 
 impl ObjectHost {
@@ -380,10 +380,17 @@ impl ObjectHost {
                 }
             }
         }
-        let mut cooldown_natives = [false; 4];
+        let mut cooldown_natives = [false; cooldown::NATIVES.len()];
         for (index, (name, params, result)) in cooldown::NATIVES.into_iter().enumerate() {
             if let Some(native) = self.inner.program.natives().get(name) {
-                Self::contract(&self.inner, name, params, result, false, Some(KIND))?;
+                Self::contract(
+                    &self.inner,
+                    name,
+                    params,
+                    result,
+                    false,
+                    params.contains(&KIND).then_some(KIND),
+                )?;
                 if native.source != units.declaration_source {
                     return Err(self.inner.error(name, Failure::Source));
                 }

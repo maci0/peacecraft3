@@ -830,6 +830,14 @@ mod tests {
                     Value::Int(rank),
                 ];
                 let original_duration = number(&format!("Cool{rank}")) as f32;
+                let source_duration_args =
+                    [Value::Int(i32::from_be_bytes(ability)), Value::Int(rank)];
+                assert_eq!(
+                    objects
+                        .native("BlzGetAbilityCooldown", &source_duration_args)
+                        .unwrap(),
+                    Value::Real(original_duration)
+                );
                 assert_eq!(
                     objects
                         .native("BlzGetUnitAbilityCooldown", &duration_args)
@@ -841,6 +849,12 @@ mod tests {
                 objects
                     .native("BlzSetUnitAbilityCooldown", &duration_set)
                     .unwrap();
+                assert_eq!(
+                    objects
+                        .native("BlzGetAbilityCooldown", &source_duration_args)
+                        .unwrap(),
+                    Value::Real(original_duration)
+                );
                 assert_eq!(
                     objects
                         .native("BlzGetUnitAbilityCooldown", &duration_args)

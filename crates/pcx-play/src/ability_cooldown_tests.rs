@@ -1,5 +1,124 @@
 use super::*;
 
+fn source_duration(vm: &mut Vm, ability: [u8; 4], rank: i32) -> f32 {
+    match vm
+        .call(
+            "source_cd",
+            &[Value::Int(i32::from_be_bytes(ability)), Value::Int(rank)],
+        )
+        .unwrap()
+    {
+        Value::Real(value) => value,
+        other => panic!("source duration: {other:?}"),
+    }
+}
+
+#[test]
+fn global_duration_uses_source_rows_without_learning_units_or_cast_admission() {
+    let (mut vm, units) = holy_open("", UNLEARNED, NOTHING);
+    for unit in units {
+        vm.host()
+            .inner
+            .native("RemoveUnit", &[Value::Handle(unit)])
+            .unwrap();
+    }
+    for (rank, expected) in [(1, 2.5), (2, 4.5), (3, 6.5)] {
+        assert_eq!(source_duration(&mut vm, *b"AHwe", rank), expected);
+    }
+    assert_eq!(source_duration(&mut vm, *b"Yher", 1), 0.);
+    for alias in [*b"NONE", *b"ahhb", [255, 0, 0, 0]] {
+        assert_eq!(source_duration(&mut vm, alias, 1), 0.);
+    }
+    assert_eq!(source_duration(&mut vm, *b"AHhb", -1), 0.);
+    assert_eq!(source_duration(&mut vm, *b"AHhb", 4), 0.);
+}
+
+#[test]
+fn global_duration_is_independent_of_unit_overrides_and_active_deadlines() {
+    let (mut vm, [caster, target, _, _]) = holy_open("", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    assert!(holy_cast(&mut vm, caster, target));
+    set_duration(&mut vm, caster, *b"AHhb", 1, 1.125);
+    let clock = vm.host().inner.timer_game_time();
+    let random = vm.host().inner.script_random_state().cloned();
+    let mana = holy_mana(&mut vm, caster);
+    for _ in 0..8 {
+        assert_eq!(source_duration(&mut vm, *b"AHhb", 1), 5.);
+    }
+    assert_eq!(duration(&mut vm, caster, *b"AHhb", 1), 1.125);
+    assert_eq!(remaining(&mut vm, caster, *b"AHhb"), 5.);
+    assert_eq!(vm.host().inner.timer_game_time(), clock);
+    assert_eq!(vm.host().inner.script_random_state().cloned(), random);
+    assert_eq!(holy_mana(&mut vm, caster), mana);
+    for args in [
+        vec![],
+        vec![Value::Int(holy_code()), Value::Int(0)],
+        vec![Value::Handle(caster), Value::Int(1)],
+    ] {
+        assert!(
+            vm.host()
+                .inner
+                .native("BlzGetAbilityCooldown", &args)
+                .is_err()
+        );
+    }
+    assert_eq!(remaining(&mut vm, caster, *b"AHhb"), 5.);
+}
+
+#[test]
+fn global_duration_applies_typed_ranked_map_edits_and_custom_aliases() {
+    let edit = |rank, value| pcx_objects::Mod {
+        field: *b"fCoo",
+        value_type: pcx_objects::ValueType::Unreal,
+        selectors: Some([rank, 0]),
+        value: pcx_objects::Value::Real(value),
+        end_word: 0,
+    };
+    let mut overlay = pcx_objects::editor::Overlay::default();
+    overlay.mods.insert("AHhb".into(), vec![edit(2, 1.75)]);
+    overlay
+        .custom
+        .insert("A001".into(), ("AHwe".into(), vec![edit(1, 9.125)]));
+    let (mut vm, _) = holy_open_with_inputs(
+        "",
+        LEARNED,
+        NOTHING,
+        HOLY_ART_END_MS,
+        None,
+        holy_tables(),
+        overlay,
+    );
+    assert_eq!(source_duration(&mut vm, *b"AHhb", 1), 5.);
+    assert_eq!(source_duration(&mut vm, *b"AHhb", 2), 1.75);
+    assert_eq!(source_duration(&mut vm, *b"AHwe", 1), 2.5);
+    assert_eq!(source_duration(&mut vm, *b"A001", 1), 9.125);
+    assert_eq!(source_duration(&mut vm, *b"A001", 2), 4.5);
+}
+
+#[test]
+fn malformed_global_duration_rows_refuse_instead_of_becoming_zero() {
+    for text in ["garbage", "NaN", "-1"] {
+        let (mut vm, _) = holy_open_with_inputs(
+            "",
+            LEARNED,
+            NOTHING,
+            HOLY_ART_END_MS,
+            None,
+            holy_tables_with(&[("Cool1", text)]),
+            Default::default(),
+        );
+        let err = vm
+            .host()
+            .inner
+            .native(
+                "BlzGetAbilityCooldown",
+                &[Value::Int(holy_code()), Value::Int(1)],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("BlzGetAbilityCooldown"), "{err}");
+    }
+}
+
 fn duration(vm: &mut Vm, unit: HandleId, ability: [u8; 4], rank: i32) -> f32 {
     match vm
         .call(

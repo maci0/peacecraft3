@@ -2,6 +2,11 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] Global `BlzGetAbilityCooldown` reads admitted source/map-edited durations,
+  independently of learned units and live overrides. Core/app, selected-install,
+  strict Clippy and affected WASM checks pass. Native level-zero indexing remains
+  unqualified and refuses explicitly.
+
 - [~] Per-unit cooldown duration get/set is connected to the two implemented
   spell classes, preserving active deadlines and recreation unit-cache state.
   Selected-client wrappers use one-based levels. Core/app suites, selected

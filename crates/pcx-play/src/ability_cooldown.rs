@@ -1,7 +1,7 @@
 //! Script cooldown controls share the implemented casts' configuration and deadlines.
 use super::*;
 
-pub(super) const NATIVES: [(&str, &[&str], &str); 4] = [
+pub(super) const NATIVES: [(&str, &[&str], &str); 5] = [
     (
         "BlzGetUnitAbilityCooldownRemaining",
         &["unit", "integer"],
@@ -18,6 +18,7 @@ pub(super) const NATIVES: [(&str, &[&str], &str); 4] = [
         &["unit", "integer", "integer", "real"],
         "nothing",
     ),
+    ("BlzGetAbilityCooldown", &["integer", "integer"], "real"),
 ];
 
 impl ObjectHost {
@@ -63,6 +64,9 @@ impl ObjectHost {
         args: &[Value],
     ) -> Result<Value, Error> {
         let fail = |detail: &str| self.hero_error(name, detail.into());
+        if name == NATIVES[4].0 {
+            return self.global_ability_cooldown(args);
+        }
         if name == NATIVES[2].0 || name == NATIVES[3].0 {
             return self.ability_cooldown_duration_call(name, args);
         }
@@ -151,14 +155,51 @@ impl ObjectHost {
         {
             return Ok(f32::from_bits(bits));
         }
-        let raw = self
-            .hero_ability_level_cell(ability, "Cool", rank, FieldKind::Unreal)
-            .map_err(fail)?;
-        let value = raw.parse::<f32>().map_err(|e| fail(e.to_string()))?;
+        self.ability_source_cooldown(ability, rank).map_err(fail)
+    }
+
+    fn ability_source_cooldown(&self, ability: [u8; 4], rank: i32) -> Result<f32, String> {
+        let raw = self.hero_ability_level_cell(ability, "Cool", rank, FieldKind::Unreal)?;
+        let value = raw.parse::<f32>().map_err(|e| e.to_string())?;
         if !value.is_finite() || value < 0.0 {
-            return Err(fail("cooldown must be finite and nonnegative".into()));
+            return Err("cooldown must be finite and nonnegative".into());
         }
         Ok(value)
+    }
+
+    fn global_ability_cooldown(&self, args: &[Value]) -> Result<Value, Error> {
+        let name = NATIVES[4].0;
+        let fail = |detail| self.hero_error(name, detail);
+        let [Value::Int(ability), Value::Int(rank)] = args else {
+            return Err(fail("ability rawcode and one-based level required".into()));
+        };
+        let ability = ability.to_be_bytes();
+        let Ok(alias) = std::str::from_utf8(&ability) else {
+            return Ok(Value::Real(0.0));
+        };
+        let input = self.heroes_admission().map_err(fail)?;
+        let custom = input.overlay.new_object(alias);
+        let base = custom.map_or(alias, |(base, _)| base);
+        if custom.is_none()
+            && !input
+                .tables
+                .object(Family::Ability, base)
+                .is_ok_and(|row| row.rawcode() == base)
+        {
+            return Ok(Value::Real(0.0));
+        }
+        let maximum = input.number(ability, "levels").map_err(fail)?;
+        if *rank < 0 || *rank > maximum {
+            return Ok(Value::Real(0.0));
+        }
+        if *rank == 0 {
+            return Err(fail(
+                "level zero uses an unqualified native row index".into(),
+            ));
+        }
+        self.ability_source_cooldown(ability, *rank)
+            .map(Value::Real)
+            .map_err(fail)
     }
 
     fn ability_cooldown_duration_call(
@@ -226,7 +267,6 @@ impl ObjectHost {
         if !value.is_finite() || value < 0.0 {
             return Err(fail("negative/nonfinite duration behavior is not admitted"));
         }
-        let error = fail("cooldown override allocation failed");
         let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
             unreachable!()
         };
@@ -237,7 +277,9 @@ impl ObjectHost {
         {
             *bits = value.to_bits();
         } else {
-            overrides.try_reserve(1).map_err(|_| error)?;
+            if overrides.try_reserve(1).is_err() {
+                return Err(self.hero_error(name, "cooldown override allocation failed".into()));
+            }
             overrides.push((ability, *rank, value.to_bits()));
             overrides.sort_unstable_by_key(|(alias, rank, _)| (*alias, *rank));
         }

@@ -277,9 +277,9 @@ Clippy, WASM and native app tests pass. Receipts are local under
 `.scratch/command-readiness/`. No new F7 rows or button states are published by
 this core checkpoint. The subsequent fractional-field change replaces Holy
 Light's older integer-only read (see `holy-light-ability.md`).
-The selected `common.j` declares ability cooldown natives; the remaining/end
-bindings below cover the two implemented spell classes. Other cooldown operations
-remain open.
+The selected `common.j` declares ability cooldown natives. Live remaining/end and
+unit-duration bindings below cover the two implemented spell classes; the global
+source query also reads other admitted rows without requiring a cast implementation.
 
 ## Script cooldown remaining/end (2026-10-22)
 
@@ -309,9 +309,8 @@ cooldown does not refund mana or undo an effect. The original Human01 host gate
 also checks both declared bindings against actual learned ranks, but it does
 not establish original-client timer parity.
 
-Still open: `BlzGetAbilityCooldown`, other ability classes and item transfer/group
-timing. The global duration getter's level-zero path is
-not qualified here.
+Other live ability classes and item transfer/group timing remain open. The
+global duration getter's level-zero path is not qualified here.
 
 `UnitResetCooldown` now clears all currently modeled deadlines for one unit,
 including the holder's item groups; configured durations are preserved. Its
@@ -361,6 +360,41 @@ next cast, unchanged active deadlines, and a pending summon's cast-point read.
 Cache tests cover exact override bits, restore, old-version decoding, truncated
 records and malformed/duplicate overrides. These are recreation host and parser
 checks; no new original-client timer/cache or rendered capture is claimed.
+
+### Global source duration
+
+`BlzGetAbilityCooldown` is now admitted from the same selected declaration source
+with its integer/integer-to-real signature. Unlike the unit APIs, it reads the
+ability's source/default `Cool` cell with the map's typed ranked modifications,
+including a custom alias's base row. It never reads a unit's configured duration
+or active deadline, and it does not require learning or a supported cast class.
+Its tables still must have been admitted; this is not executable discovery or a
+fallback to another install.
+
+Static primary registration `0x4a181f` selects `0x490c60` in the selected
+1.29.2.9231 image. The handler looks up the ability data with `0x6aefb0`, returns
+zero for absence or an unsigned out-of-range level, subtracts one from an accepted
+level and reads the duration cell. This supports one-based positive levels and
+zero for negative/above-count levels, not another version's indexing convention.
+For a present row, level zero reaches an unqualified preceding-row index; the
+recreation refuses it explicitly. Missing identifiers return zero, whereas
+malformed/unsupported source cells report their source error instead of being
+converted into a fake zero. Physical cell resolution and supported typed map
+selector rules are the same as the existing cast/default reader.
+
+Synthetic checks cover unlearned/no-live-unit queries, a class without admitted
+cast behavior, exact ranked map edits, a custom alias, unknown identifiers,
+bad arguments/levels and malformed cells. Repeated queries leave the game clock,
+RNG, mana, unit override and active cooldown unchanged. The installed Human01
+gate compares the global value with the actual source row at each learned rank,
+including after a unit-only duration mutation. These host/source checks are not
+an original-client runtime comparison; active registrar and rendered parity stay
+separate. Private receipts are under `.scratch/global-cooldown/`.
+
+Private-target checks pass: 1,112 core tests (31 ignored), 589 app binary tests
+with `test-fixtures` (51 ignored), the installed Human01 every-rank source/unit
+query gate, strict affected all-target Clippy, affected native/WASM compilation,
+and formatting. No new original-client runtime or rendered capture was made.
 
 Private-target checks pass: 1,097 core tests (31 ignored), 589 feature-enabled
 app binary tests (51 ignored), the explicit installed Human01 rank/binding gate,
