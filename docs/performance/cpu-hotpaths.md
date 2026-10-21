@@ -201,3 +201,27 @@ hotspot conclusions. All raw data and graphs remain local under
 tools are pinned at `41fee1f99f9276008b7cd112fca19dc3ea84ac32`; no original assets
 or captures were uploaded. Full campaign rendering, GPU analysis and native
 lockstep remain open.
+
+## Huffman input buffering
+
+The loading flame graph led to a bounded byte reservoir in the Huffman bit
+reader. Tree traversal now consumes buffered bits instead of indexing the
+compressed input for every bit. The reservoir holds at most fifteen bits and
+loads one byte only when needed; it never reads past the input slice. Tree
+weights still come from the imported codec image, and tree construction,
+adaptive updates, output limits and the public decoder API are unchanged.
+
+A synthetic differential test compares mixed-width reads with the former
+bitwise method across every byte value, byte offset, read width and truncated
+prefix of its four-byte fixtures. The codec suite passes 76 tests, strict
+profiling-enabled Clippy and WASM checks pass, and all 2,716 retained native WAV
+dumps still match decoded bytes. The dump SHA-256 manifest also verifies. These
+dumps are from compatibility Storm under Wine, not Legacy-runtime PCM or audible
+output evidence.
+
+Two alternating baseline/candidate Human03 runs preserve the unit/RNG projection.
+User-mode instruction counts are 27,761,163,231 / 27,761,109,383 before and
+27,336,885,834 / 27,337,009,656 after, about 1.5% fewer across startup and 4,096
+ticks. These hardware counters remain report-only. Frozen input hashes, commands,
+logs and state comparisons are local in `huffman-validation/`; no timing gate or
+new claim about rendering, GPU work or native lockstep follows from this change.

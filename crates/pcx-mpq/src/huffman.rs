@@ -465,17 +465,23 @@ impl Tree {
 
 struct Bits<'a> {
     bytes: &'a [u8],
-    bit: usize,
+    buffered: u16,
+    available: usize,
 }
 impl Bits<'_> {
     fn take(&mut self, count: usize) -> Result<usize, HuffmanError> {
-        let mut value = 0;
-        for shift in 0..count {
-            let byte = self.bytes.get(self.bit / 8).ok_or(HuffmanError::Corrupt)?;
-            value |= (((byte >> (self.bit % 8)) & 1) as usize) << shift;
-            self.bit += 1;
+        assert!(count <= 8);
+        // Keep unconsumed bits so tree traversal loads each input byte only once.
+        if self.available < count {
+            let (&byte, remaining) = self.bytes.split_first().ok_or(HuffmanError::Corrupt)?;
+            self.buffered |= u16::from(byte) << self.available;
+            self.available += 8;
+            self.bytes = remaining;
         }
-        Ok(value)
+        let value = self.buffered & ((1 << count) - 1);
+        self.buffered >>= count;
+        self.available -= count;
+        Ok(usize::from(value))
     }
 }
 
@@ -490,7 +496,8 @@ pub fn decompress(
     }
     let mut bits = Bits {
         bytes: body,
-        bit: 0,
+        buffered: 0,
+        available: 0,
     };
     let row = bits.take(8)?;
     let mut tree = Tree::new(&table.rows[row])?;
@@ -693,6 +700,37 @@ pub(crate) mod tests {
         let mut other = bytes;
         other[0x207] = 0x81;
         assert!(HuffmanTable::from_pe(&other, "other.dll").is_err());
+    }
+
+    #[test]
+    fn buffered_reads_match_bitwise_reads_at_byte_boundaries_and_truncation() {
+        for seed in 0..=u8::MAX {
+            let body = [seed, seed.rotate_left(3), !seed, seed.wrapping_mul(37)];
+            for length in 0..=body.len() {
+                for offset in 0..8 {
+                    for width in 1..=8 {
+                        let mut bits = Bits {
+                            bytes: &body[..length],
+                            buffered: 0,
+                            available: 0,
+                        };
+                        let mut position = 0;
+                        for count in [offset, width, 1, 8, width, 1, 8] {
+                            let expected = (0..count).try_fold(0, |value, shift| {
+                                let byte = body[..length].get(position / 8)?;
+                                let bit = (byte >> (position % 8)) & 1;
+                                position += 1;
+                                Some(value | (usize::from(bit) << shift))
+                            });
+                            assert_eq!(bits.take(count).ok(), expected);
+                            if expected.is_none() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
