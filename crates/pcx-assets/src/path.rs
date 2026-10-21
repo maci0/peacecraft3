@@ -19,7 +19,7 @@ impl AssetPath {
         if value.is_empty() {
             return Err(PathError::Empty);
         }
-        let normalized = value.replace('\\', "/");
+        let mut normalized = value.replace('\\', "/");
         if normalized.starts_with('/')
             || normalized.ends_with('/')
             || normalized.chars().any(|c| c.is_control() || c == ':')
@@ -29,7 +29,8 @@ impl AssetPath {
         {
             return Err(PathError::Unsafe { path: value.into() });
         }
-        Ok(Self(normalized.to_ascii_lowercase()))
+        normalized.make_ascii_lowercase();
+        Ok(Self(normalized))
     }
 
     pub fn as_str(&self) -> &str {
