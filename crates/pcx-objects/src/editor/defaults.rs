@@ -945,7 +945,9 @@ impl<'a> Object<'a> {
         })
     }
 
-    fn profile_element(self, key: &str, index: i32, slots: u32) -> Result<Cell<'a>, Refusal> {
+    /// Read a metadata-selected profile element from the original assignment, retaining provenance.
+    /// A negative index or scalar slot count returns the whole assignment.
+    pub fn profile_element(self, key: &str, index: i32, slots: u32) -> Result<Cell<'a>, Refusal> {
         let candidates = self.profile(key);
         let Some(first) = candidates.first() else {
             return Err(Refusal::MissingCell {

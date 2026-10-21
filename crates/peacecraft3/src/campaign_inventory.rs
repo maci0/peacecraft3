@@ -73,10 +73,17 @@ struct InventoryRoot;
 #[derive(Component)]
 struct InventorySlot(usize);
 #[derive(Component, Clone, PartialEq)]
-struct ItemTooltip {
-    name: String,
-    ubertip: String,
+pub(crate) struct ControlTooltip {
+    pub name: String,
+    pub ubertip: String,
 }
+#[derive(Component, Clone, Copy)]
+pub(crate) struct TooltipAnchor {
+    pub rect: SourceRect,
+    pub viewport: [f32; 2],
+}
+#[derive(Component)]
+pub(crate) struct TooltipFailure(pub String);
 #[derive(Clone, Debug, PartialEq)]
 struct ItemCard {
     id: HandleId,
@@ -148,7 +155,7 @@ fn capture(mut state: ResMut<CampaignInventory>) {
 }
 fn capture_press(
     event: On<PointerPress>,
-    slots: Query<(Option<&ItemTooltip>, &InventorySlot)>,
+    slots: Query<(Option<&ControlTooltip>, &InventorySlot)>,
     mut state: ResMut<CampaignInventory>,
     presentation: Option<Res<peacecraft3::campaign_presentation::CampaignPresentation>>,
 ) {
@@ -493,6 +500,10 @@ fn paint(
             .spawn((
                 node(rect, source.rules.viewport),
                 InventorySlot(index),
+                TooltipAnchor {
+                    rect,
+                    viewport: source.rules.viewport,
+                },
                 Hovered::default(),
             ))
             .id();
@@ -505,7 +516,7 @@ fn paint(
                 ImageNode::new(
                     source.images[&(item.art.clone(), source.rules.icon_repeat)].clone(),
                 ),
-                ItemTooltip {
+                ControlTooltip {
                     name: item.name.clone(),
                     ubertip: item.ubertip.clone(),
                 },
@@ -533,6 +544,7 @@ fn project(
         (None, None) => true,
         _ => false,
     } {
+        clear_tooltip(&mut commands, &mut state);
         if let Some(root) = state.root {
             commands.entity(root).try_despawn();
         }
@@ -629,6 +641,19 @@ fn project(
             return Err("inventory awaits exact receipt-bound ConsoleUI parent".into());
         };
         if state.parent != Some(*parent) || state.root.is_none_or(|root| nodes.get(root).is_err()) {
+            for (path, repeat) in [
+                (
+                    source.tooltip_background.clone(),
+                    source.rules.tooltip.background_repeat,
+                ),
+                (
+                    source.tooltip_edge.clone(),
+                    source.rules.tooltip.edge_repeat,
+                ),
+            ] {
+                image(&reader, &path, repeat, &mut source, &mut assets.images)?;
+            }
+            clear_tooltip(&mut commands, &mut state);
             if let Some(root) = state.root {
                 commands.entity(root).try_despawn();
             }
@@ -675,16 +700,6 @@ fn project(
                                 .flatten()
                                 .map(|i| (i.art.clone(), source.rules.icon_repeat)),
                         )
-                        .chain([
-                            (
-                                source.tooltip_background.clone(),
-                                source.rules.tooltip.background_repeat,
-                            ),
-                            (
-                                source.tooltip_edge.clone(),
-                                source.rules.tooltip.edge_repeat,
-                            ),
-                        ])
                         .collect()
                 };
                 for (path, repeat) in paths {
@@ -711,7 +726,7 @@ fn project(
 
 struct TooltipView {
     owner: Entity,
-    record: ItemTooltip,
+    record: ControlTooltip,
     verbose: Option<bool>,
     root: Entity,
     name: Entity,
@@ -719,6 +734,14 @@ struct TooltipView {
     slot: SourceRect,
     width: Option<f32>,
     ready: bool,
+}
+#[derive(Component)]
+struct EmptyTooltipText;
+
+fn clear_tooltip(commands: &mut Commands, state: &mut CampaignInventory) {
+    if let Some(tip) = state.tooltip.take() {
+        commands.entity(tip.root).try_despawn();
+    }
 }
 fn justified(flags: u32) -> Result<bevy::text::Justify, String> {
     match flags & 7 {
@@ -741,6 +764,7 @@ fn text_block(
     if !parsed.unsupported.is_empty() {
         return Err("inventory tooltip contains unsupported substitutions".into());
     }
+    let empty = parsed.spans.iter().all(|span| span.text.trim().is_empty());
     let style = TextFont {
         font: font.into(),
         font_size: bevy::text::FontSize::Vh(height * 100.),
@@ -756,6 +780,9 @@ fn text_block(
             Pickable::IGNORE,
         ))
         .id();
+    if empty {
+        commands.entity(root).insert(EmptyTooltipText);
+    }
     for run in parsed.spans {
         let c = run
             .colour
@@ -768,21 +795,40 @@ fn text_block(
     commands.entity(parent).add_child(root);
     Ok(root)
 }
+type HoveredControls<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static TooltipAnchor,
+        Option<&'static ControlTooltip>,
+        Option<&'static TooltipFailure>,
+        &'static Hovered,
+    ),
+>;
+
 fn refresh_tooltip(
     mut commands: Commands,
     mut state: ResMut<CampaignInventory>,
     camera: Res<CampaignCamera>,
     navigation: Res<crate::menu_screens::Navigation>,
-    hovered: Query<(Entity, &InventorySlot, &ItemTooltip, &Hovered)>,
+    hovered: HoveredControls,
 ) {
     let desired = camera
         .active()
-        .then(|| hovered.iter().find(|(_, _, _, hover)| hover.get()))
+        .then(|| hovered.iter().find(|(_, _, _, _, hover)| hover.get()))
         .flatten();
-    let Some((owner, slot, record, _)) = desired else {
-        if let Some(tip) = state.tooltip.take() {
-            commands.entity(tip.root).try_despawn();
-        }
+    let Some((owner, anchor, record, failure, _)) = desired else {
+        clear_tooltip(&mut commands, &mut state);
+        return;
+    };
+    if let Some(failure) = failure {
+        clear_tooltip(&mut commands, &mut state);
+        state.last_error = Some(format!("control tooltip: {}", failure.0));
+        return;
+    }
+    let Some(record) = record else {
+        clear_tooltip(&mut commands, &mut state);
         return;
     };
     let seed = state
@@ -808,30 +854,32 @@ fn refresh_tooltip(
     {
         return;
     }
-    if let Some(tip) = state.tooltip.take() {
-        commands.entity(tip.root).try_despawn();
-    }
+    clear_tooltip(&mut commands, &mut state);
     let Some(source) = state.source.as_ref() else {
         return;
     };
-    let Some(parent) = state.root else {
+    let Some(parent) = state.parent else {
         return;
     };
+    if anchor.viewport != source.rules.viewport {
+        state.last_error = Some("control tooltip viewport differs from its source style".into());
+        return;
+    }
     let tooltip = &source.rules.tooltip;
+    let root = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+            Visibility::Hidden,
+            ZIndex(1),
+            Pickable::IGNORE,
+        ))
+        .id();
+    commands.entity(parent).add_child(root);
     let result = (|| {
-        let root = commands
-            .spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    flex_direction: FlexDirection::Column,
-                    ..default()
-                },
-                Visibility::Hidden,
-                ZIndex(1),
-                Pickable::IGNORE,
-            ))
-            .id();
-        commands.entity(parent).add_child(root);
         let name = text_block(
             &mut commands,
             root,
@@ -861,7 +909,7 @@ fn refresh_tooltip(
             root,
             name,
             description,
-            slot: source.rules.slot(slot.0)?,
+            slot: anchor.rect,
             width: None,
             ready: false,
         })
@@ -869,8 +917,7 @@ fn refresh_tooltip(
     match result {
         Ok(tip) => {
             debug!(
-                "inventory tooltip slot={} slot_rect={:?} viewport={:?} name={:?} description={} verbose={:?}",
-                slot.0,
+                "control tooltip slot_rect={:?} viewport={:?} name={:?} description={} verbose={:?}",
                 tip.slot,
                 source.rules.viewport,
                 tip.record.name,
@@ -879,7 +926,10 @@ fn refresh_tooltip(
             );
             state.tooltip = Some(tip);
         }
-        Err(error) => state.last_error = Some(error),
+        Err(error) => {
+            commands.entity(root).try_despawn();
+            state.last_error = Some(error);
+        }
     }
 }
 fn relative(rect: crate::fdf::Rect, size: Vec2) -> Node {
@@ -919,7 +969,7 @@ fn tooltip_art(
     let child = commands
         .spawn((
             relative(inner, size),
-            ImageNode::new(background.clone()),
+            ImageNode::new(background.clone()).with_mode(bevy::ui::widget::NodeImageMode::Stretch),
             ZIndex(-1),
             Pickable::IGNORE,
         ))
@@ -956,7 +1006,8 @@ fn tooltip_art(
                 .clone();
             child.insert(MaterialNode(material));
         } else {
-            let mut node = ImageNode::new(edge.clone());
+            let mut node =
+                ImageNode::new(edge.clone()).with_mode(bevy::ui::widget::NodeImageMode::Stretch);
             node.rect = Some(uv);
             child.insert(node);
         }
@@ -976,6 +1027,7 @@ fn measure_tooltip(
     text: Query<(
         &bevy::text::TextLayoutInfo,
         &bevy::ui::ComputedUiRenderTargetInfo,
+        Has<EmptyTooltipText>,
     )>,
     mut assets: TooltipAssets,
 ) {
@@ -987,24 +1039,31 @@ fn measure_tooltip(
         return;
     };
     let result = (|| {
-        let Ok((title, target)) = text.get(tip.name) else {
+        let Ok((title, target, empty)) = text.get(tip.name) else {
             return Ok(());
         };
         let pixels = target.physical_size().as_vec2();
-        if pixels.x <= 0. || pixels.y <= 0. || title.glyphs.is_empty() {
+        if pixels.x <= 0. || pixels.y <= 0. || (!empty && title.glyphs.is_empty()) {
             return Ok(());
         }
         let scale = Vec2::from(source.rules.viewport) / pixels;
-        let name = title.size * scale;
+        let name = if empty {
+            Vec2::ZERO
+        } else {
+            title.size * scale
+        };
         let description = match tip.description {
             Some(entity) => {
-                let Ok((info, _)) = text.get(entity) else {
+                let Ok((info, _, empty)) = text.get(entity) else {
                     return Ok(());
                 };
-                if info.glyphs.is_empty() {
+                if empty {
+                    None
+                } else if info.glyphs.is_empty() {
                     return Ok(());
+                } else {
+                    Some(info.size * scale)
                 }
-                Some(info.size * scale)
             }
             None => None,
         };
@@ -1082,6 +1141,123 @@ fn measure_tooltip(
     }
     state.source = Some(source);
     state.tooltip = Some(tip);
+}
+
+#[cfg(all(test, feature = "test-fixtures"))]
+pub(crate) fn tooltip_component_fixture(
+    app: &mut App,
+    reader: &pcx_assets::Resolver,
+    client: &[u8],
+    origin: AssetIdentity,
+    race: Option<String>,
+    parent: Entity,
+    camera: Entity,
+) {
+    let rules = Rules::reviewed_legacy(client, origin.clone()).unwrap();
+    let seed = tooltip_seed(client, origin, rules.tooltip.preference_index);
+    let mut source = load(
+        reader,
+        rules,
+        seed,
+        Ok(race),
+        &mut app
+            .world_mut()
+            .resource_mut::<bevy::prelude::Assets<Font>>(),
+    )
+    .unwrap();
+    for (path, repeat) in [
+        (
+            source.tooltip_background.clone(),
+            source.rules.tooltip.background_repeat,
+        ),
+        (
+            source.tooltip_edge.clone(),
+            source.rules.tooltip.edge_repeat,
+        ),
+    ] {
+        image(
+            reader,
+            &path,
+            repeat,
+            &mut source,
+            &mut app
+                .world_mut()
+                .resource_mut::<bevy::prelude::Assets<Image>>(),
+        )
+        .unwrap();
+    }
+    bevy::asset::embedded_asset!(app, "glue_backdrop.wgsl");
+    app.add_plugins(UiMaterialPlugin::<crate::glue_menu::BackdropImage>::default())
+        .insert_resource(CampaignInventory {
+            parent: Some(parent),
+            source: Some(source),
+            ..default()
+        })
+        .insert_resource(CampaignCamera::active_for_test(camera))
+        .init_resource::<crate::menu_screens::Navigation>();
+    // Operator preference for this visual check, not a replacement source default.
+    app.world_mut()
+        .resource_mut::<crate::menu_screens::Navigation>()
+        .applied
+        .toggles
+        .insert(TOOLTIP_TOGGLE.into(), true);
+    app.add_systems(Update, refresh_tooltip).add_systems(
+        PostUpdate,
+        (
+            measure_tooltip.after(bevy::ui::UiSystems::PostLayout),
+            |state: Res<CampaignInventory>,
+             windows: Query<&Window>,
+             text: Query<&bevy::text::TextLayoutInfo>,
+             mut previous: Local<Option<(Entity, UVec2)>>| {
+                let Some(tip) = state.tooltip.as_ref().filter(|tip| tip.ready) else {
+                    return;
+                };
+                let window = windows.single().unwrap();
+                let key = (tip.root, window.physical_size());
+                if *previous == Some(key) {
+                    return;
+                }
+                assert!(state.last_error.is_none(), "{:?}", state.last_error);
+                assert!(!text.get(tip.name).unwrap().glyphs.is_empty());
+                assert!(
+                    !text
+                        .get(tip.description.unwrap())
+                        .unwrap()
+                        .glyphs
+                        .is_empty()
+                );
+                println!(
+                    "TOOLTIP_READY width={} height={} expanded=true",
+                    key.1.x, key.1.y
+                );
+                *previous = Some(key);
+            },
+        )
+            .chain(),
+    );
+    app.add_systems(
+        Last,
+        |state: Res<CampaignInventory>,
+         windows: Query<&Window>,
+         hovered: Query<
+            &bevy::picking::hover::Hovered,
+            With<crate::campaign_command_card::ButtonOrder>,
+        >,
+         mut previous: Local<String>| {
+            let window = windows.single().unwrap();
+            let value = format!(
+                "cursor={:?} hovered={:?} tooltip={:?} error={:?}",
+                window.cursor_position(),
+                hovered.iter().map(|hover| hover.get()).collect::<Vec<_>>(),
+                state.tooltip.as_ref().map(|tip| (tip.width, tip.ready)),
+                state.last_error
+            );
+            if *previous != value {
+                println!("TOOLTIP_STATE {value}");
+                *previous = value;
+            }
+        },
+    );
 }
 
 #[cfg(test)]
@@ -1429,15 +1605,78 @@ mod tests {
             let root = app.world_mut().spawn(Node::default()).id();
             let mut state = app.world_mut().resource_mut::<CampaignInventory>();
             state.root = Some(root);
+            state.parent = Some(root);
             state.source = Some(source(seed));
             app
         }
 
+        #[test]
+        fn tooltip_art_fills_the_source_rectangles_instead_of_preserving_image_aspect() {
+            let mut world = World::new();
+            let root = world.spawn_empty().id();
+            let mut source = source(Ok(true));
+            let mut images = bevy::prelude::Assets::<Image>::default();
+            let background = images.add(Image::default());
+            let mut edge = Image::default();
+            edge.resize(bevy::render::render_resource::Extent3d {
+                width: 128,
+                height: 16,
+                depth_or_array_layers: 1,
+            });
+            let edge = images.add(edge);
+            source.images.insert(
+                (
+                    source.tooltip_background.clone(),
+                    source.rules.tooltip.background_repeat,
+                ),
+                background,
+            );
+            source.images.insert(
+                (
+                    source.tooltip_edge.clone(),
+                    source.rules.tooltip.edge_repeat,
+                ),
+                edge,
+            );
+            let mut materials = bevy::prelude::Assets::<crate::glue_menu::BackdropImage>::default();
+            world
+                .run_system_once(move |mut commands: Commands| {
+                    tooltip_art(
+                        &mut commands,
+                        root,
+                        &mut source,
+                        Vec2::new(0.3, 0.12),
+                        &images,
+                        &mut materials,
+                    )
+                })
+                .unwrap()
+                .unwrap();
+            let mut nodes = world.query::<&ImageNode>();
+            let nodes = nodes.iter(&world).collect::<Vec<_>>();
+            assert_eq!(nodes.len(), 7); // Background, four corners and two vertical edges.
+            assert!(
+                nodes.iter().all(|node| matches!(
+                    node.image_mode,
+                    bevy::ui::widget::NodeImageMode::Stretch
+                ))
+            );
+        }
+
         fn spawn_item(app: &mut App, index: usize, name: &str, hovered: bool) -> Entity {
+            let anchor = {
+                let state = app.world().resource::<CampaignInventory>();
+                let source = state.source.as_ref().unwrap();
+                TooltipAnchor {
+                    rect: source.rules.slot(index).unwrap(),
+                    viewport: source.rules.viewport,
+                }
+            };
             app.world_mut()
                 .spawn((
                     InventorySlot(index),
-                    ItemTooltip {
+                    anchor,
+                    ControlTooltip {
                         name: name.into(),
                         ubertip: "Deals damage.".into(),
                     },
@@ -1516,6 +1755,102 @@ mod tests {
                     .tooltip
                     .is_none()
             );
+        }
+
+        #[test]
+        fn an_empty_title_stays_empty_without_blocking_description_layout() {
+            for title in ["", "|cffaabbcc|r"] {
+                let mut app = tooltip_app(Ok(true));
+                spawn_item(&mut app, 0, title, true);
+                app.update();
+                let tip = app
+                    .world()
+                    .resource::<CampaignInventory>()
+                    .tooltip
+                    .as_ref()
+                    .unwrap();
+                assert!(app.world().get::<EmptyTooltipText>(tip.name).is_some());
+                assert!(
+                    app.world()
+                        .get::<EmptyTooltipText>(tip.description.unwrap())
+                        .is_none()
+                );
+                assert_eq!(tip.record.name, title);
+            }
+        }
+
+        #[test]
+        fn malformed_hover_text_releases_partial_nodes_on_every_retry() {
+            for malformed_name in [true, false] {
+                let mut app = tooltip_app(Ok(true));
+                let item = spawn_item(&mut app, 0, "Spell", true);
+                let mut tip = app.world_mut().get_mut::<ControlTooltip>(item).unwrap();
+                if malformed_name {
+                    tip.name = "|q".into();
+                } else {
+                    tip.ubertip = "|q".into();
+                }
+                let mut ui = app
+                    .world_mut()
+                    .query_filtered::<Entity, Or<(With<Node>, With<TextSpan>)>>();
+                let before = ui.iter(app.world()).count();
+                for _ in 0..3 {
+                    app.update();
+                    let state = app.world().resource::<CampaignInventory>();
+                    assert!(state.tooltip.is_none());
+                    assert!(
+                        state
+                            .last_error
+                            .as_ref()
+                            .unwrap()
+                            .contains("malformed tooltip")
+                    );
+                    assert_eq!(ui.iter(app.world()).count(), before);
+                }
+            }
+        }
+
+        #[test]
+        fn non_inventory_control_uses_the_shared_tooltip_and_reports_refusal() {
+            let mut app = tooltip_app(Ok(true));
+            let anchor = {
+                let state = app.world().resource::<CampaignInventory>();
+                let source = state.source.as_ref().unwrap();
+                TooltipAnchor {
+                    rect: source.rules.slot(0).unwrap(),
+                    viewport: source.rules.viewport,
+                }
+            };
+            let control = app
+                .world_mut()
+                .spawn((
+                    anchor,
+                    Hovered(true),
+                    ControlTooltip {
+                        name: "Ranked spell".into(),
+                        ubertip: "Heals 17.".into(),
+                    },
+                ))
+                .id();
+            app.update();
+            let tip = app
+                .world()
+                .resource::<CampaignInventory>()
+                .tooltip
+                .as_ref()
+                .unwrap();
+            assert_eq!(tip.owner, control);
+            assert_eq!(tip.record.ubertip, "Heals 17.");
+            let old_root = tip.root;
+            app.world_mut()
+                .entity_mut(control)
+                .remove::<ControlTooltip>()
+                .insert(TooltipFailure("missing <TEST,DataA1>".into()));
+            app.update();
+            assert!(app.world().get_entity(old_root).is_err());
+            let state = app.world().resource::<CampaignInventory>();
+            assert!(state.tooltip.is_none());
+            assert!(state.last_error.as_ref().unwrap().contains("<TEST,DataA1>"));
         }
     }
 }

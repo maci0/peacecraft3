@@ -43,6 +43,9 @@ impl ObjectCatalog for Catalog {
     }
 }
 fn tables(profile: &str) -> DefaultTables {
+    tables_with_tooltip_repeat(profile, "1")
+}
+fn tables_with_tooltip_repeat(profile: &str, repeat: &str) -> DefaultTables {
     let data = sylk(
         &[
             "alias",
@@ -118,6 +121,10 @@ fn tables(profile: &str) -> DefaultTables {
                 "0",
             ],
             &["ahky", "Hotkey", "Profile", "0", "char", "text", "0", "0"],
+            &["atip", "Tip", "Profile", "0", "string", "text", repeat, "0"],
+            &[
+                "aubt", "UberTip", "Profile", "0", "string", "text", repeat, "0",
+            ],
             &["aart", "Art", "Profile", "0", "icon", "art", "0", "0"],
             &["abpx", "Buttonpos", "Profile", "0", "int", "art", "0", "0"],
             &["abpy", "Buttonpos", "Profile", "1", "int", "art", "0", "0"],
@@ -147,6 +154,88 @@ fn catalog_origin() -> crate::scripts::AssetIdentity {
         edition: "fixture".into(),
         version: "fixture".into(),
     }
+}
+
+#[test]
+fn learned_tooltips_select_the_authored_rank_and_expand_its_numeric_cells() {
+    let mut vm = host(
+        NATIVES,
+        "L001",
+        Overlay::default(),
+        "[L001]\nTip=First,Second,Third\nUberTip=\"Heals <L001,DataA1>, now.\",\"Heals <L001,DataA2>.\",Third\n",
+        8,
+    );
+    vm.call("setup", &[]).unwrap();
+    let Value::Handle(unit) = vm.global("H") else {
+        panic!("hero")
+    };
+    assert!(
+        vm.host()
+            .inner
+            .ability_tooltip(unit, *b"L001")
+            .unwrap()
+            .is_none()
+    );
+    learn(&mut vm, *b"L001");
+    let tip = vm
+        .host()
+        .inner
+        .ability_tooltip(unit, *b"L001")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (tip.title.as_str(), tip.description.as_str()),
+        ("First", "Heals 2, now.")
+    );
+    raise(&mut vm, 3);
+    learn(&mut vm, *b"L001");
+    let tip = vm
+        .host()
+        .inner
+        .ability_tooltip(unit, *b"L001")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (tip.title.as_str(), tip.description.as_str()),
+        ("Second", "Heals 4.")
+    );
+}
+
+#[test]
+fn ranked_tooltip_map_edits_select_only_their_level_and_do_not_fall_back() {
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L001".into(),
+        vec![pcx_objects::Mod {
+            field: *b"atip",
+            value_type: pcx_objects::ValueType::Str,
+            selectors: Some([2, 0]),
+            value: pcx_objects::Value::Str(b"Map rank two".to_vec()),
+            end_word: 0,
+        }],
+    );
+    let source = tables("[L001]\nTip=First,Second,Third\n");
+    assert_eq!(
+        crate::ability_profile::ranked(&source, &overlay, *b"L001", "Tip", 1, 3).unwrap(),
+        "First"
+    );
+    assert_eq!(
+        crate::ability_profile::ranked(&source, &overlay, *b"L001", "Tip", 2, 3).unwrap(),
+        "Map rank two"
+    );
+    assert!(crate::ability_profile::ranked(&source, &overlay, *b"L001", "Tip", 4, 3).is_err());
+    assert!(crate::ability_profile::ranked(&source, &overlay, *b"L001", "UberTip", 1, 3).is_err());
+    let malformed = tables_with_tooltip_repeat("[L001]\nTip=First,Second,Third\n", "bad");
+    assert!(
+        crate::ability_profile::ranked(&malformed, &overlay, *b"L001", "Tip", 2, 3)
+            .unwrap_err()
+            .contains("repeat metadata")
+    );
+    overlay.mods.get_mut("L001").unwrap()[0].value = pcx_objects::Value::Str(Vec::new());
+    assert_eq!(
+        crate::ability_profile::ranked(&source, &overlay, *b"L001", "Tip", 2, 3).unwrap(),
+        ""
+    );
 }
 
 #[test]

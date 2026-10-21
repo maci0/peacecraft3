@@ -14,6 +14,117 @@ pub struct Button {
     pub position: [usize; 2],
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tooltip {
+    pub title: String,
+    pub description: String,
+}
+
+pub(crate) fn ranked(
+    tables: &DefaultTables,
+    overlay: &Overlay,
+    alias: [u8; 4],
+    key: &str,
+    rank: i32,
+    levels: i32,
+) -> Result<String, String> {
+    if rank < 1 || rank > levels {
+        return Err(format!("{alias:?}: {key} rank {rank} outside {levels}"));
+    }
+    let (base, mods) = base(tables, overlay, alias)?;
+    if let Some(entry) = mods.iter().find(|entry| {
+        tables
+            .editor()
+            .field(entry.field)
+            .is_none_or(|field| field.from != SlkId::AbilityMetaData)
+    }) {
+        return Err(format!(
+            "{alias:?}: unknown tooltip override {:?}",
+            entry.field
+        ));
+    }
+    for entry in mods.iter().rev() {
+        let field = tables
+            .editor()
+            .field(entry.field)
+            .filter(|field| field.from == SlkId::AbilityMetaData)
+            .ok_or_else(|| format!("{alias:?}: unknown tooltip override {:?}", entry.field))?;
+        let FieldSource::Profile {
+            key: mapped,
+            index,
+            slots,
+        } = &field.source
+        else {
+            continue;
+        };
+        if !mapped.eq_ignore_ascii_case(key) {
+            continue;
+        }
+        let meta = tables
+            .metadata(field.fourcc)
+            .ok_or("missing tooltip metadata")?;
+        let repeated = match meta.attribute("repeat").map(|v| v.text.trim()) {
+            None | Some("" | "_" | "-") => false,
+            Some(value) => {
+                value
+                    .parse::<u32>()
+                    .map_err(|_| format!("{alias:?}: invalid {key} repeat metadata"))?
+                    != 0
+            }
+        };
+        if !repeated || *slots > 1 || !matches!(index, -1 | 0) {
+            return Err(format!("{alias:?}: unsupported {key} profile mapping"));
+        }
+        for selector in ["data", "appendIndex"] {
+            if meta
+                .attribute(selector)
+                .is_some_and(|value| !matches!(value.text.trim(), "" | "0" | "_" | "-"))
+            {
+                return Err(format!("{alias:?}: unsupported {key} {selector} mapping"));
+            }
+        }
+        let Some([level, data]) = entry.selectors else {
+            return Err(format!("{alias:?}: {key} override has no rank"));
+        };
+        if data != 0 || level == 0 {
+            return Err(format!("{alias:?}: unsupported {key} selector"));
+        }
+        if level != rank as u32 {
+            continue;
+        }
+        for (selector, excluded) in [("useSpecific", false), ("notSpecific", true)] {
+            if let Some(value) = meta.attribute(selector)
+                && !matches!(value.text.trim(), "" | "_" | "-")
+                && value.text.split(',').any(|id| id.trim() == base) == excluded
+            {
+                return Err(format!(
+                    "{alias:?}: {key} override does not apply to {base}"
+                ));
+            }
+        }
+        if entry.value_type != pcx_objects::ValueType::Str
+            || !matches!(field.kind, FieldKind::Token | FieldKind::Char)
+        {
+            return Err(format!("{alias:?}: nonstring {key} override"));
+        }
+        let pcx_objects::Value::Str(raw) = &entry.value else {
+            return Err(format!("{alias:?}: nonstring {key} override"));
+        };
+        return std::str::from_utf8(raw)
+            .map(str::to_owned)
+            .map_err(|_| format!("{alias:?}: non-UTF8 {key} override"));
+    }
+    let cell = tables
+        .object(Family::Ability, base)
+        .map_err(|e| e.to_string())?
+        .profile_element(key, rank - 1, levels as u32)
+        .map_err(|e| e.to_string())?;
+    if cell.parse_error.is_some() {
+        return Err(format!("{alias:?}: malformed {key} profile"));
+    }
+    Ok(cell.text.to_owned())
+}
+
 pub(crate) fn button_position(
     tables: &DefaultTables,
     overlay: &Overlay,
@@ -249,6 +360,52 @@ mod tests {
             let art = profiles(&tables, &Overlay::default(), alias, "Art").unwrap();
             assert_eq!(art.len(), 1, "{row}: one authored icon");
             assert!(!art[0].is_empty());
+            let levels: i32 = object
+                .cell(SlkId::AbilityData, "levels")
+                .unwrap()
+                .text
+                .parse()
+                .unwrap();
+            assert!(levels > 1, "source hero spell must supply ranked profiles");
+            let rank = (levels + 1) / 2;
+            for key in ["Tip", "UberTip"] {
+                let fields: Vec<_> = tables
+                    .editor()
+                    .fields()
+                    .iter()
+                    .filter(|field| {
+                        field.from == SlkId::AbilityMetaData
+                            && matches!(&field.source,
+                        FieldSource::Profile {key: mapped, ..} if mapped.eq_ignore_ascii_case(key))
+                    })
+                    .collect();
+                let [field] = fields.as_slice() else {
+                    panic!("{row}: ambiguous {key} metadata")
+                };
+                let mut overlay = Overlay::default();
+                overlay.mods.insert(
+                    row.clone(),
+                    vec![pcx_objects::Mod {
+                        field: field.fourcc,
+                        value_type: pcx_objects::ValueType::Str,
+                        selectors: Some([rank as u32, 0]),
+                        value: pcx_objects::Value::Str(b"Synthetic ranked map text".to_vec()),
+                        end_word: 0,
+                    }],
+                );
+                assert_eq!(
+                    ranked(&tables, &overlay, alias, key, rank, levels).unwrap(),
+                    "Synthetic ranked map text"
+                );
+                let other = if rank > 1 { rank - 1 } else { rank + 1 };
+                assert_eq!(
+                    ranked(&tables, &overlay, alias, key, other, levels).unwrap(),
+                    object
+                        .profile_element(key, other - 1, levels as u32)
+                        .unwrap()
+                        .text
+                );
+            }
             println!("ability={row} position={position:?} rect={rect:?}");
         }
     }

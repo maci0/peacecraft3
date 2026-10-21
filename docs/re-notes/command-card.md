@@ -200,3 +200,49 @@ assertion before this correction and passes after it. The red and green receipts
 are `.scratch/command-card-source/mounted-console-red.log` and
 `mounted-console-green.log`. This is actual admitted ECS mount/lifecycle evidence,
 not a full campaign render, physical-picking test or original-client comparison.
+
+## Ranked command tooltips (2026-10-22)
+
+Learned available commands now read `Tip` and `UberTip` at their admitted rank
+from the original profile assignments, retaining their CSV quoting rules. Ranked
+W3A string replacements are selected through the loaded AbilityMetaData mapping;
+an authored empty replacement remains empty. Unsupported mappings, unresolved
+map strings and malformed references report a refusal instead of substituted
+content. The explicit selected-image metadata gate also checks real repeated
+Tip/UberTip mappings using synthetic rank edits.
+
+Bounded `<rawcode,column>` expansion reads ability numeric cells or exact unit
+SLK columns. A rank suffix inside a reference stays literal: the reader does not
+rewrite it to the caster's rank. Referenced unit columns with map modifications,
+percentage-format tokens and unresolved WTS text remain unsupported. Holy Light's
+separate scalar UberTip admission still needs ranked-edit compatibility review.
+
+Command buttons share the inventory tooltip's source fonts, colours, frame art,
+preference and geometry under the admitted console parent. Hover exits and
+session replacement retire that tooltip; malformed rich text releases partially
+created nodes. Empty authored titles do not acquire a fabricated label.
+
+Synthetic tests and explicit installed-original checks establish data selection
+and host/UI contracts. Both spell tooltips were also hovered and captured at
+1280×960 and 640×480, using real source fonts, frame art and rank-three text
+under a synthetic full-viewport parent. This exposed the shared tooltip's default
+Bevy image-fitting behavior: its background and vertical edges did not fill their
+derived rectangles. They now use the same explicit Stretch mode as the shared
+menu backdrop renderer. A synthetic regression checks that mode for every image
+piece; source rectangles and UV selection are unchanged.
+
+Corrected captures use a private X11 display and software Vulkan. Pointer state,
+tooltip readiness, binary and image hashes, and clean process exits are retained
+under `.scratch/command-card-source/tooltip-visual-final`. Host-desktop
+attempts where no cursor event arrived remain failed receipts, not evidence of
+tooltip rendering. The private display was stopped without changing host input
+policy. Original-client appearance parity, cast-readiness presentation and the
+remaining command kinds stay open. Local source assets and captures are not committed.
+
+Private-target checks: 1,089 core tests (31 ignored), 64 object tests with both
+explicit local install paths (4 ignored), and 589 feature-enabled binary app tests
+(51 ignored) pass. The explicit original Human01 rank-expansion and admitted-console
+mount/replacement gates both pass. Strict affected all-target Clippy, native
+test-fixture compilation, affected WASM library/bin checks and formatting pass.
+Receipts remain in `.scratch/command-card-source/tooltip-*`; earlier failed
+missing-default-install census, image-fit and host-pointer attempts are retained.

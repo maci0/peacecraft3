@@ -3882,3 +3882,15 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   route 3 reached quest pickup at 222 s and return at 250 s, quest complete at 251 s.
   The strength reward was not observed. Chapter victory is unverified and not reached. Restart and load are unsupported.
 - [ ] Rendered parity for score, explosion, and inventory presentation is unverified.
+
+### 2026-10-22: Learned ability tooltips
+
+- [~] Holy Light and Water Elemental command buttons share the source-derived
+  inventory tooltip style. Ranked profile strings and supported numeric references
+  expand from admitted data; ranked string edits preserve explicit empty values.
+  Native component hover checks pass for both spells at two resolutions on a
+  private X11/software-Vulkan display. They exposed and fixed background/edge
+  aspect fitting inside the source-derived frame rectangles. Core/object/app tests,
+  strict Clippy, WASM and original Human01 rank/mount lifecycle gates pass; see
+  `docs/re-notes/command-card.md`. Original-client visual parity, remaining command
+  kinds, cast-readiness presentation and unsupported custom tooltip forms stay open.
