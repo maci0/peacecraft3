@@ -49,7 +49,8 @@ pub(super) struct ItemUse {
     max_records: usize,
     session: Session,
     charges: BTreeMap<HandleId, i32>,
-    ready_at: BTreeMap<String, f64>,
+    ready_at: BTreeMap<HandleId, BTreeMap<String, f64>>,
+    ready_records: usize,
 }
 
 /// Outcome of the readiness check. Nothing is written until `commit_item_use`.
@@ -173,6 +174,7 @@ impl ObjectHost {
             session: Session(Arc::new(())),
             charges: BTreeMap::new(),
             ready_at: BTreeMap::new(),
+            ready_records: 0,
         });
         Ok(self)
     }
@@ -221,8 +223,11 @@ impl ObjectHost {
             return Err(self.inner.error(GET, Failure::Budget("item charges")));
         }
         if let Some(cooldown) = &grant.cooldown
-            && !state.ready_at.contains_key(&cooldown.group)
-            && state.ready_at.len() >= state.max_records
+            && state
+                .ready_at
+                .get(&grant.unit)
+                .is_none_or(|groups| !groups.contains_key(&cooldown.group))
+            && state.ready_records >= state.max_records
         {
             return Err(self
                 .inner
@@ -232,10 +237,15 @@ impl ObjectHost {
         if let Some(count) = remaining {
             state.charges.insert(grant.item, count);
         }
-        if let Some(cooldown) = &grant.cooldown {
-            state
+        if let Some(cooldown) = &grant.cooldown
+            && state
                 .ready_at
-                .insert(cooldown.group.clone(), now + cooldown.seconds);
+                .entry(grant.unit)
+                .or_default()
+                .insert(cooldown.group.clone(), now + cooldown.seconds)
+                .is_none()
+        {
+            state.ready_records += 1;
         }
         Ok(UseCommit {
             charges: remaining,
@@ -288,7 +298,12 @@ impl ObjectHost {
             if cooldown.ignores_wait {
                 return Err(fail("ignoreCD cooldown semantics are unverified".into()));
             }
-            if let Some(ready) = state.ready_at.get(&cooldown.group).filter(|r| **r > now) {
+            if let Some(ready) = state
+                .ready_at
+                .get(&unit)
+                .and_then(|groups| groups.get(&cooldown.group))
+                .filter(|r| **r > now)
+            {
                 return Ok(UseCheck::OnCooldown {
                     remaining: ready - now,
                 });
@@ -303,6 +318,14 @@ impl ObjectHost {
             cooldown,
             holder: record.held_by,
         }))
+    }
+
+    pub(super) fn reset_item_cooldowns(&mut self, unit: HandleId) {
+        if let Some(state) = &mut self.item_use
+            && let Some(groups) = state.ready_at.remove(&unit)
+        {
+            state.ready_records -= groups.len();
+        }
     }
 
     pub(super) fn item_use_native(

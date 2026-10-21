@@ -2357,6 +2357,9 @@ endfunction
 function end_cd takes unit c, integer ability returns nothing
 call BlzEndUnitAbilityCooldown(c,ability)
 endfunction
+function reset_cd takes unit c returns nothing
+call UnitResetCooldown(c)
+endfunction
 function attack_enemy takes unit c, unit t returns nothing
 call IssueTargetOrder(c,"beta",t)
 endfunction
@@ -2422,6 +2425,7 @@ constant native ConvertUnitType takes integer i returns unittype
 native IsUnitType takes unit u, unittype t returns boolean
 native BlzGetUnitAbilityCooldownRemaining takes unit u, integer ability returns real
 native BlzEndUnitAbilityCooldown takes unit u, integer ability returns nothing
+native UnitResetCooldown takes unit u returns nothing
 native BlzGetUnitAbilityCooldown takes unit u, integer ability, integer rank returns real
 native BlzSetUnitAbilityCooldown takes unit u, integer ability, integer rank, real duration returns nothing
 constant native GetSpellTargetUnit takes nothing returns unit

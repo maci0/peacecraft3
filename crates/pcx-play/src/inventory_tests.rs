@@ -7,6 +7,8 @@ use pcx_objects::editor::Overlay;
 use pcx_script::HandleId;
 
 const CALLS: &str = r#"
+native UnitResetCooldown takes unit u returns nothing
+native RemoveUnit takes unit u returns nothing
 type item extends widget
 type playerunitevent extends eventid
 constant native ConvertPlayerUnitEvent takes integer i returns playerunitevent
@@ -691,10 +693,14 @@ fn inventory_death_and_drop_flags_and_ordinary_unit_lifecycle_remain_distinct() 
 
 /// Inventory host with the game clock and item use admitted. Potions are `P001` rows.
 fn open_with_item_use() -> ObjectHost {
+    open_with_item_use_budget(8)
+}
+
+fn open_with_item_use_budget(records: usize) -> ObjectHost {
     open()
         .with_item_use(
             crate::item_use_rules::Rules::new(tables("2"), Overlay::default()),
-            8,
+            records,
         )
         .unwrap()
 }
@@ -861,14 +867,65 @@ fn two_holder_readiness() -> UseCheck {
     h.check_item_use(b, pb).unwrap()
 }
 
-// Pins the current recreation key (the group alone) and is not evidence of original fidelity. The
-// native scope (per unit, per item or per group) is unqualified; see docs/re-notes/item-charges-cooldown.md.
 #[test]
-fn unqualified_current_group_key_couples_two_holders_pinned_not_established() {
+fn using_a_potion_does_not_start_another_holders_group() {
+    assert!(matches!(two_holder_readiness(), UseCheck::Ready(_)));
+}
+
+#[test]
+fn reset_only_clears_the_named_holders_item_groups_without_refunding_charges() {
+    let mut h = open_with_item_use();
+    let a = id(&unit(&mut h, 16.));
+    let b = id(&unit(&mut h, 32.));
+    let pa = potion(&mut h);
+    let pb = potion(&mut h);
+    give(&mut h, a, pa);
+    give(&mut h, b, pb);
+    h.commit_item_use(grant(h.check_item_use(a, pa))).unwrap();
+    h.commit_item_use(grant(h.check_item_use(b, pb))).unwrap();
+    h.native("UnitResetCooldown", &[Value::Handle(a)]).unwrap();
+    assert!(matches!(
+        h.check_item_use(a, pa).unwrap(),
+        UseCheck::Ready(_)
+    ));
     assert_eq!(
-        two_holder_readiness(),
-        UseCheck::OnCooldown { remaining: 20.0 }
+        h.check_item_use(b, pb).unwrap(),
+        UseCheck::OnCooldown { remaining: 20. }
     );
+    assert_eq!(charges_of(&mut h, pa), Value::Int(1));
+    assert_eq!(charges_of(&mut h, pb), Value::Int(1));
+    let next = grant(h.check_item_use(a, pa));
+    h.commit_item_use(next).unwrap();
+    assert_eq!(charges_of(&mut h, pa), Value::Int(0));
+}
+
+#[test]
+fn resetting_or_removing_a_holder_reclaims_its_bounded_group_records() {
+    for native in ["UnitResetCooldown", "RemoveUnit"] {
+        let mut h = open_with_item_use_budget(1);
+        let (a, b, p) = holder_setup(&mut h);
+        h.commit_item_use(grant(h.check_item_use(a, p))).unwrap();
+        h.native("UnitRemoveItem", &[Value::Handle(a), Value::Handle(p)])
+            .unwrap();
+        give(&mut h, b, p);
+        // Same item record, a new holder/group record: refusal must not spend its last charge.
+        let err = h
+            .commit_item_use(grant(h.check_item_use(b, p)))
+            .unwrap_err();
+        assert!(err.to_string().contains("item cooldown groups"), "{err}");
+        assert_eq!(charges_of(&mut h, p), Value::Int(1));
+        h.native(native, &[Value::Handle(a)]).unwrap();
+        h.native("UnitResetCooldown", &[Value::Handle(a)]).unwrap();
+        h.commit_item_use(grant(h.check_item_use(b, p))).unwrap();
+        assert_eq!(charges_of(&mut h, p), Value::Int(0));
+    }
+}
+
+#[test]
+fn reset_is_admitted_on_ordinary_units_without_hero_skill_rules() {
+    let mut h = open_with_abilities(false);
+    let a = unit(&mut h, 16.);
+    assert_eq!(h.native("UnitResetCooldown", &[a]), Ok(Value::Null));
 }
 
 #[test]
@@ -884,7 +941,20 @@ fn a_refused_effect_drops_the_grant_and_leaves_charges_and_cooldown_untouched() 
 }
 
 #[test]
-fn duplicate_grants_for_one_group_commit_once() {
+fn duplicate_grants_for_one_holders_group_commit_once() {
+    let mut h = open_with_item_use();
+    let (a, _, pa) = holder_setup(&mut h);
+    let pb = potion(&mut h);
+    give(&mut h, a, pb);
+    let first = grant(h.check_item_use(a, pa));
+    let second = grant(h.check_item_use(a, pb));
+    h.commit_item_use(first).unwrap();
+    assert!(h.commit_item_use(second).is_err());
+    assert_eq!(charges_of(&mut h, pb), Value::Int(2));
+}
+
+#[test]
+fn independent_holders_grants_do_not_invalidate_one_another() {
     let mut h = open_with_item_use();
     let (a, b, pa) = holder_setup(&mut h);
     let pb = potion(&mut h);
@@ -892,8 +962,9 @@ fn duplicate_grants_for_one_group_commit_once() {
     let first = grant(h.check_item_use(a, pa));
     let second = grant(h.check_item_use(b, pb));
     h.commit_item_use(first).unwrap();
-    assert!(h.commit_item_use(second).is_err());
-    assert_eq!(charges_of(&mut h, pb), Value::Int(2));
+    h.commit_item_use(second).unwrap();
+    assert_eq!(charges_of(&mut h, pa), Value::Int(1));
+    assert_eq!(charges_of(&mut h, pb), Value::Int(1));
 }
 
 #[test]

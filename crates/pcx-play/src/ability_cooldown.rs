@@ -21,6 +21,42 @@ pub(super) const NATIVES: [(&str, &[&str], &str); 4] = [
 ];
 
 impl ObjectHost {
+    pub(crate) fn unit_cooldown_reset_declaration(&self, source: &str) -> Result<(), Error> {
+        let name = "UnitResetCooldown";
+        if let Some(native) = self.inner.program.natives().get(name) {
+            Self::contract(&self.inner, name, &["unit"], "nothing", false, Some("unit"))?;
+            if native.source != source {
+                return Err(self.inner.error(name, Failure::Source));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn clear_unit_cooldowns(&mut self, unit: HandleId) {
+        if let Some(holy) = &mut self.holy_light {
+            holy.ready_at.remove(&unit);
+        }
+        if let Some(summoning) = &mut self.summoning {
+            summoning.ready.remove(&unit);
+        }
+        self.reset_item_cooldowns(unit);
+    }
+
+    pub(crate) fn unit_reset_cooldown(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let name = "UnitResetCooldown";
+        let unit = match args {
+            [Value::Null] => return Ok(Value::Null),
+            [Value::Handle(unit)] => *unit,
+            _ => return Err(self.inner.error(name, Failure::Signature)),
+        };
+        if matches!(self.inner.entry(unit)?, Entry::RemovedUnit) {
+            return Ok(Value::Null);
+        }
+        self.created_unit(unit, name)?;
+        self.clear_unit_cooldowns(unit);
+        Ok(Value::Null)
+    }
+
     pub(super) fn ability_cooldown_call(
         &mut self,
         name: &str,

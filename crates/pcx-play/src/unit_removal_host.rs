@@ -76,6 +76,7 @@ impl ObjectHost {
                     record.look_at = None;
                 }
             }
+            self.clear_unit_cooldowns(unit);
             *self.inner.entry_mut(unit)? = Entry::RemovedUnit;
             Ok(Value::Null)
         })())

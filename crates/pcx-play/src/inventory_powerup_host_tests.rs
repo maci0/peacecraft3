@@ -11,6 +11,7 @@ use pcx_sim::world::ResolutionProblem;
 
 /// Source-shaped rows: the tome grants 7 STR through `DataC1`, one slot count through `L000`.
 const POWERUP_DECLARATIONS: &str = r#"
+native UnitResetCooldown takes unit u returns nothing
 type gamecache extends agent
 native InitGameCache takes string filename returns gamecache
 native SaveGameCache takes gamecache cache returns boolean
@@ -1376,6 +1377,29 @@ fn charges_and_group_cooldown_refuse_without_writes_until_the_group_is_ready() {
     h.set_timer_game_time(25.0).unwrap();
     assert_eq!(use_item(&mut h, hero, potion), Ok(Value::Bool(true)));
     assert_eq!(life_of(&h, hero), (after_first + 250.0).min(max));
+    assert!(h.executed_items().all(|(id, _)| id != potion));
+}
+
+#[test]
+fn reset_allows_the_next_potion_effect_but_does_not_refund_its_first_charge_or_heal() {
+    let Fixture { mut h, hero, .. } = open();
+    let max = h.unit_vitals(hero).unwrap().unwrap().max_life;
+    set_life(&mut h, hero, max / 2.);
+    let potion = item(&mut h, b"phcd", 0.);
+    add(&mut h, hero, potion).unwrap();
+    assert_eq!(use_item(&mut h, hero, potion), Ok(Value::Bool(true)));
+    let first_life = life_of(&h, hero);
+    assert_eq!(use_item(&mut h, hero, potion), Ok(Value::Bool(false)));
+    h.native("UnitResetCooldown", &[Value::Handle(hero)])
+        .unwrap();
+    assert_eq!(life_of(&h, hero), first_life);
+    assert_eq!(
+        h.native("GetItemCharges", &[Value::Handle(potion)])
+            .unwrap(),
+        Value::Int(1)
+    );
+    assert_eq!(use_item(&mut h, hero, potion), Ok(Value::Bool(true)));
+    assert_eq!(life_of(&h, hero), (first_life + 250.).min(max));
     assert!(h.executed_items().all(|(id, _)| id != potion));
 }
 
