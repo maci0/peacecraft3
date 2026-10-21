@@ -2,6 +2,14 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+### 2026-10-21: Native chapter activation
+
+- [~] Selected-install chapter activation now has an explicit ignored application
+  gate: actual campaign index/button activation, configuration, admission, normal
+  input preparation and script startup publish one context and 152 Human01 units
+  on the selected Legacy RoC input with seed 1. Strict app Clippy passes. This is
+  not rendered pointer delivery or mission progression; both remain unverified.
+
 ### 2026-10-21: F7/F8 diagnostics
 
 - [x] F8 adds bounded logarithmic-age timing history beside FPS and milliseconds:
