@@ -4,6 +4,10 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 
 ### 2026-10-21: CPU hotpath evidence
 
+- [x] Huffman bit traversal reuses a bounded byte reservoir. Synthetic read and
+  truncation comparisons, 76 codec tests, strict Clippy and WASM pass; 2,716
+  retained Storm WAV dumps remain byte-identical. Human03 keeps its unit/RNG
+  projection; hardware instruction reductions remain report-only.
 - [x] Optional core spans separate startup, asset decoding, scripting, motion,
   combat and animation work. Bounded trace summaries subtract child spans.
   Real Human03 stacks captured 1,897 samples with zero lost samples; five runs
