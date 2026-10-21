@@ -31,6 +31,7 @@ const MAX_RETAINED: usize = 32 << 20;
 pub(crate) enum Kind {
     TargetUnit,
     Immediate,
+    Standard(pcx_play::standard_command::Kind),
 }
 
 #[derive(Component, Clone)]
@@ -43,8 +44,13 @@ pub(crate) struct ButtonOrder {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Icon {
     kind: Kind,
-    data: ability_profile::Button,
+    data: IconData,
     tooltip: Result<ability_profile::Tooltip, String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct IconData {
+    art: String,
+    position: [usize; 2],
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct View {
@@ -59,6 +65,8 @@ struct Header {
     local: i32,
     shown: bool,
     dead: Option<bool>,
+    movable: bool,
+    can_attack: bool,
 }
 struct Signature {
     header: Header,
@@ -89,6 +97,8 @@ fn header(objects: &ObjectHost) -> Result<Option<Header>, String> {
         local,
         shown: record.shown,
         dead: record.combat.as_ref().map(|combat| combat.dead),
+        movable: record.activity.as_ref().is_some_and(|a| a.movable()),
+        can_attack: record.combat.as_ref().is_some_and(|c| c.weapon.is_some()),
     }))
 }
 
@@ -143,6 +153,7 @@ fn snapshot(objects: &ObjectHost) -> Result<Option<Signature>, String> {
 struct Source {
     rules: Rules,
     console: String,
+    standard: Vec<(pcx_play::standard_command::Command, String)>,
     images: HashMap<String, Handle<Image>>,
     failed: HashMap<String, String>,
     retained: usize,
@@ -163,6 +174,13 @@ pub(crate) struct CommandCard {
 }
 
 impl CommandCard {
+    pub(crate) fn standard_profiles(
+        &self,
+    ) -> impl Iterator<Item = &pcx_play::standard_command::Command> {
+        self.source
+            .iter()
+            .flat_map(|source| source.standard.iter().map(|(profile, _)| profile))
+    }
     pub fn receipt_count(&self) -> usize {
         self.source
             .as_ref()
@@ -212,7 +230,7 @@ fn capture(mut card: ResMut<CommandCard>, mut hud: ResMut<crate::campaign_hud::C
     hud.pointer_consumed |= std::mem::take(&mut card.pending_pointer);
 }
 
-fn wanted(objects: &ObjectHost) -> Result<Option<View>, String> {
+fn wanted(objects: &ObjectHost, source: &Source) -> Result<Option<View>, String> {
     let Some(&unit) = objects.selection().first() else {
         return Ok(None);
     };
@@ -230,6 +248,28 @@ fn wanted(objects: &ObjectHost) -> Result<Option<View>, String> {
         return Ok(None);
     }
     let mut icons = Vec::new();
+    for (profile, art) in &source.standard {
+        if objects
+            .standard_command_order(unit, profile.kind)
+            .map_err(|e| e.to_string())?
+            .is_some()
+        {
+            if icons
+                .iter()
+                .any(|icon: &Icon| icon.data.position == profile.position)
+            {
+                return Err("standard commands collide at the same authored Buttonpos".into());
+            }
+            icons.push(Icon {
+                kind: Kind::Standard(profile.kind),
+                data: IconData {
+                    art: art.clone(),
+                    position: profile.position,
+                },
+                tooltip: Ok(profile.tooltip.clone()),
+            });
+        }
+    }
     for (kind, command) in [
         (Kind::TargetUnit, objects.holy_light_command(unit)),
         (Kind::Immediate, objects.water_elemental_command(unit)),
@@ -252,12 +292,49 @@ fn wanted(objects: &ObjectHost) -> Result<Option<View>, String> {
                 .and_then(|tip| tip.ok_or("command has no learned tooltip".into()));
             icons.push(Icon {
                 kind,
-                data,
+                data: IconData {
+                    art: data.art,
+                    position: data.position,
+                },
                 tooltip,
             });
         }
     }
     Ok(Some(View { unit, icons }))
+}
+
+fn read_standard_profiles(
+    reader: &pcx_assets::Resolver,
+    receipts: &mut Vec<AssetReceipt>,
+) -> Result<Vec<pcx_play::standard_command::Command>, String> {
+    use pcx_objects::editor::{Editor, EditorReadLimits, TxtRole};
+    let listed: Vec<String> = [TxtRole::CommandFunc, TxtRole::CommandStrings]
+        .into_iter()
+        .flat_map(|role| role.files().iter().map(|path| (*path).to_owned()))
+        .collect();
+    let editor = Editor::from_reader(
+        std::path::Path::new("selected command UI resolver"),
+        &listed,
+        EditorReadLimits {
+            max_listed_paths: listed.len(),
+            max_asset_bytes: 4 << 20,
+            max_aggregate_input_bytes: 8 << 20,
+        },
+        |path| {
+            if listed.iter().any(|member| member == path) {
+                read(reader, path, 4 << 20, receipts)
+                    .map(Some)
+                    .map_err(std::io::Error::other)
+            } else {
+                Ok(None)
+            }
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    pcx_play::standard_command::Kind::ALL
+        .into_iter()
+        .map(|kind| pcx_play::standard_command::Command::read(&editor, kind))
+        .collect()
 }
 
 fn reset(
@@ -459,10 +536,20 @@ fn project(
                     .map_err(|error| error.to_string())?,
             )?;
             let console = skin_file(&skin, &sections, &rules.console_key)?;
+            let standard = read_standard_profiles(&reader, &mut receipts)?
+                .into_iter()
+                .map(|profile| {
+                    let art = skin_file(&skin, &sections, &profile.art_key)?;
+                    pcx_assets::AssetPath::new(&art).map_err(|e| e.to_string())?;
+                    rules.slot(profile.position[0], profile.position[1])?;
+                    Ok((profile, art))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
             text(&reader, CONSOLE, &mut receipts)?;
             Ok::<_, String>(Source {
                 rules,
                 console,
+                standard,
                 receipts,
                 images: HashMap::new(),
                 failed: HashMap::new(),
@@ -522,7 +609,7 @@ fn project(
         // Tables are immutable in a published session; avoid rebuilding metadata every frame.
         let changed = !unchanged(host.objects(), card.signature.as_ref())?;
         if changed {
-            card.view = wanted(host.objects())?;
+            card.view = wanted(host.objects(), &source)?;
             card.signature = snapshot(host.objects())?;
         }
         let root = card.root.expect("command root");
@@ -616,9 +703,7 @@ mod tests {
             icons.push(Icon {
                 kind,
                 tooltip: Err("standalone icon fixture has no learned unit".into()),
-                data: ability_profile::Button {
-                    ability,
-                    rank: 1,
+                data: IconData {
                     art: art.text.to_owned(),
                     position: position.try_into().unwrap(),
                 },
@@ -642,6 +727,7 @@ mod tests {
             Source {
                 rules,
                 console: "synthetic component parent".into(),
+                standard: Vec::new(),
                 images: HashMap::new(),
                 failed: HashMap::new(),
                 retained: 0,
@@ -975,6 +1061,15 @@ mod tests {
             assert_eq!(attachment.frame, source.console);
             let buttons = app.world().get::<Children>(root).unwrap();
             assert!(!buttons.is_empty());
+            for kind in pcx_play::standard_command::Kind::ALL {
+                assert!(
+                    buttons.iter().any(|child| app
+                        .world()
+                        .get::<ButtonOrder>(child)
+                        .is_some_and(|button| button.kind == Kind::Standard(kind))),
+                    "missing standard {kind:?}"
+                );
+            }
             for child in buttons {
                 assert_eq!(app.world().get::<ButtonOrder>(*child).unwrap().unit, unit);
                 let tooltip = app
@@ -1097,8 +1192,11 @@ mod tests {
         let (mut source, mut view, reader) = selected_icons();
         let ability = std::env::var("PCX_COMMAND_CARD_ABILITY").expect("choose a fixture ability");
         assert!(matches!(ability.as_str(), "AHhb" | "AHwe"));
-        view.icons
-            .retain(|icon| icon.data.ability.as_slice() == ability.as_bytes());
+        view.icons.retain(|icon| match ability.as_str() {
+            "AHhb" => icon.kind == Kind::TargetUnit,
+            "AHwe" => icon.kind == Kind::Immediate,
+            _ => false,
+        });
         assert_eq!(view.icons.len(), 1);
         let race = if with_tooltip {
             let (race, learned) = learned_tooltip_fixture();
@@ -1106,7 +1204,10 @@ mod tests {
                 .into_iter()
                 .rfind(|(data, _)| data.ability.as_slice() == ability.as_bytes())
                 .unwrap();
-            view.icons[0].data = data;
+            view.icons[0].data = IconData {
+                art: data.art,
+                position: data.position,
+            };
             view.icons[0].tooltip = Ok(tip);
             race
         } else {
@@ -1215,6 +1316,7 @@ mod tests {
         let source = Source {
             rules,
             console: "synthetic parent".into(),
+            standard: Vec::new(),
             images: HashMap::from([("fixture".into(), owned.clone())]),
             failed: HashMap::new(),
             retained: 0,
@@ -1229,9 +1331,7 @@ mod tests {
             icons: vec![Icon {
                 kind: Kind::TargetUnit,
                 tooltip: Err("synthetic icon-only fixture".into()),
-                data: ability_profile::Button {
-                    ability: *b"TEST",
-                    rank: 1,
+                data: IconData {
                     art: "fixture".into(),
                     position: [0, 0],
                 },
@@ -1257,9 +1357,7 @@ mod tests {
         view.icons.push(Icon {
             kind: Kind::Immediate,
             tooltip: Err("synthetic icon-only fixture".into()),
-            data: ability_profile::Button {
-                ability: *b"FAIL",
-                rank: 1,
+            data: IconData {
                 art: "fixture".into(),
                 position: [source.rules.columns, 0],
             },

@@ -2,7 +2,8 @@
 
 The command card is still being implemented. Learned Holy Light and Water
 Elemental buttons now have a receipt-bound renderer and input consumer;
-ranked tooltips are connected. Readiness presentation remains unfinished.
+ranked tooltips are connected. Standard Move, Stop, Hold, Patrol and Attack
+presentation and dispatch are connected as described below. Readiness presentation remains unfinished.
 
 ## Selected-client evidence
 
@@ -401,3 +402,51 @@ app binary tests (51 ignored), the explicit installed Human01 rank/binding gate,
 strict affected all-target Clippy, native compilation and affected WASM library/
 binary checks. No new rendered or original-client runtime capture was made for
 this script-state increment.
+
+## Standard commands (2026-10-22)
+
+Move, Stop, Hold, Patrol and Attack read the selected `CommandFunc.txt` and
+`CommandStrings.txt` through the receipt-bound UI resolver. `CmdHoldPos` is the
+profile identifier for Hold. Art is a skin key, resolved through the same
+selected race skin chain as the console; it is not treated as a texture path.
+Button positions, hotkeys and tooltip strings remain authored data. The existing
+PE-derived command grid validates the positions and scales the mounted children.
+Missing, ambiguous, oversized or unsupported profile values refuse by field.
+Command profiles belong to the editor reader, not `DefaultTables`' gameplay
+unit/item/ability/upgrade namespace.
+
+The command identifiers come from the admitted activity/combat rules. Capability
+presentation currently uses the primary selected unit's liveness, visibility,
+mobility and weapon availability. This is a recreation policy; exact native
+availability for mixed selections, buildings and disabled intrinsic abilities
+is not established. Stop and Hold apply immediately to eligible locally-owned
+selected units. Move, Patrol and Attack arm a session-bound ground/target click;
+right click cancels. The consumer rechecks session, ownership, selection, user
+control and the existing HUD/dialog/input gates. Hotkeys use the authored
+profile values. Standard hotkeys currently precede learned-spell hotkeys when
+they collide; native collision precedence is unqualified.
+
+Ground Move, ground Patrol, ground Attack and unit-target Attack use the existing
+native order paths. The source Move tooltip describes following a unit, and the
+Patrol tooltip describes imitating one. Those widget-target modes remain
+unsupported and report that state instead of substituting a ground destination.
+Only `Bool(true)` native results enter the player command journal. Refused and
+failed orders do not become accepted replay entries; armed Holy Light and the
+right-click order path share this result boundary.
+
+Synthetic parser mutations and host dispatch checks cover the source-derived
+fields and all five order identities. App tests distinguish accepted, refused
+and failed journal results. The explicit installed Human01 checks mount all five
+buttons under the admitted console and exercise group Hold/Stop with control
+closed and reopened. These are component/host checks, not original-client or
+full campaign rendering evidence. Target cursor artwork, disabled/readiness art,
+follow/imitation, mixed-selection fidelity and native visual/input parity remain
+open. Private validation receipts are under `.scratch/standard-commands/`.
+
+Private-target validation passes: 1,114 core tests (31 ignored), 590 app binary
+tests with `test-fixtures` (52 ignored), and three explicitly enabled Human01
+component/input gates (mounted console lifecycle, group Hold/Stop control gates,
+and the existing session/selection/control click check). Strict affected
+all-target Clippy, core WASM and app WASM library/binary compilation, and
+touched-file formatting pass on the frozen source manifest. No new original
+client or rendered standard-command capture was made.

@@ -102,6 +102,7 @@ pub mod runner;
 pub mod script_math;
 pub mod script_numeric;
 pub mod script_random;
+pub mod standard_command;
 pub mod unit_activity;
 pub mod unit_model;
 pub use rpl::{Expectation, Rpl, RplError};
