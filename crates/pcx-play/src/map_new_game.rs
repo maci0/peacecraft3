@@ -84,6 +84,10 @@ impl MapStartupHost {
             self.native("Player", &[Value::Int(*number)])
                 .map_err(MapStartupError::Observation)?;
         }
+        if let Some(rules) = &roles.initial_alliances {
+            self.objects_mut()
+                .admit_startup_alliances(context, rules.clone(), &controllers)?;
+        }
         Ok(ResolvedObservations {
             new_game: None,
             local_player: input.local_player,

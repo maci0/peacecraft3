@@ -88,6 +88,7 @@ pub(super) struct Players {
     tech: Option<RecordLimits>,
     research: Option<RecordLimits>,
     alliance: Option<RecordLimits>,
+    initial_alliances: Option<StartupAlliances>,
     state_requests: Option<RecordLimits>,
     resources: Option<Resources>,
     experience_handicap: Option<crate::player_handicap::Rules>,
@@ -103,6 +104,11 @@ struct Resources {
     // Gold, lumber, food used, food supplied, food ceiling; identities come from common source.
     states: [i32; 5],
     values: Vec<(i32, i32, i32)>,
+}
+struct StartupAlliances {
+    rules: crate::player_alliance_rules::Rules,
+    slots: usize,
+    values: Vec<bool>,
 }
 const RESOURCE_GLOBALS: [&str; 5] = [
     "PLAYER_STATE_RESOURCE_GOLD",
@@ -228,6 +234,7 @@ impl ObjectHost {
             tech: None,
             research: None,
             alliance: None,
+            initial_alliances: None,
             state_requests: None,
             resources: None,
             experience_handicap: None,
@@ -397,6 +404,95 @@ impl ObjectHost {
         });
         Ok(self)
     }
+    pub(crate) fn admit_startup_alliances(
+        &mut self,
+        context: &Arc<ParsedMapContext>,
+        rules: crate::player_alliance_rules::Rules,
+        controllers: &[(i32, HandleId)],
+    ) -> Result<(), Error> {
+        let fail = |reason| self.inner.error(SET_ALLIANCE, Failure::PlayerState(reason));
+        let players = self
+            .players
+            .as_ref()
+            .ok_or_else(|| fail("players not admitted"))?;
+        if !Arc::ptr_eq(players.source.context(), context) {
+            return Err(fail("startup alliance context differs"));
+        }
+        if players.initial_alliances.is_some() || controllers.len() != players.slots {
+            return Err(fail(
+                "startup alliance controller domain differs or already admitted",
+            ));
+        }
+        let mut codes = Vec::new();
+        codes
+            .try_reserve_exact(controllers.len())
+            .map_err(|_| self.inner.error(SET_ALLIANCE, Failure::Capacity))?;
+        for (index, (number, control)) in controllers.iter().enumerate() {
+            if usize::try_from(*number).ok() != Some(index) {
+                return Err(fail("startup alliance controllers are not in slot order"));
+            }
+            codes.push(
+                self.inner
+                    .symbolic_value(*control, "mapcontrol")
+                    .map_err(|e| self.inner.error(SET_ALLIANCE, e.failure))?,
+            );
+        }
+        let size = codes
+            .len()
+            .checked_mul(codes.len())
+            .ok_or_else(|| self.inner.error(SET_ALLIANCE, Failure::Capacity))?;
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(size)
+            .map_err(|_| self.inner.error(SET_ALLIANCE, Failure::Capacity))?;
+        for a in &codes {
+            for b in &codes {
+                values.push(rules.allied(*a, *b));
+            }
+        }
+        let slots = codes.len();
+        self.players
+            .as_mut()
+            .ok_or_else(|| fail("players not admitted"))?
+            .initial_alliances = Some(StartupAlliances {
+            rules,
+            slots,
+            values,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn effective_alliance(
+        &self,
+        a: &PlayerSettings,
+        b: &PlayerSettings,
+        kind: i32,
+    ) -> bool {
+        if let Some((_, _, value)) = a.alliances.iter().find(|(other, setting, _)| {
+            *other == b.identity
+                && self
+                    .inner
+                    .symbolic_value(*setting, ALLIANCE_KIND)
+                    .is_ok_and(|v| v == kind)
+        }) {
+            return *value;
+        }
+        let Some(initial) = self
+            .players
+            .as_ref()
+            .and_then(|p| p.initial_alliances.as_ref())
+        else {
+            return false;
+        };
+        if kind != initial.rules.kind {
+            return false;
+        }
+        let (Ok(a), Ok(b)) = (usize::try_from(a.number), usize::try_from(b.number)) else {
+            return false;
+        };
+        a < initial.slots && b < initial.slots && initial.values[a * initial.slots + b]
+    }
+
     fn set_player_alliance(&mut self, args: &[Value]) -> Result<Value, Error> {
         let fail = |reason| self.inner.error(SET_ALLIANCE, reason);
         let [source, target, Value::Handle(setting), Value::Bool(value)] = args else {

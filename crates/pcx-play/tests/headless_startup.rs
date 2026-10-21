@@ -23,6 +23,101 @@ const ORDER_TICKS: u64 = 256;
 /// World units east of the unit.
 const ORDER_DISTANCE: f32 = 64.0;
 
+/// Observes the unchanged opening, without injecting control, pause, alliances or orders.
+/// Checks the opening survival regression and repeatability, not complete native parity.
+#[test]
+#[ignore = "requires selected Human01 through PCX_STARTUP_*; diagnostic trace, not chapter acceptance"]
+fn selected_campaign_opening_trace_repeats_without_player_input() {
+    use pcx_play::playercolor_host::CombatTraceEvent;
+    let install = PathBuf::from(env("PCX_STARTUP_INSTALL"));
+    let map = PathBuf::from(env("PCX_STARTUP_MAP"));
+    let bytes = std::fs::read(&map).unwrap();
+    let seed = env("PCX_STARTUP_SEED").parse().unwrap();
+    let run = || {
+        let mut startup = start(
+            &install,
+            selected_mode(),
+            &map.display().to_string(),
+            &bytes,
+            seed,
+            None,
+        )
+        .unwrap();
+        let local = local_slot(&startup);
+        let objects = startup.session.host().unwrap().objects_mut();
+        let (hero, rawcode, initial) = objects
+            .executed_units()
+            .find(|(_, unit)| {
+                unit.executed_owner == local
+                    && unit.abilities.as_ref().is_some_and(|a| a.hero.is_some())
+            })
+            .map(|(id, unit)| (id, unit.definition.rawcode, unit.vitals.unwrap().life))
+            .expect("local source hero");
+        objects.enable_combat_trace(8192);
+        startup
+            .step_clock(3840)
+            .expect("bounded opening projection");
+        let passive = startup.session.global("ALLIANCE_PASSIVE").unwrap();
+        let objects = startup.session.host().unwrap().objects();
+        let trace = objects.combat_trace().unwrap();
+        assert_eq!(trace.dropped(), 0, "opening trace capacity exhausted");
+        let events = trace.events().to_vec();
+        let life = objects.executed_unit(hero).unwrap().vitals.unwrap().life;
+        assert!(
+            life > 0.0,
+            "the source human hero must survive the opening without player input"
+        );
+        assert_eq!(
+            objects.timer_game_time(),
+            Some(60.0),
+            "opening must reach the requested clock rather than an unintended Defeat pause"
+        );
+        eprintln!(
+            "OPENING hero={hero:?} type={} initial_life={initial} final_life={life} clock={:?} paused={:?} presentation={:?} exits={:?}",
+            String::from_utf8_lossy(&rawcode),
+            objects.timer_game_time(),
+            objects.game_paused(),
+            objects
+                .presentation()
+                .map(|p| (p.control_enabled, p.interface_visible)),
+            objects.game_exit_requests()
+        );
+        for event in &events {
+            let (source, target) = match event {
+                CombatTraceEvent::Acquired { source, target, .. }
+                | CombatTraceEvent::Damage { source, target, .. } => (source, target),
+                _ => continue,
+            };
+            if target.unit != hero {
+                continue;
+            }
+            let a = objects.player_settings(source.owner).unwrap();
+            let b = objects.player_settings(target.owner).unwrap();
+            let passive = match passive {
+                Value::Handle(setting) => a
+                    .alliances
+                    .iter()
+                    .find(|(other, kind, _)| *other == b.identity && *kind == setting)
+                    .map(|(_, _, value)| *value),
+                _ => None,
+            };
+            eprintln!(
+                "LOCAL_HERO source_team={:?} target_team={:?} explicit_passive={passive:?} {event:?}",
+                a.team, b.team
+            );
+        }
+        (
+            events,
+            life.to_bits(),
+            objects.timer_game_time(),
+            objects.game_paused(),
+        )
+    };
+    let first = run();
+    let repeat = run();
+    assert_eq!(first, repeat, "unchanged no-input openings must reproduce");
+}
+
 /// PCX_SUMMON_MAP selects an unchanged map whose authored script casts AHwe.
 /// This is a bounded cast gate, not chapter completion or native parity.
 #[test]
