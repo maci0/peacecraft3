@@ -1,5 +1,16 @@
 # Immediate order behavior
 
+Profiling follow-up (2026-10-21): blocked-goal routing can prove a small nearest
+clear component unreachable from the seeded start before searching the whole
+source component. Proof queries consume the existing budget, with a 128-query
+algorithm limit; an incomplete proof leaves the old lower bound intact. Diagonal
+corners and seeded-start edges retain their existing rules. No route limit was
+raised. The synthetic pocket needs 648 work rather than 4,647 and keeps the same
+endpoint. The unchanged Human03 diagnostic now reaches 4,096 ticks / 64 seconds
+without injected player orders. This preserves the recreation's grid rules and
+does not qualify native steering or blocked-order retention. Connected blocked
+goals may pay bounded extra proof work. See [five rounds](../performance/five-rounds.md).
+
 Patrol follow-up (2026-10-21): source-bound point patrols now retain two endpoints,
 reverse on arrival and resume after automatic combat. See [unit patrol](unit-patrol.md)
 for the implementation contract, original-map startup gate and fidelity limits.
