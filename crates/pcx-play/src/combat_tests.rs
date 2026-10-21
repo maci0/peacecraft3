@@ -1,6 +1,8 @@
 use super::*;
 #[path = "ability_cooldown_tests.rs"]
 mod ability_cooldowns;
+#[path = "hero_experience_kill_tests.rs"]
+mod experience_kills;
 #[path = "standard_command_host_tests.rs"]
 mod standard_commands;
 #[path = "unit_summon_tests.rs"]
@@ -53,6 +55,7 @@ constant playerunitevent EVENT_PLAYER_UNIT_DEATH = ConvertPlayerUnitEvent(20)
 constant unitevent EVENT_UNIT_DEATH = ConvertUnitEvent(53)
 constant unitevent EVENT_UNIT_ATTACKED = ConvertUnitEvent(54)
 constant alliancetype ALLIANCE_PASSIVE = ConvertAllianceType(0)
+constant alliancetype ALLIANCE_SHARED_XP = ConvertAllianceType(6)
 constant playerscore PLAYER_SCORE_UNITS_TRAINED = ConvertPlayerScore(0)
 constant playerscore PLAYER_SCORE_UNITS_KILLED = ConvertPlayerScore(1)
 constant integer PLAYER_NEUTRAL_PASSIVE = 15
@@ -220,6 +223,13 @@ fn open_fixture(
             ""
         },
     );
+    let experience = heroes
+        .as_ref()
+        .is_some_and(|h| h.experience.as_ref().is_some_and(|r| r.awards.is_some()));
+    if experience {
+        extra.push_str("\nconstant native SetPlayerHandicapXP takes player p, real factor returns nothing\nconstant native GetPlayerHandicapXP takes player p returns real\n");
+        extra.push_str("native SuspendHeroXP takes unit u, boolean flag returns nothing\n");
+    }
     if blight.is_some() {
         extra.push_str("\nnative SetUnitPosition takes unit u, real x, real y returns nothing\n");
     }
@@ -254,6 +264,13 @@ fn open_fixture(
         .unwrap()
         .with_script_random(Arc::new(crate::script_random::profile::fixture()), 64)
         .unwrap();
+    if experience {
+        let (rules, numeric) = crate::player_handicap::tests::rules();
+        h = h
+            .with_script_numeric(numeric)
+            .with_player_experience_handicap(rules)
+            .unwrap();
+    }
     if let Some(rules) = heroes {
         let origin = crate::scripts::AssetIdentity {
             source: source().install,

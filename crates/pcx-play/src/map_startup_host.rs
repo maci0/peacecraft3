@@ -875,6 +875,7 @@ pub fn assemble(
         SelectedMapNeutralHost::try_new(Arc::clone(&context), rules.aggressive, max_players)?;
     let inner = SelectedMapNeutralHost::try_new(context, rules.passive, aggressive)?;
     let neutral_passive = inner.selected_result();
+    let neutral_aggressive = inner.inner().selected_result();
     let mut host = MapStartupHost {
         sound_playback,
         inner,
@@ -885,6 +886,8 @@ pub fn assemble(
         placement_loader: None,
     };
     host.objects_mut().set_neutral_passive(neutral_passive);
+    host.objects_mut()
+        .set_neutral_aggressive(neutral_aggressive);
     Ok(host)
 }
 
