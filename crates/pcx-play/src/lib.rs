@@ -62,6 +62,7 @@ pub mod campaign_host;
 pub mod campaign_inputs;
 pub mod campaign_placement;
 pub mod cinematics;
+pub mod command_layout;
 pub mod custom_scripts;
 pub mod day_night;
 pub mod default_difficulty_image;
