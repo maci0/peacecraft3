@@ -23,6 +23,72 @@ const ORDER_TICKS: u64 = 256;
 /// World units east of the unit.
 const ORDER_DISTANCE: f32 = 64.0;
 
+#[test]
+#[ignore = "requires selected Human01 through PCX_STARTUP_*; authored cinematic skip gate"]
+fn selected_campaign_escape_returns_control_through_the_authored_trigger() {
+    let install = PathBuf::from(env("PCX_STARTUP_INSTALL"));
+    let map = PathBuf::from(env("PCX_STARTUP_MAP"));
+    let bytes = std::fs::read(&map).unwrap();
+    let seed = env("PCX_STARTUP_SEED").parse().unwrap();
+    let mut startup = start(
+        &install,
+        selected_mode(),
+        &map.display().to_string(),
+        &bytes,
+        seed,
+        None,
+    )
+    .unwrap();
+    startup.step_clock(64).unwrap();
+    let before = startup
+        .session
+        .host()
+        .unwrap()
+        .objects()
+        .presentation()
+        .unwrap()
+        .control_enabled;
+    assert_eq!(before, Some(false));
+    let fired = startup
+        .session
+        .host()
+        .unwrap()
+        .objects_mut()
+        .fire_local_player_event("EVENT_PLAYER_END_CINEMATIC")
+        .unwrap();
+    assert!(
+        fired > 0,
+        "the original intro-cancel registration must receive Escape"
+    );
+    startup.step_clock(2048).unwrap();
+    let skipped = startup.session.global("udg_IntroSkipped");
+    let arrived = startup.session.global("udg_HasArthasArrived");
+    let objects = startup.session.host().unwrap().objects();
+    let presentation = objects.presentation().unwrap();
+    eprintln!(
+        "ESCAPE clock={:?} control={:?} interface={:?} intro_skipped={:?} arrived={:?}",
+        objects.timer_game_time(),
+        presentation.control_enabled,
+        presentation.interface_visible,
+        skipped,
+        arrived
+    );
+    assert_eq!(presentation.control_enabled, Some(true));
+    assert_eq!(presentation.interface_visible, Some(true));
+    assert_eq!(skipped, Some(Value::Bool(true)));
+    assert_eq!(arrived, Some(Value::Bool(true)));
+    let board = pcx_play::quest_view::project(objects.quest_session().unwrap()).unwrap();
+    for quest in &board.quests {
+        eprintln!(
+            "QUEST {} discovered={} complete={} failed={}",
+            quest.title.unwrap_or("<unset>"),
+            quest.discovered,
+            quest.completed,
+            quest.failed
+        );
+    }
+}
+
 /// Observes the unchanged opening, without injecting control, pause, alliances or orders.
 /// Checks the opening survival regression and repeatability, not complete native parity.
 #[test]
