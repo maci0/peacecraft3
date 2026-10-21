@@ -332,3 +332,109 @@ fn request(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ui_widgets::Activate;
+    use pcx_play::map_startup_host::MapStartupHost;
+    use peacecraft3::{
+        campaign_startup::{CampaignSeed, CampaignStartup},
+        map_script_session::MapScriptSession,
+    };
+
+    #[test]
+    #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL, PCX_NATIVE_CHAPTER_MAP and PCX_NATIVE_CHAPTER_ADDON"]
+    fn selected_install_chapter_activation_publishes_the_production_session() {
+        let install_dir = std::env::var("PCX_NATIVE_CHAPTER_INSTALL")
+            .expect("set PCX_NATIVE_CHAPTER_INSTALL to the selected local install");
+        let map = std::env::var("PCX_NATIVE_CHAPTER_MAP")
+            .expect("set PCX_NATIVE_CHAPTER_MAP to a map member from that install's chapter index");
+        let expansion = match std::env::var("PCX_NATIVE_CHAPTER_ADDON").as_deref() {
+            Ok("roc") => false,
+            Ok("tft") => true,
+            _ => panic!("PCX_NATIVE_CHAPTER_ADDON must explicitly select roc or tft"),
+        };
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(crate::launch_gui::Launcher::test_source(
+                install_dir,
+                expansion,
+            ))
+            .init_resource::<crate::campaign_input::CampaignInput>()
+            // The normal map-ground plugin declares this renderer capability too.
+            .insert_resource(peacecraft3::map_ground::NoOcclusionPass);
+        peacecraft3::map_requests::install(&mut app);
+        peacecraft3::campaign_startup::install(&mut app);
+        crate::campaign_prepare::install(&mut app);
+        crate::button_actions::install(&mut app);
+        install(&mut app);
+        app.add_systems(Update, crate::button_actions::clear);
+        app.world_mut().resource_mut::<CampaignSeed>().requested = Some(1);
+        app.world_mut().spawn((Node::default(), ChapterList));
+        app.update();
+
+        let chapters = app.world().resource::<Chapters>();
+        assert!(
+            chapters.error.is_none(),
+            "chapter index: {:?}",
+            chapters.error
+        );
+        let index = chapters
+            .entries
+            .iter()
+            .position(|entry| entry.map.eq_ignore_ascii_case(&map))
+            .expect("requested map must come from the selected install's campaign index");
+        let button = app
+            .world_mut()
+            .query::<(Entity, &ChapterButton)>()
+            .iter(app.world())
+            .find(|(_, button)| button.0 == index)
+            .unwrap()
+            .0;
+        // Activate is the widget's keyboard/pointer boundary; physical picking is a separate gate.
+        app.world_mut().trigger(Activate { entity: button });
+        for _ in 0..6 {
+            app.update();
+        }
+        let chapters = app.world().resource::<Chapters>();
+        assert!(
+            chapters.error.is_none(),
+            "chapter configuration: {:?}",
+            chapters.error
+        );
+        assert!(
+            chapters.pending.is_none(),
+            "configuration did not complete within six updates"
+        );
+        let startup = app.world().resource::<CampaignStartup>();
+        assert!(
+            startup.last_error.is_none(),
+            "production startup: {:?}",
+            startup.last_error
+        );
+        let requests = app.world().resource::<MapRequests>();
+        let context = requests
+            .admission
+            .shared_context()
+            .expect("map must be admitted");
+        let session = app.world().resource::<MapScriptSession<MapStartupHost>>();
+        assert!(
+            session
+                .context()
+                .is_some_and(|published| std::sync::Arc::ptr_eq(published, &context)),
+            "the activated chapter must publish the admitted context"
+        );
+        assert_eq!(app.world().resource::<CampaignSeed>().prepared, Some(1));
+        let units = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host()
+            .expect("published production host")
+            .objects()
+            .executed_units()
+            .count();
+        assert!(units > 0, "unchanged chapter main must create units");
+        println!("chapter={map} seed=1 executed_units={units} published=true");
+    }
+}

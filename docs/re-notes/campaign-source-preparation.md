@@ -1,5 +1,33 @@
 # Campaign source preparation
 
+## Native chapter activation gate (2026-10-21)
+
+The ignored binary test
+`native_campaign::tests::selected_install_chapter_activation_publishes_the_production_session`
+selects a map from the chosen install's actual campaign index, activates its
+populated chapter button through `Activate`, and runs the normal configuration
+inbox, bounded map admission, `campaign_prepare` and `campaign_startup` systems.
+It requires explicit `PCX_NATIVE_CHAPTER_INSTALL`, `PCX_NATIVE_CHAPTER_MAP` and
+`PCX_NATIVE_CHAPTER_ADDON=roc|tft` inputs. No synthetic catalog, replacement map
+script or alternate host factory supplies the session.
+
+The selected Legacy install's `Maps\Campaign\Human01.w3m`, RoC and an explicit
+recreation seed of 1 publish the same admitted context and 152 script-created
+units. This confirms chapter activation through script startup, not rendered
+input, later mission progression or original-client parity. The test omits GPU
+systems but includes the existing `NoOcclusionPass` capability that the normal
+terrain plugin declares. Its first run omitted that marker and refused
+`EnableOcclusion`; this was a test setup error, not an application defect.
+
+Physical pointer delivery remains a separate gate. An earlier synthetic test
+using the actual UI picking backend passed on the unchanged text-label helper;
+it did not establish a chapter-label bug. No label picking behavior was changed.
+Local compiler, gate and host-stall receipts remain under
+`.scratch/native-chapter/`; a host kernel RCU stall delayed linking but recovered
+without a restarted build or host configuration changes.
+
+## Normal source preparation
+
 The normal native/browser application now prepares startup inputs after a map
 delivery and before `CampaignStartupSet`. It uses the resolver published with
 that delivery's exact receipt arc. Preparation runs once per context/revision;
