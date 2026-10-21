@@ -2,7 +2,7 @@
 
 The command card is still being implemented. Learned Holy Light and Water
 Elemental buttons now have a receipt-bound renderer and input consumer;
-tooltips and readiness presentation remain unfinished.
+ranked tooltips are connected. Readiness presentation remains unfinished.
 
 ## Selected-client evidence
 
@@ -246,3 +246,36 @@ mount/replacement gates both pass. Strict affected all-target Clippy, native
 test-fixture compilation, affected WASM library/bin checks and formatting pass.
 Receipts remain in `.scratch/command-card-source/tooltip-*`; earlier failed
 missing-default-install census, image-fit and host-pointer attempts are retained.
+
+## Readiness inputs (2026-10-22)
+
+The live Holy Light and Water Elemental casts now share the payment/cooldown
+snapshot used by their read-only readiness queries. It reports the source-ranked
+mana cost, current optional mana pool, remaining game-clock cooldown and pause
+state. Missing pools stay unavailable. This is not a target-validity, creation
+capacity or full cast-acceptance result. In particular, summoning starts its
+cooldown when the cast-point callback actually creates the unit, not when the
+input order is accepted. No random draw, pool write or clock advance occurs in
+the query.
+
+Static selected-client evidence establishes the disabled-image construction:
+the texture setter at `0x5d3e30` searches both path separators for the basename,
+loads the skin key through the pointer at `0x5d3eaa`, then uses the format pointer
+at `0x5d3eb8` before passing the result to texture state zero at `0x5d3edc`.
+These are inputs from the selected image and skin, not a disabled-image path
+constant. Local disassembly is in `.scratch/command-readiness/texture-setters.asm`.
+This does not establish which low-mana, cooldown or other gameplay states select
+that image, their tint, or their model animation. Button visual-state mapping
+and its runtime comparison remain open; the normal icon is not recoloured from
+an assumed grey or blue palette.
+
+The private core suite passes 1,090 tests (31 ignored), including source-fixture
+costs, cooldown start/expiry, pause and insufficient-mana refusals. The explicit
+Human01 gate checks every rank's snapshot against the installed AbilityData cost
+column and the live unit pools/pause flag. Affected core/app strict all-target
+Clippy, WASM and native app tests pass. Receipts are local under
+`.scratch/command-readiness/`. No new F7 rows or button states are published by
+this core checkpoint. Holy Light still reads several numeric columns through
+the older integer-only helper; fractional authored values need a typed read.
+The selected `common.j` declares ability cooldown query/reset natives, whose
+script wiring remains open.

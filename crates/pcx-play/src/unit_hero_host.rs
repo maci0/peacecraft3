@@ -10,6 +10,22 @@ use std::collections::BTreeSet;
 #[path = "ability_tooltip.rs"]
 mod tooltip;
 
+impl ObjectHost {
+    pub(crate) fn ability_readiness_at(
+        unit: &ExecutedUnit,
+        mana_cost: f32,
+        ready_at: Option<f64>,
+        now: f64,
+    ) -> crate::ability_profile::Readiness {
+        crate::ability_profile::Readiness {
+            mana_cost,
+            mana: unit.vitals.map(|vitals| vitals.mana),
+            cooldown_remaining: ready_at.map_or(0.0, |due| (due - now).max(0.0)),
+            paused: unit.paused_since.is_some(),
+        }
+    }
+}
+
 struct HeroDelivery {
     trigger: HandleId,
     filter: Option<FunctionId>,

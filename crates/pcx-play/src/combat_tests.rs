@@ -2495,14 +2495,87 @@ fn holy_light_heals_a_friendly_living_unit_and_waits_out_its_cooldown() {
     let (mut vm, [h, f, _, _]) = holy_open("", LEARNED, NOTHING);
     vm.call("prime", &[]).unwrap();
     let mana = holy_mana(&mut vm, h);
+    let ready = vm.host().inner.holy_light_readiness(h).unwrap().unwrap();
+    assert_eq!(
+        (ready.mana_cost, ready.mana, ready.cooldown_remaining),
+        (65., Some(mana), 0.)
+    );
+    assert!(ready.ready());
     assert_eq!(holy_life(&mut vm, f), 100.0);
     assert!(holy_cast(&mut vm, h, f));
     assert_eq!(holy_life(&mut vm, f), 300.0);
     assert_eq!(holy_mana(&mut vm, h), mana - 65.0);
+    let cooling = vm.host().inner.holy_light_readiness(h).unwrap().unwrap();
+    assert_eq!(cooling.cooldown_remaining, 5.);
+    assert_eq!(cooling.mana, Some(mana - 65.));
+    assert!(!cooling.ready());
     assert!(!holy_cast(&mut vm, h, f), "cooldown refuses the recast");
     step(&mut vm, 5.0);
+    assert!(
+        vm.host()
+            .inner
+            .holy_light_readiness(h)
+            .unwrap()
+            .unwrap()
+            .ready()
+    );
     assert!(holy_cast(&mut vm, h, f));
     assert_eq!(holy_life(&mut vm, f), 500.0);
+}
+
+#[test]
+fn holy_readiness_tracks_pause_and_mana_without_spending_or_accepting_a_cast() {
+    let (mut vm, [caster, target, _, _]) = holy_open("", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    let mana = holy_mana(&mut vm, caster);
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(caster), Value::Bool(true)])
+        .unwrap();
+    let paused = vm
+        .host()
+        .inner
+        .holy_light_readiness(caster)
+        .unwrap()
+        .unwrap();
+    assert!(paused.paused);
+    assert!(!paused.ready());
+    assert!(!holy_cast(&mut vm, caster, target));
+    assert_eq!(holy_mana(&mut vm, caster), mana);
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(caster), Value::Bool(false)])
+        .unwrap();
+    assert!(
+        vm.host()
+            .inner
+            .holy_light_readiness(caster)
+            .unwrap()
+            .unwrap()
+            .ready()
+    );
+    let state = vm.global("UNIT_STATE_MANA");
+    vm.host()
+        .inner
+        .native(
+            "SetUnitState",
+            &[Value::Handle(caster), state, Value::Real(64.)],
+        )
+        .unwrap();
+    let short = vm
+        .host()
+        .inner
+        .holy_light_readiness(caster)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (short.mana_cost, short.mana, short.cooldown_remaining),
+        (65., Some(64.), 0.)
+    );
+    assert!(!short.ready());
+    assert!(!holy_cast(&mut vm, caster, target));
+    assert_eq!(holy_mana(&mut vm, caster), 64.);
+    assert_eq!(holy_life(&mut vm, target), 100.);
 }
 
 #[test]
@@ -2522,6 +2595,7 @@ fn unavailable_holy_light_has_no_command_or_cast_and_tracks_current_owner() {
         .unwrap();
     let mana = holy_mana(&mut vm, h);
     assert!(vm.host().inner.holy_light_command(h).unwrap().is_none());
+    assert!(vm.host().inner.holy_light_readiness(h).unwrap().is_none());
     assert!(!holy_cast(&mut vm, h, f));
     assert_eq!(holy_life(&mut vm, f), 100.0);
     assert_eq!(holy_mana(&mut vm, h), mana);
