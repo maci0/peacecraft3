@@ -8,6 +8,7 @@ pub(crate) struct CachedUnit {
     pub install: String,
     pub edition: String,
     pub hero: Option<[i32; 2]>,
+    pub experience: Option<crate::hero_experience::State>,
     pub abilities: Vec<([u8; 4], i32)>,
     pub cooldowns: Vec<([u8; 4], i32, u32)>,
     pub permanent_strength: i32,
@@ -41,6 +42,9 @@ impl CachedUnit {
                 .hero
                 .is_some_and(|[level, points]| level < 0 || points < 0)
             || self.abilities.iter().any(|(_, level)| *level < 0)
+            || self
+                .experience
+                .is_some_and(|state| state.xp < 0 || self.hero.is_none())
             || self.abilities.windows(2).any(|a| a[0].0 >= a[1].0)
             || self.cooldowns.iter().any(|(alias, rank, bits)| {
                 *rank < 1
@@ -69,7 +73,7 @@ impl CachedUnit {
             bytes: Vec::new(),
             limit,
         };
-        out.bytes(b"PC3UNIT\x02")?;
+        out.bytes(b"PC3UNIT\x03")?;
         out.bytes(&self.rawcode)?;
         out.bytes(&self.client_sha256)?;
         out.text(&self.install)?;
@@ -104,6 +108,11 @@ impl CachedUnit {
             out.bytes(&rank.to_le_bytes())?;
             out.bytes(&bits.to_le_bytes())?;
         }
+        out.bytes(&[u8::from(self.experience.is_some())])?;
+        if let Some(state) = self.experience {
+            out.bytes(&state.xp.to_le_bytes())?;
+            out.bytes(&[u8::from(state.suspended)])?;
+        }
         Ok(out.bytes)
     }
 
@@ -115,6 +124,7 @@ impl CachedUnit {
         let version = match input.take(8)? {
             b"PC3UNIT\x01" => 1,
             b"PC3UNIT\x02" => 2,
+            b"PC3UNIT\x03" => 3,
             _ => return Err("unsupported cached unit format/version".into()),
         };
         let rawcode = input.take(4)?.try_into().expect("four bytes");
@@ -190,6 +200,23 @@ impl CachedUnit {
                 ));
             }
         }
+        let experience = if version >= 3 {
+            match input.take(1)?[0] {
+                0 => None,
+                1 => {
+                    let xp = integer(&mut input)?;
+                    let suspended = match input.take(1)?[0] {
+                        0 => false,
+                        1 => true,
+                        _ => return Err("invalid cached XP suspension".into()),
+                    };
+                    Some(crate::hero_experience::State { xp, suspended })
+                }
+                _ => return Err("invalid cached XP tag".into()),
+            }
+        } else {
+            None
+        };
         if input.cursor != bytes.len() {
             return Err("trailing cached unit bytes".into());
         }
@@ -199,6 +226,7 @@ impl CachedUnit {
             install,
             edition,
             hero,
+            experience,
             abilities,
             cooldowns,
             permanent_strength,
@@ -226,6 +254,7 @@ pub(super) mod tests {
             install: "synthetic".into(),
             edition: "fixture".into(),
             hero: Some([3, 1]),
+            experience: None,
             abilities: vec![(*b"A001", 2)],
             cooldowns: vec![(*b"A001", 2, 1.25f32.to_bits())],
             permanent_strength: 7,
@@ -244,7 +273,7 @@ pub(super) mod tests {
         saved.cooldowns.clear();
         let mut old = saved.encode(1024).unwrap();
         old[7] = 1;
-        old.truncate(old.len() - 4); // Version one ended immediately after inventory.
+        old.truncate(old.len() - 5); // Version one ended before cooldowns and the XP tag.
         assert_eq!(CachedUnit::decode(&old, 1024).unwrap(), saved);
         for cooldowns in [
             vec![(*b"A001", 0, 1f32.to_bits())],
@@ -282,5 +311,23 @@ pub(super) mod tests {
         bad = saved;
         bad.items[0].charges = -1;
         assert!(bad.encode(1024).is_err());
+    }
+    #[test]
+    fn xp_and_suspension_roundtrip_and_legacy_versions_keep_absence() {
+        let mut saved = fixture();
+        saved.experience = Some(crate::hero_experience::State {
+            xp: 73,
+            suspended: true,
+        });
+        let bytes = saved.encode(1024).unwrap();
+        assert_eq!(CachedUnit::decode(&bytes, 1024).unwrap(), saved);
+        let mut old = fixture().encode(1024).unwrap();
+        old[7] = 2;
+        old.pop();
+        let decoded = CachedUnit::decode(&old, 1024).unwrap();
+        assert_eq!(decoded.experience, None);
+        assert_eq!(decoded, fixture());
+        saved.experience.as_mut().unwrap().xp = -1;
+        assert!(saved.encode(1024).is_err());
     }
 }

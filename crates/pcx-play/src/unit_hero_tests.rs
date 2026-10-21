@@ -570,6 +570,10 @@ fn host(
         MAP.split("function learn").next().unwrap()
     };
     let ctx = context(300, &common, map, "unit-catalog");
+    let mut rules = hero_skills::tests::rules();
+    if extra.contains("GetHeroXP") {
+        rules.experience = Some(Arc::new(crate::hero_experience::tests::rules()));
+    }
     let h = object(&ctx, 64)
         .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
         .unwrap()
@@ -579,7 +583,7 @@ fn host(
             tables(profile),
             catalog_origin(),
             overlay,
-            hero_skills::tests::rules(),
+            rules,
             HeroBudget {
                 abilities_per_unit: abilities,
                 overlay_objects: 8,
@@ -591,6 +595,59 @@ fn host(
     vm.init_globals().unwrap();
     vm
 }
+#[test]
+fn hero_xp_thresholds_positive_set_and_suspension_share_real_level_state() {
+    let natives = format!(
+        "{NATIVES}\nnative GetHeroXP takes unit u returns integer\nnative SetHeroXP takes unit u, integer xp, boolean eye returns nothing\nnative AddHeroXP takes unit u, integer xp, boolean eye returns nothing\nnative SuspendHeroXP takes unit u, boolean flag returns nothing\nnative IsSuspendedXP takes unit u returns boolean\n"
+    );
+    let mut vm = host(&natives, "L001", Overlay::default(), "", 8);
+    vm.call("setup", &[]).unwrap();
+    let hero = vm.global("H");
+    let ordinary = vm.global("N");
+    assert_eq!(query(&mut vm, "GetHeroXP", None), 0);
+    assert_eq!(
+        vm.host().inner.native("GetHeroXP", &[ordinary]).unwrap(),
+        Value::Int(0)
+    );
+    let call = |vm: &mut pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>,
+                name: &str,
+                value: i32| {
+        vm.host()
+            .inner
+            .native(name, &[hero.clone(), Value::Int(value), Value::Bool(false)])
+            .unwrap();
+    };
+    call(&mut vm, "SetHeroXP", 17);
+    assert_eq!(query(&mut vm, "GetHeroLevel", None), 2);
+    call(&mut vm, "SetHeroXP", 16);
+    assert_eq!(query(&mut vm, "GetHeroXP", None), 17);
+    call(&mut vm, "AddHeroXP", 21);
+    assert_eq!(query(&mut vm, "GetHeroXP", None), 38);
+    assert_eq!(query(&mut vm, "GetHeroLevel", None), 3);
+    vm.host()
+        .inner
+        .native("SuspendHeroXP", &[hero.clone(), Value::Bool(true)])
+        .unwrap();
+    call(&mut vm, "AddHeroXP", 7);
+    assert_eq!(query(&mut vm, "GetHeroXP", None), 38);
+    vm.host()
+        .inner
+        .native("SuspendHeroXP", &[hero.clone(), Value::Bool(false)])
+        .unwrap();
+    call(&mut vm, "AddHeroXP", 1);
+    assert_eq!(query(&mut vm, "GetHeroXP", None), 39);
+    for args in [
+        vec![],
+        vec![hero.clone(), Value::Bool(true), Value::Bool(false)],
+        vec![hero.clone(), Value::Int(i32::MAX), Value::Bool(false)],
+    ] {
+        assert!(vm.host().inner.native("AddHeroXP", &args).is_err());
+        assert_eq!(query(&mut vm, "GetHeroXP", None), 39);
+    }
+    raise(&mut vm, 4);
+    assert_eq!(query(&mut vm, "GetHeroXP", None), 66);
+}
+
 fn query(
     vm: &mut pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>,
     name: &str,

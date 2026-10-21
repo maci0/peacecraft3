@@ -134,6 +134,14 @@ pub fn prepare_new_game(
     if let Some(bytes) = &map_misc {
         game_profiles.push((map_sources.map_label.as_str(), bytes.as_slice()));
     }
+    let hero = inputs
+        .hero_skills
+        .as_mut()
+        .ok_or("hero XP requires hero admission")?;
+    hero.rules = hero
+        .rules
+        .clone()
+        .with_experience(image, &game_profiles, 8 << 20, 65536)?;
     let abilities = inputs
         .hero_skills
         .as_ref()

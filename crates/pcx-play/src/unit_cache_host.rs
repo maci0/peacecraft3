@@ -151,6 +151,7 @@ impl ObjectHost {
                 .hero
                 .as_ref()
                 .map(|hero| [hero.level, hero.skill_points]),
+            experience: abilities.hero.as_ref().and_then(|hero| hero.experience),
             abilities: levels,
             cooldowns: abilities.cooldowns().to_vec(),
             permanent_strength: record.permanent_strength,

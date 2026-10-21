@@ -24,6 +24,85 @@ const ORDER_TICKS: u64 = 256;
 const ORDER_DISTANCE: f32 = 64.0;
 
 #[test]
+#[ignore = "requires selected Human01 through PCX_STARTUP_*; diagnostic XP stimulus, not player acceptance"]
+fn selected_campaign_hero_xp_runs_the_authored_level_cap() {
+    use pcx_assets::ContentSource;
+    let install = PathBuf::from(env("PCX_STARTUP_INSTALL"));
+    let map = PathBuf::from(env("PCX_STARTUP_MAP"));
+    let bytes = std::fs::read(&map).unwrap();
+    let source = pcx_play::install_source::InstallSource::open(&install).unwrap();
+    let misc = source
+        .read_bounded("Units\\MiscGame.txt", 8 << 20)
+        .unwrap()
+        .unwrap();
+    let profiles = [(misc.locator.as_str(), misc.bytes.as_slice())];
+    let progression = pcx_objects::editor::hero::Progression::read(&profiles, 8 << 20).unwrap();
+    let mut startup = start(
+        &install,
+        selected_mode(),
+        &map.display().to_string(),
+        &bytes,
+        env("PCX_STARTUP_SEED").parse().unwrap(),
+        None,
+    )
+    .unwrap();
+    let hero = startup.session.global("udg_Arthas").expect("authored hero");
+    let objects = startup.session.host().unwrap().objects_mut();
+    let Value::Int(initial) = objects
+        .native("GetHeroLevel", std::slice::from_ref(&hero))
+        .unwrap()
+    else {
+        panic!("hero level")
+    };
+    let thresholds = pcx_objects::editor::hero_experience::Experience::read(
+        &profiles,
+        initial,
+        progression.max_level,
+        8 << 20,
+        65536,
+    )
+    .unwrap();
+    let threshold = thresholds.minimum_for(initial, initial + 1).unwrap();
+    assert_eq!(
+        objects
+            .native("GetHeroXP", std::slice::from_ref(&hero))
+            .unwrap(),
+        Value::Int(0)
+    );
+    objects
+        .native(
+            "SetHeroXP",
+            &[hero.clone(), Value::Int(threshold), Value::Bool(false)],
+        )
+        .unwrap();
+    startup.session.advance_queued_events(100_000).unwrap();
+    let objects = startup.session.host().unwrap().objects_mut();
+    assert_eq!(
+        objects
+            .native("GetHeroLevel", std::slice::from_ref(&hero))
+            .unwrap(),
+        Value::Int(initial + 1)
+    );
+    assert_eq!(
+        objects
+            .native("IsSuspendedXP", std::slice::from_ref(&hero))
+            .unwrap(),
+        Value::Bool(true),
+        "the map's real hero-level trigger must suspend XP"
+    );
+    objects
+        .native(
+            "AddHeroXP",
+            &[hero.clone(), Value::Int(threshold), Value::Bool(false)],
+        )
+        .unwrap();
+    assert_eq!(
+        objects.native("GetHeroXP", &[hero]).unwrap(),
+        Value::Int(threshold)
+    );
+}
+
+#[test]
 #[ignore = "requires selected Human01 through PCX_STARTUP_*; authored cinematic skip gate"]
 fn selected_campaign_escape_returns_control_through_the_authored_trigger() {
     let install = PathBuf::from(env("PCX_STARTUP_INSTALL"));

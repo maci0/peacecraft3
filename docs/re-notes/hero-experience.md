@@ -1,10 +1,49 @@
 # Hero experience: source and runtime checkpoint
 
-Experience awards are not implemented. `HeroProgress` retains level and skill
-points, not XP or XP suspension; `combat_host::kill_unit` queues death callbacks
-without an experience award. The declared `GetHeroXP`, `SetHeroXP`, `AddHeroXP`,
-`SuspendHeroXP` and `IsSuspendedXP` paths are not admitted. Do not compensate by
-raising combat damage, hero level, or resource pools in a campaign test.
+Hero XP counters, suspension and script natives are implemented through the
+selected-source admission. Automatic kill awards are not implemented:
+`combat_host::kill_unit` still queues death callbacks without an experience award.
+Do not compensate by raising combat damage, hero level, or resource pools in a
+campaign test.
+
+## Implemented state and compatibility
+
+`hero_skills::Rules::with_experience` derives required-XP thresholds from ordered
+stock/map profiles and initial XP/suspension from the selected executable's
+constructor operands. Its instruction shapes and client SHA are validated before
+admission. Synthetic operands and profiles test derivation, overrides, bounds and
+malformed input. Production new-game preparation uses this path.
+
+`GetHeroXP`, `SetHeroXP`, `AddHeroXP`, `SuspendHeroXP` and `IsSuspendedXP` share
+the existing hero-level, skill-point and vitality state. Positive setters and
+additions preserve the measured suspension behavior. A lower setter is ignored;
+negative additions and integer overflow refuse explicitly. Direct level raises
+bring XP up to the corresponding source threshold; that synchronization is a
+recreation choice, not yet a native `SetHeroLevel` observation.
+
+The selected Human01 gate `selected_campaign_hero_xp_runs_the_authored_level_cap`
+raises XP to the source-derived next-level threshold, drains the ordinary event
+queue, and observes the map's real level trigger suspending XP. Further addition
+leaves XP unchanged. This is a diagnostic stimulus, not a player-earned award or
+chapter acceptance. Native same-stack callback ordering remains unqualified;
+this gate proves the host's queued delivery boundary.
+
+Recreation-owned `PC3UNIT` version 3 stores XP and suspension. Versions 1 and 2
+still decode and restore their existing progress, with XP explicitly absent.
+No XP is invented for those old saves: XP-native operations on such a restored
+hero refuse. New records with XP inconsistent with their saved level refuse
+before replacing ability state. This does not claim original W3V compatibility.
+
+Private-target validation: `pcx-play --lib` passes 1,129 tests with 32 ignored;
+the complete `pcx-objects` package passes with both supplied install paths set.
+Its first broad run without those paths failed the existing aggregate original-
+asset census (zero inputs); that is not counted as a pass. Strict all-target
+Clippy on both crates, both WASM library checks, and native
+`peacecraft3 --all-targets` check pass. The three selected Human01 gates pass:
+the XP cap, authored Escape/control return, and two equal no-input 60-second
+opening runs with Arthas alive at his initial life. Logs remain local under
+`.scratch/campaign-route/xp-*`. These checks do not prove rendered XP UI,
+original save compatibility or chapter completion.
 
 ## Unchanged-map route (2026-10-22)
 
@@ -73,6 +112,39 @@ Raw markers, hashes, scripts, maps, captures and launch/action receipts remain
 local. Both owned reference containers are stopped. No original bytes are
 committed or uploaded.
 
+### Kill, range and sharing diagnostic
+
+Run `7c82649e3788` preserves the same template initialization and adds one timer
+with six synchronous `UnitDamageTarget` stimuli. Each created victim is `hfoo`;
+the original reports its unit level as 2. Every record confirms an accepted
+damage call and a dead victim. An added second `Hart` hero shares the first
+hero's owner. The diagnostic explicitly clears the first hero's XP suspension
+before each stimulus. Distances below are actual queried positions, not requested
+placement coordinates; terrain relocated the distant victims.
+
+| Victim owner / case | Distance from Arthas | Arthas XP delta | Second hero delta |
+|---|---:|---:|---:|
+| Player 0, near | 300.001 | 32 | absent |
+| Player 0, far | 2893.524 | 32 | absent |
+| Neutral aggressive, near | 300.001 | 26 | absent |
+| Neutral aggressive, far | 2893.524 | 26 | absent |
+| Player 0, two heroes near | 300.001 | 16 | 16 |
+| Player 0, only second hero near | 2450.786 | 0 | 32 |
+
+Human01 sets its hero player's XP handicap to 80 percent in its original script.
+The stock level-2 normal grant recurrence gives 40; its handicap gives 32. The
+creep factor at hero level 1 yields a fractional candidate of 25.6, observed as
+26. That single fractional observation alone does not establish rounding for
+other values. The code link below provides additional evidence. The far-only and second-near observations show
+that a simple global award to every owned hero is incorrect. They do not settle
+allied sharing, exact range boundaries, dead/suspended/max-level participants,
+buildings, summoned victims or alternate `GlobalExperience` settings.
+
+All six bounded marker files and source/staging/action receipts are retained in
+local `.scratch/campaign-route/xp-kills-v1/`. Parse/resolve, archive round-trip
+and staged-byte comparison passed. The observed chapter card was dismissed by
+one Space key. The owned reference container is stopped.
+
 ## Native-code links
 
 The primary registrations are in the selected image at `0x49D7BC` onward:
@@ -89,11 +161,20 @@ SetHeroXP subtracts current XP and takes only a positive difference
 constructor initializes XP at `0xB3D829`. These links agree with the runtime
 observations; they do not yet qualify kill sharing or arithmetic edge cases.
 
+At `0xB3E352` and `0xB3E370`, XP updates call `0x9A1D70` before the integer
+conversion at `0x9A07B0`. The helper adds the float at `0x10DB0A8` through
+`0x9A01C0` (the existing source-qualified addition helper), then calls
+`0x9A1520`. The operand bytes are `00 00 00 3F`, and the latter helper clears
+fraction bits for nonnegative inputs. This is code evidence for floor after
+adding the image's half-unit operand, consistent with the observed 25.6 to 26.
+Any runtime implementation must read that operand from the selected image;
+the measured value is not a production constant. Award multipliers, their order
+and level-dependent splitting remain to be connected.
+
 ## Required continuation
 
-Implement source-derived thresholds and XP state/natives, preserving level-up
-events and the map's suspension cap. Connect eligible deaths to awards only
+Connect eligible deaths to source-derived awards only
 after deriving the grant, range, allied sharing, creep and rounding rules.
-Persist XP/suspension through the existing campaign cache with an explicit
-compatibility policy. Re-run the same preserved itinerary and continue through
+Qualify the remaining arithmetic/event timing and legacy-cache migration policy.
+Re-run the same preserved itinerary and continue through
 chapter victory and the next-map transition. Neither is achieved here.

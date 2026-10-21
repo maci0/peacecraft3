@@ -170,6 +170,7 @@ pub mod campaign_index;
 pub mod defaults;
 pub mod fog_boundary;
 pub mod hero;
+pub mod hero_experience;
 mod keys;
 pub mod messages;
 pub mod meta;
