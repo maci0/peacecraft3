@@ -77,15 +77,15 @@ type OverlayPanels<'w, 's> = Query<
 fn panel() -> Node {
     Node {
         display: Display::None,
-        width: Val::Rem(22.0),
+        width: Val::Rem(23.0),
         max_width: Val::Percent(100.0),
         min_width: Val::Px(0.0),
         flex_shrink: 0.0,
         flex_direction: FlexDirection::Column,
-        padding: UiRect::all(Val::Rem(0.75)),
+        padding: UiRect::all(Val::Rem(0.625)),
         border: UiRect::all(Val::Px(1.0)),
         border_radius: BorderRadius::all(Val::Px(6.0)),
-        row_gap: Val::Rem(0.5),
+        row_gap: Val::Rem(0.375),
         ..default()
     }
 }
@@ -131,30 +131,70 @@ fn setup(mut commands: Commands) {
                 panel(),
                 Visibility::Hidden,
                 OverlayRoot,
-                BackgroundColor(Color::srgba(0.012, 0.018, 0.02, 0.28)),
-                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.12)),
+                BackgroundColor(Color::srgba(0.012, 0.018, 0.02, 0.22)),
+                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.10)),
                 Pickable::IGNORE,
             ))
             .with_children(|panel| {
-                panel.spawn((
-                    Text::new("Performance                          F8"),
-                    TextFont {
-                        font_size: bevy::text::FontSize::Rem(0.7),
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.76, 0.84, 0.83)),
-                    Pickable::IGNORE,
-                ));
-                panel.spawn((
-                    Text::new("FPS                 -\nFrame interval      - ms"),
-                    TextFont {
-                        font_size: bevy::text::FontSize::Rem(0.85),
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.96, 0.98, 0.96)),
-                    Pickable::IGNORE,
-                    CounterText,
-                ));
+                panel
+                    .spawn((
+                        Node {
+                            justify_content: JustifyContent::SpaceBetween,
+                            ..default()
+                        },
+                        Pickable::IGNORE,
+                    ))
+                    .with_children(|row| {
+                        for text in ["Performance", "F8"] {
+                            row.spawn((
+                                Text::new(text),
+                                TextFont {
+                                    font_size: bevy::text::FontSize::Rem(0.7),
+                                    ..default()
+                                },
+                                TextColor(Color::srgb(0.76, 0.84, 0.83)),
+                                Pickable::IGNORE,
+                            ));
+                        }
+                    });
+                panel
+                    .spawn((
+                        Node {
+                            justify_content: JustifyContent::SpaceBetween,
+                            ..default()
+                        },
+                        Pickable::IGNORE,
+                    ))
+                    .with_children(|row| {
+                        row.spawn((
+                            Text::new("FPS\nFrame interval"),
+                            TextFont {
+                                font_size: bevy::text::FontSize::Rem(0.85),
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.82, 0.88, 0.85)),
+                            TextShadow {
+                                offset: Vec2::splat(1.0),
+                                ..default()
+                            },
+                            Pickable::IGNORE,
+                        ));
+                        row.spawn((
+                            Text::new("-\n- ms"),
+                            TextLayout::justify(Justify::Right),
+                            TextFont {
+                                font_size: bevy::text::FontSize::Rem(0.85),
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.96, 0.98, 0.96)),
+                            TextShadow {
+                                offset: Vec2::splat(1.0),
+                                ..default()
+                            },
+                            Pickable::IGNORE,
+                            CounterText,
+                        ));
+                    });
                 panel.spawn((
                     Text::new("Frame-time history unavailable"),
                     TextFont {
@@ -233,20 +273,32 @@ fn setup(mut commands: Commands) {
                 Visibility::Hidden,
                 DebugRoot,
                 ScrollPosition::default(),
-                BackgroundColor(Color::srgba(0.012, 0.018, 0.02, 0.28)),
-                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.12)),
+                BackgroundColor(Color::srgba(0.012, 0.018, 0.02, 0.22)),
+                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.10)),
                 Pickable::IGNORE,
             ))
             .with_children(|panel| {
-                panel.spawn((
-                    Text::new("Debug                      F7 / PgUp / PgDn"),
-                    TextFont {
-                        font_size: bevy::text::FontSize::Rem(0.7),
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.76, 0.84, 0.83)),
-                    Pickable::IGNORE,
-                ));
+                panel
+                    .spawn((
+                        Node {
+                            justify_content: JustifyContent::SpaceBetween,
+                            ..default()
+                        },
+                        Pickable::IGNORE,
+                    ))
+                    .with_children(|row| {
+                        for text in ["Debug", "F7 | PgUp / PgDn"] {
+                            row.spawn((
+                                Text::new(text),
+                                TextFont {
+                                    font_size: bevy::text::FontSize::Rem(0.7),
+                                    ..default()
+                                },
+                                TextColor(Color::srgb(0.76, 0.84, 0.83)),
+                                Pickable::IGNORE,
+                            ));
+                        }
+                    });
                 panel.spawn((
                     Text::new("Debug (F7)"),
                     TextFont {
@@ -254,6 +306,10 @@ fn setup(mut commands: Commands) {
                         ..default()
                     },
                     TextColor(Color::srgb(0.96, 0.98, 0.96)),
+                    TextShadow {
+                        offset: Vec2::splat(1.0),
+                        ..default()
+                    },
                     Pickable::IGNORE,
                     debug::DebugText,
                 ));
@@ -378,14 +434,9 @@ fn refresh(
         counter.0.clear();
         match (fps, frame_ms) {
             (Some(fps), Some(ms)) => {
-                let _ = write!(
-                    counter.0,
-                    "FPS              {fps:>8.2}\nFrame interval   {ms:>8.2} ms"
-                );
+                let _ = write!(counter.0, "{fps:.2}\n{ms:.2} ms");
             }
-            _ => counter
-                .0
-                .push_str("FPS                    -\nFrame interval         - ms"),
+            _ => counter.0.push_str("-\n- ms"),
         }
     }
     for mut label in &mut labels {
