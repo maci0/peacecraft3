@@ -1651,3 +1651,10 @@ endpoint is possible. Caller work limits and movement rules are unchanged.
 Human03 passes the 256-tick startup/order gate and next refuses `SetUnitLookAt`
 at tick 257. Whole-map execution and native/rendered path parity remain open;
 see [collision replanning](docs/re-notes/unit-collision-replanning.md#blocked-destination-search-termination-2026-10-21).
+
+Scripted look-at follow-up (2026-10-21): `SetUnitLookAt` now retains the authored
+bone, live target and world offsets, with reset and target-removal handling.
+Campaign mesh skinning consumes the aimed skeleton. Human03 retains the actual
+Arthas/Captain request at tick 257 and next refuses `IssueImmediateOrder` at tick
+980. Native aiming limits, blending and rendered comparison remain open; see
+[unit look-at](docs/re-notes/unit-look-at.md).

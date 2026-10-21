@@ -67,6 +67,14 @@ impl ObjectHost {
                 {
                     *live = false;
                 }
+                if let Entry::Unit { record } = entry
+                    && record
+                        .look_at
+                        .as_ref()
+                        .is_some_and(|look| look.target == unit)
+                {
+                    record.look_at = None;
+                }
             }
             *self.inner.entry_mut(unit)? = Entry::RemovedUnit;
             Ok(Value::Null)

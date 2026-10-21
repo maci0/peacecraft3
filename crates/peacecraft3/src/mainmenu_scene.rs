@@ -1010,6 +1010,7 @@ pub fn spawn(
             bones: &bones,
             pivots: pivots.as_ref().unwrap(),
             global_durations: &runtime.global_sequences,
+            look_at: None,
             camera_pose: Some(&camera_pose_plan),
         },
         &handles,
@@ -1388,6 +1389,8 @@ pub struct Rig<'a> {
     pub global_durations: &'a [u32],
     /// Checked static source camera; panels retain their independent pose path.
     pub camera_pose: Option<&'a pcx_gfx::mdx_billboard::CameraPosePlan>,
+    /// Script-selected bone and target in source model space.
+    pub look_at: Option<(&'a str, Vec3)>,
 }
 
 /// Poses the skeleton at `frame` and rewrites every geoset's positions.
@@ -1407,12 +1410,16 @@ pub fn skin_geosets(
         .iter()
         .map(|b| tracked_pose(b, frame, elapsed_ms, rig.global_durations, rig.interval))
         .collect();
-    let skeleton = match rig.camera_pose {
+    let mut skeleton = match rig.camera_pose {
         Some(plan) => plan
             .pose(&poses)
             .map_err(|error| SceneError::Decode(error.into()))?,
         None => pcx_gfx::pose_from_poses(rig.model, rig.bones, rig.pivots, &poses),
     };
+    if let Some((bone, target)) = rig.look_at {
+        pcx_gfx::mdx_look_at::apply(&mut skeleton, rig.bones, rig.pivots, bone, target)
+            .map_err(|error| SceneError::Decode(error.into()))?;
+    }
     for (handle, rest) in handles.iter().zip(&rig.model.meshes) {
         let Some(mut mesh) = meshes.get_mut(handle) else {
             continue;
@@ -1949,6 +1956,7 @@ pub fn advance(
             pivots,
             global_durations: &scene.global_durations,
             camera_pose: scene.camera_pose.as_ref(),
+            look_at: None,
         },
         &scene.handles,
         frame,

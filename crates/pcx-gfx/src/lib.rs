@@ -16,6 +16,7 @@ pub mod dds;
 pub mod dds_gpu;
 pub mod ground;
 pub mod mdx_billboard;
+pub mod mdx_look_at;
 pub mod mdx_opacity;
 pub mod mdx_particle_render;
 pub mod mdx_particles;
