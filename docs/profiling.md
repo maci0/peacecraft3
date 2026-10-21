@@ -1,10 +1,20 @@
 # FPS and bottleneck profiling
 
 Press **F8** to show or hide FPS, smoothed frame time in milliseconds and a
-rolling graph of the last 120 frame times. The graph uses individual frame
-samples, oldest at the left and newest at the right; its labelled vertical range
-adapts to the observed samples. The display refreshes four times per second.
+compressed frame-time history. The newest band keeps up to 32 individual samples
+at the right edge; older pairs fold into peak buckets spanning 2, 4, 8, 16 and
+32 frames toward the left. Peaks preserve stutters rather than averaging them
+away. At most 192 buckets retain up to 2,016 frames, independent of uptime.
+The graph redraws every frame, with a faint reference grid and a white current-value
+marker; numeric labels refresh four times per second. Its labelled vertical range
+adapts to the retained peaks. Reopening F8 starts a new contiguous history.
 These are real frame timings, independent of accelerated simulation ticks.
+
+This follows the logarithmic-age history principle in the local
+`~/TMOG_DESIGN_RULES.md` (rules 5-13). The installed TMOG settings were inspected
+read-only: compressed graph time is enabled and visual redraw is 60 Hz.
+The bounded peak-folding algorithm here is our implementation choice, not a
+claim about TMOG's internal algorithm. No palette, bloom or meter skin is copied.
 
 Press **F7** for display/backend details, entity and image counts, CPU mesh-asset
 vertex counts, device allocator usage and available campaign diagnostics (tick,

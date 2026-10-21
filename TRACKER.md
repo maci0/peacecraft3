@@ -4,12 +4,14 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 
 ### 2026-10-21: F7/F8 diagnostics
 
-- [x] F8 adds a bounded 120-frame timing graph beside FPS and milliseconds.
+- [x] F8 adds bounded logarithmic-age timing history beside FPS and milliseconds:
+  192 peak buckets, up to 2,016 frames, full-resolution live edge and per-frame redraw.
+  Compression checks: 62 graphics tests and 466 app tests pass (41 ignored), strict
+  Clippy and WASM checks pass; native wide/narrow component captures inspected.
   F7 independently shows display/backend, mesh-asset vertices, GPU allocator
   and available whole-GPU VRAM counters, plus campaign tick/speed/seed/selection
   and error excerpts. Panels share a click-through camera and stop sampling
-  while hidden. Native component renders pass at wide/narrow sizes; 61 graphics
-  and 466 app tests, strict Clippy and WASM checks pass. Unsupported memory
+  while hidden. Native component renders pass at wide/narrow sizes. Unsupported memory
   counters report unavailable; full campaign/browser rendering stays separate.
 
 ### 2026-10-21: CPU hotpath evidence
