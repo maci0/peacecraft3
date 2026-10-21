@@ -636,6 +636,7 @@ impl ObjectHost {
         unit: HandleId,
         range: f32,
         name: &str,
+        units: &[(HandleId, bool)],
     ) -> Result<Option<HandleId>, Error> {
         let Some(attacker) = self.live(unit) else {
             return Ok(None);
@@ -645,11 +646,17 @@ impl ObjectHost {
         };
         let own_radius = self.unit_collision_radius(unit, name)?;
         let mut nearest: Option<(HandleId, f32)> = None;
-        for (id, other) in self.executed_units() {
+        for &(id, _) in units {
+            if id == unit {
+                continue;
+            }
+            let Some(other) = self.weapon_target(id) else {
+                continue;
+            };
             let Some(other_position) = other.position else {
                 continue;
             };
-            if id == unit || self.weapon_target(id).is_none() || !self.hostile(attacker, other) {
+            if !self.hostile(attacker, other) {
                 continue;
             }
             let gap = distance(position, other_position);
@@ -931,20 +938,24 @@ impl ObjectHost {
         }
         self.advance_holy_light(now)?;
         self.advance_summoning(now)?;
-        let units: Vec<HandleId> = self
+        // Callbacks are queued, not executed here; later deaths still require live target checks.
+        let units: Vec<_> = self
             .executed_units()
-            .filter(|(id, u)| {
-                self.summon_current_order(*id).is_none()
+            .map(|(id, u)| {
+                let attacks = self.summon_current_order(id).is_none()
                     && u.combat.as_ref().is_some_and(|c| {
                         u.paused_since.is_none()
                             && !u.is_sleeping()
                             && !c.dead
                             && (c.weapon.is_some() || c.attack_destination.is_some())
-                    })
+                    });
+                (id, attacks)
             })
-            .map(|(id, _)| id)
             .collect();
-        for unit in units {
+        for &(unit, attacks) in &units {
+            if !attacks {
+                continue;
+            }
             let has_valid_target = self
                 .live(unit)
                 .and_then(|record| record.combat.as_ref()?.target)
@@ -983,23 +994,20 @@ impl ObjectHost {
                 let _acquisition =
                     tracing::info_span!(target: "pcx_cpu", "combat.acquisition").entered();
                 if held {
-                    target = self.hold_position_target(unit, weapon.range, name)?;
+                    target = self.hold_position_target(unit, weapon.range, name, &units)?;
                 } else if weapon.acquire > 0.0 {
-                    target = self
-                        .executed_units()
-                        .filter(|(id, other)| {
-                            *id != unit
-                                && self.weapon_target(*id).is_some()
-                                && other
-                                    .position
-                                    .is_some_and(|p| distance(p, position) <= weapon.acquire)
-                                && self.hostile(record, other)
+                    target = units
+                        .iter()
+                        .filter_map(|&(id, _)| {
+                            if id == unit {
+                                return None;
+                            }
+                            let other = self.weapon_target(id)?;
+                            let gap = distance(other.position?, position);
+                            (gap <= weapon.acquire && self.hostile(record, other))
+                                .then_some((id, gap))
                         })
-                        .min_by(|a, b| {
-                            let da = distance(a.1.position.expect("filtered"), position);
-                            let db = distance(b.1.position.expect("filtered"), position);
-                            da.total_cmp(&db)
-                        })
+                        .min_by(|a, b| a.1.total_cmp(&b.1))
                         .map(|(id, _)| id);
                 }
             }

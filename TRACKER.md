@@ -16,6 +16,11 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   validation errors. Human03 metadata walks fall from 295,290 to 148 with the
   same unit/RNG projection; a repeated-scan mutant fails the work-count gate.
   Core tests, actor tests, strict application Clippy and WASM checks pass.
+- [x] Combat acquisition scans a per-step unit list and computes candidate
+  distance once, preserving handle order, initial attacker eligibility and live
+  target checks. New tie/death regressions and 1,073 core tests pass; Human03
+  keeps its unit/RNG projection and native-call name sequence. Instruction
+  counters are report-only; full rendered coverage stays open.
 
 ### 2026-10-21: Five measured optimization rounds
 
