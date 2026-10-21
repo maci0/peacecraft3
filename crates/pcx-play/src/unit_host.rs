@@ -85,6 +85,9 @@ pub struct ExecutedUnitState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutedUnit {
     pub definition: Definition,
+    /// Derived once from the retained definition; invalid geometry refuses only when queried.
+    /// Runtime collision setters must update this value if they are admitted later.
+    pub collision_radius: Result<f32, &'static str>,
     pub executed_owner: i32,
     /// Current player handle, initially the executed `CreateUnit` argument.
     pub owner: HandleId,
@@ -881,38 +884,38 @@ impl ObjectHost {
             .map(Value::Real)
     }
 
+    pub(super) fn unit_collision_radius(&self, unit: HandleId, caller: &str) -> Result<f32, Error> {
+        self.created_unit(unit, caller)?
+            .collision_radius
+            .map_err(|reason| self.inner.error(caller, Failure::UnitState(reason)))
+    }
+
     #[cfg_attr(
         feature = "profile-cpu",
         tracing::instrument(skip_all, target = "pcx_cpu", name = "units.collision_field")
     )]
-    pub(super) fn unit_collision_radius(&self, unit: HandleId, caller: &str) -> Result<f32, Error> {
-        let fail = |reason| self.inner.error(caller, reason);
-        let definition = &self.created_unit(unit, caller)?.definition;
+    fn catalog_collision_radius(definition: &Definition) -> Result<f32, &'static str> {
         let mut fields = definition.fields.iter().filter(|(_, field)| {
             field.metadata.as_ref().is_some_and(|meta| {
                 matches!(&meta.source, FieldSource::Column { slk: SlkId::UnitBalance, column } if column == "collision")
             })
         });
         let Some((id, field)) = fields.next() else {
-            return Err(fail(Failure::UnitState(
-                "missing UnitBalance collision field",
-            )));
+            return Err("missing UnitBalance collision field");
         };
         if fields.next().is_some() {
-            return Err(fail(Failure::UnitState(
-                "ambiguous UnitBalance collision field",
-            )));
+            return Err("ambiguous UnitBalance collision field");
         }
         let metadata = field
             .metadata
             .as_ref()
-            .ok_or_else(|| fail(Failure::Identity))?;
+            .expect("field matched by metadata source");
         if metadata.fourcc != *id
             || metadata.from != SlkId::UnitMetaData
             || metadata.index != -1
             || !matches!(metadata.kind, FieldKind::Real | FieldKind::Unreal)
         {
-            return Err(fail(Failure::UnitState("unsupported collision metadata")));
+            return Err("unsupported collision metadata");
         }
         let value = match (&field.value, metadata.kind) {
             (Ok(FieldValue::Cell(text)), _) => text.trim().parse::<f32>().ok(),
@@ -923,11 +926,7 @@ impl ObjectHost {
             _ => None,
         }
         .filter(|value| value.is_finite() && *value >= 0.0)
-        .ok_or_else(|| {
-            fail(Failure::UnitState(
-                "collision must be a finite nonnegative catalog real",
-            ))
-        })?;
+        .ok_or("collision must be a finite nonnegative catalog real")?;
         // shortcut: catalog geometry only; qualify runtime collision mutations before admitting their setters.
         Ok(value)
     }
@@ -1317,6 +1316,7 @@ impl ObjectHost {
                     lists_admitted_alias(&definition, &order.alias).then_some((order.code, false))
                 });
             ExecutedUnit {
+                collision_radius: Self::catalog_collision_radius(&definition),
                 definition,
                 executed_owner: owner_number,
                 owner,

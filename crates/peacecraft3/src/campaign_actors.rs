@@ -1208,6 +1208,7 @@ mod tests {
         };
         let id = HandleId::new(std::num::NonZeroU64::new(1).unwrap());
         ExecutedUnit {
+            collision_radius: Err("missing UnitBalance collision field"),
             definition: Definition {
                 rawcode: *b"U001",
                 base_rawcode: "U001".into(),

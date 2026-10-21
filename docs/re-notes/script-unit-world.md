@@ -56,6 +56,16 @@ must have the loaded signature and share the creation declaration's source.
 This is catalog geometry; runtime collision mutation and native clamping of
 unusual map overrides remain unqualified.
 
+The CPU hotpath change retains this derivation on each executed unit at creation.
+It stores either the exact catalog real or its validation error; callers still
+receive errors only when querying geometry, in their own source context. The
+definition and provenance remain retained. Combat and motion reuse the same
+result, without a second catalog resolution or repeated metadata walks. No
+runtime collision setter is admitted; admitting one must also update the retained
+value. The [CPU capture](../performance/cpu-hotpaths.md) records the unchanged-map
+work-count comparison and its deliberately failing repeated-scan mutant. This
+preserves recreation behavior, without adding a native-fidelity claim.
+
 The creation initializer also reaches a position-adjustment method before the
 position is stored. One branch passes the unit collision method's result into a
 spatial search; another takes a distinct query path. A separate nullable record
