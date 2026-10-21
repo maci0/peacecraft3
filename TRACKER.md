@@ -16,6 +16,12 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   at 1280×960 and 640×480 show proportional placement and scaling. This is a
   synthetic parent/selection fixture; full mounted-console and original-client
   rendering comparison remain open.
+- [x] An explicit unchanged-Human01 gate mounts the command card beneath its
+  actual admitted console, preserves button entities across stable updates,
+  rejects a lookalike session with old bindings and remounts after coherent
+  publication. The gate exposed and now covers HUD source-policy invalidation
+  on session replacement. Full campaign rendering and native comparison remain
+  separate requirements.
 
 ### 2026-10-21: Ability profile overrides
 

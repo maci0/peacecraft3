@@ -177,3 +177,26 @@ private Cargo JSON artifact stream. Both windows were closed through their own
 window IDs; no other application was controlled. The only runtime warning was
 an unmapped gamepad using its default mapping. Strict all-target Clippy passes.
 The fixtures, screenshots and original bytes remain local.
+
+## Admitted console lifecycle (2026-10-22)
+
+The explicit Human01 gate now runs the normal chapter startup, HUD source-policy
+producer, admitted HUD mount and command-card projection together. Operator
+selection/learning selects Arthas's Holy Light independently of authored intro
+progression. The card attaches under the actual source-selected console frame,
+and repeated updates preserve both its root and button entities.
+
+A fresh startup of the same map is a different context and session. Publishing
+that session with the old bindings retires the previous card and its image
+assets while retaining the caller-owned console. It cannot borrow the old
+bindings. Publishing its matching requests and source reader then mounts a new
+card; clearing the session retires it again.
+
+This exposed a HUD policy bug: the producer's attempt flag persisted across
+all sessions. The source policy now retires on a session-witness change and is
+derived again only when the session's exact admitted context and published
+receipt arc match the bindings. The original gate failed at the stale-policy
+assertion before this correction and passes after it. The red and green receipts
+are `.scratch/command-card-source/mounted-console-red.log` and
+`mounted-console-green.log`. This is actual admitted ECS mount/lifecycle evidence,
+not a full campaign render, physical-picking test or original-client comparison.

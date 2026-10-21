@@ -22,6 +22,7 @@ use peacecraft3::{
 use crate::hud_assets::{HudBudgets, HudMarkup, RootRole};
 use crate::hud_render::HudSourcePolicy;
 use crate::menu_skin::SkinTable;
+use std::sync::{Arc, Weak};
 
 const CONSOLE_FDF: &str = "UI\\FrameDef\\UI\\ConsoleUI.fdf";
 const CONSOLE_FRAME: &str = "ConsoleUI";
@@ -47,6 +48,7 @@ const BUDGETS: HudBudgets = HudBudgets {
 #[derive(Resource, Default)]
 pub(crate) struct CampaignHud {
     attempted: bool,
+    session: Option<Weak<()>>,
     pub last_error: Option<String>,
     pub quest_log_open: bool,
     pub quest_escape_consumed: bool,
@@ -70,10 +72,34 @@ fn produce_policy(
     sources: Res<SelectedMapSources>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
-    if hud.attempted || session.context().is_none() {
+    let witness = session.session_witness();
+    let same = match (&hud.session, &witness) {
+        (Some(previous), Some(current)) => Weak::ptr_eq(previous, current),
+        (None, None) => true,
+        _ => false,
+    };
+    if !same {
+        hud.session = witness;
+        hud.attempted = false;
+        hud.last_error = None;
+        commands.remove_resource::<HudSourcePolicy>();
+    }
+    if hud.attempted {
         return;
     }
-    let Some(bindings) = requests.bindings.as_ref() else {
+    let Some(context) = session.context() else {
+        return;
+    };
+    let Some(bindings) = requests.bindings.as_ref().filter(|bindings| {
+        requests
+            .published_receipts
+            .as_ref()
+            .is_some_and(|receipts| Arc::ptr_eq(receipts, &bindings.receipts))
+            && requests
+                .admission
+                .shared_context()
+                .is_some_and(|admitted| Arc::ptr_eq(&admitted, context))
+    }) else {
         return;
     };
     let Some(reader) = sources.for_receipts(&bindings.receipts) else {
