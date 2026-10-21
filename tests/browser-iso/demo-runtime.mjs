@@ -67,16 +67,16 @@ try {
     assert.equal(await page.locator('#iso-byte-progress').getAttribute('data-state'), 'complete');
     assert(await page.locator('#iso-candidates input').count() > 0);
     const selectedPaths = await page.locator('#iso-candidates input:checked').evaluateAll(inputs => inputs.map(input => input.parentElement.textContent.trim().split(' — ')[0]));
-    assert.equal(selectedPaths.length, 1, 'the supplied installer should select only one archive');
-    assert.match(selectedPaths[0], /(?:^|[\\/:])war3\.mpq$/i, 'the supplied installer should select its base archive');
+    assert(selectedPaths.some(path => /(?:^|[\\/:])war3\.mpq$/i.test(path)), 'the supplied installer should select its base archive');
+    assert(selectedPaths.every(path => /(?:^|[\\/:])(?:war3|war3local|war3x|war3xlocal|deprecated)\.mpq$/i.test(path)),
+      'the default should contain only the recognized archive family');
     assert.deepEqual(await page.evaluate(() => peacecraft3.local_menu_editions()), []);
     await page.screenshot({ path: `${output}/original-installer-directory.png`, fullPage: true });
     if (process.env.PCX_DEMO_INSTALLER_MEMBER) {
       page.setDefaultTimeout(300000);
       const selection = await page.locator('#iso-candidates label').evaluateAll((labels, member) => labels.findIndex(label => label.textContent.trim().startsWith(member + ' —')), process.env.PCX_DEMO_INSTALLER_MEMBER);
       assert(selection >= 0, 'caller-selected installer member was not discovered');
-      if (!(await page.locator('#iso-candidates input').nth(selection).isChecked()))
-        for (const input of await page.locator('#iso-candidates input:checked').all()) await input.uncheck();
+      for (const input of await page.locator('#iso-candidates input:checked').all()) await input.uncheck();
       const revision = await page.evaluate(() => peacecraft3.asset_revision());
       if (process.env.PCX_DEMO_INSTALLER_REFUSED_MEMBER) {
         const refused = await page.locator('#iso-candidates label').evaluateAll((labels, member) => labels.findIndex(label => label.textContent.trim().startsWith(member + ' —')), process.env.PCX_DEMO_INSTALLER_REFUSED_MEMBER);
@@ -127,11 +127,11 @@ try {
     }
   }
 
-  async function commit(input, candidateCount = 1) {
+  async function commit(input, candidateCount = 1, selectedCount = 1) {
     const before = await page.evaluate(() => peacecraft3.asset_revision());
     await page.locator('#iso').setInputFiles(input);
     await page.waitForFunction(count => document.querySelectorAll('#iso-candidates input').length === count && !document.querySelector('#iso').disabled, candidateCount);
-    assert.equal(await page.locator('#iso-candidates input:checked').count(), 1, 'one relevant archive should be selected by default');
+    assert.equal(await page.locator('#iso-candidates input:checked').count(), selectedCount, 'relevant archives should be selected by default');
     await page.locator('#iso-import').click();
     await page.waitForFunction(() => !document.querySelector('#iso').disabled);
     assert.equal(await page.evaluate(() => peacecraft3.asset_revision()), before + 1,
@@ -147,7 +147,8 @@ try {
   await commit({ name: 'base.iso', mimeType: 'application/x-iso9660-image', buffer: Buffer.from(isoFixture([
     { name: 'WAR3.MPQ;1', bytes: mpqFixture(base) },
     { name: 'WAR3X.MPQ;1', bytes: mpqFixture(conflicting) },
-  ])) }, 2);
+  ])) }, 2, 2);
+  assert.match(await page.evaluate(() => new TextDecoder().decode(peacecraft3.archive_member('UI\\FrameDef\\GlobalStrings.fdf'))), /Conflicting label/);
   assert.deepEqual(await page.evaluate(() => peacecraft3.local_menu_editions()), ['roc']);
   assert.deepEqual(await page.locator('#demo-edition option').evaluateAll(options => options.map(o => o.value)), ['roc']);
   const rejected = await page.evaluate(() => {
