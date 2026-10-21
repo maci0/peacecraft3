@@ -126,6 +126,95 @@ fn order_move(startup: &mut Startup, unit: HandleId, target: [f32; 2]) {
 }
 
 #[test]
+#[ignore = "requires selected local install/map through PCX_STARTUP_*; see module comment"]
+fn selected_map_profile_is_explicit_in_identity_and_saves_stay_in_the_session() {
+    let install = PathBuf::from(env("PCX_STARTUP_INSTALL"));
+    let map = PathBuf::from(env("PCX_STARTUP_MAP"));
+    let bytes = std::fs::read(&map).unwrap();
+    let label = map.display().to_string();
+    let seed = env("PCX_STARTUP_SEED").parse().unwrap();
+    let mut first = start(&install, selected_mode(), &label, &bytes, seed, None).unwrap();
+    let initial = first.admission_digest();
+    let host = first.session.host().unwrap().objects_mut();
+    let cache = host
+        .native("InitGameCache", &[Value::Str("synthetic-profile".into())])
+        .unwrap();
+    let keys = [
+        cache.clone(),
+        Value::Str("mission".into()),
+        Value::Str("sentinel".into()),
+    ];
+    let mut put = keys.to_vec();
+    put.push(Value::Int(42));
+    host.native("StoreInteger", &put).unwrap();
+    assert_eq!(
+        host.native("SaveGameCache", &[cache]).unwrap(),
+        Value::Bool(true)
+    );
+    let saved = first.campaign_profile().unwrap().unwrap();
+    assert_eq!(
+        first.admission_digest(),
+        initial,
+        "saving must not change initial identity"
+    );
+    let mut second = start(
+        &install,
+        selected_mode(),
+        &label,
+        &bytes,
+        seed,
+        Some(&saved),
+    )
+    .unwrap();
+    let repeat = start(
+        &install,
+        selected_mode(),
+        &label,
+        &bytes,
+        seed,
+        Some(&saved),
+    )
+    .unwrap();
+    assert_ne!(
+        initial,
+        second.admission_digest(),
+        "profile bytes must affect admission"
+    );
+    assert_eq!(second.admission_digest(), repeat.admission_digest());
+    let host = second.session.host().unwrap().objects_mut();
+    let cache = host
+        .native("InitGameCache", &[Value::Str("synthetic-profile".into())])
+        .unwrap();
+    let keys = [cache.clone(), keys[1].clone(), keys[2].clone()];
+    assert_eq!(
+        host.native("GetStoredInteger", &keys).unwrap(),
+        Value::Int(42)
+    );
+    let mut put = keys.to_vec();
+    put.push(Value::Int(99));
+    host.native("StoreInteger", &put).unwrap();
+    host.native("SaveGameCache", &[cache]).unwrap();
+    let changed = second.campaign_profile().unwrap().unwrap();
+    assert_ne!(changed, saved);
+    let changed_start = start(
+        &install,
+        selected_mode(),
+        &label,
+        &bytes,
+        seed,
+        Some(&changed),
+    )
+    .unwrap();
+    assert_ne!(
+        second.admission_digest(),
+        changed_start.admission_digest(),
+        "different present profiles must affect identity"
+    );
+    assert_eq!(first.campaign_profile().unwrap().unwrap(), saved);
+    assert_eq!(repeat.campaign_profile().unwrap().unwrap(), saved);
+}
+
+#[test]
 #[ignore = "requires PCX_STARTUP_INSTALL, PCX_STARTUP_MAP and PCX_STARTUP_ADDON selected local files"]
 fn selected_map_starts_orders_and_steps_identically_and_the_order_changes_the_outcome() {
     let install = PathBuf::from(env("PCX_STARTUP_INSTALL"));
@@ -137,11 +226,11 @@ fn selected_map_starts_orders_and_steps_identically_and_the_order_changes_the_ou
     let bytes = std::fs::read(&map).expect("read map");
     let label = map.display().to_string();
 
-    let mut first = start(&install, mode, &label, &bytes, seed)
+    let mut first = start(&install, mode, &label, &bytes, seed, None)
         .unwrap_or_else(|error| panic!("first start: {error}"));
-    let mut second = start(&install, mode, &label, &bytes, seed)
+    let mut second = start(&install, mode, &label, &bytes, seed, None)
         .unwrap_or_else(|error| panic!("second start: {error}"));
-    let mut control = start(&install, mode, &label, &bytes, seed)
+    let mut control = start(&install, mode, &label, &bytes, seed, None)
         .unwrap_or_else(|error| panic!("control start: {error}"));
     assert_eq!(first.context.sources.map, second.context.sources.map);
     let slot = local_slot(&first);

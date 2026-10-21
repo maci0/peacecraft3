@@ -3178,6 +3178,17 @@ checks pass. Fresh-profile unchanged Human03 next refuses `UnitAddSleep` through
 Blizzard.j:3524. Native synchronous ordering, XP-driven events and campaign
 acceptance remain open. See [hero events](docs/re-notes/script-hero-skills.md#hero-events-2026-10-21).
 
+### 2026-10-21 — explicit headless campaign profiles
+
+- [x] Require initial PC3 profile bytes or explicit absence in headless startup,
+  validate supplied bytes, and include their identity in admission. Keep saves
+  session-local with export for later maps; the app retains local persistence.
+- [x] Synthetic save/reload isolation and bounds tests pass. The selected Human01
+  startup gate compares fresh, identical and different saved profiles, observes
+  the stored values and verifies that saving leaves other sessions unchanged.
+- [ ] Original W3V compatibility, full unit payload fidelity and multiplayer
+  campaign play remain open. See [profile admission](docs/re-notes/script-game-caches.md#headless-profile-admission-2026-10-21).
+
 ### 2026-10-20 — source-derived edition-switch icon states
 
 - [x] The control builder now reads both icon families and their three state

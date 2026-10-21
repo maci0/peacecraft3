@@ -1615,3 +1615,9 @@ the existing trigger queue and expose their response context. Fresh-profile
 Human03 passes hero setup and next refuses `UnitAddSleep`. Native synchronous
 ordering, XP-driven leveling and complete campaign acceptance remain open; see
 [hero skill state](docs/re-notes/script-hero-skills.md#hero-events-2026-10-21).
+
+Headless profile follow-up (2026-10-21): startup now requires explicit profile
+bytes or an absent profile, includes that input in admission identity and keeps
+saves in session-owned storage. Callers can export saves for the next map; the
+application retains its existing local persistence. This closes an ambient-input
+gap, not the remaining multiplayer/campaign fidelity gates.

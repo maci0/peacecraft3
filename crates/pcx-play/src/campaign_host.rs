@@ -43,10 +43,11 @@ pub fn create_host(
     reader: Option<Arc<Resolver>>,
     placement_map: Arc<[u8]>,
     no_occlusion: bool,
+    cache: Arc<dyn crate::game_cache::Storage>,
 ) -> Result<MapStartupHost, MapStartupError> {
     let edition = ctx.sources.map.edition.clone();
     let mut host = map_startup_host::assemble(ctx, inputs)?;
-    crate::campaign_cache::attach(&mut host)?;
+    crate::campaign_cache::attach(&mut host, cache)?;
     if no_occlusion {
         host.objects_mut().admit_no_occlusion_pass()?;
     }

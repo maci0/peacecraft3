@@ -165,7 +165,14 @@ fn start_admitted_map(
     let result = session.replace_sequenced(
         Arc::clone(&context),
         move |ctx| {
-            pcx_play::campaign_host::create_host(ctx, inputs, reader, placement_map, no_occlusion)
+            pcx_play::campaign_host::create_host(
+                ctx,
+                inputs,
+                reader,
+                placement_map,
+                no_occlusion,
+                pcx_play::campaign_cache::local_storage(),
+            )
         },
         &[config, main],
         move |vm, completed| {

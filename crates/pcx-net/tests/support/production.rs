@@ -41,7 +41,7 @@ pub fn admit(seed: i32) -> ProductionAuthority {
     let bytes = std::fs::read(&inputs.map).expect("read map");
     let label = inputs.map.display().to_string();
     let startup =
-        pcx_play::headless_startup::start(&inputs.install, inputs.mode, &label, &bytes, seed)
+        pcx_play::headless_startup::start(&inputs.install, inputs.mode, &label, &bytes, seed, None)
             .unwrap_or_else(|error| panic!("admission: {error}"));
     ProductionAuthority::new(startup).unwrap_or_else(|error| panic!("roster: {error}"))
 }

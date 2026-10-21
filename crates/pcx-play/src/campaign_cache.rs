@@ -3,9 +3,20 @@ use crate::{
     game_cache::{Budget, Storage},
     map_startup_host::MapStartupHost,
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-pub fn attach(host: &mut MapStartupHost) -> Result<(), crate::playercolor_host::Error> {
+const BUDGET: Budget = Budget {
+    caches: 1024,
+    entries: 16384,
+    text_bytes: 4 << 20,
+    storage_bytes: 8 << 20,
+    handle_bytes: 1 << 20,
+};
+
+pub fn attach(
+    host: &mut MapStartupHost,
+    storage: Arc<dyn Storage>,
+) -> Result<(), crate::playercolor_host::Error> {
     if host
         .context()
         .scripts
@@ -16,16 +27,60 @@ pub fn attach(host: &mut MapStartupHost) -> Result<(), crate::playercolor_host::
     {
         return Ok(());
     }
-    host.objects_mut().admit_game_caches(
-        Arc::new(LocalStorage),
-        Budget {
-            caches: 1024,
-            entries: 16384,
-            text_bytes: 4 << 20,
-            storage_bytes: 8 << 20,
-            handle_bytes: 1 << 20,
-        },
-    )
+    host.objects_mut().admit_game_caches(storage, BUDGET)
+}
+
+/// Application persistence; headless sessions supply their own storage instead.
+pub fn local_storage() -> Arc<dyn Storage> {
+    Arc::new(LocalStorage)
+}
+
+/// Each headless session owns its snapshot and saves. No machine profile is read or written.
+pub(crate) struct SessionStorage(Mutex<Option<Vec<u8>>>);
+
+impl SessionStorage {
+    pub fn new(bytes: Option<&[u8]>) -> Result<Self, String> {
+        if let Some(bytes) = bytes {
+            crate::game_cache::Profile::decode(bytes, BUDGET)?;
+        }
+        Ok(Self(Mutex::new(bytes.map(Self::copy).transpose()?)))
+    }
+
+    fn copy(bytes: &[u8]) -> Result<Vec<u8>, String> {
+        if bytes.len() > BUDGET.storage_bytes {
+            return Err("campaign profile exceeds byte policy".into());
+        }
+        let mut copy = Vec::new();
+        copy.try_reserve_exact(bytes.len())
+            .map_err(|e| e.to_string())?;
+        copy.extend_from_slice(bytes);
+        Ok(copy)
+    }
+
+    pub fn snapshot(&self) -> Result<Option<Vec<u8>>, String> {
+        self.load(BUDGET.storage_bytes)
+    }
+}
+
+impl Storage for SessionStorage {
+    fn load(&self, limit: usize) -> Result<Option<Vec<u8>>, String> {
+        let bytes = self.0.lock().map_err(|e| e.to_string())?;
+        bytes
+            .as_deref()
+            .map(|bytes| {
+                if bytes.len() > limit {
+                    return Err("campaign profile exceeds read byte policy".into());
+                }
+                Self::copy(bytes)
+            })
+            .transpose()
+    }
+
+    fn save(&self, bytes: &[u8]) -> Result<(), String> {
+        let copy = Self::copy(bytes)?;
+        *self.0.lock().map_err(|e| e.to_string())? = Some(copy);
+        Ok(())
+    }
 }
 
 struct LocalStorage;
@@ -151,6 +206,25 @@ impl Storage for LocalStorage {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+    #[test]
+    fn session_profiles_are_validated_bounded_and_independent() {
+        let mut profile = crate::game_cache::Profile::default();
+        let original = profile.encode(BUDGET).unwrap();
+        let first = SessionStorage::new(Some(&original)).unwrap();
+        let second = SessionStorage::new(Some(&original)).unwrap();
+        profile.open("synthetic", BUDGET).unwrap();
+        let changed = profile.encode(BUDGET).unwrap();
+        first.save(&changed).unwrap();
+        assert_eq!(first.snapshot().unwrap(), Some(changed.clone()));
+        assert_eq!(second.snapshot().unwrap(), Some(original.clone()));
+        assert!(first.load(changed.len() - 1).is_err());
+        assert!(first.save(&vec![0; BUDGET.storage_bytes + 1]).is_err());
+        assert_eq!(first.snapshot().unwrap(), Some(changed));
+        assert_eq!(SessionStorage::new(None).unwrap().snapshot().unwrap(), None);
+        assert!(SessionStorage::new(Some(b"invalid")).is_err());
+        assert!(SessionStorage::new(Some(&[])).is_err());
+    }
+
     #[test]
     fn atomic_profile_storage_distinguishes_missing_empty_invalid_and_oversize_inputs() {
         let directory = std::env::temp_dir().join(format!("pc3-cache-test-{}", std::process::id()));

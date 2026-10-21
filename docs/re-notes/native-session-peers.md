@@ -85,6 +85,11 @@ The application supplies a Bevy resource wrapper around that shared session.
 Map source bytes, the resolver, executable identity, edition and seed remain
 explicit inputs; no separate placement-only world is substituted.
 
+Headless callers also supply profile bytes explicitly (`None` for a fresh PC3
+profile). The initial profile is covered by admission identity. Saves remain in
+the session and can be exported, rather than reading or writing the application's
+machine-local profile. The production test fixtures explicitly start fresh.
+
 The production authority below can drive this startup through the generic host.
 The CLI and browser demo still use the harness authority; a successful headless
 startup does not by itself make a map network-playable.

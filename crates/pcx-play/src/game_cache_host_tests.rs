@@ -73,6 +73,38 @@ fn args(c: &Value) -> Vec<Value> {
 }
 
 #[test]
+fn headless_session_saves_reload_locally_and_do_not_change_another_start() {
+    use crate::campaign_cache::SessionStorage;
+    let first = Arc::new(SessionStorage::new(None).unwrap());
+    let second = Arc::new(SessionStorage::new(None).unwrap());
+    let mut h = host(COMMON, "");
+    h.admit_game_caches(first.clone(), budget()).unwrap();
+    let c = cache(&mut h, "synthetic");
+    let mut put = args(&c);
+    put.push(Value::Int(42));
+    h.native("StoreInteger", &put).unwrap();
+    assert_eq!(h.native("SaveGameCache", &[c]).unwrap(), Value::Bool(true));
+    let saved = first.snapshot().unwrap().unwrap();
+    assert_eq!(second.snapshot().unwrap(), None);
+    let restored = Arc::new(SessionStorage::new(Some(&saved)).unwrap());
+    let mut next = host(COMMON, "");
+    next.admit_game_caches(restored, budget()).unwrap();
+    let c = cache(&mut next, "synthetic");
+    assert_eq!(
+        next.native("GetStoredInteger", &args(&c)).unwrap(),
+        Value::Int(42)
+    );
+    assert_eq!(
+        next.native("ReloadGameCachesFromDisk", &[]).unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        next.native("GetStoredInteger", &args(&c)).unwrap(),
+        Value::Int(42)
+    );
+}
+
+#[test]
 fn owned_vm_stores_independent_types_and_reopens_the_saved_profile_in_a_new_host() {
     let store = Arc::new(Memory::default());
     let mut h = host(

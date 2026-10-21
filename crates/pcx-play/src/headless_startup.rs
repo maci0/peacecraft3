@@ -84,6 +84,8 @@ pub enum StartupError {
     Session(String),
     #[error("campaign clock: {0}")]
     Clock(String),
+    #[error("campaign profile: {0}")]
+    Profile(String),
 }
 
 /// The admitted context and the production host built from it.
@@ -94,6 +96,7 @@ pub struct Startup {
     origin: f64,
     tick: u64,
     admission: crate::neutral_player::Sha256Digest,
+    cache: Arc<crate::campaign_cache::SessionStorage>,
 }
 
 /// Object definitions from the install's unit and item metadata plus the map's overrides.
@@ -137,13 +140,19 @@ pub fn expansion_of(mode: GameMode) -> bool {
 ///
 /// `mode` selects the asset policy and the expansion flag. `seed` is the new-game seed,
 /// supplied by the caller and never defaulted here.
+/// `profile` is a saved PC3 campaign profile, or `None` for a fresh profile. Saves stay
+/// in this session and can be exported through `Startup::campaign_profile`.
 pub fn start(
     install: &Path,
     mode: GameMode,
     map_label: &str,
     map_bytes: &[u8],
     seed: i32,
+    profile: Option<&[u8]>,
 ) -> Result<Startup, StartupError> {
+    let cache = Arc::new(
+        crate::campaign_cache::SessionStorage::new(profile).map_err(StartupError::Profile)?,
+    );
     let exe_path = install.join(EXECUTABLE);
     let image = std::fs::read(&exe_path)
         .map_err(|error| StartupError::Install(format!("{}: {error}", exe_path.display())))?;
@@ -258,6 +267,7 @@ pub fn start(
     let admitted = Arc::clone(&context);
     let placement_map = Arc::clone(&sources.map_bytes);
     let mut session = MapScriptSession::<MapStartupHost>::default();
+    let session_cache = Arc::clone(&cache);
     session
         .replace_sequenced(
             Arc::clone(&context),
@@ -268,6 +278,7 @@ pub fn start(
                     Some(reader),
                     placement_map,
                     NO_OCCLUSION_FADING,
+                    session_cache,
                 )
             },
             &[config, main],
@@ -289,6 +300,7 @@ pub fn start(
         seed,
         mode,
         context: &context,
+        profile,
     });
     Ok(Startup {
         context,
@@ -296,11 +308,12 @@ pub fn start(
         origin,
         tick: 0,
         admission,
+        cache,
     })
 }
 
 /// Everything the admission read. Two starts agree on the digest exactly when they admitted the
-/// same executable, map, scripts, catalog source, seed, mode and human roster.
+/// same executable, map, scripts, catalog source, seed, mode, profile and human roster.
 struct AdmissionInputs<'a> {
     image: &'a [u8],
     map: &'a [u8],
@@ -310,6 +323,7 @@ struct AdmissionInputs<'a> {
     seed: i32,
     mode: GameMode,
     context: &'a ParsedMapContext,
+    profile: Option<&'a [u8]>,
 }
 
 fn digest_admission(inputs: AdmissionInputs<'_>) -> crate::neutral_player::Sha256Digest {
@@ -322,8 +336,9 @@ fn digest_admission(inputs: AdmissionInputs<'_>) -> crate::neutral_player::Sha25
         seed,
         mode,
         context,
+        profile,
     } = inputs;
-    let mut text = String::from("pcx-admission-v1\n");
+    let mut text = String::from("pcx-admission-v2\n");
     text += &format!("exe {}\n", hex(&crate::neutral_player::sha256(image)));
     text += &format!("map {}\n", hex(&crate::neutral_player::sha256(map)));
     text += &format!("common {}\n", hex(&crate::neutral_player::sha256(common)));
@@ -332,10 +347,18 @@ fn digest_admission(inputs: AdmissionInputs<'_>) -> crate::neutral_player::Sha25
         hex(&crate::neutral_player::sha256(blizzard))
     );
     text += &format!("catalog {catalog}\nseed {seed}\nmode {mode:?}\n");
+    text += &format!("profile {}\n", profile_identity(profile));
     for human in context.world.info.human_players() {
         text += &format!("human {}\n", human.number());
     }
     crate::neutral_player::sha256(text.as_bytes())
+}
+
+fn profile_identity(profile: Option<&[u8]>) -> String {
+    profile.map_or_else(
+        || "absent".into(),
+        |bytes| hex(&crate::neutral_player::sha256(bytes)),
+    )
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -352,6 +375,10 @@ const MAX_EXPIRIES_PER_TICK: usize = 4096;
 pub const MAX_CLOCK_TICKS_PER_CALL: u64 = 4096;
 
 impl Startup {
+    /// Current saved profile bytes. Exporting does not read or write the machine profile.
+    pub fn campaign_profile(&self) -> Result<Option<Vec<u8>>, StartupError> {
+        self.cache.snapshot().map_err(StartupError::Profile)
+    }
     /// Ticks reached on the campaign clock since publication.
     /// Digest of this startup's admission inputs; see `digest_admission`.
     pub fn admission_digest(&self) -> crate::neutral_player::Sha256Digest {

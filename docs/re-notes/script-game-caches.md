@@ -153,3 +153,30 @@ The selected unchanged Human03 startup, with a known-absent profile in an
 isolated XDG_DATA_HOME, now follows its missing-cache fallback
 and reaches SetHeroLevel at `war3map.j:2316`, which refuses on missing hero-event
 delivery. It is still not accepted, and no original-client run was performed.
+
+## Headless profile admission (2026-10-21)
+
+Headless startup takes an explicit optional PC3 profile byte slice. `None` means
+a fresh profile; supplied bytes are validated against the existing profile format
+and budgets before startup. Each session owns an independent in-memory store.
+`SaveGameCache` and reload operate on that store, and `Startup::campaign_profile`
+exports its current saved bytes for the caller to retain or pass to a later map.
+It never discovers or overwrites the machine's campaign profile.
+
+The admission digest uses a new domain version and includes absence or the
+SHA-256 of the initial profile bytes. Saving later cannot change the initial
+session identity. Thus peers with different initial profiles cannot share an
+identity merely because their executable, map and seed match. The application
+continues to supply its existing native/browser local storage explicitly to the
+shared campaign host. This changes profile ownership, not W3V compatibility or
+the modeled unit payload's fidelity limits.
+
+Private checks: 1,157 playback package tests pass (45 ignored gates), 202 network
+feature-suite tests pass (7 ignored gates), strict all-target playback/network
+clippy and both library WASM checks pass. The explicit Human01 profile gate passes
+and the app all-target check with `test-fixtures` is clean. The gate also passes
+with `XDG_DATA_HOME` pointing at a regular-file sentinel: the old local-storage
+path would fail, while session storage succeeds and leaves the sentinel hash
+unchanged. The gate checks equal and unequal saved profile identities, stored
+values, unchanged initial identity after saving and isolation between sessions.
+These are recreation storage/identity checks, not original-client cache parity.
