@@ -403,8 +403,7 @@ impl ObjectHost {
         Ok(())
     }
 
-    /// Same player, or an explicit passive alliance from the caster's owner. Neutral
-    /// passive units are allies only through such an alliance, never by owner number.
+    /// Same player, or an effective passive alliance from the caster's owner.
     pub(super) fn is_ally(&self, caster: HandleId, target: HandleId) -> bool {
         let (Ok(caster), Ok(target)) = (self.executed_unit(caster), self.executed_unit(target))
         else {
@@ -419,15 +418,7 @@ impl ObjectHost {
         let Some(rules) = self.combat.as_ref() else {
             return false;
         };
-        a.identity == b.identity
-            || a.alliances.iter().any(|(other, setting, value)| {
-                *other == b.identity
-                    && *value
-                    && self
-                        .inner
-                        .symbolic_value(*setting, "alliancetype")
-                        .is_ok_and(|v| v == rules.passive)
-            })
+        a.identity == b.identity || self.effective_alliance(a, b, rules.passive)
     }
 
     /// Restores `amount` life, capped at max life.
@@ -603,14 +594,7 @@ impl ObjectHost {
         if Some(b.number) == rules.neutral_passive || a.identity == b.identity {
             return false;
         }
-        !a.alliances.iter().any(|(other, setting, value)| {
-            *other == b.identity
-                && *value
-                && self
-                    .inner
-                    .symbolic_value(*setting, "alliancetype")
-                    .is_ok_and(|v| v == rules.passive)
-        })
+        !self.effective_alliance(a, b, rules.passive)
     }
 
     /// How the local player regards `unit`'s owner, for selection circle colours:

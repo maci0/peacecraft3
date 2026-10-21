@@ -3835,6 +3835,15 @@ open. See [natural sleep](docs/re-notes/unit-natural-sleep.md).
 
 ### 2026-10-20 — localized defeat dialogs and simulation pause
 
+2026-10-22 correction: selected-client startup passive alliances for
+neutral/rescuable controllers are now read from executable branch operands and
+applied before `main`, separately from explicit script writes. The unchanged
+Human01 no-input regression reaches 60 game seconds twice with Arthas alive;
+the old unintended Defeat pause is removed. Core/package 1,247 and app 590 tests
+pass, plus explicit source/replay gates, strict Clippy and WASM checks. General
+team/force alliances, current-team getters and chapter completion remain open;
+see [opening alliance evidence](docs/re-notes/hold-position.md).
+
 - [x] Selected-source localization and hotkey queries retain file provenance and
   native operand qualification. Executed `PauseGame` lets the current script
   finish, freezes later simulation delivery, and permits queued dialog callbacks
@@ -3842,10 +3851,11 @@ open. See [natural sleep](docs/re-notes/unit-natural-sleep.md).
 - [x] Unit guard participation tracks source-qualified computer ownership,
   authored home positions and selected combat chase/return settings. Special
   native enrollment flags and complete computer AI remain open.
-- [x] The unchanged no-input Human01 script reaches its authored localized
-  Defeat dialog and pauses at 36.1719 game seconds without a runtime error in
-  the production-factory headless verifier. This verifies VM/dialog state, not
-  rendered dialog parity or working restart/load/quit actions.
+- [x] Historical VM boundary: the unchanged no-input Human01 script reached its
+  localized Defeat dialog without a runtime error. The 2026-10-22 original-client
+  alliance probe shows that missing startup alliances induced this defeat;
+  it is not valid opening gameplay. The checkpoint verified VM/dialog delivery,
+  not rendered parity or working restart/load/quit actions.
 - [ ] Held inventory presentation reads selected image geometry and source skin,
   item art and text. Native rendered behavior remains unverified. Applying the
   decoded cover UV crop, asset-load rollback and effective verbose-tooltip

@@ -195,6 +195,8 @@ pub struct ControllerObservation {
 #[derive(Clone, Debug)]
 pub struct NewGameInput {
     pub seed: i32,
+    /// Selected client's initial passive alliances, applied after config and before main.
+    pub initial_alliances: Option<crate::player_alliance_rules::Rules>,
     pub orders: Option<Arc<crate::order_registry::Registry>>,
     pub activity: Option<crate::unit_activity::Rules>,
     /// Selected client's group-order rules; absent leaves group orders unsupported.
@@ -216,6 +218,7 @@ pub struct NewGameInput {
 }
 
 pub struct ResolvedNewGame {
+    initial_alliances: Option<crate::player_alliance_rules::Rules>,
     empty: HandleId,
     playing: HandleId,
     none: HandleId,
@@ -468,8 +471,9 @@ pub fn resolve_observations(
     let new_game = observations
         .new_game
         .as_ref()
-        .map(|_| -> Result<_, MapStartupError> {
+        .map(|input| -> Result<_, MapStartupError> {
             Ok(ResolvedNewGame {
+                initial_alliances: input.initial_alliances.clone(),
                 empty: handle("PLAYER_SLOT_STATE_EMPTY")?,
                 playing: handle("PLAYER_SLOT_STATE_PLAYING")?,
                 none: handle("MAP_CONTROL_NONE")?,

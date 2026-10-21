@@ -3,7 +3,7 @@
 ## Shipped text evidence
 
 The selected Legacy client's `Units_CommandStrings` tooltip for Hold Position
-(`War3Local.mpq`, `[CmdHoldPosition]` `Ubertip`) says: the units "stand where they
+(`War3Local.mpq`, `[CmdHoldPos]` `Ubertip`) says: the units "stand where they
 are and attack units that are within range", and "will not chase down enemy units
 that run away, nor move to engage ranged attackers". The recreation follows that
 text. Native code for the selected client has not been traced for this behavior.
@@ -48,7 +48,8 @@ source and file facts, not a run.
 - The Scout Tower row `hwtw` in `unitweapons.slk` has `weapsOn = 0`. Scout Towers
   therefore do not attack. They are not the attacker.
 
-Inference: the script and the w3i do not put Player(1) and Player(9) in an alliance,
+Historical inference, superseded by the original-client probe below: the script
+and the w3i do not put Player(1) and Player(9) in an alliance,
 and this recreation keeps them hostile. The zero force flags and zero ally masks do
 not disprove native initial team alliances. The selected client's startup rule for
 same-team players is unverified, so the same-team hypothesis stays open. Team
@@ -62,13 +63,9 @@ record the attacker, owner or rawcode of any hit.
 
 ## Open items
 
-- First attacker is not identified. Establishing it needs a run that logs each
-  damage event with the source handle, owner, rawcode, target and clock. The
-  Arthas position near the Player(8)/Player(9) units should be compared with each
-  attacker's acquire range. This requires a root-slot replay.
-- Native alliance initialization for team members is unverified. It needs a
-  selected-client trace of `SetPlayerTeam`/startup alliance state or an original
-  runtime observation of Player(1) against Player(9).
+- The first attacker is identified below. Its initial hostility is contradicted
+  by the later original-client startup probe; see the final section.
+- General team-based alliance initialization remains outside this probe's scope.
 - Invulnerability and pause are not applied in the intro. The prior note's claim
   that invulnerability is not consumed by combat is out of date: `weapon_target`
   filters protected targets. Explicit `PauseUnit` now suspends acquisition and
@@ -118,7 +115,72 @@ The 60-second window was therefore not completed.
   units from Arthas's start (-3859, 2748), inside acquire range 500. Horse owner
   transfer to Player 9 is at `Human01.j:1794-1797`.
 
-The recreation's default hostility, with no passive alliance, explains each
+The recreation's former default hostility, with no passive alliance, explains each
 `Acquired` event. Whether the selected client makes Player(1) and Player(9)
-allies at start is still unverified, so this run does not confirm the team
-hypothesis. It does show that the default hostility produces the first contact.
+allies at start was unverified at this checkpoint, so this replay did not confirm
+the team hypothesis. The later original-client probe supersedes that uncertainty.
+
+## Original-client startup alliances (2026-10-22)
+
+The local `PCXA` diagnostic keeps the selected Human01 template's `config` and
+`main` statements, inserting additive query functions before `main`, an entry
+query as its first statement, a post-main query as its last statement, and a
+two-second timer query. All other original archive members round-trip unchanged.
+Executable SHA-256 is `3f2ed012…570eed`; template SHA-256 is `f5b15561…40ee9`.
+The diagnostic map is not unchanged-campaign acceptance evidence. It runs under
+the private Wine/software-rendered reference, not native Windows hardware.
+
+Run `908fa8da6710` retained 250 alliance records at each entry, post-main and
+timer checkpoint (five configured players, ten kinds, every directed pair).
+Before `main`, every configured pair has passive alliance. Player 1 is USER;
+players 0, 2, 8 and 9 are NEUTRAL. In particular, players 1 and 9 report ally true,
+enemy false and passive true in both directions. The neutral players' current
+team is -1, unlike their executed configuration assignments. Do not use equal
+configuration teams as the cause of these initial alliances.
+
+Post-main and timer records preserve the player 1/9 passive alliance. The
+template's explicit setters change its intended enemy pairs, including 1/8,
+to passive false. These changing results provide a positive control for the
+queries: this is not a constant stub result. The optional team-setter stimuli
+were skipped by their configuration-readback guard, so no runtime SetPlayerTeam
+effect is claimed. One harness Space dismissed the observed chapter card; the
+following capture shows the original Arthas/Uther cinematic. All raw markers,
+hashes, captures and generated maps remain local in `.scratch/campaign-opening/`
+and the private reference run directory.
+
+Static evidence in the same executable explains the controller policy:
+`0x47E7B0` collects controller classes using comparisons at `0x47E82C` and
+`0x47E831`, then checks active controller classes at `0x47E8DA`. It sets a
+directed alliance in both directions for active/neutral pairs (`0x47E925`,
+`0x47E937`) and neutral/neutral pairs (`0x47E9D6`, `0x47E9E9`), through the
+same set-bit helper `0x4C1F70` used by the primary `SetPlayerAlliance` handler.
+The classes correspond to USER/COMPUTER and RESCUABLE/NEUTRAL in the supplied
+common script. The alliance kind is read from the call-site operands.
+
+`player_alliance_rules` reads those branches and call targets
+from the reviewed image, retaining its source identity. New-game startup builds
+an initial relation matrix from its current controller snapshot after `config`
+and before `main`; it does not fabricate executed setter records. Explicit
+script assignments take precedence, including false. Combat and Holy Light
+share that effective relation. Record-only hosts retain their previous policy.
+Synthetic tests vary controller and alliance operands, refuse missing/unknown
+windows, and check that initial defaults are not setter records, failed admission
+preserves state, and explicit false overrides only its direction. The explicit
+selected-image gate passes. The unchanged-map no-input replay now reaches all
+60 requested game seconds twice with Arthas alive at 650, rather than zero life
+and an unintended Defeat pause at 37.625. Its survival/clock assertions reject
+that observed baseline. No alliance, control, pause or player order is injected
+by this replay gate; normal startup supplies the source-derived policy.
+
+Final private-target verification: `pcx-play` package 1,247 passed / 51 ignored;
+app fixture suite 590 passed / 52 ignored; three decoder gates and the explicit
+Human01 replay pass; strict native all-target Clippy, affected core/app WASM
+checks and touched-file formatting pass. Receipts and frozen input hashes are
+in `.scratch/campaign-opening/`. The initial package attempt omitted the four
+required original-drop input paths; supplying the retained matching originals
+made those existing tests pass without changing them.
+
+Not established: full chapter completion, full native/rendered opening parity,
+general team/force alliances, all initial alliance kinds, or the current-team
+getter view. In particular, the native neutral-player team -1 observation is
+retained as a gap rather than replacing executed configuration assignments.

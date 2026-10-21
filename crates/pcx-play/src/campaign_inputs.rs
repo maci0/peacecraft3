@@ -185,6 +185,8 @@ pub fn prepare_new_game(
         })
         .transpose()?
         .unwrap_or_default();
+    let initial_alliances =
+        crate::player_alliance_rules::Rules::reviewed_legacy(image, client.clone())?;
     let research = crate::upgrade_research::Rules::read(
         image,
         client,
@@ -218,6 +220,7 @@ pub fn prepare_new_game(
     inputs.post_config = PostConfigObservations {
         new_game: Some(NewGameInput {
             seed,
+            initial_alliances: Some(initial_alliances),
             orders: Some(orders),
             activity: Some(activity),
             group_orders: Some(group_orders),
