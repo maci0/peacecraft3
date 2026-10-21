@@ -80,10 +80,10 @@ fn panel() -> Node {
         max_width: Val::Percent(100.0),
         flex_shrink: 0.0,
         flex_direction: FlexDirection::Column,
-        padding: UiRect::all(Val::Rem(0.55)),
+        padding: UiRect::all(Val::Rem(0.65)),
         border: UiRect::all(Val::Px(1.0)),
-        border_radius: BorderRadius::all(Val::Px(5.0)),
-        row_gap: Val::Rem(0.35),
+        border_radius: BorderRadius::all(Val::Px(8.0)),
+        row_gap: Val::Rem(0.45),
         ..default()
     }
 }
@@ -129,11 +129,20 @@ fn setup(mut commands: Commands) {
                 panel(),
                 Visibility::Hidden,
                 OverlayRoot,
-                BackgroundColor(Color::srgba(0.015, 0.025, 0.025, 0.58)),
-                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.18)),
+                BackgroundColor(Color::srgba(0.012, 0.018, 0.02, 0.48)),
+                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.12)),
                 Pickable::IGNORE,
             ))
             .with_children(|panel| {
+                panel.spawn((
+                    Text::new("PERFORMANCE                                  F8"),
+                    TextFont {
+                        font_size: bevy::text::FontSize::Rem(0.65),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.65, 0.8, 0.8)),
+                    Pickable::IGNORE,
+                ));
                 panel.spawn((
                     Text::new("FPS                 -\nFrame interval      - ms"),
                     TextFont {
@@ -213,17 +222,26 @@ fn setup(mut commands: Commands) {
             root.spawn((
                 Node {
                     margin: UiRect::right(Val::Auto),
-                    max_height: Val::Vh(65.0),
+                    max_height: Val::Vh(95.0),
                     overflow: Overflow::clip(),
                     ..panel()
                 },
                 Visibility::Hidden,
                 DebugRoot,
-                BackgroundColor(Color::srgba(0.015, 0.025, 0.025, 0.58)),
-                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.18)),
+                BackgroundColor(Color::srgba(0.012, 0.018, 0.02, 0.48)),
+                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.12)),
                 Pickable::IGNORE,
             ))
             .with_children(|panel| {
+                panel.spawn((
+                    Text::new("DEBUG                                        F7"),
+                    TextFont {
+                        font_size: bevy::text::FontSize::Rem(0.65),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.65, 0.8, 0.8)),
+                    Pickable::IGNORE,
+                ));
                 panel.spawn((
                     Text::new("Debug (F7)"),
                     TextFont {
