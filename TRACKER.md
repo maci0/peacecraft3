@@ -2,6 +2,21 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+### 2026-10-21: Five measured optimization rounds
+
+- [x] Sorted simulation commands allocate zero times over the unchanged fixed
+  workload. Asset paths allocate once; skeleton traversal scratch is reused.
+- [x] Disconnected blocked-goal pockets are proven unreachable within a charged
+  bound; the synthetic route drops from 4,647 to 648 work with the same endpoint.
+- [x] Identical skinned positions emit no mesh modification event. Native Vulkan
+  before/after captures retain draw counts; timings remain report-only.
+- [x] Ctrl+Shift+F9 selects 1×/2×/4×/8× campaign pacing with unchanged fixed ticks.
+  Timer/RNG gates and the complete 131-unit Human03 snapshot agree across rates.
+  Source-bound RNG state and 64 subsequent draws agree too.
+- [x] Affected core/app tests, strict Clippy, WASM and the CPU-busy allocation/state
+  gate pass. Whole-game original-client lockstep and full rendered campaign
+  performance remain unqualified. See [measurements](docs/performance/five-rounds.md).
+
 ### 2026-10-21: Water Elemental in progress
 
 - [x] Source-ranked summoning, cast point, mana/cooldown, unit factory, timed death,
@@ -19,7 +34,9 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   `96c729e7-8dac-4f49-b87d-dc3dd4e1ca3a`.
 - [~] Unchanged Human03 creates a source-loaded `hwat` at tick 999. With Area
   placement and no injected player movement, the longer diagnostic reaches
-  movement work exhaustion for unit 780 at tick 2570. The v1 diagnostic stopped
+  movement work exhaustion for unit 780 at tick 2570 before the profiling fix.
+  The bounded disconnected-pocket proof now allows the same diagnostic to reach
+  tick 4096 / 64 game seconds without injected player orders. The v1 diagnostic stopped
   earlier but also injected a movement order, so this is not a controlled speedup
   comparison. This remains partial startup observation, not campaign acceptance.
   See [summoning](docs/re-notes/water-elemental.md).

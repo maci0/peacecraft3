@@ -89,3 +89,8 @@ top right, and hiding the counter restores the prior image exactly. No FPS
 threshold is used. Native profiling executables remain a separate check.
 
 Generated traces, captures and original asset content stay local and untracked.
+
+The [five-round optimization record](performance/five-rounds.md) adds deterministic
+CPU/allocation/upload checks, native GPU reports and accelerated fixed-tick pacing.
+On the latest host check `perf stat` works but both hardware and software stack
+sampling are denied; the earlier stack-capture smoke result above is historical.
