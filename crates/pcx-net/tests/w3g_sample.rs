@@ -3,7 +3,7 @@
 //! Run with `PCX_W3G_SAMPLE=<path> cargo test -p pcx-net --test w3g_sample -- --ignored`.
 //! The sample is never committed. The gate fails when the variable is unset.
 
-use pcx_net::w3g::{Leave, Record, parse};
+use pcx_net::w3g::{Leave, Record, parse, write};
 
 #[test]
 #[ignore = "requires a local original replay named by PCX_W3G_SAMPLE"]
@@ -44,4 +44,10 @@ fn legacy_sample_matches_the_observed_structure() {
             trailer: 1,
         }))
     );
+    // Recompression preserves content and recomputes block checksums.
+    let written = write(&replay).expect("sample writes with its block fields present");
+    let round = parse(&written).expect("written sample re-parses");
+    let mut expected = replay;
+    expected.header.block_fields = round.header.block_fields.clone();
+    assert_eq!(round, expected);
 }

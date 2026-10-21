@@ -1,7 +1,10 @@
 # Replay recording
 
 Status: the native replay container and session recorder are implemented in
-`crates/pcx-net`. The original Warcraft III W3G writer is not implemented.
+`crates/pcx-net`. The original Warcraft III W3G reader and a bounded writer are
+implemented for the admitted structures. Header and block checksums are verified
+and regenerated. Per-slot values and the encoded startup tail remain uninterpreted;
+original-client playback and production recording are not qualified.
 
 ## Native container
 
@@ -189,7 +192,7 @@ Verified against the bytes:
 - Inflated block 0 starts `10 01 00 00 00 01 "replay1" 00 01 00 "Local Game" 00 …`.
   This is observed, not yet decoded against a record table.
 
-Not established:
+At initial capture, not yet established (later results below supersede this list):
 
 - The block u32 field (`7f65725c` in block 0). It matches none of adler32 or
   crc32 over the inflated or the compressed bytes (`.scratch/w3g_checksum.py`).
@@ -197,19 +200,22 @@ Not established:
 - Action payload meaning (`w3g_actions.txt` is not in this repository).
 - Whether a writer can reproduce the unknown fields.
 
-Consequence: the W3G writer stays unimplemented. It needs the two unknown fields
-identified and a decoded record table. Without them the file cannot be written
-with byte fidelity, and nothing in this repository should claim otherwise.
+At that checkpoint the W3G writer remained unimplemented. The later structural
+reader/writer and checksum qualification below supersede that blocker; native
+playback fidelity remains open.
 
 ## W3G reader (structure only)
 
 `crates/pcx-net/src/w3g.rs` reads the layout from the public notes
-`scopatz/w3g` `w3g_format.txt` (CC0-1.0, checked with `gh api`; the file is
-58178 bytes). The reader decodes the header, zlib blocks, startup records, and
-replay data blocks 0x17, 0x1E/0x1F, 0x22, 0x2F. Every item is read by its id and
-length. Shapes outside the notes are refused, not skipped: ladder player records,
-chat 0x20, block 0x23, leave reasons outside 0x01/0x0C/0x0E, and any startup
-value that differs from the notes.
+`scopatz/w3g` `w3g_format.txt` (CC0-1.0). Provenance: fetched on 2026-10-21
+from `https://github.com/scopatz/w3g/blob/master/w3g_format.txt`; document version
+1.18, dated 2007-06-26, authors blue and nagger (deepnode.de / samods forum).
+The preserved copy `w3g_format_reference.txt` matches the fetched source. The
+reader decodes the header, zlib blocks, startup records, and replay data blocks
+0x17, 0x1E/0x1F, 0x22, 0x2F. Every item is read by its id and length. Shapes
+outside the notes are refused, not skipped: ladder player records, chat 0x20,
+block 0x23, leave reasons outside 0x01/0x0C/0x0E, and any startup value that
+differs from the notes.
 
 Verified on the Legacy 1.29.2.9231 sample:
 
@@ -231,23 +237,55 @@ string come 20 bytes the notes do not describe. They are not the map's SHA-1
 keeps them raw as `encoded_tail`. The field is null-delimited, so this cannot
 move the record boundaries.
 
-Not established, kept raw:
+Block checksum qualification (2026-10-21): the u32 at block offset 4 consists of
+two little-endian u16 checksums. Each folds an IEEE CRC32 with
+`(crc ^ (crc >> 16)) & 0xffff`. The first covers the eight-byte block header with
+both checksums zeroed; the second covers the compressed payload. An independent
+Python zlib calculation matches both fields of the retained original sample.
+The reader checks both before inflation, and the writer recomputes both after
+compression. Format references are the
+[gowarcraft3 compressor](https://github.com/nielsAD/gowarcraft3/blob/master/file/w3g/compress.go)
+and the independent
+[ReplayMap-Fixer implementation](https://github.com/l-Fingon-l/ReplayMap-Fixer/blob/main/replay.cpp).
+No source implementation was copied.
 
-- The u32 at offset 4 of each data block. It matches neither CRC32 nor Adler-32
-  over the inflated block, the compressed payload, or the block header with the
-  field zeroed.
-- The u32 value in each checksum record (`0x22`).
+Both original blocks yield their declared output using sync-flush decoding and
+do not reach zlib end-of-stream. The writer preserves this framing; lack of a
+final trailer is not by itself corruption in this format.
+
+Not established, kept raw:
+- The u32 value in each checksum record (`0x22`). The sample has 939 such values,
+  all distinct-looking (935 unique) and without a derivable relation to the seed.
 - `encoded_tail` (20 bytes).
 - The game-settings bit meanings and the 4-byte map checksum inside them.
 
-Structural proof, not fidelity. A parsed replay does not show that the game
-reproduces it. The writer is not implemented. Its blockers are the three raw
-fields above plus a round-trip against a second sample.
+The meanings of the per-slot values and encoded tail are unresolved. Their
+variation is not evidence that they are nondeterministic.
 
-Gates: `cargo test -p pcx-net --lib w3g` (13 synthetic tests: exact decode,
-encode/decode round trip, every truncation refused, every header byte change
-refused, CRC-only change refused, corrupt zlib, nonzero padding, short content,
-startup and replay-data refusals, a fake slot chain inside the settings, a slot-like
-player name). Local original gate:
+### Bounded writer
+
+`crates/pcx-net/src/w3g.rs::write` serializes a parsed `Replay` back to `.w3g`
+bytes. It recomputes header and block checksums and compresses the authoritative
+`content` bytes. Parsed startup/record fields must agree with those bytes or the
+writer refuses instead of silently losing an edit. Per-slot values and the
+startup tail remain unchanged in the content. Recompression can change the block
+checksums. Length conversions are checked, and output allocations refuse capacity
+failure. The writer's block buffer size is an encoding choice, not a game rule.
+The written file is not yet proven playable by the original client.
+
+The W3G header records game version and build, not the executable's cryptographic
+identity. The game-start record carries a seed, map path and a four-byte checksum;
+these do not replace the production SHA-256 source identities. Per-slot values
+cannot yet be generated from the recreation's authoritative state, so this writer
+does not provide production campaign recording or command-only replay fidelity.
+
+Structural proof, not fidelity. A parsed replay does not show that the game
+reproduces it. The writer carries the opaque fields; it does not claim to match
+the original client's sync algorithm.
+
+Gates: `cargo test -p pcx-net --lib w3g` covers checksum regeneration without
+source fields, contradictory parsed-view refusal, recompressed multiple blocks,
+every single-byte block/header corruption, truncations, record values, padding
+and the structural parser cases. Local original gate:
 `PCX_W3G_SAMPLE=<path> cargo test -p pcx-net --test w3g_sample -- --ignored`.
 The sample is never committed.
