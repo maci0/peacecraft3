@@ -7,7 +7,7 @@ use crate::scripts::AssetIdentity;
 use pcx_map::Pathing;
 use pcx_script::HandleId;
 use pcx_sim::world::Source;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug)]
 pub struct Binding {
@@ -779,6 +779,93 @@ impl Placement {
     /// Bounded deterministic cell routing on this same live collision cache.
     /// shortcut: A* tie order and cell-centre steering are reconstruction policy;
     /// qualify native path choice, local avoidance and steering before parity claims.
+    /// A small closed component cannot be approached from another component.
+    /// The bound limits this optional proof; an unfinished proof changes no target.
+    fn isolated_route_component(
+        &self,
+        unit: HandleId,
+        first: [i32; 2],
+        start: [i32; 2],
+        radius: f32,
+        work: &mut usize,
+    ) -> Result<Option<BTreeSet<[i32; 2]>>, Error> {
+        if first == start {
+            return Ok(None);
+        }
+        let allowance = (*work).min(128);
+        let mut left = allowance;
+        let result = (|| {
+            let mut charge = || {
+                if left == 0 {
+                    false
+                } else {
+                    left -= 1;
+                    true
+                }
+            };
+            let centre = |p: [i32; 2]| {
+                [
+                    self.grid.origin[0] + (p[0] as f32 + 0.5) * self.rules.cell_size(),
+                    self.grid.origin[1] + (p[1] as f32 + 0.5) * self.rules.cell_size(),
+                ]
+            };
+            let mut component = BTreeSet::from([first]);
+            let mut pending = vec![first];
+            while let Some(point) = pending.pop() {
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        if dx == 0 && dy == 0 {
+                            continue;
+                        }
+                        let next = [point[0] + dx, point[1] + dy];
+                        if component.contains(&next)
+                            || self.index(i64::from(next[0]), i64::from(next[1])).is_none()
+                        {
+                            continue;
+                        }
+                        if !charge() {
+                            return Ok(None);
+                        }
+                        // The forward search seeds the actual start even if its cell centre is blocked.
+                        if next != start
+                            && self.prepare_motion(unit, centre(next), radius)?.is_none()
+                        {
+                            continue;
+                        }
+                        if dx != 0 && dy != 0 {
+                            if !charge() {
+                                return Ok(None);
+                            }
+                            if self
+                                .prepare_motion(unit, centre([next[0], point[1]]), radius)?
+                                .is_none()
+                            {
+                                continue;
+                            }
+                            if !charge() {
+                                return Ok(None);
+                            }
+                            if self
+                                .prepare_motion(unit, centre([point[0], next[1]]), radius)?
+                                .is_none()
+                            {
+                                continue;
+                            }
+                        }
+                        if next == start {
+                            return Ok(None);
+                        }
+                        component.insert(next);
+                        pending.push(next);
+                    }
+                }
+            }
+            Ok(Some(component))
+        })();
+        *work -= allowance - left;
+        result
+    }
+
     pub(crate) fn route(
         &self,
         unit: HandleId,
@@ -817,7 +904,7 @@ impl Placement {
             return Ok(path);
         }
         // Exhausted work ends the search; the unit then goes as near as it got.
-        let mut charge = || -> bool {
+        let charge = |work: &mut usize| -> bool {
             match work.checked_sub(1) {
                 Some(left) => {
                     *work = left;
@@ -826,7 +913,7 @@ impl Placement {
                 None => false,
             }
         };
-        if !charge() {
+        if !charge(work) {
             return Err(fail("movement route work exhausted"));
         }
         let target_clear = self.prepare_motion(unit, target, radius)?.is_some();
@@ -871,15 +958,24 @@ impl Placement {
                 cell: goal,
             });
             let mut seen = BTreeSet::from([goal]);
+            let mut isolated = BTreeSet::new();
             let mut nearest = f64::INFINITY;
             while let Some(open) = candidates.pop() {
-                if !charge() {
+                if !charge(work) {
                     return Err(fail("movement route work exhausted proving nearest target"));
                 }
                 let point = xy(open.cell);
-                if self.prepare_motion(unit, centre(point), radius)?.is_some() {
-                    nearest = open.cost;
-                    break;
+                if !isolated.contains(&point)
+                    && self.prepare_motion(unit, centre(point), radius)?.is_some()
+                {
+                    if let Some(component) =
+                        self.isolated_route_component(unit, point, start_cell, radius, work)?
+                    {
+                        isolated.extend(component);
+                    } else {
+                        nearest = open.cost;
+                        break;
+                    }
                 }
                 for dy in -1..=1 {
                     for dx in -1..=1 {
@@ -917,7 +1013,7 @@ impl Placement {
         let mut best = (heuristic(start_cell), 0.0, begin);
         let mut arrived = false;
         'search: while let Some(open) = frontier.pop() {
-            if !charge() {
+            if !charge(work) {
                 break;
             }
             if open.travelled > reached[&open.cell].0 {
@@ -954,14 +1050,14 @@ impl Placement {
                     if reached.get(&next).is_some_and(|(old, _)| *old <= travelled) {
                         continue;
                     }
-                    if !charge() {
+                    if !charge(work) {
                         break 'search;
                     }
                     if self.prepare_motion(unit, centre(p), radius)?.is_none() {
                         continue;
                     }
                     if dx != 0 && dy != 0 {
-                        if !charge() {
+                        if !charge(work) {
                             break 'search;
                         }
                         if self
@@ -970,7 +1066,7 @@ impl Placement {
                         {
                             continue;
                         }
-                        if !charge() {
+                        if !charge(work) {
                             break 'search;
                         }
                         if self
