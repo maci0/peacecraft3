@@ -150,6 +150,140 @@ fn catalog_origin() -> crate::scripts::AssetIdentity {
 }
 
 #[test]
+fn button_positions_resolve_each_metadata_slot_and_map_override_independently() {
+    let source_tables = tables("[L001]\nButtonpos=2,1\n");
+    let mut overlay = Overlay::default();
+    assert_eq!(
+        crate::ability_profile::button_position(&source_tables, &overlay, *b"L001").unwrap(),
+        [2, 1]
+    );
+    overlay.mods.insert(
+        "L001".into(),
+        vec![pcx_objects::Mod {
+            field: *b"abpy",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: Some([0, 0]),
+            value: pcx_objects::Value::Int(3),
+            end_word: 0,
+        }],
+    );
+    assert_eq!(
+        crate::ability_profile::button_position(&source_tables, &overlay, *b"L001").unwrap(),
+        [2, 3]
+    );
+    let empty = tables("");
+    overlay
+        .mods
+        .get_mut("L001")
+        .unwrap()
+        .push(pcx_objects::Mod {
+            field: *b"abpx",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: None,
+            value: pcx_objects::Value::Int(4),
+            end_word: 0,
+        });
+    assert_eq!(
+        crate::ability_profile::button_position(&empty, &overlay, *b"L001").unwrap(),
+        [4, 3]
+    );
+    for invalid in [u32::MAX, i32::MIN as u32] {
+        overlay.mods.get_mut("L001").unwrap()[0].value = pcx_objects::Value::Int(invalid);
+        assert!(
+            crate::ability_profile::button_position(&source_tables, &overlay, *b"L001").is_err()
+        );
+    }
+}
+
+#[test]
+fn button_positions_refuse_malformed_stock_or_map_coordinates() {
+    for profile in [
+        "[L001]\nButtonpos=2\n",
+        "[L001]\nButtonpos=-1,0\n",
+        "[L001]\nButtonpos=x,1\n",
+    ] {
+        assert!(
+            crate::ability_profile::button_position(
+                &tables(profile),
+                &Overlay::default(),
+                *b"L001"
+            )
+            .is_err()
+        );
+    }
+    for (selectors, value_type, value) in [
+        (
+            Some([1, 0]),
+            pcx_objects::ValueType::Int,
+            pcx_objects::Value::Int(3),
+        ),
+        (
+            None,
+            pcx_objects::ValueType::Str,
+            pcx_objects::Value::Str(b"3".to_vec()),
+        ),
+        (
+            None,
+            pcx_objects::ValueType::Int,
+            pcx_objects::Value::Str(b"3".to_vec()),
+        ),
+    ] {
+        let mut overlay = Overlay::default();
+        overlay.mods.insert(
+            "L001".into(),
+            vec![pcx_objects::Mod {
+                field: *b"abpx",
+                selectors,
+                value_type,
+                value,
+                end_word: 0,
+            }],
+        );
+        assert!(
+            crate::ability_profile::button_position(
+                &tables("[L001]\nButtonpos=2,1\n"),
+                &overlay,
+                *b"L001"
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn ability_buttons_follow_learned_rank_and_authored_art() {
+    let mut vm = host(
+        NATIVES,
+        "L001",
+        Overlay::default(),
+        "[L001]\nArt=Textures\\Authored.blp\nButtonpos=2,1\n",
+        8,
+    );
+    vm.call("setup", &[]).unwrap();
+    let Value::Handle(unit) = vm.global("H") else {
+        panic!("created hero")
+    };
+    assert!(
+        vm.host()
+            .inner
+            .ability_button(unit, *b"L001")
+            .unwrap()
+            .is_none()
+    );
+    vm.call("learn", &[Value::Int(i32::from_be_bytes(*b"L001"))])
+        .unwrap();
+    let button = vm
+        .host()
+        .inner
+        .ability_button(unit, *b"L001")
+        .unwrap()
+        .unwrap();
+    assert_eq!(button.rank, 1);
+    assert_eq!(button.art, "Textures\\Authored.blp");
+    assert_eq!(button.position, [2, 1]);
+}
+
+#[test]
 fn scalar_ability_profiles_use_map_overrides_and_keep_unrelated_stock_values() {
     let modification = |field, text: &[u8]| pcx_objects::Mod {
         field,

@@ -897,6 +897,37 @@ impl ObjectHost {
         self.units.as_ref().is_some_and(|u| u.heroes.is_some())
     }
 
+    /// Presentation of a learned, player-available ability; orders still validate cast readiness.
+    pub fn ability_button(
+        &self,
+        unit: HandleId,
+        ability: [u8; 4],
+    ) -> Result<Option<crate::ability_profile::Button>, Error> {
+        let record = self.executed_unit(unit)?;
+        let rank = record
+            .abilities
+            .as_ref()
+            .map_or(0, |abilities| abilities.level(ability));
+        if rank <= 0 || !self.unit_ability_available(unit, ability)? {
+            return Ok(None);
+        }
+        let input = self
+            .heroes_admission()
+            .map_err(|detail| self.hero_error(ABILITY, detail))?;
+        let position =
+            crate::ability_profile::button_position(&input.tables, &input.overlay, ability)
+                .map_err(|detail| self.hero_error(ABILITY, detail))?;
+        let art = self
+            .hero_ability_profile(ability, "Art")
+            .map_err(|detail| self.hero_error(ABILITY, detail))?;
+        Ok(Some(crate::ability_profile::Button {
+            ability,
+            rank,
+            art,
+            position,
+        }))
+    }
+
     /// Exact ranked ability cell, including the matching W3A level override.
     pub(crate) fn hero_ability_level_cell(
         &self,
