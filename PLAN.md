@@ -1636,3 +1636,11 @@ Human03 initializes with three retained scripted patrol endpoints; its first
 clock tick next refuses blight regeneration without terrain state. Native patrol
 timing, queued routes, command-panel presentation and campaign acceptance remain
 open; see [unit patrol](docs/re-notes/unit-patrol.md).
+
+Initial-blight follow-up (2026-10-21): W3E flags now seed an identified terrain
+layer with spacing derived from the selected placement normalization and the
+map's grid ratio. Regeneration integrates accepted motion spans at cell crossings
+instead of sampling the final position. Unchanged Human03 reaches tick 155 and
+then exhausts movement work; campaign acceptance is still open. Player-owned
+`SetBlight*` changes, blight rendering and native eligibility/tick comparison
+remain open; see [terrain blight](docs/re-notes/terrain-blight.md).

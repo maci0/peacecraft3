@@ -109,6 +109,7 @@ pub mod scripts;
 pub mod sound_environment;
 pub mod sound_parameters;
 pub mod startup_clock;
+pub mod terrain_blight;
 pub mod terrain_pathing;
 pub mod trace;
 pub mod unit_placement;

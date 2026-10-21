@@ -609,9 +609,8 @@ pub struct Corner {
     /// to 0. Shipped files use 0..7 here. The two readings disagree and this
     /// crate does not pick one.
     pub slot_nibble: u8,
-    /// The four high-nibble flag bits, one per corner of the tile this vertex
-    /// touches. The game maps them to bits 0x02/0x04/0x10/0x40 of its own
-    /// flag word.
+    /// The four high-nibble flag bits. Bit 1 is the on-disk blight flag;
+    /// the remaining bits retain their original representation.
     pub corner_flags: u8,
     /// Fifth byte, opaque.
     pub byte5: u8,
@@ -620,6 +619,12 @@ pub struct Corner {
 }
 
 impl Corner {
+    /// W3E texture/flags byte bit 0x20, retained in bit 1 of `corner_flags`.
+    /// This is an on-disk flag, independent of the selected ground texture.
+    pub fn is_blighted(&self) -> bool {
+        self.corner_flags & 0b0010 != 0
+    }
+
     /// `true` when bit 14 of [`Self::position_word`] is set.
     pub fn position_flag(&self) -> bool {
         self.position_word & 0x4000 != 0

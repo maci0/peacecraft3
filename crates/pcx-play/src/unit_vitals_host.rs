@@ -14,6 +14,10 @@ use pcx_sim::world::{Definition, FieldValue};
 
 const GET: &str = "GetUnitState";
 const REGEN: &str = "unit regeneration";
+type RegenMotion<'a> = (
+    &'a [super::unit_activity::AcceptedSpan],
+    &'a [(HandleId, [f32; 2])],
+);
 
 /// `UnitBalance` `regenType` tokens. Only the four stock tokens and `day` are admitted.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -22,7 +26,7 @@ pub enum RegenType {
     Day,
     Night,
     Never,
-    /// Blight terrain regeneration. Blight ground state is not modelled.
+    /// Blight terrain regeneration, requiring an admitted terrain layer.
     Blight,
 }
 
@@ -101,6 +105,50 @@ fn regen_type(definition: &Definition) -> Result<RegenType, String> {
 }
 
 impl ObjectHost {
+    pub(super) fn require_blight_projection(
+        &self,
+        unit: HandleId,
+        name: &str,
+    ) -> Result<(), Error> {
+        if self.initial_blight.is_some()
+            && let Some(vitals) = self.executed_unit(unit)?.vitals
+            && vitals.regen.life_type == RegenType::Blight
+            && self
+                .timer_game_time()
+                .is_some_and(|now| now > vitals.regen.through)
+        {
+            return Err(self.inner.error(
+                name,
+                Failure::UnitActivity(
+                    "blight relocation requires regeneration projected through the current clock"
+                        .into(),
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Admit map-authored blight once, before creations. Runtime setters remain
+    /// unsupported until their player layers and painting rules are admitted.
+    pub fn admit_initial_blight(
+        &mut self,
+        blight: crate::terrain_blight::InitialBlight,
+    ) -> Result<(), Error> {
+        if self.initial_blight.is_some()
+            || self.executed_units().next().is_some()
+            || self.unit_activity.is_none()
+        {
+            return Err(self.inner.error(
+                REGEN,
+                Failure::UnitActivity(
+                    "initial blight requires activity and no created units, once".into(),
+                ),
+            ));
+        }
+        self.initial_blight = Some(blight);
+        Ok(())
+    }
+
     /// Before any unit exists; heroes (upper-case rawcode) add level-one attributes.
     pub fn admit_unit_vitals(&mut self, bonuses: HeroVitals) -> Result<(), Error> {
         if self.units.is_none()
@@ -230,6 +278,16 @@ impl ObjectHost {
     /// Dead and nonpositive-life units do not regenerate. Errors leave every pool
     /// and clock unchanged, so a retry integrates the same spans.
     pub(super) fn advance_unit_regen(&mut self, now: f64) -> Result<(), Error> {
+        let mut work = usize::MAX;
+        self.advance_unit_regen_motion(now, None, &mut work)
+    }
+
+    pub(super) fn advance_unit_regen_motion(
+        &mut self,
+        now: f64,
+        motion: Option<RegenMotion<'_>>,
+        work: &mut usize,
+    ) -> Result<(), Error> {
         let Some(rules) = &self.unit_vitals else {
             return Ok(());
         };
@@ -281,11 +339,7 @@ impl ObjectHost {
                     RegenType::Never => 0.0,
                     RegenType::Day => day()?,
                     RegenType::Night => elapsed - day()?,
-                    RegenType::Blight => {
-                        return Err(fail(
-                            "blight regeneration needs terrain blight state".into(),
-                        ));
-                    }
+                    RegenType::Blight => self.blight_seconds(unit, from, now, motion, work)?,
                 }
             };
             let life =
@@ -304,6 +358,81 @@ impl ObjectHost {
             }
         }
         Ok(())
+    }
+
+    fn blight_seconds(
+        &self,
+        unit: HandleId,
+        from: f64,
+        now: f64,
+        motion: Option<RegenMotion<'_>>,
+        work: &mut usize,
+    ) -> Result<f64, Error> {
+        let fail = |detail| self.inner.error(REGEN, Failure::UnitActivity(detail));
+        let blight = self
+            .initial_blight
+            .as_ref()
+            .ok_or_else(|| fail("blight regeneration needs terrain blight state".into()))?;
+        let record = self.executed_unit(unit)?;
+        let current = record
+            .position
+            .ok_or_else(|| fail("blight regeneration needs accepted position".into()))?;
+        let Some((spans, starts)) = motion else {
+            if record.activity.as_ref().is_some_and(|a| a.moving()) {
+                return Err(fail(
+                    "blight regeneration needs motion projected before a clock rebase".into(),
+                ));
+            }
+            return blight
+                .seconds(current, current, now - from, work)
+                .map_err(fail);
+        };
+        let mut position = starts
+            .binary_search_by_key(&unit, |(id, _)| *id)
+            .ok()
+            .map(|i| starts[i].1)
+            .unwrap_or(current);
+        let begin = spans.partition_point(|s| s.unit < unit);
+        let end = spans.partition_point(|s| s.unit <= unit);
+        let mut cursor = from;
+        let mut total = 0.0;
+        for span in &spans[begin..end] {
+            if span.end <= from {
+                continue;
+            }
+            if span.start > now || span.end > now || span.end <= span.start {
+                return Err(fail(
+                    "blight motion span is outside the regeneration interval".into(),
+                ));
+            }
+            let start = span.start.max(from);
+            if start < cursor {
+                return Err(fail("blight motion spans overlap".into()));
+            }
+            total += blight
+                .seconds(position, position, start - cursor, work)
+                .map_err(fail)?;
+            let fraction = (start - span.start) / (span.end - span.start);
+            let clipped = std::array::from_fn(|i| {
+                (f64::from(span.from[i])
+                    + (f64::from(span.to[i]) - f64::from(span.from[i])) * fraction)
+                    as f32
+            });
+            total += blight
+                .seconds(clipped, span.to, span.end - start, work)
+                .map_err(fail)?;
+            cursor = span.end;
+            position = span.to;
+        }
+        if position != current {
+            return Err(fail(
+                "blight regeneration needs relocation reconciled at the projection boundary".into(),
+            ));
+        }
+        total += blight
+            .seconds(position, position, now - cursor, work)
+            .map_err(fail)?;
+        Ok(total)
     }
 
     /// Per-second life and mana rates: the stock `UnitBalance` columns, plus the hero

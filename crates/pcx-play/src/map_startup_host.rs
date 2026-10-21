@@ -776,6 +776,18 @@ pub fn assemble(
             object = object.with_group_orders(rules)?;
         }
         placement_rules = input.placement_rules;
+        if let (Some(rules), Some(_)) = (&placement_rules, &input.hero_vitals) {
+            let blight = crate::terrain_blight::InitialBlight::read(
+                &context.terrain,
+                rules.cell_size() * context.alignment.uniform_scale as f32,
+                context.sources.map.clone(),
+                context.input_budget.terrain_bytes / pcx_map::CORNER_RECORD,
+            )
+            .map_err(|e| {
+                MapStartupError::Observation(format!("{}: {e}", context.sources.map.source))
+            })?;
+            object.admit_initial_blight(blight)?;
+        }
         if let Some(event) = input.unit_range_event {
             object.admit_unit_range_runtime(&event, 65536)?;
         }

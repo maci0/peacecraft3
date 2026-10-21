@@ -2,6 +2,8 @@ use super::*;
 use crate::playercolor_host::{CombatActor, CombatTraceEvent};
 use pcx_objects::editor::misc::{CombatRules, DayCycle, HeroVitals};
 use pcx_script::HandleId;
+#[path = "blight_regeneration_tests.rs"]
+mod blight;
 #[path = "unit_sleep_tests.rs"]
 mod natural_sleep;
 #[path = "patrol_combat_tests.rs"]
@@ -158,7 +160,7 @@ fn open_selected(
     heroes: Option<crate::hero_skills::Rules>,
     combat: CombatRules,
 ) -> (Vm, HandleId, HandleId) {
-    open_fixture(fields, heroes, combat, false)
+    open_fixture(fields, heroes, combat, false, None)
 }
 
 /// The same fixture with the source fgamestate clock and time-of-day admitted at hour 9.
@@ -166,7 +168,7 @@ fn open_clocked(
     fields: &[([u8; 4], ObjectField)],
     combat: CombatRules,
 ) -> (Vm, HandleId, HandleId) {
-    open_fixture(fields, None, combat, true)
+    open_fixture(fields, None, combat, true, None)
 }
 
 /// Clock declarations: the stock `CLOCK` handle and the stock dawn/dusk window.
@@ -197,8 +199,9 @@ fn open_fixture(
     heroes: Option<crate::hero_skills::Rules>,
     combat: CombatRules,
     clock: bool,
+    blight: Option<crate::terrain_blight::InitialBlight>,
 ) -> (Vm, HandleId, HandleId) {
-    let extra = format!(
+    let mut extra = format!(
         "{}\n{}{DECLARATIONS}{}{}",
         enumeration::TRIGGERS,
         super::activity::ORDERS,
@@ -211,6 +214,9 @@ fn open_fixture(
             ""
         },
     );
+    if blight.is_some() {
+        extra.push_str("\nnative SetUnitPosition takes unit u, real x, real y returns nothing\n");
+    }
     let map = if heroes.is_some() {
         MAP.replacen("'u001'", "'H001'", 1)
     } else {
@@ -277,6 +283,9 @@ fn open_fixture(
             .unwrap();
     }
     h.admit_unit_activity(activity, 65536).unwrap();
+    if let Some(blight) = blight {
+        h.admit_initial_blight(blight).unwrap();
+    }
     if clock {
         h.admit_time_of_day(&DayCycle {
             day_length: 480.0,

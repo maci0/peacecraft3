@@ -3213,6 +3213,19 @@ open. See [natural sleep](docs/re-notes/unit-natural-sleep.md).
   terrain state. Native timing/turning, queued patrols and command-panel input
   remain open. See [unit patrol](docs/re-notes/unit-patrol.md).
 
+### 2026-10-21 — initial terrain blight
+
+- [x] Read W3E blight flags independently of ground texture names. Derive world
+  spacing from the admitted placement normalization and map grid ratio.
+- [x] Integrate accepted straight motion spans at exact cell crossings, with
+  deterministic work and staged pool writes. Synthetic coverage includes
+  stationary/moving regeneration, chunk composition, diagonal boundaries,
+  atomic refusal, clock rebases and relocation boundaries.
+- [~] Human03 advances beyond the first tick to a movement-budget refusal at
+  tick 155. No campaign acceptance or native/rendered eligibility claim.
+- [ ] Player-owned script painting, overlap/removal, terrain presentation and
+  native regeneration timing remain open. See [terrain blight](docs/re-notes/terrain-blight.md).
+
 ### 2026-10-20 — source-derived edition-switch icon states
 
 - [x] The control builder now reads both icon families and their three state

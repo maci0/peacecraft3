@@ -719,6 +719,18 @@ impl ObjectHost {
         work: &mut usize,
         out: Option<&mut Vec<AcceptedSpan>>,
     ) -> Result<usize, Error> {
+        let mut regen_spans = Vec::new();
+        let moving_blight = self.initial_blight.is_some()
+            && self.executed_units().any(|(_, record)| {
+                record
+                    .vitals
+                    .is_some_and(|v| v.regen.life_type == super::unit_vitals::RegenType::Blight)
+                    && record
+                        .activity
+                        .as_ref()
+                        .is_some_and(|a| a.moving() || a.patrolling())
+            });
+        let out = out.or_else(|| moving_blight.then_some(&mut regen_spans));
         let mut sink = out.map(|spans| {
             let base = spans.len();
             SpanSink {
@@ -740,6 +752,18 @@ impl ObjectHost {
         if now == state.projected_through {
             return Ok(0);
         }
+        let starts: Vec<_> = if self.initial_blight.is_some() {
+            self.executed_units()
+                .filter(|(_, record)| {
+                    record
+                        .vitals
+                        .is_some_and(|v| v.regen.life_type == super::unit_vitals::RegenType::Blight)
+                })
+                .filter_map(|(unit, record)| record.position.map(|p| (unit, p)))
+                .collect()
+        } else {
+            Vec::new()
+        };
         self.advance_unit_sleep(work)?;
         let mut active = std::mem::take(&mut self.unit_activity.as_mut().expect("activity").active);
         let result = (|| {
@@ -838,7 +862,8 @@ impl ObjectHost {
         });
         self.unit_activity.as_mut().expect("activity").active = active;
         let result = result.and_then(|moved| {
-            self.advance_unit_regen(now)?;
+            let spans = sink.as_ref().map(|s| &s.spans[s.base..]).unwrap_or(&[]);
+            self.advance_unit_regen_motion(now, Some((spans, &starts)), work)?;
             self.advance_combat()?;
             self.advance_inventory(work)?;
             self.advance_sound_environments();
@@ -1085,6 +1110,10 @@ impl ObjectHost {
                             .error(name, Failure::UnitPlacement(e.to_string()))
                     })?;
                 let relocated = prepared.position;
+                if relocated != position {
+                    self.require_blight_projection(unit, name)?;
+                }
+                let placement = self.unit_placement.as_mut().expect("placement");
                 placement.commit(unit, prepared);
                 if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                     record.position = Some(relocated);
@@ -1122,7 +1151,7 @@ impl ObjectHost {
             .as_ref()
             .ok_or_else(|| fail("activity missing"))?;
         let occupies = record.shown && !activity.pathing_off && self.unit_placement.is_some();
-        let (face, moving) = (record.face, activity.moving());
+        let (face, moving, previous) = (record.face, activity.moving(), record.position);
         let mut position = target;
         if occupies {
             let (radius, path) = super::unit_positions::geometry(&record.definition)
@@ -1136,7 +1165,13 @@ impl ObjectHost {
                         .error(name, Failure::UnitPlacement(e.to_string()))
                 })?;
             position = prepared.position;
+            if previous != Some(position) {
+                self.require_blight_projection(unit, name)?;
+            }
+            let placement = self.unit_placement.as_mut().expect("placement");
             placement.commit(unit, prepared);
+        } else if previous != Some(position) {
+            self.require_blight_projection(unit, name)?;
         }
         let now = self.timer_game_time();
         if let Entry::Unit { record } = self.inner.entry_mut(unit)? {

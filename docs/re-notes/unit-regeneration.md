@@ -1,5 +1,11 @@
 # Unit health and mana regeneration
 
+Initial-map follow-up (2026-10-21): the host now has a W3E-derived blight layer
+and an exact straight-segment eligibility integrator. The historical refusal and
+probe sections below describe the earlier frontier. Script/player painting,
+native eligibility/tick parity and blight rendering remain open. See
+[terrain blight](terrain-blight.md) for the implementation and verification scope.
+
 ## Clock semantics
 
 Each unit has its own regeneration clock, `Regen.through`. It is set to the game time

@@ -96,6 +96,9 @@ impl ObjectHost {
             } else {
                 None
             };
+            if relocated.is_some() {
+                self.require_blight_projection(unit, name)?;
+            }
             if let Some(prepared) = prepared {
                 self.unit_placement
                     .as_mut()
