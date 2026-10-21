@@ -31,6 +31,15 @@ archive remains selectable by default. Duplicate names, unknown companion
 archives and over-budget sets require an explicit choice; the picker does not
 silently discard a source to make an incomplete set fit.
 
+A local ISO made from the five supplied 1.29b archives selected all five by
+default in Chromium and committed 279 runtime paths. The browser returned
+`GlobalStrings.fdf` with SHA-256
+`641f5df8d6bdd7f73074d1afbaff49924398766867333b5f8fec5fc2d7917788`,
+equal to a separate extraction from the supplied `War3xLocal.mpq`. The local
+receipt is `.scratch/integration-preservation-20261021/original-browser-gate.json`;
+the temporary ISO and extracted FDF were removed. This checks archive choice and
+import, not rendered menu or full gameplay fidelity.
+
 `read_checked` checks the cached slice before copying it. It refuses uncached,
 present archive members rather than using an extractor without a supplied
 bounded policy. `read_bounded` accepts explicit copy, packed-member and decoded
