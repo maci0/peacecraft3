@@ -486,7 +486,7 @@ impl Placement {
         let mut position = request;
         let normalized_radius = radius
             .map(|value| {
-                if !value.is_finite() || value < 0.0 || value > self.rules.cell_size() {
+                if !value.is_finite() || value < 0.0 {
                     return Err(fail("unsupported creation collision radius"));
                 }
                 self.rules

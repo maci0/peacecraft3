@@ -41,6 +41,34 @@ behavior has no reproducing fixture yet.
 
 These results do not establish original collision radii or native movement.
 
+## Large creation radii
+
+The selected Legacy executable's classifier at `0x8bc926..0x8bc979` selects four
+bands using the threshold loads already admitted by `campaign_client::placement_rules`.
+Its final branch selects the largest band for values at or above the last
+threshold. The recreation previously refused any collision radius larger than a
+cell before consulting those bands, making that largest band unreachable.
+
+That additional one-cell restriction is removed. Radius validation still rejects
+negative/nonfinite values and unsupported arithmetic; the existing derived band
+extents, collision raster, occupancy and query budgets remain authoritative.
+No new measured radius or threshold is compiled into production code.
+
+This was the first refusal of the selected Human03 startup at
+`war3map.j:1097`, creating the authored `nogm`. The loaded UnitBalance collision
+record and the selected normalization put that unit in the already-supported
+largest band. This static evidence identifies the extra restriction; it does not
+prove native placement-search ordering or complete Human03 execution.
+
+A synthetic regression uses four-unit cells and a six-unit radius. It requires
+the full outer footprint, prevents overlap with an existing unit, and makes an
+obstacle at its outer corner refuse when no further query work is available.
+
+The selected Human03 startup gate now passes that creation site and reaches
+`PauseUnit` in `Blizzard.j:3611`, which is not yet implemented. The map is still
+not accepted. Native library tests, strict all-target clippy and the WASM library
+check pass for this placement increment.
+
 ## Accepted spans for consumers
 
 `ObjectHost::advance_unit_activity_spans(now, work, &mut Vec<AcceptedSpan>)`

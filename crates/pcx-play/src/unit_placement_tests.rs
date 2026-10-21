@@ -331,6 +331,38 @@ fn occupancy_and_query_refusal_are_transactional_and_load_independent() {
 }
 
 #[test]
+fn large_creation_radius_uses_the_full_source_classified_footprint() {
+    let source = Source {
+        install: "synthetic".into(),
+        edition: "fixture".into(),
+        map: "large radius".into(),
+    };
+    let mut p = placement(source.clone(), 100);
+    // This fixture has four-unit cells and its largest band begins at radius six.
+    let first = p.prepare([32.0, 32.0], Some(6.0), "_", 0.0).unwrap();
+    assert_eq!(first.position, [32.0, 32.0]);
+    assert_eq!(first.cells.len(), 16);
+    assert!(first.cells.contains(&p.index(6, 6).unwrap()));
+    assert!(first.cells.contains(&p.index(9, 9).unwrap()));
+    p.commit(id(1), first);
+    let second = p.prepare([32.0, 32.0], Some(6.0), "_", 0.0).unwrap();
+    assert_ne!(second.position, [32.0, 32.0]);
+    assert!(second.cells.iter().all(|&cell| p.occupied[cell] == 0));
+
+    let mut obstructed = placement(source, 1);
+    let corner = obstructed.index(6, 6).unwrap();
+    obstructed.grid.pathing.cells[corner] = obstructed.rules.ground_mask();
+    // The outer corner blocks this large footprint although the centre is free.
+    let before = obstructed.occupied.clone();
+    assert!(
+        obstructed
+            .prepare([32.0, 32.0], Some(6.0), "_", 0.0)
+            .is_err()
+    );
+    assert_eq!(obstructed.occupied, before);
+}
+
+#[test]
 fn footprint_rotation_and_missing_texture_refusal_use_the_same_collision_cache() {
     let source = Source {
         install: "synthetic".into(),
