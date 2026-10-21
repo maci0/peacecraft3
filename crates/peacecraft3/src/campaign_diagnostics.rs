@@ -107,6 +107,7 @@ struct Stages<'w> {
     dialogs: Option<Res<'w, crate::campaign_script_dialogs::CampaignScriptDialogs>>,
     hud_prepare: Option<Res<'w, crate::hud_render::HudPrepare>>,
     inventory: Option<Res<'w, crate::campaign_inventory::CampaignInventory>>,
+    command_card: Option<Res<'w, crate::campaign_command_card::CommandCard>>,
 }
 
 fn report(stages: Stages, mut reported: ResMut<Reported>) {
@@ -123,6 +124,7 @@ fn report(stages: Stages, mut reported: ResMut<Reported>) {
         dialogs,
         hud_prepare,
         inventory,
+        command_card,
     } = stages;
     let current = [
         (
@@ -175,6 +177,14 @@ fn report(stages: Stages, mut reported: ResMut<Reported>) {
                 i.last_error
                     .as_ref()
                     .map(|error| format!("{error} ({} source receipts)", i.receipts.len()))
+            }),
+        ),
+        (
+            "command card",
+            command_card.and_then(|card| {
+                card.last_error
+                    .as_ref()
+                    .map(|error| format!("{error} ({} source receipts)", card.receipt_count()))
             }),
         ),
     ];

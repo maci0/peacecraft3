@@ -51,12 +51,15 @@ fn record_command(input: &mut CampaignInput, clock: Option<f64>, command: Player
 }
 
 pub(crate) fn install(app: &mut App) {
+    crate::button_actions::install(app);
     app.init_resource::<CampaignInput>()
         .add_systems(
             Update,
             (
                 (command_hotkey, load_circles, click)
                     .chain()
+                    .in_set(CampaignInputSet)
+                    .after(crate::campaign_command_card::CommandCardSet)
                     .after(crate::campaign_hud::CampaignHudSet)
                     .after(crate::campaign_inventory::CampaignInventorySet)
                     .after(crate::campaign_script_dialogs::CampaignScriptDialogSet),
@@ -64,6 +67,13 @@ pub(crate) fn install(app: &mut App) {
                     .after(crate::campaign_hud::CampaignHudSet)
                     .after(crate::campaign_script_dialogs::CampaignScriptDialogSet),
             ),
+        )
+        .add_systems(
+            Update,
+            command_button
+                .after(CampaignInputSet)
+                .after(crate::campaign_command_card::CommandCardSet)
+                .before(crate::button_actions::clear),
         )
         .add_systems(Update, hud_menu.before(CampaignCameraSet))
         .add_systems(
@@ -73,6 +83,102 @@ pub(crate) fn install(app: &mut App) {
                 .after(crate::campaign_inventory::CampaignInventorySet)
                 .after(crate::campaign_script_dialogs::CampaignScriptDialogSet),
         );
+}
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct CampaignInputSet;
+
+#[derive(SystemParam)]
+struct CommandControls<'w> {
+    view: Res<'w, CampaignCamera>,
+    hud: Res<'w, crate::campaign_hud::CampaignHud>,
+    inventory: Res<'w, crate::campaign_inventory::CampaignInventory>,
+    dialogs: Res<'w, crate::campaign_script_dialogs::CampaignScriptDialogs>,
+}
+
+fn command_button(
+    controls: CommandControls,
+    actions: Res<crate::button_actions::ButtonActions>,
+    buttons: Query<&crate::campaign_command_card::ButtonOrder>,
+    mut input: ResMut<CampaignInput>,
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+) {
+    let witness = session.session_witness();
+    let Some(host) = session.host() else { return };
+    if !commands_available(&controls.view, &controls.hud, &controls.dialogs, host)
+        || controls.inventory.pointer_consumed
+        || host
+            .objects()
+            .presentation()
+            .is_some_and(|state| state.interface_visible == Some(false))
+    {
+        return;
+    }
+    for entity in &actions.entities {
+        let Ok(button) = buttons.get(*entity) else {
+            continue;
+        };
+        if !witness
+            .as_ref()
+            .is_some_and(|current| Weak::ptr_eq(current, &button.session))
+        {
+            continue;
+        }
+        let objects = host.objects();
+        if objects.selection().first() != Some(&button.unit)
+            || objects
+                .executed_unit(button.unit)
+                .ok()
+                .and_then(|record| objects.player_settings(record.owner).ok())
+                .is_none_or(|player| Some(player.number) != objects.local_player_number())
+        {
+            continue;
+        }
+        let result = match button.kind {
+            crate::campaign_command_card::Kind::TargetUnit => {
+                objects.holy_light_command(button.unit)
+            }
+            crate::campaign_command_card::Kind::Immediate => {
+                objects.water_elemental_command(button.unit)
+            }
+        };
+        match result {
+            Ok(Some(command)) => match button.kind {
+                crate::campaign_command_card::Kind::TargetUnit => {
+                    input.command = Some(ArmedCommand {
+                        order: command.order,
+                        session: button.session.clone(),
+                    });
+                }
+                crate::campaign_command_card::Kind::Immediate => {
+                    input.command = None;
+                    immediate_command(host, &mut input, button.unit, command.order);
+                }
+            },
+            Err(error) => input.last_error = Some(error.to_string()),
+            Ok(None) => {}
+        }
+    }
+}
+
+fn immediate_command(
+    host: &mut MapStartupHost,
+    input: &mut CampaignInput,
+    unit: HandleId,
+    order: i32,
+) {
+    let objects = host.objects_mut();
+    let clock = objects.timer_game_time();
+    match objects.native(
+        "IssueImmediateOrderById",
+        &[Value::Handle(unit), Value::Int(order)],
+    ) {
+        Ok(Value::Bool(true)) => {
+            record_command(input, clock, PlayerCommand::Immediate { unit, order })
+        }
+        Err(error) => input.last_error = Some(error.to_string()),
+        _ => {}
+    }
 }
 
 /// Applies a pressed inventory slot as the local player's activation of the slot's held item.
@@ -313,11 +419,20 @@ fn commands_open(
     dialogs: &crate::campaign_script_dialogs::CampaignScriptDialogs,
     host: &MapStartupHost,
 ) -> bool {
+    !hud.pointer_consumed
+        && !inventory.pointer_consumed
+        && commands_available(view, hud, dialogs, host)
+}
+
+fn commands_available(
+    view: &CampaignCamera,
+    hud: &crate::campaign_hud::CampaignHud,
+    dialogs: &crate::campaign_script_dialogs::CampaignScriptDialogs,
+    host: &MapStartupHost,
+) -> bool {
     let objects = host.objects();
     view.active()
         && !hud.quest_log_open
-        && !hud.pointer_consumed
-        && !inventory.pointer_consumed
         && !dialogs.input_blocked()
         && !objects
             .presentation()
@@ -368,23 +483,7 @@ fn command_hotkey(
                 if letter_key(command.hotkey).is_some_and(|key| keys.just_pressed(key)) =>
             {
                 input.command = None;
-                let objects = host.objects_mut();
-                let clock = objects.timer_game_time();
-                match objects.native(
-                    "IssueImmediateOrderById",
-                    &[Value::Handle(unit), Value::Int(command.order)],
-                ) {
-                    Ok(Value::Bool(true)) => record_command(
-                        &mut input,
-                        clock,
-                        PlayerCommand::Immediate {
-                            unit,
-                            order: command.order,
-                        },
-                    ),
-                    Err(error) => input.last_error = Some(error.to_string()),
-                    _ => {}
-                }
+                immediate_command(host, &mut input, unit, command.order);
                 return;
             }
             Err(error) => input.last_error = Some(error.to_string()),
@@ -707,6 +806,134 @@ fn click(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
+    #[test]
+    #[ignore = "requires selected Human01 chapter inputs PCX_NATIVE_CHAPTER_* and local assets"]
+    fn selected_chapter_command_click_rechecks_session_selection_and_control() {
+        use crate::campaign_command_card::{ButtonOrder, Kind};
+        use bevy::{
+            ecs::system::RunSystemOnce,
+            ui_widgets::{Activate, Button},
+        };
+        let mut app = crate::native_campaign::tests::started_app();
+        let camera = app.world_mut().spawn_empty().id();
+        app.insert_resource(CampaignCamera::active_for_test(camera))
+            .init_resource::<crate::campaign_hud::CampaignHud>()
+            .init_resource::<crate::campaign_inventory::CampaignInventory>()
+            .init_resource::<crate::campaign_script_dialogs::CampaignScriptDialogs>();
+        let (unit, witness, order) = {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let unit = match session.global("gg_unit_Hart_0023") {
+                Some(Value::Handle(unit)) => unit,
+                other => panic!("this explicit gate requires unchanged Human01 Arthas: {other:?}"),
+            };
+            let witness = session.session_witness().unwrap();
+            let objects = session.host().unwrap().objects_mut();
+            // Operator setup for the command component test, not campaign progression evidence.
+            objects
+                .native("EnableUserControl", &[Value::Bool(true)])
+                .unwrap();
+            objects
+                .native("ShowInterface", &[Value::Bool(true), Value::Real(0.)])
+                .unwrap();
+            if objects.holy_light_command(unit).unwrap().is_none() {
+                objects
+                    .native(
+                        "SelectHeroSkill",
+                        &[
+                            Value::Handle(unit),
+                            Value::Int(i32::from_be_bytes(*b"AHhb")),
+                        ],
+                    )
+                    .unwrap();
+            }
+            for old in objects.selection().to_vec() {
+                objects
+                    .native("SelectUnit", &[Value::Handle(old), Value::Bool(false)])
+                    .unwrap();
+            }
+            objects
+                .native("SelectUnit", &[Value::Handle(unit), Value::Bool(true)])
+                .unwrap();
+            let order = objects
+                .holy_light_command(unit)
+                .unwrap()
+                .expect("source-learned Holy Light")
+                .order;
+            (unit, witness, order)
+        };
+        let other_session = Arc::new(());
+        let stale = app
+            .world_mut()
+            .spawn((
+                Button,
+                ButtonOrder {
+                    unit,
+                    kind: Kind::TargetUnit,
+                    session: Arc::downgrade(&other_session),
+                },
+            ))
+            .id();
+        app.world_mut().trigger(Activate { entity: stale });
+        app.world_mut().run_system_once(command_button).unwrap();
+        assert!(app.world().resource::<CampaignInput>().command.is_none());
+        app.world_mut()
+            .resource_mut::<crate::button_actions::ButtonActions>()
+            .entities
+            .clear();
+        let current = app
+            .world_mut()
+            .spawn((
+                Button,
+                ButtonOrder {
+                    unit,
+                    kind: Kind::TargetUnit,
+                    session: witness.clone(),
+                },
+            ))
+            .id();
+        app.world_mut().trigger(Activate { entity: current });
+        app.world_mut().run_system_once(command_button).unwrap();
+        let armed = app
+            .world()
+            .resource::<CampaignInput>()
+            .command
+            .as_ref()
+            .unwrap();
+        assert_eq!(armed.order, order);
+        assert!(armed.is_for(Some(witness)));
+        app.world_mut().resource_mut::<CampaignInput>().command = None;
+        {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            session
+                .host()
+                .unwrap()
+                .objects_mut()
+                .native("EnableUserControl", &[Value::Bool(false)])
+                .unwrap();
+        }
+        app.world_mut().run_system_once(command_button).unwrap();
+        assert!(app.world().resource::<CampaignInput>().command.is_none());
+        {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let objects = session.host().unwrap().objects_mut();
+            objects
+                .native("EnableUserControl", &[Value::Bool(true)])
+                .unwrap();
+            objects
+                .native("SelectUnit", &[Value::Handle(unit), Value::Bool(false)])
+                .unwrap();
+        }
+        app.world_mut().run_system_once(command_button).unwrap();
+        assert!(app.world().resource::<CampaignInput>().command.is_none());
+    }
 
     fn terrain() -> pcx_map::Terrain {
         let mut bytes = b"W3E!".to_vec();

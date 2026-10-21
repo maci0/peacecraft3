@@ -11,6 +11,34 @@ fn origin() -> AssetIdentity {
 
 fn fixture() -> BTreeMap<u32, Vec<u8>> {
     let mut records = BTreeMap::new();
+    for (va, target) in [
+        (0x5e805d_u32, 0x61d130_u32),
+        (0x61d24d, 0x874900),
+        (0x5eafb6, 0x635390),
+        (0x5eafd5, 0x5d3c80),
+        (0x5d3caf, 0x5d3e30),
+        (0x5d3e60, 0x8750b0),
+    ] {
+        records.insert(
+            va,
+            [
+                vec![0xe8],
+                target.wrapping_sub(va + 5).to_le_bytes().to_vec(),
+            ]
+            .concat(),
+        );
+    }
+    records.insert(
+        0x5e8074,
+        [vec![0x89, 0x87], 0x88_u32.to_le_bytes().to_vec()].concat(),
+    );
+    records.insert(
+        0x5eafab,
+        [vec![0x8b, 0x8b], 0x88_u32.to_le_bytes().to_vec()].concat(),
+    );
+    records.insert(0x887ce5, vec![0x83, 0xe0, 4]);
+    records.insert(0x8750db, vec![0x6a, 4]);
+    records.insert(0x875141, vec![0x6a, 4]);
     records.insert(
         0x5e7ca5,
         [vec![0x68], 0x300_u32.to_le_bytes().to_vec()].concat(),
@@ -76,6 +104,7 @@ fn source_dimensions_drive_the_grid_and_rows_start_at_the_top() {
     assert_eq!((rules.columns, rules.rows), (2, 3));
     assert_eq!(rules.origin, origin());
     assert_eq!(rules.console_key, "FixtureConsole");
+    assert!(rules.icon_repeat);
     let first = rules.slot(0, 0).unwrap();
     near(first.x, 0.99);
     near(first.y, 0.11);
@@ -86,6 +115,17 @@ fn source_dimensions_drive_the_grid_and_rows_start_at_the_top() {
     near(last.y, 0.03);
     assert!(rules.slot(2, 0).is_err());
     assert!(rules.slot(0, 3).is_err());
+}
+
+#[test]
+fn texture_flags_and_both_setter_paths_come_from_the_image() {
+    let mut records = fixture();
+    records.get_mut(&0x8750db).unwrap()[1] = 0;
+    assert!(decode(&records).unwrap_err().contains("sampler relation"));
+    records.get_mut(&0x875141).unwrap()[1] = 0;
+    assert!(!decode(&records).unwrap().icon_repeat);
+    records.get_mut(&0x5eafab).unwrap()[2..].copy_from_slice(&0x90_u32.to_le_bytes());
+    assert!(decode(&records).unwrap_err().contains("another UI field"));
 }
 
 #[test]

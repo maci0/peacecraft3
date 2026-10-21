@@ -88,6 +88,7 @@ impl ObjectHost {
             .map_err(|e| self.summon_error(e))?;
         match hotkey.as_bytes() {
             [letter] if letter.is_ascii_alphabetic() => Ok(Some(super::holy_light::Command {
+                ability: ABILITY,
                 hotkey: char::from(letter.to_ascii_uppercase()),
                 order: state.order,
             })),

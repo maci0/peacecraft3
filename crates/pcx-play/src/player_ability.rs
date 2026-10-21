@@ -97,11 +97,8 @@ impl ObjectHost {
         Ok(players.rows.get(&(number, abilid)).copied().unwrap_or(true))
     }
 
-    pub(super) fn unit_ability_available(
-        &self,
-        unit: HandleId,
-        ability: [u8; 4],
-    ) -> Result<bool, Error> {
+    /// Current owner-scoped availability; no override admission preserves the existing true policy.
+    pub fn unit_ability_available(&self, unit: HandleId, ability: [u8; 4]) -> Result<bool, Error> {
         if self.player_abilities.is_none() {
             return Ok(true);
         }
