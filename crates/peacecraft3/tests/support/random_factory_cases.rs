@@ -4,7 +4,7 @@ use pcx_play::map_startup_host::RandomInput;
 use pcx_play::script_random::{profile::Policy, state};
 use pcx_script::Host;
 #[path = "../../../pcx-play/tests/support/random_local.rs"]
-mod local;
+pub(super) mod local;
 
 const EXTRA: &str = "native GetRandomInt takes integer low, integer high returns integer\nnative GetRandomReal takes real low, real high returns real\nnative SetRandomSeed takes integer seed returns nothing\n";
 const MAP: &str = "globals\ninteger marker = 0\nreal sample = 0.0\nendglobals\nfunction config takes nothing returns nothing\ncall SetRandomSeed(-29)\nendfunction\nfunction main takes nothing returns nothing\nset marker = GetRandomInt(-20, 30)\nset sample = GetRandomReal(-1.0, 2.0)\nendfunction\n";

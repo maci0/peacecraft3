@@ -11,6 +11,7 @@ use pcx_play::{
 };
 use pcx_script::Value;
 use std::{
+    num::NonZeroU32,
     sync::{Arc, Weak},
     time::Duration,
 };
@@ -21,6 +22,8 @@ pub enum CampaignRuntimeError {
     MissingClock,
     #[error("campaign logical tick counter exhausted")]
     TickOverflow,
+    #[error("campaign pacing duration exhausted")]
+    ClockOverflow,
     #[error(transparent)]
     Timer(#[from] TimerSessionError),
 }
@@ -34,6 +37,7 @@ pub struct CampaignRuntime {
     session: Option<Weak<()>>,
     origin: f64,
     pending: Duration,
+    speed: NonZeroU32,
     tick: u64,
     pub paused: bool,
     /// Application view suspension, independent of an explicit simulation pause.
@@ -59,6 +63,7 @@ impl CampaignRuntime {
             session: None,
             origin: 0.0,
             pending: Duration::ZERO,
+            speed: NonZeroU32::MIN,
             tick: 0,
             paused: false,
             view_paused: false,
@@ -72,6 +77,15 @@ impl CampaignRuntime {
 
     pub fn pending(&self) -> Duration {
         self.pending
+    }
+
+    /// Wall-clock pacing only: ticks, commands and random draws retain their order.
+    pub fn set_speed(&mut self, speed: NonZeroU32) {
+        self.speed = speed;
+    }
+
+    pub fn speed(&self) -> NonZeroU32 {
+        self.speed
     }
 
     fn synchronize_script_pause(&mut self, session: &mut MapScriptSession<MapStartupHost>) -> bool {
@@ -131,7 +145,14 @@ impl CampaignRuntime {
         if self.paused || self.view_paused || self.last_error.is_some() {
             return;
         }
-        self.pending = self.pending.saturating_add(elapsed);
+        let Some(pending) = elapsed
+            .checked_mul(self.speed.get())
+            .and_then(|scaled| self.pending.checked_add(scaled))
+        else {
+            self.last_error = Some(CampaignRuntimeError::ClockOverflow);
+            return;
+        };
+        self.pending = pending;
         for _ in 0..self.max_ticks_per_update {
             if self.pending < self.step {
                 break;
@@ -182,9 +203,26 @@ pub struct CampaignExitSet;
 
 fn advance_campaign(
     time: Res<Time<Real>>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
     mut runtime: ResMut<CampaignRuntime>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
+    if session.session_witness().is_some()
+        && keys.is_some_and(|keys| {
+            keys.just_pressed(KeyCode::F9)
+                && keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
+                && keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
+        })
+    {
+        let speed = match runtime.speed().get() {
+            1 => 2,
+            2 => 4,
+            4 => 8,
+            _ => 1,
+        };
+        runtime.set_speed(NonZeroU32::new(speed).expect("positive application pacing"));
+        info!("Campaign simulation speed {speed}x (fixed ticks, Ctrl+Shift+F9 to cycle)");
+    }
     // Real time only paces ticks. Time<Virtual>'s frame clamp would discard load debt.
     runtime.advance(&mut session, time.delta());
 }
