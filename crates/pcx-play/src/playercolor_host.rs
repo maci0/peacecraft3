@@ -784,7 +784,7 @@ pub use objects::{
     TimedMessage, TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord,
     TriggerBudget, TriggerConditionRegistration, TriggerDelivery, TriggerRuntimeInput,
     UnitAbilities, UnitActivity, UnitBudget, UnitEffect, UnitEventRegistration, UnitGuard,
-    UnitInRangeRegistration, UnitRangeEntry, UnitSleep, UnitStateBudget,
+    UnitInRangeRegistration, UnitLookAt, UnitRangeEntry, UnitSleep, UnitStateBudget,
 };
 pub use objects::{
     CinematicScene, Combat, CombatActor, CombatTraceEvent, DestructableState, DialogBudget,

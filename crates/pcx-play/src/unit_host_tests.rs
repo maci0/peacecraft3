@@ -14,6 +14,65 @@ use std::sync::{Arc, Mutex};
 
 const PLACEMENT_OWNER: i16 = 7;
 
+#[test]
+fn look_at_retains_target_and_offsets_refuses_atomically_and_reset_restores_animation() {
+    let (mut h, _) = animation_vm(false);
+    h.vm.init_globals().unwrap();
+    h.vm.call("main", &[]).unwrap();
+    let Value::Handle(id) = h.vm.global("U") else {
+        panic!("unit")
+    };
+    let host = &mut h.vm.host().inner;
+    let record = host.executed_unit(id).unwrap();
+    let owner = record.owner;
+    let rawcode = i32::from_be_bytes(record.definition.rawcode);
+    let Value::Handle(target) = host
+        .native(
+            "CreateUnit",
+            &[
+                Value::Handle(owner),
+                Value::Int(rawcode),
+                Value::Real(10.),
+                Value::Real(20.),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("target")
+    };
+    let animation = host.executed_unit(id).unwrap().animation.clone();
+    let before = host.inner().handles();
+    let mut args = [
+        Value::Handle(id),
+        Value::Str("HEAD".into()),
+        Value::Handle(target),
+        Value::Real(1.),
+        Value::Real(2.),
+        Value::Real(3.),
+    ];
+    host.native("SetUnitLookAt", &args).unwrap();
+    let state = host.executed_unit(id).unwrap().look_at.clone().unwrap();
+    assert_eq!(state.target, target);
+    assert_eq!(state.offset, [1., 2., 3.]);
+    args[1] = Value::Str("missing".into());
+    assert!(host.native("SetUnitLookAt", &args).is_err());
+    args[1] = Value::Str("head".into());
+    args[3] = Value::Real(f32::NAN);
+    assert!(host.native("SetUnitLookAt", &args).is_err());
+    assert_eq!(host.executed_unit(id).unwrap().look_at, Some(state));
+    assert_eq!(host.executed_unit(id).unwrap().animation, animation);
+    host.native("ResetUnitLookAt", &[Value::Handle(id)])
+        .unwrap();
+    assert!(host.executed_unit(id).unwrap().look_at.is_none());
+    assert_eq!(host.executed_unit(id).unwrap().animation, animation);
+    args[3] = Value::Real(1.);
+    host.native("SetUnitLookAt", &args).unwrap();
+    host.native("RemoveUnit", &[Value::Handle(target)]).unwrap();
+    assert!(host.executed_unit(id).unwrap().look_at.is_none());
+    assert_eq!(host.inner().handles(), before);
+}
+
 fn animation_vm(mut fail_first: bool) -> (VmHost, Arc<crate::unit_model::Model>) {
     let common = script_common_with(
         "widget",
@@ -25,6 +84,9 @@ native TimerGetRemaining takes timer t returns real
 native TimerGetTimeout takes timer t returns real
 native GetExpiredTimer takes nothing returns timer
 native SetUnitAnimation takes unit whichUnit, string whichAnimation returns nothing
+native SetUnitLookAt takes unit u, string bone, unit target, real x, real y, real z returns nothing
+native ResetUnitLookAt takes unit u returns nothing
+native RemoveUnit takes unit u returns nothing
 ",
     );
     let ctx = context(300, &common, MAP, "unit-catalog");
@@ -33,11 +95,28 @@ native SetUnitAnimation takes unit whichUnit, string whichAnimation returns noth
     let mut host = object(&ctx, 64)
         .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
         .unwrap()
-        .with_unit_catalog(Arc::clone(&shared), source(), limits(1))
+        .with_unit_catalog(Arc::clone(&shared), source(), limits(2))
         .unwrap()
         .with_timer_runtime(0.)
         .unwrap();
-    let model = crate::unit_model::tests::model();
+    let original = crate::unit_model::tests::model();
+    let mut bytes = original.bytes.to_vec();
+    let mut bone = vec![0u8; 104];
+    bone[..4].copy_from_slice(&96u32.to_le_bytes());
+    bone[4..8].copy_from_slice(b"head");
+    bone[88..92].copy_from_slice(&(-1i32).to_le_bytes());
+    bytes.extend(b"BONE");
+    bytes.extend((bone.len() as u32).to_le_bytes());
+    bytes.extend(bone);
+    let model = Arc::new(
+        crate::unit_model::Model::read(
+            original.origin.clone(),
+            original.member.clone(),
+            bytes.into(),
+            4096,
+        )
+        .unwrap(),
+    );
     let retained = Arc::clone(&model);
     host.admit_unit_models(move |_| {
         if std::mem::take(&mut fail_first) {

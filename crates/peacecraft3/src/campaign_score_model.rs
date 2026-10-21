@@ -333,6 +333,7 @@ pub fn animate_backgrounds(
                 pivots: joints.pivots(),
                 global_durations: &state.runtime.global_sequences,
                 camera_pose: None,
+                look_at: None,
             },
             &state.handles,
             frame,

@@ -1120,6 +1120,10 @@ mod locations;
 #[path = "unit_visibility_host.rs"]
 mod unit_visibility;
 
+#[path = "unit_look_at_host.rs"]
+mod unit_look_at;
+pub use unit_look_at::UnitLookAt;
+
 #[path = "unit_pause_host.rs"]
 mod unit_pause;
 

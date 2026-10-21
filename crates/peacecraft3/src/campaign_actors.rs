@@ -164,6 +164,30 @@ fn transform_for(
     Ok(transform)
 }
 
+fn look_at_target<'a>(
+    unit: &'a ExecutedUnit,
+    objects: &pcx_play::playercolor_host::ObjectHost,
+    terrain: &pcx_map::Terrain,
+) -> Result<Option<(&'a str, Vec3)>, String> {
+    let Some(look) = &unit.look_at else {
+        return Ok(None);
+    };
+    let target = objects
+        .executed_unit(look.target)
+        .map_err(|e| e.to_string())?;
+    let transform = transform_for(
+        target,
+        terrain,
+        1.0,
+        scalar(&target.definition, "moveHeight")?,
+    )?;
+    let [x, y, z] = look.offset;
+    Ok(Some((
+        &look.bone,
+        transform.translation + Vec3::new(x, z, -y),
+    )))
+}
+
 fn team_color(
     objects: &pcx_play::playercolor_host::ObjectHost,
     unit: &ExecutedUnit,
@@ -428,7 +452,7 @@ fn expand_layers(
 
 #[derive(Clone, Copy)]
 enum Visual<'a> {
-    Unit(&'a ExecutedUnit),
+    Unit(&'a ExecutedUnit, Option<(&'a str, Vec3)>),
     Item(
         &'a pcx_play::playercolor_host::ExecutedItem,
         &'a pcx_play::unit_model::Animation,
@@ -439,7 +463,7 @@ enum Visual<'a> {
 impl<'a> Visual<'a> {
     fn animation(self) -> Result<&'a pcx_play::unit_model::Animation, String> {
         match self {
-            Self::Unit(unit) => unit
+            Self::Unit(unit, _) => unit
                 .animation
                 .as_ref()
                 .ok_or_else(|| "unit model is unavailable".into()),
@@ -448,14 +472,14 @@ impl<'a> Visual<'a> {
     }
     fn face(self) -> f32 {
         match self {
-            Self::Unit(unit) => unit.face,
+            Self::Unit(unit, _) => unit.face,
             Self::Item(..) | Self::Sky(..) => 0.0,
         }
     }
     fn layer(self) -> usize {
         match self {
             Self::Sky(..) => sky::RENDER_LAYER,
-            Self::Unit(_) | Self::Item(..) => peacecraft3::campaign_camera::RENDER_LAYER,
+            Self::Unit(..) | Self::Item(..) => peacecraft3::campaign_camera::RENDER_LAYER,
         }
     }
     fn transform(
@@ -468,7 +492,7 @@ impl<'a> Visual<'a> {
             Self::Sky(_, eye) => {
                 Ok(Transform::from_translation(eye).with_scale(Vec3::splat(scale)))
             }
-            Self::Unit(unit) => transform_for(unit, terrain, scale, height),
+            Self::Unit(unit, _) => transform_for(unit, terrain, scale, height),
             Self::Item(item, _) => {
                 let z = pcx_tera::world::sample_world_z(terrain, item.x, item.y)
                     .ok_or("item outside admitted terrain")?;
@@ -481,7 +505,7 @@ impl<'a> Visual<'a> {
     }
     fn properties(self, channel_scale: f32) -> Result<(f32, f32, [f32; 3]), String> {
         match self {
-            Self::Unit(unit) => Ok((
+            Self::Unit(unit, _) => Ok((
                 scalar(&unit.definition, "modelScale")?,
                 scalar(&unit.definition, "moveHeight")?,
                 [
@@ -756,6 +780,16 @@ impl Actor {
                 pivots: self.runtime.joints.pivots(),
                 global_durations: &self.runtime.global_sequences,
                 camera_pose: None,
+                look_at: match visual {
+                    Visual::Unit(_, Some((bone, target))) => Some((
+                        bone,
+                        self.world_transform
+                            .compute_affine()
+                            .inverse()
+                            .transform_point3(target),
+                    )),
+                    _ => None,
+                },
             },
             &self.geosets.handles,
             sample.frame,
@@ -947,6 +981,13 @@ fn project(
         if unit.animation.is_none() || state.failed.get(&id) == Some(&unit.team_color) {
             continue;
         }
+        let look_at = match look_at_target(unit, objects, &context.terrain) {
+            Ok(target) => target,
+            Err(error) => {
+                state.last_error = Some(format!("unit {id:?}: {error}"));
+                continue;
+            }
+        };
         let color = match team_color(objects, unit) {
             Ok(v) => v,
             Err(e) => {
@@ -969,7 +1010,7 @@ fn project(
                 ActorSource {
                     reader: &reader,
                     palette: &palette,
-                    visual: Visual::Unit(unit),
+                    visual: Visual::Unit(unit, look_at),
                     terrain: &context.terrain,
                     id: Some(id),
                     color,
@@ -995,7 +1036,7 @@ fn project(
         }
         if let Some(actor) = state.actors.get_mut(&id)
             && let Err(e) = actor.update(
-                Visual::Unit(unit),
+                Visual::Unit(unit, look_at),
                 now,
                 &mut assets,
                 (&mut queries.visibility, &mut queries.transforms),
@@ -1201,6 +1242,7 @@ mod tests {
             admitted_order: None,
             abilities: None,
             animation: None,
+            look_at: None,
             activity: None,
             shown: true,
             paused_since: None,

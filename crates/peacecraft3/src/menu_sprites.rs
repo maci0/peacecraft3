@@ -1731,6 +1731,7 @@ pub fn advance(
                 pivots: &panel.pivots,
                 global_durations: &panel.global_durations,
                 camera_pose: None,
+                look_at: None,
             },
             &panel.geosets.handles,
             frame,

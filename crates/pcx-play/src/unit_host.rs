@@ -128,6 +128,7 @@ pub struct ExecutedUnit {
     /// Source-backed ability levels and hero counters, when that runtime is admitted.
     pub abilities: Option<UnitAbilities>,
     pub animation: Option<crate::unit_model::Animation>,
+    pub look_at: Option<super::UnitLookAt>,
     pub activity: Option<super::unit_activity::UnitActivity>,
     /// Runtime ShowUnit state, independent of fog, invisibility and explicit pause.
     pub shown: bool,
@@ -251,6 +252,7 @@ impl ObjectHost {
             self.optional_unit_getter(&declaration_source, GET_INVULNERABLE, "boolean")?;
         self.unit_visibility_declarations(&declaration_source)?;
         self.unit_pause_declarations(&declaration_source)?;
+        self.unit_look_at_declarations(&declaration_source)?;
         self.unit_sleep_declarations(&declaration_source)?;
         self.unit_removal_declaration(&declaration_source)?;
         if self.sound_properties {
@@ -540,6 +542,9 @@ impl ObjectHost {
     ) -> Option<Result<Value, Error>> {
         self.units.as_ref()?;
         if let Some(result) = self.unit_visibility_native(name, args) {
+            return Some(result);
+        }
+        if let Some(result) = self.unit_look_at_native(name, args) {
             return Some(result);
         }
         if let Some(result) = self.unit_pause_native(name, args) {
@@ -1306,6 +1311,7 @@ impl ObjectHost {
                 admitted_order,
                 abilities: None,
                 animation: None,
+                look_at: None,
                 activity: None,
                 shown: true,
                 paused_since: None,

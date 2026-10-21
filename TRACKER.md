@@ -3237,6 +3237,17 @@ open. See [natural sleep](docs/re-notes/unit-natural-sleep.md).
   acceptance and rendered/native path fidelity remain open. See
   [collision replanning](docs/re-notes/unit-collision-replanning.md#blocked-destination-search-termination-2026-10-21).
 
+### 2026-10-21 — scripted bone look-at
+
+- [x] Retain a source-model bone, live target and script offsets; reset preserves
+  the sampled animation and removing a target clears its look-at references.
+- [x] Campaign actors resolve the moving target in world space and aim the
+  selected bone and descendants before mesh skinning and lighting.
+- [x] Unchanged Human03 executes its Arthas/Captain look-at at tick 257.
+- [ ] The longer run next refuses `IssueImmediateOrder` at tick 980. Native
+  angular limits, blending, target-height semantics and rendered comparison
+  remain unqualified; see [unit look-at](docs/re-notes/unit-look-at.md).
+
 ### 2026-10-20 — source-derived edition-switch icon states
 
 - [x] The control builder now reads both icon families and their three state

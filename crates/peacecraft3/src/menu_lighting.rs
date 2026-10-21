@@ -870,6 +870,7 @@ pub(crate) mod tests {
                     bones: runtime.joints.joints(),
                     pivots: runtime.joints.pivots(),
                     global_durations: &runtime.global_sequences,
+                    look_at: None,
                     camera_pose: Some(&camera_pose),
                 },
                 &handles,
