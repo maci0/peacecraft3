@@ -3922,6 +3922,15 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 
 ### 2026-10-22: Learned ability tooltips
 
+- [~] Human01 continuation: a selected-install production gate verifies Escape's
+  authored cinematic cancellation and restored control/interface. The private
+  ordinary-player route observes ledger completion and the strength reward but
+  still loses the hero before chapter victory. Kill-based hero XP is absent;
+  two original-client probes qualify initial XP, early thresholds, positive-only
+  SetHeroXP and suspension, including Human01's authored level-2 cap. XP awards,
+  save compatibility, victory and next-map progression remain open. See
+  [experience checkpoint](docs/re-notes/hero-experience.md).
+
 - [~] Holy Light and Water Elemental command buttons share the source-derived
   inventory tooltip style. Ranked profile strings and supported numeric references
   expand from admitted data; ranked string edits preserve explicit empty values.
