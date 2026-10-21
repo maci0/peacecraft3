@@ -1165,6 +1165,42 @@ impl ObjectHost {
     }
 
     fn create_unit(&mut self, args: &[Value]) -> Result<Value, Error> {
+        self.create_unit_with_cache(args, None)
+    }
+
+    pub(super) fn create_cached_unit(
+        &mut self,
+        args: &[Value],
+        saved: &crate::game_cache::CachedUnit,
+    ) -> Result<Value, Error> {
+        saved
+            .validate()
+            .map_err(|detail| self.inner.error("RestoreUnit", Failure::GameCache(detail)))?;
+        let source = &self.admitted_units()?.source;
+        if self
+            .order_registry
+            .as_ref()
+            .is_none_or(|registry| registry.binding().image_sha256 != saved.client_sha256)
+        {
+            return Err(self.inner.error(
+                "RestoreUnit",
+                Failure::GameCache("cached unit belongs to a different client image".into()),
+            ));
+        }
+        if source.install != saved.install || source.edition != saved.edition {
+            return Err(self.inner.error(
+                "RestoreUnit",
+                Failure::GameCache("cached unit belongs to a different install/edition".into()),
+            ));
+        }
+        self.create_unit_with_cache(args, Some(saved))
+    }
+
+    fn create_unit_with_cache(
+        &mut self,
+        args: &[Value],
+        saved: Option<&crate::game_cache::CachedUnit>,
+    ) -> Result<Value, Error> {
         let record = {
             let fail = |reason| self.inner.error(NATIVE, reason);
             let [Value::Handle(player), Value::Int(unitid), x, y, face] = args else {
@@ -1274,8 +1310,28 @@ impl ObjectHost {
         };
         let mut record = record;
         record.abilities = self.prepare_unit_abilities(&record.definition)?;
+        if let Some(saved) = saved {
+            let abilities = record.abilities.as_mut().ok_or_else(|| {
+                self.inner.error(
+                    "RestoreUnit",
+                    Failure::GameCache("cached unit ability admission missing".into()),
+                )
+            })?;
+            self.restore_cached_abilities(abilities, saved)?;
+            record.permanent_strength = saved.permanent_strength;
+        }
         record.activity = self.prepare_unit_activity(&record.definition)?;
         record.vitals = self.prepare_unit_vitals(&record.definition)?;
+        if let Some(saved) = saved {
+            let vitals = record.vitals.as_mut().ok_or_else(|| {
+                self.inner.error(
+                    "RestoreUnit",
+                    Failure::GameCache("cached unit vital admission missing".into()),
+                )
+            })?;
+            [vitals.life, vitals.max_life, vitals.mana, vitals.max_mana] =
+                saved.pools.map(f32::from_bits);
+        }
         record.combat = self.prepare_unit_combat(&record.definition)?;
         if let Some(loader) = self.units.as_mut().and_then(|u| u.models.as_mut()) {
             let model = loader(&record.definition)
@@ -1311,6 +1367,9 @@ impl ObjectHost {
         } else {
             None
         };
+        let inventory = saved
+            .map(|saved| self.prepare_cached_inventory(&record, &saved.items))
+            .transpose()?;
         let id = self.inner.allocate(
             Entry::Unit {
                 record: Box::new(record),
@@ -1329,6 +1388,9 @@ impl ObjectHost {
             .as_mut()
             .ok_or_else(|| self.inner.error(NATIVE, Failure::UnitState("not admitted")))?;
         admitted.records += 1;
+        if let Some(inventory) = inventory {
+            self.commit_cached_inventory(id, inventory);
+        }
         Ok(Value::Handle(id))
     }
 

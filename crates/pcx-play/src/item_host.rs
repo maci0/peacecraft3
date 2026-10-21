@@ -41,7 +41,110 @@ pub(super) struct Admission {
     inventory: Option<inventory::State>,
 }
 
+pub(super) struct CachedInventory(Vec<(usize, ExecutedItem, i32)>);
+
 impl ObjectHost {
+    pub(super) fn prepare_cached_inventory(
+        &mut self,
+        unit: &super::ExecutedUnit,
+        saved: &[crate::game_cache::CachedItem],
+    ) -> Result<CachedInventory, Error> {
+        let fail = |detail: &str| {
+            self.inner
+                .error("RestoreUnit", Failure::GameCache(detail.into()))
+        };
+        let policy = self.inventory_policy_for(unit)?;
+        if saved.len() > policy.slots || saved.iter().any(|item| item.slot >= policy.slots) {
+            return Err(fail("cached inventory exceeds the current unit's slots"));
+        }
+        let mut records = Vec::new();
+        records
+            .try_reserve_exact(saved.len())
+            .map_err(|_| fail("cached item allocation failed"))?;
+        if !saved.is_empty() {
+            let admitted = self
+                .items
+                .as_ref()
+                .ok_or_else(|| fail("cached item catalog missing"))?;
+            if admitted.source.install != unit.source.install
+                || admitted.source.edition != unit.source.edition
+            {
+                return Err(fail(
+                    "cached items require the unit's selected install/edition",
+                ));
+            }
+            if admitted
+                .records
+                .checked_add(saved.len())
+                .is_none_or(|n| n > admitted.budget.max_records)
+            {
+                return Err(fail("cached item record policy exceeded"));
+            }
+            for item in saved {
+                let definition = self.item_definition(i32::from_be_bytes(item.rawcode))?;
+                if self.definition_flag(&definition, "powerup")? {
+                    return Err(fail("cached powerup cannot be restored as a held item"));
+                }
+                if definition.fields.len() > admitted.budget.max_retained_fields
+                    || definition.modifications.len() > admitted.budget.max_modifications
+                {
+                    return Err(fail("cached item definition policy exceeded"));
+                }
+                records.push((
+                    item.slot,
+                    ExecutedItem {
+                        definition,
+                        source: admitted.source.clone(),
+                        x: unit.x,
+                        y: unit.y,
+                        held_by: None,
+                        invulnerable: item.flags[0],
+                        droppable: item.flags[1],
+                        drop_on_death: item.flags[2],
+                        claimed: false,
+                        consumed: false,
+                    },
+                    item.charges,
+                ));
+            }
+        }
+        self.preflight_cached_charges(saved.len())?;
+        let handles = saved
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| fail("cached handle count overflow"))?;
+        if self
+            .inner
+            .handles()
+            .checked_add(handles)
+            .is_none_or(|n| n > self.inner.max_handles)
+        {
+            return Err(fail("cached unit/item arena capacity exceeded"));
+        }
+        self.inner
+            .arena
+            .try_reserve(handles)
+            .map_err(|_| self.inner.error("RestoreUnit", Failure::Capacity))?;
+        Ok(CachedInventory(records))
+    }
+
+    pub(super) fn commit_cached_inventory(&mut self, unit: HandleId, prepared: CachedInventory) {
+        let count = prepared.0.len();
+        for (slot, mut record, charges) in prepared.0 {
+            record.held_by = Some((unit, slot));
+            let item = self
+                .inner
+                .allocate(Entry::Item { record }, "RestoreUnit")
+                .expect("preflighted cached item identities");
+            self.commit_cached_charges(item, charges);
+        }
+        if count != 0 {
+            self.items
+                .as_mut()
+                .expect("preflighted item catalog")
+                .records += count;
+        }
+    }
     /// Opt into creation using the caller's selected catalog and map identity.
     /// Non-finite coordinates refuse as recreation policy, not native evidence.
     pub fn with_item_catalog(

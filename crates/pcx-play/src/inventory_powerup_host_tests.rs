@@ -11,6 +11,15 @@ use pcx_sim::world::ResolutionProblem;
 
 /// Source-shaped rows: the tome grants 7 STR through `DataC1`, one slot count through `L000`.
 const POWERUP_DECLARATIONS: &str = r#"
+type gamecache extends agent
+native InitGameCache takes string filename returns gamecache
+native SaveGameCache takes gamecache cache returns boolean
+native StoreUnit takes gamecache cache, string mission, string key, unit u returns boolean
+native RestoreUnit takes gamecache cache, string mission, string key, player p, real x, real y, real facing returns unit
+native HaveStoredUnit takes gamecache cache, string mission, string key returns boolean
+native FlushStoredUnit takes gamecache cache, string mission, string key returns nothing
+native StoreInteger takes gamecache cache, string mission, string key, integer value returns nothing
+native GetStoredInteger takes gamecache cache, string mission, string key returns integer
 type item extends widget
 native CreateItem takes integer i, real x, real y returns item
 native UnitAddItem takes unit u, item i returns boolean
@@ -283,7 +292,7 @@ impl ObjectCatalog for PowerupItems {
         };
         // Charge, perishable, cooldown and ability fields for the two healing rows: `phea` has no
         // cooldown group; `phcd` has two charges and cooldown group `AIhe`.
-        let mut rows = vec![(*b"ipow", "powerup", powerup)];
+        let mut rows = vec![(*b"ipow", "powerup", powerup), (*b"iuse", "uses", "-")];
         match &rawcode {
             b"phea" => rows.extend([
                 (*b"iuse", "uses", "1"),
@@ -1054,6 +1063,230 @@ fn set_life(h: &mut ObjectHost, unit: HandleId, life: f32) {
 
 fn life_of(h: &ObjectHost, unit: HandleId) -> f32 {
     h.unit_vitals(unit).unwrap().unwrap().life
+}
+
+#[test]
+fn cached_unit_survives_storage_and_restores_progress_sparse_slots_charges_and_owner() {
+    use crate::game_cache::tests::{Memory, budget};
+    let store = Arc::new(Memory::default());
+    let Fixture { mut h, hero, .. } = open();
+    h.admit_game_caches(store.clone(), budget()).unwrap();
+    let cache = h
+        .native("InitGameCache", &[Value::Str("Campaign.w3v".into())])
+        .unwrap();
+    h.native(
+        "SetHeroLevel",
+        &[Value::Handle(hero), Value::Int(4), Value::Bool(false)],
+    )
+    .unwrap();
+    let tome = item(&mut h, b"tstr", 0.);
+    add(&mut h, hero, tome).unwrap();
+    let first = item(&mut h, b"phcd", 0.);
+    let second = item(&mut h, b"pstr", 0.);
+    add(&mut h, hero, first).unwrap();
+    add(&mut h, hero, second).unwrap();
+    h.native("SetItemCharges", &[Value::Handle(second), Value::Int(9)])
+        .unwrap();
+    // Keep slot one occupied while slot zero is empty; restoration must not compact it.
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(first)],
+    )
+    .unwrap();
+    set_life(&mut h, hero, 123.5);
+    let before = h.executed_unit(hero).unwrap().clone();
+    let key = [
+        cache.clone(),
+        Value::Str("Next".into()),
+        Value::Str("Hero".into()),
+    ];
+    let mut put = key.to_vec();
+    put.push(Value::Handle(hero));
+    assert_eq!(h.native("StoreUnit", &put).unwrap(), Value::Bool(true));
+    let mut primitive = key.to_vec();
+    primitive.push(Value::Int(17));
+    h.native("StoreInteger", &primitive).unwrap();
+    assert_eq!(
+        h.native("SaveGameCache", &[cache]).unwrap(),
+        Value::Bool(true)
+    );
+    drop(h);
+
+    let Fixture { mut h, .. } = open();
+    h.admit_game_caches(store, budget()).unwrap();
+    let cache = h
+        .native("InitGameCache", &[Value::Str("campaign.W3V".into())])
+        .unwrap();
+    let key = [cache, Value::Str("NEXT".into()), Value::Str("HERO".into())];
+    let owner = h.native("Player", &[Value::Int(5)]).unwrap();
+    h.next_timer_expiry(9., &mut 1000).unwrap();
+    h.advance_unit_activity(9., &mut 65536).unwrap();
+    let mut restore = key.to_vec();
+    restore.extend([
+        owner.clone(),
+        Value::Real(64.),
+        Value::Real(16.),
+        Value::Real(90.),
+    ]);
+    let Value::Handle(restored) = h.native("RestoreUnit", &restore).unwrap() else {
+        panic!("restored unit");
+    };
+    let record = h.executed_unit(restored).unwrap();
+    assert_eq!(Value::Handle(record.owner), owner);
+    assert_eq!((record.x, record.y, record.face), (64., 16., 90.));
+    assert_eq!(record.abilities, before.abilities);
+    let vitals = record.vitals.unwrap();
+    let previous = before.vitals.unwrap();
+    assert_eq!(
+        [vitals.life, vitals.max_life, vitals.mana, vitals.max_mana],
+        [
+            previous.life,
+            previous.max_life,
+            previous.mana,
+            previous.max_mana
+        ]
+    );
+    assert_eq!(vitals.regen.through, 9.);
+    assert_eq!(record.permanent_strength, before.permanent_strength);
+    assert_eq!(h.held_slot(restored, 0), None);
+    let held = h.held_slot(restored, 1).unwrap();
+    assert_eq!(
+        h.executed_items()
+            .find(|(id, _)| *id == held)
+            .unwrap()
+            .1
+            .definition
+            .rawcode,
+        *b"pstr"
+    );
+    assert_eq!(
+        h.native("GetItemCharges", &[Value::Handle(held)]).unwrap(),
+        Value::Int(9)
+    );
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(restored), Value::Handle(held)],
+    )
+    .unwrap();
+    assert_eq!(
+        h.unit_vitals(restored).unwrap().unwrap().max_life,
+        previous.max_life - PASSIVE_STRENGTH * LIFE_PER_STRENGTH
+    );
+    assert_eq!(h.native("GetStoredInteger", &key).unwrap(), Value::Int(17));
+    assert_eq!(h.native("HaveStoredUnit", &key).unwrap(), Value::Bool(true));
+    h.native("FlushStoredUnit", &key).unwrap();
+    assert_eq!(h.native("RestoreUnit", &restore).unwrap(), Value::Null);
+    assert_eq!(h.native("GetStoredInteger", &key).unwrap(), Value::Int(17));
+}
+
+#[test]
+fn cached_unit_restore_refusals_leave_the_arena_inventory_and_cache_intact() {
+    use crate::game_cache::{
+        CachedUnit, Kind, Profile, Stored,
+        tests::{Memory, budget},
+    };
+    let store = Arc::new(Memory::default());
+    let Fixture { mut h, hero, .. } = open();
+    h.admit_game_caches(store.clone(), budget()).unwrap();
+    let cache = h
+        .native("InitGameCache", &[Value::Str("campaign".into())])
+        .unwrap();
+    let held = item(&mut h, b"phcd", 0.);
+    add(&mut h, hero, held).unwrap();
+    h.native(
+        "StoreUnit",
+        &[
+            cache.clone(),
+            Value::Str("next".into()),
+            Value::Str("hero".into()),
+            Value::Handle(hero),
+        ],
+    )
+    .unwrap();
+    h.native("SaveGameCache", &[cache]).unwrap();
+    let original = store.bytes.lock().unwrap().clone().unwrap();
+    drop(h);
+    for case in 0..6 {
+        let mut profile = Profile::decode(&original, budget()).unwrap();
+        let Some(Stored::Unit(bytes)) = profile.get("campaign", "next", "hero", Kind::Unit) else {
+            panic!("stored unit");
+        };
+        let mut saved = CachedUnit::decode(bytes, budget().storage_bytes).unwrap();
+        match case {
+            0 => saved.items[0].slot = 9,
+            1 => saved.install = "foreign install".into(),
+            3 => saved.client_sha256[0] ^= 1,
+            5 => saved.items[0].rawcode = *b"tstr",
+            _ => {}
+        }
+        profile
+            .put(
+                "campaign",
+                "next".into(),
+                "hero".into(),
+                Stored::Unit(saved.encode(budget().storage_bytes).unwrap()),
+                budget(),
+            )
+            .unwrap();
+        let bytes = profile.encode(budget()).unwrap();
+        let store = Arc::new(Memory::default());
+        *store.bytes.lock().unwrap() = Some(bytes.clone());
+        let Fixture { mut h, .. } = open();
+        h.admit_game_caches(store.clone(), budget()).unwrap();
+        let cache = h
+            .native("InitGameCache", &[Value::Str("campaign".into())])
+            .unwrap();
+        if case == 2 {
+            for _ in 0..16 {
+                item(&mut h, b"phcd", 0.);
+            }
+        }
+        if case == 4 {
+            for _ in 0..8 {
+                let id = item(&mut h, b"phcd", 0.);
+                h.native("SetItemCharges", &[Value::Handle(id), Value::Int(3)])
+                    .unwrap();
+            }
+        }
+        let units: Vec<_> = h
+            .executed_units()
+            .map(|(id, record)| (id, record.clone()))
+            .collect();
+        let items: Vec<_> = h
+            .executed_items()
+            .map(|(id, record)| (id, record.clone()))
+            .collect();
+        let handles = h.inner().handles();
+        let player = h.native("Player", &[Value::Int(4)]).unwrap();
+        let key = [cache, Value::Str("next".into()), Value::Str("hero".into())];
+        let mut restore = key.to_vec();
+        restore.extend([player, Value::Real(64.), Value::Real(16.), Value::Real(90.)]);
+        let error = h.native("RestoreUnit", &restore).unwrap_err();
+        let reason = match case {
+            0 => "cached inventory exceeds",
+            1 => "different install/edition",
+            2 => "cached item record policy",
+            4 => "cached item charges",
+            5 => "cached powerup cannot",
+            _ => "different client image",
+        };
+        assert!(error.contains(reason), "case {case}: {error}");
+        assert_eq!(h.inner().handles(), handles);
+        assert_eq!(
+            h.executed_units()
+                .map(|(id, record)| (id, record.clone()))
+                .collect::<Vec<_>>(),
+            units
+        );
+        assert_eq!(
+            h.executed_items()
+                .map(|(id, record)| (id, record.clone()))
+                .collect::<Vec<_>>(),
+            items
+        );
+        assert_eq!(h.native("HaveStoredUnit", &key).unwrap(), Value::Bool(true));
+        assert_eq!(*store.bytes.lock().unwrap(), Some(bytes));
+    }
 }
 
 #[test]

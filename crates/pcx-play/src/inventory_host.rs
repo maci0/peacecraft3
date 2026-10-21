@@ -150,8 +150,14 @@ impl ObjectHost {
             })
     }
     pub fn inventory_policy(&self, unit: HandleId) -> Result<Policy, Error> {
-        let state = self.inventory_state()?;
         let unit = self.executed_unit(unit)?;
+        self.inventory_policy_for(unit)
+    }
+    pub(crate) fn inventory_policy_for(
+        &self,
+        unit: &super::super::ExecutedUnit,
+    ) -> Result<Policy, Error> {
+        let state = self.inventory_state()?;
         let abilities = unit.abilities.as_ref().ok_or_else(|| {
             self.inner.error(
                 "inventory",

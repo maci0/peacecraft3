@@ -1,18 +1,46 @@
-//! Primitive game-cache operations on the existing object arena and one profile.
+//! Typed game-cache operations on the existing object arena and one profile.
 use super::{Entry, Error, Failure, ObjectHost};
 use crate::game_cache::{Budget, Kind, Profile, Storage, Stored, key};
 use pcx_script::Value;
 use std::sync::Arc;
 
 pub(super) struct State {
-    profile: Profile,
+    pub(super) profile: Profile,
     storage: Arc<dyn Storage>,
-    budget: Budget,
+    pub(super) budget: Budget,
     handle_bytes: usize,
     storage_error: Option<String>,
 }
 
 const CONTRACTS: &[(&str, &[&str], &str)] = &[
+    (
+        "StoreUnit",
+        &["gamecache", "string", "string", "unit"],
+        "boolean",
+    ),
+    (
+        "HaveStoredUnit",
+        &["gamecache", "string", "string"],
+        "boolean",
+    ),
+    (
+        "FlushStoredUnit",
+        &["gamecache", "string", "string"],
+        "nothing",
+    ),
+    (
+        "RestoreUnit",
+        &[
+            "gamecache",
+            "string",
+            "string",
+            "player",
+            "real",
+            "real",
+            "real",
+        ],
+        "unit",
+    ),
     ("InitGameCache", &["string"], "gamecache"),
     ("SaveGameCache", &["gamecache"], "boolean"),
     ("ReloadGameCachesFromDisk", &[], "boolean"),
@@ -171,6 +199,12 @@ impl ObjectHost {
     ) -> Result<Value, String> {
         if args.len() != arity {
             return Err("arguments do not match the native declaration".into());
+        }
+        if matches!(
+            name,
+            "StoreUnit" | "RestoreUnit" | "HaveStoredUnit" | "FlushStoredUnit"
+        ) {
+            return self.unit_cache_call(name, args);
         }
         let state = self.game_caches.as_mut().expect("admitted cache state");
         if name == "ReloadGameCachesFromDisk" {
@@ -341,11 +375,13 @@ impl ObjectHost {
             Some(Stored::Real(v)) => Value::Real(f32::from_bits(*v)),
             Some(Stored::Boolean(v)) => Value::Bool(*v),
             Some(Stored::String(v)) => Value::Str(v.clone()),
+            Some(Stored::Unit(_)) => return Err("unit payload in primitive cache operation".into()),
             None => match kind {
                 Kind::Integer => Value::Int(0),
                 Kind::Real => Value::Real(0.0),
                 Kind::Boolean => Value::Bool(false),
                 Kind::String => Value::Null,
+                Kind::Unit => return Err("unit kind in primitive cache operation".into()),
             },
         })
     }

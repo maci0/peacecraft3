@@ -40,6 +40,59 @@ pub(crate) fn budget() -> Budget {
 }
 
 #[test]
+fn unit_profiles_preserve_typed_namespaces_and_read_old_primitive_profiles() {
+    let b = budget();
+    let saved = cached_unit::tests::fixture()
+        .encode(b.storage_bytes)
+        .unwrap();
+    let mut profile = Profile::default();
+    profile
+        .put("cache", "m".into(), "k".into(), Stored::Integer(17), b)
+        .unwrap();
+    let mut old = profile.encode(b).unwrap();
+    old[8] = 1;
+    assert_eq!(Profile::decode(&old, b).unwrap(), profile);
+    profile
+        .put(
+            "cache",
+            "m".into(),
+            "k".into(),
+            Stored::Unit(saved.clone()),
+            b,
+        )
+        .unwrap();
+    let bytes = profile.encode(b).unwrap();
+    assert_eq!(Profile::decode(&bytes, b).unwrap(), profile);
+    let mut falsely_old = bytes;
+    falsely_old[8] = 1;
+    assert!(Profile::decode(&falsely_old, b).is_err());
+    assert!(
+        profile
+            .put(
+                "cache",
+                "m".into(),
+                "k2".into(),
+                Stored::Unit(saved.clone()),
+                Budget {
+                    storage_bytes: saved.len(),
+                    ..b
+                }
+            )
+            .is_err()
+    );
+    profile.flush("cache", Some("m"), Some(("k", Kind::Unit)));
+    assert_eq!(
+        profile.get("cache", "m", "k", Kind::Integer),
+        Some(&Stored::Integer(17))
+    );
+    profile
+        .put("cache", "m".into(), "k2".into(), Stored::Unit(saved), b)
+        .unwrap();
+    profile.flush("cache", Some("m"), None);
+    assert_eq!(profile.unit_bytes, 0);
+}
+
+#[test]
 fn canonical_profile_roundtrip_preserves_independent_types_and_real_bits() {
     let b = budget();
     let mut first = Profile::default();
@@ -87,7 +140,7 @@ fn malformed_profile_and_limits_refuse_without_inventing_empty_data() {
     extra.push(0);
     assert!(Profile::decode(&extra, b).is_err());
     let mut changed = bytes.clone();
-    changed[8] = 2;
+    changed[8] = 3;
     assert!(Profile::decode(&changed, b).is_err());
     changed = bytes.clone();
     changed[9..13].copy_from_slice(&u32::MAX.to_le_bytes());

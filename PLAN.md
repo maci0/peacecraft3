@@ -1603,3 +1603,9 @@ The unchanged Human01 prefix passes initialization and next refuses
 `EnableUserUI(false)`. Original W3V import, hero transfer, remaining startup
 inputs, cinematics and live controls remain open; see
 [game caches](docs/re-notes/script-game-caches.md).
+
+Unit-cache follow-up (2026-10-21): modeled hero progress, permanent strength,
+vitals and slotted inventory now persist in the private profile and restore
+through the existing unit-creation path. Fresh-profile Human03 reaches its later
+hero-level event-delivery refusal. Full native unit serialization/XP, original
+W3V import, native restoration parity and campaign acceptance remain open.

@@ -1069,6 +1069,9 @@ pub use settings::StartupSettings;
 #[path = "game_cache_host.rs"]
 mod game_caches;
 
+#[path = "unit_cache_host.rs"]
+mod unit_caches;
+
 #[path = "presentation_host.rs"]
 mod presentation;
 pub use presentation::{CineFilter, FilterSample, PresentationState};

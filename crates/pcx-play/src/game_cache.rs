@@ -1,6 +1,10 @@
 //! Recreation-owned campaign profile storage. Original W3V import is not implied.
 use std::collections::BTreeMap;
 
+#[path = "cached_unit.rs"]
+mod cached_unit;
+pub(crate) use cached_unit::{CachedItem, CachedUnit};
+
 /// A profile store must distinguish an absent profile from a failed read, and
 /// replace the saved bytes atomically or leave the previous save intact.
 pub trait Storage: Send + Sync {
@@ -24,6 +28,7 @@ pub(crate) enum Kind {
     Real,
     Boolean,
     String,
+    Unit,
 }
 
 #[derive(Debug, PartialEq)]
@@ -32,6 +37,7 @@ pub(crate) enum Stored {
     Real(u32),
     Boolean(bool),
     String(String),
+    Unit(Vec<u8>),
 }
 impl Stored {
     pub fn kind(&self) -> Kind {
@@ -40,11 +46,18 @@ impl Stored {
             Self::Real(_) => Kind::Real,
             Self::Boolean(_) => Kind::Boolean,
             Self::String(_) => Kind::String,
+            Self::Unit(_) => Kind::Unit,
         }
     }
     fn text_bytes(&self) -> usize {
         match self {
             Self::String(s) => s.len(),
+            _ => 0,
+        }
+    }
+    fn unit_bytes(&self) -> usize {
+        match self {
+            Self::Unit(bytes) => bytes.len(),
             _ => 0,
         }
     }
@@ -57,6 +70,7 @@ pub(crate) struct Profile {
     files: BTreeMap<String, Values>,
     entries: usize,
     text_bytes: usize,
+    unit_bytes: usize,
 }
 
 pub(crate) fn key(text: &str, limit: usize) -> Result<String, String> {
@@ -99,6 +113,9 @@ impl Profile {
         value: Stored,
         budget: Budget,
     ) -> Result<(), String> {
+        if let Stored::Unit(bytes) = &value {
+            CachedUnit::decode(bytes, budget.storage_bytes)?;
+        }
         let entry_key = (mission, key, value.kind());
         let previous = self
             .files
@@ -108,6 +125,12 @@ impl Profile {
             .entries
             .checked_add(usize::from(previous.is_none()))
             .ok_or("game-cache entry accounting overflow")?;
+        let unit_bytes = self
+            .unit_bytes
+            .checked_sub(previous.map_or(0, Stored::unit_bytes))
+            .and_then(|n| n.checked_add(value.unit_bytes()))
+            .filter(|n| *n <= budget.storage_bytes)
+            .ok_or("game-cache unit byte policy exceeded")?;
         let text = self
             .text_bytes
             .checked_sub(previous.map_or(0, Stored::text_bytes))
@@ -139,6 +162,7 @@ impl Profile {
             .insert(entry_key, value);
         self.entries = count;
         self.text_bytes = text;
+        self.unit_bytes = unit_bytes;
         Ok(())
     }
     pub fn flush(&mut self, filename: &str, mission: Option<&str>, key: Option<(&str, Kind)>) {
@@ -151,6 +175,7 @@ impl Profile {
             if remove {
                 self.entries -= 1;
                 self.text_bytes -= m.len() + k.len() + value.text_bytes();
+                self.unit_bytes -= value.unit_bytes();
             }
             !remove
         });
@@ -165,7 +190,16 @@ impl Profile {
             bytes: Vec::new(),
             limit: budget.storage_bytes,
         };
-        out.bytes(b"PC3CACHE\x01")?;
+        let has_units = self.files.values().any(|values| {
+            values
+                .values()
+                .any(|value| matches!(value, Stored::Unit(_)))
+        });
+        out.bytes(if has_units {
+            b"PC3CACHE\x02"
+        } else {
+            b"PC3CACHE\x01"
+        })?;
         out.number(self.files.len())?;
         for (filename, values) in &self.files {
             out.text(filename)?;
@@ -179,6 +213,10 @@ impl Profile {
                     Stored::Real(bits) => out.bytes(&bits.to_le_bytes())?,
                     Stored::Boolean(v) => out.bytes(&[u8::from(*v)])?,
                     Stored::String(v) => out.text(v)?,
+                    Stored::Unit(bytes) => {
+                        out.number(bytes.len())?;
+                        out.bytes(bytes)?;
+                    }
                 }
             }
         }
@@ -189,7 +227,8 @@ impl Profile {
             return Err("saved game-cache byte policy exceeded".into());
         }
         let mut input = Reader { bytes, cursor: 0 };
-        if input.take(9)? != b"PC3CACHE\x01" {
+        let header = input.take(9)?;
+        if header != b"PC3CACHE\x01" && header != b"PC3CACHE\x02" {
             return Err(
                 "unsupported campaign cache format/version; original W3V import is unavailable"
                     .into(),
@@ -243,6 +282,12 @@ impl Profile {
                             return Err("saved game-cache string contains unsupported NUL".into());
                         }
                         Stored::String(text)
+                    }
+                    4 if header == b"PC3CACHE\x02" => {
+                        let length = input.number()?;
+                        let bytes = input.take(length)?;
+                        CachedUnit::decode(bytes, budget.storage_bytes)?;
+                        Stored::Unit(bytes.to_vec())
                     }
                     _ => return Err("unsupported saved game-cache value kind".into()),
                 };

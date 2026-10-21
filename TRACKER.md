@@ -2847,6 +2847,20 @@ repeated, and the public site package was not rebuilt.
   cinematics and live units/controls remain open. The first chapter is still
   not playable; the original game was not rerun.
 
+### 2026-10-21 — modeled campaign unit caches
+
+- [x] Store/restore/query/flush unit values in the existing profile. Preserve
+  modeled hero progress, permanent strength, pools, sparse item slots, charge
+  overrides and explicit item flags. Validate source/client identity, current
+  ability rules and creation policies before publishing a restored unit.
+- [x] Read old primitive profiles; use version 2 only when unit values exist.
+  Full pcx-play tests: 1,151 passed, 44 ignored with required local fixtures.
+  Strict all-target clippy, WASM library and app test-fixture compile checks pass.
+- [ ] Full native hero payload/XP, original W3V import and native restore parity.
+  Fresh-profile Human03 passes RestoreUnit and reaches the later SetHeroLevel
+  hero-event-delivery refusal. This is not campaign acceptance. See
+  [game caches](docs/re-notes/script-game-caches.md#unit-cache-extension-2026-10-21).
+
 ### 2026-10-19 — executed cinematic filter and native real arguments
 
 - [x] Retain the ten executed UI/filter calls on the existing Host. Preserve

@@ -102,6 +102,48 @@ pub struct UseCommit {
 }
 
 impl ObjectHost {
+    pub(super) fn cached_item_charges(&self, item: HandleId) -> Result<i32, Error> {
+        if self.item_use.is_none() {
+            return Err(self.inner.error(
+                GET,
+                Failure::ItemUse("unit cache requires item-charge admission".into()),
+            ));
+        }
+        let record = self.live_item(item)?.ok_or_else(|| {
+            self.inner
+                .error(GET, Failure::ItemUse("cached item is absent".into()))
+        })?;
+        self.charge_count(item, record)
+    }
+    pub(super) fn preflight_cached_charges(&self, count: usize) -> Result<(), Error> {
+        if count == 0 {
+            return Ok(());
+        }
+        let state = self.item_use.as_ref().ok_or_else(|| {
+            self.inner.error(
+                GET,
+                Failure::ItemUse("unit cache requires item-charge admission".into()),
+            )
+        })?;
+        if state
+            .charges
+            .len()
+            .checked_add(count)
+            .is_none_or(|n| n > state.max_records)
+        {
+            return Err(self
+                .inner
+                .error(GET, Failure::Budget("cached item charges")));
+        }
+        Ok(())
+    }
+    pub(super) fn commit_cached_charges(&mut self, item: HandleId, charges: i32) {
+        self.item_use
+            .as_mut()
+            .expect("preflighted item charges")
+            .charges
+            .insert(item, charges);
+    }
     /// Opt into charges and cooldowns. Requires item admission and a game clock
     /// (`with_timer_runtime`), since readiness and cooldown start both read the host clock.
     pub fn with_item_use(mut self, rules: Rules, max_records: usize) -> Result<Self, Error> {

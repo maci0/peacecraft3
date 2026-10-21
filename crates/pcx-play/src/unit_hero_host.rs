@@ -16,6 +16,76 @@ const ATTRIBUTES: [(&str, &str); 3] = [
     ("GetHeroInt", "INT"),
 ];
 
+#[cfg(test)]
+mod cached_tests {
+    use super::*;
+    #[test]
+    fn cached_learned_ranks_follow_current_source_rules_and_refusals_preserve_progress() {
+        let mut rules = crate::hero_skills::tests::rules();
+        rules.initial_level = 1;
+        rules.first_rank = 1;
+        rules.progression.max_level = 10;
+        let budget = HeroBudget {
+            abilities_per_unit: 8,
+            overlay_objects: 0,
+            modifications_per_ability: 0,
+        };
+        let original = UnitAbilities {
+            hero: Some(HeroProgress {
+                level: 1,
+                skill_points: 1,
+            }),
+            levels: vec![(*b"B001", 1)],
+            learnable: vec![Skill {
+                alias: *b"A001",
+                maximum: 3,
+                required: 1,
+                skip: 2,
+                dependency: None,
+            }],
+        };
+        let saved = crate::game_cache::CachedUnit {
+            rawcode: *b"H001",
+            client_sha256: [0; 32],
+            install: "synthetic".into(),
+            edition: "fixture".into(),
+            hero: Some([3, 1]),
+            abilities: vec![(*b"A001", 2), (*b"B001", 1)],
+            permanent_strength: 0,
+            pools: [5f32, 10., 1., 2.].map(f32::to_bits),
+            items: vec![],
+        };
+        let mut restored = original.clone();
+        restored.restore_cached(&saved, &rules, budget).unwrap();
+        assert_eq!(restored.level(*b"A001"), 2);
+        assert_eq!(
+            restored.hero,
+            Some(HeroProgress {
+                level: 3,
+                skill_points: 1
+            })
+        );
+        for case in 0..5 {
+            let mut invalid = saved.clone();
+            match case {
+                0 => invalid.hero = Some([2, 1]),
+                1 => invalid.abilities[0].1 = 4,
+                2 => {
+                    invalid.abilities.pop();
+                }
+                3 => invalid.hero = Some([3, 2]),
+                _ => invalid.hero = None,
+            }
+            let mut untouched = original.clone();
+            assert!(
+                untouched.restore_cached(&invalid, &rules, budget).is_err(),
+                "case {case}"
+            );
+            assert_eq!(untouched, original);
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct HeroBudget {
     pub abilities_per_unit: usize,
@@ -60,6 +130,69 @@ impl UnitAbilities {
                 .ok_or_else(|| "hero skill capacity overflow".into())
         })
     }
+    fn restore_cached(
+        &mut self,
+        saved: &crate::game_cache::CachedUnit,
+        rules: &Rules,
+        budget: HeroBudget,
+    ) -> Result<(), String> {
+        saved.validate()?;
+        if saved.abilities.len() > budget.abilities_per_unit {
+            return Err("cached ability count exceeds current admission".into());
+        }
+        let hero = match (&self.hero, saved.hero) {
+            (Some(_), Some([level, skill_points]))
+                if level >= rules.initial_level && level <= rules.progression.max_level =>
+            {
+                Some(HeroProgress {
+                    level,
+                    skill_points,
+                })
+            }
+            (None, None) => None,
+            _ => return Err("cached hero class/level differs from current source rules".into()),
+        };
+        for (alias, initial) in &self.levels {
+            if !self.learnable.iter().any(|skill| skill.alias == *alias)
+                && !saved.abilities.contains(&(*alias, *initial))
+            {
+                return Err("cached unit lacks a current source ability".into());
+            }
+        }
+        for (alias, level) in &saved.abilities {
+            if let Some(skill) = self.learnable.iter().find(|skill| skill.alias == *alias) {
+                let hero = hero.as_ref().ok_or("cached learned rank without a hero")?;
+                let required = skill
+                    .skip
+                    .checked_mul((*level - rules.first_rank).max(0))
+                    .and_then(|n| n.checked_add(skill.required))
+                    .ok_or("cached skill requirement overflow")?;
+                if *level < rules.first_rank || *level > skill.maximum || hero.level < required {
+                    return Err("cached rank exceeds current learning rules".into());
+                }
+            } else if !self.levels.contains(&(*alias, *level)) {
+                return Err("cached ability is absent from current unit data".into());
+            }
+        }
+        let mut levels = Vec::new();
+        levels
+            .try_reserve_exact(saved.abilities.len())
+            .map_err(|_| "cached ability allocation failed")?;
+        levels.extend_from_slice(&saved.abilities);
+        let mut candidate = self.clone();
+        candidate.levels = levels;
+        candidate.hero = hero;
+        let capacity = candidate.capacity()?;
+        if candidate
+            .hero
+            .as_ref()
+            .is_some_and(|hero| hero.skill_points > capacity)
+        {
+            return Err("cached skill points exceed current capacity".into());
+        }
+        *self = candidate;
+        Ok(())
+    }
 }
 
 pub(super) struct Admission {
@@ -77,6 +210,21 @@ pub(super) struct Admission {
 }
 
 impl ObjectHost {
+    pub(super) fn restore_cached_abilities(
+        &self,
+        state: &mut UnitAbilities,
+        saved: &crate::game_cache::CachedUnit,
+    ) -> Result<(), Error> {
+        let fail = |detail: &str| self.hero_error("RestoreUnit", detail.into());
+        let input = self
+            .admitted_units()?
+            .heroes
+            .as_ref()
+            .ok_or_else(|| fail("cached ability rules missing"))?;
+        state
+            .restore_cached(saved, &input.rules, input.budget)
+            .map_err(|detail| self.hero_error("RestoreUnit", detail))
+    }
     pub(crate) fn unit_implicit_hero_alias(&self) -> Option<[u8; 4]> {
         self.units
             .as_ref()?

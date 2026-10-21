@@ -1,0 +1,226 @@
+//! Portable recreation-owned unit progress; never an original W3V payload.
+use super::{Reader, Writer};
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CachedUnit {
+    pub rawcode: [u8; 4],
+    pub client_sha256: [u8; 32],
+    pub install: String,
+    pub edition: String,
+    pub hero: Option<[i32; 2]>,
+    pub abilities: Vec<([u8; 4], i32)>,
+    pub permanent_strength: i32,
+    /// Life, maximum life, mana, maximum mana as exact f32 bits.
+    pub pools: [u32; 4],
+    pub items: Vec<CachedItem>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CachedItem {
+    pub slot: usize,
+    pub rawcode: [u8; 4],
+    pub charges: i32,
+    /// Explicit invulnerable, droppable and drop-on-death writes.
+    pub flags: [Option<bool>; 3],
+}
+
+impl CachedUnit {
+    pub fn validate(&self) -> Result<(), String> {
+        let [life, maximum, mana, maximum_mana] = self.pools.map(f32::from_bits);
+        if self.install.is_empty()
+            || self.edition.is_empty()
+            || [life, maximum, mana, maximum_mana]
+                .iter()
+                .any(|n| !n.is_finite())
+            || life <= 0.
+            || maximum < life
+            || mana < 0.
+            || maximum_mana < mana
+            || self
+                .hero
+                .is_some_and(|[level, points]| level < 0 || points < 0)
+            || self.abilities.iter().any(|(_, level)| *level < 0)
+            || self.abilities.windows(2).any(|a| a[0].0 >= a[1].0)
+            || self.items.iter().any(|item| item.charges < 0)
+            || self.items.windows(2).any(|a| a[0].slot >= a[1].slot)
+        {
+            return Err("invalid cached unit identity, pools, progress or inventory".into());
+        }
+        Ok(())
+    }
+
+    pub fn encode(&self, limit: usize) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        let mut out = Writer {
+            bytes: Vec::new(),
+            limit,
+        };
+        out.bytes(b"PC3UNIT\x01")?;
+        out.bytes(&self.rawcode)?;
+        out.bytes(&self.client_sha256)?;
+        out.text(&self.install)?;
+        out.text(&self.edition)?;
+        out.bytes(&[u8::from(self.hero.is_some())])?;
+        if let Some(hero) = self.hero {
+            for number in hero {
+                out.bytes(&number.to_le_bytes())?;
+            }
+        }
+        out.bytes(&self.permanent_strength.to_le_bytes())?;
+        for bits in self.pools {
+            out.bytes(&bits.to_le_bytes())?;
+        }
+        out.number(self.abilities.len())?;
+        for (alias, level) in &self.abilities {
+            out.bytes(alias)?;
+            out.bytes(&level.to_le_bytes())?;
+        }
+        out.number(self.items.len())?;
+        for item in &self.items {
+            out.number(item.slot)?;
+            out.bytes(&item.rawcode)?;
+            out.bytes(&item.charges.to_le_bytes())?;
+            for flag in item.flags {
+                out.bytes(&[flag.map_or(0, |v| if v { 2 } else { 1 })])?;
+            }
+        }
+        Ok(out.bytes)
+    }
+
+    pub fn decode(bytes: &[u8], limit: usize) -> Result<Self, String> {
+        if bytes.len() > limit {
+            return Err("cached unit byte policy exceeded".into());
+        }
+        let mut input = Reader { bytes, cursor: 0 };
+        if input.take(8)? != b"PC3UNIT\x01" {
+            return Err("unsupported cached unit format/version".into());
+        }
+        let rawcode = input.take(4)?.try_into().expect("four bytes");
+        let client_sha256 = input.take(32)?.try_into().expect("SHA-256 bytes");
+        let install = input.text(limit)?;
+        let edition = input.text(limit)?;
+        let hero = match input.take(1)?[0] {
+            0 => None,
+            1 => Some([integer(&mut input)?, integer(&mut input)?]),
+            _ => return Err("invalid cached hero tag".into()),
+        };
+        let permanent_strength = integer(&mut input)?;
+        let mut pools = [0; 4];
+        for bits in &mut pools {
+            *bits = u32::from_le_bytes(input.take(4)?.try_into().expect("four bytes"));
+        }
+        let count = input.number()?;
+        if count > (bytes.len() - input.cursor) / 8 {
+            return Err("truncated cached abilities".into());
+        }
+        let mut abilities = Vec::new();
+        abilities
+            .try_reserve_exact(count)
+            .map_err(|_| "cached ability allocation failed")?;
+        for _ in 0..count {
+            abilities.push((
+                input.take(4)?.try_into().expect("four bytes"),
+                integer(&mut input)?,
+            ));
+        }
+        let count = input.number()?;
+        if count > (bytes.len() - input.cursor) / 15 {
+            return Err("truncated cached inventory".into());
+        }
+        let mut items = Vec::new();
+        items
+            .try_reserve_exact(count)
+            .map_err(|_| "cached inventory allocation failed")?;
+        for _ in 0..count {
+            let slot = input.number()?;
+            let rawcode = input.take(4)?.try_into().expect("four bytes");
+            let charges = integer(&mut input)?;
+            let mut flags = [None; 3];
+            for flag in &mut flags {
+                *flag = match input.take(1)?[0] {
+                    0 => None,
+                    1 => Some(false),
+                    2 => Some(true),
+                    _ => return Err("invalid cached item flag".into()),
+                };
+            }
+            items.push(CachedItem {
+                slot,
+                rawcode,
+                charges,
+                flags,
+            });
+        }
+        if input.cursor != bytes.len() {
+            return Err("trailing cached unit bytes".into());
+        }
+        let result = Self {
+            rawcode,
+            client_sha256,
+            install,
+            edition,
+            hero,
+            abilities,
+            permanent_strength,
+            pools,
+            items,
+        };
+        result.validate()?;
+        Ok(result)
+    }
+}
+
+fn integer(input: &mut Reader<'_>) -> Result<i32, String> {
+    Ok(i32::from_le_bytes(
+        input.take(4)?.try_into().expect("four bytes"),
+    ))
+}
+
+#[cfg(test)]
+pub(super) mod tests {
+    use super::*;
+    pub(crate) fn fixture() -> CachedUnit {
+        CachedUnit {
+            rawcode: *b"H001",
+            client_sha256: [0; 32],
+            install: "synthetic".into(),
+            edition: "fixture".into(),
+            hero: Some([3, 1]),
+            abilities: vec![(*b"A001", 2)],
+            permanent_strength: 7,
+            pools: [123.5f32, 750., 0., 50.].map(f32::to_bits),
+            items: vec![CachedItem {
+                slot: 2,
+                rawcode: *b"I001",
+                charges: 4,
+                flags: [None, Some(false), Some(true)],
+            }],
+        }
+    }
+    #[test]
+    fn unit_snapshot_roundtrip_is_bounded_and_rejects_truncation_and_invalid_progress() {
+        let saved = fixture();
+        let bytes = saved.encode(1024).unwrap();
+        assert_eq!(CachedUnit::decode(&bytes, 1024).unwrap(), saved);
+        for n in 0..bytes.len() {
+            assert!(CachedUnit::decode(&bytes[..n], 1024).is_err(), "prefix {n}");
+        }
+        assert!(saved.encode(bytes.len() - 1).is_err());
+        assert!(CachedUnit::decode(&bytes, bytes.len() - 1).is_err());
+        let mut extra = bytes.clone();
+        extra.push(0);
+        assert!(CachedUnit::decode(&extra, 1024).is_err());
+        let mut bad = saved.clone();
+        bad.pools[0] = f32::NAN.to_bits();
+        assert!(bad.encode(1024).is_err());
+        bad = saved.clone();
+        bad.abilities.push(bad.abilities[0]);
+        assert!(bad.encode(1024).is_err());
+        bad = saved.clone();
+        bad.items.push(bad.items[0].clone());
+        assert!(bad.encode(1024).is_err());
+        bad = saved;
+        bad.items[0].charges = -1;
+        assert!(bad.encode(1024).is_err());
+    }
+}
