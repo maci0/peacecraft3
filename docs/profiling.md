@@ -38,6 +38,38 @@ and clocks affect these samples; they diagnose hotspots rather than assert speed
 The local kernel permits self-process performance counters. Permission failures
 on another host are reported, not bypassed by changing global kernel settings.
 
+## bpftrace CPU flame graphs
+
+Launch the game normally, then attach the observer with `sudo`; the game keeps
+its user and desktop-session environment. On this host bpftrace 0.27 supports
+[`dw_ustack`](https://bpftrace.org/docs/release_027/stdlib#dw_ustack), which uses
+DWARF unwind data rather than requiring a frame-pointer rebuild. That helper is
+experimental and x86-64-only. An ordinary `ustack` capture can be incomplete
+when the binary omits frame pointers.
+
+```sh
+sudo bpftrace -p "$game_pid" -e '
+config = { unstable_dw_ustack=enable; max_map_keys=8192; }
+profile:hz:99 /pid == $1/ {
+  @[dw_ustack(bpftrace, 64)] = count();
+  @sample_count = count();
+}
+interval:s:12 { exit(); }
+' "$game_pid" > .scratch/profiles/cpu-bpftrace.txt
+
+perl /path/to/FlameGraph/stackcollapse-bpftrace.pl \
+  .scratch/profiles/cpu-bpftrace.txt > .scratch/profiles/cpu.folded
+perl /path/to/FlameGraph/flamegraph.pl \
+  .scratch/profiles/cpu.folded > .scratch/profiles/cpu.svg
+```
+
+The conversion tools are from [FlameGraph](https://github.com/brendangregg/FlameGraph).
+Keep raw stacks and warnings, verify folded weights match the collected map
+count, and inspect stack depths and unresolved frames. Rust frames may require
+individual symbol demangling before rendering. These are sampled on-CPU
+proportions, not elapsed-time gates or GPU measurements. The
+[CPU report](performance/cpu-hotpaths.md) records the verified local captures.
+
 ## AMD graphics and ROCm compute are different routes
 
 The linked [rocprofv3 documentation](https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/how-to/using-rocprofv3.html)
