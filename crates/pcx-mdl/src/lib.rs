@@ -1528,6 +1528,7 @@ pub fn bone_matrices_from_poses(
         .collect();
     let mut world = vec![[0.0f32; 16]; bones.len()];
     let mut done = vec![false; bones.len()];
+    let mut chain = Vec::new();
 
     // Iterative rather than recursive, and it terminates: a cycle in the parent
     // chain would otherwise recurse forever.
@@ -1535,7 +1536,7 @@ pub fn bone_matrices_from_poses(
         if done[start] {
             continue;
         }
-        let mut chain = Vec::new();
+        chain.clear();
         let mut cur = Some(start);
         while let Some(i) = cur {
             if done[i] {
