@@ -1063,22 +1063,6 @@ impl ObjectHost {
         self.heroes_admission()?.number(alias, column)
     }
 
-    /// Text `AbilityData` column of an ability alias. Map overrides of the alias refuse.
-    pub(crate) fn hero_ability_text(&self, alias: [u8; 4], column: &str) -> Result<String, String> {
-        let input = self.heroes_admission()?;
-        let (base, mods) = input.base(alias)?;
-        if !mods.is_empty() {
-            return Err(format!("{alias:?}: unsupported map override of {column}"));
-        }
-        let cell = input
-            .tables
-            .object(Family::Ability, base)
-            .map_err(|e| e.to_string())?
-            .cell(SlkId::AbilityData, column)
-            .map_err(|e| e.to_string())?;
-        Ok(cell.text.trim().to_owned())
-    }
-
     /// Non-empty `AbilityFunc`/`AbilityData`/strings profile values under `key`, in authored order.
     pub(crate) fn hero_ability_profiles(
         &self,

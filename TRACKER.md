@@ -3903,3 +3903,13 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   disabled-texture construction inputs are traced, but readiness visuals are not
   assigned an assumed palette/state mapping. Fractional Holy Light fields and the
   selected script's cooldown-query/reset natives remain follow-ups.
+
+### 2026-10-22: Fractional Holy Light fields
+
+- [~] Holy Light now reads ranked cooldown, range and healing as real values,
+  while preserving signed-integer mana-cost bounds. The shared ranked target-list
+  read accepts supported numeric map edits instead of blanket refusal. Synthetic
+  casts verify fractional range/healing/cooldown and per-rank edits; invalid values
+  refuse before mana or healing writes. Core 1,093 and app 589 tests pass, along
+  with the installed-data gate, strict Clippy and affected native/WASM checks.
+  Original-client fractional-cast parity and readiness visuals remain unqualified.

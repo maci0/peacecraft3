@@ -96,9 +96,29 @@ and by the explicit gate, which asserts the `type` column is `Token` and that
   attaches its own effect with its own end time. The end is derived from the game clock
   when the effect is read, so it does not depend on combat stepping. Removing the unit
   ends its effects, as the existing removal path does. Script `DestroyEffect` also ends one. The art bytes come from the campaign reader, with `.mdl` mapped to `.mdx`.
-- The campaign hotkey path is compiled only through `cargo check -p peacecraft3`.
-  That check was run once on the shared target and failed on a borrow error, which is
-  fixed in the next commit. A second check is needed before merge.
+- Native and WASM consumers now compile in a private target, with strict app
+  Clippy and app tests. This does not establish original-client click/cast parity.
 
 See [script hero skills](script-hero-skills.md) for ability learning and
 [hero combat attributes](hero-combat-attributes.md) for the hero combat path.
+
+## Fractional ranked fields (2026-10-22)
+
+Holy Light formerly read cost, cooldown, range and healing through the integer
+learning-field helper. Valid fractional source cells were therefore refused.
+The cast and readiness paths now use the shared ranked-cell reader: cost keeps
+its signed-integer range, while cooldown/range and healing use real-valued reads.
+Nonfinite and negative cast values refuse before payment or an effect. That
+refusal policy does not qualify native behavior for negative custom values.
+
+The target list also uses the ranked reader. Supported numeric W3A edits no
+longer fail merely because the old target-list helper refused every modified
+ability. Loaded metadata still selects the field, type and rank; untouched ranks
+keep their source cells. The obsolete unranked text helper was replaced, with
+all text reads retained through the ranked API.
+
+Synthetic cast tests distinguish a fractional range boundary, fractional healing,
+fractional cooldown expiry, typed edits of one rank, and unchanged values at the
+next learned rank. Invalid fields, including a cost outside the signed-integer
+range, leave mana and target life unchanged. Local receipts are under
+`.scratch/holy-fractional/`; original-client fractional-cast parity is not measured.
