@@ -3,7 +3,9 @@
 //! evidence behind `pcx_play::editor_object_globals`. Opt-in and read-only.
 
 use pcx_map::{Doodads, Regions, Units};
-use pcx_play::editor_object_globals::{object_global_name, region_global_name, sanitize_identifier};
+use pcx_play::editor_object_globals::{
+    object_global_name, region_global_name, sanitize_identifier,
+};
 use pcx_trig::{extract_trig_file, legacy_dir, shipped_maps};
 use std::collections::BTreeSet;
 
@@ -75,31 +77,43 @@ fn derived_object_globals_match_the_shipped_war3map_j_declarations() {
         assert!(
             declared_units.is_subset(&candidate_units),
             "{map}: declared unit globals not derivable from records: {:?}",
-            declared_units.difference(&candidate_units).collect::<Vec<_>>()
+            declared_units
+                .difference(&candidate_units)
+                .collect::<Vec<_>>()
         );
         assert!(
             declared_rcts.is_subset(&candidate_rcts),
             "{map}: declared region globals not derivable from records: {:?}",
-            declared_rcts.difference(&candidate_rcts).collect::<Vec<_>>()
+            declared_rcts
+                .difference(&candidate_rcts)
+                .collect::<Vec<_>>()
         );
         assert!(
             declared_dests.is_subset(&candidate_dests),
             "{map}: declared destructable globals not derivable from records: {:?}",
-            declared_dests.difference(&candidate_dests).collect::<Vec<_>>()
+            declared_dests
+                .difference(&candidate_dests)
+                .collect::<Vec<_>>()
         );
 
         // Region name sanitization matches byte-for-byte for the declared set.
         for name in &declared_rcts {
             let region = name.strip_prefix("gg_rct_").expect("prefix");
             assert!(
-                regions.regions.iter().any(|r| {
-                    sanitize_identifier(&String::from_utf8_lossy(&r.name)) == region
-                }),
+                regions
+                    .regions
+                    .iter()
+                    .any(|r| { sanitize_identifier(&String::from_utf8_lossy(&r.name)) == region }),
                 "{map}: region {region} has no record whose sanitized name matches"
             );
         }
         checked += 1;
     }
-    assert!(checked >= 44, "expected all 44 campaign maps, inspected {checked}");
-    println!("object-global differential: {checked} maps, unit/region/destructable declarations match record-derived names");
+    assert!(
+        checked >= 44,
+        "expected all 44 campaign maps, inspected {checked}"
+    );
+    println!(
+        "object-global differential: {checked} maps, unit/region/destructable declarations match record-derived names"
+    );
 }
