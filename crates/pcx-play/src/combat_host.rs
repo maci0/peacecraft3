@@ -983,7 +983,10 @@ impl ObjectHost {
             let Some(position) = record.position else {
                 continue;
             };
-            let idle = !record.activity.as_ref().is_some_and(|a| a.moving());
+            let idle = !record
+                .activity
+                .as_ref()
+                .is_some_and(|a| a.moving() || a.following());
             let held = record.activity.as_ref().is_some_and(|a| a.held());
             let destination = combat.attack_destination;
             let previous_target = combat.target;

@@ -24,6 +24,14 @@ pub struct Rules {
     pub(crate) stop: i32,
     pub(crate) movement: i32,
     pub(crate) patrol: i32,
+    pub(crate) follow: Option<FollowRules>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FollowRules {
+    pub range: f32,
+    pub structure_range: f32,
+    pub sources: Vec<(String, Sha256Digest)>,
 }
 
 impl Rules {
@@ -84,7 +92,38 @@ impl Rules {
             stop,
             movement,
             patrol,
+            follow: None,
         })
+    }
+
+    pub fn with_follow_profiles(
+        mut self,
+        profiles: &[(&str, &[u8])],
+        max_bytes: usize,
+    ) -> Result<Self, String> {
+        let ([range, structure_range], _) = pcx_objects::editor::misc::misc_scalars(
+            profiles,
+            ["FollowRange", "StructureFollowRange"],
+            max_bytes,
+        )?;
+        let required = |value: Option<f32>, key: &str| {
+            value
+                .filter(|v| *v >= 0.0)
+                .ok_or_else(|| format!("missing or negative Misc/{key}"))
+        };
+        self.follow = Some(FollowRules {
+            range: required(range, "FollowRange")?,
+            structure_range: required(structure_range, "StructureFollowRange")?,
+            sources: profiles
+                .iter()
+                .map(|(label, bytes)| ((*label).into(), sha256(bytes)))
+                .collect(),
+        });
+        Ok(self)
+    }
+
+    pub fn follow_rules(&self) -> Option<&FollowRules> {
+        self.follow.as_ref()
     }
     pub fn binding(&self) -> &Binding {
         &self.binding

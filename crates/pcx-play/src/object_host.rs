@@ -847,6 +847,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.guard_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.follow_target_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.combat_native(name, args) {
             return result.map_err(|e| e.to_string());
         }

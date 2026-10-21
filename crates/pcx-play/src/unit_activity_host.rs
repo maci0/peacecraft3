@@ -4,10 +4,14 @@ use pcx_objects::editor::{FieldKind, FieldSource, SlkId};
 use pcx_script::{HandleId, Value};
 use pcx_sim::world::{Definition, FieldValue};
 
+#[path = "unit_follow_host.rs"]
+mod follow;
+
 pub(super) struct State {
     rules: Rules,
     route_work: usize,
     active: Vec<HandleId>,
+    follow_positions: Vec<(HandleId, Option<[f32; 2]>)>,
     projected_through: f64,
 }
 
@@ -18,6 +22,7 @@ pub struct UnitActivity {
     speed: Option<f32>,
     motion: Option<Box<Motion>>,
     patrol: Option<Patrol>,
+    follow: Option<Follow>,
     turn: Option<Turn>,
     /// `SetUnitPathing(false)`: no occupancy, straight motion, no collision checks.
     pathing_off: bool,
@@ -64,6 +69,13 @@ struct Patrol {
     start: [f32; 2],
     end: [f32; 2],
     returning: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Follow {
+    target: HandleId,
+    range: f32,
+    observed: [f32; 2],
 }
 
 impl Patrol {
@@ -165,6 +177,12 @@ impl UnitActivity {
     }
     pub(super) fn patrolling(&self) -> bool {
         self.patrol.is_some()
+    }
+    pub(super) fn following(&self) -> bool {
+        self.follow.is_some()
+    }
+    pub fn followed_unit(&self) -> Option<HandleId> {
+        self.follow.map(|f| f.target)
     }
     /// Whether the unit's class admits movement orders at all.
     pub fn movable(&self) -> bool {
@@ -357,6 +375,18 @@ impl ObjectHost {
                 "boolean",
                 false,
             ),
+            (
+                "IssueTargetOrder",
+                &["unit", "string", "widget"][..],
+                "boolean",
+                false,
+            ),
+            (
+                "IssueTargetOrderById",
+                &["unit", "integer", "widget"][..],
+                "boolean",
+                false,
+            ),
             ("GetUnitCurrentOrder", &["unit"][..], "integer", false),
             ("GetUnitMoveSpeed", &["unit"][..], "real", true),
             ("SetUnitFacing", &["unit", "real"][..], "nothing", false),
@@ -393,6 +423,7 @@ impl ObjectHost {
             rules,
             route_work,
             active: Vec::new(),
+            follow_positions: Vec::new(),
             projected_through: self.timer_game_time().expect("admitted clock"),
         });
         Ok(())
@@ -425,6 +456,7 @@ impl ObjectHost {
                 .map_err(fail)?,
             motion: None,
             patrol: None,
+            follow: None,
             turn: None,
             pathing_off: false,
         }))
@@ -547,6 +579,7 @@ impl ObjectHost {
                             .summon_current_order(unit)
                             .or_else(|| self.inventory_order(unit))
                             .or_else(|| activity.patrol.map(|_| patrol))
+                            .or_else(|| activity.follow.map(|_| movement))
                             .or_else(|| self.combat_attack_order(unit))
                         {
                             Some(attack) => attack,
@@ -759,7 +792,7 @@ impl ObjectHost {
                     && record
                         .activity
                         .as_ref()
-                        .is_some_and(|a| a.moving() || a.patrolling())
+                        .is_some_and(|a| a.moving() || a.patrolling() || a.following())
             });
         let out = out.or_else(|| moving_blight.then_some(&mut regen_spans));
         let mut sink = out.map(|spans| {
@@ -797,6 +830,18 @@ impl ObjectHost {
         };
         self.advance_unit_sleep(work)?;
         let mut active = std::mem::take(&mut self.unit_activity.as_mut().expect("activity").active);
+        // Followers observe the same pre-projection target positions regardless of handle order.
+        let mut followed = std::mem::take(
+            &mut self
+                .unit_activity
+                .as_mut()
+                .expect("activity")
+                .follow_positions,
+        );
+        followed.extend(active.iter().filter_map(|&unit| {
+            let follow = self.executed_unit(unit).ok()?.activity.as_ref()?.follow?;
+            Some((unit, self.follow_position(follow.target)))
+        }));
         let result = (|| {
             let mut moved = 0;
             for &unit in &active {
@@ -806,6 +851,9 @@ impl ObjectHost {
                         Failure::UnitActivity("unit tick work exhausted".into()),
                     )
                 })?;
+                if let Ok(index) = followed.binary_search_by_key(&unit, |(id, _)| *id) {
+                    self.refresh_unit_follow(unit, followed[index].1, work)?;
+                }
                 if self
                     .executed_unit(unit)?
                     .activity
@@ -887,11 +935,19 @@ impl ObjectHost {
         })();
         active.retain(|&unit| match self.inner.entry(unit) {
             Ok(Entry::Unit { record }) => record.activity.as_ref().is_some_and(|a| {
-                a.motion.is_some() && !a.held || a.turn.is_some() || a.patrol.is_some()
+                a.motion.is_some() && !a.held
+                    || a.turn.is_some()
+                    || a.patrol.is_some()
+                    || a.follow.is_some()
             }),
             _ => true,
         });
         self.unit_activity.as_mut().expect("activity").active = active;
+        followed.clear();
+        self.unit_activity
+            .as_mut()
+            .expect("activity")
+            .follow_positions = followed;
         let result = result.and_then(|moved| {
             let spans = sink.as_ref().map(|s| &s.spans[s.base..]).unwrap_or(&[]);
             self.advance_unit_regen_motion(now, Some((spans, &starts)), work)?;
@@ -1017,6 +1073,7 @@ impl ObjectHost {
     }
 
     pub(super) fn forget_unit_activity(&mut self, unit: HandleId) {
+        self.cancel_unit_follow(unit);
         self.cancel_summon_cast(unit);
         self.cancel_patrol(unit);
         self.forget_holy_cast(unit);

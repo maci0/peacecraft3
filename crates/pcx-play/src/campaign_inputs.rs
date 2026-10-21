@@ -113,6 +113,7 @@ pub fn prepare_new_game(
     if let Some(bytes) = &map_misc {
         day_profiles.push((map_sources.map_label.as_str(), bytes.as_slice()));
     }
+    let activity = activity.with_follow_profiles(&day_profiles, 8 << 20)?;
     inputs.resources = Some(crate::player_resources::Rules::discover(
         image,
         client.clone(),

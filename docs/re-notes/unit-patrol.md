@@ -57,7 +57,8 @@ exact combat-resume ordering and animation phase at reversals are recreation
 choices, not original-runtime comparisons. Native turn-rate/acceleration and the
 existing blocked-motion partition dependence remain unqualified. No arrival
 tolerance, retry timeout or new speed constant is fitted to observations. Queued
-patrol routes and a source-derived player command-panel button are not added.
+patrol routes remain open. The source-derived player command-panel button is now
+connected; see [command card](command-card.md).
 Campaign unit caches still omit transient orders.
 
 ## Verification
