@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 use bevy::{
     camera::visibility::RenderLayers,
-    diagnostic::{Diagnostic, DiagnosticsStore, FrameTimeDiagnosticsPlugin},
+    diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     prelude::*,
 };
 
@@ -11,15 +11,16 @@ use bevy::{
 mod debug;
 pub use debug::DebugOverlay;
 
-/// Display policy: one column per recent frame, independent of simulation ticks.
-const GRAPH_SAMPLES: usize = 120;
+#[path = "performance_history.rs"]
+mod history;
+use history::{History, SAMPLES as GRAPH_SAMPLES};
 
 pub struct PerformanceOverlayPlugin;
 
 impl Plugin for PerformanceOverlayPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<FrameTimeDiagnosticsPlugin>() {
-            app.add_plugins(FrameTimeDiagnosticsPlugin::new(GRAPH_SAMPLES));
+            app.add_plugins(FrameTimeDiagnosticsPlugin::default());
         }
         app.init_resource::<OverlayState>()
             .init_resource::<DebugOverlay>()
@@ -37,6 +38,7 @@ impl Plugin for PerformanceOverlayPlugin {
 struct OverlayState {
     visible: bool,
     refresh: Timer,
+    history: History,
 }
 
 impl Default for OverlayState {
@@ -44,6 +46,7 @@ impl Default for OverlayState {
         Self {
             visible: false,
             refresh: Timer::from_seconds(0.25, TimerMode::Repeating),
+            history: History::default(),
         }
     }
 }
@@ -58,6 +61,8 @@ struct CounterText;
 struct GraphLabel;
 #[derive(Component)]
 struct GraphBar(usize);
+#[derive(Component)]
+struct LiveMarker;
 #[derive(Component)]
 struct DebugRoot;
 
@@ -155,6 +160,19 @@ fn setup(mut commands: Commands) {
                         Pickable::IGNORE,
                     ))
                     .with_children(|graph| {
+                        for top in [25.0, 50.0, 75.0] {
+                            graph.spawn((
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    top: Val::Percent(top),
+                                    width: Val::Percent(100.0),
+                                    height: Val::Px(1.0),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.12)),
+                                Pickable::IGNORE,
+                            ));
+                        }
                         for index in 0..GRAPH_SAMPLES {
                             graph.spawn((
                                 Node {
@@ -169,6 +187,20 @@ fn setup(mut commands: Commands) {
                                 GraphBar(index),
                             ));
                         }
+                        graph.spawn((
+                            Node {
+                                position_type: PositionType::Absolute,
+                                right: Val::Px(0.0),
+                                bottom: Val::Percent(0.0),
+                                width: Val::Px(5.0),
+                                height: Val::Px(2.0),
+                                margin: UiRect::bottom(Val::Px(-1.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::WHITE),
+                            Pickable::IGNORE,
+                            LiveMarker,
+                        ));
                     });
             });
             root.spawn((
@@ -209,6 +241,7 @@ fn toggle(
     }
     if keys.just_pressed(KeyCode::F8) {
         state.visible = !state.visible;
+        state.history.clear();
     }
     if keys.just_pressed(KeyCode::F7) {
         debug.visible = !debug.visible;
@@ -243,9 +276,24 @@ fn refresh(
     mut state: ResMut<OverlayState>,
     mut counters: Query<&mut Text, With<CounterText>>,
     mut labels: Query<&mut Text, (With<GraphLabel>, Without<CounterText>)>,
-    mut bars: Query<(&GraphBar, &mut Node)>,
+    mut bars: Query<(&GraphBar, &mut Node), Without<LiveMarker>>,
+    mut marker: Query<&mut Node, With<LiveMarker>>,
 ) {
-    if !state.visible || !state.refresh.tick(time.delta()).just_finished() {
+    if !state.visible {
+        return;
+    }
+    // Same real-time source as Bevy's frame diagnostic; never sample simulation ticks.
+    if !time.delta().is_zero() {
+        state.history.push(time.delta_secs_f64() * 1000.0);
+    }
+    let (heights, ceiling, count) = state.history.graph();
+    for (bar, mut node) in &mut bars {
+        node.height = Val::Percent(heights[bar.0]);
+    }
+    for mut node in &mut marker {
+        node.bottom = Val::Percent(heights[GRAPH_SAMPLES - 1]);
+    }
+    if !state.refresh.tick(time.delta()).just_finished() {
         return;
     }
     let fps = diagnostics
@@ -265,76 +313,19 @@ fn refresh(
             _ => counter.0.push_str("FPS -  - ms"),
         }
     }
-    let (heights, ceiling, count) =
-        graph_history(diagnostics.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME));
     for mut label in &mut labels {
         label.0 = if count == 0 {
             "Frame-time history unavailable".into()
         } else {
-            format!("Frame time | last {count} frames | 0..{ceiling:.1} ms")
+            format!("{count} frames | older peaks 2x..32x | 0..{ceiling:.0} ms")
         };
     }
-    for (bar, mut node) in &mut bars {
-        node.height = Val::Percent(heights[bar.0]);
-    }
-}
-
-fn graph_history(diagnostic: Option<&Diagnostic>) -> ([f32; GRAPH_SAMPLES], f64, usize) {
-    let mut values = [0.0; GRAPH_SAMPLES];
-    let mut ceiling = 1.0_f64;
-    let mut count = 0;
-    if let Some(diagnostic) = diagnostic {
-        count = diagnostic.history_len().min(GRAPH_SAMPLES);
-        for (slot, &value) in values[GRAPH_SAMPLES - count..]
-            .iter_mut()
-            .zip(diagnostic.values().skip(diagnostic.history_len() - count))
-        {
-            if value.is_finite() && value >= 0.0 {
-                *slot = value;
-                ceiling = ceiling.max(value);
-            }
-        }
-    }
-    ceiling = ceiling.ceil();
-    (
-        values.map(|value| (value / ceiling * 100.0) as f32),
-        ceiling,
-        count,
-    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
-
-    #[test]
-    fn graph_keeps_recent_frames_and_gaps_invalid_values() {
-        use bevy::diagnostic::DiagnosticMeasurement;
-        let mut diagnostic = Diagnostic::new(FrameTimeDiagnosticsPlugin::FRAME_TIME)
-            .with_max_history_length(GRAPH_SAMPLES + 2);
-        for value in std::iter::once(900.0)
-            .chain(std::iter::repeat_n(10.0, GRAPH_SAMPLES - 1))
-            .chain([f64::NAN, 20.0])
-        {
-            diagnostic.add_measurement(DiagnosticMeasurement {
-                time: bevy::platform::time::Instant::now(),
-                value,
-            });
-        }
-        let (heights, ceiling, count) = graph_history(Some(&diagnostic));
-        assert_eq!(count, GRAPH_SAMPLES);
-        assert_eq!(ceiling, 20.0);
-        assert_eq!(heights[0], 50.0);
-        assert_eq!(heights[GRAPH_SAMPLES - 2], 0.0);
-        assert_eq!(heights[GRAPH_SAMPLES - 1], 100.0);
-        assert!(
-            heights
-                .iter()
-                .all(|height| height.is_finite() && (0.0..=100.0).contains(height))
-        );
-        assert_eq!(graph_history(None), ([0.0; GRAPH_SAMPLES], 1.0, 0));
-    }
 
     #[test]
     fn f7_and_f8_are_independent_and_share_the_overlay_camera() {
