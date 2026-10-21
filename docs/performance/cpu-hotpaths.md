@@ -105,6 +105,39 @@ The work gate compares derivation and creation counts, independent of host load.
 Core library tests (1,071), actor tests (15, two explicit gates ignored), strict
 application Clippy and application WASM checks pass on the candidate.
 
+## Combat acquisition
+
+Combat now gathers unit handles once after spell and summon advancement, in the
+same arena order. The list also retains each unit's initial attacker eligibility,
+as the previous attacker list did. Each acquisition scans these handles rather
+than all non-unit arena entries. Target liveness, protection, current position
+and hostility are still checked at selection time, including after an earlier
+unit kills a target in the same step. Combat queues callbacks for later delivery;
+it does not execute script-created units inside this loop. This list is local to
+one step, not a cross-step cache.
+
+Nearest-target comparisons retain `total_cmp` and the existing first-handle tie
+rule, while computing each candidate's distance once. Hold Position retains its
+separate reach rule. The per-step vector now includes all units and an attacker
+eligibility flag, so its storage can be larger than the previous attacker-only
+vector. No spatial approximation, target reordering or RNG draw is introduced.
+This preserves the recreation's acquisition policy; native policy remains
+unqualified.
+
+The two new synthetic regressions cover equal-distance selection with non-unit
+handle gaps (idle and held), and acquisition after a target dies earlier in the
+same combat step. All 1,073 core tests pass (29 explicit gates ignored), along
+with strict application Clippy and application WASM checks.
+
+The unchanged Human03 workload preserves the same unit projection and complete
+source RNG state, all 249 span call counts, and the ordered sequence of 12,366
+native-call names. This does not compare native arguments, every VM global or
+rendered state. One uninstrumented comparison recorded 32,678,945,389 retired
+user instructions before and 27,761,127,778 after, about 15% fewer. This combined
+startup/gameplay counter measurement is report-only, not an FPS, elapsed-time
+or portable instruction threshold. Receipts are in `acquisition-validation/`
+under the local evidence directory.
+
 Local evidence is retained under `.scratch/profiles/cpu-hotpaths/`: raw traces,
 perf data, flat and call-chain reports, build logs, repeated-run receipts, and
 the bounded driver. Nothing there is uploaded.

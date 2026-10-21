@@ -1183,6 +1183,154 @@ fn explicit_protection_rejects_new_attacks_and_cancels_swings_without_erasing_qu
 }
 
 #[test]
+fn acquisition_keeps_first_handle_on_equal_distance_with_nonunit_gaps() {
+    for held in [false, true] {
+        let mut fields = armed("128", "normal");
+        fields
+            .iter_mut()
+            .find(|(id, _)| id == b"W005")
+            .unwrap()
+            .1
+            .value = Ok(FieldValue::Cell("256".into()));
+        let (mut vm, a, b) = open(&fields);
+        let h = &mut vm.host().inner;
+        for _ in 0..16 {
+            h.native("CreateTimer", &[]).unwrap();
+        }
+        let owner = h.executed_unit(b).unwrap().owner;
+        let Value::Handle(c) = h
+            .native(
+                "CreateUnit",
+                &[
+                    Value::Handle(owner),
+                    Value::Int(i32::from_be_bytes(*b"u001")),
+                    Value::Real(16.0),
+                    Value::Real(48.0),
+                    Value::Real(0.0),
+                ],
+            )
+            .unwrap()
+        else {
+            panic!("unit")
+        };
+        if held {
+            assert_eq!(
+                h.native(
+                    "IssueImmediateOrder",
+                    &[Value::Handle(a), Value::Str("alpha".into())]
+                )
+                .unwrap(),
+                Value::Bool(true)
+            );
+        }
+        step(&mut vm, 1.0 / 64.0);
+        assert_eq!(
+            vm.host()
+                .inner
+                .executed_unit(a)
+                .unwrap()
+                .combat
+                .as_ref()
+                .unwrap()
+                .target,
+            Some(b)
+        );
+        vm.host()
+            .inner
+            .native("KillUnit", &[Value::Handle(b)])
+            .unwrap();
+        step(&mut vm, 2.0 / 64.0);
+        assert_eq!(
+            vm.host()
+                .inner
+                .executed_unit(a)
+                .unwrap()
+                .combat
+                .as_ref()
+                .unwrap()
+                .target,
+            Some(c)
+        );
+    }
+}
+
+#[test]
+fn acquisition_rechecks_a_target_killed_earlier_in_the_same_combat_step() {
+    let mut fields = armed("128", "normal");
+    fields
+        .iter_mut()
+        .find(|(id, _)| id == b"W005")
+        .unwrap()
+        .1
+        .value = Ok(FieldValue::Cell("256".into()));
+    let (mut vm, a, b) = open(&fields);
+    let life = vm.global("UNIT_STATE_LIFE");
+    let h = &mut vm.host().inner;
+    let (ally, enemy) = (
+        h.executed_unit(a).unwrap().owner,
+        h.executed_unit(b).unwrap().owner,
+    );
+    let passive = h.native("ConvertAllianceType", &[Value::Int(0)]).unwrap();
+    h.native(
+        "SetPlayerAlliance",
+        &[
+            Value::Handle(enemy),
+            Value::Handle(ally),
+            passive,
+            Value::Bool(true),
+        ],
+    )
+    .unwrap();
+    h.native("SetUnitState", &[Value::Handle(b), life, Value::Real(1.0)])
+        .unwrap();
+    let mut create = |owner, x, y| {
+        let Value::Handle(id) = h
+            .native(
+                "CreateUnit",
+                &[
+                    Value::Handle(owner),
+                    Value::Int(i32::from_be_bytes(*b"u001")),
+                    Value::Real(x),
+                    Value::Real(y),
+                    Value::Real(0.0),
+                ],
+            )
+            .unwrap()
+        else {
+            panic!("unit")
+        };
+        id
+    };
+    let c = create(ally, 16.0, 48.0);
+    let d = create(enemy, 80.0, 48.0);
+    h.enable_combat_trace(64);
+    step(&mut vm, 0.3);
+    let h = &vm.host().inner;
+    assert!(h.executed_unit(b).unwrap().combat.as_ref().unwrap().dead);
+    assert_eq!(
+        h.executed_unit(c).unwrap().combat.as_ref().unwrap().target,
+        Some(d)
+    );
+    let events = h.combat_trace().unwrap().events();
+    let (hit, clock) = events
+        .iter()
+        .enumerate()
+        .find_map(|(i, e)| match e {
+            CombatTraceEvent::Damage {
+                source,
+                target,
+                clock,
+                ..
+            } if source.unit == a && target.unit == b => Some((i, *clock)),
+            _ => None,
+        })
+        .expect("A kills B before C's turn");
+    assert!(events[hit + 1..].iter().any(|e| matches!(e,
+        CombatTraceEvent::Acquired { source, target, clock: at } if source.unit == c && target.unit == d && *at == clock
+    )));
+}
+
+#[test]
 fn auto_acquisition_skips_explicit_protection_and_cleared_protection_becomes_eligible() {
     let mut fields = armed("128", "normal");
     fields.push(column(
