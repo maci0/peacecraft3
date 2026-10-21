@@ -1,5 +1,9 @@
 # Immediate order behavior
 
+Patrol follow-up (2026-10-21): source-bound point patrols now retain two endpoints,
+reverse on arrival and resume after automatic combat. See [unit patrol](unit-patrol.md)
+for the implementation contract, original-map startup gate and fidelity limits.
+
 ## Selected client lookup and activity-order frontier (2026-10-20)
 
 Fresh-game preparation now binds `OrderId` and `OrderId2String` to the selected

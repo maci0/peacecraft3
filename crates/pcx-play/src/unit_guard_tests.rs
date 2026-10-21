@@ -98,6 +98,59 @@ fn attack(vm: &mut Vm, a: HandleId, b: HandleId) {
     );
 }
 #[test]
+fn a_blocked_patrol_keeps_its_endpoint_and_guard_release_cancels_it() {
+    let (mut vm, a, b) = guarded();
+    let h = &mut vm.host().inner;
+    let home = h.executed_unit(a).unwrap().position.unwrap();
+    let occupied = h.executed_unit(b).unwrap().position.unwrap();
+    let patrol = h.native("OrderId", &[Value::Str("delta".into())]).unwrap();
+    assert_eq!(
+        h.native(
+            "IssuePointOrder",
+            &[
+                Value::Handle(a),
+                Value::Str("delta".into()),
+                Value::Real(occupied[0]),
+                Value::Real(occupied[1])
+            ]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    step(&mut vm, 10.0);
+    let h = &mut vm.host().inner;
+    assert_eq!(
+        h.native("GetUnitCurrentOrder", &[Value::Handle(a)])
+            .unwrap(),
+        patrol
+    );
+    assert!(!h.guard_state().unwrap().get(a).unwrap().returning);
+    assert!(distance(h.executed_unit(a).unwrap().position.unwrap(), home) > 8.0);
+    h.native("KillUnit", &[Value::Handle(b)]).unwrap();
+    step(&mut vm, 12.0);
+    let h = &mut vm.host().inner;
+    assert_eq!(
+        h.executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .attack_destination,
+        Some(home)
+    );
+    h.native("RemoveGuardPosition", &[Value::Handle(a)])
+        .unwrap();
+    assert_eq!(
+        h.native("GetUnitCurrentOrder", &[Value::Handle(a)])
+            .unwrap(),
+        Value::Int(0)
+    );
+    let stopped = h.executed_unit(a).unwrap().position;
+    step(&mut vm, 20.0);
+    assert_eq!(vm.host().inner.executed_unit(a).unwrap().position, stopped);
+}
+
+#[test]
 fn managed_creation_returns_home_but_release_allows_the_authored_pursuit() {
     let (mut vm, a, b) = guarded();
     let home = vm.host().inner.guard_state().unwrap().get(a).unwrap().home;

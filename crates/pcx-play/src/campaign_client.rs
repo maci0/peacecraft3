@@ -61,6 +61,7 @@ pub fn unit_activity(
             hold: window(0xb64316, 5)?,
             stop: window(0x6a16c6, 6)?,
             movement: window(0xb64586, 5)?,
+            patrol: window(0xb64594, 5)?,
         },
         registry,
         BUDGET,

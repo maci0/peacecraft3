@@ -17,6 +17,7 @@ pub struct UnitActivity {
     movable: bool,
     speed: Option<f32>,
     motion: Option<Box<Motion>>,
+    patrol: Option<Patrol>,
     turn: Option<Turn>,
     /// `SetUnitPathing(false)`: no occupancy, straight motion, no collision checks.
     pathing_off: bool,
@@ -56,6 +57,19 @@ struct Motion {
     prefix: f64,
     last_distance: f64,
     started: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Patrol {
+    start: [f32; 2],
+    end: [f32; 2],
+    returning: bool,
+}
+
+impl Patrol {
+    fn goal(self) -> [f32; 2] {
+        if self.returning { self.start } else { self.end }
+    }
 }
 
 /// One accepted interval of a unit's movement on host game time.
@@ -148,6 +162,9 @@ impl UnitActivity {
     }
     pub fn moving(&self) -> bool {
         self.motion.is_some()
+    }
+    pub(super) fn patrolling(&self) -> bool {
+        self.patrol.is_some()
     }
     /// Whether the unit's class admits movement orders at all.
     pub fn movable(&self) -> bool {
@@ -381,6 +398,7 @@ impl ObjectHost {
                 .transpose()
                 .map_err(fail)?,
             motion: None,
+            patrol: None,
             turn: None,
             pathing_off: false,
         }))
@@ -405,10 +423,11 @@ impl ObjectHost {
         if matches!(name, "SetUnitPosition" | "SetUnitPositionLoc") {
             return Some(self.position_native(name, args));
         }
-        let (hold, stop, movement, route_work) = (
+        let (hold, stop, movement, patrol, route_work) = (
             state.rules.hold,
             state.rules.stop,
             state.rules.movement,
+            state.rules.patrol,
             state.route_work,
         );
         let getter = matches!(name, "GetUnitCurrentOrder" | "GetUnitMoveSpeed");
@@ -449,7 +468,7 @@ impl ObjectHost {
         };
         if !getter
             && (if point {
-                order != movement && !self.is_attack_order(order)
+                order != movement && order != patrol && !self.is_attack_order(order)
             } else {
                 order != hold && order != stop
             })
@@ -500,6 +519,7 @@ impl ObjectHost {
                     Value::Int(
                         match self
                             .inventory_order(unit)
+                            .or_else(|| activity.patrol.map(|_| patrol))
                             .or_else(|| self.combat_attack_order(unit))
                         {
                             Some(attack) => attack,
@@ -603,7 +623,15 @@ impl ObjectHost {
                 }
                 None
             };
-            let attack_destination = if point && self.is_attack_order(order) {
+            let patrol_plan = motion
+                .as_ref()
+                .filter(|_| order == patrol)
+                .map(|motion| Patrol {
+                    start: motion.base,
+                    end: motion.goal,
+                    returning: false,
+                });
+            let attack_destination = if point && (self.is_attack_order(order) || order == patrol) {
                 motion.as_ref().map(|m| m.goal)
             } else {
                 None
@@ -652,6 +680,9 @@ impl ObjectHost {
                 _ => {}
             }
             self.unit_ordered(unit);
+            if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
+                record.activity.as_mut().expect("activity").patrol = patrol_plan;
+            }
             self.cancel_inventory_order(unit);
             self.clear_combat_target(unit);
             if let Entry::Unit { record } = self.inner.entry_mut(unit)?
@@ -720,6 +751,17 @@ impl ObjectHost {
                         Failure::UnitActivity("unit tick work exhausted".into()),
                     )
                 })?;
+                if self
+                    .executed_unit(unit)?
+                    .activity
+                    .as_ref()
+                    .is_some_and(|a| a.motion.is_none())
+                {
+                    let pending = self.next_patrol_motion(unit, now, None, work)?;
+                    if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
+                        record.activity.as_mut().expect("activity").motion = pending;
+                    }
+                }
                 let (speed, mut motion) = match self.inner.entry_mut(unit)? {
                     Entry::Unit { record } => {
                         if record.paused_since.is_some() {
@@ -766,21 +808,32 @@ impl ObjectHost {
                     }
                     _ => return Err(self.inner.error("unit activity", Failure::WrongFamily)),
                 };
-                let result = self.advance_motion(unit, speed, now, &mut motion, work, &mut sink);
-                if let Entry::Unit { record } = self.inner.entry_mut(unit)?
-                    && motion.next < motion.path.len()
-                {
-                    record.activity.as_mut().expect("activity").motion = Some(motion);
+                loop {
+                    let result =
+                        self.advance_motion(unit, speed, now, &mut motion, work, &mut sink);
+                    if motion.next < motion.path.len() {
+                        if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
+                            record.activity.as_mut().expect("activity").motion = Some(motion);
+                        }
+                        moved += result?;
+                        break;
+                    }
+                    moved += result?;
+                    let arrival = credited_time(&motion, speed, motion.last_distance);
+                    let Some(next) =
+                        self.next_patrol_motion(unit, arrival, Some(motion.goal), work)?
+                    else {
+                        break;
+                    };
+                    motion = next;
                 }
-                moved += result?;
             }
             Ok(moved)
         })();
         active.retain(|&unit| match self.inner.entry(unit) {
-            Ok(Entry::Unit { record }) => record
-                .activity
-                .as_ref()
-                .is_some_and(|a| a.motion.is_some() && !a.held || a.turn.is_some()),
+            Ok(Entry::Unit { record }) => record.activity.as_ref().is_some_and(|a| {
+                a.motion.is_some() && !a.held || a.turn.is_some() || a.patrol.is_some()
+            }),
             _ => true,
         });
         self.unit_activity.as_mut().expect("activity").active = active;
@@ -908,10 +961,96 @@ impl ObjectHost {
     }
 
     pub(super) fn forget_unit_activity(&mut self, unit: HandleId) {
+        self.cancel_patrol(unit);
         self.forget_holy_cast(unit);
         if let Some(state) = &mut self.unit_activity {
             state.active.retain(|&u| u != unit);
         }
+    }
+
+    pub(super) fn cancel_patrol(&mut self, unit: HandleId) {
+        if let Ok(Entry::Unit { record }) = self.inner.entry_mut(unit)
+            && let Some(activity) = &mut record.activity
+            && activity.patrol.take().is_some()
+            && let Some(combat) = &mut record.combat
+        {
+            combat.attack_destination = None;
+        }
+    }
+
+    /// Continue the current patrol leg, or reverse it after reaching its endpoint.
+    /// `at` is the arrival time, preserving unused travel time within this projection.
+    fn next_patrol_motion(
+        &mut self,
+        unit: HandleId,
+        at: f64,
+        finished: Option<[f32; 2]>,
+        work: &mut usize,
+    ) -> Result<Option<Box<Motion>>, Error> {
+        let record = self.executed_unit(unit)?;
+        let Some(activity) = &record.activity else {
+            return Ok(None);
+        };
+        let Some(mut patrol) = activity.patrol else {
+            return Ok(None);
+        };
+        if record.paused_since.is_some()
+            || record
+                .combat
+                .as_ref()
+                .is_some_and(|c| c.dead || c.target.is_some())
+            || self
+                .guards
+                .as_ref()
+                .and_then(|g| g.get(unit))
+                .is_some_and(|g| g.returning)
+        {
+            return Ok(None);
+        }
+        let position = record.position.ok_or_else(|| {
+            self.inner
+                .error("patrol", Failure::UnitState("accepted position required"))
+        })?;
+        if finished.is_some_and(|goal| goal != patrol.goal() || position != goal) {
+            return Ok(None);
+        }
+        if position == patrol.goal() {
+            if patrol.start == patrol.end {
+                return Ok(None);
+            }
+            patrol.returning = !patrol.returning;
+        }
+        let mut motion = Box::new(Motion {
+            goal: patrol.goal(),
+            path: Vec::new(),
+            next: 0,
+            base: position,
+            prefix: 0.0,
+            last_distance: 0.0,
+            started: at,
+        });
+        let pathing_off = activity.pathing_off;
+        let speed = activity.speed;
+        let mut animation = record.animation.clone();
+        let progress = if pathing_off {
+            motion.path.push(motion.goal);
+            true
+        } else {
+            self.replan_blocked(unit, position, &mut motion, at, work)?
+        };
+        if progress && let Some(animation) = &mut animation {
+            animation
+                .select("walk", at, speed)
+                .map_err(|e| self.inner.error("patrol", Failure::UnitAnimation(e)))?;
+        }
+        if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
+            record.activity.as_mut().expect("activity").patrol = Some(patrol);
+            record.animation = animation;
+            if let Some(combat) = &mut record.combat {
+                combat.attack_destination = Some(patrol.goal());
+            }
+        }
+        Ok(progress.then_some(motion))
     }
 
     fn pathing_native(&mut self, args: &[Value]) -> Result<Value, Error> {

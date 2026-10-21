@@ -51,7 +51,7 @@ pub struct Combat {
     ready_at: f64,
     swing: Option<(HandleId, f64)>,
     chase: Option<[f32; 2]>,
-    /// Retained accepted attack-move endpoint while acquisition interrupts travel.
+    /// Retained accepted attack-move or patrol endpoint while acquisition interrupts travel.
     pub attack_destination: Option<[f32; 2]>,
 }
 

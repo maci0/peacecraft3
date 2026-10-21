@@ -1,5 +1,7 @@
 use super::*;
 use pcx_script::HandleId;
+#[path = "unit_patrol_tests.rs"]
+mod patrol;
 type Vm = pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>;
 pub(super) const ORDERS: &str = r#"
 native PauseUnit takes unit u, boolean paused returns nothing
@@ -65,8 +67,23 @@ pub(super) fn rules() -> (
     Arc<crate::order_registry::Registry>,
     crate::unit_activity::Rules,
 ) {
+    rules_with_patrol(2122)
+}
+
+fn rules_with_patrol(
+    patrol_id: i32,
+) -> (
+    Arc<crate::order_registry::Registry>,
+    crate::unit_activity::Rules,
+) {
     use crate::{camera_margins::SourceWindow, neutral_player::sha256};
     let (mut image, mut binding, budget) = crate::order_registry::tests::fixture([431, 744]);
+    // Replace the fixture's duplicate registration with a fourth synthetic order.
+    let third = 0x220 + 9 + 15 + 17;
+    image[third + 1..third + 5].copy_from_slice(&0x301480u32.to_le_bytes());
+    image[third + 6..third + 10].copy_from_slice(&patrol_id.to_le_bytes());
+    image[0x680..0x686].copy_from_slice(b"delta\0");
+    binding.initializer.digest = sha256(&image[0x220..0x220 + binding.initializer.len as usize]);
     let mut put = |at: usize, prefix: &[u8], id: i32| {
         let mut b = prefix.to_vec();
         b.extend_from_slice(&id.to_le_bytes());
@@ -80,6 +97,7 @@ pub(super) fn rules() -> (
     let hold = put(0x320, &[0x3d], 431);
     let stop = put(0x330, &[0x81, 0xfb], 744);
     let movement = put(0x340, &[0x3d], 1631);
+    let patrol = put(0x350, &[0x3d], patrol_id);
     binding.image_sha256 = sha256(&image);
     let registry = Arc::new(
         crate::order_registry::Registry::read(&image, binding.clone(), budget, 4, 32).unwrap(),
@@ -92,6 +110,7 @@ pub(super) fn rules() -> (
             hold,
             stop,
             movement,
+            patrol,
         },
         &registry,
         budget,
@@ -106,6 +125,7 @@ fn host_fields(route_work: usize, fields: &[([u8; 4], ObjectField)]) -> ObjectHo
     use crate::file_sounds::tests::{PROPERTY_DECLARATIONS, mixed_assets};
     let extra = format!(
         "{}\n{ORDERS}native RemoveUnit takes unit u returns nothing
+native SetUnitPathing takes unit u, boolean enabled returns nothing
 type sound extends agent\n{SOUNDS}{PROPERTY_DECLARATIONS}",
         enumeration::TRIGGERS
     );

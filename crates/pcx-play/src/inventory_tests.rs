@@ -185,6 +185,10 @@ pub(super) fn order_inputs() -> (
     crate::unit_activity::Rules,
 ) {
     let (mut image, mut binding, budget) = crate::order_registry::tests::fixture([431, 744]);
+    let third = 0x220 + 9 + 15 + 17;
+    image[third + 1..third + 5].copy_from_slice(&0x301480u32.to_le_bytes());
+    image[third + 6..third + 10].copy_from_slice(&2122i32.to_le_bytes());
+    image[0x680..0x686].copy_from_slice(b"delta\0");
     let mut code = image[0x220..0x220 + binding.initializer.len as usize - 2].to_vec();
     for (address, id) in [(0x301450u32, 937i32), (0x301460, 1133)] {
         code.push(0x68);
@@ -214,6 +218,7 @@ pub(super) fn order_inputs() -> (
     let hold = put(0x320, &[0x3d], 431);
     let stop = put(0x330, &[0x81, 0xfb], 744);
     let movement = put(0x340, &[0x3d], 1631);
+    let patrol = put(0x350, &[0x3d], 2122);
     binding.image_sha256 = sha256(&image);
     let registry = Arc::new(
         crate::order_registry::Registry::read(&image, binding.clone(), budget, 8, 80).unwrap(),
@@ -226,6 +231,7 @@ pub(super) fn order_inputs() -> (
             hold,
             stop,
             movement,
+            patrol,
         },
         &registry,
         budget,

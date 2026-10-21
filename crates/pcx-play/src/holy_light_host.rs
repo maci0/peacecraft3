@@ -337,6 +337,7 @@ impl ObjectHost {
         }
         self.step_holy_cast(caster, target, now)?;
         self.wake_natural_sleep(caster);
+        self.cancel_patrol(caster);
         Ok(true)
     }
 

@@ -1628,3 +1628,11 @@ idle night sleep, wake and combat suppression. Unchanged Human03 passes creep
 sleep setup and next refuses a location order; its startup patrol path is still
 unsupported. Permanent/spell sleep, presentation and native wake timing remain
 open; see [natural sleep](docs/re-notes/unit-natural-sleep.md).
+
+Patrol follow-up (2026-10-21): all four point-order forms now accept the selected
+client's patrol registration. Units repeat both endpoints and resume their leg
+after automatic combat through the existing motion/combat paths. Unchanged
+Human03 initializes with three retained scripted patrol endpoints; its first
+clock tick next refuses blight regeneration without terrain state. Native patrol
+timing, queued routes, command-panel presentation and campaign acceptance remain
+open; see [unit patrol](docs/re-notes/unit-patrol.md).

@@ -280,3 +280,60 @@ fn selected_map_starts_orders_and_steps_identically_and_the_order_changes_the_ou
         startup_units.len()
     );
 }
+
+/// PCX_PATROL_MAP must name an unchanged map whose initialization issues patrol orders
+/// (the selected Human03 ROC map exercises this path).
+#[test]
+#[ignore = "requires PCX_PATROL_MAP plus PCX_STARTUP_INSTALL, PCX_STARTUP_ADDON and PCX_STARTUP_SEED"]
+fn selected_patrol_map_retains_scripted_patrol_endpoints_after_initialization() {
+    let install = PathBuf::from(env("PCX_STARTUP_INSTALL"));
+    let map = PathBuf::from(env("PCX_PATROL_MAP"));
+    let bytes = std::fs::read(&map).expect("read patrol map");
+    let seed = env("PCX_STARTUP_SEED").parse().expect("seed");
+    let mut startup = start(
+        &install,
+        selected_mode(),
+        &map.display().to_string(),
+        &bytes,
+        seed,
+        None,
+    )
+    .expect("patrol startup");
+    let objects = startup.session.host().unwrap().objects_mut();
+    let patrol = objects
+        .native("OrderId", &[Value::Str("patrol".into())])
+        .unwrap();
+    assert_eq!(
+        objects
+            .native("OrderId2String", std::slice::from_ref(&patrol))
+            .unwrap(),
+        Value::Str("patrol".into())
+    );
+    let units: Vec<_> = objects.executed_units().map(|(id, _)| id).collect();
+    let mut count = 0;
+    for unit in units {
+        if objects
+            .native("GetUnitCurrentOrder", &[Value::Handle(unit)])
+            .unwrap()
+            == patrol
+        {
+            let activity = objects
+                .executed_unit(unit)
+                .unwrap()
+                .activity
+                .as_ref()
+                .unwrap();
+            assert!(activity.movable());
+            assert!(
+                activity.destination().is_some(),
+                "the script's endpoint must be retained"
+            );
+            count += 1;
+        }
+    }
+    assert!(
+        count > 0,
+        "the selected map did not exercise scripted patrol"
+    );
+    eprintln!("scripted patrol endpoints retained: {count}");
+}

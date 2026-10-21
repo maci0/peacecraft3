@@ -3201,6 +3201,18 @@ Human03 next refuses `IssuePointOrderLoc` at Blizzard.j:7800, after creep setup.
 Permanent/spell sleep, native wake timing/proximity and presentation remain
 open. See [natural sleep](docs/re-notes/unit-natural-sleep.md).
 
+### 2026-10-21 — source-bound unit patrols
+
+- [x] Point patrols retain both endpoints, reverse with unused travel time and
+  resume through automatic combat. Existing route budgets, accepted spans,
+  explicit replacement, pause, guard and natural-sleep behavior are covered.
+- [x] Private-target package: 1,170 passed / 0 failed / 46 ignored. Native app
+  all-target fixture and WASM library checks pass. Selected Human03 initializes
+  three scripted patrols; the Human01 startup/order/profile gates also pass.
+- [ ] Human03's first clock tick still refuses blight regeneration without
+  terrain state. Native timing/turning, queued patrols and command-panel input
+  remain open. See [unit patrol](docs/re-notes/unit-patrol.md).
+
 ### 2026-10-20 — source-derived edition-switch icon states
 
 - [x] The control builder now reads both icon families and their three state

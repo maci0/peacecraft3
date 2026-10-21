@@ -164,7 +164,10 @@ impl ObjectHost {
             })?;
             let dead = record.combat.as_ref().is_some_and(|c| c.dead)
                 || record.vitals.is_some_and(|v| v.life <= 0.0);
-            let busy = record.activity.as_ref().is_some_and(|a| a.moving())
+            let busy = record
+                .activity
+                .as_ref()
+                .is_some_and(|a| a.moving() || a.patrolling())
                 || record
                     .combat
                     .as_ref()

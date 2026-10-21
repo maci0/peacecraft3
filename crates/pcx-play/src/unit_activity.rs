@@ -14,6 +14,7 @@ pub struct Binding {
     pub hold: SourceWindow,
     pub stop: SourceWindow,
     pub movement: SourceWindow,
+    pub patrol: SourceWindow,
 }
 
 #[derive(Clone, Debug)]
@@ -22,6 +23,7 @@ pub struct Rules {
     pub(crate) hold: i32,
     pub(crate) stop: i32,
     pub(crate) movement: i32,
+    pub(crate) patrol: i32,
 }
 
 impl Rules {
@@ -33,7 +35,7 @@ impl Rules {
     ) -> Result<Self, String> {
         let fail = |reason: &str| format!("unit activity {}: {reason}", binding.origin.source);
         if image.len() > budget.image_bytes
-            || [binding.hold, binding.stop, binding.movement]
+            || [binding.hold, binding.stop, binding.movement, binding.patrol]
                 .iter()
                 .map(|w| u64::from(w.len))
                 .sum::<u64>()
@@ -68,7 +70,12 @@ impl Rules {
         let hold = compare(&binding.hold, &[0x3d])?;
         let stop = compare(&binding.stop, &[0x81, 0xfb])?;
         let movement = compare(&binding.movement, &[0x3d])?;
-        if hold == stop || stop == movement || hold == movement {
+        let patrol = compare(&binding.patrol, &[0x3d])?;
+        if hold == stop
+            || stop == movement
+            || hold == movement
+            || [hold, stop, movement].contains(&patrol)
+        {
             return Err(fail("ambiguous activity identifiers"));
         }
         Ok(Self {
@@ -76,6 +83,7 @@ impl Rules {
             hold,
             stop,
             movement,
+            patrol,
         })
     }
     pub fn binding(&self) -> &Binding {

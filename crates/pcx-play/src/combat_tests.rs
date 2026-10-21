@@ -4,6 +4,8 @@ use pcx_objects::editor::misc::{CombatRules, DayCycle, HeroVitals};
 use pcx_script::HandleId;
 #[path = "unit_sleep_tests.rs"]
 mod natural_sleep;
+#[path = "patrol_combat_tests.rs"]
+mod patrol;
 type Vm = pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>;
 
 const DECLARATIONS: &str = r#"

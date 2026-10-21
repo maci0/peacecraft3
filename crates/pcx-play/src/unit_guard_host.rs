@@ -331,6 +331,7 @@ impl ObjectHost {
         }
     }
     pub(super) fn unit_ordered(&mut self, unit: HandleId) {
+        self.cancel_patrol(unit);
         self.wake_natural_sleep(unit);
         if let Some(state) = &mut self.guards
             && let Some((_, g)) = state.records.iter_mut().find(|(id, _)| *id == unit)
@@ -375,7 +376,10 @@ impl ObjectHost {
                 Failure::UnitActivity("accepted guard position required".into()),
             )
         })?;
-        let moving = record.activity.as_ref().is_some_and(|a| a.moving());
+        let moving = record
+            .activity
+            .as_ref()
+            .is_some_and(|a| a.moving() || a.patrolling() && !guard.returning);
         let tolerance = self.unit_collision_radius(unit, REMOVE)?;
         let decision = guard
             .plan(
@@ -428,6 +432,7 @@ impl ObjectHost {
             }
             // The native manager sends its stop order even for a repeated release.
             self.steer_unit(unit, None, name)?;
+            self.cancel_patrol(unit);
             self.cancel_inventory_order(unit);
             self.clear_combat_target(unit);
             if let Some(state) = &mut self.guards

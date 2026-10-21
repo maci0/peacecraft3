@@ -511,6 +511,11 @@ fn activity_rules() -> (
 ) {
     use pcx_play::camera_margins::SourceWindow;
     let (mut image, mut binding, budget) = registry_fixture([431, 744]);
+    let third = 0x220 + 9 + 15 + 17;
+    image[third + 1..third + 5].copy_from_slice(&0x301480u32.to_le_bytes());
+    image[third + 6..third + 10].copy_from_slice(&2122i32.to_le_bytes());
+    image[0x680..0x686].copy_from_slice(b"delta\0");
+    binding.initializer.digest = digest(&image[0x220..0x220 + binding.initializer.len as usize]);
     let mut put = |at: usize, prefix: &[u8], id: i32| {
         let mut bytes = prefix.to_vec();
         bytes.extend_from_slice(&id.to_le_bytes());
@@ -524,6 +529,7 @@ fn activity_rules() -> (
     let hold = put(0x320, &[0x3d], 431);
     let stop = put(0x330, &[0x81, 0xfb], 744);
     let movement = put(0x340, &[0x3d], 1631);
+    let patrol = put(0x350, &[0x3d], 2122);
     binding.image_sha256 = digest(&image);
     let registry = Arc::new(
         pcx_play::order_registry::Registry::read(&image, binding.clone(), budget, 4, 32).unwrap(),
@@ -536,6 +542,7 @@ fn activity_rules() -> (
             hold,
             stop,
             movement,
+            patrol,
         },
         &registry,
         budget,
