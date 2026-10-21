@@ -824,6 +824,24 @@ mod tests {
                 assert_eq!(readiness.mana, record.vitals.map(|vitals| vitals.mana));
                 assert_eq!(readiness.paused, record.paused_since.is_some());
                 assert_eq!(readiness.cooldown_remaining, 0.0);
+                assert_eq!(
+                    objects
+                        .native(
+                            "BlzGetUnitAbilityCooldownRemaining",
+                            &[Value::Handle(unit), Value::Int(i32::from_be_bytes(ability))]
+                        )
+                        .unwrap(),
+                    Value::Real(0.0)
+                );
+                assert_eq!(
+                    objects
+                        .native(
+                            "BlzEndUnitAbilityCooldown",
+                            &[Value::Handle(unit), Value::Int(i32::from_be_bytes(ability))]
+                        )
+                        .unwrap(),
+                    Value::Null
+                );
                 println!("ability={row} rank={rank} references_expanded=true");
                 learned.push((objects.ability_button(unit, ability).unwrap().unwrap(), tip));
             }

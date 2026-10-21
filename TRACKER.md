@@ -3913,3 +3913,13 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   refuse before mana or healing writes. Core 1,093 and app 589 tests pass, along
   with the installed-data gate, strict Clippy and affected native/WASM checks.
   Original-client fractional-cast parity and readiness visuals remain unqualified.
+
+### 2026-10-22: Script cooldown remaining/end
+
+- [~] Source-declared remaining/end cooldown natives now share the live Holy Light
+  and Water Elemental deadlines. Compiled synthetic scripts cover recasting after
+  reset, per-unit/per-ability isolation, summon cast-point timing, absence paths,
+  refusal before mutation, and unchanged query RNG/clock/pools. Core 1,097 and app
+  589 tests pass, plus the selected-install binding gate, strict Clippy and WASM.
+  Other ability classes, item groups, duration getters/setter and whole-unit reset
+  remain unfinished; native timing parity is not claimed.

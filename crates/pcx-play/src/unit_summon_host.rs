@@ -9,7 +9,7 @@ const NATIVE: &str = "IssueImmediateOrder";
 
 pub(super) struct State {
     order: i32,
-    ready: BTreeMap<HandleId, f64>,
+    pub(super) ready: BTreeMap<HandleId, f64>,
     pending: BTreeMap<HandleId, f64>,
     expires: BTreeMap<HandleId, f64>,
     animations: BTreeMap<HandleId, (usize, f64, f64)>,

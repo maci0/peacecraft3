@@ -7,6 +7,8 @@ use pcx_objects::editor::Overlay;
 use pcx_script::value::FunctionId;
 use std::collections::BTreeSet;
 
+#[path = "ability_cooldown.rs"]
+mod cooldown;
 #[path = "ability_tooltip.rs"]
 mod tooltip;
 
@@ -235,6 +237,7 @@ pub(super) struct Admission {
     ability: bool,
     /// Admitted `GetHeroStr`, `GetHeroAgi`, `GetHeroInt` in `ATTRIBUTES` order.
     attributes: [bool; 3],
+    cooldown_natives: [bool; 2],
 }
 
 impl ObjectHost {
@@ -357,6 +360,23 @@ impl ObjectHost {
                 }
             }
         }
+        let mut cooldown_natives = [false; 2];
+        for (index, (name, result)) in cooldown::NATIVES.into_iter().enumerate() {
+            if let Some(native) = self.inner.program.natives().get(name) {
+                Self::contract(
+                    &self.inner,
+                    name,
+                    &["unit", "integer"],
+                    result,
+                    false,
+                    Some(KIND),
+                )?;
+                if native.source != units.declaration_source {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
+                cooldown_natives[index] = true;
+            }
+        }
         self.units.as_mut().expect("admitted").heroes = Some(Admission {
             tables,
             catalog_origin,
@@ -368,6 +388,7 @@ impl ObjectHost {
             points,
             ability,
             attributes: [strength, agility, intelligence],
+            cooldown_natives,
         });
         Ok(self)
     }
@@ -474,6 +495,12 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         let input = self.units.as_ref()?.heroes.as_ref()?;
+        if let Some(index) = cooldown::NATIVES
+            .iter()
+            .position(|(native, _)| *native == name)
+        {
+            return input.cooldown_natives[index].then(|| self.ability_cooldown_call(name, args));
+        }
         if let Some(index) = ATTRIBUTES.iter().position(|(native, _)| *native == name) {
             let (_, stat) = ATTRIBUTES[index];
             return input.attributes[index].then(|| self.hero_attribute(name, stat, args));
