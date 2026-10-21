@@ -1,7 +1,8 @@
 # Command card
 
-The command card is still being implemented. The geometry reader is separate
-from the renderer and does not mount buttons yet.
+The command card is still being implemented. Learned Holy Light and Water
+Elemental buttons now have a receipt-bound renderer and input consumer;
+tooltips and readiness presentation remain unfinished.
 
 ## Selected-client evidence
 
@@ -76,11 +77,10 @@ silently replaced with stock presentation.
 
 ## Remaining work
 
-The geometry reader alone does not establish native/rendered parity. The
-command-card renderer, source-qualified icon/sampler reads, learned-rank view,
-tooltips, cooldown/availability presentation, pointer consumption and dispatch
-through the existing accepted-command log remain to be connected and tested.
-The existing Holy Light and Water Elemental hotkeys remain their input paths.
+The geometry reader alone does not establish native/rendered parity. The button
+checkpoint below connects the two implemented learned commands, source icon
+reads and sampler admission, pointer consumption and dispatch. Tooltips,
+cooldown/readiness presentation and other command types remain unfinished.
 Native command ordering, disabled states and the rendered console relationship
 still need runtime comparison.
 
@@ -108,6 +108,47 @@ compares both implemented Human hero spells with their supplied profile text
 and checks the selected client grid. It requires `PCX_NATIVE_CHAPTER_INSTALL`
 and `PCX_WAR3_EXE`; no measured coordinates are embedded in the test.
 
-The command-card renderer is still absent. Command icon sampler flags have not
-yet been admitted for this path; the inventory's sampler settings are not
-assumed to apply. Ranked tooltips and their substitutions also remain open.
+## Button rendering and dispatch (2026-10-22)
+
+`campaign_command_card` mounts the two implemented learned abilities under the
+console frame selected by the skin. The mounted HUD must match the exact
+published context and binding revision. A new session removes the old root and
+only its owned image assets. Geometry remains relative to the source viewport.
+Duplicate authored slots refuse rather than inventing button priority.
+
+The selected executable links the command-bar creation (`0x5e805d`) through
+the child-button constructor (`0x61d24d`). The command-grid lookup at `0x5eafb6`
+feeds the art setter at `0x5eafd5`, its wrapper at `0x5d3caf`, and texture
+loader at `0x5d3e60`. The GameUI field written at `0x5e8074` must match the
+field read at `0x5eafab`; the reader checks their relationship. Texture
+addressing comes from flags at `0x8750db` and `0x875141`, interpreted through
+the loader mask at `0x887ce5`. Both paths must agree. These static links qualify
+the addressing input, not native filtering or rendered equivalence.
+
+Icons use bounded, receipt-carrying reads and decoding. Successful and failed
+image reads are cached per session. Stable selection, learned ranks and
+player availability reuse presentation data rather than rebuilding nodes each
+frame. Button presses consume world pointer input. Activation rechecks the
+session, local ownership, selection, controls and current command availability.
+Targeted spells arm the existing target-click path; immediate spells use the
+same native and accepted-command log as their hotkeys.
+
+Synthetic session/pointer tests and a selected-client geometry test cover
+stale witnesses, pointer consumption, preflight of failed replacement and
+owned-asset teardown. The image assets in that teardown test are synthetic;
+it does not establish displayed original icon fidelity. The explicit Human01
+input gate uses the real chapter startup, with operator setup to enable control
+and select/learn Holy Light. It is component input evidence, not progression
+through the authored cinematic.
+
+Ranked tooltips and substitutions, cooldown/mana presentation, disabled and
+pressed art, remaining commands, and native/rendered comparison remain open.
+
+Private-target validation: 1,086 core tests pass (31 ignored), the selected
+layout gate passes, and 639 feature-enabled library/bin app tests pass (50
+ignored). The explicit Human01 input gate passes after the system-parameter
+cleanup. Strict all-target Clippy with `profile-gpu,test-fixtures`, affected
+WASM checks and touched-file formatting pass. Logs are retained locally under
+`.scratch/command-card-source/card-validation` and `card-validation-fixed`;
+the first chain's Clippy failure is preserved, with its corrected rerun in
+`card-clippy-2.log`. No original asset or screenshot is committed.

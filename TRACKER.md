@@ -2,6 +2,16 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+### 2026-10-22: Learned command buttons
+
+- [~] Holy Light and Water Elemental have a receipt-bound command-card renderer
+  and click consumer. Geometry and texture addressing are derived from the
+  selected client; icons come from the learned ability's source profile. Session
+  replacement releases owned assets, and button input rechecks current selection
+  and control. Synthetic pointer/session tests, selected-client replacement and
+  teardown, and the explicit Human01 input gate pass. Rendered comparison,
+  tooltips, readiness/disabled art and remaining command types stay open.
+
 ### 2026-10-21: Ability profile overrides
 
 - [x] Live hero ability profiles and startup's Holy Light model read apply the
@@ -10,12 +20,13 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   Holy Light input reports lookup failures. Core tests pass (1,082/0 failed/30
   ignored), the selected command-layout gate passes, original Human01 chapter
   startup still publishes, and app input tests, strict Clippy and WASM pass.
-- [~] The source-derived command grid is preserved; mounting its buttons
-  and ranked tooltip expansion remain unfinished.
+- [~] The source-derived command grid is preserved; ranked tooltip expansion
+  remains unfinished.
   Learned button presentation now derives Art/rank and independent Buttonpos
   components, including scalar map replacements. Synthetic tests and the
-  explicit two-spell selected-install/grid comparison pass. Mounting, sampler
-  admission, tooltips and rendered behavior remain unfinished.
+  explicit two-spell selected-install/grid comparison pass. The later button
+  checkpoint adds mounting and sampler admission; tooltips and rendered behavior
+  remain unfinished.
 
 ### 2026-10-21: Native chapter activation
 

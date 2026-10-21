@@ -10,6 +10,7 @@ mod import_assets;
 
 mod button_actions;
 mod campaign_actors;
+mod campaign_command_card;
 mod campaign_diagnostics;
 mod campaign_hud;
 mod campaign_input;

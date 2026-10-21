@@ -334,7 +334,7 @@ fn request(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use bevy::ui_widgets::Activate;
     use pcx_play::map_startup_host::MapStartupHost;
@@ -346,6 +346,10 @@ mod tests {
     #[test]
     #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL, PCX_NATIVE_CHAPTER_MAP and PCX_NATIVE_CHAPTER_ADDON"]
     fn selected_install_chapter_activation_publishes_the_production_session() {
+        drop(started_app());
+    }
+
+    pub(crate) fn started_app() -> App {
         let install_dir = std::env::var("PCX_NATIVE_CHAPTER_INSTALL")
             .expect("set PCX_NATIVE_CHAPTER_INSTALL to the selected local install");
         let map = std::env::var("PCX_NATIVE_CHAPTER_MAP")
@@ -436,5 +440,6 @@ mod tests {
             .count();
         assert!(units > 0, "unchanged chapter main must create units");
         println!("chapter={map} seed=1 executed_units={units} published=true");
+        app
     }
 }

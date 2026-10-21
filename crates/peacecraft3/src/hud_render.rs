@@ -229,6 +229,15 @@ pub struct HudPrepare {
     pub refusal: Option<String>,
 }
 
+impl HudPrepare {
+    /// Whether the mounted HUD belongs to this exact published map context and revision.
+    pub(crate) fn mounted_for(&self, context: &Arc<ParsedMapContext>, revision: u64) -> bool {
+        self.mounted.as_ref().is_some_and(|stamp| {
+            stamp.revision == revision && Weak::ptr_eq(&stamp.context, &Arc::downgrade(context))
+        })
+    }
+}
+
 /// Registers the HUD systems. Nothing is drawn until [`HudSubmit`] or until
 /// [`HudSourcePolicy`] and an admitted [`MapRequests`] outcome are both present.
 /// Admitted preparation is ordered after [`MapRequestSet::Deliver`].
@@ -1879,6 +1888,24 @@ mod tests {
         )
         .expect("memory resolver");
         (std::sync::Arc::new(resolver), reads)
+    }
+
+    #[test]
+    fn mounted_witness_requires_the_exact_context_and_revision() {
+        let sample = sample_hud(&["Human", "Default"]);
+        let (first, _, _) = admitted_delivery(7, "same-map.w3m", &sample);
+        let (second, _, _) = admitted_delivery(7, "same-map.w3m", &sample);
+        let first = first.admission.shared_context().unwrap();
+        let second = second.admission.shared_context().unwrap();
+        let mut prepared = HudPrepare::default();
+        assert!(!prepared.mounted_for(&first, 7));
+        prepared.mounted = Some(AdmissionStamp {
+            context: Arc::downgrade(&first),
+            revision: 7,
+        });
+        assert!(prepared.mounted_for(&first, 7));
+        assert!(!prepared.mounted_for(&first, 8));
+        assert!(!prepared.mounted_for(&second, 7));
     }
 
     struct IdleCatalog;

@@ -84,6 +84,8 @@ enum Effect {
 /// A player command: the hotkey that arms it, and the order number a target click issues.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Command {
+    /// Implemented ability row supplying its order and presentation.
+    pub ability: [u8; 4],
     pub hotkey: char,
     pub order: i32,
 }
@@ -199,6 +201,7 @@ impl ObjectHost {
             .map_err(|e| self.holy_error(e))?;
         match hotkey.as_bytes() {
             [letter] if letter.is_ascii_alphabetic() => Ok(Some(Command {
+                ability: ABILITY,
                 hotkey: char::from(letter.to_ascii_uppercase()),
                 order: rules.order,
             })),

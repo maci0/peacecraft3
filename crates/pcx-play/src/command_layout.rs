@@ -17,6 +17,8 @@ pub struct Rules {
     pub rows: usize,
     /// Logical UI coordinates, with positive Y upwards.
     pub viewport: [f32; 2],
+    /// Addressing selected by the command-button texture setter's source flags.
+    pub icon_repeat: bool,
     frame_size: [f32; 2],
     insets: [f32; 4],
     offset: [f32; 2],
@@ -101,6 +103,29 @@ impl Rules {
             }
             Ok(value)
         }
+        for (va, target) in [
+            (0x5e805d_u32, 0x61d130_u32),
+            (0x61d24d, 0x874900),
+            (0x5eafb6, 0x635390),
+            (0x5eafd5, 0x5d3c80),
+            (0x5d3caf, 0x5d3e30),
+            (0x5d3e60, 0x8750b0),
+        ] {
+            let displacement = target.wrapping_sub(va + 5);
+            if word(operand(&mut read, va, &[0xe8], 4)?)? != displacement {
+                return Err(format!("unsupported command texture setter at {va:#x}"));
+            }
+        }
+        if word(operand(&mut read, 0x5e8074, &[0x89, 0x87], 4)?)?
+            != word(operand(&mut read, 0x5eafab, &[0x8b, 0x8b], 4)?)?
+        {
+            return Err("command texture setter uses another UI field".into());
+        }
+        let mask = operand(&mut read, 0x887ce5, &[0x83, 0xe0], 1)?[0];
+        let icon_repeat = operand(&mut read, 0x8750db, &[0x6a], 1)?[0] & mask != 0;
+        if (operand(&mut read, 0x875141, &[0x6a], 1)?[0] & mask != 0) != icon_repeat {
+            return Err("command image sampler relation".into());
+        }
         let console_pointer = word(operand(&mut read, 0x5e7ca5, &[0x68], 4)?)?;
         let mut console = Vec::new();
         for offset in 0..4096 {
@@ -178,6 +203,7 @@ impl Rules {
             columns,
             rows,
             viewport,
+            icon_repeat,
             frame_size,
             insets,
             offset,
