@@ -816,23 +816,7 @@ impl ObjectHost {
 
 impl Admission {
     fn base(&self, alias: [u8; 4]) -> Result<(&str, &[pcx_objects::Mod]), String> {
-        let alias = std::str::from_utf8(&alias).map_err(|_| "non-UTF8 ability alias")?;
-        let (base, mods) = self
-            .overlay
-            .new_object(alias)
-            .unwrap_or((alias, self.overlay.on(alias)));
-        if self.overlay.new_object(base).is_some() {
-            return Err("custom ability base chain unsupported".into());
-        }
-        // Returned base borrows the overlay for custom rows, or must borrow the table's spelling.
-        let object = self
-            .tables
-            .object(Family::Ability, base)
-            .map_err(|e| e.to_string())?;
-        if object.rawcode() != base {
-            return Err("ability rawcode spelling differs from the selected row".into());
-        }
-        Ok((object.rawcode(), mods))
+        crate::ability_profile::base(&self.tables, &self.overlay, alias)
     }
     fn number(&self, alias: [u8; 4], column: &str) -> Result<i32, String> {
         let (base, mods) = self.base(alias)?;
@@ -1052,21 +1036,7 @@ impl ObjectHost {
         key: &str,
     ) -> Result<Vec<String>, String> {
         let input = self.heroes_admission()?;
-        let (base, _) = input.base(alias)?;
-        let cells = input
-            .tables
-            .object(Family::Ability, base)
-            .map_err(|e| e.to_string())?
-            .profile(key);
-        if let Some(bad) = cells.iter().find(|c| c.parse_error.is_some()) {
-            return Err(format!("{alias:?}: malformed {key} profile {:?}", bad.text));
-        }
-        Ok(cells
-            .iter()
-            .map(|c| c.text.trim())
-            .filter(|t| !matches!(*t, "" | "_" | "-"))
-            .map(str::to_owned)
-            .collect())
+        crate::ability_profile::profiles(&input.tables, &input.overlay, alias, key)
     }
 
     /// The single profile value under `key`; zero or several values refuse.

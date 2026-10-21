@@ -402,7 +402,13 @@ fn command_hotkey(
                 .and_then(|r| objects.player_settings(r.owner).ok())
                 .is_some_and(|p| Some(p.number) == local)
         })
-        .filter_map(|u| objects.holy_light_command(u).ok().flatten())
+        .filter_map(|u| {
+            objects
+                .holy_light_command(u)
+                .inspect_err(|error| input.last_error = Some(error.to_string()))
+                .ok()
+                .flatten()
+        })
         .find(|command| letter_key(command.hotkey).is_some_and(|k| keys.just_pressed(k)));
     if let (Some(command), Some(session)) = (armed, witness) {
         input.command = Some(ArmedCommand {
