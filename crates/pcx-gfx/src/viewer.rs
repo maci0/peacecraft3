@@ -641,15 +641,12 @@ fn skin_from_animation(
         if Some(binding.instance) != cache.instance {
             continue;
         }
-        let Some(mut mesh) = meshes.get_mut(&handle.0) else {
-            continue;
-        };
         // load_model retains GEOS records in authored ordinal order.
         let Some(rest) = model.meshes.get(binding.geoset) else {
             continue;
         };
         let skinned = skin_mesh(rest, &skeleton);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, skinned);
+        crate::set_mesh_positions(&mut meshes, &handle.0, skinned);
     }
 }
 
