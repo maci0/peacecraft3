@@ -97,6 +97,25 @@ pub fn all_origins_and_ambiguity() {
     assert!(store.get_asset(std::path::Path::new("fixture")).is_none());
 }
 #[cfg_attr(test, test)]
+pub fn named_priority_does_not_fall_back_from_a_broken_selected_archive() {
+    let store = Dir::default();
+    let mut archives = [
+        fixtures::archive(&[2, 3], 2, fixtures::FLAGS, 0, "War3.mpq"),
+        fixtures::archive(&[4, 5], 2, fixtures::FLAGS, 0, "War3x.mpq"),
+    ];
+    let read = read_bounded(&store, &mut archives, 95, "fixture", policy(2, 2, 2))
+        .unwrap()
+        .unwrap();
+    assert_eq!(read.bytes, [4, 5]);
+    assert_eq!(read.receipt.archives.unwrap()[0].ordinal, 1);
+
+    archives[1] = fixtures::archive(&[4, 5], 2, fixtures::FLAGS, 7, "War3x.mpq");
+    assert!(matches!(
+        read_bounded(&store, &mut archives, 95, "fixture", policy(2, 2, 2)),
+        Err(ReadError::BoundedExtraction { origin, .. }) if origin.ordinal == 1
+    ));
+}
+#[cfg_attr(test, test)]
 pub fn malformed_not_missing() {
     let store = Dir::default();
     let mut archives = [fixtures::archive(

@@ -235,6 +235,51 @@ fn origin(ordinal: usize, archive: &MpqArchive) -> ArchiveOrigin {
     }
 }
 
+fn priority_winner(candidates: &[ArchiveOrigin]) -> Option<usize> {
+    if candidates.len() < 2 {
+        return None;
+    }
+    let mut ranked = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let name = candidate.name.rsplit(['/', '\\', ':']).next()?;
+        let name = match name.rsplit_once('@') {
+            Some((name, offset))
+                if !offset.is_empty() && offset.bytes().all(|c| c.is_ascii_digit()) =>
+            {
+                name
+            }
+            _ => name,
+        };
+        let name = match name.rsplit_once(';') {
+            Some((name, version))
+                if !version.is_empty() && version.bytes().all(|c| c.is_ascii_digit()) =>
+            {
+                name
+            }
+            _ => name,
+        };
+        // The selected 1.29b client opens these at priorities 9, 4, 3, 2, 1
+        // and searches the archive list from its highest-priority end.
+        let rank = [
+            "deprecated.mpq",
+            "war3xlocal.mpq",
+            "war3x.mpq",
+            "war3local.mpq",
+            "war3.mpq",
+        ]
+        .iter()
+        .position(|known| name.eq_ignore_ascii_case(known))?;
+        if ranked.iter().any(|(prior, _)| *prior == rank) {
+            return None;
+        }
+        ranked.push((rank, candidate.ordinal));
+    }
+    ranked
+        .into_iter()
+        .min_by_key(|(rank, _)| *rank)
+        .map(|(_, ordinal)| ordinal)
+}
+
 /// Checks the borrowed stored slice length before its first Vec copy.
 /// A missing cached path is absent only when no committed archive has its hash.
 /// This cached-only API refuses present uncached members. Use read_bounded with
@@ -291,9 +336,16 @@ pub fn extract_fallible(
 ) -> Result<Option<AssetRead>, ReadError> {
     let key = key(path)?;
     let member = key.replace('/', "\\");
+    let candidates = archives
+        .iter()
+        .enumerate()
+        .filter(|(_, archive)| contains(archive, &key))
+        .map(|(ordinal, archive)| origin(ordinal, archive))
+        .collect::<Vec<_>>();
+    let selected = priority_winner(&candidates);
     let mut found: Option<AssetRead> = None;
     for (ordinal, archive) in archives.iter_mut().enumerate() {
-        if !contains(archive, &key) {
+        if !contains(archive, &key) || selected.is_some_and(|winner| ordinal != winner) {
             continue;
         }
         let source = origin(ordinal, archive);
@@ -371,6 +423,7 @@ pub fn read_bounded(
         .filter(|(_, archive)| contains(archive, &key))
         .map(|(ordinal, archive)| origin(ordinal, archive))
         .collect::<Vec<_>>();
+    let selected = priority_winner(&matching_archives);
     let budget = pcx_mpq::ExtractionBudget {
         max_raw_packed_bytes: policy.extraction.max_raw_packed_bytes,
         max_decoded_bytes: policy
@@ -380,7 +433,7 @@ pub fn read_bounded(
     };
     let mut found: Option<AssetRead> = None;
     for (ordinal, archive) in archives.iter_mut().enumerate() {
-        if !contains(archive, &key) {
+        if !contains(archive, &key) || selected.is_some_and(|winner| ordinal != winner) {
             continue;
         }
         let origin = origin(ordinal, archive);

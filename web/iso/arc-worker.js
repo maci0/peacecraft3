@@ -9,7 +9,7 @@ let codec, current, currentId, state, storage;
 // Independent per-attempt decoded-intermediate work policy, not a measured asset
 // size, REP final-output estimate or working-memory allowance.
 const MAX_INTERMEDIATE_BYTES = 2 * 1024 * 1024 * 1024;
-const MAX_SELECTED_BYTES = 1024 * 1024 * 1024;
+const MAX_SELECTED_BYTES = 5 * 256 * 1024 * 1024;
 let lastProgress = 0;
 const progress = work => {
   const now = performance.now();

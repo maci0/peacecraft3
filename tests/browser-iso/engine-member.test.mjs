@@ -10,7 +10,7 @@ import { discoverIso } from '../../web/iso.js';
 import { isoFixture } from './fixtures.mjs';
 
 const SOLID = 2 * 1024 * 1024 * 1024;
-const SELECTED = 1024 * 1024 * 1024;
+const SELECTED = 5 * 256 * 1024 * 1024;
 
 function solidArchive(parts) {
   const all = new Uint8Array(parts.reduce((sum, part) => sum + part.bytes.length, 0));

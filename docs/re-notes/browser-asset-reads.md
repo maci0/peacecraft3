@@ -7,17 +7,38 @@ The existing optional-byte API remains available for its older callers.
 
 `peacecraft3::browser_read` exposes receipts containing the requested path,
 normalized key, import revision and decoded length. Archive reads retain every
-equal-content contributing archive's ordinal and name. Unequal content refuses
-with `AMBIGUOUS_MEMBER`; no archive priority is inferred. Hydrated cache entries
+equal-content contributing archive's ordinal and name. When every matching
+archive has a distinct name in the selected 1.29b client family, its native
+priority selects one source, independent of import order: `Deprecated` (9),
+`War3xLocal` (4), `War3x` (3), `War3Local` (2), then `War3` (1). The selected
+`Warcraft III.exe` SHA-256 is
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+At PE addresses `0x428dd8–0x428e56` it passes these archive priorities to
+`0x439740`; `0x4398ba` stores the priority in each archive node,
+`0x437637–0x4376a2` inserts nodes in priority order, and
+`0x435cfe–0x435e06` searches from the high-priority end. This is
+version-specific native-code evidence, not a claim about other builds or
+archive authenticity. ISO member labels retain path/version/offset provenance.
+Unknown names
+or duplicate recognized names with unequal content still refuse with
+`AMBIGUOUS_MEMBER`. Hydrated cache entries
 report unavailable origins because the flattened store did not retain them.
+
+The ISO picker preselects one distinct, recognized 1.29b archive family,
+including its local and expansion members, when each source fits the 512 MiB
+per-archive budget and the set fits the 1.25 GiB aggregate budget. A lone
+archive remains selectable by default. Duplicate names, unknown companion
+archives and over-budget sets require an explicit choice; the picker does not
+silently discard a source to make an incomplete set fit.
 
 `read_checked` checks the cached slice before copying it. It refuses uncached,
 present archive members rather than using an extractor without a supplied
 bounded policy. `read_bounded` accepts explicit copy, packed-member and decoded
 limits plus an optional caller-supplied Huffman table. The copy limit intersects
-the decoded limit before extraction. A malformed matching hash row, including
-one unreachable through the archive's lookup chain, is an error; it does not
-permit fallback to a later archive. Successful extraction does not implicitly
+the decoded limit before extraction. A malformed matching hash row in the
+selected source, including one unreachable through its lookup chain, is an
+error; it does not permit fallback to a later archive. A selected higher-priority source likewise
+cannot fall back to a lower one. Successful extraction does not implicitly
 publish bytes into the cache.
 
 The actual WASM exports include `stored_asset_checked` and

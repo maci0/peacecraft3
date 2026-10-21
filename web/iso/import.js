@@ -1,16 +1,19 @@
 import { discoverIso, sliceIsoFile } from '../iso.js';
 import { directEngineFile } from './engine-member.js';
 
-export function defaultIsoCandidate(candidates) {
+export function defaultIsoCandidates(candidates) {
   const eligible = candidates.filter(candidate => candidate.archiveSize <= 512 * 1024 * 1024);
-  const base = eligible.filter(candidate => /(?:^|[\\/:])war3\.mpq(?:;\d+)?$/i.test(candidate.path));
-  return base.length === 1 ? base[0] : eligible.length === 1 && candidates.length === 1 ? eligible[0] : null;
+  if (eligible.length !== candidates.length || eligible.reduce((sum, candidate) => sum + candidate.archiveSize, 0) > 5 * 256 * 1024 * 1024) return [];
+  const names = eligible.map(candidate => candidate.path.split(/[\\/:]/).at(-1).replace(/;\d+$/, '').toLowerCase());
+  if (names.length === 1) return eligible;
+  const family = new Set(['war3.mpq', 'war3local.mpq', 'war3x.mpq', 'war3xlocal.mpq', 'deprecated.mpq']);
+  return names.filter(name => name === 'war3.mpq').length === 1 && new Set(names).size === names.length && names.every(name => family.has(name)) ? eligible : [];
 }
 
 // Resource budgets, not measured game data. Each archive is copied separately.
 export async function importIsoCandidates(file, discovery, selected, api, {
   signal, onProgress, maxArchiveBytes = 512 * 1024 * 1024,
-  maxTotalBytes = 1024 * 1024 * 1024,
+  maxTotalBytes = 5 * 256 * 1024 * 1024,
 } = {}) {
   if (!selected.length) throw new Error('NO_SELECTION: select at least one content-validated MPQ');
   let total = 0;

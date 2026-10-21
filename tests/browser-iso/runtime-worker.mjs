@@ -108,6 +108,16 @@ try {
   api.begin_archive_import(); api.stage_archive('single-column-base', mpqFixture({ ...members, [fogPath]: rocOnlyFog }));
   api.commit_archive_import();
   check(JSON.stringify(api.local_menu_editions()) === JSON.stringify(['roc']), 'single-column RoC input did not retain base-only gating');
+  const stringsPath = Object.keys(members).find(path => path.toLowerCase().endsWith('globalstrings.fdf'));
+  const expansionStrings = text.encode('StringList {\n SYNTHETIC_LABEL "Expansion label",\n}\n');
+  const expansionLocalStrings = text.encode('StringList {\n SYNTHETIC_LABEL "Expansion local label",\n}\n');
+  api.begin_archive_import();
+  api.stage_archive('War3.mpq', mpqFixture(members));
+  api.stage_archive('War3x.mpq', mpqFixture({ [stringsPath]: expansionStrings }));
+  api.stage_archive('War3xLocal.mpq', mpqFixture({ [stringsPath]: expansionLocalStrings }));
+  api.commit_archive_import();
+  check(new TextDecoder().decode(api.archive_member(stringsPath)) === new TextDecoder().decode(expansionLocalStrings),
+    'selected client expansion-local archive did not override GlobalStrings.fdf');
   const selftest = api.selftest();
   const audio = { click, musicPath, music: [...api.archive_member(musicPath)], clickBytes: [...api.archive_member(click.path)] };
   const panels = runPanelChecks(api);

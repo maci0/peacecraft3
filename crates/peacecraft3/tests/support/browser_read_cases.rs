@@ -110,6 +110,43 @@ pub fn equal_origins_and_ambiguity() {
     );
 }
 #[cfg_attr(test, test)]
+pub fn named_archives_use_the_selected_client_priority() {
+    let mut archives = [
+        fixtures::archive(&[2, 3], 2, fixtures::FLAGS, 0, "install/War3.mpq"),
+        fixtures::archive(&[4, 5], 2, fixtures::FLAGS, 0, "ISO:/WAR3X.MPQ;1@1024"),
+    ];
+    let read = extract_fallible(&mut archives, 12, "fixture", 2)
+        .unwrap()
+        .unwrap();
+    assert_eq!(read.bytes, [4, 5]);
+    assert_eq!(read.receipt.archives.unwrap()[0].ordinal, 1);
+
+    archives[0] = fixtures::archive(&[2, 3], 2, fixtures::FLAGS, 0, "War3x.mpq");
+    archives[1] = fixtures::archive(&[8, 9], 2, fixtures::FLAGS, 0, "War3xLocal.mpq");
+    assert_eq!(
+        extract_fallible(&mut archives, 12, "fixture", 2)
+            .unwrap()
+            .unwrap()
+            .bytes,
+        [8, 9]
+    );
+
+    archives[0] = fixtures::archive(&[6, 7], 2, fixtures::FLAGS, 0, "War3x.mpq");
+    archives[1] = fixtures::archive(&[8, 9], 2, fixtures::FLAGS, 0, "war3.mpq");
+    assert_eq!(
+        extract_fallible(&mut archives, 12, "fixture", 2)
+            .unwrap()
+            .unwrap()
+            .bytes,
+        [6, 7]
+    );
+    archives[1] = fixtures::archive(&[8, 9], 2, fixtures::FLAGS, 0, "War3x.mpq");
+    assert!(matches!(
+        extract_fallible(&mut archives, 12, "fixture", 2),
+        Err(ReadError::Ambiguous { .. })
+    ));
+}
+#[cfg_attr(test, test)]
 pub fn invalid_present_and_declared_limit() {
     let mut archives = [fixtures::archive(
         &[2, 3],
