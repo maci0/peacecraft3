@@ -10,7 +10,7 @@ const { chromium } = await import(pathToFileURL(playwrightPath));
 const allowed = new Set([
   '/tests/browser-iso/runtime.html', '/tests/browser-iso/runtime-worker.mjs', '/tests/browser-iso/fixtures.mjs',
   '/tests/browser-iso/panels-runtime.mjs',
-  '/web/iso.js', '/web/iso/import.js', '/web/iso/audio.js', '/web/menu-audio.js',
+  '/web/iso.js', '/web/iso/import.js', '/web/iso/engine-member.js', '/web/iso/audio.js', '/web/menu-audio.js',
   '/web/pkg/peacecraft3.js', '/web/pkg/peacecraft3_bg.wasm',
   // Existing audio module's ordinary static presentation sources, before replacement.
   '/web/assets/menu-music.mp3', '/web/assets/menu-click.wav', '/tests/browser-iso/assets/menu-music.mp3', '/tests/browser-iso/assets/menu-click.wav', '/favicon.ico',
