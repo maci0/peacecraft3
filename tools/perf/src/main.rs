@@ -133,9 +133,9 @@ fn main() {
     let reallocations = REALLOCATIONS.load(Ordering::Relaxed);
     let bytes = ALLOCATED_BYTES.load(Ordering::Relaxed);
     let digest = digest(&world);
-    let max_bytes = TICKS as usize * PLAYERS * std::mem::size_of::<&PlayerInput>();
+    let max_bytes = 0;
     println!(
-        "{{\"workload\":\"sim-movement-v1\",\"seed\":{SEED},\"ticks\":{},\"units\":{},\"player_commands\":{},\"allocations\":{allocations},\"reallocations\":{reallocations},\"allocated_bytes\":{bytes},\"max_allocations\":{TICKS},\"max_allocated_bytes\":{max_bytes},\"state_digest\":\"{digest:016x}\",\"elapsed_ns_report_only\":{}}}",
+        "{{\"workload\":\"sim-movement-v1\",\"seed\":{SEED},\"ticks\":{},\"units\":{},\"player_commands\":{},\"allocations\":{allocations},\"reallocations\":{reallocations},\"allocated_bytes\":{bytes},\"max_allocations\":0,\"max_allocated_bytes\":{max_bytes},\"state_digest\":\"{digest:016x}\",\"elapsed_ns_report_only\":{}}}",
         world.tick,
         world.units.len(),
         TICKS * PLAYERS as u64,
@@ -148,8 +148,8 @@ fn main() {
         "simulation result changed; review semantics before changing its baseline"
     );
     assert!(
-        allocations <= TICKS as usize,
-        "simulation allocated more than one temporary command-order array per tick"
+        allocations == 0,
+        "sorted commands must not allocate during a tick"
     );
     assert_eq!(reallocations, 0, "simulation unexpectedly reallocated");
     assert!(

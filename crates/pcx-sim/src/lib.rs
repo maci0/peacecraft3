@@ -191,13 +191,17 @@ pub fn step(world: &mut World, input: &Input, rng: &mut Rng) {
 
     // Every player's commands, in player order, so command application cannot
     // depend on the order a network layer happened to deliver them in.
-    let mut ordered: Vec<&PlayerInput> = input.commands.iter().collect();
-    ordered.sort_by_key(|c| c.player);
-
-    for cmd in ordered {
+    let mut apply = |cmd: &PlayerInput| {
         for c in &cmd.commands {
             apply_command(world, cmd.player, c, rng);
         }
+    };
+    if input.commands.is_sorted_by_key(|c| c.player) {
+        input.commands.iter().for_each(&mut apply);
+    } else {
+        let mut ordered: Vec<&PlayerInput> = input.commands.iter().collect();
+        ordered.sort_by_key(|c| c.player);
+        ordered.into_iter().for_each(apply);
     }
 
     // Movement is resolved after all commands, so a unit that is issued a move
