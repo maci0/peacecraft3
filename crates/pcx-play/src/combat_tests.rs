@@ -1,6 +1,8 @@
 use super::*;
 #[path = "ability_cooldown_tests.rs"]
 mod ability_cooldowns;
+#[path = "standard_command_host_tests.rs"]
+mod standard_commands;
 #[path = "unit_summon_tests.rs"]
 mod summoning;
 use crate::playercolor_host::{CombatActor, CombatTraceEvent};
@@ -2403,6 +2405,7 @@ endfunction
 "#;
 
 const HOLY_DECLARATIONS: &str = r#"
+native IssueTargetOrderById takes unit u, integer order, widget target returns boolean
 native SetUnitFacing takes unit u, real angle returns nothing
 native SetPlayerAbilityAvailable takes player p, integer ability, boolean available returns nothing
 native SetUnitOwner takes unit u, player p, boolean changeColor returns nothing

@@ -19,6 +19,12 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 
 ### 2026-10-22: Learned command buttons
 
+- [~] Standard Move, Stop, Hold, Patrol and Attack now share the receipt-bound
+  command grid and player-order path. Profiles supply skin keys, positions,
+  hotkeys and tooltips; group commands filter current local ownership. Only
+  accepted native orders enter the journal. Follow/imitation widget targets,
+  readiness/cursor art, exact mixed-selection policy and native rendering/input
+  comparison remain open. Validation receipts: `.scratch/standard-commands/`.
 - [~] Holy Light and Water Elemental have a receipt-bound command-card renderer
   and click consumer. Geometry and texture addressing are derived from the
   selected client; icons come from the learned ability's source profile. Session

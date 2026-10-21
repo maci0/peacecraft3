@@ -550,6 +550,11 @@ impl ObjectHost {
             .then_some(rules.attack_order)
     }
 
+    pub(super) fn standard_attack_order(&self, unit: HandleId) -> Option<i32> {
+        self.live(unit)?.combat.as_ref()?.weapon?;
+        Some(self.combat.as_ref()?.attack_order)
+    }
+
     pub(super) fn is_attack_order(&self, order: i32) -> bool {
         self.combat
             .as_ref()

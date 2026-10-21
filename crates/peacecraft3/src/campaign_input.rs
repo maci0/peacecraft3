@@ -53,6 +53,7 @@ fn record_command(input: &mut CampaignInput, clock: Option<f64>, command: Player
 pub(crate) fn install(app: &mut App) {
     crate::button_actions::install(app);
     app.init_resource::<CampaignInput>()
+        .init_resource::<crate::campaign_command_card::CommandCard>()
         .add_systems(
             Update,
             (
@@ -141,12 +142,21 @@ fn command_button(
             crate::campaign_command_card::Kind::Immediate => {
                 objects.water_elemental_command(button.unit)
             }
+            crate::campaign_command_card::Kind::Standard(kind) => {
+                if let Err(error) =
+                    activate_standard(host, &mut input, button.unit, kind, button.session.clone())
+                {
+                    input.last_error = Some(error);
+                }
+                continue;
+            }
         };
         match result {
             Ok(Some(command)) => match button.kind {
                 crate::campaign_command_card::Kind::TargetUnit => {
                     input.command = Some(ArmedCommand {
                         order: command.order,
+                        kind: crate::campaign_command_card::Kind::TargetUnit,
                         session: button.session.clone(),
                     });
                 }
@@ -154,6 +164,7 @@ fn command_button(
                     input.command = None;
                     immediate_command(host, &mut input, button.unit, command.order);
                 }
+                crate::campaign_command_card::Kind::Standard(_) => unreachable!("handled above"),
             },
             Err(error) => input.last_error = Some(error.to_string()),
             Ok(None) => {}
@@ -169,16 +180,146 @@ fn immediate_command(
 ) {
     let objects = host.objects_mut();
     let clock = objects.timer_game_time();
-    match objects.native(
+    let result = objects.native(
         "IssueImmediateOrderById",
         &[Value::Handle(unit), Value::Int(order)],
-    ) {
-        Ok(Value::Bool(true)) => {
-            record_command(input, clock, PlayerCommand::Immediate { unit, order })
+    );
+    record_order_result(
+        input,
+        clock,
+        result,
+        PlayerCommand::Immediate { unit, order },
+    );
+}
+
+fn owned_standard_orders(
+    objects: &pcx_play::playercolor_host::ObjectHost,
+    kind: pcx_play::standard_command::Kind,
+) -> Result<Vec<(HandleId, i32)>, String> {
+    let local = objects
+        .local_player_number()
+        .ok_or("standard command has no local player")?;
+    let mut orders = Vec::new();
+    for &unit in objects.selection() {
+        let record = objects.executed_unit(unit).map_err(|e| e.to_string())?;
+        if objects
+            .player_settings(record.owner)
+            .map_err(|e| e.to_string())?
+            .number
+            != local
+        {
+            continue;
         }
-        Err(error) => input.last_error = Some(error.to_string()),
+        if let Some(order) = objects
+            .standard_command_order(unit, kind)
+            .map_err(|e| e.to_string())?
+        {
+            orders.push((unit, order));
+        }
+    }
+    Ok(orders)
+}
+
+fn activate_standard(
+    host: &mut MapStartupHost,
+    input: &mut CampaignInput,
+    unit: HandleId,
+    kind: pcx_play::standard_command::Kind,
+    session: Weak<()>,
+) -> Result<(), String> {
+    let Some(order) = host
+        .objects()
+        .standard_command_order(unit, kind)
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+    if kind.immediate() {
+        input.command = None;
+        for (unit, order) in owned_standard_orders(host.objects(), kind)? {
+            immediate_command(host, input, unit, order);
+        }
+    } else {
+        input.command = Some(ArmedCommand {
+            order,
+            kind: crate::campaign_command_card::Kind::Standard(kind),
+            session,
+        });
+    }
+    Ok(())
+}
+
+fn record_order_result(
+    input: &mut CampaignInput,
+    clock: Option<f64>,
+    result: Result<Value, String>,
+    command: PlayerCommand,
+) {
+    match result {
+        Ok(Value::Bool(true)) => record_command(input, clock, command),
+        Err(error) => input.last_error = Some(error),
         _ => {}
     }
+}
+
+fn standard_target(
+    objects: &mut pcx_play::playercolor_host::ObjectHost,
+    input: &mut CampaignInput,
+    kind: pcx_play::standard_command::Kind,
+    point: [f32; 2],
+    target: Option<HandleId>,
+) -> Result<(), String> {
+    use pcx_play::standard_command::Kind;
+    if target.is_some() && matches!(kind, Kind::Move | Kind::Patrol) {
+        return Err(match kind {
+            Kind::Move => "Moving to a target object is not supported yet. Choose a ground point.",
+            _ => "Patrol imitation is not supported yet. Choose a ground point.",
+        }
+        .into());
+    }
+    for (unit, order) in owned_standard_orders(objects, kind)? {
+        let Value::Str(name) = objects.native("OrderId2String", &[Value::Int(order)])? else {
+            return Err("standard command has no admitted order name".into());
+        };
+        let clock = objects.timer_game_time();
+        let (result, command) = if let Some(target) = target.filter(|_| kind == Kind::Attack) {
+            (
+                objects.native(
+                    "IssueTargetOrderById",
+                    &[
+                        Value::Handle(unit),
+                        Value::Int(order),
+                        Value::Handle(target),
+                    ],
+                ),
+                PlayerCommand::Target {
+                    unit,
+                    order: name,
+                    target,
+                },
+            )
+        } else {
+            (
+                objects.native(
+                    "IssuePointOrderById",
+                    &[
+                        Value::Handle(unit),
+                        Value::Int(order),
+                        Value::Real(point[0]),
+                        Value::Real(point[1]),
+                    ],
+                ),
+                PlayerCommand::Point {
+                    unit,
+                    order: name,
+                    x: point[0],
+                    y: point[1],
+                },
+            )
+        };
+        record_order_result(input, clock, result, command);
+    }
+    Ok(())
 }
 
 /// Applies a pressed inventory slot as the local player's activation of the slot's held item.
@@ -381,6 +522,7 @@ fn ground_point(ray: Ray3d, terrain: &pcx_map::Terrain, far: f32) -> Option<[f32
 #[derive(Clone)]
 pub(crate) struct ArmedCommand {
     order: i32,
+    kind: crate::campaign_command_card::Kind,
     session: Weak<()>,
 }
 
@@ -445,17 +587,20 @@ fn commands_available(
         })
 }
 
-/// Arms the Holy Light-style command when its hotkey is pressed while an owned selected
-/// unit has it. Input closed by a dialog, HUD or control change disarms it.
+/// Dispatches authored standard and learned hotkeys. Closed input disarms targeting.
 fn command_hotkey(
     keys: Option<Res<ButtonInput<KeyCode>>>,
-    view: Res<CampaignCamera>,
-    hud: Res<crate::campaign_hud::CampaignHud>,
-    inventory: Res<crate::campaign_inventory::CampaignInventory>,
-    dialogs: Res<crate::campaign_script_dialogs::CampaignScriptDialogs>,
+    controls: CommandControls,
+    card: Res<crate::campaign_command_card::CommandCard>,
     mut input: ResMut<CampaignInput>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
+    let CommandControls {
+        view,
+        hud,
+        inventory,
+        dialogs,
+    } = controls;
     let Some(keys) = keys else {
         return;
     };
@@ -477,6 +622,26 @@ fn command_hotkey(
             .and_then(|r| objects.player_settings(r.owner).ok())
             .is_some_and(|player| Some(player.number) == local)
     });
+    if let Some(unit) = primary {
+        for profile in card.standard_profiles() {
+            if letter_key(profile.hotkey).is_some_and(|key| keys.just_pressed(key))
+                && host
+                    .objects()
+                    .standard_command_order(unit, profile.kind)
+                    .ok()
+                    .flatten()
+                    .is_some()
+                && let Some(session) = witness.clone()
+            {
+                if let Err(error) = activate_standard(host, &mut input, unit, profile.kind, session)
+                {
+                    input.last_error = Some(error);
+                }
+                return;
+            }
+        }
+    }
+    let objects = host.objects();
     if let Some(unit) = primary {
         match objects.water_elemental_command(unit) {
             Ok(Some(command))
@@ -512,6 +677,7 @@ fn command_hotkey(
     if let (Some(command), Some(session)) = (armed, witness) {
         input.command = Some(ArmedCommand {
             order: command.order,
+            kind: crate::campaign_command_card::Kind::TargetUnit,
             session,
         });
     }
@@ -659,6 +825,25 @@ fn click(
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(id, _)| id);
     debug!(?point, ?picked, select, "campaign pointer hit");
+    let standard = input
+        .command
+        .as_ref()
+        .filter(|armed| armed.is_for(witness.clone()))
+        .and_then(|armed| match armed.kind {
+            crate::campaign_command_card::Kind::Standard(kind) => Some(kind),
+            _ => None,
+        });
+    if let Some(kind) = standard {
+        input.command = None;
+        if select
+            && !order
+            && let Err(error) =
+                standard_target(objects, &mut input, kind, point, picked.or(item_hit))
+        {
+            input.last_error = Some(error);
+        }
+        return;
+    }
     let armed = input
         .command
         .as_ref()
@@ -695,6 +880,14 @@ fn click(
                 })
                 .collect();
             for unit in casters {
+                let order = match objects.native("OrderId2String", &[Value::Int(command)]) {
+                    Ok(Value::Str(order)) => order,
+                    _ => {
+                        input.last_error = Some("command has no source order name".into());
+                        continue;
+                    }
+                };
+                let clock = objects.timer_game_time();
                 let result = objects.native(
                     "IssueTargetOrderById",
                     &[
@@ -703,9 +896,16 @@ fn click(
                         Value::Handle(target),
                     ],
                 );
-                if let Err(error) = result {
-                    input.last_error = Some(error);
-                }
+                record_order_result(
+                    &mut input,
+                    clock,
+                    result,
+                    PlayerCommand::Target {
+                        unit,
+                        order,
+                        target,
+                    },
+                );
             }
             return;
         }
@@ -793,19 +993,229 @@ fn click(
                 }
             }
         };
-        match result {
-            Ok(_) => {
-                let clock = objects.timer_game_time();
-                record_command(&mut input, clock, command);
-            }
-            Err(error) => input.last_error = Some(error),
-        }
+        record_order_result(&mut input, objects.timer_game_time(), result, command);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
+    #[test]
+    #[ignore = "requires unchanged Human01 and selected PCX_NATIVE_CHAPTER_* inputs"]
+    fn selected_chapter_standard_buttons_act_on_owned_selection_and_recheck_control() {
+        use crate::campaign_command_card::{ButtonOrder, Kind};
+        use bevy::{
+            ecs::system::RunSystemOnce,
+            ui_widgets::{Activate, Button},
+        };
+        use pcx_play::standard_command::Kind as Standard;
+        let mut app = crate::native_campaign::tests::started_app();
+        let camera = app.world_mut().spawn_empty().id();
+        app.insert_resource(CampaignCamera::active_for_test(camera))
+            .init_resource::<crate::campaign_hud::CampaignHud>()
+            .init_resource::<crate::campaign_inventory::CampaignInventory>()
+            .init_resource::<crate::campaign_script_dialogs::CampaignScriptDialogs>();
+        let (units, witness) = {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let witness = session.session_witness().unwrap();
+            let objects = session.host().unwrap().objects_mut();
+            let local = objects.local_player_number().unwrap();
+            let units: Vec<_> = objects
+                .executed_units()
+                .filter(|(_, record)| {
+                    record.shown
+                        && record.activity.as_ref().is_some_and(|a| a.movable())
+                        && record.combat.as_ref().is_some_and(|c| !c.dead)
+                        && objects.player_settings(record.owner).unwrap().number == local
+                })
+                .map(|(id, _)| id)
+                .take(2)
+                .collect();
+            assert_eq!(units.len(), 2, "two real owned movable units required");
+            objects
+                .native("EnableUserControl", &[Value::Bool(true)])
+                .unwrap();
+            objects
+                .native("ShowInterface", &[Value::Bool(true), Value::Real(0.)])
+                .unwrap();
+            objects.native("PauseGame", &[Value::Bool(false)]).unwrap();
+            for &unit in &units {
+                objects
+                    .native("PauseUnit", &[Value::Handle(unit), Value::Bool(false)])
+                    .unwrap();
+            }
+            objects.select_units(&units, true);
+            (units, witness)
+        };
+        let start = {
+            let seed = app
+                .world()
+                .resource::<peacecraft3::campaign_startup::CampaignSeed>()
+                .prepared
+                .unwrap();
+            let session = app.world().resource::<MapScriptSession<MapStartupHost>>();
+            pcx_play::player_command_log::StartIdentity::from_context(
+                seed,
+                session.context().unwrap(),
+            )
+        };
+        app.world_mut()
+            .resource_mut::<CampaignInput>()
+            .commands
+            .begin(start);
+        let button = app
+            .world_mut()
+            .spawn((
+                Button,
+                ButtonOrder {
+                    unit: units[0],
+                    kind: Kind::Standard(Standard::Hold),
+                    session: witness.clone(),
+                },
+            ))
+            .id();
+        app.world_mut().trigger(Activate { entity: button });
+        app.world_mut().run_system_once(command_button).unwrap();
+        assert_eq!(
+            app.world()
+                .resource::<CampaignInput>()
+                .commands
+                .entries()
+                .len(),
+            2
+        );
+        app.world_mut()
+            .resource_mut::<crate::button_actions::ButtonActions>()
+            .entities
+            .clear();
+        {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let objects = session.host().unwrap().objects_mut();
+            for &unit in &units {
+                assert!(
+                    objects
+                        .executed_unit(unit)
+                        .unwrap()
+                        .activity
+                        .as_ref()
+                        .unwrap()
+                        .held()
+                );
+            }
+            objects
+                .native("EnableUserControl", &[Value::Bool(false)])
+                .unwrap();
+        }
+        app.world_mut()
+            .resource_mut::<crate::button_actions::ButtonActions>()
+            .entities
+            .clear();
+        app.world_mut().get_mut::<ButtonOrder>(button).unwrap().kind =
+            Kind::Standard(Standard::Stop);
+        app.world_mut().trigger(Activate { entity: button });
+        app.world_mut().run_system_once(command_button).unwrap();
+        assert_eq!(
+            app.world()
+                .resource::<CampaignInput>()
+                .commands
+                .entries()
+                .len(),
+            2
+        );
+        {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let objects = session.host().unwrap().objects_mut();
+            objects
+                .native("EnableUserControl", &[Value::Bool(true)])
+                .unwrap();
+        }
+        app.world_mut().trigger(Activate { entity: button });
+        app.world_mut().run_system_once(command_button).unwrap();
+        assert_eq!(
+            app.world()
+                .resource::<CampaignInput>()
+                .commands
+                .entries()
+                .len(),
+            4
+        );
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let objects = session.host().unwrap().objects_mut();
+        for &unit in &units {
+            assert!(
+                !objects
+                    .executed_unit(unit)
+                    .unwrap()
+                    .activity
+                    .as_ref()
+                    .unwrap()
+                    .held()
+            );
+        }
+        assert!(
+            standard_target(
+                objects,
+                &mut CampaignInput::default(),
+                Standard::Move,
+                [0., 0.],
+                Some(units[0])
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn only_accepted_orders_enter_the_player_journal() {
+        let mut input = CampaignInput::default();
+        let identity = |source: &str| pcx_play::scripts::AssetIdentity {
+            source: source.into(),
+            edition: "fixture".into(),
+            version: "fixture".into(),
+        };
+        input
+            .commands
+            .begin(pcx_play::player_command_log::StartIdentity {
+                seed: 7,
+                map_label: "synthetic command map".into(),
+                map_sha256: [0x5a; 32],
+                sources: pcx_play::map_admission::MapInputSources {
+                    map: identity("map"),
+                    common: identity("common"),
+                    blizzard: identity("blizzard"),
+                    catalog: identity("catalog"),
+                },
+            });
+        let unit = HandleId::new(std::num::NonZeroU64::new(7).unwrap());
+        let command = PlayerCommand::Immediate { unit, order: 9 };
+        record_order_result(
+            &mut input,
+            Some(1.),
+            Ok(Value::Bool(false)),
+            command.clone(),
+        );
+        assert!(input.commands.entries().is_empty());
+        record_order_result(
+            &mut input,
+            Some(1.),
+            Err("fixture refusal".into()),
+            command.clone(),
+        );
+        assert!(input.commands.entries().is_empty());
+        assert_eq!(input.last_error.as_deref(), Some("fixture refusal"));
+        record_order_result(&mut input, Some(1.), Ok(Value::Bool(true)), command.clone());
+        assert_eq!(input.commands.entries().len(), 1);
+        assert_eq!(input.commands.entries()[0].command, command);
+    }
 
     #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[test]
@@ -1045,6 +1455,7 @@ mod tests {
         let second = Arc::new(());
         let armed = ArmedCommand {
             order: 9,
+            kind: crate::campaign_command_card::Kind::TargetUnit,
             session: Arc::downgrade(&first),
         };
         assert!(armed.is_for(Some(Arc::downgrade(&first))));

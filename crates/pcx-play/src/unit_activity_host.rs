@@ -257,6 +257,32 @@ pub(crate) fn balance_real_with_marker(
 }
 
 impl ObjectHost {
+    /// Currently executable standard orders, using admitted identifiers and live unit capabilities.
+    pub fn standard_command_order(
+        &self,
+        unit: HandleId,
+        kind: crate::standard_command::Kind,
+    ) -> Result<Option<i32>, Error> {
+        use crate::standard_command::Kind;
+        let record = self.executed_unit(unit)?;
+        if !record.shown || record.combat.as_ref().is_some_and(|c| c.dead) {
+            return Ok(None);
+        }
+        let Some(state) = self.unit_activity.as_ref() else {
+            return Ok(None);
+        };
+        let movable = record.activity.as_ref().is_some_and(UnitActivity::movable);
+        let attack = self.standard_attack_order(unit);
+        Ok(match kind {
+            Kind::Move if movable => Some(state.rules.movement),
+            Kind::Patrol if movable => Some(state.rules.patrol),
+            Kind::Hold if movable => Some(state.rules.hold),
+            Kind::Stop if movable || attack.is_some() => Some(state.rules.stop),
+            Kind::Attack => attack,
+            _ => None,
+        })
+    }
+
     pub(super) fn activity_stop_order(&self) -> Option<i32> {
         self.unit_activity.as_ref().map(|state| state.rules.stop)
     }
