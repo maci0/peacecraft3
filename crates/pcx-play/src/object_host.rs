@@ -16,6 +16,7 @@ pub struct ObjectHost {
     combat: Option<combat::Rules>,
     combat_trace: Option<combat::CombatTrace>,
     holy_light: Option<holy_light::Rules>,
+    summoning: Option<unit_summon::State>,
     events: event_delivery::Delivery,
     unit_vitals: Option<unit_vitals::Rules>,
     volume_groups: Option<volume_groups::State>,
@@ -173,6 +174,7 @@ impl ObjectHost {
             combat: None,
             combat_trace: None,
             holy_light: None,
+            summoning: None,
             indicators: None,
             cinematic_scene: None,
             dialogs: None,
@@ -674,6 +676,9 @@ impl Host for ObjectHost {
     }
 
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.summoning_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if name == "CreateUnitAtLoc" && self.locations && self.units.is_some() {
             return self
                 .create_unit_at_location(args)
@@ -1170,7 +1175,7 @@ pub use combat::{Combat, CombatActor, CombatTraceEvent, Relation, Weapon};
 
 #[path = "event_delivery_host.rs"]
 mod event_delivery;
-pub use event_delivery::{EventSubject, FiredEvent, HeroEvent, SaleContext};
+pub use event_delivery::{EventSubject, FiredEvent, HeroEvent, SaleContext, SummonContext};
 pub use item_sale::{PurchaseOutcome, PurchaseRefusal};
 
 #[path = "unit_vitals_host.rs"]
@@ -1218,6 +1223,9 @@ pub use game_exit::GameExitRequest;
 #[path = "unit_guard_host.rs"]
 mod unit_guards;
 pub use unit_guards::{GuardBudget, GuardState, UnitGuard};
+
+#[path = "unit_summon_host.rs"]
+mod unit_summon;
 
 #[path = "holy_light_host.rs"]
 mod holy_light;

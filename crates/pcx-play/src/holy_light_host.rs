@@ -446,7 +446,7 @@ impl ObjectHost {
             Effect::Heal(amount) => self.heal_unit(target, amount)?,
         }
         self.attach_holy_art(target, now)?;
-        self.queue_spell_effect(caster, target)
+        self.queue_spell_effect(caster, Some(target))
     }
 
     /// Shows the `Targetart` on the target. The previous art on that target ends first.

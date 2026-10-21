@@ -80,6 +80,7 @@ impl ObjectHost {
                 record.paused_since = pause.then_some(now);
             }
             if let Some(since) = since {
+                self.resume_summon_cast(unit, now - since);
                 self.guard_resumed(unit, since, now);
             }
             Ok(Value::Null)

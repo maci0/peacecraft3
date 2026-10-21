@@ -44,10 +44,20 @@ impl ObjectCatalog for Catalog {
 }
 fn tables(profile: &str) -> DefaultTables {
     let data = sylk(
-        &["alias", "code", "levels", "reqLevel", "levelSkip"],
+        &[
+            "alias",
+            "code",
+            "levels",
+            "reqLevel",
+            "levelSkip",
+            "DataA1",
+            "DataA2",
+            "UnitID1",
+            "UnitID2",
+        ],
         &[
             &["L000", "L000", "1", "0", "0"],
-            &["L001", "L001", "3", "1", "0"],
+            &["L001", "L001", "3", "1", "0", "2", "4", "u001", "u002"],
             &["L002", "L002", "1", "4", "3"],
             &["Yher", "Yher", "1", "0", "0"],
         ],
@@ -57,6 +67,26 @@ fn tables(profile: &str) -> DefaultTables {
             "ID", "field", "slk", "index", "type", "category", "repeat", "data",
         ],
         &[
+            &[
+                "adat",
+                "Data",
+                "AbilityData",
+                "-1",
+                "int",
+                "stats",
+                "1",
+                "1",
+            ],
+            &[
+                "auni",
+                "UnitID",
+                "AbilityData",
+                "-1",
+                "unitCode",
+                "stats",
+                "1",
+                "0",
+            ],
             &[
                 "alev",
                 "levels",
@@ -112,6 +142,84 @@ fn catalog_origin() -> crate::scripts::AssetIdentity {
         source: source().install,
         edition: "fixture".into(),
         version: "fixture".into(),
+    }
+}
+
+#[test]
+fn ranked_ability_cells_use_metadata_overrides_and_keep_other_ranks() {
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L001".into(),
+        vec![
+            pcx_objects::Mod {
+                field: *b"adat",
+                value_type: pcx_objects::ValueType::Int,
+                selectors: Some([2, 0]),
+                value: pcx_objects::Value::Int(9),
+                end_word: 0,
+            },
+            pcx_objects::Mod {
+                field: *b"auni",
+                value_type: pcx_objects::ValueType::Str,
+                selectors: Some([2, 0]),
+                value: pcx_objects::Value::Str(b"u003".to_vec()),
+                end_word: 0,
+            },
+        ],
+    );
+    let mut vm = host(NATIVES, "L001", overlay, "", 8);
+    let h = &vm.host().inner;
+    assert_eq!(
+        h.hero_ability_level_cell(*b"L001", "DataA", 1, FieldKind::Int)
+            .unwrap(),
+        "2"
+    );
+    assert_eq!(
+        h.hero_ability_level_cell(*b"L001", "DataA", 2, FieldKind::Int)
+            .unwrap(),
+        "9"
+    );
+    assert_eq!(
+        h.hero_ability_level_cell(*b"L001", "UnitID", 1, FieldKind::Token)
+            .unwrap(),
+        "u001"
+    );
+    assert_eq!(
+        h.hero_ability_level_cell(*b"L001", "UnitID", 2, FieldKind::Token)
+            .unwrap(),
+        "u003"
+    );
+    assert!(
+        h.hero_ability_level_cell(*b"L001", "UnitID", 2, FieldKind::Int)
+            .is_err()
+    );
+    assert!(
+        h.hero_ability_level_cell(*b"L001", "UnitID", 0, FieldKind::Token)
+            .is_err()
+    );
+}
+
+#[test]
+fn ranked_ability_cells_refuse_unknown_fields_and_unsupported_data_selectors() {
+    for (field, selectors) in [(*b"adat", Some([2, 1])), (*b"ZZZZ", Some([2, 0]))] {
+        let mut overlay = Overlay::default();
+        overlay.mods.insert(
+            "L001".into(),
+            vec![pcx_objects::Mod {
+                field,
+                selectors,
+                value_type: pcx_objects::ValueType::Int,
+                value: pcx_objects::Value::Int(9),
+                end_word: 0,
+            }],
+        );
+        let mut vm = host(NATIVES, "L001", overlay, "", 8);
+        assert!(
+            vm.host()
+                .inner
+                .hero_ability_level_cell(*b"L001", "DataA", 2, FieldKind::Int)
+                .is_err()
+        );
     }
 }
 fn host(

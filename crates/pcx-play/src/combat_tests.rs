@@ -1,4 +1,6 @@
 use super::*;
+#[path = "unit_summon_tests.rs"]
+mod summoning;
 use crate::playercolor_host::{CombatActor, CombatTraceEvent};
 use pcx_objects::editor::misc::{CombatRules, DayCycle, HeroVitals};
 use pcx_script::HandleId;
@@ -1976,9 +1978,18 @@ fn holy_tables() -> DefaultTables {
         "targs1",
         "targs2",
         "targs3",
+        "Dur1",
+        "Dur2",
+        "Dur3",
+        "UnitID1",
+        "UnitID2",
+        "UnitID3",
+        "Area1",
+        "Area2",
+        "Area3",
     ];
     let targs = "air,ground,organic,notself,invu,vuln,nonancient";
-    let rows: [Vec<&str>; 2] = [
+    let rows: [Vec<&str>; 3] = [
         vec![
             "AHhb", "AHhb", "3", "1", "0", "1", "200", "400", "600", "65", "65", "65", "5", "5",
             "5", "60", "60", "60", targs, targs, targs,
@@ -2006,6 +2017,11 @@ fn holy_tables() -> DefaultTables {
             "air,ground,invu,vuln",
             "air,ground,invu,vuln",
         ],
+        vec![
+            "AHwe", "AHwe", "3", "1", "0", "1", "1", "2", "1", "7", "13", "19", "2.5", "4.5",
+            "6.5", "_", "_", "_", "_", "_", "_", "3.5", "6.5", "9.5", "u001", "u002", "u003", "5",
+            "11", "17",
+        ],
     ];
     let mut slk = String::from("ID;PWXL;N;E\r\n");
     for (column, name) in headers.iter().enumerate() {
@@ -2029,7 +2045,10 @@ fn holy_tables() -> DefaultTables {
             edition_version: "fixture".into(),
         },
         &[(SlkId::AbilityData.path(), slk.as_bytes())],
-        &[("Units\\HumanAbilityFunc.txt", profile.as_bytes())],
+        &[(
+            "Units\\HumanAbilityFunc.txt",
+            format!("{profile}\r\n[AHwe]\r\nOrder=gamma\r\nHotkey=W\r\n").as_bytes(),
+        )],
         pcx_objects::editor::EditorReadLimits {
             max_listed_paths: 4,
             max_asset_bytes: 64 << 10,
@@ -2115,10 +2134,13 @@ endfunction
 "#;
 
 const HOLY_DECLARATIONS: &str = r#"
+native SetUnitFacing takes unit u, real angle returns nothing
 native SetPlayerAbilityAvailable takes player p, integer ability, boolean available returns nothing
 native SetUnitOwner takes unit u, player p, boolean changeColor returns nothing
 globals
 constant unitevent EVENT_UNIT_SPELL_EFFECT = ConvertUnitEvent(294)
+constant unitevent EVENT_UNIT_SUMMON = ConvertUnitEvent(-128)
+constant playerunitevent EVENT_PLAYER_UNIT_SUMMON = ConvertPlayerUnitEvent(905)
 constant playerunitevent EVENT_PLAYER_UNIT_SPELL_EFFECT = ConvertPlayerUnitEvent(277)
 constant unitevent EVENT_UNIT_HERO_LEVEL = ConvertUnitEvent(-141)
 constant unitevent EVENT_UNIT_HERO_SKILL = ConvertUnitEvent(892)
@@ -2136,6 +2158,8 @@ type unittype extends handle
 constant native ConvertUnitType takes integer i returns unittype
 native IsUnitType takes unit u, unittype t returns boolean
 constant native GetSpellTargetUnit takes nothing returns unit
+constant native GetSummoningUnit takes nothing returns unit
+constant native GetSummonedUnit takes nothing returns unit
 constant native GetLevelingUnit takes nothing returns unit
 constant native GetLearningUnit takes nothing returns unit
 constant native GetLearnedSkill takes nothing returns integer
@@ -2163,7 +2187,24 @@ fn holy_open_with_art(
     heroes: &str,
     art_end_ms: u32,
 ) -> (Vm, [HandleId; 4]) {
+    holy_open_with_model(types, abilities, heroes, art_end_ms, None)
+}
+
+fn holy_open_with_model(
+    types: &str,
+    abilities: &str,
+    heroes: &str,
+    art_end_ms: u32,
+    model: Option<Arc<crate::unit_model::Model>>,
+) -> (Vm, [HandleId; 4]) {
     let mut fields = hero_fields("STR");
+    fields.push(column(
+        b"Smp0",
+        SlkId::UnitWeapons,
+        "castpt",
+        FieldKind::Unreal,
+        "0.25",
+    ));
     fields.push(column(
         b"H001",
         SlkId::UnitBalance,
@@ -2253,6 +2294,10 @@ fn holy_open_with_art(
     h.admit_combat(rules(), "beta").unwrap();
     h.admit_holy_light(&holy_art(art_end_ms, false)).unwrap();
     h.set_neutral_passive(15);
+    if let Some(model) = model {
+        h.admit_unit_models(move |_| Ok(Some(Arc::clone(&model))))
+            .unwrap();
+    }
     let context = Arc::clone(h.player_context().unwrap());
     let mut vm = context.scripts.clone().owned_vm(h);
     vm.init_globals().unwrap();

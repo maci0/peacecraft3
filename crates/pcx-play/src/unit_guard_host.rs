@@ -331,6 +331,7 @@ impl ObjectHost {
         }
     }
     pub(super) fn unit_ordered(&mut self, unit: HandleId) {
+        self.cancel_summon_cast(unit);
         self.cancel_patrol(unit);
         self.wake_natural_sleep(unit);
         if let Some(state) = &mut self.guards

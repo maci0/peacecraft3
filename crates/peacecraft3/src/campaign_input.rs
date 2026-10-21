@@ -355,6 +355,42 @@ fn command_hotkey(
     }
     let objects = host.objects();
     let local = objects.local_player_number();
+    let primary = objects.selection().first().copied().filter(|&unit| {
+        objects
+            .executed_unit(unit)
+            .ok()
+            .and_then(|r| objects.player_settings(r.owner).ok())
+            .is_some_and(|player| Some(player.number) == local)
+    });
+    if let Some(unit) = primary {
+        match objects.water_elemental_command(unit) {
+            Ok(Some(command))
+                if letter_key(command.hotkey).is_some_and(|key| keys.just_pressed(key)) =>
+            {
+                input.command = None;
+                let objects = host.objects_mut();
+                let clock = objects.timer_game_time();
+                match objects.native(
+                    "IssueImmediateOrderById",
+                    &[Value::Handle(unit), Value::Int(command.order)],
+                ) {
+                    Ok(Value::Bool(true)) => record_command(
+                        &mut input,
+                        clock,
+                        PlayerCommand::Immediate {
+                            unit,
+                            order: command.order,
+                        },
+                    ),
+                    Err(error) => input.last_error = Some(error.to_string()),
+                    _ => {}
+                }
+                return;
+            }
+            Err(error) => input.last_error = Some(error.to_string()),
+            _ => {}
+        }
+    }
     let armed = objects
         .selection()
         .iter()

@@ -129,7 +129,7 @@ fn profile<'a>(d: &'a Definition, wanted: &str) -> Result<Option<&'a FieldValue>
 }
 
 /// An SLK `-`/empty cell is an empty numeric.
-fn number(value: &FieldValue, name: &str) -> Result<Option<f32>, String> {
+pub(super) fn number(value: &FieldValue, name: &str) -> Result<Option<f32>, String> {
     let parsed = match value {
         FieldValue::Cell(s) if matches!(s.trim(), "-" | "" | "_") => return Ok(None),
         FieldValue::Cell(s) => s.trim().parse::<f32>().ok(),
@@ -445,17 +445,31 @@ impl ObjectHost {
     pub(super) fn queue_spell_effect(
         &mut self,
         caster: HandleId,
-        target: HandleId,
+        target: Option<HandleId>,
     ) -> Result<(), Error> {
-        let unit_event = self.source_constant_enumerand("EVENT_UNIT_SPELL_EFFECT", "unitevent")?;
-        let player_event =
-            self.source_constant_enumerand("EVENT_PLAYER_UNIT_SPELL_EFFECT", "playerunitevent")?;
-        let owner = self.executed_unit(caster)?.owner;
         let subject = EventSubject {
             unit: Some(caster),
-            spell_target: Some(target),
+            spell_target: target,
             ..EventSubject::default()
         };
+        self.queue_ability_event(
+            caster,
+            "EVENT_UNIT_SPELL_EFFECT",
+            "EVENT_PLAYER_UNIT_SPELL_EFFECT",
+            subject,
+        )
+    }
+
+    pub(super) fn queue_ability_event(
+        &mut self,
+        caster: HandleId,
+        unit_name: &str,
+        player_name: &str,
+        subject: EventSubject,
+    ) -> Result<(), Error> {
+        let unit_event = self.source_constant_enumerand(unit_name, "unitevent")?;
+        let player_event = self.source_constant_enumerand(player_name, "playerunitevent")?;
+        let owner = self.executed_unit(caster)?.owner;
         let mut fired = Vec::new();
         for entry in &self.inner.arena {
             match entry {
@@ -544,6 +558,7 @@ impl ObjectHost {
 
     /// Another order replaces the unit's attack target.
     pub(super) fn clear_combat_target(&mut self, unit: HandleId) {
+        self.cancel_summon_cast(unit);
         self.forget_holy_cast(unit);
         if let Ok(Entry::Unit { record }) = self.inner.entry_mut(unit)
             && let Some(combat) = &mut record.combat
@@ -911,15 +926,17 @@ impl ObjectHost {
             self.damage_unit(missile.source, missile.target, missile.damage)?;
         }
         self.advance_holy_light(now)?;
+        self.advance_summoning(now)?;
         let units: Vec<HandleId> = self
             .executed_units()
-            .filter(|(_, u)| {
-                u.combat.as_ref().is_some_and(|c| {
-                    u.paused_since.is_none()
-                        && !u.is_sleeping()
-                        && !c.dead
-                        && (c.weapon.is_some() || c.attack_destination.is_some())
-                })
+            .filter(|(id, u)| {
+                self.summon_current_order(*id).is_none()
+                    && u.combat.as_ref().is_some_and(|c| {
+                        u.paused_since.is_none()
+                            && !u.is_sleeping()
+                            && !c.dead
+                            && (c.weapon.is_some() || c.attack_destination.is_some())
+                    })
             })
             .map(|(id, _)| id)
             .collect();
