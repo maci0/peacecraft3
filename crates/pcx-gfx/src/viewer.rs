@@ -645,6 +645,9 @@ fn skin_from_animation(
         let Some(rest) = model.meshes.get(binding.geoset) else {
             continue;
         };
+        if rest.bone_indices.is_empty() {
+            continue;
+        }
         let skinned = skin_mesh(rest, &skeleton);
         crate::set_mesh_positions(&mut meshes, &handle.0, skinned);
     }
@@ -839,9 +842,9 @@ mod tests {
             normals: vec![[0.0, 0.0, 1.0]],
             tex_coords: vec![[0.0, 0.0]],
             indices: vec![],
-            vertex_groups: vec![],
-            bone_indices: vec![],
-            group_counts: vec![],
+            vertex_groups: vec![0],
+            bone_indices: vec![9],
+            group_counts: vec![1],
             geoset,
             material_id: 0,
         };
@@ -857,6 +860,7 @@ mod tests {
         let mut world = World::new();
         let instance = world.spawn_empty().id();
         let other_instance = world.spawn_empty().id();
+        let bone_entity = world.spawn(Transform::from_xyz(10.0, 0.0, 0.0)).id();
         let mut meshes = Assets::<Mesh>::default();
         let handles: Vec<_> = (0..3)
             .map(|_| meshes.add(crate::to_bevy_mesh(&rest(0, [99.0; 3]))))
@@ -881,13 +885,25 @@ mod tests {
         world.insert_resource(ViewerCache {
             model: Some(model),
             instance: Some(instance),
-            ..default()
+            bones: vec![pcx_mdl::Bone {
+                offset: 0,
+                span: 0,
+                name: "synthetic".into(),
+                object_id: 9,
+                parent_id: -1,
+                flags: 0x100,
+                tracks: vec![],
+                geoset_id: -1,
+                geoset_anim_id: -1,
+            }],
+            pivots: pcx_mdl::Pivots(vec![[0.0; 3]; 10]),
+            bone_entities: vec![bone_entity],
         });
         world.run_system_once(skin_from_animation).unwrap();
         let meshes = world.resource::<Assets<Mesh>>();
         for (handle, expected) in handles.iter().zip([
-            vec![[1.0, 2.0, 3.0]],
-            vec![[7.0, 8.0, 9.0]],
+            vec![[11.0, 2.0, 3.0]],
+            vec![[17.0, 8.0, 9.0]],
             vec![[99.0; 3]],
         ]) {
             assert_eq!(

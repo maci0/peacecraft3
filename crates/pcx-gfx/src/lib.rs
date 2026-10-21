@@ -822,10 +822,16 @@ mod tests {
 /// Positions, normals and UVs pass straight through, which is safe because the
 /// decoder already produced exactly this shape. The only thing added is Bevy's
 /// mesh layout.
+/// Unbound geosets release the uploaded vertex data; bound ones retain it for CPU skinning.
 pub fn to_bevy_mesh(m: &LoadedMesh) -> Mesh {
     Mesh::new(
         PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
+        if m.bone_indices.is_empty() {
+            RenderAssetUsages::RENDER_WORLD
+        } else {
+            // CPU skinning still rewrites bound vertices each animation update.
+            RenderAssetUsages::default()
+        },
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, m.positions.clone())
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, m.normals.clone())

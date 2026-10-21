@@ -78,6 +78,7 @@ fn panel() -> Node {
         display: Display::None,
         width: Val::Rem(22.0),
         max_width: Val::Percent(100.0),
+        flex_shrink: 0.0,
         flex_direction: FlexDirection::Column,
         padding: UiRect::all(Val::Rem(0.5)),
         row_gap: Val::Rem(0.25),
@@ -106,9 +107,12 @@ fn setup(mut commands: Commands) {
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
+                flex_direction: FlexDirection::RowReverse,
+                flex_wrap: FlexWrap::Wrap,
                 justify_content: JustifyContent::Start,
-                align_items: AlignItems::End,
+                align_items: AlignItems::Start,
+                align_content: AlignContent::Start,
+                column_gap: Val::Rem(0.5),
                 row_gap: Val::Rem(0.5),
                 padding: UiRect::all(Val::Rem(0.5)),
                 ..default()
@@ -205,6 +209,7 @@ fn setup(mut commands: Commands) {
             });
             root.spawn((
                 Node {
+                    margin: UiRect::right(Val::Auto),
                     max_height: Val::Vh(65.0),
                     overflow: Overflow::clip(),
                     ..panel()

@@ -81,11 +81,21 @@ pub(super) fn refresh(
     }
     let _ = writeln!(value, "Entities: {}", sources.entities.iter().len());
     if let Some(meshes) = sources.meshes {
-        let vertices: usize = meshes.iter().map(|(_, mesh)| mesh.count_vertices()).sum();
+        let mut retained = 0;
+        let mut vertices = 0;
+        for (_, mesh) in meshes.iter() {
+            if let Ok(attributes) = mesh.try_attributes() {
+                retained += 1;
+                vertices += attributes
+                    .map(|(_, values)| values.len())
+                    .min()
+                    .unwrap_or(0);
+            }
+        }
         let _ = writeln!(
             value,
-            "CPU mesh assets: {} | vertices: {vertices}",
-            meshes.len()
+            "CPU-retained meshes: {} | vertices: {vertices}",
+            retained
         );
     }
     if let Some(images) = sources.images {
@@ -132,11 +142,19 @@ mod tests {
             )
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0_f32; 3]; 3]),
         );
+        let mut extracted = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::RENDER_WORLD,
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0_f32; 3]; 6]);
+        let _uploaded = extracted.take_gpu_data().unwrap();
+        let _extracted_handle = meshes.add(extracted);
         world.insert_resource(meshes);
         let text = world.spawn((DebugText, Text::new(""))).id();
         world.run_system_once(refresh).unwrap();
         let output = world.get::<Text>(text).unwrap().0.clone();
         assert!(output.contains("vertices: 3"), "{output}");
+        assert!(output.contains("CPU-retained meshes: 1"), "{output}");
         assert!(output.contains("GPU memory report unavailable"));
         assert!(output.contains("Tick 12"));
         world.resource_mut::<DebugOverlay>().visible = false;
