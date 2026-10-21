@@ -25,6 +25,7 @@ pub(super) struct DebugText;
 pub(super) struct Sources<'w, 's> {
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     entities: Query<'w, 's, ()>,
+    mesh_instances: Query<'w, 's, Option<&'static ViewVisibility>, With<Mesh3d>>,
     meshes: Option<Res<'w, Assets<Mesh>>>,
     images: Option<Res<'w, Assets<Image>>>,
     adapter: Option<Res<'w, RenderAdapterInfo>>,
@@ -47,7 +48,7 @@ pub(super) fn refresh(
         return;
     }
     *last = now;
-    let mut value = String::from("DISPLAY / RENDERER\n");
+    let mut value = String::from("DISPLAY\n");
     if let Some(frames) = sources.frames {
         let _ = writeln!(
             value,
@@ -68,14 +69,14 @@ pub(super) fn refresh(
     if let Some(adapter) = sources.adapter {
         let _ = writeln!(
             value,
-            "\nGPU  {}\nBackend  {:?} | {:?}\nDriver  {}",
+            "\nRENDERER\nGPU  {}\nBackend  {:?} | {:?}\nDriver  {}",
             adapter.name, adapter.backend, adapter.device_type, adapter.driver
         );
         match memory::vram(&adapter.device_pci_bus_id) {
             Some((used, total)) => {
                 let _ = writeln!(
                     value,
-                    "VRAM (whole GPU): {:.0} / {:.0} MiB ({:.1}%)",
+                    "VRAM used        {:>10.0} MiB\nVRAM total       {:>10.0} MiB\nVRAM occupancy   {:>10.1}%\nWhole GPU | includes other apps",
                     used as f64 / (1024.0 * 1024.0),
                     total as f64 / (1024.0 * 1024.0),
                     used as f64 / total as f64 * 100.0
@@ -86,31 +87,59 @@ pub(super) fn refresh(
     }
     let _ = writeln!(
         value,
-        "\nSCENE / GEOMETRY\nEntities         {:>10}",
-        sources.entities.iter().len()
+        "\nSCENE\nEntities         {:>10}\nMesh instances   {:>10}\nView-visible     {:>10}",
+        sources.entities.iter().len(),
+        sources.mesh_instances.iter().len(),
+        sources
+            .mesh_instances
+            .iter()
+            .filter(|visibility| visibility.is_some_and(|visibility| visibility.get()))
+            .count(),
     );
     if let Some(meshes) = sources.meshes {
         let mut retained = 0;
         let mut vertices = 0;
         let mut indices = 0;
+        let mut bytes = 0;
         for (_, mesh) in meshes.iter() {
             if let Ok(attributes) = mesh.try_attributes() {
                 retained += 1;
                 vertices += attributes
-                    .map(|(_, values)| values.len())
+                    .map(|(_, values)| {
+                        bytes += values.get_bytes().len();
+                        values.len()
+                    })
                     .min()
                     .unwrap_or(0);
                 indices += mesh.indices().map_or(0, |indices| indices.len());
+                bytes += mesh.indices().map_or(0, |indices| {
+                    indices.len()
+                        * match indices {
+                            bevy::mesh::Indices::U16(_) => 2,
+                            bevy::mesh::Indices::U32(_) => 4,
+                        }
+                });
             }
         }
         let _ = writeln!(
             value,
-            "Mesh assets      {:>10}\nCPU-retained meshes: {retained}\nCPU vertices: {vertices}\nCPU indices: {indices}",
-            meshes.len()
+            "Mesh assets      {:>10}\n\nCPU MESH COPIES\nRetained meshes  {retained:>10}\nVertices         {vertices:>10}\nIndices          {indices:>10}\nBuffers          {:>10.2} MiB\nCPU copies only | not GPU totals",
+            meshes.len(),
+            bytes as f64 / (1024.0 * 1024.0),
         );
     }
     if let Some(images) = sources.images {
-        let _ = writeln!(value, "Image assets     {:>10}", images.len());
+        let bytes: usize = images
+            .iter()
+            .filter_map(|(_, image)| image.data.as_ref())
+            .map(Vec::len)
+            .sum();
+        let _ = writeln!(
+            value,
+            "\nTEXTURES\nImage assets     {:>10}\nCPU image data   {:>10.2} MiB",
+            images.len(),
+            bytes as f64 / (1024.0 * 1024.0)
+        );
     }
     match sources
         .device
@@ -119,7 +148,7 @@ pub(super) fn refresh(
         Some(report) => {
             let _ = writeln!(
                 value,
-                "\nDEVICE MEMORY\nGPU allocations: {:.1} MiB used\nGPU blocks: {:.1} MiB reserved\nAllocator only; whole-GPU VRAM above",
+                "\nDEVICE MEMORY\nAllocated        {:>10.1} MiB\nReserved         {:>10.1} MiB\nDevice allocator | not whole-GPU VRAM",
                 report.total_allocated_bytes as f64 / (1024.0 * 1024.0),
                 report.total_reserved_bytes as f64 / (1024.0 * 1024.0)
             );
@@ -167,10 +196,11 @@ mod tests {
         let text = world.spawn((DebugText, Text::new(""))).id();
         world.run_system_once(refresh).unwrap();
         let output = world.get::<Text>(text).unwrap().0.clone();
-        assert!(output.contains("vertices: 3"), "{output}");
-        assert!(output.contains("CPU-retained meshes: 1"), "{output}");
+        assert!(output.contains("Vertices                  3"), "{output}");
+        assert!(output.contains("Retained meshes           1"), "{output}");
         assert!(output.contains("Mesh assets               2"), "{output}");
-        assert!(output.contains("CPU indices: 0"), "{output}");
+        assert!(output.contains("Indices                   0"), "{output}");
+        assert!(output.contains("CPU copies only | not GPU totals"));
         assert!(output.contains("GPU memory report unavailable"));
         assert!(output.contains("Tick 12"));
         world.resource_mut::<DebugOverlay>().visible = false;

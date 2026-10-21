@@ -25,7 +25,8 @@ impl Plugin for PerformanceOverlayPlugin {
         app.init_resource::<OverlayState>()
             .init_resource::<DebugOverlay>()
             .add_systems(Startup, setup)
-            .add_systems(Update, (toggle, refresh, debug::refresh).chain());
+            .add_systems(Update, (toggle, refresh, debug::refresh).chain())
+            .add_systems(PostUpdate, fit_debug.after(bevy::ui::UiSystems::Layout));
         #[cfg(feature = "profile-gpu")]
         app.add_plugins((
             bevy::render::diagnostic::RenderDiagnosticsPlugin,
@@ -82,7 +83,7 @@ fn panel() -> Node {
         flex_direction: FlexDirection::Column,
         padding: UiRect::all(Val::Rem(0.65)),
         border: UiRect::all(Val::Px(1.0)),
-        border_radius: BorderRadius::all(Val::Px(8.0)),
+        border_radius: BorderRadius::all(Val::Px(6.0)),
         row_gap: Val::Rem(0.45),
         ..default()
     }
@@ -129,15 +130,15 @@ fn setup(mut commands: Commands) {
                 panel(),
                 Visibility::Hidden,
                 OverlayRoot,
-                BackgroundColor(Color::srgba(0.012, 0.018, 0.02, 0.48)),
-                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.12)),
+                BackgroundColor(Color::srgba(0.012, 0.018, 0.02, 0.36)),
+                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.16)),
                 Pickable::IGNORE,
             ))
             .with_children(|panel| {
                 panel.spawn((
-                    Text::new("PERFORMANCE                                  F8"),
+                    Text::new("Performance | F8"),
                     TextFont {
-                        font_size: bevy::text::FontSize::Rem(0.65),
+                        font_size: bevy::text::FontSize::Rem(0.75),
                         ..default()
                     },
                     TextColor(Color::srgb(0.65, 0.8, 0.8)),
@@ -167,12 +168,12 @@ fn setup(mut commands: Commands) {
                     .spawn((
                         Node {
                             width: Val::Percent(100.0),
-                            height: Val::Rem(3.0),
+                            height: Val::Rem(3.5),
                             align_items: AlignItems::End,
                             overflow: Overflow::clip(),
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.12)),
+                        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.08)),
                         Pickable::IGNORE,
                     ))
                     .with_children(|graph| {
@@ -198,7 +199,7 @@ fn setup(mut commands: Commands) {
                                     height: Val::Percent(0.0),
                                     ..default()
                                 },
-                                BackgroundColor(Color::srgba(0.35, 0.8, 1.0, 0.55)),
+                                BackgroundColor(Color::srgba(0.35, 0.8, 1.0, 0.38)),
                                 Pickable::IGNORE,
                                 GraphBar(index),
                             ));
@@ -223,20 +224,21 @@ fn setup(mut commands: Commands) {
                 Node {
                     margin: UiRect::right(Val::Auto),
                     max_height: Val::Vh(95.0),
-                    overflow: Overflow::clip(),
+                    overflow: Overflow::scroll_y(),
                     ..panel()
                 },
                 Visibility::Hidden,
                 DebugRoot,
-                BackgroundColor(Color::srgba(0.012, 0.018, 0.02, 0.48)),
-                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.12)),
+                ScrollPosition::default(),
+                BackgroundColor(Color::srgba(0.012, 0.018, 0.02, 0.36)),
+                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.16)),
                 Pickable::IGNORE,
             ))
             .with_children(|panel| {
                 panel.spawn((
-                    Text::new("DEBUG                                        F7"),
+                    Text::new("Debug | F7 | PgUp/PgDn"),
                     TextFont {
-                        font_size: bevy::text::FontSize::Rem(0.65),
+                        font_size: bevy::text::FontSize::Rem(0.75),
                         ..default()
                     },
                     TextColor(Color::srgb(0.65, 0.8, 0.8)),
@@ -254,6 +256,44 @@ fn setup(mut commands: Commands) {
                 ));
             });
         });
+}
+
+fn fit_debug(
+    debug: Res<DebugOverlay>,
+    keys: Res<ButtonInput<KeyCode>>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut panels: Query<
+        (
+            &ComputedNode,
+            &UiGlobalTransform,
+            &mut Node,
+            &mut ScrollPosition,
+        ),
+        With<DebugRoot>,
+    >,
+) {
+    if !debug.visible {
+        return;
+    }
+    let Ok(window) = windows.single() else { return };
+    for (computed, transform, mut node, mut scroll) in &mut panels {
+        let top = transform.to_scale_angle_translation().2.y - computed.size().y * 0.5;
+        let scale = computed.inverse_scale_factor();
+        // Wrapped F7 uses only the space below F8; keyboard paging keeps every row reachable.
+        let height = ((window.physical_height() as f32 - top) * scale - 10.0).max(0.0);
+        let limit = Val::Px(height);
+        if node.max_height != limit {
+            node.max_height = limit;
+        }
+        let page = computed.size().y * scale * 0.8;
+        if keys.just_pressed(KeyCode::PageDown) {
+            let end = ((computed.content_size().y - computed.size().y) * scale).max(0.0);
+            scroll.0.y = (scroll.0.y + page).min(end);
+        }
+        if keys.just_pressed(KeyCode::PageUp) {
+            scroll.0.y = (scroll.0.y - page).max(0.0);
+        }
+    }
 }
 
 fn toggle(
@@ -358,6 +398,56 @@ fn refresh(
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn wrapped_debug_fits_below_performance_and_pages_without_changing_game_input() {
+        let mut world = World::new();
+        world.insert_resource(DebugOverlay {
+            visible: true,
+            ..default()
+        });
+        world.init_resource::<ButtonInput<KeyCode>>();
+        world.spawn((
+            Window {
+                resolution: (480, 800).into(),
+                ..default()
+            },
+            bevy::window::PrimaryWindow,
+        ));
+        let panel = world
+            .spawn((
+                DebugRoot,
+                panel(),
+                ScrollPosition::default(),
+                ComputedNode {
+                    size: Vec2::new(440.0, 500.0),
+                    content_size: Vec2::new(440.0, 1000.0),
+                    inverse_scale_factor: 1.0,
+                    ..default()
+                },
+                UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(
+                    230.0, 470.0,
+                ))),
+            ))
+            .id();
+        world
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::PageDown);
+        world.run_system_once(fit_debug).unwrap();
+        assert_eq!(world.get::<Node>(panel).unwrap().max_height, Val::Px(570.0));
+        assert_eq!(world.get::<ScrollPosition>(panel).unwrap().0.y, 400.0);
+        world.resource_mut::<ButtonInput<KeyCode>>().reset_all();
+        world
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::PageUp);
+        world.run_system_once(fit_debug).unwrap();
+        assert_eq!(world.get::<ScrollPosition>(panel).unwrap().0.y, 0.0);
+        assert!(
+            world
+                .resource::<ButtonInput<KeyCode>>()
+                .just_pressed(KeyCode::PageUp)
+        );
+    }
 
     #[test]
     fn f7_and_f8_are_independent_and_share_the_overlay_camera() {
