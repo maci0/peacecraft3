@@ -9,6 +9,8 @@ use std::collections::BTreeSet;
 
 #[path = "ability_cooldown.rs"]
 mod cooldown;
+#[path = "hero_experience_host.rs"]
+mod experience;
 #[path = "ability_tooltip.rs"]
 mod tooltip;
 
@@ -64,6 +66,7 @@ mod cached_tests {
             hero: Some(HeroProgress {
                 level: 1,
                 skill_points: 1,
+                experience: None,
             }),
             levels: vec![(*b"B001", 1)],
             cooldowns: vec![],
@@ -81,6 +84,7 @@ mod cached_tests {
             install: "synthetic".into(),
             edition: "fixture".into(),
             hero: Some([3, 1]),
+            experience: None,
             abilities: vec![(*b"A001", 2), (*b"B001", 1)],
             cooldowns: vec![(*b"A001", 2, 1.125f32.to_bits())],
             permanent_strength: 0,
@@ -95,7 +99,8 @@ mod cached_tests {
             restored.hero,
             Some(HeroProgress {
                 level: 3,
-                skill_points: 1
+                skill_points: 1,
+                experience: None,
             })
         );
         for case in 0..5 {
@@ -116,6 +121,23 @@ mod cached_tests {
             );
             assert_eq!(untouched, original);
         }
+        rules.experience = Some(std::sync::Arc::new(crate::hero_experience::tests::rules()));
+        let mut with_xp = saved.clone();
+        with_xp.experience = Some(crate::hero_experience::State {
+            xp: 39,
+            suspended: true,
+        });
+        restored.restore_cached(&with_xp, &rules, budget).unwrap();
+        assert_eq!(
+            restored.hero.as_ref().unwrap().experience,
+            with_xp.experience
+        );
+        let before = restored.clone();
+        with_xp.experience.as_mut().unwrap().xp = 0;
+        assert!(restored.restore_cached(&with_xp, &rules, budget).is_err());
+        assert_eq!(restored, before);
+        restored.restore_cached(&saved, &rules, budget).unwrap();
+        assert_eq!(restored.hero.as_ref().unwrap().experience, None);
     }
 }
 
@@ -130,6 +152,8 @@ pub struct HeroBudget {
 pub struct HeroProgress {
     pub level: i32,
     pub skill_points: i32,
+    /// None is unadmitted or absent from an older recreation cache; never fabricated XP.
+    pub experience: Option<crate::hero_experience::State>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -185,6 +209,7 @@ impl UnitAbilities {
                 Some(HeroProgress {
                     level,
                     skill_points,
+                    experience: saved.experience,
                 })
             }
             (None, None) => None,
@@ -218,6 +243,15 @@ impl UnitAbilities {
             .map_err(|_| "cached ability allocation failed")?;
         levels.extend_from_slice(&saved.abilities);
         let mut candidate = self.clone();
+        if let (Some(hero), Some(experience_rules), Some(experience)) =
+            (&hero, &rules.experience, saved.experience)
+            && experience_rules
+                .thresholds
+                .level_for(rules.initial_level, experience.xp)?
+                != hero.level
+        {
+            return Err("cached XP differs from source hero level".into());
+        }
         candidate.levels = levels;
         candidate.hero = hero;
         candidate.cooldowns = saved.cooldowns.clone();
@@ -247,6 +281,7 @@ pub(super) struct Admission {
     /// Admitted `GetHeroStr`, `GetHeroAgi`, `GetHeroInt` in `ATTRIBUTES` order.
     attributes: [bool; 3],
     cooldown_natives: [bool; cooldown::NATIVES.len()],
+    experience_natives: [bool; experience::NATIVES.len()],
 }
 
 impl ObjectHost {
@@ -397,6 +432,25 @@ impl ObjectHost {
                 cooldown_natives[index] = true;
             }
         }
+        let mut experience_natives = [false; experience::NATIVES.len()];
+        if rules.experience.is_some() {
+            for (index, (name, params, result)) in experience::NATIVES.into_iter().enumerate() {
+                if let Some(native) = self.inner.program.natives().get(name) {
+                    Self::contract(
+                        &self.inner,
+                        name,
+                        params,
+                        result,
+                        native.is_constant,
+                        Some(KIND),
+                    )?;
+                    if native.source != units.declaration_source {
+                        return Err(self.inner.error(name, Failure::Source));
+                    }
+                    experience_natives[index] = true;
+                }
+            }
+        }
         self.units.as_mut().expect("admitted").heroes = Some(Admission {
             tables,
             catalog_origin,
@@ -409,6 +463,7 @@ impl ObjectHost {
             ability,
             attributes: [strength, agility, intelligence],
             cooldown_natives,
+            experience_natives,
         });
         Ok(self)
     }
@@ -484,6 +539,7 @@ impl ObjectHost {
                 state.hero = Some(HeroProgress {
                     level: input.rules.initial_level,
                     skill_points: input.rules.initial_points.min(capacity),
+                    experience: input.rules.experience.as_ref().map(|rules| rules.initial),
                 });
                 state
                     .levels
@@ -516,6 +572,12 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         let input = self.units.as_ref()?.heroes.as_ref()?;
+        if let Some(index) = experience::NATIVES
+            .iter()
+            .position(|(native, _, _)| *native == name)
+        {
+            return input.experience_natives[index].then(|| self.hero_experience_call(name, args));
+        }
         if let Some(index) = cooldown::NATIVES
             .iter()
             .position(|(native, _, _)| *native == name)
@@ -852,6 +914,25 @@ impl ObjectHost {
                     .capacity()
                     .map_err(|e| self.hero_error(SET_HERO_LEVEL, e))?,
             );
+        let experience = match (
+            hero.experience,
+            self.admitted_units()?
+                .heroes
+                .as_ref()
+                .and_then(|h| h.rules.experience.as_ref()),
+        ) {
+            (Some(mut state), Some(rules)) => {
+                let initial = self.hero_initial_level().expect("hero rules");
+                state.xp = state.xp.max(
+                    rules
+                        .thresholds
+                        .minimum_for(initial, next)
+                        .map_err(|e| self.hero_error(SET_HERO_LEVEL, e))?,
+                );
+                Some(state)
+            }
+            _ => hero.experience,
+        };
         let events = self.prepare_hero_events(
             *unit,
             SET_HERO_LEVEL,
@@ -876,6 +957,7 @@ impl ObjectHost {
             .expect("hero");
         hero.level = next;
         hero.skill_points = points;
+        hero.experience = experience;
         self.push_hero_events(events, *unit, HeroEvent::Level);
         Ok(Value::Null)
     }

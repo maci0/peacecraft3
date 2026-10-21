@@ -74,6 +74,7 @@ pub mod game_cache;
 pub mod generator;
 pub mod group_order_rules;
 pub mod headless_startup;
+pub mod hero_experience;
 pub mod hero_skills;
 pub mod install_source;
 pub mod label_sounds;

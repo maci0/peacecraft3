@@ -21,6 +21,7 @@ pub struct Binding {
 
 #[derive(Clone, Debug)]
 pub struct Rules {
+    pub(crate) experience: Option<std::sync::Arc<crate::hero_experience::Rules>>,
     pub(crate) binding: Binding,
     pub(crate) progression: Progression,
     pub(crate) initial_level: i32,
@@ -32,6 +33,28 @@ pub struct Rules {
 }
 
 impl Rules {
+    pub fn with_experience(
+        mut self,
+        image: &[u8],
+        profiles: &[(&str, &[u8])],
+        max_bytes: usize,
+        max_levels: usize,
+    ) -> Result<Self, String> {
+        if self.experience.is_some() || sha256(image) != self.binding.image_sha256 {
+            return Err("XP source differs or already admitted".into());
+        }
+        let thresholds = pcx_objects::editor::hero_experience::Experience::read(
+            profiles,
+            self.initial_level,
+            self.progression.max_level,
+            max_bytes,
+            max_levels,
+        )?;
+        let rules =
+            crate::hero_experience::Rules::read(image, self.binding.origin.clone(), thresholds)?;
+        self.experience = Some(std::sync::Arc::new(rules));
+        Ok(self)
+    }
     pub fn read(
         image: &[u8],
         binding: Binding,
@@ -163,6 +186,7 @@ impl Rules {
             other_implicit.push(id);
         }
         Ok(Self {
+            experience: None,
             binding,
             progression,
             initial_level,
