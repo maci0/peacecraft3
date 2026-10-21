@@ -79,12 +79,13 @@ fn panel() -> Node {
         display: Display::None,
         width: Val::Rem(22.0),
         max_width: Val::Percent(100.0),
+        min_width: Val::Px(0.0),
         flex_shrink: 0.0,
         flex_direction: FlexDirection::Column,
-        padding: UiRect::all(Val::Rem(0.65)),
+        padding: UiRect::all(Val::Rem(0.75)),
         border: UiRect::all(Val::Px(1.0)),
         border_radius: BorderRadius::all(Val::Px(6.0)),
-        row_gap: Val::Rem(0.45),
+        row_gap: Val::Rem(0.5),
         ..default()
     }
 }
@@ -130,18 +131,18 @@ fn setup(mut commands: Commands) {
                 panel(),
                 Visibility::Hidden,
                 OverlayRoot,
-                BackgroundColor(Color::srgba(0.012, 0.018, 0.02, 0.36)),
-                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.16)),
+                BackgroundColor(Color::srgba(0.012, 0.018, 0.02, 0.28)),
+                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.12)),
                 Pickable::IGNORE,
             ))
             .with_children(|panel| {
                 panel.spawn((
-                    Text::new("Performance | F8"),
+                    Text::new("Performance                          F8"),
                     TextFont {
-                        font_size: bevy::text::FontSize::Rem(0.75),
+                        font_size: bevy::text::FontSize::Rem(0.7),
                         ..default()
                     },
-                    TextColor(Color::srgb(0.65, 0.8, 0.8)),
+                    TextColor(Color::srgb(0.76, 0.84, 0.83)),
                     Pickable::IGNORE,
                 ));
                 panel.spawn((
@@ -150,7 +151,7 @@ fn setup(mut commands: Commands) {
                         font_size: bevy::text::FontSize::Rem(0.85),
                         ..default()
                     },
-                    TextColor(Color::srgb(0.88, 0.94, 0.91)),
+                    TextColor(Color::srgb(0.96, 0.98, 0.96)),
                     Pickable::IGNORE,
                     CounterText,
                 ));
@@ -168,7 +169,7 @@ fn setup(mut commands: Commands) {
                     .spawn((
                         Node {
                             width: Val::Percent(100.0),
-                            height: Val::Rem(3.5),
+                            height: Val::Rem(2.75),
                             align_items: AlignItems::End,
                             overflow: Overflow::clip(),
                             ..default()
@@ -197,9 +198,11 @@ fn setup(mut commands: Commands) {
                                     flex_grow: 1.0,
                                     min_width: Val::Px(0.0),
                                     height: Val::Percent(0.0),
+                                    border: UiRect::top(Val::Px(1.0)),
                                     ..default()
                                 },
-                                BackgroundColor(Color::srgba(0.35, 0.8, 1.0, 0.38)),
+                                BackgroundColor(Color::srgba(0.35, 0.8, 1.0, 0.16)),
+                                BorderColor::all(Color::srgba(0.5, 0.88, 1.0, 0.85)),
                                 Pickable::IGNORE,
                                 GraphBar(index),
                             ));
@@ -230,18 +233,18 @@ fn setup(mut commands: Commands) {
                 Visibility::Hidden,
                 DebugRoot,
                 ScrollPosition::default(),
-                BackgroundColor(Color::srgba(0.012, 0.018, 0.02, 0.36)),
-                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.16)),
+                BackgroundColor(Color::srgba(0.012, 0.018, 0.02, 0.28)),
+                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.12)),
                 Pickable::IGNORE,
             ))
             .with_children(|panel| {
                 panel.spawn((
-                    Text::new("Debug | F7 | PgUp/PgDn"),
+                    Text::new("Debug                      F7 / PgUp / PgDn"),
                     TextFont {
-                        font_size: bevy::text::FontSize::Rem(0.75),
+                        font_size: bevy::text::FontSize::Rem(0.7),
                         ..default()
                     },
-                    TextColor(Color::srgb(0.65, 0.8, 0.8)),
+                    TextColor(Color::srgb(0.76, 0.84, 0.83)),
                     Pickable::IGNORE,
                 ));
                 panel.spawn((
@@ -250,7 +253,7 @@ fn setup(mut commands: Commands) {
                         font_size: bevy::text::FontSize::Rem(0.75),
                         ..default()
                     },
-                    TextColor(Color::srgb(0.88, 0.94, 0.91)),
+                    TextColor(Color::srgb(0.96, 0.98, 0.96)),
                     Pickable::IGNORE,
                     debug::DebugText,
                 ));
