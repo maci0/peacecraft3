@@ -256,7 +256,10 @@ impl ObjectHost {
             }
             // The clock still moves on a dead or lifeless unit, so a later revive
             // cannot regenerate across the dead span.
-            if record.combat.as_ref().is_some_and(|c| c.dead) || vitals.life <= 0.0 {
+            if record.paused_since.is_some()
+                || record.combat.as_ref().is_some_and(|c| c.dead)
+                || vitals.life <= 0.0
+            {
                 next.push((unit, vitals.life, vitals.mana));
                 continue;
             }

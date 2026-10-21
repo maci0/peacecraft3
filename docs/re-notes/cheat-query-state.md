@@ -34,7 +34,7 @@ wrong declarations/source, missing admission and argument errors.
 
 This is shipped-script/native-code and recreated VM evidence, not a comparison
 against a running original game. No original bytes are committed. A separate
-combat gap remains: recorded explicit unit invulnerability is not consumed by
-combat acquisition/damage, and PauseUnit is not admitted. The opening cinematic
-helper itself grants neither protection nor pause, so these gaps do not alone
-explain an observed early Arthas death.
+combat question remains: the opening cinematic helper itself grants neither
+protection nor pause. Combat now consumes explicit invulnerability and unit pause
+(see [unit-pause.md](unit-pause.md)); those calls alone do not explain an observed
+early Arthas death. Native team initialization is still unqualified.

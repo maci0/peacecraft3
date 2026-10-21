@@ -131,6 +131,34 @@ fn region_membership_fires_enter_and_leave_with_the_moving_unit() {
 }
 
 #[test]
+fn pause_freezes_turn_progress_and_resumes_the_remaining_interval() {
+    let (mut vm, unit, _) = open();
+    vm.host()
+        .inner
+        .native(
+            "SetUnitFacingTimed",
+            &[Value::Handle(unit), Value::Real(90.), Value::Real(2.)],
+        )
+        .unwrap();
+    tick(&mut vm, 0.5);
+    assert_eq!(vm.host().inner.executed_unit(unit).unwrap().face, 22.5);
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(unit), Value::Bool(true)])
+        .unwrap();
+    tick(&mut vm, 5.5);
+    assert_eq!(vm.host().inner.executed_unit(unit).unwrap().face, 22.5);
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(unit), Value::Bool(false)])
+        .unwrap();
+    tick(&mut vm, 6.);
+    assert_eq!(vm.host().inner.executed_unit(unit).unwrap().face, 45.);
+    tick(&mut vm, 7.);
+    assert_eq!(vm.host().inner.executed_unit(unit).unwrap().face, 90.);
+}
+
+#[test]
 fn facing_turns_over_time_and_unit_types_and_selection_read_live_state() {
     let (mut vm, a, b) = open();
     let hero = vm.global("UNIT_TYPE_HERO");

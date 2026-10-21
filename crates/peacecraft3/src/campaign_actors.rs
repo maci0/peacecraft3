@@ -1203,6 +1203,7 @@ mod tests {
             animation: None,
             activity: None,
             shown: true,
+            paused_since: None,
             vitals: None,
             combat: None,
             permanent_strength: 0,

@@ -732,6 +732,9 @@ impl ObjectHost {
             Entry::Unit { .. } => {}
             _ => return Err(self.inner.error(name, Failure::WrongFamily)),
         }
+        if self.executed_unit(unit)?.paused_since.is_some() {
+            return Ok(Value::Bool(false));
+        }
         let Some(record) = self.live_item(item)? else {
             return Ok(Value::Bool(false));
         };
@@ -1007,6 +1010,9 @@ impl ObjectHost {
         order: i32,
         name: &str,
     ) -> Result<bool, Error> {
+        if self.executed_unit(unit)?.paused_since.is_some() {
+            return Ok(false);
+        }
         let Some(record) = self.live_item(item)? else {
             return Ok(false);
         };
@@ -1090,6 +1096,12 @@ impl ObjectHost {
                 self.inner
                     .error("inventory", Failure::Budget("pickup tick work"))
             })?;
+            if self
+                .executed_unit(unit)
+                .is_ok_and(|u| u.paused_since.is_some())
+            {
+                continue;
+            }
             let Some(record) = self.live_item(item)? else {
                 self.cancel_inventory_order(unit);
                 continue;

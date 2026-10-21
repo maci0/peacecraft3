@@ -64,10 +64,11 @@ A synthetic regression uses four-unit cells and a six-unit radius. It requires
 the full outer footprint, prevents overlap with an existing unit, and makes an
 obstacle at its outer corner refuse when no further query work is available.
 
-The selected Human03 startup gate now passes that creation site and reaches
-`PauseUnit` in `Blizzard.j:3611`, which is not yet implemented. The map is still
-not accepted. Native library tests, strict all-target clippy and the WASM library
-check pass for this placement increment.
+At the placement-only increment, selected Human03 startup passed that creation
+site and reached the unsupported `PauseUnit` in `Blizzard.j:3611`. The subsequent
+[unit-pause increment](unit-pause.md) advances it to `RestoreUnit`. The map is
+still not accepted. Native library tests, strict all-target clippy and the WASM
+library check pass for the placement increment.
 
 ## Accepted spans for consumers
 

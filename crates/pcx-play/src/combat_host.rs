@@ -62,6 +62,15 @@ struct Missile {
     damage: f32,
 }
 
+impl Combat {
+    pub(super) fn resume_after_pause(&mut self, elapsed: f64) {
+        self.ready_at += elapsed;
+        if let Some((_, impact)) = &mut self.swing {
+            *impact += elapsed;
+        }
+    }
+}
+
 pub(super) struct Rules {
     rules: CombatRules,
     attack_order: i32,
@@ -696,6 +705,12 @@ impl ObjectHost {
                 return Ok(Value::Bool(false));
             };
             let (unit, target) = (*unit, *target);
+            if self
+                .live(unit)
+                .is_some_and(|record| record.paused_since.is_some())
+            {
+                return Ok(Value::Bool(false));
+            }
             let can_attack = self
                 .live(unit)
                 .and_then(|u| u.combat.as_ref()?.weapon)
@@ -896,7 +911,9 @@ impl ObjectHost {
             .executed_units()
             .filter(|(_, u)| {
                 u.combat.as_ref().is_some_and(|c| {
-                    !c.dead && (c.weapon.is_some() || c.attack_destination.is_some())
+                    u.paused_since.is_none()
+                        && !c.dead
+                        && (c.weapon.is_some() || c.attack_destination.is_some())
                 })
             })
             .map(|(id, _)| id)

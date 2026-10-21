@@ -1115,6 +1115,9 @@ mod locations;
 #[path = "unit_visibility_host.rs"]
 mod unit_visibility;
 
+#[path = "unit_pause_host.rs"]
+mod unit_pause;
+
 #[path = "camera_view_host.rs"]
 mod camera_view;
 

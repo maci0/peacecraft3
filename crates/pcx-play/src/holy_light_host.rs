@@ -316,6 +316,9 @@ impl ObjectHost {
         caster: HandleId,
         target: HandleId,
     ) -> Result<bool, Error> {
+        if self.executed_unit(caster)?.paused_since.is_some() {
+            return Ok(false);
+        }
         let now = self.timer_game_time().ok_or_else(|| {
             self.inner
                 .error(NATIVE, Failure::UnitState("clock missing"))
@@ -347,6 +350,9 @@ impl ObjectHost {
             .map(|(&caster, &target)| (caster, target))
             .collect();
         for (caster, target) in pending {
+            if self.executed_unit(caster)?.paused_since.is_some() {
+                continue;
+            }
             self.step_holy_cast(caster, target, now)?;
         }
         Ok(())

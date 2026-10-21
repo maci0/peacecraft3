@@ -131,6 +131,12 @@ impl UnitGuard {
         }
         self.settled_at = None;
     }
+    fn resumed(&mut self, since: f64, now: f64) {
+        if let Some(chase) = &mut self.chase_since {
+            *chase += now - since.max(*chase);
+        }
+        self.observed_through = now;
+    }
     fn ordered(&mut self) {
         self.returning = false;
         self.beyond = false;
@@ -338,6 +344,13 @@ impl ObjectHost {
             g.attacked(now);
         }
     }
+    pub(super) fn guard_resumed(&mut self, unit: HandleId, since: f64, now: f64) {
+        if let Some(state) = &mut self.guards
+            && let Some((_, guard)) = state.records.iter_mut().find(|(id, _)| *id == unit)
+        {
+            guard.resumed(since, now);
+        }
+    }
     /// True means an AI return owns movement this tick, so skip acquisition.
     pub(super) fn guard_combat_step(
         &mut self,
@@ -432,6 +445,27 @@ mod tests {
     use super::*;
     fn id() -> HandleId {
         HandleId::new(std::num::NonZeroU64::new(7).unwrap())
+    }
+    #[test]
+    fn pause_does_not_spend_the_guard_chase_timeout() {
+        let mut guard = UnitGuard::new(id(), [0., 0.], 0.);
+        let rules = ReturnRules {
+            distance: 10.,
+            timeout: 5.,
+        };
+        assert_eq!(
+            guard.plan([20., 0.], 1., true, true, 1., rules).unwrap(),
+            Decision::Continue
+        );
+        guard.resumed(2., 12.);
+        assert_eq!(
+            guard.plan([20., 0.], 12., true, true, 1., rules).unwrap(),
+            Decision::Continue
+        );
+        assert_eq!(
+            guard.plan([20., 0.], 16., true, true, 1., rules).unwrap(),
+            Decision::Return
+        );
     }
     #[test]
     fn guard_return_uses_authored_distance_time_attack_reset_and_release() {

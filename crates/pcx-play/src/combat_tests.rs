@@ -354,6 +354,65 @@ fn melee_attacks_follow_the_source_cycle_and_kill_with_death_events() {
     );
 }
 
+#[test]
+fn pause_freezes_a_pending_attack_but_the_paused_target_still_takes_damage() {
+    let fields = armed("64", "normal");
+    let (mut vm, a, b) = open(&fields);
+    let (mut control, c, d) = open(&fields);
+    for (vm, attacker, target) in [(&mut vm, a, b), (&mut control, c, d)] {
+        vm.host()
+            .inner
+            .native("PauseUnit", &[Value::Handle(target), Value::Bool(true)])
+            .unwrap();
+        assert_eq!(
+            vm.host()
+                .inner
+                .native(
+                    "IssueTargetOrder",
+                    &[
+                        Value::Handle(attacker),
+                        Value::Str("alpha".into()),
+                        Value::Handle(target)
+                    ]
+                )
+                .unwrap(),
+            Value::Bool(true)
+        );
+        step(vm, 0.125);
+    }
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(a), Value::Bool(true)])
+        .unwrap();
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(a),
+                    Value::Str("alpha".into()),
+                    Value::Handle(b)
+                ]
+            )
+            .unwrap(),
+        Value::Bool(false)
+    );
+    step(&mut vm, 3.125);
+    assert_eq!(pools(&mut vm, b).0, 20.);
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(a), Value::Bool(false)])
+        .unwrap();
+    step(&mut vm, 3.3);
+    step(&mut control, 0.3);
+    assert_eq!(pools(&mut vm, b), pools(&mut control, d));
+    assert!(pools(&mut vm, b).0 < 20.);
+    step(&mut vm, 4.8);
+    step(&mut control, 1.8);
+    assert_eq!(pools(&mut vm, b), pools(&mut control, d));
+}
+
 fn vm_global(vm: &Vm, name: &str) -> Value {
     vm.global(name)
 }
@@ -397,6 +456,12 @@ fn missiles_land_after_travel_and_lethal_state_and_kill_unit_reuse_death() {
     step(&mut vm, start + 0.6);
     let life = |vm: &mut Vm| vm.host().inner.unit_vitals(b).unwrap().unwrap().life;
     assert_eq!(life(&mut vm), 20.0);
+    for unit in [a, b] {
+        vm.host()
+            .inner
+            .native("PauseUnit", &[Value::Handle(unit), Value::Bool(true)])
+            .unwrap();
+    }
     step(&mut vm, start + 0.8);
     assert!(life(&mut vm) < 20.0);
     let state = vm_global(&vm, "UNIT_STATE_LIFE");
@@ -1662,6 +1727,28 @@ fn regeneration_integrates_stock_rates_and_caps_at_maxima_for_any_tick_chunking(
     assert_eq!(pools(&mut stepped, c), (7.5, 5.0));
     assert_eq!(pools(&mut whole, b), (20.0, 50.0));
     assert_eq!(pools(&mut stepped, d), (20.0, 50.0));
+}
+
+#[test]
+fn pause_freezes_regeneration_without_deferring_it_until_resume() {
+    let fields = regen_fields("0.25", "always", "0.5");
+    let (mut vm, a, b) = open(&fields);
+    set_pools(&mut vm, a, 5., 0.);
+    set_pools(&mut vm, b, 5., 0.);
+    step(&mut vm, 0.5);
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(a), Value::Bool(true)])
+        .unwrap();
+    step(&mut vm, 10.5);
+    assert_eq!(pools(&mut vm, a), (5.125, 0.25));
+    assert_eq!(pools(&mut vm, b), (7.625, 5.25));
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(a), Value::Bool(false)])
+        .unwrap();
+    step(&mut vm, 12.5);
+    assert_eq!(pools(&mut vm, a), (5.625, 1.25));
 }
 
 #[test]

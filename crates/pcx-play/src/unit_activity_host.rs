@@ -132,6 +132,14 @@ fn emit(
 }
 
 impl UnitActivity {
+    pub(super) fn resume_after_pause(&mut self, since: f64, now: f64) {
+        if let Some(motion) = &mut self.motion {
+            motion.started += now - since.max(motion.started);
+        }
+        if let Some(turn) = &mut self.turn {
+            turn.start += now - since.max(turn.start);
+        }
+    }
     pub fn held(&self) -> bool {
         self.held
     }
@@ -516,7 +524,7 @@ impl ObjectHost {
                     })
                 });
             }
-            if record.combat.as_ref().is_some_and(|c| c.dead) {
+            if record.paused_since.is_some() || record.combat.as_ref().is_some_and(|c| c.dead) {
                 return Ok(Value::Bool(false));
             }
             let now = self.timer_game_time().ok_or_else(|| {
@@ -713,6 +721,28 @@ impl ObjectHost {
                 })?;
                 let (speed, mut motion) = match self.inner.entry_mut(unit)? {
                     Entry::Unit { record } => {
+                        if record.paused_since.is_some() {
+                            if let Some(position) = record.position {
+                                emit(
+                                    &mut sink,
+                                    unit,
+                                    position,
+                                    position,
+                                    self.unit_activity
+                                        .as_ref()
+                                        .expect("activity")
+                                        .projected_through,
+                                    now,
+                                )
+                                .map_err(|detail| {
+                                    self.inner.error(
+                                        "unit activity",
+                                        Failure::UnitActivity(detail.into()),
+                                    )
+                                })?;
+                            }
+                            continue;
+                        }
                         let Some(activity) = &mut record.activity else {
                             continue;
                         };
@@ -769,6 +799,23 @@ impl ObjectHost {
             sink.spans.truncate(sink.base);
         }
         result
+    }
+
+    // Script sessions project units before delivering a native. Direct callers must do the same.
+    pub(super) fn check_activity_boundary(&self, now: f64, name: &str) -> Result<(), Error> {
+        if self
+            .unit_activity
+            .as_ref()
+            .is_some_and(|state| state.projected_through != now)
+        {
+            return Err(self.inner.error(
+                name,
+                Failure::UnitActivity(
+                    "project activity to the current clock before changing pause".into(),
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// Route toward `destination`, or stop when `None`, keeping walk/stand animation

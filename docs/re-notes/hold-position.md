@@ -71,7 +71,8 @@ record the attacker, owner or rawcode of any hit.
   runtime observation of Player(1) against Player(9).
 - Invulnerability and pause are not applied in the intro. The prior note's claim
   that invulnerability is not consumed by combat is out of date: `weapon_target`
-  filters protected targets. Pausing (`PauseUnit`) is still unsupported.
+  filters protected targets. Explicit `PauseUnit` now suspends acquisition and
+  attack progress; see [unit-pause.md](unit-pause.md). The intro does not issue it.
 
 ## Diagnostic trace and replay
 

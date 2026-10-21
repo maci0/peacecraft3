@@ -131,6 +131,8 @@ pub struct ExecutedUnit {
     pub activity: Option<super::unit_activity::UnitActivity>,
     /// Runtime ShowUnit state, independent of fog, invisibility and explicit pause.
     pub shown: bool,
+    /// Start of an explicit PauseUnit interval on host game time.
+    pub paused_since: Option<f64>,
     /// Live life/mana when vitals are admitted.
     pub vitals: Option<super::Vitals>,
     /// Weapon, armor and attack state when combat is admitted.
@@ -246,6 +248,7 @@ impl ObjectHost {
         let invulnerable_query_span =
             self.optional_unit_getter(&declaration_source, GET_INVULNERABLE, "boolean")?;
         self.unit_visibility_declarations(&declaration_source)?;
+        self.unit_pause_declarations(&declaration_source)?;
         self.unit_removal_declaration(&declaration_source)?;
         if self.sound_properties {
             self.sound_attachment_declaration(&declaration_source)?;
@@ -534,6 +537,9 @@ impl ObjectHost {
     ) -> Option<Result<Value, Error>> {
         self.units.as_ref()?;
         if let Some(result) = self.unit_visibility_native(name, args) {
+            return Some(result);
+        }
+        if let Some(result) = self.unit_pause_native(name, args) {
             return Some(result);
         }
         if name == "SetUnitAnimation" && self.units.as_ref()?.models.is_some() {
@@ -1260,6 +1266,7 @@ impl ObjectHost {
                 animation: None,
                 activity: None,
                 shown: true,
+                paused_since: None,
                 vitals: None,
                 permanent_strength: 0,
                 combat: None,
@@ -1363,6 +1370,12 @@ impl ObjectHost {
         let turning_on = text == on;
         if !turning_off && !turning_on {
             return None;
+        }
+        if self
+            .executed_unit(unit)
+            .is_ok_and(|record| record.paused_since.is_some())
+        {
+            return Some(Ok(Value::Bool(false)));
         }
         match self.unit_ability_available(unit, ability) {
             Ok(true) => {}

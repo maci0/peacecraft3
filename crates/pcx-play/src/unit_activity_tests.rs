@@ -2,6 +2,8 @@ use super::*;
 use pcx_script::HandleId;
 type Vm = pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>;
 pub(super) const ORDERS: &str = r#"
+native PauseUnit takes unit u, boolean paused returns nothing
+native IsUnitPaused takes unit u returns boolean
 native ShowUnit takes unit u, boolean shown returns nothing
 constant native IsUnitHidden takes unit u returns boolean
 type location extends agent
@@ -168,6 +170,128 @@ fn tick(vm: &mut Vm, now: f64) {
 }
 fn position(vm: &mut Vm, id: HandleId) -> [f32; 2] {
     vm.host().inner.executed_unit(id).unwrap().position.unwrap()
+}
+
+#[test]
+fn pause_preserves_the_route_and_repeated_pause_does_not_stack_or_catch_up() {
+    let mut vm = open();
+    let a = unit(&vm, "A");
+    assert_eq!(vm.call("move", &[]).unwrap(), Value::Bool(true));
+    tick(&mut vm, 1.);
+    let before = position(&mut vm, a);
+    let route = vm.host().inner.executed_unit(a).unwrap().activity.clone();
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(a), Value::Bool(true)])
+        .unwrap();
+    let mut spans = Vec::new();
+    vm.host().inner.next_timer_expiry(4., &mut 1000).unwrap();
+    vm.host()
+        .inner
+        .advance_unit_activity_spans(4., &mut 65536, &mut spans)
+        .unwrap();
+    assert_eq!(spans.len(), 1);
+    assert_eq!(
+        (spans[0].from, spans[0].to, spans[0].start, spans[0].end),
+        (before, before, 1., 4.)
+    );
+    assert!(!spans[0].moving);
+    assert_eq!(position(&mut vm, a), before);
+    assert_eq!(vm.host().inner.executed_unit(a).unwrap().activity, route);
+    assert_eq!(
+        vm.host()
+            .inner
+            .native("IsUnitPaused", &[Value::Handle(a)])
+            .unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        vm.host()
+            .inner
+            .native("GetUnitCurrentOrder", &[Value::Handle(a)])
+            .unwrap(),
+        Value::Int(1631)
+    );
+    assert_eq!(vm.call("stop", &[]).unwrap(), Value::Bool(false));
+    assert_eq!(vm.call("move", &[]).unwrap(), Value::Bool(false));
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(a), Value::Bool(true)])
+        .unwrap();
+    tick(&mut vm, 7.);
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(a), Value::Bool(false)])
+        .unwrap();
+    tick(&mut vm, 8.);
+    let mut control = open();
+    control.call("move", &[]).unwrap();
+    tick(&mut control, 2.);
+    let control_a = unit(&control, "A");
+    assert_eq!(position(&mut vm, a), position(&mut control, control_a));
+    assert_eq!(
+        vm.host()
+            .inner
+            .native("IsUnitPaused", &[Value::Handle(a)])
+            .unwrap(),
+        Value::Bool(false)
+    );
+}
+
+#[test]
+fn pause_validates_arguments_and_projection_before_changing_state() {
+    let mut vm = open();
+    let a = unit(&vm, "A");
+    assert!(
+        vm.host()
+            .inner
+            .native("PauseUnit", &[Value::Handle(a), Value::Int(1)])
+            .is_err()
+    );
+    assert_eq!(
+        vm.host()
+            .inner
+            .native("PauseUnit", &[Value::Null, Value::Bool(true)])
+            .unwrap(),
+        Value::Null
+    );
+    assert_eq!(
+        vm.host()
+            .inner
+            .native("IsUnitPaused", &[Value::Null])
+            .unwrap(),
+        Value::Bool(false)
+    );
+    assert!(
+        vm.host()
+            .inner
+            .next_timer_expiry(2., &mut 1000)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        vm.host()
+            .inner
+            .native("PauseUnit", &[Value::Handle(a), Value::Bool(true)])
+            .is_err()
+    );
+    assert_eq!(vm.host().inner.executed_unit(a).unwrap().paused_since, None);
+    tick(&mut vm, 2.);
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(a), Value::Bool(true)])
+        .unwrap();
+    vm.host()
+        .inner
+        .native("RemoveUnit", &[Value::Handle(a)])
+        .unwrap();
+    assert_eq!(
+        vm.host()
+            .inner
+            .native("IsUnitPaused", &[Value::Handle(a)])
+            .unwrap(),
+        Value::Bool(false)
+    );
 }
 
 #[test]
