@@ -406,6 +406,36 @@ pub fn skin_mesh(mesh: &LoadedMesh, skeleton: &Skeleton) -> Vec<[f32; 3]> {
         .collect()
 }
 
+/// Avoid marking a mesh changed (and uploading it again) when its position bits match.
+/// Missing handles retain the skinning callers' existing no-op behavior.
+pub fn set_mesh_positions(
+    meshes: &mut Assets<Mesh>,
+    handle: &Handle<Mesh>,
+    positions: Vec<[f32; 3]>,
+) -> bool {
+    let Some(mesh) = meshes.get(handle) else {
+        return false;
+    };
+    if mesh
+        .attribute(Mesh::ATTRIBUTE_POSITION)
+        .and_then(|a| a.as_float3())
+        .is_some_and(|old| {
+            old.len() == positions.len()
+                && old
+                    .iter()
+                    .zip(&positions)
+                    .all(|(a, b)| a.map(f32::to_bits) == b.map(f32::to_bits))
+        })
+    {
+        return false;
+    }
+    meshes
+        .get_mut(handle)
+        .expect("checked mesh")
+        .insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    true
+}
+
 /// A Bevy-ready mesh built from a decoded geoset.
 #[derive(Debug, Clone)]
 pub struct LoadedMesh {

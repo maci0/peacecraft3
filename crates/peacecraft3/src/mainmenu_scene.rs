@@ -1418,13 +1418,7 @@ pub fn skin_geosets(
             .map_err(|error| SceneError::Decode(error.into()))?;
     }
     for (handle, rest) in handles.iter().zip(&rig.model.meshes) {
-        let Some(mut mesh) = meshes.get_mut(handle) else {
-            continue;
-        };
-        mesh.insert_attribute(
-            Mesh::ATTRIBUTE_POSITION,
-            pcx_gfx::skin_mesh(rest, &skeleton),
-        );
+        pcx_gfx::set_mesh_positions(meshes, handle, pcx_gfx::skin_mesh(rest, &skeleton));
     }
     Ok(skeleton)
 }
