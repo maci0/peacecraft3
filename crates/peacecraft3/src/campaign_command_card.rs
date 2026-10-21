@@ -44,6 +44,7 @@ pub(crate) struct ButtonOrder {
 struct Icon {
     kind: Kind,
     data: ability_profile::Button,
+    tooltip: Result<ability_profile::Tooltip, String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct View {
@@ -245,7 +246,15 @@ fn wanted(objects: &ObjectHost) -> Result<Option<View>, String> {
             {
                 return Err("implemented commands collide at the same authored Buttonpos".into());
             }
-            icons.push(Icon { kind, data });
+            let tooltip = objects
+                .ability_tooltip(unit, command.ability)
+                .map_err(|e| e.to_string())
+                .and_then(|tip| tip.ok_or("command has no learned tooltip".into()));
+            icons.push(Icon {
+                kind,
+                data,
+                tooltip,
+            });
         }
     }
     Ok(Some(View { unit, icons }))
@@ -342,21 +351,39 @@ fn paint(
             },
             image,
             icon.kind,
+            rect,
+            &icon.tooltip,
         ));
     }
     commands.entity(root).despawn_children();
-    for (node, image, kind) in nodes {
+    for (node, image, kind, rect, tooltip) in nodes {
         commands.entity(root).with_children(|parent| {
-            parent.spawn((
+            let mut button = parent.spawn((
                 node,
                 ImageNode::new(image),
                 Button,
+                bevy::picking::hover::Hovered::default(),
+                crate::campaign_inventory::TooltipAnchor {
+                    rect,
+                    viewport: source.rules.viewport,
+                },
                 ButtonOrder {
                     unit: view.unit,
                     kind,
                     session: witness.clone(),
                 },
             ));
+            match tooltip {
+                Ok(tip) => {
+                    button.insert(crate::campaign_inventory::ControlTooltip {
+                        name: tip.title.clone(),
+                        ubertip: tip.description.clone(),
+                    });
+                }
+                Err(error) => {
+                    button.insert(crate::campaign_inventory::TooltipFailure(error.clone()));
+                }
+            }
         });
     }
     Ok(())
@@ -588,6 +615,7 @@ mod tests {
                 .collect();
             icons.push(Icon {
                 kind,
+                tooltip: Err("standalone icon fixture has no learned unit".into()),
                 data: ability_profile::Button {
                     ability,
                     rank: 1,
@@ -664,6 +692,131 @@ mod tests {
             first
         );
         assert_eq!(source.failed.len(), 1);
+    }
+
+    #[test]
+    #[ignore = "requires selected unchanged Human01 PCX_NATIVE_CHAPTER_* inputs; no campaign progression claim"]
+    fn selected_chapter_learned_tooltips_expand_both_source_spells_at_every_rank() {
+        drop(learned_tooltip_fixture());
+    }
+
+    fn learned_tooltip_fixture() -> (
+        Option<String>,
+        Vec<(ability_profile::Button, ability_profile::Tooltip)>,
+    ) {
+        use pcx_objects::editor::{
+            SlkId,
+            defaults::{DefaultTables, Family},
+        };
+        use pcx_script::{Host, Value};
+        let dir = std::path::PathBuf::from(std::env::var_os("PCX_NATIVE_CHAPTER_INSTALL").unwrap());
+        let client = dir.join("Warcraft III.exe");
+        let identity = pcx_play::campaign_inputs::client_identity(
+            &std::fs::read(&client).unwrap(),
+            &client.display().to_string(),
+        );
+        let tables = DefaultTables::open(&dir, identity.version).unwrap();
+        let mage = tables
+            .rawcodes(Family::Unit)
+            .find(|row| {
+                tables
+                    .object(Family::Unit, row)
+                    .unwrap()
+                    .cell(SlkId::UnitAbilities, "heroAbilList")
+                    .is_ok_and(|cell| cell.text.split(',').any(|id| id.trim() == "AHwe"))
+            })
+            .expect("a source hero with Water Elemental")
+            .as_bytes()
+            .try_into()
+            .unwrap();
+        let mut app = crate::native_campaign::tests::started_app();
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let holy = match session.global("gg_unit_Hart_0023") {
+            Some(Value::Handle(unit)) => unit,
+            other => panic!("Human01 Arthas: {other:?}"),
+        };
+        let objects = session.host().unwrap().objects_mut();
+        let record = objects.executed_unit(holy).unwrap();
+        let position = record.position.unwrap_or([record.x, record.y]);
+        let args = [
+            Value::Handle(record.owner),
+            Value::Int(i32::from_be_bytes(mage)),
+            Value::Real(position[0]),
+            Value::Real(position[1]),
+            Value::Real(record.face),
+        ];
+        let water = match objects.native("CreateUnit", &args).unwrap() {
+            Value::Handle(unit) => unit,
+            other => panic!("source mage creation: {other:?}"),
+        };
+        let race = objects.local_race_preference_constant().unwrap();
+        let mut learned = Vec::new();
+        for (unit, ability) in [(holy, *b"AHhb"), (water, *b"AHwe")] {
+            let row = pcx_objects::fourcc_text(ability);
+            let source = tables.object(Family::Ability, &row).unwrap();
+            let number = |column| {
+                source
+                    .cell(SlkId::AbilityData, column)
+                    .unwrap()
+                    .text
+                    .parse::<i32>()
+                    .unwrap()
+            };
+            let levels = number("levels");
+            // The native caps this boundary request using the admitted source progression.
+            objects
+                .native(
+                    "SetHeroLevel",
+                    &[
+                        Value::Handle(unit),
+                        Value::Int(i32::MAX),
+                        Value::Bool(false),
+                    ],
+                )
+                .unwrap();
+            for rank in 1..=levels {
+                if objects
+                    .executed_unit(unit)
+                    .unwrap()
+                    .abilities
+                    .as_ref()
+                    .unwrap()
+                    .level(ability)
+                    < rank
+                {
+                    objects
+                        .native(
+                            "SelectHeroSkill",
+                            &[Value::Handle(unit), Value::Int(i32::from_be_bytes(ability))],
+                        )
+                        .unwrap();
+                }
+                assert_eq!(
+                    objects
+                        .executed_unit(unit)
+                        .unwrap()
+                        .abilities
+                        .as_ref()
+                        .unwrap()
+                        .level(ability),
+                    rank
+                );
+                let tip = objects.ability_tooltip(unit, ability).unwrap().unwrap();
+                assert_eq!(
+                    tip.title,
+                    source
+                        .profile_element("Tip", rank - 1, levels as u32)
+                        .unwrap()
+                        .text
+                );
+                assert!(!tip.description.is_empty() && !tip.description.contains(['<', '>']));
+                println!("ability={row} rank={rank} references_expanded=true");
+                learned.push((objects.ability_button(unit, ability).unwrap().unwrap(), tip));
+            }
+        }
+        (race, learned)
     }
 
     #[cfg(feature = "test-fixtures")]
@@ -747,6 +900,11 @@ mod tests {
             assert!(!buttons.is_empty());
             for child in buttons {
                 assert_eq!(app.world().get::<ButtonOrder>(*child).unwrap().unit, unit);
+                let tooltip = app
+                    .world()
+                    .get::<crate::campaign_inventory::ControlTooltip>(*child)
+                    .expect("source-ranked tooltip must reach its mounted button");
+                assert!(!tooltip.name.is_empty() && !tooltip.ubertip.contains(['<', '>']));
             }
             (
                 root,
@@ -843,15 +1001,40 @@ mod tests {
         assert!(app.world().resource::<CommandCard>().root.is_none());
     }
 
+    #[cfg(feature = "test-fixtures")]
     #[test]
     #[ignore = "requires live desktop, selected install/executable, and PCX_COMMAND_CARD_ABILITY=AHhb|AHwe"]
     fn selected_original_command_icon_native_component() {
+        native_component(false);
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    #[test]
+    #[ignore = "requires live desktop and unchanged Human01 PCX_NATIVE_CHAPTER_* plus PCX_COMMAND_CARD_ABILITY=AHhb|AHwe"]
+    fn selected_original_command_tooltip_native_component() {
+        native_component(true);
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    fn native_component(with_tooltip: bool) {
         let (mut source, mut view, reader) = selected_icons();
         let ability = std::env::var("PCX_COMMAND_CARD_ABILITY").expect("choose a fixture ability");
         assert!(matches!(ability.as_str(), "AHhb" | "AHwe"));
         view.icons
             .retain(|icon| icon.data.ability.as_slice() == ability.as_bytes());
         assert_eq!(view.icons.len(), 1);
+        let race = if with_tooltip {
+            let (race, learned) = learned_tooltip_fixture();
+            let (data, tip) = learned
+                .into_iter()
+                .rfind(|(data, _)| data.ability.as_slice() == ability.as_bytes())
+                .unwrap();
+            view.icons[0].data = data;
+            view.icons[0].tooltip = Ok(tip);
+            race
+        } else {
+            None
+        };
         let mut app = App::new();
         app.add_plugins(
             DefaultPlugins
@@ -868,7 +1051,7 @@ mod tests {
                 })
                 .disable::<bevy::audio::AudioPlugin>(),
         );
-        app.world_mut().spawn(Camera2d);
+        let camera = app.world_mut().spawn(Camera2d).id();
         {
             let mut images = app.world_mut().resource_mut::<Assets<Image>>();
             for icon in &view.icons {
@@ -887,6 +1070,48 @@ mod tests {
         )
         .unwrap();
         queue.apply(app.world_mut());
+        if with_tooltip {
+            let path = std::env::var("PCX_WAR3_EXE").unwrap();
+            let bytes = std::fs::read(&path).unwrap();
+            crate::campaign_inventory::tooltip_component_fixture(
+                &mut app,
+                &reader,
+                &bytes,
+                pcx_play::campaign_inputs::client_identity(&bytes, &path),
+                race,
+                root,
+                camera,
+            );
+            app.add_systems(
+                PostUpdate,
+                (|windows: Query<&Window>,
+                  buttons: Query<(&ComputedNode, &UiGlobalTransform), With<ButtonOrder>>,
+                  mut previous: Local<Option<UVec2>>| {
+                    let Ok(window) = windows.single() else { return };
+                    let size = window.physical_size();
+                    let Ok((node, transform)) = buttons.single() else {
+                        return;
+                    };
+                    if node.size().min_element() <= 0.0 || *previous == Some(size) {
+                        return;
+                    }
+                    let centre = transform.to_scale_angle_translation().2;
+                    if centre.x <= 0.0
+                        || centre.y <= 0.0
+                        || centre.x >= size.x as f32
+                        || centre.y >= size.y as f32
+                    {
+                        return;
+                    }
+                    println!(
+                        "CONTROL_CENTER width={} height={} x={} y={}",
+                        size.x, size.y, centre.x, centre.y
+                    );
+                    *previous = Some(size);
+                })
+                .after(bevy::ui::UiSystems::PostLayout),
+            );
+        }
         // Watchdog only; screenshots and exact geometry checks establish the visual result.
         app.add_systems(Update, |time: Res<Time<Real>>| {
             assert!(time.elapsed_secs() < 45.)
@@ -926,6 +1151,7 @@ mod tests {
             unit: HandleId::new(std::num::NonZeroU64::new(7).unwrap()),
             icons: vec![Icon {
                 kind: Kind::TargetUnit,
+                tooltip: Err("synthetic icon-only fixture".into()),
                 data: ability_profile::Button {
                     ability: *b"TEST",
                     rank: 1,
@@ -953,6 +1179,7 @@ mod tests {
         );
         view.icons.push(Icon {
             kind: Kind::Immediate,
+            tooltip: Err("synthetic icon-only fixture".into()),
             data: ability_profile::Button {
                 ability: *b"FAIL",
                 rank: 1,

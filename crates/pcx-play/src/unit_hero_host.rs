@@ -7,6 +7,9 @@ use pcx_objects::editor::Overlay;
 use pcx_script::value::FunctionId;
 use std::collections::BTreeSet;
 
+#[path = "ability_tooltip.rs"]
+mod tooltip;
+
 struct HeroDelivery {
     trigger: HandleId,
     filter: Option<FunctionId>,
