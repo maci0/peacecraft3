@@ -5,7 +5,7 @@ use bevy::{
 };
 use pcx_play::{
     ability_profile, command_layout::Rules, map_startup_host::MapStartupHost,
-    playercolor_host::ObjectHost, scripts::AssetIdentity,
+    playercolor_host::ObjectHost,
 };
 use pcx_script::HandleId;
 use peacecraft3::{
@@ -419,11 +419,7 @@ fn project(
                 crate::menu_lighting::with_client_image(install.as_deref(), |label, image| {
                     Rules::reviewed_legacy(
                         image,
-                        AssetIdentity {
-                            source: label.into(),
-                            edition: "selected campaign client".into(),
-                            version: "reviewed command layout".into(),
-                        },
+                        pcx_play::campaign_inputs::client_identity(image, label),
                     )
                 })?;
             let mut receipts = Vec::new();
@@ -560,6 +556,166 @@ mod tests {
             pointer::{Location, PointerButton, PointerId},
         },
     };
+    use pcx_play::scripts::AssetIdentity;
+
+    fn selected_icons() -> (Source, View, pcx_assets::Resolver) {
+        use pcx_assets::{Addon, ArchiveLayer, AssetMode, Behaviour, Build, GameMode, Resolver};
+        use pcx_objects::editor::defaults::{DefaultTables, Family};
+        let dir = std::path::PathBuf::from(
+            std::env::var_os("PCX_NATIVE_CHAPTER_INSTALL").expect("set PCX_NATIVE_CHAPTER_INSTALL"),
+        );
+        let path = std::env::var("PCX_WAR3_EXE").expect("set PCX_WAR3_EXE");
+        let bytes = std::fs::read(&path).unwrap();
+        let identity = pcx_play::campaign_inputs::client_identity(&bytes, &path);
+        let rules = Rules::reviewed_legacy(&bytes, identity.clone()).unwrap();
+        let tables = DefaultTables::open(&dir, identity.version).unwrap();
+        let mut icons = Vec::new();
+        for (ability, kind) in [(*b"AHhb", Kind::TargetUnit), (*b"AHwe", Kind::Immediate)] {
+            let row = pcx_objects::fourcc_text(ability);
+            let object = tables.object(Family::Ability, &row).unwrap();
+            let art = object.profile("Art");
+            let [art] = art.as_slice() else {
+                panic!("{row}: expected one source Art")
+            };
+            let position = object.profile("Buttonpos");
+            let [position] = position.as_slice() else {
+                panic!("{row}: expected one source Buttonpos")
+            };
+            let position: Vec<usize> = position
+                .text
+                .split(',')
+                .map(|v| v.trim().parse().unwrap())
+                .collect();
+            icons.push(Icon {
+                kind,
+                data: ability_profile::Button {
+                    ability,
+                    rank: 1,
+                    art: art.text.to_owned(),
+                    position: position.try_into().unwrap(),
+                },
+            });
+        }
+        let reader = Resolver::new(
+            GameMode {
+                build: Build::V1_29b,
+                addon: Addon::NoAddon,
+                assets: AssetMode::Vanilla,
+                behaviour: Behaviour::Vanilla,
+            },
+            None,
+            vec![ArchiveLayer {
+                priority: 0,
+                source: Box::new(pcx_play::install_source::InstallSource::open(&dir).unwrap()),
+            }],
+        )
+        .unwrap();
+        (
+            Source {
+                rules,
+                console: "synthetic component parent".into(),
+                images: HashMap::new(),
+                failed: HashMap::new(),
+                retained: 0,
+                receipts: Vec::new(),
+            },
+            View {
+                unit: HandleId::new(std::num::NonZeroU64::new(7).unwrap()),
+                icons,
+            },
+            reader,
+        )
+    }
+
+    #[test]
+    #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL and PCX_WAR3_EXE; reads local original icons"]
+    fn selected_original_icons_decode_once_and_missing_assets_are_cached() {
+        let (mut source, view, reader) = selected_icons();
+        let mut images = Assets::<Image>::default();
+        for icon in &view.icons {
+            let handle = image(&reader, &mut source, &icon.data.art, &mut images).unwrap();
+            let receipt_count = source.receipts.len();
+            let retained = source.retained;
+            let decoded = images.get(&handle).unwrap();
+            assert!(decoded.width() > 0 && decoded.height() > 0);
+            assert!(decoded.data.as_ref().is_some_and(|data| !data.is_empty()));
+            assert_eq!(
+                image(&reader, &mut source, &icon.data.art, &mut images)
+                    .unwrap()
+                    .id(),
+                handle.id()
+            );
+            assert_eq!(source.receipts.len(), receipt_count);
+            assert_eq!(source.retained, retained);
+            assert!(
+                source
+                    .receipts
+                    .iter()
+                    .any(|receipt| receipt.path
+                        == pcx_assets::AssetPath::new(&icon.data.art).unwrap())
+            );
+        }
+        assert_eq!(images.len(), view.icons.len());
+        assert!(source.retained > 0 && source.retained <= MAX_RETAINED);
+        let missing = "PCX-Fixture-Missing-Command-Icon.blp";
+        let first = image(&reader, &mut source, missing, &mut images).unwrap_err();
+        assert_eq!(
+            image(&reader, &mut source, missing, &mut images).unwrap_err(),
+            first
+        );
+        assert_eq!(source.failed.len(), 1);
+    }
+
+    #[test]
+    #[ignore = "requires live desktop, selected install/executable, and PCX_COMMAND_CARD_ABILITY=AHhb|AHwe"]
+    fn selected_original_command_icon_native_component() {
+        let (mut source, mut view, reader) = selected_icons();
+        let ability = std::env::var("PCX_COMMAND_CARD_ABILITY").expect("choose a fixture ability");
+        assert!(matches!(ability.as_str(), "AHhb" | "AHwe"));
+        view.icons
+            .retain(|icon| icon.data.ability.as_slice() == ability.as_bytes());
+        assert_eq!(view.icons.len(), 1);
+        let mut app = App::new();
+        app.add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "PeaceCraft command card fixture".into(),
+                        resolution: (1280_u32, 960_u32).into(),
+                        ..default()
+                    }),
+                    ..default()
+                })
+                .set(bevy::winit::WinitPlugin {
+                    run_on_any_thread: true,
+                })
+                .disable::<bevy::audio::AudioPlugin>(),
+        );
+        app.world_mut().spawn(Camera2d);
+        {
+            let mut images = app.world_mut().resource_mut::<Assets<Image>>();
+            for icon in &view.icons {
+                image(&reader, &mut source, &icon.data.art, &mut images).unwrap();
+            }
+        }
+        let root = app.world_mut().spawn(root_node(Display::Flex)).id();
+        let session = Arc::new(());
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        paint(
+            &mut Commands::new(&mut queue, app.world()),
+            root,
+            &source,
+            &view,
+            &Arc::downgrade(&session),
+        )
+        .unwrap();
+        queue.apply(app.world_mut());
+        // Watchdog only; screenshots and exact geometry checks establish the visual result.
+        app.add_systems(Update, |time: Res<Time<Real>>| {
+            assert!(time.elapsed_secs() < 45.)
+        });
+        assert!(matches!(app.run(), AppExit::Success));
+    }
 
     #[test]
     #[ignore = "requires PCX_WAR3_EXE for the selected command geometry; images are synthetic"]

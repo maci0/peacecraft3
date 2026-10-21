@@ -11,6 +11,11 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   and control. Synthetic pointer/session tests, selected-client replacement and
   teardown, and the explicit Human01 input gate pass. Rendered comparison,
   tooltips, readiness/disabled art and remaining command types stay open.
+- [x] Selected-original command icons decode through bounded source reads and
+  reuse their cached handles/receipts. Native component captures of each spell
+  at 1280×960 and 640×480 show proportional placement and scaling. This is a
+  synthetic parent/selection fixture; full mounted-console and original-client
+  rendering comparison remain open.
 
 ### 2026-10-21: Ability profile overrides
 

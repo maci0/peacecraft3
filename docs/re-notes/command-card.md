@@ -152,3 +152,28 @@ WASM checks and touched-file formatting pass. Logs are retained locally under
 `.scratch/command-card-source/card-validation` and `card-validation-fixed`;
 the first chain's Clippy failure is preserved, with its corrected rerun in
 `card-clippy-2.log`. No original asset or screenshot is committed.
+
+## Original icon component capture (2026-10-22)
+
+The explicit selected-install gate now reads both authored `Art` paths through
+the bounded install resolver, decodes their images, and checks that repeated
+reads reuse the image handle and receipt without increasing retained bytes.
+A missing synthetic path keeps its first refusal in the bounded error cache.
+The runtime layout provenance now uses the shared client-identity helper,
+including the executable digest, rather than a descriptive version placeholder.
+
+The native ignored component fixture renders each spell separately through
+the production `paint` and image-loading functions. Both original icons were
+observed at 1280×960 and 640×480, with clean process exits. Their non-background
+pixel bounds shrink from 61×61 to 30×30; placement shrinks with the viewport
+with raster rounding. This uses a synthetic full-viewport parent and a
+synthetic rank/selection. It establishes icon decoding and component rendering,
+not the mounted campaign console, pointer picking, native filtering or original
+client appearance parity. No visual adjustment was made from screenshot fits.
+
+Local receipts, four screenshots and binary hashes are in
+`.scratch/command-card-source/icon-visual`; the binary was selected from the
+private Cargo JSON artifact stream. Both windows were closed through their own
+window IDs; no other application was controlled. The only runtime warning was
+an unmapped gamepad using its default mapping. Strict all-target Clippy passes.
+The fixtures, screenshots and original bytes remain local.
