@@ -47,7 +47,7 @@ pub(super) struct Rules {
     undead_divisor: f32,
     art: Art,
     /// Game time each caster may cast again.
-    ready_at: BTreeMap<HandleId, f64>,
+    pub(super) ready_at: BTreeMap<HandleId, f64>,
     /// Accepted casts still walking into range, by caster.
     pending: BTreeMap<HandleId, HandleId>,
 }

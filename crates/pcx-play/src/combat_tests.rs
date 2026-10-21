@@ -1,4 +1,6 @@
 use super::*;
+#[path = "ability_cooldown_tests.rs"]
+mod ability_cooldowns;
 #[path = "unit_summon_tests.rs"]
 mod summoning;
 use crate::playercolor_host::{CombatActor, CombatTraceEvent};
@@ -2343,6 +2345,12 @@ endfunction
 function cast takes unit c, unit t returns boolean
 return IssueTargetOrder(c,"alpha",t)
 endfunction
+function remaining_cd takes unit c, integer ability returns real
+return BlzGetUnitAbilityCooldownRemaining(c,ability)
+endfunction
+function end_cd takes unit c, integer ability returns nothing
+call BlzEndUnitAbilityCooldown(c,ability)
+endfunction
 function attack_enemy takes unit c, unit t returns nothing
 call IssueTargetOrder(c,"beta",t)
 endfunction
@@ -2406,6 +2414,8 @@ native SelectHeroSkill takes unit u, integer ability returns nothing
 type unittype extends handle
 constant native ConvertUnitType takes integer i returns unittype
 native IsUnitType takes unit u, unittype t returns boolean
+native BlzGetUnitAbilityCooldownRemaining takes unit u, integer ability returns real
+native BlzEndUnitAbilityCooldown takes unit u, integer ability returns nothing
 constant native GetSpellTargetUnit takes nothing returns unit
 constant native GetSummoningUnit takes nothing returns unit
 constant native GetSummonedUnit takes nothing returns unit

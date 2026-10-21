@@ -277,5 +277,47 @@ Clippy, WASM and native app tests pass. Receipts are local under
 `.scratch/command-readiness/`. No new F7 rows or button states are published by
 this core checkpoint. The subsequent fractional-field change replaces Holy
 Light's older integer-only read (see `holy-light-ability.md`).
-The selected `common.j` declares ability cooldown query/reset natives, whose
-script wiring remains open.
+The selected `common.j` declares ability cooldown natives; the remaining/end
+bindings below cover the two implemented spell classes. Other cooldown operations
+remain open.
+
+## Script cooldown remaining/end (2026-10-22)
+
+`BlzGetUnitAbilityCooldownRemaining` and `BlzEndUnitAbilityCooldown` now use the
+same per-unit deadlines as Holy Light and Water Elemental. Their declarations
+are optional at admission; when present, their signatures, unit family and source
+must match the admitted unit declarations. A present ability whose cooldown
+behavior is not implemented refuses explicitly. This is not general support
+for every ability class or item cooldown group.
+
+Primary registrations in the selected image bind remaining at `0x4a185e` to
+`0x497190`, which resolves the unit and calls `0x6d6e00`; end at `0x4a1872`
+binds `0x48fe60`, which calls `0x6d63a0`. The bodies look up the ability and
+perform a type check. Failure returns zero for remaining and does nothing for
+end. The remaining body calls the ability's getter at vtable offset `0x2dc`;
+end calls offset `0x3b0`. Null and removed handles take the wrapper's absence
+path. The recreation does not replace this lookup with the UI's learned-and-
+available readiness query; disabled/dead units can still hold tracked cooldowns.
+These are static primary-path reads, not a new observation of the original
+client's active registrar or timer behavior. Disassembly and selected-image hash
+remain local under `.scratch/ability-cooldown/`.
+
+Synthetic scripts verify query/expiry/end/recast, independent units and spells,
+summon cast-point timing, no cancellation of a pending summon, wrapper absence
+paths, argument refusals and unchanged RNG/clock/pools on queries. Ending a
+cooldown does not refund mana or undo an effect. The original Human01 host gate
+also checks both declared bindings against actual learned ranks, but it does
+not establish original-client timer parity.
+
+Still open: `UnitResetCooldown`, `BlzGetAbilityCooldown`,
+`BlzGetUnitAbilityCooldown` and `BlzSetUnitAbilityCooldown`, along with other
+ability classes and item cooldown ownership. The selected unit duration getter
+and setter wrappers explicitly reject levels below one and subtract one before
+calling the engine; do not assume another version's indexing from their names.
+Their global duration getter's level-zero path is not qualified here.
+
+Private-target checks pass: 1,097 core tests (31 ignored), 589 feature-enabled
+app binary tests (51 ignored), the explicit installed Human01 rank/binding gate,
+strict affected all-target Clippy, native compilation and affected WASM library/
+binary checks. No new rendered or original-client runtime capture was made for
+this script-state increment.
