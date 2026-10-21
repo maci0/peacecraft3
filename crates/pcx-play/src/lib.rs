@@ -66,6 +66,7 @@ pub mod custom_scripts;
 pub mod day_night;
 pub mod default_difficulty_image;
 pub mod diff;
+pub mod editor_object_globals;
 pub mod editor_triggers;
 pub mod file_sounds;
 pub mod game_cache;
