@@ -185,3 +185,31 @@ fn local_sequence_sampling_excludes_other_clips_without_allocating() {
         }
     }
 }
+
+#[test]
+fn independent_bone_composition_has_bounded_scratch_allocations() {
+    let bones: Vec<_> = (0..100)
+        .map(|id| {
+            let mut b = bone(Vec::new());
+            b.object_id = id;
+            b.parent_id = -1;
+            b
+        })
+        .collect();
+    let poses = vec![Pose::default(); bones.len()];
+    ALLOCATIONS.set(Some(0));
+    let matrices =
+        pcx_mdl::bone_matrices_from_poses(&bones, &|_| None, &pcx_mdl::Pivots(Vec::new()), &poses);
+    let allocations = ALLOCATIONS.replace(None).unwrap();
+    eprintln!("independent-bones allocations={allocations}");
+    assert!(
+        allocations <= 4,
+        "scratch allocation must not scale with root count"
+    );
+    assert_eq!(matrices.len(), bones.len());
+    assert!(
+        matrices
+            .iter()
+            .all(|m| *m == pcx_mdl::compose(pcx_mdl::identity(), Pose::default(), [0.; 3]))
+    );
+}
