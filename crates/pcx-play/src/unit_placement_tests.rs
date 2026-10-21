@@ -178,6 +178,89 @@ fn blocked_goals_stop_searching_when_the_nearest_cell_is_proven() {
 }
 
 #[test]
+fn blocked_goal_with_an_isolated_nearest_pocket_has_bounded_work() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "isolated pocket".into(),
+        },
+        10000,
+    );
+    let start = [16., 16.];
+    let target = [64., 64.];
+    let stamp = p.prepare(start, Some(0.), "_", 0.).unwrap();
+    p.commit(id(1), stamp);
+    for y in 14..=18 {
+        for x in 14..=18 {
+            p.grid.pathing.cells[y * 32 + x] = p.rules.mask;
+        }
+    }
+    p.grid.pathing.cells[16 * 32 + 15] = 0;
+    let before = p.occupied.clone();
+    let mut work = 10000;
+    let path = p.route(id(1), start, target, 0., &mut work).unwrap();
+    eprintln!(
+        "isolated-pocket work={} endpoint={:?}",
+        10000 - work,
+        path.last()
+    );
+    assert!(
+        10000 - work < 1024,
+        "isolated pocket caused a map-wide search"
+    );
+    assert_eq!(
+        path.last(),
+        Some(&[66., 54.]),
+        "nearest reachable endpoint changed"
+    );
+    let last = p.cell(*path.last().unwrap()).unwrap();
+    assert_eq!((last[0] - 16).abs().max((last[1] - 16).abs()), 3);
+    let mut from = start;
+    for to in path {
+        assert!(p.segment_clear(id(1), from, to, 0., &mut 1000).unwrap());
+        from = to;
+    }
+    assert_eq!(p.occupied, before);
+}
+
+#[test]
+fn pocket_proof_preserves_seed_edges_and_diagonal_corner_blocking() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "seed edges".into(),
+        },
+        10000,
+    );
+    let stamp = p.prepare([16., 16.], Some(0.), "_", 0.).unwrap();
+    p.commit(id(1), stamp);
+    p.grid.pathing.cells.fill(p.rules.mask);
+    p.grid.pathing.cells[4 * 32 + 5] = 0;
+    assert!(
+        p.isolated_route_component(id(1), [5, 4], [4, 4], 0., &mut 1000)
+            .unwrap()
+            .is_none(),
+        "a blocked start centre must still retain its seeded outgoing edge"
+    );
+    p.grid.pathing.cells[4 * 32 + 5] = p.rules.mask;
+    p.grid.pathing.cells[5 * 32 + 5] = 0;
+    assert_eq!(
+        p.isolated_route_component(id(1), [5, 5], [4, 4], 0., &mut 1000)
+            .unwrap(),
+        Some(BTreeSet::from([[5, 5]])),
+        "diagonal corners cannot connect the pocket"
+    );
+    assert!(
+        p.isolated_route_component(id(1), [5, 5], [4, 4], 0., &mut 0)
+            .unwrap()
+            .is_none(),
+        "an unfinished proof must not prune"
+    );
+}
+
+#[test]
 fn lazy_footprints_cache_success_and_refuse_oversized_data_before_occupancy_changes() {
     use std::sync::{
         Arc,
