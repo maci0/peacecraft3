@@ -7,8 +7,10 @@
 pub const TRIGGER_DATA: &str = "\
 [TriggerTypes]
 integer=0,1,1,WESTRING_integer
+rect=0,1,1,WESTRING_rect
 [TriggerTypeDefaults]
 integer=0
+rect=null
 [TriggerParams]
 RealHalf=0,real,0.5,WESTRING_HALF
 Num1=0,integer,1,WESTRING_ONE
@@ -30,12 +32,18 @@ type triggeraction extends handle
 type triggercondition extends handle
 type event extends handle
 type player extends handle
+type unit extends handle
+type rect extends handle
+type destructable extends handle
+type sound extends handle
+type camerasetup extends handle
 native CreateTrigger takes nothing returns trigger
 native DisableTrigger takes trigger t returns nothing
 native TriggerAddAction takes trigger t, code c returns triggeraction
 native TriggerRegisterTimerEventSingle takes trigger t, real r returns event
 native DisplayTextToPlayer takes player p, string s returns nothing
 native Player takes integer n returns player
+native Rect takes real minx, real miny, real maxx, real maxy returns rect
 ";
 
 pub fn u(v: &mut Vec<u8>, n: u32) {

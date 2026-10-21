@@ -145,9 +145,8 @@ does not cover timers firing, condition evaluation, or the native game.
 
 ## Provenance
 
-- 2026-10-20, worker piece 19: lowering module, catalog sections, synthetic and
-  differential gates. Requested by the wave 20 coordinator.
-- Follow-up, same worker: WCT custom text, JASS string escaping via `pcx_script::Esc`,
+- 2026-10-20: lowering module, catalog sections, synthetic and differential gates.
+- Follow-up: WCT custom text, JASS string escaping via `pcx_script::Esc`,
   nesting bound, `pcx_play::editor_triggers`, and the VM comparison test. Evidence:
   the Legacy install's `war3map.j` and `war3map.wct` for the cited maps (local only).
 
@@ -166,9 +165,30 @@ does not cover timers firing, condition evaluation, or the native game.
 - Evidence scope: a synthetic TriggerData, a synthetic Blizzard.j stub for
   `TriggerRegisterTimerEventSingle`, and a hand-written compiled script. This is the trigger
   host contract only, not the native game and not a shipped map.
-- Object globals (`gg_unit_*`, `gg_rct_*`, and similar) are not bound by this path. The
-  existing placement helpers (`unit_placement`, `pcx_map::Units`) carry no script name, and
-  the editor's naming rule (`gg_unit_<type>_<nnnn>`) and creation order are not derived from
-  the file. A graph that names an unbound global is refused by name at compile time
-  (`an_object_global_the_path_does_not_bind_is_refused_by_name`). Shipped trigger graphs
-  reference such globals, so the explicit path cannot compile a stock map yet.
+- Object globals are bound by the editor path from the map's placement records
+  (`pcx_play::editor_object_globals`). A lowered script's object-global references
+  are read through the JASS lexer (so strings and comments are never mistaken for
+  references) and resolved against `war3mapUnits.doo`, `war3map.w3r` and
+  `war3map.doo`. The naming rules are evidence-derived: every `gg_unit_*`,
+  `gg_rct_*` and `gg_dest_*` declaration in the compiled `war3map.j` of all 44
+  shipped 1.29b campaign maps matches a record
+  (`tests/editor_object_globals_differential.rs`, opt-in). Regions are bound with
+  runtime assignment: `compile_editor_triggers_with_objects` declares each
+  `gg_rct_*` and initializes it via `Rect(...)` in `InitGlobals` from the authored
+  W3R bounds. Unit and destructable object globals are refused at compile time
+  until their creation initializer is generated (`MissingInitialization`), rather
+  than being left as null handles that look runnable. Duplicate unit/doodad
+  `type`/`creation` identities and colliding sanitized region names are refused as
+  ambiguous. `gg_snd_*` and `gg_cam_*` come from other map files and are refused
+  as out of scope.
+- The archive entry point also extracts optional `war3map.w3r` through the caller's
+  checked member budget and supplies those records to the same binding path. It
+  still does not read `war3map.j`. A synthetic archive with invalid compiled JASS
+  executes region initialization and a trigger action that copies the real rect
+  handle to a rect global; its native-call trace checks the authored coordinates.
+- Region initialization supports an otherwise empty `InitGlobals`. Missing
+  insertion points, missing records, ambiguous names and nonfinite bounds refuse
+  instead of quietly returning a script with null globals. Region lookup uses an
+  index rather than scanning all records for each reference.
+- No stock map's full editor-source execution or unit/destructable creation order
+  is qualified by these region tests. Those initializers remain required work.
