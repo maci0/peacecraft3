@@ -4,6 +4,10 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 
 ### 2026-10-21: CPU hotpath evidence
 
+- [~] Native launcher GPU diagnostics and a RADV capture are verified on the
+  RX 7900 XTX; RGP opens and displays the capture. The Xvfb application attempt
+  is invalid (no DRI3). Chapter execution was unobserved, so rendered campaign
+  GPU coverage remains open. See [GPU evidence](docs/performance/gpu-launcher.md).
 - [x] Huffman bit traversal reuses a bounded byte reservoir. Synthetic read and
   truncation comparisons, 76 codec tests, strict Clippy and WASM pass; 2,716
   retained Storm WAV dumps remain byte-identical. Human03 keeps its unit/RNG

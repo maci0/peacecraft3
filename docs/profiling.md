@@ -101,8 +101,9 @@ These controls are documented by [Mesa](https://docs.mesa3d.org/envvars.html#env
 This route needs real RADV/Vulkan execution; browser SwiftShader/WebGL cannot
 validate AMD hardware bottlenecks. RGP viewer availability is listed by `doctor`. The local RGP 2.7.1
 package is under `.tools/profiling/` with its bundled libraries. A headless
-CLI probe did not establish viewer behavior; opening and inspecting a real
-capture remains a separate verification step.
+CLI probe did not establish viewer behavior. A newer native launcher capture has
+now been opened and visually inspected in RGP; the [GPU report](performance/gpu-launcher.md)
+records that evidence and its remaining campaign-coverage limits.
 
 For browser frames, use browser Performance tooling and the actual WebGL/WebGPU
 backend. On macOS use Xcode's Metal profiling tools; Windows Vulkan/DX12 uses the
