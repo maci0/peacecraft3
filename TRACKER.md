@@ -3168,6 +3168,16 @@ repeated, and the public site package was not rebuilt.
   first Human01 is not playable and the original baseline gate is unchanged.
   See [hero skill state](docs/re-notes/script-hero-skills.md).
 
+### 2026-10-21 — source-bound hero events
+
+Level/skill setters now deliver source-bound
+unit/current-owner player events with captured learned ranks, updated callback
+state, filters and response cleanup. Private package tests: 1,155 passed,
+0 failed, 44 ignored; strict clippy, WASM library and app all-target fixture
+checks pass. Fresh-profile unchanged Human03 next refuses `UnitAddSleep` through
+Blizzard.j:3524. Native synchronous ordering, XP-driven events and campaign
+acceptance remain open. See [hero events](docs/re-notes/script-hero-skills.md#hero-events-2026-10-21).
+
 ### 2026-10-20 — source-derived edition-switch icon states
 
 - [x] The control builder now reads both icon families and their three state

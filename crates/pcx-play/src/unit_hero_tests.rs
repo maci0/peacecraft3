@@ -541,6 +541,46 @@ fn live_skill_event_listeners_are_not_silently_skipped() {
 }
 
 #[test]
+fn hero_event_response_declarations_must_match_the_source_contract() {
+    for declaration in [
+        "constant native GetLearnedSkill takes nothing returns unit\n",
+        "native GetLearnedSkill takes nothing returns integer\n",
+    ] {
+        let common = script_common_with("widget", true, &format!("{NATIVES}{declaration}"));
+        let ctx = context(300, &common, MAP, "unit-catalog");
+        let h = object(&ctx, 64)
+            .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+            .unwrap()
+            .with_unit_catalog(
+                Arc::new(Catalog {
+                    list: "L001".into(),
+                }),
+                source(),
+                limits(4),
+            )
+            .unwrap();
+        let result = h.with_hero_skills(
+            tables(""),
+            catalog_origin(),
+            Overlay::default(),
+            hero_skills::tests::rules(),
+            HeroBudget {
+                abilities_per_unit: 8,
+                overlay_objects: 8,
+                modifications_per_ability: 8,
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(crate::playercolor_host::Error {
+                failure: Failure::Signature,
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
 fn invalid_ability_list_metadata_refuses_before_unit_allocation() {
     let mut vm = host(NATIVES, "L001", Overlay::default(), "", 8);
     let player = vm.host().inner.native("Player", &[Value::Int(4)]).unwrap();

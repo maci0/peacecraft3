@@ -1609,3 +1609,9 @@ vitals and slotted inventory now persist in the private profile and restore
 through the existing unit-creation path. Fresh-profile Human03 reaches its later
 hero-level event-delivery refusal. Full native unit serialization/XP, original
 W3V import, native restoration parity and campaign acceptance remain open.
+
+Hero-event follow-up (2026-10-21): source-bound level/skill registrations now use
+the existing trigger queue and expose their response context. Fresh-profile
+Human03 passes hero setup and next refuses `UnitAddSleep`. Native synchronous
+ordering, XP-driven leveling and complete campaign acceptance remain open; see
+[hero skill state](docs/re-notes/script-hero-skills.md#hero-events-2026-10-21).

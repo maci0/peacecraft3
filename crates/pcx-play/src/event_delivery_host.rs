@@ -22,6 +22,14 @@ pub struct EventSubject {
     pub spell_target: Option<HandleId>,
     /// Shop sale in progress: the seller and the sold item, set only by a queued sale.
     pub sale: Option<SaleContext>,
+    pub hero: Option<HeroEvent>,
+}
+
+/// Hero-specific responses captured when the change fires.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeroEvent {
+    Level,
+    Skill { ability: i32, level: i32 },
 }
 
 /// One completed sale, delivered to its sell-event triggers.
@@ -50,7 +58,11 @@ pub(super) struct Delivery {
     region_known: BTreeSet<HandleId>,
 }
 
-const RESPONSES: [&str; 14] = [
+const RESPONSES: [&str; 18] = [
+    "GetLevelingUnit",
+    "GetLearningUnit",
+    "GetLearnedSkill",
+    "GetLearnedSkillLevel",
     "GetSpellTargetUnit",
     "GetTriggerUnit",
     "GetSellingUnit",
@@ -266,6 +278,25 @@ impl ObjectHost {
         }
         self.inner.program.natives().get(name)?;
         let subject = self.events.subject;
+        if matches!(
+            name,
+            "GetLevelingUnit" | "GetLearningUnit" | "GetLearnedSkill" | "GetLearnedSkillLevel"
+        ) && !self.has_hero_skills()
+        {
+            return None;
+        }
+        if matches!(name, "GetLearnedSkill" | "GetLearnedSkillLevel") {
+            return Some(Ok(Value::Int(match subject.hero {
+                Some(HeroEvent::Skill { ability, level }) => {
+                    if name == "GetLearnedSkill" {
+                        ability
+                    } else {
+                        level
+                    }
+                }
+                _ => 0,
+            })));
+        }
         if name == "GetTriggerPlayer" {
             let source = &self.inner.program.natives().get("CreateTimer")?.source;
             if let Err(error) = self.check_trigger_player_response(source) {
@@ -276,6 +307,12 @@ impl ObjectHost {
             }
         }
         let value = match name {
+            "GetLevelingUnit" => matches!(subject.hero, Some(HeroEvent::Level))
+                .then_some(subject.unit)
+                .flatten(),
+            "GetLearningUnit" => matches!(subject.hero, Some(HeroEvent::Skill { .. }))
+                .then_some(subject.unit)
+                .flatten(),
             "GetKillingUnit" | "GetAttacker" => subject.source,
             "GetManipulatedItem" => subject.item,
             "GetSellingUnit" => subject.sale.map(|sale| sale.shop),

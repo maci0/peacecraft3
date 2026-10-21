@@ -2019,6 +2019,14 @@ unit F=null
 unit E=null
 unit G=null
 trigger T=null
+integer HeroSeen=0
+integer HeroRank=0
+integer HeroAbility=0
+integer HeroPoints=0
+integer HeroLevel=0
+unit HeroUnit=null
+unit HeroFiltered=null
+boolean HeroAllow=true
 endglobals
 function setup takes nothing returns nothing
 set H=CreateUnit(Player(4),'H001',16.0,16.0,0.0)
@@ -2043,6 +2051,40 @@ endfunction
 function attack_enemy takes unit c, unit t returns nothing
 call IssueTargetOrder(c,"beta",t)
 endfunction
+function hero_record takes nothing returns nothing
+set HeroSeen=HeroSeen+1
+set HeroUnit=GetLevelingUnit()
+if HeroUnit==null then
+set HeroUnit=GetLearningUnit()
+endif
+set HeroAbility=GetLearnedSkill()
+set HeroRank=GetLearnedSkillLevel()
+set HeroPoints=GetHeroSkillPoints(GetTriggerUnit())
+set HeroLevel=GetHeroLevel(GetTriggerUnit())
+endfunction
+function hero_filter takes nothing returns boolean
+set HeroFiltered=GetFilterUnit()
+return HeroAllow
+endfunction
+function hero_filter_handle takes nothing returns boolexpr
+return Filter(function hero_filter)
+endfunction
+function hero_listen_unit takes unit u, unitevent e returns trigger
+set T=CreateTrigger()
+call TriggerRegisterUnitEvent(T,u,e)
+call TriggerAddAction(T,function hero_record)
+return T
+endfunction
+function hero_listen_player takes player p, playerunitevent e, boolexpr f returns trigger
+set T=CreateTrigger()
+call TriggerRegisterPlayerUnitEvent(T,p,e,f)
+call TriggerAddAction(T,function hero_record)
+return T
+endfunction
+function hero_refuse_filter takes nothing returns nothing
+set HeroAllow=false
+set HeroFiltered=null
+endfunction
 "#;
 
 const HOLY_DECLARATIONS: &str = r#"
@@ -2051,6 +2093,10 @@ native SetUnitOwner takes unit u, player p, boolean changeColor returns nothing
 globals
 constant unitevent EVENT_UNIT_SPELL_EFFECT = ConvertUnitEvent(294)
 constant playerunitevent EVENT_PLAYER_UNIT_SPELL_EFFECT = ConvertPlayerUnitEvent(277)
+constant unitevent EVENT_UNIT_HERO_LEVEL = ConvertUnitEvent(-141)
+constant unitevent EVENT_UNIT_HERO_SKILL = ConvertUnitEvent(892)
+constant playerunitevent EVENT_PLAYER_HERO_LEVEL = ConvertPlayerUnitEvent(1011)
+constant playerunitevent EVENT_PLAYER_HERO_SKILL = ConvertPlayerUnitEvent(-333)
 constant unittype UNIT_TYPE_UNDEAD = ConvertUnitType(2)
 constant unittype UNIT_TYPE_ANCIENT = ConvertUnitType(3)
 endglobals
@@ -2063,7 +2109,16 @@ type unittype extends handle
 constant native ConvertUnitType takes integer i returns unittype
 native IsUnitType takes unit u, unittype t returns boolean
 constant native GetSpellTargetUnit takes nothing returns unit
+constant native GetLevelingUnit takes nothing returns unit
+constant native GetLearningUnit takes nothing returns unit
+constant native GetLearnedSkill takes nothing returns integer
+constant native GetLearnedSkillLevel takes nothing returns integer
+constant native GetHeroLevel takes unit u returns integer
+constant native GetHeroSkillPoints takes unit u returns integer
 "#;
+
+#[path = "hero_event_tests.rs"]
+mod hero_events;
 
 /// Holy Light caster `H` (hero), friendly `F`, enemy `E`, far friend `G` (120 units away).
 /// Every unit shares one fixture definition, so `types` is the `type` list of all of them.

@@ -2,8 +2,17 @@
 use super::*;
 use crate::hero_skills::Rules;
 use crate::inventory_powerup::AttributeBonus;
+use crate::playercolor_host::{EventSubject, HeroEvent};
 use pcx_objects::editor::Overlay;
+use pcx_script::value::FunctionId;
 use std::collections::BTreeSet;
+
+struct HeroDelivery {
+    trigger: HandleId,
+    filter: Option<FunctionId>,
+    event: HandleId,
+    player: Option<HandleId>,
+}
 
 const LEARN: &str = "SelectHeroSkill";
 const LEVEL: &str = "GetHeroLevel";
@@ -316,6 +325,19 @@ impl ObjectHost {
             agility,
             intelligence,
         ] = present;
+        for (name, result) in [
+            ("GetLevelingUnit", "unit"),
+            ("GetLearningUnit", "unit"),
+            ("GetLearnedSkill", "integer"),
+            ("GetLearnedSkillLevel", "integer"),
+        ] {
+            if let Some(native) = self.inner.program.natives().get(name) {
+                Self::contract(&self.inner, name, &[], result, true, None)?;
+                if native.source != units.declaration_source {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
+            }
+        }
         self.units.as_mut().expect("admitted").heroes = Some(Admission {
             tables,
             catalog_origin,
@@ -594,7 +616,7 @@ impl ObjectHost {
                 format!("{alias:?}: dependency-controlled learning unsupported: {dependency}"),
             ));
         }
-        self.hero_event_guard(
+        let events = self.prepare_hero_events(
             *unit,
             name,
             "EVENT_UNIT_HERO_SKILL",
@@ -607,26 +629,41 @@ impl ObjectHost {
             .expect("admitted")
             .rules
             .first_rank;
+        let learned_rank = if level == 0 {
+            first_rank
+        } else {
+            level
+                .checked_add(1)
+                .ok_or_else(|| self.hero_error(name, "learned rank overflow".into()))?
+        };
         let Entry::Unit { record } = self.inner.entry_mut(*unit)? else {
             unreachable!()
         };
         let state = record.abilities.as_mut().expect("admitted");
         if let Some((_, rank)) = state.levels.iter_mut().find(|(a, _)| *a == alias) {
-            *rank += 1;
+            *rank = learned_rank;
         } else {
             state.levels.push((alias, first_rank));
         }
         state.hero.as_mut().expect("hero").skill_points -= 1;
+        self.push_hero_events(
+            events,
+            *unit,
+            HeroEvent::Skill {
+                ability: i32::from_be_bytes(alias),
+                level: learned_rank,
+            },
+        );
         Ok(Value::Null)
     }
 
-    fn hero_event_guard(
-        &self,
+    fn prepare_hero_events(
+        &mut self,
         unit: HandleId,
         name: &str,
         unit_global: &str,
         player_global: &str,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<HeroDelivery>, Error> {
         let owner = self.current_unit_owner(unit, name)?.0;
         let event =
             self.unit_event_enumerand(name, unit_global, "unitevent", "ConvertUnitEvent")?;
@@ -636,19 +673,77 @@ impl ObjectHost {
             "playerunitevent",
             "ConvertPlayerUnitEvent",
         )?;
-        if self.inner.arena.iter().any(|entry| {
-            let trigger = match entry {
-                Entry::RegisteredUnitEvent {trigger,unit: watched,enumerand,..}
-                    if *watched == unit && event.is_none_or(|event| event == *enumerand) => Some(*trigger),
-                Entry::RegisteredPlayerUnitEvent(registration)
-                    if registration.player == owner && player_event.is_none_or(|event| event == registration.enumerand) => Some(registration.trigger),
-                _ => None,
+        let mut fired = Vec::new();
+        for entry in &self.inner.arena {
+            let (trigger, filter, identity, player, qualified) = match entry {
+                Entry::RegisteredUnitEvent {
+                    trigger,
+                    unit: watched,
+                    enumerand,
+                    unitevent,
+                } if *watched == unit && event.is_none_or(|event| event == *enumerand) => {
+                    (*trigger, None, *unitevent, None, event.is_some())
+                }
+                Entry::RegisteredPlayerUnitEvent(r)
+                    if r.player == owner
+                        && player_event.is_none_or(|event| event == r.enumerand) =>
+                {
+                    (
+                        r.trigger,
+                        r.filter,
+                        r.playerunitevent,
+                        Some(r.player),
+                        player_event.is_some(),
+                    )
+                }
+                _ => continue,
             };
-            trigger.is_some_and(|id| matches!(self.inner.entry(id), Ok(Entry::Trigger {enabled}) if *enabled != Some(false)))
-        }) {
-            return Err(self.hero_error(name, "matching or unqualified hero listeners require event delivery".into()));
+            match self.inner.entry(trigger)? {
+                Entry::DeadTrigger
+                | Entry::Trigger {
+                    enabled: Some(false),
+                } => continue,
+                Entry::Trigger { .. } => {}
+                _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+            }
+            if !qualified {
+                return Err(self.hero_error(
+                    name,
+                    "hero event identity is not declared by the selected source".into(),
+                ));
+            }
+            if self.trigger_runtime.is_none() {
+                return Err(self.hero_error(name, "hero listeners require event runtime".into()));
+            }
+            let filter = self.resolve_event_filter(filter)?;
+            fired
+                .try_reserve(1)
+                .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+            fired.push(HeroDelivery {
+                trigger,
+                filter,
+                event: identity,
+                player,
+            });
         }
-        Ok(())
+        self.reserve_event_delivery(fired.len())?;
+        Ok(fired)
+    }
+
+    fn push_hero_events(&mut self, events: Vec<HeroDelivery>, unit: HandleId, kind: HeroEvent) {
+        for event in events {
+            self.push_reserved_event(
+                event.trigger,
+                event.filter,
+                EventSubject {
+                    unit: Some(unit),
+                    player: event.player,
+                    hero: Some(kind),
+                    ..EventSubject::default()
+                },
+                Some(event.event),
+            );
+        }
     }
 
     pub(super) fn change_hero_level(&mut self, args: &[Value]) -> Result<Value, Error> {
@@ -690,7 +785,7 @@ impl ObjectHost {
                     .capacity()
                     .map_err(|e| self.hero_error(SET_HERO_LEVEL, e))?,
             );
-        self.hero_event_guard(
+        let events = self.prepare_hero_events(
             *unit,
             SET_HERO_LEVEL,
             "EVENT_UNIT_HERO_LEVEL",
@@ -714,6 +809,7 @@ impl ObjectHost {
             .expect("hero");
         hero.level = next;
         hero.skill_points = points;
+        self.push_hero_events(events, *unit, HeroEvent::Level);
         Ok(Value::Null)
     }
 }
