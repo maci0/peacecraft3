@@ -86,6 +86,7 @@ fn keyboard_shortcuts(
     mut actions: ResMut<crate::button_actions::ButtonActions>,
     camera: Option<Res<CampaignCamera>>,
     presentation: Option<Res<peacecraft3::campaign_presentation::CampaignPresentation>>,
+    debug: Option<Res<pcx_gfx::performance::DebugOverlay>>,
 ) {
     if camera.as_ref().is_some_and(|camera| !camera.active())
         || !crate::button_actions::input_allowed(presentation)
@@ -93,6 +94,9 @@ fn keyboard_shortcuts(
         return;
     }
     for (entity, shortcut) in &buttons {
+        if shortcut.0 == KeyCode::F7 && debug.is_some() {
+            continue;
+        }
         if keys.just_pressed(shortcut.0) && !actions.entities.contains(&entity) {
             actions.entities.push(entity);
         }
@@ -808,6 +812,35 @@ fn quest_log(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn f7_debug_overlay_does_not_also_activate_the_authored_quest_shortcut() {
+        let mut world = World::new();
+        world.init_resource::<ButtonInput<KeyCode>>();
+        world.init_resource::<crate::button_actions::ButtonActions>();
+        world.init_resource::<pcx_gfx::performance::DebugOverlay>();
+        let quest = world.spawn(AuthoredShortcut(KeyCode::F7)).id();
+        world
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::F7);
+        world.run_system_once(keyboard_shortcuts).unwrap();
+        assert!(
+            world
+                .resource::<crate::button_actions::ButtonActions>()
+                .entities
+                .is_empty()
+        );
+        world.remove_resource::<pcx_gfx::performance::DebugOverlay>();
+        world.run_system_once(keyboard_shortcuts).unwrap();
+        assert_eq!(
+            world
+                .resource::<crate::button_actions::ButtonActions>()
+                .entities,
+            vec![quest]
+        );
+    }
+
     fn pointer() -> bevy::picking::events::Pointer {
         bevy::picking::events::Pointer::new(
             bevy::picking::pointer::PointerId::Mouse,

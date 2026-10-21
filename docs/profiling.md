@@ -11,6 +11,8 @@ vertex counts, device allocator usage and available campaign diagnostics (tick,
 speed, seed, clock, selected units and errors). Mesh-asset vertices are not a
 drawn-vertex count: instances may reuse assets, and render-only assets may lack a
 CPU copy. Allocated/reserved device bytes are distinct from whole-GPU VRAM.
+When the overlay is installed, F7 is reserved for diagnostics; use the Quests
+button if its authored shortcut is F7.
 On Linux, the [AMDGPU driver counters](https://www.kernel.org/doc/html/latest/gpu/amdgpu/driver-misc.html)
 expose whole-GPU VRAM used/total through read-only sysfs for the selected PCI
 adapter; those totals include other apps.
