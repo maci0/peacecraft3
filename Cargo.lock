@@ -4567,6 +4567,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]
@@ -4580,6 +4581,7 @@ dependencies = [
  "pcx-sim",
  "pcx-tga",
  "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]
@@ -4606,6 +4608,7 @@ dependencies = [
  "pcx-tera",
  "pcx-tga",
  "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]
@@ -4616,6 +4619,7 @@ dependencies = [
  "pcx-mpq",
  "pcx-tga",
  "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]
@@ -4625,6 +4629,7 @@ dependencies = [
  "pcx-casc",
  "pcx-mpq",
  "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]
@@ -4664,6 +4669,7 @@ dependencies = [
  "pcx-mpq",
  "pcx-slq",
  "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]
@@ -4684,6 +4690,7 @@ dependencies = [
  "sha2",
  "symphonia 0.6.1",
  "thiserror 2.0.21",
+ "tracing",
  "wasm-bindgen",
 ]
 
@@ -4693,6 +4700,7 @@ version = "0.3.0"
 dependencies = [
  "pcx-mpq",
  "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]

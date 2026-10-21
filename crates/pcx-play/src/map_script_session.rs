@@ -95,6 +95,10 @@ impl<H: Host + Send + Sync + 'static> MapScriptSession<H> {
     /// `between(vm, completed)` runs after globals (`completed == 0`) and after
     /// each entrypoint that returned. A between-callback error is a factory
     /// failure: the previous session stays published.
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "script.initialize")
+    )]
     pub fn replace_sequenced<F, E, B, BE>(
         &mut self,
         context: Arc<ParsedMapContext>,
@@ -255,6 +259,10 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
     /// Deliver positive-timeout callbacks in this published VM using explicit game time.
     /// Errors retain prior effects; the host clock records how far delivery reached.
     /// An executed game pause freezes future timer/wake delivery after the current event.
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "simulation.timers")
+    )]
     pub fn advance_timers(
         &mut self,
         until: f64,
@@ -440,6 +448,10 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
     }
 
     /// Deliver already queued UI/script callbacks without polling world geometry or time.
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "simulation.events")
+    )]
     pub fn advance_queued_events(&mut self, mut work: usize) -> Result<usize, TimerSessionError> {
         let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
         let mut delivered = 0;

@@ -77,6 +77,10 @@ pub(crate) fn selected_block(
 impl MpqArchive {
     /// Strict ambiguity refusal and explicit codec input; no executable discovery.
     /// Tables/backing storage are already owned. Budgets do not bound decoder RSS.
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "assets.mpq_extract")
+    )]
     pub fn extract_bounded(
         &mut self,
         member: &str,

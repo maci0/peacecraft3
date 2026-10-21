@@ -6,7 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 description = "W3U/W3T/W3A/W3D/W3H/W3B/W3Q object data reader"
 
+[features]
+profile-cpu = ["dep:tracing", "pcx-mpq/profile-cpu"]
+
 [dependencies]
+tracing = { workspace = true, optional = true }
 pcx-mpq.workspace = true
 pcx-slq.workspace = true
 thiserror.workspace = true

@@ -231,6 +231,10 @@ pub fn resolve(script: &Script) -> Result<Program, crate::Error> {
 }
 
 /// Resolve `script` as the last source in a load list.
+#[cfg_attr(
+    feature = "profile-cpu",
+    tracing::instrument(skip_all, target = "pcx_cpu", name = "script.resolve")
+)]
 pub fn resolve_with(script: &Script, prelude: &[Prelude<'_>]) -> Result<Program, crate::Error> {
     resolve_with_diagnostics(script, prelude).map_err(|diagnostic| diagnostic.error)
 }

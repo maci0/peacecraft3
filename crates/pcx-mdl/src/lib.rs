@@ -1514,6 +1514,10 @@ pub fn bone_matrices(
 
 /// Compose supplied poses with the same hierarchy, pivot and cycle behavior as `bone_matrices`.
 /// Missing poses retain the pose adapter's existing identity fallback; extra poses are ignored.
+#[cfg_attr(
+    feature = "profile-cpu",
+    tracing::instrument(skip_all, target = "pcx_cpu", name = "animation.bone_matrices")
+)]
 pub fn bone_matrices_from_poses(
     bones: &[Bone],
     parent: &dyn Fn(u32) -> Option<u32>,
@@ -2773,6 +2777,10 @@ fn read_cstr(d: &[u8], at: usize) -> Result<String, Error> {
 }
 
 impl Mdlx {
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "assets.mdx_parse")
+    )]
     pub fn parse(data: &[u8]) -> Result<Self, Error> {
         let magic: [u8; 4] = data
             .get(0..4)

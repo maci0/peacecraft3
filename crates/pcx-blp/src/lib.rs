@@ -544,6 +544,10 @@ pub fn bytes_per_pixel(d: &[u8], h: &Header, index: usize) -> Result<Option<u32>
 /// holding a single distinct value while the trailing plane held 83.
 ///
 /// JPEG-content BLPs need [`decode_jpeg`].
+#[cfg_attr(
+    feature = "profile-cpu",
+    tracing::instrument(skip_all, target = "pcx_cpu", name = "assets.blp_decode")
+)]
 pub fn decode_mip(d: &[u8], h: &Header, index: usize) -> Result<Vec<u8>, Error> {
     match Variant::from_magic(h.magic)? {
         Variant::Blp0 => return Err(Error::Blp0ExternalMips),
@@ -627,6 +631,10 @@ pub fn decode_jpeg(d: &[u8], h: &Header, index: usize) -> Result<Vec<u8>, Error>
 }
 
 /// Decode with a caller budget checked against both BLP and JPEG dimensions before pixels.
+#[cfg_attr(
+    feature = "profile-cpu",
+    tracing::instrument(skip_all, target = "pcx_cpu", name = "assets.jpeg_decode")
+)]
 pub fn decode_jpeg_with_limit(
     d: &[u8],
     h: &Header,

@@ -880,6 +880,10 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         result
     }
 
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "script.vm")
+    )]
     fn drive_loop(&mut self, base: usize) -> Result<Exec, crate::Error> {
         loop {
             if self.stack.len() <= base {

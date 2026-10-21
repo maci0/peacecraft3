@@ -302,6 +302,10 @@ pub struct Skeleton {
 ///
 /// `parent` resolves a bone's parent node, which is what makes a bone that hangs
 /// from a helper resolve correctly rather than being treated as a root.
+#[cfg_attr(
+    feature = "profile-cpu",
+    tracing::instrument(skip_all, target = "pcx_cpu", name = "animation.pose_skeleton")
+)]
 pub fn pose_skeleton(
     _model: &LoadedModel,
     bones: &[pcx_mdl::Bone],
@@ -371,6 +375,10 @@ pub fn pose_from_poses(
 /// Each vertex's matrix group comes from `GNDX`, and that group's bone is the
 /// slice of `MATS` the group counts select. This is the whole point of the mesh
 /// path: without it a model shows its rest pose, which looks fine and is wrong.
+#[cfg_attr(
+    feature = "profile-cpu",
+    tracing::instrument(skip_all, target = "pcx_cpu", name = "animation.skin_mesh")
+)]
 pub fn skin_mesh(mesh: &LoadedMesh, skeleton: &Skeleton) -> Vec<[f32; 3]> {
     // Flatten the group counts into a per-group bone index, exactly as the
     // decoder's invariant says they nest.
@@ -408,6 +416,10 @@ pub fn skin_mesh(mesh: &LoadedMesh, skeleton: &Skeleton) -> Vec<[f32; 3]> {
 
 /// Avoid marking a mesh changed (and uploading it again) when its position bits match.
 /// Missing handles retain the skinning callers' existing no-op behavior.
+#[cfg_attr(
+    feature = "profile-cpu",
+    tracing::instrument(skip_all, target = "pcx_cpu", name = "render.mesh_positions")
+)]
 pub fn set_mesh_positions(
     meshes: &mut Assets<Mesh>,
     handle: &Handle<Mesh>,
@@ -526,6 +538,10 @@ pub struct Sequence {
 ///
 /// A model with no geosets remains legal and distinct from a parse failure.
 /// Graphics import requires finite bounds; extent consumers validate their use.
+#[cfg_attr(
+    feature = "profile-cpu",
+    tracing::instrument(skip_all, target = "pcx_cpu", name = "assets.model_load")
+)]
 pub fn load_model(bytes: &[u8], source: &str) -> Result<LoadedModel, crate::Error> {
     let m =
         pcx_mdl::Mdlx::parse(bytes).map_err(|e| crate::Error::Decode(format!("{source}: {e}")))?;

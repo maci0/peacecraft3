@@ -675,6 +675,7 @@ impl Host for ObjectHost {
         self.numeric.as_ref().map(|p| p as &dyn pcx_script::RealOps)
     }
 
+    #[cfg_attr(feature = "profile-cpu", tracing::instrument(skip_all, target = "pcx_cpu", name = "script.native", fields(native = name)))]
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         if let Some(result) = self.summoning_native(name, args) {
             return result.map_err(|e| e.to_string());

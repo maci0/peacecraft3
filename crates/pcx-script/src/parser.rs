@@ -38,6 +38,10 @@ use crate::ast::*;
 use crate::lexer::{Ident, Kw, Tok, Token};
 use crate::span::Span;
 
+#[cfg_attr(
+    feature = "profile-cpu",
+    tracing::instrument(skip_all, target = "pcx_cpu", name = "script.parse")
+)]
 pub fn parse(src: &str) -> Result<Script, Error> {
     let lexed = crate::lexer::lex(src)?;
     let mut p = Parser::new(lexed.tokens, line_starts(src));

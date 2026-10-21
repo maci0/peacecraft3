@@ -94,3 +94,9 @@ The [five-round optimization record](performance/five-rounds.md) adds determinis
 CPU/allocation/upload checks, native GPU reports and accelerated fixed-tick pacing.
 On the latest host check `perf stat` works but both hardware and software stack
 sampling are denied; the earlier stack-capture smoke result above is historical.
+
+The [CPU hotpath capture](performance/cpu-hotpaths.md) records a newer successful
+one-run privileged observer with the game still running as the normal user. It
+also documents optional core phase spans, sampled hotspots, and the remaining
+rendering and validation coverage. Unprivileged sampling remains denied; no
+host profiling permissions were changed.

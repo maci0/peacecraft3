@@ -866,6 +866,10 @@ impl Placement {
         result
     }
 
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "pathfinding.route")
+    )]
     pub(crate) fn route(
         &self,
         unit: HandleId,

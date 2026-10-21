@@ -7,9 +7,11 @@ license.workspace = true
 description = "Bevy asset loaders for the pcx-* decoders"
 
 [features]
+profile-cpu = ["dep:tracing", "bevy/trace", "pcx-mdl/profile-cpu", "pcx-blp/profile-cpu", "pcx-mpq/profile-cpu"]
 profile-gpu = []
 
 [dependencies]
+tracing = { workspace = true, optional = true }
 bevy = { version = "0.20", features = ["dds"] }
 pcx-mpq.workspace = true
 pcx-blp.workspace = true

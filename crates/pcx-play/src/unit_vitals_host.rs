@@ -282,6 +282,10 @@ impl ObjectHost {
         self.advance_unit_regen_motion(now, None, &mut work)
     }
 
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "simulation.regeneration")
+    )]
     pub(super) fn advance_unit_regen_motion(
         &mut self,
         now: f64,

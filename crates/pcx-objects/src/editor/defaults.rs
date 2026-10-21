@@ -359,6 +359,10 @@ impl DefaultTables {
     /// selection stay with the caller. Profile members use the same family
     /// names as an install read. Counts and aggregate bytes (including member
     /// names and copied provenance) are checked before parsing or copying inputs.
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "objects.parse_tables")
+    )]
     pub fn from_bytes(
         identity: Identity,
         tables: &[(&str, &[u8])],

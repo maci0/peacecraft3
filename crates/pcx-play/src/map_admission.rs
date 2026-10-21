@@ -113,6 +113,10 @@ fn identity(input: &'static str, identity: &AssetIdentity) -> Result<(), MapAdmi
 }
 /// All inputs are supplied by the caller; every world member comes from this Map.
 /// Catalog resolution and script compilation finish before the context is returned.
+#[cfg_attr(
+    feature = "profile-cpu",
+    tracing::instrument(skip_all, target = "pcx_cpu", name = "startup.map_admission")
+)]
 pub fn prepare_map_context<C: ObjectCatalog>(
     input: MapAdmissionInputs<'_, C>,
     budget: MapAdmissionBudget,

@@ -7,7 +7,7 @@ license.workspace = true
 description = "Faithful Warcraft III reimplementation on the Bevy engine"
 
 [features]
-profile-cpu = ["bevy/trace_chrome"]
+profile-cpu = ["bevy/trace_chrome", "pcx-play/profile-cpu", "pcx-gfx/profile-cpu"]
 profile-gpu = ["pcx-gfx/profile-gpu"]
 # Synthetic inventory fixtures and their ECS tests. Run tests with
 # `cargo test -p peacecraft3 --features test-fixtures`.

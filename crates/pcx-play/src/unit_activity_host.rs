@@ -714,6 +714,10 @@ impl ObjectHost {
         self.advance_activity(now, work, Some(spans))
     }
 
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "simulation.activity")
+    )]
     fn advance_activity(
         &mut self,
         now: f64,
@@ -1291,6 +1295,10 @@ impl ObjectHost {
         Ok(true)
     }
 
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "simulation.motion")
+    )]
     fn advance_motion(
         &mut self,
         unit: HandleId,
