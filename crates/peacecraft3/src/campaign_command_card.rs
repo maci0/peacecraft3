@@ -666,6 +666,183 @@ mod tests {
         assert_eq!(source.failed.len(), 1);
     }
 
+    #[cfg(feature = "test-fixtures")]
+    #[test]
+    #[ignore = "requires unchanged Human01 and selected PCX_NATIVE_CHAPTER_* inputs and PCX_WAR3_EXE"]
+    fn selected_chapter_mounts_the_card_under_its_admitted_console_and_retires_it() {
+        use pcx_script::{Host, Value};
+        let mut app = crate::native_campaign::tests::started_app();
+        let camera = app.world_mut().spawn_empty().id();
+        app.insert_resource(CampaignCamera::active_for_test(camera))
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Font>>()
+            .init_resource::<Assets<crate::glue_menu::BackdropImage>>()
+            .init_resource::<ButtonInput<KeyCode>>();
+        crate::campaign_hud::install(&mut app);
+        crate::hud_render::install(&mut app);
+        install(&mut app);
+        let unit = {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let unit = match session.global("gg_unit_Hart_0023") {
+                Some(Value::Handle(unit)) => unit,
+                other => panic!("the explicit Human01 fixture needs Arthas: {other:?}"),
+            };
+            let objects = session.host().unwrap().objects_mut();
+            // Operator selection/learning, independent of cinematic progression.
+            if objects.holy_light_command(unit).unwrap().is_none() {
+                objects
+                    .native(
+                        "SelectHeroSkill",
+                        &[
+                            Value::Handle(unit),
+                            Value::Int(i32::from_be_bytes(*b"AHhb")),
+                        ],
+                    )
+                    .unwrap();
+            }
+            for old in objects.selection().to_vec() {
+                objects
+                    .native("SelectUnit", &[Value::Handle(old), Value::Bool(false)])
+                    .unwrap();
+            }
+            objects
+                .native("SelectUnit", &[Value::Handle(unit), Value::Bool(true)])
+                .unwrap();
+            unit
+        };
+        for _ in 0..6 {
+            app.update();
+        }
+        let (root, parent, owned, buttons) = {
+            let card = app.world().resource::<CommandCard>();
+            let hud = app.world().resource::<crate::hud_render::HudMount>();
+            assert!(hud.error.is_none(), "HUD mount: {:?}", hud.error);
+            assert!(
+                app.world()
+                    .resource::<crate::hud_render::HudPrepare>()
+                    .refusal
+                    .is_none(),
+                "HUD preparation: {:?}",
+                app.world()
+                    .resource::<crate::hud_render::HudPrepare>()
+                    .refusal
+            );
+            assert!(
+                card.last_error.is_none(),
+                "command card: {:?}",
+                card.last_error
+            );
+            let source = card.source.as_ref().expect("selected command source");
+            let root = card.root.expect("command root");
+            let parent = card.parent.expect("console parent");
+            assert_eq!(app.world().get::<ChildOf>(root).unwrap().parent(), parent);
+            let attachment = app
+                .world()
+                .get::<crate::hud_render::HudSourceAttachment>(parent)
+                .unwrap();
+            assert_eq!(attachment.frame, source.console);
+            let buttons = app.world().get::<Children>(root).unwrap();
+            assert!(!buttons.is_empty());
+            for child in buttons {
+                assert_eq!(app.world().get::<ButtonOrder>(*child).unwrap().unit, unit);
+            }
+            (
+                root,
+                parent,
+                source.images.values().cloned().collect::<Vec<_>>(),
+                buttons.iter().collect::<Vec<_>>(),
+            )
+        };
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<CommandCard>().root, Some(root));
+        assert_eq!(
+            app.world()
+                .get::<Children>(root)
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            buttons
+        );
+        let expected_sections = app
+            .world()
+            .resource::<crate::hud_render::HudSourcePolicy>()
+            .race_sections
+            .clone();
+        let mut next = crate::native_campaign::tests::started_app();
+        let replacement = next
+            .world_mut()
+            .remove_resource::<MapScriptSession<MapStartupHost>>()
+            .unwrap();
+        let next_requests = next.world_mut().remove_resource::<MapRequests>().unwrap();
+        let next_sources = next
+            .world_mut()
+            .remove_resource::<SelectedMapSources>()
+            .unwrap();
+        let old_context = app
+            .world()
+            .resource::<MapRequests>()
+            .admission
+            .shared_context()
+            .unwrap();
+        assert!(!Arc::ptr_eq(&old_context, replacement.context().unwrap()));
+        app.insert_resource(replacement);
+        app.update();
+        assert!(app.world().get_entity(root).is_err());
+        assert!(
+            app.world().get_entity(parent).is_ok(),
+            "the card does not own the console"
+        );
+        for image in owned {
+            assert!(
+                app.world()
+                    .resource::<Assets<Image>>()
+                    .get(&image)
+                    .is_none()
+            );
+        }
+        assert!(app.world().resource::<CommandCard>().source.is_none());
+        assert!(
+            app.world().resource::<CommandCard>().root.is_none(),
+            "a lookalike session cannot use the previous context's bindings"
+        );
+        assert!(
+            !app.world()
+                .contains_resource::<crate::hud_render::HudSourcePolicy>(),
+            "the previous session's HUD source policy must retire too"
+        );
+        app.insert_resource(next_requests)
+            .insert_resource(next_sources);
+        for _ in 0..6 {
+            app.update();
+        }
+        assert_eq!(
+            app.world()
+                .resource::<crate::hud_render::HudSourcePolicy>()
+                .race_sections,
+            expected_sections
+        );
+        let card = app.world().resource::<CommandCard>();
+        assert!(
+            card.last_error.is_none(),
+            "replacement card: {:?}",
+            card.last_error
+        );
+        assert!(
+            card.source.is_some() && card.root.is_some(),
+            "coherent publication must mount a new card"
+        );
+        assert_ne!(card.root, Some(root));
+        app.world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .clear();
+        app.update();
+        assert!(app.world().resource::<CommandCard>().root.is_none());
+    }
+
     #[test]
     #[ignore = "requires live desktop, selected install/executable, and PCX_COMMAND_CARD_ABILITY=AHhb|AHwe"]
     fn selected_original_command_icon_native_component() {
