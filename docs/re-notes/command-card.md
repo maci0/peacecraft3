@@ -309,9 +309,16 @@ cooldown does not refund mana or undo an effect. The original Human01 host gate
 also checks both declared bindings against actual learned ranks, but it does
 not establish original-client timer parity.
 
-Still open: `UnitResetCooldown`, `BlzGetAbilityCooldown`, other ability classes
-and item cooldown ownership. The global duration getter's level-zero path is
+Still open: `BlzGetAbilityCooldown`, other ability classes and item transfer/group
+timing. The global duration getter's level-zero path is
 not qualified here.
+
+`UnitResetCooldown` now clears all currently modeled deadlines for one unit,
+including the holder's item groups; configured durations are preserved. Its
+source-checked admission also works without hero-skill rules. Spell/item state,
+null/removed units, pending casts, wrong-handle refusals and reclaimed record
+budgets are covered by host tests. See [item cooldowns](item-charges-cooldown.md)
+for the selected-client traversal and the explicit item grouping/transfer limits.
 
 ### Per-unit configured durations
 

@@ -273,6 +273,7 @@ impl ObjectHost {
         self.unit_look_at_declarations(&declaration_source)?;
         self.unit_sleep_declarations(&declaration_source)?;
         self.unit_removal_declaration(&declaration_source)?;
+        self.unit_cooldown_reset_declaration(&declaration_source)?;
         if self.sound_properties {
             self.sound_attachment_declaration(&declaration_source)?;
         }
@@ -559,6 +560,9 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         self.units.as_ref()?;
+        if name == "UnitResetCooldown" && self.inner.program.natives().get(name).is_some() {
+            return Some(self.unit_reset_cooldown(args));
+        }
         if let Some(result) = self.unit_visibility_native(name, args) {
             return Some(result);
         }

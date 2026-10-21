@@ -31,6 +31,81 @@ fn set_duration(vm: &mut Vm, unit: HandleId, ability: [u8; 4], rank: i32, value:
 }
 
 #[test]
+fn whole_unit_reset_clears_both_spells_without_payment_refund_or_config_changes() {
+    let (mut vm, [caster, target, _, _]) = holy_open("", "AHhb,AHwe", NOTHING);
+    vm.host().inner.admit_water_elemental().unwrap();
+    vm.call("prime", &[]).unwrap();
+    set_duration(&mut vm, caster, *b"AHhb", 1, 3.125);
+    assert!(holy_cast(&mut vm, caster, target));
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrder",
+                &[Value::Handle(caster), Value::Str("gamma".into())]
+            )
+            .unwrap(),
+        Value::Bool(true)
+    );
+    step(&mut vm, 0.25);
+    assert!(remaining(&mut vm, caster, *b"AHhb") > 0.);
+    assert!(remaining(&mut vm, caster, *b"AHwe") > 0.);
+    let mana = holy_mana(&mut vm, caster);
+    let life = holy_life(&mut vm, target);
+    let random = vm.host().inner.script_random_state().cloned();
+    let clock = vm.host().inner.timer_game_time();
+    vm.call("reset_cd", &[Value::Handle(caster)]).unwrap();
+    assert_eq!(remaining(&mut vm, caster, *b"AHhb"), 0.);
+    assert_eq!(remaining(&mut vm, caster, *b"AHwe"), 0.);
+    assert_eq!(duration(&mut vm, caster, *b"AHhb", 1), 3.125);
+    assert_eq!(holy_mana(&mut vm, caster), mana);
+    assert_eq!(holy_life(&mut vm, target), life);
+    assert_eq!(vm.host().inner.script_random_state().cloned(), random);
+    assert_eq!(vm.host().inner.timer_game_time(), clock);
+    assert!(holy_cast(&mut vm, caster, target));
+    assert_eq!(remaining(&mut vm, caster, *b"AHhb"), 3.125);
+}
+
+#[test]
+fn reset_does_not_cancel_pending_summons_and_invalid_handles_leave_deadlines_alone() {
+    let (mut vm, [caster, target, _, _]) = holy_open("", "AHhb,AHwe", NOTHING);
+    vm.host().inner.admit_water_elemental().unwrap();
+    vm.call("prime", &[]).unwrap();
+    assert!(holy_cast(&mut vm, caster, target));
+    let owner = vm.host().inner.executed_unit(caster).unwrap().owner;
+    for args in [vec![], vec![Value::Int(3)], vec![Value::Handle(owner)]] {
+        assert!(vm.host().inner.native("UnitResetCooldown", &args).is_err());
+        assert_eq!(remaining(&mut vm, caster, *b"AHhb"), 5.);
+    }
+    vm.call("reset_cd", &[Value::Null]).unwrap();
+    assert_eq!(remaining(&mut vm, caster, *b"AHhb"), 5.);
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrder",
+                &[Value::Handle(caster), Value::Str("gamma".into())]
+            )
+            .unwrap(),
+        Value::Bool(true)
+    );
+    vm.call("reset_cd", &[Value::Handle(caster)]).unwrap();
+    step(&mut vm, 0.25);
+    assert_eq!(remaining(&mut vm, caster, *b"AHwe"), 2.5);
+    vm.host()
+        .inner
+        .native("KillUnit", &[Value::Handle(caster)])
+        .unwrap();
+    vm.call("reset_cd", &[Value::Handle(caster)]).unwrap();
+    assert_eq!(remaining(&mut vm, caster, *b"AHwe"), 0.);
+    vm.host()
+        .inner
+        .native("RemoveUnit", &[Value::Handle(caster)])
+        .unwrap();
+    vm.call("reset_cd", &[Value::Handle(caster)]).unwrap();
+}
+
+#[test]
 fn configured_duration_changes_the_next_cast_without_rewriting_an_active_deadline() {
     let (mut vm, [caster, target, _, _]) = holy_open("", LEARNED, NOTHING);
     vm.call("prime", &[]).unwrap();

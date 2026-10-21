@@ -853,6 +853,12 @@ mod tests {
                     .unwrap();
                 assert_eq!(
                     objects
+                        .native("UnitResetCooldown", &[Value::Handle(unit)])
+                        .unwrap(),
+                    Value::Null
+                );
+                assert_eq!(
+                    objects
                         .native(
                             "BlzGetUnitAbilityCooldownRemaining",
                             &[Value::Handle(unit), Value::Int(i32::from_be_bytes(ability))]

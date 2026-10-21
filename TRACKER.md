@@ -5,8 +5,12 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 - [~] Per-unit cooldown duration get/set is connected to the two implemented
   spell classes, preserving active deadlines and recreation unit-cache state.
   Selected-client wrappers use one-based levels. Core/app suites, selected
-  Human01 rank checks, strict Clippy and affected WASM checks pass; other classes,
-  whole-unit reset, and native timing/cache parity remain open.
+  Human01 rank checks, strict Clippy and affected WASM checks pass; other classes
+  and native timing/cache parity remain open.
+- [~] `UnitResetCooldown` resets currently modeled spell and unit/item-group
+  deadlines without refunds or duration changes; independent holder state and
+  removal cleanup pass core/app, selected Human01, Clippy and WASM checks. Native item group
+  propagation/transfer timing and other ability classes remain open.
 
 ### 2026-10-22: Learned command buttons
 
