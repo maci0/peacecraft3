@@ -69,6 +69,8 @@ impl ObjectHost {
                     || record.vitals.is_some_and(|v| v.life <= 0.0)
             } else if is("UNIT_TYPE_SLEEPING") {
                 record.is_sleeping()
+            } else if is("UNIT_TYPE_SUMMONED") {
+                record.summoned
             } else if is("UNIT_TYPE_STRUCTURE") {
                 structure
             } else if is("UNIT_TYPE_FLYING") {

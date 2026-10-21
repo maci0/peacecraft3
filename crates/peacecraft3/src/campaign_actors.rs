@@ -1243,6 +1243,7 @@ mod tests {
             abilities: None,
             animation: None,
             look_at: None,
+            summoned: false,
             activity: None,
             shown: true,
             paused_since: None,

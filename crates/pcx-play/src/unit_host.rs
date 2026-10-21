@@ -129,6 +129,7 @@ pub struct ExecutedUnit {
     pub abilities: Option<UnitAbilities>,
     pub animation: Option<crate::unit_model::Animation>,
     pub look_at: Option<super::UnitLookAt>,
+    pub summoned: bool,
     pub activity: Option<super::unit_activity::UnitActivity>,
     /// Runtime ShowUnit state, independent of fog, invisibility and explicit pause.
     pub shown: bool,
@@ -198,6 +199,20 @@ impl Admission {
 }
 
 impl ObjectHost {
+    pub(super) fn check_unit_creation_capacity(&self, count: usize) -> Result<(), Error> {
+        let admission = self.admitted_units()?;
+        if count > admission.max_records.saturating_sub(admission.records)
+            || count
+                > self
+                    .inner
+                    .max_handles
+                    .saturating_sub(self.inner.arena.len())
+        {
+            return Err(self.inner.error(NATIVE, Failure::Budget("unit creation")));
+        }
+        Ok(())
+    }
+
     /// Admit `CreateUnit` against an already selected catalog and source.
     ///
     /// `catalog` must be the caller's existing arc. `source` must be an
@@ -1176,7 +1191,11 @@ impl ObjectHost {
     }
 
     fn create_unit(&mut self, args: &[Value]) -> Result<Value, Error> {
-        self.create_unit_with_cache(args, None)
+        self.create_unit_with_cache(args, None, false)
+    }
+
+    pub(super) fn create_summoned_unit(&mut self, args: &[Value]) -> Result<Value, Error> {
+        self.create_unit_with_cache(args, None, true)
     }
 
     pub(super) fn create_cached_unit(
@@ -1204,13 +1223,14 @@ impl ObjectHost {
                 Failure::GameCache("cached unit belongs to a different install/edition".into()),
             ));
         }
-        self.create_unit_with_cache(args, Some(saved))
+        self.create_unit_with_cache(args, Some(saved), false)
     }
 
     fn create_unit_with_cache(
         &mut self,
         args: &[Value],
         saved: Option<&crate::game_cache::CachedUnit>,
+        summoned: bool,
     ) -> Result<Value, Error> {
         let record = {
             let fail = |reason| self.inner.error(NATIVE, reason);
@@ -1312,6 +1332,7 @@ impl ObjectHost {
                 abilities: None,
                 animation: None,
                 look_at: None,
+                summoned,
                 activity: None,
                 shown: true,
                 paused_since: None,
@@ -1367,7 +1388,8 @@ impl ObjectHost {
         if let Some(prepared) = &placement {
             record.position = Some(prepared.position);
         }
-        let guard = if self.guard_managed_owner(record.owner)?
+        let guard = if !record.summoned
+            && self.guard_managed_owner(record.owner)?
             && super::unit_guards::candidate(&record.definition, record.combat.as_ref())
                 .map_err(|error| self.inner.error(NATIVE, Failure::UnitActivity(error)))?
         {

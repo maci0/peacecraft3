@@ -913,6 +913,110 @@ impl ObjectHost {
         self.units.as_ref().is_some_and(|u| u.heroes.is_some())
     }
 
+    /// Exact ranked ability cell, including the matching W3A level override.
+    pub(crate) fn hero_ability_level_cell(
+        &self,
+        alias: [u8; 4],
+        stem: &str,
+        rank: i32,
+        kind: FieldKind,
+    ) -> Result<String, String> {
+        if rank < 1 {
+            return Err("ability rank must be positive".into());
+        }
+        let input = self.heroes_admission()?;
+        let (base, mods) = input.base(alias)?;
+        for entry in mods.iter().rev() {
+            let field =
+                input.tables.editor().field(entry.field).ok_or_else(|| {
+                    format!("{alias:?}: unknown ability override {:?}", entry.field)
+                })?;
+            let FieldSource::Column {
+                slk: SlkId::AbilityData,
+                column,
+            } = &field.source
+            else {
+                continue;
+            };
+            let metadata = input
+                .tables
+                .metadata(field.fourcc)
+                .ok_or("ability override metadata missing")?;
+            let mapped = if column == "Data" {
+                let ordinal = metadata
+                    .attribute("data")
+                    .ok_or("ability data ordinal missing")?
+                    .text
+                    .parse::<u32>()
+                    .map_err(|_| "invalid ability data ordinal")?;
+                format!(
+                    "Data{}",
+                    char::from_u32(
+                        u32::from(b'A')
+                            .checked_add(ordinal.checked_sub(1).ok_or("zero data ordinal")?)
+                            .ok_or("ability data ordinal overflow")?
+                    )
+                    .ok_or("invalid data ordinal")?
+                )
+            } else {
+                column.clone()
+            };
+            if mapped != stem || entry.selectors.is_some_and(|s| s[0] != rank as u32) {
+                continue;
+            }
+            if field.index != -1 || entry.selectors.is_some_and(|s| s[1] != 0) {
+                return Err(format!("{alias:?}: indexed {stem} override unsupported"));
+            }
+            if let Some(specific) = metadata.attribute("useSpecific")
+                && !matches!(specific.text.trim(), "" | "_" | "-")
+                && !specific.text.split(',').any(|id| id.trim() == base)
+            {
+                return Err(format!(
+                    "{alias:?}: {stem} override does not apply to {base}"
+                ));
+            }
+            let valid = matches!(
+                (kind, field.kind, entry.value_type),
+                (FieldKind::Int, FieldKind::Int, pcx_objects::ValueType::Int)
+                    | (
+                        FieldKind::Real | FieldKind::Unreal,
+                        FieldKind::Real | FieldKind::Unreal,
+                        pcx_objects::ValueType::Real | pcx_objects::ValueType::Unreal
+                    )
+                    | (
+                        FieldKind::Token,
+                        FieldKind::Token,
+                        pcx_objects::ValueType::Str
+                    )
+            );
+            if !valid {
+                return Err(format!("{alias:?}: wrong type for {stem} override"));
+            }
+            return Ok(match &entry.value {
+                pcx_objects::Value::Int(value) => (*value as i32).to_string(),
+                pcx_objects::Value::Real(value) if value.is_finite() => value.to_string(),
+                pcx_objects::Value::Str(value) => std::str::from_utf8(value)
+                    .map_err(|_| format!("{alias:?}: non-UTF8 {stem} override"))?
+                    .trim()
+                    .to_owned(),
+                _ => return Err(format!("{alias:?}: nonfinite {stem} override")),
+            });
+        }
+        let object = input
+            .tables
+            .object(Family::Ability, base)
+            .map_err(|e| e.to_string())?;
+        let cell = object
+            .level_cell(stem, rank as u32)
+            .map_err(|e| e.to_string())?;
+        match cell.typed(kind).map_err(|e| e.to_string())? {
+            defaults::Value::Integer(_) | defaults::Value::Real(_) | defaults::Value::Text(_) => {
+                Ok(cell.text.trim().to_owned())
+            }
+            _ => Err(format!("{alias:?}: missing {stem}{rank}")),
+        }
+    }
+
     fn heroes_admission(&self) -> Result<&Admission, String> {
         self.units
             .as_ref()

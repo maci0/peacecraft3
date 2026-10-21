@@ -23,6 +23,62 @@ const ORDER_TICKS: u64 = 256;
 /// World units east of the unit.
 const ORDER_DISTANCE: f32 = 64.0;
 
+/// PCX_SUMMON_MAP selects an unchanged map whose authored script casts AHwe.
+/// This is a bounded cast gate, not chapter completion or native parity.
+#[test]
+#[ignore = "requires PCX_SUMMON_MAP and the selected PCX_STARTUP_* install/mode/seed"]
+fn selected_summoning_map_creates_a_live_source_loaded_unit_without_player_orders() {
+    let install = PathBuf::from(env("PCX_STARTUP_INSTALL"));
+    let map = PathBuf::from(env("PCX_SUMMON_MAP"));
+    let bytes = std::fs::read(&map).expect("read summoning map");
+    let seed = env("PCX_STARTUP_SEED").parse().expect("seed");
+    let mut startup = start(
+        &install,
+        selected_mode(),
+        &map.display().to_string(),
+        &bytes,
+        seed,
+        None,
+    )
+    .expect("summoning startup");
+    assert!(
+        !startup
+            .session
+            .host()
+            .unwrap()
+            .objects()
+            .executed_units()
+            .any(|(_, u)| u.summoned)
+    );
+    for tick in 1..=2048 {
+        startup
+            .step_clock(1)
+            .unwrap_or_else(|error| panic!("tick {tick}: {error}"));
+        let objects = startup.session.host().unwrap().objects();
+        if let Some((id, unit)) = objects.executed_units().find(|(_, u)| u.summoned) {
+            assert!(
+                unit.position
+                    .is_some_and(|p| p.into_iter().all(f32::is_finite))
+            );
+            assert!(unit.vitals.is_some_and(|v| v.life > 0.));
+            assert!(unit.combat.as_ref().is_some_and(|c| !c.dead));
+            let model = &unit.animation.as_ref().expect("source unit model").model;
+            assert!(!model.origin.source.is_empty());
+            assert!(!model.origin.version.is_empty());
+            eprintln!(
+                "summon tick={tick} handle={id:?} rawcode={} owner={} position={:?} model={} origin={:?}",
+                String::from_utf8_lossy(&unit.definition.rawcode),
+                unit.executed_owner,
+                unit.position,
+                model.member,
+                model.origin
+            );
+            return;
+        }
+    }
+    panic!("no scripted summon within the bounded diagnostic window");
+}
+
 fn env(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("set {name}; see the test module comment"))
 }

@@ -518,7 +518,8 @@ impl ObjectHost {
                 return Ok(if name == "GetUnitCurrentOrder" {
                     Value::Int(
                         match self
-                            .inventory_order(unit)
+                            .summon_current_order(unit)
+                            .or_else(|| self.inventory_order(unit))
                             .or_else(|| activity.patrol.map(|_| patrol))
                             .or_else(|| self.combat_attack_order(unit))
                         {
@@ -986,6 +987,7 @@ impl ObjectHost {
     }
 
     pub(super) fn forget_unit_activity(&mut self, unit: HandleId) {
+        self.cancel_summon_cast(unit);
         self.cancel_patrol(unit);
         self.forget_holy_cast(unit);
         if let Some(state) = &mut self.unit_activity {

@@ -802,6 +802,9 @@ pub fn assemble(
         }
         if let Some(rules) = input.combat {
             object.admit_combat(rules, "attack")?;
+            if object.has_hero_skills() {
+                object.admit_water_elemental()?;
+            }
             if let (true, Some(art)) = (object.has_hero_skills(), holy_light_art.as_deref()) {
                 object.admit_holy_light(art)?;
             }

@@ -17,6 +17,8 @@ pub const MAX_LOG_ENTRIES: usize = 1 << 20;
 /// A player command as the application accepted it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlayerCommand {
+    /// A registered immediate order issued to a unit.
+    Immediate { unit: HandleId, order: i32 },
     /// Replace the selection with `units`, or add them when `replace` is false.
     Select { units: Vec<HandleId>, replace: bool },
     /// A ground order such as `move` to `(x, y)`.

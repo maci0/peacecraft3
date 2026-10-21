@@ -2,6 +2,28 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+### 2026-10-21: Water Elemental in progress
+
+- [x] Source-ranked summoning, cast point, mana/cooldown, unit factory, timed death,
+  summon responses and primary-unit hotkey are wired in the private candidate.
+  Nine focused synthetic tests pass, including map overrides and parsed model
+  animation completion. The play suite passes 1,190 tests (47 ignored); strict
+  native app/play Clippy, app WASM, six app input tests and four selected-install gates pass.
+- [x] The Area placement follow-up derives the forward distance per rank. The
+  selected native loader/getter/effect chain establishes the Area relationship;
+  synthetic cardinal and rank tests pass. Suppressing the offset fails the new
+  regression. All affected checks above were repeated on the follow-up.
+- [ ] Native collision adjustment, event ordering, animation blending and
+  lifetime pause semantics remain unqualified. The command-panel button is not drawn.
+  Buff/status-bar/dispel integration also remains open, tracked under
+  `96c729e7-8dac-4f49-b87d-dc3dd4e1ca3a`.
+- [~] Unchanged Human03 creates a source-loaded `hwat` at tick 999. With Area
+  placement and no injected player movement, the longer diagnostic reaches
+  movement work exhaustion for unit 780 at tick 2570. The v1 diagnostic stopped
+  earlier but also injected a movement order, so this is not a controlled speedup
+  comparison. This remains partial startup observation, not campaign acceptance.
+  See [summoning](docs/re-notes/water-elemental.md).
+
 Last updated: 2026-10-15
 
 Historical menu verification (2026-10-14; current increment below): WASM release build succeeds; the app

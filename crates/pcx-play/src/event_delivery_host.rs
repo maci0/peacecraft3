@@ -22,7 +22,15 @@ pub struct EventSubject {
     pub spell_target: Option<HandleId>,
     /// Shop sale in progress: the seller and the sold item, set only by a queued sale.
     pub sale: Option<SaleContext>,
+    pub summon: Option<SummonContext>,
     pub hero: Option<HeroEvent>,
+}
+
+/// Units captured when a summoning effect creates a unit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SummonContext {
+    pub summoner: HandleId,
+    pub summoned: HandleId,
 }
 
 /// Hero-specific responses captured when the change fires.
@@ -58,7 +66,9 @@ pub(super) struct Delivery {
     region_known: BTreeSet<HandleId>,
 }
 
-const RESPONSES: [&str; 18] = [
+const RESPONSES: [&str; 20] = [
+    "GetSummoningUnit",
+    "GetSummonedUnit",
     "GetLevelingUnit",
     "GetLearningUnit",
     "GetLearnedSkill",
@@ -317,6 +327,8 @@ impl ObjectHost {
             "GetManipulatedItem" => subject.item,
             "GetSellingUnit" => subject.sale.map(|sale| sale.shop),
             "GetSoldItem" => subject.sale.map(|sale| sale.item),
+            "GetSummoningUnit" => subject.summon.map(|summon| summon.summoner),
+            "GetSummonedUnit" => subject.summon.map(|summon| summon.summoned),
             "GetManipulatingUnit" => subject.unit,
             "GetClickedDialog" => subject.dialog,
             "GetClickedButton" => subject.button,
