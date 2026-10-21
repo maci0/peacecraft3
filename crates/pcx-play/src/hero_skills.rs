@@ -50,8 +50,15 @@ impl Rules {
             max_bytes,
             max_levels,
         )?;
-        let rules =
+        let mut rules =
             crate::hero_experience::Rules::read(image, self.binding.origin.clone(), thresholds)?;
+        rules.admit_awards(
+            image,
+            profiles,
+            self.progression.max_level,
+            max_bytes,
+            max_levels,
+        )?;
         self.experience = Some(std::sync::Arc::new(rules));
         Ok(self)
     }

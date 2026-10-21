@@ -171,6 +171,7 @@ pub mod defaults;
 pub mod fog_boundary;
 pub mod hero;
 pub mod hero_experience;
+pub mod hero_experience_awards;
 mod keys;
 pub mod messages;
 pub mod meta;

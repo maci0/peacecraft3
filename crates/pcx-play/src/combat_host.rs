@@ -76,6 +76,7 @@ pub(super) struct Rules {
     attack_order: i32,
     /// From the selected neutral rule, set once the host is assembled.
     neutral_passive: Option<i32>,
+    neutral_aggressive: Option<i32>,
     passive: i32,
     player_death: i32,
     unit_death: i32,
@@ -391,6 +392,7 @@ impl ObjectHost {
             rules,
             attack_order,
             neutral_passive: None,
+            neutral_aggressive: None,
             passive: self.source_constant_enumerand("ALLIANCE_PASSIVE", "alliancetype")?,
             player_death: self
                 .source_constant_enumerand("EVENT_PLAYER_UNIT_DEATH", "playerunitevent")?,
@@ -491,6 +493,24 @@ impl ObjectHost {
             rules.neutral_passive = Some(number);
         }
     }
+    pub(crate) fn set_neutral_aggressive(&mut self, number: i32) {
+        if let Some(rules) = &mut self.combat {
+            rules.neutral_aggressive = Some(number);
+        }
+    }
+    pub(super) fn creep_owner(&self, owner: HandleId) -> Result<bool, Error> {
+        let aggressive = self
+            .combat
+            .as_ref()
+            .and_then(|r| r.neutral_aggressive)
+            .ok_or_else(|| {
+                self.inner.error(
+                    "hero kill XP",
+                    Failure::UnitState("neutral aggressive owner is not admitted"),
+                )
+            })?;
+        Ok(self.player_settings(owner)?.number == aggressive)
+    }
 
     pub(super) fn prepare_unit_combat(&self, d: &Definition) -> Result<Option<Combat>, Error> {
         let Some(input) = &self.combat else {
@@ -586,7 +606,7 @@ impl ObjectHost {
         self.hostile_owners(attacker.owner, target.owner)
     }
 
-    fn hostile_owners(&self, attacker: HandleId, target: HandleId) -> bool {
+    pub(super) fn hostile_owners(&self, attacker: HandleId, target: HandleId) -> bool {
         let rules = self.combat.as_ref().expect("combat");
         let (Ok(a), Ok(b)) = (self.player_settings(attacker), self.player_settings(target)) else {
             return false;
@@ -750,7 +770,7 @@ impl ObjectHost {
     }
 
     /// Kill a live unit: stop it, free its occupancy, play death, queue events.
-    pub(super) fn kill_unit(
+    pub(crate) fn kill_unit(
         &mut self,
         unit: HandleId,
         killer: Option<HandleId>,
@@ -760,6 +780,7 @@ impl ObjectHost {
             return Ok(());
         };
         let owner = record.owner;
+        let experience = self.plan_hero_kill_experience(unit, killer)?;
         let now = self.timer_game_time().unwrap_or(0.0);
         self.forget_inventory_unit(unit, false)?;
         self.forget_unit_guard(unit);
@@ -800,6 +821,9 @@ impl ObjectHost {
         if exploded && !exploded_presented {
             self.note_unrendered_explosion(unit);
         }
+        for (hero, xp) in experience {
+            self.assign_hero_experience(hero, xp, false)?;
+        }
         let rules = self.combat.as_ref().expect("combat");
         let (player_death, unit_death) = (rules.player_death, rules.unit_death);
         let subject = EventSubject {
@@ -836,7 +860,7 @@ impl ObjectHost {
     }
 
     /// Lethal or partial life loss from a damage source (weapon or spell). Kills name `source` as killer.
-    pub(super) fn damage_unit(
+    pub(crate) fn damage_unit(
         &mut self,
         source: HandleId,
         target: HandleId,

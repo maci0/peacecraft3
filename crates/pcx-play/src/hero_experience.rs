@@ -17,6 +17,7 @@ pub struct Rules {
     pub image_sha256: Sha256Digest,
     pub(crate) initial: State,
     pub(crate) thresholds: pcx_objects::editor::hero_experience::Experience,
+    pub(crate) awards: Option<(pcx_objects::editor::hero_experience_awards::Awards, f32)>,
 }
 impl Rules {
     pub(crate) fn read(
@@ -83,7 +84,53 @@ impl Rules {
                 suspended: suspended != 0,
             },
             thresholds,
+            awards: None,
         })
+    }
+    pub(crate) fn admit_awards(
+        &mut self,
+        image: &[u8],
+        profiles: &[(&str, &[u8])],
+        maximum: i32,
+        max_bytes: usize,
+        max_levels: usize,
+    ) -> Result<(), String> {
+        let pe = Pe::parse(
+            image,
+            RuleInputBudget {
+                image_bytes: 32 << 20,
+                profile_bytes: 64 << 10,
+                sections: 96,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        let helper = pe.read_from(0x9a1d70, true).map_err(|e| e.to_string())?;
+        if helper.get(..5) != Some(&[0x55, 0x8b, 0xec, 0x51, 0x68]) {
+            return Err("XP rounding helper shape".into());
+        }
+        let pointer = u32::from_le_bytes(
+            helper
+                .get(5..9)
+                .ok_or("XP rounding operand")?
+                .try_into()
+                .map_err(|_| "XP rounding pointer")?,
+        );
+        let bytes = pe.read_from(pointer, false).map_err(|e| e.to_string())?;
+        let bias = f32::from_le_bytes(
+            bytes
+                .get(..4)
+                .ok_or("XP rounding data")?
+                .try_into()
+                .map_err(|_| "XP rounding data")?,
+        );
+        if !bias.is_finite() || !(0.0..1.0).contains(&bias) {
+            return Err("XP rounding operand domain".into());
+        }
+        let awards = pcx_objects::editor::hero_experience_awards::Awards::read(
+            profiles, maximum, max_bytes, max_levels,
+        )?;
+        self.awards = Some((awards, bias));
+        Ok(())
     }
 }
 
@@ -104,6 +151,7 @@ pub(crate) mod tests {
                 suspended: false,
             },
             thresholds,
+            awards: None,
         }
     }
     #[test]
@@ -150,3 +198,7 @@ pub(crate) mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "hero_experience_original_tests.rs"]
+mod original_tests;

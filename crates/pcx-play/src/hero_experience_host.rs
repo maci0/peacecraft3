@@ -92,7 +92,7 @@ impl ObjectHost {
             }
         }
     }
-    pub(super) fn assign_hero_experience(
+    pub(in crate::playercolor_host::objects) fn assign_hero_experience(
         &mut self,
         unit: HandleId,
         xp: i32,

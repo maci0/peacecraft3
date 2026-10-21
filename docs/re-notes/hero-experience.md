@@ -1,10 +1,56 @@
 # Hero experience: source and runtime checkpoint
 
 Hero XP counters, suspension and script natives are implemented through the
-selected-source admission. Automatic kill awards are not implemented:
-`combat_host::kill_unit` still queues death callbacks without an experience award.
-Do not compensate by raising combat damage, hero level, or resource pools in a
-campaign test.
+selected-source admission. Combat deaths with a credited hostile killer now
+award XP using the loaded grant policies, and then queue the ordinary death
+callbacks. Do not compensate for campaign failures by raising combat damage,
+hero level, or resource pools in a test.
+
+## Automatic awards
+
+`hero_experience_awards::Awards` reads the normal/hero grant lists and A/B/C
+extensions, unit-level ceiling, creep factors, range, global experience,
+building policy, maximum-level drain and summoned-kill factor from ordered
+stock/map profiles. Duplicate, missing, malformed or over-budget fields refuse;
+no grant values are embedded in production. XP rounding reads the selected
+image operand described below.
+
+The host selects living, shown heroes belonging to the killer or receiving its
+directed shared-XP alliance. Nearby participants take precedence. When there
+are none, the global policy admits the killer owner's heroes. A suspended hero
+participates in the split but receives no XP; maximum-level heroes drain only
+when the loaded policy enables that. A dead source can still credit its owner
+for a later projectile impact, while dead recipient heroes are excluded.
+Friendly kills and deaths without a credited killer give no award.
+
+Grant, summoned factor, split, creep factor and the recipient player's assigned
+XP handicap are applied using the already admitted numeric policy. The result
+is rounded with the image operand and added through the same XP/level/event
+path as the script natives. Eligibility/order outside the six measured cases,
+allied sharing, suspended/max-level draining, buildings, summoned victims,
+boundary geometry and exact event interleaving are recreation choices with
+native qualification still open. Automatic level-up effect art is not rendered.
+
+No default handicap is invented: a nonzero award for a player whose factor has
+not been assigned refuses with that context. The existing setter/getter model
+does not yet qualify the final native initial factor. Older caches without XP
+also refuse an award requiring that missing counter. Preflight computes award
+counters before death housekeeping, but earlier damage is not rolled back on
+failure; the owning session stops, as for other failed world projections.
+
+Synthetic tests exercise the grant recurrence/overrides/refusals, exactly-once
+lethal delivery, sharing, creep/handicap arithmetic, global fallback, dead and
+suspended recipients, late impact credit, maximum-level drain and unknown-factor
+refusal. The explicit local `local_original_kill_experience_matches_recorded_probe`
+gate reads the retained original-client receipt, checks its template/profile
+SHA identities, and matches all six independent XP-delta observations below.
+It is a diagnostic comparison, not normal player input or unchanged-map acceptance.
+
+Validation on this increment: 1,132 `pcx-play` library tests pass with 33 ignored;
+the award-parser synthetic test passes. Strict all-target Clippy on play/objects,
+both WASM library checks and native `peacecraft3 --all-targets` check pass. The
+three Human01 opening/XP-cap/Escape gates and the six-case marker comparison
+pass after the award hook is connected. No elapsed-time or FPS threshold is a gate.
 
 ## Implemented state and compatibility
 
@@ -67,6 +113,24 @@ The draft and all failed run logs remain in local `.scratch/campaign-route/`,
 including `headless-startup-victory-draft.rs.txt` and its SHA receipt. They are
 not a committed passing victory test. This preserves the chapter-completion
 requirement rather than declaring the side quest to be the end of the game.
+
+With automatic awards connected, a repeat ordinary-input itinerary earns level
+2 and XP 232 during the bandit fight. The authored level event suspends XP;
+the ledger still completes and grants its permanent-strength reward. Two
+strategies then lose Arthas at the later orc fight. A regroup/heal strategy has
+already lost its footmen before that fight; its surviving-party check is not
+evidence that the original party recovered. Those failures still do not prove
+incorrect combat balance.
+
+A further ordinary group focus-fire strategy stops earlier with a concrete
+host error: at game time 84.015625 (tick 5377), movement work is exhausted for
+unit 825, chasing `[3632.0, -3992.7148]`, waypoint 0 of 13, with its motion epoch
+restarted at that same time and zero distance credited. This is a recreation
+movement-budget failure, not a native observation. It needs a bounded chase
+regression and a progress fix rather than increasing the work allowance.
+The latest source draft and all failed route logs are retained in local
+`.scratch/campaign-route/route-xp-*`; no failing route is published as a passing
+chapter gate. Victory and next-map transition remain unachieved.
 
 ## Shipped data
 
@@ -168,13 +232,14 @@ conversion at `0x9A07B0`. The helper adds the float at `0x10DB0A8` through
 fraction bits for nonnegative inputs. This is code evidence for floor after
 adding the image's half-unit operand, consistent with the observed 25.6 to 26.
 Any runtime implementation must read that operand from the selected image;
-the measured value is not a production constant. Award multipliers, their order
-and level-dependent splitting remain to be connected.
+the measured value is not a production constant. Award multipliers and
+level-dependent splitting are now connected as described above; their complete
+native ordering remains unqualified.
 
 ## Required continuation
 
-Connect eligible deaths to source-derived awards only
-after deriving the grant, range, allied sharing, creep and rounding rules.
-Qualify the remaining arithmetic/event timing and legacy-cache migration policy.
+Qualify the remaining eligibility, arithmetic/event timing, initial player XP
+handicap and legacy-cache migration policy. Fix the movement-work failure exposed
+by ordinary group target orders.
 Re-run the same preserved itinerary and continue through
 chapter victory and the next-map transition. Neither is achieved here.

@@ -11,6 +11,8 @@ use std::collections::BTreeSet;
 mod cooldown;
 #[path = "hero_experience_host.rs"]
 mod experience;
+#[path = "hero_experience_kills.rs"]
+mod experience_kills;
 #[path = "ability_tooltip.rs"]
 mod tooltip;
 
