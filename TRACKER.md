@@ -9,7 +9,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   Real Human03 stacks captured 1,897 samples with zero lost samples; five runs
   preserve unit projections and source RNG state. Core tests (1,430), strict
   app Clippy and affected WASM checks pass.
-- [~] Complete rendered campaign coverage remains open. Three hidden-window
+- [~] Complete rendered campaign coverage remains open. Four hidden-window
   capture attempts are invalid; none supplies frame or GPU evidence.
   See [CPU hotpaths](docs/performance/cpu-hotpaths.md).
 - [x] Derive catalog collision geometry once per created unit, preserving deferred
@@ -21,6 +21,11 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   target checks. New tie/death regressions and 1,073 core tests pass; Human03
   keeps its unit/RNG projection and native-call name sequence. Instruction
   counters are report-only; full rendered coverage stays open.
+- [x] `sudo perf` attaches to the normal-user Wayland viewer (4,494 samples).
+  `bpftrace` DWARF CPU flame graphs capture 1,171 unchanged-map samples, split
+  into startup/simulation/other; 24 repetitions retain the unit/RNG projection.
+  Unresolved runtime addresses, external helper warnings and the sparse viewer
+  BPF sample are recorded; full rendered campaign/GPU coverage remains open.
 
 ### 2026-10-21: Five measured optimization rounds
 

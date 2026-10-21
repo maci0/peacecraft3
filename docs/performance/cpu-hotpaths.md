@@ -148,12 +148,56 @@ WASM checks, core WASM checks with profiling enabled, four trace-summary tests,
 and formatting. The object-file census requires the explicit local install;
 its initial run without those inputs failed and is retained separately.
 
-Three renderer capture attempts are invalid. The X11 window stayed unmapped;
+Four X11 renderer capture attempts are invalid. The X11 window stayed unmapped;
 forcing a map request did not establish visibility. The first trace also grew
 with repeated audio-backend timestamp errors. The second capture reported lost
 sample chunks and was terminated without a complete trace. Animation spans
 alone do not prove visible rendering. A third bounded probe preserved the normal
-desktop-session environment and still did not establish visibility. These runs
+desktop-session environment and still did not establish visibility. An activation
+request in the fourth did not remove its hidden state. These runs
 contribute no frame or GPU performance claim. Campaign HUD, audio mixing,
 GPU driver submission and all-map
 coverage remain open.
+
+## Privileged observers and BPF flame graphs
+
+A normal-user Wayland viewer now closes normally through its own window's close
+request, producing a complete trace. KWin reports that owned window as active,
+not hidden and not minimized. The earlier X11 diagnostic used `windowclose`,
+which destroys the X11 window; its subsequent swapchain-loss messages are not
+evidence of an initial rendering failure. Use a close request (`windowquit` on
+X11), not destruction, when a tracing collector needs to flush.
+
+A `sudo perf` observer attached to the normal-user Wayland viewer recorded 4,494
+samples over twelve seconds, with no lost-sample warning. No capabilities,
+sysctls or power settings were changed. This uses a development build and a
+single model viewer; it is not rendered campaign acceptance.
+
+The installed bpftrace 0.27 has DWARF unwinding support. A process-filtered
+`profile:hz:99` probe with `dw_ustack` produced a zoomable, Rust-demangled CPU
+flame graph from 1,171 samples of repeated unchanged Human03 startup and 4,096
+simulation ticks. The process completed all 24 repetitions with the same unit
+projection and complete source RNG state. The probe samples twelve seconds of
+this repeated workload, not every tick of every repetition.
+
+Splitting by observed `headless_startup::start` and `Startup::step_clock` stack
+branches assigns 930 samples to startup, 217 to simulation, and 24 to other work.
+Separate SVGs retain those weights. Startup's leading self samples are Huffman
+decompression (212), SHA-256 compression (187) and ADPCM (67); simulation's are
+acquisition iteration (55), weapon-target checks (30) and region polling (25).
+These sample counts prioritize investigation; they are not deterministic work
+budgets or timing thresholds.
+
+Stack depths are 10–31, below the configured 64-frame limit. All samples contain
+an unresolved runtime address, although the Rust hotpath frames resolve. The
+external DWARF helper generated nine kernel-header declaration warnings, retained
+with the raw output. Folded weights match the collected map count; the SVGs
+parse and the combined graph was visually checked. This does not prove complete
+symbol resolution or full unwind coverage.
+
+The corresponding model-viewer BPF capture has only thirteen samples, too few for
+hotspot conclusions. All raw data and graphs remain local under
+`campaign-bpf-dwarf/` and `viewer-bpf-dwarf/` in the evidence directory. FlameGraph
+tools are pinned at `41fee1f99f9276008b7cd112fca19dc3ea84ac32`; no original assets
+or captures were uploaded. Full campaign rendering, GPU analysis and native
+lockstep remain open.
