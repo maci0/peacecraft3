@@ -74,8 +74,9 @@ A separate local original-input gate extracted three explicitly selected
 `UI\FrameDef\Glue\MainMenu.fdf` and `UI\war3skins.txt`. Their decoded hashes and
 lengths matched the earlier supplied fixture's provenance. Staging these bytes
 through the actual WASM exports derived the same authored font file list. The
-temporary extracted bodies were deleted after the check. This does not establish
-archive priority, release attribution, browser drawing or native fidelity.
+temporary extracted bodies were deleted after the check. That extraction gate
+does not establish release attribution, browser drawing or native fidelity;
+the selected 1.29b archive order above comes from the separate client-code trace.
 
 Captured commands, exit codes and hashes are local under
 `.scratch/browser-read-root-review/`. No original bytes belong to the commit.
