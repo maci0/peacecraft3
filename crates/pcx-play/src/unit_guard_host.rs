@@ -331,6 +331,7 @@ impl ObjectHost {
         }
     }
     pub(super) fn unit_ordered(&mut self, unit: HandleId) {
+        self.cancel_unit_follow(unit);
         self.cancel_summon_cast(unit);
         self.cancel_patrol(unit);
         self.wake_natural_sleep(unit);
@@ -384,7 +385,7 @@ impl ObjectHost {
         let moving = record
             .activity
             .as_ref()
-            .is_some_and(|a| a.moving() || a.patrolling() && !guard.returning);
+            .is_some_and(|a| a.moving() || (a.patrolling() || a.following()) && !guard.returning);
         let tolerance = self.unit_collision_radius(unit, REMOVE)?;
         let decision = guard
             .plan(

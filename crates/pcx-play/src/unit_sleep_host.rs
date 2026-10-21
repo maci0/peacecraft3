@@ -167,7 +167,7 @@ impl ObjectHost {
             let busy = record
                 .activity
                 .as_ref()
-                .is_some_and(|a| a.moving() || a.patrolling())
+                .is_some_and(|a| a.moving() || a.patrolling() || a.following())
                 || record
                     .combat
                     .as_ref()

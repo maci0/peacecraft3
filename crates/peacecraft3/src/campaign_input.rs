@@ -270,53 +270,50 @@ fn standard_target(
     target: Option<HandleId>,
 ) -> Result<(), String> {
     use pcx_play::standard_command::Kind;
-    if target.is_some() && matches!(kind, Kind::Move | Kind::Patrol) {
-        return Err(match kind {
-            Kind::Move => "Moving to a target object is not supported yet. Choose a ground point.",
-            _ => "Patrol imitation is not supported yet. Choose a ground point.",
-        }
-        .into());
+    if target.is_some() && kind == Kind::Patrol {
+        return Err("Patrol imitation is not supported yet. Choose a ground point.".into());
     }
     for (unit, order) in owned_standard_orders(objects, kind)? {
         let Value::Str(name) = objects.native("OrderId2String", &[Value::Int(order)])? else {
             return Err("standard command has no admitted order name".into());
         };
         let clock = objects.timer_game_time();
-        let (result, command) = if let Some(target) = target.filter(|_| kind == Kind::Attack) {
-            (
-                objects.native(
-                    "IssueTargetOrderById",
-                    &[
-                        Value::Handle(unit),
-                        Value::Int(order),
-                        Value::Handle(target),
-                    ],
-                ),
-                PlayerCommand::Target {
-                    unit,
-                    order: name,
-                    target,
-                },
-            )
-        } else {
-            (
-                objects.native(
-                    "IssuePointOrderById",
-                    &[
-                        Value::Handle(unit),
-                        Value::Int(order),
-                        Value::Real(point[0]),
-                        Value::Real(point[1]),
-                    ],
-                ),
-                PlayerCommand::Point {
-                    unit,
-                    order: name,
-                    x: point[0],
-                    y: point[1],
-                },
-            )
-        };
+        let (result, command) =
+            if let Some(target) = target.filter(|_| matches!(kind, Kind::Attack | Kind::Move)) {
+                (
+                    objects.native(
+                        "IssueTargetOrderById",
+                        &[
+                            Value::Handle(unit),
+                            Value::Int(order),
+                            Value::Handle(target),
+                        ],
+                    ),
+                    PlayerCommand::Target {
+                        unit,
+                        order: name,
+                        target,
+                    },
+                )
+            } else {
+                (
+                    objects.native(
+                        "IssuePointOrderById",
+                        &[
+                            Value::Handle(unit),
+                            Value::Int(order),
+                            Value::Real(point[0]),
+                            Value::Real(point[1]),
+                        ],
+                    ),
+                    PlayerCommand::Point {
+                        unit,
+                        order: name,
+                        x: point[0],
+                        y: point[1],
+                    },
+                )
+            };
         record_order_result(input, clock, result, command);
     }
     Ok(())
@@ -956,36 +953,61 @@ fn click(
             };
             (result, command)
         } else {
-            match picked.filter(|&target| objects.is_enemy(unit, target)) {
+            use pcx_play::standard_command::Kind;
+            let kind = if picked.is_some_and(|target| objects.is_enemy(unit, target)) {
+                Kind::Attack
+            } else {
+                Kind::Move
+            };
+            let order = match objects.standard_command_order(unit, kind) {
+                Ok(Some(order)) => order,
+                Ok(None) => continue,
+                Err(error) => {
+                    input.last_error = Some(error.to_string());
+                    continue;
+                }
+            };
+            let name = match objects.native("OrderId2String", &[Value::Int(order)]) {
+                Ok(Value::Str(name)) => name,
+                Err(error) => {
+                    input.last_error = Some(error);
+                    continue;
+                }
+                _ => {
+                    input.last_error = Some("standard command has no admitted order name".into());
+                    continue;
+                }
+            };
+            match picked {
                 Some(target) => {
                     let result = objects.native(
-                        "IssueTargetOrder",
+                        "IssueTargetOrderById",
                         &[
                             Value::Handle(unit),
-                            Value::Str("attack".into()),
+                            Value::Int(order),
                             Value::Handle(target),
                         ],
                     );
                     let command = PlayerCommand::Target {
                         unit,
-                        order: "attack".into(),
+                        order: name,
                         target,
                     };
                     (result, command)
                 }
                 None => {
                     let result = objects.native(
-                        "IssuePointOrder",
+                        "IssuePointOrderById",
                         &[
                             Value::Handle(unit),
-                            Value::Str("move".into()),
+                            Value::Int(order),
                             Value::Real(point[0]),
                             Value::Real(point[1]),
                         ],
                     );
                     let command = PlayerCommand::Point {
                         unit,
-                        order: "move".into(),
+                        order: name,
                         x: point[0],
                         y: point[1],
                     };
@@ -1166,12 +1188,40 @@ mod tests {
             standard_target(
                 objects,
                 &mut CampaignInput::default(),
-                Standard::Move,
+                Standard::Patrol,
                 [0., 0.],
                 Some(units[0])
             )
             .is_err()
         );
+        app.world_mut()
+            .resource_scope(|world, mut input: Mut<CampaignInput>| {
+                let mut session = world.resource_mut::<MapScriptSession<MapStartupHost>>();
+                let objects = session.host().unwrap().objects_mut();
+                standard_target(
+                    objects,
+                    &mut input,
+                    Standard::Move,
+                    [0.0, 0.0],
+                    Some(units[1]),
+                )
+                .unwrap();
+                assert_eq!(
+                    objects
+                        .executed_unit(units[0])
+                        .unwrap()
+                        .activity
+                        .as_ref()
+                        .unwrap()
+                        .followed_unit(),
+                    Some(units[1])
+                );
+                assert_eq!(
+                    input.commands.entries().len(),
+                    5,
+                    "self-target must not add an accepted order"
+                );
+            });
     }
 
     #[test]

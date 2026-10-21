@@ -2,10 +2,24 @@
 //! names resolve through the script's own `UNIT_TYPE_*` constants. Status
 //! types without a modeled effect (stunned, ...) read false. Natural sleep uses live unit state.
 use super::{Entry, Error, Failure, ObjectHost};
-use pcx_objects::editor::SlkId;
+use pcx_objects::editor::{FieldKind, SlkId};
 use pcx_script::Value;
+use pcx_sim::world::{Definition, FieldValue};
 
 const NATIVE: &str = "IsUnitType";
+
+pub(super) fn structure(definition: &Definition) -> Result<bool, String> {
+    let field =
+        super::unit_positions::field(definition, SlkId::UnitBalance, "isbldg", &[FieldKind::Bool])
+            .map_err(|e| format!("UnitBalance/isbldg: {e}"))?;
+    match field {
+        FieldValue::Cell(value) if value.trim() == "0" => Ok(false),
+        FieldValue::Cell(value) if value.trim() == "1" => Ok(true),
+        FieldValue::Override(pcx_objects::Value::Int(0)) => Ok(false),
+        FieldValue::Override(pcx_objects::Value::Int(1)) => Ok(true),
+        _ => Err("UnitBalance/isbldg requires a source boolean".into()),
+    }
+}
 
 /// Classification tokens of `UnitBalance` `type` named by these unit types.
 const CLASSES: [(&str, &str); 8] = [
@@ -59,8 +73,6 @@ impl ObjectHost {
             let definition = &record.definition;
             let text = |slk, column| super::unit_positions::text(definition, slk, column);
             let movement = text(SlkId::UnitData, "movetp").unwrap_or("");
-            let structure =
-                super::unit_activity::balance_real(definition, "isbldg").is_ok_and(|v| v != 0.0);
             let weapon = record.combat.as_ref().and_then(|c| c.weapon);
             let value = if is("UNIT_TYPE_HERO") {
                 definition.rawcode[0].is_ascii_uppercase()
@@ -72,7 +84,8 @@ impl ObjectHost {
             } else if is("UNIT_TYPE_SUMMONED") {
                 record.summoned
             } else if is("UNIT_TYPE_STRUCTURE") {
-                structure
+                structure(definition)
+                    .map_err(|e| self.inner.error(NATIVE, Failure::UnitActivity(e)))?
             } else if is("UNIT_TYPE_FLYING") {
                 movement == "fly"
             } else if is("UNIT_TYPE_GROUND") {

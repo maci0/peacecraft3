@@ -2,6 +2,11 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [ ] Bind headless session admission to actual selected catalog/Misc contents.
+  Its current catalog identity is an install path; matching admission digests do
+  not prove equal source game rules across peers. Runtime provenance is retained,
+  but source-content equality and native lockstep remain separate open gates.
+
 - [~] Global `BlzGetAbilityCooldown` reads admitted source/map-edited durations,
   independently of learned units and live overrides. Core/app, selected-install,
   strict Clippy and affected WASM checks pass. Native level-zero indexing remains
@@ -22,7 +27,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 - [~] Standard Move, Stop, Hold, Patrol and Attack now share the receipt-bound
   command grid and player-order path. Profiles supply skin keys, positions,
   hotkeys and tooltips; group commands filter current local ownership. Only
-  accepted native orders enter the journal. Follow/imitation widget targets,
+  accepted native orders enter the journal. Unit-target Move and friendly-unit
+  right-click now retain follow intent using admitted Misc ranges. Patrol imitation,
   readiness/cursor art, exact mixed-selection policy and native rendering/input
   comparison remain open. Validation receipts: `.scratch/standard-commands/`.
 - [~] Holy Light and Water Elemental have a receipt-bound command-card renderer

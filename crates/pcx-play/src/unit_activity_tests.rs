@@ -1,5 +1,7 @@
 use super::*;
 use pcx_script::HandleId;
+#[path = "unit_follow_tests.rs"]
+mod follow;
 #[path = "unit_patrol_tests.rs"]
 mod patrol;
 type Vm = pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>;
@@ -115,6 +117,14 @@ fn rules_with_patrol(
         &registry,
         budget,
     )
+    .unwrap()
+    .with_follow_profiles(
+        &[(
+            "synthetic follow misc",
+            b"[Misc]\nFollowRange=12\nStructureFollowRange=4\n",
+        )],
+        4096,
+    )
     .unwrap();
     (registry, rules)
 }
@@ -125,6 +135,15 @@ fn host_fields(route_work: usize, fields: &[([u8; 4], ObjectField)]) -> ObjectHo
     use crate::file_sounds::tests::{PROPERTY_DECLARATIONS, mixed_assets};
     let extra = format!(
         "{}\n{ORDERS}native RemoveUnit takes unit u returns nothing
+native SetUnitPosition takes unit u, real x, real y returns nothing
+native IssueTargetOrder takes unit u, string s, widget target returns boolean
+native IssueTargetOrderById takes unit u, integer n, widget target returns boolean
+type unittype extends handle
+constant native ConvertUnitType takes integer n returns unittype
+constant native IsUnitType takes unit u, unittype kind returns boolean
+globals
+constant unittype UNIT_TYPE_STRUCTURE=ConvertUnitType(-91)
+endglobals
 native SetUnitPathing takes unit u, boolean enabled returns nothing
 type sound extends agent\n{SOUNDS}{PROPERTY_DECLARATIONS}",
         enumeration::TRIGGERS
@@ -149,7 +168,10 @@ type sound extends agent\n{SOUNDS}{PROPERTY_DECLARATIONS}",
     h
 }
 fn open() -> Vm {
-    let mut h = host(65536);
+    open_with_fields(&[])
+}
+fn open_with_fields(fields: &[([u8; 4], ObjectField)]) -> Vm {
+    let mut h = host_fields(65536, fields);
     let model = crate::unit_model::tests::model();
     let mut bytes = model.bytes.to_vec();
     let at = bytes

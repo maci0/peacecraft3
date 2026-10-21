@@ -427,9 +427,10 @@ profile values. Standard hotkeys currently precede learned-spell hotkeys when
 they collide; native collision precedence is unqualified.
 
 Ground Move, ground Patrol, ground Attack and unit-target Attack use the existing
-native order paths. The source Move tooltip describes following a unit, and the
-Patrol tooltip describes imitating one. Those widget-target modes remain
-unsupported and report that state instead of substituting a ground destination.
+native order paths. Unit-target Move now retains the followed unit and uses the
+admitted Misc follow ranges; see [unit follow](unit-follow.md). The source Patrol
+tooltip describes imitating a unit. That widget-target mode remains unsupported
+and reports that state instead of substituting a ground destination.
 Only `Bool(true)` native results enter the player command journal. Refused and
 failed orders do not become accepted replay entries; armed Holy Light and the
 right-click order path share this result boundary.
@@ -440,7 +441,7 @@ and failed journal results. The explicit installed Human01 checks mount all five
 buttons under the admitted console and exercise group Hold/Stop with control
 closed and reopened. These are component/host checks, not original-client or
 full campaign rendering evidence. Target cursor artwork, disabled/readiness art,
-follow/imitation, mixed-selection fidelity and native visual/input parity remain
+Patrol imitation, mixed-selection fidelity and native visual/input parity remain
 open. Private validation receipts are under `.scratch/standard-commands/`.
 
 Private-target validation passes: 1,114 core tests (31 ignored), 590 app binary
