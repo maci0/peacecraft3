@@ -4,6 +4,89 @@ use pcx_objects::editor::{
     defaults::{DefaultTables, Family},
 };
 
+/// Authored presentation of one learned, available ability. This is not a cast-readiness check.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Button {
+    pub ability: [u8; 4],
+    pub rank: i32,
+    pub art: String,
+    /// Source column and row; row zero is the top of the command grid.
+    pub position: [usize; 2],
+}
+
+pub(crate) fn button_position(
+    tables: &DefaultTables,
+    overlay: &Overlay,
+    alias: [u8; 4],
+) -> Result<[usize; 2], String> {
+    let (base, mods) = base(tables, overlay, alias)?;
+    let object = tables
+        .object(Family::Ability, base)
+        .map_err(|error| error.to_string())?;
+    let mut result = [0; 2];
+    for (index, coordinate) in result.iter_mut().enumerate() {
+        let mut fields = tables.editor().fields().iter().filter(|field| {
+            field.from == SlkId::AbilityMetaData
+                && matches!(&field.source,
+                FieldSource::Profile { key, index: slot, slots: 2 }
+                if key.eq_ignore_ascii_case("Buttonpos") && *slot == index as i32)
+        });
+        let field = fields
+            .next()
+            .ok_or_else(|| format!("{alias:?}: missing Buttonpos/{index} metadata"))?;
+        if fields.next().is_some() || field.kind != FieldKind::Int {
+            return Err(format!(
+                "{alias:?}: ambiguous or noninteger Buttonpos/{index} metadata"
+            ));
+        }
+        let metadata = tables
+            .metadata(field.fourcc)
+            .ok_or_else(|| format!("{alias:?}: missing Buttonpos/{index} metadata record"))?;
+        for selector in [
+            "repeat",
+            "data",
+            "appendIndex",
+            "useSpecific",
+            "notSpecific",
+        ] {
+            if metadata
+                .attribute(selector)
+                .is_some_and(|value| !matches!(value.text.trim(), "" | "0" | "_" | "-"))
+            {
+                return Err(format!(
+                    "{alias:?}: unsupported Buttonpos/{index} {selector}"
+                ));
+            }
+        }
+        let value = if let Some(modification) =
+            mods.iter().rev().find(|entry| entry.field == field.fourcc)
+        {
+            if modification.value_type != pcx_objects::ValueType::Int
+                || modification
+                    .selectors
+                    .is_some_and(|selectors| selectors != [0, 0])
+            {
+                return Err(format!("{alias:?}: unsupported Buttonpos/{index} override"));
+            }
+            let pcx_objects::Value::Int(value) = modification.value else {
+                return Err(format!("{alias:?}: noninteger Buttonpos/{index} override"));
+            };
+            i64::from(value as i32)
+        } else {
+            let stock = object
+                .field(field.fourcc)
+                .map_err(|error| error.to_string())?;
+            let pcx_objects::editor::defaults::Value::Integer(value) = stock.value else {
+                return Err(format!("{alias:?}: noninteger Buttonpos/{index}"));
+            };
+            value
+        };
+        *coordinate = usize::try_from(value)
+            .map_err(|_| format!("{alias:?}: negative or oversized Buttonpos/{index}"))?;
+    }
+    Ok(result)
+}
+
 pub(crate) fn base<'a>(
     tables: &'a DefaultTables,
     overlay: &'a Overlay,
@@ -126,4 +209,47 @@ pub(crate) fn profiles(
         .filter(|t| !matches!(*t, "" | "_" | "-"))
         .map(str::to_owned)
         .collect())
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL and PCX_WAR3_EXE from the selected local install"]
+    fn original_button_positions_agree_with_authored_profiles_and_client_grid() {
+        let install = std::path::PathBuf::from(
+            std::env::var_os("PCX_NATIVE_CHAPTER_INSTALL").expect("set PCX_NATIVE_CHAPTER_INSTALL"),
+        );
+        let client_path =
+            std::path::PathBuf::from(std::env::var_os("PCX_WAR3_EXE").expect("set PCX_WAR3_EXE"));
+        let image = std::fs::read(&client_path).expect("selected executable");
+        let identity =
+            crate::campaign_inputs::client_identity(&image, &client_path.display().to_string());
+        let grid = crate::command_layout::Rules::reviewed_legacy(&image, identity.clone()).unwrap();
+        let tables =
+            DefaultTables::open(&install, identity.version).expect("selected object tables");
+        for alias in [*b"AHhb", *b"AHwe"] {
+            let row = pcx_objects::fourcc_text(alias);
+            let object = tables.object(Family::Ability, &row).unwrap();
+            let authored = object.profile("Buttonpos");
+            let [authored] = authored.as_slice() else {
+                panic!("{row}: ambiguous Buttonpos")
+            };
+            let raw: Vec<usize> = authored
+                .text
+                .split(',')
+                .map(|value| value.trim().parse().unwrap())
+                .collect();
+            let position = button_position(&tables, &Overlay::default(), alias).unwrap();
+            assert_eq!(position.as_slice(), raw, "{row}: metadata slot mapping");
+            let rect = grid
+                .slot(position[0], position[1])
+                .expect("source button fits source grid");
+            let art = profiles(&tables, &Overlay::default(), alias, "Art").unwrap();
+            assert_eq!(art.len(), 1, "{row}: one authored icon");
+            assert!(!art[0].is_empty());
+            println!("ability={row} position={position:?} rect={rect:?}");
+        }
+    }
 }

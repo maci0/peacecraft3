@@ -83,3 +83,31 @@ through the existing accepted-command log remain to be connected and tested.
 The existing Holy Light and Water Elemental hotkeys remain their input paths.
 Native command ordering, disabled states and the rendered console relationship
 still need runtime comparison.
+
+## Learned button data (2026-10-21)
+
+`ObjectHost::ability_button(unit, ability)` now projects the learned rank,
+player availability, authored `Art` and metadata-mapped `Buttonpos`. Unlearned
+or player-unavailable abilities return no button. This is presentation data,
+not a mana, cooldown or target-readiness decision; accepted orders must still
+go through the gameplay command path.
+
+The two position components are identified through AbilityMetaData profile
+slots, not field fourcc literals or copied coordinates. Each scalar map
+modification replaces only its own component. A valid map override does not
+require a stock coordinate to exist. Malformed types, nonzero selectors,
+negative coordinates and unsupported mapping attributes refuse. Negative
+coordinates may have native hiding semantics; no such rule is claimed here.
+The caller must pass the position through the selected grid's `slot` bounds
+check before drawing it.
+
+Synthetic tests cover component mapping, map replacement, absent stock values,
+malformed inputs and learned-rank projection. The explicit original gate
+`ability_profile::tests::original_button_positions_agree_with_authored_profiles_and_client_grid`
+compares both implemented Human hero spells with their supplied profile text
+and checks the selected client grid. It requires `PCX_NATIVE_CHAPTER_INSTALL`
+and `PCX_WAR3_EXE`; no measured coordinates are embedded in the test.
+
+The command-card renderer is still absent. Command icon sampler flags have not
+yet been admitted for this path; the inventory's sampler settings are not
+assumed to apply. Ranked tooltips and their substitutions also remain open.
