@@ -2,6 +2,17 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+### 2026-10-21: Ability profile overrides
+
+- [x] Live hero ability profiles and startup's Holy Light model read apply the
+  same scalar map modifications through AbilityMetaData. Empty overrides do not
+  fall back to stock; malformed, unknown, ranked and indexed forms refuse.
+  Holy Light input reports lookup failures. Core tests pass (1,082/0 failed/30
+  ignored), the selected command-layout gate passes, original Human01 chapter
+  startup still publishes, and app input tests, strict Clippy and WASM pass.
+- [~] The source-derived command grid is preserved; mounting its buttons,
+  indexed button positions and ranked tooltip expansion remain unfinished.
+
 ### 2026-10-21: Native chapter activation
 
 - [~] Selected-install chapter activation now has an explicit ignored application

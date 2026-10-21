@@ -117,6 +117,10 @@ fn tables(profile: &str) -> DefaultTables {
                 "0",
                 "0",
             ],
+            &["ahky", "Hotkey", "Profile", "0", "char", "text", "0", "0"],
+            &["aart", "Art", "Profile", "0", "icon", "art", "0", "0"],
+            &["abpx", "Buttonpos", "Profile", "0", "int", "art", "0", "0"],
+            &["abpy", "Buttonpos", "Profile", "1", "int", "art", "0", "0"],
         ],
     );
     DefaultTables::from_bytes(
@@ -143,6 +147,113 @@ fn catalog_origin() -> crate::scripts::AssetIdentity {
         edition: "fixture".into(),
         version: "fixture".into(),
     }
+}
+
+#[test]
+fn scalar_ability_profiles_use_map_overrides_and_keep_unrelated_stock_values() {
+    let modification = |field, text: &[u8]| pcx_objects::Mod {
+        field,
+        value_type: pcx_objects::ValueType::Str,
+        selectors: Some([0, 0]),
+        value: pcx_objects::Value::Str(text.to_vec()),
+        end_word: 0,
+    };
+    let profile = "[L001]\nHotkey=Q\nArt=Textures\\Stock.blp\nOrder=synthetic\n";
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L001".into(),
+        vec![
+            modification(*b"ahky", b"T"),
+            modification(*b"ahky", b" W "),
+            modification(*b"aart", b"Textures\\Map.blp"),
+        ],
+    );
+    let mut vm = host(NATIVES, "L001", overlay, profile, 8);
+    let h = &vm.host().inner;
+    assert_eq!(h.hero_ability_profile(*b"L001", "Hotkey").unwrap(), "W");
+    assert_eq!(
+        h.hero_ability_profile(*b"L001", "Art").unwrap(),
+        "Textures\\Map.blp"
+    );
+    assert_eq!(
+        h.hero_ability_profile(*b"L001", "Order").unwrap(),
+        "synthetic"
+    );
+}
+
+#[test]
+fn malformed_or_indexed_profile_overrides_never_fall_back_to_stock() {
+    let profile = "[L001]\nHotkey=Q\nButtonpos=1,2\n";
+    for (field, selectors, value_type, value, key) in [
+        (
+            *b"ahky",
+            Some([1, 0]),
+            pcx_objects::ValueType::Str,
+            pcx_objects::Value::Str(b"T".to_vec()),
+            "Hotkey",
+        ),
+        (
+            *b"ahky",
+            None,
+            pcx_objects::ValueType::Int,
+            pcx_objects::Value::Int(5),
+            "Hotkey",
+        ),
+        (
+            *b"ahky",
+            None,
+            pcx_objects::ValueType::Str,
+            pcx_objects::Value::Str(vec![255]),
+            "Hotkey",
+        ),
+        (
+            *b"abpx",
+            None,
+            pcx_objects::ValueType::Int,
+            pcx_objects::Value::Int(3),
+            "Buttonpos",
+        ),
+        (
+            *b"xxxx",
+            None,
+            pcx_objects::ValueType::Str,
+            pcx_objects::Value::Str(b"T".to_vec()),
+            "Hotkey",
+        ),
+    ] {
+        let mut overlay = Overlay::default();
+        overlay.mods.insert(
+            "L001".into(),
+            vec![pcx_objects::Mod {
+                field,
+                selectors,
+                value_type,
+                value,
+                end_word: 0,
+            }],
+        );
+        let mut vm = host(NATIVES, "L001", overlay, profile, 8);
+        assert!(vm.host().inner.hero_ability_profile(*b"L001", key).is_err());
+    }
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L001".into(),
+        vec![pcx_objects::Mod {
+            field: *b"ahky",
+            selectors: None,
+            value_type: pcx_objects::ValueType::Str,
+            value: pcx_objects::Value::Str(Vec::new()),
+            end_word: 0,
+        }],
+    );
+    let mut vm = host(NATIVES, "L001", overlay, profile, 8);
+    assert!(
+        vm.host()
+            .inner
+            .hero_ability_profiles(*b"L001", "Hotkey")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

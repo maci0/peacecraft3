@@ -53,6 +53,7 @@
 //! clock, and takes every random draw from one `pcx_sim::Rng`. Trace rows are
 //! emitted in sorted order with no map iteration anywhere near the output.
 
+mod ability_profile;
 pub mod camera_margins;
 pub mod campaign;
 pub mod campaign_assets;

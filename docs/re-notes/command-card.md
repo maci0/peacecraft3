@@ -52,6 +52,20 @@ and its refusal paths, not displayed buttons.
 
 ## Ability presentation inputs
 
+The shared `ability_profile` reader now applies scalar W3A profile modifications
+through the loaded AbilityMetaData mapping. Last authored modification wins;
+empty values remove the stock value. UTF-8, string wire/type, family and metadata
+applicability are checked. Unknown fields, multi-slot fields and ranked profile
+modifications refuse explicitly. Stock values are not substituted for those
+unsupported map records.
+
+Both live hero ability reads and startup's Holy Light model read use that reader.
+This keeps a changed `Targetart` path paired with the model whose sequence data
+startup admits. Holy Light input now reports profile errors instead of dropping
+them. Synthetic checks cover replacement hotkeys and art paths, repeated and
+empty modifications, and malformed/indexed refusal. This does not mount the
+command card or implement ranked tooltip expansion.
+
 The selected `HumanAbilityFunc.txt` records for `AHhb` and `AHwe` carry `Art`,
 `Buttonpos` and `Order`. `HumanAbilityStrings.txt` carries `Hotkey` and ranked
 `Tip`/`UberTip` lists. The existing object catalog preserves each assignment,
