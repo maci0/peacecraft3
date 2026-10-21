@@ -152,6 +152,7 @@ impl ObjectHost {
                 .as_ref()
                 .map(|hero| [hero.level, hero.skill_points]),
             abilities: levels,
+            cooldowns: abilities.cooldowns().to_vec(),
             permanent_strength: record.permanent_strength,
             pools: [vitals.life, vitals.max_life, vitals.mana, vitals.max_mana].map(f32::to_bits),
             items,

@@ -1,5 +1,133 @@
 use super::*;
 
+fn duration(vm: &mut Vm, unit: HandleId, ability: [u8; 4], rank: i32) -> f32 {
+    match vm
+        .call(
+            "duration_cd",
+            &[
+                Value::Handle(unit),
+                Value::Int(i32::from_be_bytes(ability)),
+                Value::Int(rank),
+            ],
+        )
+        .unwrap()
+    {
+        Value::Real(value) => value,
+        other => panic!("duration: {other:?}"),
+    }
+}
+
+fn set_duration(vm: &mut Vm, unit: HandleId, ability: [u8; 4], rank: i32, value: f32) {
+    vm.call(
+        "set_duration_cd",
+        &[
+            Value::Handle(unit),
+            Value::Int(i32::from_be_bytes(ability)),
+            Value::Int(rank),
+            Value::Real(value),
+        ],
+    )
+    .unwrap();
+}
+
+#[test]
+fn configured_duration_changes_the_next_cast_without_rewriting_an_active_deadline() {
+    let (mut vm, [caster, target, _, _]) = holy_open("", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    let random = vm.host().inner.script_random_state().cloned();
+    assert_eq!(duration(&mut vm, caster, *b"AHhb", 1), 5.);
+    set_duration(&mut vm, caster, *b"AHhb", 1, 7.25);
+    assert!(holy_cast(&mut vm, caster, target));
+    assert_eq!(remaining(&mut vm, caster, *b"AHhb"), 7.25);
+    step(&mut vm, 1.);
+    set_duration(&mut vm, caster, *b"AHhb", 1, 0.75);
+    assert_eq!(duration(&mut vm, caster, *b"AHhb", 1), 0.75);
+    assert_eq!(remaining(&mut vm, caster, *b"AHhb"), 6.25);
+    end(&mut vm, caster, *b"AHhb");
+    assert!(holy_cast(&mut vm, caster, target));
+    assert_eq!(remaining(&mut vm, caster, *b"AHhb"), 0.75);
+    assert_eq!(vm.host().inner.script_random_state().cloned(), random);
+}
+
+#[test]
+fn configured_durations_are_one_based_rank_and_unit_scoped_and_refuse_invalid_values() {
+    let (mut vm, [caster, _, _, _]) = holy_open("", LEARNED, NOTHING);
+    let owner = vm.host().inner.executed_unit(caster).unwrap().owner;
+    let Value::Handle(other) = vm
+        .host()
+        .inner
+        .native(
+            "CreateUnit",
+            &[
+                Value::Handle(owner),
+                Value::Int(i32::from_be_bytes(*b"H001")),
+                Value::Real(16.),
+                Value::Real(24.),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!()
+    };
+    set_duration(&mut vm, caster, *b"AHhb", 2, 1.125);
+    assert_eq!(duration(&mut vm, caster, *b"AHhb", 1), 5.);
+    assert_eq!(duration(&mut vm, caster, *b"AHhb", 2), 1.125);
+    assert_eq!(duration(&mut vm, other, *b"AHhb", 2), 5.);
+    for rank in [-1, 0, 4] {
+        set_duration(&mut vm, caster, *b"AHhb", rank, 12.);
+        assert_eq!(duration(&mut vm, caster, *b"AHhb", rank), 0.);
+    }
+    for value in [-1., f32::NAN, f32::INFINITY] {
+        assert!(
+            vm.host()
+                .inner
+                .native(
+                    "BlzSetUnitAbilityCooldown",
+                    &[
+                        Value::Handle(caster),
+                        Value::Int(holy_code()),
+                        Value::Int(2),
+                        Value::Real(value)
+                    ]
+                )
+                .is_err()
+        );
+    }
+    assert_eq!(duration(&mut vm, caster, *b"AHhb", 2), 1.125);
+    let state = vm
+        .host()
+        .inner
+        .executed_unit(caster)
+        .unwrap()
+        .abilities
+        .as_ref()
+        .unwrap();
+    assert_eq!(state.cooldowns().len(), 1);
+    assert_eq!(duration(&mut vm, caster, *b"NONE", 1), 0.);
+}
+
+#[test]
+fn pending_summon_uses_its_units_latest_configured_duration_at_the_cast_point() {
+    let (mut vm, [caster, _, _, _]) = holy_open("", "AHhb,AHwe", NOTHING);
+    vm.host().inner.admit_water_elemental().unwrap();
+    vm.call("prime", &[]).unwrap();
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrder",
+                &[Value::Handle(caster), Value::Str("gamma".into())]
+            )
+            .unwrap(),
+        Value::Bool(true)
+    );
+    set_duration(&mut vm, caster, *b"AHwe", 1, 1.375);
+    step(&mut vm, 0.25);
+    assert_eq!(remaining(&mut vm, caster, *b"AHwe"), 1.375);
+    assert_eq!(duration(&mut vm, caster, *b"AHhb", 1), 5.);
+}
+
 fn remaining(vm: &mut Vm, unit: HandleId, ability: [u8; 4]) -> f32 {
     match vm
         .call(

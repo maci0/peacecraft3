@@ -2348,6 +2348,12 @@ endfunction
 function remaining_cd takes unit c, integer ability returns real
 return BlzGetUnitAbilityCooldownRemaining(c,ability)
 endfunction
+function duration_cd takes unit c, integer ability, integer rank returns real
+return BlzGetUnitAbilityCooldown(c,ability,rank)
+endfunction
+function set_duration_cd takes unit c, integer ability, integer rank, real duration returns nothing
+call BlzSetUnitAbilityCooldown(c,ability,rank,duration)
+endfunction
 function end_cd takes unit c, integer ability returns nothing
 call BlzEndUnitAbilityCooldown(c,ability)
 endfunction
@@ -2416,6 +2422,8 @@ constant native ConvertUnitType takes integer i returns unittype
 native IsUnitType takes unit u, unittype t returns boolean
 native BlzGetUnitAbilityCooldownRemaining takes unit u, integer ability returns real
 native BlzEndUnitAbilityCooldown takes unit u, integer ability returns nothing
+native BlzGetUnitAbilityCooldown takes unit u, integer ability, integer rank returns real
+native BlzSetUnitAbilityCooldown takes unit u, integer ability, integer rank, real duration returns nothing
 constant native GetSpellTargetUnit takes nothing returns unit
 constant native GetSummoningUnit takes nothing returns unit
 constant native GetSummonedUnit takes nothing returns unit

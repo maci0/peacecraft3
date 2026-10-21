@@ -824,6 +824,33 @@ mod tests {
                 assert_eq!(readiness.mana, record.vitals.map(|vitals| vitals.mana));
                 assert_eq!(readiness.paused, record.paused_since.is_some());
                 assert_eq!(readiness.cooldown_remaining, 0.0);
+                let duration_args = [
+                    Value::Handle(unit),
+                    Value::Int(i32::from_be_bytes(ability)),
+                    Value::Int(rank),
+                ];
+                let original_duration = number(&format!("Cool{rank}")) as f32;
+                assert_eq!(
+                    objects
+                        .native("BlzGetUnitAbilityCooldown", &duration_args)
+                        .unwrap(),
+                    Value::Real(original_duration)
+                );
+                let mut duration_set = duration_args.to_vec();
+                duration_set.push(Value::Real(original_duration * 1.5));
+                objects
+                    .native("BlzSetUnitAbilityCooldown", &duration_set)
+                    .unwrap();
+                assert_eq!(
+                    objects
+                        .native("BlzGetUnitAbilityCooldown", &duration_args)
+                        .unwrap(),
+                    Value::Real(original_duration * 1.5)
+                );
+                duration_set[3] = Value::Real(original_duration);
+                objects
+                    .native("BlzSetUnitAbilityCooldown", &duration_set)
+                    .unwrap();
                 assert_eq!(
                     objects
                         .native(

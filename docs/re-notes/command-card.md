@@ -309,12 +309,51 @@ cooldown does not refund mana or undo an effect. The original Human01 host gate
 also checks both declared bindings against actual learned ranks, but it does
 not establish original-client timer parity.
 
-Still open: `UnitResetCooldown`, `BlzGetAbilityCooldown`,
-`BlzGetUnitAbilityCooldown` and `BlzSetUnitAbilityCooldown`, along with other
-ability classes and item cooldown ownership. The selected unit duration getter
-and setter wrappers explicitly reject levels below one and subtract one before
-calling the engine; do not assume another version's indexing from their names.
-Their global duration getter's level-zero path is not qualified here.
+Still open: `UnitResetCooldown`, `BlzGetAbilityCooldown`, other ability classes
+and item cooldown ownership. The global duration getter's level-zero path is
+not qualified here.
+
+### Per-unit configured durations
+
+The selected 1.29.2.9231 image's primary unit-duration getter (`0x497150`)
+and setter (`0x4aade0`) reject levels below one and subtract one before calling
+`0x6d6dc0` / `0x6d9030`. The spell, Holy Bolt and Water Elemental vtables all
+resolve their duration getter/setter to `0x46b400` / `0x46b590`. The getter reads
+the per-instance data clone when present, otherwise the source data. The setter
+clones source data on first write and changes the requested rank's duration cell;
+it does not write the active timer. These are static reads from the selected
+image (SHA-256 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`),
+not a new original-client observation or proof of runtime registrar selection.
+
+`BlzGetUnitAbilityCooldown` and `BlzSetUnitAbilityCooldown` use one-based rank,
+unit-local configuration for the two implemented spells. Defaults use the same
+typed, map-overridden `Cool` cells as casts. Both cast paths read this configuration;
+a duration change leaves an existing deadline intact, while a pending summon
+reads the current duration at its cast point. Queries and writes do not draw RNG
+or advance time. Physically resolved source ranks bound retained overrides.
+
+The recreation-owned cached-unit format is now version two and preserves these
+rank overrides as exact float bits; decoding version one remains supported.
+Restore checks ranks and cells against the selected source before publication.
+This does not establish the native game's cache persistence policy. Negative or
+nonfinite duration writes refuse before mutation; the native setter copies raw
+bits and its subsequent cast behavior for those values is unqualified. Ranks
+above the authored count take a bounded no-op/zero path here: the native setter's
+already-cloned out-of-range indexing is not emulated or claimed safe.
+
+The getter's out-of-range value is zero: startup `0x401300` calls `0x9a1620`
+with zero and destination `0x112d88c`; the helper's zero branch writes zero bits.
+The getter copies that value on its absent-row path. The local receipt includes
+the initializer and helper reads.
+
+Duration-increment checks pass in the private target: 1,101 core tests (31
+ignored), 589 app binary tests with `test-fixtures` (51 ignored), the installed
+Human01 every-rank getter/setter gate, strict affected all-target Clippy and
+affected WASM checks. Synthetic tests discriminate unit/rank scope, a changed
+next cast, unchanged active deadlines, and a pending summon's cast-point read.
+Cache tests cover exact override bits, restore, old-version decoding, truncated
+records and malformed/duplicate overrides. These are recreation host and parser
+checks; no new original-client timer/cache or rendered capture is claimed.
 
 Private-target checks pass: 1,097 core tests (31 ignored), 589 feature-enabled
 app binary tests (51 ignored), the explicit installed Human01 rank/binding gate,

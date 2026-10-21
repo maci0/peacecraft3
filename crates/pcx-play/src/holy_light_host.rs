@@ -281,7 +281,7 @@ impl ObjectHost {
             .map_err(|e| self.holy_error(e))?;
         Ok(Some(Spell {
             cost: number("Cost", FieldKind::Int)?,
-            cooldown: f64::from(number("Cool", FieldKind::Unreal)?),
+            cooldown: f64::from(self.ability_cooldown_duration(caster, ABILITY, rank)?),
             range: number("Rng", FieldKind::Unreal)?,
             amount: number("DataA", FieldKind::Real)?,
             undead_divisor: self.holy_light.as_ref().map_or(HALF, |r| r.undead_divisor),
