@@ -96,6 +96,28 @@ impl ObjectHost {
         }
     }
 
+    /// Current source-ranked cost and live cooldown; target/creation checks remain separate.
+    pub fn water_elemental_readiness(
+        &self,
+        unit: HandleId,
+    ) -> Result<Option<crate::ability_profile::Readiness>, Error> {
+        let Some(state) = self.summoning.as_ref() else {
+            return Ok(None);
+        };
+        let Some(spell) = self.summon_spell(unit)? else {
+            return Ok(None);
+        };
+        let now = self
+            .timer_game_time()
+            .ok_or_else(|| self.summon_error("clock missing"))?;
+        Ok(Some(Self::ability_readiness_at(
+            self.executed_unit(unit)?,
+            spell.cost,
+            state.ready.get(&unit).copied(),
+            now,
+        )))
+    }
+
     fn track_summon_animation(&mut self, unit: HandleId) -> Result<(), Error> {
         let Some(animation) = self.executed_unit(unit)?.animation.as_ref() else {
             return Ok(());
@@ -252,12 +274,15 @@ impl ObjectHost {
                 .timer_game_time()
                 .ok_or_else(|| self.summon_error("summoning requires game time"))?;
             let record = self.executed_unit(caster)?;
-            if record.paused_since.is_some()
-                || record.vitals.is_none_or(|v| v.mana < spell.cost)
-                || self
-                    .summoning
+            if !Self::ability_readiness_at(
+                record,
+                spell.cost,
+                self.summoning
                     .as_ref()
-                    .is_some_and(|s| s.ready.get(&caster).is_some_and(|due| now < *due))
+                    .and_then(|s| s.ready.get(&caster).copied()),
+                now,
+            )
+            .ready()
             {
                 return Ok(Value::Bool(false));
             }

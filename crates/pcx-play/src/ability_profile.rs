@@ -20,6 +20,24 @@ pub struct Tooltip {
     pub description: String,
 }
 
+/// Current spell payment/cooldown state, not target eligibility or cast acceptance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Readiness {
+    pub mana_cost: f32,
+    /// Missing pools remain unavailable rather than being reported as zero mana.
+    pub mana: Option<f32>,
+    pub cooldown_remaining: f64,
+    pub paused: bool,
+}
+
+impl Readiness {
+    pub fn ready(self) -> bool {
+        !self.paused
+            && self.cooldown_remaining == 0.0
+            && self.mana.is_some_and(|mana| mana >= self.mana_cost)
+    }
+}
+
 pub(crate) fn ranked(
     tables: &DefaultTables,
     overlay: &Overlay,

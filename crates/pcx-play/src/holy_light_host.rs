@@ -10,8 +10,8 @@
 //! collision radii. Qualifying that geometry needs native range evidence.
 //!
 //! Not implemented: the spell's armor and attack type. Undead damage bypasses target
-//! armor until a native check qualifies it. Art has no expiry: it lasts until the
-//! same target is hit again, or until the script destroys it. Air/Ground filters
+//! armor until a native check qualifies it. Art lifetime uses the admitted model's
+//! non-looping sequence; target removal also retires it. Air/Ground filters
 //! require both `targs` tokens.
 use super::{Entry, Error, Failure, ObjectHost, combat};
 use pcx_objects::editor::SlkId;
@@ -209,6 +209,28 @@ impl ObjectHost {
         }
     }
 
+    /// Read the learned spell on the same game clock and pools used by its cast path.
+    pub fn holy_light_readiness(
+        &self,
+        unit: HandleId,
+    ) -> Result<Option<crate::ability_profile::Readiness>, Error> {
+        let Some(rules) = self.holy_light.as_ref() else {
+            return Ok(None);
+        };
+        let Some(spell) = self.holy_spell(unit)? else {
+            return Ok(None);
+        };
+        let now = self
+            .timer_game_time()
+            .ok_or_else(|| self.holy_error("clock missing".into()))?;
+        Ok(Some(Self::ability_readiness_at(
+            self.executed_unit(unit)?,
+            spell.cost,
+            rules.ready_at.get(&unit).copied(),
+            now,
+        )))
+    }
+
     /// Drops a walking cast when its caster dies, is removed or takes another order.
     pub(super) fn forget_holy_cast(&mut self, caster: HandleId) {
         if let Some(rules) = &mut self.holy_light {
@@ -301,15 +323,11 @@ impl ObjectHost {
         let Some(rules) = self.holy_light.as_ref() else {
             return true;
         };
-        let cooling = rules
-            .ready_at
-            .get(&caster)
-            .is_some_and(|ready| now < *ready);
-        let short = self
-            .live(caster)
-            .and_then(|unit| unit.vitals)
-            .is_none_or(|vitals| vitals.mana < spell.cost);
-        cooling || short
+        let Some(unit) = self.live(caster) else {
+            return true;
+        };
+        !Self::ability_readiness_at(unit, spell.cost, rules.ready_at.get(&caster).copied(), now)
+            .ready()
     }
 
     /// `IssueTargetOrder` for Holy Light. The order is accepted when the caster can

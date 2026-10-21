@@ -3894,3 +3894,12 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   strict Clippy, WASM and original Human01 rank/mount lifecycle gates pass; see
   `docs/re-notes/command-card.md`. Original-client visual parity, remaining command
   kinds, cast-readiness presentation and unsupported custom tooltip forms stay open.
+
+### 2026-10-22: Spell readiness state
+
+- [~] Holy Light and Water Elemental expose live source-ranked mana/cooldown/pause
+  snapshots and share the same calculation with their cast checks. Core tests and
+  every-rank installed-data checks pass, with strict native/WASM checks. Native
+  disabled-texture construction inputs are traced, but readiness visuals are not
+  assigned an assumed palette/state mapping. Fractional Holy Light fields and the
+  selected script's cooldown-query/reset natives remain follow-ups.

@@ -187,6 +187,17 @@ fn summoning_uses_the_cast_point_then_spends_mana_and_expires_a_real_unit() {
     let (mut vm, caster) = open();
     let before = vm.host().inner.executed_units().count();
     let mana = holy_mana(&mut vm, caster);
+    let ready = vm
+        .host()
+        .inner
+        .water_elemental_readiness(caster)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (ready.mana_cost, ready.mana, ready.cooldown_remaining),
+        (7., Some(mana), 0.)
+    );
+    assert!(ready.ready());
     assert!(cast(&mut vm, caster));
     assert_eq!(vm.host().inner.executed_units().count(), before);
     let order = vm
@@ -205,6 +216,15 @@ fn summoning_uses_the_cast_point_then_spends_mana_and_expires_a_real_unit() {
     );
     assert_eq!(holy_mana(&mut vm, caster), mana);
     step(&mut vm, 0.125);
+    assert_eq!(
+        vm.host()
+            .inner
+            .water_elemental_readiness(caster)
+            .unwrap()
+            .unwrap()
+            .cooldown_remaining,
+        0.
+    );
     assert_eq!(vm.host().inner.executed_units().count(), before);
     step(&mut vm, 0.25);
     assert_eq!(vm.host().inner.executed_units().count(), before + 1);
@@ -219,6 +239,15 @@ fn summoning_uses_the_cast_point_then_spends_mana_and_expires_a_real_unit() {
     assert!(position.is_some());
     assert!(vm.host().inner.executed_unit(summoned).unwrap().summoned);
     assert_eq!(holy_mana(&mut vm, caster), mana - 7.);
+    let cooling = vm
+        .host()
+        .inner
+        .water_elemental_readiness(caster)
+        .unwrap()
+        .unwrap();
+    assert_eq!(cooling.cooldown_remaining, 2.5);
+    assert_eq!(cooling.mana, Some(mana - 7.));
+    assert!(!cooling.ready());
     assert!(!cast(&mut vm, caster));
     step(&mut vm, 3.5);
     assert!(
@@ -330,6 +359,17 @@ fn summoning_refuses_short_mana_and_replacement_order_cancels_without_spending()
             &[Value::Handle(caster), mana_state, Value::Real(6.)],
         )
         .unwrap();
+    let short = vm
+        .host()
+        .inner
+        .water_elemental_readiness(caster)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (short.mana_cost, short.mana, short.cooldown_remaining),
+        (7., Some(6.), 0.)
+    );
+    assert!(!short.ready());
     assert!(!cast(&mut vm, caster));
     assert_eq!(holy_mana(&mut vm, caster), 6.);
     assert_eq!(vm.host().inner.executed_units().count(), before);

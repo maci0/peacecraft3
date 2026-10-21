@@ -756,7 +756,7 @@ mod tests {
         for (unit, ability) in [(holy, *b"AHhb"), (water, *b"AHwe")] {
             let row = pcx_objects::fourcc_text(ability);
             let source = tables.object(Family::Ability, &row).unwrap();
-            let number = |column| {
+            let number = |column: &str| {
                 source
                     .cell(SlkId::AbilityData, column)
                     .unwrap()
@@ -812,6 +812,18 @@ mod tests {
                         .text
                 );
                 assert!(!tip.description.is_empty() && !tip.description.contains(['<', '>']));
+                let readiness = match &ability {
+                    b"AHhb" => objects.holy_light_readiness(unit),
+                    b"AHwe" => objects.water_elemental_readiness(unit),
+                    _ => unreachable!("fixture only learns the two implemented spells"),
+                }
+                .unwrap()
+                .unwrap();
+                assert_eq!(readiness.mana_cost, number(&format!("Cost{rank}")) as f32);
+                let record = objects.executed_unit(unit).unwrap();
+                assert_eq!(readiness.mana, record.vitals.map(|vitals| vitals.mana));
+                assert_eq!(readiness.paused, record.paused_since.is_some());
+                assert_eq!(readiness.cooldown_remaining, 0.0);
                 println!("ability={row} rank={rank} references_expanded=true");
                 learned.push((objects.ability_button(unit, ability).unwrap().unwrap(), tip));
             }
