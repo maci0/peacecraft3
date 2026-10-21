@@ -59,9 +59,11 @@ pub(super) fn refresh(
     if let Ok(window) = sources.windows.single() {
         let _ = writeln!(
             value,
-            "Display          {}x{} px\nUI scale         {:>10.2}\nPresent mode     {:?}",
+            "Display          {}x{} px\nLogical          {:.0}x{:.0} px\nUI scale         {:>10.2}\nPresent mode     {:?}",
             window.physical_width(),
             window.physical_height(),
+            window.width(),
+            window.height(),
             window.scale_factor(),
             window.present_mode
         );
@@ -100,17 +102,22 @@ pub(super) fn refresh(
         let mut retained = 0;
         let mut vertices = 0;
         let mut indices = 0;
+        let mut triangles = 0;
         let mut bytes = 0;
         for (_, mesh) in meshes.iter() {
             if let Ok(attributes) = mesh.try_attributes() {
                 retained += 1;
-                vertices += attributes
+                let vertex_count = attributes
                     .map(|(_, values)| {
                         bytes += values.get_bytes().len();
                         values.len()
                     })
                     .min()
                     .unwrap_or(0);
+                vertices += vertex_count;
+                if mesh.primitive_topology() == bevy::mesh::PrimitiveTopology::TriangleList {
+                    triangles += mesh.indices().map_or(vertex_count, |indices| indices.len()) / 3;
+                }
                 indices += mesh.indices().map_or(0, |indices| indices.len());
                 bytes += mesh.indices().map_or(0, |indices| {
                     indices.len()
@@ -123,7 +130,7 @@ pub(super) fn refresh(
         }
         let _ = writeln!(
             value,
-            "Mesh assets      {:>10}\n\nCPU MESH COPIES\nRetained meshes  {retained:>10}\nVertices         {vertices:>10}\nIndices          {indices:>10}\nBuffers          {:>10.2} MiB\nCPU copies only | not GPU totals",
+            "Mesh assets      {:>10}\n\nCPU MESH COPIES\nRetained meshes  {retained:>10}\nVertices         {vertices:>10}\nList triangles   {triangles:>10}\nIndices          {indices:>10}\nBuffers          {:>10.2} MiB\nCPU copies only | not GPU totals",
             meshes.len(),
             bytes as f64 / (1024.0 * 1024.0),
         );
@@ -200,6 +207,7 @@ mod tests {
         assert!(output.contains("Retained meshes           1"), "{output}");
         assert!(output.contains("Mesh assets               2"), "{output}");
         assert!(output.contains("Indices                   0"), "{output}");
+        assert!(output.contains("List triangles            1"), "{output}");
         assert!(output.contains("CPU copies only | not GPU totals"));
         assert!(output.contains("GPU memory report unavailable"));
         assert!(output.contains("Tick 12"));
