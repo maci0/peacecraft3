@@ -1,13 +1,15 @@
-//! Reader for Warcraft III `.w3g` replays written by the 1.29 client.
+//! Reader and bounded writer for Warcraft III `.w3g` replays written by the
+//! 1.29 client.
 //!
 //! Follows the public layout notes (header, data blocks, startup records, replay
 //! data blocks) and is checked against one Legacy 1.29.2.9231 sample; see
 //! `docs/re-notes/replay-recording.md`. The header CRC32 is verified. Every item is
 //! read by its authored id and length, and a shape outside those notes is refused.
-//! Not refused, but kept raw because no algorithm is established: each data block's
-//! u32 field and each checksum record's value. Structure only: a parsed replay is
-//! not evidence that the game would reproduce it.
+//! Block checksums are folded IEEE CRC32 checks of the header and compressed
+//! payload. Checksum records and the encoded startup tail remain uninterpreted.
+//! Structure only: a parsed replay is not evidence that the game would reproduce it.
 
+use std::io::Write;
 use std::ops::Range;
 
 use flate2::{Decompress, FlushDecompress, Status};
@@ -19,6 +21,8 @@ const HEADER_LEN: usize = 68;
 const HEADER_VERSION: u32 = 1;
 const CRC_FIELD: Range<usize> = 64..68;
 const BLOCK_HEAD_LEN: usize = 8;
+/// Writer buffer size; the format stores each block's actual size separately.
+const BLOCK_SIZE: usize = 8192;
 /// Leading startup value. The notes call it a record id, not confirmed.
 const FIRST_STARTUP_VALUE: u32 = 0x110;
 const HOST_RECORD: u8 = 0x00;
@@ -45,7 +49,7 @@ pub struct Header {
     pub flags: u16,
     pub length_ms: u32,
     pub decompressed_size: u32,
-    /// Raw u32 at each data block's offset 4. The algorithm is not established.
+    /// Verified header/payload checksums at each data block's offset 4.
     pub block_fields: Vec<u32>,
 }
 
@@ -145,6 +149,12 @@ pub enum W3gError {
     FileSize { claimed: u32, actual: usize },
     #[error("header CRC32 is 0x{stored:08x}, computed 0x{computed:08x}")]
     HeaderCrc { stored: u32, computed: u32 },
+    #[error("block {index} checksum is 0x{stored:08x}, computed 0x{computed:08x}")]
+    BlockCrc {
+        index: usize,
+        stored: u32,
+        computed: u32,
+    },
     #[error("block {index} does not inflate to exactly its declared size with all input consumed")]
     BlockMismatch { index: usize },
     #[error("blocks inflate to {available} bytes, short of the declared {declared}")]
@@ -157,6 +167,8 @@ pub enum W3gError {
     Malformed { at: usize, what: &'static str },
     #[error("no reader for replay data block 0x{id:02x} at byte {at}")]
     UnsupportedBlock { at: usize, id: u8 },
+    #[error("replay allocation exceeds available capacity")]
+    Capacity,
 }
 
 /// Parses a `.w3g` file. Any shape the notes do not cover is refused.
@@ -177,15 +189,7 @@ pub fn parse(bytes: &[u8]) -> Result<Replay, W3gError> {
         return Err(W3gError::Padding { at: declared + at });
     }
     content.truncate(declared);
-    let (startup, records) = {
-        let mut cursor = Cursor {
-            bytes: &content,
-            at: 0,
-        };
-        let startup = read_startup(&mut cursor)?;
-        let records = read_records(&mut cursor)?;
-        (startup, records)
-    };
+    let (startup, records) = read_content(&content)?;
     Ok(Replay {
         header: Header {
             block_fields,
@@ -195,6 +199,112 @@ pub fn parse(bytes: &[u8]) -> Result<Replay, W3gError> {
         content,
         records,
     })
+}
+
+fn read_content(content: &[u8]) -> Result<(Startup, Vec<Record>), W3gError> {
+    let mut cursor = Cursor {
+        bytes: content,
+        at: 0,
+    };
+    let startup = read_startup(&mut cursor)?;
+    let records = read_records(&mut cursor)?;
+    Ok((startup, records))
+}
+
+/// Serializes a parsed `Replay` back to `.w3g` bytes.
+///
+/// The documented fields are recomputed: the header (with its verifiable CRC32),
+/// the data-block framing and zlib streams, and the decompressed content. The
+/// block checksums are recomputed after compression. The `0x22` record values and
+/// encoded startup tail remain verbatim in `content`; their meaning is unresolved.
+/// Recompression may change `header.block_fields` without changing replay content.
+/// `content` is authoritative; contradictory `startup` or `records` are refused.
+pub fn write(replay: &Replay) -> Result<Vec<u8>, W3gError> {
+    if replay.content.is_empty() {
+        return Err(W3gError::Malformed {
+            at: 0,
+            what: "cannot write an empty replay",
+        });
+    }
+    if replay.header.decompressed_size as usize != replay.content.len() {
+        return Err(W3gError::Malformed {
+            at: 0,
+            what: "header decompressed size does not match the replay content",
+        });
+    }
+    let (startup, records) = read_content(&replay.content)?;
+    if startup != replay.startup || records != replay.records {
+        return Err(W3gError::Malformed {
+            at: 0,
+            what: "parsed startup or records disagree with replay content",
+        });
+    }
+    let count = replay.content.len().div_ceil(BLOCK_SIZE);
+    let block_count = u32::try_from(count).map_err(|_| W3gError::Malformed {
+        at: 0,
+        what: "block count exceeds the replay format",
+    })?;
+    let mut blocks = Vec::new();
+    for (index, chunk) in replay.content.chunks(BLOCK_SIZE).enumerate() {
+        let mut padded = chunk.to_vec();
+        padded.resize(BLOCK_SIZE, 0);
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder
+            .write_all(&padded)
+            .map_err(|_| W3gError::BlockMismatch { index })?;
+        encoder
+            .flush()
+            .map_err(|_| W3gError::BlockMismatch { index })?;
+        let payload = encoder.get_ref().clone();
+        let compressed =
+            u16::try_from(payload.len()).map_err(|_| W3gError::BlockMismatch { index })?;
+        blocks
+            .try_reserve(BLOCK_HEAD_LEN + payload.len())
+            .map_err(|_| W3gError::Capacity)?;
+        blocks.extend_from_slice(&compressed.to_le_bytes());
+        blocks.extend_from_slice(&(BLOCK_SIZE as u16).to_le_bytes());
+        let checksum = block_checksum(compressed, BLOCK_SIZE as u16, &payload);
+        blocks.extend_from_slice(&checksum.to_le_bytes());
+        blocks.extend_from_slice(&payload);
+    }
+    let compressed_total = blocks
+        .len()
+        .checked_add(HEADER_LEN)
+        .and_then(|size| u32::try_from(size).ok())
+        .ok_or(W3gError::Malformed {
+            at: 0,
+            what: "file size exceeds the replay format",
+        })?;
+    let mut head = Vec::with_capacity(HEADER_LEN);
+    head.extend_from_slice(TITLE);
+    head.extend_from_slice(&(HEADER_LEN as u32).to_le_bytes());
+    head.extend_from_slice(&compressed_total.to_le_bytes());
+    head.extend_from_slice(&HEADER_VERSION.to_le_bytes());
+    head.extend_from_slice(&replay.header.decompressed_size.to_le_bytes());
+    head.extend_from_slice(&block_count.to_le_bytes());
+    head.extend_from_slice(MAGIC);
+    head.extend_from_slice(&replay.header.game_version.to_le_bytes());
+    head.extend_from_slice(&replay.header.build.to_le_bytes());
+    head.extend_from_slice(&replay.header.flags.to_le_bytes());
+    head.extend_from_slice(&replay.header.length_ms.to_le_bytes());
+    head.extend_from_slice(&[0, 0, 0, 0]);
+    let crc = crc32fast::hash(&head);
+    head[CRC_FIELD].copy_from_slice(&crc.to_le_bytes());
+    let mut out = Vec::new();
+    out.try_reserve_exact(compressed_total as usize)
+        .map_err(|_| W3gError::Capacity)?;
+    out.extend_from_slice(&head);
+    out.extend_from_slice(&blocks);
+    Ok(out)
+}
+
+fn block_checksum(compressed: u16, inflated: u16, payload: &[u8]) -> u32 {
+    let mut header = [0; BLOCK_HEAD_LEN];
+    header[..2].copy_from_slice(&compressed.to_le_bytes());
+    header[2..4].copy_from_slice(&inflated.to_le_bytes());
+    let fold = |crc: u32| (crc ^ (crc >> 16)) & 0xffff;
+    fold(crc32fast::hash(&header)) | (fold(crc32fast::hash(payload)) << 16)
 }
 
 /// Returns the header and the declared block count.
@@ -234,6 +344,9 @@ fn read_header(bytes: &[u8]) -> Result<(Header, usize), W3gError> {
 }
 
 fn inflate_blocks(bytes: &[u8], count: usize) -> Result<(Vec<u8>, Vec<u32>), W3gError> {
+    if count > bytes.len().saturating_sub(HEADER_LEN) / BLOCK_HEAD_LEN {
+        return Err(W3gError::Truncated { at: bytes.len() });
+    }
     let mut content = Vec::new();
     let mut fields = Vec::new();
     let mut at = HEADER_LEN;
@@ -241,8 +354,18 @@ fn inflate_blocks(bytes: &[u8], count: usize) -> Result<(Vec<u8>, Vec<u32>), W3g
         let head = take(bytes, at, BLOCK_HEAD_LEN)?;
         let compressed = usize::from(u16::from_le_bytes([head[0], head[1]]));
         let inflated = usize::from(u16::from_le_bytes([head[2], head[3]]));
-        fields.push(u32::from_le_bytes([head[4], head[5], head[6], head[7]]));
+        let stored = u32::from_le_bytes([head[4], head[5], head[6], head[7]]);
         let payload = take(bytes, at + BLOCK_HEAD_LEN, compressed)?;
+        let computed = block_checksum(compressed as u16, inflated as u16, payload);
+        if stored != computed {
+            return Err(W3gError::BlockCrc {
+                index,
+                stored,
+                computed,
+            });
+        }
+        fields.try_reserve(1).map_err(|_| W3gError::Capacity)?;
+        fields.push(stored);
         let mut out = vec![0u8; inflated];
         let mut zlib = Decompress::new(true);
         // The sample's streams end without an end-of-stream marker, so Sync decodes what is there.
@@ -253,6 +376,9 @@ fn inflate_blocks(bytes: &[u8], count: usize) -> Result<(Vec<u8>, Vec<u32>), W3g
         if !whole || !matches!(status, Status::Ok | Status::StreamEnd) {
             return Err(W3gError::BlockMismatch { index });
         }
+        content
+            .try_reserve(out.len())
+            .map_err(|_| W3gError::Capacity)?;
         content.extend_from_slice(&out);
         at += BLOCK_HEAD_LEN + compressed;
     }
@@ -735,7 +861,8 @@ mod tests {
             let payload = encoder.get_ref().clone();
             blocks.extend((payload.len() as u16).to_le_bytes());
             blocks.extend((BLOCK as u16).to_le_bytes());
-            blocks.extend(0x1234_5678u32.to_le_bytes());
+            blocks
+                .extend(block_checksum(payload.len() as u16, BLOCK as u16, &payload).to_le_bytes());
             blocks.extend(payload);
         }
         let mut head = Vec::new();
@@ -863,7 +990,10 @@ mod tests {
     fn a_corrupt_zlib_payload_is_refused() {
         let mut bytes = sample_file();
         bytes[HEADER_LEN + BLOCK_HEAD_LEN] ^= 0xFF;
-        assert_eq!(parse(&bytes), Err(W3gError::BlockMismatch { index: 0 }));
+        assert!(matches!(
+            parse(&bytes),
+            Err(W3gError::BlockCrc { index: 0, .. })
+        ));
     }
 
     #[test]
@@ -969,6 +1099,99 @@ mod tests {
         let replay = parse(&bytes).unwrap();
         assert_eq!(replay.startup.settings, fake);
         assert_eq!(replay.records.len(), 6);
+    }
+
+    #[test]
+    fn write_round_trips_the_synthetic_file() {
+        let original = sample_file();
+        let replay = parse(&original).unwrap();
+        assert_eq!(parse(&write(&replay).unwrap()).unwrap(), replay);
+    }
+
+    #[test]
+    fn block_checksum_detects_every_header_checksum_and_payload_byte_change() {
+        let bytes = sample_file();
+        for at in HEADER_LEN..bytes.len() {
+            let mut bad = bytes.clone();
+            bad[at] ^= 1;
+            assert!(parse(&bad).is_err(), "block byte {at} change parsed");
+        }
+    }
+
+    #[test]
+    fn writer_rejects_changed_parsed_views_instead_of_discarding_the_edit() {
+        let original = parse(&sample_file()).unwrap();
+        let mut replay = original.clone();
+        replay.startup.random_seed ^= 1;
+        assert!(matches!(write(&replay), Err(W3gError::Malformed { .. })));
+        let mut replay = original;
+        replay.records[1] = Record::Checksum(99);
+        assert!(matches!(write(&replay), Err(W3gError::Malformed { .. })));
+    }
+
+    #[test]
+    fn writer_checksums_cover_recompressed_multiple_blocks() {
+        let extra = [COUNTDOWN_ID, 0, 0, 0, 0, 10, 0, 0, 0].repeat(2000);
+        let original = file(&sample_startup(), &records(&extra, 12), None, &[]);
+        let replay = parse(&original).unwrap();
+        let written = write(&replay).unwrap();
+        let round = parse(&written).unwrap();
+        assert!(round.header.block_fields.len() > 1);
+        assert_eq!(round.content, replay.content);
+        assert_eq!(round.records, replay.records);
+        for at in HEADER_LEN + 4..HEADER_LEN + 8 {
+            let mut bad = written.clone();
+            bad[at] ^= 1;
+            assert!(matches!(
+                parse(&bad),
+                Err(W3gError::BlockCrc { index: 0, .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn write_recomputes_block_checksums_without_source_fields() {
+        let mut replay = parse(&sample_file()).unwrap();
+        replay.header.block_fields.clear();
+        let round = parse(&write(&replay).unwrap()).unwrap();
+        assert!(!round.header.block_fields.is_empty());
+        assert_eq!(round.content, replay.content);
+    }
+
+    #[test]
+    fn write_refuses_when_decompressed_size_mismatches_the_content() {
+        let mut replay = parse(&sample_file()).unwrap();
+        replay.header.decompressed_size += 1;
+        assert!(matches!(write(&replay), Err(W3gError::Malformed { .. })));
+    }
+
+    #[test]
+    fn write_carries_the_uninterpreted_record_values() {
+        let replay = parse(&sample_file()).unwrap();
+        let written = write(&replay).unwrap();
+        let round = parse(&written).unwrap();
+        // Record values remain unchanged; block checksums are computed separately.
+        assert_eq!(
+            round
+                .records
+                .iter()
+                .filter_map(|r| if let Record::Checksum(value) = r {
+                    Some(*value)
+                } else {
+                    None
+                })
+                .collect::<Vec<_>>(),
+            replay
+                .records
+                .iter()
+                .filter_map(|r| if let Record::Checksum(value) = r {
+                    Some(*value)
+                } else {
+                    None
+                })
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(round.startup.encoded_tail, replay.startup.encoded_tail);
     }
 
     #[test]
