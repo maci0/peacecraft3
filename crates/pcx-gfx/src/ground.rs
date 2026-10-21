@@ -783,7 +783,8 @@ fn ground_mesh(terrain: &Terrain, selectors: &[[u16; 4]]) -> Result<Mesh, Ground
     }
     Ok(Mesh::new(
         PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
+        // Terrain changes rebuild this mesh; no CPU vertex edits follow upload.
+        RenderAssetUsages::RENDER_WORLD,
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
     .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)

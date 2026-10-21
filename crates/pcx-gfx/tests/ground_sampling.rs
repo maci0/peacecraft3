@@ -209,6 +209,10 @@ fn admitted_ground_keeps_selector_order_and_publishes_atomically() {
     )
     .unwrap();
     let mesh = meshes.get(draw.mesh.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        mesh.asset_usage,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD
+    );
     let VertexAttributeValues::Uint32x4(selectors) = mesh.attribute(GROUND_SELECTORS).unwrap()
     else {
         panic!("selector attribute");

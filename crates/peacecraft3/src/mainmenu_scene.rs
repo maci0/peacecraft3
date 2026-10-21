@@ -1272,8 +1272,13 @@ pub fn spawn_geosets(
         }
         material.base.base_color_texture = Some(texture_bindings.images[&texture_id].clone());
         let alpha = material.base.base_color.alpha();
+        let mut uploaded_mesh = pcx_gfx::to_bevy_mesh(mesh);
+        if !material.base.unlit {
+            // Source lighting still writes per-vertex colours on the CPU.
+            uploaded_mesh.asset_usage = bevy::asset::RenderAssetUsages::default();
+        }
         let material = materials.add(material);
-        handles.push(meshes.add(pcx_gfx::to_bevy_mesh(mesh)));
+        handles.push(meshes.add(uploaded_mesh));
         let entity = commands
             .spawn((
                 Mesh3d(handles.last().unwrap().clone()),
@@ -1418,6 +1423,9 @@ pub fn skin_geosets(
             .map_err(|error| SceneError::Decode(error.into()))?;
     }
     for (handle, rest) in handles.iter().zip(&rig.model.meshes) {
+        if rest.bone_indices.is_empty() {
+            continue;
+        }
         pcx_gfx::set_mesh_positions(meshes, handle, pcx_gfx::skin_mesh(rest, &skeleton));
     }
     Ok(skeleton)
@@ -3222,6 +3230,28 @@ mod texture_selection_tests {
                 .unwrap()
                 .base
                 .fog_enabled
+        );
+    }
+
+    #[test]
+    fn unbound_meshes_release_cpu_data_unless_source_lighting_needs_it() {
+        let f = fixture_with_materials(vec![
+            material_with_flags(1, &[], 2, 1),
+            material_with_flags(7, &[], 2, 0),
+        ]);
+        let spawned = spawn(&f);
+        let geosets = spawned.result.unwrap();
+        assert_eq!(
+            spawned.meshes.get(&geosets.handles[0]).unwrap().asset_usage,
+            bevy::asset::RenderAssetUsages::RENDER_WORLD
+        );
+        assert!(
+            spawned
+                .meshes
+                .get(&geosets.handles[1])
+                .unwrap()
+                .asset_usage
+                .contains(bevy::asset::RenderAssetUsages::MAIN_WORLD)
         );
     }
 

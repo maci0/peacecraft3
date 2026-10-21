@@ -1,6 +1,44 @@
 use bevy::{asset::RenderAssetUsages, mesh::PrimitiveTopology, prelude::*};
 
 #[test]
+fn static_geosets_release_cpu_vertices_but_bound_geosets_remain_editable() {
+    let mut source = pcx_gfx::LoadedMesh {
+        positions: vec![[1.0, 2.0, 3.0]],
+        normals: vec![[0.0, 0.0, 1.0]],
+        tex_coords: vec![[0.0, 0.0]],
+        indices: vec![0],
+        vertex_groups: vec![0],
+        bone_indices: vec![],
+        group_counts: vec![],
+        geoset: 0,
+        material_id: 0,
+    };
+    let static_mesh = pcx_gfx::to_bevy_mesh(&source);
+    assert_eq!(static_mesh.asset_usage, RenderAssetUsages::RENDER_WORLD);
+    assert_eq!(
+        static_mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+            .as_float3()
+            .unwrap(),
+        source.positions
+    );
+    source.bone_indices.push(9);
+    source.group_counts.push(1);
+    let dynamic_mesh = pcx_gfx::to_bevy_mesh(&source);
+    assert!(
+        dynamic_mesh
+            .asset_usage
+            .contains(RenderAssetUsages::MAIN_WORLD)
+    );
+    assert!(
+        dynamic_mesh
+            .asset_usage
+            .contains(RenderAssetUsages::RENDER_WORLD)
+    );
+}
+
+#[test]
 fn identical_positions_produce_no_modified_events_but_bit_changes_do() {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, AssetPlugin::default()))

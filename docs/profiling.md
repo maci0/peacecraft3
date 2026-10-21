@@ -16,7 +16,7 @@ read-only: compressed graph time is enabled and visual redraw is 60 Hz.
 The bounded peak-folding algorithm here is our implementation choice, not a
 claim about TMOG's internal algorithm. No palette, bloom or meter skin is copied.
 
-Press **F7** for display/backend details, entity and image counts, CPU mesh-asset
+Press **F7** for display/backend details, entity and image counts, CPU-retained mesh
 vertex counts, device allocator usage and available campaign diagnostics (tick,
 speed, seed, clock, selected units and errors). Mesh-asset vertices are not a
 drawn-vertex count: instances may reuse assets, and render-only assets may lack a
@@ -26,7 +26,9 @@ expose whole-GPU VRAM used/total through read-only sysfs for the selected PCI
 adapter; those totals include other apps.
 Unavailable memory reports are labelled rather than replaced with zero.
 
-Both panels start hidden, stack at the top right, and do not intercept input.
+Both panels start hidden and do not intercept input. F8 stays on the right;
+F7 uses the left side. If the window cannot fit both widths, F7 wraps beneath
+F8 instead of overlapping it.
 They share a full-window UI camera separate from the original menu's authored
 viewport. When both are hidden the camera does no rendering, and panel sampling
 and formatting stop. Focus the game window or browser canvas before using the
@@ -40,6 +42,15 @@ bounded history, invalid samples, mesh counts and unavailable memory reports.
 Campaign text is bounded to three error excerpts; complete errors remain in
 the existing diagnostic log. Browser compilation passes; these native captures
 do not establish browser rendering or full-campaign behavior.
+
+Static terrain and geosets without bone bindings or CPU source lighting upload with `RENDER_WORLD`
+usage, releasing their Bevy CPU vertex/index data after extraction. Bevy keeps
+the asset handle and bounds; F7 excludes those extracted shells from its CPU
+mesh and vertex counts. Decoded source models may still be retained separately.
+Bound geosets currently use CPU skinning, and source-lit menu geosets compute
+vertex colours on the CPU, so they keep editable data and upload changes.
+Moving that skinning and lighting to the GPU remains open; these
+residency changes do not claim a fully GPU animation pipeline.
 
 FPS and all CPU/GPU elapsed times are observational reports affected by competing
 work, clocks and presentation. They are not performance regression thresholds.
