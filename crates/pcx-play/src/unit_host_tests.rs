@@ -1950,6 +1950,7 @@ fn order_common() -> String {
         globals + 1,
         "native SetUnitOwner takes unit u, player p, boolean changeColor returns nothing\n\
 native IssueImmediateOrder takes unit whichUnit, string order returns boolean\n\
+native SetPlayerAbilityAvailable takes player p, integer ability, boolean available returns nothing\n\
 constant native GetPlayerTechResearched takes player whichPlayer, integer techid, boolean specificOnly returns boolean\n\
 constant native SetPlayerTechResearched takes player whichPlayer, integer techid, integer setToLevel returns nothing\n",
     );
@@ -1988,7 +1989,11 @@ endfunction\n";
             .with_player_tech_researched(TechLimitBudget { max_records: 2 })
             .unwrap();
     }
-    let host = host.with_defend_ability(tables, "Qord").unwrap();
+    let host = host
+        .with_defend_ability(tables, "Qord")
+        .unwrap()
+        .with_player_abilities(16)
+        .unwrap();
     let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
     vm.init_globals().unwrap();
     vm.call("main", &[]).unwrap();
@@ -2208,6 +2213,39 @@ fn owned_vm_defend_tracks_selected_ability_and_owner_research() {
         amount.contains("Requiresamount is not an absent or blank level"),
         "{amount}"
     );
+}
+
+#[test]
+fn player_availability_controls_defend_orders_by_alias_without_losing_state() {
+    let row = &["Qord", "Qcls", "0", "0", "1", "1", "0", "0", "0", "0"];
+    let tables = order_tables(ORDER_HEADERS, row, "", "1");
+    let (mut vm, _) = order_vm(&tables, true);
+    research(&mut vm, *b"Qtec", 1);
+    let player = vm.global("P");
+    vm.host()
+        .native(
+            "SetPlayerAbilityAvailable",
+            &[
+                player.clone(),
+                Value::Int(i32::from_be_bytes(*b"Qord")),
+                Value::Bool(false),
+            ],
+        )
+        .unwrap();
+    assert_eq!(issue(&mut vm, "A", "engage").unwrap(), Value::Bool(false));
+    assert_eq!(order_bit(&mut vm, "A"), Some((*b"Qcls", false)));
+    vm.host()
+        .native(
+            "SetPlayerAbilityAvailable",
+            &[
+                player,
+                Value::Int(i32::from_be_bytes(*b"Qord")),
+                Value::Bool(true),
+            ],
+        )
+        .unwrap();
+    assert_eq!(issue(&mut vm, "A", "engage").unwrap(), Value::Bool(true));
+    assert_eq!(order_bit(&mut vm, "A"), Some((*b"Qcls", true)));
 }
 
 #[test]

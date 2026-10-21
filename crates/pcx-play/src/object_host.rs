@@ -33,6 +33,7 @@ pub struct ObjectHost {
     members: Vec<(HandleId, HandleId)>,
     config: Option<MapConfig>,
     players: Option<players::Players>,
+    player_abilities: Option<player_ability::PlayerAbilityState>,
     camera: Option<camera::CameraState>,
     day_night: Option<environment::DayNightState>,
     sounds: Option<Vec<crate::label_sounds::SoundBank>>,
@@ -123,6 +124,7 @@ impl ObjectHost {
             members: Vec::new(),
             config: None,
             players: None,
+            player_abilities: None,
             camera: None,
             day_night: None,
             sounds: None,
@@ -744,6 +746,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.player_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.player_ability_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.config_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -934,6 +939,9 @@ pub use players::{
     PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerSettings,
     PlayerStateRequestBudget, ResearchObservation, TechLimitBudget,
 };
+
+#[path = "player_ability.rs"]
+mod player_ability;
 
 #[path = "camera_host.rs"]
 mod camera;

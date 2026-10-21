@@ -67,6 +67,7 @@ pub struct MapStartupBudgets {
     pub camera_setup_fields: usize,
     pub tech_limits: TechLimitBudget,
     pub tech_researched: TechLimitBudget,
+    pub ability_availability: usize,
     pub destructables: DestructableBudget,
     pub units: UnitBudget,
     pub unit_states: UnitStateBudget,
@@ -619,6 +620,7 @@ pub fn assemble(
         .with_camera_setups(budgets.camera_setup_fields)?
         .with_player_tech_limits(budgets.tech_limits)?
         .with_player_tech_researched(budgets.tech_researched)?
+        .with_player_abilities(budgets.ability_availability)?
         .with_destructables(budgets.destructables)?
         .with_unit_catalog(
             Arc::clone(&catalog),

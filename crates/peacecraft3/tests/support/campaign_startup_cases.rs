@@ -113,6 +113,7 @@ endglobals
 native SetPlayerState takes player p, playerstate which, integer value returns nothing
 constant native ConvertPlayerState takes integer i returns playerstate
 constant native SetPlayerTechMaxAllowed takes player p, integer tech, integer maximum returns nothing
+native SetPlayerAbilityAvailable takes player p, integer ability, boolean available returns nothing
 constant native GetPlayerTechMaxAllowed takes player p, integer tech returns integer
 constant native SetPlayerTechResearched takes player p, integer tech, integer level returns nothing
 native SetStartLocPrioCount takes integer start, integer count returns nothing
@@ -296,6 +297,7 @@ fn budgets() -> MapStartupBudgets {
         camera_setup_fields: 4,
         tech_limits: TechLimitBudget { max_records: 4 },
         tech_researched: TechLimitBudget { max_records: 4 },
+        ability_availability: 4,
         destructables: DestructableBudget { max_records: 4 },
         units: UnitBudget {
             max_records: 4,

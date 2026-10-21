@@ -679,6 +679,7 @@ fn budgets(shop: crate::playercolor_host::ShopCapacity) -> MapStartupBudgets {
         camera_setup_fields: 4096,
         tech_limits: TechLimitBudget { max_records: 65536 },
         tech_researched: TechLimitBudget { max_records: 65536 },
+        ability_availability: 65536,
         destructables: DestructableBudget { max_records: 10000 },
         units: UnitBudget {
             max_records: 10000,

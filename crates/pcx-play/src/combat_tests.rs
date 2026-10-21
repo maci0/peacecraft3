@@ -1959,6 +1959,8 @@ endfunction
 "#;
 
 const HOLY_DECLARATIONS: &str = r#"
+native SetPlayerAbilityAvailable takes player p, integer ability, boolean available returns nothing
+native SetUnitOwner takes unit u, player p, boolean changeColor returns nothing
 globals
 constant unitevent EVENT_UNIT_SPELL_EFFECT = ConvertUnitEvent(294)
 constant playerunitevent EVENT_PLAYER_UNIT_SPELL_EFFECT = ConvertPlayerUnitEvent(277)
@@ -2035,6 +2037,8 @@ fn holy_open_with_art(
     );
     let (registry, activity) = super::activity::rules();
     let h = position_host_admitting(1000, 16, HOLY_MAP, &extra, &fields, |h| h)
+        .with_player_abilities(16)
+        .unwrap()
         .with_locations()
         .unwrap()
         .with_player_unit_events(8)
@@ -2137,6 +2141,116 @@ fn holy_light_heals_a_friendly_living_unit_and_waits_out_its_cooldown() {
     step(&mut vm, 5.0);
     assert!(holy_cast(&mut vm, h, f));
     assert_eq!(holy_life(&mut vm, f), 500.0);
+}
+
+#[test]
+fn unavailable_holy_light_has_no_command_or_cast_and_tracks_current_owner() {
+    let (mut vm, [h, f, _, _]) = holy_open("", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    let owner = vm.host().inner.executed_unit(h).unwrap().owner;
+    vm.host()
+        .native(
+            "SetPlayerAbilityAvailable",
+            &[
+                Value::Handle(owner),
+                Value::Int(holy_code()),
+                Value::Bool(false),
+            ],
+        )
+        .unwrap();
+    let mana = holy_mana(&mut vm, h);
+    assert!(vm.host().inner.holy_light_command(h).unwrap().is_none());
+    assert!(!holy_cast(&mut vm, h, f));
+    assert_eq!(holy_life(&mut vm, f), 100.0);
+    assert_eq!(holy_mana(&mut vm, h), mana);
+    assert_eq!(
+        vm.host()
+            .inner
+            .executed_unit(h)
+            .unwrap()
+            .abilities
+            .as_ref()
+            .unwrap()
+            .level(*b"AHhb"),
+        1
+    );
+
+    let other = vm.host().native("Player", &[Value::Int(5)]).unwrap();
+    vm.host()
+        .native(
+            "SetUnitOwner",
+            &[Value::Handle(h), other, Value::Bool(false)],
+        )
+        .unwrap();
+    assert!(vm.host().inner.holy_light_command(h).unwrap().is_some());
+    vm.host()
+        .native(
+            "SetUnitOwner",
+            &[Value::Handle(h), Value::Handle(owner), Value::Bool(false)],
+        )
+        .unwrap();
+    assert!(vm.host().inner.holy_light_command(h).unwrap().is_none());
+    vm.host()
+        .native(
+            "SetPlayerAbilityAvailable",
+            &[
+                Value::Handle(owner),
+                Value::Int(holy_code()),
+                Value::Bool(true),
+            ],
+        )
+        .unwrap();
+    assert!(holy_cast(&mut vm, h, f));
+    assert_eq!(holy_life(&mut vm, f), 300.0);
+}
+
+#[test]
+fn disabling_holy_light_during_a_walk_cancels_without_spending_mana() {
+    let (mut vm, [h, _, _, far]) = holy_open("", LEARNED, NOTHING);
+    vm.call("prime", &[]).unwrap();
+    let life_state = vm_global(&vm, "UNIT_STATE_LIFE");
+    vm.host()
+        .native(
+            "SetUnitState",
+            &[Value::Handle(far), life_state, Value::Real(100.0)],
+        )
+        .unwrap();
+    let mana = holy_mana(&mut vm, h);
+    assert!(holy_cast(&mut vm, h, far));
+    assert!(
+        vm.host()
+            .inner
+            .executed_unit(h)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .moving()
+    );
+    let owner = vm.host().inner.executed_unit(h).unwrap().owner;
+    vm.host()
+        .native(
+            "SetPlayerAbilityAvailable",
+            &[
+                Value::Handle(owner),
+                Value::Int(holy_code()),
+                Value::Bool(false),
+            ],
+        )
+        .unwrap();
+    step(&mut vm, 0.25);
+    assert!(
+        !vm.host()
+            .inner
+            .executed_unit(h)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .moving()
+    );
+    assert_eq!(holy_mana(&mut vm, h), mana);
+    assert_eq!(holy_life(&mut vm, far), 100.0);
 }
 
 #[test]

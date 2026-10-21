@@ -504,6 +504,9 @@ mod current_controllers;
 #[path = "player_current_research_tests.rs"]
 mod current_research;
 
+#[path = "player_ability_tests.rs"]
+mod player_ability;
+
 #[path = "stock_host_tests.rs"]
 mod stock_slots;
 

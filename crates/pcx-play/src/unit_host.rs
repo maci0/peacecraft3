@@ -1326,13 +1326,14 @@ impl ObjectHost {
     }
 
     fn issue_immediate_order(&mut self, args: &[Value]) -> Option<Result<Value, Error>> {
-        let (on, off, tech, required_level) = {
+        let (on, off, tech, required_level, ability) = {
             let order = self.units.as_ref()?.order.as_ref()?;
             (
                 order.on.as_str(),
                 order.off.as_str(),
                 order.tech,
                 order.required_level,
+                one_fourcc(&order.alias).expect("admitted ability rawcode"),
             )
         };
         let [Value::Handle(unit), Value::Str(text)] = args else {
@@ -1362,6 +1363,11 @@ impl ObjectHost {
         let turning_on = text == on;
         if !turning_off && !turning_on {
             return None;
+        }
+        match self.unit_ability_available(unit, ability) {
+            Ok(true) => {}
+            Ok(false) => return Some(Ok(Value::Bool(false))),
+            Err(error) => return Some(Err(error)),
         }
         if turning_off && !active {
             return Some(Ok(Value::Bool(false)));

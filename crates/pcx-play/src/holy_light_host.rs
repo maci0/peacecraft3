@@ -183,6 +183,9 @@ impl ObjectHost {
         let Some(rules) = self.holy_light.as_ref() else {
             return Ok(None);
         };
+        if !self.unit_ability_available(unit, ABILITY)? {
+            return Ok(None);
+        }
         let record = self.executed_unit(unit)?;
         if record
             .abilities
@@ -215,6 +218,9 @@ impl ObjectHost {
         let Some(unit) = self.live(caster) else {
             return Ok(None);
         };
+        if !self.unit_ability_available(caster, ABILITY)? {
+            return Ok(None);
+        }
         let Some(abilities) = unit.abilities.as_ref() else {
             return Ok(None);
         };
