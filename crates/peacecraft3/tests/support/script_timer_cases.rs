@@ -106,6 +106,180 @@ endfunction
 }
 
 #[test]
+fn campaign_runtime_acceleration_preserves_timer_order_and_debt() {
+    use peacecraft3::campaign_runtime::CampaignRuntime;
+    use std::{num::NonZeroU32, time::Duration};
+    let run = |speed, chunks: &[u64]| {
+        let mut app = timer_app();
+        deliver_timer(&mut app, RESTART, 1);
+        let mut runtime = CampaignRuntime::new(Duration::from_millis(125), 2, 8);
+        runtime.set_speed(NonZeroU32::new(speed).unwrap());
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        runtime.advance(&mut session, Duration::from_secs(999));
+        for chunk in chunks {
+            runtime.advance(&mut session, Duration::from_millis(*chunk));
+        }
+        while runtime.pending() >= Duration::from_millis(125) {
+            assert!(runtime.last_error.is_none(), "{:?}", runtime.last_error);
+            runtime.advance(&mut session, Duration::ZERO);
+        }
+        assert!(runtime.last_error.is_none());
+        (
+            runtime.tick(),
+            runtime.pending(),
+            session.global("marker"),
+            session.global("elapsed"),
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .timer_game_time()
+                .unwrap()
+                .to_bits(),
+        )
+    };
+    let baseline = run(1, &[125; 8]);
+    assert_eq!(baseline.0, 8);
+    assert_eq!(run(2, &[500]), baseline);
+    assert_eq!(run(4, &[1, 13, 0, 236]), baseline);
+    assert_eq!(run(8, &[125]), baseline);
+}
+
+#[test]
+fn campaign_clock_speed_switches_do_not_rescale_existing_debt_and_overflow_refuses() {
+    use peacecraft3::campaign_runtime::{CampaignRuntime, CampaignRuntimeError};
+    use std::{num::NonZeroU32, time::Duration};
+    let mut app = timer_app();
+    deliver_timer(&mut app, RESTART, 1);
+    let mut runtime = CampaignRuntime::new(Duration::from_millis(125), 1, 8);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    runtime.advance(&mut session, Duration::ZERO);
+    runtime.advance(&mut session, Duration::from_millis(250));
+    assert_eq!(runtime.pending(), Duration::from_millis(125));
+    runtime.set_speed(NonZeroU32::new(8).unwrap());
+    runtime.advance(&mut session, Duration::ZERO);
+    assert_eq!(runtime.tick(), 2);
+    assert_eq!(runtime.pending(), Duration::ZERO);
+    runtime.paused = true;
+    runtime.advance(&mut session, Duration::from_secs(1));
+    assert_eq!(runtime.tick(), 2);
+    runtime.paused = false;
+    runtime.advance(&mut session, Duration::MAX);
+    assert!(matches!(
+        runtime.last_error,
+        Some(CampaignRuntimeError::ClockOverflow)
+    ));
+    assert_eq!(runtime.tick(), 2);
+    assert_eq!(runtime.pending(), Duration::ZERO);
+}
+
+#[test]
+fn campaign_clock_f9_cycles_pacing_without_repeating_while_held() {
+    use peacecraft3::campaign_runtime::{self, CampaignRuntime};
+    use std::time::Duration;
+    let mut app = timer_app();
+    app.init_resource::<Time<Real>>()
+        .init_resource::<ButtonInput<KeyCode>>();
+    campaign_runtime::install(
+        &mut app,
+        CampaignRuntime::new(Duration::from_millis(125), 2, 8),
+    );
+    deliver_timer(&mut app, RESTART, 1);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::F9);
+    app.update();
+    assert_eq!(app.world().resource::<CampaignRuntime>().speed().get(), 1);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::ControlLeft);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::ShiftLeft);
+    for speed in [2, 4, 8, 1] {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::F9);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::F9);
+        app.update();
+        assert_eq!(
+            app.world().resource::<CampaignRuntime>().speed().get(),
+            speed
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.update();
+        assert_eq!(
+            app.world().resource::<CampaignRuntime>().speed().get(),
+            speed
+        );
+    }
+    assert_eq!(app.world().resource::<CampaignRuntime>().tick(), 0);
+}
+
+#[test]
+#[ignore = "requires PEACECRAFT3_RANDOM_REAL_IMAGE and PEACECRAFT3_RANDOM_BINDING"]
+fn accelerated_campaign_clock_keeps_the_source_bound_random_stream() {
+    use pcx_script::Host;
+    use peacecraft3::campaign_runtime::CampaignRuntime;
+    use std::{num::NonZeroU32, time::Duration};
+    let policy = Arc::new(super::random_factory_cases::local::local_policy());
+    let script = "globals\ntimer t = CreateTimer()\ntimer u = CreateTimer()\ninteger a = 0\ninteger b = 0\ninteger total = 0\nreal last = 0.0\nendglobals\nfunction first takes nothing returns nothing\nset a = a + 1\nset total = total + GetRandomInt(0, 1000)\nendfunction\nfunction second takes nothing returns nothing\nset b = b + 1\nset total = total + GetRandomInt(-10000, -1)\nset last = GetRandomReal(-1.0, 1.0)\nendfunction\nfunction config takes nothing returns nothing\ncall SetRandomSeed(-29)\nendfunction\nfunction main takes nothing returns nothing\ncall TimerStart(t, 0.125, true, function first)\ncall TimerStart(u, 0.25, true, function second)\nendfunction\n";
+    let run = |speed, chunks: &[u64]| {
+        let mut app = timer_app();
+        deliver_timer_with(
+            &mut app,
+            script,
+            1,
+            "native SetRandomSeed takes integer seed returns nothing\nnative GetRandomInt takes integer low, integer high returns integer\nnative GetRandomReal takes real low, real high returns real\n",
+            |inputs| {
+                inputs.random = Some(pcx_play::map_startup_host::RandomInput {
+                    policy: Arc::clone(&policy),
+                    max_secondary: 256,
+                })
+            },
+        );
+        let mut runtime = CampaignRuntime::new(Duration::from_millis(125), 2, 8);
+        runtime.set_speed(NonZeroU32::new(speed).unwrap());
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        runtime.advance(&mut session, Duration::from_secs(999));
+        for chunk in chunks {
+            runtime.advance(&mut session, Duration::from_millis(*chunk));
+        }
+        while runtime.pending() >= Duration::from_millis(125) {
+            assert!(runtime.last_error.is_none(), "{:?}", runtime.last_error);
+            runtime.advance(&mut session, Duration::ZERO);
+        }
+        assert!(runtime.last_error.is_none(), "{:?}", runtime.last_error);
+        let globals = ["a", "b", "total", "last"].map(|name| session.global(name));
+        assert_eq!(globals[0], Some(Value::Int(64)));
+        assert_eq!(globals[1], Some(Value::Int(32)));
+        let host = session.host().unwrap();
+        let state = host.objects().script_random_state().cloned();
+        let next: Vec<_> = (0..64)
+            .map(|_| {
+                host.native("GetRandomInt", &[Value::Int(-1000), Value::Int(1000)])
+                    .unwrap()
+            })
+            .collect();
+        (runtime.tick(), runtime.pending(), globals, state, next)
+    };
+    let baseline = run(1, &[125; 64]);
+    assert_eq!(run(2, &[4000]), baseline);
+    assert_eq!(run(4, &[1, 499, 0, 1500]), baseline);
+    assert_eq!(run(8, &[1000]), baseline);
+}
+
+#[test]
 fn campaign_runtime_pause_replacement_and_failed_callback_do_not_replay_effects() {
     use peacecraft3::campaign_runtime::CampaignRuntime;
     use std::time::Duration;
