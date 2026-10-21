@@ -47,14 +47,18 @@ pub(super) fn refresh(
         return;
     }
     *last = now;
-    let mut value = String::from("Debug (F7)\n");
+    let mut value = String::from("Debug (F7) | renderer / scene\n\n");
     if let Some(frames) = sources.frames {
-        let _ = writeln!(value, "Frame {} | uptime {now:.1} s", frames.0);
+        let _ = writeln!(
+            value,
+            "Frame            {:>10}\nUptime           {now:>10.1} s",
+            frames.0
+        );
     }
     if let Ok(window) = sources.windows.single() {
         let _ = writeln!(
             value,
-            "Display: {}x{} px | scale {:.2}",
+            "Display          {}x{} px\nUI scale         {:>10.2}",
             window.physical_width(),
             window.physical_height(),
             window.scale_factor()
@@ -63,7 +67,7 @@ pub(super) fn refresh(
     if let Some(adapter) = sources.adapter {
         let _ = writeln!(
             value,
-            "GPU: {}\nBackend: {:?} | {}",
+            "\nGPU  {}\nBackend  {:?} | {}",
             adapter.name, adapter.backend, adapter.driver
         );
         match memory::vram(&adapter.device_pci_bus_id) {
@@ -79,10 +83,15 @@ pub(super) fn refresh(
             None => value.push_str("Whole-GPU VRAM report unavailable\n"),
         }
     }
-    let _ = writeln!(value, "Entities: {}", sources.entities.iter().len());
+    let _ = writeln!(
+        value,
+        "\nEntities         {:>10}",
+        sources.entities.iter().len()
+    );
     if let Some(meshes) = sources.meshes {
         let mut retained = 0;
         let mut vertices = 0;
+        let mut indices = 0;
         for (_, mesh) in meshes.iter() {
             if let Ok(attributes) = mesh.try_attributes() {
                 retained += 1;
@@ -90,16 +99,17 @@ pub(super) fn refresh(
                     .map(|(_, values)| values.len())
                     .min()
                     .unwrap_or(0);
+                indices += mesh.indices().map_or(0, |indices| indices.len());
             }
         }
         let _ = writeln!(
             value,
-            "CPU-retained meshes: {} | vertices: {vertices}",
-            retained
+            "Mesh assets      {:>10}\nCPU-retained meshes: {retained}\nCPU vertices: {vertices}\nCPU indices: {indices}",
+            meshes.len()
         );
     }
     if let Some(images) = sources.images {
-        let _ = writeln!(value, "Image assets: {}", images.len());
+        let _ = writeln!(value, "Image assets     {:>10}", images.len());
     }
     match sources
         .device
@@ -108,14 +118,17 @@ pub(super) fn refresh(
         Some(report) => {
             let _ = writeln!(
                 value,
-                "GPU allocations: {:.1} MiB used\nGPU blocks: {:.1} MiB reserved\nDevice allocator, not total VRAM usage",
+                "\nGPU allocations: {:.1} MiB used\nGPU blocks: {:.1} MiB reserved\nDevice allocator, not total VRAM usage",
                 report.total_allocated_bytes as f64 / (1024.0 * 1024.0),
                 report.total_reserved_bytes as f64 / (1024.0 * 1024.0)
             );
         }
         None => value.push_str("GPU memory report unavailable on this backend\n"),
     }
-    value.push_str(&debug.details);
+    if !debug.details.is_empty() {
+        value.push_str("\nCAMPAIGN\n");
+        value.push_str(&debug.details);
+    }
     for mut counter in &mut counters {
         counter.0.clone_from(&value);
     }
@@ -155,6 +168,8 @@ mod tests {
         let output = world.get::<Text>(text).unwrap().0.clone();
         assert!(output.contains("vertices: 3"), "{output}");
         assert!(output.contains("CPU-retained meshes: 1"), "{output}");
+        assert!(output.contains("Mesh assets               2"), "{output}");
+        assert!(output.contains("CPU indices: 0"), "{output}");
         assert!(output.contains("GPU memory report unavailable"));
         assert!(output.contains("Tick 12"));
         world.resource_mut::<DebugOverlay>().visible = false;
