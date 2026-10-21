@@ -1,10 +1,35 @@
 # FPS and bottleneck profiling
 
-Press **F8** to show or hide FPS and smoothed frame time. The counter starts
-hidden, uses a full-window UI camera, stays at the game screen's top right and
-does not intercept input. It is separate from the original menu's authored
-viewport. Its camera does no rendering while hidden. It reports Bevy frame
-cadence, not cinematic video frame rate or simulation ticks.
+Press **F8** to show or hide FPS, smoothed frame time in milliseconds and a
+rolling graph of the last 120 frame times. The graph uses individual frame
+samples, oldest at the left and newest at the right; its labelled vertical range
+adapts to the observed samples. The display refreshes four times per second.
+These are real frame timings, independent of accelerated simulation ticks.
+
+Press **F7** for display/backend details, entity and image counts, CPU mesh-asset
+vertex counts, device allocator usage and available campaign diagnostics (tick,
+speed, seed, clock, selected units and errors). Mesh-asset vertices are not a
+drawn-vertex count: instances may reuse assets, and render-only assets may lack a
+CPU copy. Allocated/reserved device bytes are distinct from whole-GPU VRAM.
+On Linux, the [AMDGPU driver counters](https://www.kernel.org/doc/html/latest/gpu/amdgpu/driver-misc.html)
+expose whole-GPU VRAM used/total through read-only sysfs for the selected PCI
+adapter; those totals include other apps.
+Unavailable memory reports are labelled rather than replaced with zero.
+
+Both panels start hidden, stack at the top right, and do not intercept input.
+They share a full-window UI camera separate from the original menu's authored
+viewport. When both are hidden the camera does no rendering, and panel sampling
+and formatting stop. Focus the game window or browser canvas before using the
+keys. These diagnostics report Bevy frame cadence, not cinematic video frame
+rate, and do not change simulation state or consume random draws.
+
+The native diagnostic component is visually checked at 1280×800 and 480×800.
+Its wide/narrow captures show actual RADV allocator and whole-GPU VRAM values;
+the synthetic fixture runs no campaign. Unit tests cover independent toggles,
+bounded history, invalid samples, mesh counts and unavailable memory reports.
+Campaign text is bounded to three error excerpts; complete errors remain in
+the existing diagnostic log. Browser compilation passes; these native captures
+do not establish browser rendering or full-campaign behavior.
 
 FPS and all CPU/GPU elapsed times are observational reports affected by competing
 work, clocks and presentation. They are not performance regression thresholds.
