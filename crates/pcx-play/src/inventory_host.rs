@@ -1088,6 +1088,10 @@ impl ObjectHost {
             .push((unit, item, order));
         Ok(true)
     }
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "simulation.inventory")
+    )]
     pub(crate) fn advance_inventory(&mut self, work: &mut usize) -> Result<(), Error> {
         let Some(state) = self.items.as_ref().and_then(|s| s.inventory.as_ref()) else {
             return Ok(());

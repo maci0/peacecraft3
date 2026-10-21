@@ -37,6 +37,10 @@ const GAME_CAMERA_ZOOM: usize = 0;
 
 /// Fresh single-player policy: the sole authored human slot is the local client.
 /// Explicit seed and selected edition are game inputs, not map-derived defaults.
+#[cfg_attr(
+    feature = "profile-cpu",
+    tracing::instrument(skip_all, target = "pcx_cpu", name = "startup.new_game")
+)]
 pub fn prepare_new_game(
     context: &Arc<ParsedMapContext>,
     map_sources: &MapSources,
@@ -279,6 +283,10 @@ fn conversion_global(
     Ok(name)
 }
 
+#[cfg_attr(
+    feature = "profile-cpu",
+    tracing::instrument(skip_all, target = "pcx_cpu", name = "startup.inputs")
+)]
 pub fn prepare(
     context: &Arc<ParsedMapContext>,
     map_sources: &MapSources,
@@ -555,6 +563,10 @@ fn enum_contracts(context: &ParsedMapContext) -> Result<EnumContracts, String> {
     })
 }
 
+#[cfg_attr(
+    feature = "profile-cpu",
+    tracing::instrument(skip_all, target = "pcx_cpu", name = "startup.object_sources")
+)]
 fn defaults(reader: &Resolver, origin: &AssetIdentity) -> Result<DefaultTables, String> {
     let mut tables = Vec::new();
     let mut profiles = Vec::new();

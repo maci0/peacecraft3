@@ -357,6 +357,10 @@ impl<'a> Map<'a> {
     /// declared archive size plus the fixed header plus any trailer add up to
     /// the file length exactly. A map that fails this is refused rather than
     /// returned with a shrug.
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "map.parse_container")
+    )]
     pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
         let magic: [u8; 4] = data
             .get(..4)

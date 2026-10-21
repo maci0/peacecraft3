@@ -256,6 +256,10 @@ impl Resolver {
     pub fn resolve_bounded(&self, value: &str, limit: u64) -> Result<ResolvedAsset, Error> {
         self.resolve_with_budget(value, Some(limit))
     }
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "assets.resolve")
+    )]
     fn resolve_with_budget(&self, value: &str, limit: Option<u64>) -> Result<ResolvedAsset, Error> {
         let path = AssetPath::new(value)?;
         if let Some(overrides) = &self.overrides

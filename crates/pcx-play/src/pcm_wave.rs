@@ -16,6 +16,10 @@ pub struct WaveError {
     pub reason: &'static str,
 }
 impl PcmWave {
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "audio.wav_inspect")
+    )]
     pub fn inspect(bytes: &[u8]) -> Result<Self, WaveError> {
         let bad = |at, reason| WaveError { at, reason };
         if bytes.get(..4) != Some(b"RIFF") || bytes.get(8..12) != Some(b"WAVE") {

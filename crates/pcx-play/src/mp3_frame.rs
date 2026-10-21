@@ -91,6 +91,10 @@ pub enum DecodeError {
     UnsupportedChannels { count: usize },
 }
 
+#[cfg_attr(
+    feature = "profile-cpu",
+    tracing::instrument(skip_all, target = "pcx_cpu", name = "audio.mp3_decode")
+)]
 pub fn decode(encoded: &[u8], limits: &Limits) -> Result<FrameReport, DecodeError> {
     if encoded.len() > limits.max_encoded_bytes {
         return Err(DecodeError::EncodedByteLimit {

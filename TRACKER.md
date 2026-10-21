@@ -2,6 +2,17 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+### 2026-10-21: CPU hotpath evidence
+
+- [x] Optional core spans separate startup, asset decoding, scripting, motion,
+  combat and animation work. Bounded trace summaries subtract child spans.
+  Real Human03 stacks captured 1,897 samples with zero lost samples; five runs
+  preserve unit projections and source RNG state. Core tests (1,430), strict
+  app Clippy and affected WASM checks pass.
+- [~] Complete rendered campaign coverage remains open. Two hidden-window
+  capture attempts are invalid; neither supplies frame or GPU evidence.
+  See [CPU hotpaths](docs/performance/cpu-hotpaths.md).
+
 ### 2026-10-21: Five measured optimization rounds
 
 - [x] Sorted simulation commands allocate zero times over the unchanged fixed

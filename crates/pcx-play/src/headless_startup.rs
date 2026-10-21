@@ -142,6 +142,10 @@ pub fn expansion_of(mode: GameMode) -> bool {
 /// supplied by the caller and never defaulted here.
 /// `profile` is a saved PC3 campaign profile, or `None` for a fresh profile. Saves stay
 /// in this session and can be exported through `Startup::campaign_profile`.
+#[cfg_attr(
+    feature = "profile-cpu",
+    tracing::instrument(skip_all, target = "pcx_cpu", name = "startup.total")
+)]
 pub fn start(
     install: &Path,
     mode: GameMode,

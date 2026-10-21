@@ -6,7 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 description = "Warcraft III MDL/MDX model parser"
 
+[features]
+profile-cpu = ["dep:tracing"]
+
 [dependencies]
+tracing = { workspace = true, optional = true }
 pcx-mpq.workspace = true
 thiserror.workspace = true
 

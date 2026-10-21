@@ -600,6 +600,10 @@ impl MpqArchive {
 
     /// Extract a file: read its packed bytes, decrypt the sector layout and
     /// decompress each sector.
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "assets.mpq_extract_unbounded")
+    )]
     pub fn extract(&mut self, path: &str) -> Result<Vec<u8>, Error> {
         let block = *self
             .find_block(path)

@@ -910,6 +910,10 @@ impl ObjectHost {
     }
 
     /// One combat step at the current game time, in unit handle order.
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "simulation.combat")
+    )]
     pub(super) fn advance_combat(&mut self) -> Result<(), Error> {
         let name = "combat";
         if self.combat.is_none() {
@@ -975,6 +979,9 @@ impl ObjectHost {
                     .is_some_and(|p| Some(p) != destination);
             let mut target = previous_target.filter(|t| self.weapon_target(*t).is_some());
             if target.is_none() && (idle || destination.is_some()) {
+                #[cfg(feature = "profile-cpu")]
+                let _acquisition =
+                    tracing::info_span!(target: "pcx_cpu", "combat.acquisition").entered();
                 if held {
                     target = self.hold_position_target(unit, weapon.range, name)?;
                 } else if weapon.acquire > 0.0 {

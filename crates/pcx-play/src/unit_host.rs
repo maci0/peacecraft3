@@ -881,6 +881,10 @@ impl ObjectHost {
             .map(Value::Real)
     }
 
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "units.collision_field")
+    )]
     pub(super) fn unit_collision_radius(&self, unit: HandleId, caller: &str) -> Result<f32, Error> {
         let fail = |reason| self.inner.error(caller, reason);
         let definition = &self.created_unit(unit, caller)?.definition;

@@ -7,6 +7,7 @@ license.workspace = true
 description = "BLP0/BLP1/BLP2 texture decoder (Warcraft III)"
 
 [features]
+profile-cpu = ["dep:tracing"]
 local-fixtures = []
 
 [[example]]
@@ -14,6 +15,7 @@ name = "wasm_smoke"
 required-features = ["local-fixtures"]
 
 [dependencies]
+tracing = { workspace = true, optional = true }
 pcx-mpq.workspace = true
 thiserror.workspace = true
 bytemuck.workspace = true

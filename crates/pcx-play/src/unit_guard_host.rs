@@ -355,6 +355,10 @@ impl ObjectHost {
         }
     }
     /// True means an AI return owns movement this tick, so skip acquisition.
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "combat.guard")
+    )]
     pub(super) fn guard_combat_step(
         &mut self,
         unit: HandleId,

@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "MPQ archive reader for Warcraft III assets"
 
+[features]
+profile-cpu = []
+
 [dependencies]
 anyhow.workspace = true
 thiserror.workspace = true
