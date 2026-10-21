@@ -2469,6 +2469,19 @@ fn collision_query_uses_the_retained_catalog_field_without_resolving_again() {
             field.metadata.as_mut().unwrap().kind = kind;
             let mut session = geometry_vm(BTreeMap::from([(*b"G001", field)]), constant);
             let unit = session.vm.global("U");
+            let Value::Handle(id) = unit else {
+                panic!("created unit")
+            };
+            assert_eq!(
+                session
+                    .vm
+                    .host()
+                    .inner
+                    .executed_unit(id)
+                    .unwrap()
+                    .collision_radius,
+                Ok(expected)
+            );
             let before = session.vm.host().inner.inner().handles();
             assert_eq!(
                 session
@@ -2550,6 +2563,19 @@ fn collision_query_refuses_missing_ambiguous_and_unusable_geometry() {
     for fields in cases {
         let mut session = geometry_vm(fields, false);
         let unit = session.vm.global("U");
+        let Value::Handle(id) = unit else {
+            panic!("created unit")
+        };
+        assert!(
+            session
+                .vm
+                .host()
+                .inner
+                .executed_unit(id)
+                .unwrap()
+                .collision_radius
+                .is_err()
+        );
         let error = session
             .vm
             .host()

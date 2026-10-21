@@ -9,9 +9,13 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   Real Human03 stacks captured 1,897 samples with zero lost samples; five runs
   preserve unit projections and source RNG state. Core tests (1,430), strict
   app Clippy and affected WASM checks pass.
-- [~] Complete rendered campaign coverage remains open. Two hidden-window
-  capture attempts are invalid; neither supplies frame or GPU evidence.
+- [~] Complete rendered campaign coverage remains open. Three hidden-window
+  capture attempts are invalid; none supplies frame or GPU evidence.
   See [CPU hotpaths](docs/performance/cpu-hotpaths.md).
+- [x] Derive catalog collision geometry once per created unit, preserving deferred
+  validation errors. Human03 metadata walks fall from 295,290 to 148 with the
+  same unit/RNG projection; a repeated-scan mutant fails the work-count gate.
+  Core tests, actor tests, strict application Clippy and WASM checks pass.
 
 ### 2026-10-21: Five measured optimization rounds
 

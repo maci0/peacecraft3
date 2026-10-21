@@ -14,6 +14,8 @@ and event delivery, unit activity, motion, routing, combat, guard/acquisition,
 collision metadata, regeneration, inventory, audio decoding, model parsing,
 bone matrices, skinning and mesh position submission. Bevy supplies system and
 render scheduling spans. Normal builds omit these additional core spans.
+The collision-field span measures derivation from metadata, not use of an
+already retained radius.
 
 The spans use target `pcx_cpu`. Native calls record their native name, without
 recording arguments or asset payloads. A tracing-chrome collector must enable
@@ -79,20 +81,46 @@ The five uninstrumented runs and the instrumented run have identical unit handle
 rawcode, creation-owner and position projections plus complete source RNG state.
 That comparison does not cover every VM global or rendered state.
 
+## Retain derived collision geometry
+
+Each created unit now retains the result of validating its own resolved
+`UnitBalance.collision` field. Combat, movement, guards and range events read
+that result instead of walking the definition again. No rawcode, field id or
+radius is copied into a constant. Missing or malformed geometry remains a
+deferred query error with the current caller's context; creation does not newly
+refuse it. There is no admitted runtime collision setter. A future setter must
+update the retained value.
+
+The same Human03 workload now records 148 derivations, matching its 148 observed
+creation native calls, instead of 295,290 queries that each walked metadata.
+Its unit projection and complete source RNG state remain byte-identical to the
+baseline, both with and without core tracing. A deliberate repeated-scan mutant
+still produces the same projection but fails the work-count gate (295,438
+derivations for 148 creations). The exact candidate source was restored afterward.
+
+One uninstrumented counter comparison recorded 34,413,117,816 retired user
+instructions before and 32,679,071,407 after. This combined startup/gameplay
+measurement is report-only; it is not a cross-machine or elapsed-time gate.
+The work gate compares derivation and creation counts, independent of host load.
+Core library tests (1,071), actor tests (15, two explicit gates ignored), strict
+application Clippy and application WASM checks pass on the candidate.
+
 Local evidence is retained under `.scratch/profiles/cpu-hotpaths/`: raw traces,
 perf data, flat and call-chain reports, build logs, repeated-run receipts, and
 the bounded driver. Nothing there is uploaded.
 
-Affected-target validation passed: 1,430 core library tests (43 explicit gates
+The instrumentation checkpoint passed 1,430 core library tests (43 explicit gates
 ignored), strict application Clippy with `profile-cpu` on all targets, application
 WASM checks, core WASM checks with profiling enabled, four trace-summary tests,
 and formatting. The object-file census requires the explicit local install;
 its initial run without those inputs failed and is retained separately.
 
-Two renderer capture attempts are invalid. The X11 window stayed unmapped;
+Three renderer capture attempts are invalid. The X11 window stayed unmapped;
 forcing a map request did not establish visibility. The first trace also grew
 with repeated audio-backend timestamp errors. The second capture reported lost
 sample chunks and was terminated without a complete trace. Animation spans
-alone do not prove visible rendering. These runs contribute no frame or GPU
-performance claim. Campaign HUD, audio mixing, GPU driver submission and all-map
+alone do not prove visible rendering. A third bounded probe preserved the normal
+desktop-session environment and still did not establish visibility. These runs
+contribute no frame or GPU performance claim. Campaign HUD, audio mixing,
+GPU driver submission and all-map
 coverage remain open.
