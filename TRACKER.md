@@ -2,6 +2,16 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+### 2026-10-21: F7/F8 diagnostics
+
+- [x] F8 adds a bounded 120-frame timing graph beside FPS and milliseconds.
+  F7 independently shows display/backend, mesh-asset vertices, GPU allocator
+  and available whole-GPU VRAM counters, plus campaign tick/speed/seed/selection
+  and error excerpts. Panels share a click-through camera and stop sampling
+  while hidden. Native component renders pass at wide/narrow sizes; 61 graphics
+  and 466 app tests, strict Clippy and WASM checks pass. Unsupported memory
+  counters report unavailable; full campaign/browser rendering stays separate.
+
 ### 2026-10-21: CPU hotpath evidence
 
 - [~] Native launcher GPU diagnostics and a RADV capture are verified on the

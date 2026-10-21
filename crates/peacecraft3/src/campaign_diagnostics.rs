@@ -5,12 +5,92 @@ use peacecraft3::{
     campaign_camera::CampaignCamera, campaign_runtime::CampaignRuntime,
     campaign_startup::CampaignStartup, map_ground::GroundPublication,
 };
+use std::fmt::Write;
 
 #[derive(Resource, Default)]
 struct Reported(Vec<Option<String>>);
 
 pub(crate) fn install(app: &mut App) {
-    app.init_resource::<Reported>().add_systems(Last, report);
+    app.init_resource::<Reported>()
+        .add_systems(Last, (report, debug_info).chain());
+}
+
+#[derive(SystemParam)]
+struct DebugSources<'w> {
+    runtime: Option<Res<'w, CampaignRuntime>>,
+    seed: Option<Res<'w, peacecraft3::campaign_startup::CampaignSeed>>,
+    requests: Option<Res<'w, peacecraft3::map_requests::MapRequests>>,
+    session: Option<
+        ResMut<
+            'w,
+            peacecraft3::map_script_session::MapScriptSession<
+                pcx_play::map_startup_host::MapStartupHost,
+            >,
+        >,
+    >,
+}
+
+fn debug_info(
+    time: Res<Time<Real>>,
+    debug: Option<ResMut<pcx_gfx::performance::DebugOverlay>>,
+    sources: DebugSources,
+    reported: Res<Reported>,
+    mut last: Local<f64>,
+) {
+    let Some(mut debug) = debug.filter(|debug| debug.visible) else {
+        return;
+    };
+    let now = time.elapsed_secs_f64();
+    if now - *last < 0.25 && !debug.details.is_empty() {
+        return;
+    }
+    *last = now;
+    debug.details.clear();
+    if let Some(bindings) = sources
+        .requests
+        .as_ref()
+        .and_then(|requests| requests.bindings.as_ref())
+    {
+        let _ = writeln!(debug.details, "Map: {}", bindings.map_label);
+    }
+    if let Some(runtime) = sources.runtime {
+        let _ = writeln!(
+            debug.details,
+            "Tick {} | speed {}x | paused {}\nView suspended {} | queued {:.3} s",
+            runtime.tick(),
+            runtime.speed(),
+            runtime.paused,
+            runtime.view_paused,
+            runtime.pending().as_secs_f64()
+        );
+    }
+    if let Some(seed) = sources.seed.and_then(|seed| seed.prepared) {
+        let _ = writeln!(debug.details, "Seed: {seed}");
+    }
+    if let Some(mut session) = sources.session {
+        // The existing host accessor is mutable; these diagnostics only read it.
+        if let Some(host) = session.bypass_change_detection().host() {
+            let objects = host.objects();
+            if let Some(clock) = objects.timer_game_time() {
+                let _ = writeln!(debug.details, "Game clock: {clock:.3} s");
+            }
+            let _ = writeln!(
+                debug.details,
+                "Units: {} | selected: {}",
+                objects.executed_units().count(),
+                objects.selection().len()
+            );
+        } else {
+            debug.details.push_str("Campaign not running\n");
+        }
+    }
+    for error in reported.0.iter().flatten().take(3) {
+        let _ = writeln!(
+            debug.details,
+            "Error: {}",
+            error.chars().take(160).collect::<String>()
+        );
+    }
 }
 
 #[derive(SystemParam)]
@@ -106,5 +186,43 @@ fn report(stages: Stages, mut reported: ResMut<Reported>) {
             }
             *seen = error;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn debug_panel_reports_seed_and_idle_campaign_without_mutating_the_session() {
+        let mut world = World::new();
+        world.init_resource::<Time<Real>>();
+        world.insert_resource(pcx_gfx::performance::DebugOverlay {
+            visible: true,
+            details: String::new(),
+        });
+        world.insert_resource(Reported(vec![Some("missing fixture".into())]));
+        world.insert_resource(CampaignRuntime::new(
+            std::time::Duration::from_secs_f64(1.0 / 64.0),
+            64,
+            4096,
+        ));
+        world.insert_resource(peacecraft3::campaign_startup::CampaignSeed {
+            requested: Some(42),
+            prepared: Some(42),
+        });
+        world.init_resource::<peacecraft3::map_script_session::MapScriptSession<
+            pcx_play::map_startup_host::MapStartupHost,
+        >>();
+        world.run_system_once(debug_info).unwrap();
+        let details = &world
+            .resource::<pcx_gfx::performance::DebugOverlay>()
+            .details;
+        assert!(details.contains("Tick 0 | speed 1x"), "{details}");
+        assert!(details.contains("Seed: 42"));
+        assert!(details.contains("Campaign not running"));
+        assert!(details.contains("Error: missing fixture"));
+        assert_eq!(world.resource::<CampaignRuntime>().tick(), 0);
     }
 }
