@@ -47,7 +47,7 @@ pub(super) fn refresh(
         return;
     }
     *last = now;
-    let mut value = String::from("Debug (F7) | renderer / scene\n\n");
+    let mut value = String::from("DISPLAY / RENDERER\n");
     if let Some(frames) = sources.frames {
         let _ = writeln!(
             value,
@@ -58,17 +58,18 @@ pub(super) fn refresh(
     if let Ok(window) = sources.windows.single() {
         let _ = writeln!(
             value,
-            "Display          {}x{} px\nUI scale         {:>10.2}",
+            "Display          {}x{} px\nUI scale         {:>10.2}\nPresent mode     {:?}",
             window.physical_width(),
             window.physical_height(),
-            window.scale_factor()
+            window.scale_factor(),
+            window.present_mode
         );
     }
     if let Some(adapter) = sources.adapter {
         let _ = writeln!(
             value,
-            "\nGPU  {}\nBackend  {:?} | {}",
-            adapter.name, adapter.backend, adapter.driver
+            "\nGPU  {}\nBackend  {:?} | {:?}\nDriver  {}",
+            adapter.name, adapter.backend, adapter.device_type, adapter.driver
         );
         match memory::vram(&adapter.device_pci_bus_id) {
             Some((used, total)) => {
@@ -85,7 +86,7 @@ pub(super) fn refresh(
     }
     let _ = writeln!(
         value,
-        "\nEntities         {:>10}",
+        "\nSCENE / GEOMETRY\nEntities         {:>10}",
         sources.entities.iter().len()
     );
     if let Some(meshes) = sources.meshes {
@@ -118,7 +119,7 @@ pub(super) fn refresh(
         Some(report) => {
             let _ = writeln!(
                 value,
-                "\nGPU allocations: {:.1} MiB used\nGPU blocks: {:.1} MiB reserved\nDevice allocator, not total VRAM usage",
+                "\nDEVICE MEMORY\nGPU allocations: {:.1} MiB used\nGPU blocks: {:.1} MiB reserved\nAllocator only; whole-GPU VRAM above",
                 report.total_allocated_bytes as f64 / (1024.0 * 1024.0),
                 report.total_reserved_bytes as f64 / (1024.0 * 1024.0)
             );
