@@ -633,6 +633,7 @@ pub(crate) fn host_inputs(
     catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>,
 ) -> MapStartupInputs {
     MapStartupInputs {
+        ai_source: None,
         inventory: None,
         inventory_powerup: None,
         item_classes: None,

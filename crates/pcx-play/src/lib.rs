@@ -56,6 +56,7 @@
 pub mod ability_profile;
 pub mod camera_margins;
 pub mod campaign;
+pub mod campaign_ai;
 pub mod campaign_assets;
 pub mod campaign_cache;
 pub mod campaign_client;
