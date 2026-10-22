@@ -17,6 +17,7 @@ use crate::map_script_session::MapScriptSession;
 use crate::map_scripts_import::MapScriptBudget;
 use crate::map_startup_host::MapStartupHost;
 use crate::scripts::{AssetIdentity, ScriptAsset};
+use crate::source_receipt::{SourceReceiptRecorder, observe_catalog_profiles};
 use pcx_assets::{Addon, ArchiveLayer, GameMode, Resolver};
 use pcx_map::Map;
 use pcx_objects::ObjectFile;
@@ -32,6 +33,13 @@ const EXECUTABLE: &str = "Warcraft III.exe";
 const NO_OCCLUSION_FADING: bool = true;
 const COMMON_SCRIPT: &str = "Scripts\\common.j";
 const BLIZZARD_SCRIPT: &str = "Scripts\\Blizzard.j";
+/// Stock Misc tables the campaign startup admits through the selected source reader.
+/// Their bytes are game rules and UI configuration, so the admission receipt binds them.
+const MISC_SOURCES: &[(&str, u64)] = &[
+    ("Units/MiscData.txt", 4 << 20),
+    ("Units/MiscGame.txt", 4 << 20),
+    ("UI/MiscData.txt", 2 << 20),
+];
 const MAP_READ_BUDGET: pcx_mpq::checked::ReadBudget = pcx_mpq::checked::ReadBudget {
     max_archive_bytes: 64 << 20,
     max_archive_table_bytes: 8 << 20,
@@ -74,6 +82,8 @@ pub enum StartupError {
     Map(String),
     #[error("catalog: {0}")]
     Catalog(String),
+    #[error("source receipt: {0}")]
+    Receipt(String),
     #[error("admission: {0}")]
     Admission(String),
     #[error("startup inputs: {0}")]
@@ -96,6 +106,7 @@ pub struct Startup {
     origin: f64,
     tick: u64,
     admission: crate::neutral_player::Sha256Digest,
+    catalog_receipt: crate::neutral_player::Sha256Digest,
     cache: Arc<crate::campaign_cache::SessionStorage>,
 }
 
@@ -190,26 +201,59 @@ pub fn start(
     };
     let common_identity = script_identity(COMMON_SCRIPT);
     let blizzard_identity = script_identity(BLIZZARD_SCRIPT);
-    let catalog_identity = AssetIdentity {
-        edition: edition.clone(),
-        version: "selected install".into(),
-        source: install.display().to_string(),
-    };
     let map_identity = AssetIdentity {
         edition: edition.clone(),
         version: "map bytes".into(),
         source: map_label.into(),
     };
+    let mut recorder = SourceReceiptRecorder::new();
 
     let map = Map::parse(map_bytes).map_err(|error| StartupError::Map(error.to_string()))?;
     let editor = Editor::from_reader(install, &[], EDITOR_LIMITS, |member| {
-        match resolver.resolve_bounded(member, MAX_ASSET_BYTES as u64) {
+        let result = match resolver.resolve_bounded(member, MAX_ASSET_BYTES as u64) {
             Ok(asset) => Ok(Some(asset.bytes)),
             Err(pcx_assets::Error::MissingAsset { .. }) => Ok(None),
             Err(error) => Err(error),
+        };
+        if let Ok(content) = &result {
+            recorder.observe(member, content.as_deref());
         }
+        result
     })
     .map_err(|error| StartupError::Catalog(error.to_string()))?;
+    observe_catalog_profiles(
+        &mut recorder,
+        resolver.paths().cloned(),
+        |member| -> Result<Option<Vec<u8>>, String> {
+            match resolver.resolve_bounded(member, 4 << 20) {
+                Ok(asset) => Ok(Some(asset.bytes)),
+                Err(pcx_assets::Error::MissingAsset { .. }) => Ok(None),
+                Err(error) => Err(error.to_string()),
+            }
+        },
+    )
+    .map_err(|error| StartupError::Receipt(error.to_string()))?;
+    for &(member, limit) in MISC_SOURCES {
+        let content = match resolver.resolve_bounded(member, limit) {
+            Ok(asset) => Some(asset.bytes),
+            Err(pcx_assets::Error::MissingAsset { .. }) => None,
+            Err(error) => {
+                return Err(StartupError::Member {
+                    member: member.into(),
+                    message: error.to_string(),
+                });
+            }
+        };
+        recorder.observe(member, content.as_deref());
+    }
+    let catalog_receipt = recorder
+        .finish()
+        .map_err(|error| StartupError::Receipt(error.to_string()))?;
+    let catalog_identity = AssetIdentity {
+        edition: edition.clone(),
+        version: "selected install catalog receipt".into(),
+        source: format!("sha256:{}", hex(&catalog_receipt.digest())),
+    };
     let catalog = Arc::new(OwnedCatalog {
         editor,
         units: map_overlay(&map, map_label, "war3map.w3u")?,
@@ -300,7 +344,7 @@ pub fn start(
         map: map_bytes,
         common: &common_bytes,
         blizzard: &blizzard_bytes,
-        catalog: &sources.catalog_identity.source,
+        catalog_receipt: catalog_receipt.digest(),
         seed,
         mode,
         context: &context,
@@ -312,18 +356,19 @@ pub fn start(
         origin,
         tick: 0,
         admission,
+        catalog_receipt: catalog_receipt.digest(),
         cache,
     })
 }
 
 /// Everything the admission read. Two starts agree on the digest exactly when they admitted the
-/// same executable, map, scripts, catalog source, seed, mode, profile and human roster.
+/// same executable, map, scripts, catalog source content, seed, mode, profile and human roster.
 struct AdmissionInputs<'a> {
     image: &'a [u8],
     map: &'a [u8],
     common: &'a [u8],
     blizzard: &'a [u8],
-    catalog: &'a str,
+    catalog_receipt: crate::neutral_player::Sha256Digest,
     seed: i32,
     mode: GameMode,
     context: &'a ParsedMapContext,
@@ -336,13 +381,45 @@ fn digest_admission(inputs: AdmissionInputs<'_>) -> crate::neutral_player::Sha25
         map,
         common,
         blizzard,
-        catalog,
+        catalog_receipt,
         seed,
         mode,
         context,
         profile,
     } = inputs;
-    let mut text = String::from("pcx-admission-v2\n");
+    let humans = context
+        .world
+        .info
+        .human_players()
+        .map(|human| human.number())
+        .collect::<Vec<_>>();
+    let text = admission_text(
+        image,
+        map,
+        common,
+        blizzard,
+        catalog_receipt,
+        seed,
+        mode,
+        profile,
+        &humans,
+    );
+    crate::neutral_player::sha256(text.as_bytes())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn admission_text(
+    image: &[u8],
+    map: &[u8],
+    common: &[u8],
+    blizzard: &[u8],
+    catalog_receipt: crate::neutral_player::Sha256Digest,
+    seed: i32,
+    mode: GameMode,
+    profile: Option<&[u8]>,
+    humans: &[u32],
+) -> String {
+    let mut text = String::from("pcx-admission-v3\n");
     text += &format!("exe {}\n", hex(&crate::neutral_player::sha256(image)));
     text += &format!("map {}\n", hex(&crate::neutral_player::sha256(map)));
     text += &format!("common {}\n", hex(&crate::neutral_player::sha256(common)));
@@ -350,12 +427,15 @@ fn digest_admission(inputs: AdmissionInputs<'_>) -> crate::neutral_player::Sha25
         "blizzard {}\n",
         hex(&crate::neutral_player::sha256(blizzard))
     );
-    text += &format!("catalog {catalog}\nseed {seed}\nmode {mode:?}\n");
+    text += &format!(
+        "catalog-receipt {}\nseed {seed}\nmode {mode:?}\n",
+        hex(&catalog_receipt)
+    );
     text += &format!("profile {}\n", profile_identity(profile));
-    for human in context.world.info.human_players() {
-        text += &format!("human {}\n", human.number());
+    for human in humans {
+        text += &format!("human {human}\n");
     }
-    crate::neutral_player::sha256(text.as_bytes())
+    text
 }
 
 fn profile_identity(profile: Option<&[u8]>) -> String {
@@ -387,6 +467,10 @@ impl Startup {
     /// Digest of this startup's admission inputs; see `digest_admission`.
     pub fn admission_digest(&self) -> crate::neutral_player::Sha256Digest {
         self.admission
+    }
+    /// Canonical digest of the catalog and Misc source content this startup admitted.
+    pub fn catalog_receipt(&self) -> crate::neutral_player::Sha256Digest {
+        self.catalog_receipt
     }
 
     pub fn tick(&self) -> u64 {
@@ -434,5 +518,45 @@ mod tests {
     fn expansion_follows_the_selected_addon() {
         assert!(expansion_of(mode(Addon::Tft)));
         assert!(!expansion_of(mode(Addon::NoAddon)));
+    }
+
+    fn catalog_receipt(content: &[u8]) -> crate::source_receipt::SourceReceipt {
+        let mut recorder = crate::source_receipt::SourceReceiptRecorder::new();
+        recorder.observe("Units\\MiscGame.txt", Some(content));
+        recorder.finish().expect("receipt")
+    }
+
+    #[test]
+    fn admission_binds_catalog_content_at_the_same_member_path() {
+        let executable = b"executable";
+        let map = b"map";
+        let script = b"script";
+        let seed = -7;
+        let mode = mode(Addon::NoAddon);
+        let humans = [0u32];
+        let digest = |content: &[u8]| {
+            crate::neutral_player::sha256(
+                admission_text(
+                    executable,
+                    map,
+                    script,
+                    script,
+                    catalog_receipt(content).digest(),
+                    seed,
+                    mode,
+                    None,
+                    &humans,
+                )
+                .as_bytes(),
+            )
+        };
+        let original = digest(b"[Misc]\nFoo=1\n");
+        let repeat = digest(b"[Misc]\nFoo=1\n");
+        let changed = digest(b"[Misc]\nFoo=2\n");
+        assert_eq!(original, repeat, "repeated admission must agree");
+        assert_ne!(
+            original, changed,
+            "changed catalog bytes at one path must change admission"
+        );
     }
 }
