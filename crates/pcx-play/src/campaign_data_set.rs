@@ -1041,28 +1041,76 @@ fn read_listfile(
     })
 }
 
+enum ListedMember<'a> {
+    Absent,
+    Live(&'a pcx_mpq::BlockEntry),
+}
+
+/// Distinguishes a stale listfile name from a listed hash entry whose block
+/// cannot be used. The former is allowed to remain absent; the latter must not
+/// silently lose to a lower-priority archive. Empty, deleted and region-end
+/// hash sentinels keep their chain-terminating meaning, and block deletion
+/// markers remain legitimate tombstones.
+fn listed_member<'a>(
+    archive: &'a pcx_mpq::MpqArchive,
+    member: &str,
+) -> Result<ListedMember<'a>, Error> {
+    let hashes = archive.hash_entries();
+    if hashes.is_empty() {
+        return Ok(ListedMember::Absent);
+    }
+    let count = hashes.len();
+    let (name1, name2) = pcx_mpq::hash::hash_string_both(member);
+    let mut slot = pcx_mpq::hash::start_slot(member, count);
+    for _ in 0..count {
+        let entry = &hashes[slot];
+        if entry.is_unpopulated() {
+            return Ok(ListedMember::Absent);
+        }
+        if entry.name1 == name1 && entry.name2 == name2 {
+            let index = entry.block_index as usize;
+            let block = archive.block_entries().get(index).ok_or_else(|| {
+                Error::Message(format!(
+                    "{}: listed member {member:?} references block {index} outside the block table",
+                    archive.path().display()
+                ))
+            })?;
+            if block.flags & pcx_mpq::flags::DELETE_MARKER != 0 {
+                return Ok(ListedMember::Absent);
+            }
+            if block.flags & pcx_mpq::flags::EXISTING == 0 {
+                return Err(Error::Message(format!(
+                    "{}: listed member {member:?} references non-existent block {index} (flags {:#010x})",
+                    archive.path().display(),
+                    block.flags
+                )));
+            }
+            return Ok(ListedMember::Live(block));
+        }
+        slot += 1;
+        if slot == count {
+            slot = 0;
+        }
+    }
+    Ok(ListedMember::Absent)
+}
+
 fn canonical_members(
     archive: &pcx_mpq::MpqArchive,
     listfile: &str,
 ) -> Result<Vec<(String, String)>, Error> {
-    let mut canonical: BTreeMap<AssetPath, String> = BTreeMap::new();
+    let mut canonical: BTreeMap<AssetPath, (String, pcx_mpq::BlockEntry)> = BTreeMap::new();
     for line in listfile
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
     {
-        let Some(block) = archive.find_block(line) else {
+        let ListedMember::Live(block) = listed_member(archive, line)? else {
             continue;
         };
         let path = AssetPath::new(line)
             .map_err(|error| Error::Message(format!("{}: {error}", archive.path().display())))?;
-        if let Some(prior) = canonical.get(&path) {
-            let prior_block = archive.find_block(prior).ok_or_else(|| {
-                Error::Message(format!(
-                    "{}: listed member {prior:?} disappeared",
-                    archive.path().display()
-                ))
-            })?;
+        if let Some((prior, prior_block)) = canonical.get(&path) {
             if prior_block.file_pos != block.file_pos
                 || prior_block.file_size != block.file_size
                 || prior_block.compressed_size != block.compressed_size
@@ -1073,7 +1121,7 @@ fn canonical_members(
                 )));
             }
         } else {
-            canonical.insert(path, line.to_string());
+            canonical.insert(path, (line.to_string(), *block));
         }
     }
     if canonical.len() > MAX_LISTED_PATHS {
@@ -1085,7 +1133,7 @@ fn canonical_members(
     }
     Ok(canonical
         .into_iter()
-        .map(|(path, member)| (path.as_str().to_string(), member))
+        .map(|(path, (member, _))| (path.as_str().to_string(), member))
         .collect())
 }
 

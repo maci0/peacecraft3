@@ -339,6 +339,152 @@ fn unresolved_locale_campaign_archive_refuses_before_archive_selection() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+fn encrypt_table(data: &mut [u8], key: u32) {
+    let table = pcx_mpq::crypt::table();
+    let (mut seed1, mut seed2) = (key, 0xeeee_eeeeu32);
+    for chunk in data.as_chunks_mut::<4>().0 {
+        seed2 = seed2.wrapping_add(table[0x400 + (seed1 & 255) as usize]);
+        let plain = u32::from_le_bytes(*chunk);
+        chunk.copy_from_slice(&(plain ^ seed1.wrapping_add(seed2)).to_le_bytes());
+        seed1 = ((!seed1) << 21).wrapping_add(0x1111_1111) | (seed1 >> 11);
+        seed2 = plain
+            .wrapping_add(seed2)
+            .wrapping_add(seed2 << 5)
+            .wrapping_add(3);
+    }
+}
+
+fn write_table_archive(
+    path: &Path,
+    listed: &str,
+    hash_matches: bool,
+    block_index: u32,
+    blocks: &[pcx_mpq::BlockEntry],
+) {
+    let hash_at = 32u32;
+    let block_at = hash_at + 16;
+    let archive_size = block_at + blocks.len() as u32 * 16;
+    let mut hashes = [0xffu8; 16];
+    if hash_matches {
+        let (name1, name2) = pcx_mpq::hash::hash_string_both(listed);
+        hashes[..4].copy_from_slice(&name1.to_le_bytes());
+        hashes[4..8].copy_from_slice(&name2.to_le_bytes());
+        hashes[12..].copy_from_slice(&block_index.to_le_bytes());
+    }
+    encrypt_table(&mut hashes, pcx_mpq::hash::hash_table_key());
+    let mut table = Vec::new();
+    for block in blocks {
+        table.extend(block.file_pos.to_le_bytes());
+        table.extend(block.compressed_size.to_le_bytes());
+        table.extend(block.file_size.to_le_bytes());
+        table.extend(block.flags.to_le_bytes());
+    }
+    encrypt_table(&mut table, pcx_mpq::hash::block_table_key());
+    let mut raw = b"MPQ\x1a".to_vec();
+    raw.extend(32u32.to_le_bytes());
+    raw.extend(archive_size.to_le_bytes());
+    raw.extend(0u16.to_le_bytes());
+    raw.extend(0u16.to_le_bytes());
+    raw.extend(hash_at.to_le_bytes());
+    raw.extend(block_at.to_le_bytes());
+    raw.extend(1u32.to_le_bytes());
+    raw.extend((blocks.len() as u32).to_le_bytes());
+    raw.extend(hashes);
+    raw.extend(table);
+    assert_eq!(raw.len(), archive_size as usize);
+    std::fs::write(path, raw).unwrap();
+}
+
+fn table_temp_dir(tag: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "pcx-campaign-{tag}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn canonical_members_keeps_tombstones_and_stale_listings_absent() {
+    let dir = table_temp_dir("tombstone");
+    let member = "scripts\\common.j";
+    let live = pcx_mpq::BlockEntry {
+        flags: pcx_mpq::flags::EXISTING,
+        ..pcx_mpq::BlockEntry::default()
+    };
+    let stale = dir.join("stale.mpq");
+    write_table_archive(&stale, member, false, 0, &[live]);
+    assert!(
+        canonical_members(&pcx_mpq::MpqArchive::open(&stale).unwrap(), member)
+            .unwrap()
+            .is_empty()
+    );
+    let tombstone = dir.join("tombstone.mpq");
+    write_table_archive(
+        &tombstone,
+        member,
+        true,
+        0,
+        &[pcx_mpq::BlockEntry {
+            flags: pcx_mpq::flags::DELETE_MARKER,
+            ..pcx_mpq::BlockEntry::default()
+        }],
+    );
+    assert!(
+        canonical_members(&pcx_mpq::MpqArchive::open(&tombstone).unwrap(), member)
+            .unwrap()
+            .is_empty()
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn canonical_members_refuses_a_corrupt_winner_without_falling_back() {
+    let dir = table_temp_dir("corrupt-winner");
+    let member = "scripts\\common.j";
+    let missing_block = dir.join("high-missing-block.mpq");
+    write_table_archive(&missing_block, member, true, 7, &[]);
+    let error = canonical_members(&pcx_mpq::MpqArchive::open(&missing_block).unwrap(), member)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("high-missing-block.mpq"), "{error}");
+    assert!(error.contains("common.j"), "{error}");
+    assert!(error.contains("outside the block table"), "{error}");
+    let non_existent = dir.join("high-non-existent.mpq");
+    write_table_archive(
+        &non_existent,
+        member,
+        true,
+        0,
+        &[pcx_mpq::BlockEntry::default()],
+    );
+    let error = canonical_members(&pcx_mpq::MpqArchive::open(&non_existent).unwrap(), member)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("high-non-existent.mpq"), "{error}");
+    assert!(error.contains("common.j"), "{error}");
+    assert!(error.contains("non-existent block"), "{error}");
+    let low = dir.join("low.mpq");
+    write_table_archive(
+        &low,
+        member,
+        true,
+        0,
+        &[pcx_mpq::BlockEntry {
+            flags: pcx_mpq::flags::EXISTING,
+            ..pcx_mpq::BlockEntry::default()
+        }],
+    );
+    assert_eq!(
+        canonical_members(&pcx_mpq::MpqArchive::open(&low).unwrap(), member).unwrap(),
+        [("scripts/common.j".to_string(), member.to_string())]
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn provided_common_must_match_the_archive_selected_common() {
     assert!(matching_common_sha256(b"outer", b"archive").is_err());
@@ -677,6 +823,164 @@ fn local_original_recipe_opens_a_complete_campaign_reader() {
     assert!(reader.resolver.paths().count() > 0);
     let resolved = reader.resolver.resolve("Scripts\\common.j").unwrap();
     assert!(!resolved.bytes.is_empty());
+}
+
+fn install_file(install: &Path, name: &str) -> Option<std::path::PathBuf> {
+    std::fs::read_dir(install).ok()?.find_map(|entry| {
+        let path = entry.ok()?.path();
+        path.file_name()
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(name))
+            .then_some(path)
+    })
+}
+
+fn opened_archive(
+    path: &Path,
+    table: &std::sync::Arc<pcx_mpq::huffman::HuffmanTable>,
+) -> pcx_mpq::MpqArchive {
+    let mut archive = pcx_mpq::MpqArchive::open(path).unwrap();
+    archive.set_codec_table(std::sync::Arc::clone(table));
+    archive
+}
+
+#[test]
+#[ignore = "requires PCX_CAMPAIGN_INSTALL, PCX_CAMPAIGN_IMAGE and PCX_CAMPAIGN_COMMON"]
+fn local_original_recipe_selects_the_custom_v0_namespace_and_base_fallback() {
+    let install = std::env::var("PCX_CAMPAIGN_INSTALL").expect("explicit original install");
+    let install = Path::new(&install);
+    let image_path = std::env::var("PCX_CAMPAIGN_IMAGE").expect("explicit original executable");
+    let common_path = std::env::var("PCX_CAMPAIGN_COMMON").expect("explicit original common.j");
+    let image = std::fs::read(&image_path).unwrap();
+    let common = std::fs::read(&common_path).unwrap();
+    let rules = ImageRules::read(
+        &image,
+        AssetIdentity {
+            source: image_path.clone(),
+            edition: "Legacy".into(),
+            version: "1.29.2.9231".into(),
+        },
+    )
+    .unwrap();
+    let expected_rules = rules.clone();
+    let table = std::sync::Arc::new(
+        pcx_mpq::huffman::HuffmanTable::from_pe(&image, Path::new(&image_path)).unwrap(),
+    );
+    let recipe = CampaignRecipe::pin(
+        install,
+        GameMode::default(),
+        rules,
+        &image,
+        &common,
+        "VERSION_REIGN_OF_CHAOS",
+    )
+    .unwrap();
+    assert_eq!(recipe.edition(), 0);
+    let reader = recipe.open(&map_info(1, 0)).unwrap();
+    assert_eq!(reader.selection.prefix, "Custom_V0");
+
+    let namespace_only = "Units\\NotUsed_UnitData.slk";
+    for mount in &expected_rules.base {
+        let Some(path) = install_file(install, &mount.archive) else {
+            continue;
+        };
+        assert!(
+            opened_archive(&path, &table)
+                .find_block(namespace_only)
+                .is_none(),
+            "{} unexpectedly carries the base spelling of {namespace_only}",
+            path.display()
+        );
+    }
+    let prefixed = format!("Custom_V0\\{namespace_only}");
+    let mut namespace_mounts = expected_rules.selected_mounts(0).unwrap().to_vec();
+    namespace_mounts.sort_by_key(|mount| std::cmp::Reverse(mount.priority));
+    let (namespace_mount, namespace_origin, namespace_bytes) = namespace_mounts
+        .into_iter()
+        .find_map(|mount| {
+            let path = install_file(install, &mount.archive)?;
+            let mut archive = opened_archive(&path, &table);
+            archive.find_block(&prefixed)?;
+            let bytes = archive.extract(&prefixed).unwrap();
+            Some((mount, path, bytes))
+        })
+        .expect("selected namespace archive carries the namespace-only member");
+    let origin = namespace_origin.to_str().unwrap();
+    let version = format!(
+        "campaign image sha256:{} common sha256:{} edition:0",
+        digest_hex(&recipe.image_sha256()),
+        digest_hex(&recipe.common_sha256())
+    );
+    let resolved = reader.resolver.resolve(namespace_only).unwrap();
+    assert_eq!(resolved.bytes, namespace_bytes);
+    assert_eq!(sha256(&resolved.bytes), sha256(&namespace_bytes));
+    assert_eq!(resolved.provenance.locator, format!("{origin}::{prefixed}"));
+    assert_eq!(
+        resolved.provenance.archive_priority,
+        Some(namespace_mount.priority)
+    );
+    assert_eq!(resolved.provenance.source.origin, origin);
+    assert_eq!(
+        resolved.provenance.source.version.as_deref(),
+        Some(version.as_str())
+    );
+    assert_eq!(
+        resolved.provenance.source.id,
+        format!(
+            "campaign archive {origin} priority {} namespace Custom_V0 {version}",
+            namespace_mount.priority
+        )
+    );
+    assert_eq!(
+        resolved.provenance.byte_length,
+        namespace_bytes.len() as u64
+    );
+
+    let base_only = "Scripts\\common.j";
+    for mount in expected_rules.selected_mounts(0).unwrap() {
+        let Some(path) = install_file(install, &mount.archive) else {
+            continue;
+        };
+        assert!(
+            opened_archive(&path, &table)
+                .find_block(&format!("Custom_V0\\{base_only}"))
+                .is_none(),
+            "{} unexpectedly carries a Custom_V0 spelling of {base_only}",
+            path.display()
+        );
+    }
+    let mut base_mounts = expected_rules.base.clone();
+    base_mounts.sort_by_key(|mount| std::cmp::Reverse(mount.priority));
+    let (base_mount, base_origin, base_bytes) = base_mounts
+        .into_iter()
+        .find_map(|mount| {
+            let path = install_file(install, &mount.archive)?;
+            let mut archive = opened_archive(&path, &table);
+            archive.find_block(base_only)?;
+            let bytes = archive.extract(base_only).unwrap();
+            Some((mount, path, bytes))
+        })
+        .expect("a base archive carries the base-only member");
+    let origin = base_origin.to_str().unwrap();
+    let resolved = reader.resolver.resolve(base_only).unwrap();
+    assert_eq!(resolved.bytes, base_bytes);
+    assert_eq!(sha256(&resolved.bytes), sha256(&base_bytes));
+    assert_eq!(
+        resolved.provenance.locator,
+        format!("{origin}::{base_only}")
+    );
+    assert_eq!(
+        resolved.provenance.archive_priority,
+        Some(base_mount.priority)
+    );
+    assert_eq!(resolved.provenance.source.origin, origin);
+    assert_eq!(
+        resolved.provenance.source.id,
+        format!(
+            "campaign archive {origin} priority {} base {version}",
+            base_mount.priority
+        )
+    );
+    assert_eq!(resolved.provenance.byte_length, base_bytes.len() as u64);
 }
 
 #[test]
