@@ -765,6 +765,23 @@ fn stop_preserves_partial_cargo_across_reissue_and_manual_return() {
 }
 
 #[test]
+fn removal_retires_partial_harvest_cargo_and_worker() {
+    let (mut vm, tree) = open_harvest();
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    start_harvest(&mut vm, worker);
+    tick(&mut vm, 0.5);
+    tick(&mut vm, 2.5);
+    assert_eq!(tree_life(&mut vm, tree), 62.0);
+    assert_eq!(vm.host().inner.harvest_worker_count(worker), 1);
+
+    remove_unit(&mut vm, worker);
+
+    assert_eq!(vm.host().inner.harvest_worker_count(worker), 0);
+    assert_eq!(vm.host().inner.harvest_cargo(worker), None);
+}
+
+#[test]
 fn a_move_order_preserves_partial_cargo_across_reissue_and_manual_return() {
     let (mut vm, tree) = open_harvest_with(
         harvest_tables_for("9", "18", "4"),

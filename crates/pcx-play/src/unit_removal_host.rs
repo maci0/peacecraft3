@@ -86,6 +86,7 @@ impl ObjectHost {
                 removed_at: now,
                 resource_amount,
             };
+            self.purge_harvest_cargo(unit);
             Ok(Value::Null)
         })())
     }

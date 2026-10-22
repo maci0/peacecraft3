@@ -209,10 +209,10 @@ keep its partial carry attached to the unit. Reissuing `autoharvestlumber`
 resumes with that carry; an explicit `returnresources` routes it to a qualified
 depot, deposits the preserved amount and ends idle, while an automatic capacity
 return reports `resumeharvesting` and resumes harvesting after the deposit. A
-worker with no remaining reachable tree stops searching. Unit death and removal
-also cancel the worker record and currently retain cargo. Cargo-retention
-evidence covers only Stop, Move and reissue, so retention on death or removal
-is unqualified.
+worker with no remaining reachable tree stops searching. Unit death currently
+retains cargo, while unit removal discards it and retires the worker record.
+Cargo-retention evidence covers only Stop, Move and reissue, so death retention
+and removal discard are unqualified recreation choices.
 
 Tree deaths caused by an engine-tick swing reserve and push their registered
 death events into the delivery queue at the tick boundary; they do not run

@@ -310,6 +310,23 @@ impl ObjectHost {
         self.harvest.as_ref()?.cargo.get(&unit).copied()
     }
 
+    #[cfg(test)]
+    pub(crate) fn harvest_worker_count(&self, unit: HandleId) -> usize {
+        self.harvest.as_ref().map_or(0, |state| {
+            state
+                .workers
+                .iter()
+                .filter(|worker| worker.unit == unit)
+                .count()
+        })
+    }
+
+    pub(super) fn purge_harvest_cargo(&mut self, unit: HandleId) {
+        if let Some(state) = &mut self.harvest {
+            state.cargo.remove(&unit);
+        }
+    }
+
     fn start_harvest(&mut self, unit: HandleId) -> Result<Value, Error> {
         let now = self
             .timer_game_time()
