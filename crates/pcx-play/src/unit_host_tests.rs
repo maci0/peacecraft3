@@ -3388,7 +3388,7 @@ fn failed_creation_and_rectangle_budget_leave_arena_and_members_unchanged() {
             ]
         )
         .unwrap_err()
-        .contains("stationary collision cache")
+        .contains("script stationary path resolver is missing")
     );
     assert_eq!(host.inner().handles(), handles);
     let second = position_create(&mut host, 64.0, 64.0).unwrap();

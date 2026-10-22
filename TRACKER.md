@@ -49,6 +49,27 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   removal cleanup pass core/app, selected Human01, Clippy and WASM checks. Native item group
   propagation/transfer timing and other ability classes remain open.
 
+### 2026-10-23: Late script destructable collision
+
+Script-created live and dead destructables now join the stationary collision
+cache after initial placement. The late admission resolves the selected
+object catalog's live/dead pathing textures, applies the same nearest
+quarter-turn footprint raster as authored placement, and composes over
+terrain, decorations, placed trees and unit occupancy instead of rebuilding
+the cache. The `CreateDead*` forms publish the dead footprint. Later kill and
+revive transitions continue through the shared stationary-layer swap.
+
+Path resolution, footprint work, layer and cell budgets and handle capacity
+are preflighted before the handle, layer or event-visible state is published;
+a failed attempt leaves the arena, prior layers and stored work unchanged.
+Synthetic tests cover overlap with an existing placed layer, live/dead swap
+and revive, dead creation, selected-catalog path edits, and missing resolver,
+unknown identity, pathing, work, cell, layer and source failures. The full
+`pcx-play` core suite passes 1384 tests with 41 explicitly ignored; strict
+native and WASM Clippy, the app test check and formatting pass. This is
+collision admission evidence, not an original-map rendered/native creation
+comparison.
+
 ### 2026-10-22: Learned command buttons
 
 - [~] Standard Move, Stop, Hold, Patrol and Attack now share the receipt-bound

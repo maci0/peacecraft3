@@ -29,6 +29,27 @@ pub struct Catalog {
     decorations: Overlay,
 }
 
+/// The path-resolution subset of the selected catalog, retained by the collision
+/// cache for script-created destructables. It excludes the authored `.doo` rows.
+#[derive(Clone)]
+struct ScriptPaths {
+    tables: Arc<DefaultTables>,
+    destructables: Overlay,
+    decorations: Overlay,
+}
+
+impl ScriptPaths {
+    fn resolve(&self, objectid: i32, dead: bool) -> Result<String, String> {
+        path(
+            &self.tables,
+            &self.destructables,
+            &self.decorations,
+            objectid.to_be_bytes(),
+            dead,
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum PlacedRole {
     Automatic(DestructableStats),
@@ -182,6 +203,14 @@ impl Catalog {
     fn path(&self, tables: &DefaultTables, id: [u8; 4], dead: bool) -> Result<String, String> {
         path(tables, &self.destructables, &self.decorations, id, dead)
     }
+
+    fn script_paths(&self) -> ScriptPaths {
+        ScriptPaths {
+            tables: self.objects.tables(),
+            destructables: self.destructables.clone(),
+            decorations: self.decorations.clone(),
+        }
+    }
 }
 
 /// Called immediately before the first executed unit, after stationary creations.
@@ -279,6 +308,7 @@ pub fn assemble(
         });
     }
     let base = grid.pathing.clone();
+    let script_paths = catalog.script_paths();
     Placement::new(
         grid,
         rules.clone(),
@@ -287,11 +317,15 @@ pub fn assemble(
             cells: CELLS,
             footprint_cells: FOOTPRINT_CELLS,
             stationary_cells: STATIONARY_CELLS,
+            stationary_work: STATIONARY_WORK,
             queries: 1 << 16,
         },
     )
     .and_then(|p| p.with_stationary(base, layers))
-    .map(|p| p.with_footprint_loader(move |path| textures.read(path).map(|f| f.as_ref().clone())))
+    .map(|p| {
+        p.with_footprint_loader(move |path| textures.read(path).map(|f| f.as_ref().clone()))
+            .with_script_paths(move |id, dead| script_paths.resolve(id, dead))
+    })
     .map_err(|e| e.to_string())
 }
 
@@ -716,8 +750,14 @@ mod tests {
 
     fn catalog_with_life(max_life: &str) -> Catalog {
         let data = slk_table(
-            &["DestructableID", "HP", "targType"],
-            &[&["LTlt", max_life, "tree,ground"]],
+            &[
+                "DestructableID",
+                "HP",
+                "targType",
+                "pathTex",
+                "pathTexDeath",
+            ],
+            &[&["LTlt", max_life, "tree,ground", "live.tga", "dead.tga"]],
         );
         let decorations = slk_table(&["doodID"], &[&["LOsm"]]);
         let metadata = slk_table(
@@ -731,6 +771,22 @@ mod tests {
                     "string",
                     "0",
                     "combat",
+                ],
+                &[
+                    "Qpth",
+                    "pathTex",
+                    "DestructableData",
+                    "string",
+                    "0",
+                    "pathing",
+                ],
+                &[
+                    "Qded",
+                    "pathTexDeath",
+                    "DestructableData",
+                    "string",
+                    "0",
+                    "pathing",
                 ],
             ],
         );
@@ -762,6 +818,44 @@ mod tests {
             destructables: Overlay::default(),
             decorations: Overlay::default(),
         }
+    }
+
+    #[test]
+    fn script_paths_resolve_the_selected_live_dead_cells_and_map_edits() {
+        let mut catalog = catalog_with_life("50");
+        let id = i32::from_be_bytes(*b"LTlt");
+        assert_eq!(
+            catalog.script_paths().resolve(id, false).unwrap(),
+            "live.tga"
+        );
+        assert_eq!(
+            catalog.script_paths().resolve(id, true).unwrap(),
+            "dead.tga"
+        );
+        let mut edits = Overlay::default();
+        edits.custom.insert(
+            "LTl2".into(),
+            (
+                "LTlt".into(),
+                vec![pcx_objects::Mod {
+                    field: *b"Qpth",
+                    value_type: pcx_objects::ValueType::Str,
+                    selectors: Some([0, 0]),
+                    value: pcx_objects::Value::Str(b"custom.tga".to_vec()),
+                    end_word: 0,
+                }],
+            ),
+        );
+        catalog.destructables = edits;
+        let edited = i32::from_be_bytes(*b"LTl2");
+        assert_eq!(
+            catalog.script_paths().resolve(edited, false).unwrap(),
+            "custom.tga"
+        );
+        assert_eq!(
+            catalog.script_paths().resolve(edited, true).unwrap(),
+            "dead.tga"
+        );
     }
 
     fn doodad(creation_number: u32, life: u8) -> pcx_map::Doodad {
