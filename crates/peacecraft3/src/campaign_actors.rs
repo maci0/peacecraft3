@@ -1253,6 +1253,7 @@ mod tests {
             vitals: None,
             combat: None,
             permanent_strength: 0,
+            health_handicap: 1.0,
         }
     }
     fn terrain() -> pcx_map::Terrain {

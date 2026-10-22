@@ -658,8 +658,12 @@ fn open_with_regens_overlays(
 }
 
 pub(crate) fn health_fixture() -> (ObjectHost, HandleId) {
+    health_fixture_with_bias(0.5)
+}
+
+fn health_fixture_with_bias(bias: f32) -> (ObjectHost, HandleId) {
     let Fixture { mut h, hero, .. } = open();
-    let (rules, numeric) = crate::player_handicap::tests::health_rules();
+    let (rules, numeric) = crate::player_handicap::tests::health_rules_with_bias(bias);
     h = h
         .with_script_numeric(numeric)
         .with_player_health_handicap(rules)
@@ -900,6 +904,24 @@ fn health_handicap_scales_powerup_and_level_strength_life_deltas() {
         h.unit_vitals(hero).unwrap().unwrap().max_life,
         granted.max_life + 30.0
     );
+}
+
+#[test]
+fn health_rounding_bias_governs_scaled_strength_item_deltas() {
+    for (bias, expected) in [(0.5, 88.0), (0.25, 87.0)] {
+        let (mut h, hero) = health_fixture_with_bias(bias);
+        let player = h.native("Player", &[Value::Int(4)]).unwrap();
+        h.native("SetPlayerHandicap", &[player, Value::Real(0.5)])
+            .unwrap();
+        let before = h.unit_vitals(hero).unwrap().unwrap().max_life;
+        let tome = item(&mut h, b"tstr", 0.0);
+        assert_eq!(add(&mut h, hero, tome), Ok(Value::Bool(true)));
+        assert_eq!(
+            h.unit_vitals(hero).unwrap().unwrap().max_life,
+            before + expected,
+            "bias {bias}"
+        );
+    }
 }
 
 #[test]

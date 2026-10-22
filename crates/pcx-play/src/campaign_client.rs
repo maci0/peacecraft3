@@ -23,6 +23,7 @@ pub struct Inputs {
     pub random: profile::Policy,
     pub clock: startup_clock::StartupClock,
     pub experience: player_handicap::Rules,
+    pub health: player_handicap::HealthRules,
     pub hero: hero_skills::Rules,
 }
 
@@ -289,6 +290,23 @@ pub fn read(
         BUDGET,
     )
     .map_err(|e| e.to_string())?;
+    let health = player_handicap::HealthRules::read(
+        image,
+        player_handicap::HealthBinding {
+            origin: origin.clone(),
+            image_sha256,
+            setter: window(0x4a95a0, 192, true)?,
+            getter: window(0x494590, 33, true)?,
+            maximum_initializer: window(0x401350, 16, true)?,
+            null_initializer: window(0x401460, 16, true)?,
+            reset: window(0x4bdf31, 67, true)?,
+            rounder: window(0x9a1d70, 40, true)?,
+            floor: window(0x9a1520, 232, true)?,
+        },
+        &numeric,
+        BUDGET,
+    )
+    .map_err(|e| e.to_string())?;
     let hero = hero_skills::Rules::read(
         image,
         hero_skills::Binding {
@@ -318,6 +336,7 @@ pub fn read(
         random,
         clock,
         experience,
+        health,
         hero,
     })
 }

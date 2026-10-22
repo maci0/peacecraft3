@@ -147,22 +147,33 @@ results. Parse/resolve success alone did not establish native script acceptance.
 ## Implementation status
 
 `SetPlayerHandicap` and `GetPlayerHandicap` now use the source-qualified setter,
-getter, initializer and threshold operands. The setter applies its raw requested
-factor to existing owned units before storing the clamped player factor. Base HP
-uses the ratio update; the strength HP term, including held or permanent
-strength, follows as a direct pool delta; flat held maximum-life bonuses stay
-unscaled. Unit creation uses the owner's stored factor, while ownership transfer
-retains both the fitted factor and current maxima.
+getter, initializers, reset, rounder, floor, threshold and minimum operands. The
+setter applies its raw requested factor to existing owned units before storing
+the clamped player factor. Base HP uses the ratio update; the strength HP term,
+including held or permanent strength, follows as a direct pool delta; flat held
+maximum-life bonuses stay unscaled. Life rounding is read from the selected
+rounder (bias and floor routine), including the strength-item delta path, rather
+than fixed at half-up. Unit creation uses the owner's stored factor, while
+ownership transfer retains both the fitted factor and current maxima.
 
-Native still drives the raw factor into unit pools, so zero and negative requests
-produce zero maximums and dead pools while the stored factor clamps to the source
-minimum. A request within the source threshold neither changes pools nor stores a
-new factor. Runtime tests cover existing units, threshold repeats, fresh units,
-flat held life, raw zero/negative requests, ownership transfer and scaled
-powerup/level strength gains. The implementation refuses unsupported unit
-projections before mutation.
+The live-owner requested factor is validated once before unit projection, so a
+non-finite request refuses even when the owner has no vital records. Before
+commit, owned units are regenerated read-only through the current clock and the
+resulting pools are projected with the health factor. A projection that would
+make a maximum nonpositive, or turn a living pool into zero, now refuses
+atomically with no unit or player-row change because the death transition is not
+reconstructed. This is a deliberate support boundary, not native behavior: the
+observed client lets zero and negative factors drive zero or negative pools and
+death. The previously accepted zero/negative fixture was replaced by atomic
+refusal tests; native negative-pool/death semantics remain unimplemented.
+Requests within the source threshold neither change pools nor store a new factor.
 
-Remaining open questions are alternate hero attributes, non-integral pool
-rounding beyond the admitted rounder, fate of units revived after a negative
-factor, other held-item combinations, and the native reset path's wider caller
-set. This work did not run a rendered comparison or a native Windows client.
+Runtime tests cover existing units, threshold repeats, fresh units, flat held
+life, destructive refusal, empty-owner non-finite refusal, ownership transfer,
+image-derived item-delta rounding and scaled powerup/level strength gains.
+Production campaign startup binds the health windows alongside the XP windows.
+
+Remaining open questions are the native death/revive transition for destructive
+factors, alternate hero attributes, other held-item combinations, and the native
+reset path's wider caller set. This work did not run a rendered comparison or a
+native Windows client.

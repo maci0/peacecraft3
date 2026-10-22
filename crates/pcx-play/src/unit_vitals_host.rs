@@ -158,7 +158,7 @@ impl ObjectHost {
                 .map_err(fail)?;
                 let change = (current - base) * coefficient;
                 Ok(if name == "STR" {
-                    scale_life_component(change, record.health_handicap)
+                    scale_life_component(change, record.health_handicap, self.health_rounding())
                 } else {
                     change
                 })
@@ -179,6 +179,7 @@ impl ObjectHost {
                     self.life_per_strength().expect("admitted vitals"),
                     record.permanent_strength,
                     record.health_handicap,
+                    self.health_rounding(),
                 )
                 .map_err(fail)?;
             }
@@ -220,6 +221,7 @@ impl ObjectHost {
                     self.life_per_strength().expect("admitted vitals"),
                     passive.strength,
                     record.health_handicap,
+                    self.health_rounding(),
                 )
                 .map_err(fail)?;
             }
@@ -308,6 +310,10 @@ impl ObjectHost {
         Ok(())
     }
 
+    pub(crate) fn vitals_bonuses(&self) -> Option<HeroVitals> {
+        self.unit_vitals.as_ref().map(|rules| rules.bonuses)
+    }
+
     /// Before any unit exists; heroes (upper-case rawcode) add level-one attributes.
     pub fn admit_unit_vitals(&mut self, bonuses: HeroVitals) -> Result<(), Error> {
         if self.units.is_none()
@@ -384,11 +390,11 @@ impl ObjectHost {
         if !health_handicap.is_finite() {
             return Err(fail("invalid health handicap".into()));
         }
-        max_life = Self::scale_health_component(max_life, health_handicap);
+        max_life = self.scale_health_component(max_life, health_handicap);
         if definition.rawcode[0].is_ascii_uppercase() {
             let strength = balance_real(definition, "STR").map_err(fail)?;
             let intelligence = balance_real(definition, "INT").map_err(fail)?;
-            max_life += Self::scale_health_component(
+            max_life += self.scale_health_component(
                 strength * rules.bonuses.life_per_strength,
                 health_handicap,
             );
@@ -404,8 +410,8 @@ impl ObjectHost {
         }))
     }
 
-    fn scale_health_component(value: f32, factor: f32) -> f32 {
-        scale_life_component(value, factor)
+    fn scale_health_component(&self, value: f32, factor: f32) -> f32 {
+        scale_life_component(value, factor, self.health_rounding())
     }
 
     fn health_components(
@@ -442,18 +448,20 @@ impl ObjectHost {
         &self,
         unit: HandleId,
         record: &ExecutedUnit,
+        vitals: Vitals,
         requested: f32,
+        rounding: Option<crate::player_handicap::LifeRounding>,
     ) -> Result<Vitals, String> {
-        let vitals = record.vitals.ok_or("unit vitals missing")?;
         if !requested.is_finite() || !record.health_handicap.is_finite() {
             return Err("invalid health handicap".into());
         }
         let (base, strength) = self.health_components(unit, record)?;
-        let base_change = Self::scale_health_component(base, requested)
-            - Self::scale_health_component(base, record.health_handicap);
-        let (life, max_life) = Self::change_health_base(vitals.life, vitals.max_life, base_change)?;
-        let strength_change = Self::scale_health_component(strength, requested)
-            - Self::scale_health_component(strength, record.health_handicap);
+        let base_change = self.scale_health_component(base, requested)
+            - self.scale_health_component(base, record.health_handicap);
+        let (life, max_life) =
+            Self::change_health_base(vitals.life, vitals.max_life, base_change, rounding)?;
+        let strength_change = self.scale_health_component(strength, requested)
+            - self.scale_health_component(strength, record.health_handicap);
         let (life, max_life) = Self::change_health_strength(life, max_life, strength_change)?;
         Ok(Vitals {
             life,
@@ -462,7 +470,12 @@ impl ObjectHost {
         })
     }
 
-    fn change_health_base(life: f32, max_life: f32, change: f32) -> Result<(f32, f32), String> {
+    fn change_health_base(
+        life: f32,
+        max_life: f32,
+        change: f32,
+        rounding: Option<crate::player_handicap::LifeRounding>,
+    ) -> Result<(f32, f32), String> {
         if !life.is_finite() || !max_life.is_finite() || !change.is_finite() {
             return Err("non-finite health handicap pool".into());
         }
@@ -473,7 +486,10 @@ impl ObjectHost {
         let mut next_life = if life <= 0.0 || max_life <= 0.0 || next_max <= 0.0 {
             0.0
         } else {
-            round_life(next_max * (life / max_life))
+            match rounding {
+                Some(rounding) => rounding.round(next_max * (life / max_life)),
+                None => round_life(next_max * (life / max_life)),
+            }
         };
         if life > 0.0 && next_max > 0.0 && next_life <= 0.0 {
             next_life = 1.0;
@@ -536,6 +552,7 @@ impl ObjectHost {
             let life = scale_life_component(
                 delta("STR", rules.bonuses.life_per_strength)?,
                 record.health_handicap,
+                self.health_rounding(),
             );
             let mana = delta("INT", rules.bonuses.mana_per_intelligence)?;
             adjust_hero_vitals(vitals, life, mana)
@@ -611,51 +628,11 @@ impl ObjectHost {
             .collect();
         let mut next = Vec::with_capacity(units.len());
         for unit in units {
-            let record = self.executed_unit(unit)?;
-            let vitals = record.vitals.expect("filtered to vitals");
-            let from = vitals.regen.through;
-            if now < from {
-                return Err(fail("unit regeneration clock moved backwards".into()));
-            }
-            if now == from {
-                continue;
-            }
-            // The clock still moves on a dead or lifeless unit, so a later revive
-            // cannot regenerate across the dead span.
-            if record.paused_since.is_some()
-                || record.combat.as_ref().is_some_and(|c| c.dead)
-                || vitals.life <= 0.0
+            if let Some((life, mana)) =
+                self.project_regen_unit(unit, &bonuses, now, motion, work)?
             {
-                next.push((unit, vitals.life, vitals.mana));
-                continue;
+                next.push((unit, life, mana));
             }
-            let elapsed = now - from;
-            let (life_rate, mana_rate, bonus_life_rate) = self.regen_rates(unit, &bonuses)?;
-            let daytime = self.daytime_between(from, now);
-            let day = || match &daytime {
-                Ok(Some(seconds)) => Ok(*seconds),
-                Ok(None) => Err(fail(
-                    "day/night regeneration needs the admitted time-of-day window".into(),
-                )),
-                Err(reason) => Err(fail(reason.clone())),
-            };
-            let life_seconds = if life_rate == 0.0 {
-                0.0
-            } else {
-                match vitals.regen.life_type {
-                    RegenType::Always => elapsed,
-                    RegenType::Never => 0.0,
-                    RegenType::Day => day()?,
-                    RegenType::Night => elapsed - day()?,
-                    RegenType::Blight => self.blight_seconds(unit, from, now, motion, work)?,
-                }
-            };
-            let life =
-                (f64::from(vitals.life) + life_rate * life_seconds + bonus_life_rate * elapsed)
-                    .min(f64::from(vitals.max_life));
-            let mana = (f64::from(vitals.mana) + mana_rate * elapsed)
-                .clamp(0.0, f64::from(vitals.max_mana));
-            next.push((unit, life as f32, mana as f32));
         }
         for (unit, life, mana) in next {
             if let Entry::Unit { record } = self.inner.entry_mut(unit)?
@@ -667,6 +644,63 @@ impl ObjectHost {
             }
         }
         Ok(())
+    }
+
+    /// Read-only regeneration projection for one unit. `None` means the unit is
+    /// already at `now`; otherwise the pools are integrated through `now` with the
+    /// old rates and maximum, without touching the record.
+    pub(super) fn project_regen_unit(
+        &self,
+        unit: HandleId,
+        bonuses: &HeroVitals,
+        now: f64,
+        motion: Option<RegenMotion<'_>>,
+        work: &mut usize,
+    ) -> Result<Option<(f32, f32)>, Error> {
+        let fail = |e: String| self.inner.error(REGEN, Failure::UnitActivity(e));
+        let record = self.executed_unit(unit)?;
+        let vitals = record.vitals.expect("filtered to vitals");
+        let from = vitals.regen.through;
+        if now < from {
+            return Err(fail("unit regeneration clock moved backwards".into()));
+        }
+        if now == from {
+            return Ok(None);
+        }
+        // The clock still moves on a dead or lifeless unit, so a later revive
+        // cannot regenerate across the dead span.
+        if record.paused_since.is_some()
+            || record.combat.as_ref().is_some_and(|c| c.dead)
+            || vitals.life <= 0.0
+        {
+            return Ok(Some((vitals.life, vitals.mana)));
+        }
+        let elapsed = now - from;
+        let (life_rate, mana_rate, bonus_life_rate) = self.regen_rates(unit, bonuses)?;
+        let daytime = self.daytime_between(from, now);
+        let day = || match &daytime {
+            Ok(Some(seconds)) => Ok(*seconds),
+            Ok(None) => Err(fail(
+                "day/night regeneration needs the admitted time-of-day window".into(),
+            )),
+            Err(reason) => Err(fail(reason.clone())),
+        };
+        let life_seconds = if life_rate == 0.0 {
+            0.0
+        } else {
+            match vitals.regen.life_type {
+                RegenType::Always => elapsed,
+                RegenType::Never => 0.0,
+                RegenType::Day => day()?,
+                RegenType::Night => elapsed - day()?,
+                RegenType::Blight => self.blight_seconds(unit, from, now, motion, work)?,
+            }
+        };
+        let life = (f64::from(vitals.life) + life_rate * life_seconds + bonus_life_rate * elapsed)
+            .min(f64::from(vitals.max_life));
+        let mana =
+            (f64::from(vitals.mana) + mana_rate * elapsed).clamp(0.0, f64::from(vitals.max_mana));
+        Ok(Some((life as f32, mana as f32)))
     }
 
     fn blight_seconds(

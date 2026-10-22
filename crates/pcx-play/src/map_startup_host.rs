@@ -323,6 +323,8 @@ pub struct MapStartupInputs {
     pub numeric: Option<crate::script_numeric::NumericPolicy>,
     /// Source-qualified XP-factor limits; absent leaves the handicap natives unsupported.
     pub experience_handicap: Option<crate::player_handicap::Rules>,
+    /// Source-qualified health-factor limits and unit-pool rounding.
+    pub health_handicap: Option<crate::player_handicap::HealthRules>,
     pub hero_skills: Option<HeroSkillsInput>,
     pub catalog: Arc<dyn ObjectCatalog + Send + Sync>,
     pub defend: DefendSelection,
@@ -604,6 +606,7 @@ pub fn assemble(
         terrain_pathing,
         numeric,
         experience_handicap,
+        health_handicap,
         hero_skills,
         catalog,
         defend,
@@ -809,6 +812,9 @@ pub fn assemble(
     }
     if let Some(rules) = experience_handicap {
         object = object.with_player_experience_handicap(rules)?;
+    }
+    if let Some(rules) = health_handicap {
+        object = object.with_player_health_handicap(rules)?;
     }
     if let Some(input) = random {
         object = object.with_script_random(input.policy, input.max_secondary)?;

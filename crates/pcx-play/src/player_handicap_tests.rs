@@ -256,7 +256,7 @@ pub(crate) fn health_fixture() -> (
 ) {
     let (mut image, mut numeric, mut budget) = crate::script_numeric::tests::fixture();
     let loc = |offset: u32| 0x301000 + offset;
-    let field = loc(0x1a10);
+    let field = 0x358;
     let mut setter = vec![0; 192];
     for (at, data) in [
         (
@@ -358,6 +358,20 @@ pub(crate) fn health_fixture() -> (
         ]
         .concat()
     };
+    let mut reset = vec![0; 67];
+    reset[0..2].copy_from_slice(&[0x8d, 0x8e]);
+    reset[2..6].copy_from_slice(&field.to_le_bytes());
+    reset[56..61].copy_from_slice(&[0x8b, 0x01, 0x6a, 0x01, 0x68]);
+    reset[61..65].copy_from_slice(&field.wrapping_add(4).to_le_bytes());
+    reset[65..67].copy_from_slice(&[0xff, 0x10]);
+    let mut rounder = vec![0; 40];
+    rounder[0..5].copy_from_slice(&[0x55, 0x8b, 0xec, 0x51, 0x68]);
+    rounder[5..9].copy_from_slice(&loc(0x1a08).to_le_bytes());
+    rounder[9..17].copy_from_slice(&[0xff, 0x75, 0x0c, 0x8d, 0x45, 0xfc, 0x50, 0xe8]);
+    rounder[17..21].copy_from_slice(&loc(0x1b80).wrapping_sub(loc(0x1b00) + 21).to_le_bytes());
+    rounder[21..26].copy_from_slice(&[0x50, 0xff, 0x75, 0x08, 0xe8]);
+    rounder[26..30].copy_from_slice(&loc(0x1b80).wrapping_sub(loc(0x1b00) + 30).to_le_bytes());
+    rounder[30..40].copy_from_slice(&[0x8b, 0x45, 0x08, 0x83, 0xc4, 0x14, 0x8b, 0xe5, 0x5d, 0xc3]);
     let mut put = |offset: usize, data: &[u8]| {
         image[0x200 + offset..0x200 + offset + data.len()].copy_from_slice(data);
         SourceWindow {
@@ -370,8 +384,12 @@ pub(crate) fn health_fixture() -> (
     let getter = put(0x1900, &getter);
     let maximum_initializer = put(0x1940, &init(100, loc(0x1940), field));
     let null_initializer = put(0x1950, &init(1, loc(0x1950), field.wrapping_add(4)));
+    let reset = put(0x1960, &reset);
+    let rounder = put(0x1b00, &rounder);
+    let floor = put(0x1b80, &[0xcc; 232]);
     put(0x1a00, &0.001_f32.to_le_bytes());
     put(0x1a04, &0.01_f32.to_le_bytes());
+    put(0x1a08, &0.5_f32.to_le_bytes());
     numeric.image_sha256 = sha256(&image);
     budget.profile_bytes = 8192;
     let binding = HealthBinding {
@@ -381,12 +399,34 @@ pub(crate) fn health_fixture() -> (
         getter,
         maximum_initializer,
         null_initializer,
+        reset,
+        rounder,
+        floor,
     };
     (image, binding, numeric, budget)
 }
 
 pub(crate) fn health_rules() -> (HealthRules, NumericPolicy) {
-    let (image, binding, numeric, budget) = health_fixture();
+    health_rules_with_bias(0.5)
+}
+
+pub(crate) fn health_rules_with_bias(bias: f32) -> (HealthRules, NumericPolicy) {
+    let (mut image, mut binding, mut numeric, budget) = health_fixture();
+    image[0x1c08..0x1c0c].copy_from_slice(&bias.to_le_bytes());
+    binding.image_sha256 = sha256(&image);
+    numeric.image_sha256 = sha256(&image);
+    for w in [
+        &mut binding.setter,
+        &mut binding.getter,
+        &mut binding.maximum_initializer,
+        &mut binding.null_initializer,
+        &mut binding.reset,
+        &mut binding.rounder,
+        &mut binding.floor,
+    ] {
+        let at = 0x200 + (w.va - 0x301000) as usize;
+        w.digest = sha256(&image[at..at + w.len as usize]);
+    }
     let numeric = NumericPolicy::read(&image, numeric, budget, 32).unwrap();
     (
         HealthRules::read(&image, binding, &numeric, budget).unwrap(),
@@ -408,6 +448,67 @@ fn health_source_operands_drive_limits_null_result_and_threshold() {
 }
 
 #[test]
+fn health_rounding_bias_and_initial_reset_link_come_from_source() {
+    let (r, _) = health_rules();
+    assert_eq!(r.initial_result(), 1.0);
+    assert_eq!(r.rounding().bias(), 0.5);
+    assert_eq!(r.rounding().round(17.25), 17.0);
+    assert_eq!(r.rounding().round(17.75), 18.0);
+    let (quarter, _) = health_rules_with_bias(0.25);
+    assert_eq!(quarter.rounding().bias(), 0.25);
+    assert_eq!(quarter.rounding().round(17.25), 17.0);
+    assert_eq!(quarter.rounding().round(17.5), 17.0);
+}
+
+#[test]
+fn health_budget_accounts_for_both_data_operands() {
+    let (image, binding, numeric, budget) = health_fixture();
+    let numeric = NumericPolicy::read(&image, numeric, budget, 32).unwrap();
+    let windows = [
+        &binding.setter,
+        &binding.getter,
+        &binding.maximum_initializer,
+        &binding.null_initializer,
+        &binding.reset,
+        &binding.rounder,
+        &binding.floor,
+    ];
+    let needed = windows.iter().map(|w| u64::from(w.len)).sum::<u64>() + 8;
+    let too_small = RuleInputBudget {
+        profile_bytes: (needed - 1) as usize,
+        ..budget
+    };
+    assert!(HealthRules::read(&image, binding.clone(), &numeric, too_small).is_err());
+    let exact = RuleInputBudget {
+        profile_bytes: needed as usize,
+        ..budget
+    };
+    assert!(HealthRules::read(&image, binding, &numeric, exact).is_ok());
+}
+
+#[test]
+fn health_reset_destination_relationship_refuses() {
+    let (mut image, mut binding, mut numeric, budget) = health_fixture();
+    image[0x1b60 + 2] ^= 4;
+    binding.image_sha256 = sha256(&image);
+    numeric.image_sha256 = sha256(&image);
+    for w in [
+        &mut binding.setter,
+        &mut binding.getter,
+        &mut binding.maximum_initializer,
+        &mut binding.null_initializer,
+        &mut binding.reset,
+        &mut binding.rounder,
+        &mut binding.floor,
+    ] {
+        let at = 0x200 + (w.va - 0x301000) as usize;
+        w.digest = sha256(&image[at..at + w.len as usize]);
+    }
+    let numeric = NumericPolicy::read(&image, numeric, budget, 32).unwrap();
+    assert!(HealthRules::read(&image, binding, &numeric, budget).is_err());
+}
+
+#[test]
 fn health_changed_limits_and_shape_refuse() {
     for change in 0..5 {
         let (mut image, mut binding, mut numeric, budget) = health_fixture();
@@ -426,6 +527,9 @@ fn health_changed_limits_and_shape_refuse() {
             &mut binding.getter,
             &mut binding.maximum_initializer,
             &mut binding.null_initializer,
+            &mut binding.reset,
+            &mut binding.rounder,
+            &mut binding.floor,
         ] {
             let at = 0x200 + (w.va - 0x301000) as usize;
             w.digest = sha256(&image[at..at + w.len as usize]);

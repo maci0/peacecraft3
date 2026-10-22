@@ -482,6 +482,7 @@ pub fn prepare(
         }),
         numeric: Some(source.numeric),
         experience_handicap: Some(source.experience),
+        health_handicap: Some(source.health),
         hero_skills: Some(HeroSkillsInput {
             rules: source.hero,
             abilities,
