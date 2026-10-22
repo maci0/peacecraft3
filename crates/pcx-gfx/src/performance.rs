@@ -77,15 +77,15 @@ type OverlayPanels<'w, 's> = Query<
 fn panel() -> Node {
     Node {
         display: Display::None,
-        width: Val::Rem(23.0),
+        width: Val::Rem(22.0),
         max_width: Val::Percent(100.0),
         min_width: Val::Px(0.0),
         flex_shrink: 0.0,
         flex_direction: FlexDirection::Column,
-        padding: UiRect::all(Val::Rem(0.625)),
+        padding: UiRect::all(Val::Rem(0.75)),
         border: UiRect::all(Val::Px(1.0)),
-        border_radius: BorderRadius::all(Val::Px(6.0)),
-        row_gap: Val::Rem(0.375),
+        border_radius: BorderRadius::all(Val::Px(8.0)),
+        row_gap: Val::Rem(0.5),
         ..default()
     }
 }
@@ -131,8 +131,8 @@ fn setup(mut commands: Commands) {
                 panel(),
                 Visibility::Hidden,
                 OverlayRoot,
-                BackgroundColor(Color::srgba(0.012, 0.018, 0.02, 0.22)),
-                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.10)),
+                BackgroundColor(Color::srgba(0.008, 0.012, 0.014, 0.18)),
+                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.14)),
                 Pickable::IGNORE,
             ))
             .with_children(|panel| {
@@ -140,8 +140,11 @@ fn setup(mut commands: Commands) {
                     .spawn((
                         Node {
                             justify_content: JustifyContent::SpaceBetween,
+                            padding: UiRect::bottom(Val::Rem(0.375)),
+                            border: UiRect::bottom(Val::Px(1.0)),
                             ..default()
                         },
+                        BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.12)),
                         Pickable::IGNORE,
                     ))
                     .with_children(|row| {
@@ -149,7 +152,7 @@ fn setup(mut commands: Commands) {
                             row.spawn((
                                 Text::new(text),
                                 TextFont {
-                                    font_size: bevy::text::FontSize::Rem(0.7),
+                                    font_size: bevy::text::FontSize::Rem(0.75),
                                     ..default()
                                 },
                                 TextColor(Color::srgb(0.76, 0.84, 0.83)),
@@ -169,7 +172,7 @@ fn setup(mut commands: Commands) {
                         row.spawn((
                             Text::new("FPS\nFrame interval"),
                             TextFont {
-                                font_size: bevy::text::FontSize::Rem(0.85),
+                                font_size: bevy::text::FontSize::Rem(0.95),
                                 ..default()
                             },
                             TextColor(Color::srgb(0.82, 0.88, 0.85)),
@@ -183,7 +186,7 @@ fn setup(mut commands: Commands) {
                             Text::new("-\n- ms"),
                             TextLayout::justify(Justify::Right),
                             TextFont {
-                                font_size: bevy::text::FontSize::Rem(0.85),
+                                font_size: bevy::text::FontSize::Rem(0.95),
                                 ..default()
                             },
                             TextColor(Color::srgb(0.96, 0.98, 0.96)),
@@ -209,7 +212,7 @@ fn setup(mut commands: Commands) {
                     .spawn((
                         Node {
                             width: Val::Percent(100.0),
-                            height: Val::Rem(2.75),
+                            height: Val::Rem(3.25),
                             align_items: AlignItems::End,
                             overflow: Overflow::clip(),
                             ..default()
@@ -241,7 +244,7 @@ fn setup(mut commands: Commands) {
                                     border: UiRect::top(Val::Px(1.0)),
                                     ..default()
                                 },
-                                BackgroundColor(Color::srgba(0.35, 0.8, 1.0, 0.16)),
+                                BackgroundColor(Color::srgba(0.35, 0.8, 1.0, 0.10)),
                                 BorderColor::all(Color::srgba(0.5, 0.88, 1.0, 0.85)),
                                 Pickable::IGNORE,
                                 GraphBar(index),
@@ -265,6 +268,9 @@ fn setup(mut commands: Commands) {
             });
             root.spawn((
                 Node {
+                    width: Val::Rem(28.0),
+                    max_width: Val::Vw(90.0),
+                    flex_shrink: 1.0,
                     margin: UiRect::right(Val::Auto),
                     max_height: Val::Vh(95.0),
                     overflow: Overflow::scroll_y(),
@@ -273,8 +279,8 @@ fn setup(mut commands: Commands) {
                 Visibility::Hidden,
                 DebugRoot,
                 ScrollPosition::default(),
-                BackgroundColor(Color::srgba(0.012, 0.018, 0.02, 0.22)),
-                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.10)),
+                BackgroundColor(Color::srgba(0.008, 0.012, 0.014, 0.18)),
+                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.14)),
                 Pickable::IGNORE,
             ))
             .with_children(|panel| {
@@ -282,8 +288,11 @@ fn setup(mut commands: Commands) {
                     .spawn((
                         Node {
                             justify_content: JustifyContent::SpaceBetween,
+                            padding: UiRect::bottom(Val::Rem(0.375)),
+                            border: UiRect::bottom(Val::Px(1.0)),
                             ..default()
                         },
+                        BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.12)),
                         Pickable::IGNORE,
                     ))
                     .with_children(|row| {
@@ -291,7 +300,7 @@ fn setup(mut commands: Commands) {
                             row.spawn((
                                 Text::new(text),
                                 TextFont {
-                                    font_size: bevy::text::FontSize::Rem(0.7),
+                                    font_size: bevy::text::FontSize::Rem(0.75),
                                     ..default()
                                 },
                                 TextColor(Color::srgb(0.76, 0.84, 0.83)),
