@@ -11,11 +11,10 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   continuation before eager placed-world admission. Gathered gold/lumber
   counters (`Blizzard.j:7652,7654`) now use
   source-decoded setter scaling, unsigned getter division and the same
-  synchronous state-event path. The affected continuation gate still needs a
-  rerun after private import. The combined tree/cache checks passed 1381 core
-  tests, 606 app tests, strict native/WASM Clippy and formatting before the
+  synchronous state-event path. The combined private checks passed 1389 core
+  tests, 606 app tests, strict native/WASM Clippy and formatting including the
   gathered-counter and ranked/inventory Data-pointer imports. The unchanged
-  Continue gate now refuses Human01 `LTg1` creation 1823, whose placed flag
+  Continue gate refuses Human01 `LTg1` creation 1823, whose placed flag
   `0x04` is outside the measured admission set; a controlled probe is pending.
   Pool-clamp corrections and ignored maximum-state writes are integrated.
   The native-qualified inventory W3A Data-pointer correction and combined-tome
@@ -26,7 +25,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   The continuation remains private; full chapter
   completion, Windows snapshot runtime and native passive composition remain
   unqualified. Receipts: `.scratch/campaign-continuation/intelligence-*.log`
-  and `inventory-review-*.log` in that directory.
+  and `inventory-review-*.log`, `gathered-pointer-*.log` in that directory.
 
 - [x] Bind headless session admission to actual selected catalog/Misc contents.
   The readiness receipt keys every admitted catalog table/profile and the three
