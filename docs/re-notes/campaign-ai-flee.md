@@ -176,3 +176,27 @@ The 111/110 raw markers, 94/93 samples, staged-member receipts, source compariso
 and first-divergence summary remain local under `.scratch/flee-flag-clear-runs/`.
 The actual-wrapper collector passes ten offline tests, including malformed bank
 transitions, identities, reciprocal attack records and terminal-witness refusals.
+
+## Clearing during the first retreat
+
+A second matched pair changes only the diagnostic identity and the AI sleep
+duration to two seconds. The retaining control reproduces the prior seeded
+trajectory. Both runs first observe the second bank watermark at 2.125 seconds,
+while both units still report the movement order and continue west. They reach
+the same first retreat endpoint at 2.25 seconds and have identical samples
+through 2.938 seconds. At 3.0 seconds the retaining control starts another
+movement order; the clearing run remains in combat with order zero.
+
+In this ordinary-unit setup, clearing the flag therefore permits the current
+retreat to continue and prevents the later observed initiation. It does not
+establish this rule for every unit class, guard state or explicit order. The
+bank watermark brackets delivery rather than exposing an exact native-call
+timestamp, and the camera still does not compare rendered movement.
+
+Both runs preserve 111 markers and 94 samples. Retaining map SHA-256:
+`237f9ea7d356d80365e860bcb1d99958c27c128ce212068c8eb51f649449df8a`;
+clearing map SHA-256:
+`9f11cf77bba029b2abdf53614971623f746d2c5c9a6a9ff2c7b134be73851e84`.
+The eleven offline collector/build checks pass. All-member staged roundtrips,
+raw marker hashes, captures and the source/first-divergence summary remain
+local under `.scratch/flee-midroute-clear-runs/`. Both clients are stopped.
