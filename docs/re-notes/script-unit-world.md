@@ -1033,3 +1033,31 @@ one script-origin arena record and one `StationaryKey::Destructable` layer.
 Non-destructable decorative doodads keep their existing static-footprint
 handling regardless of their flags. Killing one script identity changes only
 that identity's stationary layer.
+
+## Explicit unit team color (2026-10-23)
+
+`SetUnitColor` is admitted optionally alongside the selected `CreateUnit`
+declaration, with the exact `(unit, playercolor) -> nothing` signature and
+same-source `playercolor` type. It retains the admitted symbolic color on the
+existing unit's `team_color` field. Owner, creation color, catalog, position,
+orders and other units remain unchanged; there is no new palette or unit.
+The existing actor projection prioritizes this field over class/creation color
+and retires/rebuilds an actor when its effective palette index changes. Palette
+paths and material binding continue to come from the selected assets.
+
+The reviewed image above registers the working wrapper at `0x4ab260` through
+the registration at `0x49d5fb`. It resolves the unit with `0x483940`, skips a
+null lookup, passes the color through vtable slot `+0x64`, then calls the unit
+color update at `0x6a2a70` and refreshes presentation through `0x5f6e00`.
+The second registration table points to `0xcbda30`, a zero-return stub; that
+table alone is not edition-specific behavior evidence. The local registration
+receipt and disassembly are retained in `.scratch/unit-color/` in the private
+continuation checkout.
+
+Null or removed units have no effect, without resolving the unused color.
+Malformed arguments, wrong-family/reserved handles and foreign declarations
+refuse before mutation. A null color on a live unit is explicitly unsupported
+rather than being assigned an invented palette index. The retained-field implementation
+is a recreation choice supported by the native setter path and existing
+renderer consumer, not a fresh native tint comparison. Exact visual refresh
+phase, null-color behavior and rendered parity remain unqualified.

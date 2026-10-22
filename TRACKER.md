@@ -11,11 +11,14 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   continuation before eager placed-world admission. Gathered gold/lumber
   counters (`Blizzard.j:7652,7654`) now use
   source-decoded setter scaling, unsigned getter division and the same
-  synchronous state-event path. The combined private checks passed 1389 core
+  synchronous state-event path. The combined private checks passed 1393 core
   tests, 606 app tests, strict native/WASM Clippy and formatting including the
   gathered-counter and ranked/inventory Data-pointer imports. The unchanged
-  Continue gate passes Human01 with 152 executed units and now reaches
-  Human02's unsupported `SetUnitColor` (`Blizzard.j:7757`). Controlled tree
+  Continue gate passes Human01 with 152 executed units and Human02's explicit
+  unit-color calls. It now refuses `IssueImmediateOrder` through
+  `Blizzard.j:7817`; the source initialization next reaches nearby-lumber
+  harvesting, whose complete runtime cycle is still being implemented.
+  Controlled tree
   and original-gate probes qualify flags 4/7 for script-only admission; the
   placement correction passes those same private suites.
   Pool-clamp corrections and ignored maximum-state writes are integrated.
@@ -28,7 +31,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   completion, Windows snapshot runtime and native passive composition remain
   unqualified. Receipts: `.scratch/campaign-continuation/intelligence-*.log`
   and `inventory-review-*.log`, `gathered-pointer-*.log`,
-  `placed-flag-admission-*.log` in that directory.
+  `placed-flag-admission-*.log`, `unit-color-final-*.log` in that directory.
 
 - [x] Bind headless session admission to actual selected catalog/Misc contents.
   The readiness receipt keys every admitted catalog table/profile and the three

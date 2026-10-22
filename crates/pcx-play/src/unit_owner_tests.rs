@@ -3,6 +3,7 @@ use super::*;
 const SETTER: &str =
     "native SetUnitOwner takes unit u, player p, boolean changeColor returns nothing\n";
 const GETTER: &str = "constant native GetOwningPlayer takes unit u returns player\n";
+const COLOR_SETTER: &str = "native SetUnitColor takes unit u, playercolor c returns nothing\n";
 const MAP: &str = "globals\nunit A=null\nunit ALIAS=null\nunit B=null\nplayer OLD=null\nplayer NEW=null\nendglobals\nfunction setup takes nothing returns nothing\nset OLD=Player(4)\nset NEW=Player(5)\nset A=CreateUnit(OLD,'hfoo',1.5,-2.25,90.0)\nset ALIAS=A\nset B=CreateUnit(OLD,'hfoo',4.0,5.0,6.0)\nendfunction\nfunction transfer takes nothing returns nothing\ncall SetUnitOwner(ALIAS,NEW,false)\nendfunction\n";
 
 fn open(extra: &str) -> VmHost {
@@ -40,6 +41,197 @@ fn id(value: &Value) -> pcx_script::HandleId {
         panic!("handle")
     };
     *id
+}
+
+#[test]
+fn explicit_unit_color_changes_only_the_existing_units_color() {
+    let mut s = open(COLOR_SETTER);
+    let a = s.vm.global("A");
+    let alias = s.vm.global("ALIAS");
+    let b = s.vm.global("B");
+    let color = s.vm.global("C");
+    let handles = s.vm.host().inner.inner().handles();
+    let before = s.vm.host().inner.executed_unit(id(&a)).unwrap().clone();
+    let sibling = s.vm.host().inner.executed_unit(id(&b)).unwrap().clone();
+    s.vm.host()
+        .inner
+        .native("SetUnitColor", &[alias, color.clone()])
+        .unwrap();
+    let mut expected = before;
+    expected.team_color = Some(id(&color));
+    assert_eq!(s.vm.host().inner.executed_unit(id(&a)).unwrap(), &expected);
+    assert_eq!(s.vm.host().inner.executed_unit(id(&b)).unwrap(), &sibling);
+    s.vm.host()
+        .inner
+        .native("SetUnitColor", &[a, color])
+        .unwrap();
+    assert_eq!(s.vm.host().inner.inner().handles(), handles);
+    assert_eq!(s.hits.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn explicit_unit_color_validates_before_mutation_and_ignores_removed_units() {
+    let mut s = open(&format!(
+        "{COLOR_SETTER}native RemoveUnit takes unit u returns nothing\n"
+    ));
+    let a = s.vm.global("A");
+    let color = s.vm.global("C");
+    let player = s.vm.global("OLD");
+    let before = s.vm.host().inner.executed_unit(id(&a)).unwrap().clone();
+    let unknown = Value::Handle(pcx_script::HandleId::new(
+        std::num::NonZeroU64::new(9999).unwrap(),
+    ));
+    let handles = s.vm.host().inner.inner().handles();
+    for args in [
+        vec![],
+        vec![a.clone()],
+        vec![a.clone(), Value::Null],
+        vec![Value::Null, Value::Int(1)],
+        vec![a.clone(), player.clone()],
+        vec![player, color.clone()],
+        vec![a.clone(), unknown.clone()],
+        vec![unknown, color.clone()],
+        vec![a.clone(), color.clone(), Value::Bool(false)],
+    ] {
+        assert!(s.vm.host().inner.native("SetUnitColor", &args).is_err());
+        assert_eq!(s.vm.host().inner.executed_unit(id(&a)).unwrap(), &before);
+        assert_eq!(s.vm.host().inner.inner().handles(), handles);
+    }
+    s.vm.host()
+        .inner
+        .native("SetUnitColor", &[Value::Null, color.clone()])
+        .unwrap();
+    s.vm.host()
+        .inner
+        .native("SetUnitColor", &[Value::Null, Value::Null])
+        .unwrap();
+    s.vm.host()
+        .inner
+        .native("RemoveUnit", std::slice::from_ref(&a))
+        .unwrap();
+    s.vm.host()
+        .inner
+        .native("SetUnitColor", &[a.clone(), color])
+        .unwrap();
+    s.vm.host()
+        .inner
+        .native("SetUnitColor", &[a.clone(), Value::Null])
+        .unwrap();
+    assert!(s.vm.host().inner.executed_unit(id(&a)).is_err());
+    assert_eq!(s.vm.host().inner.inner().handles(), handles);
+}
+
+#[test]
+fn explicit_unit_color_admission_is_optional_and_source_checked() {
+    let mut s = open("");
+    let a = s.vm.global("A");
+    let color = s.vm.global("C");
+    assert!(
+        s.vm.host()
+            .inner
+            .native("SetUnitColor", &[a, color])
+            .unwrap_err()
+            .contains("unsupported")
+    );
+    for declaration in [
+        COLOR_SETTER.replace("playercolor c", "player c"),
+        COLOR_SETTER.replace("unit u", "player u"),
+        COLOR_SETTER.replace("returns nothing", "returns boolean"),
+        format!("constant {COLOR_SETTER}"),
+    ] {
+        let common = script_common_with("widget", true, &declaration);
+        let ctx = context(300, &common, "// color declaration", "unit-catalog");
+        let (catalog, hits, _) = counting();
+        let error = object(&ctx, 4)
+            .with_unit_catalog(catalog, source(), limits(1))
+            .err()
+            .expect("invalid unit color declaration");
+        assert_eq!(error.native, "SetUnitColor");
+        assert_eq!(error.failure, Failure::Signature);
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+    let conversion = "constant native ConvertPlayerColor takes integer i returns playercolor\n";
+    let color = "constant playercolor C = ConvertPlayerColor(37)\n";
+    for (common, foreign) in [
+        (
+            script_common_with("widget", true, ""),
+            COLOR_SETTER.to_owned(),
+        ),
+        (
+            script_common_with("widget", true, COLOR_SETTER)
+                .replace(conversion, "")
+                .replace(color, ""),
+            format!("{conversion}globals\n{color}endglobals\n"),
+        ),
+    ] {
+        let common = pcx_script::parse_script(&common).unwrap();
+        let foreign = pcx_script::parse_script(&foreign).unwrap();
+        let map = pcx_script::parse_script("").unwrap();
+        let program = Arc::new(
+            pcx_script::resolve_with(
+                &map,
+                &[
+                    pcx_script::Prelude::new("synthetic/common.j", &common),
+                    pcx_script::Prelude::new("other.j", &foreign),
+                ],
+            )
+            .unwrap(),
+        );
+        let inner = EnumHost::checked_selected(
+            program,
+            "foreign unit color source",
+            &["ConvertPlayerColor"],
+            Limits {
+                max_handles: 4,
+                admission_steps: 100,
+                expression_depth: 16,
+                expression_work: 100,
+            },
+        )
+        .unwrap();
+        let (catalog, _, _) = counting();
+        let error = ObjectHost::checked(inner)
+            .unwrap()
+            .with_unit_catalog(catalog, source(), limits(1))
+            .err()
+            .expect("foreign unit color source");
+        assert_eq!(error.native, "SetUnitColor");
+        assert_eq!(error.failure, Failure::Source);
+    }
+}
+
+#[test]
+fn explicit_unit_color_does_not_require_unused_color_conversion_admission() {
+    let common = script_common_with("widget", true, COLOR_SETTER);
+    let ctx = context(
+        300,
+        &common,
+        "// no color conversions selected",
+        "unit-catalog",
+    );
+    let inner = EnumHost::checked_selected(
+        ctx.scripts.shared_program(),
+        "unit catalog without color conversions",
+        &[],
+        Limits {
+            max_handles: 4,
+            admission_steps: 100,
+            expression_depth: 16,
+            expression_work: 100,
+        },
+    )
+    .unwrap();
+    let (catalog, hits, _) = counting();
+    let mut host = ObjectHost::checked(inner)
+        .unwrap()
+        .with_unit_catalog(catalog, source(), limits(1))
+        .unwrap();
+    assert_eq!(
+        host.native("SetUnitColor", &[Value::Null, Value::Null])
+            .unwrap(),
+        Value::Null
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
 }
 
 #[test]

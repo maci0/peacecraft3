@@ -36,6 +36,7 @@ const NATIVE: &str = "CreateUnit";
 const GET_TYPE: &str = "GetUnitTypeId";
 const GET_OWNER: &str = "GetOwningPlayer";
 const SET_OWNER: &str = "SetUnitOwner";
+const SET_COLOR: &str = "SetUnitColor";
 const GET_COLLISION: &str = "BlzGetUnitCollisionSize";
 const SET_RANGE: &str = "SetUnitAcquireRange";
 const SET_HERO_LEVEL: &str = "SetHeroLevel";
@@ -205,6 +206,7 @@ pub(super) struct Admission {
     /// Present when this program declares `GetOwningPlayer` on the same source.
     owner_span: Option<Span>,
     owner_setter_span: Option<Span>,
+    color_setter_span: Option<Span>,
     collision_span: Option<Span>,
     /// Present when this program declares `SetUnitAcquireRange` on the same source.
     acquire_span: Option<Span>,
@@ -292,6 +294,7 @@ impl ObjectHost {
         let type_span = self.optional_unit_getter(&declaration_source, GET_TYPE, "integer")?;
         let owner_span = self.optional_unit_getter(&declaration_source, GET_OWNER, "player")?;
         let owner_setter_span = self.owner_declaration(&declaration_source)?;
+        let color_setter_span = self.color_declaration(&declaration_source)?;
         let collision_span =
             self.optional_unit_getter(&declaration_source, GET_COLLISION, "real")?;
         let acquire_span = self.acquire_declaration(&declaration_source)?;
@@ -321,6 +324,7 @@ impl ObjectHost {
             type_span,
             owner_span,
             owner_setter_span,
+            color_setter_span,
             collision_span,
             acquire_span,
             hero_level_span,
@@ -820,6 +824,9 @@ impl ObjectHost {
         if name == SET_OWNER && self.admitted_units().ok()?.owner_setter_span.is_some() {
             return Some(self.set_unit_owner(args));
         }
+        if name == SET_COLOR && self.admitted_units().ok()?.color_setter_span.is_some() {
+            return Some(self.set_unit_color(args));
+        }
         if name == GET_COLLISION && self.admitted_units().ok()?.collision_span.is_some() {
             return Some(self.unit_collision(args));
         }
@@ -959,6 +966,70 @@ impl ObjectHost {
             return Err(self.inner.error(SET_OWNER, Failure::Source));
         }
         Ok(Some(native.span))
+    }
+
+    fn color_declaration(&self, source: &str) -> Result<Option<Span>, Error> {
+        let Some(native) = self.inner.program.natives().get(SET_COLOR) else {
+            return Ok(None);
+        };
+        Self::contract(
+            &self.inner,
+            SET_COLOR,
+            &[KIND, "playercolor"],
+            "nothing",
+            false,
+            Some(KIND),
+        )?;
+        if native.source != source {
+            return Err(self.inner.error(SET_COLOR, Failure::Source));
+        }
+        super::trigger_admission::loaded_type(
+            &self.inner,
+            SET_COLOR,
+            "playercolor",
+            "handle",
+            source,
+        )?;
+        if let Some(conversion) = self.inner.conversions.get("ConvertPlayerColor") {
+            if conversion.kind != "playercolor" {
+                return Err(self.inner.error(SET_COLOR, Failure::Signature));
+            }
+            if conversion.source != source {
+                return Err(self.inner.error(SET_COLOR, Failure::Source));
+            }
+        }
+        Ok(Some(native.span))
+    }
+
+    fn set_unit_color(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let fail = |reason| self.inner.error(SET_COLOR, reason);
+        let [unit, color] = args else {
+            return Err(fail(Failure::Signature));
+        };
+        if !matches!(color, Value::Null | Value::Handle(_)) {
+            return Err(fail(Failure::Signature));
+        }
+        let unit = match unit {
+            Value::Null => return Ok(Value::Null),
+            Value::Handle(unit) => *unit,
+            _ => return Err(fail(Failure::WrongFamily)),
+        };
+        match self.inner.entry(unit).map_err(|e| fail(e.failure))? {
+            Entry::Unit { .. } => {}
+            Entry::RemovedUnit { .. } => return Ok(Value::Null),
+            _ => return Err(fail(Failure::WrongFamily)),
+        }
+        let Value::Handle(color) = color else {
+            return Err(fail(Failure::Signature));
+        };
+        self.inner
+            .player_color(*color)
+            .map_err(|e| fail(e.failure))?;
+        let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
+            unreachable!("validated unit identity")
+        };
+        record.team_color = Some(*color);
+        Ok(Value::Null)
     }
 
     fn set_unit_owner(&mut self, args: &[Value]) -> Result<Value, Error> {
