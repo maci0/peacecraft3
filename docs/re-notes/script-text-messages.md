@@ -43,19 +43,24 @@ original-game run or proof of every branch. Private source identity, windows,
 checks and original-map-prefix receipts are under
 `.scratch/campaign-message-root-20261019/`.
 
-Reconstruction choices remain visible: text is stacked upward from the latest
-executed normalized position within the campaign view. The original positions it
-relative to a separate native frame and additional native margins. Exact margins,
-box width, wrapping, fade-out, chat-history integration and original rendered
-comparison are open. Automatic-duration `DisplayTextToPlayer` and sender-prefixed
-`DisplayTimedTextFromPlayer` remain unsupported. Invalid/unknown player handling
-is a safety refusal, not a claim about native null-handle behavior.
+The reconstructed placement follows the programmatic frames read from the same
+executable. The initializer at `0x5e8300` gives `WorldFrameMessage` a 0.38 by 0.05
+box with its bottom centre 0.18 above the UI bottom, and `WorldFrameUnitMessage` a
+0.5 by 0.25 box anchored to the former's top centre with offsets -0.098125 and
+0.0005. The consumer at `0x5f4860` maps the supplied x/y across the remaining UI
+extent. For x = y = 0 that yields a left edge of 0.051875 UI units (6.484% of the
+viewport) and a bottom edge of 0.2305 (38.417%). Messages are stacked in execution
+order, oldest first, bottom-aligned inside the box and clipped above it. Fade-out,
+chat-history integration and a live original-versus-reconstruction render
+comparison remain open. Automatic-duration `DisplayTextToPlayer` and
+sender-prefixed `DisplayTimedTextFromPlayer` remain unsupported. Invalid/unknown
+player handling is a safety refusal, not a claim about native null-handle behavior.
 
 Synthetic Host tests cover local filtering, actual VM argument conversion,
 logical-time chunking, clearing, capacity, failed arguments and declaration
 qualification. Factory tests cover the published session and rejected
-replacement. Renderer checks cover rich-text spans and relative sizing; the
-explicit Vulkan test covers colors and clearing through 4K. Native/WASM builds
+replacement. Renderer checks cover rich-text spans, native frame placement and relative
+sizing; the explicit Vulkan test covers colors and clearing through 4K. Native/WASM builds
 and actual WASI/Cargo-WASM execution are recorded separately in the private
 verification receipt. These checks do not establish chapter playability,
 original/native/WASM visual parity or complete game determinism.

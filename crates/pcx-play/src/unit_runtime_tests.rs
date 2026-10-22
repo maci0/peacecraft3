@@ -11,7 +11,9 @@ native RegionAddRect takes region g, rect r returns nothing
 native TriggerRegisterEnterRegion takes trigger t, region g, boolexpr f returns event
 native TriggerRegisterLeaveRegion takes trigger t, region g, boolexpr f returns event
 native RemoveUnit takes unit u returns nothing
+native SetUnitFacing takes unit u, real a returns nothing
 native SetUnitFacingTimed takes unit u, real a, real d returns nothing
+constant native GetUnitFacing takes unit u returns real
 native SetUnitPathing takes unit u, boolean b returns nothing
 native SetUnitPosition takes unit u, real x, real y returns nothing
 native SetUnitPositionLoc takes unit u, location l returns nothing
@@ -128,6 +130,127 @@ fn region_membership_fires_enter_and_leave_with_the_moving_unit() {
     h.begin_fired_event(&fired).unwrap().unwrap();
     assert_eq!(h.native("GetLeavingUnit", &[]).unwrap(), Value::Handle(b));
     h.finish_fired_event();
+}
+
+#[test]
+fn removed_unit_keeps_its_location_for_the_callback_then_loses_it_on_the_next_tick() {
+    let (mut vm, a, _) = open();
+    let h = &mut vm.host().inner;
+    h.native("RemoveUnit", &[Value::Handle(a)]).unwrap();
+    let Value::Handle(snapshot) = h.native("GetUnitLoc", &[Value::Handle(a)]).unwrap() else {
+        panic!("same-callback removal retains the position");
+    };
+    assert_eq!(
+        h.native("GetLocationX", &[Value::Handle(snapshot)]).unwrap(),
+        Value::Real(16.0)
+    );
+    assert_eq!(
+        h.native("GetLocationY", &[Value::Handle(snapshot)]).unwrap(),
+        Value::Real(16.0)
+    );
+
+    let start = h.timer_game_time().unwrap();
+    tick(&mut vm, start + 1.0);
+    let h = &mut vm.host().inner;
+    let handles = h.inner().handles();
+    assert_eq!(
+        h.native("GetUnitLoc", &[Value::Handle(a)]).unwrap(),
+        Value::Null
+    );
+    assert_eq!(h.inner().handles(), handles);
+}
+
+#[test]
+fn null_locations_and_removed_facing_still_validate_their_arguments() {
+    let (mut vm, a, _) = open();
+    let h = &mut vm.host().inner;
+    assert_eq!(
+        h.native("GetUnitLoc", &[Value::Null]).unwrap(),
+        Value::Null
+    );
+    assert_eq!(
+        h.native("GetLocationX", &[Value::Null]).unwrap(),
+        Value::Real(0.0)
+    );
+    assert_eq!(
+        h.native("GetLocationY", &[Value::Null]).unwrap(),
+        Value::Real(0.0)
+    );
+    assert_eq!(
+        h.native("RemoveLocation", &[Value::Null]).unwrap(),
+        Value::Null
+    );
+    assert_eq!(
+        h.native(
+            "MoveLocation",
+            &[Value::Null, Value::Real(1.0), Value::Real(2.0)]
+        )
+        .unwrap(),
+        Value::Null
+    );
+    assert!(
+        h.native(
+            "MoveLocation",
+            &[Value::Null, Value::Real(f32::NAN), Value::Real(2.0)]
+        )
+        .is_err()
+    );
+    assert!(
+        h.native("MoveLocation", &[Value::Null, Value::Real(1.0)])
+            .is_err()
+    );
+    assert!(
+        h.native(
+            "MoveLocation",
+            &[Value::Null, Value::Int(1), Value::Real(2.0)]
+        )
+        .is_err()
+    );
+
+    h.native("RemoveUnit", &[Value::Handle(a)]).unwrap();
+    assert_eq!(
+        h.native("GetUnitFacing", &[Value::Handle(a)]).unwrap(),
+        Value::Real(0.0)
+    );
+    assert_eq!(
+        h.native("GetUnitFacing", &[Value::Null]).unwrap(),
+        Value::Real(0.0)
+    );
+    assert_eq!(
+        h.native("SetUnitFacing", &[Value::Null, Value::Real(90.0)])
+            .unwrap(),
+        Value::Null
+    );
+    assert_eq!(
+        h.native(
+            "SetUnitFacingTimed",
+            &[Value::Handle(a), Value::Real(90.0), Value::Real(1.0)]
+        )
+        .unwrap(),
+        Value::Null
+    );
+    assert!(
+        h.native("SetUnitFacing", &[Value::Handle(a), Value::Real(f32::NAN)])
+            .is_err()
+    );
+    assert!(
+        h.native(
+            "SetUnitFacing",
+            &[Value::Handle(a), Value::Real(90.0), Value::Real(1.0)]
+        )
+        .is_err()
+    );
+    assert!(
+        h.native("GetUnitFacing", &[Value::Handle(a), Value::Real(90.0)])
+            .is_err()
+    );
+    assert!(
+        h.native(
+            "SetUnitFacing",
+            &[Value::Null, Value::Real(90.0), Value::Real(1.0)]
+        )
+        .is_err()
+    );
 }
 
 #[test]

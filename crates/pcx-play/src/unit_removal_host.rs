@@ -39,13 +39,13 @@ impl ObjectHost {
                 [Value::Handle(unit)] => *unit,
                 _ => return Err(self.inner.error(REMOVE, Failure::Signature)),
             };
-            let shown = match self
+            let (shown, position) = match self
                 .inner
                 .entry(unit)
                 .map_err(|e| self.inner.error(REMOVE, e.failure))?
             {
-                Entry::RemovedUnit => return Ok(Value::Null),
-                Entry::Unit { record } => record.shown,
+                Entry::RemovedUnit { .. } => return Ok(Value::Null),
+                Entry::Unit { record } => (record.shown, record.position),
                 _ => return Err(self.inner.error(REMOVE, Failure::WrongFamily)),
             };
             self.forget_inventory_unit(unit, true)?;
@@ -77,8 +77,19 @@ impl ObjectHost {
                 }
             }
             self.clear_unit_cooldowns(unit);
-            *self.inner.entry_mut(unit)? = Entry::RemovedUnit;
+            *self.inner.entry_mut(unit)? = Entry::RemovedUnit { position };
             Ok(Value::Null)
         })())
+    }
+
+    /// Clears the same-callback position retained by `RemoveUnit`. The native
+    /// handle gate fails on the next tick, but its object still carries the
+    /// position for the remainder of the callback that removed it.
+    pub(super) fn expire_removed_unit_positions(&mut self) {
+        for entry in &mut self.inner.arena {
+            if let Entry::RemovedUnit { position } = entry {
+                *position = None;
+            }
+        }
     }
 }

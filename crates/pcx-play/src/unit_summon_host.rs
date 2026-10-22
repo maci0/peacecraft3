@@ -264,7 +264,7 @@ impl ObjectHost {
                 Value::Handle(id) => *id,
                 _ => return Err(self.summon_error("caster must be a unit")),
             };
-            if matches!(self.inner.entry(caster)?, Entry::RemovedUnit) {
+            if matches!(self.inner.entry(caster)?, Entry::RemovedUnit { .. }) {
                 return Ok(Value::Bool(false));
             }
             let Some(spell) = self.summon_spell(caster)? else {

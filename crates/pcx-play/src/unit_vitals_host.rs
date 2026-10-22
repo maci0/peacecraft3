@@ -527,7 +527,7 @@ impl ObjectHost {
             let vitals = match unit {
                 Value::Null => return Ok(Value::Real(0.0)),
                 Value::Handle(id) => match self.inner.entry(*id)? {
-                    Entry::RemovedUnit => return Ok(Value::Real(0.0)),
+                    Entry::RemovedUnit { .. } => return Ok(Value::Real(0.0)),
                     Entry::Unit { record } => record.vitals.ok_or_else(|| {
                         self.inner.error(GET, Failure::UnitState("vitals missing"))
                     })?,

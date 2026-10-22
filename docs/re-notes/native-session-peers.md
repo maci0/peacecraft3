@@ -176,24 +176,31 @@ Rules implemented:
   duplicate for a peer and tick is refused.
 - **Gating before orders.** A batch is refused, with no native call, when the game is paused
   (`game_paused`), when user control is off (`presentation().control_enabled == Some(false)`,
-  the application's rule), when the player owns no movable unit, or when it carries `Select`
-  or `Stop`. The gate runs before any `IssuePointOrder`, so a script's own order calls are
-  not the admission check.
+  the application's rule), when a `Move`/`Stop` has no selected unit that admits it, or when a
+  `Select` exceeds the snapshot bound. The gate runs before any order native, so a script's
+  own order calls are not the admission check. Gate checks follow batch order: a `Select`
+  earlier in the batch changes the selection that a later `Move` or `Stop` is checked against.
 - **Apply once.** A batch applies at the clock tick it names, then the clock steps one
   tick. Refusals go to a bounded log with the number dropped.
 - **Fail-stop.** An order native that returns anything but `true` ends the authority rather
   than continuing from a partly applied batch.
+- **Selection and orders.** `Select` replaces only the sending player's selection with that
+  player's live owned units inside the harness box. `Move` and `Stop` order only that player's
+  selection, through `standard_command_order` and `IssuePointOrderById`/`IssueImmediateOrderById`;
+  a player who has not selected keeps the harness default of every owned unit.
 - **Export.** A snapshot maps each executed unit to a wire unit with checked handle, owner and
-  coordinate values. It reads `selection()` for the selected flag and `activity.destination()`
-  for the move target.
+  coordinate values. The selected flag comes from that unit's own player's selection (or the
+  harness default), not a shared `selection()`, and the move target comes from
+  `activity.destination()`.
 - **Identity.** `startup.admission_digest()`: the executable, map, both scripts, catalog
   source, seed, mode and roster. Unit snapshots are not the identity.
 
 Scope and limits:
 
-- `Move` orders every owned movable unit, through the same `IssuePointOrder` native the
-  application uses. The application orders its selected units, and the wire carries no
-  selection, so this divergence stays until selection is on the wire.
+- `Move`/`Stop` order the player's selected units through the admitted source order registry.
+  The harness selection box is a recreation boundary, not a measured native radius.
+- Selection and command state are per player, so two peers never replace each other's choice.
+  The roster policy still admits only one human on the campaign maps observed so far.
 - Coordinates become `f32` world units for orders and come back as wire fixed point, so a
   round trip is exact only to the `f32` precision of the position.
 - Snapshot equality compares executed-unit identity, owner and current position. It does not
@@ -220,5 +227,4 @@ Observations, from `production_authority` and `pcx-play` probes run during this 
 Gaps, in order of effect: the end-cinematic input is not on the wire, so Human01 cannot
 reach an accepted order; the roster policy refuses maps with more than one human slot
 (`campaign_inputs::prepare_new_game`), so a two-human source-map session needs a policy
-decision; selection and stop orders need the wire to carry them; and `SetPlayerAbilityAvailable`
- is missing.
+decision; and `SetPlayerAbilityAvailable` is missing.

@@ -429,7 +429,7 @@ impl ObjectHost {
                 _ => return Err(self.inner.error(name, Failure::Signature)),
             };
             match self.inner.entry(unit)? {
-                Entry::RemovedUnit => return Ok(Value::Null),
+                Entry::RemovedUnit { .. } => return Ok(Value::Null),
                 Entry::Unit { .. } => {}
                 _ => return Err(self.inner.error(name, Failure::WrongFamily)),
             }

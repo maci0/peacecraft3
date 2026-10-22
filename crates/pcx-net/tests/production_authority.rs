@@ -101,7 +101,8 @@ fn roster_orders_and_refusals_on_the_admitted_map() {
     ));
     assert_eq!(refusal_total(&authority), refusals_before_wrong_owner);
 
-    // Selection and stop are refused and recorded; the refusal does not stop the authority.
+    // Selection and stop pass the ownership and hint checks on their own, but this map's control
+    // gate still refuses them at tick 0. The refusal is recorded and does not stop the authority.
     let now = authority.tick();
     let refusals_before_stop = refusal_total(&authority);
     authority
@@ -113,6 +114,13 @@ fn roster_orders_and_refusals_on_the_admitted_map() {
         refusals_before_stop + 1,
         "the stop batch was not refused"
     );
+    let refusal = authority
+        .refusals()
+        .entries()
+        .last()
+        .expect("refusal")
+        .clone();
+    assert_eq!(refusal.reason, "user control is disabled by the script");
 
     // Stale, duplicate and too-far batches are refused at receipt.
     assert!(matches!(

@@ -202,7 +202,7 @@ impl ObjectHost {
                 )));
             }
             let event = self.inner.id(index, DELIVERY)?;
-            if matches!(self.inner.entry(record.unit)?, Entry::RemovedUnit) {
+            if matches!(self.inner.entry(record.unit)?, Entry::RemovedUnit { .. }) {
                 continue;
             }
             let anchor = self

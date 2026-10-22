@@ -1,7 +1,7 @@
 //! Executed timed text on the published campaign UI camera.
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use pcx_objects::editor::messages::MessageStyle;
+use pcx_objects::editor::messages::{MessageFrame, MessageStyle};
 use pcx_play::{map_startup_host::MapStartupHost, playercolor_host::TimedMessage};
 use peacecraft3::{
     browser_configuration::SelectedMapSources,
@@ -271,17 +271,15 @@ pub(crate) fn paint(
     style: &MessageStyle,
     font: &Handle<Font>,
 ) -> Result<Entity, String> {
-    // shortcut: relative placement uses the campaign view; qualify native message-frame
-    // margins and wrapping before claiming rendered original-game parity.
     let height_vh = style.height / crate::mainmenu::FRAME_H * 100.;
     if !height_vh.is_finite() || height_vh <= 0.0 {
         return Err("message font height is unrepresentable".into());
     }
     let [x, y] = entries.last().ok_or("no live messages")?.position;
-    let position = [x * 100., y * 100.];
-    if position.iter().any(|v| !v.is_finite()) {
+    if !x.is_finite() || !y.is_finite() {
         return Err("message position is unrepresentable".into());
     }
+    let frame = MessageFrame::unit(x, y);
     let parsed = entries
         .iter()
         .map(|entry| crate::rich_text::parse(&entry.text).map_err(|e| e.to_string()))
@@ -293,11 +291,12 @@ pub(crate) fn paint(
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                left: percent(position[0]),
-                bottom: percent(position[1]),
-                width: percent((100. - position[0]).max(0.)),
-                max_height: percent((100. - position[1]).max(0.)),
-                flex_direction: FlexDirection::ColumnReverse,
+                left: percent(frame.left / crate::mainmenu::FRAME_W * 100.),
+                bottom: percent(frame.bottom / crate::mainmenu::FRAME_H * 100.),
+                width: percent(frame.width / crate::mainmenu::FRAME_W * 100.),
+                height: percent(frame.height / crate::mainmenu::FRAME_H * 100.),
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::FlexEnd,
                 overflow: Overflow::clip(),
                 ..default()
             },
@@ -306,7 +305,7 @@ pub(crate) fn paint(
             Name::new("Campaign text messages"),
         ))
         .id();
-    for text in parsed.into_iter().rev() {
+    for text in parsed {
         let text_font = TextFont {
             font: bevy::text::FontSource::Handle(font.clone()),
             font_size: bevy::text::FontSize::Vh(height_vh),
@@ -400,7 +399,7 @@ mod tests {
                     &mut commands,
                     &[TimedMessage {
                         sequence: 1,
-                        position: [0.2, 0.3],
+                        position: [0., 0.],
                         text: "a|c7f123456b|r|nc".into(),
                         started_at: 0.,
                         expires_at: 4.,
@@ -439,11 +438,22 @@ mod tests {
         let world = app.world_mut();
         let mut roots = world.query_filtered::<&Node, With<CampaignHud>>();
         let root = roots.single(world).unwrap();
-        assert_eq!(root.left, percent(20.));
+        let Val::Percent(left) = root.left else {
+            panic!("relative message placement");
+        };
+        assert!((left - 6.484375).abs() < 0.00001);
         let Val::Percent(bottom) = root.bottom else {
             panic!("relative message placement");
         };
-        assert!((bottom - 30.).abs() < 0.00001);
+        assert!((bottom - 38.416667).abs() < 0.00001);
+        let Val::Percent(width) = root.width else {
+            panic!("native message frame width");
+        };
+        assert!((width - 62.5).abs() < 0.00001);
+        let Val::Percent(height) = root.height else {
+            panic!("native message frame height");
+        };
+        assert!((height - 41.666667).abs() < 0.00001);
         let mut spans = world.query::<(&TextSpan, &TextColor, &TextFont)>();
         let spans: Vec<_> = spans.iter(world).collect();
         assert_eq!(spans.len(), 3);

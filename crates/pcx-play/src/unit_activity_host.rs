@@ -556,7 +556,7 @@ impl ObjectHost {
                     self.inner
                         .entry(unit)
                         .map_err(|e| self.inner.error(name, e.failure))?,
-                    Entry::RemovedUnit
+                    Entry::RemovedUnit { .. }
                 )
             {
                 return Ok(Value::Bool(false));
@@ -785,6 +785,7 @@ impl ObjectHost {
         work: &mut usize,
         out: Option<&mut Vec<AcceptedSpan>>,
     ) -> Result<usize, Error> {
+        self.expire_removed_unit_positions();
         let mut regen_spans = Vec::new();
         let moving_blight = self.initial_blight.is_some()
             && self.executed_units().any(|(_, record)| {
@@ -1296,9 +1297,23 @@ impl ObjectHost {
     /// Null units are ignored by setters and read as zero facing.
     fn facing_native(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
         let fail = |detail: &str| self.inner.error(name, Failure::UnitActivity(detail.into()));
-        let (unit, rest) = match args.split_first() {
-            Some((Value::Handle(unit), rest)) => (*unit, rest),
-            Some((Value::Null, _)) => {
+        let (unit, rest) = args
+            .split_first()
+            .ok_or_else(|| fail("unit required"))?;
+        let reals = rest
+            .iter()
+            .map(|v| v.as_real().filter(|r| r.is_finite()))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| fail("finite reals required"))?;
+        let (target, duration) = match (name, reals.as_slice()) {
+            ("GetUnitFacing", []) => (0.0, 0.0),
+            ("SetUnitFacing", &[angle]) => (angle, 0.0),
+            ("SetUnitFacingTimed", &[angle, duration]) => (angle, duration),
+            _ => return Err(fail("arguments do not match the declared native")),
+        };
+        let unit = match unit {
+            Value::Handle(unit) => *unit,
+            Value::Null => {
                 return Ok(if name == "GetUnitFacing" {
                     Value::Real(0.0)
                 } else {
@@ -1307,21 +1322,25 @@ impl ObjectHost {
             }
             _ => return Err(fail("unit required")),
         };
+        if matches!(
+            self.inner
+                .entry(unit)
+                .map_err(|e| self.inner.error(name, e.failure))?,
+            Entry::RemovedUnit { .. }
+        ) {
+            return Ok(if name == "GetUnitFacing" {
+                Value::Real(0.0)
+            } else {
+                Value::Null
+            });
+        }
         let face = self
             .executed_unit(unit)
             .map_err(|e| self.inner.error(name, e.failure))?
             .face;
-        let reals = rest
-            .iter()
-            .map(|v| v.as_real().filter(|r| r.is_finite()))
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| fail("finite reals required"))?;
-        let (target, duration) = match (name, reals.as_slice()) {
-            ("GetUnitFacing", []) => return Ok(Value::Real(face)),
-            ("SetUnitFacing", &[angle]) => (angle, 0.0),
-            ("SetUnitFacingTimed", &[angle, duration]) => (angle, duration),
-            _ => return Err(fail("arguments do not match the declared native")),
-        };
+        if name == "GetUnitFacing" {
+            return Ok(Value::Real(face));
+        }
         let now = self.timer_game_time().ok_or_else(|| fail("game clock"))?;
         let delta = (target - face + 180.0).rem_euclid(360.0) - 180.0;
         let turn = Turn {
