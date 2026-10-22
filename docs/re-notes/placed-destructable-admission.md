@@ -114,3 +114,31 @@ set rather than asserting a universal mask. Other flag values still refuse.
 Both runs use the reviewed image above. Receipts and raw markers remain local
 under `.scratch/placed-tree-flags-probe/r3/` in the main checkout. Enumeration
 absence does not qualify rendered visibility, pathing or hidden native state.
+
+## Death callback ordering and context
+
+A script-only derivative of the life-setter probe ran on the same reviewed
+client with RoC readback. All 19 bounded markers validate; callback details
+were not truncated. A negative life write, a kill after positive life, and a
+kill after explicit restoration each deliver their callback before the caller
+resumes: the first statement after each native records cumulative counts
+1, 2 and 3 respectively. Positive life and explicit restoration do not add
+death deliveries.
+
+Inside each callback, `GetTriggerEventId()` equals the selected source global
+`EVENT_WIDGET_DEATH`, and both `GetTriggerWidget()` and
+`GetTriggerDestructable()` equal the tested tree. Its life is zero and its
+maximum remains unchanged. Before each call, immediately afterward, and at
+the later timer boundaries, all three caller-context getters are null. These
+are observable ordering and context-restoration results for nonnested
+callbacks; nested deaths, yielding callbacks and callback-list mutation remain
+unqualified. No event enumerand is copied into the diagnostic or recreation.
+
+Map SHA-256 is
+`8f0f009fc1d022dfb6fd3088d1221a63bf4799db28020630d89c4f5edccbbf32`;
+script SHA-256 is
+`6638c9bd027cf56228bda14726e3491961f4b762e6107aa8dd2a8f8433498832`.
+Receipts, collector tests and raw markers remain local under
+`.scratch/destructable-death-context-probe/` in the main checkout. The owned
+reference run is stopped. The current host still has registration-only
+widget-death support; this native result does not claim that producer exists.
