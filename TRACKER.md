@@ -272,6 +272,11 @@ integration. A completed prototype does not close its broader milestone.
 | AI startup | Selected campaign AI entrypoint executes one supported behavior with the next missing interface identified | Script ownership, world and gameplay Host |
 | Remaining-work reconciliation | Every open/partial checkbox maps to a concrete acceptance gate and dependency, with stale claims corrected | Current source and retained verification |
 
+The selected Human02 AI sources load through the pinned campaign recipe and
+compile with the existing VM compiler. Runtime AI support remains open; the
+source audit and bounded comparison with the earlier probe map are recorded in
+[campaign-ai-runtime.md](docs/re-notes/campaign-ai-runtime.md).
+
 
 - [x] Shared BLP JPEG color conversion now respects BGR component order. Both
       retained logo alpha planes are unchanged; fixed public-decoder colors
