@@ -242,6 +242,54 @@ fn strength_comes_from_the_ability_amount_not_a_constant() {
 }
 
 #[test]
+fn passive_intelligence_comes_from_the_iint_column() {
+    let passive = |amounts| {
+        rules(
+            &Tome {
+                code: "AIab",
+                powerup: "0",
+                usable: "0",
+                amounts,
+                ..Tome::default()
+            },
+            Overlay::default(),
+            "AIsm",
+        )
+        .unwrap()
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap()
+        .unwrap()
+    };
+    assert_eq!(passive(["0", "3", "0"]).intelligence, 3);
+    assert_eq!(passive(["0", "5", "0"]).intelligence, 5);
+    assert_eq!(passive(["0", "0", "0"]).intelligence, 0);
+}
+
+#[test]
+fn w3a_override_on_the_iint_field_wins_for_passive_intelligence() {
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AIsm".into(), vec![int_mod(b"Iint", Some([1, 0]), 8)]);
+    let held = rules(
+        &Tome {
+            code: "AIab",
+            powerup: "0",
+            usable: "0",
+            amounts: ["0", "3", "0"],
+            ..Tome::default()
+        },
+        overlay,
+        "AIsm",
+    )
+    .unwrap()
+    .held_attributes(&catalog_item("tstr"))
+    .unwrap()
+    .unwrap();
+    assert_eq!(held.intelligence, 8);
+}
+
+#[test]
 fn w3a_override_on_the_istr_field_wins_at_effect_level() {
     let mut overlay = Overlay::default();
     overlay
@@ -449,8 +497,12 @@ fn local_original_tome_strength_comes_from_the_selected_catalog() {
         .unwrap()
         .unwrap();
     assert_eq!((held.strength, held.agility), (4, 4));
-    let refusal = rules.held_attributes(&catalog_item("hcun")).unwrap_err();
-    assert!(refusal.contains("intelligence passive bonus"), "{refusal}");
+    let intelligence = rules
+        .held_attributes(&catalog_item("hcun"))
+        .unwrap()
+        .unwrap();
+    assert_ne!(intelligence.intelligence, 0);
+    assert_eq!((intelligence.strength, intelligence.agility), (0, 0));
     assert_eq!(rules.held_attributes(&catalog_item("crys")).unwrap(), None);
 }
 
@@ -675,6 +727,7 @@ fn armor_points_come_from_the_admitted_source_row() {
         AttributeBonus {
             strength: 0,
             agility: 0,
+            intelligence: 0,
             armor: 3,
             damage: 0,
             max_life: 0,
@@ -1019,6 +1072,7 @@ fn flat_damage_comes_from_the_admitted_iatt_column() {
         AttributeBonus {
             strength: 0,
             agility: 0,
+            intelligence: 0,
             armor: 0,
             damage: 15,
             max_life: 0,

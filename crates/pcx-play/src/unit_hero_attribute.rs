@@ -22,6 +22,7 @@ impl ObjectHost {
         let flat = match name {
             "STR" => bonus.strength,
             "AGI" => bonus.agility,
+            "INT" => bonus.intelligence,
             _ => 0,
         } as f32;
         let value = (base + growth * gained as f32).floor() + flat;

@@ -3,12 +3,21 @@ use super::*;
 use crate::inventory::{InventoryBudget, Policy, Rules};
 use crate::inventory_powerup::{AttributeBonus, Rules as PowerupRules};
 use crate::inventory_powerup_host::{
-    clamp_life_pools, grant_strength, reprice_life, reprice_max_life,
+    clamp_life_pools, clamp_mana_pools, grant_strength, reprice_life, reprice_mana,
+    reprice_max_life,
 };
 use crate::item_heal::heal_life;
 use crate::playercolor_host::UseCheck;
 use pcx_objects::editor::{FieldSource, SlkId};
 use pcx_sim::world::FieldValue;
+
+#[derive(Clone, Copy)]
+struct VitalPools {
+    life: f32,
+    max_life: f32,
+    mana: f32,
+    max_mana: f32,
+}
 
 pub(super) struct State {
     rules: Rules,
@@ -360,6 +369,7 @@ impl ObjectHost {
         let mut bonus = AttributeBonus {
             strength: self.executed_unit(unit)?.permanent_strength,
             agility: 0,
+            intelligence: 0,
             armor: 0,
             damage: 0,
             max_life: 0,
@@ -384,6 +394,10 @@ impl ObjectHost {
             bonus.agility = bonus
                 .agility
                 .checked_add(passive.agility)
+                .ok_or_else(overflow)?;
+            bonus.intelligence = bonus
+                .intelligence
+                .checked_add(passive.intelligence)
                 .ok_or_else(overflow)?;
             bonus.armor = bonus
                 .armor
@@ -415,10 +429,15 @@ impl ObjectHost {
         Ok(self.unit_hero_bonus(unit)?.armor)
     }
 
-    /// Current and maximum life of any unit with vitals.
-    fn unit_life_pools(&self, unit: HandleId) -> Result<Option<(f32, f32)>, Error> {
+    /// Current and maximum life and mana of any unit with vitals.
+    fn unit_vital_pools(&self, unit: HandleId) -> Result<Option<VitalPools>, Error> {
         let record = self.executed_unit(unit)?;
-        Ok(record.vitals.map(|vitals| (vitals.life, vitals.max_life)))
+        Ok(record.vitals.map(|vitals| VitalPools {
+            life: vitals.life,
+            max_life: vitals.max_life,
+            mana: vitals.mana,
+            max_mana: vitals.max_mana,
+        }))
     }
 
     /// Removal delta for an authored passive amount, refusing a value whose negation is not
@@ -440,6 +459,10 @@ impl ObjectHost {
         self.removal_delta(max_life, "max-life")
     }
 
+    fn intelligence_removal_delta(&self, intelligence: i32) -> Result<i32, Error> {
+        self.removal_delta(intelligence, "intelligence")
+    }
+
     /// Project `delta` strength onto already-selected life pools.
     fn project_strength_life(&self, pools: (f32, f32), delta: i32) -> Result<(f32, f32), Error> {
         let life_per_strength = self.life_per_strength().ok_or_else(|| {
@@ -458,15 +481,33 @@ impl ObjectHost {
             .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))
     }
 
-    fn project_held_pools(
+    /// Project `delta` intelligence onto already-selected mana pools.
+    fn project_intelligence_mana(
         &self,
         pools: (f32, f32),
+        delta: i32,
+    ) -> Result<(f32, f32), Error> {
+        let mana_per_intelligence = self.mana_per_intelligence().ok_or_else(|| {
+            self.inner.error(
+                "inventory",
+                Failure::UnitState("unit vitals required before intelligence changes"),
+            )
+        })?;
+        reprice_mana(pools.0, pools.1, mana_per_intelligence, delta)
+            .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))
+    }
+
+    fn project_held_pools(
+        &self,
+        pools: VitalPools,
         is_hero: bool,
         dead: bool,
         strength: i32,
         max_life: i32,
-    ) -> Result<(f32, f32), Error> {
-        let mut pools = pools;
+        intelligence: i32,
+    ) -> Result<VitalPools, Error> {
+        let mut life = (pools.life, pools.max_life);
+        let mut mana = (pools.mana, pools.max_mana);
         if strength != 0 {
             if !is_hero {
                 return Err(self.inner.error(
@@ -474,23 +515,38 @@ impl ObjectHost {
                     Failure::UnitActivity("passive strength requires a hero".into()),
                 ));
             }
-            pools = self.project_strength_life(pools, strength)?;
+            life = self.project_strength_life(life, strength)?;
         }
         if max_life != 0 {
-            pools = self.project_max_life(pools, max_life)?;
+            life = self.project_max_life(life, max_life)?;
         }
-        Ok(clamp_life_pools(pools.0, pools.1, dead))
+        if strength != 0 || max_life != 0 {
+            life = clamp_life_pools(life.0, life.1, dead);
+        }
+        // Intelligence is a hero attribute. A non-hero accepts the item but has no modeled
+        // attribute or mana-pool effect, so its pools stay unchanged.
+        if is_hero && intelligence != 0 {
+            mana = self.project_intelligence_mana(mana, intelligence)?;
+        }
+        mana = clamp_mana_pools(mana.0, mana.1);
+        Ok(VitalPools {
+            life: life.0,
+            max_life: life.1,
+            mana: mana.0,
+            max_mana: mana.1,
+        })
     }
 
-    /// Life pools after passive strength and maximum-life deltas on a unit, or `None` when both
+    /// Pools after passive strength, maximum-life and intelligence deltas, or `None` when all
     /// deltas are zero. A unit without vitals refuses a non-zero delta.
     fn held_pools(
         &self,
         unit: HandleId,
         strength: i32,
         max_life: i32,
-    ) -> Result<Option<(f32, f32)>, Error> {
-        if strength == 0 && max_life == 0 {
+        intelligence: i32,
+    ) -> Result<Option<VitalPools>, Error> {
+        if strength == 0 && max_life == 0 && intelligence == 0 {
             return Ok(None);
         }
         let record = self.executed_unit(unit)?;
@@ -503,21 +559,27 @@ impl ObjectHost {
         let is_hero = record.definition.rawcode[0].is_ascii_uppercase();
         let dead = record.combat.as_ref().is_some_and(|combat| combat.dead);
         self.project_held_pools(
-            (vitals.life, vitals.max_life),
+            VitalPools {
+                life: vitals.life,
+                max_life: vitals.max_life,
+                mana: vitals.mana,
+                max_mana: vitals.max_mana,
+            },
             is_hero,
             dead,
             strength,
             max_life,
+            intelligence,
         )
         .map(Some)
     }
 
-    /// Life pools after removing an item's passive bonus from a unit.
+    /// Pools after removing an item's passive bonus from a unit.
     fn removed_item_pools(
         &self,
         unit: HandleId,
         passive: AttributeBonus,
-    ) -> Result<Option<(f32, f32)>, Error> {
+    ) -> Result<Option<VitalPools>, Error> {
         let strength = if passive.strength == 0 {
             0
         } else {
@@ -528,11 +590,16 @@ impl ObjectHost {
         } else {
             self.max_life_removal_delta(passive.max_life)?
         };
-        self.held_pools(unit, strength, max_life)
+        let intelligence = if passive.intelligence == 0 {
+            0
+        } else {
+            self.intelligence_removal_delta(passive.intelligence)?
+        };
+        self.held_pools(unit, strength, max_life, intelligence)
     }
 
-    fn set_life_pools(&mut self, unit: HandleId, pools: Option<(f32, f32)>) -> Result<(), Error> {
-        let Some((life, max_life)) = pools else {
+    fn set_vital_pools(&mut self, unit: HandleId, pools: Option<VitalPools>) -> Result<(), Error> {
+        let Some(pools) = pools else {
             return Ok(());
         };
         let dead = self
@@ -540,12 +607,15 @@ impl ObjectHost {
             .combat
             .as_ref()
             .is_some_and(|combat| combat.dead);
-        let (life, max_life) = clamp_life_pools(life, max_life, dead);
+        let (life, max_life) = clamp_life_pools(pools.life, pools.max_life, dead);
+        let (mana, max_mana) = clamp_mana_pools(pools.mana, pools.max_mana);
         if let Entry::Unit { record } = self.inner.entry_mut(unit)?
             && let Some(vitals) = &mut record.vitals
         {
             vitals.life = life;
             vitals.max_life = max_life;
+            vitals.mana = mana;
+            vitals.max_mana = max_mana;
         }
         Ok(())
     }
@@ -555,8 +625,10 @@ impl ObjectHost {
         unit: HandleId,
         life: i32,
         mana_fraction: f32,
+        intelligence: i32,
     ) -> Result<(), Error> {
-        if life != 0 || mana_fraction != 0.0 {
+        let hero = self.executed_unit(unit)?.definition.rawcode[0].is_ascii_uppercase();
+        if life != 0 || mana_fraction != 0.0 || (intelligence != 0 && hero) {
             let through = self
                 .executed_unit(unit)?
                 .vitals
@@ -598,12 +670,13 @@ impl ObjectHost {
         if self.item_flag(item, "powerup")? {
             return self.activate_powerup(unit, item);
         }
-        // Passive refusals and life changes are staged before any slot, event or state write.
+        // Passive refusals and pool changes are staged before any slot, event or state write.
         let passive = self.held_attributes(item)?;
         let held = self.unit_hero_bonus(unit)?;
         for (current, incoming) in [
             (held.strength, passive.strength),
             (held.agility, passive.agility),
+            (held.intelligence, passive.intelligence),
             (held.armor, passive.armor),
             (held.damage, passive.damage),
             (held.max_life, passive.max_life),
@@ -637,11 +710,17 @@ impl ObjectHost {
         let Some(slot) = (0..policy.slots).find(|&s| self.held_slot(unit, s).is_none()) else {
             return Ok(false);
         };
-        let pools = self.held_pools(unit, passive.strength, passive.max_life)?;
+        let pools = self.held_pools(
+            unit,
+            passive.strength,
+            passive.max_life,
+            passive.intelligence,
+        )?;
         self.require_passive_regen_projection(
             unit,
             passive.life_regen,
             passive.mana_regen_fraction,
+            passive.intelligence,
         )?;
         let holder = record.held_by;
         if let Some((owner, _)) = holder {
@@ -649,6 +728,7 @@ impl ObjectHost {
                 owner,
                 passive.life_regen,
                 passive.mana_regen_fraction,
+                passive.intelligence,
             )?;
             // Stage the owner's pool result too, before any event or ownership write.
             self.removed_item_pools(owner, passive)?;
@@ -659,10 +739,10 @@ impl ObjectHost {
         }
         self.reserve_item_events(&changes)?;
         if let Some((owner, _)) = holder {
-            // The owner's drop reprices its own life with the same passive amount.
+            // The owner's drop reprices its own pools with the same passive amount.
             self.drop_inventory_item(owner, item)?;
         }
-        self.set_life_pools(unit, pools)?;
+        self.set_vital_pools(unit, pools)?;
         if let Entry::Item { record } = self.inner.entry_mut(item)? {
             record.held_by = Some((unit, slot));
         }
@@ -746,10 +826,11 @@ impl ObjectHost {
             unit,
             passive.life_regen,
             passive.mana_regen_fraction,
+            passive.intelligence,
         )?;
         let pools = self.removed_item_pools(unit, passive)?;
         self.reserve_item_events(&[(unit, false)])?;
-        self.set_life_pools(unit, pools)?;
+        self.set_vital_pools(unit, pools)?;
         if let Entry::Item { record } = self.inner.entry_mut(item)? {
             record.held_by = None;
             record.x = position[0];
@@ -806,13 +887,14 @@ impl ObjectHost {
                     record.combat.as_ref().is_some_and(|combat| combat.dead),
                 )
             };
-            let mut pools = self.unit_life_pools(unit)?;
+            let mut pools = self.unit_vital_pools(unit)?;
             for &item in &held {
                 let passive = self.held_attributes(item)?;
                 self.require_passive_regen_projection(
                     unit,
                     passive.life_regen,
                     passive.mana_regen_fraction,
+                    passive.intelligence,
                 )?;
                 let strength = if passive.strength == 0 {
                     0
@@ -824,15 +906,26 @@ impl ObjectHost {
                 } else {
                     self.max_life_removal_delta(passive.max_life)?
                 };
-                if strength != 0 || max_life != 0 {
+                let intelligence = if passive.intelligence == 0 {
+                    0
+                } else {
+                    self.intelligence_removal_delta(passive.intelligence)?
+                };
+                if strength != 0 || max_life != 0 || intelligence != 0 {
                     let Some(current) = pools else {
                         return Err(self.inner.error(
                             "inventory",
                             Failure::UnitState("unit vitals required before passive pool changes"),
                         ));
                     };
-                    pools =
-                        Some(self.project_held_pools(current, is_hero, dead, strength, max_life)?);
+                    pools = Some(self.project_held_pools(
+                        current,
+                        is_hero,
+                        dead,
+                        strength,
+                        max_life,
+                        intelligence,
+                    )?);
                 }
             }
             self.reserve_item_events(&vec![(unit, false); held.len()])?;

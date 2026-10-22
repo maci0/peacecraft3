@@ -71,6 +71,7 @@ impl StrengthEffect {
 pub struct AttributeBonus {
     pub strength: i32,
     pub agility: i32,
+    pub intelligence: i32,
     pub armor: i32,
     pub damage: i32,
     pub max_life: i32,
@@ -486,8 +487,7 @@ impl Rules {
 
     /// Passive attributes, armor, attack damage, maximum life and regeneration. `None` for
     /// powerups and usable items: a usable item is held without activation, so its abilities add
-    /// no passive attribute here. Any passive ability outside the admitted classes, or an
-    /// intelligence bonus, refuses.
+    /// no passive attribute here. Any passive ability outside the admitted classes refuses.
     pub fn held_attributes(
         &self,
         definition: &Definition,
@@ -593,13 +593,6 @@ impl Rules {
                 ));
             }
             self.admit(alias)?;
-            let intelligence = self.amount(alias, &self.intelligence)?;
-            if intelligence != 0 {
-                return Err(format!(
-                    "intelligence passive bonus on {} needs the unqualified mana path",
-                    item.rawcode()
-                ));
-            }
             held.strength = held
                 .strength
                 .checked_add(self.amount(alias, &self.strength)?)
@@ -608,6 +601,10 @@ impl Rules {
                 .agility
                 .checked_add(self.amount(alias, &self.agility)?)
                 .ok_or("passive agility overflows")?;
+            held.intelligence = held
+                .intelligence
+                .checked_add(self.amount(alias, &self.intelligence)?)
+                .ok_or("passive intelligence overflows")?;
         }
         Ok(Some(held))
     }

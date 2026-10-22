@@ -78,11 +78,10 @@ gains into the `includeBonuses` false total is inference until those are read.
 
 ## Boundaries
 
-- Intelligence passive items refuse on pickup (`inventory_powerup.rs`), so no held INT
-  total exists in the model. `GetHeroInt(true)` returns the base INT. Intelligence item
-  effects remain unsupported.
-- With `includeBonuses` true, a held item that refuses (for example an intelligence
-  passive) also refuses `GetHeroStr` and `GetHeroAgi`. That is the shared held-item path.
+- A held intelligence passive joins `GetHeroInt(true)` through the same shared held-item path
+  as strength and agility. `GetHeroInt(false)` stays at the base total.
+- With `includeBonuses` true, a held item that refuses also refuses `GetHeroStr`,
+  `GetHeroAgi` and `GetHeroInt`.
 - `SetHeroStr`/`SetHeroAgi`/`SetHeroInt` are not implemented.
 
 ## Next static query

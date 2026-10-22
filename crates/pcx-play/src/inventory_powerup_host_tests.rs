@@ -88,6 +88,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["pbig", "AIsh", "0", "0", "0", "-"],
             &["pmin", "AImn", "0", "0", "0", "-"],
             &["pint", "AIi4", "0", "0", "0", "-"],
+            &["pivi", "AIi9", "0", "0", "0", "-"],
             &["pbad", "AIsm", "0", "0", "0", "-"],
             &["uact", "AIsm", "0", "1", "1", "1"],
             &["parm", "AId1", "0", "0", "0", "-"],
@@ -138,6 +139,19 @@ fn powerup_tables() -> Arc<DefaultTables> {
             ],
             &["AIa4", "AIab", "1", "2", "0", "0", "0", "0", "-", "-", "_"],
             &["AIi4", "AIab", "1", "0", "3", "0", "0", "0", "-", "-", "_"],
+            &[
+                "AIi9",
+                "AIab",
+                "1",
+                "0",
+                "2147483647",
+                "0",
+                "0",
+                "0",
+                "-",
+                "-",
+                "_",
+            ],
             &["AId1", "AIde", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
             &["AId8", "AIde", "1", "8", "0", "0", "0", "0", "-", "-", "_"],
             &[
@@ -261,7 +275,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "-1",
                 "int",
                 "1",
-                "AIsm,AIxm,AIs4,AIa4,AIi4,AIsh,AImn",
+                "AIsm,AIxm,AIs4,AIa4,AIi4,AIi9,AIsh,AImn",
                 "",
             ],
             &[
@@ -271,7 +285,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "-1",
                 "int",
                 "2",
-                "AIsm,AIxm,AIs4,AIa4,AIi4,AIsh,AImn",
+                "AIsm,AIxm,AIs4,AIa4,AIi4,AIi9,AIsh,AImn",
                 "",
             ],
             &[
@@ -281,7 +295,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "-1",
                 "int",
                 "3",
-                "AIsm,AIxm,AIs4,AIa4,AIi4,AIsh,AImn",
+                "AIsm,AIxm,AIs4,AIa4,AIi4,AIi9,AIsh,AImn",
                 "",
             ],
             &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1", ""],
@@ -1106,21 +1120,11 @@ fn unsupported_passive_families_refuse_atomically_with_a_diagnostic() {
     let mismatched = item(&mut h, b"pbad", 0.0);
     let err = add(&mut h, hero, mismatched).unwrap_err();
     assert!(err.contains("unsupported passive ability"), "{err}");
-    let intelligence = item(&mut h, b"pint", 0.0);
-    let err = add(&mut h, hero, intelligence).unwrap_err();
-    assert!(err.contains("intelligence passive bonus"), "{err}");
     assert_eq!(strength_and_agility(&mut h, hero), before);
     assert_eq!(
         h.native(
             "UnitHasItem",
             &[Value::Handle(hero), Value::Handle(mismatched)]
-        ),
-        Ok(Value::Bool(false))
-    );
-    assert_eq!(
-        h.native(
-            "UnitHasItem",
-            &[Value::Handle(hero), Value::Handle(intelligence)]
         ),
         Ok(Value::Bool(false))
     );
@@ -1668,6 +1672,10 @@ fn mana_of(h: &ObjectHost, unit: HandleId) -> f32 {
     h.unit_vitals(unit).unwrap().unwrap().mana
 }
 
+fn max_mana_of(h: &ObjectHost, unit: HandleId) -> f32 {
+    h.unit_vitals(unit).unwrap().unwrap().max_mana
+}
+
 type RecordSnapshot = (Vec<(HandleId, ExecutedUnit)>, Vec<(HandleId, ExecutedItem)>);
 
 fn snapshot_records(h: &ObjectHost, units: &[HandleId]) -> RecordSnapshot {
@@ -1694,6 +1702,169 @@ fn assert_close(actual: f32, expected: f32, context: &str) {
 }
 
 #[test]
+fn held_intelligence_adds_mana_pool_and_is_removed_with_ratio_rounding() {
+    let Fixture { mut h, hero, .. } = open();
+    let base_max = max_mana_of(&h, hero);
+    assert_close(base_max, 7.0 * 15.0, "base intelligence pool");
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", hero, true), Ok(7));
+    set_mana(&mut h, hero, base_max / 2.0);
+    let intelligence = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, hero, intelligence), Ok(Value::Bool(true)));
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", hero, false), Ok(7));
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", hero, true), Ok(10));
+    assert_close(max_mana_of(&h, hero), base_max + 3.0 * 15.0, "held maximum");
+    assert_close(
+        mana_of(&h, hero),
+        base_max * 0.5 + 3.0 * 15.0 * 0.5,
+        "held current",
+    );
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(intelligence)],
+    )
+    .unwrap();
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", hero, true), Ok(7));
+    assert_close(max_mana_of(&h, hero), base_max, "dropped maximum");
+    assert_close(mana_of(&h, hero), 53.0, "dropped ratio rounds half upward");
+}
+
+#[test]
+fn held_intelligence_stacks_and_cleanup_restores_the_mana_pool() {
+    let Fixture { mut h, hero, .. } = open();
+    let base_max = max_mana_of(&h, hero);
+    set_mana(&mut h, hero, base_max / 2.0);
+    let first = item(&mut h, b"pint", 0.0);
+    let second = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    assert_close(max_mana_of(&h, hero), base_max + 45.0, "one held bonus");
+    assert_close(mana_of(&h, hero), 75.0, "one held ratio");
+    assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", hero, true), Ok(13));
+    assert_close(max_mana_of(&h, hero), base_max + 90.0, "two held bonuses");
+    assert_close(mana_of(&h, hero), 98.0, "two held ratio rounds half upward");
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(h.held_slot(hero, 1), None);
+    assert_close(max_mana_of(&h, hero), base_max, "cleanup maximum");
+    assert_close(mana_of(&h, hero), 53.0, "cleanup sequential ratio");
+}
+
+#[test]
+fn held_intelligence_transfers_between_heroes_and_reprices_both_pools() {
+    let Fixture { mut h, hero, .. } = open();
+    let receiver = create_unit(&mut h, b"H001", 64.0);
+    let base_max = max_mana_of(&h, hero);
+    assert_close(max_mana_of(&h, receiver), base_max, "equal base pools");
+    set_mana(&mut h, hero, base_max / 2.0);
+    set_mana(&mut h, receiver, base_max / 2.0);
+    let intelligence = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, hero, intelligence), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut h, receiver, intelligence), Ok(Value::Bool(true)));
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(h.held_slot(receiver, 0), Some(intelligence));
+    assert_close(max_mana_of(&h, hero), base_max, "donor maximum");
+    assert_close(mana_of(&h, hero), 53.0, "donor ratio rounds half upward");
+    assert_close(
+        max_mana_of(&h, receiver),
+        base_max + 45.0,
+        "receiver maximum",
+    );
+    assert_close(mana_of(&h, receiver), 75.0, "receiver ratio");
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", hero, true), Ok(7));
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", receiver, true), Ok(10));
+}
+
+#[test]
+fn held_intelligence_overflow_refuses_without_pool_or_item_changes() {
+    let Fixture { mut h, hero, .. } = open();
+    let huge = item(&mut h, b"pivi", 0.0);
+    assert_eq!(add(&mut h, hero, huge), Ok(Value::Bool(true)));
+    let max = max_mana_of(&h, hero);
+    let mana = mana_of(&h, hero);
+    let item = item(&mut h, b"pint", 0.0);
+    let err = add(&mut h, hero, item).unwrap_err();
+    assert!(err.contains("held passive bonus overflows"), "{err}");
+    assert_eq!(h.held_slot(hero, 0), Some(huge));
+    assert_eq!(h.held_slot(hero, 1), None);
+    assert_close(max_mana_of(&h, hero), max, "overflow maximum");
+    assert_close(mana_of(&h, hero), mana, "overflow current");
+    assert_eq!(
+        h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(item)]),
+        Ok(Value::Bool(false))
+    );
+}
+
+#[test]
+fn dead_retained_intelligence_drop_rounds_mana_and_keeps_it_nonzero() {
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L000".into(),
+        vec![pcx_objects::Mod {
+            field: *b"inv2",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: Some([1, 0]),
+            value: pcx_objects::Value::Int(0),
+            end_word: 0,
+        }],
+    );
+    let Fixture { mut h, hero, .. } =
+        open_with_regens_overlays(overlay, Overlay::default(), 0., None, 0.);
+    let base_max = max_mana_of(&h, hero);
+    set_mana(&mut h, hero, base_max / 2.0);
+    let intelligence = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, hero, intelligence), Ok(Value::Bool(true)));
+    let held_max = max_mana_of(&h, hero);
+    h.kill_unit(hero, None).unwrap();
+    assert_eq!(h.held_slot(hero, 0), Some(intelligence));
+    assert_eq!(life_of(&h, hero), 0.0);
+    assert_close(max_mana_of(&h, hero), held_max, "dead retained maximum");
+    assert_close(mana_of(&h, hero), held_max / 2.0, "death keeps mana");
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(intelligence)],
+    )
+    .unwrap();
+    assert_close(max_mana_of(&h, hero), base_max, "dead dropped maximum");
+    assert_close(mana_of(&h, hero), 53.0, "dead ratio rounds half upward");
+    assert_eq!(life_of(&h, hero), 0.0);
+}
+
+#[test]
+fn pure_intelligence_on_a_non_hero_is_accepted_without_a_modeled_effect() {
+    let Fixture {
+        mut h, ordinary, ..
+    } = open();
+    let before_max = max_mana_of(&h, ordinary);
+    let before_mana = mana_of(&h, ordinary);
+    let intelligence = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, ordinary, intelligence), Ok(Value::Bool(true)));
+    assert_eq!(h.held_slot(ordinary, 0), Some(intelligence));
+    assert_close(max_mana_of(&h, ordinary), before_max, "non-hero maximum");
+    assert_close(mana_of(&h, ordinary), before_mana, "non-hero current");
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", ordinary, true), Ok(0));
+}
+
+#[test]
+fn held_intelligence_changes_refuse_stale_projection_without_moving_items() {
+    let Fixture { mut h, hero, .. } = open();
+    let intelligence = item(&mut h, b"pint", 0.0);
+    h.next_timer_expiry(1., &mut 1000).unwrap();
+    assert!(
+        add(&mut h, hero, intelligence)
+            .unwrap_err()
+            .contains("projected through")
+    );
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(
+        h.native(
+            "UnitHasItem",
+            &[Value::Handle(hero), Value::Handle(intelligence)]
+        ),
+        Ok(Value::Bool(false))
+    );
+}
+
+#[test]
 fn held_mana_fraction_scales_base_and_intelligence_rate() {
     let Fixture { mut h, hero, .. } = open_with_regens(0., Some("2"), 0.05);
     let base = 2.0 + 7.0 * 0.05;
@@ -1716,6 +1887,35 @@ fn held_mana_fraction_scales_base_and_intelligence_rate() {
     advance_passive_regen(&mut h, 4.);
     assert_close(mana_of(&h, hero), base * 6.0, "drop removes one fraction");
     assert_eq!(h.unit_hero_bonus(hero).unwrap().mana_regen_fraction, 0.5);
+}
+
+#[test]
+fn held_intelligence_scales_regeneration_before_the_mana_fraction() {
+    let Fixture { mut h, hero, .. } = open_with_regens(0., Some("2"), 0.05);
+    set_mana(&mut h, hero, 0.);
+    let intelligence = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, hero, intelligence), Ok(Value::Bool(true)));
+    advance_passive_regen(&mut h, 1.);
+    assert_close(mana_of(&h, hero), 2.5, "base plus held intelligence");
+    let fraction = item(&mut h, b"pman", 0.0);
+    assert_eq!(add(&mut h, hero, fraction), Ok(Value::Bool(true)));
+    advance_passive_regen(&mut h, 2.);
+    assert_close(
+        mana_of(&h, hero),
+        6.25,
+        "held fraction scales held intelligence",
+    );
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(intelligence)],
+    )
+    .unwrap();
+    advance_passive_regen(&mut h, 3.);
+    assert_close(
+        mana_of(&h, hero),
+        7.525,
+        "drop reprices current before regen",
+    );
 }
 
 #[test]
@@ -2777,8 +2977,11 @@ fn hero_attribute_queries_split_base_permanent_and_held_totals() {
     assert_eq!(query(&mut h, "GetHeroStr", true), Ok(22));
     assert_eq!(query(&mut h, "GetHeroAgi", false), Ok(5));
     assert_eq!(query(&mut h, "GetHeroAgi", true), Ok(7));
-    // Intelligence passive bonuses refuse on pickup, so INT has no held total to add.
-    assert_eq!(query(&mut h, "GetHeroInt", true), Ok(7));
+    // Intelligence passive bonuses join only with `includeBonuses`.
+    let intelligence = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, hero, intelligence), Ok(Value::Bool(true)));
+    assert_eq!(query(&mut h, "GetHeroInt", false), Ok(7));
+    assert_eq!(query(&mut h, "GetHeroInt", true), Ok(10));
     // Growth floors each attribute after the fractional per-level gain: STR 10+2.5, AGI 5+1.5.
     h.native(
         "SetHeroLevel",
@@ -2798,7 +3001,8 @@ fn hero_attribute_queries_split_base_permanent_and_held_totals() {
     assert_eq!(query(&mut h, "GetHeroStr", false), Ok(22));
     assert_eq!(query(&mut h, "GetHeroStr", true), Ok(27));
     assert_eq!(query(&mut h, "GetHeroAgi", true), Ok(10));
-    assert_eq!(query(&mut h, "GetHeroInt", true), Ok(8));
+    assert_eq!(query(&mut h, "GetHeroInt", false), Ok(8));
+    assert_eq!(query(&mut h, "GetHeroInt", true), Ok(11));
 }
 
 #[test]

@@ -195,6 +195,13 @@ impl ObjectHost {
             .map(|rules| rules.bonuses.life_per_strength)
     }
 
+    /// Mana per intelligence point from the admitted hero bonuses; `None` without vitals.
+    pub(super) fn mana_per_intelligence(&self) -> Option<f32> {
+        self.unit_vitals
+            .as_ref()
+            .map(|rules| rules.bonuses.mana_per_intelligence)
+    }
+
     pub(super) fn prepare_unit_vitals(
         &self,
         definition: &Definition,
