@@ -17,6 +17,7 @@
 //! the authored `CampaignButtonTemplate` and placement inside the hosted frames
 //! is a labelled recreation choice (see `docs/re-notes/menu-entry.md`).
 use crate::launch::{Addon, AssetMode, Behaviour, GameMode};
+use bevy::picking::hover::Hovered;
 use bevy::{prelude::*, ui::InteractionDisabled, ui_widgets::Button};
 use pcx_assets::{ArchiveLayer, ContentSource, Resolver};
 use pcx_objects::editor::campaign_index::{CampaignSlot, IndexLimits, parse_campaign_index};
@@ -107,6 +108,21 @@ pub(crate) struct MissionButton {
     pub mission: usize,
 }
 
+/// The clipped mission-list viewport.
+#[derive(Component)]
+pub(crate) struct MissionViewport;
+
+/// The scrollable mission-list content column.
+#[derive(Component)]
+pub(crate) struct MissionScroller;
+
+/// Focus-follow bookkeeping for the mission list's scroll position.
+#[derive(Component, Default)]
+pub(crate) struct MissionScrollState {
+    viewport_size: Vec2,
+    inverse_scale: f32,
+}
+
 /// The fallback launcher card's flat list container.
 #[derive(Component)]
 pub(crate) struct ChapterList;
@@ -127,6 +143,7 @@ pub(crate) fn install(app: &mut App) {
                 launch,
                 request,
                 render_campaign_panel,
+                mission_scroll,
                 select_campaign,
                 launch_mission,
             )
@@ -503,13 +520,92 @@ fn request(
 }
 
 /// A label styled from an authored FDF text frame: source face, size and colour.
+/// Horizontal justification mapping shared with the menu label layout.
+fn justify_h(h: crate::menu_text::JustifyH) -> bevy::text::Justify {
+    match h {
+        crate::menu_text::JustifyH::Left => bevy::text::Justify::Left,
+        crate::menu_text::JustifyH::Center => bevy::text::Justify::Center,
+        crate::menu_text::JustifyH::Right => bevy::text::Justify::Right,
+    }
+}
+
+/// The template's vertical justification, as the container's main axis.
+fn justify_v(v: crate::menu_text::JustifyV) -> JustifyContent {
+    match v {
+        crate::menu_text::JustifyV::Top => JustifyContent::FlexStart,
+        crate::menu_text::JustifyV::Middle => JustifyContent::Center,
+        crate::menu_text::JustifyV::Bottom => JustifyContent::FlexEnd,
+    }
+}
+
+/// The template's horizontal justification, as the container's cross axis.
+fn align_h(h: crate::menu_text::JustifyH) -> AlignItems {
+    match h {
+        crate::menu_text::JustifyH::Left => AlignItems::FlexStart,
+        crate::menu_text::JustifyH::Center => AlignItems::Center,
+        crate::menu_text::JustifyH::Right => AlignItems::FlexEnd,
+    }
+}
+
+/// A campaign/mission button label. The container carries the authored
+/// justification; the text is bounded to the button's inner content width and
+/// uses the authored size, wrapping within that width so long names stay fully
+/// visible without spilling into adjacent columns. Nothing is clipped or
+/// truncated.
+struct CampaignLabel {
+    container: Node,
+    text_node: Node,
+    text: Text,
+    font: TextFont,
+    color: TextColor,
+    z: ZIndex,
+    layout: TextLayout,
+    line: bevy::text::LineHeight,
+}
+
+#[cfg(test)]
+impl CampaignLabel {
+    fn synthetic(text: &str, width_pct: f32) -> Self {
+        Self {
+            container: Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            text_node: Node {
+                width: Val::Percent(width_pct),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            text: Text(text.to_string()),
+            font: TextFont::default(),
+            color: TextColor::default(),
+            z: ZIndex(1),
+            layout: TextLayout::default(),
+            line: bevy::text::LineHeight::RelativeToFont(1.0),
+        }
+    }
+}
+
+/// The authored style frame for a list button label. `CampaignButtonTemplate`
+/// is a bare `TEXTBUTTON` with no `ButtonText` child, so there is no per-row
+/// authored text frame; the shared authored button-label profile
+/// (`StandardButtonTextTemplate`: `MasterFont`, `0.013`, centre/middle,
+/// `FIXEDSIZE`) is the source-bound profile the other menu buttons use. Using
+/// the screen header frame `MissionNameHeader` would be debt.
+const LABEL_FRAME: &str = "StandardButtonTextTemplate";
+
 fn source_label(
     install: Option<&std::path::Path>,
     fdf: &crate::fdf::Fdf,
     fonts: &mut Assets<Font>,
-    frame: &str,
     text: String,
-) -> Result<(Text, TextFont, TextColor, ZIndex), String> {
+    width_pct: f32,
+) -> Result<CampaignLabel, String> {
+    let frame = LABEL_FRAME;
     let style = crate::menu_text::render_style_with_parent(fdf, frame, frame)
         .map_err(|e| format!("campaign label {frame}: {e}"))?;
     let install = install.ok_or_else(|| "no selected install for campaign labels".to_string())?;
@@ -525,16 +621,50 @@ fn source_label(
     let face = fonts.add(Font::from_bytes(bytes));
     let size = bevy::text::FontSize::Vh(style.height / crate::mainmenu::FRAME_H * 100.0);
     let [r, g, b, a] = style.colour;
-    Ok((
-        Text(text),
-        TextFont {
+    Ok(CampaignLabel {
+        container: Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            justify_content: justify_v(style.justify_v),
+            align_items: align_h(style.justify_h),
+            ..default()
+        },
+        text_node: Node {
+            width: Val::Percent(width_pct),
+            height: Val::Percent(100.0),
+            ..default()
+        },
+        text: Text(text),
+        font: TextFont {
             font: bevy::text::FontSource::Handle(face),
             font_size: size,
             ..default()
         },
-        TextColor(Color::srgba(r, g, b, a)),
-        ZIndex(1),
-    ))
+        color: TextColor(Color::srgba(r, g, b, a)),
+        z: ZIndex(1),
+        layout: TextLayout::new(
+            justify_h(style.justify_h),
+            bevy::text::LineBreak::WordBoundary,
+        ),
+        line: bevy::text::LineHeight::RelativeToFont(1.0),
+    })
+}
+
+/// The label width as a percentage of the authored button width, derived from
+/// the template geometry and the authored backdrop insets.
+fn button_inner_width_pct(button_w: f32, inset: f32) -> Result<f32, String> {
+    if !button_w.is_finite() || button_w <= 0.0 {
+        return Err("button width must be positive".into());
+    }
+    if !inset.is_finite() || inset < 0.0 {
+        return Err("backdrop inset must be finite and non-negative".into());
+    }
+    let inner = button_w - 2.0 * inset;
+    if inner <= 0.0 {
+        return Err("backdrop insets exceed the button width".into());
+    }
+    Ok(inner / button_w * 100.0)
 }
 
 /// The authored `CampaignButtonTemplate` geometry, in frame units.
@@ -546,19 +676,30 @@ fn template_geometry(fdf: &crate::fdf::Fdf) -> Result<(f32, f32), String> {
     Ok((rect.width, rect.height))
 }
 
+/// Spawn options for a campaign/mission button.
+#[derive(Clone, Copy)]
+struct SpawnOptions {
+    /// Whether the interactive button is enabled (a closed campaign is disabled).
+    enabled: bool,
+    /// Row mode: the button art fills a flex row wrapper and carries no
+    /// interactive components (the row owns them).
+    fill: bool,
+}
+
 /// Spawn one campaign/mission button using the shared `GlueButton` renderer.
 ///
-/// The authored `CampaignButtonTemplate` supplies the backdrop, pushed/disabled
-/// and mouse-over art and offsets; a source-styled label is added as the button
-/// node's child. The node is placed at the absolute frame `rect`.
+/// `options.fill` selects list rows: the button art is spawned inside a flex row
+/// wrapper and its node is overridden to fill that row, rather than being
+/// positioned by an absolute frame rect. Interactive components are only added
+/// when `!options.fill` (rows carry their own interaction components).
 fn spawn_campaign_button(
     commands: &mut Commands,
     panel: Entity,
     fdf: &crate::fdf::Fdf,
     rect: crate::fdf::Rect,
-    label: impl Bundle,
+    label: CampaignLabel,
     component: impl Bundle,
-    enabled: bool,
+    options: SpawnOptions,
 ) -> Result<(), String> {
     let button =
         crate::glue_menu::button(fdf, "CampaignButtonTemplate").map_err(|e| e.to_string())?;
@@ -590,20 +731,47 @@ fn spawn_campaign_button(
         }) else {
             return;
         };
-        world.entity_mut(target).insert((
-            component,
-            crate::menu_screens::CampaignAction,
-            bevy::input_focus::tab_navigation::TabIndex::default(),
-        ));
-        if !enabled {
-            world.entity_mut(target).insert(InteractionDisabled);
+        if options.fill {
+            // List row: the button art fills its flex row wrapper, and the row
+            // owns placement (the generic FDF pass must not resolve it).
+            world.entity_mut(target).insert(Node {
+                position_type: PositionType::Relative,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            });
+            world
+                .entity_mut(target)
+                .remove::<crate::menu_screens::ScreenPosition>();
+        } else {
+            world.entity_mut(target).insert((
+                component,
+                crate::menu_screens::CampaignAction,
+                bevy::input_focus::tab_navigation::TabIndex::default(),
+            ));
+            if !options.enabled {
+                world.entity_mut(target).insert(InteractionDisabled);
+            }
+            // Dynamic rows own their placement; the generic FDF pass resolves the
+            // template origin.
+            world
+                .entity_mut(target)
+                .remove::<crate::menu_screens::ScreenPosition>();
         }
-        // Dynamic rows own their placement; the generic FDF pass resolves the template origin.
-        world
-            .entity_mut(target)
-            .remove::<crate::menu_screens::ScreenPosition>();
+        // The authored label, centred per its own justification inside the art.
         world.entity_mut(target).with_children(|button| {
-            button.spawn((label, Pickable::IGNORE));
+            button
+                .spawn((label.container, Pickable::IGNORE))
+                .with_child((
+                    label.text_node,
+                    label.text,
+                    label.font,
+                    label.color,
+                    label.z,
+                    label.layout,
+                    label.line,
+                    Pickable::IGNORE,
+                ));
         });
     });
     Ok(())
@@ -631,6 +799,12 @@ fn build_campaign_panel(
             "CampaignButtonTemplate geometry is not positive: {button_w}x{button_h}"
         ));
     }
+    // The authored backdrop inset bounds the label's inner content width.
+    let inset = crate::glue_menu::backdrop(fdf, "StandardCampaignButtonBackdropTemplate")
+        .map_err(|e| format!("campaign button backdrop: {e}"))?
+        .and_then(|art| art.inset)
+        .unwrap_or(0.0);
+    let inner_width_pct = button_inner_width_pct(button_w, inset)?;
     let gap = button_h * 0.25;
     let campaign_left = crate::mainmenu::FRAME_W * 0.04;
     let mission_left = crate::mainmenu::FRAME_W * 0.45;
@@ -647,13 +821,7 @@ fn build_campaign_panel(
     commands.entity(panel).despawn_related::<Children>();
     for (index, campaign) in campaigns.iter().enumerate() {
         let rect = row(index, campaign_left);
-        let label = source_label(
-            install,
-            fdf,
-            fonts,
-            "MissionNameHeader",
-            campaign.title.clone(),
-        )?;
+        let label = source_label(install, fdf, fonts, campaign.title.clone(), inner_width_pct)?;
         spawn_campaign_button(
             commands,
             panel,
@@ -661,36 +829,210 @@ fn build_campaign_panel(
             rect,
             label,
             CampaignButton(index),
-            campaign.default_open,
+            SpawnOptions {
+                enabled: campaign.default_open,
+                fill: false,
+            },
         )?;
     }
     if let Some(sel) = selected
         && let Some(campaign) = campaigns.get(sel)
+        && !campaign.missions.is_empty()
     {
+        // The FDF declares no mission list region, so the missions column is a
+        // bounded, clipped viewport (recreation geometry) whose rows scroll. All
+        // missions stay reachable through wheel and keyboard focus navigation.
+        let viewport = commands
+            .spawn((
+                MissionViewport,
+                Pickable::IGNORE,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Percent(mission_left / crate::mainmenu::FRAME_W * 100.0),
+                    top: Val::Percent(top_start / crate::mainmenu::FRAME_H * 100.0),
+                    width: Val::Percent(button_w / crate::mainmenu::FRAME_W * 100.0),
+                    height: Val::Vh(
+                        (crate::mainmenu::FRAME_H - top_start) / crate::mainmenu::FRAME_H * 100.0,
+                    ),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+            ))
+            .id();
+        commands.entity(panel).add_child(viewport);
+        let scroller = commands
+            .spawn((
+                MissionScroller,
+                MissionScrollState::default(),
+                Hovered::default(),
+                ScrollPosition::default(),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Percent(0.0),
+                    right: Val::Percent(0.0),
+                    top: Val::Percent(0.0),
+                    bottom: Val::Percent(0.0),
+                    overflow: Overflow::scroll_y(),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Stretch,
+                    row_gap: Val::Vh(gap / crate::mainmenu::FRAME_H * 100.0),
+                    ..default()
+                },
+            ))
+            .id();
+        commands.entity(viewport).add_child(scroller);
+        let row_rect = crate::fdf::Rect {
+            left: 0.0,
+            bottom: 0.0,
+            width: button_w,
+            height: button_h,
+        };
         for (index, mission) in campaign.missions.iter().enumerate() {
-            let rect = row(index, mission_left);
+            let row = commands
+                .spawn((
+                    Button,
+                    Hovered::default(),
+                    MissionButton {
+                        campaign: sel,
+                        mission: index,
+                    },
+                    crate::menu_screens::CampaignAction,
+                    bevy::input_focus::tab_navigation::TabIndex(
+                        i32::try_from(index).map_err(|_| "too many missions")?,
+                    ),
+                    Node {
+                        min_height: Val::Vh(button_h / crate::mainmenu::FRAME_H * 100.0),
+                        flex_shrink: 0.0,
+                        width: Val::Percent(100.0),
+                        ..default()
+                    },
+                ))
+                .id();
+            if !campaign.default_open {
+                commands.entity(row).insert(InteractionDisabled);
+            }
+            commands.entity(scroller).add_child(row);
             let label = source_label(
                 install,
                 fdf,
                 fonts,
-                "MissionNameHeader",
                 format!("{}: {}", mission.header, mission.name),
+                inner_width_pct,
             )?;
             spawn_campaign_button(
                 commands,
-                panel,
+                row,
                 fdf,
-                rect,
+                row_rect,
                 label,
-                MissionButton {
-                    campaign: sel,
-                    mission: index,
+                (),
+                SpawnOptions {
+                    enabled: campaign.default_open,
+                    fill: true,
                 },
-                campaign.default_open,
             )?;
         }
     }
     Ok(())
+}
+
+/// Wheel and keyboard-focus scrolling for the mission list viewport, mirroring
+/// the shared settings-list scroll behaviour (`Overflow::scroll_y` +
+/// `MouseWheel`, with the focused row kept in view).
+fn mission_scroll(
+    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    mut scrollers: Query<
+        (
+            Entity,
+            &mut ScrollPosition,
+            &Hovered,
+            &Children,
+            &mut MissionScrollState,
+        ),
+        With<MissionScroller>,
+    >,
+    rows: Query<(Entity, &ChildOf, &Hovered), With<MissionButton>>,
+    geometry: Query<(&ComputedNode, &UiGlobalTransform)>,
+    focus: (
+        Option<Res<bevy::input_focus::InputFocus>>,
+        Option<Res<bevy::input_focus::InputFocusVisible>>,
+    ),
+) {
+    let focused = focus.0.as_ref().and_then(|focus| focus.get());
+    for event in wheel.read() {
+        if !event.y.is_finite() {
+            continue;
+        }
+        for (entity, mut scroll, hovered, children, _) in &mut scrollers {
+            let hovering = hovered.get()
+                || children
+                    .iter()
+                    .any(|child| rows.get(child).is_ok_and(|(_, _, h)| h.get()));
+            if !hovering {
+                continue;
+            }
+            let Ok((node, _)) = geometry.get(entity) else {
+                continue;
+            };
+            let inv = node.inverse_scale_factor();
+            if !inv.is_finite()
+                || inv <= 0.0
+                || !node.size().is_finite()
+                || !node.content_size().is_finite()
+            {
+                continue;
+            }
+            let dy = match event.unit {
+                bevy::input::mouse::MouseScrollUnit::Line => {
+                    let Some(row) = children.iter().find_map(|child| geometry.get(child).ok())
+                    else {
+                        continue;
+                    };
+                    event.y * row.0.size().y * inv
+                }
+                bevy::input::mouse::MouseScrollUnit::Pixel => event.y * inv,
+            };
+            let max = ((node.content_size().y - node.size().y) * inv).max(0.0);
+            if dy.is_finite() {
+                scroll.0.y = (scroll.0.y - dy).clamp(0.0, max);
+            }
+        }
+    }
+    let focus_changed = focus.0.as_ref().is_some_and(|focus| focus.is_changed());
+    if let Some(focused) = focused
+        && let Ok((_, parent, _)) = rows.get(focused)
+        && let Ok((entity, mut scroll, _, _, mut state)) = scrollers.get_mut(parent.parent())
+        && let Ok((viewport, transform)) = geometry.get(entity)
+        && let Ok((row, row_transform)) = geometry.get(focused)
+        && viewport.inverse_scale_factor().is_finite()
+        && viewport.inverse_scale_factor() > 0.0
+        && viewport.size().is_finite()
+        && viewport.size().min_element() > 0.0
+        && viewport.content_size().is_finite()
+        && row.size().is_finite()
+        && (focus_changed
+            || state.viewport_size != viewport.size()
+            || state.inverse_scale != viewport.inverse_scale_factor())
+    {
+        state.viewport_size = viewport.size();
+        state.inverse_scale = viewport.inverse_scale_factor();
+        let viewport_top = transform.affine().translation.y - viewport.size().y * 0.5;
+        let viewport_bottom = viewport_top + viewport.size().y;
+        let pending = scroll.0.y / viewport.inverse_scale_factor() - viewport.scroll_position.y;
+        let top = row_transform.affine().translation.y - row.size().y * 0.5 - pending;
+        let bottom = top + row.size().y;
+        let adjustment = if top < viewport_top {
+            top - viewport_top
+        } else if bottom > viewport_bottom {
+            bottom - viewport_bottom
+        } else {
+            0.0
+        };
+        let max = ((viewport.content_size().y - viewport.size().y)
+            * viewport.inverse_scale_factor())
+        .max(0.0);
+        scroll.0.y = (scroll.0.y + adjustment * viewport.inverse_scale_factor()).clamp(0.0, max);
+    }
 }
 
 /// Build the real `CampaignMenu` screen's dynamic campaign and mission lists.
@@ -784,6 +1126,11 @@ fn render_campaign_panel(
 pub(crate) mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+    use bevy::input::{
+        mouse::{MouseScrollUnit, MouseWheel},
+        touch::TouchPhase,
+    };
+    use bevy::input_focus::{FocusCause, InputFocus, InputFocusVisible};
     use bevy::ui_widgets::Activate;
     use pcx_play::map_startup_host::MapStartupHost;
     use peacecraft3::{
@@ -993,9 +1340,12 @@ pub(crate) mod tests {
             panel,
             &fdf,
             rect,
-            Text::new("Synthetic campaign"),
+            CampaignLabel::synthetic("Synthetic campaign", 90.0),
             CampaignButton(0),
-            false,
+            SpawnOptions {
+                enabled: false,
+                fill: false,
+            },
         )
         .unwrap();
         world.flush();
@@ -1028,5 +1378,172 @@ pub(crate) mod tests {
             .single(&world)
             .unwrap();
         assert!(!world.get::<Pickable>(label).unwrap().is_hoverable);
+    }
+
+    #[test]
+    fn fill_mode_row_art_fills_and_adds_no_interactive_components() {
+        let fdf = crate::fdf::Fdf::parse(
+            "Frame \"TEXTBUTTON\" \"CampaignButtonTemplate\" {\n Width 0.1,\n Height 0.02,\n}\n",
+        )
+        .unwrap();
+        let rect = crate::fdf::Rect {
+            left: 0.0,
+            bottom: 0.0,
+            width: 0.1,
+            height: 0.02,
+        };
+        let mut world = World::new();
+        let row = world
+            .spawn((
+                Button,
+                MissionButton {
+                    campaign: 0,
+                    mission: 0,
+                },
+                Node {
+                    min_height: Val::Vh(4.0),
+                    width: Val::Percent(100.0),
+                    ..default()
+                },
+            ))
+            .id();
+        spawn_campaign_button(
+            &mut world.commands(),
+            row,
+            &fdf,
+            rect,
+            CampaignLabel::synthetic("Mission", 90.0),
+            (),
+            SpawnOptions {
+                enabled: true,
+                fill: true,
+            },
+        )
+        .unwrap();
+        world.flush();
+        let target = world
+            .query_filtered::<Entity, With<crate::glue_menu::GlueButton>>()
+            .single(&world)
+            .unwrap();
+        assert_eq!(
+            world.get::<Node>(target).unwrap().position_type,
+            PositionType::Relative
+        );
+        assert!(
+            world
+                .get::<crate::menu_screens::ScreenPosition>(target)
+                .is_none()
+        );
+        assert!(
+            world
+                .get::<crate::menu_screens::CampaignAction>(target)
+                .is_none()
+        );
+        let (_, text_node) = world
+            .query_filtered::<(Entity, &Node), With<Text>>()
+            .single(&world)
+            .unwrap();
+        assert_eq!(text_node.width, Val::Percent(90.0));
+    }
+
+    fn mission_scroller_fixture(count: usize) -> (World, Entity, Vec<Entity>) {
+        let mut world = World::new();
+        world.init_resource::<InputFocus>();
+        world.init_resource::<InputFocusVisible>();
+        world.init_resource::<Messages<MouseWheel>>();
+        let scroller = world
+            .commands()
+            .spawn((
+                MissionScroller,
+                MissionScrollState::default(),
+                ScrollPosition::default(),
+                Hovered::default(),
+                ComputedNode {
+                    size: Vec2::new(200.0, 80.0),
+                    content_size: Vec2::new(200.0, 240.0),
+                    inverse_scale_factor: 0.5,
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(100.0, 100.0),
+            ))
+            .with_children(|parent| {
+                for index in 0..count {
+                    parent.spawn((
+                        MissionButton {
+                            campaign: 0,
+                            mission: index,
+                        },
+                        Hovered::default(),
+                        ComputedNode {
+                            size: Vec2::new(200.0, 80.0),
+                            inverse_scale_factor: 0.5,
+                            ..default()
+                        },
+                        UiGlobalTransform::from_xy(100.0, 100.0 + index as f32 * 80.0),
+                    ));
+                }
+            })
+            .id();
+        world.flush();
+        let rows: Vec<Entity> = world
+            .query_filtered::<Entity, With<MissionButton>>()
+            .iter(&world)
+            .collect();
+        (world, scroller, rows)
+    }
+
+    #[test]
+    fn mission_scroll_reveals_the_focused_row_and_clamps_wheel() {
+        let (mut world, scroller, rows) = mission_scroller_fixture(3);
+        let system = world.register_system(mission_scroll);
+        world.resource_mut::<InputFocusVisible>().0 = true;
+        world
+            .resource_mut::<InputFocus>()
+            .set(rows[2], FocusCause::Navigated);
+        world.run_system(system).unwrap();
+        assert_eq!(world.get::<ScrollPosition>(scroller).unwrap().0.y, 80.0);
+
+        world.resource_mut::<InputFocusVisible>().0 = false;
+        world.entity_mut(scroller).insert(Hovered(true));
+        world.get_mut::<ScrollPosition>(scroller).unwrap().0.y = 0.0;
+        world.resource_mut::<Messages<MouseWheel>>().clear();
+        world.write_message(MouseWheel {
+            unit: MouseScrollUnit::Line,
+            x: 0.0,
+            y: -3.0,
+            window: Entity::PLACEHOLDER,
+            phase: TouchPhase::Moved,
+        });
+        world.run_system(system).unwrap();
+        assert_eq!(world.get::<ScrollPosition>(scroller).unwrap().0.y, 80.0);
+
+        world.get_mut::<ScrollPosition>(scroller).unwrap().0.y = 0.0;
+        world.resource_mut::<Messages<MouseWheel>>().clear();
+        world.write_message(MouseWheel {
+            unit: MouseScrollUnit::Pixel,
+            x: 0.0,
+            y: -24.0,
+            window: Entity::PLACEHOLDER,
+            phase: TouchPhase::Moved,
+        });
+        world.run_system(system).unwrap();
+        assert_eq!(world.get::<ScrollPosition>(scroller).unwrap().0.y, 12.0);
+    }
+
+    #[test]
+    fn button_inner_width_reflects_the_authored_backdrop_inset() {
+        let button_w = 0.179;
+        let inset = 0.007;
+        assert!((button_inner_width_pct(button_w, inset).unwrap() - 92.18).abs() < 0.01);
+        assert_eq!(button_inner_width_pct(button_w, 0.0).unwrap(), 100.0);
+        for (w, i) in [
+            (0.0, 0.0),
+            (-1.0, 0.0),
+            (0.179, -0.1),
+            (0.179, 0.1),
+            (f32::NAN, 0.0),
+        ] {
+            assert!(button_inner_width_pct(w, i).is_err(), "({w},{i})");
+        }
     }
 }
