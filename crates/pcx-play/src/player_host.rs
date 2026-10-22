@@ -1687,6 +1687,149 @@ impl ObjectHost {
     }
 }
 
+const GET_PLAYER_STATE_FOR_CREDIT: &str = "GetPlayerState";
+
+impl ObjectHost {
+    /// Reads and reserves the lumber bank and gathered counter credit without
+    /// writing either. Both rows and any qualifying player-state events are
+    /// prepared before the caller mutates tree or carry state, so the commit
+    /// cannot fail after those writes.
+    pub(crate) fn prepare_lumber_credit_reserving(
+        &mut self,
+        player: HandleId,
+        amount: i32,
+        pending: usize,
+    ) -> Result<LumberCredit, Error> {
+        let fail = |reason| {
+            self.inner
+                .error(GET_PLAYER_STATE_FOR_CREDIT, Failure::PlayerState(reason))
+        };
+        if amount <= 0 {
+            return Err(fail("lumber credit must be positive"));
+        }
+        let at = self.player_index(&Value::Handle(player), GET_PLAYER_STATE_FOR_CREDIT)?;
+        let bank_state =
+            self.source_constant_enumerand("PLAYER_STATE_RESOURCE_LUMBER", "playerstate")?;
+        let gathered_state =
+            self.source_constant_enumerand("PLAYER_STATE_LUMBER_GATHERED", "playerstate")?;
+        let bank_current = self
+            .resource_value(at, bank_state)?
+            .ok_or_else(|| fail("lumber not admitted"))?;
+        let gathered_current = self
+            .resource_value(at, gathered_state)?
+            .ok_or_else(|| fail("gathered lumber not admitted"))?;
+        let bank_next = bank_current
+            .checked_add(amount)
+            .ok_or_else(|| fail("lumber credit overflow"))?;
+        let players = self.players.as_ref().ok_or_else(|| fail("not admitted"))?;
+        let resources = players
+            .resources
+            .as_ref()
+            .ok_or_else(|| fail("resources not admitted"))?;
+        let number = players.rows[at].number;
+        let gathered_delta = resources.rules.gathered(amount);
+        let gathered_next = gathered_current
+            .checked_add(gathered_delta)
+            .ok_or_else(|| fail("gathered lumber credit overflow"))?;
+        let missing = [bank_state, gathered_state]
+            .iter()
+            .filter(|state| {
+                !resources
+                    .values
+                    .iter()
+                    .any(|(owner, stored, _)| *owner == number && stored == *state)
+            })
+            .count();
+        if missing > 0 {
+            let players = self.players.as_mut().ok_or_else(|| fail("not admitted"))?;
+            players
+                .resources
+                .as_mut()
+                .expect("resources admitted")
+                .values
+                .try_reserve(missing)
+                .map_err(|_| fail("resource row capacity"))?;
+        }
+        let bank_change =
+            self.prepare_player_state_change_reserving(player, bank_state, bank_next, pending)?;
+        let gathered_change =
+            self.prepare_player_state_change_reserving(player, gathered_state, gathered_next, 0)?;
+        let players = self
+            .players
+            .as_ref()
+            .expect("prepared credit implies players");
+        let resources = players
+            .resources
+            .as_ref()
+            .expect("prepared credit implies resources");
+        let row = |state| {
+            (
+                number,
+                state,
+                resources
+                    .values
+                    .iter()
+                    .position(|(owner, stored, _)| *owner == number && *stored == state),
+            )
+        };
+        let (bank_number, bank_state, bank_index) = row(bank_state);
+        let (gathered_number, gathered_state, gathered_index) = row(gathered_state);
+        Ok(LumberCredit {
+            rows: vec![
+                LumberRow {
+                    number: bank_number,
+                    state: bank_state,
+                    index: bank_index,
+                    next: bank_next,
+                },
+                LumberRow {
+                    number: gathered_number,
+                    state: gathered_state,
+                    index: gathered_index,
+                    next: gathered_next,
+                },
+            ],
+            changes: vec![bank_change, gathered_change],
+        })
+    }
+
+    /// Writes a prepared lumber credit and commits the reserved events.
+    pub(crate) fn apply_lumber_credit(&mut self, credit: LumberCredit) {
+        let players = self
+            .players
+            .as_mut()
+            .expect("prepared credit implies admitted players");
+        let resources = players
+            .resources
+            .as_mut()
+            .expect("prepared credit implies admitted resources");
+        for row in credit.rows {
+            match row.index {
+                Some(index) => resources.values[index].2 = row.next,
+                None => resources.values.push((row.number, row.state, row.next)),
+            }
+        }
+        for change in credit.changes.into_iter().flatten() {
+            self.commit_player_state_change(change);
+        }
+    }
+}
+
+/// A lumber bank and gathered-counter credit with prepared rows and events.
+#[derive(Debug)]
+pub(crate) struct LumberCredit {
+    rows: Vec<LumberRow>,
+    changes: Vec<Option<PlayerStateChange>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LumberRow {
+    number: i32,
+    state: i32,
+    index: Option<usize>,
+    next: i32,
+}
+
 /// A gold debit that has been checked and whose row is ready.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoldDebit {

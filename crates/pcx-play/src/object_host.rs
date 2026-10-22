@@ -29,6 +29,7 @@ pub struct ObjectHost {
     locations: bool,
     effects: bool,
     unit_activity: Option<unit_activity::State>,
+    harvest: Option<harvest_runtime::State>,
     order_registry: Option<std::sync::Arc<crate::order_registry::Registry>>,
     inner: EnumHost,
     group_limit: Option<usize>,
@@ -220,6 +221,7 @@ impl ObjectHost {
             units: None,
             order_registry: None,
             unit_activity: None,
+            harvest: None,
             locations: false,
             time_of_day: None,
             threads: thread::Threads::default(),
@@ -861,6 +863,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.order_registry_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.harvest_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.unit_vitals_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -1206,6 +1211,8 @@ mod trigger_runtime_tests;
 mod messages;
 pub use messages::{MessageBudget, MessageState, TimedMessage};
 
+#[path = "harvest_runtime.rs"]
+pub(crate) mod harvest_runtime;
 #[path = "unit_activity_host.rs"]
 mod unit_activity;
 pub use unit_activity::{AcceptedSpan, UnitActivity};
