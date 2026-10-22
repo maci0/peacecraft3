@@ -831,6 +831,7 @@ impl ObjectHost {
             Vec::new()
         };
         self.advance_unit_sleep(work)?;
+        self.advance_divine_shield(now);
         let mut active = std::mem::take(&mut self.unit_activity.as_mut().expect("activity").active);
         // Followers observe the same pre-projection target positions regardless of handle order.
         let mut followed = std::mem::take(

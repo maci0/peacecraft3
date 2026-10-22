@@ -579,6 +579,9 @@ impl ObjectHost {
         if let Some(result) = self.unit_buff_native(name, args) {
             return Some(result);
         }
+        if let Some(result) = self.divine_shield_native(name, args) {
+            return Some(result);
+        }
         if name == "SetUnitAnimation" && self.units.as_ref()?.models.is_some() {
             return Some(self.set_unit_animation(args));
         }

@@ -78,6 +78,7 @@ impl ObjectHost {
             }
             self.clear_unit_cooldowns(unit);
             self.forget_unit_buffs(unit);
+            self.forget_divine_shield(unit);
             let location = self.timer_game_time().zip(position);
             *self.inner.entry_mut(unit)? = Entry::RemovedUnit { location };
             Ok(Value::Null)
