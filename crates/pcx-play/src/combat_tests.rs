@@ -3391,3 +3391,68 @@ fn removing_the_target_ends_its_art_and_the_clock_cannot_revive_it() {
 }
 #[path = "player_score_tests.rs"]
 mod player_score;
+
+#[test]
+fn melee_chase_routes_to_attack_reach_instead_of_the_occupied_target_centre() {
+    let (mut vm, a, b) = open(&armed("64", "normal"));
+    let h = &mut vm.host().inner;
+    h.native("ShowUnit", &[Value::Handle(b), Value::Bool(false)])
+        .unwrap();
+    let owner = h.native("Player", &[Value::Int(5)]).unwrap();
+    let Value::Handle(target) = h
+        .native(
+            "CreateUnit",
+            &[
+                owner,
+                Value::Int(i32::from_be_bytes(*b"u001")),
+                Value::Real(112.0),
+                Value::Real(16.0),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("target")
+    };
+    let life = h.executed_unit(target).unwrap().vitals.unwrap().life;
+    assert_eq!(
+        h.native(
+            "IssueTargetOrder",
+            &[
+                Value::Handle(a),
+                Value::Str("alpha".into()),
+                Value::Handle(target)
+            ]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    step(&mut vm, 1.0 / 64.0);
+    let h = &mut vm.host().inner;
+    let goal = h
+        .executed_unit(a)
+        .unwrap()
+        .activity
+        .as_ref()
+        .unwrap()
+        .waypoints()
+        .0
+        .last()
+        .copied()
+        .unwrap();
+    // Fixture range 64 plus two radius-2 footprints: approach x=44 from the west.
+    assert!(goal[0] >= 44.0 && goal[0] < 45.0, "{goal:?}");
+    assert_eq!(goal[1], 16.0);
+    assert_ne!(goal, h.executed_unit(target).unwrap().position.unwrap());
+    step(&mut vm, 5.0);
+    let h = &mut vm.host().inner;
+    assert!(h.executed_unit(target).unwrap().vitals.unwrap().life < life);
+    assert!(
+        !h.executed_unit(a)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .moving()
+    );
+}

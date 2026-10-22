@@ -1078,7 +1078,7 @@ impl ObjectHost {
                     .chase;
                 let stale = chase.is_none_or(|c| distance(c, target_position) > weapon.range * 0.5);
                 if stale || idle {
-                    self.steer_unit(unit, Some(target_position), name)?;
+                    self.steer_unit_in_range(unit, Some(target_position), reach, name)?;
                     if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                         record.combat.as_mut().expect("combat").chase = Some(target_position);
                     }

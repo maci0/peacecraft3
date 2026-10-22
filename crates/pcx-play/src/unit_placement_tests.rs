@@ -614,3 +614,53 @@ fn failed_reveal_preserves_hidden_occupancy_and_never_erases_static_ground() {
     assert_eq!(p.grid.pathing.cells, ground);
     assert!(!p.stamps[0].1.active);
 }
+
+#[test]
+fn attack_region_routes_around_a_blocked_contact_point_without_target_occupancy() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "attack-region".into(),
+        },
+        10000,
+    );
+    for (unit, point) in [
+        (id(1), [16.0, 16.0]),
+        (id(2), [112.0, 16.0]),
+        (id(3), [44.0, 16.0]),
+    ] {
+        let prepared = p.prepare(point, Some(2.0), "_", 0.0).unwrap();
+        p.commit(unit, prepared);
+    }
+    let before = p.occupied.clone();
+    let approach = approach_point([16.0, 16.0], [112.0, 16.0], 68.0);
+    assert!(
+        p.prepare_motion(id(1), approach, 2.0).unwrap().is_none(),
+        "the straight contact point is blocked"
+    );
+    let mut work = 2000;
+    let route = p
+        .route_within(id(1), [16.0, 16.0], [112.0, 16.0], 2.0, 68.0, &mut work)
+        .unwrap();
+    let end = *route.last().unwrap();
+    assert_ne!(end, [112.0, 16.0]);
+    assert!((end[0] - 112.0).hypot(end[1] - 16.0) <= 68.0, "{route:?}");
+    assert!(
+        route.iter().any(|p| p[1] != 16.0),
+        "the search finds another approach angle"
+    );
+    let mut previous = [16.0, 16.0];
+    for point in route {
+        assert!(
+            p.segment_clear(id(1), previous, point, 2.0, &mut 1000)
+                .unwrap()
+        );
+        previous = point;
+    }
+    assert_eq!(p.occupied, before);
+    assert!(
+        p.route_within(id(1), [16.0, 16.0], [112.0, 16.0], 2.0, f32::NAN, &mut 2000)
+            .is_err()
+    );
+}

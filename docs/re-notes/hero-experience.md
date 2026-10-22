@@ -128,6 +128,10 @@ unit 825, chasing `[3632.0, -3992.7148]`, waypoint 0 of 13, with its motion epoc
 restarted at that same time and zero distance credited. This is a recreation
 movement-budget failure, not a native observation. It needs a bounded chase
 regression and a progress fix rather than increasing the work allowance.
+The subsequent [attack-region correction](unit-collision-replanning.md#attack-regions-and-zero-time-replans-2026-10-22)
+passes that failure with the same controller and reaches an unsupported
+`GroupEnumUnitsOfPlayer` call at requested tick 28475. That is the current
+script-execution frontier, not chapter victory.
 The latest source draft and all failed route logs are retained in local
 `.scratch/campaign-route/route-xp-*`; no failing route is published as a passing
 chapter gate. Victory and next-map transition remain unachieved.
@@ -239,7 +243,8 @@ native ordering remains unqualified.
 ## Required continuation
 
 Qualify the remaining eligibility, arithmetic/event timing, initial player XP
-handicap and legacy-cache migration policy. Fix the movement-work failure exposed
-by ordinary group target orders.
+handicap and legacy-cache migration policy. Implement the owner-based unit
+enumeration reached after the attack-region correction, preserving the real
+predicate and group-callback paths.
 Re-run the same preserved itinerary and continue through
 chapter victory and the next-map transition. Neither is achieved here.

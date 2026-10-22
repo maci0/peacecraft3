@@ -154,3 +154,52 @@ blocked stops at a fixed cadence must project at that cadence.
 
 Order retention after a stop is not modelled here. `GetUnitCurrentOrder` reads
 the moving state, and the spans carry no order data.
+
+## Attack regions and zero-time replans (2026-10-22)
+
+An ordinary-input Human01 itinerary exposed shared movement-work exhaustion at
+requested tick 5377. Inspection identifies unit 825 as a bandit (`nban`) chasing
+footman 829, correcting the earlier tentative footman label. The bandit's chase
+was aimed at the occupied target centre. Its bounded search returned a partial
+route after consuming the remaining work; the immediate projection of that new
+route then failed with zero elapsed time. Removing that redundant projection
+exposed the following unit's starvation at the same tick, so it was insufficient
+by itself.
+
+Successful blocked replans now retain their new epoch until the next projection.
+They cannot move again at the same time. The synthetic obstruction needs 136
+work for the block and route, compared with 138 including the old zero-time
+loop/check. The exact-budget regression fails on the old code and passes with
+zero work remaining, the same stop point, retained destination and next-tick
+resumption. Existing accepted-span and speed checks remain in force.
+
+Combat now supplies its already computed weapon range plus both collision radii
+to the bounded router. A clear straight approach is a fast path; if that point
+is obstructed, the same search can reach another clear cell centre inside the
+attack region. Its heuristic measures remaining distance to the region, and it
+does not search for an unoccupied copy of the target's centre. Collision masks,
+occupancy, diagonal-corner checks and work charges remain authoritative. Range
+survives blocked replanning; point Move, Follow and Patrol keep zero reach and
+their existing point-goal rules. Motion retains the target coordinate as its
+intent, separately from the endpoint found inside reach.
+
+A second regression blocks the straight contact point, requires another approach
+angle inside reach, checks every segment and confirms unchanged occupancy.
+A combat regression verifies that the attacker approaches within the fixture's
+range and subsequently deals damage. No asset values or larger work allowance
+are substituted for these tests.
+
+The same controller on the unchanged Human01 map now clears the former failure,
+earns the authored XP cap and ledger reward, and reaches a later unsupported
+`GroupEnumUnitsOfPlayer` call at requested tick 28475. Earlier point-only approach
+experiments and their failures are retained alongside the current route in local
+`.scratch/campaign-route/`; none is chapter acceptance. The controller's commands
+respond to current state, so this is not replay equality for an identical input
+journal. Native steering/path choice, exact range geometry and complete campaign
+victory/transition remain unqualified. General searches may still refuse their
+explicit operating bounds; this change does not remove those bounds.
+
+Private checks for this increment: 1,135 play library tests pass with 33 ignored;
+318 focused unit-creation tests and the region-routing test pass. Strict
+all-target Clippy, the WASM library check and native application all-target check
+pass. Timing is report-only; the 136-work regression is deterministic.

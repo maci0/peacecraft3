@@ -56,6 +56,7 @@ impl Turn {
 struct Motion {
     /// Requested order destination. `path` may end short of it when no route reaches it.
     goal: [f32; 2],
+    reach: f32,
     path: Vec<[f32; 2]>,
     next: usize,
     base: [f32; 2],
@@ -670,6 +671,7 @@ impl ObjectHost {
                 };
                 Some(Box::new(Motion {
                     goal: [x, y],
+                    reach: 0.0,
                     path,
                     next: 0,
                     base: start,
@@ -992,6 +994,16 @@ impl ObjectHost {
         destination: Option<[f32; 2]>,
         name: &str,
     ) -> Result<bool, Error> {
+        self.steer_unit_in_range(unit, destination, 0.0, name)
+    }
+
+    pub(super) fn steer_unit_in_range(
+        &mut self,
+        unit: HandleId,
+        destination: Option<[f32; 2]>,
+        reach: f32,
+        name: &str,
+    ) -> Result<bool, Error> {
         let fail = |detail: &str| self.inner.error(name, Failure::UnitActivity(detail.into()));
         let route_work = self
             .unit_activity
@@ -1018,16 +1030,17 @@ impl ObjectHost {
                 let radius = self.unit_collision_radius(unit, name)?;
                 let mut work = route_work;
                 let path = if activity.pathing_off {
-                    vec![target]
+                    vec![crate::unit_placement::approach_point(start, target, reach)]
                 } else {
                     self.unit_placement
                         .as_ref()
                         .ok_or_else(|| fail("live placement required"))?
-                        .route(unit, start, target, radius, &mut work)
+                        .route_within(unit, start, target, radius, reach, &mut work)
                         .map_err(|e| self.inner.error(name, Failure::UnitActivity(e.to_string())))?
                 };
                 Some(Box::new(Motion {
                     goal: target,
+                    reach,
                     path,
                     next: 0,
                     base: start,
@@ -1136,6 +1149,7 @@ impl ObjectHost {
         }
         let mut motion = Box::new(Motion {
             goal: patrol.goal(),
+            reach: 0.0,
             path: Vec::new(),
             next: 0,
             base: position,
@@ -1360,7 +1374,7 @@ impl ObjectHost {
             .unit_placement
             .as_ref()
             .expect("admitted placement")
-            .route(unit, from, motion.goal, radius, &mut budget)
+            .route_within(unit, from, motion.goal, radius, motion.reach, &mut budget)
             .map_err(|e| {
                 self.inner
                     .error("unit activity", Failure::UnitActivity(e.to_string()))
@@ -1399,10 +1413,9 @@ impl ObjectHost {
             return Err(fail("game time precedes the movement order"));
         }
         // Distance is measured from `motion.started`; a replan restarts it at `now`.
-        let mut distance = (now - motion.started) * f64::from(speed);
+        let distance = (now - motion.started) * f64::from(speed);
         let radius = self.unit_collision_radius(unit, "unit activity")?;
         let mut moved = 0;
-        let mut replanned = false;
         while motion.next < motion.path.len() {
             *work = work.checked_sub(1).ok_or_else(|| {
                 self.inner.error(
@@ -1566,16 +1579,9 @@ impl ObjectHost {
                     self.inner
                         .error("unit activity", Failure::UnitActivity(detail.into()))
                 })?;
-                // One replan per tick: a blocked segment that stays blocked waits for the next tick.
-                if replanned {
-                    motion.started = now - motion.last_distance / f64::from(speed);
-                    break;
-                }
-                replanned = true;
                 if self.replan_blocked(unit, origin, motion, now, work)? {
                     // The new route starts at this tick's time with no distance credited yet.
-                    distance = 0.;
-                    continue;
+                    break;
                 }
                 motion.next = motion.path.len();
                 if let Entry::Unit { record } = self.inner.entry_mut(unit)?
