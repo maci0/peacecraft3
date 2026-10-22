@@ -652,7 +652,7 @@ endfunction
 }
 
 #[test]
-fn set_player_state_inside_trigger_execute_queues_instead_of_nesting() {
+fn set_player_state_inside_trigger_execute_runs_before_the_setter_returns() {
     let mut common = common(0);
     let globals = common.find("\nglobals\n").expect("globals") + 1;
     common.insert_str(
@@ -670,9 +670,10 @@ integer hits = 0
 endglobals
 function nested takes nothing returns nothing
     call SetPlayerState(P, PLAYER_STATE_RESOURCE_GOLD, 30)
+    set hits = hits * 10 + 2
 endfunction
 function observe takes nothing returns nothing
-    set hits = hits + 1
+    set hits = hits * 10 + 1
 endfunction
 function main takes nothing returns nothing
     set A = CreateTrigger()
@@ -682,20 +683,15 @@ function main takes nothing returns nothing
     call TriggerAddAction(B, function observe)
     call TriggerRegisterPlayerStateEvent(B, P, PLAYER_STATE_RESOURCE_GOLD, LESS_THAN, 50.0)
     call TriggerExecute(A)
-    set hits = hits + 100
+    set hits = hits * 10 + 3
 endfunction
 ";
     let (ctx, host) = base_map(&common, map);
     let mut vm = Arc::clone(&ctx.scripts).owned_vm(host.with_player_state_events(4).unwrap());
     vm.init_globals().unwrap();
     vm.call("main", &[]).unwrap();
-    assert_eq!(vm.global("hits"), Value::Int(100));
-    let fired = vm
-        .host()
-        .inner
-        .take_fired_event()
-        .expect("queued player-state event");
-    assert!(fired.subject.player_state.is_some());
+    assert_eq!(vm.global("hits"), Value::Int(123));
+    assert!(vm.host().inner.take_fired_event().is_none());
 }
 
 #[test]
@@ -791,4 +787,116 @@ endfunction
     vm.resume_thread(ticket).unwrap();
     assert_eq!(vm.global("order"), Value::Int(1239));
     assert_eq!(vm.host().inner.parked_thread_count(), 0);
+}
+
+fn assert_native_nested_ordering(sleep: bool) {
+    let mut common = common(0);
+    let at = common.find("type playerstate extends handle").unwrap();
+    common.insert_str(at, CONDITIONS);
+    let at = common.find("\nglobals\n").unwrap();
+    common.insert_str(
+        at,
+        "\nnative TriggerExecute takes trigger t returns nothing\nconstant native GetTriggerPlayer takes nothing returns player\n",
+    );
+    let map = format!(
+        r#"globals
+trigger A = null
+trigger C = null
+trigger N = null
+player P = null
+string trace = ""
+boolean okay = true
+boolean wait = {sleep}
+endglobals
+function nested_condition takes nothing returns boolean
+    set okay = okay and GetTriggeringTrigger() == N
+    set trace = trace + "N"
+    return true
+endfunction
+function condition takes nothing returns boolean
+    local boolean accepted
+    set okay = okay and GetTriggeringTrigger() == A
+    set trace = trace + "B"
+    set accepted = TriggerEvaluate(N)
+    set okay = okay and GetTriggeringTrigger() == A
+    set trace = trace + "E"
+    return accepted
+endfunction
+function action takes nothing returns nothing
+    set okay = okay and GetTriggeringTrigger() == A and GetTriggerPlayer() == P
+    set trace = trace + "A"
+    if GetPlayerState(P, PLAYER_STATE_RESOURCE_GOLD) == 10 then
+        set trace = trace + "W"
+        if wait then
+            call TriggerSleepAction(2.0)
+        endif
+        set okay = okay and GetTriggeringTrigger() == A and GetEventPlayerState() == PLAYER_STATE_RESOURCE_GOLD
+        set trace = trace + "R"
+        call SetPlayerState(P, PLAYER_STATE_RESOURCE_GOLD, 20)
+        set okay = okay and GetTriggeringTrigger() == A
+        set trace = trace + "Z"
+    endif
+    set trace = trace + "L"
+endfunction
+function caller takes nothing returns nothing
+    set trace = trace + "C"
+    call SetPlayerState(P, PLAYER_STATE_RESOURCE_GOLD, 10)
+    set okay = okay and GetTriggeringTrigger() == C
+    set trace = trace + "D"
+endfunction
+function after_state takes nothing returns trigger
+    return GetTriggeringTrigger()
+endfunction
+function main takes nothing returns nothing
+    set A = CreateTrigger()
+    set C = CreateTrigger()
+    set N = CreateTrigger()
+    set P = Player(0)
+    call TriggerAddCondition(N, Condition(function nested_condition))
+    call TriggerAddCondition(A, Condition(function condition))
+    call TriggerAddAction(A, function action)
+    call TriggerAddAction(C, function caller)
+    call TriggerRegisterPlayerStateEvent(A, P, PLAYER_STATE_RESOURCE_GOLD, GREATER_THAN_OR_EQUAL, 10.0)
+    call TriggerExecute(C)
+    set trace = trace + "F"
+endfunction
+"#
+    );
+    let (ctx, host) = base_map(&common, &map);
+    let mut host = host
+        .with_filters(crate::playercolor_host::FilterBudget { max_records: 4 })
+        .unwrap()
+        .with_conditions(crate::playercolor_host::ConditionBudget { max_records: 4 })
+        .unwrap()
+        .with_trigger_conditions(4)
+        .unwrap()
+        .with_player_state_events(4)
+        .unwrap();
+    host.admit_thread_sleep(2).unwrap();
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    if sleep {
+        assert_eq!(vm.global("trace"), Value::Str("CBNEAWDF".into()));
+        assert_eq!(vm.host().inner.parked_thread_count(), 1);
+        let ticket = vm.host().inner.next_thread_wake(30.0).unwrap().unwrap();
+        vm.resume_thread(ticket).unwrap();
+        assert_eq!(vm.global("trace"), Value::Str("CBNEAWDFRBNEALZL".into()));
+    } else {
+        assert_eq!(vm.global("trace"), Value::Str("CBNEAWRBNEALZLDF".into()));
+    }
+    assert_eq!(vm.global("okay"), Value::Bool(true));
+    assert_eq!(vm.host().inner.parked_thread_count(), 0);
+    assert!(vm.host().inner.take_fired_event().is_none());
+    assert_eq!(vm.call("after_state", &[]).unwrap(), Value::Null);
+}
+
+#[test]
+fn nested_mutation_and_condition_evaluation_match_the_native_order() {
+    assert_native_nested_ordering(false);
+}
+
+#[test]
+fn sleeping_event_resumes_its_context_and_can_deliver_a_nested_mutation() {
+    assert_native_nested_ordering(true);
 }

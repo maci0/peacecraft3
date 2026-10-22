@@ -2,10 +2,10 @@
 //! (region membership, deaths) queue events; the session delivers them at
 //! script boundaries in firing order: filter, enabled check, conditions, then
 //! actions as one thread. Player-state changes admitted by
-//! `with_player_state_events` deliver before `SetPlayerState` returns only
-//! when no trigger or event delivery is already active; other events always
-//! defer to the next boundary. Both orderings are recreation choices; the
-//! original's synchronous nesting is unqualified.
+//! `with_player_state_events` deliver before `SetPlayerState` returns,
+//! including nested mutations inside trigger callbacks. Other events defer to
+//! the next boundary. Player-state callback ordering is covered by the native
+//! nested-mutation and sleeping-action observations.
 use super::{Entry, Error, Failure, ObjectHost, TriggerDelivery};
 use pcx_script::{HandleId, Value, value::FunctionId};
 use std::collections::{BTreeSet, VecDeque};
@@ -67,10 +67,18 @@ pub(super) struct Delivery {
     synchronous: Option<VecDeque<FiredEvent>>,
     pub(super) subject: EventSubject,
     active: bool,
+    previous: Vec<DeliveryContext>,
     /// Region registrations by arena event handle, with the units inside.
     region_members: BTreeSet<(HandleId, HandleId)>,
     /// Registrations whose membership was initialized without firing.
     region_known: BTreeSet<HandleId>,
+}
+
+struct DeliveryContext {
+    trigger: Option<HandleId>,
+    event: Option<HandleId>,
+    subject: EventSubject,
+    active: bool,
 }
 
 const RESPONSES: [&str; 21] = [
@@ -108,9 +116,6 @@ impl ObjectHost {
             .map_err(|_| self.inner.error("event delivery", Failure::Capacity))
     }
     /// Route events queued by the current mutation into a synchronous batch.
-    pub(super) fn delivery_active(&self) -> bool {
-        self.events.active
-    }
     pub(super) fn begin_synchronous_delivery(&mut self) {
         self.events.synchronous = Some(VecDeque::new());
     }
@@ -248,12 +253,28 @@ impl ObjectHost {
         &mut self,
         fired: &FiredEvent,
     ) -> Result<Option<TriggerDelivery>, Error> {
+        self.begin_fired_event_context(fired, false)
+    }
+
+    pub(super) fn begin_player_state_fired_event(
+        &mut self,
+        fired: &FiredEvent,
+    ) -> Result<Option<TriggerDelivery>, Error> {
+        self.begin_fired_event_context(fired, true)
+    }
+
+    fn begin_fired_event_context(
+        &mut self,
+        fired: &FiredEvent,
+        nested: bool,
+    ) -> Result<Option<TriggerDelivery>, Error> {
         let name = "event delivery";
-        if self.events.active
-            || self
-                .trigger_runtime
-                .as_ref()
-                .is_some_and(|s| s.active.is_some())
+        if !nested
+            && (self.events.active
+                || self
+                    .trigger_runtime
+                    .as_ref()
+                    .is_some_and(|s| s.active.is_some()))
         {
             return Err(self
                 .inner
@@ -267,10 +288,20 @@ impl ObjectHost {
             return Ok(None);
         }
         let delivery = self.trigger_delivery(fired.trigger, name)?;
+        self.events
+            .previous
+            .try_reserve(1)
+            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
         let state = self
             .trigger_runtime
             .as_mut()
             .ok_or_else(|| self.inner.error(name, Failure::TriggerState("no runtime")))?;
+        self.events.previous.push(DeliveryContext {
+            trigger: state.active,
+            event: state.event_context,
+            subject: self.events.subject,
+            active: self.events.active,
+        });
         state.active = Some(fired.trigger);
         state.event_context = fired.event;
         self.events.subject = fired.subject;
@@ -279,13 +310,16 @@ impl ObjectHost {
     }
 
     pub fn finish_fired_event(&mut self) {
+        let previous = self.events.previous.pop();
         if let Some(state) = &mut self.trigger_runtime {
-            state.active = None;
-            state.event_context = None;
+            state.active = previous.as_ref().and_then(|context| context.trigger);
+            state.event_context = previous.as_ref().and_then(|context| context.event);
         }
         let item = self.events.subject.item;
-        self.events.subject = EventSubject::default();
-        self.events.active = false;
+        self.events.subject = previous
+            .as_ref()
+            .map_or_else(EventSubject::default, |context| context.subject);
+        self.events.active = previous.is_some_and(|context| context.active);
         self.settle_powerup_item(item);
     }
 

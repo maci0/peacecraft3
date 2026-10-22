@@ -84,26 +84,28 @@ observed value. Delivery uses the existing event context, with
 `GetEventPlayerState` returning the registered state handle. States outside the
 effective resource projection refuse instead of inventing a value.
 
-`SetPlayerState` is the only mutation with synchronous delivery: when player
-state events are admitted and no trigger or event delivery is already active,
+`SetPlayerState` is the mutation with synchronous delivery: when player
+state events are admitted,
 its matching filters, conditions and actions run through the normal
 event-delivery context before the native returns; no later tick is required.
 Other event families still defer to the next script boundary. A
 `TriggerSleepAction` inside an action parks that action and lets the remaining
 matching registrations and the enclosing script continue. `SetPlayerState`
-calls made while a trigger is already executing, or while another event is
-being delivered, are not delivered recursively: they update the effective
-value and queue their events for the next delivery boundary. This ordering is
-a recreation choice; the original's exact nested delivery timing is not
-qualified here.
+calls inside a trigger or another state event also deliver synchronously and
+reentrantly. Nested frames restore the caller's trigger and response context;
+a parked action retains its event context when resumed. The controlled native
+ordering and sleep observations are recorded in
+`player-state-event-observation.md`. Other event families and external effective
+food changes retain boundary delivery as a recreation policy.
 
 The shipped witness is `Human02.j:3506` and `:3520`, registering gold below
 1000 and lumber below 300, with the declaration at `common.j:1284` and the
 `EVENT_PLAYER_STATE_LIMIT` response at `:1287`. Synthetic tests cover baseline
 seeding, changed and unchanged values, comparisons from selected constants,
 response context, budgets and missing operation declarations. The selected
-Human02 admission passes through this source contract; executing that map still
-stops earlier at unimplemented `SetResourceAmount`.
+Human02 admission passes through this source contract. The integrated continuation
+still requires a new execution gate after the runtime changes; admission alone
+does not establish that map's startup or mission completion.
 
 Synthetic tests exercise changed source operands and malformed source refusal,
 initial balances, setter clamps with retained raw requests, per-player

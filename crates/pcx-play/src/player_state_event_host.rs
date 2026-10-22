@@ -2,7 +2,7 @@
 //! value. The central player-state mutation path queues qualifying changes as
 //! they happen; a boundary poll catches effective changes computed outside that
 //! path, such as live food.
-use super::super::PlayerStateDelivery;
+use super::super::{PlayerStateDelivery, PlayerStateFrame};
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_script::{HandleId, ScriptCall, Value};
 pub(super) const REGISTER: &str = "TriggerRegisterPlayerStateEvent";
@@ -18,18 +18,21 @@ impl ObjectHost {
         args: &[Value],
     ) -> Result<Option<ScriptCall>, Error> {
         if name != SET
-            || self.delivery_active()
-            || self
-                .trigger_runtime
-                .as_ref()
-                .is_some_and(|runtime| runtime.active.is_some())
-            || self
-                .triggers
-                .as_ref()
-                .is_none_or(|admitted| admitted.player_state_event_limit.is_none())
+            || self.triggers.as_ref().is_none_or(|admitted| {
+                admitted.player_state_event_limit.is_none()
+                    || admitted.player_state_registrations.is_empty()
+            })
         {
             return Ok(None);
         }
+        if self.player_state_frames.len() >= pcx_script::eval::MAX_CALL_DEPTH as usize {
+            return Err(self
+                .inner
+                .error(SET, Failure::Budget("nested player-state callbacks")));
+        }
+        self.player_state_frames
+            .try_reserve(1)
+            .map_err(|_| self.inner.error(SET, Failure::Capacity))?;
         self.begin_synchronous_delivery();
         let result = self.request_player_state(args);
         let Some(events) = self.take_synchronous_delivery() else {
@@ -42,26 +45,34 @@ impl ObjectHost {
         if events.is_empty() {
             return Ok(Some(ScriptCall::Return(Value::Null)));
         }
-        self.player_state_sync = Some(events);
+        self.player_state_frames.push(PlayerStateFrame {
+            events,
+            active: false,
+            spawn_depth: 0,
+            callback_depth: 0,
+            conditions: None,
+        });
         self.begin_next_player_state_event().map(Some)
     }
 
     fn begin_next_player_state_event(&mut self) -> Result<ScriptCall, Error> {
         loop {
             let Some(event) = self
-                .player_state_sync
-                .as_mut()
-                .and_then(|events| events.pop_front())
+                .player_state_frames
+                .last_mut()
+                .and_then(|frame| frame.events.pop_front())
             else {
-                self.player_state_sync = None;
-                self.player_state_sync_active = false;
+                self.player_state_frames.pop();
                 return Ok(ScriptCall::Return(Value::Null));
             };
             let filter = event.filter;
-            let Some(delivery) = self.begin_fired_event(&event)? else {
+            let Some(delivery) = self.begin_player_state_fired_event(&event)? else {
                 continue;
             };
-            self.player_state_sync_active = true;
+            self.player_state_frames
+                .last_mut()
+                .expect("active state call")
+                .active = true;
             let mut conditions = Vec::new();
             let count = usize::from(filter.is_some()) + delivery.conditions.len();
             conditions
@@ -72,16 +83,27 @@ impl ObjectHost {
             if conditions.is_empty() {
                 if delivery.actions.is_empty() {
                     self.finish_fired_event();
-                    self.player_state_sync_active = false;
+                    self.player_state_frames
+                        .last_mut()
+                        .expect("active state call")
+                        .active = false;
                     continue;
                 }
-                self.player_state_spawn_depth = self.spawned_thread_depth();
+                let depth = self.spawned_thread_depth();
+                self.player_state_frames
+                    .last_mut()
+                    .expect("active state call")
+                    .spawn_depth = depth;
                 self.enter_spawned_thread();
                 return Ok(ScriptCall::Spawn(delivery.actions));
             }
             let first = conditions[0];
-            self.player_state_callback_depth = self.callbacks.len();
-            self.player_state_conditions = Some(PlayerStateDelivery {
+            let frame = self
+                .player_state_frames
+                .last_mut()
+                .expect("active state call");
+            frame.callback_depth = self.callbacks.len();
+            frame.conditions = Some(PlayerStateDelivery {
                 conditions,
                 actions: delivery.actions,
                 next: 1,
@@ -97,13 +119,23 @@ impl ObjectHost {
                 "player state condition did not return boolean",
             )));
         };
-        let Some(frame) = self.player_state_conditions.as_mut() else {
+        let Some(frame) = self
+            .player_state_frames
+            .last_mut()
+            .and_then(|frame| frame.conditions.as_mut())
+        else {
             return Err(fail(Failure::TriggerState("no active delivery")));
         };
         if !accepted {
-            self.player_state_conditions = None;
+            self.player_state_frames
+                .last_mut()
+                .expect("active state call")
+                .conditions = None;
             self.finish_fired_event();
-            self.player_state_sync_active = false;
+            self.player_state_frames
+                .last_mut()
+                .expect("active state call")
+                .active = false;
             return self.begin_next_player_state_event();
         }
         if let Some(&next) = frame.conditions.get(frame.next) {
@@ -111,38 +143,50 @@ impl ObjectHost {
             return Ok(ScriptCall::Call(next));
         }
         let frame = self
-            .player_state_conditions
+            .player_state_frames
+            .last_mut()
+            .expect("active state call")
+            .conditions
             .take()
             .expect("checked active delivery");
         if frame.actions.is_empty() {
             self.finish_fired_event();
-            self.player_state_sync_active = false;
+            self.player_state_frames
+                .last_mut()
+                .expect("active state call")
+                .active = false;
             self.begin_next_player_state_event()
         } else {
-            self.player_state_spawn_depth = self.spawned_thread_depth();
+            let depth = self.spawned_thread_depth();
+            self.player_state_frames
+                .last_mut()
+                .expect("active state call")
+                .spawn_depth = depth;
             self.enter_spawned_thread();
             Ok(ScriptCall::Spawn(frame.actions))
         }
     }
 
     pub(crate) fn after_player_state_spawn(&mut self) -> Result<Option<ScriptCall>, Error> {
-        if !self.player_state_sync_active
-            || self.player_state_conditions.is_some()
-            || self.spawned_thread_depth() != self.player_state_spawn_depth
-        {
+        let depth = self.spawned_thread_depth();
+        if self.player_state_frames.last().is_none_or(|frame| {
+            !frame.active || frame.conditions.is_some() || depth != frame.spawn_depth
+        }) {
             return Ok(None);
         }
         self.finish_fired_event();
-        self.player_state_sync_active = false;
+        self.player_state_frames
+            .last_mut()
+            .expect("active state call")
+            .active = false;
         self.begin_next_player_state_event().map(Some)
     }
 
     pub(crate) fn abort_player_state_delivery(&mut self) {
-        self.player_state_conditions = None;
-        self.player_state_sync = None;
-        if self.player_state_sync_active {
-            self.player_state_sync_active = false;
-            self.finish_fired_event();
+        while let Some(frame) = self.player_state_frames.pop() {
+            if frame.active {
+                self.finish_fired_event();
+            }
         }
     }
 }

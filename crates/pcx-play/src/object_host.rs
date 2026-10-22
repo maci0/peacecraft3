@@ -101,11 +101,14 @@ pub struct ObjectHost {
     trigger_runtime: Option<trigger_runtime::State>,
     unit_range_runtime: Option<unit_ranges::State>,
     callbacks: Vec<NativeCallback>,
-    player_state_sync: Option<std::collections::VecDeque<event_delivery::FiredEvent>>,
-    player_state_sync_active: bool,
-    player_state_spawn_depth: usize,
-    player_state_callback_depth: usize,
-    player_state_conditions: Option<PlayerStateDelivery>,
+    player_state_frames: Vec<PlayerStateFrame>,
+}
+pub(super) struct PlayerStateFrame {
+    events: std::collections::VecDeque<event_delivery::FiredEvent>,
+    active: bool,
+    spawn_depth: usize,
+    callback_depth: usize,
+    conditions: Option<PlayerStateDelivery>,
 }
 /// Remaining callbacks for the event whose conditions just ran.
 pub(super) struct PlayerStateDelivery {
@@ -244,11 +247,7 @@ impl ObjectHost {
             trigger_runtime: None,
             unit_range_runtime: None,
             callbacks: Vec::new(),
-            player_state_sync: None,
-            player_state_sync_active: false,
-            player_state_spawn_depth: 0,
-            player_state_callback_depth: 0,
-            player_state_conditions: None,
+            player_state_frames: Vec::new(),
         })
     }
     fn checked_boolean_wrapper(&self, id: HandleId, native: &str) -> Result<(), Error> {
@@ -693,9 +692,9 @@ impl Host for ObjectHost {
             .map_err(|e| e.to_string())
     }
     fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
-        if self.player_state_conditions.is_some()
-            && self.callbacks.len() == self.player_state_callback_depth
-        {
+        if self.player_state_frames.last().is_some_and(|frame| {
+            frame.conditions.is_some() && self.callbacks.len() == frame.callback_depth
+        }) {
             return self
                 .continue_player_state_call(value)
                 .map_err(|e| e.to_string());
