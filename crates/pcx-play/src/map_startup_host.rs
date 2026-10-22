@@ -321,6 +321,7 @@ pub struct MapStartupInputs {
     pub terrain_pathing: Option<crate::terrain_pathing::TerrainPathing>,
     /// Selected real literal and operator policy; absent retains host arithmetic.
     pub numeric: Option<crate::script_numeric::NumericPolicy>,
+    pub destructable_restore: Option<crate::playercolor_host::RestoreLifePolicy>,
     /// Source-qualified XP-factor limits; absent leaves the handicap natives unsupported.
     pub experience_handicap: Option<crate::player_handicap::Rules>,
     pub hero_skills: Option<HeroSkillsInput>,
@@ -603,6 +604,7 @@ pub fn assemble(
         random,
         terrain_pathing,
         numeric,
+        destructable_restore,
         experience_handicap,
         hero_skills,
         catalog,
@@ -806,6 +808,9 @@ pub fn assemble(
     }
     if let Some(policy) = numeric {
         object = object.with_script_numeric(policy);
+    }
+    if let Some(policy) = destructable_restore {
+        object = object.with_destructable_restore(policy)?;
     }
     if let Some(rules) = experience_handicap {
         object = object.with_player_experience_handicap(rules)?;

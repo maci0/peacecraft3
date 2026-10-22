@@ -20,6 +20,7 @@ pub use fresh::{FreshSettings, FreshTriggers, fresh_settings, fresh_triggers};
 pub struct Inputs {
     pub camera: CameraMargins,
     pub numeric: script_numeric::NumericPolicy,
+    pub destructable_restore: crate::playercolor_host::RestoreLifePolicy,
     pub random: profile::Policy,
     pub clock: startup_clock::StartupClock,
     pub experience: player_handicap::Rules,
@@ -221,6 +222,20 @@ pub fn read(
     )
     .and_then(|numeric| numeric.with_math(image, &math, BUDGET))
     .map_err(|e| e.to_string())?;
+    let destructable_restore = crate::playercolor_host::RestoreLifePolicy::read(
+        image,
+        crate::playercolor_host::RestoreLifeBinding {
+            origin: origin.clone(),
+            image_sha256,
+            body: window(0x6d2a30, 0x75, true)?,
+            zero_initializer: window(0x401300, 16, true)?,
+            threshold: window(0x10db054, 4, false)?,
+            minimum: window(0x10db0a8, 4, false)?,
+            subtract_va: 0x9a00b0,
+            convert_va: 0x9a1620,
+        },
+        BUDGET,
+    )?;
     let random = profile::Policy::read(
         image,
         profile::Binding {
@@ -315,6 +330,7 @@ pub fn read(
     Ok(Inputs {
         camera,
         numeric,
+        destructable_restore,
         random,
         clock,
         experience,

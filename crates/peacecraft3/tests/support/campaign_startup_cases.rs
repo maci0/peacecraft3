@@ -645,6 +645,7 @@ pub(crate) fn host_inputs(
         random: None,
         terrain_pathing: None,
         numeric: None,
+        destructable_restore: None,
         experience_handicap: None,
         hero_skills: None,
         enumeration: EnumContracts {
