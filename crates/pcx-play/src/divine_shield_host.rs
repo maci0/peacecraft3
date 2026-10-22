@@ -1,17 +1,22 @@
-//! Divine Shield (`AHds`): a self-cast hero ability that makes the caster
-//! invulnerable for the authored per-rank duration, then expires.
+//! Divine Shield (`AHds`): a self-cast hero ability for the authored per-rank
+//! duration.
 //!
-//! Per learned rank, `levels`, `Duration`, `Cool`, `Cost` and `BuffID` come from
-//! `Units\AbilityData.slk`. The order/unorder strings come from the ability
-//! profile (`Order`/`Unorder`) and are resolved through the selected order
-//! registry. The caster must be a live unit that has learned the ability.
+//! Per learned rank, `levels`, `Dur`/`HeroDur`, `Cool`, `Cost` and `BuffID`
+//! come from `Units\AbilityData.slk`. The order/unorder strings come from the
+//! ability profile (`Order`/`Unorder`) and are resolved through the selected
+//! order registry. The caster must be a live unit that has learned the ability.
 //!
-//! Activation timing (cooldown, mana gating, cast point) and cancel/expiry
-//! clock ordering are left unqualified until the native probe measures them; the
-//! fresh-off observation (an `undivineshield` on a unit without an active shield
-//! returns false) is preserved. The shield contributes its own invulnerability;
-//! when it ends it restores the independently authored `SetUnitInvulnerable`
-//! value that preceded it.
+//! Native probe (Human02 Huth rank 3): the "on" order is accepted true at cast,
+//! spends 25 mana and sets a 65 cooldown; the "off" order
+//! (`undivineshield`) returns **false both when fresh and while active** — so
+//! this implementation does not claim a successful cancel (expiry on clock
+//! advance remains the only removal path).
+//!
+//! Invulnerability is modelled (cast marks the unit invulnerable and restores
+//! the independently authored `SetUnitInvulnerable` value on expiry) but is
+//! **unverified**: the raw `BlzIsUnitInvulnerable` getter read inverted in the
+//! probe, so the effect must not be treated as qualified until a damage-control
+//! / static-wrapper probe confirms it.
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_objects::editor::FieldKind;
 use pcx_script::{HandleId, Value};
@@ -122,15 +127,26 @@ impl ObjectHost {
             }
             Ok(value)
         };
+        // Hero ability duration: prefer `HeroDur` (the hero-ranked column), with
+        // `Dur` as the fallback. Both coincide for `AHds` in the selected data.
+        let duration = self
+            .hero_ability_level_cell(ABILITY, "HeroDur", rank, FieldKind::Real)
+            .or_else(|_| self.hero_ability_level_cell(ABILITY, "Dur", rank, FieldKind::Real))
+            .map_err(|e| self.shield_error(e))?
+            .parse::<f32>()
+            .map_err(|detail| self.shield_error(format!("invalid HeroDur{rank}: {detail}")))?;
+        if !duration.is_finite() || duration < 0.0 {
+            return Err(self.shield_error(format!("HeroDur{rank} must be finite and nonnegative")));
+        }
         Ok(Some(Spell {
             cost: number("Cost", FieldKind::Int)?,
             cooldown: f64::from(self.ability_cooldown_duration(caster, ABILITY, rank)?),
-            duration: f64::from(number("Dur", FieldKind::Real)?),
+            duration: f64::from(duration),
         }))
     }
 
     /// Whether an active shield is still running, expiring those past `now` and
-    /// restoring their independent invulnerability.
+    /// restoring the independently authored `SetUnitInvulnerable` value.
     fn shield_active(&mut self, caster: HandleId, now: f64) -> bool {
         let Some(rules) = self.divine_shield.rules.as_mut() else {
             return false;
@@ -221,23 +237,16 @@ impl ObjectHost {
         Ok(true)
     }
 
-    /// Cancels an active Divine Shield. The fresh-off observation: a unit
-    /// without an active shield returns false.
+    /// `undivineshield`: the native probe returns false both for a fresh unit and
+    /// for one with an active shield, so this reports false and performs no
+    /// cancel side-effect. Ex expiry remains the only removal path.
     pub(super) fn uncast_divine_shield(&mut self, caster: HandleId) -> Result<bool, Error> {
         let Some(now) = self.timer_game_time() else {
             return Ok(false);
         };
         self.advance_divine_shield(now);
-        let Some(rules) = self.divine_shield.rules.as_mut() else {
-            return Ok(false);
-        };
-        let Some(shield) = rules.active.remove(&caster) else {
-            return Ok(false);
-        };
-        if let Ok(Entry::Unit { record }) = self.inner.entry_mut(caster) {
-            record.invulnerable = shield.restore_invulnerable;
-        }
-        Ok(true)
+        let _ = caster;
+        Ok(false)
     }
 
     /// Forget a caster's shield when the unit dies or is removed.
