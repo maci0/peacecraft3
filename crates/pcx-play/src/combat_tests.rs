@@ -12,10 +12,10 @@ use pcx_objects::editor::misc::{CombatRules, DayCycle, HeroVitals};
 use pcx_script::HandleId;
 #[path = "blight_regeneration_tests.rs"]
 mod blight;
-#[path = "unit_sleep_tests.rs"]
-mod natural_sleep;
 #[path = "unit_buff_host_tests.rs"]
 mod buffs;
+#[path = "unit_sleep_tests.rs"]
+mod natural_sleep;
 #[path = "patrol_combat_tests.rs"]
 mod patrol;
 type Vm = pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>;

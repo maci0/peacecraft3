@@ -769,6 +769,8 @@ mod tests;
 
 #[path = "object_host.rs"]
 mod objects;
+#[cfg(test)]
+pub(crate) use objects::unit_buff::{ActiveBuff, BuffTraits, MAX_BUFFS_PER_UNIT};
 pub use objects::{
     AcceptedSpan, AppliedCameraSetup, CameraDestination, CameraFieldRecord, CameraState,
     CineFilter, ConditionBudget, ConditionCallback, DayNightState, DeathEventRegistration,
@@ -788,8 +790,6 @@ pub use objects::{
     UnitAbilities, UnitActivity, UnitBudget, UnitEffect, UnitEventRegistration, UnitGuard,
     UnitInRangeRegistration, UnitLookAt, UnitRangeEntry, UnitSleep, UnitStateBudget,
 };
-#[cfg(test)]
-pub(crate) use objects::unit_buff::{ActiveBuff, BuffTraits, MAX_BUFFS_PER_UNIT};
 pub use objects::{
     CinematicScene, Combat, CombatActor, CombatTraceEvent, DestructableState, DialogBudget,
     DialogButton, DialogQuitRequest, DialogState, EventSubject, FiredEvent, FogModifier,

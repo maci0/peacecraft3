@@ -32,8 +32,7 @@ const NATIVES: [(&str, &[&str], &str); 2] = [
     (
         REMOVE_EX,
         &[
-            "unit", "boolean", "boolean", "boolean", "boolean", "boolean",
-            "boolean", "boolean",
+            "unit", "boolean", "boolean", "boolean", "boolean", "boolean", "boolean", "boolean",
         ],
         "nothing",
     ),
@@ -214,10 +213,9 @@ impl ObjectHost {
         }
         Some((|| {
             let (unit, options) = match (name, args) {
-                (REMOVE, [unit, Value::Bool(positive), Value::Bool(negative)]) => (
-                    unit.clone(),
-                    RemoveOptions::basic(*positive, *negative),
-                ),
+                (REMOVE, [unit, Value::Bool(positive), Value::Bool(negative)]) => {
+                    (unit.clone(), RemoveOptions::basic(*positive, *negative))
+                }
                 (
                     REMOVE_EX,
                     [
@@ -276,10 +274,29 @@ mod tests {
 
     #[test]
     fn basic_removal_follows_the_helper_polarity_gate() {
-        let positive = buff(*b"BHab", BuffTraits { positive: true, ..Default::default() });
-        let negative = buff(*b"Bcor", BuffTraits { negative: true, ..Default::default() });
+        let positive = buff(
+            *b"BHab",
+            BuffTraits {
+                positive: true,
+                ..Default::default()
+            },
+        );
+        let negative = buff(
+            *b"Bcor",
+            BuffTraits {
+                negative: true,
+                ..Default::default()
+            },
+        );
         let neither = buff(*b"Bncl", BuffTraits::default());
-        let both = buff(*b"Bfro", BuffTraits { positive: true, negative: true, ..Default::default() });
+        let both = buff(
+            *b"Bfro",
+            BuffTraits {
+                positive: true,
+                negative: true,
+                ..Default::default()
+            },
+        );
 
         let only_positive = RemoveOptions::basic(true, false);
         let only_negative = RemoveOptions::basic(false, true);
@@ -299,12 +316,53 @@ mod tests {
 
     #[test]
     fn ex_filters_apply_only_when_the_corresponding_boolean_is_set() {
-        let timed = buff(*b"BTLf", BuffTraits { positive: true, timed_life: true, ..Default::default() });
-        let aura = buff(*b"BHab", BuffTraits { positive: true, aura: true, ..Default::default() });
-        let magic = buff(*b"Bmgs", BuffTraits { positive: true, magic: true, ..Default::default() });
-        let physical = buff(*b"Bphy", BuffTraits { positive: true, physical: true, ..Default::default() });
-        let dispellable = buff(*b"Bdis", BuffTraits { positive: true, auto_dispellable: true, ..Default::default() });
-        let opaque = buff(*b"Bnod", BuffTraits { positive: true, ..Default::default() });
+        let timed = buff(
+            *b"BTLf",
+            BuffTraits {
+                positive: true,
+                timed_life: true,
+                ..Default::default()
+            },
+        );
+        let aura = buff(
+            *b"BHab",
+            BuffTraits {
+                positive: true,
+                aura: true,
+                ..Default::default()
+            },
+        );
+        let magic = buff(
+            *b"Bmgs",
+            BuffTraits {
+                positive: true,
+                magic: true,
+                ..Default::default()
+            },
+        );
+        let physical = buff(
+            *b"Bphy",
+            BuffTraits {
+                positive: true,
+                physical: true,
+                ..Default::default()
+            },
+        );
+        let dispellable = buff(
+            *b"Bdis",
+            BuffTraits {
+                positive: true,
+                auto_dispellable: true,
+                ..Default::default()
+            },
+        );
+        let opaque = buff(
+            *b"Bnod",
+            BuffTraits {
+                positive: true,
+                ..Default::default()
+            },
+        );
 
         let keep_timed = RemoveOptions {
             remove_positive: true,
@@ -315,7 +373,11 @@ mod tests {
             aura: false,
             auto_dispel: false,
         };
-        let keep_aura = RemoveOptions { timed_life: false, aura: false, ..keep_timed };
+        let keep_aura = RemoveOptions {
+            timed_life: false,
+            aura: false,
+            ..keep_timed
+        };
         assert!(!should_remove(&timed, &keep_timed));
         assert!(!should_remove(&aura, &keep_aura));
         assert!(!should_remove(&timed, &keep_aura));
@@ -332,11 +394,17 @@ mod tests {
         };
         assert!(!should_remove(&magic, &require_resist));
         assert!(!should_remove(&physical, &require_resist));
-        let require_magic = RemoveOptions { physical: false, ..require_resist };
+        let require_magic = RemoveOptions {
+            physical: false,
+            ..require_resist
+        };
         assert!(should_remove(&magic, &require_magic));
         assert!(!should_remove(&physical, &require_magic));
 
-        let require_auto = RemoveOptions { auto_dispel: true, ..keep_timed };
+        let require_auto = RemoveOptions {
+            auto_dispel: true,
+            ..keep_timed
+        };
         assert!(should_remove(&dispellable, &require_auto));
         assert!(!should_remove(&opaque, &require_auto));
         assert!(should_remove(&opaque, &keep_timed));
