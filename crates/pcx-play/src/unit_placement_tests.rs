@@ -135,16 +135,16 @@ fn stationary_layers_swap_live_and_dead_footprints_without_erasing_terrain_or_ea
     assert_eq!(p.grid.pathing.cells[100], 0x1d);
     assert_eq!(p.grid.pathing.cells[10], 0x04);
     assert_eq!(p.grid.pathing.cells[200], 0x01);
-    assert!(p.set_placed_active(1, false).unwrap());
+    assert!(p.set_placed_active(1, false));
     assert_eq!(p.grid.pathing.cells[100], 0x19);
     assert_eq!(p.grid.pathing.cells[10], 0x00);
     assert_eq!(p.grid.pathing.cells[200], 0x05);
-    assert!(p.set_placed_active(2, false).unwrap());
+    assert!(p.set_placed_active(2, false));
     assert_eq!(p.grid.pathing.cells[100], 0x11);
-    assert!(p.set_placed_active(3, true).unwrap());
+    assert!(p.set_placed_active(3, true));
     assert_eq!(p.grid.pathing.cells[100], 0x01);
     assert_eq!(p.grid.pathing.cells[200], 0x15);
-    assert!(!p.set_placed_active(99, true).unwrap());
+    assert!(!p.set_placed_active(99, true));
 }
 
 #[test]

@@ -4067,12 +4067,14 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 ### 2026-10-23: Destructable death delivery
 
 - [~] Destructable death subscriptions now share a prepared transition producer
-  across script setters, kill/restore and engine damage. The selected
-  `EVENT_WIDGET_DEATH` identity is derived from `ConvertWidgetEvent`; source-qualified
+  across script setters, kill/restore and engine damage, with a prepare/commit
+  seam for harvest. The selected `EVENT_WIDGET_DEATH` identity is derived from
+  `ConvertWidgetEvent`; missing, foreign and non-stock declarations are refused,
+  while combat admission keeps the identity optional. Source-qualified
   `GetTriggerWidget` / `GetTriggerDestructable` responses, synchronous callbacks,
   cross-family nesting, sleeping actions, conditions, callback aborts and bounded
-  nesting are covered by synthetic owned-VM tests. Core 1,416 tests pass, plus
-  strict Clippy, formatting and a workspace all-targets check. Native ordering,
-  unregistration, item widgets, death presentation, rendered/collision parity and
-  the original baseline remain open. See
+  nesting are covered by synthetic owned-VM tests. Core 1,422 tests pass, plus
+  strict Clippy and formatting. Native ordering, unregistration, item widgets,
+  death presentation, rendered/collision parity and the original baseline remain
+  open. See
   [destructable death delivery](docs/re-notes/destructable-death-delivery.md).

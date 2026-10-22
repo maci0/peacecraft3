@@ -400,7 +400,7 @@ impl ObjectHost {
             .get("TriggerRegisterDeathEvent")
             .or_else(|| self.inner.program.natives().get("ConvertWidgetEvent"))
             .map_or_else(String::new, |n| n.source.clone());
-        let death_event = self.widget_death_event(&death_event_source)?;
+        let death_event = self.optional_widget_death_event(&death_event_source)?;
         self.combat = Some(Rules {
             rules,
             attack_order,

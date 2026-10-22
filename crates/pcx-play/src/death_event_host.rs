@@ -78,21 +78,52 @@ impl ObjectHost {
             .as_mut()
             .expect("admitted above")
             .death_event_limit = Some(max_records);
-        self.triggers.as_mut().expect("admitted above").death_event = death_event;
+        let admitted = self.triggers.as_mut().expect("admitted above");
+        admitted.death_event = Some(death_event);
+        admitted.death_event_source = Some(source);
         Ok(self)
     }
 
     /// Derive the selected widget-death event handle from the source global and
-    /// its admitted conversion. Absence of the global leaves the event unset.
-    pub(crate) fn widget_death_event(&mut self, source: &str) -> Result<Option<HandleId>, Error> {
-        if !self
+    /// its admitted conversion. A missing global, another source, a different
+    /// initializer, or an enumerand outside the conversion domain is an error.
+    pub(crate) fn widget_death_event(&mut self, source: &str) -> Result<HandleId, Error> {
+        let global = self
             .inner
             .program
             .globals()
             .iter()
-            .any(|g| g.name == DEATH_EVENT)
+            .find(|g| g.name == DEATH_EVENT)
+            .ok_or_else(|| {
+                self.inner
+                    .error(DEATH_EVENT, Failure::TriggerState("global is not declared"))
+            })?;
+        if global.source != source {
+            return Err(self.inner.error(DEATH_EVENT, Failure::Source));
+        }
+        if !global.is_constant
+            || global.array
+            || global.ty.array
+            || global.ty.kind.name() != "widgetevent"
         {
-            return Ok(None);
+            return Err(self.inner.error(DEATH_EVENT, Failure::Signature));
+        }
+        let Some(pcx_script::ast::Expr::Call { callee, args, .. }) = &global.init else {
+            return Err(self
+                .inner
+                .error(DEATH_EVENT, Failure::Initializer(DEATH_EVENT.to_owned())));
+        };
+        let (pcx_script::ast::Expr::Ident(conversion, _), [arg]) =
+            (callee.as_ref(), args.as_slice())
+        else {
+            return Err(self
+                .inner
+                .error(DEATH_EVENT, Failure::Initializer(DEATH_EVENT.to_owned())));
+        };
+        if conversion.as_str() != CONVERT_EVENT {
+            return Err(self
+                .inner
+                .error(DEATH_EVENT, Failure::Initializer(DEATH_EVENT.to_owned())));
         }
         Self::contract(
             &self.inner,
@@ -102,35 +133,57 @@ impl ObjectHost {
             true,
             None,
         )?;
-        let conversion = self
+        let admitted = self
             .inner
             .conversions()
             .find(|c| c.name == CONVERT_EVENT && c.kind == "widgetevent")
             .ok_or_else(|| self.inner.error(CONVERT_EVENT, Failure::Signature))?;
-        if conversion.source != source
-            || conversion.domain.is_empty()
+        if admitted.source != source
+            || admitted.domain.is_empty()
             || self
                 .inner
                 .program
                 .natives()
                 .get(CONVERT_EVENT)
-                .is_none_or(|n| n.source != source)
+                .is_none_or(|native| native.source != source)
         {
             return Err(self.inner.error(CONVERT_EVENT, Failure::Source));
         }
+        let mut work = 4096;
+        let enumerand = crate::playercolor_host::integer(arg, 64, &mut work)
+            .map_err(|failure| self.inner.error(DEATH_EVENT, failure))?;
+        if !admitted.domain.contains(&enumerand) {
+            return Err(self
+                .inner
+                .error(DEATH_EVENT, Failure::OutsideDomain(enumerand)));
+        }
         loaded_type(&self.inner, DEATH_EVENT, "widgetevent", "eventid", source)?;
         loaded_type(&self.inner, DEATH_EVENT, "eventid", "handle", source)?;
-        let enumerand = self.source_constant_enumerand(DEATH_EVENT, "widgetevent")?;
-        Ok(Some(
-            match self
-                .inner
-                .convert_for(CONVERT_EVENT, &[Value::Int(enumerand)])
-                .map_err(|e| self.inner.error(DEATH_EVENT, e.failure))?
-            {
-                Value::Handle(event) => event,
-                _ => return Err(self.inner.error(DEATH_EVENT, Failure::Signature)),
-            },
-        ))
+        match self
+            .inner
+            .convert_for(CONVERT_EVENT, &[Value::Int(enumerand)])
+            .map_err(|e| self.inner.error(DEATH_EVENT, e.failure))?
+        {
+            Value::Handle(event) => Ok(event),
+            _ => Err(self.inner.error(DEATH_EVENT, Failure::Signature)),
+        }
+    }
+
+    /// Derive the widget-death event only when the global is declared.
+    /// A declared global still has to satisfy the full source contract.
+    pub(crate) fn optional_widget_death_event(
+        &mut self,
+        source: &str,
+    ) -> Result<Option<HandleId>, Error> {
+        let declared = self
+            .inner
+            .program
+            .globals()
+            .iter()
+            .any(|global| global.name == DEATH_EVENT);
+        declared
+            .then(|| self.widget_death_event(source))
+            .transpose()
     }
 
     pub(crate) fn destructable_death_registered(&self) -> bool {
