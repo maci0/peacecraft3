@@ -167,6 +167,17 @@ table families select a namespace. The unchanged embedded diagnostic run ID
 is disambiguated by separate run directories and launch receipts; the paired
 receipts are retained in ignored `edition-classic-probe`.
 
+A further paired diagnostic changed the version-18 information word at byte
+offset 161 from zero to one, retaining the edition-readback script apart from
+its run identifier. Map SHA-256:
+`eea2a21a65379b13072311799f1f9abc94d5aa4c4b8959108759970a4d7b9218`.
+Under the same fresh-prefix, `-loadfile`-only launch, all 16 records arrived:
+the runtime still reported TFT, grunt maximum life 700 and Uther collision 32.
+This particular word/value pair did not change the observed fingerprint. It
+does not identify the word's meaning, rule out other values or map-selection
+inputs, or establish a general loader policy. The owned container was stopped;
+build, launch and marker receipts remain in ignored `edition-stats-word1-probe`.
+
 ## Recreation shield boundary
 
 The self-cast host reads the learned rank's duration, cost, cooldown and Can
