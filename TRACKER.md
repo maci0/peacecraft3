@@ -3975,3 +3975,17 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   589 tests pass, plus the selected-install binding gate, strict Clippy and WASM.
   Other ability classes, item groups, duration getters/setter and whole-unit reset
   remain unfinished; native timing parity is not claimed.
+
+### 2026-10-22: Change-level request target
+
+- [~] `ChangeLevel` now admits against the selected `common.j`, validates the
+  `string, boolean` signature and same source as `CreateTimer`, and queues a
+  request-local verbatim target with its score flag. `EndGame` queues no target.
+  The existing `SetNextLevel` ambient request remains separate and is not inherited
+  by either request. Bad arity/type, NUL, oversized targets and a full queue refuse
+  without changing earlier requests. Evidence: `cargo test -p pcx-play --lib`
+  (1,180 passed, 34 ignored), strict `cargo clippy -p pcx-play --all-targets --
+  -D warnings`, WASM `cargo check -p pcx-play --lib`, and the ignored
+  selected-`common.j` gate with `PEACECRAFT3_COMMON_J`, all exit 0. The app-owned
+  map transition, save handoff and score presentation remain open; see
+  [game exit](docs/re-notes/script-game-exit.md).

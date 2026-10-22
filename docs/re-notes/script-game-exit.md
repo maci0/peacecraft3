@@ -1,6 +1,8 @@
-# Executed game exit requests
+# Executed game exit and change-level requests
 
-The selected `common.j` declares `EndGame(boolean doScoreScreen) returns nothing`.
+The selected `common.j` declares `EndGame(boolean doScoreScreen) returns nothing`
+and `ChangeLevel(string newLevel, boolean doScoreScreen) returns nothing` (lines
+1775-1776 in the reviewed extracted script; the declaration is marked "Async only").
 The selected `Blizzard.j` defeat dialog registers `CustomDefeatQuitBJ` as the
 action of a normal `DialogAddButton` (`GAMEOVER_QUIT_MISSION`). That action runs
 `PauseGame(false)` when single-player, `SetGameDifficulty(GetDefaultDifficulty())`,
@@ -8,19 +10,41 @@ then `EndGame(true)`. The quit button of `DialogAddQuitButton` is a separate pat
 (`dialog_host.rs`), and `EndGameBJ` and other `EndGame` calls are reached from
 other BJ functions.
 
-Read-only original-byte inspection of the locally supplied Legacy executable
-(version `1.29.2.9231`) locates the native wrapper at `0x48fe20`. It stores the
-boolean argument and clears a second field, calls `0x475930`, and returns to its
-caller. The calling thread continues; the request does not clear the executing VM.
-`RestartGame` (wrapper `0x4a5620`, which calls `0x47c740`) is a different native
-and is not covered here.
+`CustomVictoryOkBJ` (selected `Blizzard.j`, line 5197) instead calls
+`ChangeLevel(bj_changeLevelMapName, bj_changeLevelShowScores)` when
+`bj_changeLevelMapName` is non-null, and `EndGame(bj_changeLevelShowScores)`
+otherwise. `SetNextLevelBJ` (line 5387) only writes that BJ global; it does not
+call a host native or queue a transition. Unchanged Human01's next-level trigger
+sets `Maps\\Campaign\\Human02.w3m` through `SetNextLevelBJ` and then runs
+`CustomVictoryBJ`. The ambient `SetNextLevel` request and a `ChangeLevel` target
+therefore remain separate pieces of state.
 
-`ObjectHost::with_game_exit(max_pending)` validates the declaration and its source
-against the checked host's `CreateTimer` source, as `with_game_pause` does. Missing
-declarations leave the capability unadmitted; incompatible or foreign-source
+Read-only original-byte inspection of the locally supplied Legacy executable
+(version `1.29.2.9231`) locates the `EndGame` native wrapper at `0x48fe20`. It
+stores the boolean argument and clears a second field, calls `0x475930`, and
+returns to its caller. The calling thread continues; the request does not clear
+the executing VM. `RestartGame` (wrapper `0x4a5620`, which calls `0x47c740`) is a
+different native and is not covered here.
+
+No equivalent wrapper inspection or runtime observation covers `ChangeLevel`.
+Returning to the VM caller after queuing its request is a host scheduling choice,
+not a claim of native teardown or transition parity. The selected declaration's
+`Async only` comment is the only scheduling evidence recorded here.
+
+`ObjectHost::with_game_exit(max_pending)` validates the declarations and their
+sources against the checked host's `CreateTimer` source, as `with_game_pause` does.
+Missing declarations leave the capability unadmitted; incompatible or foreign-source
 declarations refuse admission. `game_exit_native` appends a `GameExitRequest` to a
-bounded queue and returns `nothing`. Invalid arguments and a full queue fail without
-changing recorded requests. `take_game_exit_requests` drains the queue in call order.
+bounded queue and returns `nothing`. Each request carries `score_screen` and a
+request-local `next_level`: `EndGame` records `None`, while `ChangeLevel` records a
+verbatim bounded copy of its target, including an empty string. Invalid arguments,
+embedded NUL, oversized targets and a full queue fail without changing recorded
+requests. `take_game_exit_requests` drains the queue in call order.
+
+`next_level()` still exposes only the separate `SetNextLevel` ambient request.
+`ChangeLevel` does not overwrite it, and neither `EndGame` nor `ChangeLevel`
+inherits its value. The existing empty-clears, NUL-refusal and byte-bound behavior
+of `SetNextLevel` is unchanged.
 
 The campaign runtime (`crates/peacecraft3/src/campaign_runtime.rs`,
 `take_game_exit`) runs after `advance_campaign`, the path that delivers queued
@@ -36,8 +60,11 @@ request and a warning is logged when it is set; the session still ends. This
 means `EndGame(true)` does not reproduce the original score presentation.
 
 Synthetic VM tests (`crates/pcx-play/src/game_exit_tests.rs`) cover admission,
-recording through a VM call with the calling thread continuing, drain order, argument
-and overflow failures, and signature and source refusal. Parser and host tests do
-not prove the rendered defeat dialog, the score screen, or native session teardown
-parity. The live Human01 route that reaches `CustomDefeatQuitBJ` remains the runtime
-evidence to collect.
+recording through VM calls under the host schedule, request-local targets, drain
+order, argument/NUL/oversize/overflow failures, and signature and source refusal.
+The ignored `selected_common_change_level_contract_is_admitted` gate reads an
+explicitly supplied `PEACECRAFT3_COMMON_J` and executes the selected declaration.
+Parser and host tests do not prove the rendered defeat dialog, the score screen,
+native session teardown or native map-transition parity. The application consumer
+that opens the next map is owned separately and remains open; the live Human01 route
+that reaches the victory or defeat dialog remains runtime evidence to collect.
