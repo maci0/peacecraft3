@@ -174,6 +174,80 @@ fn replacement_and_refused_orders_preserve_the_right_patrol_state() {
 }
 
 #[test]
+fn blocked_patrol_keeps_its_intent_at_zero_speed_and_resumes_when_positive() {
+    const ZERO_MIN: &str =
+        "[Misc]\nMinUnitSpeed=0\nMaxUnitSpeed=400\nMinBldgSpeed=25\nMaxBldgSpeed=300\n";
+    let mut vm = open_move_speed_with(ZERO_MIN, "10");
+    let a = unit(&vm, "A");
+    let start = position(&mut vm, a);
+    let end = [48.0, start[1]];
+    let expected_order = vm
+        .host()
+        .inner
+        .native("OrderId", &[Value::Str("delta".into())])
+        .unwrap();
+    assert_eq!(patrol(&mut vm, a, end), Value::Bool(true));
+    tick(&mut vm, 1.0);
+    let stopped = position(&mut vm, a);
+    assert_ne!(stopped, start);
+
+    let blockers = {
+        let h = &mut vm.host().inner;
+        [
+            [stopped[0] + 8.0, stopped[1]],
+            [stopped[0] - 8.0, stopped[1]],
+            [stopped[0], stopped[1] + 8.0],
+            [stopped[0], stopped[1] - 8.0],
+        ]
+        .map(|at| position_create(h, at[0], at[1]).unwrap())
+    };
+    tick(&mut vm, 2.0);
+    let blocked = vm.host().inner.executed_unit(a).unwrap().activity.clone();
+    assert!(blocked.as_ref().is_some_and(|s| !s.moving()));
+    assert_eq!(position(&mut vm, a), stopped);
+    assert_eq!(current(&mut vm, a), expected_order);
+
+    for blocker in blockers {
+        let Value::Handle(blocker) = blocker else {
+            panic!("blocker unit");
+        };
+        vm.host()
+            .inner
+            .native("RemoveUnit", &[Value::Handle(blocker)])
+            .unwrap();
+    }
+    vm.host()
+        .inner
+        .native("SetUnitMoveSpeed", &[Value::Handle(a), Value::Real(0.0)])
+        .unwrap();
+    tick(&mut vm, 3.0);
+    let held = vm.host().inner.executed_unit(a).unwrap().activity.clone();
+    assert!(
+        held.as_ref()
+            .is_some_and(|s| !s.moving() && s.destination().is_none())
+    );
+    assert_eq!(position(&mut vm, a), stopped);
+    assert_eq!(move_speed(&mut vm, a), 0.0);
+    assert_eq!(current(&mut vm, a), expected_order);
+
+    vm.host()
+        .inner
+        .native("SetUnitMoveSpeed", &[Value::Handle(a), Value::Real(10.0)])
+        .unwrap();
+    tick(&mut vm, 4.0);
+    let resumed = vm.host().inner.executed_unit(a).unwrap().activity.clone();
+    assert!(
+        resumed
+            .as_ref()
+            .is_some_and(|s| s.moving() && s.destination() == Some(end))
+    );
+    tick(&mut vm, 5.0);
+    assert_ne!(position(&mut vm, a), stopped);
+    assert_ne!(move_speed(&mut vm, a), 0.0);
+    assert_eq!(current(&mut vm, a), expected_order);
+}
+
+#[test]
 fn coincident_patrol_endpoints_stand_and_many_cycles_refuse_bounded_work() {
     let mut vm = open();
     let a = unit(&vm, "A");

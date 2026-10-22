@@ -194,6 +194,10 @@ impl UnitActivity {
     pub fn movable(&self) -> bool {
         self.movable
     }
+    /// Whether the selected speed admits starting a new route.
+    pub(super) fn can_start_motion(&self) -> bool {
+        self.movable && self.speed.is_some_and(|speed| speed > 0.0)
+    }
     /// The accepted route's waypoints, in travel order, and the index of the next one. Empty
     /// when no route is pending.
     pub fn waypoints(&self) -> (&[[f32; 2]], usize) {
@@ -646,7 +650,7 @@ impl ObjectHost {
                         Failure::UnitActivity("finite destination required".into()),
                     ));
                 }
-                if !activity.movable || activity.speed == Some(0.) {
+                if !activity.can_start_motion() {
                     return Ok(Value::Bool(false));
                 }
                 if record.admitted_order.is_some_and(|(_, active)| active) {
@@ -1085,7 +1089,7 @@ impl ObjectHost {
         let was_moving = activity.moving();
         let motion = match destination {
             Some(target) => {
-                if !activity.movable || activity.speed == Some(0.) {
+                if !activity.can_start_motion() {
                     return Ok(false);
                 }
                 let start = record
@@ -1185,6 +1189,9 @@ impl ObjectHost {
         let Some(mut patrol) = activity.patrol else {
             return Ok(None);
         };
+        if !activity.can_start_motion() {
+            return Ok(None);
+        }
         if record.paused_since.is_some()
             || record
                 .combat

@@ -102,6 +102,54 @@ fn follow_retains_its_target_at_source_range_and_resumes_when_the_target_moves()
 }
 
 #[test]
+fn zero_speed_follow_restart_waits_for_a_positive_speed_without_losing_the_target() {
+    const ZERO_MIN: &str =
+        "[Misc]\nMinUnitSpeed=0\nMaxUnitSpeed=400\nMinBldgSpeed=25\nMaxBldgSpeed=300\n";
+    let mut vm = open_move_speed_with(ZERO_MIN, "10");
+    let a = unit(&vm, "A");
+    let b = unit(&vm, "B");
+    vm.host()
+        .inner
+        .native("SetUnitPathing", &[Value::Handle(a), Value::Bool(false)])
+        .unwrap();
+    assert_eq!(follow(&mut vm, a, b, false), Value::Bool(true));
+    tick(&mut vm, 1.0);
+    let before = position(&mut vm, a);
+    let expected_order = vm
+        .host()
+        .inner
+        .native("OrderId", &[Value::Str("gamma".into())])
+        .unwrap();
+    vm.host()
+        .inner
+        .native("SetUnitMoveSpeed", &[Value::Handle(a), Value::Real(0.0)])
+        .unwrap();
+    vm.host()
+        .inner
+        .native(
+            "SetUnitPosition",
+            &[Value::Handle(b), Value::Real(100.0), Value::Real(16.0)],
+        )
+        .unwrap();
+    tick(&mut vm, 2.0);
+    assert_eq!(position(&mut vm, a), before);
+    assert_eq!(target(&mut vm, a), Some(b));
+    assert_eq!(current(&mut vm, a), expected_order);
+    assert_eq!(move_speed(&mut vm, a), 0.0);
+
+    vm.host()
+        .inner
+        .native("SetUnitMoveSpeed", &[Value::Handle(a), Value::Real(10.0)])
+        .unwrap();
+    tick(&mut vm, 3.0);
+    tick(&mut vm, 4.0);
+    assert_ne!(position(&mut vm, a), before);
+    assert_eq!(target(&mut vm, a), Some(b));
+    assert_eq!(current(&mut vm, a), expected_order);
+    assert_eq!(move_speed(&mut vm, a), 10.0);
+}
+
+#[test]
 fn structure_range_and_pause_preserve_the_follow_order_without_catchup() {
     let mut vm = opened(true);
     let a = unit(&vm, "A");
