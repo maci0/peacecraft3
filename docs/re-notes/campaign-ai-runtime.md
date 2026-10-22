@@ -113,6 +113,23 @@ Three synthetic collector/stimulus tests passed. The earlier repeat run without
 the fresh-player control remains preserved separately; the controlled run is
 the evidence for the conclusion above. Both owned client runs were stopped.
 
+A further variant requested B again at map time 2.063 after A's final write
+had already been observed at 1.563. A has no further source operations after
+that write except returning from `main`. The repeated call left the bank at
+34 immediately and through the final 9.063 sample. The fresh-player B control
+again completed at 58. This supports retaining the established context in this
+completed-entrypoint path as well; failed initial loads, explicitly stopped AI
+and other start natives remain outside the measurement.
+
+All 12 markers qualified on RoC. The ignored
+`.scratch/campaign-ai-completed-repeat-probe/` retains the receipt, raw markers
+and four passing collector/stimulus checks. Map SHA-256:
+`9a17259e01e349949149ea3f42d0dc7c9faf5e51320c94264f602b0df4516746`;
+script SHA-256:
+`bcbe2f9edd8c17aef73c8b2771bad6c94bbea89fe574a5c2b7b961f7052d4eaa`.
+The owned client is stopped. The runtime's initially proposed completed-context
+refusal needs correction to match this measured case.
+
 ## Relationship to the earlier Human02 probes
 
 The selected `War3Local.mpq::Maps\Campaign\Human02.w3m` has SHA-256

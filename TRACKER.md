@@ -11,9 +11,9 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   continuation before eager placed-world admission. Gathered gold/lumber
   counters (`Blizzard.j:7652,7654`) now use
   source-decoded setter scaling, unsigned getter division and the same
-  synchronous state-event path. The combined private checks passed 1406 core
+  synchronous state-event path. The combined private checks passed 1423 core
   tests, 606 app tests, strict native/WASM Clippy and formatting including the
-  gathered-counter and ranked/inventory Data-pointer imports. The unchanged
+  gathered-counter, ranked/inventory Data-pointer and destructable-death imports. The unchanged
   Continue gate passes Human01 with 152 executed units and Human02's explicit
   unit-color calls. It now refuses `IssueImmediateOrder` through
   `Blizzard.j:7817`; the source initialization next reaches nearby-lumber
@@ -32,7 +32,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   unqualified. Receipts: `.scratch/campaign-continuation/intelligence-*.log`
   and `inventory-review-*.log`, `gathered-pointer-*.log`,
   `placed-flag-admission-*.log`, `unit-color-final-*.log`, and
-  `late-create-combined-*.log` in that directory.
+  `late-create-combined-*.log` and `restore-combined-*.log` in that directory.
 
 - [x] Bind headless session admission to actual selected catalog/Misc contents.
   The readiness receipt keys every admitted catalog table/profile and the three
@@ -65,6 +65,29 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   effect, ownership transfers and isolated bound requests. It remains
   unimplemented; the separate XP-factor host is not its consumer. See
   [player-health-handicap.md](docs/re-notes/player-health-handicap.md).
+
+### 2026-10-23: Destructable death delivery
+
+The private host now derives the canonical widget-death event from the selected
+source global, delivers script-produced deaths synchronously through the shared
+reentrant frames, and queues engine-produced deaths for boundary delivery.
+Prepared damage reserves event capacity before changing tree life or collision.
+Nested death/player-state callbacks, sleep and abort context restoration have
+focused coverage. Missing event identity and malformed response contracts refuse.
+
+The selected-install gate exposed an incorrect two-argument restoration fixture;
+`DestructableRestoreLife` actually takes a real life amount before its birth flag.
+The corrected three-argument path supports the measured full-life restoration of
+a dead target without birth animation. Other restoration forms remain unsupported
+and refuse before mutation. The app fixture also now supplies a synthetic widget
+event identity instead of relying on an absent source constant.
+
+Combined validation passes 1423 core tests, 606 app tests, strict native/WASM
+Clippy and formatting. The real Continue gate publishes Human01 with 152 executed
+units and then stops at Human02's `IssueImmediateOrder` through `Blizzard.j:7817`.
+It is still a failing campaign acceptance gate. Retained receipts are
+`.scratch/campaign-continuation/restore-combined-*.log` and matching exit files.
+See [destructable death delivery](docs/re-notes/destructable-death-delivery.md).
 
 ### 2026-10-23: Late script destructable collision
 
