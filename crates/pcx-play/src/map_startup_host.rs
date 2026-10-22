@@ -369,7 +369,7 @@ impl MapStartupHost {
         self.inner.as_mut().expect("map world is not lent to AI")
     }
 
-    pub(crate) fn with_ai_loader(
+    pub fn with_ai_loader(
         mut self,
         loader: impl FnMut(&str) -> Result<Arc<crate::scripts::MapScripts>, String>
         + Send
