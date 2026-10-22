@@ -725,7 +725,7 @@ impl ObjectHost {
             limits.records += 1;
         }
         if let Some(change) = change {
-            self.commit_player_state_change(change)?;
+            self.commit_player_state_change(change);
         }
         Ok(Value::Null)
     }
@@ -1659,7 +1659,8 @@ impl ObjectHost {
     }
 
     /// Writes a prepared debit and commits the reserved player-state change.
-    pub(crate) fn apply_gold_debit(&mut self, debit: GoldDebit) -> Result<(), Error> {
+    /// All fallible work happened while preparing, so this write cannot fail.
+    pub(crate) fn apply_gold_debit(&mut self, debit: GoldDebit) {
         let players = self
             .players
             .as_mut()
@@ -1675,14 +1676,13 @@ impl ObjectHost {
                 .push((debit.number, debit.state, debit.next)),
         }
         if let Some(change) = debit.change {
-            self.commit_player_state_change(change)?;
+            self.commit_player_state_change(change);
         }
-        Ok(())
     }
 }
 
 /// A gold debit that has been checked and whose row is ready.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoldDebit {
     number: i32,
     state: i32,

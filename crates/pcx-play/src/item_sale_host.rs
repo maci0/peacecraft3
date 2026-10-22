@@ -207,7 +207,7 @@ impl ObjectHost {
         let item_handle = self.create_item_record(item, shop_x, shop_y, Some((buyer, slot)))?;
 
         // Every row, cell and queue slot was located or reserved above.
-        self.apply_gold_debit(debit)?;
+        self.apply_gold_debit(debit);
         self.apply_stock_sale(cell);
         let subject = EventSubject {
             sale: Some(SaleContext {

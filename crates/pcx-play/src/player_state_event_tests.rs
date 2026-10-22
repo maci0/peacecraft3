@@ -343,7 +343,7 @@ fn gold_debit_uses_the_same_player_state_change_path() {
     let event = register(&mut h, &trigger, &player, &gold, &less, 50.0).unwrap();
 
     let debit = h.prepare_gold_debit_reserving(id(&player), 3, 0).unwrap();
-    h.apply_gold_debit(debit).unwrap();
+    h.apply_gold_debit(debit);
 
     assert_eq!(
         h.player_state_event_registration(id(&event)).unwrap().last,
@@ -365,13 +365,13 @@ fn a_gold_debit_reserves_pending_sale_events_and_its_own_state_event_together() 
     register(&mut h, &trigger, &player, &gold, &less, 50.0).unwrap();
 
     let before = h.event_queue_capacity();
-    let debit = h.prepare_gold_debit_reserving(id(&player), 3, 2).unwrap();
+    let debit = h.prepare_gold_debit_reserving(id(&player), 3, 4).unwrap();
     let reserved = h.event_queue_capacity();
     assert!(
-        reserved >= before + 3,
-        "two pending events and one state event need one combined block"
+        reserved >= before + 5,
+        "four pending events and one state event need one combined block"
     );
-    for _ in 0..2 {
+    for _ in 0..4 {
         h.push_reserved_event(
             id(&trigger),
             None,
@@ -379,15 +379,48 @@ fn a_gold_debit_reserves_pending_sale_events_and_its_own_state_event_together() 
             None,
         );
     }
-    h.apply_gold_debit(debit).unwrap();
+    h.apply_gold_debit(debit);
     assert_eq!(
         h.event_queue_capacity(),
         reserved,
         "both commits push into the combined reservation without growing it"
     );
-    assert!(h.take_fired_event().is_some());
-    assert!(h.take_fired_event().is_some());
-    assert!(h.take_fired_event().is_some());
+    for _ in 0..5 {
+        assert!(h.take_fired_event().is_some());
+    }
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn a_gold_debit_reserves_pending_events_when_player_state_events_are_not_admitted() {
+    let (_, mut h) = base(&common(0));
+    let player = h.native("Player", &[Value::Int(0)]).unwrap();
+
+    let before = h.event_queue_capacity();
+    let debit = h.prepare_gold_debit_reserving(id(&player), 3, 4).unwrap();
+    let reserved = h.event_queue_capacity();
+    assert!(
+        reserved >= before + 4,
+        "four pending sale events need their own reservation even without state triggers"
+    );
+    for _ in 0..4 {
+        h.push_reserved_event(
+            id(&player),
+            None,
+            crate::playercolor_host::EventSubject::default(),
+            None,
+        );
+    }
+    h.apply_gold_debit(debit);
+    assert_eq!(
+        h.event_queue_capacity(),
+        reserved,
+        "the pending events push into the reservation without growing it"
+    );
+    assert_eq!(h.owner_gold(id(&player)).unwrap(), Some(0));
+    for _ in 0..4 {
+        assert!(h.take_fired_event().is_some());
+    }
     assert!(h.take_fired_event().is_none());
 }
 
