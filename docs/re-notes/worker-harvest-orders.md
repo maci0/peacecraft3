@@ -138,6 +138,37 @@ launch receipts and results remain local in ignored
 `.scratch/harvest-order-source.json`. These diagnostic runs do not qualify
 rendered presentation, native Windows, or unchanged Human02 startup.
 
+## Upgrade during an active load
+
+A separate RoC run changed `Rhlh` research while the same worker was already
+chopping. At game time 10.000 the tree had life 45/50, the worker retained its
+effective harvest order, both own counters were zero, and own research read
+zero. `SetPlayerTechResearched` changed the readback to one in that same
+checkpoint without reissuing the order. The first observed deposit at 24.000
+credited 15 lumber and 15 gathered lumber; the tree had life 35/50 and the
+worker had resumed harvesting. The unordered different-owner control retained
+its position/order, tree life and zero counters throughout.
+
+The independently extracted `Custom_V0` rows give `Ahar.DataB1` capacity 10
+and `Rhlh` effect `rlum` with base 5, modifier 5 and maximum level 2. Metadata
+identifies the capacity and lumber-effect fields. The observed level-one
+deposit matches base capacity plus the effect base, rather than additionally
+applying its modifier at level one. This qualifies a capacity increase during
+an already active partial load in this configuration. It does not establish
+all upgrade formulas, reductions, level-two behavior or map-edited upgrades.
+Production values must come from the selected tables and applicable overlays.
+
+Map SHA-256 is
+`e8cc4e6fd9b405665332f4c2ebd577701f2f26a9d1694abef17a7d938928a56f`;
+script SHA-256 is
+`e5940c37d24c6450556e86e11a315b1138f6c7839f18e84f2967c5edc8419352`.
+Only the original Human02 script member changed. Parse/resolve, all packed
+member byte checks and five collector tests passed. All 96 marker files
+validated, including 84 periodic checkpoints. Raw markers and exact selected
+archive/member hashes remain local in `.scratch/harvest-active-upgrade-probe/`.
+This is a diagnostic resource-cycle observation, not unchanged chapter or
+presentation acceptance.
+
 ## Model presentation evidence
 
 The selected `UnitUI.slk` binds `hpea.file` to

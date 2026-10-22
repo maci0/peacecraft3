@@ -62,6 +62,9 @@ present; callbacks are not forwarded into the wrong VM. Unsupported AI gameplay
 natives report their exact names. The selected red/purple source fixtures reach
 `SetTargetHeroes` and `SetHeroLevels` in a synthetic normal-difficulty world;
 they are not a complete Human02 run, and the selected map does not start purple.
+The [matched targeting observations](campaign-ai-targeting.md) record identical
+automatic attacks with the flag enabled and disabled in a limited setup; they
+do not establish a campaign targeting implementation or an inert native.
 
 Combined private receipts under `.scratch/campaign-continuation/ai-combined-*`
 record 1427 core tests and 607 app tests passed, strict native and WASM Clippy,
