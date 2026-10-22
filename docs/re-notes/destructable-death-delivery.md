@@ -48,6 +48,24 @@ a lower-bound branch. Those values must be derived from image operands before
 extending the support boundary. Local disassembly remains under the ignored
 `.scratch/destructable-restore-native/` directory.
 
+A subsequent controlled run on the same reviewed client, with `-classic` and
+explicit RoC readback, sampled nine restoration cases on one script-created tree.
+Calling restore with half its maximum while alive left life unchanged. Killing
+before each later call gave: zero request -> full life; half maximum -> half life;
+twice maximum -> maximum; negative maximum -> 0.5; 0.0005 -> full life; 0.25 ->
+0.5; and 0.75 -> 0.75. A half-maximum request with `birth=true` yielded half life
+through getters. Each subsequent kill delivered another death callback.
+
+All 12 markers qualified; four synthetic collector tests passed. The diagnostic
+map hash is `07f0961538e6134401e350e3fff6c9a928922a0f9e2bf6b3daeecf80109c60b0`;
+the script hash is `6b0e86f43b246cb5b05ea9d8a9d29b0d78769614ef922fcd76b1ec6044eca869`.
+Raw markers, input receipts and the stopped run remain local under
+`.scratch/destructable-restore-amount-probe/` and
+`/home/maci/.cache/pc3-probe/drestore-261023a`. These observations corroborate the
+native amount branches, but the production support boundary above is unchanged
+until its rules are derived from image operands. Exact threshold equality,
+rendered birth animation and collision behavior remain unqualified.
+
 Script death natives deliver matching callbacks synchronously before returning:
 the host takes the reserved batch, installs the event context, and continues
 through the shared synchronous frame machinery used by player-state events. A

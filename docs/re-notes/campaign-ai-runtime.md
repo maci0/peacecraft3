@@ -4,8 +4,8 @@
 
 The private campaign continuation still refuses `IssueImmediateOrder` during
 initialization, before its later `StartCampaignAI` calls. The source path next
-reaches nearby-lumber harvesting. AI execution is not implemented by the source
-audit below.
+reaches nearby-lumber harvesting. The source audit below is distinct from the
+private execution foundation described in this note.
 
 The audit uses the existing `CampaignRecipe` reader with the reviewed
 1.29.2.9231 executable
@@ -34,7 +34,37 @@ establish working campaign AI.
 The runtime must keep each player's AI globals and continuations separate
 while using the session's existing world, handles and deterministic clock.
 The existing script VM is the execution path to reuse. Shared-world ownership,
-AI-native contracts, callback invocation and scheduling remain open.
+AI-native gameplay behavior and cross-program callback invocation remain open.
+
+## Private execution foundation
+
+The private continuation now loads the image-derived common, AI-common and
+requested script paths through the retained campaign reader. Exact lookup
+precedes the image-derived fallback prefix; only an absent member permits that
+fallback. The common source must equal the map's admitted common bytes.
+
+Each player retains a separate VM and sleeping continuations. Execution borrows
+the same complete world stack and restores it on return, sleep or refusal.
+Initial `main` runs synchronously; later wakes share the map game-clock scheduler
+with deterministic player/ticket ordering. Repeated starts retain the established
+context in the measured sleeping and completed cases. The AI-owned native
+declarations are checked for source, ambiguity, constant flags and scalar
+signatures before globals execute or the world is lent.
+
+A synthetic test through the actual `MapStartupHost` and `MapScriptSession`
+checks synchronous resource writes, independent programs, a map timer preceding
+their wakes, and world restoration after callback refusal. Player-state mutation
+from an AI program refuses before writing when map callback registrations are
+present; callbacks are not forwarded into the wrong VM. Unsupported AI gameplay
+natives report their exact names. The selected red/purple source fixtures reach
+`SetTargetHeroes` and `SetHeroLevels` in a synthetic normal-difficulty world;
+they are not a complete Human02 run, and the selected map does not start purple.
+
+Combined private receipts under `.scratch/campaign-continuation/ai-combined-*`
+record 1427 core tests and 607 app tests passed, strict native and WASM Clippy,
+and formatting. The real selected Continue test still refuses Human02's harvest
+order after Human01 publishes 152 executed units. Campaign strategy, construction,
+combat, cross-program callbacks and full chapter completion remain unqualified.
 
 ## Native loader path
 

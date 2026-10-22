@@ -11,13 +11,19 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   continuation before eager placed-world admission. Gathered gold/lumber
   counters (`Blizzard.j:7652,7654`) now use
   source-decoded setter scaling, unsigned getter division and the same
-  synchronous state-event path. The combined private checks passed 1423 core
-  tests, 606 app tests, strict native/WASM Clippy and formatting including the
+  synchronous state-event path. The combined private checks passed 1427 core
+  tests, 607 app tests, strict native/WASM Clippy and formatting including the
   gathered-counter, ranked/inventory Data-pointer and destructable-death imports. The unchanged
   Continue gate passes Human01 with 152 executed units and Human02's explicit
   unit-color calls. It now refuses `IssueImmediateOrder` through
   `Blizzard.j:7817`; the source initialization next reaches nearby-lumber
   harvesting, whose complete runtime cycle is still being implemented.
+  Campaign scripts now have source-validated, independent per-player VMs over
+  the shared world, synchronous initial execution and game-clock wake delivery.
+  The production-host fixture checks shared resource writes and timer ordering;
+  map callbacks from those programs still refuse before resource mutation.
+  The selected red/purple source fixtures reach unsupported `SetTargetHeroes`
+  and `SetHeroLevels`; this is not working campaign strategy or chapter completion.
   Controlled tree
   and original-gate probes qualify flags 4/7 for script-only admission; the
   placement correction passes those same private suites.
@@ -32,7 +38,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   unqualified. Receipts: `.scratch/campaign-continuation/intelligence-*.log`
   and `inventory-review-*.log`, `gathered-pointer-*.log`,
   `placed-flag-admission-*.log`, `unit-color-final-*.log`, and
-  `late-create-combined-*.log` and `restore-combined-*.log` in that directory.
+  `late-create-combined-*.log`, `restore-combined-*.log` and
+  `ai-combined-*.log` in that directory.
 
 - [x] Bind headless session admission to actual selected catalog/Misc contents.
   The readiness receipt keys every admitted catalog table/profile and the three
