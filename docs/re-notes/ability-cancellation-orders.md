@@ -155,6 +155,18 @@ stopped, with local receipts retained in ignored `edition-stats-probe`.
 Neither a RoC launch nor the native dataset-selection algorithm is established
 by this result.
 
+The paired launch reused those exact map/script bytes in a separate fresh prefix
+and added only `-classic` before `-loadfile`. All 16 checkpoints arrived:
+`VersionGet` reported `VERSION_REIGN_OF_CHAOS`, grunt maximum life was 680,
+and Uther collision size remained 32. The other sampled values were unchanged.
+This directly establishes the edition effect of that argument for the reviewed
+executable and this launch. Among the compared tables, the pair is consistent
+with `Custom_V0` for this RoC run and `Custom_V1` for the preceding TFT run.
+It does not establish how arbitrary map flags, explicit datasets or other
+table families select a namespace. The unchanged embedded diagnostic run ID
+is disambiguated by separate run directories and launch receipts; the paired
+receipts are retained in ignored `edition-classic-probe`.
+
 ## Recreation shield boundary
 
 The self-cast host reads the learned rank's duration, cost, cooldown and Can
