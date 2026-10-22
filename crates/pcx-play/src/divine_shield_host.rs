@@ -12,11 +12,13 @@
 //! this implementation does not claim a successful cancel (expiry on clock
 //! advance remains the only removal path).
 //!
-//! Invulnerability is modelled (cast marks the unit invulnerable and restores
-//! the independently authored `SetUnitInvulnerable` value on expiry) but is
-//! **unverified**: the raw `BlzIsUnitInvulnerable` getter read inverted in the
-//! probe, so the effect must not be treated as qualified until a damage-control
-//! / static-wrapper probe confirms it.
+//! The shield is a separate protection contribution: the explicit
+//! `SetUnitInvulnerable` flag stays independent, and effective protection is
+//! `explicit || shield_active`. This keeps a mid-shield explicit setter change
+//! intact when the shield expires. Invulnerability is **unverified** until a
+//! damage-control/static-wrapper probe confirms it (the raw
+//! `BlzIsUnitInvulnerable` getter reads inverted and must be reviewed
+//! separately), so the cast is not claimed to block damage yet.
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_objects::editor::FieldKind;
 use pcx_script::{HandleId, Value};
@@ -36,8 +38,6 @@ pub(super) struct Rules {
 
 struct ActiveShield {
     ends_at: f64,
-    /// The `SetUnitInvulnerable` value to restore when the shield ends.
-    restore_invulnerable: Option<bool>,
 }
 
 struct Spell {
@@ -145,8 +145,16 @@ impl ObjectHost {
         }))
     }
 
-    /// Whether an active shield is still running, expiring those past `now` and
-    /// restoring the independently authored `SetUnitInvulnerable` value.
+    /// Whether an active shield is still running at `now`, without mutating.
+    pub(crate) fn divine_shield_protects(&self, caster: HandleId, now: f64) -> bool {
+        self.divine_shield
+            .rules
+            .as_ref()
+            .and_then(|rules| rules.active.get(&caster))
+            .is_some_and(|shield| now < shield.ends_at)
+    }
+
+    /// Whether an active shield is still running, expiring those past `now`.
     fn shield_active(&mut self, caster: HandleId, now: f64) -> bool {
         let Some(rules) = self.divine_shield.rules.as_mut() else {
             return false;
@@ -157,10 +165,7 @@ impl ObjectHost {
         if now < shield.ends_at {
             return true;
         }
-        let shield = rules.active.remove(&caster).expect("present");
-        if let Ok(Entry::Unit { record }) = self.inner.entry_mut(caster) {
-            record.invulnerable = shield.restore_invulnerable;
-        }
+        rules.active.remove(&caster);
         false
     }
 
@@ -213,24 +218,20 @@ impl ObjectHost {
         if self.blocked(caster, &spell, now) {
             return Ok(false);
         }
-        let restore_invulnerable = match self.inner.entry_mut(caster)? {
+        match self.inner.entry_mut(caster)? {
             Entry::Unit { record } => {
-                let restore = record.invulnerable;
-                record.invulnerable = Some(true);
                 if let Some(vitals) = &mut record.vitals {
                     vitals.mana -= spell.cost;
                 }
-                restore
             }
             _ => return Err(self.inner.error(NATIVE, Failure::WrongFamily)),
-        };
+        }
         if let Some(rules) = &mut self.divine_shield.rules {
             rules.ready_at.insert(caster, now + spell.cooldown);
             rules.active.insert(
                 caster,
                 ActiveShield {
                     ends_at: now + spell.duration,
-                    restore_invulnerable,
                 },
             );
         }

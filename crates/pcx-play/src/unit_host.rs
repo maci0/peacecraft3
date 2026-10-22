@@ -1068,15 +1068,23 @@ impl ObjectHost {
                 .inner
                 .error(GET_INVULNERABLE, Failure::UnitState("one unit required")));
         };
-        self.created_unit(*unit, GET_INVULNERABLE)?
-            .invulnerable
-            .map(Value::Bool)
-            .ok_or_else(|| {
-                self.inner.error(
-                    GET_INVULNERABLE,
-                    Failure::UnitState("initial invulnerability is not derived"),
-                )
-            })
+        let record = self.created_unit(*unit, GET_INVULNERABLE)?;
+        let shielded = self
+            .timer_game_time()
+            .is_some_and(|now| self.divine_shield_protects(*unit, now));
+        // The reviewed 1.29 getter returns the inverse of effective protection
+        // (static `499fa0` evaluates `!(unit+0x20 bit 3)`). Keep the internal
+        // explicit flag semantics true=protected and invert only this return.
+        match record.invulnerable {
+            None if !shielded => Err(self.inner.error(
+                GET_INVULNERABLE,
+                Failure::UnitState("initial invulnerability is not derived"),
+            )),
+            explicit => {
+                let protected = explicit.unwrap_or(false) || shielded;
+                Ok(Value::Bool(!protected))
+            }
+        }
     }
 
     fn set_unit_state(&mut self, args: &[Value]) -> Result<Value, Error> {
