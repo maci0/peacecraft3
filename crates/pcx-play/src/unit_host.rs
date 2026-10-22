@@ -18,7 +18,7 @@ use super::super::{Entry, Error, Failure, below};
 use super::ObjectHost;
 use super::players::TechRead;
 use pcx_objects::editor::defaults::{self, DefaultTables, Family};
-use pcx_objects::editor::{FieldKind, FieldSource, ObjectKind, SlkId};
+use pcx_objects::editor::{FieldKind, FieldSource, ObjectKind, Overlay, SlkId};
 use pcx_script::span::Span;
 use pcx_script::{HandleId, Value, ast::Expr};
 use pcx_sim::world::{
@@ -178,10 +178,8 @@ struct DefendAbility {
 
 struct MilitiaAbility {
     alias: String,
-    on: String,
     off: String,
     base: [u8; 4],
-    active: [u8; 4],
 }
 
 struct UnitStateLimits {
@@ -568,19 +566,29 @@ impl ObjectHost {
     /// and the rank-1 `DataA1`/`DataB1` base and active forms come from the
     /// selected tables. An absent class leaves this admission off; a present,
     /// malformed class refuses with the table identity in the error context.
-    /// This retains only the off order and both unit forms; it does not read
-    /// `Dur1`, morph, or keep per-unit state. The declaration is non-constant
+    /// `abilities` is the caller's selected ability overlay, the same one hero
+    /// admission receives: a map modification or custom row for `Amil` is
+    /// refused because this slice consumes only the default row. This retains
+    /// only the off order and the base form; it does not read `Dur1`, morph, or
+    /// keep per-unit state. The declaration is non-constant
     /// `unit, string -> boolean` and shares `CreateUnit`'s source. Admit this
     /// behavior before creating units.
-    pub fn with_militia_ability(mut self, tables: &DefaultTables) -> Result<Self, Error> {
-        if self.units.is_none() || tables.object(Family::Ability, MILITIA_ALIAS).is_err() {
-            return Ok(self);
-        }
+    pub fn with_militia_ability(
+        mut self,
+        tables: &DefaultTables,
+        abilities: &Overlay,
+    ) -> Result<Self, Error> {
         let create_source = {
             let admitted = self
                 .units
                 .as_ref()
                 .ok_or_else(|| self.inner.error(ORDER, Failure::UnitState("not admitted")))?;
+            if !tables
+                .rawcodes(Family::Ability)
+                .any(|rawcode| rawcode.eq_ignore_ascii_case(MILITIA_ALIAS))
+            {
+                return Ok(self);
+            }
             if admitted.militia.is_some() {
                 return Err(self
                     .inner
@@ -594,6 +602,15 @@ impl ObjectHost {
             }
             admitted.declaration_source.clone()
         };
+        if abilities.new_object(MILITIA_ALIAS).is_some() || !abilities.on(MILITIA_ALIAS).is_empty()
+        {
+            return Err(self.inner.error(
+                ORDER,
+                Failure::UnitState(
+                    "map ability overlay modifies Amil; narrow slice does not consume it",
+                ),
+            ));
+        }
         Self::contract(
             &self.inner,
             ORDER,
@@ -1834,20 +1851,14 @@ impl ObjectHost {
     /// stay on the unsupported path. Null and removed units return false;
     /// a non-unit handle refuses as the wrong family.
     fn militia_immediate_order(&mut self, args: &[Value]) -> Option<Result<Value, Error>> {
-        let (alias, on, off, base, active) = {
+        let (alias, off, base) = {
             let militia = self.units.as_ref()?.militia.as_ref()?;
-            (
-                militia.alias.as_str(),
-                militia.on.as_str(),
-                militia.off.as_str(),
-                militia.base,
-                militia.active,
-            )
+            (militia.alias.as_str(), militia.off.as_str(), militia.base)
         };
         let [unit, Value::Str(text)] = args else {
             return None;
         };
-        if text == on || text != off {
+        if text != off {
             return None;
         }
         let unit = match unit {
@@ -1865,9 +1876,6 @@ impl ObjectHost {
             Ok(_) => return Some(Err(self.inner.error(ORDER, Failure::WrongFamily))),
             Err(error) => return Some(Err(error)),
         };
-        if record.definition.rawcode == active {
-            return None;
-        }
         if record.definition.rawcode != base {
             return None;
         }
@@ -1969,13 +1977,15 @@ fn read_militia_ability(tables: &DefaultTables) -> Result<MilitiaAbility, &'stat
     let alias = MILITIA_ALIAS;
     let object = tables
         .object(Family::Ability, alias)
-        .map_err(|_| "militia ability is absent")?;
+        .map_err(|_| "militia ability lookup failed")?;
     let alias_cell = present_cell(object.cell(SlkId::AbilityData, "alias"), "alias")?;
     if alias_cell.text != alias {
         return Err("militia alias spelling differs from the selected row");
     }
     let code_cell = present_cell(object.cell(SlkId::AbilityData, "code"), "code")?;
-    one_fourcc(code_cell.text).ok_or("militia code is not one fourcc")?;
+    if code_cell.text != alias {
+        return Err("militia code differs from the authored class");
+    }
     require_int(object.cell(SlkId::AbilityData, "levels"), "levels", 1)?;
     require_int(object.level_cell("Cost", 1), "Cost1", 0)?;
     require_real_zero(object.level_cell("Cool", 1), "Cool1")?;
@@ -2016,10 +2026,8 @@ fn read_militia_ability(tables: &DefaultTables) -> Result<MilitiaAbility, &'stat
     }
     Ok(MilitiaAbility {
         alias: alias.to_string(),
-        on,
         off,
         base,
-        active,
     })
 }
 
