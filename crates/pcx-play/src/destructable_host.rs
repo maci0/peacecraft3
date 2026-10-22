@@ -372,7 +372,7 @@ const RUNTIME: [(&str, &[&str], &str); 11] = [
     ("SetDestructableLife", &["destructable", "real"], "nothing"),
     (
         "DestructableRestoreLife",
-        &["destructable", "boolean"],
+        &["destructable", "real", "boolean"],
         "nothing",
     ),
 ];
@@ -734,7 +734,17 @@ impl ObjectHost {
                 let life = value.clamp(0.0, ceiling);
                 (life, life <= 0.0)
             }
-            ("DestructableRestoreLife", [Value::Bool(_)]) => (ceiling, ceiling <= 0.0),
+            ("DestructableRestoreLife", [Value::Real(value), Value::Bool(birth)]) => {
+                if !state.dead || *birth || *value != ceiling || ceiling <= 0.0 {
+                    return Err(self.inner.error(
+                        name,
+                        Failure::DestructableState(
+                            "only full-life restoration of a dead target without birth animation is admitted",
+                        ),
+                    ));
+                }
+                (ceiling, false)
+            }
             _ => return Err(self.inner.error(name, Failure::Signature)),
         };
         Ok(Some(LifePlan {
@@ -1092,7 +1102,9 @@ fn runtime_signature(name: &str, rest: &[Value]) -> bool {
         | "GetDestructableLife"
         | "GetDestructableMaxLife" => rest.is_empty(),
         "SetDestructableLife" => matches!(rest, [Value::Real(value)] if value.is_finite()),
-        "DestructableRestoreLife" => matches!(rest, [Value::Bool(_)]),
+        "DestructableRestoreLife" => {
+            matches!(rest, [Value::Real(value), Value::Bool(_)] if value.is_finite())
+        }
         _ => false,
     }
 }

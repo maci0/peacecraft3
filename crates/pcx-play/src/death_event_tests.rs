@@ -364,8 +364,9 @@ constant native GetTriggerWidget takes nothing returns widget
 constant native GetTriggerDestructable takes nothing returns destructable
 native SetDestructableLife takes destructable d, real life returns nothing
 native KillDestructable takes destructable d returns nothing
-native DestructableRestoreLife takes destructable d, boolean birth returns nothing
+native DestructableRestoreLife takes destructable d, real life, boolean birth returns nothing
 native GetDestructableLife takes destructable d returns real
+native GetDestructableMaxLife takes destructable d returns real
 native TimerStart takes timer t, real timeout, boolean periodic, code handler returns nothing
 native TriggerRegisterTimerExpireEvent takes trigger t, timer which returns event
 native TriggerRegisterTimerEvent takes trigger t, real timeout, boolean periodic returns event
@@ -515,7 +516,7 @@ function positive takes nothing returns nothing
  call SetDestructableLife(D,50.0)
 endfunction
 function restore takes nothing returns nothing
- call DestructableRestoreLife(D,false)
+ call DestructableRestoreLife(D,GetDestructableMaxLife(D),false)
 endfunction
 function widget_now takes nothing returns widget
  return GetTriggerWidget()
@@ -581,6 +582,44 @@ fn already_dead_trees_do_not_fire_and_positive_life_rearms_the_next_death() {
     assert_eq!(vm.global("hits"), Value::Int(2));
     vm.call("kill", &[]).unwrap();
     assert_eq!(vm.global("hits"), Value::Int(3));
+}
+
+#[test]
+fn restoration_requires_the_life_argument_and_refuses_unqualified_forms_atomically() {
+    let (_ctx, mut vm) = vm_for(DEATH_MAP);
+    vm.call("setup", &[]).unwrap();
+    vm.call("kill", &[]).unwrap();
+    let tree = id(&vm.global("D"));
+    let before = vm.host().inner.destructable_state(tree).unwrap();
+    let maximum = before.max_life.unwrap();
+    for args in [
+        vec![Value::Handle(tree), Value::Bool(false)],
+        vec![
+            Value::Handle(tree),
+            Value::Real(f32::NAN),
+            Value::Bool(false),
+        ],
+        vec![
+            Value::Handle(tree),
+            Value::Real(maximum / 2.0),
+            Value::Bool(false),
+        ],
+        vec![Value::Handle(tree), Value::Real(maximum), Value::Bool(true)],
+    ] {
+        assert!(
+            vm.host()
+                .inner
+                .native("DestructableRestoreLife", &args)
+                .is_err()
+        );
+        assert_eq!(vm.host().inner.destructable_state(tree).unwrap(), before);
+        assert!(vm.host().inner.take_fired_event().is_none());
+    }
+    vm.call("restore", &[]).unwrap();
+    let restored = vm.host().inner.destructable_state(tree).unwrap();
+    assert_eq!(restored.life, Some(maximum));
+    assert!(!restored.dead);
+    assert_eq!(vm.global("hits"), Value::Int(1));
 }
 
 #[test]
