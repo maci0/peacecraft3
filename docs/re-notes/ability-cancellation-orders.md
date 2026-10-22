@@ -116,6 +116,32 @@ The private container was stopped and the receipt retained in ignored
 `dataset-probe/result.json`. The meaning and consumer of that information word
 remain a separate source-policy question.
 
+A second diagnostic retained Human02's original information and unit-override
+members and sampled fresh source-created units instead of shield duration.
+Map SHA-256:
+`2ac54493dd93c6852d26dc4d90e2e1ec9a28ecc7c4ee14d1a1023fe1598b5fe4`.
+All 15 checkpoints arrived. At game time 5.000, collision sizes were 32 for
+Uther, 16 for a peasant, 31 for a footman and 32 for a grunt; the grunt's maximum
+life was 700. Human02's grunt override changes food, not life. Among the three
+compared prefixed tables this agrees with `Custom_V1`: `Custom_V0` has grunt
+life 680, while `Melee_V0` has zero for those collision cells. This fingerprint
+does not establish the native selection algorithm or a rule mapping editions
+to namespaces. The unit/ability files may also have distinct selection rules.
+
+Edition qualification is also open: these reference invocations supplied
+`-loadfile` without an explicit engine-edition switch or a recorded `VersionGet`
+result. The RoC campaign member's identity does not establish the running
+engine's addon. Treat the fingerprint and shield observations as belonging to
+that recorded launch configuration; do not use them to replace a RoC-specific
+source policy until engine edition is observed.
+
+The launcher wrapper timed out during Wine's initial prefix configuration, but
+the existing container subsequently reached the observed chapter card. One
+Space input preceded the completed records. No duplicate container was started;
+the owned run was stopped afterward. Local receipts and captures are retained
+in ignored `dataset-stats-probe`. Wall-clock startup delays under filesystem
+contention are not performance measurements of the recreation.
+
 ## Recreation shield boundary
 
 The self-cast host reads the learned rank's duration, cost, cooldown and Can
