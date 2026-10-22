@@ -45,16 +45,17 @@ evidence.
 
 ## Recreation correction
 
-`assign_unit_vital` currently replaces the maximum pools for those two state
-cases. That behavior contradicts the reviewed dispatch and allows a maximum
-write to invalidate the later removal of a held life bonus. The correction
-should preserve valid call acceptance and argument checking while leaving
-the maximum pools unchanged. Existing executed-request receipts can retain
-the requested value without presenting it as an effective world-state change.
+The previous `assign_unit_vital` replaced the maximum pools for those two
+state cases. That contradicted the reviewed dispatch and allowed a maximum
+write to invalidate later removal of a held life bonus. The corrected path
+preserves valid call acceptance and argument checking while leaving the
+maximum pools unchanged. Executed-request receipts retain the requested
+value without presenting it as an effective world-state change.
 
 Synthetic tests that use these calls to construct arbitrary maximum pools
-must change too. Native behavior tests should assert the unchanged maxima;
-pool-failure tests should use an admitted source configuration that reaches
+now use explicit test-only pool mutation where necessary. Native behavior
+tests assert unchanged maxima and retained requests; pool-failure tests use
+an admitted source configuration that reaches
 the failure, or explicitly identify an internal fixture state. The admitted
 large-strength precision-loss case remains a separate reason to preflight
 sequential inventory cleanup.

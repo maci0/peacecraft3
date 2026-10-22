@@ -200,6 +200,32 @@ Exact selector mutation and fresh control are local under
 all fourteen raw markers are in `selector1-transition/`. Earlier unqualified
 results remain preserved independently.
 
+### Same-map life and mana comparison
+
+The subsequent RoC run `same-map-store-restore-20261022-a` supplies all
+thirteen expected markers, with successful stores and presence checks for
+both plain and held-item cases. Diagnostic map SHA-256 is
+`5cc7b25d0613deee900be002231e63cb9bc1420f1f575331bba3185653a12aef`;
+script SHA-256 is
+`c4b4bbe811675bcae3f5ab64eb24e75ca8399c23afaabfaadc26c90a1ea7648a`.
+No ability override is present. The matched controls have the same level,
+items and quarter-full current pools as the stored units.
+
+| Case | Stored life / maximum | Stored mana / maximum | Restored life / maximum | Restored mana / maximum |
+| --- | --- | --- | --- | --- |
+| Plain Uther | 312.5 / 1250 | 123.75 / 495 | 1250 / 1250 | 495 / 495 |
+| `prvt` + `ciri` | 350 / 1400 | 146.25 / 585 | 1400 / 1400 | 585 / 585 |
+
+The held case retains both slots and effective INT 39 versus base INT 33.
+Removing `prvt` changes life/max life to 1250/1250 and leaves mana/max mana
+585/585. Removing `ciri` then changes mana/max mana to 495/495 and effective
+INT to 33. Both current pools therefore restore full in these tested cases;
+the controls remain quarter-full. These numbers are runtime witnesses,
+not recreation constants. Raw markers, source rows and the collector result
+are local under `.scratch/same-map-store-restore-probe/` in the main checkout.
+The owned run is stopped. Non-heroes, other cached state and native Windows
+are not qualified by this experiment.
+
 The reviewed image is the `3f2ed012…70eed` client identified above, launched
 with `-classic`; both maps report RoC. Revised A map SHA-256 is
 `7cd1280d2ec73e4629e239638452be7f3dc683a0735301f1dbb0ef74132e7248`;
@@ -212,9 +238,11 @@ results remain local in `.scratch/cross-map-cache-probe/transition-a/` in
 the main checkout. These Wine observations do not qualify native Windows
 or a general restore-pool policy beyond the sampled life case.
 
-Pool preservation, explicit item-flag preservation, omission of transient state
-and the no-pickup-event path are recreation choices still requiring an original
-client comparison. The native cached inventory loop observed here covers six
+Saved-pool preservation is contradicted by the tested hero cases above and
+remains an implementation gap pending correction. Explicit item-flag
+preservation, omission of transient state and the no-pickup-event path are
+recreation choices still requiring an original client comparison. The native
+cached inventory loop observed here covers six
 slots; the recreation currently uses the admitted inventory policy rather than
 copying that measured limit into code. The native hero payload and its remaining
 mask are not fully decoded. XP and other unimplemented hero state, native W3V
