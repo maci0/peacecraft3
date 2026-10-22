@@ -1,18 +1,25 @@
-//! Active per-unit buff state and the source-backed `UnitRemoveBuffs` /
-//! `UnitRemoveBuffsEx` removal filters.
+//! Active per-unit buff state and the `UnitRemoveBuffs` /
+//! `UnitRemoveBuffsEx` removal filters derived from the selected client's shared
+//! helper `0x6D87A0`.
 //!
-//! Buff identity is the shipped `Units\AbilityBuffData.slk` rawcode. Polarity,
-//! resistance, timed-life, aura and auto-dispel classification are native
-//! predicates on the buff class rather than SLK cells (the buff tables carry
-//! `alias`, `code`, `isEffect`, `race`, and editor metadata only): the selected
-//! client's shared removal helper `0x6D87A0` evaluates vtable slots `0x1E0`
+//! The helper walks the unit's ability chain and evaluates vtable slots `0x1E0`
 //! (negative), `0x1E4` (positive), `0x1E8` (aura), `0x334` (timed life),
-//! `0x1D8` (magic), `0x1DC` (physical), and `0x338` (auto-dispel) while
-//! walking the unit's ability chain, and removes each matching buff. The basic
-//! `UnitRemoveBuffs` wrapper calls the helper with timed-life/aura enabled and
-//! magic/physical/auto-dispel disabled; `UnitRemoveBuffsEx` passes its own
-//! booleans in the helper's stack order (physical, magic, timed-life, aura,
-//! auto-dispel, remove-positive, remove-negative).
+//! `0x1D8` (magic), `0x1DC` (physical), and `0x338` (auto-dispel), removing each
+//! matching buff. The basic `UnitRemoveBuffs` wrapper calls the helper with
+//! timed-life/aura enabled and magic/physical/auto-dispel disabled;
+//! `UnitRemoveBuffsEx` reorders its booleans into the helper's stack order
+//! (physical, magic, timed-life, aura, auto-dispel, remove-positive,
+//! remove-negative).
+//!
+//! The shipped `Units\AbilityBuffData.slk` carries only `alias`, `code`,
+//! `isEffect`, `race` and editor metadata; it does not encode polarity,
+//! resistance, timed-life or dispel class. A buff-producing ability host will
+//! supply the rawcode (checked against the buff table spelling when the
+//! applying ability is implemented) and the class traits; classification is the
+//! applying ability's behavior, not a value invented here or derived from the
+//! buff tables. The attach/query producer hooks are test-only until such a host
+//! lands; the bounded per-unit state backs the removal filters and is not a
+//! public API.
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_script::{HandleId, Value};
 use std::collections::BTreeMap;
@@ -32,12 +39,12 @@ const NATIVES: [(&str, &[&str], &str); 2] = [
     ),
 ];
 
-/// Native classification of one active buff, matching the shared removal
-/// helper's predicate slots. Consumers that apply a buff carry its rawcode and
-/// these traits from the behavior that adds it; the buff tables' `code`
-/// column remains the source of the rawcode.
+/// Classification of one active buff as the applying ability declares it,
+/// matching the shared removal helper's predicate slots. The buff tables do not
+/// encode these bits; a buff-producing ability host supplies them from its own
+/// behavior when a producer is implemented.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct BuffTraits {
+pub(crate) struct BuffTraits {
     pub positive: bool,
     pub negative: bool,
     pub magic: bool,
@@ -47,27 +54,23 @@ pub struct BuffTraits {
     pub auto_dispellable: bool,
 }
 
-/// One active buff on a unit.
+/// One active buff on a unit, as attached by a producer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ActiveBuff {
+pub(crate) struct ActiveBuff {
     rawcode: [u8; 4],
     traits: BuffTraits,
 }
 
+#[cfg(test)]
 impl ActiveBuff {
-    pub const fn new(rawcode: [u8; 4], traits: BuffTraits) -> Self {
+    pub(crate) const fn new(rawcode: [u8; 4], traits: BuffTraits) -> Self {
         Self { rawcode, traits }
     }
-
-    /// The shipped `Units\AbilityBuffData.slk` `code` cell spelling this buff.
-    pub const fn rawcode(self) -> [u8; 4] {
-        self.rawcode
-    }
-
-    pub const fn traits(self) -> BuffTraits {
-        self.traits
-    }
 }
+
+/// Cap on buffs retained per unit in the test-only producer hook.
+#[cfg(test)]
+pub(crate) const MAX_BUFFS_PER_UNIT: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RemoveOptions {
@@ -141,25 +144,51 @@ impl ObjectHost {
         Ok(())
     }
 
-    fn live_unit(&self, native: &str, unit: HandleId) -> Result<(), Error> {
+    /// `Ok(Some(()))` for a live `unit`, `Ok(None)` for a removed tombstone,
+    /// and `Err` for any other family. Test-only producer hook.
+    #[cfg(test)]
+    fn unit_liveness(&self, native: &str, unit: HandleId) -> Result<Option<()>, Error> {
         let fail = |failure| self.inner.error(native, failure);
         match self.inner.entry(unit).map_err(|e| fail(e.failure))? {
-            Entry::RemovedUnit | Entry::Unit { .. } => Ok(()),
+            Entry::Unit { .. } => Ok(Some(())),
+            Entry::RemovedUnit => Ok(None),
             _ => Err(fail(Failure::WrongFamily)),
         }
     }
 
-    /// Attach an active buff to a live unit. Future buff-applying effect hosts
-    /// call this with the shipped buff rawcode and the class traits above.
-    pub fn apply_unit_buff(&mut self, unit: HandleId, buff: ActiveBuff) -> Result<(), Error> {
-        self.live_unit("unit buff", unit)?;
-        self.unit_buffs.active.entry(unit).or_default().push(buff);
+    /// Internal, bounded, test-only hook for a future buff-producing ability
+    /// host to attach an active buff to a live unit. The producer supplies the
+    /// rawcode and class traits from its own behavior; this is not a public API
+    /// and does not claim buff-table-derived classification. Refuses removed
+    /// units and is capped at [`MAX_BUFFS_PER_UNIT`] per unit.
+    #[cfg(test)]
+    pub(crate) fn attach_unit_buff(
+        &mut self,
+        unit: HandleId,
+        buff: ActiveBuff,
+    ) -> Result<(), Error> {
+        if self.unit_liveness("unit buff", unit)?.is_none() {
+            return Err(self
+                .inner
+                .error("unit buff", Failure::UnitState("unit removed")));
+        }
+        let active = self.unit_buffs.active.entry(unit).or_default();
+        if active.len() >= MAX_BUFFS_PER_UNIT {
+            return Err(self
+                .inner
+                .error("unit buff", Failure::Budget("unit buff capacity")));
+        }
+        active.push(buff);
         Ok(())
     }
 
-    /// The active buffs on a live unit, most recently applied first.
-    pub fn active_unit_buffs(&self, unit: HandleId) -> Result<Vec<ActiveBuff>, Error> {
-        self.live_unit("unit buff", unit)?;
+    /// The active buffs attached to a unit, in application order. A removed unit
+    /// reports an empty set (its buffs are forgotten on `RemoveUnit`).
+    #[cfg(test)]
+    pub(crate) fn unit_buffs(&self, unit: HandleId) -> Result<Vec<ActiveBuff>, Error> {
+        if self.unit_liveness("unit buff", unit)?.is_none() {
+            return Ok(Vec::new());
+        }
         Ok(self
             .unit_buffs
             .active
