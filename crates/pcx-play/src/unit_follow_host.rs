@@ -54,7 +54,7 @@ impl ObjectHost {
                 || record
                     .activity
                     .as_ref()
-                    .is_none_or(|a| !a.movable || a.speed.is_none_or(|speed| speed <= 0.0))
+                    .is_none_or(|a| !a.can_start_motion())
             {
                 return Ok(Value::Bool(false));
             }
@@ -223,6 +223,9 @@ impl ObjectHost {
             if unchanged {
                 return Ok(());
             }
+        }
+        if target.is_some() && !activity.can_start_motion() {
+            return Ok(());
         }
         let motion = match target {
             Some(target) => self.prepare_follow_motion(unit, target, follow.range, at, work)?,

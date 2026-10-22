@@ -93,9 +93,14 @@ An admitted profile may set `MinUnitSpeed=0`, so the setter can store a zero
 speed. Motion projection then retains the route, destination and current order
 without displacement; it emits no nonfinite span and never divides by the zero
 speed. A later positive setter reanchors the retained route and motion resumes.
-A synthetic zero-minimum fixture locks that behavior. This is a recreation
-choice: the controlled stock profile clamps zero to its minimum of 10, so no
-probe observed a stored zero speed or the native zero-denominator behavior.
+A synthetic zero-minimum fixture locks that behavior. Patrol and follow intents
+remain admitted at zero speed: they do not rediscover a patrol leg or follow
+route, or reselect `Walk`, until a positive setter arrives. A blocked-patrol
+fixture locks the retained patrol order and later resumption, and a follow
+fixture locks a retained target across a zero-speed target move and reset. This
+is a recreation choice: the controlled stock profile clamps zero to its minimum
+of 10, so no probe observed a stored zero speed or the native zero-denominator
+behavior.
 
 The controlled probe reported `VERSION_REIGN_OF_CHAOS` checks under Wine, not
 native Windows or rendered parity. Nonfinite behavior, other movement classes,
