@@ -8,6 +8,8 @@ use pcx_script::{HandleId, ScriptCall, Value};
 pub(super) const REGISTER: &str = "TriggerRegisterPlayerStateEvent";
 
 const SET: &str = "SetPlayerState";
+const CONVERT_EVENT: &str = "ConvertPlayerEvent";
+const LIMIT_EVENT: &str = "EVENT_PLAYER_STATE_LIMIT";
 
 impl ObjectHost {
     /// Intercept an admitted `SetPlayerState` so its callbacks run before the
@@ -233,7 +235,6 @@ struct PlayerStateEventUpdate {
     index: usize,
     trigger: HandleId,
     state_handle: HandleId,
-    registration: HandleId,
     fire: bool,
 }
 
@@ -241,6 +242,7 @@ struct PlayerStateEventUpdate {
 pub(crate) struct PlayerStateChange {
     player: HandleId,
     current: i32,
+    event: HandleId,
     updates: Vec<PlayerStateEventUpdate>,
 }
 
@@ -306,7 +308,11 @@ impl ObjectHost {
                 return Err(fail(Failure::Source));
             }
         }
-        for (native, kind) in [(CONVERT_STATE, "playerstate"), (CONVERT_LIMIT, "limitop")] {
+        for (native, kind) in [
+            (CONVERT_STATE, "playerstate"),
+            (CONVERT_LIMIT, "limitop"),
+            (CONVERT_EVENT, "playerevent"),
+        ] {
             Self::contract(&self.inner, native, &["integer"], kind, true, None)?;
             let conversion = self
                 .inner
@@ -324,7 +330,7 @@ impl ObjectHost {
                 return Err(self.inner.error(native, Failure::Source));
             }
         }
-        for name in ["playerstate", "limitop"] {
+        for name in ["playerstate", "limitop", "playerevent"] {
             let mut current = name;
             for _ in 0..=program.types().count() {
                 if current == "handle" {
@@ -362,6 +368,7 @@ impl ObjectHost {
                 "player state limit operations are not distinct",
             )));
         }
+        let event_enumerand = self.source_constant_enumerand(LIMIT_EVENT, "playerevent")?;
         if self
             .triggers
             .as_mut()
@@ -376,8 +383,17 @@ impl ObjectHost {
             .triggers
             .as_mut()
             .ok_or_else(|| fail(Failure::TriggerState("not admitted")))?;
+        let player_state_event = match self
+            .inner
+            .convert_for(CONVERT_EVENT, &[Value::Int(event_enumerand)])
+            .map_err(|e| self.inner.error(LIMIT_EVENT, e.failure))?
+        {
+            Value::Handle(event) => event,
+            _ => return Err(self.inner.error(REGISTER, Failure::Signature)),
+        };
         admitted.player_state_event_limit = Some(max_records);
         admitted.player_state_ops = Some(ops);
+        admitted.player_state_event = Some(player_state_event);
         Ok(self)
     }
 
@@ -556,14 +572,15 @@ impl ObjectHost {
             self.reserve_event_delivery(pending)?;
             return Ok(None);
         };
-        let registrations = self
-            .admitted_triggers()?
-            .player_state_registrations
-            .len();
+        let admitted = self.admitted_triggers()?;
+        let event = admitted.player_state_event.ok_or_else(|| {
+            self.inner.error(
+                REGISTER,
+                Failure::TriggerState("player state event is not admitted"),
+            )
+        })?;
+        let registrations = admitted.player_state_registrations.len();
         let mut updates = Vec::new();
-        updates
-            .try_reserve(registrations)
-            .map_err(|_| self.inner.error(REGISTER, Failure::Capacity))?;
         let mut count: usize = 0;
         for slot in 0..registrations {
             let id = self.player_state_registration_id(slot)?;
@@ -579,11 +596,15 @@ impl ObjectHost {
             }
             let index = usize::try_from(id.token() - 1)
                 .map_err(|_| self.inner.error(REGISTER, Failure::Identity))?;
+            if updates.len() == updates.capacity() {
+                updates
+                    .try_reserve(1)
+                    .map_err(|_| self.inner.error(REGISTER, Failure::Capacity))?;
+            }
             updates.push(PlayerStateEventUpdate {
                 index,
                 trigger: record.trigger,
                 state_handle: record.state,
-                registration: id,
                 fire,
             });
         }
@@ -594,6 +615,7 @@ impl ObjectHost {
         Ok(Some(PlayerStateChange {
             player,
             current,
+            event,
             updates,
         }))
     }
@@ -604,9 +626,7 @@ impl ObjectHost {
     /// caller can run this after its other writes without a failure path.
     pub(crate) fn commit_player_state_change(&mut self, change: PlayerStateChange) {
         for update in change.updates {
-            if let Entry::RegisteredPlayerStateEvent(stored) =
-                &mut self.inner.arena[update.index]
-            {
+            if let Entry::RegisteredPlayerStateEvent(stored) = &mut self.inner.arena[update.index] {
                 stored.last = change.current;
             }
             if update.fire {
@@ -618,7 +638,7 @@ impl ObjectHost {
                         player_state: Some(update.state_handle),
                         ..Default::default()
                     },
-                    Some(update.registration),
+                    Some(change.event),
                 );
             }
         }
@@ -627,14 +647,20 @@ impl ObjectHost {
     /// Queue one event per registration whose effective value changed outside
     /// the central mutation path and whose selected comparison now holds.
     pub fn poll_player_state_events(&mut self, work: &mut usize) -> Result<usize, Error> {
-        let (ops, registrations) = {
+        let (ops, event, registrations) = {
             let Some(admitted) = self.triggers.as_ref() else {
                 return Ok(0);
             };
             let Some(ops) = admitted.player_state_ops else {
                 return Ok(0);
             };
-            (ops, admitted.player_state_registrations.len())
+            let event = admitted.player_state_event.ok_or_else(|| {
+                self.inner.error(
+                    REGISTER,
+                    Failure::TriggerState("player state event is not admitted"),
+                )
+            })?;
+            (ops, event, admitted.player_state_registrations.len())
         };
         let mut fired = 0;
         for slot in 0..registrations {
@@ -665,7 +691,7 @@ impl ObjectHost {
                         player_state: Some(record.state),
                         ..Default::default()
                     },
-                    Some(id),
+                    Some(event),
                 )?;
                 fired += 1;
             }
