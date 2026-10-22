@@ -561,7 +561,7 @@ impl ObjectHost {
         if let Some(state) = &mut animation {
             if queue {
                 self.reserve_animation_active(*unit)
-                    .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+                    .map_err(|failure| self.inner.error(name, failure))?;
                 queued = state
                     .queue(sequence, now)
                     .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;

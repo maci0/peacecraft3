@@ -777,14 +777,16 @@ impl ObjectHost {
 
     /// Reserve room for a unit that will advance queued animation without motion.
     /// The sorted active list is committed only after the queue append succeeds.
-    pub(super) fn reserve_animation_active(&mut self, unit: HandleId) -> Result<(), ()> {
+    pub(super) fn reserve_animation_active(&mut self, unit: HandleId) -> Result<(), Failure> {
         let Some(state) = &mut self.unit_activity else {
-            return Ok(());
+            return Err(Failure::UnitAnimation(
+                "queue requires admitted unit activity".into(),
+            ));
         };
         if state.active.binary_search(&unit).is_ok() {
             return Ok(());
         }
-        state.active.try_reserve(1).map_err(|_| ())
+        state.active.try_reserve(1).map_err(|_| Failure::Capacity)
     }
 
     pub(super) fn commit_animation_active(&mut self, unit: HandleId) {
