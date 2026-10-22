@@ -155,8 +155,35 @@ identifies the capacity and lumber-effect fields. The observed level-one
 deposit matches base capacity plus the effect base, rather than additionally
 applying its modifier at level one. This qualifies a capacity increase during
 an already active partial load in this configuration. It does not establish
-all upgrade formulas, reductions, level-two behavior or map-edited upgrades.
-Production values must come from the selected tables and applicable overlays.
+all upgrade formulas, reductions or other map-edited fields. Production values
+must come from the selected tables and applicable overlays.
+
+### First-level capacity selector boundary
+
+Matched `Rhlh` runs distinguish the `gba1` (`base1`) selector at applied levels
+one and two. `Ahar.DataB1` was 10, the `rlum` modifier stayed 5, the maximum
+level was 2, and the edited run set only the `rlum` base (`gba1`) to 9.
+First-deposit lumber was:
+
+| level | unedited | `gba1 = 9`, `[0,0]` | `gba1 = 9`, `[1,0]` |
+| --- | --- | --- | --- |
+| 1 | 15 | 19 | 15 |
+| 2 | 20 | 24 | 20 |
+
+At the first credit the tree life was 35/31/35 at level one and 30/26/30 at
+level two. The neutral `[0,0]` base edit therefore persists at level two,
+while a first selector word of `1` was ineffective at both tested levels for
+this `base1` field.
+
+The runtime admits a scalar `base*`/`mod*` override only with selectors
+`[0,0]`, and refuses unqualified or other selectors contextually rather than
+guessing a level. For this `Rhlh` effect it derives the value kind from the
+mapped `UpgradeMetaData` row (`gba1` is `unreal`), requires the override wire
+type to match, and requires a finite integral value. This evidence covers only
+`Rhlh`'s `rlum` base edit to 9 through level two; it does not establish selector
+behavior for other fields, higher levels or partial-load amounts.
+Raw runs and the selector audit remain local under ignored
+`.scratch/w3q-level2-runs/` and `.scratch/w3q-original-runs/`.
 
 Map SHA-256 is
 `e8cc4e6fd9b405665332f4c2ebd577701f2f26a9d1694abef17a7d938928a56f`;

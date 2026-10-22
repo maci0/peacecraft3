@@ -11,7 +11,7 @@
 //! Missing harvest capability is reported as `None`, not as numbers from an
 //! absent `Ahar` record.
 use pcx_objects::editor::defaults::{DefaultTables, Family};
-use pcx_objects::editor::{FieldSource, Overlay, SlkId};
+use pcx_objects::editor::{FieldKind, FieldSource, Overlay, SlkId};
 use pcx_sim::world::{Definition, FieldValue};
 
 const AHAR: &str = "Ahar";
@@ -167,12 +167,37 @@ fn upgrade_overlay_source<'a>(
     }
 }
 
+#[derive(Clone, Copy)]
+enum UpgradeCellKind {
+    Token,
+    Integer,
+    Int,
+}
+
+impl UpgradeCellKind {
+    fn accepts(self, kind: FieldKind) -> bool {
+        match self {
+            Self::Token => matches!(kind, FieldKind::Char | FieldKind::Token),
+            Self::Integer => matches!(kind, FieldKind::Int | FieldKind::Real | FieldKind::Unreal),
+            Self::Int => kind == FieldKind::Int,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Token => "token",
+            Self::Integer => "numeric",
+            Self::Int => "integer",
+        }
+    }
+}
+
 fn upgrade_cell(
     tables: &DefaultTables,
     upgrades: &Overlay,
     alias: &str,
     column: &str,
-    kind: pcx_objects::editor::FieldKind,
+    expected: UpgradeCellKind,
 ) -> Result<String, HarvestError> {
     let (base, mods) = upgrade_overlay_source(upgrades, alias);
     let matching: Vec<_> = tables
@@ -180,18 +205,28 @@ fn upgrade_cell(
         .fields()
         .iter()
         .filter(|field| {
-            matches!(
-                &field.source,
-                FieldSource::Column {
-                    slk: SlkId::UpgradeData,
-                    column: name
-                } if name == column
-            )
+            field.from == SlkId::UpgradeMetaData
+                && matches!(
+                    &field.source,
+                    FieldSource::Column {
+                        slk: SlkId::UpgradeData,
+                        column: name
+                    } if name == column
+                )
         })
         .collect();
     let field = match matching.as_slice() {
-        [] => None,
-        [field] => Some(*field),
+        [] if mods.is_empty() => {
+            return object_text(tables, Family::Upgrade, base, SlkId::UpgradeData, column);
+        }
+        [] => {
+            return Err(HarvestError::Malformed {
+                rawcode: alias.to_string(),
+                column: column.to_string(),
+                detail: "missing upgrade metadata for a column with map modifications".into(),
+            });
+        }
+        [field] => *field,
         _ => {
             return Err(HarvestError::Malformed {
                 rawcode: alias.to_string(),
@@ -200,40 +235,36 @@ fn upgrade_cell(
             });
         }
     };
-    if let Some(field) = field
-        && let Some(edit) = mods.iter().rev().find(|edit| edit.field == field.fourcc)
-    {
-        let level = column
-            .strip_prefix("maxlevel")
-            .map(|_| 0)
-            .or_else(|| {
-                ["effect", "base", "mod"].iter().find_map(|prefix| {
-                    column
-                        .strip_prefix(prefix)
-                        .and_then(|suffix| suffix.parse::<u32>().ok())
-                })
-            })
-            .unwrap_or(0);
-        let selectors_supported = match (level, edit.selectors) {
-            (0, None | Some([0, 0])) => true,
-            (level, Some([selected, 0])) if level > 0 && selected == level => true,
-            _ => false,
-        };
-        if !selectors_supported {
+    if !expected.accepts(field.kind) {
+        return Err(HarvestError::Malformed {
+            rawcode: alias.to_string(),
+            column: column.to_string(),
+            detail: format!(
+                "upgrade metadata declares {:?}, expected a {} value",
+                field.kind,
+                expected.name()
+            ),
+        });
+    }
+    if let Some(edit) = mods.iter().rev().find(|edit| edit.field == field.fourcc) {
+        if edit.selectors != Some([0, 0]) {
             return Err(HarvestError::Malformed {
                 rawcode: alias.to_string(),
                 column: column.to_string(),
                 detail: format!(
-                    "unsupported upgrade override selectors {:?} for level {level}",
+                    "unsupported upgrade override selectors {:?}; a first-level scalar override requires [0, 0]",
                     edit.selectors
                 ),
             });
         }
-        if !value_type_matches(edit.value_type, kind) {
+        if !value_type_matches(edit.value_type, field.kind) {
             return Err(HarvestError::Malformed {
                 rawcode: alias.to_string(),
                 column: column.to_string(),
-                detail: "upgrade override has an incompatible value type".into(),
+                detail: format!(
+                    "upgrade override type {:?} differs from metadata kind {:?}",
+                    edit.value_type, field.kind
+                ),
             });
         }
         return value_text(alias, column, &edit.value);
@@ -246,15 +277,45 @@ fn upgrade_cell_if_present(
     upgrades: &Overlay,
     alias: &str,
     column: &str,
-    kind: pcx_objects::editor::FieldKind,
+    expected: UpgradeCellKind,
 ) -> Result<Option<String>, HarvestError> {
-    match upgrade_cell(tables, upgrades, alias, column, kind) {
+    match upgrade_cell(tables, upgrades, alias, column, expected) {
         Ok(value) => Ok(Some(value)),
         Err(HarvestError::Missing {
             column: missing, ..
         }) if missing == column => Ok(None),
         Err(error) => Err(error),
     }
+}
+
+fn parse_upgrade_integer(
+    rawcode: &str,
+    text: &str,
+    column: &str,
+    subject: &str,
+) -> Result<i32, HarvestError> {
+    let value = text
+        .parse::<f64>()
+        .map_err(|detail| HarvestError::Malformed {
+            rawcode: rawcode.to_string(),
+            column: column.to_string(),
+            detail: format!("{subject} must be a finite integer, got {text:?}: {detail}"),
+        })?;
+    if !value.is_finite() || value.fract() != 0.0 {
+        return Err(HarvestError::Malformed {
+            rawcode: rawcode.to_string(),
+            column: column.to_string(),
+            detail: format!("{subject} must be a finite integer, got {text:?}"),
+        });
+    }
+    if value < f64::from(i32::MIN) || value > f64::from(i32::MAX) {
+        return Err(HarvestError::Malformed {
+            rawcode: rawcode.to_string(),
+            column: column.to_string(),
+            detail: format!("{subject} {text:?} is outside the i32 range"),
+        });
+    }
+    Ok(value as i32)
 }
 
 fn parse_i32(rawcode: &str, text: &str, column: &str) -> Result<i32, HarvestError> {
@@ -997,13 +1058,7 @@ impl HarvestRules {
                     detail: format!("resolved identity {} differs in case", upgrade.rawcode()),
                 });
             }
-            let maximum = upgrade_cell(
-                tables,
-                upgrades,
-                &alias,
-                "maxlevel",
-                pcx_objects::editor::FieldKind::Int,
-            )?;
+            let maximum = upgrade_cell(tables, upgrades, &alias, "maxlevel", UpgradeCellKind::Int)?;
             let maximum = parse_i32(&alias, &maximum, "maxlevel")?;
             if active > maximum {
                 return Err(HarvestError::Malformed {
@@ -1018,7 +1073,7 @@ impl HarvestRules {
                     upgrades,
                     &alias,
                     &format!("effect{slot}"),
-                    pcx_objects::editor::FieldKind::Token,
+                    UpgradeCellKind::Token,
                 )?
                 else {
                     continue;
@@ -1031,17 +1086,27 @@ impl HarvestRules {
                     upgrades,
                     &alias,
                     &format!("base{slot}"),
-                    pcx_objects::editor::FieldKind::Int,
+                    UpgradeCellKind::Integer,
                 )?;
                 let increment = upgrade_cell(
                     tables,
                     upgrades,
                     &alias,
                     &format!("mod{slot}"),
-                    pcx_objects::editor::FieldKind::Int,
+                    UpgradeCellKind::Integer,
                 )?;
-                let base = parse_i32(&alias, &base, &format!("base{slot}"))?;
-                let increment = parse_i32(&alias, &increment, &format!("mod{slot}"))?;
+                let base = parse_upgrade_integer(
+                    &alias,
+                    &base,
+                    &format!("base{slot}"),
+                    "lumber-capacity base effect",
+                )?;
+                let increment = parse_upgrade_integer(
+                    &alias,
+                    &increment,
+                    &format!("mod{slot}"),
+                    "lumber-capacity per-level effect",
+                )?;
                 let delta = increment
                     .checked_mul(active - 1)
                     .and_then(|scaled| base.checked_add(scaled))
