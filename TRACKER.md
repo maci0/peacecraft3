@@ -11,7 +11,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   continuation before eager placed-world admission. Gathered gold/lumber
   counters (`Blizzard.j:7652,7654`) now use
   source-decoded setter scaling, unsigned getter division and the same
-  synchronous state-event path. The combined private checks passed 1393 core
+  synchronous state-event path. The combined private checks passed 1406 core
   tests, 606 app tests, strict native/WASM Clippy and formatting including the
   gathered-counter and ranked/inventory Data-pointer imports. The unchanged
   Continue gate passes Human01 with 152 executed units and Human02's explicit
@@ -31,7 +31,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   completion, Windows snapshot runtime and native passive composition remain
   unqualified. Receipts: `.scratch/campaign-continuation/intelligence-*.log`
   and `inventory-review-*.log`, `gathered-pointer-*.log`,
-  `placed-flag-admission-*.log`, `unit-color-final-*.log` in that directory.
+  `placed-flag-admission-*.log`, `unit-color-final-*.log`, and
+  `late-create-combined-*.log` in that directory.
 
 - [x] Bind headless session admission to actual selected catalog/Misc contents.
   The readiness receipt keys every admitted catalog table/profile and the three
@@ -71,12 +72,19 @@ revive transitions continue through the shared stationary-layer swap.
 
 Path resolution, footprint work, layer and cell budgets and handle capacity
 are preflighted before the handle, layer or event-visible state is published;
-a failed attempt leaves the arena, prior layers and stored work unchanged.
+a failed attempt leaves the arena, prior layers and publication-work balance
+unchanged. Footprint identities are canonical across placement and source
+caches, including public initial maps and case/slash aliases. Script preflight
+rolls back retained source bytes and cells on refusal; successful ordinary unit
+loads commit their sources immediately. Uncached resolve/decode attempts have a
+separate non-refundable bound, so repeated failures cannot refund spent work.
 Synthetic tests cover overlap with an existing placed layer, live/dead swap
 and revive, dead creation, selected-catalog path edits, and missing resolver,
 unknown identity, pathing, work, cell, layer and source failures. The full
-`pcx-play` core suite passes 1384 tests with 41 explicitly ignored; strict
-native and WASM Clippy, the app test check and formatting pass. This is
+combined `pcx-play` core suite passes 1406 tests with 41 explicitly ignored;
+606 app tests, strict native and WASM Clippy, and formatting pass. The selected
+Continue gate still passes Human01 and refuses Human02's `IssueImmediateOrder`
+through `Blizzard.j:7817`. This is
 collision admission evidence, not an original-map rendered/native creation
 comparison.
 
