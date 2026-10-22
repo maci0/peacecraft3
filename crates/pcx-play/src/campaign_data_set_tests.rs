@@ -1,0 +1,789 @@
+use super::*;
+
+const WAR3_DESCRIPTOR: u32 = 0x112d8b0;
+const WAR3_LOCAL_DESCRIPTOR: u32 = 0x112d9b8;
+const WAR3X_DESCRIPTOR: u32 = 0x112dac0;
+const WAR3X_LOCAL_DESCRIPTOR: u32 = 0x112dbc8;
+const MOD_DESCRIPTOR: u32 = 0x112dcd0;
+const DEPRECATED_DESCRIPTOR: u32 = 0x112ddd8;
+const WAR3_HANDLE: u32 = 0x112deec;
+const WAR3X_HANDLE: u32 = 0x112def0;
+const WAR3_LOCAL_HANDLE: u32 = 0x112def4;
+const WAR3X_LOCAL_HANDLE: u32 = 0x112def8;
+const MOD_HANDLE: u32 = 0x112d898;
+const DEPRECATED_HANDLE: u32 = 0x112d89c;
+
+struct Fixture<'a> {
+    names: [&'a str; 4],
+    special: [&'a str; 2],
+    selected_priorities: [u8; 4],
+    datasets: [&'a str; 2],
+    format: &'a str,
+    start: u8,
+    step: u8,
+    mod_priority: u8,
+    deprecated_priority: u8,
+    mask: u8,
+}
+
+impl Default for Fixture<'_> {
+    fn default() -> Self {
+        Self {
+            names: ["a.mpq", "b.mpq", "c.mpq", "d.mpq"],
+            special: ["mod.mpq", "old.mpq"],
+            selected_priorities: [0x60, 0x61, 0x62, 0x63],
+            datasets: ["Green", "Blue"],
+            format: "%s_V%d",
+            start: 7,
+            step: 2,
+            mod_priority: 0x33,
+            deprecated_priority: 0x44,
+            mask: 0x80,
+        }
+    }
+}
+
+fn fixture(f: Fixture<'_>) -> Result<ImageRules, Error> {
+    rules(f, |_, _| Ok(()))
+}
+
+fn push_va(opcode: u8, value: u32) -> Vec<u8> {
+    let mut bytes = vec![opcode];
+    bytes.extend(value.to_le_bytes());
+    bytes
+}
+
+fn mov_table_op(value: u32) -> Vec<u8> {
+    let mut bytes = vec![0x8b, 0x8f];
+    bytes.extend(value.to_le_bytes());
+    bytes
+}
+
+fn lea_op(value: u32) -> Vec<u8> {
+    let mut bytes = vec![0x8d, 0x87];
+    bytes.extend(value.to_le_bytes());
+    bytes
+}
+
+fn table_op(value: u32, modrm: u8) -> Vec<u8> {
+    let mut bytes = vec![0x8b, modrm, 0x85];
+    bytes.extend(value.to_le_bytes());
+    bytes
+}
+
+fn literal_site(source: u32, destination: u32) -> Vec<u8> {
+    let mut bytes = push_va(0x68, 64);
+    bytes.extend(push_va(0x68, source));
+    bytes.extend(push_va(0x68, destination));
+    bytes.push(0xe8);
+    bytes
+}
+
+fn local_site(suffix: u32, destination: u32) -> Vec<u8> {
+    let mut bytes = push_va(0x68, suffix);
+    bytes.push(0x56);
+    bytes.extend(push_va(0x68, 0xe68a28));
+    bytes.extend(push_va(0x68, 0x104));
+    bytes.push(0x68);
+    bytes.extend(destination.to_le_bytes());
+    bytes.push(0xe8);
+    bytes
+}
+
+fn fallback_site(source: u32, destination: u32) -> Vec<u8> {
+    let mut bytes = push_va(0x68, 64);
+    bytes.extend(push_va(0x68, source));
+    bytes.extend(push_va(0x68, destination));
+    bytes.push(0xe8);
+    bytes.resize(20, 0);
+    bytes
+}
+
+fn handle_table(values: [u32; 2]) -> Vec<u8> {
+    values.into_iter().flat_map(u32::to_le_bytes).collect()
+}
+
+fn descriptor_table(values: [u32; 2]) -> Vec<u8> {
+    values.into_iter().flat_map(u32::to_le_bytes).collect()
+}
+
+fn rules(
+    f: Fixture<'_>,
+    mut alter: impl FnMut(u32, &mut Vec<u8>) -> Result<(), String>,
+) -> Result<ImageRules, Error> {
+    let strings = [
+        (0xe68900u32, f.names[0]),
+        (0xe6890c, f.names[1]),
+        (0xe6891c, f.names[2]),
+        (0xe68928, f.names[3]),
+        (0xe68938, f.special[0]),
+        (0xe68944, f.special[1]),
+        (0xe68980, "enUS"),
+        (0xe68994, f.format),
+        (0xe68a28, "%s-%s"),
+        (0xe69000, f.datasets[0]),
+        (0xe69010, f.datasets[1]),
+    ];
+    let limit = f.start.wrapping_add(f.step.wrapping_mul(2));
+    ImageRules::decode(
+        AssetIdentity {
+            source: "synthetic:campaign".into(),
+            edition: "synthetic".into(),
+            version: "1".into(),
+        },
+        sha256(&[]),
+        |va, n| {
+            let mut bytes = match va {
+                0x71dbd6 => vec![
+                    0x8b, 0x88, 0x44, 0x1e, 0x00, 0x00, 0x33, 0xc0, 0x83, 0xf9, 2, 0x0f, 0x46, 0xc1,
+                ],
+                0x7046c5 => vec![0x8b, 0x80, 0x40, 0x01, 0x00, 0x00, 0x83, 0xe0, f.mask],
+                0x704701 => vec![0x8b, 0x85, 0xbc, 0xcb, 0xff, 0xff, 0x83, 0xe0, f.mask],
+                0x428dd8 => vec![0xbe, f.start, 0, 0, 0],
+                0x428e2f => vec![0x83, 0xc6, f.step],
+                0x428e32 => vec![0x83, 0xc7, 4],
+                0x428e35 => vec![0x83, 0xfe, limit],
+                0x428de0 => mov_table_op(0x10db140),
+                0x428dea => lea_op(WAR3_HANDLE),
+                0x428e0a => mov_table_op(0x10db148),
+                0x428e19 => lea_op(WAR3_LOCAL_HANDLE),
+                0x428e43 => push_va(0x68, MOD_DESCRIPTOR),
+                0x428e3a => push_va(0x68, MOD_HANDLE),
+                0x428e56 => push_va(0x68, DEPRECATED_DESCRIPTOR),
+                0x428e4d => push_va(0x68, DEPRECATED_HANDLE),
+                0x428e41 => vec![0x6a, f.mod_priority],
+                0x428e54 => vec![0x6a, f.deprecated_priority],
+                0x428be9 => literal_site(0xe68900, WAR3_DESCRIPTOR),
+                0x428bff => literal_site(0xe6891c, WAR3X_DESCRIPTOR),
+                0x428c13 => literal_site(0xe68938, MOD_DESCRIPTOR),
+                0x428c27 => literal_site(0xe68944, DEPRECATED_DESCRIPTOR),
+                0x428c3b => local_site(0xe6890c, WAR3_LOCAL_DESCRIPTOR),
+                0x428c58 => local_site(0xe68928, WAR3X_LOCAL_DESCRIPTOR),
+                0x428c83 => fallback_site(0xe6890c, WAR3_LOCAL_DESCRIPTOR),
+                0x428cab => fallback_site(0xe68928, WAR3X_LOCAL_DESCRIPTOR),
+                0x42905b => vec![0x6a, f.selected_priorities[0]],
+                0x42907f => vec![0x6a, f.selected_priorities[1]],
+                0x42909d => vec![0x6a, f.selected_priorities[2]],
+                0x4290bb => vec![0x6a, f.selected_priorities[3]],
+                0x429009 => table_op(0x10db170, 0x0c),
+                0x429024 => table_op(0x10db180, 0x0c),
+                0x429010 => table_op(0x10db178, 0x1c),
+                0x429017 => table_op(0x10db188, 0x3c),
+                0x10db140 => descriptor_table([WAR3_DESCRIPTOR, WAR3X_DESCRIPTOR]),
+                0x10db148 => descriptor_table([WAR3_LOCAL_DESCRIPTOR, WAR3X_LOCAL_DESCRIPTOR]),
+                0x10db170 => handle_table([WAR3_HANDLE, WAR3X_HANDLE]),
+                0x10db178 => handle_table([WAR3_LOCAL_HANDLE, WAR3X_LOCAL_HANDLE]),
+                0x10db180 | 0x10db188 => handle_table([MOD_HANDLE; 2]),
+                0x10db190 => {
+                    let mut table = Vec::new();
+                    table.extend(0xe69000u32.to_le_bytes());
+                    table.extend(0xe69010u32.to_le_bytes());
+                    table
+                }
+                _ => strings
+                    .iter()
+                    .find(|(string_va, _)| *string_va == va)
+                    .map(|(_, text)| text.as_bytes().to_vec())
+                    .ok_or_else(|| format!("unexpected read at {va:#x}"))?,
+            };
+            if bytes.len() < n {
+                bytes.resize(n, 0);
+            }
+            bytes.truncate(n);
+            alter(va, &mut bytes)?;
+            Ok(bytes)
+        },
+    )
+}
+
+#[test]
+fn operands_not_fixture_semantics_drive_rules() {
+    let rules = fixture(Fixture::default()).unwrap();
+    assert_eq!(rules.selector_clamp, 2);
+    assert_eq!(rules.flag_mask, 0x80);
+    assert_eq!(rules.datasets, ["Green", "Blue"]);
+    assert_eq!(
+        rules.base[0],
+        MountSpec {
+            archive: "a.mpq".into(),
+            priority: 7
+        }
+    );
+    assert_eq!(
+        rules.base[1],
+        MountSpec {
+            archive: "b.mpq".into(),
+            priority: 8
+        }
+    );
+    assert_eq!(
+        rules.base[2],
+        MountSpec {
+            archive: "c.mpq".into(),
+            priority: 9
+        }
+    );
+    assert_eq!(
+        rules.base[3],
+        MountSpec {
+            archive: "d.mpq".into(),
+            priority: 10
+        }
+    );
+    assert_eq!(rules.base[4].priority, 0x33);
+    assert_eq!(rules.base[5].priority, 0x44);
+    assert_eq!(
+        rules.selected[0],
+        [
+            MountSpec {
+                archive: "a.mpq".into(),
+                priority: 0x60
+            },
+            MountSpec {
+                archive: "mod.mpq".into(),
+                priority: 0x63
+            },
+            MountSpec {
+                archive: "b.mpq".into(),
+                priority: 0x62
+            },
+        ]
+    );
+    assert_eq!(
+        rules.selected[1],
+        [
+            MountSpec {
+                archive: "c.mpq".into(),
+                priority: 0x60
+            },
+            MountSpec {
+                archive: "mod.mpq".into(),
+                priority: 0x63
+            },
+            MountSpec {
+                archive: "d.mpq".into(),
+                priority: 0x62
+            },
+        ]
+    );
+}
+
+#[test]
+fn selected_tables_are_followed_through_base_handle_identity() {
+    let rules = rules(Fixture::default(), |va, bytes| {
+        if va == 0x10db170 {
+            bytes[..4].copy_from_slice(&WAR3_LOCAL_HANDLE.to_le_bytes());
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(rules.selected[0][0].archive, "b.mpq");
+    assert_eq!(rules.selected[1][0].archive, "c.mpq");
+}
+
+#[test]
+fn unlisted_selected_handle_refuses() {
+    assert!(
+        rules(Fixture::default(), |va, bytes| {
+            if va == 0x10db170 {
+                bytes[..4].copy_from_slice(&0xdead_beefu32.to_le_bytes());
+            }
+            Ok(())
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn local_archive_name_fallback_drives_descriptor() {
+    let rules = rules(Fixture::default(), |va, bytes| {
+        if va == 0x428c83 {
+            bytes[..5].fill(0);
+        }
+        Ok(())
+    });
+    assert!(rules.is_err());
+}
+
+#[test]
+fn war3patch_presence_refuses_before_archive_selection() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "pcx-campaign-war3patch-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("war3patch.mpq"), []).unwrap();
+    assert!(refuse_war3patch(&dir).is_err());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn unresolved_locale_campaign_archive_refuses_before_archive_selection() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let rules = fixture(Fixture::default()).unwrap();
+    let dir = std::env::temp_dir().join(format!(
+        "pcx-campaign-locale-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("enUS-b.mpq"), []).unwrap();
+    assert!(refuse_unresolved_locale(&dir, &rules).is_err());
+    std::fs::remove_file(dir.join("enUS-b.mpq")).unwrap();
+    std::fs::write(dir.join("b.mpq"), []).unwrap();
+    assert!(refuse_unresolved_locale(&dir, &rules).is_ok());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn provided_common_must_match_the_archive_selected_common() {
+    assert!(matching_common_sha256(b"outer", b"archive").is_err());
+    assert_eq!(
+        matching_common_sha256(b"same", b"same").unwrap(),
+        sha256(b"same")
+    );
+}
+
+#[test]
+fn namespace_stripping_exposes_only_members_under_the_selected_prefix() {
+    let raw = vec![
+        (
+            "scripts/common.j".to_string(),
+            "Scripts\\Common.j".to_string(),
+        ),
+        (
+            "scripts/other.j".to_string(),
+            "Scripts\\Other.j".to_string(),
+        ),
+        ("units/orc.txt".to_string(), "Units\\Orc.txt".to_string()),
+    ];
+    let stripped = stripped_members(&raw, "Scripts").unwrap();
+    assert_eq!(
+        stripped,
+        [
+            ("common.j".to_string(), "Scripts\\Common.j".to_string()),
+            ("other.j".to_string(), "Scripts\\Other.j".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn selector_and_flags_choose_the_dataset_and_format_prefix() {
+    let rules = fixture(Fixture::default()).unwrap();
+    let cases = [
+        (Some(1), 0, "Blue_V0"),
+        (Some(1), 0x80, "Blue_V0"),
+        (Some(2), 0, "Green_V0"),
+        (Some(2), 0x80, "Green_V0"),
+        (Some(0), 0, "Blue_V0"),
+        (Some(0), 0x80, "Green_V0"),
+        (Some(3), 0x80, "Green_V0"),
+        (None, 0, "Blue_V0"),
+    ];
+    for (loading_id, flags, expected) in cases {
+        let selected = rules.select(loading_id, flags, 0).unwrap();
+        assert_eq!(selected.prefix, expected);
+    }
+    let selected = rules.select(Some(2), 0, 1).unwrap();
+    assert_eq!(selected.prefix, "Green_V1");
+    assert!(rules.select(Some(2), 0, 2).is_err());
+}
+
+#[test]
+fn namespace_plan_prefers_present_prefixed_members_then_base() {
+    let rules = fixture(Fixture {
+        format: "ns/%d/%s",
+        ..Fixture::default()
+    })
+    .unwrap();
+    let selection = rules.select(Some(2), 0, 1).unwrap();
+    let layers = rules
+        .plan_layers(
+            &selection,
+            &["Units/MiscGame.txt", "Shared.txt"],
+            |archive, member| {
+                matches!(
+                    (archive, member),
+                    ("mod.mpq", "ns/1/Green\\Units\\MiscGame.txt")
+                        | ("a.mpq", "Units/MiscGame.txt")
+                        | ("c.mpq", "Shared.txt")
+                )
+            },
+        )
+        .unwrap();
+    assert_eq!(layers.len(), 3);
+    assert_eq!(layers[0].prefix.as_deref(), Some("ns/1/Green"));
+    assert_eq!(
+        layers[0].members[0].member,
+        "ns/1/Green\\Units\\MiscGame.txt"
+    );
+    assert_eq!(layers[1].members[0].asset, "Shared.txt");
+    assert_eq!(layers[2].prefix, None);
+    assert_eq!(layers[2].members[0].asset, "Units/MiscGame.txt");
+}
+
+#[test]
+fn malformed_windows_and_ambiguous_priorities_refuse() {
+    assert!(
+        fixture(Fixture {
+            selected_priorities: [7, 8, 9, 10],
+            ..Fixture::default()
+        })
+        .is_err()
+    );
+    assert!(
+        fixture(Fixture {
+            datasets: ["same", "same"],
+            ..Fixture::default()
+        })
+        .is_err()
+    );
+    assert!(
+        fixture(Fixture {
+            format: "%s_V%s",
+            ..Fixture::default()
+        })
+        .is_err()
+    );
+    assert!(
+        fixture(Fixture {
+            names: ["War3Patch.mpq", "b.mpq", "c.mpq", "d.mpq"],
+            ..Fixture::default()
+        })
+        .is_err()
+    );
+    assert!(
+        fixture(Fixture {
+            datasets: ["", "Blue"],
+            ..Fixture::default()
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn malformed_instruction_windows_refuse() {
+    assert!(
+        rules(Fixture::default(), |va, bytes| {
+            if va == 0x71dbd6 {
+                bytes[0] = 0;
+            }
+            Ok(())
+        })
+        .is_err()
+    );
+    assert!(
+        rules(Fixture::default(), |va, bytes| {
+            if va == 0x10db190 {
+                bytes[..4].fill(0);
+            }
+            Ok(())
+        })
+        .is_err()
+    );
+}
+
+fn common(global: &str) -> String {
+    format!(
+        "type version extends handle\n\
+         constant native ConvertVersion takes integer i returns version\n\
+         globals\n\
+         constant version {global}\n\
+         endglobals\n"
+    )
+}
+
+#[test]
+fn edition_is_read_from_the_selected_common_declaration() {
+    let low = common("VERSION_REIGN_OF_CHAOS=ConvertVersion(60-60)");
+    assert_eq!(
+        edition_from_common(low.as_bytes(), "VERSION_REIGN_OF_CHAOS").unwrap(),
+        0
+    );
+    let high = common("VERSION_FROZEN_THRONE=ConvertVersion(60+3)");
+    assert_eq!(
+        edition_from_common(high.as_bytes(), "VERSION_FROZEN_THRONE").unwrap(),
+        63
+    );
+    let changed = common("VERSION_FROZEN_THRONE=ConvertVersion(61+3)");
+    assert_eq!(
+        edition_from_common(changed.as_bytes(), "VERSION_FROZEN_THRONE").unwrap(),
+        64
+    );
+}
+
+#[test]
+fn missing_ambiguous_or_malformed_edition_declarations_refuse() {
+    let missing = common("VERSION_FROZEN_THRONE=ConvertVersion(1)");
+    assert!(edition_from_common(missing.as_bytes(), "VERSION_REIGN_OF_CHAOS").is_err());
+
+    let ambiguous = "type version extends handle\n\
+        constant native ConvertVersion takes integer i returns version\n\
+        globals\n\
+        constant version VERSION_FROZEN_THRONE=ConvertVersion(1)\n\
+        constant version VERSION_FROZEN_THRONE=ConvertVersion(2)\n\
+        endglobals\n";
+    assert!(edition_from_common(ambiguous.as_bytes(), "VERSION_FROZEN_THRONE").is_err());
+
+    for source in [
+        "constant native ConvertVersion takes integer i returns version\n\
+         globals\nconstant version VERSION_FROZEN_THRONE=ConvertVersion(1)\nendglobals\n",
+        "type version extends handle\n\
+         native ConvertVersion takes integer i returns version\n\
+         globals\nconstant version VERSION_FROZEN_THRONE=ConvertVersion(1)\nendglobals\n",
+        "type version extends handle\n\
+         constant native ConvertVersion takes nothing returns version\n\
+         globals\nconstant version VERSION_FROZEN_THRONE=ConvertVersion(1)\nendglobals\n",
+        "type version extends handle\n\
+         constant native ConvertVersion takes integer i returns integer\n\
+         globals\nconstant version VERSION_FROZEN_THRONE=ConvertVersion(1)\nendglobals\n",
+        "type version extends handle\n\
+         constant native ConvertVersion takes integer i returns version\n\
+         globals\nversion VERSION_FROZEN_THRONE=ConvertVersion(1)\nendglobals\n",
+    ] {
+        assert!(edition_from_common(source.as_bytes(), "VERSION_FROZEN_THRONE").is_err());
+    }
+}
+
+#[test]
+#[ignore = "requires explicit PCX_CAMPAIGN_IMAGE selected original executable"]
+fn local_original_rules_match_reviewed_operands() {
+    let path = std::env::var("PCX_CAMPAIGN_IMAGE").expect("explicit original executable");
+    let image = std::fs::read(&path).unwrap();
+    let rules = ImageRules::read(
+        &image,
+        AssetIdentity {
+            source: path,
+            edition: "Legacy".into(),
+            version: "1.29.2.9231".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(rules.selector_clamp, 2);
+    assert_eq!(rules.flag_mask, 4);
+    assert_eq!(rules.namespace_format, "%s_V%d");
+    assert_eq!(rules.datasets, ["Melee", "Custom"]);
+    let base: Vec<_> = rules
+        .base
+        .iter()
+        .map(|mount| (mount.archive.as_str(), mount.priority))
+        .collect();
+    assert_eq!(
+        base,
+        [
+            ("War3.mpq", 1),
+            ("War3Local.mpq", 2),
+            ("War3x.mpq", 3),
+            ("War3xLocal.mpq", 4),
+            ("War3Mod.mpq", 9),
+            ("Deprecated.mpq", 0),
+        ]
+    );
+    let roc: Vec<_> = rules.selected[0]
+        .iter()
+        .map(|mount| (mount.archive.as_str(), mount.priority))
+        .collect();
+    assert_eq!(
+        roc,
+        [
+            ("War3.mpq", 0xa),
+            ("War3Mod.mpq", 0xd),
+            ("War3Local.mpq", 0xb),
+        ]
+    );
+    let tft: Vec<_> = rules.selected[1]
+        .iter()
+        .map(|mount| (mount.archive.as_str(), mount.priority))
+        .collect();
+    assert_eq!(
+        tft,
+        [
+            ("War3x.mpq", 0xa),
+            ("War3Mod.mpq", 0xd),
+            ("War3xLocal.mpq", 0xb),
+        ]
+    );
+}
+
+#[test]
+#[ignore = "requires explicit PCX_CAMPAIGN_COMMON selected original common.j"]
+fn local_original_common_declares_the_two_edition_enumerands() {
+    let path = std::env::var("PCX_CAMPAIGN_COMMON").expect("explicit original common.j");
+    let common = std::fs::read(path).unwrap();
+    assert_eq!(
+        edition_from_common(&common, "VERSION_REIGN_OF_CHAOS").unwrap(),
+        0
+    );
+    assert_eq!(
+        edition_from_common(&common, "VERSION_FROZEN_THRONE").unwrap(),
+        1
+    );
+}
+
+fn map_info(loading_id: u32, flags: u32) -> MapInfo {
+    let mut bytes = Vec::new();
+    for word in [18u32, 0, 0] {
+        bytes.extend(word.to_le_bytes());
+    }
+    bytes.extend([0; 4]);
+    bytes.extend([0; 32 + 16 + 8]);
+    bytes.extend(flags.to_le_bytes());
+    bytes.push(0);
+    bytes.extend(0u32.to_le_bytes());
+    bytes.extend([0; 3]);
+    bytes.extend(loading_id.to_le_bytes());
+    bytes.extend([0; 3]);
+    bytes.extend(0u32.to_le_bytes());
+    bytes.extend([0; 16]);
+    MapInfo::parse(&bytes).expect("synthetic map info")
+}
+
+#[test]
+#[ignore = "requires PCX_CAMPAIGN_INSTALL, PCX_CAMPAIGN_IMAGE and PCX_CAMPAIGN_COMMON"]
+fn local_original_recipe_opens_a_complete_campaign_reader() {
+    let install = std::env::var("PCX_CAMPAIGN_INSTALL").expect("explicit original install");
+    let image_path = std::env::var("PCX_CAMPAIGN_IMAGE").expect("explicit original executable");
+    let common_path = std::env::var("PCX_CAMPAIGN_COMMON").expect("explicit original common.j");
+    let image = std::fs::read(&image_path).unwrap();
+    let common = std::fs::read(&common_path).unwrap();
+    let rules = ImageRules::read(
+        &image,
+        AssetIdentity {
+            source: image_path,
+            edition: "Legacy".into(),
+            version: "1.29.2.9231".into(),
+        },
+    )
+    .unwrap();
+    let recipe = CampaignRecipe::pin(
+        Path::new(&install),
+        GameMode::default(),
+        rules,
+        &image,
+        &common,
+        "VERSION_FROZEN_THRONE",
+    )
+    .unwrap();
+    assert_eq!(recipe.edition(), 1);
+    let info = map_info(2, 0);
+    assert_eq!(info.loading_id, Some(2));
+    assert_eq!(info.flags, 0);
+    let reader = recipe.open(&info).unwrap();
+    assert_eq!(reader.selection.prefix, "Melee_V1");
+    assert!(reader.resolver.paths().count() > 0);
+    let resolved = reader.resolver.resolve("Scripts\\common.j").unwrap();
+    assert!(!resolved.bytes.is_empty());
+}
+
+#[test]
+#[ignore = "requires PCX_CAMPAIGN_INSTALL, PCX_CAMPAIGN_IMAGE and PCX_CAMPAIGN_COMMON"]
+fn local_original_recipe_refuses_a_mismatched_common_blob() {
+    let install = std::env::var("PCX_CAMPAIGN_INSTALL").expect("explicit original install");
+    let image_path = std::env::var("PCX_CAMPAIGN_IMAGE").expect("explicit original executable");
+    let common_path = std::env::var("PCX_CAMPAIGN_COMMON").expect("explicit original common.j");
+    let image = std::fs::read(&image_path).unwrap();
+    let mut common = std::fs::read(&common_path).unwrap();
+    common.push(b'\n');
+    let rules = ImageRules::read(
+        &image,
+        AssetIdentity {
+            source: image_path,
+            edition: "Legacy".into(),
+            version: "1.29.2.9231".into(),
+        },
+    )
+    .unwrap();
+    let error = CampaignRecipe::pin(
+        Path::new(&install),
+        GameMode::default(),
+        rules,
+        &image,
+        &common,
+        "VERSION_FROZEN_THRONE",
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("common.j"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires PCX_CAMPAIGN_INSTALL, PCX_CAMPAIGN_IMAGE and PCX_CAMPAIGN_COMMON"]
+fn local_original_recipe_retains_its_opened_archive_generation() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let install = std::env::var("PCX_CAMPAIGN_INSTALL").expect("explicit original install");
+    let image_path = std::env::var("PCX_CAMPAIGN_IMAGE").expect("explicit original executable");
+    let common_path = std::env::var("PCX_CAMPAIGN_COMMON").expect("explicit original common.j");
+    let image = std::fs::read(&image_path).unwrap();
+    let common = std::fs::read(&common_path).unwrap();
+    let rules = ImageRules::read(
+        &image,
+        AssetIdentity {
+            source: image_path,
+            edition: "Legacy".into(),
+            version: "1.29.2.9231".into(),
+        },
+    )
+    .unwrap();
+    let dir = std::env::temp_dir().join(format!(
+        "pcx-campaign-generation-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    for entry in std::fs::read_dir(&install).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("mpq"))
+        {
+            std::os::unix::fs::symlink(&path, dir.join(entry.file_name())).unwrap();
+        }
+    }
+    let replacement_rules = rules.clone();
+    let recipe = CampaignRecipe::pin(
+        &dir,
+        GameMode::default(),
+        rules,
+        &image,
+        &common,
+        "VERSION_FROZEN_THRONE",
+    )
+    .unwrap();
+    let info = map_info(2, 0);
+    let before = recipe
+        .open(&info)
+        .unwrap()
+        .resolver
+        .resolve("Scripts\\common.j")
+        .unwrap()
+        .bytes;
+    std::fs::remove_file(dir.join("War3.mpq")).unwrap();
+    std::fs::write(dir.join("War3.mpq"), b"not an mpq").unwrap();
+    let after = recipe
+        .open(&info)
+        .unwrap()
+        .resolver
+        .resolve("Scripts\\common.j")
+        .unwrap()
+        .bytes;
+    assert_eq!(before, after);
+    assert!(
+        CampaignRecipe::pin(
+            &dir,
+            GameMode::default(),
+            replacement_rules,
+            &image,
+            &common,
+            "VERSION_FROZEN_THRONE",
+        )
+        .is_err()
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}

@@ -831,6 +831,15 @@ impl MpqSet {
     pub fn members_mut(&mut self) -> &mut [MpqArchive] {
         &mut self.members
     }
+    /// Take ownership of the archives opened by [`Self::open_named`].
+    ///
+    /// Callers that build several views of the same archive (for example an
+    /// unprefixed layer and a namespace layer) need one owned handle each
+    /// rather than reopening the file per view. Taking the members preserves
+    /// the set's case-insensitive duplicate suppression.
+    pub fn into_members(self) -> Vec<MpqArchive> {
+        self.members
+    }
 
     /// Find `path` in the highest-priority archive that holds it.
     pub fn locate(&self, path: &str) -> Option<(usize, &BlockEntry)> {
