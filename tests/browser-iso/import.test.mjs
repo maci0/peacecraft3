@@ -18,18 +18,45 @@ async function source() {
   const file = new File([isoFixture([{ name: 'PAYLOAD.BIN;1', bytes: mpqFixture(menuMembers()) }])], 'authored.iso');
   return { file, discovery: await discoverIso(file) };
 }
-test('recognized archive family is selected by default within the memory budget', () => {
+const completeEditionCandidates = [
+  ['/elamigos-1.bin::war3.mpq', 447331787],
+  ['/elamigos-1.bin::War3Patch.mpq', 125201961],
+  ['/elamigos-1.bin::War3x.mpq', 402990907],
+  ['/elamigos-1.bin::War3xlocal.mpq', 46073074],
+  ['/elamigos-1.bin::Movies\\HumanEd.mpq', 20393390],
+  ['/elamigos-1.bin::Movies\\HumanOp.mpq', 26366936],
+  ['/elamigos-1.bin::Movies\\IntroX.mpq', 19385684],
+  ['/elamigos-1.bin::Movies\\NightElfEd.mpq', 19138382],
+  ['/elamigos-1.bin::Movies\\OrcEd.mpq', 28432146],
+  ['/elamigos-1.bin::Movies\\OutroX.mpq', 23743732],
+  ['/elamigos-1.bin::Movies\\TutorialIn.mpq', 16447210],
+  ['/elamigos-1.bin::Movies\\TutorialOp.mpq', 21283740],
+  ['/elamigos-1.bin::Movies\\UndeadEd.mpq', 15052312],
+].map(([path, archiveSize]) => ({ path, archiveSize }));
+
+test('unique base archive is selected independently of unrelated installer members', () => {
   const base = { path: '/DATA.ARC::war3.mpq', archiveSize: 40 };
   const expansion = { path: '/DATA.ARC::War3x.mpq', archiveSize: 30 };
-  assert.deepEqual(defaultIsoCandidates([expansion, base]), [expansion, base]);
+  assert.deepEqual(defaultIsoCandidates([expansion, base]), [base]);
   const local = { path: '/War3Local.mpq', archiveSize: 300 * 1024 * 1024 };
   const expansionLocal = { path: '/War3xLocal.mpq', archiveSize: 300 * 1024 * 1024 };
-  assert.deepEqual(defaultIsoCandidates([base, expansion, local, expansionLocal]), [base, expansion, local, expansionLocal]);
-  assert.deepEqual(defaultIsoCandidates([base, { ...base }]), []);
-  assert.deepEqual(defaultIsoCandidates([expansion, { path: '/DATA.ARC::War3Patch.mpq', archiveSize: 20 }]), []);
+  assert.deepEqual(defaultIsoCandidates([base, expansion, local, expansionLocal]), [base]);
+  assert.deepEqual(defaultIsoCandidates(completeEditionCandidates), [completeEditionCandidates[0]]);
+  assert.equal(defaultIsoCandidates(completeEditionCandidates)[0], completeEditionCandidates[0]);
   assert.deepEqual(defaultIsoCandidates([{ path: '/WAR3.MPQ;1', archiveSize: 40 }]).map(c => c.path), ['/WAR3.MPQ;1']);
+  assert.deepEqual(defaultIsoCandidates([base, { ...expansion, archiveSize: 1024 * 1024 * 1024 }]), [base]);
+});
+
+test('missing, duplicate or oversized base refuses an automatic selection', () => {
+  const base = { path: '/DATA.ARC::war3.mpq', archiveSize: 40 };
+  const expansion = { path: '/DATA.ARC::War3x.mpq', archiveSize: 30 };
+  const expansionLocal = { path: '/DATA.ARC::War3xlocal.mpq', archiveSize: 20 };
+  const patch = { path: '/DATA.ARC::War3Patch.mpq', archiveSize: 10 };
+  assert.deepEqual(defaultIsoCandidates([base, { ...base }]), []);
+  assert.deepEqual(defaultIsoCandidates([expansion, expansionLocal, patch]), []);
+  assert.deepEqual(defaultIsoCandidates([base, { ...base, path: '/WAR3.MPQ;1' }]), []);
   assert.deepEqual(defaultIsoCandidates([{ ...base, archiveSize: 513 * 1024 * 1024 }]), []);
-  assert.deepEqual(defaultIsoCandidates([base, { ...expansion, archiveSize: 1024 * 1024 * 1024 }]), []);
+  assert.deepEqual(defaultIsoCandidates([]), []);
 });
 test('browser importer stages bounded archive content and commits once', async () => {
   const { file, discovery } = await source(), api = adapter();
