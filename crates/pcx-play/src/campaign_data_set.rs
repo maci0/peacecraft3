@@ -17,11 +17,17 @@ use pcx_assets::{
 };
 use pcx_map::info::MapInfo;
 use pcx_script::{BinOp, Expr, Item, Literal, TypeKind, UnOp};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
+    fs::{File, OpenOptions},
+    io::{Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -1009,10 +1015,182 @@ fn c_string_at(
     Ok(text.to_string())
 }
 
+const MAX_SNAPSHOT_ARCHIVE_BYTES: u64 = 4 << 30;
+const MAX_SNAPSHOT_TOTAL_BYTES: u64 = 8 << 30;
+const SNAPSHOT_CHUNK_BYTES: u64 = 1 << 20;
+
+static NEXT_SNAPSHOT: AtomicU64 = AtomicU64::new(0);
+
+struct SnapshotBudget {
+    directory: PathBuf,
+    remaining: u64,
+}
+
+impl SnapshotBudget {
+    fn new() -> Self {
+        Self {
+            directory: std::env::temp_dir(),
+            remaining: MAX_SNAPSHOT_TOTAL_BYTES,
+        }
+    }
+}
+
+#[cfg(unix)]
+#[derive(Debug, PartialEq, Eq)]
+struct SourceStamp {
+    len: u64,
+    device: u64,
+    inode: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
+#[cfg(unix)]
+fn source_stamp(path: &Path) -> Result<SourceStamp, Error> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path)?;
+    Ok(SourceStamp {
+        len: metadata.len(),
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        modified: (metadata.mtime(), metadata.mtime_nsec()),
+        changed: (metadata.ctime(), metadata.ctime_nsec()),
+    })
+}
+
+#[cfg(not(unix))]
+#[derive(Debug, PartialEq, Eq)]
+struct SourceStamp {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+#[cfg(not(unix))]
+fn source_stamp(path: &Path) -> Result<SourceStamp, Error> {
+    let metadata = std::fs::metadata(path)?;
+    Ok(SourceStamp {
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+fn create_snapshot_file(directory: &Path, source: &Path) -> Result<File, Error> {
+    let path = directory.join(format!(
+        ".pcx-campaign-snapshot-{}-{}",
+        std::process::id(),
+        NEXT_SNAPSHOT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&path).map_err(|error| {
+        Error::Message(format!(
+            "{}: cannot create a private snapshot in {}: {error}",
+            source.display(),
+            directory.display()
+        ))
+    })?;
+    if let Err(error) = std::fs::remove_file(&path) {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err(Error::Message(format!(
+            "{}: cannot unlink private snapshot {} before copying source bytes: {error}",
+            source.display(),
+            path.display()
+        )));
+    }
+    Ok(file)
+}
+
+fn snapshot_archive(
+    mut archive: pcx_mpq::MpqArchive,
+    budget: &mut SnapshotBudget,
+) -> Result<(pcx_mpq::MpqArchive, Sha256Digest), Error> {
+    let source = archive.path().to_path_buf();
+    let len = archive.byte_len();
+    if len > MAX_SNAPSHOT_ARCHIVE_BYTES {
+        return Err(Error::Message(format!(
+            "{}: archive is {len} bytes, exceeding the {MAX_SNAPSHOT_ARCHIVE_BYTES}-byte snapshot limit",
+            source.display()
+        )));
+    }
+    if len > budget.remaining {
+        return Err(Error::Message(format!(
+            "{}: snapshot would exceed the {MAX_SNAPSHOT_TOTAL_BYTES}-byte recipe limit",
+            source.display()
+        )));
+    }
+    let before = source_stamp(&source)?;
+    if before.len != len {
+        return Err(Error::Message(format!(
+            "{}: archive changed after it was opened",
+            source.display()
+        )));
+    }
+    let mut file = create_snapshot_file(&budget.directory, &source)?;
+    let mut hasher = Sha256::new();
+    let mut offset = 0u64;
+    while offset < len {
+        let want = usize::try_from((len - offset).min(SNAPSHOT_CHUNK_BYTES))
+            .map_err(|_| Error::Message("snapshot chunk length overflowed".into()))?;
+        let bytes = archive.read_at(offset, want).map_err(|error| {
+            Error::Message(format!(
+                "{}: cannot copy snapshot at byte {offset}: {error}",
+                source.display()
+            ))
+        })?;
+        if bytes.len() != want {
+            return Err(Error::Message(format!(
+                "{}: snapshot copy at byte {offset} returned {} bytes, expected {want}",
+                source.display(),
+                bytes.len()
+            )));
+        }
+        hasher.update(&bytes);
+        file.write_all(&bytes).map_err(|error| {
+            Error::Message(format!(
+                "{}: cannot write private snapshot at byte {offset}: {error}",
+                source.display()
+            ))
+        })?;
+        offset += want as u64;
+    }
+    file.flush().map_err(|error| {
+        Error::Message(format!(
+            "{}: cannot flush private snapshot: {error}",
+            source.display()
+        ))
+    })?;
+    let after = source_stamp(&source)?;
+    if before != after {
+        return Err(Error::Message(format!(
+            "{}: archive changed while its snapshot was copied",
+            source.display()
+        )));
+    }
+    file.seek(SeekFrom::Start(0))?;
+    let snapshot = pcx_mpq::MpqArchive::from_file(file, &source).map_err(|error| {
+        Error::Message(format!(
+            "{}: cannot parse private archive snapshot: {error}",
+            source.display()
+        ))
+    })?;
+    budget.remaining = budget
+        .remaining
+        .checked_sub(len)
+        .ok_or_else(|| Error::Message("campaign snapshot budget underflowed".into()))?;
+    Ok((snapshot, hasher.finalize().into()))
+}
+
 struct OpenedArchive {
     path: PathBuf,
     archive: Arc<Mutex<pcx_mpq::MpqArchive>>,
     raw: Vec<(String, String)>,
+    snapshot_sha256: Sha256Digest,
 }
 
 struct ArchiveGeneration {
@@ -1251,9 +1429,10 @@ fn build_layer(
         .map(|prefix| format!("namespace {prefix}"))
         .unwrap_or_else(|| "base".to_string());
     let version = format!(
-        "campaign image sha256:{} common sha256:{} edition:{}",
+        "campaign image sha256:{} common sha256:{} archive sha256:{} edition:{}",
         digest_hex(&generation.image_sha256),
         digest_hex(&generation.common_sha256),
+        digest_hex(&opened.snapshot_sha256),
         generation.edition
     );
     let id = format!("campaign archive {origin} priority {priority} {role} {version}");
@@ -1387,41 +1566,8 @@ fn open_campaign_inventory(
     let mut opened = BTreeMap::new();
     let mut listfile_bytes = 0usize;
     let mut raw_paths = 0usize;
-    match pcx_mpq::MpqSet::open_named(dir, &wanted) {
-        Ok(set) => {
-            for mut archive in set.into_members() {
-                let path = archive.path().to_path_buf();
-                let key = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .ok_or_else(|| {
-                        Error::Message(format!(
-                            "campaign archive {} has no UTF-8 name",
-                            path.display()
-                        ))
-                    })?
-                    .to_ascii_lowercase();
-                let listfile = read_listfile(&mut archive, huffman)?;
-                listfile_bytes = listfile_bytes
-                    .checked_add(listfile.len())
-                    .ok_or_else(|| Error::Message("campaign listfile size overflowed".into()))?;
-                if listfile_bytes > MAX_AGGREGATE_BYTES {
-                    return Err(Error::Message(format!(
-                        "campaign listfiles exceed {MAX_AGGREGATE_BYTES} bytes"
-                    )));
-                }
-                let raw = canonical_members(&archive, &listfile)?;
-                raw_paths = add_paths(raw_paths, raw.len())?;
-                opened.insert(
-                    key,
-                    OpenedArchive {
-                        path,
-                        archive: Arc::new(Mutex::new(archive)),
-                        raw,
-                    },
-                );
-            }
-        }
+    let members = match pcx_mpq::MpqSet::open_named(dir, &wanted) {
+        Ok(set) => set.into_members(),
         Err(pcx_mpq::Error::NotFound(_)) => {
             return Err(Error::Message(format!(
                 "no campaign archives found in {}",
@@ -1429,6 +1575,59 @@ fn open_campaign_inventory(
             )));
         }
         Err(error) => return Err(Error::Mpq(error)),
+    };
+    let mut snapshot_bytes = 0u64;
+    for archive in &members {
+        let len = archive.byte_len();
+        if len > MAX_SNAPSHOT_ARCHIVE_BYTES {
+            return Err(Error::Message(format!(
+                "{}: archive is {len} bytes, exceeding the {MAX_SNAPSHOT_ARCHIVE_BYTES}-byte snapshot limit",
+                archive.path().display()
+            )));
+        }
+        snapshot_bytes = snapshot_bytes
+            .checked_add(len)
+            .ok_or_else(|| Error::Message("campaign snapshot size overflowed".into()))?;
+    }
+    if snapshot_bytes > MAX_SNAPSHOT_TOTAL_BYTES {
+        return Err(Error::Message(format!(
+            "campaign archives need {snapshot_bytes} snapshot bytes, exceeding the {MAX_SNAPSHOT_TOTAL_BYTES}-byte recipe limit"
+        )));
+    }
+    let mut budget = SnapshotBudget::new();
+    for archive in members {
+        let path = archive.path().to_path_buf();
+        let key = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                Error::Message(format!(
+                    "campaign archive {} has no UTF-8 name",
+                    path.display()
+                ))
+            })?
+            .to_ascii_lowercase();
+        let (mut archive, snapshot_sha256) = snapshot_archive(archive, &mut budget)?;
+        let listfile = read_listfile(&mut archive, huffman)?;
+        listfile_bytes = listfile_bytes
+            .checked_add(listfile.len())
+            .ok_or_else(|| Error::Message("campaign listfile size overflowed".into()))?;
+        if listfile_bytes > MAX_AGGREGATE_BYTES {
+            return Err(Error::Message(format!(
+                "campaign listfiles exceed {MAX_AGGREGATE_BYTES} bytes"
+            )));
+        }
+        let raw = canonical_members(&archive, &listfile)?;
+        raw_paths = add_paths(raw_paths, raw.len())?;
+        opened.insert(
+            key,
+            OpenedArchive {
+                path,
+                archive: Arc::new(Mutex::new(archive)),
+                raw,
+                snapshot_sha256,
+            },
+        );
     }
     if opened.is_empty() {
         return Err(Error::Message(format!(
