@@ -249,6 +249,24 @@ impl CampaignRecipe {
         })
     }
 
+    /// Select data from the bounded header of these exact map bytes.
+    pub fn open_map(
+        &self,
+        bytes: &[u8],
+        label: &str,
+        budget: pcx_mpq::checked::ReadBudget,
+    ) -> Result<CampaignReader, Error> {
+        let map = pcx_map::Map::parse(bytes)
+            .map_err(|error| Error::Message(format!("{label}: {error}")))?;
+        let info = map
+            .extract_checked(label, "war3map.w3i", budget)
+            .map_err(|error| Error::Message(format!("{label}: {error}")))?
+            .ok_or_else(|| Error::Message(format!("{label}: missing war3map.w3i")))?;
+        let info = MapInfo::from_bytes(info)
+            .map_err(|error| Error::Message(format!("{label}: {error}")))?;
+        self.open(&info)
+    }
+
     pub fn dir(&self) -> &Path {
         &self.dir
     }

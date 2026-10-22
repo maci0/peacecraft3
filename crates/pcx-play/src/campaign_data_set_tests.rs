@@ -1170,7 +1170,28 @@ fn local_original_recipe_retains_its_opened_archive_generation() {
     let replaced = dir.join(Path::new(&map_origin).file_name().unwrap());
     std::fs::remove_file(&replaced).unwrap();
     std::fs::write(&replaced, b"not an mpq").unwrap();
-    let reader = recipe.open(&info).unwrap();
+    let budget = pcx_mpq::checked::ReadBudget {
+        max_archive_bytes: 64 << 20,
+        max_archive_table_bytes: 8 << 20,
+        max_raw_packed_bytes: 16 << 20,
+        max_decoded_bytes: 16 << 20,
+    };
+    let reader = recipe.open_map(&map_bytes, &map_member, budget).unwrap();
+    assert_eq!(
+        reader.selection,
+        recipe
+            .rules()
+            .campaign_data_set(&info, recipe.edition())
+            .unwrap()
+    );
+    assert!(
+        recipe
+            .open_map(b"invalid", "malformed map", budget)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("malformed map")
+    );
     assert_eq!(
         reader.resolver.resolve(&map_member).unwrap().bytes,
         map_bytes

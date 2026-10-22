@@ -7,9 +7,7 @@
 //! selected executable, which the application's adapter also uses.
 use crate::campaign_host::{self, advance_tick};
 use crate::campaign_inputs::{self, MapSources};
-use crate::install_source::{
-    InstallSource, MAX_AGGREGATE_BYTES, MAX_ASSET_BYTES, MAX_LISTED_PATHS,
-};
+use crate::install_source::{MAX_AGGREGATE_BYTES, MAX_ASSET_BYTES, MAX_LISTED_PATHS};
 use crate::map_admission::{
     IdentifiedScript, MapAdmissionBudget, MapAdmissionInputs, ParsedMapContext, prepare_map_context,
 };
@@ -18,11 +16,12 @@ use crate::map_scripts_import::MapScriptBudget;
 use crate::map_startup_host::MapStartupHost;
 use crate::scripts::{AssetIdentity, ScriptAsset};
 use crate::source_receipt::{SourceReceiptRecorder, observe_catalog_profiles};
-use pcx_assets::{Addon, ArchiveLayer, GameMode, Resolver};
+use pcx_assets::{Addon, GameMode};
 use pcx_map::Map;
 use pcx_objects::ObjectFile;
 use pcx_objects::editor::{Editor, EditorReadLimits, Overlay};
 use pcx_sim::world::{Definition, MetadataCatalog, ObjectCatalog, ResolutionProblem};
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -169,18 +168,46 @@ pub fn start(
         crate::campaign_cache::SessionStorage::new(profile).map_err(StartupError::Profile)?,
     );
     let exe_path = install.join(EXECUTABLE);
-    let image = std::fs::read(&exe_path)
+    let file = std::fs::File::open(&exe_path)
         .map_err(|error| StartupError::Install(format!("{}: {error}", exe_path.display())))?;
-    let source = InstallSource::open(install).map_err(StartupError::Install)?;
-    let resolver = Resolver::new(
-        mode,
-        None,
-        vec![ArchiveLayer {
-            priority: 0,
-            source: Box::new(source),
-        }],
+    let image_limit = MAX_ASSET_BYTES as u64;
+    if file
+        .metadata()
+        .map_err(|error| StartupError::Install(error.to_string()))?
+        .len()
+        > image_limit
+    {
+        return Err(StartupError::Install(format!(
+            "{}: image exceeds {image_limit} byte budget",
+            exe_path.display()
+        )));
+    }
+    let mut image = Vec::new();
+    file.take(image_limit + 1)
+        .read_to_end(&mut image)
+        .map_err(|error| StartupError::Install(format!("{}: {error}", exe_path.display())))?;
+    if image.len() > MAX_ASSET_BYTES {
+        return Err(StartupError::Install(format!(
+            "{}: image exceeds {image_limit} byte budget",
+            exe_path.display()
+        )));
+    }
+    let rules = crate::campaign_data_set::ImageRules::read(
+        &image,
+        campaign_inputs::client_identity(&image, &exe_path.display().to_string()),
     )
     .map_err(|error| StartupError::Install(error.to_string()))?;
+    let global = match mode.addon {
+        Addon::NoAddon => "VERSION_REIGN_OF_CHAOS",
+        Addon::Tft => "VERSION_FROZEN_THRONE",
+    };
+    let recipe =
+        crate::campaign_data_set::CampaignRecipe::pin(install, mode, rules, &image, None, global)
+            .map_err(|error| StartupError::Install(error.to_string()))?;
+    let resolver = recipe
+        .open_map(map_bytes, map_label, MAP_READ_BUDGET)
+        .map_err(|error| StartupError::Map(error.to_string()))?
+        .resolver;
 
     let edition = format!("{:?} selected install", mode.addon);
     let read = |member: &str| -> Result<Vec<u8>, StartupError> {

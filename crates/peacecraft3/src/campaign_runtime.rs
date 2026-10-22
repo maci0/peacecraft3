@@ -379,7 +379,7 @@ pub struct CampaignTransition {
     pending: Option<(CampaignTransitionRequest, Arc<ParsedMapContext>)>,
 }
 
-/// Rebind and admit an authored next map through the *same* selected resolver.
+/// Rebind an authored next map through the retained source generation.
 ///
 /// The request is accepted only while its exit context is still the admitted
 /// map. The next member is read once within the retained map/input ceilings,
@@ -402,9 +402,69 @@ pub fn transition_to_next_level(
         .bindings
         .as_ref()
         .ok_or(CampaignTransitionError::MissingBindings)?;
-    let resolver = sources
+    let previous_resolver = sources
         .for_receipts(&bindings.receipts)
         .ok_or(CampaignTransitionError::MissingReader)?;
+    let recipe = sources.campaign_for_receipts(&bindings.receipts);
+    let (resolver, catalog_identity, catalog_sources) = if let Some(recipe) = &recipe {
+        let prepare = || -> Result<_, String> {
+            let base = recipe.base_resolver().map_err(|error| error.to_string())?;
+            let map = base
+                .resolve_bounded(
+                    &request.next_level,
+                    bindings.limits.max_map_file_bytes as u64,
+                )
+                .map_err(|error| error.to_string())?;
+            let limits = bindings.limits;
+            let reader = recipe
+                .open_map(
+                    &map.bytes,
+                    &request.next_level,
+                    pcx_mpq::checked::ReadBudget {
+                        max_archive_bytes: limits.max_map_file_bytes,
+                        max_archive_table_bytes: limits.admission.scripts.max_archive_table_bytes,
+                        max_raw_packed_bytes: limits.admission.scripts.max_raw_packed_bytes,
+                        max_decoded_bytes: limits.admission.info_bytes,
+                    },
+                )
+                .map_err(|error| error.to_string())?;
+            let selected = reader
+                .resolver
+                .resolve_bounded(&request.next_level, limits.max_map_file_bytes as u64)
+                .map_err(|error| error.to_string())?;
+            if selected.bytes != map.bytes {
+                return Err(
+                    "selected campaign namespace changes the map used to select its data".into(),
+                );
+            }
+            let mut catalog_sources = Vec::new();
+            for path in reader.resolver.paths() {
+                let source = reader
+                    .resolver
+                    .source_for(path.as_str())
+                    .map_err(|error| error.to_string())?;
+                if !catalog_sources.contains(source) {
+                    catalog_sources.push(source.clone());
+                }
+            }
+            let identity = AssetIdentity {
+                edition: bindings.catalog_identity.edition.clone(),
+                version: recipe.rules().origin.version.clone(),
+                source: format!("{}::{}", recipe.dir().display(), reader.selection.prefix),
+            };
+            Ok((Arc::new(reader.resolver), identity, catalog_sources))
+        };
+        prepare().map_err(|reason| CampaignTransitionError::Binding {
+            member: request.next_level.clone(),
+            reason,
+        })?
+    } else {
+        (
+            previous_resolver,
+            bindings.catalog_identity.clone(),
+            bindings.catalog_sources.clone(),
+        )
+    };
     let (map_path, map_source) = {
         let source = resolver.source_for(&request.next_level).map_err(|source| {
             CampaignTransitionError::Resolve {
@@ -426,14 +486,24 @@ pub fn transition_to_next_level(
     let common_path = bindings.receipts.common.path.as_str().to_owned();
     let common_label = bindings.common.label.clone();
     let common_identity = bindings.common.identity.clone();
-    let common_source = bindings.receipts.common.provenance.source.clone();
+    let common_source = resolver
+        .source_for(&common_path)
+        .map_err(|source| CampaignTransitionError::Resolve {
+            member: common_path.clone(),
+            source,
+        })?
+        .clone();
     let blizzard_path = bindings.receipts.blizzard.path.as_str().to_owned();
     let blizzard_label = bindings.blizzard.label.clone();
     let blizzard_identity = bindings.blizzard.identity.clone();
-    let blizzard_source = bindings.receipts.blizzard.provenance.source.clone();
-    let catalog_identity = bindings.catalog_identity.clone();
+    let blizzard_source = resolver
+        .source_for(&blizzard_path)
+        .map_err(|source| CampaignTransitionError::Resolve {
+            member: blizzard_path.clone(),
+            source,
+        })?
+        .clone();
     let catalog_label = bindings.catalog_label.clone();
-    let catalog_sources = bindings.catalog_sources.clone();
     let required_catalog_tables = bindings.required_catalog_tables.clone();
     let required_fields = bindings.required_fields.clone();
     let limits = bindings.limits;
@@ -464,7 +534,7 @@ pub fn transition_to_next_level(
         required_fields: &required_fields,
         revision,
     };
-    let outcome = requests.replace_selected(sources, resolver, input, limits);
+    let outcome = requests.replace_selected_with_campaign(sources, resolver, recipe, input, limits);
     match &outcome.result {
         Ok(()) => Ok(()),
         Err(error) => Err(CampaignTransitionError::Binding {

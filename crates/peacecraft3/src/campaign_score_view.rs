@@ -416,6 +416,18 @@ mod selected_tests {
             .init_resource::<Assets<MenuMaterial>>()
             .init_resource::<Assets<Image>>();
         install(&mut app);
+        let recipe = {
+            let bindings = app
+                .world()
+                .resource::<MapRequests>()
+                .bindings
+                .as_ref()
+                .unwrap();
+            app.world()
+                .resource::<peacecraft3::browser_configuration::SelectedMapSources>()
+                .campaign_for_receipts(&bindings.receipts)
+                .expect("native configuration pins a campaign recipe")
+        };
         let old = {
             let mut session = app
                 .world_mut()
@@ -472,6 +484,45 @@ mod selected_tests {
         let requests = app.world().resource::<MapRequests>();
         let admitted = requests.admission.shared_context().unwrap();
         assert!(!Arc::ptr_eq(&admitted, &old));
+        let bindings = requests.bindings.as_ref().unwrap();
+        let next_recipe = app
+            .world()
+            .resource::<peacecraft3::browser_configuration::SelectedMapSources>()
+            .campaign_for_receipts(&bindings.receipts)
+            .expect("Continue retains the admitted campaign generation");
+        assert!(Arc::ptr_eq(&recipe, &next_recipe));
+        let limits = bindings.limits;
+        let selected = recipe
+            .open_map(
+                &bindings.catalog_map_bytes,
+                &next,
+                pcx_mpq::checked::ReadBudget {
+                    max_archive_bytes: limits.max_map_file_bytes,
+                    max_archive_table_bytes: limits.admission.scripts.max_archive_table_bytes,
+                    max_raw_packed_bytes: limits.admission.scripts.max_raw_packed_bytes,
+                    max_decoded_bytes: limits.admission.info_bytes,
+                },
+            )
+            .unwrap();
+        let ability = bindings
+            .receipts
+            .catalog
+            .iter()
+            .find(|receipt| {
+                receipt
+                    .path
+                    .as_str()
+                    .eq_ignore_ascii_case("Units/AbilityData.slk")
+            })
+            .expect("selected ability table receipt");
+        assert!(
+            ability.provenance.locator.to_ascii_lowercase().ends_with(
+                &format!("{}\\Units\\AbilityData.slk", selected.selection.prefix)
+                    .to_ascii_lowercase()
+            ),
+            "{}",
+            ability.provenance.locator
+        );
         assert_eq!(
             requests.bindings.as_ref().unwrap().receipts.map.path,
             pcx_assets::AssetPath::new(&next).unwrap()

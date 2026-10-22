@@ -80,8 +80,7 @@ fn prepare(
         let reader = sources
             .for_receipts(&bindings.receipts)
             .ok_or("admitted map has no matching source reader")?;
-        let install = std::path::Path::new(&bindings.receipts.common.provenance.source.origin);
-        crate::menu_lighting::with_client_image(Some(install), |source, image| {
+        let prepare = |source: &str, image: &[u8]| {
             pcx_play::campaign_inputs::prepare_new_game(
                 &context,
                 &map_sources(bindings),
@@ -91,8 +90,14 @@ fn prepare(
                 chosen_seed,
                 matches!(reader.mode().addon, pcx_assets::Addon::Tft),
             )
-        })
-        .map(|inputs| (inputs, chosen_seed))
+        };
+        let inputs = if let Some(recipe) = sources.campaign_for_receipts(&bindings.receipts) {
+            prepare(&recipe.rules().origin.source, recipe.image())
+        } else {
+            let install = std::path::Path::new(&bindings.receipts.common.provenance.source.origin);
+            crate::menu_lighting::with_client_image(Some(install), prepare)
+        }?;
+        Ok::<_, String>((inputs, chosen_seed))
     })();
     match result {
         Ok((inputs, chosen_seed)) => {
@@ -159,9 +164,15 @@ mod tests {
             .clone();
         let requests = app.world().resource::<MapRequests>();
         let bindings = requests.bindings.as_ref().unwrap();
-        let expected_image =
-            std::path::Path::new(&bindings.receipts.common.provenance.source.origin)
-                .join("Warcraft III.exe");
+        let expected_image = app
+            .world()
+            .resource::<SelectedMapSources>()
+            .campaign_for_receipts(&bindings.receipts)
+            .unwrap()
+            .rules()
+            .origin
+            .source
+            .clone();
         let reader = app
             .world()
             .resource::<SelectedMapSources>()
@@ -181,7 +192,7 @@ mod tests {
             .expect("the admitted source must still prepare");
         assert_eq!(
             inputs.message_layout.as_ref().unwrap().origin.source,
-            expected_image.display().to_string()
+            expected_image
         );
         assert_eq!(
             inputs.post_config.version_global.as_deref(),

@@ -171,6 +171,17 @@ impl MapRequests {
         input: crate::map_binding::BindingInputs<'_>,
         limits: crate::map_binding::BindingLimits,
     ) -> &MapOutcome {
+        self.replace_selected_with_campaign(sources, resolver, None, input, limits)
+    }
+
+    pub(crate) fn replace_selected_with_campaign(
+        &mut self,
+        sources: &mut SelectedMapSources,
+        resolver: Arc<pcx_assets::Resolver>,
+        campaign: Option<Arc<pcx_play::campaign_data_set::CampaignRecipe>>,
+        input: crate::map_binding::BindingInputs<'_>,
+        limits: crate::map_binding::BindingLimits,
+    ) -> &MapOutcome {
         let label = input.map.label.to_owned();
         let identity = input.map.identity.clone();
         let revision = input.revision;
@@ -208,7 +219,7 @@ impl MapRequests {
             self.bindings = candidate.bindings;
             self.admission = candidate.admission;
             self.published_receipts = candidate.published_receipts;
-            drop(sources.publish(receipts, resolver));
+            drop(sources.publish(receipts, resolver, campaign));
         }
         self.last_outcome.as_ref().expect("delivered outcome")
     }
@@ -399,7 +410,8 @@ fn publish_retained_reader(state: &MapRequests, sources: &mut SelectedMapSources
     }) else {
         return;
     };
-    drop(sources.publish(receipts, resolver));
+    let campaign = sources.campaign_for_receipts(&receipts);
+    drop(sources.publish(receipts, resolver, campaign));
 }
 pub fn install(app: &mut App) {
     app.init_resource::<MapRequests>()

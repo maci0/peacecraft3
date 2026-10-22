@@ -71,6 +71,7 @@ fn request(
     .unwrap();
     Configuration {
         resolver,
+        campaign: None,
         map: member(),
         common: member(),
         blizzard: member(),

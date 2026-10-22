@@ -24,18 +24,64 @@ const ORDER_TICKS: u64 = 256;
 const ORDER_DISTANCE: f32 = 64.0;
 
 #[test]
+fn oversized_client_image_refuses_before_map_or_archive_reads() {
+    let directory =
+        std::env::temp_dir().join(format!("pcx-startup-image-budget-{}", std::process::id()));
+    std::fs::create_dir(&directory).unwrap();
+    let image = std::fs::File::create(directory.join("Warcraft III.exe")).unwrap();
+    image
+        .set_len(pcx_play::install_source::MAX_ASSET_BYTES as u64 + 1)
+        .unwrap();
+    let error = start(&directory, GameMode::default(), "unused map", b"", 1, None)
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("image exceeds"), "{error}");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 #[ignore = "requires selected Human01 through PCX_STARTUP_*; diagnostic XP stimulus, not player acceptance"]
 fn selected_campaign_hero_xp_runs_the_authored_level_cap() {
-    use pcx_assets::ContentSource;
     let install = PathBuf::from(env("PCX_STARTUP_INSTALL"));
     let map = PathBuf::from(env("PCX_STARTUP_MAP"));
     let bytes = std::fs::read(&map).unwrap();
-    let source = pcx_play::install_source::InstallSource::open(&install).unwrap();
-    let misc = source
-        .read_bounded("Units\\MiscGame.txt", 8 << 20)
-        .unwrap()
+    let image_path = install.join("Warcraft III.exe");
+    let image = std::fs::read(&image_path).unwrap();
+    let rules = pcx_play::campaign_data_set::ImageRules::read(
+        &image,
+        pcx_play::campaign_inputs::client_identity(&image, &image_path.display().to_string()),
+    )
+    .unwrap();
+    let global = match selected_mode().addon {
+        Addon::NoAddon => "VERSION_REIGN_OF_CHAOS",
+        Addon::Tft => "VERSION_FROZEN_THRONE",
+    };
+    let recipe = pcx_play::campaign_data_set::CampaignRecipe::pin(
+        &install,
+        selected_mode(),
+        rules,
+        &image,
+        None,
+        global,
+    )
+    .unwrap();
+    let reader = recipe
+        .open_map(
+            &bytes,
+            &map.display().to_string(),
+            pcx_mpq::checked::ReadBudget {
+                max_archive_bytes: 64 << 20,
+                max_archive_table_bytes: 8 << 20,
+                max_raw_packed_bytes: 16 << 20,
+                max_decoded_bytes: 16 << 20,
+            },
+        )
         .unwrap();
-    let profiles = [(misc.locator.as_str(), misc.bytes.as_slice())];
+    let misc = reader
+        .resolver
+        .resolve_bounded("Units\\MiscGame.txt", 8 << 20)
+        .unwrap();
+    let profiles = [(misc.provenance.locator.as_str(), misc.bytes.as_slice())];
     let progression = pcx_objects::editor::hero::Progression::read(&profiles, 8 << 20).unwrap();
     let mut startup = start(
         &install,

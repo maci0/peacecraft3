@@ -26,6 +26,7 @@ impl Member {
 /// All policy is supplied, including the already caller-configured source resolver.
 pub struct Configuration {
     pub resolver: Resolver,
+    pub campaign: Option<Arc<pcx_play::campaign_data_set::CampaignRecipe>>,
     pub map: Member,
     pub common: Member,
     pub blizzard: Member,
@@ -41,13 +42,28 @@ pub struct Configuration {
 /// Retaining a reader does not bypass its source-generation checks or read budgets.
 #[derive(Resource, Default)]
 pub struct SelectedMapSources {
-    published: Option<(Arc<BindingReceipts>, Arc<Resolver>)>,
+    published: Option<PublishedSources>,
+}
+pub(crate) struct PublishedSources {
+    receipts: Arc<BindingReceipts>,
+    resolver: Arc<Resolver>,
+    campaign: Option<Arc<pcx_play::campaign_data_set::CampaignRecipe>>,
 }
 impl SelectedMapSources {
     /// Only the receipts from this publication can select its reader.
     pub fn for_receipts(&self, receipts: &Arc<BindingReceipts>) -> Option<Arc<Resolver>> {
-        let (published, resolver) = self.published.as_ref()?;
-        Arc::ptr_eq(published, receipts).then(|| Arc::clone(resolver))
+        let published = self.published.as_ref()?;
+        Arc::ptr_eq(&published.receipts, receipts).then(|| Arc::clone(&published.resolver))
+    }
+
+    pub fn campaign_for_receipts(
+        &self,
+        receipts: &Arc<BindingReceipts>,
+    ) -> Option<Arc<pcx_play::campaign_data_set::CampaignRecipe>> {
+        let published = self.published.as_ref()?;
+        Arc::ptr_eq(&published.receipts, receipts)
+            .then(|| published.campaign.clone())
+            .flatten()
     }
 
     /// Publish one receipt arc with the resolver that produced it.
@@ -57,18 +73,19 @@ impl SelectedMapSources {
         &mut self,
         receipts: Arc<BindingReceipts>,
         resolver: Arc<Resolver>,
-    ) -> Option<(Arc<BindingReceipts>, Arc<Resolver>)> {
-        self.published.replace((receipts, resolver))
+        campaign: Option<Arc<pcx_play::campaign_data_set::CampaignRecipe>>,
+    ) -> Option<PublishedSources> {
+        self.published.replace(PublishedSources {
+            receipts,
+            resolver,
+            campaign,
+        })
     }
 
     /// Move a staged pair here.
     /// `None` means the stage was empty. `Some(None)` is a first publication.
-    pub(crate) fn commit(
-        &mut self,
-        staged: &mut Self,
-    ) -> Option<Option<(Arc<BindingReceipts>, Arc<Resolver>)>> {
-        let (receipts, resolver) = staged.published.take()?;
-        Some(self.publish(receipts, resolver))
+    pub(crate) fn commit(&mut self, staged: &mut Self) -> Option<Option<PublishedSources>> {
+        Some(self.published.replace(staged.published.take()?))
     }
 }
 #[derive(Debug, thiserror::Error)]
@@ -155,6 +172,7 @@ fn consume(
     let mut staged = SelectedMapSources::default();
     let crate::browser_configuration::Configuration {
         resolver,
+        campaign,
         map,
         common,
         blizzard,
@@ -178,7 +196,7 @@ fn consume(
         required_fields: &required_fields,
         revision,
     };
-    candidate.replace_selected(&mut staged, resolver, input, limits);
+    candidate.replace_selected_with_campaign(&mut staged, resolver, campaign, input, limits);
     let outcome = candidate
         .last_outcome
         .take()
@@ -199,7 +217,7 @@ fn consume(
             .expect("successful configuration publishes a reader");
         (Some(std::mem::replace(&mut *active, candidate)), retired)
     } else {
-        (None, None::<(Arc<BindingReceipts>, Arc<Resolver>)>)
+        (None, None::<PublishedSources>)
     };
     queue.completed = Some((id, Box::new(outcome)));
     queue.in_flight = None;

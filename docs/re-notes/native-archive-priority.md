@@ -39,14 +39,20 @@ RoC-to-`Custom_V0` match arm into production.
 and a base archive pointer, then inserts it into the global list at `0x10db4d8`
 sorted by descending priority. The records observed on this path are:
 
-| Base archive | Base priority | Selected-namespace priority |
-| --- | ---: | ---: |
-| `War3Mod.mpq` | 9 | — |
-| `War3xLocal.mpq` | 4 | 0xd |
-| `War3x.mpq` | 3 | 0xb |
-| `War3Local.mpq` | 2 | 0xc |
-| `War3.mpq` | 1 | 0xa |
-| `Deprecated.mpq` | 0 | — |
+| Base archive | Base priority | RoC namespace | TFT namespace |
+| --- | ---: | ---: | ---: |
+| `War3Mod.mpq` | 9 | 0xd | 0xd |
+| `War3xLocal.mpq` | 4 | — | 0xb |
+| `War3x.mpq` | 3 | — | 0xa |
+| `War3Local.mpq` | 2 | 0xb | — |
+| `War3.mpq` | 1 | 0xa | — |
+| `Deprecated.mpq` | 0 | — | — |
+
+The corrected handle indirection is essential: tables `0x10db170` and
+`0x10db178` choose the edition's main/local archive objects, while both entries
+of `0x10db180` and `0x10db188` point to `War3Mod`. The last two mounts use
+priorities `0xc` and `0xd`; duplicate archive/prefix pairs retain the higher
+priority. These are not four consecutive archive handles.
 
 The selected-namespace copies mount the same archive objects with the prefix
 already applied; they are not separate archive files. `War3Patch.mpq` is not
@@ -72,8 +78,8 @@ Consequences:
 
 This matches the existing `pcx-assets` resolver for an absent member and for a
 listed winner that cannot be read (`crates/pcx-assets/tests/layering.rs:449`).
-It differs in layering: production currently mounts one global archive chain,
-not selected-namespace records layered above the base chain.
+The older `InstallSource` mounts one global archive chain. The scoped campaign
+reader instead layers selected-namespace records above the base chain.
 
 ## Relation to current constants
 
@@ -112,12 +118,11 @@ The following uses existing `pcx-assets` and `pcx-mpq` types and leaves
    present; absent entries are omitted so the existing resolver falls through
    to the base layers. Exclude `War3Patch` from this scoped path, matching the
    observed mount function.
-4. **Parse the map header first.** `native_campaign::configuration`
-   (`crates/peacecraft3/src/native_campaign.rs`) currently builds one
-   `InstallSource` layer and binds the chapter map through it. The scoped path
-   must first read the chapter map bytes with the base reader, parse
-   `war3map.w3i`, derive the namespace, then construct the scoped resolver for
-   the actual binding. This is a two-stage map read, not a fallback.
+4. **Parse the map header first.** `native_campaign::configuration` reads the
+   chapter map through the retained base reader, then boundedly extracts
+   `war3map.w3i` before constructing its selected resolver. A namespace that
+   changes the map used to select its data refuses. Continue repeats this for
+   the next map using the same pinned archive generation and image.
 5. **Keep the scoped resolver attached to the same receipts.**
    `SelectedMapSources::publish` and `MapRequests::replace_selected` already
    retain the resolver that produced the accepted binding. Consumers such as
@@ -128,6 +133,25 @@ The following uses existing `pcx-assets` and `pcx-mpq` types and leaves
    policy only as caller-supplied layers with explicit priorities and exact
    prefixed member mappings, or after an explicit schema extension carrying
    the source inputs. It must not infer prefixes from archive names.
+
+The scoped native reader presently refuses installs containing `War3Patch.mpq`
+or unresolved locale-form archive names, rather than claiming an untraced
+mount policy. Invalid listed blocks and mixed live/tombstone hash candidates
+also refuse. A supplied common-script blob must match the highest-priority
+base copy; callers may instead use that selected copy directly. Configuration
+publishes the recipe with its exact receipts, and gameplay preparation borrows
+its pinned executable bytes instead of reopening an installation path.
+
+The native chapter index retains that recipe through mission selection and
+publication; launching a row does not pin the install a second time. A row must
+match the current install/edition key and have a retained recipe. Refresh failure
+or loss of the install clears both rows and recipe. A request already enqueued
+continues with its captured generation even if the launcher subsequently changes;
+this preserves source identity rather than silently switching its inputs.
+
+The selected RoC startup gate exposed an absent-upgrade query (`Rhrt`) in
+`InitSummonableCaps` after namespace selection was corrected. Source routing checks
+and synthetic tests alone do not establish successful unchanged chapter startup.
 
 Do not switch unrelated rule consumers to the selected namespace until their
 source lookup and receipt paths agree. In particular, the native RoC speed

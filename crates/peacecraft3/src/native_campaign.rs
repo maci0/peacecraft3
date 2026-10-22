@@ -6,10 +6,8 @@
 //! and background skin, and its mission rows. Choosing a mission configures its
 //! map through the same bounded binding path the browser uses, then requests it;
 //! the campaign startup path takes over from there. The source mounts every
-//! present archive in the client's default priority (campaign maps live in the
-//! local archives for both editions), with Huffman weights read from the selected
-//! client executable. Edition-specific `_V0`/`_V1` data variants are not selected
-//! yet; that remains an open fidelity question.
+//! reviewed client's base priority, with Huffman weights and data namespace
+//! selection derived from the pinned executable and each map header.
 //!
 //! The real `CampaignMenu` screen is bound here (native only): two authored
 //! frames from the FDF host the dynamic campaign and mission lists. The source
@@ -18,19 +16,18 @@
 //! is a labelled recreation choice (see `docs/re-notes/menu-entry.md`).
 use crate::launch::{Addon, AssetMode, Behaviour, GameMode};
 use bevy::{prelude::*, ui::InteractionDisabled, ui_widgets::Button};
-use pcx_assets::{ArchiveLayer, ContentSource, Resolver};
 use pcx_objects::editor::campaign_index::{CampaignSlot, IndexLimits, parse_campaign_index};
 use pcx_objects::editor::{EditorReadLimits, SlkId};
 use pcx_play::MapScriptBudget;
-use pcx_play::install_source::{
-    InstallSource, MAX_AGGREGATE_BYTES, MAX_ASSET_BYTES, MAX_LISTED_PATHS,
-};
+use pcx_play::campaign_data_set::{CampaignRecipe, ImageRules};
+use pcx_play::install_source::{MAX_AGGREGATE_BYTES, MAX_ASSET_BYTES, MAX_LISTED_PATHS};
 use pcx_play::map_admission::MapAdmissionBudget;
 use pcx_play::scripts::AssetIdentity;
 use peacecraft3::browser_configuration::{Configuration, ConfigurationInbox, Member, Poll};
 use peacecraft3::map_binding::{BindingLimits, OverlayLimits};
 use peacecraft3::map_requests::{MapRequest, MapRequestSet, MapRequests};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 const INDEX_LIMITS: IndexLimits = IndexLimits {
     max_bytes: 1 << 20,
@@ -75,6 +72,7 @@ pub(crate) struct Chapter {
 #[derive(Resource, Default)]
 pub(crate) struct Chapters {
     key: Option<(PathBuf, GameMode)>,
+    recipe: Option<Arc<CampaignRecipe>>,
     /// Structured campaigns for the real `CampaignMenu` screen.
     pub campaigns: Vec<Campaign>,
     /// Flat chapter rows for the fallback launcher card.
@@ -214,19 +212,28 @@ fn parse_campaigns(member: &str, text: &str) -> Result<(Vec<Campaign>, Vec<Chapt
     Ok((campaigns, chapters))
 }
 
-fn read_campaigns(dir: &Path, mode: &GameMode) -> Result<(Vec<Campaign>, Vec<Chapter>), String> {
-    let source = InstallSource::open(dir)?;
+fn read_campaigns(
+    dir: &Path,
+    mode: &GameMode,
+) -> Result<(Arc<CampaignRecipe>, Vec<Campaign>, Vec<Chapter>), String> {
+    let recipe = campaign_recipe(dir, *mode)?;
+    let reader = recipe.base_resolver().map_err(|error| error.to_string())?;
     let member = index_member(mode);
-    let content = source
-        .read_bounded(member, INDEX_LIMITS.max_bytes as u64)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("{member} is absent from the selected install"))?;
+    let content = reader
+        .resolve_bounded(member, INDEX_LIMITS.max_bytes as u64)
+        .map_err(|e| e.to_string())?;
     let text = std::str::from_utf8(&content.bytes).map_err(|e| e.to_string())?;
-    parse_campaigns(member, text)
+    let (campaigns, chapters) = parse_campaigns(member, text)?;
+    Ok((recipe, campaigns, chapters))
 }
 
 fn refresh(launcher: Res<crate::launch_gui::Launcher>, mut chapters: ResMut<Chapters>) {
     let Some(dir) = crate::launch_gui::selected_install(&launcher) else {
+        chapters.key = None;
+        chapters.recipe = None;
+        chapters.campaigns.clear();
+        chapters.entries.clear();
+        chapters.error = None;
         return;
     };
     let key = (dir, launcher.mode());
@@ -234,12 +241,14 @@ fn refresh(launcher: Res<crate::launch_gui::Launcher>, mut chapters: ResMut<Chap
         return;
     }
     match read_campaigns(&key.0, &key.1) {
-        Ok((campaigns, entries)) => {
+        Ok((recipe, campaigns, entries)) => {
+            chapters.recipe = Some(recipe);
             chapters.campaigns = campaigns;
             chapters.entries = entries;
             chapters.error = None;
         }
         Err(error) => {
+            chapters.recipe = None;
             chapters.campaigns.clear();
             chapters.entries.clear();
             chapters.error = Some(error);
@@ -327,50 +336,96 @@ fn limits() -> BindingLimits {
 }
 
 fn configuration(
-    dir: &Path,
+    recipe: Arc<CampaignRecipe>,
     mode: GameMode,
     chapter: &Chapter,
     revision: u64,
 ) -> Result<Configuration, String> {
-    let source = InstallSource::open(dir)?;
-    let info = source.info().clone();
+    let base = recipe.base_resolver().map_err(|error| error.to_string())?;
+    let map = base
+        .resolve_bounded(&chapter.map, MAX_ASSET_BYTES as u64)
+        .map_err(|error| error.to_string())?;
+    let reader = recipe
+        .open_map(&map.bytes, &chapter.map, map_read_budget())
+        .map_err(|error| error.to_string())?;
+    let resolver = reader.resolver;
+    let selected = resolver
+        .resolve_bounded(&chapter.map, MAX_ASSET_BYTES as u64)
+        .map_err(|error| error.to_string())?;
+    if selected.bytes != map.bytes {
+        return Err("selected campaign namespace changes the map used to select its data".into());
+    }
     let edition = format!("{:?} campaign chapter", mode.addon);
-    let member = |path: &str, label: &str| Member {
-        path: path.into(),
-        label: label.into(),
-        identity: AssetIdentity {
-            edition: edition.clone(),
-            version: "selected install".into(),
-            source: path.into(),
-        },
-        source: info.clone(),
+    let member = |path: &str, label: &str| -> Result<Member, String> {
+        Ok(Member {
+            path: path.into(),
+            label: label.into(),
+            identity: AssetIdentity {
+                edition: edition.clone(),
+                version: "selected install".into(),
+                source: path.into(),
+            },
+            source: resolver
+                .source_for(path)
+                .map_err(|error| error.to_string())?
+                .clone(),
+        })
     };
-    let resolver = Resolver::new(
-        asset_mode(mode)?,
-        None,
-        vec![ArchiveLayer {
-            priority: 0,
-            source: Box::new(source),
-        }],
-    )
-    .map_err(|e| e.to_string())?;
+    let map = member(&chapter.map, &chapter.name)?;
+    let common = member("Scripts\\common.j", "Scripts\\common.j")?;
+    let blizzard = member("Scripts\\Blizzard.j", "Scripts\\Blizzard.j")?;
+    let mut catalog_sources = Vec::new();
+    for path in resolver.paths() {
+        let source = resolver
+            .source_for(path.as_str())
+            .map_err(|error| error.to_string())?;
+        if !catalog_sources.contains(source) {
+            catalog_sources.push(source.clone());
+        }
+    }
+    let catalog_identity = AssetIdentity {
+        edition,
+        version: recipe.rules().origin.version.clone(),
+        source: format!("{}::{}", recipe.dir().display(), reader.selection.prefix),
+    };
     Ok(Configuration {
         resolver,
-        map: member(&chapter.map, &chapter.name),
-        common: member("Scripts\\common.j", "Scripts\\common.j"),
-        blizzard: member("Scripts\\Blizzard.j", "Scripts\\Blizzard.j"),
-        catalog_identity: AssetIdentity {
-            edition,
-            version: "selected install".into(),
-            source: dir.display().to_string(),
-        },
+        campaign: Some(recipe),
+        map,
+        common,
+        blizzard,
+        catalog_identity,
         catalog_label: "selected install object data".into(),
-        catalog_sources: vec![info],
+        catalog_sources,
         required_catalog_tables: SlkId::ALL.to_vec(),
         required_fields: Vec::new(),
         revision,
         limits: limits(),
     })
+}
+
+fn campaign_recipe(dir: &Path, mode: GameMode) -> Result<Arc<CampaignRecipe>, String> {
+    crate::menu_lighting::with_client_image(Some(dir), |source, image| {
+        let identity = pcx_play::campaign_inputs::client_identity(image, source);
+        let rules = ImageRules::read(image, identity).map_err(|error| error.to_string())?;
+        let global = match mode.addon {
+            Addon::Roc => "VERSION_REIGN_OF_CHAOS",
+            Addon::Tft => "VERSION_FROZEN_THRONE",
+        };
+        CampaignRecipe::pin(dir, asset_mode(mode)?, rules, image, None, global)
+            .map(Arc::new)
+            .map_err(|error| error.to_string())
+    })
+}
+
+fn map_read_budget() -> pcx_mpq::checked::ReadBudget {
+    let limits = limits();
+    pcx_mpq::checked::ReadBudget {
+        max_archive_bytes: limits.max_map_file_bytes,
+        max_archive_table_bytes: limits.admission.scripts.max_archive_table_bytes,
+        max_raw_packed_bytes: limits.admission.scripts.max_raw_packed_bytes,
+        max_decoded_bytes: limits.admission.info_bytes,
+    }
 }
 
 /// Launch one selected mission through the shared configuration/map-request path.
@@ -384,9 +439,18 @@ fn enqueue_chapter(
         chapters.error = Some("no selected install".into());
         return;
     };
+    if chapters.key.as_ref() != Some(&(dir, launcher.mode())) {
+        chapters.error =
+            Some("campaign index does not match the selected install and edition".into());
+        return;
+    }
+    let Some(recipe) = chapters.recipe.clone() else {
+        chapters.error = Some("campaign index has no admitted source recipe".into());
+        return;
+    };
     chapters.revision += 1;
     let revision = chapters.revision;
-    match configuration(&dir, launcher.mode(), chapter, revision)
+    match configuration(recipe, launcher.mode(), chapter, revision)
         .and_then(|request| inbox.enqueue(request).map_err(|e| e.to_string()))
     {
         Ok(id) => chapters.pending = Some((id, revision)),
@@ -708,10 +772,11 @@ fn render_campaign_panel(
 ) {
     let (layers, panels) = surfaces;
     let active = navigation.screen == crate::menu_screens::Screen::Campaign;
-    let Some(dir) = crate::launch_gui::selected_install(&launcher) else {
-        return;
-    };
-    if !active {
+    if active && let Some(error) = &chapters.error {
+        navigation.notice = format!("Campaign: {error}");
+    }
+    let dir = crate::launch_gui::selected_install(&launcher);
+    if !active || dir.is_none() || chapters.recipe.is_none() {
         if state.built_for.take().is_some() || state.selected_campaign.take().is_some() {
             for panel in &panels {
                 commands.entity(panel).despawn();
@@ -719,9 +784,7 @@ fn render_campaign_panel(
         }
         return;
     }
-    if let Some(error) = &chapters.error {
-        navigation.notice = format!("Campaign: {error}");
-    }
+    let dir = dir.expect("selected install checked above");
     let signature = (
         dir.clone(),
         launcher.mode(),
@@ -850,6 +913,7 @@ pub(crate) mod tests {
             .iter()
             .position(|m| m.map.eq_ignore_ascii_case(&map))
             .unwrap();
+        let indexed_recipe = chapters.recipe.clone().expect("index retains its recipe");
         // Activate is the widget's keyboard/pointer boundary; physical picking is
         // a separate gate. The mission button is the only launch trigger; merely
         // selecting a campaign never launches.
@@ -882,6 +946,18 @@ pub(crate) mod tests {
             .admission
             .shared_context()
             .expect("map must be admitted");
+        let recipe = app
+            .world()
+            .resource::<peacecraft3::browser_configuration::SelectedMapSources>()
+            .campaign_for_receipts(
+                &requests
+                    .bindings
+                    .as_ref()
+                    .expect("chapter bindings")
+                    .receipts,
+            )
+            .expect("activated chapter publishes its recipe");
+        assert!(Arc::ptr_eq(&recipe, &indexed_recipe,));
         let session = app.world().resource::<MapScriptSession<MapStartupHost>>();
         assert!(
             session
@@ -940,6 +1016,29 @@ pub(crate) mod tests {
         let (campaigns, _) = parse_campaigns("member", text).unwrap();
         assert_eq!(campaigns[0].background.as_deref(), Some("HumanBackdrop"));
         assert!(campaigns[0].default_open);
+    }
+
+    #[test]
+    fn losing_the_selected_install_clears_the_index_without_cancelling_pending_work() {
+        let (campaigns, entries) = parse_campaigns("member", FIXTURE).unwrap();
+        let mut world = World::new();
+        world.insert_resource(crate::launch_gui::Launcher::test_source(
+            String::new(),
+            false,
+        ));
+        world.insert_resource(Chapters {
+            campaigns,
+            entries,
+            pending: Some((1, 2)),
+            ..default()
+        });
+        world.run_system_once(refresh).unwrap();
+        let chapters = world.resource::<Chapters>();
+        assert!(chapters.key.is_none());
+        assert!(chapters.recipe.is_none());
+        assert!(chapters.campaigns.is_empty());
+        assert!(chapters.entries.is_empty());
+        assert_eq!(chapters.pending, Some((1, 2)));
     }
 
     #[test]

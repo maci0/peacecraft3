@@ -482,6 +482,7 @@ pub fn decode_and_enqueue(
     inbox
         .enqueue(Configuration {
             resolver,
+            campaign: None,
             map,
             common,
             blizzard,
