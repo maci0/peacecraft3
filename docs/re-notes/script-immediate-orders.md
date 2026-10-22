@@ -439,13 +439,21 @@ form returned `false`. The active `hmil` form and the morph-on request are not
 yet captured, so they remain unsupported rather than inferred.
 
 `ObjectHost::with_militia_ability` is a separate opt-in beside the Defend
-admission. It selects the authored `Amil` ability row from the caller's selected
-`DefaultTables`; the identifier is a named constant. The profile's `Order` and
-`Unorder` text and the rank-1 `DataA1`/`DataB1` base and active forms are read
-from those tables. Admission accepts the same single-level, non-hero, non-item,
-zero-cost/cooldown shape as the selected row, including absent `Requires` and
-`Requiresamount`. An absent `Amil` row leaves the admission off. A present but
-malformed row refuses with the table identity in the error context.
+admission. It requires the unit catalog first and then looks for the authored
+`Amil` rawcode among the selected `DefaultTables`; the identifier is a named
+constant. The profile's `Order` and `Unorder` text and the rank-1
+`DataA1`/`DataB1` base and active forms are read from those tables, and the
+`code` cell must name `Amil` itself. Admission accepts the same single-level,
+non-hero, non-item, zero-cost/cooldown shape as the selected row, including
+absent `Requires` and `Requiresamount`. An absent `Amil` row leaves the
+admission off. A present but malformed row, or a failed row lookup, refuses
+with the table identity in the error context.
+
+The caller also passes the selected ability overlay, the same one hero
+admission receives. A map modification or custom row for `Amil` is refused
+because this slice consumes only the default row; it does not silently apply
+default `DataA`/`DataB` or code behavior behind a map override. Unrelated
+overlay rows are ignored.
 
 Dispatch returns `false` only for a live base-form unit whose metadata-associated
 `abilList` names `Amil` and whose order text exactly matches the authored

@@ -2047,8 +2047,19 @@ fn militia_tables(
     order: &str,
     unorder: &str,
 ) -> DefaultTables {
+    militia_tables_with_code("Amil", levels, base, active, order, unorder)
+}
+
+fn militia_tables_with_code(
+    code: &str,
+    levels: &str,
+    base: &str,
+    active: &str,
+    order: &str,
+    unorder: &str,
+) -> DefaultTables {
     let row = [
-        "Amil", "Amil", "0", "0", "1", levels, "0", "0", "0", "0", base, active,
+        "Amil", code, "0", "0", "1", levels, "0", "0", "0", "0", base, active,
     ];
     let bytes = sylk(MILITIA_HEADERS, &[&row]);
     let profile = format!("[Amil]\r\nOrder={order}\r\nUnorder={unorder}\r\n");
@@ -2080,6 +2091,10 @@ native RemoveUnit takes unit u returns nothing\n",
 }
 
 fn militia_vm(tables: &DefaultTables) -> OrderVm {
+    militia_vm_with(tables, &pcx_objects::editor::Overlay::default())
+}
+
+fn militia_vm_with(tables: &DefaultTables, abilities: &pcx_objects::editor::Overlay) -> OrderVm {
     let common = militia_common();
     let map = "globals\nplayer P = null\nunit BASE = null\nunit ACTIVE = null\nunit OTHER = null\nunit NOLIST = null\nendglobals\n\
 function main takes nothing returns nothing\n\
@@ -2104,7 +2119,7 @@ endfunction\n";
         .unwrap()
         .with_unit_catalog(shared, source(), limits(4))
         .unwrap()
-        .with_militia_ability(tables)
+        .with_militia_ability(tables, abilities)
         .unwrap();
     let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
     vm.init_globals().unwrap();
@@ -2113,6 +2128,13 @@ endfunction\n";
 }
 
 fn militia_refusal(tables: &DefaultTables) -> String {
+    militia_refusal_with(tables, &pcx_objects::editor::Overlay::default())
+}
+
+fn militia_refusal_with(
+    tables: &DefaultTables,
+    abilities: &pcx_objects::editor::Overlay,
+) -> String {
     let common = militia_common();
     let ctx = context(
         302,
@@ -2128,7 +2150,7 @@ fn militia_refusal(tables: &DefaultTables) -> String {
         .unwrap()
         .with_unit_catalog(shared, source(), limits(1))
         .unwrap()
-        .with_militia_ability(tables)
+        .with_militia_ability(tables, abilities)
         .map(|_| String::new())
         .unwrap_or_else(|error| error.to_string())
 }
@@ -2348,7 +2370,8 @@ fn militia_admission_precedes_unit_creation() {
         ],
     )
     .unwrap();
-    let Err(error) = host.with_militia_ability(&tables) else {
+    let Err(error) = host.with_militia_ability(&tables, &pcx_objects::editor::Overlay::default())
+    else {
         panic!("late admission succeeded");
     };
     assert!(
@@ -2356,6 +2379,77 @@ fn militia_admission_precedes_unit_creation() {
             .to_string()
             .contains("admit militia before creating units")
     );
+}
+
+#[test]
+fn militia_requires_the_unit_catalog_first() {
+    let tables = militia_tables("1", "v001", "v002", "militia", "militiaoff");
+    let common = militia_common();
+    let ctx = context(
+        302,
+        &common,
+        "function main takes nothing returns nothing\nendfunction\n",
+        "unit-catalog",
+    );
+    let Err(error) = object(&ctx, 8)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_militia_ability(&tables, &pcx_objects::editor::Overlay::default())
+    else {
+        panic!("militia admitted without a unit catalog");
+    };
+    assert!(error.to_string().contains("not admitted"), "{error}");
+}
+
+#[test]
+fn militia_code_must_name_the_authored_class() {
+    let tables = militia_tables_with_code("AHds", "1", "v001", "v002", "militia", "militiaoff");
+    let error = militia_refusal(&tables);
+    assert!(error.contains("code differs"), "{error}");
+    assert!(error.contains("militia ability \"Amil\""), "{error}");
+    assert!(error.contains("fixture edition/version"), "{error}");
+}
+
+#[test]
+fn militia_map_overlay_modification_is_refused() {
+    let tables = militia_tables("1", "v001", "v002", "militia", "militiaoff");
+    let mut overlay = pcx_objects::editor::Overlay::default();
+    overlay.mods.insert(
+        "Amil".into(),
+        vec![pcx_objects::Mod {
+            field: *b"Data",
+            value_type: pcx_objects::ValueType::Str,
+            selectors: Some([1, 0]),
+            value: pcx_objects::Value::Str(b"v002".to_vec()),
+            end_word: 0,
+        }],
+    );
+    let error = militia_refusal_with(&tables, &overlay);
+    assert!(error.contains("overlay modifies Amil"), "{error}");
+}
+
+#[test]
+fn militia_custom_rows_and_unrelated_overlay_edits_are_distinguished() {
+    let tables = militia_tables("1", "v001", "v002", "militia", "militiaoff");
+    let mut custom = pcx_objects::editor::Overlay::default();
+    custom
+        .custom
+        .insert("Amil".into(), ("AHds".into(), Vec::new()));
+    let error = militia_refusal_with(&tables, &custom);
+    assert!(error.contains("overlay modifies Amil"), "{error}");
+
+    let mut unrelated = pcx_objects::editor::Overlay::default();
+    unrelated.mods.insert(
+        "AHds".into(),
+        vec![pcx_objects::Mod {
+            field: *b"Data",
+            value_type: pcx_objects::ValueType::Str,
+            selectors: Some([1, 0]),
+            value: pcx_objects::Value::Str(b"v001".to_vec()),
+            end_word: 0,
+        }],
+    );
+    assert_eq!(militia_refusal_with(&tables, &unrelated), "");
 }
 
 fn refused_order(headers: &[&str], row: &[&str], amount: &str) -> String {

@@ -586,6 +586,10 @@ pub fn assemble(
             enumeration.limits,
         )?
     };
+    let empty_abilities = pcx_objects::editor::Overlay::default();
+    let abilities = hero_skills
+        .as_ref()
+        .map_or(&empty_abilities, |input| &input.abilities);
     let mut object = TimerHost::checked(enum_host)?
         .with_groups(budgets.groups)?
         .with_map_config(budgets.map_config)?
@@ -636,7 +640,7 @@ pub fn assemble(
         .with_unit_states(budgets.unit_states)?
         .with_resource_amounts(Arc::clone(&defend.tables))?
         .with_defend_ability(&defend.tables, &defend.alias)?
-        .with_militia_ability(&defend.tables)?;
+        .with_militia_ability(&defend.tables, abilities)?;
     // Retained SetUnitExploded flags only; explosion presentation is not implemented.
     object = object.with_unit_explosions(budgets.units.max_records)?;
     if let Some(rules) = resources {
