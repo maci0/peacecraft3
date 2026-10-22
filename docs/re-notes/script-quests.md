@@ -155,14 +155,34 @@ capacity, unchanged quest/text/handle state, malformed calls and VM continuation
 past an unassigned quest. On unchanged Human01 the ordinary-order controller now
 passes the previous null completion refusal at requested tick 91832, then reaches
 `UnitRemoveBuffs` at requested tick 92152 (step 1406) in the authored victory
-cinematic and refuses there. The controller's final assertions follow the two
-source objective-item assignments, rather than requiring the distinct village
-quest to acquire an unexecuted completion flag. No chapter exit, rendered/native
-victory or next-map transition is established. Its source, log and hashes remain
-local in `.scratch/campaign-route/quest-null-receipt.json`.
+cinematic and continues there.
 
-Private final checks: 1,150 pcx-play library tests pass (33 ignored), strict
-all-target Clippy and the WASM library check pass, and the native peacecraft3
-all-target check passes. The three selected-original Human01 opening, authored
-cinematic-skip and authored XP-cap gates pass separately. These results do not
-turn the still-refused long victory route into a passing acceptance gate.
+`UnitRemoveBuffs` and `UnitRemoveBuffsEx` are now implemented as source-backed
+active buff removal on the wrapper host. The shared helper `0x6D87A0` walks the
+unit's ability chain and evaluates vtable predicates for negative/positive
+(`0x1E0`/`0x1E4`), aura (`0x1E8`), timed life (`0x334`), magic (`0x1D8`),
+physical (`0x1DC`) and auto-dispel (`0x338`); the basic wrapper calls it with
+timed-life/aura enabled and magic/physical/auto-dispel disabled, while the Ex
+wrapper reorders its booleans into the helper's stack order. The active buff
+state is keyed per unit, cleaned up on `RemoveUnit`, and exposed through an
+`apply_unit_buff`/`active_unit_buffs` API for future buff-producing ability
+hosts. The shipped `Units\AbilityBuffData.slk` supplies the rawcode; polarity and
+resistance are native class predicates, not SLK cells, so no flags are invented.
+No dispellable buff is currently applied by any modeled ability: summons/timed
+life, sleeps, Defend and item-passive effects are intentionally not modeled as
+`UnitRemoveBuffs` buffs. Five focused tests cover the polarity gate, the Ex
+filters, and null/removed/wrong-family/wrong-arity no-write behavior.
+
+A bounded unchanged Human01 driver using seed 1 progresses past the former
+`UnitRemoveBuffs` frontier (step 1406 / tick 92152) and runs to step 3580, where
+it stops on the driver's own completion assertion (phase=3 waypoint=6) rather
+than on a missing native. Seeds 3,4,5,7,8,9,10,11 reach the same assert; seeds
+0,2,6 lose the hero earlier in combat before buff dispatch. The console's final
+assertions still follow the two source objective-item assignments rather than a
+chapter exit, rendered/native victory or next-map transition.
+
+Private final checks: 1,167 pcx-play library tests pass (33 ignored), strict
+all-target Clippy passes with `-D warnings`, and the WASM library check passes.
+The three selected-original Human01 opening, authored cinematic-skip and authored
+XP-cap gates pass separately. These results do not turn the still-refused long
+victory route into a passing acceptance gate.

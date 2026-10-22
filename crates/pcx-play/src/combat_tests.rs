@@ -14,6 +14,8 @@ use pcx_script::HandleId;
 mod blight;
 #[path = "unit_sleep_tests.rs"]
 mod natural_sleep;
+#[path = "unit_buff_host_tests.rs"]
+mod buffs;
 #[path = "patrol_combat_tests.rs"]
 mod patrol;
 type Vm = pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>;
@@ -203,6 +205,11 @@ native UnitIsSleeping takes unit u returns boolean
 native UnitWakeUp takes unit u returns nothing
 "#;
 
+const BUFF_DECLARATIONS: &str = r#"
+native UnitRemoveBuffs takes unit u, boolean p, boolean n returns nothing
+native UnitRemoveBuffsEx takes unit u, boolean p, boolean n, boolean m, boolean ph, boolean tl, boolean a, boolean ad returns nothing
+"#;
+
 fn open_fixture(
     fields: &[([u8; 4], ObjectField)],
     heroes: Option<crate::hero_skills::Rules>,
@@ -211,7 +218,7 @@ fn open_fixture(
     blight: Option<crate::terrain_blight::InitialBlight>,
 ) -> (Vm, HandleId, HandleId) {
     let mut extra = format!(
-        "{}\n{}{DECLARATIONS}{}{}",
+        "{}\n{}{DECLARATIONS}{}{}{}",
         enumeration::TRIGGERS,
         super::activity::ORDERS,
         if clock { CLOCK_DECLARATIONS } else { "" },
@@ -222,6 +229,7 @@ fn open_fixture(
         } else {
             ""
         },
+        BUFF_DECLARATIONS,
     );
     let experience = heroes
         .as_ref()

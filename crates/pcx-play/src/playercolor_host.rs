@@ -787,6 +787,7 @@ pub use objects::{
     TriggerBudget, TriggerConditionRegistration, TriggerDelivery, TriggerRuntimeInput,
     UnitAbilities, UnitActivity, UnitBudget, UnitEffect, UnitEventRegistration, UnitGuard,
     UnitInRangeRegistration, UnitLookAt, UnitRangeEntry, UnitSleep, UnitStateBudget,
+    ActiveBuff, BuffTraits,
 };
 pub use objects::{
     CinematicScene, Combat, CombatActor, CombatTraceEvent, DestructableState, DialogBudget,

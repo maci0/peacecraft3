@@ -77,6 +77,7 @@ impl ObjectHost {
                 }
             }
             self.clear_unit_cooldowns(unit);
+            self.forget_unit_buffs(unit);
             *self.inner.entry_mut(unit)? = Entry::RemovedUnit;
             Ok(Value::Null)
         })())
