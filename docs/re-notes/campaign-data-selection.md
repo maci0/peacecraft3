@@ -52,6 +52,24 @@ same-map pair observed TFT/grunt HP 700 by default and RoC/grunt HP 680 with
 under TFT preserved the same custom fingerprint, which is consistent with the
 default non-melee and explicit-custom branches above.
 
+A further controlled run changed only that information word from zero to two
+and the diagnostic run identifier, using the verified `-classic` launch.
+Map SHA-256:
+`5e21e6acc54d8d083f90b985cb02a2313b5c32139907fd0dd10403b185d12c4a`.
+All 16 records arrived. `VersionGet` reported RoC; grunt maximum life became
+700 (the zero-selector RoC control had 680). Uther, peasant and footman collision
+sizes stayed 32, 16 and 31. The changed life agrees with the explicit-melee
+branch above. The unchanged collisions contradict the earlier proposed
+collision-zero fingerprint for the melee dataset: a zero in a compared table
+is not proof that the native collision getter returns zero. That field's actual
+consumer/merge semantics remain unqualified. Do not use it to reject this run
+or to infer that namespace mounting did not occur.
+
+The chapter card was inspected before one Space input; the owned container was
+stopped after collection. Receipts are retained in ignored
+`.scratch/edition-stats-word2-probe`. The replacement script omits authored units
+and triggers, so this is source-selection evidence, not campaign acceptance.
+
 ## Implementation boundary
 
 No production selector is implemented by this note. A reader should derive
