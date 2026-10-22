@@ -252,7 +252,7 @@ impl ObjectHost {
                 .entry(id)
                 .map_err(|e| self.inner.error(name, e.failure))?
             {
-            Entry::RemovedUnit { .. } => return Ok(Value::Null),
+                Entry::RemovedUnit { .. } => return Ok(Value::Null),
                 Entry::Unit { .. } => {}
                 _ => return Err(self.inner.error(name, Failure::WrongFamily)),
             }
