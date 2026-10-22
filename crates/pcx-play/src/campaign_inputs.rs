@@ -232,6 +232,7 @@ pub fn prepare_new_game(
             initial_alliances: Some(initial_alliances),
             orders: Some(orders),
             activity: Some(activity),
+            upgrades: upgrades.clone(),
             group_orders: Some(group_orders),
             research: Some(research),
             placement_rules: Some(placement_rules),

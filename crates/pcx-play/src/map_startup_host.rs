@@ -202,6 +202,8 @@ pub struct NewGameInput {
     pub initial_alliances: Option<crate::player_alliance_rules::Rules>,
     pub orders: Option<Arc<crate::order_registry::Registry>>,
     pub activity: Option<crate::unit_activity::Rules>,
+    /// The map's `war3map.w3q` upgrade overrides, resolved by upgrade readers.
+    pub upgrades: pcx_objects::editor::Overlay,
     /// Selected client's group-order rules; absent leaves group orders unsupported.
     pub group_orders: Option<crate::group_order_rules::Rules>,
     /// None leaves research queries unsupported rather than installing defaults.
@@ -830,6 +832,7 @@ pub fn assemble(
             object = object.with_harvest(
                 Arc::clone(&tables),
                 harvest_abilities,
+                input.upgrades,
                 crate::playercolor_host::harvest_runtime::Budget::new(
                     budgets.units.max_records,
                     65536,
