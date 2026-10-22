@@ -175,6 +175,42 @@ There is no new original runtime, rendered/audio comparison or playable-mission
 claim. Local evidence is `research-model-4/` and `runtime-state/research-*.json`
 under the same private evidence directory. Earlier failed attempts are retained.
 
+## Absent research queries (2026-10-22)
+
+The reviewed Legacy 1.29.2.9231 image (SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`)
+registers `GetPlayerTechResearched (Hplayer;IB)B` at `0x49e5e5` to handler
+`0x494c20` and `GetPlayerTechCount (Hplayer;IB)I` at `0x49e60d` to handler
+`0x494bb0`. Both handlers resolve the player first and return the native zero
+value when that player is absent. They select the count flags `0x10` for
+`specificonly=true` and `0x18` for false, then use the same player technology
+counter helper. The boolean getter compares the returned count with its
+hard-coded minimum one; the integer getter returns the count unchanged.
+
+The counter helper `0x513620` clears its accumulator to zero at `0x513634`,
+looks up the exact rawcode in the player's technology map, and only adds stored
+counts when a record exists. It does not consult the upgrade catalog, the
+`UpgradeData` level cap, or the selected `UpgradeMetaData` maximum. Missing
+records therefore leave zero; the subsequent related-technology lookups create
+empty records and add nothing for rawcodes without such relationships. The
+recreation consequently answers absent known-unresearched and unknown ids as
+false/zero for both query natives and both `specificonly` values instead of
+rejecting them as non-admitted upgrades. `SetPlayerTechResearched` retains its
+catalog and cap admission.
+
+This is static evidence from the fingerprinted image. It does not establish
+runtime answers for arbitrary ids, the relationship/category tables used by
+the extra flag branches, saved state, or upgrade gameplay effects. Connecting
+the counter cap to an authored level-count column remains the implementation
+choice recorded above. The Human01 refusal at `Rhrt` was this getter's catalog
+rejection; `Robk` is the following absent id. No application or original-runtime
+run is claimed for this change.
+
+Verification on 2026-10-22: the new absent-id regression passes; `cargo test -p
+pcx-play --lib` passes 1306 tests with 41 ignored; strict `pcx-play` Clippy,
+`wasm32-unknown-unknown` library check and formatting pass using a private target
+and one build job. The logs are retained under `.scratch/absent-research-query/`.
+
 ## Fresh timed-trigger input (2026-10-20)
 
 Normal new-game preparation now supplies the existing bounded trigger runtime.

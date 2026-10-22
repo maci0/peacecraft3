@@ -42,6 +42,17 @@ fn query(h: &mut ObjectHost, player: &Value, tech: i32, specific: bool) -> Resul
         &[player.clone(), Value::Int(tech), Value::Bool(specific)],
     )
 }
+fn query_count(
+    h: &mut ObjectHost,
+    player: &Value,
+    tech: i32,
+    specific: bool,
+) -> Result<Value, String> {
+    h.native(
+        "GetPlayerTechCount",
+        &[player.clone(), Value::Int(tech), Value::Bool(specific)],
+    )
+}
 
 #[test]
 fn fresh_upgrade_queries_use_applied_levels_and_preserve_raw_setter_requests() {
@@ -109,7 +120,14 @@ fn fresh_upgrade_queries_use_applied_levels_and_preserve_raw_setter_requests() {
         query(vm.host(), &late, 5, true).unwrap(),
         Value::Bool(false)
     );
-    assert!(query(vm.host(), &late, 6, true).is_err());
+    assert_eq!(
+        query(vm.host(), &late, 6, true).unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        query_count(vm.host(), &late, 6, true).unwrap(),
+        Value::Int(0)
+    );
     assert!(
         vm.host()
             .admit_current_research(
@@ -137,6 +155,50 @@ fn fresh_upgrade_queries_use_applied_levels_and_preserve_raw_setter_requests() {
         vm.host().player_settings(id(&p)).unwrap().research_levels,
         [(5, 0)]
     );
+}
+
+#[test]
+fn absent_research_ids_answer_false_and_zero_for_both_queries_and_flags() {
+    let (mut h, ctx) = setup(&common(), "globals\nplayer P = Player(0)\nendglobals\n", 1);
+    h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+        .unwrap();
+    let p = h.native("Player", &[Value::Int(0)]).unwrap();
+    let other = h.native("Player", &[Value::Int(1)]).unwrap();
+    for player in [&p, &other] {
+        for tech in [-37, 5, 6] {
+            for specific in [true, false] {
+                assert_eq!(
+                    query(&mut h, player, tech, specific).unwrap(),
+                    Value::Bool(false)
+                );
+                assert_eq!(
+                    query_count(&mut h, player, tech, specific).unwrap(),
+                    Value::Int(0)
+                );
+            }
+        }
+    }
+    assert!(
+        h.native(
+            "SetPlayerTechResearched",
+            &[p.clone(), Value::Int(6), Value::Int(1)]
+        )
+        .is_err()
+    );
+    let color = h.native("ConvertPlayerColor", &[Value::Int(37)]).unwrap();
+    let bad = [
+        vec![],
+        vec![p.clone(), Value::Int(5)],
+        vec![p.clone(), Value::Int(5), Value::Bool(true), Value::Int(0)],
+        vec![p.clone(), Value::Real(5.0), Value::Bool(true)],
+        vec![p.clone(), Value::Int(5), Value::Int(1)],
+        vec![color, Value::Int(5), Value::Bool(true)],
+        vec![Value::Null, Value::Int(5), Value::Bool(true)],
+    ];
+    for args in bad {
+        assert!(h.native("GetPlayerTechResearched", &args).is_err());
+        assert!(h.native("GetPlayerTechCount", &args).is_err());
+    }
 }
 
 #[test]
