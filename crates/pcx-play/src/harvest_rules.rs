@@ -3,7 +3,8 @@
 //! This is a **source-read** module: it parses and validates the authored
 //! `Ahar` (Harvest) fields, worker/unit capability, destructable tree
 //! classification and the depot `Artn` return flags. It runs no gameplay
-//! harvesting algorithm — that is deferred until a native trace qualifies it.
+//! harvesting algorithm. These readers consume default tables only; runtime
+//! admission must resolve or explicitly refuse relevant map overrides.
 //!
 //! Identities and class codes are case-sensitive, matching the shipped
 //! fourcc/code cells; the `-` sentinel means absence, never a lookup.
