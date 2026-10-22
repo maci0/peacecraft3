@@ -3,6 +3,64 @@ fn id(n: u64) -> HandleId {
     HandleId::new(std::num::NonZeroU64::new(n).unwrap())
 }
 
+#[derive(Default)]
+struct SourceLedger {
+    loads: usize,
+    staged: BTreeSet<String>,
+    committed: BTreeSet<String>,
+}
+
+struct TrackingLoader(std::sync::Arc<std::sync::Mutex<SourceLedger>>);
+
+impl TrackingLoader {
+    fn new() -> (Self, std::sync::Arc<std::sync::Mutex<SourceLedger>>) {
+        let ledger = std::sync::Arc::new(std::sync::Mutex::new(SourceLedger::default()));
+        (Self(std::sync::Arc::clone(&ledger)), ledger)
+    }
+}
+
+impl FootprintLoader for TrackingLoader {
+    fn load(&mut self, path: &str) -> Result<Footprint, String> {
+        let mut ledger = self.0.lock().unwrap();
+        ledger.loads += 1;
+        if !ledger.staged.contains(path) && !ledger.committed.contains(path) {
+            ledger.staged.insert(path.into());
+        }
+        Ok(Footprint {
+            origin: AssetIdentity {
+                source: format!("synthetic source at {path}"),
+                edition: "test".into(),
+                version: "test".into(),
+            },
+            cells: vec![[0, 0]],
+        })
+    }
+
+    fn commit(&mut self, paths: &[String]) {
+        let mut ledger = self.0.lock().unwrap();
+        for path in paths {
+            ledger.staged.remove(path);
+            ledger.committed.insert(path.clone());
+        }
+    }
+
+    fn rollback(&mut self, paths: &[String]) {
+        let mut ledger = self.0.lock().unwrap();
+        for path in paths {
+            ledger.staged.remove(path);
+        }
+    }
+}
+
+fn script_base() -> Pathing {
+    Pathing {
+        version: 0,
+        width: 32,
+        height: 32,
+        cells: vec![0; 1024],
+    }
+}
+
 #[test]
 fn live_motion_excludes_only_its_own_stamp_and_releases_the_previous_cells() {
     let mut p = placement(
@@ -413,6 +471,139 @@ fn script_creation_refuses_a_missing_base_before_resolving_or_loading_sources() 
     assert_eq!(loads.load(Ordering::SeqCst), 0);
     assert!(p.stationary.is_empty());
     assert!(p.stationary_cells.is_empty());
+}
+
+#[test]
+fn unit_source_commit_survives_a_refused_canonical_alias_script_layer() {
+    let (loader, ledger) = TrackingLoader::new();
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "committed unit source".into(),
+        },
+        100,
+    )
+    .with_stationary(script_base(), Vec::new())
+    .unwrap()
+    .with_staged_footprint_loader(loader)
+    .with_script_paths(|_, dead| Ok(if dead { "foo.tga" } else { "FOO.TGA" }.into()));
+    p.prepare([32., 32.], None, "Foo.tga", 0.).unwrap();
+    {
+        let ledger = ledger.lock().unwrap();
+        assert_eq!(ledger.loads, 1);
+        assert!(ledger.staged.is_empty());
+        assert_eq!(
+            ledger.committed.iter().cloned().collect::<Vec<_>>(),
+            ["foo.tga"]
+        );
+    }
+    assert_eq!(p.footprints.len(), 1);
+    assert!(p.footprints.contains_key("foo.tga"));
+
+    p.stationary_cells_used = p.budget.stationary_cells;
+    let error = p
+        .prepare_script_destructable(7, [32., 32.], 0., false)
+        .unwrap_err();
+    assert!(error.0.contains("stationary cell budget"), "{error}");
+    {
+        let ledger = ledger.lock().unwrap();
+        assert_eq!(ledger.loads, 1);
+        assert!(ledger.staged.is_empty());
+        assert!(ledger.committed.contains("foo.tga"));
+    }
+    assert_eq!(p.footprints.len(), 1);
+    p.prepare([40., 32.], None, "Foo.tga", 0.).unwrap();
+    assert_eq!(ledger.lock().unwrap().loads, 1);
+}
+
+#[test]
+fn script_layer_case_and_slash_aliases_share_one_canonical_source() {
+    let (loader, ledger) = TrackingLoader::new();
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "canonical script aliases".into(),
+        },
+        100,
+    )
+    .with_stationary(script_base(), Vec::new())
+    .unwrap()
+    .with_staged_footprint_loader(loader)
+    .with_script_paths(|_, dead| {
+        Ok(if dead {
+            "Textures\\Live.TGA"
+        } else {
+            "textures/live.tga"
+        }
+        .into())
+    });
+    p.prepare_script_destructable(7, [32., 32.], 0., false)
+        .unwrap();
+    let ledger = ledger.lock().unwrap();
+    assert_eq!(ledger.loads, 1);
+    assert!(ledger.staged.is_empty());
+    assert_eq!(
+        ledger.committed.iter().cloned().collect::<Vec<_>>(),
+        ["textures/live.tga"]
+    );
+    drop(ledger);
+    assert_eq!(p.footprints.len(), 1);
+    assert!(p.footprints.contains_key("textures/live.tga"));
+}
+
+#[test]
+fn initial_footprint_map_is_canonical_and_refuses_alias_duplicates() {
+    let grid = || Grid {
+        source: Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "canonical initial footprints".into(),
+        },
+        origin: [0.0; 2],
+        pathing: script_base(),
+        domains: vec![5; 1024],
+    };
+    let budget = || Budget {
+        cells: 1024,
+        footprint_cells: 64,
+        stationary_cells: 1 << 20,
+        stationary_work: 1 << 20,
+        queries: 100,
+    };
+    let footprint = || Footprint {
+        origin: AssetIdentity {
+            source: "synthetic source".into(),
+            edition: "test".into(),
+            version: "test".into(),
+        },
+        cells: vec![[0, 0]],
+    };
+    let p = Placement::new(
+        grid(),
+        rules(2, -8192.25),
+        BTreeMap::from([("Textures\\Live.TGA".into(), footprint())]),
+        budget(),
+    )
+    .unwrap();
+    assert_eq!(p.footprints.len(), 1);
+    assert!(p.footprints.contains_key("textures/live.tga"));
+    let error = Placement::new(
+        grid(),
+        rules(2, -8192.25),
+        BTreeMap::from([
+            ("Textures\\Live.TGA".into(), footprint()),
+            ("textures/live.tga".into(), footprint()),
+        ]),
+        budget(),
+    )
+    .err()
+    .unwrap();
+    assert!(
+        error.0.contains("duplicate footprint path alias"),
+        "{error}"
+    );
 }
 
 #[test]

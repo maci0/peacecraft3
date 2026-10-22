@@ -18,6 +18,10 @@ use std::{collections::BTreeMap, sync::Arc};
 
 const CELLS: usize = 4 << 20;
 const FOOTPRINT_CELLS: usize = 1 << 16;
+/// Existing source-count operating limit, reused as the non-refundable
+/// uncached resolve/decode attempt limit. Each attempt still obeys the 1 MiB
+/// resolve cap and the footprint pixel cap, bounding total spent work.
+const FOOTPRINT_SOURCES: usize = 256;
 const STATIONARY_WORK: usize = 4 << 20;
 const STATIONARY_CELLS: usize = 1 << 20;
 
@@ -257,6 +261,7 @@ pub fn assemble(
         staged: BTreeMap::new(),
         remaining_bytes: 16 << 20,
         remaining_cells: FOOTPRINT_CELLS,
+        remaining_source_attempts: FOOTPRINT_SOURCES,
     };
     let mut work = STATIONARY_WORK;
     for instance in catalog.doodads() {
@@ -469,8 +474,13 @@ struct Textures {
     edition: String,
     cache: BTreeMap<String, Arc<Footprint>>,
     staged: BTreeMap<String, Staged>,
+    /// Retained-cache capacity. A rolled-back staged load returns its share.
     remaining_bytes: usize,
+    /// Retained-cell capacity. A rolled-back staged load returns its share.
     remaining_cells: usize,
+    /// Non-refundable uncached resolve/decode attempts. Cache and staged hits
+    /// are free; rollback never returns an attempt.
+    remaining_source_attempts: usize,
 }
 
 impl Textures {
@@ -538,9 +548,14 @@ impl Textures {
     }
 
     fn decode(&mut self, path: &str) -> Result<(Arc<Footprint>, usize, usize), String> {
-        if self.cache.len() + self.staged.len() >= 256 {
+        if self.cache.len() + self.staged.len() >= FOOTPRINT_SOURCES {
             return Err("footprint source count budget".into());
         }
+        let remaining = self
+            .remaining_source_attempts
+            .checked_sub(1)
+            .ok_or("footprint source attempt budget")?;
+        self.remaining_source_attempts = remaining;
         let asset = self
             .reader
             .resolve_bounded(path, self.remaining_bytes.min(1 << 20) as u64)
@@ -688,6 +703,7 @@ fn stamp(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     #[test]
     fn domains_follow_the_selected_grid_ratio_and_corner_words() {
         let mut bytes = pcx_map::TERRAIN_MAGIC.to_vec();
@@ -1082,10 +1098,11 @@ mod tests {
     struct TextureSource {
         info: pcx_assets::SourceInfo,
         files: BTreeMap<String, Vec<u8>>,
+        reads: Arc<AtomicUsize>,
     }
 
     impl TextureSource {
-        fn new(files: &[(&str, Vec<u8>)]) -> Self {
+        fn new(files: &[(&str, Vec<u8>)], reads: Arc<AtomicUsize>) -> Self {
             Self {
                 info: pcx_assets::SourceInfo {
                     id: "synthetic-textures".into(),
@@ -1097,6 +1114,7 @@ mod tests {
                     .iter()
                     .map(|(path, bytes)| ((*path).into(), bytes.clone()))
                     .collect(),
+                reads,
             }
         }
     }
@@ -1129,6 +1147,7 @@ mod tests {
             member: &str,
             limit: u64,
         ) -> Result<Option<pcx_assets::SourceContent>, pcx_assets::SourceError> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
             let Some(bytes) = self.files.get(member) else {
                 return Ok(None);
             };
@@ -1153,15 +1172,16 @@ mod tests {
         bytes
     }
 
-    fn textures(files: &[(&str, Vec<u8>)]) -> Textures {
-        Textures {
+    fn textures_with_reads(files: &[(&str, Vec<u8>)]) -> (Textures, Arc<AtomicUsize>) {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let textures = Textures {
             reader: Arc::new(
                 Resolver::new(
                     pcx_assets::GameMode::default(),
                     None,
                     vec![pcx_assets::ArchiveLayer {
                         priority: 1,
-                        source: Box::new(TextureSource::new(files)),
+                        source: Box::new(TextureSource::new(files, Arc::clone(&reads))),
                     }],
                 )
                 .unwrap(),
@@ -1171,12 +1191,14 @@ mod tests {
             staged: BTreeMap::new(),
             remaining_bytes: 4096,
             remaining_cells: 8,
-        }
+            remaining_source_attempts: FOOTPRINT_SOURCES,
+        };
+        (textures, reads)
     }
 
     #[test]
     fn staged_texture_loads_only_charge_the_retained_budget_when_committed() {
-        let mut textures = textures(&[
+        let (mut textures, reads) = textures_with_reads(&[
             (
                 "live.tga",
                 texture(2, 2, &[[255; 3], [0; 3], [0; 3], [0; 3]]),
@@ -1194,21 +1216,128 @@ mod tests {
         assert!(textures.cache.is_empty());
         assert_eq!(textures.remaining_bytes, bytes - 30);
         assert_eq!(textures.remaining_cells, cells - 1);
+        assert_eq!(textures.remaining_source_attempts, FOOTPRINT_SOURCES - 1);
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
         assert!(Arc::ptr_eq(&live, &textures.stage("live.tga").unwrap()));
         assert_eq!(textures.staged.len(), 1);
+        assert_eq!(textures.remaining_source_attempts, FOOTPRINT_SOURCES - 1);
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
         textures.rollback(&["live.tga".into()]);
         assert!(textures.staged.is_empty());
         assert!(textures.cache.is_empty());
         assert_eq!(textures.remaining_bytes, bytes);
         assert_eq!(textures.remaining_cells, cells);
+        assert_eq!(textures.remaining_source_attempts, FOOTPRINT_SOURCES - 1);
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
 
         textures.stage("live.tga").unwrap();
+        assert_eq!(textures.remaining_source_attempts, FOOTPRINT_SOURCES - 2);
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
         textures.commit(&["LIVE.TGA".into()]);
         assert!(textures.staged.is_empty());
         assert!(textures.cache.contains_key("live.tga"));
         assert_eq!(textures.remaining_cells, cells - 1);
         textures.stage("live.tga").unwrap();
         assert_eq!(textures.remaining_cells, cells - 1);
+        assert_eq!(textures.remaining_source_attempts, FOOTPRINT_SOURCES - 2);
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn canonical_path_aliases_share_one_staged_source_and_one_charge() {
+        let (mut textures, reads) = textures_with_reads(&[(
+            "textures/live.tga",
+            texture(2, 2, &[[255; 3], [0; 3], [0; 3], [0; 3]]),
+        )]);
+        let bytes = textures.remaining_bytes;
+        let cells = textures.remaining_cells;
+        let first = textures.stage("Textures\\Live.TGA").unwrap();
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        assert_eq!(textures.remaining_source_attempts, FOOTPRINT_SOURCES - 1);
+        assert_eq!(textures.remaining_bytes, bytes - 30);
+        assert_eq!(textures.remaining_cells, cells - 1);
+        assert!(textures.staged.contains_key("textures/live.tga"));
+        let second = textures.stage("textures/live.tga").unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(textures.staged.len(), 1);
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        assert_eq!(textures.remaining_source_attempts, FOOTPRINT_SOURCES - 1);
+        assert_eq!(textures.remaining_bytes, bytes - 30);
+        assert_eq!(textures.remaining_cells, cells - 1);
+
+        textures.commit(&["TEXTURES\\LIVE.TGA".into()]);
+        assert!(textures.staged.is_empty());
+        assert!(textures.cache.contains_key("textures/live.tga"));
+        assert_eq!(textures.remaining_bytes, bytes - 30);
+        assert_eq!(textures.remaining_cells, cells - 1);
+        let cached = textures.stage("textures\\live.tga").unwrap();
+        assert!(Arc::ptr_eq(&first, &cached));
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        assert_eq!(textures.remaining_source_attempts, FOOTPRINT_SOURCES - 1);
+        assert_eq!(textures.remaining_bytes, bytes - 30);
+        assert_eq!(textures.remaining_cells, cells - 1);
+    }
+
+    #[test]
+    fn failed_source_attempts_are_nonrefundable_and_exhaust_before_reads() {
+        let (mut textures, reads) = textures_with_reads(&[
+            ("bad-live.tga", vec![0; 17]),
+            ("bad-dead.tga", vec![0; 17]),
+            (
+                "good.tga",
+                texture(2, 2, &[[255; 3], [0; 3], [0; 3], [0; 3]]),
+            ),
+        ]);
+        textures.remaining_source_attempts = 2;
+        let bytes = textures.remaining_bytes;
+        let cells = textures.remaining_cells;
+        for path in ["bad-live.tga", "bad-dead.tga"] {
+            assert!(textures.stage(path).is_err());
+            assert!(textures.staged.is_empty());
+            assert_eq!(textures.remaining_bytes, bytes);
+            assert_eq!(textures.remaining_cells, cells);
+        }
+        assert_eq!(textures.remaining_source_attempts, 0);
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
+        let error = textures.stage("good.tga").err().unwrap();
+        assert!(error.contains("footprint source attempt budget"), "{error}");
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
+        assert_eq!(textures.remaining_bytes, bytes);
+        assert_eq!(textures.remaining_cells, cells);
+        assert_eq!(textures.remaining_source_attempts, 0);
+    }
+
+    #[test]
+    fn failed_attempt_preserves_capacity_while_rollback_keeps_it_spent() {
+        let (mut textures, reads) = textures_with_reads(&[
+            ("bad.tga", vec![0; 17]),
+            (
+                "good.tga",
+                texture(2, 2, &[[255; 3], [0; 3], [0; 3], [0; 3]]),
+            ),
+        ]);
+        textures.remaining_source_attempts = 2;
+        let bytes = textures.remaining_bytes;
+        let cells = textures.remaining_cells;
+        assert!(textures.stage("bad.tga").is_err());
+        assert_eq!(textures.remaining_source_attempts, 1);
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        assert_eq!(textures.remaining_bytes, bytes);
+        assert_eq!(textures.remaining_cells, cells);
+
+        textures.stage("good.tga").unwrap();
+        assert_eq!(textures.remaining_source_attempts, 0);
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
+        assert!(textures.remaining_bytes < bytes);
+        assert!(textures.remaining_cells < cells);
+        textures.rollback(&["good.tga".into()]);
+        assert_eq!(textures.remaining_bytes, bytes);
+        assert_eq!(textures.remaining_cells, cells);
+        assert_eq!(textures.remaining_source_attempts, 0);
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
+        let error = textures.stage("good.tga").err().unwrap();
+        assert!(error.contains("footprint source attempt budget"), "{error}");
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
     }
 
     #[test]
