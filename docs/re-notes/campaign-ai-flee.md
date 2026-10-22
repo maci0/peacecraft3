@@ -53,5 +53,40 @@ Both owned clients are stopped; their sources, captures, raw markers and audit
 receipts remain local under `.scratch/flee-original-runs/r6/`. Earlier drafts
 with invalid version helpers or duplicate observer globals are preserved as failed
 loads and supply no gameplay evidence. Production `SetUnitsFlee` behavior remains
-unsupported. A seeded matched repeat is needed before attributing the movement
-difference solely to the flag or deciding whether a no-op could reproduce it.
+unsupported. The unseeded pair alone does not establish flag causality; the
+seeded repeats below address reproducibility in this setup.
+
+## Seeded repeats
+
+Four fresh reference runs used the same setup with diagnostic `SetRandomSeed(1)`
+as the first call in both map and AI `main`. Each flag was run twice in an
+independent prepared directory. The only changes from the earlier maps were
+these seed calls and diagnostic run identity. Map scripts match after label
+normalization; AI scripts differ only by the requested flag and labels. Every
+other packed member matches, and all four clients reported RoC.
+
+Both true runs produced identical bytes for all 111 markers, including 94
+samples. Both false runs produced identical bytes for all 110 markers, including
+93 samples. Initial samples match across flags. The repeated results are:
+
+| Measurement | Flee true, both runs | Flee false, both runs |
+| --- | ---: | ---: |
+| Terminal sample time | 9.438 | 9.313 |
+| Terminal victim position | (-4428.578, -4688.027) | (-3863.524, -4688.868) |
+| Terminal threat position | (-4290.801, -4688.020) | (-3748.344, -4695.082) |
+| Terminal victim / threat life | 0 / 664 | 0 / 576 |
+
+This establishes a reproducible movement difference for the policy in this fixed
+seeded setup. A no-op implementation would not reproduce both outcomes. It does
+not establish a general flee threshold, route, duration, all unit classes, or
+which setup calls are prerequisites. Attack-event chronology and rendered
+movement remain unqualified as in the earlier pair.
+
+Seeded true map SHA-256:
+`dadced501aa573e8b2ea0efcf6871ed438e339b1851942c6356e8ce734ae836e`;
+seeded false map SHA-256:
+`fae0200df2a1a911240a341b1358e28476f485ce890bf5dd6664ddb8f4f11a9c`.
+All four owned clients are stopped and preserved. Source, staged-member checks,
+launches, captures, raw markers and the full within-flag hash comparison remain
+local under `.scratch/flee-seeded-runs/`. The collector rejects an unknown edition
+and passed 24 offline checks before collection. No original assets are tracked.

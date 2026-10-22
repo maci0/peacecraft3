@@ -88,3 +88,21 @@ tests cover actual emitter shape, terminal caps and malformed collections.
 The earlier equal-distance draft omitted the bounded emitter changes and was
 not launched. Raw records and receipts remain local under
 `.scratch/campaign-targeting-equal-distance-r2/`.
+
+## Current difficulty input to the native scorer
+
+In the selected image, the scorer reads an unsigned byte at
+`[[0x113b6f4]+0x30]+0x46`. The registered `GetGameDifficulty` handler `0x4927a0`
+reads exactly that byte, and the registered `SetGameDifficulty` handler `0x4a8730`
+writes it. `GetAIDifficulty(player)` instead reads a separate player field at
+`+0x2cc`. The score gate therefore follows current game difficulty, including
+setter changes, rather than a second AI-difficulty store.
+
+The scorer can promote the local gate value under additional conditions without
+writing the game setting. Those remaining conditions and other score bands still
+need qualification. The current `ObjectHost` already admits the selected
+`gamedifficulty` symbolic domain and current handle; a consumer should reuse it
+and derive ordinal/branch relationships from the checked source. This byte trace
+does not establish every startup lobby-flag mapping or the complete target score.
+Pinned windows and relationships remain local in
+`.scratch/campaign-targeting-root-review/band-enable-setting.md`.
