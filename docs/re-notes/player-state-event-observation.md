@@ -90,3 +90,27 @@ states and other operators remain separate qualification cases.
 Ordered records, hashes and launch arguments are retained locally in ignored
 `.scratch/player-state-nested-probe/result.json`. This Wine/software reference
 is not native Windows or whole-mission acceptance evidence.
+
+## Yield inside an event action
+
+A paired diagnostic added `TriggerSleepAction(0.125)` immediately before the
+outer event action's gold-20 write and extended the final timer checkpoint to
+two seconds after dispatch. Map SHA-256:
+`c28f821841362f7daa8a548963b1c279da64831bf676eb979da006d2bcd39045`.
+The explicit `-classic` run again reported `VERSION_REIGN_OF_CHAOS`; all 23
+records arrived.
+
+At 5.000, the caller's gold-10 setter entered the event condition and action as
+before. After the action's before-sleep checkpoint, the caller's setter returned
+with gold 10 and caller trigger context; `TriggerExecute` then returned. At
+5.250, the parked action resumed with event trigger context and gold 10. Its
+gold-20 setter synchronously ran the nested condition/evaluation/action sequence
+before returning to the resumed outer action. The final 7.000 checkpoint saw
+gold 20 with no trigger context.
+
+This qualifies synchronous delivery until an action yields, caller continuation
+at that yield, and event-context retention across the observed resumption. The
+requested delay and observed 0.250 interval do not establish a scheduling quantum
+to copy into the host. Other wait forms, multiple parked events and arbitrary
+recursion remain separate cases. Local receipts are in ignored
+`.scratch/player-state-sleep-probe/result.json`.
