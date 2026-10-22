@@ -2,11 +2,9 @@
 use super::*;
 
 const EXTRA: &str = "\
-type playerevent extends eventid
 type triggeraction extends handle
 native TriggerAddAction takes trigger t, code action returns triggeraction
 native DisableTrigger takes trigger t returns nothing
-constant native ConvertPlayerEvent takes integer i returns playerevent
 native TriggerRegisterPlayerEvent takes trigger t, player p, playerevent e returns event
 globals
 constant playerevent SAMPLE = ConvertPlayerEvent(27)
@@ -41,7 +39,6 @@ fn deliver_events(app: &mut App, revision: u64, budget: Option<usize>) {
     let resolver = map.resolver();
     let bound = bind_map(&resolver, map.input(revision), map.limits()).unwrap();
     let mut inputs = host_inputs(Arc::clone(&bound.catalog.0));
-    inputs.enumeration.names.push("ConvertPlayerEvent".into());
     inputs.budgets.player_events = budget;
     let bytes = Arc::clone(&bound.catalog_map_bytes);
     app.insert_resource(MapRequests {

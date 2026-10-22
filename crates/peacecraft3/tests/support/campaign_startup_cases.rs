@@ -53,6 +53,7 @@ type force extends agent
 type rect extends agent
 type eventid extends handle
 type unitevent extends eventid
+type playerevent extends eventid
 type gamestate extends handle
 type igamestate extends gamestate
 type fgamestate extends gamestate
@@ -170,6 +171,7 @@ constant native ConvertLimitOp takes integer i returns limitop
 constant native ConvertUnitState takes integer i returns unitstate
 constant native ConvertCameraField takes integer i returns camerafield
 constant native ConvertUnitEvent takes integer i returns unitevent
+constant native ConvertPlayerEvent takes integer i returns playerevent
 native CreateDestructable takes integer objectid, real x, real y, real face, real scale, integer variation returns destructable
 native CreateUnit takes player p, integer unitid, real x, real y, real face returns unit
 native SetUnitExploded takes unit whichUnit, boolean exploded returns nothing
@@ -210,6 +212,7 @@ constant camerafield CFIELD = ConvertCameraField(1)
 constant playerstate PSTATE = ConvertPlayerState(1)
 constant alliancetype ALLY = ConvertAllianceType(1)
 constant unitevent UEVENT = ConvertUnitEvent(1)
+constant playerevent EVENT_PLAYER_STATE_LIMIT = ConvertPlayerEvent(47)
 endglobals
 ";
 
@@ -654,6 +657,7 @@ pub(crate) fn host_inputs(
                 "ConvertPlayerState",
                 "ConvertAllianceType",
                 "ConvertUnitEvent",
+                "ConvertPlayerEvent",
                 "ConvertItemType",
             ]
             .into_iter()
