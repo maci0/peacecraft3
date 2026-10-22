@@ -463,6 +463,20 @@ impl ObjectHost {
         }
         // Passive refusals and life changes are staged before any slot, event or state write.
         let passive = self.held_attributes(item)?;
+        let held = self.unit_hero_bonus(unit)?;
+        for (current, incoming) in [
+            (held.strength, passive.strength),
+            (held.agility, passive.agility),
+            (held.armor, passive.armor),
+            (held.damage, passive.damage),
+        ] {
+            current.checked_add(incoming).ok_or_else(|| {
+                self.inner.error(
+                    "inventory",
+                    Failure::UnitActivity("held passive bonus overflows".into()),
+                )
+            })?;
+        }
         // Strength and agility are hero attributes. A non-hero holder has no modeled effect, so a
         // stat item is refused rather than accepted as a silent no-op.
         if (passive.strength != 0 || passive.agility != 0)

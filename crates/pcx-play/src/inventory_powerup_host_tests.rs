@@ -94,6 +94,8 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["pdm2", "AIat", "0", "0", "0", "-"],
             &["pdmx", "AItz", "0", "0", "0", "-"],
             &["pdmv", "AItf,AIwz", "0", "0", "0", "-"],
+            &["pdmm", "AIwz", "0", "0", "0", "-"],
+            &["pdmo", "AIt1", "0", "0", "0", "-"],
         ],
     );
     let abilities = sylk(
@@ -131,6 +133,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["AItf", "AIat", "1", "15", "0", "0", "0", "0", "-", "-", "_"],
             &["AIat", "AIat", "1", "20", "0", "0", "0", "0", "-", "-", "_"],
             &["AItz", "AIat", "1", "3", "0", "0", "0", "0", "-", "-", "_"],
+            &["AIt1", "AIat", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
             &[
                 "AIwz",
                 "AIat",
@@ -237,7 +240,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "-1",
                 "int",
                 "1",
-                "AIat,AItf,AIwz",
+                "AIat,AItf,AIwz,AIt1",
                 "",
             ],
             &[
@@ -1104,6 +1107,55 @@ fn damage_row_outside_admission_and_overflow_refuse_atomically() {
         ),
         Ok(Value::Bool(false))
     );
+}
+
+#[test]
+fn combined_held_damage_overflow_refuses_pickup_and_preserves_transfer_holder() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    let maximum = item(&mut h, b"pdmm", 0.0);
+    let one = item(&mut h, b"pdmo", 0.0);
+    assert_eq!(add(&mut h, hero, maximum), Ok(Value::Bool(true)));
+    assert_eq!(h.unit_hero_bonus(hero).unwrap().damage, i32::MAX);
+    let before: Vec<_> = h
+        .executed_items()
+        .map(|(id, record)| (id, record.clone()))
+        .collect();
+    let vitals = h.executed_unit(hero).unwrap().vitals;
+    assert!(
+        add(&mut h, hero, one)
+            .unwrap_err()
+            .contains("held passive bonus overflows")
+    );
+    assert_eq!(
+        h.executed_items()
+            .map(|(id, record)| (id, record.clone()))
+            .collect::<Vec<_>>(),
+        before
+    );
+    assert_eq!(h.executed_unit(hero).unwrap().vitals, vitals);
+    assert_eq!(add(&mut h, ordinary, one), Ok(Value::Bool(true)));
+    let before: Vec<_> = h
+        .executed_items()
+        .map(|(id, record)| (id, record.clone()))
+        .collect();
+    assert!(
+        add(&mut h, hero, one)
+            .unwrap_err()
+            .contains("held passive bonus overflows")
+    );
+    assert_eq!(
+        h.executed_items()
+            .map(|(id, record)| (id, record.clone()))
+            .collect::<Vec<_>>(),
+        before
+    );
+    assert_eq!(h.unit_hero_bonus(hero).unwrap().damage, i32::MAX);
+    assert_eq!(h.unit_hero_bonus(ordinary).unwrap().damage, 1);
+    assert_eq!(h.executed_unit(hero).unwrap().vitals, vitals);
 }
 
 /// Held flat damage enters the real damage formula for heroes and non-heroes, and its transfer

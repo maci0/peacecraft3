@@ -131,6 +131,9 @@ silent wrong stat.
 - Held effect: flat attack damage, summed over held passive items and derived per unit (hero or
   not). Negative amounts, aliases outside `Iatt`, and an overflowing sum refuse the pickup before
   any write.
+- Pickup and transfer also check the receiving holder's combined passive totals
+  before changing slots or ownership. Two individually valid items whose sum
+  overflows refuse at that boundary; a refused transfer retains the donor's item.
 - Damage hook: `combat_host.rs` carries the held total as `HeroBonuses.held_damage` and adds it
   once to `roll_damage`, after the primary-attribute damage. It is not derived from strength, so
   it does not change the attribute query or the life pools.
