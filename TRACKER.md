@@ -2,6 +2,14 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] Campaign flee policy operands now decode from 26 checked selected-image
+  windows, preserving conditional life-band grouping and joining the route order
+  to admitted movement rules. Private integration passes 1,526 core tests,
+  strict native/WASM Clippy and the selected-image gate. The runtime consumer
+  remains unfinished: ordinary indexed route-score initialization is unresolved,
+  and the offline flag-clear experiment has not run. Human02 still stops at
+  `SetUnitsFlee`; see [campaign flee](docs/re-notes/campaign-ai-flee.md).
+
 - [~] Campaign targeting now has a selected-image policy reader, canonical
   per-player flags and a bounded automatic-acquisition consumer. The published
   session fixture and combined 1,521 core / 610 app tests pass, with strict

@@ -121,3 +121,27 @@ The source-key audit, aligned windows and hashes remain local under
 `canflee-behavior-gate-review.md`. This establishes a consumer and a data input,
 not the remaining decision thresholds, route or complete flee policy. Production
 `SetUnitsFlee` behavior remains unsupported pending those consumers.
+
+## Admitted policy operands
+
+`campaign_flee_policy::FleePolicy::read` now binds the reviewed image and
+decodes 26 bounded instruction/data windows. It derives the context flag and
+default, current-speed minimum, ordinary life cutoff, six life bands, route
+default distance and margin, near-zero distance, and route movement order.
+The first four life bands remain separate from the final two because the native
+decision conditionally skips the first group. The movement order is checked
+against the admitted order registry and unit-activity movement identity; the
+neighboring attack-order operand is not used for ordinary AI retreat.
+
+Synthetic tests vary operands, check exact aggregate window budgets, and refuse
+malformed relationships and sign-extended flag masks. The selected-image test
+also passes. Private integration passes 1,526 core tests (45 ignored), strict
+native/WASM Clippy, and formatting. These checks establish source decoding,
+not a working flee consumer or rendered parity.
+
+The remaining route-score relationship is explicit: the client caches authored
+`rangeN1/2`, and a later `ratr` upgrade updates indexed node values, but the
+ordinary cache-to-node initialization and alternate node value are not yet
+qualified. The host's first-weapon range cannot silently replace that value.
+A matched flag-clear experiment is built and collector-tested offline; it has
+not run and supplies no flag-clearing behavior evidence yet.
