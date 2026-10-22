@@ -900,6 +900,36 @@ fn mixed_ability_list_refuses_without_partial_state() {
 }
 
 #[test]
+fn powerup_overflows_with_held_strength_before_any_grant() {
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "AIsm".into(),
+        vec![pcx_objects::Mod {
+            field: *b"Istr",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: Some([1, 3]),
+            value: pcx_objects::Value::Int((i32::MAX - 10) as u32),
+            end_word: 0,
+        }],
+    );
+    let Fixture { mut h, hero, .. } = open_with_regens_overlay(overlay, 0., None, 0.);
+    let held = item(&mut h, b"pbig", 0.0);
+    assert_eq!(add(&mut h, hero, held), Ok(Value::Bool(true)));
+    let tome = item(&mut h, b"tstr", 0.0);
+    let before = snapshot_records(&h, &[hero]);
+    let err = add(&mut h, hero, tome).unwrap_err();
+    assert!(
+        err.contains("powerup strength overflows combined hero bonus"),
+        "{err}"
+    );
+    assert_records_unchanged(&h, &[hero], &before);
+    assert_eq!(h.held_slot(hero, 0), Some(held));
+    assert_eq!(h.held_slot(hero, 1), None);
+    assert!(!h.executed_item(tome).unwrap().claimed);
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
 fn non_hero_target_refuses_without_partial_state() {
     let Fixture {
         mut h, ordinary, ..

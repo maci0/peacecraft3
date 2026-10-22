@@ -47,7 +47,10 @@ original runtime observation.
    item or queueing a drop event. An item whose removal would make the maximum
    nonpositive refuses the whole cleanup without partial drops, even when an earlier
    item removal alone was valid. An authored removal delta whose negation is not
-   representable also refuses before any write instead of overflowing.
+   representable also refuses before any write instead of overflowing. A grant also
+   preflights retained strength plus the holder's held strength bonuses, so the pickup
+   event, life pools and consumption stay unchanged when the combined total would
+   overflow.
 
 ## Unqualified
 
@@ -74,7 +77,9 @@ These are fidelity gaps in the recreation, not permission gates added for conven
   percentage policy, mixed and non-hero refusal, multiple queued pickups, disabled trigger.
   Cleanup tests refuse an oversized strength item after an earlier plain item and two
   strength items whose second removal would empty the pool, preserving units, items,
-  pending orders and drop events.
+  pending orders and drop events. `powerup_overflows_with_held_strength_before_any_grant`
+  covers a large tome combined with a held strength item: refusal changes no record and
+  queues no pickup.
 - Explicit local gate (`#[ignore]`): `PCX_TOME_CLIENT` and `PCX_TOME_CATALOG`, run with
   `--ignored`.
 
