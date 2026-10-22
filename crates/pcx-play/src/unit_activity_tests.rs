@@ -192,9 +192,22 @@ fn host_fields_with_placed(
         crate::unit_activity::Rules,
     ),
 ) -> ObjectHost {
+    host_fields_with_placed_source(route_work, fields, placed, (registry, rules), MAP, "")
+}
+fn host_fields_with_placed_source(
+    route_work: usize,
+    fields: &[([u8; 4], ObjectField)],
+    placed: &[crate::playercolor_host::PlacedDestructable],
+    (registry, rules): (
+        Arc<crate::order_registry::Registry>,
+        crate::unit_activity::Rules,
+    ),
+    map: &str,
+    declarations: &str,
+) -> ObjectHost {
     use crate::file_sounds::tests::{PROPERTY_DECLARATIONS, mixed_assets};
     let extra = format!(
-        "{}\n{ORDERS}native RemoveUnit takes unit u returns nothing
+        "{}\n{ORDERS}{declarations}native RemoveUnit takes unit u returns nothing
 native SetUnitPosition takes unit u, real x, real y returns nothing
 native SetUnitAnimation takes unit whichUnit, string whichAnimation returns nothing
 native QueueUnitAnimation takes unit whichUnit, string whichAnimation returns nothing
@@ -216,7 +229,7 @@ type sound extends agent\n{SOUNDS}{PROPERTY_DECLARATIONS}",
             .with_sound_properties()
             .unwrap()
     };
-    let h = position_host_admitting_placed(1000, 16, MAP, &extra, fields, placed, sounds)
+    let h = position_host_admitting_placed(1000, 16, map, &extra, fields, placed, sounds)
         .with_locations()
         .unwrap();
     let mut h = h

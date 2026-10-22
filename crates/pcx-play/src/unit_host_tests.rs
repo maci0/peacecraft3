@@ -3227,6 +3227,8 @@ fn position_host_admitting_placed(
         "ConvertUnitType",
         "ConvertFGameState",
         "ConvertPlayerScore",
+        "ConvertLimitOp",
+        "ConvertPlayerEvent",
     ] {
         if ctx.scripts.shared_program().natives().get(name).is_some() {
             conversions.push(name);

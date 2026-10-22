@@ -335,6 +335,12 @@ so a later reveal and explicit return cannot silently lose already earned
 lumber. A synthetic hide/reveal/return regression covers that invariant; native
 hide/resume order and cargo behavior remain unqualified.
 
+A synthetic complete chop/deposit cycle registers both player-state events and
+executes their actions in the same script VM. Both callbacks see the complete
+bank and gathered credit, in bank-then-gathered delivery order, and the next tick
+does not duplicate the events. This verifies the engine-to-script delivery seam;
+it does not establish original-client callback timing.
+
 Tree deaths caused by an engine-tick swing reserve and push their registered
 death events into the delivery queue at the tick boundary; they do not run
 synchronously inside `SetLife` as the destructable native evidence indicates

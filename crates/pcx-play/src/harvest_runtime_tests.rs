@@ -5,6 +5,55 @@ use pcx_objects::editor::defaults::{DefaultTables, Identity};
 use pcx_objects::editor::{EditorReadLimits, Overlay};
 use std::sync::Arc;
 
+const STATE_EVENTS: &str = r#"
+type limitop extends eventid
+type playerevent extends eventid
+constant native ConvertLimitOp takes integer i returns limitop
+constant native ConvertPlayerEvent takes integer i returns playerevent
+constant native GetEventPlayerState takes nothing returns playerstate
+native TriggerRegisterPlayerStateEvent takes trigger t, player p, playerstate s, limitop op, real limit returns event
+globals
+constant limitop LESS_THAN=ConvertLimitOp(0)
+constant limitop LESS_THAN_OR_EQUAL=ConvertLimitOp(1)
+constant limitop EQUAL=ConvertLimitOp(2)
+constant limitop GREATER_THAN_OR_EQUAL=ConvertLimitOp(3)
+constant limitop GREATER_THAN=ConvertLimitOp(4)
+constant limitop NOT_EQUAL=ConvertLimitOp(5)
+constant playerevent EVENT_PLAYER_STATE_LIMIT=ConvertPlayerEvent(47)
+endglobals
+"#;
+
+const DEPOSIT_OBSERVER: &str = r#"
+globals
+integer Deposits=0
+integer DepositOrder=0
+integer FirstBank=0
+integer FirstGathered=0
+integer ObservedBank=0
+integer ObservedGathered=0
+endglobals
+function observe_deposit takes nothing returns nothing
+set Deposits=Deposits+1
+if GetEventPlayerState()==PLAYER_STATE_RESOURCE_LUMBER then
+set DepositOrder=DepositOrder*10+1
+else
+set DepositOrder=DepositOrder*10+2
+endif
+set ObservedBank=GetPlayerState(Player(0),PLAYER_STATE_RESOURCE_LUMBER)
+set ObservedGathered=GetPlayerState(Player(0),PLAYER_STATE_LUMBER_GATHERED)
+if Deposits==1 then
+set FirstBank=ObservedBank
+set FirstGathered=ObservedGathered
+endif
+endfunction
+function watch_deposit takes nothing returns nothing
+local trigger t=CreateTrigger()
+call TriggerRegisterPlayerStateEvent(t,Player(0),PLAYER_STATE_RESOURCE_LUMBER,GREATER_THAN,0.0)
+call TriggerRegisterPlayerStateEvent(t,Player(0),PLAYER_STATE_LUMBER_GATHERED,GREATER_THAN,0.0)
+call TriggerAddAction(t,function observe_deposit)
+endfunction
+"#;
+
 const ABILITY_HEADERS: &[&str] = &[
     "alias",
     "code",
@@ -455,11 +504,20 @@ fn open_harvest_with(
     tree: crate::playercolor_host::PlacedDestructable,
     fields: Vec<([u8; 4], ObjectField)>,
 ) -> (Vm, HandleId) {
-    let mut h = host_fields_with_placed(65536, &fields, &[tree], harvest_rules());
+    let mut h = host_fields_with_placed_source(
+        65536,
+        &fields,
+        &[tree],
+        harvest_rules(),
+        &format!("{MAP}\n{DEPOSIT_OBSERVER}"),
+        STATE_EVENTS,
+    );
     h = h
         .with_player_state_requests(PlayerStateRequestBudget { max_records: 8 })
         .unwrap()
         .with_player_resources(crate::player_resources::fixture::rules())
+        .unwrap()
+        .with_player_state_events(4)
         .unwrap()
         .with_player_tech_researched(crate::playercolor_host::TechLimitBudget { max_records: 4 })
         .unwrap();
@@ -1347,6 +1405,42 @@ fn deposit_credit_is_not_duplicated_when_no_tree_remains() {
         player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED"),
         gathered + 9
     );
+}
+
+#[test]
+fn a_harvest_deposit_delivers_both_state_triggers_with_the_complete_credit() {
+    let (mut vm, tree) = open_harvest_with(
+        harvest_tables_for("9", "20", "4"),
+        tree_catalog_for("9"),
+        placed_tree_with_life(9.0),
+        harvest_fields(),
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    let gathered = player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED");
+    vm.call("watch_deposit", &[]).unwrap();
+    start_harvest(&mut vm, worker);
+    tick(&mut vm, 0.5);
+    assert_eq!(tree_life(&mut vm, tree), 0.0);
+    assert!(vm.host().inner.take_fired_event().is_none());
+    tick(&mut vm, 1.5);
+    assert_eq!(vm.global("Deposits"), Value::Int(0));
+
+    while let Some(event) = vm.host().inner.take_fired_event() {
+        let delivery = vm.host().inner.begin_fired_event(&event).unwrap().unwrap();
+        assert!(delivery.conditions.is_empty());
+        vm.run_thread(&delivery.actions).unwrap();
+        vm.host().inner.finish_fired_event();
+    }
+    assert_eq!(vm.global("Deposits"), Value::Int(2));
+    assert_eq!(vm.global("DepositOrder"), Value::Int(12));
+    assert_eq!(vm.global("FirstBank"), Value::Int(bank + 9));
+    assert_eq!(vm.global("FirstGathered"), Value::Int(gathered + 9));
+    assert_eq!(vm.global("ObservedBank"), Value::Int(bank + 9));
+    assert_eq!(vm.global("ObservedGathered"), Value::Int(gathered + 9));
+    tick(&mut vm, 2.5);
+    assert!(vm.host().inner.take_fired_event().is_none());
 }
 
 #[test]
