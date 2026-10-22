@@ -90,3 +90,34 @@ All four owned clients are stopped and preserved. Source, staged-member checks,
 launches, captures, raw markers and the full within-flag hash comparison remain
 local under `.scratch/flee-seeded-runs/`. The collector rejects an unknown edition
 and passed 24 offline checks before collection. No original assets are tracked.
+
+## Selected-code consumer
+
+The selected executable now provides a positive policy-consumer link. In
+`0xba94a0`, a unit's indexed player resolves to its AI context. The non-hero
+branch at `0xba9581` tests context `+0x2d0` bit `0x10`, the same bit set or
+cleared by `SetUnitsFlee` at `0xab7665` / `0xab766e`. A zero bit returns false
+from this decision function. True remains subject to further gates; its caller
+can then reach the candidate action at `0xb67ce0`. Other caller paths can reach
+that action after this decision returns false, so clearing the flag is not a
+global prohibition on every retreat-like action. Earlier bounded searches that
+reported no reader are superseded by this aligned instruction evidence.
+
+The shipped `UnitData.canFlee` value also has a qualified read path. Its named
+field descriptor passes through the integer accessor into cached unit-type
+record `+0x58`; `0x67ec30` reads that record by type ID. The separate gate at
+`0xb23550` obtains the type ID through a unit-attached behavior node. It also
+checks node state and masked handle pairs, whose exact meanings remain open.
+Its receiver is not the raw unit object.
+
+The initial local loader trace was withdrawn: an incorrect PE-section conversion
+mapped the string to `ToolTipDesc` and followed an unrelated font path. A section
+table roundtrip identifies `canFlee` at VA `0xea0648`, with the descriptor setup
+reference at `0x6b3eeb`. No gameplay rule follows from that discarded font trace.
+
+The source-key audit, aligned windows and hashes remain local under
+`.scratch/campaign-tactics-native/setunitsflee/`, including
+`canflee-pe-address-audit.json`, `canflee-cached-record-consumer-review.md` and
+`canflee-behavior-gate-review.md`. This establishes a consumer and a data input,
+not the remaining decision thresholds, route or complete flee policy. Production
+`SetUnitsFlee` behavior remains unsupported pending those consumers.
