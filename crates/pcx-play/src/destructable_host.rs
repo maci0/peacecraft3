@@ -294,7 +294,7 @@ fn numeric_field(
     let value = match chosen_mod(mods, definition, name, column)? {
         None => base,
         Some(edit) => match (definition.kind, &edit.value) {
-            (FieldKind::Int, pcx_objects::Value::Int(value)) => f64::from(*value),
+            (FieldKind::Int, pcx_objects::Value::Int(value)) => f64::from(*value as i32),
             (
                 FieldKind::Real | FieldKind::Unreal,
                 pcx_objects::Value::Real(value) | pcx_objects::Value::Unreal(value),

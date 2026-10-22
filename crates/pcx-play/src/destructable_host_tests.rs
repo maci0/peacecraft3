@@ -372,6 +372,39 @@ fn catalog_enforces_typed_metadata_exact_case_and_present_malformed_records() {
 }
 
 #[test]
+fn nonpositive_signed_hp_overrides_refuse_before_creation() {
+    for value in [-1_i32, i32::MIN, 0] {
+        let mut edits = pcx_objects::editor::Overlay::default();
+        edits.mods.insert(
+            "LTlt".into(),
+            vec![hp_edit(
+                pcx_objects::ValueType::Int,
+                pcx_objects::Value::Int(value as u32),
+            )],
+        );
+        let catalog = catalog_from(
+            &[&["LTlt", "50", "tree"]],
+            &tree_metadata(),
+            None,
+            edits,
+            pcx_objects::editor::Overlay::default(),
+        );
+        let mut host = host_from(&life_declarations(), "", 8)
+            .with_destructables(DestructableBudget { max_records: 1 })
+            .unwrap();
+        host.admit_destructable_catalog(catalog).unwrap();
+        let error = host
+            .native(
+                "CreateDestructable",
+                &payload(i32::from_be_bytes(*b"LTlt"), 0),
+            )
+            .unwrap_err();
+        assert!(error.contains("invalid authored HP"), "{value}: {error}");
+        assert_eq!(host.executed_destructables().count(), 0);
+    }
+}
+
+#[test]
 fn absent_destructable_is_none_but_a_present_decoration_is_not_an_error() {
     let decoration = catalog_from(
         &[],
