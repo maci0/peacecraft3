@@ -48,3 +48,47 @@ All 57 expected files and 217 payload records arrived, including completion at
 `.scratch/move-speed-runtime-probe`. The Wine/software reference does not
 qualify native Windows or rendered parity. Bonus composition, other movement
 classes, nonfinite inputs, and exact endpoint/turn timing remain separate gates.
+
+## Source-derived bounds
+
+New games resolve the logical `Units/MiscGame.txt` member through the scoped
+campaign reader, then let a map-local Misc profile override it. No play-side code
+names an edition-specific game-data member. `MoveSpeedLimits::read` takes
+`MinUnitSpeed`, `MaxUnitSpeed`, `MinBldgSpeed` and `MaxBldgSpeed` from those
+admitted profiles. Missing, non-finite, negative or inverted limits refuse
+admission rather than falling back to a copied numeric range.
+
+For a definition, authored speed is `UnitBalance/spd`. Structure classification is
+`UnitBalance/isbldg`, so a movable `foot`, `horse` or `fly` unit uses the unit pair
+and a building uses the building pair. Movable units have their authored speed
+clamped when the activity state is created. `SetUnitMoveSpeed` accepts any finite
+real, including a negative input, and passes it through the same source-derived
+clamp. `GetUnitMoveSpeed` returns the stored speed after that clamp;
+`GetUnitDefaultMoveSpeed` returns authored `spd` without applying the setter
+limits. NaN, infinity, wrong arity, wrong value or handle family, and calls on a
+non-unit family are refused; null and removed units remain no-ops.
+
+The focused fixture test uses non-stock limits (`MinUnitSpeed=37.5`,
+`MaxUnitSpeed=412.5`, `MinBldgSpeed=41.25`, `MaxBldgSpeed=311.5`) and checks unit
+and building negative/over-range inputs. This demonstrates that the floor comes
+from the admitted profile rather than the observed stock value or a copied
+constant.
+
+## Recreation choices and open fidelity
+
+The controlled readbacks above establish finite input/readback pairs for one foot
+unit class. They do not establish creation-time clamping, class-specific native
+limits, or map-profile composition. The recreation clamps authored movable speed
+at creation and leaves the default getter raw; native behavior at creation and on
+non-movable units is unqualified. Structure setters are applied even when the
+structure has no moving order; no native structure readback covers that case.
+
+Changing speed while moving reselects the `Walk` animation at the setter time,
+using the existing explicit-selection rule that clears queued clips while keeping
+the unit scheduled and its motion rebased. A host test locks that queue
+interruption and continued scheduling. The diagnostic did not establish native
+Walk phase, animation queue interaction or the exact route-rebasing arithmetic.
+
+The controlled probe reported `VERSION_REIGN_OF_CHAOS` checks under Wine, not
+native Windows or rendered parity. Nonfinite behavior, other movement classes,
+bonus compositions and exact endpoint/turn timing remain separate gates.
