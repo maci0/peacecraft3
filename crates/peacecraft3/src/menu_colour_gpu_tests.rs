@@ -1629,6 +1629,13 @@ fn campaign_message_spans_render_and_clear_through_4k() {
                         height: 0.06,
                     },
                     &font,
+                    pcx_play::message_layout::Placement {
+                        left: 0.051875,
+                        bottom: 0.2305,
+                        width: 0.5,
+                        height: 0.25,
+                        viewport: [0.8, 0.6],
+                    },
                 )
                 .unwrap()
             })

@@ -64,6 +64,7 @@ pub struct ObjectHost {
     quests: Option<crate::quest_session::QuestSession>,
     game_caches: Option<game_caches::State>,
     presentation: Option<presentation::PresentationState>,
+    message_layout: Option<crate::message_layout::Rules>,
     no_occlusion_pass: bool,
     occlusion_enabled: Option<bool>,
     messages: Option<messages::MessageState>,
@@ -112,6 +113,24 @@ impl ObjectHost {
         self
     }
 
+    pub fn with_message_layout(
+        mut self,
+        rules: crate::message_layout::Rules,
+    ) -> Result<Self, Error> {
+        if self.message_layout.is_some() {
+            return Err(self.inner.error(
+                "message layout",
+                Failure::Message("layout already admitted"),
+            ));
+        }
+        self.message_layout = Some(rules);
+        Ok(self)
+    }
+
+    pub fn message_layout(&self) -> Option<&crate::message_layout::Rules> {
+        self.message_layout.as_ref()
+    }
+
     pub fn checked(inner: EnumHost) -> Result<Self, Error> {
         for (name, parameters, result) in [
             ("CreateTimer", &[][..], "timer"),
@@ -154,6 +173,7 @@ impl ObjectHost {
             quests: None,
             game_caches: None,
             presentation: None,
+            message_layout: None,
             no_occlusion_pass: false,
             occlusion_enabled: None,
             messages: None,
