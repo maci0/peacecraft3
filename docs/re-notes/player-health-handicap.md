@@ -49,6 +49,25 @@ These observations do not establish the upper clamp boundary or behavior of
 repeated out-of-range requests. The integral ordinary-unit examples do not
 distinguish raw from rounded ratio arithmetic.
 
+### Held maximum-life item
+
+A third diagnostic retained the half-life setup and equipped the source
+Human02 `prvt` item on the target Blademaster before the baseline. The script
+checked slot 0's item type and marked the run unqualified if the item was not
+held. All 28 markers qualified on RoC. The target's baseline was 750/750,
+while the matched other-owner hero remained 600/600. The same-callback
+wounded and handicap snapshots were **375/750 → 155/510**. Mana stayed
+270/270, and the ordinary-unit control repeated 210/420 → 126/252.
+
+The 150-point held-life contribution remains in the new maximum: the earlier
+unmodified hero reached 360, and this holder reached 510. Scaling the whole
+750 maximum by 0.6 would incorrectly yield 450. The ordered composition
+described below also explains current life: the base-term change gives an
+intermediate maximum of 710 and current life 355, then the strength-term
+delta of -200 yields 155. This supports that composition for the tested item;
+it does not establish every passive ability, item removal after a handicap,
+or the behavior of held strength bonuses.
+
 ## Native-code evidence and composition inference
 
 The selected registration maps the setter to `0x4a95a0` and getter to
@@ -57,6 +76,16 @@ that the setter updates. The setter compares the requested and stored factors,
 visits units through callback `0x489f70` → `0x67af40`, and then clamps and stores
 the player factor. Applying only the stored clamp to unit pools would therefore
 lose observable behavior above.
+
+The maximum operand at `0x4a9636` references global `0x112d854`. Its initializer
+at `0x401350` supplies integer 100 through the same numeric conversion helper
+already admitted by the XP-handicap reader. The null-player getter references
+`0x112d810`, initialized from integer 1 at `0x401460`. A property-reset path
+at `0x4bdf31` initializes the `+0x358` property from that same global; the
+getter reads its `+0x35c` value. These are native operand relationships, not
+values inferred from zero-filled on-disk globals. The complete set of callers
+of the reset path has not been established. The local checked receipt is
+`.scratch/player-health-handicap-native/initialization.json`.
 
 The unit path reads a unit-data value, applies numeric operations, updates a
 pool through `0x6be8c0` with mode 1, and optionally updates a hero component
@@ -87,6 +116,14 @@ raw-versus-rounded pool ratios, timer-step coverage and fresh-creation order.
 | --- | --- | --- |
 | `hch-1023e` | `61802cd175e52ec9459913ede2073556b9593ba96d3b742a21d5c025be1139d7` | `ff0f228ca14a76a980b72b87f7d2a4684ecfc52c386055df161e35ec331dec2a` |
 | `hch-1023f` | `5a14da4371d89f06d674cc84d5a1bb1d044fa087cdb20f1ea0286f90b8464321` | `90f1562bb1c291ace71106ae11fe084963fd279efa8ad45aefcde3d04d8ddd87` |
+| `hheld-23b` | `409c7b5025220c67854d03e38b664f3b3468ba793a68bff8546bb1561cea7b9d` | `a355ecb77923ee790fa30793993578b4e0f8691c1b355854cdc90326b75b10ac` |
+
+The held-item run is retained in
+`.scratch/player-health-handicap-held-probe-r2/`, including the inventory
+check, packed-member hashes, raw markers and result. Seven synthetic checks
+pass, including the inventory qualification and earlier protocol checks. Its
+earlier variant was staged but never launched because its helper's non-null
+item return did not prove inventory ownership.
 
 Earlier offline drafts remain preserved. Run `hch-1023c` showed a load-error
 dialog and yielded no markers; renaming the probe's colliding global/function
@@ -96,5 +133,5 @@ results. Parse/resolve success alone did not establish native script acceptance.
 
 The reference clients are stopped. No health-handicap production implementation,
 new rendered comparison or native Windows run was completed here. Alternate
-hero attributes, non-integral pool rounding, held items, revival and the initial
-factor's production admission remain open.
+hero attributes, non-integral pool rounding, other held-item interactions,
+revival and the initial factor's production admission remain open.
