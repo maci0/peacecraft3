@@ -54,6 +54,7 @@ const PRIMARY_DAMAGE: f32 = 1.75;
 const HERO_STR: f32 = 10.0;
 const HERO_LIFE: f32 = 500.0 + HERO_STR * LIFE_PER_STRENGTH;
 const LIFE_STATE: i32 = 0;
+const MAX_LIFE_STATE: i32 = 1;
 
 fn sylk(headers: &[&str], rows: &[&[&str]]) -> Vec<u8> {
     let mut text = String::from("ID;PWXL;N;E\r\n");
@@ -84,6 +85,8 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["tmix", "AIsm,L000", "1", "1", "1", "1"],
             &["tsrd", "", "0", "1", "1", "1"],
             &["pstr", "AIs4,AIa4", "0", "0", "0", "-"],
+            &["pbig", "AIsh", "0", "0", "0", "-"],
+            &["pmin", "AImn", "0", "0", "0", "-"],
             &["pint", "AIi4", "0", "0", "0", "-"],
             &["pbad", "AIsm", "0", "0", "0", "-"],
             &["uact", "AIsm", "0", "1", "1", "1"],
@@ -113,6 +116,22 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["L000", "Xinv", "1", "2", "1", "1", "1", "1", "-", "-", "_"],
             &["AIsm", "AIsm", "1", "0", "0", "7", "0", "0", "-", "-", "_"],
             &["AIs4", "AIab", "1", "0", "0", "5", "0", "0", "-", "-", "_"],
+            &[
+                "AIsh", "AIab", "1", "0", "0", "1000", "0", "0", "-", "-", "_",
+            ],
+            &[
+                "AImn",
+                "AIab",
+                "1",
+                "0",
+                "0",
+                "-2147483648",
+                "0",
+                "0",
+                "-",
+                "-",
+                "_",
+            ],
             &["AIa4", "AIab", "1", "2", "0", "0", "0", "0", "-", "-", "_"],
             &["AIi4", "AIab", "1", "0", "3", "0", "0", "0", "-", "-", "_"],
             &["AId1", "AIde", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
@@ -222,7 +241,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "-1",
                 "int",
                 "1",
-                "AIsm,AIxm,AIs4,AIa4,AIi4",
+                "AIsm,AIxm,AIs4,AIa4,AIi4,AIsh,AImn",
                 "",
             ],
             &[
@@ -232,7 +251,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "-1",
                 "int",
                 "2",
-                "AIsm,AIxm,AIs4,AIa4,AIi4",
+                "AIsm,AIxm,AIs4,AIa4,AIi4,AIsh,AImn",
                 "",
             ],
             &[
@@ -242,7 +261,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "-1",
                 "int",
                 "3",
-                "AIsm,AIxm,AIs4,AIa4,AIi4",
+                "AIsm,AIxm,AIs4,AIa4,AIi4,AIsh,AImn",
                 "",
             ],
             &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1", ""],
@@ -431,6 +450,15 @@ fn open_with_regens(
         .into_iter()
         .filter(|(id, _)| *id != *b"A008")
         .collect();
+    if fields.iter().all(|(id, _)| *id != *b"S001") {
+        fields.push(column(
+            b"S001",
+            SlkId::UnitBalance,
+            "spd",
+            FieldKind::Real,
+            "32",
+        ));
+    }
     if let Some(rate) = mana_regen {
         let field = fields
             .iter_mut()
@@ -613,6 +641,21 @@ fn register_pickup(h: &mut ObjectHost, unit: HandleId) -> HandleId {
 /// Registers a player drop trigger for the unit's owner and returns the trigger handle.
 fn register_drop(h: &mut ObjectHost, unit: HandleId) -> HandleId {
     register_item_event(h, unit, 99)
+}
+
+fn issue_pending_pickup(h: &mut ObjectHost, unit: HandleId, ground: HandleId) -> i32 {
+    assert_eq!(
+        h.native(
+            "IssueTargetOrder",
+            &[
+                Value::Handle(unit),
+                Value::Str("smart".into()),
+                Value::Handle(ground)
+            ]
+        ),
+        Ok(Value::Bool(true))
+    );
+    h.inventory_order(unit).expect("pending pickup order")
 }
 
 fn life_state(h: &mut ObjectHost) -> Value {
@@ -1316,6 +1359,10 @@ fn set_life(h: &mut ObjectHost, unit: HandleId, life: f32) {
     .unwrap();
 }
 
+fn set_max_life(h: &mut ObjectHost, unit: HandleId, maximum: f32) {
+    set_state(h, unit, MAX_LIFE_STATE, maximum);
+}
+
 fn life_of(h: &ObjectHost, unit: HandleId) -> f32 {
     h.unit_vitals(unit).unwrap().unwrap().life
 }
@@ -1789,6 +1836,99 @@ fn mixed_item_cleanup_refuses_stale_regeneration_before_any_drop() {
     h.forget_inventory_unit(hero, false).unwrap();
     assert_eq!(h.held_slot(hero, 0), None);
     assert_eq!(h.held_slot(hero, 1), None);
+}
+
+#[test]
+fn cleanup_refuses_an_oversized_strength_item_before_dropping_the_earlier_plain_item() {
+    let Fixture { mut h, hero, .. } = open();
+    let plain = item(&mut h, b"tsrd", 0.);
+    let huge = item(&mut h, b"pbig", 0.);
+    assert_eq!(add(&mut h, hero, plain), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut h, hero, huge), Ok(Value::Bool(true)));
+    assert_eq!(h.held_slot(hero, 0), Some(plain));
+    assert_eq!(h.held_slot(hero, 1), Some(huge));
+    set_max_life(&mut h, hero, 100.);
+    set_life(&mut h, hero, 100.);
+    let ground = item(&mut h, b"tstr", 64.);
+    let _drop = register_drop(&mut h, hero);
+    let pending = issue_pending_pickup(&mut h, hero, ground);
+    let before = snapshot_records(&h, &[hero]);
+    let err = h
+        .forget_inventory_unit(hero, false)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("new maximum life is not positive"), "{err}");
+    assert_records_unchanged(&h, &[hero], &before);
+    assert_eq!(h.held_slot(hero, 0), Some(plain));
+    assert_eq!(h.held_slot(hero, 1), Some(huge));
+    assert_eq!(h.inventory_order(hero), Some(pending));
+    assert!(h.take_fired_event().is_none());
+    set_max_life(&mut h, hero, 30_000.);
+    set_life(&mut h, hero, 100.);
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(h.held_slot(hero, 1), None);
+    assert_eq!(h.inventory_order(hero), None);
+    assert_eq!(std::iter::from_fn(|| h.take_fired_event()).count(), 2);
+}
+
+#[test]
+fn cleanup_refuses_a_minimum_strength_removal_before_any_write() {
+    let Fixture { mut h, hero, .. } = open();
+    let debuff = item(&mut h, b"pmin", 0.);
+    set_max_life(&mut h, hero, 1.0e12);
+    set_life(&mut h, hero, 5.0e11);
+    assert_eq!(add(&mut h, hero, debuff), Ok(Value::Bool(true)));
+    assert_eq!(h.held_slot(hero, 0), Some(debuff));
+    let before = snapshot_records(&h, &[hero]);
+    let err = h
+        .forget_inventory_unit(hero, false)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("strength removal delta overflows"), "{err}");
+    assert_records_unchanged(&h, &[hero], &before);
+    assert_eq!(h.held_slot(hero, 0), Some(debuff));
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn cleanup_preflights_sequential_strength_pools_before_dropping_either_item() {
+    let Fixture { mut h, hero, .. } = open();
+    let first = item(&mut h, b"pstr", 0.);
+    let second = item(&mut h, b"pstr", 0.);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
+    set_max_life(&mut h, hero, 200.);
+    set_life(&mut h, hero, 100.);
+    assert!(
+        crate::inventory_powerup_host::reprice_life(100.0, 200.0, LIFE_PER_STRENGTH, -5).is_ok()
+    );
+    let (life, max_life) =
+        crate::inventory_powerup_host::reprice_life(100.0, 200.0, LIFE_PER_STRENGTH, -5).unwrap();
+    assert!(
+        crate::inventory_powerup_host::reprice_life(life, max_life, LIFE_PER_STRENGTH, -5).is_err()
+    );
+    let ground = item(&mut h, b"tstr", 64.);
+    let _drop = register_drop(&mut h, hero);
+    let pending = issue_pending_pickup(&mut h, hero, ground);
+    let before = snapshot_records(&h, &[hero]);
+    let err = h
+        .forget_inventory_unit(hero, false)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("new maximum life is not positive"), "{err}");
+    assert_records_unchanged(&h, &[hero], &before);
+    assert_eq!(h.held_slot(hero, 0), Some(first));
+    assert_eq!(h.held_slot(hero, 1), Some(second));
+    assert_eq!(h.inventory_order(hero), Some(pending));
+    assert!(h.take_fired_event().is_none());
+    set_max_life(&mut h, hero, 1_000.);
+    set_life(&mut h, hero, 100.);
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(h.held_slot(hero, 1), None);
+    assert_eq!(h.unit_vitals(hero).unwrap().unwrap().max_life, HERO_LIFE);
+    assert_eq!(std::iter::from_fn(|| h.take_fired_event()).count(), 2);
 }
 
 #[test]

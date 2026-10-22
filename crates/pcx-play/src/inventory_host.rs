@@ -408,11 +408,8 @@ impl ObjectHost {
         Ok(self.unit_hero_bonus(unit)?.armor)
     }
 
-    /// Life pools after `delta` strength on a hero, or `None` for units without hero pools.
-    fn held_strength_life(&self, unit: HandleId, delta: i32) -> Result<Option<(f32, f32)>, Error> {
-        if delta == 0 {
-            return Ok(None);
-        }
+    /// Current and maximum life of a hero, or `None` for units without hero pools.
+    fn hero_life_pools(&self, unit: HandleId) -> Result<Option<(f32, f32)>, Error> {
         let record = self.executed_unit(unit)?;
         let Some(vitals) = record.vitals else {
             return Ok(None);
@@ -420,15 +417,41 @@ impl ObjectHost {
         if !record.definition.rawcode[0].is_ascii_uppercase() {
             return Ok(None);
         }
+        Ok(Some((vitals.life, vitals.max_life)))
+    }
+
+    /// Removal delta for an authored passive strength, refusing a value whose negation is not
+    /// representable instead of overflowing.
+    fn strength_removal_delta(&self, strength: i32) -> Result<i32, Error> {
+        strength.checked_neg().ok_or_else(|| {
+            self.inner.error(
+                "inventory",
+                Failure::UnitActivity("strength removal delta overflows".into()),
+            )
+        })
+    }
+
+    /// Project `delta` strength onto already-selected life pools.
+    fn project_strength_life(&self, pools: (f32, f32), delta: i32) -> Result<(f32, f32), Error> {
         let life_per_strength = self.life_per_strength().ok_or_else(|| {
             self.inner.error(
                 "inventory",
                 Failure::UnitState("unit vitals required before strength changes"),
             )
         })?;
-        reprice_life(vitals.life, vitals.max_life, life_per_strength, delta)
-            .map(Some)
+        reprice_life(pools.0, pools.1, life_per_strength, delta)
             .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))
+    }
+
+    /// Life pools after `delta` strength on a hero, or `None` for units without hero pools.
+    fn held_strength_life(&self, unit: HandleId, delta: i32) -> Result<Option<(f32, f32)>, Error> {
+        if delta == 0 {
+            return Ok(None);
+        }
+        let Some(pools) = self.hero_life_pools(unit)? else {
+            return Ok(None);
+        };
+        self.project_strength_life(pools, delta).map(Some)
     }
 
     fn set_life_pools(&mut self, unit: HandleId, pools: Option<(f32, f32)>) -> Result<(), Error> {
@@ -636,7 +659,8 @@ impl ObjectHost {
             passive.life_regen,
             passive.mana_regen_fraction,
         )?;
-        let pools = self.held_strength_life(unit, -passive.strength)?;
+        let delta = self.strength_removal_delta(passive.strength)?;
+        let pools = self.held_strength_life(unit, delta)?;
         self.reserve_item_events(&[(unit, false)])?;
         self.set_life_pools(unit, pools)?;
         if let Entry::Item { record } = self.inner.entry_mut(item)? {
@@ -688,6 +712,7 @@ impl ObjectHost {
                 self.inner
                     .error("inventory", Failure::ItemState("unit position missing"))
             })?;
+            let mut pools = self.hero_life_pools(unit)?;
             for &item in &held {
                 let passive = self.held_attributes(item)?;
                 self.require_passive_regen_projection(
@@ -695,6 +720,12 @@ impl ObjectHost {
                     passive.life_regen,
                     passive.mana_regen_fraction,
                 )?;
+                if passive.strength != 0
+                    && let Some(current) = pools
+                {
+                    let delta = self.strength_removal_delta(passive.strength)?;
+                    pools = Some(self.project_strength_life(current, delta)?);
+                }
             }
             self.reserve_item_events(&vec![(unit, false); held.len()])?;
         }

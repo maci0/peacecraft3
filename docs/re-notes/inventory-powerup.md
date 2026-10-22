@@ -41,7 +41,12 @@ original runtime observation.
    picked up.
 5. Refusals are atomic: mixed or empty ability lists, multi-level or multi-charge rows,
    agility or intelligence amounts, negative strength, custom item rows, and non-hero
-   targets return an error before any write.
+   targets return an error before any write. Unit cleanup projects every held item's
+   strength removal in held/drop order before cancelling a pending order, dropping an
+   item or queueing a drop event. An item whose removal would make the maximum
+   nonpositive refuses the whole cleanup without partial drops, even when an earlier
+   item removal alone was valid. An authored removal delta whose negation is not
+   representable also refuses before any write instead of overflowing.
 
 ## Unqualified
 
@@ -65,6 +70,9 @@ These are fidelity gaps in the recreation, not permission gates added for conven
 - `combat_tests.rs` child `inventory_powerup_host_tests.rs`: queued pickup reads the live
   item, claimed grant refused, consumption after finish, full slots, level-up retention,
   percentage policy, mixed and non-hero refusal, multiple queued pickups, disabled trigger.
+  Cleanup tests refuse an oversized strength item after an earlier plain item and two
+  strength items whose second removal would empty the pool, preserving units, items,
+  pending orders and drop events.
 - Explicit local gate (`#[ignore]`): `PCX_TOME_CLIENT` and `PCX_TOME_CATALOG`, run with
   `--ignored`.
 
