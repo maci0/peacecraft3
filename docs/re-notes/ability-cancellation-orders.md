@@ -47,3 +47,59 @@ mana/cooldown changes, militia conversion and rendered effects remain unmeasured
 Ability values and order associations must still come from the selected ranked
 ability rows, profiles and map overrides; the experiment does not replace those
 inputs with constants.
+
+## Shield activation and sampled protection
+
+Two further isolated Human02 diagnostics used the same reviewed executable.
+The five prepared MPQ hashes also match the selected Legacy installation;
+`archive-identity.json` retains that comparison locally. The first diagnostic
+map has SHA-256
+`c02e5129c8cc6bd4afefa4520db7edfbf95af58d7d7032e5236fbc9831ce5724`,
+and the damage follow-up has SHA-256
+`4998d44e5e83d5d9ffb13e8dbb4efb825c02deced3cc742474fda61e7ea65bd8`.
+Both staged map/script pairs matched their build receipts, reached their final
+checkpoint, and had their private containers stopped afterward. Generated
+content and receipts remain in ignored `shield-probe` and `shield-followup`
+directories.
+
+In the first run, three source-created, rank-three Uthers accepted
+`divineshield` at printed game time 5.000. Mana changed from 495 to 470 and the
+cooldown query immediately reported 65 seconds. The active cancellation calls
+at 5.250 and 5.500 returned false, as did the repeated cancellation at 5.750.
+These observations do not establish successful active cancellation.
+
+The reviewed `BlzIsUnitInvulnerable` getter is inverted relative to explicit
+protection: a `SetUnitInvulnerable(false)` control reads true, while a
+`SetUnitInvulnerable(true)` control reads false. Its primary registration at
+`0x4a17ce` names handler `0x499fa0`; the handler resolves the unit, shifts
+`[unit+0x20]` by three bits, inverts it, and masks bit zero. Keep the internal
+protection flag distinct from this getter's observable result.
+
+In the follow-up, the unprotected controls changed mana, cooldown and order
+state during the initial damage stimulus, before their planned cast requests.
+Automatic shield activation is an explanation consistent with those records;
+the precise native reaction path has not been traced. Those initial damage
+calls therefore do not supply a neutral damage control.
+
+At game time 41.750, the naturally expiring unit still read false through that
+getter and lost no life to the sampled damage call. At 51.750 and 61.750 it
+read true, and the same damage stimulus reduced life from 1250 to 1244.891.
+The independently protected unit continued to read false and lost no life.
+This supports the protection distinction and bounds the observed effect end
+between the two checkpoints; it does not identify an exact retirement tick.
+
+## Game-data variant remains open
+
+The selected archives contain multiple authored balance tables. For `AHds`,
+unprefixed `Units/AbilityData.slk` has ranked `Dur`/`HeroDur` values 15, 25 and
+35. `Custom_V0/Units/AbilityData.slk` has 15, 30 and 45. The latter rank-three
+value is consistent with the sampled original lifetime; matching a value does
+not prove the native table-selection rule. Both tables retain the same
+rank-three mana cost and cooldown, so those observations cannot discriminate
+them.
+
+Do not compensate by changing rank arithmetic, copying a duration constant,
+or silently selecting a table from the observed duration. The map's game-data
+selection and native namespace policy still need to be derived before claiming
+production duration fidelity. The existing ranked-cell reader can consume the
+selected table once that policy is qualified.
