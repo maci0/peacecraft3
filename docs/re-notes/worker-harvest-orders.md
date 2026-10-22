@@ -103,3 +103,18 @@ not establish that an empty worker moving toward a tree uses that variant.
 Order-to-sequence selection, carry-state transitions and sound playback remain
 unqualified; the measured tree damage/deposit cycle does not qualify those
 presentation details.
+
+The retained SoundInfo rows resolve `SNDXAREP` through its `AREP` payload:
+`UI\SoundInfo\AnimLookups.slk` maps `AnimSoundEvent` to the Repair label,
+and `AnimSounds.slk` resolves that label to the repair sound files. The same
+chain resolves `DPES` to PeasantDeath. Thus the Stand Work event is sourced
+Repair audio; its presence is not evidence that harvesting uses that sequence.
+The weapon's `AxeMediumChop` binding has a separate Wood combat-sound row in
+`UnitCombatSounds.slk`. Playback selection and timing still need a consumer
+and qualification. FPT, SPL and SPN payloads were not found in the inspected
+SoundInfo members; that bounded search does not establish that their mappings
+are absent from all shipped data.
+
+Exact archive/member identities, member hashes and matching parsed rows stay
+local in `.scratch/mdx-peasant-probe/peasant-sound-receipt.json`, SHA-256
+`cba4a485881d9aa5139db9a152bff49c861f6bab9a3d419e093292c1e234795b`.
