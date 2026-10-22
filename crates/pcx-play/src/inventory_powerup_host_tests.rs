@@ -2576,9 +2576,9 @@ fn cached_unit_survives_storage_and_restores_progress_sparse_slots_charges_and_o
     assert_eq!(
         [vitals.life, vitals.max_life, vitals.mana, vitals.max_mana],
         [
-            previous.life,
             previous.max_life,
-            previous.mana,
+            previous.max_life,
+            previous.max_mana,
             previous.max_mana
         ]
     );
@@ -2616,6 +2616,99 @@ fn cached_unit_survives_storage_and_restores_progress_sparse_slots_charges_and_o
 }
 
 #[test]
+fn cached_restore_uses_current_item_data_and_fills_both_pools_before_attaching_items() {
+    use crate::game_cache::tests::{Memory, budget};
+    let store = Arc::new(Memory::default());
+    let Fixture { mut h, hero, .. } = open();
+    h.admit_game_caches(store.clone(), budget()).unwrap();
+    let cache = h
+        .native("InitGameCache", &[Value::Str("campaign".into())])
+        .unwrap();
+    let life = item(&mut h, b"plif", 0.);
+    let intelligence = item(&mut h, b"pint", 0.);
+    assert_eq!(add(&mut h, hero, life), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut h, hero, intelligence), Ok(Value::Bool(true)));
+    let before = h.unit_vitals(hero).unwrap().unwrap();
+    set_life(&mut h, hero, before.max_life / 4.);
+    set_mana(&mut h, hero, before.max_mana / 4.);
+    let key = [
+        cache.clone(),
+        Value::Str("next".into()),
+        Value::Str("hero".into()),
+    ];
+    assert_eq!(
+        h.native(
+            "StoreUnit",
+            &[
+                key[0].clone(),
+                key[1].clone(),
+                key[2].clone(),
+                Value::Handle(hero)
+            ]
+        ),
+        Ok(Value::Bool(true))
+    );
+    assert_eq!(h.native("SaveGameCache", &[cache]), Ok(Value::Bool(true)));
+    drop(h);
+
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "AIl1".into(),
+        vec![pcx_objects::Mod {
+            field: *b"Ilif",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: Some([1, 1]),
+            value: pcx_objects::Value::Int(41),
+            end_word: 0,
+        }],
+    );
+    let Fixture { mut h, hero, .. } = open_with_regens_overlay(overlay, 0., None, 0.);
+    let base = h.unit_vitals(hero).unwrap().unwrap();
+    let _pickup = register_pickup(&mut h, hero);
+    h.admit_game_caches(store, budget()).unwrap();
+    let cache = h
+        .native("InitGameCache", &[Value::Str("campaign".into())])
+        .unwrap();
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    let key = [cache, Value::Str("next".into()), Value::Str("hero".into())];
+    let mut restore = key.to_vec();
+    restore.extend([owner, Value::Real(64.), Value::Real(16.), Value::Real(90.)]);
+    let handles = h.inner().handles();
+    let Value::Handle(restored) = h.native("RestoreUnit", &restore).unwrap() else {
+        panic!("restored hero");
+    };
+    assert_eq!(h.inner().handles(), handles + 3);
+    let vitals = h.unit_vitals(restored).unwrap().unwrap();
+    assert_eq!(
+        (vitals.life, vitals.max_life),
+        (base.max_life + 41., base.max_life + 41.)
+    );
+    assert_eq!(
+        (vitals.mana, vitals.max_mana),
+        (base.max_mana + 45., base.max_mana + 45.)
+    );
+    let life = h.held_slot(restored, 0).unwrap();
+    let intelligence = h.held_slot(restored, 1).unwrap();
+    assert!(
+        h.take_fired_event().is_none(),
+        "cached items attach without pickup events"
+    );
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(restored), Value::Handle(life)],
+    )
+    .unwrap();
+    assert_eq!(max_life_of(&h, restored), base.max_life);
+    assert_eq!(max_mana_of(&h, restored), base.max_mana + 45.);
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(restored), Value::Handle(intelligence)],
+    )
+    .unwrap();
+    assert_eq!(max_mana_of(&h, restored), base.max_mana);
+}
+
+#[test]
 fn cached_unit_restore_refusals_leave_the_arena_inventory_and_cache_intact() {
     use crate::game_cache::{
         CachedUnit, Kind, Profile, Stored,
@@ -2642,7 +2735,7 @@ fn cached_unit_restore_refusals_leave_the_arena_inventory_and_cache_intact() {
     h.native("SaveGameCache", &[cache]).unwrap();
     let original = store.bytes.lock().unwrap().clone().unwrap();
     drop(h);
-    for case in 0..6 {
+    for case in 0..7 {
         let mut profile = Profile::decode(&original, budget()).unwrap();
         let Some(Stored::Unit(bytes)) = profile.get("campaign", "next", "hero", Kind::Unit) else {
             panic!("stored unit");
@@ -2653,6 +2746,12 @@ fn cached_unit_restore_refusals_leave_the_arena_inventory_and_cache_intact() {
             1 => saved.install = "foreign install".into(),
             3 => saved.client_sha256[0] ^= 1,
             5 => saved.items[0].rawcode = *b"tstr",
+            6 => {
+                saved.items[0].rawcode = *b"pmax";
+                let mut second = saved.items[0].clone();
+                second.slot = 1;
+                saved.items.push(second);
+            }
             _ => {}
         }
         profile
@@ -2704,6 +2803,7 @@ fn cached_unit_restore_refusals_leave_the_arena_inventory_and_cache_intact() {
             2 => "cached item record policy",
             4 => "cached item charges",
             5 => "cached powerup cannot",
+            6 => "combined cached mana regeneration overflows",
             _ => "different client image",
         };
         assert!(error.contains(reason), "case {case}: {error}");

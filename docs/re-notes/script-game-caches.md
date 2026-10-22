@@ -118,30 +118,30 @@ current learning rules. Source changes that make the snapshot unsupported refuse
 
 Every unit/item definition, slot, record/charge policy and arena reservation is
 checked before publishing the unit. Prepared items attach directly to their
-saved slots. This avoids a second pickup or automatic powerup grant. The saved
-pools already include passive bonuses, and removing a restored passive item
+saved slots. This avoids a second pickup or automatic powerup grant. Restore
+rebuilds full life and mana maxima from the receiving map's unit definition,
+restored hero progress and permanent strength, and prepared current-map item
+definitions before publishing any handle. The saved pool bits remain readable
+for existing PC3UNIT payloads but do not set the restored pools. Combined
+passives and all pool changes are checked before publication; later item removal
 uses the ordinary repricing path. Pending orders, pause, animation phase,
 spell/item cooldowns and queued events are not copied into a new chapter.
 Regeneration starts on the receiving host's clock.
 
-### Open passive-source interaction
+### Passive-source interaction corrected
 
-The current recreation stores already-boosted pools alongside held item
+The earlier recreation stored already-boosted pools alongside held item
 rawcodes, charges and flags, but no identity for the passive contribution.
-Restoration resolves those item definitions against the receiving map and
-publishes the saved pools unchanged. A receiving map can validly override the
+Restoration resolved those item definitions against the receiving map and
+published the saved pools unchanged. A receiving map can validly override the
 same item's `Ilif` amount: an old pool containing one amount can then be
 repriced on drop using a different amount. Client/install/edition checks do
 not discriminate per-map ability overrides.
 
-This is a code-path consistency gap, not a measured native cache policy.
-The correction must establish how the original restores current pools and
-current-map item effects before choosing whether to rederive pools or retain
-more saved state. A blanket refusal of changed maps would not establish the
-required cross-map behavior. A controlled comparison needs both a same-map
-restore and a second map with a typed override of the held item's amount,
-using the same persisted native cache. No original W3V bytes are part of the
-recreation's private profile format.
+The observations below established the correction: rederive receiving-map
+maxima and restore full current pools. A blanket refusal of changed maps or
+retention of the old bonus would contradict the tested cross-map behavior.
+No original W3V bytes are part of the recreation's private profile format.
 
 ### Controlled restore observation (2026-10-22)
 
@@ -238,11 +238,12 @@ results remain local in `.scratch/cross-map-cache-probe/transition-a/` in
 the main checkout. These Wine observations do not qualify native Windows
 or a general restore-pool policy beyond the sampled life case.
 
-Saved-pool preservation is contradicted by the tested hero cases above and
-remains an implementation gap pending correction. Explicit item-flag
-preservation, omission of transient state and the no-pickup-event path are
-recreation choices still requiring an original client comparison. The native
-cached inventory loop observed here covers six
+Those observations qualify life and mana for the tested hero/item cases, not
+non-hero restoration, multi-item rounding order, the native cache layout or
+every cached state. The same full-pool projection for non-heroes and slot-order
+application of multiple passives are recreation choices. Explicit item-flag
+preservation, omission of transient state and the no-pickup-event path remain
+recreation choices. The native cached inventory loop observed here covers six
 slots; the recreation currently uses the admitted inventory policy rather than
 copying that measured limit into code. The native hero payload and its remaining
 mask are not fully decoded. XP and other unimplemented hero state, native W3V
@@ -257,8 +258,9 @@ the existing storage policy, with no new resource knob. An older build cannot
 read a version-2 profile; no original W3V file is modified.
 
 Synthetic tests cover persistence into a new host, owner/position arguments,
-clock rebasing, permanent strength, sparse slots, charge overrides, passive
-removal, typed flushes, v1 compatibility, malformed payloads and refusals without
+clock rebasing, permanent strength, sparse slots, charge overrides, receiving-map
+passives, full restored pools, passive removal, typed flushes, v1 compatibility,
+malformed payloads and refusals without
 partial creation for slot, source/client, item/charge policy and injected held
 powerup failures. The final private-target checks pass: 1,151 pcx-play package
 tests (44 ignored), strict all-target clippy, the WASM library check and the

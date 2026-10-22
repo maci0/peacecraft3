@@ -5,7 +5,10 @@
 //! Regeneration integrates the per-second rates over game time between
 //! advances. Day and night eligibility uses the admitted time-of-day clock.
 use super::unit_activity::balance_real;
+use super::unit_creation::ExecutedUnit;
 use super::{Entry, Error, Failure, ObjectHost};
+use crate::inventory_powerup::AttributeBonus;
+use crate::inventory_powerup_host::{reprice_life, reprice_mana, reprice_max_life};
 use pcx_objects::editor::FieldSource;
 use pcx_objects::editor::misc::HeroVitals;
 use pcx_objects::editor::{FieldKind, SlkId};
@@ -105,6 +108,153 @@ fn regen_type(definition: &Definition) -> Result<RegenType, String> {
 }
 
 impl ObjectHost {
+    /// Rebuild cached pools from this map's unit and prepared item definitions before publication.
+    pub(super) fn prepare_cached_restored_vitals<'a>(
+        &self,
+        record: &ExecutedUnit,
+        items: impl Iterator<Item = &'a Definition>,
+    ) -> Result<Vitals, Error> {
+        let fail = |detail: String| self.inner.error("RestoreUnit", Failure::GameCache(detail));
+        let mut vitals = record
+            .vitals
+            .ok_or_else(|| fail("cached unit vital admission missing".into()))?;
+        if !vitals.max_life.is_finite()
+            || vitals.max_life <= 0.0
+            || !vitals.max_mana.is_finite()
+            || vitals.max_mana < 0.0
+        {
+            return Err(fail("current unit vital maxima are invalid".into()));
+        }
+        let hero = record.definition.rawcode[0].is_ascii_uppercase();
+        if record.permanent_strength < 0 || (!hero && record.permanent_strength != 0) {
+            return Err(fail("cached permanent strength is unsupported".into()));
+        }
+        if hero {
+            let initial = self
+                .hero_initial_level()
+                .ok_or_else(|| fail("current hero progression is not admitted".into()))?;
+            let level = record
+                .abilities
+                .as_ref()
+                .and_then(|abilities| abilities.hero.as_ref())
+                .ok_or_else(|| fail("cached hero progress is missing".into()))?
+                .level;
+            let delta = |name: &str, coefficient: f32| -> Result<f32, Error> {
+                let base = Self::derive_hero_attribute(
+                    &record.definition,
+                    Some((initial, initial)),
+                    AttributeBonus::default(),
+                    name,
+                )
+                .map_err(fail)?;
+                let current = Self::derive_hero_attribute(
+                    &record.definition,
+                    Some((initial, level)),
+                    AttributeBonus::default(),
+                    name,
+                )
+                .map_err(fail)?;
+                Ok((current - base) * coefficient)
+            };
+            vitals = adjust_hero_vitals(
+                vitals,
+                delta("STR", self.life_per_strength().expect("admitted vitals"))?,
+                delta(
+                    "INT",
+                    self.mana_per_intelligence().expect("admitted vitals"),
+                )?,
+            )
+            .map_err(fail)?;
+            if record.permanent_strength != 0 {
+                (vitals.life, vitals.max_life) = reprice_life(
+                    vitals.life,
+                    vitals.max_life,
+                    self.life_per_strength().expect("admitted vitals"),
+                    record.permanent_strength,
+                )
+                .map_err(fail)?;
+            }
+        }
+        vitals.life = vitals.max_life;
+        vitals.mana = vitals.max_mana;
+        let mut combined = AttributeBonus {
+            strength: record.permanent_strength,
+            ..AttributeBonus::default()
+        };
+        for definition in items {
+            let passive = self.definition_passive(definition)?;
+            if !hero && (passive.strength != 0 || passive.agility != 0) {
+                return Err(fail(
+                    "passive hero attributes on a non-hero are unsupported".into(),
+                ));
+            }
+            for (total, extra) in [
+                (&mut combined.strength, passive.strength),
+                (&mut combined.agility, passive.agility),
+                (&mut combined.intelligence, passive.intelligence),
+                (&mut combined.armor, passive.armor),
+                (&mut combined.damage, passive.damage),
+                (&mut combined.max_life, passive.max_life),
+                (&mut combined.life_regen, passive.life_regen),
+            ] {
+                *total = total
+                    .checked_add(extra)
+                    .ok_or_else(|| fail("combined cached passive bonus overflows".into()))?;
+            }
+            combined.mana_regen_fraction += passive.mana_regen_fraction;
+            if !combined.mana_regen_fraction.is_finite() {
+                return Err(fail("combined cached mana regeneration overflows".into()));
+            }
+            if passive.strength != 0 {
+                (vitals.life, vitals.max_life) = reprice_life(
+                    vitals.life,
+                    vitals.max_life,
+                    self.life_per_strength().expect("admitted vitals"),
+                    passive.strength,
+                )
+                .map_err(fail)?;
+            }
+            if passive.max_life != 0 {
+                (vitals.life, vitals.max_life) =
+                    reprice_max_life(vitals.life, vitals.max_life, passive.max_life)
+                        .map_err(fail)?;
+            }
+            if hero && passive.intelligence != 0 {
+                (vitals.mana, vitals.max_mana) = reprice_mana(
+                    vitals.mana,
+                    vitals.max_mana,
+                    self.mana_per_intelligence().expect("admitted vitals"),
+                    passive.intelligence,
+                )
+                .map_err(fail)?;
+            }
+            vitals.life = vitals.max_life;
+            vitals.mana = vitals.max_mana;
+        }
+        if hero {
+            let initial = self.hero_initial_level().expect("admitted hero");
+            let level = record
+                .abilities
+                .as_ref()
+                .and_then(|abilities| abilities.hero.as_ref())
+                .expect("checked hero progress")
+                .level;
+            for name in ["STR", "AGI", "INT"] {
+                let value = Self::derive_hero_attribute(
+                    &record.definition,
+                    Some((initial, level)),
+                    combined,
+                    name,
+                )
+                .map_err(fail)?;
+                if value >= i32::MAX as f32 {
+                    return Err(fail(format!("combined cached {name} exceeds integer")));
+                }
+            }
+        }
+        Ok(vitals)
+    }
+
     pub(super) fn require_blight_projection(
         &self,
         unit: HandleId,
