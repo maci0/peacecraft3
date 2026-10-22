@@ -84,6 +84,7 @@ native TimerGetRemaining takes timer t returns real
 native TimerGetTimeout takes timer t returns real
 native GetExpiredTimer takes nothing returns timer
 native SetUnitAnimation takes unit whichUnit, string whichAnimation returns nothing
+native QueueUnitAnimation takes unit whichUnit, string whichAnimation returns nothing
 native SetUnitLookAt takes unit u, string bone, unit target, real x, real y, real z returns nothing
 native ResetUnitLookAt takes unit u returns nothing
 native RemoveUnit takes unit u returns nothing
@@ -177,6 +178,121 @@ fn unit_animation_selects_the_retained_model_without_new_unit_or_handle() {
     )
     .unwrap();
     assert_eq!(host.inner().handles(), before);
+}
+
+#[test]
+fn model_admission_checks_the_queue_animation_signature() {
+    let common = script_common_with(
+        "widget",
+        true,
+        "native TimerStart takes timer t, real timeout, boolean periodic, code callback returns nothing\n\
+         native TimerGetElapsed takes timer t returns real\n\
+         native TimerGetRemaining takes timer t returns real\n\
+         native TimerGetTimeout takes timer t returns real\n\
+         native GetExpiredTimer takes nothing returns timer\n\
+         native SetUnitAnimation takes unit u, string s returns nothing\n\
+         native QueueUnitAnimation takes unit u, integer s returns nothing\n",
+    );
+    let ctx = context(300, &common, MAP, "unit-catalog");
+    let (catalog, _, _) = counting();
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+    let mut host = object(&ctx, 64)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(Arc::clone(&shared), source(), limits(2))
+        .unwrap()
+        .with_timer_runtime(0.)
+        .unwrap();
+    let model = crate::unit_model::tests::model();
+    let error = host
+        .admit_unit_models(move |_| Ok(Some(Arc::clone(&model))))
+        .unwrap_err();
+    assert_eq!(error.failure, Failure::Signature);
+    assert_eq!(error.native, "QueueUnitAnimation");
+}
+
+#[test]
+fn queue_unit_animation_dispatches_and_refuses_bad_inputs_without_mutation() {
+    let (mut h, _) = animation_vm(false);
+    h.vm.init_globals().unwrap();
+    h.vm.call("main", &[]).unwrap();
+    let Value::Handle(id) = h.vm.global("U") else {
+        panic!("unit")
+    };
+    let host = &mut h.vm.host().inner;
+    let before = host.inner().handles();
+    host.native(
+        "SetUnitAnimation",
+        &[Value::Handle(id), Value::Str("Death".into())],
+    )
+    .unwrap();
+    assert_eq!(
+        host.native(
+            "QueueUnitAnimation",
+            &[Value::Null, Value::Str("Death".into())]
+        )
+        .unwrap(),
+        Value::Null
+    );
+    assert!(
+        host.native(
+            "QueueUnitAnimation",
+            &[Value::Int(1), Value::Str("Death".into())]
+        )
+        .unwrap_err()
+        .contains("another family")
+    );
+    assert!(
+        host.native("QueueUnitAnimation", &[Value::Handle(id)])
+            .unwrap_err()
+            .contains("QueueUnitAnimation")
+    );
+    let state = host.executed_unit(id).unwrap().animation.clone();
+    assert_eq!(
+        host.native(
+            "QueueUnitAnimation",
+            &[Value::Handle(id), Value::Str("absent".into())]
+        )
+        .unwrap(),
+        Value::Null
+    );
+    assert_eq!(host.executed_unit(id).unwrap().animation, state);
+    host.native(
+        "QueueUnitAnimation",
+        &[Value::Handle(id), Value::Str("Walk".into())],
+    )
+    .unwrap();
+    assert!(
+        host.executed_unit(id)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap()
+            .has_pending()
+    );
+    host.native(
+        "SetUnitAnimation",
+        &[Value::Handle(id), Value::Str("Stand".into())],
+    )
+    .unwrap();
+    assert!(
+        !host
+            .executed_unit(id)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap()
+            .has_pending()
+    );
+    assert_eq!(host.inner().handles(), before);
+    host.native("RemoveUnit", &[Value::Handle(id)]).unwrap();
+    assert!(
+        host.native(
+            "QueueUnitAnimation",
+            &[Value::Handle(id), Value::Str("Walk".into())]
+        )
+        .is_err()
+    );
 }
 
 #[test]

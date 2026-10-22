@@ -694,17 +694,19 @@ impl ObjectHost {
                 ),
             ));
         }
-        if let Some(native) = self.inner.program.natives().get("SetUnitAnimation") {
-            Self::contract(
-                &self.inner,
-                "SetUnitAnimation",
-                &["unit", "string"],
-                "nothing",
-                false,
-                Some(KIND),
-            )?;
-            if native.source != units.declaration_source {
-                return Err(self.inner.error("SetUnitAnimation", Failure::Source));
+        for name in ["SetUnitAnimation", "QueueUnitAnimation"] {
+            if let Some(native) = self.inner.program.natives().get(name) {
+                Self::contract(
+                    &self.inner,
+                    name,
+                    &["unit", "string"],
+                    "nothing",
+                    false,
+                    Some(KIND),
+                )?;
+                if native.source != units.declaration_source {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
             }
         }
         self.units.as_mut().expect("admitted").models = Some(Box::new(loader));
@@ -712,7 +714,19 @@ impl ObjectHost {
     }
 
     fn set_unit_animation(&mut self, args: &[Value]) -> Result<Value, Error> {
-        let name = "SetUnitAnimation";
+        self.animation_native("SetUnitAnimation", args, false)
+    }
+
+    fn queue_unit_animation(&mut self, args: &[Value]) -> Result<Value, Error> {
+        self.animation_native("QueueUnitAnimation", args, true)
+    }
+
+    fn animation_native(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        queue: bool,
+    ) -> Result<Value, Error> {
         if self.inner.program.natives().get(name).is_none() {
             return Err(self.inner.error(name, Failure::Signature));
         }
@@ -730,15 +744,27 @@ impl ObjectHost {
                 .error(name, Failure::UnitAnimation("missing game clock".into()))
         })?;
         let mut animation = self.executed_unit(*unit)?.animation.clone();
+        let mut queued = false;
         if let Some(state) = &mut animation {
-            state
-                .select(sequence, now, None)
-                .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
+            if queue {
+                self.reserve_animation_active(*unit)
+                    .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+                queued = state
+                    .queue(sequence, now)
+                    .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
+            } else {
+                state
+                    .select(sequence, now, None)
+                    .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
+            }
         }
         let Entry::Unit { record } = self.inner.entry_mut(*unit)? else {
             unreachable!()
         };
         record.animation = animation;
+        if queued {
+            self.commit_animation_active(*unit);
+        }
         Ok(Value::Null)
     }
 
@@ -771,6 +797,9 @@ impl ObjectHost {
         }
         if name == "SetUnitAnimation" && self.units.as_ref()?.models.is_some() {
             return Some(self.set_unit_animation(args));
+        }
+        if name == "QueueUnitAnimation" && self.units.as_ref()?.models.is_some() {
+            return Some(self.queue_unit_animation(args));
         }
         if let Some(result) = self.hero_native(name, args) {
             return Some(result);
