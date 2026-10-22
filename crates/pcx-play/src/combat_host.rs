@@ -512,14 +512,14 @@ impl ObjectHost {
             rules.neutral_aggressive = Some(number);
         }
     }
-    pub(super) fn creep_owner(&self, owner: HandleId) -> Result<bool, Error> {
+    pub(super) fn creep_owner(&self, owner: HandleId, native: &str) -> Result<bool, Error> {
         let aggressive = self
             .combat
             .as_ref()
             .and_then(|r| r.neutral_aggressive)
             .ok_or_else(|| {
                 self.inner.error(
-                    "hero kill XP",
+                    native,
                     Failure::UnitState("neutral aggressive owner is not admitted"),
                 )
             })?;

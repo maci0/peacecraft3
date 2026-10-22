@@ -2,6 +2,16 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] Managed neutral-aggressive creep pursuit now consumes the authored
+  `MaxGuardDistance`, returning beyond it without waiting for the chase timeout
+  or incoming-attack resets. Other computer owners, released guards and explicit
+  point movement retain their prior rules. The game-difficulty getter/setter
+  runtime arities are also corrected. Combined validation passes 1,507 core tests,
+  609 app tests, strict native/WASM Clippy, formatting and selected Continue
+  startup. Original-client creep-boundary parity and the Human02 opening minute
+  remain unqualified; `SetTargetHeroes` is still unsupported. See
+  [unit guards](docs/re-notes/script-unit-guards.md).
+
 - [~] Native campaign index, map admission and Continue retain one source recipe
   with immutable archive snapshots and source-selected data namespaces. The
   selected Human01 preparation gate passes, including recipe identity and later

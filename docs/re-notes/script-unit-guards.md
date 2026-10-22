@@ -49,6 +49,14 @@ An explicit point order completes before an idle home return; an explicit new
 order cancels the current return. Return ownership suppresses acquisition only
 for that unit while it is returning.
 
+Pursuing managed creeps also use the authored `MaxGuardDistance`: once strictly
+beyond that maximum, the home return bypasses the chase timeout, including its
+incoming-attack resets. This uses the host's existing creep-owner definition,
+the admitted neutral-aggressive player identity, rather than applying the maximum
+to every computer-controlled unit. The selected startup host binds that identity
+before scripts execute; low-level guard advancement refuses if it is missing.
+Released guards and explicit point movement retain their existing behavior.
+
 `RemoveGuardPosition` sends an actual stop through the movement host, cancels
 pending inventory interaction and combat target, then releases guard
 participation. It does not disable combat acquisition globally or reject later
@@ -58,12 +66,22 @@ Player handles, units and the script session remain intact.
 
 Managed membership, timeout scheduling and obstructed-return settlement are
 recreation choices. Special native AI type exclusions, AI rebuilding/replacement,
-neutral creep `MaxGuardDistance` tether behavior and the complete native manager
-policy remain fidelity work. The creep-specific maximum is not applied to every
-computer-controlled unit. Parser tests establish decoding and rejection; host
-movement tests establish the implemented recreation behavior, not native parity.
+other creep classifications and the complete native manager policy remain
+fidelity work. The maximum-distance rule follows the shipped Misc comments;
+an original-client boundary comparison remains unqualified. Parser tests establish
+decoding and rejection; host movement tests establish the implemented recreation
+behavior, not native parity.
 
 ## Verification
+
+The maximum-distance regression fails before the rule is connected and passes
+afterward. Synthetic cases cover an incoming-attack reset at the maximum,
+strictly beyond it, release, explicit movement and non-creep computer ownership.
+The combined private suite passes 1,507 core tests and 609 application tests,
+strict native/WASM Clippy and formatting. The selected Continue startup still
+publishes 152 Human01 units and starts Human02; this is not the opening-minute
+gate or native creep-boundary parity. Receipts remain local under
+`.scratch/campaign-targeting-root-review/guard-*`.
 
 Synthetic instruction fixtures vary the mask bits and stop identity, and reject
 malformed/truncated windows. Host tests execute creation, pursuit, timed return,

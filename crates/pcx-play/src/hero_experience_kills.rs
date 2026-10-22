@@ -67,7 +67,7 @@ impl ObjectHost {
             .position
             .unwrap_or([victim_record.x, victim_record.y]);
         let summoned = victim_record.summoned;
-        let creep = self.creep_owner(victim_record.owner)?;
+        let creep = self.creep_owner(victim_record.owner, "hero kill XP")?;
         let source_player = self.player_settings(killer_owner)?;
         let shared = self.source_constant_enumerand("ALLIANCE_SHARED_XP", "alliancetype")?;
         let maximum = admission.rules.progression.max_level;
