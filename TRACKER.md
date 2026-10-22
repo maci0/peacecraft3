@@ -10,14 +10,18 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   passive and the held intelligence effect on `ckng` pass the selected
   continuation. It now refuses an unsupported effective `GetPlayerState`
   query in `AdjustPlayerStateSimpleBJ` (`Blizzard.j:7644`). Private checks pass
-  1361 core and 606 app tests, strict native/WASM Clippy and formatting.
+  1364 core tests, strict native/WASM Clippy and formatting; the latest app
+  runtime suite passed 606 tests before the final inventory review fixes.
   Pool-clamp corrections and ignored maximum-state writes are integrated.
-  A controlled native `Ilif` override exposes a W3A Data-pointer correction
-  still in progress; same-map native cache restore also returns full life
-  in the sampled case, unlike the current saved-pool recreation policy.
+  The native-qualified inventory W3A Data-pointer correction and combined-tome
+  overflow preflight are integrated privately. Same-map native cache restore
+  returns full life and mana in the sampled cases, and the cross-map test
+  uses the receiving map's held-life bonus; the saved-pool recreation policy
+  is being corrected separately.
   The continuation remains private; full chapter
   completion, Windows snapshot runtime and native passive composition remain
-  unqualified. Receipts: `.scratch/campaign-continuation/intelligence-*.log`.
+  unqualified. Receipts: `.scratch/campaign-continuation/intelligence-*.log`
+  and `inventory-review-*.log` in that directory.
 
 - [x] Bind headless session admission to actual selected catalog/Misc contents.
   The readiness receipt keys every admitted catalog table/profile and the three
