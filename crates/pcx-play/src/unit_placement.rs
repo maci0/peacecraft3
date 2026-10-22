@@ -4,6 +4,7 @@ use crate::neutral_player::{RuleInputBudget, Sha256Digest, sha256};
 use crate::neutral_rule_input::Pe;
 use crate::script_random::real;
 use crate::scripts::AssetIdentity;
+use pcx_assets::AssetPath;
 use pcx_map::Pathing;
 use pcx_script::HandleId;
 use pcx_sim::world::Source;
@@ -334,9 +335,11 @@ pub struct Placement {
     budget: Budget,
 }
 
-/// Source reader for lazily decoded footprints. Loads are staged by the reader
-/// until [`Placement::prepare_script_destructable`] accepts the layer; refusing
-/// the layer calls [`FootprintLoader::rollback`] for every successful load.
+/// Source reader for lazily decoded footprints. Paths are canonical
+/// [`AssetPath`] identities. Script loads stay staged until
+/// [`Placement::prepare_script_destructable`] accepts the layer; refusing the
+/// layer calls [`FootprintLoader::rollback`] for every successful load.
+/// Ordinary unit footprints commit as soon as their source load succeeds.
 pub trait FootprintLoader: Send + Sync {
     fn load(&mut self, path: &str) -> Result<Footprint, String>;
     fn commit(&mut self, _paths: &[String]) {}
@@ -421,6 +424,14 @@ impl Placement {
         {
             return Err(fail("missing map/footprint provenance or finite origin"));
         }
+        let mut canonical = BTreeMap::new();
+        for (path, footprint) in footprints {
+            let key = Self::footprint_key(&path)?;
+            if canonical.insert(key.clone(), footprint).is_some() {
+                return Err(fail(format!("duplicate footprint path alias {key}")));
+            }
+        }
+        let footprints = canonical;
         let mut occupied = Vec::new();
         occupied
             .try_reserve_exact(count)
@@ -686,9 +697,10 @@ impl Placement {
         let mut work = 0usize;
         for path in [&live_path, &dead_path] {
             if !matches!(path.as_str(), "" | "_" | "none") {
+                let key = Self::footprint_key(path)?;
                 let count = self
                     .footprints
-                    .get(path)
+                    .get(&key)
                     .ok_or_else(|| fail(format!("missing selected footprint {path}")))?
                     .cells
                     .len();
@@ -782,9 +794,10 @@ impl Placement {
         if matches!(path, "" | "_" | "none") {
             return Ok(Vec::new());
         }
+        let key = Self::footprint_key(path)?;
         let footprint = self
             .footprints
-            .get(path)
+            .get(&key)
             .ok_or_else(|| fail(format!("missing selected footprint {path}")))?;
         let cell: [f64; 2] = std::array::from_fn(|axis| {
             ((f64::from(point[axis]) - f64::from(self.grid.origin[axis]))
@@ -815,7 +828,24 @@ impl Placement {
     }
 
     fn ensure_footprint(&mut self, path: &str) -> Result<(), Error> {
-        self.ensure_footprint_tracked(path, &mut Vec::new())
+        let mut loaded = Vec::new();
+        match self.ensure_footprint_tracked(path, &mut loaded) {
+            Ok(()) => {
+                if let Some(loader) = self.footprint_loader.as_mut() {
+                    loader.commit(&loaded);
+                }
+                Ok(())
+            }
+            Err(error) => {
+                for path in &loaded {
+                    self.footprints.remove(path);
+                }
+                if let Some(loader) = self.footprint_loader.as_mut() {
+                    loader.rollback(&loaded);
+                }
+                Err(error)
+            }
+        }
     }
 
     fn ensure_footprint_tracked(
@@ -823,15 +853,19 @@ impl Placement {
         path: &str,
         loaded: &mut Vec<String>,
     ) -> Result<(), Error> {
-        if matches!(path, "" | "_" | "none") || self.footprints.contains_key(path) {
+        if matches!(path, "" | "_" | "none") {
+            return Ok(());
+        }
+        let key = Self::footprint_key(path)?;
+        if self.footprints.contains_key(&key) {
             return Ok(());
         }
         let loader = self
             .footprint_loader
             .as_mut()
             .ok_or_else(|| fail(format!("missing selected footprint {path}")))?;
-        let input = loader.load(path).map_err(fail)?;
-        loaded.push(path.into());
+        let input = loader.load(&key).map_err(fail)?;
+        loaded.push(key.clone());
         let count = self
             .footprints
             .values()
@@ -848,8 +882,14 @@ impl Placement {
         {
             return Err(fail("footprint budget or provenance"));
         }
-        self.footprints.insert(path.into(), input);
+        self.footprints.insert(key, input);
         Ok(())
+    }
+
+    fn footprint_key(path: &str) -> Result<String, Error> {
+        AssetPath::new(path)
+            .map(|path| path.as_str().to_owned())
+            .map_err(|error| fail(format!("{path}: {error}")))
     }
 
     fn cell(&self, point: [f32; 2]) -> Result<[i32; 2], Error> {
@@ -1087,9 +1127,10 @@ impl Placement {
         }
         let mut footprint = Vec::new();
         if !matches!(path, "" | "_" | "none") {
+            let key = Self::footprint_key(path)?;
             let input = self
                 .footprints
-                .get(path)
+                .get(&key)
                 .ok_or_else(|| fail(format!("missing selected footprint {path}")))?;
             footprint
                 .try_reserve_exact(input.cells.len())
