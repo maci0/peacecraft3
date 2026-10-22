@@ -105,13 +105,14 @@ pub struct ObjectHost {
     unit_range_runtime: Option<unit_ranges::State>,
     callbacks: Vec<NativeCallback>,
     player_state_frames: Vec<PlayerStateFrame>,
+    death_frames: Vec<PlayerStateFrame>,
 }
 pub(super) struct PlayerStateFrame {
-    events: std::collections::VecDeque<event_delivery::FiredEvent>,
-    active: bool,
-    spawn_depth: usize,
-    callback_depth: usize,
-    conditions: Option<PlayerStateDelivery>,
+    pub(super) events: std::collections::VecDeque<event_delivery::FiredEvent>,
+    pub(super) active: bool,
+    pub(super) spawn_depth: usize,
+    pub(super) callback_depth: usize,
+    pub(super) conditions: Option<PlayerStateDelivery>,
 }
 /// Remaining callbacks for the event whose conditions just ran.
 pub(super) struct PlayerStateDelivery {
@@ -271,6 +272,7 @@ impl ObjectHost {
             unit_range_runtime: None,
             callbacks: Vec::new(),
             player_state_frames: Vec::new(),
+            death_frames: Vec::new(),
         })
     }
     fn checked_boolean_wrapper(&self, id: HandleId, native: &str) -> Result<(), Error> {
@@ -706,6 +708,12 @@ impl Host for ObjectHost {
             return Ok(Some(call));
         }
         if let Some(call) = self
+            .begin_native_death_call(name, args)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(call));
+        }
+        if let Some(call) = self
             .begin_synchronous_player_state_call(name, args)
             .map_err(|e| e.to_string())?
         {
@@ -715,6 +723,11 @@ impl Host for ObjectHost {
             .map_err(|e| e.to_string())
     }
     fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
+        if self.death_frames.last().is_some_and(|frame| {
+            frame.conditions.is_some() && self.callbacks.len() == frame.callback_depth
+        }) {
+            return self.continue_death_call(value).map_err(|e| e.to_string());
+        }
         if self.player_state_frames.last().is_some_and(|frame| {
             frame.conditions.is_some() && self.callbacks.len() == frame.callback_depth
         }) {
@@ -731,10 +744,14 @@ impl Host for ObjectHost {
         .map_err(|e| e.to_string())
     }
     fn after_script_spawn(&mut self) -> Result<Option<pcx_script::ScriptCall>, String> {
+        if let Some(call) = self.after_death_spawn().map_err(|e| e.to_string())? {
+            return Ok(Some(call));
+        }
         self.after_player_state_spawn().map_err(|e| e.to_string())
     }
     fn abort_script_calls(&mut self) {
         self.abort_native_callbacks();
+        self.abort_death_delivery();
         self.abort_player_state_delivery();
         self.abort_threads();
     }

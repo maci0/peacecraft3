@@ -331,6 +331,7 @@ impl ObjectHost {
         }
     }
     pub(super) fn unit_ordered(&mut self, unit: HandleId) {
+        self.cancel_harvest(unit);
         self.cancel_unit_follow(unit);
         self.cancel_summon_cast(unit);
         self.cancel_patrol(unit);

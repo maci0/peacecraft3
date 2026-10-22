@@ -66,6 +66,133 @@ fn tables_with(
         SlkId::AbilityData.path().to_string(),
         sylk(ABILITY_HEADERS, ability_rows).into_bytes(),
     ));
+    if !ability_rows.is_empty() {
+        members.push((
+            SlkId::AbilityMetaData.path().to_string(),
+            sylk(
+                &[
+                    "ID",
+                    "field",
+                    "slk",
+                    "index",
+                    "repeat",
+                    "data",
+                    "appendIndex",
+                    "useSpecific",
+                    "notSpecific",
+                    "type",
+                    "category",
+                ],
+                &[
+                    vec![
+                        "Har1",
+                        "Data",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "1",
+                        "0",
+                        "Ahar",
+                        "-",
+                        "int",
+                        "stats",
+                    ],
+                    vec![
+                        "Har2",
+                        "Data",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "2",
+                        "0",
+                        "Ahar",
+                        "-",
+                        "int",
+                        "stats",
+                    ],
+                    vec![
+                        "Har3",
+                        "Data",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "3",
+                        "0",
+                        "Ahar",
+                        "-",
+                        "int",
+                        "stats",
+                    ],
+                    vec![
+                        "adur",
+                        "Dur",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "0",
+                        "0",
+                        "Ahar",
+                        "-",
+                        "unreal",
+                        "stats",
+                    ],
+                    vec![
+                        "aran",
+                        "Rng",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "0",
+                        "0",
+                        "Ahar",
+                        "-",
+                        "unreal",
+                        "stats",
+                    ],
+                    vec![
+                        "aare",
+                        "Area",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "0",
+                        "0",
+                        "Ahar",
+                        "-",
+                        "unreal",
+                        "stats",
+                    ],
+                    vec![
+                        "Arg1",
+                        "Data",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "1",
+                        "0",
+                        "Argl",
+                        "-",
+                        "bool",
+                        "stats",
+                    ],
+                    vec![
+                        "Arg2",
+                        "Data",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "2",
+                        "0",
+                        "Argl",
+                        "-",
+                        "bool",
+                        "stats",
+                    ],
+                ],
+            )
+            .into_bytes(),
+        ));
+    }
     if !unit_rows.is_empty() {
         members.push((
             SlkId::UnitAbilities.path().to_string(),
@@ -417,4 +544,136 @@ fn definition_without_ahar_is_absent() {
             .unwrap()
             .is_none()
     );
+}
+
+fn edit(
+    rawcode: &str,
+    field: [u8; 4],
+    value_type: pcx_objects::ValueType,
+    value: pcx_objects::Value,
+) -> Overlay {
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        rawcode.into(),
+        vec![pcx_objects::Mod {
+            field,
+            value_type,
+            selectors: Some([1, 0]),
+            value,
+            end_word: 0,
+        }],
+    );
+    overlay
+}
+
+fn definition_rules(overlay: &Overlay) -> HarvestRules {
+    let tables = stock_tables();
+    let definition = selected_unit(
+        *b"hpea",
+        &[(*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar")],
+    );
+    HarvestRules::from_definition(&tables, overlay, &definition)
+        .unwrap()
+        .expect("Ahar")
+}
+
+#[test]
+fn metadata_data_ordinal_selects_and_accepts_a_typed_override() {
+    let rules = definition_rules(&edit(
+        "Ahar",
+        *b"Har2",
+        pcx_objects::ValueType::Int,
+        pcx_objects::Value::Int(17),
+    ));
+    assert_eq!(rules.damage, 7.0);
+    assert_eq!(rules.lumber_capacity, 17);
+    assert_eq!(rules.gold_capacity, 30);
+}
+
+#[test]
+fn metadata_data_ordinal_damage_override_and_unrelated_edits_survive() {
+    let mut overlay = edit(
+        "Ahar",
+        *b"Har1",
+        pcx_objects::ValueType::Int,
+        pcx_objects::Value::Int(11),
+    );
+    overlay
+        .mods
+        .entry("Ahar".into())
+        .or_default()
+        .push(pcx_objects::Mod {
+            field: *b"acdn",
+            value_type: pcx_objects::ValueType::Real,
+            selectors: Some([1, 0]),
+            value: pcx_objects::Value::Real(9.5),
+            end_word: 0,
+        });
+    let rules = definition_rules(&overlay);
+    assert_eq!(rules.damage, 11.0);
+    assert_eq!(rules.lumber_capacity, 25);
+}
+
+#[test]
+fn metadata_scalar_override_uses_the_named_field_not_a_data_column() {
+    let rules = definition_rules(&edit(
+        "Ahar",
+        *b"adur",
+        pcx_objects::ValueType::Unreal,
+        pcx_objects::Value::Unreal(4.25),
+    ));
+    assert_eq!(rules.work_duration, 4.25);
+}
+
+#[test]
+fn depot_return_metadata_override_changes_both_authored_flags() {
+    let tables = stock_tables();
+    let definition = selected_unit(
+        *b"htow",
+        &[(*b"uabi", SlkId::UnitAbilities, "abilList", "Argl")],
+    );
+    let mut overlay = edit(
+        "Argl",
+        *b"Arg1",
+        pcx_objects::ValueType::Int,
+        pcx_objects::Value::Int(0),
+    );
+    overlay
+        .mods
+        .entry("Argl".into())
+        .or_default()
+        .push(pcx_objects::Mod {
+            field: *b"Arg2",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: Some([1, 0]),
+            value: pcx_objects::Value::Int(0),
+            end_word: 0,
+        });
+    let returned = DepotReturn::from_definition(&tables, &overlay, &definition).unwrap();
+    assert!(!returned.accepts_gold);
+    assert!(!returned.accepts_lumber);
+}
+#[test]
+fn metadata_override_with_the_wrong_type_is_a_contextual_refusal() {
+    let error = HarvestRules::from_definition(
+        &stock_tables(),
+        &edit(
+            "Ahar",
+            *b"Har2",
+            pcx_objects::ValueType::Real,
+            pcx_objects::Value::Real(17.5),
+        ),
+        &selected_unit(
+            *b"hpea",
+            &[(*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar")],
+        ),
+    )
+    .unwrap_err();
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "Data2");
+            assert!(detail.contains("type"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
 }

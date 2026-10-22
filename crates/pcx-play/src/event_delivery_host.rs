@@ -81,7 +81,7 @@ struct DeliveryContext {
     active: bool,
 }
 
-const RESPONSES: [&str; 21] = [
+const RESPONSES: [&str; 24] = [
     "GetSummoningUnit",
     "GetSummonedUnit",
     "GetLevelingUnit",
@@ -103,6 +103,9 @@ const RESPONSES: [&str; 21] = [
     "GetClickedButton",
     "GetTriggerPlayer",
     "GetEventPlayerState",
+    "GetTriggerWidget",
+    "GetTriggerDestructable",
+    "GetTriggerEventId",
 ];
 
 impl ObjectHost {
@@ -121,6 +124,11 @@ impl ObjectHost {
     }
     pub(super) fn take_synchronous_delivery(&mut self) -> Option<VecDeque<FiredEvent>> {
         self.events.synchronous.take()
+    }
+    /// Whether a synchronous mutation batch is still routed, for cleanup tests.
+    #[cfg(test)]
+    pub(crate) fn synchronous_delivery_active(&self) -> bool {
+        self.events.synchronous.is_some()
     }
     /// Capacity of the queue a mutation would reserve in, for allocation tests.
     #[cfg(test)]
@@ -402,6 +410,12 @@ impl ObjectHost {
             "GetTriggerPlayer" => subject.player,
             "GetEventPlayerState" => subject.player_state,
             "GetSpellTargetUnit" => subject.spell_target,
+            "GetTriggerWidget" => subject.unit.or(subject.destructable),
+            "GetTriggerDestructable" => subject.destructable,
+            "GetTriggerEventId" => self
+                .trigger_runtime
+                .as_ref()
+                .and_then(|state| state.event_context),
             _ if subject.unit.is_some() => subject.unit,
             // Fall through to range delivery, which owns its own responses.
             "GetTriggerUnit" | "GetEnteringUnit" if self.range_context().is_some() => return None,

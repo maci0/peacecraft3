@@ -841,12 +841,18 @@ impl ObjectHost {
             ..EventSubject::default()
         };
         let mut fired = Vec::new();
-        for entry in &self.inner.arena {
+        for (index, entry) in self.inner.arena.iter().enumerate() {
             match entry {
                 Entry::RegisteredPlayerUnitEvent(r)
                     if r.player == owner && r.enumerand == player_death =>
                 {
-                    fired.push((r.trigger, r.filter, Some(r.playerunitevent), Some(r.player)));
+                    fired.push((
+                        r.trigger,
+                        r.filter,
+                        Some(r.playerunitevent),
+                        Some(r.player),
+                        None,
+                    ));
                 }
                 Entry::RegisteredUnitEvent {
                     trigger,
@@ -854,16 +860,22 @@ impl ObjectHost {
                     unitevent,
                     enumerand,
                 } if *u == unit && *enumerand == unit_death => {
-                    fired.push((*trigger, None, Some(*unitevent), None));
+                    fired.push((*trigger, None, Some(*unitevent), None, None));
                 }
                 Entry::RegisteredDeathEvent(r) if r.widget == unit => {
-                    fired.push((r.trigger, None, None, None));
+                    let event = self.inner.id(index, "event delivery")?;
+                    fired.push((r.trigger, None, None, None, Some(event)));
                 }
                 _ => {}
             }
         }
-        for (trigger, filter, event, player) in fired {
-            self.queue_event(trigger, filter, EventSubject { player, ..subject }, event)?;
+        for (trigger, filter, event, player, widget_event) in fired {
+            self.queue_event(
+                trigger,
+                filter,
+                EventSubject { player, ..subject },
+                widget_event.or(event),
+            )?;
         }
         Ok(())
     }

@@ -530,8 +530,8 @@ impl ObjectHost {
                 Failure::DestructableState("finite nonnegative damage"),
             ));
         }
-        let (origin, life, changed) = {
-            let Ok(Entry::Destructable { creation, state }) = self.inner.entry_mut(id) else {
+        let (origin, was_dead, current, max_life) = {
+            let Ok(Entry::Destructable { creation, state }) = self.inner.entry(id) else {
                 return Err(self.inner.error(name, Failure::WrongFamily));
             };
             let (Some(max_life), Some(current)) = (state.max_life, state.life) else {
@@ -542,12 +542,26 @@ impl ObjectHost {
             if state.invulnerable {
                 return Ok(current);
             }
-            let life = (current - amount).max(0.0).min(max_life);
+            (creation.origin, state.dead, current, max_life)
+        };
+        let life = (current - amount).max(0.0).min(max_life);
+        let died = !was_dead && life <= 0.0;
+        if died {
+            let count = self.widget_death_event_count(id);
+            self.reserve_event_delivery(count)?;
+        }
+        let became_dead = {
+            let Ok(Entry::Destructable { state, .. }) = self.inner.entry_mut(id) else {
+                unreachable!("checked destructable entry");
+            };
             state.life = Some(life);
             state.dead |= life <= 0.0;
-            (creation.origin, life, !state.dead)
+            state.dead
         };
-        self.sync_destructable_collision(id, origin, changed)?;
+        self.sync_destructable_collision(id, origin, !became_dead)?;
+        if died {
+            self.queue_widget_death_events(id)?;
+        }
         Ok(life)
     }
 
@@ -665,6 +679,19 @@ impl ObjectHost {
         ) {
             return Err(self.inner.error(name, Failure::WrongFamily));
         }
+        let was_dead = matches!(
+            self.inner.entry(id),
+            Ok(Entry::Destructable { state, .. }) if state.dead
+        );
+        let became_dead = match (name, rest) {
+            ("KillDestructable", []) => !was_dead,
+            ("SetDestructableLife", [Value::Real(value)]) => !was_dead && *value <= 0.0,
+            _ => false,
+        };
+        if became_dead {
+            let count = self.widget_death_event_count(id);
+            self.reserve_event_delivery(count)?;
+        }
         let (origin, value, changed) = {
             let Ok(Entry::Destructable { creation, state }) = self.inner.entry_mut(id) else {
                 unreachable!("checked destructable entry");
@@ -727,8 +754,12 @@ impl ObjectHost {
                 _ => return Err(self.inner.error(name, Failure::Signature)),
             }
         };
+        let dead = self.destructable_dead(id, name)?;
         if changed {
-            self.sync_destructable_collision(id, origin, !self.destructable_dead(id, name)?)?;
+            self.sync_destructable_collision(id, origin, !dead)?;
+        }
+        if became_dead && dead {
+            self.queue_widget_death_events(id)?;
         }
         Ok(value)
     }
