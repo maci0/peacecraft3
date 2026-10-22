@@ -74,6 +74,77 @@ fn read(h: &mut ObjectHost) -> (Value, Value, Value) {
     )
 }
 #[test]
+fn game_difficulty_native_arity_cannot_change_current_state() {
+    let common = format!(
+        "{COMMON}\ntype gamedifficulty extends handle\nconstant native ConvertGameDifficulty takes integer i returns gamedifficulty\nconstant native GetGameDifficulty takes nothing returns gamedifficulty\nnative SetGameDifficulty takes gamedifficulty d returns nothing\nglobals\nconstant gamedifficulty LOW = ConvertGameDifficulty(17)\nconstant gamedifficulty HIGH = ConvertGameDifficulty(23)\nendglobals\n"
+    );
+    let map = "globals\ngamedifficulty Saved = null\nendglobals\nfunction change takes nothing returns nothing\nset Saved = GetGameDifficulty()\ncall SetGameDifficulty(HIGH)\nendfunction\n";
+    let ctx = context(301, &common, map, "synthetic:difficulty");
+    let inner = EnumHost::checked_selected(
+        ctx.scripts.shared_program(),
+        "synthetic:difficulty",
+        &[
+            "ConvertPlacement",
+            "ConvertPlayerColor",
+            "ConvertRacePref",
+            "ConvertMapControl",
+            "ConvertGameDifficulty",
+        ],
+        Limits {
+            max_handles: 32,
+            admission_steps: 1000,
+            expression_depth: 16,
+            expression_work: 1000,
+        },
+    )
+    .unwrap();
+    let mut h = ObjectHost::checked(inner)
+        .unwrap()
+        .with_players(ctx.clone(), slots_rule(301, -3, 9), budget())
+        .unwrap();
+    let low = h
+        .native("ConvertGameDifficulty", &[Value::Int(17)])
+        .unwrap();
+    let high = h
+        .native("ConvertGameDifficulty", &[Value::Int(23)])
+        .unwrap();
+    assert!(h.native("GetGameDifficulty", &[]).is_err());
+    assert!(
+        h.native("SetGameDifficulty", std::slice::from_ref(&high))
+            .is_err()
+    );
+    h.admit_game_difficulty(&ctx, id(&low)).unwrap();
+    let foreign = h.native("ConvertPlayerColor", &[Value::Int(37)]).unwrap();
+    let handles = h.inner().handles();
+    for (name, args) in [
+        ("GetGameDifficulty", vec![high.clone()]),
+        ("GetGameDifficulty", vec![Value::Int(17)]),
+        ("SetGameDifficulty", vec![]),
+        ("SetGameDifficulty", vec![foreign]),
+        ("SetGameDifficulty", vec![Value::Int(23)]),
+        ("SetGameDifficulty", vec![Value::Null]),
+        ("SetGameDifficulty", vec![high.clone(), low.clone()]),
+    ] {
+        assert!(h.native(name, &args).is_err(), "{name} {args:?}");
+        assert_eq!(h.native("GetGameDifficulty", &[]).unwrap(), low);
+    }
+    assert_eq!(h.inner().handles(), handles);
+    let mut vm = h.into_vm();
+    vm.init_globals().unwrap();
+    let handles = vm.host().inner().handles();
+    vm.call("change", &[]).unwrap();
+    assert_eq!(vm.global("Saved"), low);
+    assert_eq!(vm.host().native("GetGameDifficulty", &[]).unwrap(), high);
+    assert_eq!(
+        vm.host()
+            .native("SetGameDifficulty", std::slice::from_ref(&low))
+            .unwrap(),
+        Value::Null
+    );
+    assert_eq!(vm.host().native("GetGameDifficulty", &[]).unwrap(), low);
+    assert_eq!(vm.host().inner().handles(), handles);
+}
+#[test]
 fn owned_vm_saves_toggles_and_restores_explicit_settings_without_new_handles() {
     let map = "globals
 gamespeed Saved = null
