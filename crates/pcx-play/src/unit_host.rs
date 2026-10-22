@@ -272,6 +272,7 @@ impl ObjectHost {
         self.unit_pause_declarations(&declaration_source)?;
         self.unit_look_at_declarations(&declaration_source)?;
         self.unit_sleep_declarations(&declaration_source)?;
+        self.unit_buff_declarations(&declaration_source)?;
         self.unit_removal_declaration(&declaration_source)?;
         self.unit_cooldown_reset_declaration(&declaration_source)?;
         if self.sound_properties {
@@ -573,6 +574,9 @@ impl ObjectHost {
             return Some(result);
         }
         if let Some(result) = self.unit_sleep_native(name, args) {
+            return Some(result);
+        }
+        if let Some(result) = self.unit_buff_native(name, args) {
             return Some(result);
         }
         if name == "SetUnitAnimation" && self.units.as_ref()?.models.is_some() {
