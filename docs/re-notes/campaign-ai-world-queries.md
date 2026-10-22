@@ -1,8 +1,10 @@
 # Campaign AI world queries
 
 This note records source and original-runtime evidence for the next campaign
-gameplay consumers. The private script runtime does not yet implement these
-AI-native queries or the targeting and production systems that use them.
+gameplay consumers. The private runtime now implements
+[the upgrade-level query](campaign-ai-upgrade-level.md) through the shared map
+world. The other listed queries and the targeting and production systems that
+use them remain unfinished.
 
 ## Selected native paths
 
@@ -32,7 +34,10 @@ attached unit-AI handles through `0x6933c0`, setting or clearing bit `0x20` at
 their offset `0x28`. `SetUnitsFlee` handler `0xab7630` changes bit `0x10` at
 the context's `0x2d0` field. These writes do not establish target preference,
 avoidance or retreat behavior by themselves; the recorded bit-test candidates
-remain untyped. The targeting experiment is still offline and unqualified.
+remain incomplete evidence for the gameplay policy. The
+[matched targeting experiment](campaign-ai-targeting.md) ran successfully but
+observed no difference in its limited nearer-hero setup; it does not qualify a
+targeting implementation.
 
 `CreateCaptains` handler `0xab4750` reaches `0xabd160`, which performs actual
 group and home setup. `SetHeroLevels` handler `0xab70e0` retains a code callback
