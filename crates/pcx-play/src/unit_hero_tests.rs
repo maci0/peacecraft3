@@ -43,9 +43,15 @@ impl ObjectCatalog for Catalog {
     }
 }
 fn tables(profile: &str) -> DefaultTables {
-    tables_with_tooltip_repeat(profile, "1")
+    tables_with_data_ordinal(profile, "1")
+}
+fn tables_with_data_ordinal(profile: &str, data_ordinal: &str) -> DefaultTables {
+    tables_with(profile, "1", data_ordinal)
 }
 fn tables_with_tooltip_repeat(profile: &str, repeat: &str) -> DefaultTables {
+    tables_with(profile, repeat, "1")
+}
+fn tables_with(profile: &str, repeat: &str, data_ordinal: &str) -> DefaultTables {
     let data = sylk(
         &[
             "alias",
@@ -57,10 +63,14 @@ fn tables_with_tooltip_repeat(profile: &str, repeat: &str) -> DefaultTables {
             "DataA2",
             "UnitID1",
             "UnitID2",
+            "DataB1",
+            "DataB2",
         ],
         &[
             &["L000", "L000", "1", "0", "0"],
-            &["L001", "L001", "3", "1", "0", "2", "4", "u001", "u002"],
+            &[
+                "L001", "L001", "3", "1", "0", "2", "4", "u001", "u002", "7", "8",
+            ],
             &["L002", "L002", "1", "4", "3"],
             &["Yher", "Yher", "1", "0", "0"],
         ],
@@ -78,7 +88,7 @@ fn tables_with_tooltip_repeat(profile: &str, repeat: &str) -> DefaultTables {
                 "int",
                 "stats",
                 "1",
-                "1",
+                data_ordinal,
             ],
             &[
                 "auni",
@@ -199,6 +209,64 @@ fn learned_tooltips_select_the_authored_rank_and_expand_its_numeric_cells() {
         (tip.title.as_str(), tip.description.as_str()),
         ("Second", "Heals 4.")
     );
+}
+
+#[test]
+fn tooltip_data_expansion_requires_the_metadata_data_pointer() {
+    let tooltip = "[L001]\nTip=First,Second,Third\nUberTip=\"Heals <L001,DataA1>, now.\",\"Heals <L001,DataA2>.\",Third\n";
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L001".into(),
+        vec![pcx_objects::Mod {
+            field: *b"adat",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: Some([2, 1]),
+            value: pcx_objects::Value::Int(9),
+            end_word: 0,
+        }],
+    );
+    let mut vm = host(NATIVES, "L001", overlay, tooltip, 8);
+    vm.call("setup", &[]).unwrap();
+    let Value::Handle(unit) = vm.global("H") else {
+        panic!("hero")
+    };
+    learn(&mut vm, *b"L001");
+    raise(&mut vm, 3);
+    learn(&mut vm, *b"L001");
+    let tip = vm
+        .host()
+        .inner
+        .ability_tooltip(unit, *b"L001")
+        .unwrap()
+        .unwrap();
+    assert_eq!(tip.description, "Heals 9.");
+
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L001".into(),
+        vec![pcx_objects::Mod {
+            field: *b"adat",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: Some([2, 0]),
+            value: pcx_objects::Value::Int(9),
+            end_word: 0,
+        }],
+    );
+    let mut vm = host(NATIVES, "L001", overlay, tooltip, 8);
+    vm.call("setup", &[]).unwrap();
+    let Value::Handle(unit) = vm.global("H") else {
+        panic!("hero")
+    };
+    learn(&mut vm, *b"L001");
+    raise(&mut vm, 3);
+    learn(&mut vm, *b"L001");
+    let error = vm
+        .host()
+        .inner
+        .ability_tooltip(unit, *b"L001")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("data pointer 0 does not match metadata data column 1"));
 }
 
 #[test]
@@ -488,7 +556,7 @@ fn ranked_ability_cells_use_metadata_overrides_and_keep_other_ranks() {
             pcx_objects::Mod {
                 field: *b"adat",
                 value_type: pcx_objects::ValueType::Int,
-                selectors: Some([2, 0]),
+                selectors: Some([2, 1]),
                 value: pcx_objects::Value::Int(9),
                 end_word: 0,
             },
@@ -534,8 +602,134 @@ fn ranked_ability_cells_use_metadata_overrides_and_keep_other_ranks() {
 }
 
 #[test]
+fn ranked_ability_cells_follow_nonstock_metadata_data_and_refuse_mismatches() {
+    let data_mod = |pointer, value_type, value| pcx_objects::Mod {
+        field: *b"adat",
+        value_type,
+        selectors: Some([2, pointer]),
+        value,
+        end_word: 0,
+    };
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L001".into(),
+        vec![data_mod(
+            2,
+            pcx_objects::ValueType::Int,
+            pcx_objects::Value::Int(9),
+        )],
+    );
+    let mut vm = host_with_tables(
+        NATIVES,
+        "L001",
+        overlay,
+        "",
+        8,
+        tables_with_data_ordinal("", "2"),
+    );
+    let h = &vm.host().inner;
+    assert_eq!(
+        h.hero_ability_level_cell(*b"L001", "DataB", 2, FieldKind::Int)
+            .unwrap(),
+        "9",
+        "a non-stock ordinal maps Data to DataB"
+    );
+    assert_eq!(
+        h.hero_ability_level_cell(*b"L001", "DataB", 1, FieldKind::Int)
+            .unwrap(),
+        "7"
+    );
+    assert_eq!(
+        h.hero_ability_level_cell(*b"L001", "DataA", 2, FieldKind::Int)
+            .unwrap(),
+        "4",
+        "the decoy DataA column is not the metadata Data column"
+    );
+
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L001".into(),
+        vec![data_mod(
+            1,
+            pcx_objects::ValueType::Int,
+            pcx_objects::Value::Int(9),
+        )],
+    );
+    let mut vm = host_with_tables(
+        NATIVES,
+        "L001",
+        overlay,
+        "",
+        8,
+        tables_with_data_ordinal("", "2"),
+    );
+    let error = vm
+        .host()
+        .inner
+        .hero_ability_level_cell(*b"L001", "DataB", 2, FieldKind::Int)
+        .unwrap_err();
+    assert!(error.contains("data pointer 1 does not match metadata data column 2"));
+
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L001".into(),
+        vec![data_mod(
+            2,
+            pcx_objects::ValueType::Str,
+            pcx_objects::Value::Str(b"9".to_vec()),
+        )],
+    );
+    let mut vm = host_with_tables(
+        NATIVES,
+        "L001",
+        overlay,
+        "",
+        8,
+        tables_with_data_ordinal("", "2"),
+    );
+    assert!(
+        vm.host()
+            .inner
+            .hero_ability_level_cell(*b"L001", "DataB", 2, FieldKind::Int)
+            .unwrap_err()
+            .contains("wrong type")
+    );
+
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L001".into(),
+        vec![
+            data_mod(2, pcx_objects::ValueType::Int, pcx_objects::Value::Int(5)),
+            pcx_objects::Mod {
+                field: *b"atip",
+                value_type: pcx_objects::ValueType::Str,
+                selectors: Some([2, 0]),
+                value: pcx_objects::Value::Str(b"profile source".to_vec()),
+                end_word: 0,
+            },
+            data_mod(2, pcx_objects::ValueType::Int, pcx_objects::Value::Int(9)),
+        ],
+    );
+    let mut vm = host_with_tables(
+        NATIVES,
+        "L001",
+        overlay,
+        "",
+        8,
+        tables_with_data_ordinal("", "2"),
+    );
+    let h = &vm.host().inner;
+    assert_eq!(
+        h.hero_ability_level_cell(*b"L001", "DataB", 2, FieldKind::Int)
+            .unwrap(),
+        "9",
+        "the latest matching Data override wins"
+    );
+}
+
+#[test]
 fn ranked_ability_cells_refuse_unknown_fields_and_unsupported_data_selectors() {
-    for (field, selectors) in [(*b"adat", Some([2, 1])), (*b"ZZZZ", Some([2, 0]))] {
+    for (field, selectors) in [(*b"adat", Some([2, 0])), (*b"ZZZZ", Some([2, 0]))] {
         let mut overlay = Overlay::default();
         overlay.mods.insert(
             "L001".into(),
@@ -563,6 +757,16 @@ fn host(
     profile: &str,
     abilities: usize,
 ) -> pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>> {
+    host_with_tables(extra, list, overlay, profile, abilities, tables(profile))
+}
+fn host_with_tables(
+    extra: &str,
+    list: &str,
+    overlay: Overlay,
+    _profile: &str,
+    abilities: usize,
+    tables: DefaultTables,
+) -> pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>> {
     let common = script_common_with("widget", true, extra);
     let map = if extra.contains("SelectHeroSkill") {
         MAP
@@ -580,7 +784,7 @@ fn host(
         .with_unit_catalog(Arc::new(Catalog { list: list.into() }), source(), limits(4))
         .unwrap()
         .with_hero_skills(
-            tables(profile),
+            tables,
             catalog_origin(),
             overlay,
             rules,

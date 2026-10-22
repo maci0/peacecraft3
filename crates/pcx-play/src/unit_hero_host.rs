@@ -1108,30 +1108,39 @@ impl ObjectHost {
                 .tables
                 .metadata(field.fourcc)
                 .ok_or("ability override metadata missing")?;
-            let mapped = if column == "Data" {
+            let (mapped, data) = if column == "Data" {
                 let ordinal = metadata
                     .attribute("data")
                     .ok_or("ability data ordinal missing")?
                     .text
                     .parse::<u32>()
                     .map_err(|_| "invalid ability data ordinal")?;
-                format!(
-                    "Data{}",
-                    char::from_u32(
-                        u32::from(b'A')
-                            .checked_add(ordinal.checked_sub(1).ok_or("zero data ordinal")?)
-                            .ok_or("ability data ordinal overflow")?
-                    )
-                    .ok_or("invalid data ordinal")?
+                let letter = char::from_u32(
+                    u32::from(b'A')
+                        .checked_add(ordinal.checked_sub(1).ok_or("zero data ordinal")?)
+                        .ok_or("ability data ordinal overflow")?,
                 )
+                .ok_or("invalid data ordinal")?;
+                (format!("Data{letter}"), Some(ordinal))
             } else {
-                column.clone()
+                (column.clone(), None)
             };
             if mapped != stem || entry.selectors.is_some_and(|s| s[0] != rank as u32) {
                 continue;
             }
-            if field.index != -1 || entry.selectors.is_some_and(|s| s[1] != 0) {
+            if field.index != -1 {
                 return Err(format!("{alias:?}: indexed {stem} override unsupported"));
+            }
+            if let Some([_, pointer]) = entry.selectors {
+                if let Some(ordinal) = data {
+                    if pointer != ordinal {
+                        return Err(format!(
+                            "{alias:?}: {stem} override data pointer {pointer} does not match metadata data column {ordinal}"
+                        ));
+                    }
+                } else if pointer != 0 {
+                    return Err(format!("{alias:?}: indexed {stem} override unsupported"));
+                }
             }
             if let Some(specific) = metadata.attribute("useSpecific")
                 && !matches!(specific.text.trim(), "" | "_" | "-")
