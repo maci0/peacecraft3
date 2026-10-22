@@ -72,6 +72,42 @@ fn tables_with_upgrades(
     weapon_rows: &[Vec<&str>],
     upgrade_rows: &[Vec<&str>],
 ) -> DefaultTables {
+    tables_with_upgrade_metadata(
+        ability_rows,
+        unit_rows,
+        dest_rows,
+        weapon_rows,
+        upgrade_rows,
+        &default_upgrade_metadata_rows(),
+    )
+}
+
+fn default_upgrade_metadata_rows() -> Vec<Vec<&'static str>> {
+    vec![
+        vec!["glvl", "maxlevel", "UpgradeData", "-1", "int", "tech"],
+        vec!["gef1", "effect1", "UpgradeData", "-1", "token", "tech"],
+        vec!["gef2", "effect2", "UpgradeData", "-1", "token", "tech"],
+        vec!["gef3", "effect3", "UpgradeData", "-1", "token", "tech"],
+        vec!["gef4", "effect4", "UpgradeData", "-1", "token", "tech"],
+        vec!["gba1", "base1", "UpgradeData", "-1", "unreal", "tech"],
+        vec!["gba2", "base2", "UpgradeData", "-1", "unreal", "tech"],
+        vec!["gba3", "base3", "UpgradeData", "-1", "unreal", "tech"],
+        vec!["gba4", "base4", "UpgradeData", "-1", "unreal", "tech"],
+        vec!["gmo1", "mod1", "UpgradeData", "-1", "unreal", "tech"],
+        vec!["gmo2", "mod2", "UpgradeData", "-1", "unreal", "tech"],
+        vec!["gmo3", "mod3", "UpgradeData", "-1", "unreal", "tech"],
+        vec!["gmo4", "mod4", "UpgradeData", "-1", "unreal", "tech"],
+    ]
+}
+
+fn tables_with_upgrade_metadata(
+    ability_rows: &[Vec<&str>],
+    unit_rows: &[Vec<&str>],
+    dest_rows: &[Vec<&str>],
+    weapon_rows: &[Vec<&str>],
+    upgrade_rows: &[Vec<&str>],
+    upgrade_metadata_rows: &[Vec<&str>],
+) -> DefaultTables {
     let mut members: Vec<(String, Vec<u8>)> = Vec::new();
     members.push((
         SlkId::AbilityData.path().to_string(),
@@ -235,12 +271,7 @@ fn tables_with_upgrades(
             SlkId::UpgradeMetaData.path().to_string(),
             sylk(
                 &["ID", "field", "slk", "index", "type", "category"],
-                &[
-                    vec!["Umlv", "maxlevel", "UpgradeData", "-1", "int", "tech"],
-                    vec!["Uef1", "effect1", "UpgradeData", "-1", "token", "tech"],
-                    vec!["Uba1", "base1", "UpgradeData", "-1", "int", "tech"],
-                    vec!["Umd1", "mod1", "UpgradeData", "-1", "int", "tech"],
-                ],
+                upgrade_metadata_rows,
             )
             .into_bytes(),
         ));
@@ -310,6 +341,22 @@ fn upgrade_tables() -> DefaultTables {
         &[],
         &weapon_rows,
         &[vec!["Rhlh", "2", "rlum", "10", "10"]],
+    )
+}
+
+fn stock_capacity_tables() -> DefaultTables {
+    let ability_rows = vec![ahar_ability("7", "10", "30", "Ahar", "Ahar")];
+    let unit_rows = vec![vec!["hpea", "Peasant", "Ahar", "-"]];
+    let weapon_rows = vec![vec![
+        "hpea", "2", "ground", "2", "0.433", "0.567", "90", "250", "tree", "1.7", "0.3", "0.6",
+        "70", "140",
+    ]];
+    tables_with_upgrades(
+        &ability_rows,
+        &unit_rows,
+        &[],
+        &weapon_rows,
+        &[vec!["Rhlh", "2", "rlum", "5", "5"]],
     )
 }
 
@@ -867,17 +914,17 @@ fn w3q_custom_upgrade_overrides_the_base_capacity_and_maximum() {
             "Rhlh".into(),
             vec![
                 Mod {
-                    field: *b"Umlv",
+                    field: *b"glvl",
                     value_type: ValueType::Int,
                     selectors: Some([0, 0]),
                     value: ObjectValue::Int(3),
                     end_word: 0,
                 },
                 Mod {
-                    field: *b"Umd1",
-                    value_type: ValueType::Int,
-                    selectors: Some([1, 0]),
-                    value: ObjectValue::Int(15),
+                    field: *b"gmo1",
+                    value_type: ValueType::Unreal,
+                    selectors: Some([0, 0]),
+                    value: ObjectValue::Unreal(15.0),
                     end_word: 0,
                 },
             ],
@@ -897,6 +944,228 @@ fn w3q_custom_upgrade_overrides_the_base_capacity_and_maximum() {
         .apply_lumber_harvesting_upgrades(&tables, &overlay, &definition, |_| Ok(3))
         .unwrap();
     assert_eq!(rules.lumber_capacity, 65);
+}
+
+fn w3q_capacity_override(selectors: [u32; 2], value: f32) -> Overlay {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(b"Rhlh");
+    bytes.extend_from_slice(&[0u8; 4]);
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(b"gba1");
+    bytes.extend_from_slice(&ValueType::Unreal.word().to_le_bytes());
+    bytes.extend_from_slice(&selectors[0].to_le_bytes());
+    bytes.extend_from_slice(&selectors[1].to_le_bytes());
+    bytes.extend_from_slice(&value.to_bits().to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    assert_eq!(bytes.len(), 48);
+    let file = pcx_objects::ObjectFile::parse("war3map.w3q", &bytes).expect("48-byte W3Q");
+    Overlay::of(&file)
+}
+
+fn apply_capacity_override(tables: &DefaultTables, overlay: &Overlay) -> Result<i32, HarvestError> {
+    let definition = selected_unit(
+        *b"hpea",
+        &[
+            (*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar"),
+            (*b"upgr", SlkId::UnitBalance, "upgradeList", "Rhlh"),
+        ],
+    );
+    let mut rules = HarvestRules::from_definition(tables, &Overlay::default(), &definition)
+        .unwrap()
+        .expect("Ahar");
+    rules.apply_lumber_harvesting_upgrades(tables, overlay, &definition, |_| Ok(1))?;
+    Ok(rules.lumber_capacity)
+}
+
+fn apply_stock_capacity_override(overlay: &Overlay) -> Result<i32, HarvestError> {
+    apply_capacity_override(&stock_capacity_tables(), overlay)
+}
+
+#[test]
+fn w3q_neutral_selector_applies_the_first_level_capacity_override() {
+    assert_eq!(
+        apply_stock_capacity_override(&w3q_capacity_override([0, 0], 9.0)).unwrap(),
+        19
+    );
+}
+
+#[test]
+fn w3q_level_selector_is_refused_for_a_first_level_capacity_override() {
+    let error = apply_stock_capacity_override(&w3q_capacity_override([1, 0], 9.0))
+        .expect_err("level-selector base1 must not apply to level 1");
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "base1");
+            assert!(detail.contains("[0, 0]"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+fn capacity_override(
+    selectors: Option<[u32; 2]>,
+    value_type: ValueType,
+    value: ObjectValue,
+) -> Overlay {
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "Rhlh".into(),
+        vec![Mod {
+            field: *b"gba1",
+            value_type,
+            selectors,
+            value,
+            end_word: 0,
+        }],
+    );
+    overlay
+}
+
+#[test]
+fn w3q_unqualified_capacity_override_is_refused() {
+    let error = apply_stock_capacity_override(&capacity_override(
+        None,
+        ValueType::Unreal,
+        ObjectValue::Unreal(9.0),
+    ))
+    .expect_err("unqualified base1 must be refused");
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "base1");
+            assert!(detail.contains("[0, 0]"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+#[test]
+fn w3q_fractional_capacity_override_is_refused() {
+    let error = apply_stock_capacity_override(&w3q_capacity_override([0, 0], 9.5))
+        .expect_err("fractional capacity must be refused");
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "base1");
+            assert!(detail.contains("finite integer"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+#[test]
+fn w3q_non_finite_capacity_override_is_refused() {
+    let error = apply_stock_capacity_override(&w3q_capacity_override([0, 0], f32::NAN))
+        .expect_err("non-finite capacity must be refused");
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "base1");
+            assert!(detail.contains("finite integer"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+#[test]
+fn w3q_out_of_range_capacity_override_is_refused() {
+    let error = apply_stock_capacity_override(&w3q_capacity_override([0, 0], 3.0e9))
+        .expect_err("capacity outside i32 must be refused");
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "base1");
+            assert!(detail.contains("outside the i32 range"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+#[test]
+fn w3q_capacity_override_with_the_wrong_wire_type_is_refused() {
+    let error = apply_stock_capacity_override(&capacity_override(
+        Some([0, 0]),
+        ValueType::Int,
+        ObjectValue::Int(9),
+    ))
+    .expect_err("int wire must not satisfy unreal metadata");
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "base1");
+            assert!(detail.contains("differs from metadata kind"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+#[test]
+fn ambiguous_upgrade_metadata_is_refused() {
+    let tables = tables_with_upgrade_metadata(
+        &[ahar_ability("7", "10", "30", "Ahar", "Ahar")],
+        &[vec!["hpea", "Peasant", "Ahar", "-"]],
+        &[],
+        &[vec![
+            "hpea", "2", "ground", "2", "0.433", "0.567", "90", "250", "tree", "1.7", "0.3", "0.6",
+            "70", "140",
+        ]],
+        &[vec!["Rhlh", "2", "rlum", "5", "5"]],
+        &{
+            let mut rows = default_upgrade_metadata_rows();
+            rows.push(vec!["gba9", "base1", "UpgradeData", "-1", "unreal", "tech"]);
+            rows
+        },
+    );
+    let error = apply_capacity_override(
+        &tables,
+        &capacity_override(Some([0, 0]), ValueType::Unreal, ObjectValue::Unreal(9.0)),
+    )
+    .expect_err("ambiguous upgrade metadata must be refused");
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "base1");
+            assert!(detail.contains("more than one"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+fn capacity_tables_without_upgrade_metadata() -> DefaultTables {
+    tables_with_upgrade_metadata(
+        &[ahar_ability("7", "10", "30", "Ahar", "Ahar")],
+        &[vec!["hpea", "Peasant", "Ahar", "-"]],
+        &[],
+        &[vec![
+            "hpea", "2", "ground", "2", "0.433", "0.567", "90", "250", "tree", "1.7", "0.3", "0.6",
+            "70", "140",
+        ]],
+        &[vec!["Rhlh", "2", "rlum", "5", "5"]],
+        &[],
+    )
+}
+
+#[test]
+fn stock_capacity_without_upgrade_metadata_still_reads_the_table() {
+    let tables = capacity_tables_without_upgrade_metadata();
+    assert_eq!(
+        apply_capacity_override(&tables, &Overlay::default()).unwrap(),
+        15
+    );
+}
+
+#[test]
+fn map_override_without_upgrade_metadata_is_refused() {
+    let tables = capacity_tables_without_upgrade_metadata();
+    let error = apply_capacity_override(
+        &tables,
+        &capacity_override(Some([0, 0]), ValueType::Unreal, ObjectValue::Unreal(9.0)),
+    )
+    .expect_err("a map override without metadata must not publish the stock default");
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "maxlevel");
+            assert!(detail.contains("missing upgrade metadata"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
 }
 
 #[test]
