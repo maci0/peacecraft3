@@ -395,6 +395,52 @@ fn write_table_archive(
     std::fs::write(path, raw).unwrap();
 }
 
+fn write_candidate_archive(
+    path: &Path,
+    listed: &str,
+    candidates: &[(u16, u16, u32)],
+    blocks: &[pcx_mpq::BlockEntry],
+) {
+    let hash_at = 32u32;
+    let hash_count = candidates.len() as u32 + 1;
+    let block_at = hash_at + hash_count * 16;
+    let archive_size = block_at + blocks.len() as u32 * 16;
+    let start = pcx_mpq::hash::start_slot(listed, hash_count as usize);
+    let (name1, name2) = pcx_mpq::hash::hash_string_both(listed);
+    let mut hashes = vec![0xffu8; hash_count as usize * 16];
+    for (offset, (locale, platform, block_index)) in candidates.iter().copied().enumerate() {
+        let slot = (start + offset) % hash_count as usize;
+        let entry = &mut hashes[slot * 16..slot * 16 + 16];
+        entry[..4].copy_from_slice(&name1.to_le_bytes());
+        entry[4..8].copy_from_slice(&name2.to_le_bytes());
+        entry[8..10].copy_from_slice(&locale.to_le_bytes());
+        entry[10..12].copy_from_slice(&platform.to_le_bytes());
+        entry[12..].copy_from_slice(&block_index.to_le_bytes());
+    }
+    encrypt_table(&mut hashes, pcx_mpq::hash::hash_table_key());
+    let mut table = Vec::new();
+    for block in blocks {
+        table.extend(block.file_pos.to_le_bytes());
+        table.extend(block.compressed_size.to_le_bytes());
+        table.extend(block.file_size.to_le_bytes());
+        table.extend(block.flags.to_le_bytes());
+    }
+    encrypt_table(&mut table, pcx_mpq::hash::block_table_key());
+    let mut raw = b"MPQ\x1a".to_vec();
+    raw.extend(32u32.to_le_bytes());
+    raw.extend(archive_size.to_le_bytes());
+    raw.extend(0u16.to_le_bytes());
+    raw.extend(0u16.to_le_bytes());
+    raw.extend(hash_at.to_le_bytes());
+    raw.extend(block_at.to_le_bytes());
+    raw.extend(hash_count.to_le_bytes());
+    raw.extend((blocks.len() as u32).to_le_bytes());
+    raw.extend(hashes);
+    raw.extend(table);
+    assert_eq!(raw.len(), archive_size as usize);
+    std::fs::write(path, raw).unwrap();
+}
+
 fn table_temp_dir(tag: &str) -> std::path::PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -437,6 +483,41 @@ fn canonical_members_keeps_tombstones_and_stale_listings_absent() {
         canonical_members(&pcx_mpq::MpqArchive::open(&tombstone).unwrap(), member)
             .unwrap()
             .is_empty()
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn canonical_members_refuses_mixed_live_and_tombstone_candidates_before_fallback() {
+    let dir = table_temp_dir("mixed-candidates");
+    let member = "scripts\\common.j";
+    let live = pcx_mpq::BlockEntry {
+        flags: pcx_mpq::flags::EXISTING,
+        ..pcx_mpq::BlockEntry::default()
+    };
+    let tombstone = pcx_mpq::BlockEntry {
+        flags: pcx_mpq::flags::DELETE_MARKER,
+        ..pcx_mpq::BlockEntry::default()
+    };
+    for (name, candidates) in [
+        ("deleted-first.mpq", [(0, 0, 0), (0, 0, 1)]),
+        ("live-first.mpq", [(0, 0, 1), (0, 0, 0)]),
+    ] {
+        let archive = dir.join(name);
+        write_candidate_archive(&archive, member, &candidates, &[tombstone, live]);
+        let error = canonical_members(&pcx_mpq::MpqArchive::open(&archive).unwrap(), member)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(name), "{error}");
+        assert!(error.contains("common.j"), "{error}");
+        assert!(error.contains("both live and deleted"), "{error}");
+    }
+    let low = dir.join("low.mpq");
+    write_table_archive(&low, member, true, 0, &[live]);
+    assert_eq!(
+        canonical_members(&pcx_mpq::MpqArchive::open(&low).unwrap(), member).unwrap(),
+        [("scripts/common.j".to_string(), member.to_string())],
+        "the lower archive is readable, so hiding the mixed high candidate would activate it"
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
