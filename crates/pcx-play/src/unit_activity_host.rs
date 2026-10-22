@@ -141,7 +141,12 @@ impl SpanSink<'_> {
 
 /// Host time at which `motion` has credited `credited` distance at `speed`.
 fn credited_time(motion: &Motion, speed: f32, credited: f64) -> f64 {
-    motion.started + credited / f64::from(speed)
+    motion.started
+        + if speed > 0.0 {
+            credited / f64::from(speed)
+        } else {
+            0.0
+        }
 }
 
 fn emit(
@@ -1589,6 +1594,9 @@ impl ObjectHost {
         };
         if now < motion.started {
             return Err(fail("game time precedes the movement order"));
+        }
+        if speed <= 0.0 {
+            return Ok(0);
         }
         // Distance is measured from `motion.started`; a replan restarts it at `now`.
         let distance = (now - motion.started) * f64::from(speed);

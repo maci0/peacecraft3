@@ -89,6 +89,14 @@ the unit scheduled and its motion rebased. A host test locks that queue
 interruption and continued scheduling. The diagnostic did not establish native
 Walk phase, animation queue interaction or the exact route-rebasing arithmetic.
 
+An admitted profile may set `MinUnitSpeed=0`, so the setter can store a zero
+speed. Motion projection then retains the route, destination and current order
+without displacement; it emits no nonfinite span and never divides by the zero
+speed. A later positive setter reanchors the retained route and motion resumes.
+A synthetic zero-minimum fixture locks that behavior. This is a recreation
+choice: the controlled stock profile clamps zero to its minimum of 10, so no
+probe observed a stored zero speed or the native zero-denominator behavior.
+
 The controlled probe reported `VERSION_REIGN_OF_CHAOS` checks under Wine, not
 native Windows or rendered parity. Nonfinite behavior, other movement classes,
 bonus compositions and exact endpoint/turn timing remain separate gates.
