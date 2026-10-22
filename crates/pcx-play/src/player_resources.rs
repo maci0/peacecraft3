@@ -23,6 +23,33 @@ pub struct Rules {
     food_defaults: Vec<i32>,
     pub(crate) food_marker_default: i32,
 }
+
+#[cfg(feature = "test-fixtures")]
+impl Rules {
+    /// Synthetic state domain for cross-crate runtime tests only.
+    pub fn synthetic_fixture() -> Self {
+        Self {
+            origin: AssetIdentity {
+                edition: "synthetic".into(),
+                version: "fixture".into(),
+                source: "synthetic player resources".into(),
+            },
+            image_sha256: [0; 32],
+            profile_sources: vec!["synthetic".into()],
+            initial: 0,
+            initialized_states: 32,
+            money_states: [1, 2],
+            money_scale: 1,
+            money_maximum: i32::MAX,
+            gathered_states: [15, 16],
+            gathered_scale: 1,
+            upkeep: Err("synthetic upkeep is not admitted".into()),
+            food_limit: None,
+            food_defaults: vec![0],
+            food_marker_default: 0,
+        }
+    }
+}
 fn word(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(
         bytes.get(at..at.checked_add(4)?)?.try_into().ok()?,

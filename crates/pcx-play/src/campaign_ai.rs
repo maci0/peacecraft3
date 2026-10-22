@@ -173,11 +173,8 @@ impl<W: AiWorld> Runtime<W> {
             return Err("StartCampaignAI: script path exceeds 16 KiB".into());
         }
         let path = AssetPath::new(path).map_err(|e| format!("StartCampaignAI: {e}"))?;
-        if let Some(active) = self.active.get_mut(&player) {
-            if !active.host().sleepers.is_empty() {
-                return Ok(());
-            }
-            return Err("StartCampaignAI: repeat after AI completion is unqualified".into());
+        if self.active.contains_key(&player) {
+            return Ok(());
         }
         if self.active.len() >= MAX_PLAYERS {
             return Err("StartCampaignAI: player budget".into());
@@ -191,6 +188,7 @@ impl<W: AiWorld> Runtime<W> {
             .checked_sub(1)
             .ok_or("StartCampaignAI: source load attempt budget")?;
         let scripts = loader(path.as_str())?;
+        admit_ai_natives(&scripts)?;
         let program = scripts.program();
         let entry = program
             .function("main")
@@ -248,6 +246,42 @@ impl<W: AiWorld> Runtime<W> {
         }
         result.map_err(|e| format!("campaign AI player {player}: {e}"))
     }
+}
+
+fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
+    let source = &scripts
+        .digests
+        .get(1)
+        .ok_or("StartCampaignAI: AI common source is missing")?
+        .label;
+    for (name, params, result) in [
+        ("GetAiPlayer", &[][..], "integer"),
+        ("Sleep", &["real"][..], "nothing"),
+        ("StartThread", &["code"][..], "nothing"),
+    ] {
+        let native = scripts
+            .program()
+            .natives()
+            .get(name)
+            .ok_or_else(|| format!("StartCampaignAI: {name} has no unambiguous declaration"))?;
+        if native.source != *source
+            || !native.also_declared_in.is_empty()
+            || native.is_constant
+            || native.params.len() != params.len()
+            || native
+                .params
+                .iter()
+                .zip(params)
+                .any(|(param, expected)| param.ty.array || param.ty.kind.name() != *expected)
+            || native.ret.array
+            || native.ret.kind.name() != result
+        {
+            return Err(format!(
+                "StartCampaignAI: {name} AI common declaration differs"
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) struct AiHost<W: AiWorld> {
@@ -440,7 +474,23 @@ mod tests {
         }
     }
 
+    const COMMON: &str = "type agent extends handle\ntype player extends agent\ntype playerstate extends handle\nnative Player takes integer number returns player\nnative GetPlayerState takes player whichPlayer, playerstate whichState returns integer\nnative SetPlayerState takes player whichPlayer, playerstate whichState, integer value returns nothing\n";
+    const AI_COMMON: &str = "native GetAiPlayer takes nothing returns integer\nnative Sleep takes real seconds returns nothing\nnative StartThread takes code callback returns nothing\n";
+
     fn program(label: &str, source: &str) -> Arc<MapScripts> {
+        program_with_ai_common(label, source, AI_COMMON)
+    }
+
+    fn program_with_ai_common(label: &str, source: &str, ai_common: &str) -> Arc<MapScripts> {
+        program_with_sources(label, source, COMMON, ai_common)
+    }
+
+    fn program_with_sources(
+        label: &str,
+        source: &str,
+        common: &str,
+        ai_common: &str,
+    ) -> Arc<MapScripts> {
         Arc::new(
             MapScripts::compile(
                 AssetIdentity {
@@ -450,11 +500,11 @@ mod tests {
                 },
                 ScriptAsset {
                     label: "synthetic:common",
-                    bytes: b"type agent extends handle\ntype player extends agent\ntype playerstate extends handle\nnative Player takes integer number returns player\nnative GetPlayerState takes player whichPlayer, playerstate whichState returns integer\nnative SetPlayerState takes player whichPlayer, playerstate whichState, integer value returns nothing\nnative GetAiPlayer takes nothing returns integer\nnative Sleep takes real seconds returns nothing\nnative StartThread takes code callback returns nothing\n",
+                    bytes: common.as_bytes(),
                 },
                 ScriptAsset {
                     label: "synthetic:common-ai",
-                    bytes: b"// no shared globals\n",
+                    bytes: ai_common.as_bytes(),
                 },
                 ScriptAsset {
                     label,
@@ -464,6 +514,43 @@ mod tests {
             )
             .unwrap(),
         )
+    }
+
+    #[test]
+    fn malformed_ai_native_abi_refuses_before_globals_or_spawned_child_write() {
+        let body = "globals\ninteger g = 0\nendglobals\nfunction child takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()), null, 11)\nendfunction\nfunction main takes nothing returns nothing\ncall StartThread(function child)\nendfunction\n";
+        for declaration in [
+            AI_COMMON.replace(
+                "StartThread takes code callback returns nothing",
+                "StartThread takes code callback returns integer",
+            ),
+            AI_COMMON.replace("native Sleep", "constant native Sleep"),
+            AI_COMMON.replace(
+                "GetAiPlayer takes nothing returns integer",
+                "GetAiPlayer takes nothing returns real",
+            ),
+        ] {
+            let script = program_with_ai_common("synthetic:red.ai", body, &declaration);
+            let mut runtime = Runtime::<World>::default();
+            runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+            let shared = Arc::new(Mutex::new(State::default()));
+            let mut world = Some(World(Arc::clone(&shared)));
+            let error = runtime.start(&mut world, 1, "red.ai").unwrap_err();
+            assert!(error.contains("declaration"), "{error}");
+            assert!(world.is_some());
+            assert!(shared.lock().unwrap().gold.is_empty());
+        }
+        let common = format!("{COMMON}{AI_COMMON}");
+        let script =
+            program_with_sources("synthetic:red.ai", body, &common, "// empty AI common\n");
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        let error = runtime.start(&mut world, 1, "red.ai").unwrap_err();
+        assert!(error.contains("declaration"), "{error}");
+        assert!(world.is_some());
+        assert!(shared.lock().unwrap().gold.is_empty());
     }
 
     struct Source {
@@ -608,7 +695,10 @@ mod tests {
         }
         assert_eq!(runtime.active[&1].global("localCount"), Value::Int(111));
         assert_eq!(runtime.active[&2].global("localCount"), Value::Int(111));
-        assert!(runtime.start(&mut world, 1, "purple.ai").is_err());
+        let remaining = runtime.remaining_loads;
+        runtime.start(&mut world, 1, "purple.ai").unwrap();
+        assert_eq!(runtime.remaining_loads, remaining);
+        assert_eq!(runtime.active[&1].global("localCount"), Value::Int(111));
     }
 
     #[test]
