@@ -45,6 +45,17 @@ pub(crate) fn reprice_max_life(
         .map_err(|e| format!("max life change: {e}"))
 }
 
+/// Final pools stored for a holder: a living holder keeps at least one hit point, while a dead
+/// holder stays at zero. The pool projection and every write use this same clamp.
+pub(crate) fn clamp_life_pools(life: f32, max_life: f32, dead: bool) -> (f32, f32) {
+    let life = if dead {
+        0.0
+    } else {
+        life.max(1.0).min(max_life)
+    };
+    (life, max_life)
+}
+
 fn change_life_pools(life: f32, max_life: f32, change: f32) -> Result<(f32, f32), String> {
     if !life.is_finite() || !max_life.is_finite() || !change.is_finite() {
         return Err("non-finite life value".into());
@@ -66,12 +77,14 @@ pub fn grant_strength(
     max_life: f32,
     life_per_strength: f32,
     effect: StrengthEffect,
+    dead: bool,
 ) -> Result<Grant, String> {
     let strength = retained
         .checked_add(effect.strength())
         .ok_or_else(|| "powerup strength grant: retained strength overflows".to_string())?;
     let (life, max_life) = reprice_life(life, max_life, life_per_strength, effect.strength())
         .map_err(|e| format!("powerup strength grant: {e}"))?;
+    let (life, max_life) = clamp_life_pools(life, max_life, dead);
     Ok(Grant {
         strength,
         life,
@@ -89,7 +102,7 @@ mod tests {
 
     #[test]
     fn percentage_of_life_is_kept_when_maximum_grows() {
-        let grant = grant_strength(0, 50.0, 100.0, 25.0, effect(2)).unwrap();
+        let grant = grant_strength(0, 50.0, 100.0, 25.0, effect(2), false).unwrap();
         assert_eq!(
             grant,
             Grant {
@@ -102,9 +115,16 @@ mod tests {
 
     #[test]
     fn retained_strength_accumulates_across_grants() {
-        let first = grant_strength(0, 100.0, 100.0, 25.0, effect(1)).unwrap();
-        let second =
-            grant_strength(first.strength, first.life, first.max_life, 25.0, effect(1)).unwrap();
+        let first = grant_strength(0, 100.0, 100.0, 25.0, effect(1), false).unwrap();
+        let second = grant_strength(
+            first.strength,
+            first.life,
+            first.max_life,
+            25.0,
+            effect(1),
+            false,
+        )
+        .unwrap();
         assert_eq!(
             second,
             Grant {
@@ -118,23 +138,31 @@ mod tests {
     #[test]
     fn zero_strength_keeps_pools_and_refuses_bad_pools_atomically() {
         assert_eq!(
-            grant_strength(3, 40.0, 80.0, 25.0, effect(0)).unwrap(),
+            grant_strength(3, 40.0, 80.0, 25.0, effect(0), false).unwrap(),
             Grant {
                 strength: 3,
                 life: 40.0,
                 max_life: 80.0
             }
         );
-        assert!(grant_strength(0, 90.0, 80.0, 25.0, effect(1)).is_err());
-        assert!(grant_strength(0, 10.0, 0.0, 25.0, effect(1)).is_err());
-        assert!(grant_strength(0, f32::NAN, 80.0, 25.0, effect(1)).is_err());
-        assert!(grant_strength(i32::MAX, 10.0, 80.0, 25.0, effect(1)).is_err());
-        assert!(grant_strength(0, 10.0, 80.0, -100.0, effect(1)).is_err());
+        assert!(grant_strength(0, 90.0, 80.0, 25.0, effect(1), false).is_err());
+        assert!(grant_strength(0, 10.0, 0.0, 25.0, effect(1), false).is_err());
+        assert!(grant_strength(0, f32::NAN, 80.0, 25.0, effect(1), false).is_err());
+        assert!(grant_strength(i32::MAX, 10.0, 80.0, 25.0, effect(1), false).is_err());
+        assert!(grant_strength(0, 10.0, 80.0, -100.0, effect(1), false).is_err());
     }
 
     #[test]
     fn removing_strength_scales_life_back_and_refuses_a_nonpositive_maximum() {
         assert_eq!(reprice_life(75.0, 150.0, 25.0, -2).unwrap(), (50.0, 100.0));
         assert!(reprice_life(10.0, 100.0, 25.0, -4).is_err());
+    }
+
+    #[test]
+    fn grants_clamp_tiny_living_life_to_one_and_dead_life_to_zero() {
+        let living = grant_strength(0, 0.1, 100.0, 25.0, effect(1), false).unwrap();
+        assert_eq!(living.life, 1.0);
+        let dead = grant_strength(0, 0.1, 100.0, 25.0, effect(1), true).unwrap();
+        assert_eq!(dead.life, 0.0);
     }
 }

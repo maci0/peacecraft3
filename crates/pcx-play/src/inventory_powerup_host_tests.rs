@@ -399,7 +399,11 @@ impl ObjectCatalog for PowerupItems {
         };
         // Charge, perishable, cooldown and ability fields for the two healing rows: `phea` has no
         // cooldown group; `phcd` has two charges and cooldown group `AIhe`.
-        let mut rows = vec![(*b"ipow", "powerup", powerup), (*b"iuse", "uses", "-")];
+        let mut rows = vec![
+            (*b"ipow", "powerup", powerup),
+            (*b"iuse", "uses", "-"),
+            (*b"idro", "drop", "0"),
+        ];
         match &rawcode {
             b"phea" => rows.extend([
                 (*b"iuse", "uses", "1"),
@@ -488,6 +492,22 @@ fn open_with_regens_overlay(
     mana_regen: Option<&str>,
     mana_per_intelligence: f32,
 ) -> Fixture {
+    open_with_regens_overlays(
+        overlay.clone(),
+        overlay,
+        strength_regen,
+        mana_regen,
+        mana_per_intelligence,
+    )
+}
+
+fn open_with_regens_overlays(
+    inventory_overlay: Overlay,
+    hero_overlay: Overlay,
+    strength_regen: f32,
+    mana_regen: Option<&str>,
+    mana_per_intelligence: f32,
+) -> Fixture {
     let (hero_rules, combat) = hero_rules();
     // `uabi` supplies the one ability list; the hero fixture's own `abilList` would be ambiguous.
     let mut fields: Vec<_> = hero_fields("STR")
@@ -526,7 +546,7 @@ fn open_with_regens_overlay(
     let (registry, activity) = super::inventory::order_inputs();
     let inventory = InventoryRules::read(
         Arc::clone(&tables),
-        overlay.clone(),
+        inventory_overlay.clone(),
         Arc::clone(&registry),
         &[(
             "synthetic MiscGame",
@@ -537,7 +557,7 @@ fn open_with_regens_overlay(
     .unwrap();
     let tome = TomeRules::decode(
         Arc::clone(&tables),
-        overlay.clone(),
+        inventory_overlay.clone(),
         origin.clone(),
         [0; 32],
         [
@@ -568,7 +588,7 @@ fn open_with_regens_overlay(
         .with_hero_skills(
             tables,
             origin,
-            overlay.clone(),
+            hero_overlay,
             hero_rules,
             HeroBudget {
                 abilities_per_unit: 8,
@@ -609,7 +629,7 @@ fn open_with_regens_overlay(
         .with_inventory_powerup(tome)
         .unwrap()
         .with_item_use(
-            crate::item_use_rules::Rules::new(powerup_tables(), overlay.clone()),
+            crate::item_use_rules::Rules::new(powerup_tables(), inventory_overlay.clone()),
             8,
         )
         .unwrap();
@@ -1269,6 +1289,71 @@ fn held_max_life_keeps_a_living_holder_at_one_life() {
     assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(true)));
     assert_eq!(max_life_of(&h, hero), HERO_LIFE + 37.0);
     assert_eq!(life_of(&h, hero), 1.0);
+}
+
+#[test]
+fn tiny_living_hero_keeps_one_life_after_a_strength_powerup() {
+    let Fixture { mut h, hero, .. } = open();
+    set_life(&mut h, hero, 0.1);
+    let tome = item(&mut h, b"tstr", 0.);
+    assert_eq!(add(&mut h, hero, tome), Ok(Value::Bool(true)));
+    assert_eq!(life_of(&h, hero), 1.0);
+    assert_eq!(
+        max_life_of(&h, hero),
+        HERO_LIFE + TOME_STRENGTH * LIFE_PER_STRENGTH
+    );
+}
+
+#[test]
+fn non_hero_near_zero_drop_keeps_one_life_and_restores_maximum() {
+    let Fixture {
+        mut h, ordinary, ..
+    } = open();
+    let ordinary_max = max_life_of(&h, ordinary);
+    set_life(&mut h, ordinary, 0.1);
+    let item = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, ordinary, item), Ok(Value::Bool(true)));
+    assert_eq!(max_life_of(&h, ordinary), ordinary_max + 37.0);
+    assert_eq!(life_of(&h, ordinary), 1.0);
+    set_life(&mut h, ordinary, 0.1);
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(ordinary), Value::Handle(item)],
+    )
+    .unwrap();
+    assert_eq!(max_life_of(&h, ordinary), ordinary_max);
+    assert_eq!(life_of(&h, ordinary), 1.0);
+}
+
+#[test]
+fn dead_retained_max_life_drop_keeps_zero_life_and_restores_maximum() {
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L000".into(),
+        vec![pcx_objects::Mod {
+            field: *b"inv2",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: Some([1, 0]),
+            value: pcx_objects::Value::Int(0),
+            end_word: 0,
+        }],
+    );
+    let Fixture { mut h, hero, .. } =
+        open_with_regens_overlays(overlay, Overlay::default(), 0., None, 0.);
+    let item = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(true)));
+    let held_max = max_life_of(&h, hero);
+    h.kill_unit(hero, None).unwrap();
+    assert_eq!(h.held_slot(hero, 0), Some(item));
+    assert_eq!(max_life_of(&h, hero), held_max);
+    assert_eq!(life_of(&h, hero), 0.0);
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(item)],
+    )
+    .unwrap();
+    assert_eq!(max_life_of(&h, hero), held_max - 37.0);
+    assert_eq!(life_of(&h, hero), 0.0);
 }
 
 #[test]
@@ -2105,6 +2190,24 @@ fn cleanup_preflights_sequential_strength_pools_before_dropping_either_item() {
     assert_eq!(h.held_slot(hero, 0), None);
     assert_eq!(h.held_slot(hero, 1), None);
     assert_eq!(h.unit_vitals(hero).unwrap().unwrap().max_life, HERO_LIFE);
+    assert_eq!(std::iter::from_fn(|| h.take_fired_event()).count(), 2);
+}
+
+#[test]
+fn cleanup_drops_sequential_fractional_max_life_without_spurious_refusal() {
+    let Fixture { mut h, hero, .. } = open();
+    let first = item(&mut h, b"plif", 0.);
+    let second = item(&mut h, b"plon", 0.);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
+    set_max_life(&mut h, hero, 100.6);
+    set_life(&mut h, hero, 100.6);
+    let _drop = register_drop(&mut h, hero);
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(h.held_slot(hero, 1), None);
+    assert_close(life_of(&h, hero), 62.6, "clamped sequential life");
+    assert_close(max_life_of(&h, hero), 62.6, "clamped sequential maximum");
     assert_eq!(std::iter::from_fn(|| h.take_fired_event()).count(), 2);
 }
 

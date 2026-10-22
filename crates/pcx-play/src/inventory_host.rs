@@ -2,7 +2,9 @@ use super::super::EventSubject;
 use super::*;
 use crate::inventory::{InventoryBudget, Policy, Rules};
 use crate::inventory_powerup::{AttributeBonus, Rules as PowerupRules};
-use crate::inventory_powerup_host::{grant_strength, reprice_life, reprice_max_life};
+use crate::inventory_powerup_host::{
+    clamp_life_pools, grant_strength, reprice_life, reprice_max_life,
+};
 use crate::item_heal::heal_life;
 use crate::playercolor_host::UseCheck;
 use pcx_objects::editor::{FieldSource, SlkId};
@@ -460,6 +462,7 @@ impl ObjectHost {
         &self,
         pools: (f32, f32),
         is_hero: bool,
+        dead: bool,
         strength: i32,
         max_life: i32,
     ) -> Result<(f32, f32), Error> {
@@ -476,7 +479,7 @@ impl ObjectHost {
         if max_life != 0 {
             pools = self.project_max_life(pools, max_life)?;
         }
-        Ok(pools)
+        Ok(clamp_life_pools(pools.0, pools.1, dead))
     }
 
     /// Life pools after passive strength and maximum-life deltas on a unit, or `None` when both
@@ -498,8 +501,15 @@ impl ObjectHost {
             ));
         };
         let is_hero = record.definition.rawcode[0].is_ascii_uppercase();
-        self.project_held_pools((vitals.life, vitals.max_life), is_hero, strength, max_life)
-            .map(Some)
+        let dead = record.combat.as_ref().is_some_and(|combat| combat.dead);
+        self.project_held_pools(
+            (vitals.life, vitals.max_life),
+            is_hero,
+            dead,
+            strength,
+            max_life,
+        )
+        .map(Some)
     }
 
     /// Life pools after removing an item's passive bonus from a unit.
@@ -530,11 +540,7 @@ impl ObjectHost {
             .combat
             .as_ref()
             .is_some_and(|combat| combat.dead);
-        let life = if dead {
-            0.0
-        } else {
-            life.max(1.0).min(max_life)
-        };
+        let (life, max_life) = clamp_life_pools(life, max_life, dead);
         if let Entry::Unit { record } = self.inner.entry_mut(unit)?
             && let Some(vitals) = &mut record.vitals
         {
@@ -693,12 +699,14 @@ impl ObjectHost {
         let vitals = record
             .vitals
             .ok_or_else(|| fail("hero vitals missing for powerup grant"))?;
+        let dead = record.combat.as_ref().is_some_and(|combat| combat.dead);
         let grant = grant_strength(
             record.permanent_strength,
             vitals.life,
             vitals.max_life,
             life_per_strength,
             effect,
+            dead,
         )
         .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))?;
         // Queue the pickup before the first write: queueing is the only fallible step left.
@@ -791,7 +799,13 @@ impl ObjectHost {
                 self.inner
                     .error("inventory", Failure::ItemState("unit position missing"))
             })?;
-            let is_hero = self.executed_unit(unit)?.definition.rawcode[0].is_ascii_uppercase();
+            let (is_hero, dead) = {
+                let record = self.executed_unit(unit)?;
+                (
+                    record.definition.rawcode[0].is_ascii_uppercase(),
+                    record.combat.as_ref().is_some_and(|combat| combat.dead),
+                )
+            };
             let mut pools = self.unit_life_pools(unit)?;
             for &item in &held {
                 let passive = self.held_attributes(item)?;
@@ -817,7 +831,8 @@ impl ObjectHost {
                             Failure::UnitState("unit vitals required before passive pool changes"),
                         ));
                     };
-                    pools = Some(self.project_held_pools(current, is_hero, strength, max_life)?);
+                    pools =
+                        Some(self.project_held_pools(current, is_hero, dead, strength, max_life)?);
                 }
             }
             self.reserve_item_events(&vec![(unit, false); held.len()])?;
