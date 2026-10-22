@@ -39,3 +39,49 @@ The existing unsupported boundary remains until that behavior is modeled.
 Receipts, markers and launch arguments stay local in ignored
 `.scratch/auto-harvest-probe`. The Wine/software reference does not qualify
 native Windows or rendered parity.
+
+## Controlled tree and deposit cycle
+
+A separate diagnostic used the same reviewed executable with `-classic` and
+reported `VERSION_REIGN_OF_CHAOS`. Map SHA-256:
+`1304832fd9ad8260511a1ccd991c55ecf483530cfcdc182c580635e2ea10c486`.
+Its original Human02 member set was retained except for the replacement script.
+Before measurement, the script removed existing destructables in the test
+region, created an owned town hall from the authored creation statement, and
+created a worker/tree pair plus a separate-owner unordered control pair. It
+configured a two-way passive alliance between the test owners and reset both
+lumber banks to zero. These are diagnostic stimuli, not unchanged-campaign
+acceptance.
+
+The controlled tree was requested at (-3600, -4800) and read back at
+(-3584, -4800), with maximum/current life 50. The ordered worker began at
+(-3600, -4700); the town hall read back at (-3776, -4032), owned by player nine.
+The order returned true. Sampling used the actual game clock, with a requested
+0.1-second timer period and a bound of 1200 samples.
+
+All 155 samples arrived through the completion checkpoint at 20.500:
+
+| First observed checkpoint | Ordered worker/tree/bank |
+| --- | --- |
+| 5.000 | tree life 50, order 852018, lumber zero |
+| 5.500 | tree life 49, worker still at its starting point |
+| 15.438 | tree life 40 after ten one-point decrements |
+| 16.000 | order changed to 852017; tree life 40, lumber zero |
+| 18.500 | lumber became 10 while tree life remained 40; order was 852018 again; worker at (-3661.882, -4254.364) |
+
+The control worker retained order zero and its initial position; its tree
+remained at life 50 and its owner's lumber stayed zero throughout. This observes
+a complete first harvest/deposit cycle while the measured tree remains alive,
+contradicting a kill-required reward model. The measurements do not directly
+expose a carried-lumber counter or prove arbitrary upgrade/partial-load rules.
+The order numbers are diagnostic values; production resolves their identities
+through the selected client registry.
+
+The shipped ability metadata supplies independent field meanings: `Har1` maps
+`Ahar.DataA` to `Damage to Tree`, `Har2` maps `DataB` to `Lumber Capacity`, and
+`Har3` maps `DataC` to `Gold Capacity`. These labels alone do not specify transfer
+timing. Exact work animation phase, nearest-tree/depot selection, interaction
+distance and the intervals between sampled checkpoints remain separate fidelity
+questions. Local source hashes, all records and the recovered launch receipt
+are in ignored `.scratch/harvest-cycle-probe-v2`. The launch wrapper timed out
+while its existing container continued initialization; no duplicate was started.
