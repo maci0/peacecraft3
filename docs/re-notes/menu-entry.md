@@ -30,8 +30,18 @@ chapter caller and none is claimed here.
 - Button geometry: `CampaignButtonTemplate` `Width`/`Height` read at runtime
   (`fdf.rect`), not a copied constant. Non-positive geometry refuses the panel.
 - Button art/state: `glue_menu::button` + `glue_menu::Item`/`spawn`.
-- Label face/size/colour: `render_style_with_parent` on the authored text frame,
-  resolved through the skin table and loaded from the install.
+- Label face/size/colour: `render_style_with_parent` on the authored
+  `StandardButtonTextTemplate` profile (the shared button-label style: `MasterFont`,
+  `0.013`, `JUSTIFYCENTER`/`JUSTIFYMIDDLE`, `FIXEDSIZE`), resolved through the
+  skin table and loaded from the install. `CampaignButtonTemplate` is a bare
+  `TEXTBUTTON` with no `ButtonText` child, so there is no per-row authored text
+  frame; the shared button-label profile is the source-bound choice, not the
+  `MissionNameHeader` screen header. Label **width** is derived from the authored
+  `CampaignButtonTemplate` `Width` minus the authored
+  `StandardCampaignButtonBackdropTemplate` `BackdropBackgroundInsets`, and the
+  label honours the authored `FontJustificationH`/`V` and wraps within that width
+  at the authored size — long mission names stay fully readable without spilling
+  into adjacent columns or being clipped/truncated.
 
 ## Recreation choices (no authored position exists)
 
@@ -41,6 +51,14 @@ recreation policy: campaigns column at `4%` left, missions at `45%` left, both
 starting `30%` from the top, stacking by the template geometry with a `25%`
 height gap. These offsets are labelled recreation and are the only invented
 values; nothing about item size, art or text is invented.
+
+Mission-list **viewport scrolling** is not sourced: the FDF exposes no list
+region, scrollbar art or scroll anchors. Deep mission lists remain fully
+reachable, so the missions column is rendered inside a bounded, clipped viewport
+whose rows scroll with wheel and keyboard-focus navigation, reusing the shared
+Bevy `Overflow::scroll_y`/`MouseWheel` input pattern used by the settings lists and
+keeping the focused row in view. This viewport is a labelled recreation geometry,
+and no scrollbar art or asset values are invented.
 
 ## Open fidelity questions
 
@@ -54,7 +72,8 @@ values; nothing about item size, art or text is invented.
   disabled in the list and refused at selection/mission activation.
 - Mission rows are exposed without mission-specific unlock filtering; this is
   an entry-path implementation, not qualified original progression UI.
-- Exact list coordinates and scroll behaviour are not sourced from the client.
+- Exact list coordinates and scroll behaviour are not sourced from the client;
+  the mission viewport is a labelled recreation geometry (see above).
 - Edition `_V0`/`_V1` data variants remain unselected (unchanged).
 
 ## Verification
@@ -69,12 +88,12 @@ the completed pointer click. A synthetic spawn test checks both boundaries.
   - `malformed_default_open_is_refused_instead_of_treated_closed`
   - `mission_row_background_key_does_not_match_prefix_fields`
   - `selecting_a_campaign_never_launches`
+  - `button_inner_width_reflects_the_authored_backdrop_inset`
+  - `fill_mode_row_art_fills_and_adds_no_interactive_components`
+  - `mission_scroll_reveals_the_focused_row_and_clamps_wheel`
   - `pcx-objects` `campaign_index` suite (8 tests)
 - Ignored install-gated integration: `selected_install_chapter_activation_publishes_the_production_session`
   (requires `PCX_NATIVE_CHAPTER_INSTALL` / `_MAP` / `_ADDON`).
-
-Corrected source checkpoint: `0f1ee38ea1f551ff4de9a5e10a5ac1ccb71329d2`,
-on top of `5b0ac54756b8832c4b5ab09a0d980b731ccf1e4b`.
 
 Worktree-private checks (`CARGO_BUILD_JOBS=1`, `--locked --offline`):
 
