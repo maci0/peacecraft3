@@ -392,6 +392,31 @@ struct LifePlan {
     was_dead: bool,
 }
 
+/// A preflighted damage transition that has reserved room for every death
+/// event it will queue. It does not change life, death or collision until
+/// [`ObjectHost::commit_destructable_damage`].
+#[derive(Clone, Copy)]
+pub(crate) struct PreparedDestructableDamage {
+    id: HandleId,
+    origin: DestructableOrigin,
+    life: f32,
+    dead: bool,
+    was_dead: bool,
+    events: usize,
+}
+
+impl PreparedDestructableDamage {
+    /// Resulting life after the committed hit.
+    pub(crate) fn life(&self) -> f32 {
+        self.life
+    }
+
+    /// Whether the target was already dead before the planned hit.
+    pub(crate) fn was_dead(&self) -> bool {
+        self.was_dead
+    }
+}
+
 pub(super) struct Admission {
     max_records: usize,
     records: usize,
@@ -547,6 +572,22 @@ impl ObjectHost {
     /// Apply damage through the same state, event and collision path as a kill.
     /// `invulnerable` leaves both life and collision untouched.
     pub fn damage_destructable(&mut self, id: HandleId, amount: f32) -> Result<f32, Error> {
+        let Some(plan) = self.prepare_destructable_damage(id, amount)? else {
+            return self.current_destructable_life(id);
+        };
+        let life = plan.life;
+        self.commit_destructable_damage(plan);
+        Ok(life)
+    }
+
+    /// Preflight a damage transition and reserve room for its death events.
+    /// `None` means invulnerability left the target unchanged. The returned
+    /// plan is committed with [`Self::commit_destructable_damage`].
+    pub(crate) fn prepare_destructable_damage(
+        &mut self,
+        id: HandleId,
+        amount: f32,
+    ) -> Result<Option<PreparedDestructableDamage>, Error> {
         let name = SHAPES[0].name;
         if !amount.is_finite() || amount < 0.0 {
             return Err(self.inner.error(
@@ -555,7 +596,7 @@ impl ObjectHost {
             ));
         }
         let (origin, life, was_dead) = {
-            let Ok(Entry::Destructable { creation, state }) = self.inner.entry_mut(id) else {
+            let Ok(Entry::Destructable { creation, state }) = self.inner.entry(id) else {
                 return Err(self.inner.error(name, Failure::WrongFamily));
             };
             let (Some(max_life), Some(current)) = (state.max_life, state.life) else {
@@ -564,32 +605,63 @@ impl ObjectHost {
                     .error(name, Failure::DestructableState("catalog HP not resolved")));
             };
             if state.invulnerable {
-                return Ok(current);
+                return Ok(None);
             }
             let life = (current - amount).max(0.0).min(max_life);
             (creation.origin, life, state.dead)
         };
         let dead = was_dead || life <= 0.0;
-        let count = if !dead || was_dead {
-            0
-        } else {
+        let events = if dead && !was_dead {
             self.death_event_count(id)
+        } else {
+            0
         };
-        if count > 0 {
-            self.reserve_event_delivery(count)?;
+        if events > 0 {
+            self.reserve_event_delivery(events)?;
         }
-        match self.inner.entry_mut(id) {
+        Ok(Some(PreparedDestructableDamage {
+            id,
+            origin,
+            life,
+            dead,
+            was_dead,
+            events,
+        }))
+    }
+
+    /// Commit a prepared damage transition. All fallible work, including event
+    /// queue reservation, happened in preparation; collision toggles for
+    /// admitted stationary layers do not allocate or fail.
+    pub(crate) fn commit_destructable_damage(&mut self, plan: PreparedDestructableDamage) {
+        debug_assert_eq!(plan.dead, plan.was_dead() || plan.life() <= 0.0);
+        match self.inner.entry_mut(plan.id) {
             Ok(Entry::Destructable { state, .. }) => {
-                state.life = Some(life);
-                state.dead = dead;
+                state.life = Some(plan.life);
+                state.dead = plan.dead;
             }
-            _ => unreachable!("checked destructable entry"),
+            _ => unreachable!("prepared destructable entry"),
         }
-        self.sync_destructable_collision(id, origin, !dead)?;
-        if count > 0 {
-            self.push_death_events(id, count);
+        self.sync_destructable_collision(plan.id, plan.origin, !plan.dead);
+        if plan.events > 0 {
+            self.push_death_events(plan.id, plan.events);
         }
-        Ok(life)
+    }
+
+    fn current_destructable_life(&self, id: HandleId) -> Result<f32, Error> {
+        match self.inner.entry(id) {
+            Ok(Entry::Destructable {
+                state:
+                    DestructableState {
+                        life: Some(life), ..
+                    },
+                ..
+            }) => Ok(*life),
+            Ok(Entry::Destructable { .. }) => Err(self.inner.error(
+                SHAPES[0].name,
+                Failure::DestructableState("catalog HP not resolved"),
+            )),
+            _ => Err(self.inner.error(SHAPES[0].name, Failure::WrongFamily)),
+        }
     }
 
     /// Intercept a death-producing destructable native so matching callbacks run
@@ -620,7 +692,7 @@ impl ObjectHost {
         self.begin_synchronous_delivery();
         let result = (|| {
             self.reserve_event_delivery(count)?;
-            self.commit_life(plan)?;
+            self.commit_life(plan);
             self.push_death_events(plan.id, count);
             Ok(())
         })();
@@ -674,7 +746,7 @@ impl ObjectHost {
         }))
     }
 
-    fn commit_life(&mut self, plan: LifePlan) -> Result<(), Error> {
+    fn commit_life(&mut self, plan: LifePlan) {
         match self.inner.entry_mut(plan.id) {
             Ok(Entry::Destructable { state, .. }) => {
                 state.life = Some(plan.life);
@@ -682,7 +754,7 @@ impl ObjectHost {
             }
             _ => unreachable!("planned destructable entry"),
         }
-        self.sync_destructable_collision(plan.id, plan.origin, !plan.dead)
+        self.sync_destructable_collision(plan.id, plan.origin, !plan.dead);
     }
 
     fn death_event_count(&self, id: HandleId) -> usize {
@@ -845,7 +917,7 @@ impl ObjectHost {
             if count > 0 {
                 self.reserve_event_delivery(count)?;
             }
-            self.commit_life(plan)?;
+            self.commit_life(plan);
             if count > 0 {
                 self.push_death_events(id, count);
             }
@@ -892,7 +964,7 @@ impl ObjectHost {
             }
         };
         if changed {
-            self.sync_destructable_collision(id, origin, !self.destructable_dead(id, name)?)?;
+            self.sync_destructable_collision(id, origin, !self.destructable_dead(id, name)?);
         }
         Ok(value)
     }
@@ -909,20 +981,18 @@ impl ObjectHost {
         id: HandleId,
         origin: DestructableOrigin,
         active: bool,
-    ) -> Result<(), Error> {
+    ) {
         let Some(placement) = self.unit_placement.as_mut() else {
-            return Ok(());
+            return;
         };
-        let result = match origin {
+        match origin {
             DestructableOrigin::Placed { creation_number } => {
-                placement.set_placed_active(creation_number, active)
+                placement.set_placed_active(creation_number, active);
             }
-            DestructableOrigin::Script => placement.set_destructable_active(id, active),
-        };
-        result.map(|_| ()).map_err(|e| {
-            self.inner
-                .error(SHAPES[0].name, Failure::DestructableSource(e.0))
-        })
+            DestructableOrigin::Script => {
+                placement.set_destructable_active(id, active);
+            }
+        }
     }
 
     fn admitted(&self) -> Result<&Admission, Error> {

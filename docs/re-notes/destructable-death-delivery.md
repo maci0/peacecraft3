@@ -5,14 +5,21 @@
 `ObjectHost::with_death_events` derives `EVENT_WIDGET_DEATH` from the selected
 `ConvertWidgetEvent` declaration and the source global with that name. The
 conversion must share `TriggerRegisterDeathEvent`'s source, retain a non-empty
-domain, and its `widgetevent -> eventid -> handle` ancestry is checked. Absence of
-the global leaves the event identity unset instead of inventing a number.
+domain, and its `widgetevent -> eventid -> handle` ancestry is checked. Starting
+death subscriptions requires that global and named initializer; a missing or
+foreign global, another initializer and an enumerand outside the admitted domain
+are refused rather than producing a null identity. Combat admission derives the
+same identity opportunistically: it stays unset when the global is absent and is
+validated when declared. Unit death subscriptions use that identity when it is
+available.
 
 `GetTriggerWidget` and `GetTriggerDestructable` are admitted only when declared,
-with the same source and their `widget` / `destructable` result families.
-Responses use the fired event's destructable subject; `GetTriggerWidget` also
-keeps the existing unit subject path. Unit death subscriptions use the same
-derived identity when it is available.
+with the same source and their `widget` / `destructable` result families. Their
+responses also require the admitted death-event source and identity, so the
+dispatchers stay unsupported before death subscriptions are admitted and cannot
+serve a foreign declaration afterwards. Responses use the fired event's
+destructable subject; `GetTriggerWidget` also keeps the existing unit subject
+path.
 
 ## Transition and queueing
 
@@ -22,7 +29,13 @@ maximum life. A first alive-to-dead transition reserves one queue slot per
 matching retained registration before writing life, dead state or collision
 activation. The commit then pushes one event per registration with a destructable
 subject and the derived event identity; the push cannot allocate. Engine damage
-uses the same producer and leaves the events for boundary delivery.
+uses the same producer and leaves the events for boundary delivery. The producer
+is split into a fallible `prepare_destructable_damage` preflight, which reserves
+event capacity without changing life or collision, and an infallible
+`commit_destructable_damage`, which writes the planned state and queues the
+reserved events. Harvest can prepare before updating carry, then commit after
+those writes. Destination toggles for stationary collision layers are likewise
+infallible at commit because their layers are already retained.
 
 Script death natives deliver matching callbacks synchronously before returning:
 the host takes the reserved batch, installs the event context, and continues
@@ -45,9 +58,9 @@ Synthetic owned-VM tests in `death_event_tests.rs` cover synchronous setters,
 kill and restore paths, event/widget/destructable responses, already-dead and
 positive-rearm behavior, engine-damage boundary delivery, both cross-family
 nesting directions, false conditions, sleeping actions, callback errors, source
-and platform admission, and the shared nesting budget.
+and platform admission, the prepare/commit seam, and the shared nesting budget.
 
-- `cargo test -p pcx-play --lib -- --test-threads=1`: 1416 passed, 41 ignored.
+- `cargo test -p pcx-play --lib -- --test-threads=1`: 1422 passed, 41 ignored.
 - `cargo clippy -p pcx-play --all-targets -- -D warnings`: pass.
 - `cargo fmt --all -- --check`: pass.
 - `cargo check --workspace --all-targets`: pass.
