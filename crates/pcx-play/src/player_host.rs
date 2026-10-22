@@ -1718,19 +1718,24 @@ impl ObjectHost {
         let gathered_current = self
             .resource_value(at, gathered_state)?
             .ok_or_else(|| fail("gathered lumber not admitted"))?;
-        let bank_next = bank_current
+        let bank_visible = bank_current
             .checked_add(amount)
             .ok_or_else(|| fail("lumber credit overflow"))?;
+        let gathered_visible = gathered_current
+            .checked_add(amount)
+            .ok_or_else(|| fail("gathered lumber credit overflow"))?;
+        let (bank_next, bank_visible) = self
+            .resource_assignment(at, bank_state, bank_visible)?
+            .ok_or_else(|| fail("lumber not admitted"))?;
+        let (gathered_next, gathered_visible) = self
+            .resource_assignment(at, gathered_state, gathered_visible)?
+            .ok_or_else(|| fail("gathered lumber not admitted"))?;
         let players = self.players.as_ref().ok_or_else(|| fail("not admitted"))?;
         let resources = players
             .resources
             .as_ref()
             .ok_or_else(|| fail("resources not admitted"))?;
         let number = players.rows[at].number;
-        let gathered_delta = resources.rules.gathered(amount);
-        let gathered_next = gathered_current
-            .checked_add(gathered_delta)
-            .ok_or_else(|| fail("gathered lumber credit overflow"))?;
         let missing = [bank_state, gathered_state]
             .iter()
             .filter(|state| {
@@ -1750,10 +1755,14 @@ impl ObjectHost {
                 .try_reserve(missing)
                 .map_err(|_| fail("resource row capacity"))?;
         }
-        let bank_change =
-            self.prepare_player_state_change_reserving(player, bank_state, bank_next, pending)?;
-        let gathered_change =
-            self.prepare_player_state_change_reserving(player, gathered_state, gathered_next, 0)?;
+        let changes = self.prepare_player_state_changes_reserving(
+            player,
+            [
+                (bank_state, bank_visible),
+                (gathered_state, gathered_visible),
+            ],
+            pending,
+        )?;
         let players = self
             .players
             .as_ref()
@@ -1775,7 +1784,7 @@ impl ObjectHost {
         let (bank_number, bank_state, bank_index) = row(bank_state);
         let (gathered_number, gathered_state, gathered_index) = row(gathered_state);
         Ok(LumberCredit {
-            rows: vec![
+            rows: [
                 LumberRow {
                     number: bank_number,
                     state: bank_state,
@@ -1789,7 +1798,7 @@ impl ObjectHost {
                     next: gathered_next,
                 },
             ],
-            changes: vec![bank_change, gathered_change],
+            changes,
         })
     }
 
@@ -1818,8 +1827,8 @@ impl ObjectHost {
 /// A lumber bank and gathered-counter credit with prepared rows and events.
 #[derive(Debug)]
 pub(crate) struct LumberCredit {
-    rows: Vec<LumberRow>,
-    changes: Vec<Option<PlayerStateChange>>,
+    rows: [LumberRow; 2],
+    changes: [Option<PlayerStateChange>; 2],
 }
 
 #[derive(Debug, Clone, Copy)]

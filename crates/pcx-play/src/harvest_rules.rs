@@ -270,74 +270,260 @@ fn unit_abil_codes(tables: &DefaultTables, rawcode: &str) -> Result<Vec<String>,
     Ok(split_csv(&list).map(str::to_owned).collect())
 }
 
-/// Ability cell after map overrides, refusing indexed or non-scalar edits.
-///
-/// The selected-object definition has already folded the map overlay into the
-/// unit row. Ability rows are shared, so the ability overlay is applied here
-/// with the same last-write-wins order as `ability_profile`.
+/// One authored harvest input: a scalar metadata field or an ordinal `Data`
+/// field. `Data` rows use the metadata `data` column and the authored level
+/// suffix; the fourcc is metadata-selected, not guessed from `DataA1`.
+#[derive(Debug, Clone, Copy)]
+enum AbilityValue<'a> {
+    Data(u8),
+    Scalar(&'a str),
+}
+
+fn metadata_text<'a>(
+    metadata: pcx_objects::editor::defaults::Metadata<'a>,
+    attribute: &str,
+) -> &'a str {
+    metadata
+        .attribute(attribute)
+        .map(|cell| cell.text.trim())
+        .unwrap_or("")
+}
+
+fn scalar_attribute(text: &str) -> bool {
+    matches!(text, "" | "0" | "-" | "_")
+}
+
+fn metadata_applies(metadata: pcx_objects::editor::defaults::Metadata<'_>, base: &str) -> bool {
+    let include = metadata_text(metadata, "useSpecific");
+    if !include.is_empty() && !include.split(',').any(|name| name.trim() == base) {
+        return false;
+    }
+    let exclude = metadata_text(metadata, "notSpecific");
+    !exclude.split(',').any(|name| name.trim() == base)
+}
+
+/// Ability cell after map overrides. Metadata supplies the field identity,
+/// ordinal and applicability; the map overlay supplies a typed level/value
+/// selector. Unrelated edits survive, while an edit that would change the
+/// selected harvest field is either applied or refused with context.
 fn overlay_ability_cell(
     tables: &DefaultTables,
     abilities: &Overlay,
     alias: &str,
-    column: &str,
+    value: AbilityValue<'_>,
+    level: u32,
+    kind: pcx_objects::editor::FieldKind,
 ) -> Result<String, HarvestError> {
+    let diagnostic = match value {
+        AbilityValue::Data(ordinal) => format!("Data{ordinal}"),
+        AbilityValue::Scalar(stem) => stem.to_string(),
+    };
     let alias_bytes = fourcc_text(alias)?;
     let (base, modifications) = crate::ability_profile::base(tables, abilities, alias_bytes)
         .map_err(|detail| HarvestError::Malformed {
             rawcode: alias.to_string(),
-            column: column.to_string(),
+            column: diagnostic.clone(),
             detail,
         })?;
-    let fields: Vec<_> = tables
+    let mut selected = None;
+    for field in tables
         .editor()
         .fields()
         .iter()
         .filter(|field| field.from == SlkId::AbilityMetaData)
-        .filter(|field| {
-            matches!(
-                &field.source,
-                FieldSource::Column { slk: SlkId::AbilityData, column: name } if name == column
-            )
-        })
-        .collect();
-    if fields.len() > 1 {
-        return Err(HarvestError::Malformed {
-            rawcode: alias.to_string(),
-            column: column.to_string(),
-            detail: "ambiguous ability metadata field".into(),
-        });
-    }
-    if let Some(field) = fields.first()
-        && let Some(entry) = modifications
-            .iter()
-            .rev()
-            .find(|entry| entry.field == field.fourcc)
     {
-        if entry.selectors.is_some_and(|selectors| selectors != [0, 0]) {
+        let Some(metadata) = tables.metadata(field.fourcc) else {
+            continue;
+        };
+        let name = metadata_text(metadata, "field");
+        let data = metadata_text(metadata, "data");
+        let matches = match value {
+            AbilityValue::Data(ordinal) => {
+                name.eq_ignore_ascii_case("Data")
+                    && data.parse::<u8>().is_ok_and(|value| value == ordinal)
+            }
+            AbilityValue::Scalar(stem) => name.eq_ignore_ascii_case(stem) && scalar_attribute(data),
+        };
+        if !matches
+            || !scalar_attribute(metadata_text(metadata, "appendIndex"))
+            || !metadata_applies(metadata, base)
+        {
+            continue;
+        }
+        if selected.replace(field.fourcc).is_some() {
             return Err(HarvestError::Malformed {
                 rawcode: alias.to_string(),
-                column: column.to_string(),
-                detail: "indexed ability override is not a scalar harvest input".into(),
+                column: diagnostic,
+                detail: "multiple applicable ability metadata fields".into(),
             });
         }
-        return Ok(render_value(&entry.value).trim().to_owned());
+    }
+    let Some(fourcc) = selected else {
+        return Err(HarvestError::Missing {
+            rawcode: alias.to_string(),
+            column: diagnostic,
+            detail: format!("no applicable ability metadata field for {base}"),
+        });
+    };
+    let definition = tables
+        .editor()
+        .field(fourcc)
+        .ok_or_else(|| HarvestError::Missing {
+            rawcode: alias.to_string(),
+            column: diagnostic.clone(),
+            detail: "selected metadata field is not in the editor schema".into(),
+        })?;
+    if definition.kind != kind {
+        return Err(HarvestError::Malformed {
+            rawcode: alias.to_string(),
+            column: diagnostic.clone(),
+            detail: format!(
+                "metadata field kind {:?} differs from expected {kind:?}",
+                definition.kind
+            ),
+        });
+    }
+    let column = match value {
+        AbilityValue::Data(ordinal) => {
+            let letter = (1..=9)
+                .contains(&ordinal)
+                .then(|| char::from(b'A' + ordinal - 1))
+                .ok_or_else(|| HarvestError::Malformed {
+                    rawcode: alias.to_string(),
+                    column: diagnostic.clone(),
+                    detail: "Data ordinal outside A..I".into(),
+                })?;
+            format!("Data{letter}{level}")
+        }
+        AbilityValue::Scalar(stem) => format!("{stem}{level}"),
+    };
+    if let Some(entry) = modifications.iter().rev().find(|entry| {
+        entry.field == fourcc
+            && entry
+                .selectors
+                .is_some_and(|selectors| selectors[0] == level)
+    }) {
+        let Some([_, data]) = entry.selectors else {
+            return Err(HarvestError::Malformed {
+                rawcode: alias.to_string(),
+                column: diagnostic,
+                detail: "ability override lacks indexed selectors".into(),
+            });
+        };
+        if data != 0 {
+            return Err(HarvestError::Malformed {
+                rawcode: alias.to_string(),
+                column: diagnostic,
+                detail: format!("unsupported data selector {data}"),
+            });
+        }
+        if !value_type_matches(entry.value_type, kind) {
+            return Err(HarvestError::Malformed {
+                rawcode: alias.to_string(),
+                column: diagnostic,
+                detail: format!(
+                    "override type {:?} differs from metadata kind {kind:?}",
+                    entry.value_type
+                ),
+            });
+        }
+        return value_text(alias, &diagnostic, &entry.value);
+    }
+    if modifications
+        .iter()
+        .any(|entry| entry.field == fourcc && entry.selectors.is_none())
+    {
+        return Err(HarvestError::Malformed {
+            rawcode: alias.to_string(),
+            column: diagnostic,
+            detail: "ability override lacks indexed selectors".into(),
+        });
     }
     let object = ability_object(tables, base)?;
     let cell = object
-        .cell(SlkId::AbilityData, column)
+        .cell(SlkId::AbilityData, &column)
         .map_err(|underlying| HarvestError::Missing {
             rawcode: alias.to_string(),
-            column: column.to_string(),
+            column: column.clone(),
             detail: underlying.to_string(),
         })?;
-    Ok(cell.text.trim().to_owned())
+    let typed = cell
+        .typed(kind)
+        .map_err(|underlying| HarvestError::Malformed {
+            rawcode: alias.to_string(),
+            column: column.clone(),
+            detail: underlying.to_string(),
+        })?;
+    typed_text(alias, &column, typed)
 }
 
-fn render_value(value: &pcx_objects::Value) -> String {
+fn typed_text(
+    alias: &str,
+    column: &str,
+    value: pcx_objects::editor::defaults::Value<'_>,
+) -> Result<String, HarvestError> {
+    use pcx_objects::editor::defaults::Value;
+    Ok(match value {
+        Value::Integer(number) => number.to_string(),
+        Value::Boolean(value) => u8::from(value).to_string(),
+        Value::Real(number) => number.to_string(),
+        Value::Text(text) => text.trim().to_owned(),
+        Value::IntegerList(_) | Value::Marker(_) => {
+            return Err(HarvestError::Malformed {
+                rawcode: alias.to_string(),
+                column: column.to_string(),
+                detail: "harvest input is not a scalar authored value".into(),
+            });
+        }
+    })
+}
+
+fn render_value(
+    definition: &Definition,
+    column: &str,
+    value: &pcx_objects::Value,
+) -> Result<String, HarvestError> {
+    value_text(&fourcc(definition.rawcode)?, column, value)
+}
+
+fn value_type_matches(
+    value_type: pcx_objects::ValueType,
+    kind: pcx_objects::editor::FieldKind,
+) -> bool {
+    use pcx_objects::ValueType;
+    match kind {
+        pcx_objects::editor::FieldKind::Int
+        | pcx_objects::editor::FieldKind::Bool
+        | pcx_objects::editor::FieldKind::AttackBits
+        | pcx_objects::editor::FieldKind::VersionFlags
+        | pcx_objects::editor::FieldKind::IntList => value_type == ValueType::Int,
+        pcx_objects::editor::FieldKind::Real => value_type == ValueType::Real,
+        pcx_objects::editor::FieldKind::Unreal => value_type == ValueType::Unreal,
+        pcx_objects::editor::FieldKind::Char | pcx_objects::editor::FieldKind::Token => {
+            value_type == ValueType::Str
+        }
+    }
+}
+
+fn value_text(
+    alias: &str,
+    column: &str,
+    value: &pcx_objects::Value,
+) -> Result<String, HarvestError> {
     match value {
-        pcx_objects::Value::Str(bytes) => String::from_utf8_lossy(bytes).into_owned(),
-        pcx_objects::Value::Int(number) => number.to_string(),
-        pcx_objects::Value::Real(number) | pcx_objects::Value::Unreal(number) => number.to_string(),
+        pcx_objects::Value::Str(bytes) => {
+            std::str::from_utf8(bytes)
+                .map(str::to_owned)
+                .map_err(|detail| HarvestError::Malformed {
+                    rawcode: alias.to_string(),
+                    column: column.to_string(),
+                    detail: detail.to_string(),
+                })
+        }
+        pcx_objects::Value::Int(number) => Ok(number.to_string()),
+        pcx_objects::Value::Real(number) | pcx_objects::Value::Unreal(number) => {
+            Ok(number.to_string())
+        }
     }
 }
 
@@ -389,12 +575,23 @@ fn definition_text(
     }
     match &fields[0].value {
         Ok(FieldValue::Cell(text)) => Ok(text.trim().to_owned()),
-        Ok(FieldValue::Override(value)) => Ok(render_value(value).trim().to_owned()),
+        Ok(FieldValue::Override(value)) => render_value(definition, column, value),
         Err(problem) => Err(HarvestError::Missing {
             rawcode: fourcc(definition.rawcode)?,
             column: column.into(),
             detail: format!("selected field unavailable: {problem:?}"),
         }),
+    }
+}
+
+fn definition_upgrade_codes(definition: &Definition) -> Result<Vec<String>, HarvestError> {
+    match definition_text(definition, SlkId::UnitBalance, "upgradeList") {
+        Ok(list) => Ok(split_csv(&list)
+            .filter(|code| !matches!(*code, "-" | "_"))
+            .map(str::to_owned)
+            .collect()),
+        Err(HarvestError::Missing { .. }) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
 }
 
@@ -477,19 +674,28 @@ fn resolve_ability_code(
     if alias == SENTINEL {
         return Ok(None);
     }
-    let code = match abilities {
-        Some(overlay) => overlay_ability_cell(tables, overlay, alias, "code")?,
-        None => ability_object(tables, alias)?
-            .cell(SlkId::AbilityData, "code")
-            .map_err(|underlying| HarvestError::Missing {
-                rawcode: alias.to_string(),
-                column: "code".to_string(),
-                detail: underlying.to_string(),
-            })?
-            .text
-            .trim()
-            .to_owned(),
+    let base = match abilities {
+        Some(overlay) => {
+            crate::ability_profile::base(tables, overlay, fourcc_text(alias)?)
+                .map_err(|detail| HarvestError::Malformed {
+                    rawcode: alias.to_string(),
+                    column: "code".to_string(),
+                    detail,
+                })?
+                .0
+        }
+        None => alias,
     };
+    let code = ability_object(tables, base)?
+        .cell(SlkId::AbilityData, "code")
+        .map_err(|underlying| HarvestError::Missing {
+            rawcode: alias.to_string(),
+            column: "code".to_string(),
+            detail: underlying.to_string(),
+        })?
+        .text
+        .trim()
+        .to_owned();
     if code == SENTINEL {
         return Ok(None);
     }
@@ -653,6 +859,107 @@ impl HarvestRules {
         Self::from_alias_list(tables, Some(abilities), &raw, &aliases, work_weapon)
     }
 
+    /// Apply the authored `UpgradeData` effects that change this worker's
+    /// harvest inputs. Only the `rlum` lumber-capacity effect is consumed here;
+    /// active combat, armor and movement upgrades remain unit-runtime state.
+    ///
+    /// `level` returns the player's applied level for a fourcc tech integer.
+    /// Absent or inactive levels are zero. A malformed active effect or a level
+    /// beyond the authored maximum is a contextual refusal, never a default.
+    pub fn apply_lumber_harvesting_upgrades(
+        &mut self,
+        tables: &DefaultTables,
+        definition: &Definition,
+        mut level: impl FnMut(i32) -> Result<i32, HarvestError>,
+    ) -> Result<(), HarvestError> {
+        let worker = fourcc(definition.rawcode)?;
+        for alias in definition_upgrade_codes(definition)? {
+            let code = fourcc_text(&alias)?;
+            let active = level(i32::from_be_bytes(code))?;
+            if active <= 0 {
+                continue;
+            }
+            let upgrade = tables
+                .object(Family::Upgrade, &alias)
+                .map_err(|underlying| HarvestError::Missing {
+                    rawcode: alias.clone(),
+                    column: "upgradeid".into(),
+                    detail: underlying.to_string(),
+                })?;
+            if upgrade.rawcode() != alias {
+                return Err(HarvestError::Missing {
+                    rawcode: alias.clone(),
+                    column: "upgradeid".into(),
+                    detail: format!("resolved identity {} differs in case", upgrade.rawcode()),
+                });
+            }
+            let maximum = object_text(
+                tables,
+                Family::Upgrade,
+                &alias,
+                SlkId::UpgradeData,
+                "maxlevel",
+            )?;
+            let maximum = parse_i32(&alias, &maximum, "maxlevel")?;
+            if active > maximum {
+                return Err(HarvestError::Malformed {
+                    rawcode: alias.clone(),
+                    column: "maxlevel".into(),
+                    detail: format!("applied level {active} exceeds authored maximum {maximum}"),
+                });
+            }
+            for slot in 1..=4 {
+                let effect = match tables
+                    .object(Family::Upgrade, &alias)
+                    .ok()
+                    .and_then(|object| {
+                        object
+                            .cell(SlkId::UpgradeData, &format!("effect{slot}"))
+                            .ok()
+                    }) {
+                    Some(cell) => cell.text.trim().to_owned(),
+                    None => continue,
+                };
+                if effect != "rlum" {
+                    continue;
+                }
+                let base = object_text(
+                    tables,
+                    Family::Upgrade,
+                    &alias,
+                    SlkId::UpgradeData,
+                    &format!("base{slot}"),
+                )?;
+                let increment = object_text(
+                    tables,
+                    Family::Upgrade,
+                    &alias,
+                    SlkId::UpgradeData,
+                    &format!("mod{slot}"),
+                )?;
+                let base = parse_i32(&alias, &base, &format!("base{slot}"))?;
+                let increment = parse_i32(&alias, &increment, &format!("mod{slot}"))?;
+                let delta = increment
+                    .checked_mul(active - 1)
+                    .and_then(|scaled| base.checked_add(scaled))
+                    .ok_or_else(|| HarvestError::Malformed {
+                        rawcode: alias.clone(),
+                        column: format!("base{slot}"),
+                        detail: "lumber-capacity effect overflows".into(),
+                    })?;
+                self.lumber_capacity =
+                    self.lumber_capacity.checked_add(delta).ok_or_else(|| {
+                        HarvestError::Malformed {
+                            rawcode: worker.clone(),
+                            column: "Lumber Capacity".into(),
+                            detail: "active upgrade capacity overflows".into(),
+                        }
+                    })?;
+            }
+        }
+        Ok(())
+    }
+
     fn from_alias_list(
         tables: &DefaultTables,
         abilities: Option<&Overlay>,
@@ -663,18 +970,82 @@ impl HarvestRules {
         let Some(ahar_alias) = find_ahar_alias(tables, abilities, aliases)? else {
             return Ok(None);
         };
-        let cell = |stem: &str| match abilities {
-            Some(overlay) => {
-                overlay_ability_cell(tables, overlay, &ahar_alias, &format!("{stem}1"))
+        let cell = |value: AbilityValue<'_>, kind: pcx_objects::editor::FieldKind, column: &str| {
+            match abilities {
+                Some(overlay) => overlay_ability_cell(tables, overlay, &ahar_alias, value, 1, kind),
+                None => match value {
+                    AbilityValue::Data(ordinal) => {
+                        let stem = format!("Data{}", char::from(b'A' + ordinal - 1));
+                        ability_level_cell(tables, &ahar_alias, &stem, 1)
+                    }
+                    AbilityValue::Scalar(stem) => ability_level_cell(tables, &ahar_alias, stem, 1),
+                }
+                .map_err(|error| match error {
+                    HarvestError::Missing {
+                        rawcode, detail, ..
+                    } => HarvestError::Missing {
+                        rawcode,
+                        column: column.to_string(),
+                        detail,
+                    },
+                    other => other,
+                }),
             }
-            None => ability_level_cell(tables, &ahar_alias, stem, 1),
         };
-        let damage = parse_f32(&ahar_alias, &cell("DataA")?, "DataA1")?;
-        let lumber_capacity = parse_nonneg_i32(&ahar_alias, &cell("DataB")?, "DataB1")?;
-        let gold_capacity = parse_nonneg_i32(&ahar_alias, &cell("DataC")?, "DataC1")?;
-        let range = parse_f32(&ahar_alias, &cell("Rng")?, "Rng1")?;
-        let search_radius = parse_f32(&ahar_alias, &cell("Area")?, "Area1")?;
-        let work_duration = parse_f32(&ahar_alias, &cell("Dur")?, "Dur1")?;
+        let damage = parse_f32(
+            &ahar_alias,
+            &cell(
+                AbilityValue::Data(1),
+                pcx_objects::editor::FieldKind::Int,
+                "DataA1",
+            )?,
+            "DataA1",
+        )?;
+        let lumber_capacity = parse_nonneg_i32(
+            &ahar_alias,
+            &cell(
+                AbilityValue::Data(2),
+                pcx_objects::editor::FieldKind::Int,
+                "DataB1",
+            )?,
+            "DataB1",
+        )?;
+        let gold_capacity = parse_nonneg_i32(
+            &ahar_alias,
+            &cell(
+                AbilityValue::Data(3),
+                pcx_objects::editor::FieldKind::Int,
+                "DataC1",
+            )?,
+            "DataC1",
+        )?;
+        let range = parse_f32(
+            &ahar_alias,
+            &cell(
+                AbilityValue::Scalar("Rng"),
+                pcx_objects::editor::FieldKind::Unreal,
+                "Rng1",
+            )?,
+            "Rng1",
+        )?;
+        let search_radius = parse_f32(
+            &ahar_alias,
+            &cell(
+                AbilityValue::Scalar("Area"),
+                pcx_objects::editor::FieldKind::Unreal,
+                "Area1",
+            )?,
+            "Area1",
+        )?;
+        let work_duration = parse_f32(
+            &ahar_alias,
+            &cell(
+                AbilityValue::Scalar("Dur"),
+                pcx_objects::editor::FieldKind::Unreal,
+                "Dur1",
+            )?,
+            "Dur1",
+        )?;
         let _ = raw;
         Ok(Some(Self {
             source: source_of(tables),
@@ -750,12 +1121,46 @@ impl DepotReturn {
             if code != ARTN {
                 continue;
             }
-            let cell = |stem: &str| match abilities {
-                Some(overlay) => overlay_ability_cell(tables, overlay, alias, &format!("{stem}1")),
-                None => ability_level_cell(tables, alias, stem, 1),
+            let cell = |value: AbilityValue<'_>,
+                        kind: pcx_objects::editor::FieldKind,
+                        column: &str| match abilities {
+                Some(overlay) => overlay_ability_cell(tables, overlay, alias, value, 1, kind),
+                None => match value {
+                    AbilityValue::Data(ordinal) => {
+                        let stem = format!("Data{}", char::from(b'A' + ordinal - 1));
+                        ability_level_cell(tables, alias, &stem, 1)
+                    }
+                    AbilityValue::Scalar(stem) => ability_level_cell(tables, alias, stem, 1),
+                }
+                .map_err(|error| match error {
+                    HarvestError::Missing {
+                        rawcode, detail, ..
+                    } => HarvestError::Missing {
+                        rawcode,
+                        column: column.to_string(),
+                        detail,
+                    },
+                    other => other,
+                }),
             };
-            let gold = parse_exact_bool(alias, &cell("DataA")?, "DataA1")?;
-            let lumber = parse_exact_bool(alias, &cell("DataB")?, "DataB1")?;
+            let gold = parse_exact_bool(
+                alias,
+                &cell(
+                    AbilityValue::Data(1),
+                    pcx_objects::editor::FieldKind::Bool,
+                    "DataA1",
+                )?,
+                "DataA1",
+            )?;
+            let lumber = parse_exact_bool(
+                alias,
+                &cell(
+                    AbilityValue::Data(2),
+                    pcx_objects::editor::FieldKind::Bool,
+                    "DataB1",
+                )?,
+                "DataB1",
+            )?;
             accepts_gold |= gold;
             accepts_lumber |= lumber;
         }

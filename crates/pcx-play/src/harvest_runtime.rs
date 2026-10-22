@@ -47,6 +47,7 @@ enum Phase {
 #[derive(Debug, Clone)]
 struct Worker {
     unit: HandleId,
+    owner: HandleId,
     rules: HarvestRules,
     tree: Option<HandleId>,
     depot: Option<HandleId>,
@@ -54,13 +55,15 @@ struct Worker {
     phase: Phase,
     phase_since: f64,
     next_hit: f64,
+    paused_at: Option<f64>,
+    reroute: bool,
 }
 
 pub(super) struct State {
     tables: Arc<DefaultTables>,
     abilities: Overlay,
     harvest_order: i32,
-    movement_order: i32,
+    return_order: i32,
     budget: Budget,
     workers: Vec<Worker>,
     depot_cache: BTreeMap<[u8; 4], DepotReturn>,
@@ -95,14 +98,18 @@ impl ObjectHost {
         else {
             return Ok(self);
         };
-        let Some(movement_order) = self.activity_movement_order() else {
-            return Err(fail("movement order not admitted"));
+        let Some(return_order) = self
+            .order_registry
+            .as_ref()
+            .and_then(|registry| registry.id("returnresources"))
+        else {
+            return Ok(self);
         };
         self.harvest = Some(State {
             tables,
             abilities,
             harvest_order,
-            movement_order,
+            return_order,
             budget,
             workers: Vec::new(),
             depot_cache: BTreeMap::new(),
@@ -118,6 +125,7 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         self.harvest.as_ref()?;
+        self.inner.program.natives().get(name)?;
         if name == "GetUnitCurrentOrder" {
             let [Value::Handle(unit)] = args else {
                 return None;
@@ -125,7 +133,7 @@ impl ObjectHost {
             let state = self.harvest.as_ref()?;
             let worker = state.workers.iter().find(|worker| worker.unit == *unit)?;
             let order = match worker.phase {
-                Phase::ToDepot => state.movement_order,
+                Phase::ToDepot => state.return_order,
                 _ => state.harvest_order,
             };
             return Some(Ok(Value::Int(order)));
@@ -155,12 +163,54 @@ impl ObjectHost {
             Some(Value::Int(id)) if by_id => Some(*id),
             _ => return None,
         };
-        let harvest_order = self.harvest.as_ref()?.harvest_order;
-        if !immediate || order != Some(harvest_order) {
-            self.cancel_harvest(unit);
+        if !immediate || args.len() != 2 {
             return None;
         }
-        Some(self.start_harvest(unit))
+        let state = self.harvest.as_ref()?;
+        if order == Some(state.harvest_order) {
+            return Some(self.start_harvest(unit));
+        }
+        if order == Some(state.return_order) {
+            return Some(self.return_resources(unit));
+        }
+        None
+    }
+
+    /// `returnresources` accepted for a worker that already carries lumber.
+    /// It routes to a source-qualified depot and keeps the authored order
+    /// identity visible through `GetUnitCurrentOrder` until deposit completes.
+    fn return_resources(&mut self, unit: HandleId) -> Result<Value, Error> {
+        let record = match self.executed_unit(unit) {
+            Ok(record) => record,
+            Err(_) => return Ok(Value::Bool(false)),
+        };
+        if !record.shown
+            || record.paused_since.is_some()
+            || record.combat.as_ref().is_some_and(|combat| combat.dead)
+        {
+            return Ok(Value::Bool(false));
+        }
+        let Some(position) = record.position else {
+            return Err(self.harvest_error("accepted unit position required"));
+        };
+        let owner = record.owner;
+        let index = {
+            let Some(state) = &self.harvest else {
+                return Ok(Value::Bool(false));
+            };
+            let Some(index) = state.workers.iter().position(|worker| worker.unit == unit) else {
+                return Ok(Value::Bool(false));
+            };
+            if state.workers[index].carrying < 1.0 {
+                return Ok(Value::Bool(false));
+            }
+            index
+        };
+        let mut worker = self.harvest.as_ref().expect("admitted").workers[index].clone();
+        worker.owner = owner;
+        self.route_depot(&mut worker, position)?;
+        self.harvest.as_mut().expect("admitted").workers[index] = worker;
+        Ok(Value::Bool(true))
     }
 
     /// Forget a worker without changing its current motion.
@@ -192,9 +242,24 @@ impl ObjectHost {
             let state = self.harvest.as_ref().expect("admitted");
             (Arc::clone(&state.tables), state.abilities.clone())
         };
-        let rules = HarvestRules::from_definition(&tables, &abilities, &definition)
+        let mut rules = HarvestRules::from_definition(&tables, &abilities, &definition)
             .map_err(|error| self.harvest_read_error("Ahar", error))?
             .ok_or_else(|| self.harvest_error("unit has no Ahar harvest capability"))?;
+        let owner_number = self
+            .player_settings(owner)
+            .ok()
+            .map(|settings| settings.number);
+        rules
+            .apply_lumber_harvesting_upgrades(&tables, &definition, |tech| {
+                let Some(number) = owner_number else {
+                    return Ok(0);
+                };
+                Ok(match self.stored_tech_level(number, tech) {
+                    super::players::TechRead::Level(level) => level,
+                    super::players::TechRead::Absent | super::players::TechRead::Unavailable => 0,
+                })
+            })
+            .map_err(|error| self.harvest_read_error("upgradeList", error))?;
         validate_rules(&rules).map_err(|detail| self.harvest_error(detail))?;
         let reach = tree_reach(&rules);
         let tree = self
@@ -231,6 +296,7 @@ impl ObjectHost {
         let delay = f64::from(work_delay(&rules));
         let worker = Worker {
             unit,
+            owner,
             rules,
             tree: Some(tree),
             depot: Some(depot),
@@ -238,6 +304,8 @@ impl ObjectHost {
             phase,
             phase_since: now,
             next_hit: now + delay,
+            paused_at: None,
+            reroute: false,
         };
         if phase == Phase::Work {
             self.enter_work_animation(unit, now)?;
@@ -280,31 +348,50 @@ impl ObjectHost {
             return Ok(());
         };
         let mut worker = state.workers[index].clone();
-        let live = match self.executed_unit(unit) {
-            Ok(record) => {
-                record.shown
-                    && record.paused_since.is_none()
-                    && !record.combat.as_ref().is_some_and(|combat| combat.dead)
+        let record = match self.executed_unit(unit) {
+            Ok(record)
+                if record.shown && !record.combat.as_ref().is_some_and(|combat| combat.dead) =>
+            {
+                record
             }
-            Err(_) => false,
+            _ => {
+                self.harvest
+                    .as_mut()
+                    .expect("admitted")
+                    .workers
+                    .remove(index);
+                return Ok(());
+            }
         };
-        if !live {
-            self.harvest
-                .as_mut()
-                .expect("admitted")
+        if let Some(paused_at) = record.paused_since {
+            worker.paused_at.get_or_insert(paused_at);
+            let state = self.harvest.as_mut().expect("admitted");
+            if let Some(slot) = state
                 .workers
-                .remove(index);
+                .iter_mut()
+                .find(|existing| existing.unit == unit)
+            {
+                *slot = worker;
+            }
             return Ok(());
         }
-        let position = self
-            .executed_unit(unit)?
+        if let Some(paused_at) = worker.paused_at.take() {
+            let frozen = (now - paused_at).max(0.0);
+            worker.phase_since += frozen;
+            worker.next_hit += frozen;
+        }
+        let position = record
             .position
             .ok_or_else(|| self.harvest_error("accepted unit position required"))?;
-        match worker.phase {
-            Phase::Seek => self.seek_tree(&mut worker, position)?,
-            Phase::ToTree => self.advance_to_tree(&mut worker, position, now)?,
-            Phase::Work => self.advance_work(&mut worker, position, now, work)?,
-            Phase::ToDepot => self.advance_to_depot(&mut worker, position, now)?,
+        let result = match worker.phase {
+            Phase::Seek => self.seek_tree(&mut worker, position),
+            Phase::ToTree => self.advance_to_tree(&mut worker, position, now),
+            Phase::Work => self.advance_work(&mut worker, position, now, work),
+            Phase::ToDepot => self.advance_to_depot(&mut worker, position, now),
+        };
+        if result.is_err() {
+            self.store_worker(worker);
+            return result;
         }
         if worker.phase == Phase::Seek && worker.tree.is_none() && worker.carrying < 1.0 {
             let state = self.harvest.as_mut().expect("admitted");
@@ -317,6 +404,11 @@ impl ObjectHost {
             }
             return Ok(());
         }
+        self.store_worker(worker);
+        Ok(())
+    }
+
+    fn store_worker(&mut self, worker: Worker) {
         let state = self.harvest.as_mut().expect("admitted");
         if let Some(slot) = state
             .workers
@@ -325,13 +417,15 @@ impl ObjectHost {
         {
             *slot = worker;
         }
-        Ok(())
     }
 
     fn seek_tree(&mut self, worker: &mut Worker, position: [f32; 2]) -> Result<(), Error> {
         let Some(tree) = self.select_tree(position, &worker.rules)? else {
             worker.phase = Phase::Seek;
             worker.tree = None;
+            if worker.carrying >= 1.0 {
+                self.route_depot(worker, position)?;
+            }
             return Ok(());
         };
         let tree_position = self.tree_position(tree)?;
@@ -381,7 +475,7 @@ impl ObjectHost {
             self.enter_work_animation(worker.unit, now)?;
             return Ok(());
         }
-        if !self.activity_moving(worker.unit)? && now - worker.phase_since > 0.25 {
+        if !self.activity_moving(worker.unit)? && self.activity_waypoints_empty(worker.unit)? {
             return Err(self.harvest_error("selected tree is not reachable"));
         }
         Ok(())
@@ -394,65 +488,79 @@ impl ObjectHost {
         now: f64,
         work: &mut usize,
     ) -> Result<(), Error> {
-        let Some(tree) = worker.tree else {
-            worker.phase = Phase::Seek;
-            return Ok(());
-        };
-        if !self.tree_usable(tree) {
-            if worker.carrying >= 1.0 {
-                self.route_depot(worker, position)?;
-            } else {
+        loop {
+            let Some(tree) = worker.tree else {
                 worker.phase = Phase::Seek;
-                worker.tree = None;
+                return Ok(());
+            };
+            if !self.tree_usable(tree) {
+                if worker.carrying >= 1.0 {
+                    worker.phase = Phase::ToDepot;
+                    worker.depot = None;
+                    worker.reroute = true;
+                    worker.phase_since = now;
+                } else {
+                    worker.phase = Phase::Seek;
+                    worker.tree = None;
+                    self.seek_tree(worker, position)?;
+                }
+                return Ok(());
             }
-            return Ok(());
-        }
-        let tree_position = self.tree_position(tree)?;
-        let reach = tree_reach(&worker.rules);
-        if distance(position, tree_position) > reach + 1.0 {
-            worker.phase = Phase::ToTree;
-            worker.phase_since = now;
-            self.steer_unit_in_range(worker.unit, Some(tree_position), reach, ORDER)?;
-            return Ok(());
-        }
-        if now + 1e-9 < worker.next_hit {
-            return Ok(());
-        }
-        *work = work
-            .checked_sub(1)
-            .ok_or_else(|| self.harvest_error("harvest work exhausted"))?;
-        let death_triggers = self.death_triggers(tree);
-        self.reserve_event_delivery(death_triggers.len())?;
-        let life = self.damage_destructable(tree, worker.rules.damage)?;
-        let capacity = worker.rules.lumber_capacity as f32;
-        worker.carrying = (worker.carrying + worker.rules.damage).min(capacity);
-        if life <= 0.0 {
-            for trigger in death_triggers {
-                self.push_reserved_event(
-                    trigger,
-                    None,
-                    super::EventSubject {
-                        destructable: Some(tree),
-                        ..Default::default()
-                    },
-                    None,
-                );
+            let tree_position = self.tree_position(tree)?;
+            let reach = tree_reach(&worker.rules);
+            if distance(position, tree_position) > reach + 1.0 {
+                worker.phase = Phase::ToTree;
+                worker.phase_since = now;
+                worker.reroute = false;
+                self.steer_unit_in_range(worker.unit, Some(tree_position), reach, ORDER)?;
+                return Ok(());
             }
-            if worker.carrying >= 1.0 {
-                self.route_depot(worker, position)?;
-            } else {
-                worker.phase = Phase::Seek;
+            if now + 1e-9 < worker.next_hit {
+                return Ok(());
+            }
+            *work = work
+                .checked_sub(1)
+                .ok_or_else(|| self.harvest_error("harvest work exhausted"))?;
+            let plan = self.prepare_destructable_damage(tree, worker.rules.damage)?;
+            let capacity = worker.rules.lumber_capacity as f32;
+            let Some(plan) = plan else {
+                worker.next_hit += f64::from(work_interval(&worker.rules));
+                continue;
+            };
+            let life = plan.life();
+            worker.carrying = (worker.carrying + worker.rules.damage).min(capacity);
+            worker.next_hit += f64::from(work_interval(&worker.rules));
+            let mut route = Ok(());
+            let mut reseek = false;
+            if life <= 0.0 {
                 worker.tree = None;
+                if worker.carrying >= 1.0 {
+                    worker.phase = Phase::ToDepot;
+                    worker.depot = None;
+                    worker.reroute = true;
+                    worker.phase_since = now;
+                    route = self.route_depot(worker, position);
+                } else {
+                    worker.phase = Phase::Seek;
+                    worker.depot = None;
+                    reseek = true;
+                }
+            } else if worker.carrying + 1e-3 >= capacity {
+                worker.phase = Phase::ToDepot;
+                worker.depot = None;
+                worker.reroute = true;
+                worker.phase_since = now;
+                route = self.route_depot(worker, position);
+            }
+            self.commit_destructable_damage(plan);
+            route?;
+            if reseek {
                 self.seek_tree(worker, position)?;
             }
-            return Ok(());
+            if worker.phase != Phase::Work {
+                return Ok(());
+            }
         }
-        if worker.carrying + 1e-3 >= capacity {
-            self.route_depot(worker, position)?;
-            return Ok(());
-        }
-        worker.next_hit += f64::from(work_interval(&worker.rules));
-        Ok(())
     }
 
     fn advance_to_depot(
@@ -464,9 +572,12 @@ impl ObjectHost {
         let Some(depot) = worker.depot else {
             return self.route_depot(worker, position);
         };
+        let owner = self.executed_unit(worker.unit)?.owner;
+        worker.owner = owner;
         let usable = self
             .executed_unit(depot)
-            .is_ok_and(|record| record.shown && !record.combat.as_ref().is_some_and(|c| c.dead));
+            .is_ok_and(|record| record.shown && !record.combat.as_ref().is_some_and(|c| c.dead))
+            && self.depot_accepts(depot, owner)?;
         if !usable {
             worker.depot = None;
             return self.route_depot(worker, position);
@@ -474,21 +585,30 @@ impl ObjectHost {
         let depot_position = self.unit_position(depot)?;
         let reach = self.depot_reach(depot, &worker.rules)?;
         if distance(position, depot_position) > reach + 1.0 {
-            if !self.activity_moving(worker.unit)? && now - worker.phase_since > 0.25 {
-                return Err(self.harvest_error("selected depot is not reachable"));
+            if worker.reroute || !self.activity_moving(worker.unit)? {
+                if !self.steer_unit_in_range(worker.unit, Some(depot_position), reach, ORDER)? {
+                    return Err(self.harvest_error("worker cannot move to the selected depot"));
+                }
+                if self.activity_waypoints_empty(worker.unit)? {
+                    return Err(self.harvest_error("selected depot is not reachable"));
+                }
+                worker.reroute = false;
+                worker.phase_since = now;
             }
             return Ok(());
         }
-        self.stop_unit(worker.unit)?;
         let amount = worker.carrying.floor() as i32;
         if amount > 0 {
-            let owner = self.executed_unit(worker.unit)?.owner;
             let credit = self.prepare_lumber_credit_reserving(owner, amount, 0)?;
+            self.stop_unit(worker.unit)?;
             self.apply_lumber_credit(credit);
+        } else {
+            self.stop_unit(worker.unit)?;
         }
         worker.carrying = 0.0;
         worker.phase = Phase::Seek;
         worker.tree = None;
+        self.seek_tree(worker, position)?;
         Ok(())
     }
 
@@ -502,6 +622,7 @@ impl ObjectHost {
         worker.depot = Some(depot);
         worker.phase = Phase::ToDepot;
         worker.phase_since = self.timer_game_time().unwrap_or(0.0);
+        worker.reroute = false;
         if distance(position, depot_position) > reach + 1.0 {
             if !self.steer_unit_in_range(worker.unit, Some(depot_position), reach, ORDER)? {
                 return Err(self.harvest_error("worker cannot move to the selected depot"));
@@ -706,6 +827,19 @@ impl ObjectHost {
         Ok(self.unit_collision_radius(depot, ORDER)? + rules.range)
     }
 
+    fn depot_accepts(&mut self, depot: HandleId, owner: HandleId) -> Result<bool, Error> {
+        let Ok(record) = self.executed_unit(depot) else {
+            return Ok(false);
+        };
+        if record.owner != owner {
+            return Ok(false);
+        }
+        let rawcode = record.definition.rawcode;
+        Ok(self
+            .depot_return(rawcode)?
+            .is_some_and(|depot| depot.accepts_lumber))
+    }
+
     fn stop_unit(&mut self, unit: HandleId) -> Result<(), Error> {
         self.steer_unit_in_range(unit, None, 0.0, ORDER)?;
         Ok(())
@@ -725,19 +859,6 @@ impl ObjectHost {
             .select("stand work lumber", now, None)
             .map_err(|detail| self.harvest_error(detail))?;
         Ok(())
-    }
-
-    fn death_triggers(&self, tree: HandleId) -> Vec<HandleId> {
-        self.inner
-            .arena
-            .iter()
-            .filter_map(|entry| match entry {
-                Entry::RegisteredDeathEvent(record) if record.widget == tree => {
-                    Some(record.trigger)
-                }
-                _ => None,
-            })
-            .collect()
     }
 
     fn harvest_error(&self, detail: impl Into<String>) -> Error {
