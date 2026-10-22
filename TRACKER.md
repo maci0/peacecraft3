@@ -12,6 +12,10 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   query in `AdjustPlayerStateSimpleBJ` (`Blizzard.j:7644`). Private checks pass
   1364 core tests, strict native/WASM Clippy and formatting; the latest app
   runtime suite passed 606 tests before the final inventory review fixes.
+  Gathered gold/lumber counters (`Blizzard.j:7652,7654`) now use
+  source-decoded setter scaling, unsigned getter division and the same
+  synchronous state-event path. The affected continuation gate still needs a
+  rerun. Core and app suites, strict native/WASM Clippy and formatting pass.
   Pool-clamp corrections and ignored maximum-state writes are integrated.
   The native-qualified inventory W3A Data-pointer correction and combined-tome
   overflow preflight are integrated privately. Same-map native cache restore

@@ -16,6 +16,8 @@ pub struct Rules {
     pub(crate) money_states: [i32; 2],
     pub(crate) money_scale: i32,
     pub(crate) money_maximum: i32,
+    pub(crate) gathered_states: [i32; 2],
+    pub(crate) gathered_scale: i32,
     upkeep: Result<upkeep::Upkeep, String>,
     food_limit: Option<i32>,
     food_defaults: Vec<i32>,
@@ -211,15 +213,49 @@ impl Rules {
                 (57, &[0x3b, 0xf9, 0x1b, 0xc9, 0x83, 0xe1]),
                 (64, &[0x83, 0xc1]),
                 (67, &[0xf7, 0xf9]),
+                (69, &[0x8d, 0x4e]),
+                (72, &[0x3b, 0xcf]),
+                (74, &[0x77]),
+                (76, &[0x8d, 0x4e]),
+                (79, &[0x3b, 0xf9]),
+                (81, &[0x1b, 0xc9]),
+                (83, &[0x33, 0xd2]),
+                (85, &[0x83, 0xe1]),
+                (88, &[0x83, 0xc1]),
+                (91, &[0xf7, 0xf1]),
             ],
         ) || !shape(
             set,
             &[
                 (0, &[0x55, 0x8b, 0xec, 0x56, 0xff, 0x75, 8, 0xe8]),
                 (12, &[0x8b, 0xf0, 0x83, 0xc4, 4, 0x85, 0xf6, 0x74]),
-                (70, &[0xc3, 0x8b, 0x45, 16, 0x8b, 0xce, 0x50, 0x52, 0xe8]),
+                (21, &[0x8b, 0x55, 12]),
+                (24, &[0x83, 0xfa]),
+                (27, &[0x73]),
+                (29, &[0x8d, 0x4a]),
+                (32, &[0x83, 0xf9]),
+                (35, &[0x77]),
+                (37, &[0x8d, 0x42]),
+                (40, &[0xb9]),
+                (45, &[0x3b, 0xc8]),
+                (47, &[0x8b, 0xce]),
+                (49, &[0x1b, 0xc0]),
+                (51, &[0x83, 0xe0]),
+                (54, &[0x83, 0xc0]),
+                (57, &[0x0f, 0xaf, 0x45, 16]),
+                (61, &[0x50]),
+                (62, &[0x52]),
+                (63, &[0xe8]),
+                (68, &[0x5e, 0x5d, 0xc3]),
+                (71, &[0x8b, 0x45, 16]),
+                (74, &[0x8b, 0xce]),
+                (76, &[0x50]),
+                (77, &[0x52]),
+                (78, &[0xe8]),
+                (83, &[0x5e, 0x5d, 0xc3]),
             ],
         ) || call(get, get_va, 6) != call(set, set_va, 7)
+            || call(set, set_va, 63) != call(set, set_va, 78)
         {
             return Err(fail("unsupported player-state wrapper shapes"));
         }
@@ -246,17 +282,55 @@ impl Rules {
         let first = -i32::from(*get.get(50).ok_or_else(|| fail("money state range"))? as i8);
         let count = word(get, 53).ok_or_else(|| fail("money state count"))?;
         let scale = i32::from(*get.get(66).ok_or_else(|| fail("money scale"))? as i8);
+        let mask = i32::from(*get.get(63).ok_or_else(|| fail("money scale mask"))? as i8);
         let maximum = word(helper, 41).ok_or_else(|| fail("money maximum"))? as i32;
+        let helper_seed = word(helper, 7).ok_or_else(|| fail("state clamp seed"))?;
+        let helper_mask = i32::from(*helper.get(26).ok_or_else(|| fail("state clamp mask"))? as i8);
+        let helper_scale =
+            i32::from(*helper.get(29).ok_or_else(|| fail("state clamp scale"))? as i8);
+        let gathered_first =
+            -i32::from(*set.get(31).ok_or_else(|| fail("gathered state range"))? as i8);
+        let gathered_offset = i32::from(*set.get(34).ok_or_else(|| fail("gathered state count"))?);
+        let gathered_seed = word(set, 41).ok_or_else(|| fail("gathered scale seed"))?;
+        let gathered_set_mask =
+            i32::from(*set.get(53).ok_or_else(|| fail("gathered setter mask"))? as i8);
+        let gathered_set_scale =
+            i32::from(*set.get(56).ok_or_else(|| fail("gathered setter scale"))? as i8);
+        let gathered_get_first =
+            -i32::from(*get.get(71).ok_or_else(|| fail("gathered getter range"))? as i8);
+        let gathered_get_offset = word(get, 53).ok_or_else(|| fail("gathered getter count"))?;
+        let gathered_get_mask =
+            i32::from(*get.get(87).ok_or_else(|| fail("gathered getter mask"))? as i8);
+        let gathered_get_scale =
+            i32::from(*get.get(90).ok_or_else(|| fail("gathered getter scale"))? as i8);
         if count != 1
             || first != -i32::from(helper[16] as i8)
+            || first != -i32::from(helper[21] as i8)
+            || helper_seed != 1
             || helper[36] != count as u8
-            || helper[29] as i8 as i32 != scale
-            || helper[26] != get[63]
+            || helper_scale != scale
+            || helper_mask != mask
+            || helper_mask.checked_add(helper_scale) != Some(1)
+            || scale.checked_add(mask) != Some(1)
             || word(helper, 54) != Some(maximum as u32)
             || scale <= 0
             || maximum < 0
+            || set[26] != get[26]
+            || gathered_first <= 0
+            || gathered_first != gathered_get_first
+            || gathered_offset != 1
+            || gathered_get_offset != 1
+            || gathered_seed != 1
+            || set[31] != set[39]
+            || get[71] != get[78]
+            || set[53] != get[87]
+            || gathered_set_mask.checked_add(gathered_set_scale) != Some(1)
+            || gathered_get_mask.checked_add(gathered_get_scale) != Some(1)
+            || gathered_set_scale != gathered_get_scale
+            || gathered_set_scale <= 0
+            || gathered_first <= first + count as i32
         {
-            return Err(fail("inconsistent source money operands"));
+            return Err(fail("inconsistent source player-state operands"));
         }
         let mut initializers = Vec::new();
         for (code_va, code) in pe.code_ranges() {
@@ -389,6 +463,9 @@ impl Rules {
         let [(initial, initialized_states)] = initializers.as_slice() else {
             return Err(fail("missing or ambiguous state initialization"));
         };
+        if gathered_first + gathered_offset >= *initialized_states as i32 {
+            return Err(fail("gathered state outside initialized range"));
+        }
         let version_va = entry(b"VersionGet\0", b"()Hversion;\0")?;
         let version = pe
             .read_from(version_va, true)
@@ -509,6 +586,8 @@ impl Rules {
             money_states: [first, first + count as i32],
             money_scale: scale,
             money_maximum: maximum,
+            gathered_states: [gathered_first, gathered_first + gathered_offset],
+            gathered_scale: gathered_get_scale,
             food_limit,
             food_defaults: food_defaults.clone(),
             food_marker_default,
@@ -546,6 +625,12 @@ impl Rules {
         };
         raw / self.money_scale
     }
+    pub(crate) fn gathered(&self, value: i32) -> i32 {
+        self.gathered_value(value.wrapping_mul(self.gathered_scale))
+    }
+    pub(crate) fn gathered_value(&self, raw: i32) -> i32 {
+        (raw as u32 / self.gathered_scale as u32) as i32
+    }
 }
 
 #[cfg(test)]
@@ -573,12 +658,17 @@ mod tests {
         .unwrap();
         assert_eq!(rules.food_ceiling(None), Some(73));
         assert!(rules.money_scale > 0);
+        assert_eq!(rules.gathered_states, [15, 16]);
+        assert_eq!(rules.gathered_scale, 10);
+        assert_eq!(rules.gathered_value(18), 1);
         eprintln!(
-            "initial={} money_states={:?} scale={} cap={} sha256={:02x?}",
+            "initial={} money_states={:?} scale={} cap={} gathered={:?} gathered_scale={} sha256={:02x?}",
             rules.initial,
             rules.money_states,
             rules.money_scale,
             rules.money_maximum,
+            rules.gathered_states,
+            rules.gathered_scale,
             rules.image_sha256
         );
     }
@@ -611,6 +701,14 @@ pub(crate) mod fixture {
                     0x3b, 0xf9, 0x1b, 0xc9, 0x83, 0xe1, 0xfb, 0x83, 0xc1, 6, 0xf7, 0xf9,
                 ],
             ),
+            (
+                69,
+                &[
+                    0x8d, 0x4e, 0xf1, 0x3b, 0xcf, 0x77, 0x11, 0x8d, 0x4e, 0xf1, 0x3b, 0xf9, 0x1b,
+                    0xc9, 0x33, 0xd2, 0x83, 0xe1, 0xf7, 0x83, 0xc1, 0x0a, 0xf7, 0xf1, 0x5f, 0x5e,
+                    0x5d, 0xc3,
+                ],
+            ),
         ] {
             get[at..at + b.len()].copy_from_slice(b);
         }
@@ -621,12 +719,22 @@ pub(crate) mod fixture {
         let mut set = vec![0u8; 86];
         for (at, b) in [
             (0, &[0x55, 0x8b, 0xec, 0x56, 0xff, 0x75, 8, 0xe8][..]),
-            (12, &[0x8b, 0xf0, 0x83, 0xc4, 4, 0x85, 0xf6, 0x74]),
-            (70, &[0xc3, 0x8b, 0x45, 16, 0x8b, 0xce, 0x50, 0x52, 0xe8]),
+            (12, &[0x8b, 0xf0, 0x83, 0xc4, 4, 0x85, 0xf6, 0x74, 0x3e]),
+            (
+                21,
+                &[
+                    0x8b, 0x55, 12, 0x83, 0xfa, 0x1a, 0x73, 0x36, 0x8d, 0x4a, 0xf1, 0x83, 0xf9, 1,
+                    0x77, 0x22, 0x8d, 0x42, 0xf1, 0xb9, 1, 0, 0, 0, 0x3b, 0xc8, 0x8b, 0xce, 0x1b,
+                    0xc0, 0x83, 0xe0, 0xf7, 0x83, 0xc0, 0x0a, 0x0f, 0xaf, 0x45, 16, 0x50, 0x52,
+                    0xe8, 0, 0, 0, 0, 0x5e, 0x5d, 0xc3, 0x8b, 0x45, 16, 0x8b, 0xce, 0x50, 0x52,
+                    0xe8, 0, 0, 0, 0, 0x5e, 0x5d, 0xc3,
+                ],
+            ),
         ] {
             set[at..at + b.len()].copy_from_slice(b);
         }
         set[8..12].copy_from_slice(&va(0x750).wrapping_sub(va(0x300) + 12).to_le_bytes());
+        set[64..68].copy_from_slice(&va(0x380).wrapping_sub(va(0x300) + 68).to_le_bytes());
         set[79..83].copy_from_slice(&va(0x380).wrapping_sub(va(0x300) + 83).to_le_bytes());
         put(0x300, &set);
         let mut helper = vec![0u8; 77];
@@ -645,6 +753,7 @@ pub(crate) mod fixture {
         ] {
             helper[at..at + b.len()].copy_from_slice(b);
         }
+        helper[7..11].copy_from_slice(&1u32.to_le_bytes());
         helper[41..45].copy_from_slice(&600i32.to_le_bytes());
         helper[54..58].copy_from_slice(&600i32.to_le_bytes());
         helper[68..72].copy_from_slice(&va(0x4c0).wrapping_sub(va(0x380) + 72).to_le_bytes());
@@ -861,6 +970,26 @@ pub(crate) mod fixture {
         )
         .unwrap()
     }
+    pub fn rules_with_gathered(first: u8, scale: u8, initial: i32) -> Rules {
+        let (mut image, origin, budget) = image();
+        for at in [0x280 + 71, 0x280 + 78, 0x300 + 31, 0x300 + 39] {
+            image[at] = first.wrapping_neg();
+        }
+        for at in [0x280 + 90, 0x300 + 56] {
+            image[at] = scale;
+        }
+        for at in [0x280 + 87, 0x300 + 53] {
+            image[at] = 1u8.wrapping_sub(scale);
+        }
+        image[0x550 + 9..0x550 + 13].copy_from_slice(&initial.to_le_bytes());
+        Rules::discover(
+            &image,
+            origin,
+            &[("synthetic misc", b"[Misc]\nFoodCeiling=73\n")],
+            budget,
+        )
+        .unwrap()
+    }
     pub fn rules_without_food_override() -> Rules {
         let (image, origin, budget) = image();
         Rules::discover(
@@ -904,8 +1033,30 @@ pub(crate) mod fixture {
         assert_eq!(rules.money(-3), 0);
         assert_eq!(rules.money(37), 37);
         let (image, origin, budget) = image();
+        assert_eq!(rules.gathered_states, [15, 16]);
+        assert_eq!(rules.gathered_scale, 10);
+        assert_eq!(rules.gathered(117), 117);
+        assert_eq!(rules.gathered_value(18), 1);
+        assert_eq!(rules.gathered_value(-10), 429_496_728);
         for at in [
-            0x280, 0x300, 0x380, 0x400, 0x200, 0x550, 0x4a1, 0xb47, 0xca8,
+            0x280,
+            0x300,
+            0x380,
+            0x400,
+            0x200,
+            0x550,
+            0x4a1,
+            0xb47,
+            0xca8,
+            0x2c7,
+            0x2da,
+            0x31f,
+            0x338,
+            0x387,
+            0x39a,
+            0x39d,
+            0x280 + 87,
+            0x300 + 53,
         ] {
             let mut broken = image.clone();
             broken[at] ^= 1;
@@ -919,6 +1070,19 @@ pub(crate) mod fixture {
                 .is_err()
             );
         }
+        let mut outside = image.clone();
+        for at in [0x280 + 71, 0x280 + 78, 0x300 + 31, 0x300 + 39] {
+            outside[at] = 24u8.wrapping_neg();
+        }
+        assert!(
+            Rules::discover(
+                &outside,
+                origin.clone(),
+                &[("synthetic", b"[Misc]\nFoodCeiling=73")],
+                budget
+            )
+            .is_err()
+        );
         assert!(
             Rules::discover(
                 &image,

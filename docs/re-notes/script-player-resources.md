@@ -1,13 +1,18 @@
 # Effective player resources
 
-The selected 1.29.2.9231 executable has SHA-256
+The selected executable is installed 1.29.2.9231, not the 1.27b installer. It
+has SHA-256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
 Its registered `GetPlayerState` implementation at `0x494a80` indexes the same
 state-property array that `SetPlayerState` (`0x4a97a0`, helper `0x4a9800`)
 updates. The wrappers share their player lookup. Gold and lumber occupy the
 source-decoded adjacent state range, use a source-decoded internal scale, and
 follow the setter's unsigned comparison and signed clamp after wrapping integer
-multiplication. Raw script requests remain separate from applied values.
+multiplication. Gathered gold and lumber (`PLAYER_STATE_GOLD_GATHERED`,
+`PLAYER_STATE_LUMBER_GATHERED`, states 15 and 16) use the setter's second
+source-decoded state range: it pre-scales the input, calls the same helper
+without entering the clamp, and the getter divides the stored counter as
+unsigned. Raw script requests remain separate from applied values.
 
 The player state-schema initializer at `0x4b8d20` supplies a repeated template to
 the property binder, including money and food state indices. Its template at
@@ -29,9 +34,10 @@ profile sources remain attached to the rules.
 
 The production startup can admit these rules before globals or assignments.
 `GetPlayerState` and `ObjectHost::player_resource_value` then expose effective
-gold, lumber, food used, food supplied and the food ceiling on the existing
-player identity. An unadmitted projection stays unknown. Other player-state
-settings keep their existing request-only behavior; their queries refuse.
+gold, lumber, food used, food supplied, the food ceiling, and gathered gold and
+lumber on the existing player identity. An unadmitted projection stays unknown.
+Other player-state settings keep their existing request-only behavior; their
+queries refuse.
 Requests still use their symbolic handles and retain exact signed inputs, even
 when the effective amount clamps. Failed signatures, identities, domains,
 work allocations or record budgets preserve the previous effective amount.
@@ -109,8 +115,9 @@ does not establish that map's startup or mission completion.
 
 Synthetic tests exercise changed source operands and malformed source refusal,
 initial balances, setter clamps with retained raw requests, per-player
-independence, exhausted request budgets, authored food fields, ownership,
-removal and explicit adjustment counters. The ignored original-image reader test
+independence, exhausted request budgets, gathered state scaling and unsigned
+reads, authored food fields, ownership, removal and explicit adjustment
+counters. The ignored original-image reader test
 requires `PCX_PLAYER_RESOURCE_IMAGE`; its food profile is deliberately synthetic
 and does not establish the original game's food ceiling. Private source analysis
 and local validation receipts stay under `.scratch/player-resources-20261020/`.

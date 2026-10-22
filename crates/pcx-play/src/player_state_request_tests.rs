@@ -269,7 +269,102 @@ fn request_admission_is_explicit_source_bound_and_independent_of_the_getter() {
 }
 
 fn resource_common() -> String {
-    common().replacen("globals\n", "type version extends handle\nconstant native ConvertVersion takes integer i returns version\nnative VersionGet takes nothing returns version\ntype widget extends agent\ntype unit extends widget\nnative CreateUnit takes player p, integer id, real x, real y, real face returns unit\nnative RemoveUnit takes unit u returns nothing\nnative SetUnitOwner takes unit u, player p, boolean color returns nothing\nglobals\nconstant version RESOURCE_VERSION_LOW=ConvertVersion(0)\nconstant version RESOURCE_VERSION_HIGH=ConvertVersion(1)\nconstant playerstate PLAYER_STATE_RESOURCE_GOLD=ConvertPlayerState(1)\nconstant playerstate PLAYER_STATE_RESOURCE_LUMBER=ConvertPlayerState(2)\nconstant playerstate PLAYER_STATE_RESOURCE_FOOD_USED=ConvertPlayerState(5)\nconstant playerstate PLAYER_STATE_RESOURCE_FOOD_CAP=ConvertPlayerState(4)\nconstant playerstate PLAYER_STATE_FOOD_CAP_CEILING=ConvertPlayerState(6)\n",1)
+    common().replacen("globals\n", "type version extends handle\nconstant native ConvertVersion takes integer i returns version\nnative VersionGet takes nothing returns version\ntype widget extends agent\ntype unit extends widget\nnative CreateUnit takes player p, integer id, real x, real y, real face returns unit\nnative RemoveUnit takes unit u returns nothing\nnative SetUnitOwner takes unit u, player p, boolean color returns nothing\nglobals\nconstant version RESOURCE_VERSION_LOW=ConvertVersion(0)\nconstant version RESOURCE_VERSION_HIGH=ConvertVersion(1)\nconstant playerstate PLAYER_STATE_RESOURCE_GOLD=ConvertPlayerState(1)\nconstant playerstate PLAYER_STATE_RESOURCE_LUMBER=ConvertPlayerState(2)\nconstant playerstate PLAYER_STATE_RESOURCE_FOOD_USED=ConvertPlayerState(5)\nconstant playerstate PLAYER_STATE_RESOURCE_FOOD_CAP=ConvertPlayerState(4)\nconstant playerstate PLAYER_STATE_FOOD_CAP_CEILING=ConvertPlayerState(6)\nconstant playerstate PLAYER_STATE_GOLD_GATHERED=ConvertPlayerState(15)\nconstant playerstate PLAYER_STATE_LUMBER_GATHERED=ConvertPlayerState(16)\n",1)
+}
+fn resource_common_with_gathered(first: i32, second: i32) -> String {
+    resource_common()
+        .replacen(
+            "PLAYER_STATE_GOLD_GATHERED=ConvertPlayerState(15)",
+            &format!("PLAYER_STATE_GOLD_GATHERED=ConvertPlayerState({first})"),
+            1,
+        )
+        .replacen(
+            "PLAYER_STATE_LUMBER_GATHERED=ConvertPlayerState(16)",
+            &format!("PLAYER_STATE_LUMBER_GATHERED=ConvertPlayerState({second})"),
+            1,
+        )
+}
+#[test]
+fn gathered_counters_use_wrapping_assignment_and_unsigned_reads() {
+    let rules = crate::player_resources::fixture::rules_with_gathered(17, 7, 42);
+    assert_eq!(rules.initial, 42);
+    assert_eq!(rules.gathered_states, [17, 18]);
+    assert_eq!(rules.gathered_scale, 7);
+    let (_, host) = fixture(&resource_common_with_gathered(17, 18), "// gathered", true);
+    let mut host = host
+        .with_player_state_requests(PlayerStateRequestBudget { max_records: 8 })
+        .unwrap()
+        .with_player_resources(rules)
+        .unwrap();
+    let a = host.native("Player", &[Value::Int(0)]).unwrap();
+    let b = host.native("Player", &[Value::Int(1)]).unwrap();
+    let gold = host
+        .native("ConvertPlayerState", &[Value::Int(17)])
+        .unwrap();
+    let lumber = host
+        .native("ConvertPlayerState", &[Value::Int(18)])
+        .unwrap();
+    assert_eq!(
+        host.player_resource_value(id(&a), "PLAYER_STATE_GOLD_GATHERED")
+            .unwrap(),
+        Some(6)
+    );
+    assert_eq!(
+        host.native("GetPlayerState", &[a.clone(), gold.clone()])
+            .unwrap(),
+        Value::Int(6)
+    );
+    host.native("SetPlayerState", &[a.clone(), gold.clone(), Value::Int(5)])
+        .unwrap();
+    assert_eq!(
+        host.native("GetPlayerState", &[a.clone(), gold.clone()])
+            .unwrap(),
+        Value::Int(5)
+    );
+    assert_eq!(
+        host.player_settings(id(&a)).unwrap().state_requests,
+        [(id(&gold), 5)]
+    );
+    host.native(
+        "SetPlayerState",
+        &[a.clone(), gold.clone(), Value::Int(100)],
+    )
+    .unwrap();
+    assert_eq!(
+        host.native("GetPlayerState", &[a.clone(), gold.clone()])
+            .unwrap(),
+        Value::Int(100)
+    );
+    host.native("SetPlayerState", &[a.clone(), gold.clone(), Value::Int(-3)])
+        .unwrap();
+    assert_eq!(
+        host.native("GetPlayerState", &[a.clone(), gold.clone()])
+            .unwrap(),
+        Value::Int(613_566_753)
+    );
+    host.native(
+        "SetPlayerState",
+        &[a.clone(), gold.clone(), Value::Int(i32::MIN)],
+    )
+    .unwrap();
+    assert_eq!(
+        host.native("GetPlayerState", &[a.clone(), gold.clone()])
+            .unwrap(),
+        Value::Int(306_783_378)
+    );
+    host.native(
+        "SetPlayerState",
+        &[a.clone(), lumber.clone(), Value::Int(0)],
+    )
+    .unwrap();
+    assert_eq!(
+        host.native("GetPlayerState", &[a, lumber]).unwrap(),
+        Value::Int(0)
+    );
+    assert_eq!(
+        host.native("GetPlayerState", &[b, gold]).unwrap(),
+        Value::Int(6)
+    );
 }
 #[test]
 fn effective_money_uses_selected_initial_scale_and_clamp_while_requests_stay_exact() {
