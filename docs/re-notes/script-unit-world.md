@@ -941,3 +941,53 @@ context still matches all 155 original creation requests and accepted positions.
 Unchanged Human01 application startup passes ShowUnit and next refuses
 `AttachSoundToUnit` at Blizzard.j:2226; it publishes no session. The earlier
 standalone diagnostic's missing day/night loader is not that application's failure.
+
+## Selected flight movement admission (2026-10-22)
+
+The supplied `UnitData.slk` row `nser` (Searinox) selects `movetp=fly`,
+`moveHeight=280`, `moveFloor=90`, `turnRate=0.1`, `collision=48` and
+`pathTex=_`; its `UnitBalance.slk` `collision` value is `48`. These are the
+authored inputs for Human02's scripted Searinox creation, not defaults invented
+by the recreation.
+
+Selected executable evidence (Legacy 1.29.2.9231, SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`):
+
+- the movement-token decoder's string table at `0x10dccc0` maps `fly` to
+  movement enumerand `2`;
+- the constructor path beginning at `0x67ce7d` indexes a case table at
+  `0x67d90c`: movement `1` (`foot`) reaches `0x67cebc` (`mov ecx,2`) and
+  movement `2` (`fly`) reaches `0x67cec3` (`mov ecx,4`); the selected value is
+  stored at the unit's `+0x1b0` pathing-mask field;
+- the separate pathing-type switch at `0x494460` maps pathing enumerand `1` to
+  mask `2` and enumerand `2` to mask `4`, matching `PATHING_TYPE_FLYABILITY`;
+- the fly predicate at `0x767c30` compares the `movetp` field with `fly`.
+
+The recreation now derives both masks from those reviewed instruction windows.
+`unit_positions::geometry` classifies `foot`, `horse` and `fly`; air keeps the
+authored collision radius and `pathTex`. Placement selects the `fly` mask instead
+of the ground mask for air, skips ground terrain-domain adjacency, ignores dynamic
+unit occupancy and stationary footprints, and does not insert air stamps into
+either ground occupancy array. `prepare_motion` reuses the stamp's class, so
+routes and segment samples also test the fly mask. An all-fly-masked map refuses
+creation rather than falling back to an invented position.
+
+Recreation choices still requiring native qualification: whether air units
+collide with each other, the exact radius/footprint test against no-fly cells,
+`moveFloor` altitude handling and turn-rate-limited facing. The actor consumer
+already reads `moveHeight` as model height above terrain; it does not consume
+`moveFloor` or `turnRate`, and this slice does not change rendering.
+
+A local Human02-derived diagnostic omitted five unsupported
+`IssueImmediateOrder` calls and the later trigger initialization, then reached
+and admitted the authored `CreateUnit('nser', ...)` at script line 858. The
+resulting `gg_unit_nser_0048` global answered `GetUnitTypeId == 'nser'` and
+`GetUnitX/GetUnitY == 2612.25/-5883.25`, the authored 2612.3/-5883.1 request
+snapped to the selected quarter-cell grid. The unmodified map still stops
+earlier at script line 815 on unimplemented `IssueImmediateOrder`, so this is a
+targeted creation-path probe, not an unmodified campaign gate, playability or
+rendered-parity claim.
+
+Synthetic tests cover flight admission, ground-mask/occupancy/domain bypass,
+fly-mask refusal, air stamps leaving ground occupancy unchanged and scripted fly
+movement. Focused library tests, strict Clippy and formatting pass locally.

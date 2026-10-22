@@ -560,6 +560,25 @@ fn selected_speed_overrides_and_movement_class_control_real_displacement() {
 }
 
 #[test]
+fn fly_movement_class_admits_scripted_motion() {
+    let mut h = profile(FieldValue::Cell("12".into()), Some("fly"));
+    let a = position_create(&mut h, 16., 16.).unwrap();
+    h.native(
+        "IssuePointOrder",
+        &[
+            a.clone(),
+            Value::Str("gamma".into()),
+            Value::Real(72.),
+            Value::Real(16.),
+        ],
+    )
+    .unwrap();
+    assert!(h.next_timer_expiry(1., &mut 1000).unwrap().is_none());
+    h.advance_unit_activity(1., &mut 65536).unwrap();
+    assert_eq!(h.native("GetUnitX", &[a]).unwrap(), Value::Real(28.));
+}
+
+#[test]
 fn malformed_orders_and_profiles_refuse_without_position_or_handle_mutation() {
     let mut vm = open();
     let a = unit(&vm, "A");

@@ -389,6 +389,7 @@ pub(crate) fn fixture(exponent: u32, initial: f32) -> (Vec<u8>, Binding, RuleInp
     let one_initializer = put(0x340, &initializer(1, address(0x510)));
     let two_initializer = put(0x360, &initializer(2, address(0x514)));
     let ground_mask = put(0x380, &[0xb9, 8, 0, 0, 0]);
+    let fly_mask = put(0x3a0, &[0xb9, 4, 0, 0, 0]);
     for (offset, value) in [(0x500, initial), (0x504, 0.5_f32), (0x508, 1.5)] {
         bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
@@ -403,6 +404,7 @@ pub(crate) fn fixture(exponent: u32, initial: f32) -> (Vec<u8>, Binding, RuleInp
         one_initializer,
         two_initializer,
         ground_mask,
+        fly_mask,
     };
     (bytes, binding, budget)
 }
@@ -466,7 +468,7 @@ fn operands_not_selected_image_values_drive_normalization_and_geometry() {
 
 #[test]
 fn malformed_source_windows_and_budgets_are_refused() {
-    for mutation in 0..9 {
+    for mutation in 0..10 {
         let (mut bytes, mut binding, mut budget) = fixture(2, -8192.25);
         match mutation {
             0 => bytes[0x500] ^= 1,
@@ -486,6 +488,11 @@ fn malformed_source_windows_and_budgets_are_refused() {
             }
             7 => {
                 bytes[0x504..0x508].copy_from_slice(&2.0_f32.to_le_bytes());
+                binding.image_sha256 = sha256(&bytes);
+            }
+            9 => {
+                bytes[0x3a0] = 0xb8;
+                binding.fly_mask.digest = sha256(&bytes[0x3a0..0x3a5]);
                 binding.image_sha256 = sha256(&bytes);
             }
             _ => {
@@ -720,5 +727,59 @@ fn attack_region_routes_around_a_blocked_contact_point_without_target_occupancy(
     assert!(
         p.route_within(id(1), [16.0, 16.0], [112.0, 16.0], 2.0, f32::NAN, &mut 2000)
             .is_err()
+    );
+}
+
+#[test]
+fn fly_placement_ignores_ground_state_but_respects_the_fly_mask() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "fly".into(),
+        },
+        10000,
+    );
+    let air = p
+        .prepare_class([32., 32.], Some(2.), "_", 0., true)
+        .unwrap();
+    p.commit(id(1), air);
+    let cell = 8 * 32 + 8;
+    assert_eq!(p.occupied[cell], 0);
+    assert_eq!(p.footprint_occupied[cell], 0);
+    let ground = p.prepare([32., 32.], Some(2.), "_", 0.).unwrap();
+    p.commit(id(2), ground);
+    p.grid.pathing.cells[cell] |= p.rules.ground_mask();
+    p.grid.domains[cell] = 9;
+    assert!(
+        p.prepare_motion(id(1), [32., 32.], 2.).unwrap().is_some(),
+        "air ignores the ground mask, ground occupancy and terrain domains"
+    );
+    p.grid.pathing.cells[cell] |= p.rules.fly_mask();
+    assert!(
+        p.prepare_motion(id(1), [32., 32.], 2.).unwrap().is_none(),
+        "the selected fly mask still refuses air motion"
+    );
+}
+
+#[test]
+fn fly_creation_refuses_a_map_with_no_unmasked_cell() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "fly-wall".into(),
+        },
+        10000,
+    );
+    let fly = p.rules.fly_mask();
+    for cell in &mut p.grid.pathing.cells {
+        *cell |= fly;
+    }
+    assert!(
+        p.prepare_class([32., 32.], Some(2.), "_", 0., true)
+            .unwrap_err()
+            .0
+            .contains("no qualified placement")
     );
 }

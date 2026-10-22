@@ -123,9 +123,15 @@ impl ObjectHost {
             return Ok(None);
         };
         let fail = |text| self.inner.error("CreateUnit", Failure::UnitState(text));
-        let (radius, path) = geometry(&record.definition).map_err(fail)?;
+        let geometry = geometry(&record.definition).map_err(fail)?;
         placement
-            .prepare([record.x, record.y], radius, path, record.face)
+            .prepare_class(
+                [record.x, record.y],
+                geometry.radius,
+                geometry.path,
+                record.face,
+                geometry.air,
+            )
             .map(Some)
             .map_err(|e| {
                 self.inner
@@ -412,12 +418,19 @@ pub(super) fn text<'a>(
     }
 }
 
-pub(super) fn geometry(definition: &Definition) -> Result<(Option<f32>, &str), &'static str> {
+pub(super) struct Geometry<'a> {
+    pub radius: Option<f32>,
+    pub path: &'a str,
+    pub air: bool,
+}
+
+pub(super) fn geometry(definition: &Definition) -> Result<Geometry<'_>, &'static str> {
     let movement = text(definition, SlkId::UnitData, "movetp")?;
     let path = text(definition, SlkId::UnitData, "pathTex")?;
+    let air = movement == "fly";
     let radius = match movement {
         "_" | "none" | "" => None,
-        "foot" | "horse" => {
+        "foot" | "horse" | "fly" => {
             let value = field(
                 definition,
                 SlkId::UnitBalance,
@@ -437,5 +450,5 @@ pub(super) fn geometry(definition: &Definition) -> Result<(Option<f32>, &str), &
         }
         _ => return Err("movement type is outside admitted creation placement"),
     };
-    Ok((radius, path))
+    Ok(Geometry { radius, path, air })
 }
