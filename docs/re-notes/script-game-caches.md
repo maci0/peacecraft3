@@ -143,6 +143,35 @@ restore and a second map with a typed override of the held item's amount,
 using the same persisted native cache. No original W3V bytes are part of the
 recreation's private profile format.
 
+### Controlled restore observation (2026-10-22)
+
+The RoC run `cross-map-cache-20261022-a` successfully stores and saves a
+level-ten Uther holding `prvt`. Its current/maximum life before `StoreUnit`
+is 350/1400. The immediate same-map `RestoreUnit` returns the held item and
+life 1400/1400, rather than preserving the saved current-life ratio. All
+seven A markers validate, including source identity, cache presence and
+successful store/save. This contradicts the recreation's current-life
+preservation for this tested case; mana and other cached states were not
+sampled here.
+
+`ChangeLevel` reaches the staged B map in the same client, and B finds and
+restores the cached unit. However, B's fresh control receives the original
+150-point bonus rather than the diagnostic 200-point override. The
+cross-map **override comparison remains unqualified**; successful restore
+alone does not establish which modified definition would win.
+
+The reviewed image is the `3f2ed012…70eed` client identified above, launched
+with `-classic`; both maps report RoC. Revised A map SHA-256 is
+`7cd1280d2ec73e4629e239638452be7f3dc683a0735301f1dbb0ef74132e7248`;
+its script SHA-256 is
+`b64a21a22c3e2731b75de4be27f8b336496b58b48f722324a0450f5cfe86f690`.
+B map SHA-256 is
+`68b837d5df72d0a5cdffe5e8d4f7cebc8b44e0cee70ff07abd498ac298256bd0`.
+Raw markers, packed-member receipts and qualified/unqualified collector
+results remain local in `.scratch/cross-map-cache-probe/transition-a/` in
+the main checkout. These Wine observations do not qualify native Windows
+or a general restore-pool policy beyond the sampled life case.
+
 Pool preservation, explicit item-flag preservation, omission of transient state
 and the no-pickup-event path are recreation choices still requiring an original
 client comparison. The native cached inventory loop observed here covers six
