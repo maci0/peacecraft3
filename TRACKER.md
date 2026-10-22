@@ -11,7 +11,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   continuation before eager placed-world admission. Gathered gold/lumber
   counters (`Blizzard.j:7652,7654`) now use
   source-decoded setter scaling, unsigned getter division and the same
-  synchronous state-event path. The combined private checks passed 1427 core
+  synchronous state-event path. The combined private checks passed 1430 core
   tests, 607 app tests, strict native/WASM Clippy and formatting including the
   gathered-counter, ranked/inventory Data-pointer and destructable-death imports. The unchanged
   Continue gate passes Human01 with 152 executed units and Human02's explicit
@@ -44,7 +44,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   and `inventory-review-*.log`, `gathered-pointer-*.log`,
   `placed-flag-admission-*.log`, `unit-color-final-*.log`, and
   `late-create-combined-*.log`, `restore-combined-*.log` and
-  `ai-combined-*.log` in that directory.
+  `ai-combined-*.log` and `restore-amount-combined-*.log` in that directory.
 
 - [x] Bind headless session admission to actual selected catalog/Misc contents.
   The readiness receipt keys every admitted catalog table/profile and the three
@@ -89,9 +89,11 @@ focused coverage. Missing event identity and malformed response contracts refuse
 
 The selected-install gate exposed an incorrect two-argument restoration fixture;
 `DestructableRestoreLife` actually takes a real life amount before its birth flag.
-The corrected three-argument path supports the measured full-life restoration of
-a dead target without birth animation. Other restoration forms remain unsupported
-and refuse before mutation. The app fixture also now supplies a synthetic widget
+The corrected three-argument path now derives its near-zero threshold and life
+floor from the selected client, restores dead targets by the requested amount
+with the catalog maximum as a cap, and leaves live targets unchanged. The source
+windows have an aggregate byte limit. Birth animation remains unsupported and
+refuses before mutation. The app fixture also now supplies a synthetic widget
 event identity instead of relying on an absent source constant.
 
 Combined validation passes 1423 core tests, 606 app tests, strict native/WASM
