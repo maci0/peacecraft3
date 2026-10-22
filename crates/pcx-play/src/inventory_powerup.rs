@@ -1,7 +1,7 @@
 //! Source-derived hero attribute abilities: automatic powerups (permanent strength on use) and
-//! passive held-item bonuses (strength and agility while held). Both read ability classes from
-//! the reviewed client's registration operands and amounts from selected ability metadata with
-//! W3A overlays.
+//! passive held-item bonuses (strength, agility, armor and flat attack damage while held). Both
+//! read ability classes from the reviewed client's registration operands and amounts from
+//! selected ability metadata with W3A overlays.
 use crate::{
     menu_lighting::REVIEWED_IMAGE,
     neutral_player::{RuleInputBudget, Sha256Digest, sha256},
@@ -19,6 +19,8 @@ const POWERUP_WINDOW: u32 = 0xbca0e0;
 const PASSIVE_WINDOW: u32 = 0xbc9ce0;
 /// Registration call for the passive armor class (source `AIde`, base `APbo`).
 const ARMOR_WINDOW: u32 = 0xbc9d40;
+/// Registration call for the passive flat attack-damage class (source `AIat`, base `APbo`).
+const DAMAGE_WINDOW: u32 = 0xbc9c80;
 /// Registration call for the healing class (source `AIhe`). Its base comes from a call, so the
 /// window is longer than the immediate-base shape. Reviewed at `0xbf0520`.
 pub(crate) const HEAL_WINDOW: u32 = 0xbf0520;
@@ -55,13 +57,15 @@ impl StrengthEffect {
     }
 }
 
-/// Flat strength, agility and armor from passive held items. Strength and agility also include
-/// retained powerup strength in a unit total. Armor points are added to unit armor while held.
+/// Flat strength, agility, armor and attack damage from passive held items. Strength and agility
+/// also include retained powerup strength in a unit total. Armor points are added to unit armor
+/// while held; damage is a flat addition to the unit's attack damage.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AttributeBonus {
     pub strength: i32,
     pub agility: i32,
     pub armor: i32,
+    pub damage: i32,
 }
 
 #[derive(Clone, Debug)]
@@ -80,10 +84,12 @@ pub struct Rules {
     powerup_class: String,
     passive_class: String,
     armor_class: String,
+    damage_class: String,
     strength: Column,
     agility: Column,
     intelligence: Column,
     armor: Column,
+    damage: Column,
     /// Healing registration, attached by `with_heal`. Absent until the healing window is read.
     heal: Option<HealClass>,
 }
@@ -125,6 +131,7 @@ impl Rules {
         let powerup = window(POWERUP_WINDOW)?;
         let passive = window(PASSIVE_WINDOW)?;
         let armor = window(ARMOR_WINDOW)?;
+        let damage = window(DAMAGE_WINDOW)?;
         let heal = pe
             .read_from(HEAL_WINDOW, true)
             .map_err(|e| fail(&e.to_string()))?
@@ -138,16 +145,26 @@ impl Rules {
             .get(..BASE_FN_LEN)
             .map(<[u8]>::to_vec)
             .ok_or_else(|| fail("truncated healing base function"))?;
-        Self::decode(tables, overlay, origin, digest, &powerup, &passive, &armor)
-            .and_then(|rules| rules.with_heal(&heal, &base_code))
-            .map_err(|e| fail(&e))
+        Self::decode(
+            tables,
+            overlay,
+            origin,
+            digest,
+            [&powerup, &passive, &armor, &damage],
+        )
+        .and_then(|rules| rules.with_heal(&heal, &base_code))
+        .map_err(|e| fail(&e))
     }
 
     /// Attaches the healing class. The class key is an immediate in the window; the base comes
     /// from the reviewed base function, which the caller reads from the image.
     pub(crate) fn with_heal(mut self, window: &[u8], base_code: &[u8]) -> Result<Self, String> {
         let (class, _) = class_from_call_window(window, base_code)?;
-        if class == self.powerup_class || class == self.passive_class || class == self.armor_class {
+        if class == self.powerup_class
+            || class == self.passive_class
+            || class == self.armor_class
+            || class == self.damage_class
+        {
             return Err("healing registration must name a distinct class".into());
         }
         let amount = column(&self.tables, b"Ihpg")?;
@@ -247,18 +264,21 @@ impl Rules {
         overlay: Overlay,
         origin: AssetIdentity,
         image_sha256: Sha256Digest,
-        powerup_window: &[u8],
-        passive_window: &[u8],
-        armor_window: &[u8],
+        windows: [&[u8]; 4],
     ) -> Result<Self, String> {
+        let [powerup_window, passive_window, armor_window, damage_window] = windows;
         let (powerup_class, powerup_base) = class_from_window(powerup_window)?;
-        // The passive and armor bases (`APbo`) are native classes with no ability row, so they are
-        // not checked against metadata.
+        // The passive, armor and damage bases (`APbo`) are native classes with no ability row, so
+        // they are not checked against metadata.
         let (passive_class, _) = class_from_window(passive_window)?;
         let (armor_class, _) = class_from_window(armor_window)?;
+        let (damage_class, _) = class_from_window(damage_window)?;
         if powerup_class == passive_class
             || powerup_class == armor_class
+            || powerup_class == damage_class
             || passive_class == armor_class
+            || passive_class == damage_class
+            || armor_class == damage_class
         {
             return Err("attribute registrations must name distinct classes".into());
         }
@@ -269,11 +289,13 @@ impl Rules {
         let agility = column(&tables, b"Iagi")?;
         let intelligence = column(&tables, b"Iint")?;
         let armor = column(&tables, b"Idef")?;
+        let damage = column(&tables, b"Iatt")?;
         Ok(Self {
             strength,
             agility,
             intelligence,
             armor,
+            damage,
             origin,
             image_sha256,
             tables,
@@ -281,6 +303,7 @@ impl Rules {
             powerup_class,
             passive_class,
             armor_class,
+            damage_class,
             heal: None,
         })
     }
@@ -322,9 +345,10 @@ impl Rules {
         Ok(Some(StrengthEffect { strength }))
     }
 
-    /// Passive strength, agility and armor of a held item. `None` for powerups and usable items: a
-    /// usable item is held without activation, so its abilities add no passive attribute here.
-    /// Any passive ability outside the admitted classes, or an intelligence bonus, refuses.
+    /// Passive strength, agility, armor and flat attack damage of a held item. `None` for powerups
+    /// and usable items: a usable item is held without activation, so its abilities add no passive
+    /// attribute here. Any passive ability outside the admitted classes, or an intelligence
+    /// bonus, refuses.
     pub fn held_attributes(
         &self,
         definition: &Definition,
@@ -354,6 +378,20 @@ impl Rules {
                     .armor
                     .checked_add(points)
                     .ok_or("passive armor overflows")?;
+                continue;
+            }
+            if code == self.damage_class {
+                if !self.damage.aliases.iter().any(|a| a == alias) {
+                    return Err(format!("damage metadata does not admit ability {alias}"));
+                }
+                let points = self.amount(alias, &self.damage)?;
+                if points < 0 {
+                    return Err(format!("negative damage on {}", item.rawcode()));
+                }
+                held.damage = held
+                    .damage
+                    .checked_add(points)
+                    .ok_or("passive damage overflows")?;
                 continue;
             }
             if code != self.passive_class {

@@ -90,6 +90,10 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["phcd", "AIh1", "0", "1", "1", "2"],
             &["phsm", "AIh2", "0", "1", "1", "1"],
             &["phtg", "AIh3", "0", "1", "1", "1"],
+            &["pdm1", "AItf", "0", "0", "0", "-"],
+            &["pdm2", "AIat", "0", "0", "0", "-"],
+            &["pdmx", "AItz", "0", "0", "0", "-"],
+            &["pdmv", "AItf,AIwz", "0", "0", "0", "-"],
         ],
     );
     let abilities = sylk(
@@ -123,6 +127,22 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "100",
                 "20",
                 "ground,air",
+            ],
+            &["AItf", "AIat", "1", "15", "0", "0", "0", "0", "-", "-", "_"],
+            &["AIat", "AIat", "1", "20", "0", "0", "0", "0", "-", "-", "_"],
+            &["AItz", "AIat", "1", "3", "0", "0", "0", "0", "-", "-", "_"],
+            &[
+                "AIwz",
+                "AIat",
+                "1",
+                "2147483647",
+                "0",
+                "0",
+                "0",
+                "0",
+                "-",
+                "-",
+                "_",
             ],
         ],
     );
@@ -210,6 +230,16 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "",
             ],
             &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1", ""],
+            &[
+                "Iatt",
+                "Data",
+                "AbilityData",
+                "-1",
+                "int",
+                "1",
+                "AIat,AItf,AIwz",
+                "",
+            ],
             &[
                 "Ihpg",
                 "Data",
@@ -391,9 +421,12 @@ fn open() -> Fixture {
         Overlay::default(),
         origin.clone(),
         [0; 32],
-        &registration("AIsm", "AIxm"),
-        &registration("AIab", "APbo"),
-        &registration("AIde", "APbo"),
+        [
+            &registration("AIsm", "AIxm"),
+            &registration("AIab", "APbo"),
+            &registration("AIde", "APbo"),
+            &registration("AIat", "APbo"),
+        ],
     )
     .unwrap()
     .with_heal(&healing_registration(), &healing_base())
@@ -527,6 +560,10 @@ fn life_state(h: &mut ObjectHost) -> Value {
 
 fn damage(h: &ObjectHost, unit: HandleId) -> f32 {
     h.hero_combat_bonuses(unit).unwrap().damage
+}
+
+fn held_damage(h: &ObjectHost, unit: HandleId) -> i32 {
+    h.hero_combat_bonuses(unit).unwrap().held_damage as i32
 }
 
 #[test]
@@ -997,6 +1034,112 @@ fn armor_row_outside_the_admission_refuses_atomically() {
             &[Value::Handle(hero), Value::Handle(refused)]
         ),
         Ok(Value::Bool(false))
+    );
+}
+
+#[test]
+fn held_flat_damage_stacks_transfers_and_removes() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    let primary = damage(&h, hero);
+    assert_eq!(held_damage(&h, hero), 0);
+    let first = item(&mut h, b"pdm1", 0.0);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    assert_eq!(held_damage(&h, hero), 15);
+    // Damage is not a strength or agility change.
+    assert_eq!(damage(&h, hero), primary);
+    let second = item(&mut h, b"pdm2", 0.0);
+    assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
+    assert_eq!(held_damage(&h, hero), 35);
+    assert_eq!(add(&mut h, ordinary, first), Ok(Value::Bool(true)));
+    assert_eq!(held_damage(&h, hero), 20);
+    assert_eq!(held_damage(&h, ordinary), 15);
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(ordinary), Value::Handle(first)],
+    )
+    .unwrap();
+    assert_eq!(held_damage(&h, ordinary), 0);
+    assert_eq!(held_damage(&h, hero), 20);
+}
+
+#[test]
+fn death_drops_held_flat_damage() {
+    let Fixture { mut h, hero, .. } = open();
+    let item = item(&mut h, b"pdm1", 0.0);
+    assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(true)));
+    assert_eq!(held_damage(&h, hero), 15);
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(held_damage(&h, hero), 0);
+}
+
+#[test]
+fn damage_row_outside_admission_and_overflow_refuse_atomically() {
+    let Fixture { mut h, hero, .. } = open();
+    let refused = item(&mut h, b"pdmx", 0.0);
+    let err = add(&mut h, hero, refused).unwrap_err();
+    assert!(
+        err.contains("damage metadata does not admit ability AItz"),
+        "{err}"
+    );
+    assert_eq!(held_damage(&h, hero), 0);
+    assert_eq!(
+        h.native(
+            "UnitHasItem",
+            &[Value::Handle(hero), Value::Handle(refused)]
+        ),
+        Ok(Value::Bool(false))
+    );
+    let overflow = item(&mut h, b"pdmv", 0.0);
+    let err = add(&mut h, hero, overflow).unwrap_err();
+    assert!(err.contains("passive damage overflows"), "{err}");
+    assert_eq!(held_damage(&h, hero), 0);
+    assert_eq!(
+        h.native(
+            "UnitHasItem",
+            &[Value::Handle(hero), Value::Handle(overflow)]
+        ),
+        Ok(Value::Bool(false))
+    );
+}
+
+/// Held flat damage enters the real damage formula for heroes and non-heroes, and its transfer
+/// moves the contribution to the receiver.
+#[test]
+fn held_flat_damage_changes_real_damage() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    let weapon = crate::playercolor_host::Weapon {
+        range: 1.0,
+        acquire: 1.0,
+        cooldown: 1.0,
+        damage_point: 0.0,
+        base: 10,
+        dice: 0,
+        sides: 1,
+        attack: 0,
+        missile_speed: None,
+    };
+    let factor = h.roll_damage(ordinary, weapon, ordinary).unwrap() / 10.0;
+    let hero_bare = h.roll_damage(hero, weapon, ordinary).unwrap();
+    let first = item(&mut h, b"pdm1", 0.0);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    let hero_with = h.roll_damage(hero, weapon, ordinary).unwrap();
+    assert!(
+        (hero_with - hero_bare - 15.0 * factor).abs() < 1e-4,
+        "hero: {hero_with} vs {hero_bare} at factor {factor}"
+    );
+    assert_eq!(add(&mut h, ordinary, first), Ok(Value::Bool(true)));
+    let ordinary_with = h.roll_damage(ordinary, weapon, ordinary).unwrap();
+    assert!(
+        (ordinary_with - 25.0 * factor).abs() < 1e-4,
+        "non-hero: {ordinary_with} at factor {factor}"
     );
 }
 

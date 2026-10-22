@@ -30,9 +30,11 @@ fn sylk(headers: &[&str], rows: &[&[&str]]) -> Vec<u8> {
 
 /// Source-shaped tome: `amounts` are the ability's `DataA1`, `DataB1`, `DataC1` (agi, int, str).
 struct Tome<'a> {
+    alias: &'a str,
     code: &'a str,
     abilities: &'a str,
     powerup: &'a str,
+    usable: &'a str,
     uses: &'a str,
     use_specific: &'a str,
     amounts: [&'a str; 3],
@@ -41,9 +43,11 @@ struct Tome<'a> {
 impl Default for Tome<'_> {
     fn default() -> Self {
         Self {
+            alias: "AIsm",
             code: "AIsm",
             abilities: "AIsm",
             powerup: "1",
+            usable: "1",
             uses: "1",
             use_specific: "AIsm,AIxm",
             amounts: ["0", "0", "7"],
@@ -61,12 +65,19 @@ fn tables(tome: &Tome) -> Arc<DefaultTables> {
             "perishable",
             "uses",
         ],
-        &[&["tstr", tome.abilities, tome.powerup, "1", "1", tome.uses]],
+        &[&[
+            "tstr",
+            tome.abilities,
+            tome.powerup,
+            tome.usable,
+            "1",
+            tome.uses,
+        ]],
     );
     let ability = sylk(
         &["alias", "code", "levels", "DataA1", "DataB1", "DataC1"],
         &[&[
-            "AIsm",
+            tome.alias,
             tome.code,
             "1",
             tome.amounts[0],
@@ -105,6 +116,15 @@ fn tables(tome: &Tome) -> Arc<DefaultTables> {
                 tome.use_specific,
             ],
             &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1"],
+            &[
+                "Iatt",
+                "Data",
+                "AbilityData",
+                "-1",
+                "int",
+                "1",
+                tome.use_specific,
+            ],
         ],
     );
     Arc::new(
@@ -139,9 +159,12 @@ fn rules(tome: &Tome, overlay: Overlay, class_key: &str) -> Result<Rules, String
             version: "test".into(),
         },
         [0; 32],
-        &window(class_key, "AIxm"),
-        &window("AIab", "APbo"),
-        &window("AIde", "APbo"),
+        [
+            &window(class_key, "AIxm"),
+            &window("AIab", "APbo"),
+            &window("AIde", "APbo"),
+            &window("AIat", "APbo"),
+        ],
     )
 }
 
@@ -490,9 +513,12 @@ fn passive_registration_is_read_with_the_same_layout_and_must_name_another_class
             version: "test".into(),
         },
         [0; 32],
-        &window("AIsm", "AIxm"),
-        &window("AIsm", "APbo"),
-        &window("AIde", "APbo"),
+        [
+            &window("AIsm", "AIxm"),
+            &window("AIsm", "APbo"),
+            &window("AIde", "APbo"),
+            &window("AIat", "APbo"),
+        ],
     );
     assert!(same.unwrap_err().contains("distinct classes"));
 }
@@ -587,6 +613,7 @@ fn armor_rules(amount: &str) -> Rules {
             &["Iint", "Data", "AbilityData", "-1", "int", "2", "AIsm,AIxm"],
             &["Istr", "Data", "AbilityData", "-1", "int", "3", "AIsm,AIxm"],
             &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1"],
+            &["Iatt", "Data", "AbilityData", "-1", "int", "1", "AIat,AItf"],
         ],
     );
     let tables = Arc::new(
@@ -618,9 +645,12 @@ fn armor_rules(amount: &str) -> Rules {
             version: "test".into(),
         },
         [0; 32],
-        &window("AIsm", "AIxm"),
-        &window("AIab", "APbo"),
-        &window("AIde", "APbo"),
+        [
+            &window("AIsm", "AIxm"),
+            &window("AIab", "APbo"),
+            &window("AIde", "APbo"),
+            &window("AIat", "APbo"),
+        ],
     )
     .unwrap()
 }
@@ -636,7 +666,8 @@ fn armor_points_come_from_the_admitted_source_row() {
         AttributeBonus {
             strength: 0,
             agility: 0,
-            armor: 3
+            armor: 3,
+            damage: 0,
         }
     );
 }
@@ -658,6 +689,135 @@ fn negative_authored_armor_refuses() {
         .held_attributes(&catalog_item("parm"))
         .unwrap_err();
     assert!(err.contains("negative armor"), "{err}");
+}
+
+fn damage_tome<'a>(amount: &'a str) -> Tome<'a> {
+    Tome {
+        alias: "AItf",
+        code: "AIat",
+        abilities: "AItf",
+        powerup: "0",
+        usable: "0",
+        uses: "-",
+        use_specific: "AIat,AItf,AIxm",
+        amounts: [amount, "0", "0"],
+    }
+}
+
+#[test]
+fn flat_damage_comes_from_the_admitted_iatt_column() {
+    let held = rules(&damage_tome("15"), Overlay::default(), "AIsm")
+        .unwrap()
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        held,
+        AttributeBonus {
+            strength: 0,
+            agility: 0,
+            armor: 0,
+            damage: 15,
+        }
+    );
+}
+
+#[test]
+fn w3a_override_on_the_iatt_field_wins_at_effect_level() {
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AItf".into(), vec![int_mod(b"Iatt", Some([1, 0]), 12)]);
+    let held = rules(&damage_tome("15"), overlay, "AIsm")
+        .unwrap()
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.damage, 12);
+}
+
+#[test]
+fn damage_row_outside_the_iatt_admission_refuses() {
+    let err = rules(
+        &Tome {
+            use_specific: "AIat,AIxm",
+            ..damage_tome("3")
+        },
+        Overlay::default(),
+        "AIsm",
+    )
+    .unwrap()
+    .held_attributes(&catalog_item("tstr"))
+    .unwrap_err();
+    assert!(
+        err.contains("damage metadata does not admit ability AItf"),
+        "{err}"
+    );
+}
+
+#[test]
+fn negative_or_malformed_authored_damage_refuses() {
+    let negative = rules(&damage_tome("-1"), Overlay::default(), "AIsm")
+        .unwrap()
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap_err();
+    assert!(negative.contains("negative damage"), "{negative}");
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "AItf".into(),
+        vec![pcx_objects::Mod {
+            field: *b"Iatt",
+            value_type: pcx_objects::ValueType::Real,
+            selectors: Some([1, 0]),
+            value: pcx_objects::Value::Real(1.5),
+            end_word: 0,
+        }],
+    );
+    let malformed = rules(&damage_tome("15"), overlay, "AIsm")
+        .unwrap()
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap_err();
+    assert!(
+        malformed.contains("noninteger attribute override"),
+        "{malformed}"
+    );
+}
+
+#[test]
+fn repeated_damage_aliases_overflow_atomically() {
+    let err = rules(
+        &Tome {
+            abilities: "AItf,AItf",
+            ..damage_tome("2147483647")
+        },
+        Overlay::default(),
+        "AIsm",
+    )
+    .unwrap()
+    .held_attributes(&catalog_item("tstr"))
+    .unwrap_err();
+    assert!(err.contains("passive damage overflows"), "{err}");
+}
+
+#[test]
+fn damage_registration_must_name_a_distinct_class() {
+    let same = Rules::decode(
+        tables(&Tome::default()),
+        Overlay::default(),
+        AssetIdentity {
+            source: "synthetic".into(),
+            edition: "synthetic".into(),
+            version: "test".into(),
+        },
+        [0; 32],
+        [
+            &window("AIsm", "AIxm"),
+            &window("AIab", "APbo"),
+            &window("AIde", "APbo"),
+            &window("AIde", "APbo"),
+        ],
+    );
+    assert!(same.unwrap_err().contains("distinct classes"));
 }
 
 /// Healing window with its base function at `HEAL_BASE_VA`, in the reviewed 25-byte layout.
@@ -742,6 +902,7 @@ fn healing_rules(amount: &str, range: &str) -> Rules {
             &["Istr", "Data", "AbilityData", "-1", "int", "3", "AIsm,AIxm"],
             &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1"],
             &["Ihpg", "Data", "AbilityData", "-1", "int", "1", "AIh1"],
+            &["Iatt", "Data", "AbilityData", "-1", "int", "1", "AIat,AItf"],
         ],
     );
     let tables = Arc::new(
@@ -773,9 +934,12 @@ fn healing_rules(amount: &str, range: &str) -> Rules {
             version: "test".into(),
         },
         [0; 32],
-        &window("AIsm", "AIxm"),
-        &window("AIab", "APbo"),
-        &window("AIde", "APbo"),
+        [
+            &window("AIsm", "AIxm"),
+            &window("AIab", "APbo"),
+            &window("AIde", "APbo"),
+            &window("AIat", "APbo"),
+        ],
     )
     .unwrap()
     .with_heal(&heal_window("AIhe"), &base_code("AAsm"))

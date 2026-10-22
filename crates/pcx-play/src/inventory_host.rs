@@ -359,13 +359,12 @@ impl ObjectHost {
             strength: self.executed_unit(unit)?.permanent_strength,
             agility: 0,
             armor: 0,
+            damage: 0,
         };
-        let held: Vec<HandleId> = self
+        for (item, _) in self
             .executed_items()
             .filter(|(_, r)| r.held_by.is_some_and(|(owner, _)| owner == unit))
-            .map(|(id, _)| id)
-            .collect();
-        for item in held {
+        {
             let passive = self.held_attributes(item)?;
             let overflow = || {
                 self.inner.error(
@@ -384,6 +383,10 @@ impl ObjectHost {
             bonus.armor = bonus
                 .armor
                 .checked_add(passive.armor)
+                .ok_or_else(overflow)?;
+            bonus.damage = bonus
+                .damage
+                .checked_add(passive.damage)
                 .ok_or_else(overflow)?;
         }
         Ok(bonus)
