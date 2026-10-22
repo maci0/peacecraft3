@@ -995,10 +995,12 @@ fn local_original_recipe_selects_the_custom_v0_namespace_and_base_fallback() {
         })
         .expect("selected namespace archive carries the namespace-only member");
     let origin = namespace_origin.to_str().unwrap();
+    let archive_sha256 = sha256(&std::fs::read(&namespace_origin).unwrap());
     let version = format!(
-        "campaign image sha256:{} common sha256:{} edition:0",
+        "campaign image sha256:{} common sha256:{} archive sha256:{} edition:0",
         digest_hex(&recipe.image_sha256()),
-        digest_hex(&recipe.common_sha256())
+        digest_hex(&recipe.common_sha256()),
+        digest_hex(&archive_sha256)
     );
     let resolved = reader.resolver.resolve(namespace_only).unwrap();
     assert_eq!(resolved.bytes, namespace_bytes);
@@ -1051,6 +1053,13 @@ fn local_original_recipe_selects_the_custom_v0_namespace_and_base_fallback() {
         })
         .expect("a base archive carries the base-only member");
     let origin = base_origin.to_str().unwrap();
+    let archive_sha256 = sha256(&std::fs::read(&base_origin).unwrap());
+    let base_version = format!(
+        "campaign image sha256:{} common sha256:{} archive sha256:{} edition:0",
+        digest_hex(&recipe.image_sha256()),
+        digest_hex(&recipe.common_sha256()),
+        digest_hex(&archive_sha256)
+    );
     let resolved = reader.resolver.resolve(base_only).unwrap();
     assert_eq!(resolved.bytes, base_bytes);
     assert_eq!(sha256(&resolved.bytes), sha256(&base_bytes));
@@ -1066,7 +1075,7 @@ fn local_original_recipe_selects_the_custom_v0_namespace_and_base_fallback() {
     assert_eq!(
         resolved.provenance.source.id,
         format!(
-            "campaign archive {origin} priority {} base {version}",
+            "campaign archive {origin} priority {} base {base_version}",
             base_mount.priority
         )
     );
@@ -1210,4 +1219,93 @@ fn local_original_recipe_retains_its_opened_archive_generation() {
         .is_err()
     );
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+fn synthetic_mpq(member: &str, payload: &[u8]) -> Vec<u8> {
+    fn encrypt(data: &mut [u8], key: u32) {
+        let table = pcx_mpq::crypt::table();
+        let mut seed = 0xeeee_eeeeu32;
+        let mut key = key;
+        for word in data.as_chunks_mut::<4>().0 {
+            seed = seed.wrapping_add(table[0x400 + (key & 0xff) as usize]);
+            let plain = u32::from_le_bytes(*word);
+            *word = (plain ^ key.wrapping_add(seed)).to_le_bytes();
+            key = ((!key) << 21).wrapping_add(0x1111_1111) | (key >> 11);
+            seed = plain
+                .wrapping_add(seed)
+                .wrapping_add(seed << 5)
+                .wrapping_add(3);
+        }
+    }
+
+    let hash_pos = 32 + payload.len() as u32;
+    let block_pos = hash_pos + 16;
+    let mut bytes = b"MPQ\x1a".to_vec();
+    for value in [32u32, block_pos + 16, 3 << 16, hash_pos, block_pos, 1, 1] {
+        bytes.extend(value.to_le_bytes());
+    }
+    bytes.extend_from_slice(payload);
+    let (name1, name2) = pcx_mpq::hash::hash_string_both(member);
+    let mut hash = Vec::new();
+    for value in [name1, name2, 0, 0] {
+        hash.extend(value.to_le_bytes());
+    }
+    encrypt(&mut hash, pcx_mpq::hash::hash_table_key());
+    bytes.extend(hash);
+    let mut block = Vec::new();
+    for value in [
+        32u32,
+        payload.len() as u32,
+        payload.len() as u32,
+        pcx_mpq::flags::EXISTING | pcx_mpq::flags::SINGLE_UNIT,
+    ] {
+        block.extend(value.to_le_bytes());
+    }
+    encrypt(&mut block, pcx_mpq::hash::block_table_key());
+    bytes.extend(block);
+    bytes
+}
+
+#[cfg(unix)]
+fn assert_same_inode(before: &std::fs::Metadata, after: &std::fs::Metadata) {
+    use std::os::unix::fs::MetadataExt;
+    assert_eq!(before.dev(), after.dev());
+    assert_eq!(before.ino(), after.ino());
+}
+
+#[cfg(not(unix))]
+fn assert_same_inode(_: &std::fs::Metadata, _: &std::fs::Metadata) {}
+
+#[test]
+fn snapshot_isolated_from_same_inode_rewrite() {
+    let directory =
+        std::env::temp_dir().join(format!("pcx-campaign-snapshot-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("synthetic.mpq");
+    let original = synthetic_mpq("fixture", b"original payload");
+    std::fs::write(&path, &original).unwrap();
+    let archive = pcx_mpq::MpqArchive::open(&path).unwrap();
+    let mut budget = SnapshotBudget {
+        directory: directory.clone(),
+        remaining: MAX_SNAPSHOT_TOTAL_BYTES,
+    };
+    let (mut snapshot, digest) = snapshot_archive(archive, &mut budget).unwrap();
+    assert_eq!(digest, sha256(&original));
+    assert_eq!(snapshot.path(), path);
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+    let before = std::fs::metadata(&path).unwrap();
+    let header = snapshot.header;
+    {
+        let mut file = OpenOptions::new().write(true).open(&path).unwrap();
+        file.seek(SeekFrom::Start(32)).unwrap();
+        file.write_all(&[0u8; 8]).unwrap();
+        file.seek(SeekFrom::Start(u64::from(header.hash_table_pos)))
+            .unwrap();
+        file.write_all(&[0u8; 16]).unwrap();
+        file.sync_all().unwrap();
+    }
+    let after = std::fs::metadata(&path).unwrap();
+    assert_same_inode(&before, &after);
+    assert_eq!(snapshot.extract("fixture").unwrap(), b"original payload");
+    std::fs::remove_dir_all(directory).unwrap();
 }

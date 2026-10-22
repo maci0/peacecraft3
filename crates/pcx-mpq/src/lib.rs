@@ -449,7 +449,17 @@ fn codec_source(directory: &Path) -> std::io::Result<Option<PathBuf>> {
 impl MpqArchive {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref().to_path_buf();
-        let mut file = Source::File(BufReader::new(File::open(&path)?));
+        Self::from_file(File::open(&path)?, path)
+    }
+
+    /// Open an archive from a file that is already open.
+    ///
+    /// `original_path` is retained for error messages, locators and codec
+    /// discovery, so a caller may parse a private snapshot while preserving the
+    /// source's provenance.
+    pub fn from_file(file: File, original_path: impl AsRef<Path>) -> Result<Self, Error> {
+        let path = original_path.as_ref().to_path_buf();
+        let mut file = Source::File(BufReader::new(file));
         let header = Header::parse(&mut file.reader())?;
         let mut me = Self {
             file,
