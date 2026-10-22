@@ -223,3 +223,48 @@ fn display_requires_a_real_local_player_and_the_logical_clock() {
     );
     assert_eq!(host.messages().unwrap().revision(), 1);
 }
+
+#[test]
+fn each_host_keeps_the_message_layout_admitted_with_its_session() {
+    use crate::message_layout::tests::rules;
+    let first = host("// map", 1, 4)
+        .with_message_layout(rules(0.5))
+        .unwrap();
+    let second = host("// map", 1, 4)
+        .with_message_layout(rules(0.25))
+        .unwrap();
+    assert_eq!(
+        first
+            .message_layout()
+            .unwrap()
+            .placement(0., 0.)
+            .unwrap()
+            .width,
+        0.5
+    );
+    assert_eq!(
+        second
+            .message_layout()
+            .unwrap()
+            .placement(0., 0.)
+            .unwrap()
+            .width,
+        0.25
+    );
+    assert_ne!(
+        first.message_layout().unwrap().placement(0., 0.).unwrap(),
+        second.message_layout().unwrap().placement(0., 0.).unwrap()
+    );
+}
+
+#[test]
+fn a_published_message_layout_cannot_be_rebound() {
+    use crate::message_layout::tests::rules;
+    let host = host("// map", 1, 4)
+        .with_message_layout(rules(0.5))
+        .unwrap();
+    let Err(error) = host.with_message_layout(rules(0.25)) else {
+        panic!("a second layout must be refused");
+    };
+    assert!(error.to_string().contains("layout already admitted"));
+}

@@ -460,6 +460,10 @@ pub fn prepare(
             image,
             client.clone(),
         )?),
+        message_layout: Some(crate::message_layout::Rules::reviewed_legacy(
+            image,
+            client.clone(),
+        )?),
         clock: StartupClockInput {
             clock: source.clock,
             global_name: "GAME_STATE_TIME_OF_DAY".into(),
