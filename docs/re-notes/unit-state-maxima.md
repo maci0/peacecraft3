@@ -20,9 +20,28 @@ maximum-mana cases return without a write. These correspond to the selected
 source globals at lines 436–439. The retained disassembly windows are local
 under `.scratch/campaign-continuation/set-unit-state-*.txt`.
 
-This is native-code evidence. A controlled original-runtime comparison is
-prepared separately; it has not yet supplied an observation for this note.
-Dedicated maximum-stat natives require their own admission and evidence.
+## Controlled runtime observation
+
+The RoC run `max-state-write-20261022-a` confirms that dispatch behavior.
+`VersionGet` reports RoC; all eleven expected native markers were collected.
+The diagnostic map SHA-256 is
+`b4596bfc996cd6cd4d507182d35025a9bc4f06b91cd8117122eaa8a7afc4ada3`;
+its script SHA-256 is
+`5e4df686ee2af12ecbe42356842f23e649d8e01dad95d82c7007f22ece5a1dce`.
+
+The level-ten Uther control has life/max life 1250 and mana/max mana 495.
+Writing 100 to maximum life leaves both life values at 1250. Writing 100 to
+maximum mana leaves both mana values at 495. A second Uther equips `prvt`,
+raising life/max life to 1400; the same maximum-life write leaves them at
+1400, and removing the item restores 1250. These are observed source-driven
+values, not runtime constants.
+
+The original client ran through Wine with the reviewed image above and
+`-classic`; this does not qualify native Windows behavior or dedicated
+maximum-stat natives. Local raw markers, map/script receipts and collector
+result are retained under `.scratch/max-state-write-probe/` in the main
+checkout. Dedicated maximum-stat natives require their own admission and
+evidence.
 
 ## Recreation correction
 
