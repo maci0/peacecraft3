@@ -2,12 +2,10 @@ import { discoverIso, sliceIsoFile } from '../iso.js';
 import { directEngineFile } from './engine-member.js';
 
 export function defaultIsoCandidates(candidates) {
-  const eligible = candidates.filter(candidate => candidate.archiveSize <= 512 * 1024 * 1024);
-  if (eligible.length !== candidates.length || eligible.reduce((sum, candidate) => sum + candidate.archiveSize, 0) > 5 * 256 * 1024 * 1024) return [];
-  const names = eligible.map(candidate => candidate.path.split(/[\\/:]/).at(-1).replace(/;\d+$/, '').toLowerCase());
-  if (names.length === 1) return eligible;
-  const family = new Set(['war3.mpq', 'war3local.mpq', 'war3x.mpq', 'war3xlocal.mpq', 'deprecated.mpq']);
-  return names.filter(name => name === 'war3.mpq').length === 1 && new Set(names).size === names.length && names.every(name => family.has(name)) ? eligible : [];
+  const names = candidates.map(candidate => candidate.path.split(/[\\/:]/).at(-1).replace(/;\d+$/, '').toLowerCase());
+  const bases = candidates.filter((_, index) => names[index] === 'war3.mpq');
+  if (bases.length !== 1 || bases[0].archiveSize > 512 * 1024 * 1024) return [];
+  return bases;
 }
 
 // Resource budgets, not measured game data. Each archive is copied separately.
