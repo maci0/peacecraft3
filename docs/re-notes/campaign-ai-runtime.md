@@ -2,10 +2,12 @@
 
 ## Selected-source audit (2026-10-23)
 
-The private campaign continuation still refuses `IssueImmediateOrder` during
-initialization, before its later `StartCampaignAI` calls. The source path next
-reaches nearby-lumber harvesting. The source audit below is distinct from the
-private execution foundation described in this note.
+The private campaign continuation now passes Human02 initialization with nearby
+lumber harvesting admitted. Advancing its authored opening reaches 7.218750
+seconds, then refuses the red program's `SetTargetHeroes` through the map's
+`StartCampaignAI` call at line 1692. This is a real selected-map execution result,
+distinct from the synthetic source fixtures below; it does not establish a
+working opening cinematic or campaign strategy.
 
 The audit uses the existing `CampaignRecipe` reader with the reviewed
 1.29.2.9231 executable
@@ -68,9 +70,12 @@ do not establish a campaign targeting implementation or an inert native.
 
 Combined private receipts under `.scratch/campaign-continuation/ai-combined-*`
 record 1427 core tests and 607 app tests passed, strict native and WASM Clippy,
-and formatting. The real selected Continue test still refuses Human02's harvest
-order after Human01 publishes 152 executed units. Campaign strategy, construction,
-combat, cross-program callbacks and full chapter completion remain unqualified.
+and formatting. Later health/harvest imports pass the real selected Continue
+startup after Human01 publishes 152 executed units; the separate opening-minute
+check stops at the targeting refusal above. Its retained log is
+`.scratch/campaign-continuation/health-harvest-final-selected.log`.
+Campaign strategy, construction, combat, cross-program callbacks and full chapter
+completion remain unqualified.
 
 ## Native loader path
 

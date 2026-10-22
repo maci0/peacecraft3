@@ -3,8 +3,8 @@
 Human02's easy-difficulty branch calls `SetPlayerHandicapBJ` for its enemy
 players. The selected `Blizzard.j` supplies the easy percentage and converts
 percentages to the factor accepted by `SetPlayerHandicap`. The current
-recreation implements the separate XP handicap interface; health handicap
-remains an open gameplay consumer.
+recreation implements both XP and health handicap; the health support boundaries
+and remaining fidelity questions are listed below.
 
 ## Original-client observations (2026-10-23)
 

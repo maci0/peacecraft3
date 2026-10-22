@@ -14,10 +14,15 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   synchronous state-event path. The combined private checks passed 1430 core
   tests, 607 app tests, strict native/WASM Clippy and formatting including the
   gathered-counter, ranked/inventory Data-pointer and destructable-death imports. The unchanged
-  Continue gate passes Human01 with 152 executed units and Human02's explicit
-  unit-color calls. It now refuses `IssueImmediateOrder` through
-  `Blizzard.j:7817`; the source initialization next reaches nearby-lumber
-  harvesting, whose complete runtime cycle is still being implemented.
+  Continue gate now passes Human01 with 152 executed units and starts Human02
+  with nearby-lumber harvest and health handicap admitted. A separate opening
+  clock check reaches 7.218750 seconds, then refuses the red campaign program's
+  `SetTargetHeroes` through `StartCampaignAI` at Human02 line 1692. Startup passes;
+  the opening-minute acceptance check still fails. These selected results are
+  retained in `.scratch/campaign-continuation/health-harvest-final-selected.log`.
+  The latest combined core suite passes 1487 tests, and strict native/WASM
+  Clippy passes. The app suite passes 606 tests with one missing-declaration
+  synthetic AI fixture failure; its correction remains pending.
   Three controlled original-client runs now qualify partial lumber retention
   across Stop, Move and repeated nearby harvest, followed by an explicit return
   that credits both counters and ends idle. Automatic return resumes harvesting;

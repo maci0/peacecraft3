@@ -398,6 +398,16 @@ mod selected_tests {
     #[test]
     #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL, MAP, ADDON and PCX_NATIVE_NEXT_CHAPTER_MAP"]
     fn selected_victory_continue_admits_and_starts_the_next_chapter() {
+        check_selected_continue(0);
+    }
+
+    #[test]
+    #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL, MAP, ADDON and PCX_NATIVE_NEXT_CHAPTER_MAP"]
+    fn selected_victory_continue_runs_the_next_chapters_opening_minute() {
+        check_selected_continue(60);
+    }
+
+    fn check_selected_continue(seconds: usize) {
         let next = std::env::var("PCX_NATIVE_NEXT_CHAPTER_MAP")
             .expect("set PCX_NATIVE_NEXT_CHAPTER_MAP to the next selected campaign member");
         let mut app = crate::native_campaign::tests::started_app();
@@ -542,6 +552,21 @@ mod selected_tests {
                 .context()
                 .is_some_and(|ctx| Arc::ptr_eq(ctx, &admitted))
         );
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        for tick in 1..=seconds * 64 {
+            let at = tick as f64 / 64.0;
+            pcx_play::campaign_host::advance_tick(&mut session, at, 65536)
+                .unwrap_or_else(|error| panic!("next chapter at {at:.6}s: {error}"));
+        }
+        if seconds > 0 {
+            assert_eq!(
+                session.host().unwrap().objects().timer_game_time(),
+                Some(seconds as f64),
+                "the script must actually advance through the requested opening interval"
+            );
+        }
     }
 }
 
