@@ -1049,8 +1049,11 @@ enum ListedMember<'a> {
 /// Distinguishes a stale listfile name from a listed hash entry whose block
 /// cannot be used. The former is allowed to remain absent; the latter must not
 /// silently lose to a lower-priority archive. Empty, deleted and region-end
-/// hash sentinels keep their chain-terminating meaning, and block deletion
-/// markers remain legitimate tombstones.
+/// hash sentinels keep their chain-terminating meaning. A deleted matching
+/// block is a tombstone, but a live matching block in the same probe chain is a
+/// conflicting candidate: native lookup returns no winner for the first one,
+/// while extraction refuses the ambiguity. Refuse instead of hiding the name or
+/// selecting a later candidate that extraction cannot resolve.
 fn listed_member<'a>(
     archive: &'a pcx_mpq::MpqArchive,
     member: &str,
@@ -1062,10 +1065,12 @@ fn listed_member<'a>(
     let count = hashes.len();
     let (name1, name2) = pcx_mpq::hash::hash_string_both(member);
     let mut slot = pcx_mpq::hash::start_slot(member, count);
+    let mut live = None;
+    let mut tombstone = false;
     for _ in 0..count {
         let entry = &hashes[slot];
         if entry.is_unpopulated() {
-            return Ok(ListedMember::Absent);
+            break;
         }
         if entry.name1 == name1 && entry.name2 == name2 {
             let index = entry.block_index as usize;
@@ -1076,23 +1081,30 @@ fn listed_member<'a>(
                 ))
             })?;
             if block.flags & pcx_mpq::flags::DELETE_MARKER != 0 {
-                return Ok(ListedMember::Absent);
-            }
-            if block.flags & pcx_mpq::flags::EXISTING == 0 {
+                tombstone = true;
+            } else if block.flags & pcx_mpq::flags::EXISTING == 0 {
                 return Err(Error::Message(format!(
                     "{}: listed member {member:?} references non-existent block {index} (flags {:#010x})",
                     archive.path().display(),
                     block.flags
                 )));
+            } else if live.is_none() {
+                live = Some(block);
             }
-            return Ok(ListedMember::Live(block));
         }
         slot += 1;
         if slot == count {
             slot = 0;
         }
     }
-    Ok(ListedMember::Absent)
+    match (live, tombstone) {
+        (Some(_), true) => Err(Error::Message(format!(
+            "{}: listed member {member:?} has both live and deleted matching hash candidates",
+            archive.path().display()
+        ))),
+        (Some(block), false) => Ok(ListedMember::Live(block)),
+        (None, _) => Ok(ListedMember::Absent),
+    }
 }
 
 fn canonical_members(
