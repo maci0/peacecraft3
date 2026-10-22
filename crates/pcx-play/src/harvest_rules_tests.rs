@@ -354,6 +354,25 @@ fn custom_ahar_alias_reads_from_the_resolved_alias() {
 }
 
 #[test]
+fn harvest_damage_rejects_fractional_and_out_of_range_integer_cells() {
+    for damage in ["0.5", "2147483648", "-2147483649"] {
+        let tables = tables_with(
+            &[ahar_ability(damage, "11", "12", "Harv", "Ahar")],
+            &[vec!["hpea", "Peasant", "Harv", "-"]],
+            &[],
+            &[],
+        );
+        let error = HarvestRules::from_tables(&tables, *b"hpea")
+            .expect_err("DataA1 is an integer source field");
+        assert!(
+            matches!(&error, HarvestError::Malformed { rawcode, column, .. }
+                if rawcode == "Harv" && column == "DataA1"),
+            "{damage}: {error}"
+        );
+    }
+}
+
+#[test]
 fn case_different_code_is_not_ahar() {
     // alias "Ahar" (uppercase AHAR) resolves to code "AHAR" != "Ahar".
     let ability_rows = vec![ahar_ability("1", "2", "3", "AHAR", "AHAR")];

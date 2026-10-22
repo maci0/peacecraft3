@@ -299,6 +299,9 @@ deposited even when below capacity. Sub-unit carry is not deposited; fractional
 damage/yield behavior remains unqualified. The edited-damage observation above
 qualifies a full final hit past the remaining capacity for its tested values;
 depositing incomplete carry on tree death remains a recreation choice.
+The integer damage cell is validated as a signed 32-bit value before conversion
+to the runtime float; fractional or out-of-range source text refuses with its
+resolved ability alias and column instead of creating fractional cargo.
 
 The worker's selected `upgradeList` admits its authored upgrades. For each
 upgrade with an applied player level, the runtime resolves the active object,

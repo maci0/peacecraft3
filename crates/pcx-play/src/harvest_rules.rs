@@ -1095,7 +1095,7 @@ impl HarvestRules {
                 }),
             }
         };
-        let damage = parse_f32(
+        let damage = parse_i32(
             &ahar_alias,
             &cell(
                 AbilityValue::Data(1),
@@ -1103,7 +1103,7 @@ impl HarvestRules {
                 "DataA1",
             )?,
             "DataA1",
-        )?;
+        )? as f32;
         let lumber_capacity = parse_nonneg_i32(
             &ahar_alias,
             &cell(
