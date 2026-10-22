@@ -182,12 +182,22 @@ enum Comparison {
     NotEqual,
 }
 
+/// One registration whose observed snapshot a prepared change will update, with
+/// the decision already made from the pre-change state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PlayerStateEventUpdate {
+    index: usize,
+    trigger: HandleId,
+    state_handle: HandleId,
+    registration: HandleId,
+    fire: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PlayerStateChange {
     player: HandleId,
-    state: i32,
     current: i32,
-    ops: [i32; 6],
+    updates: Vec<PlayerStateEventUpdate>,
 }
 
 impl Comparison {
@@ -484,6 +494,9 @@ impl ObjectHost {
     /// Like [`Self::prepare_player_state_change`], but reserves one combined
     /// block for `pending` events that will be queued before this change commits.
     /// Reserving separately would only guarantee space for the larger of the two.
+    ///
+    /// The `pending` block is reserved even when no player-state trigger can
+    /// observe the change, so the caller's own event writes never allocate.
     pub(crate) fn prepare_player_state_change_reserving(
         &mut self,
         player: HandleId,
@@ -491,13 +504,22 @@ impl ObjectHost {
         current: i32,
         pending: usize,
     ) -> Result<Option<PlayerStateChange>, Error> {
-        let Some(admitted) = self.triggers.as_ref() else {
+        let ops = self
+            .triggers
+            .as_ref()
+            .and_then(|admitted| admitted.player_state_ops);
+        let Some(ops) = ops else {
+            self.reserve_event_delivery(pending)?;
             return Ok(None);
         };
-        let Some(ops) = admitted.player_state_ops else {
-            return Ok(None);
-        };
-        let registrations = admitted.player_state_registrations.len();
+        let registrations = self
+            .admitted_triggers()?
+            .player_state_registrations
+            .len();
+        let mut updates = Vec::new();
+        updates
+            .try_reserve(registrations)
+            .map_err(|_| self.inner.error(REGISTER, Failure::Capacity))?;
         let mut count: usize = 0;
         for slot in 0..registrations {
             let id = self.player_state_registration_id(slot)?;
@@ -505,12 +527,21 @@ impl ObjectHost {
             if record.player != player || record.state_value != state || record.last == current {
                 continue;
             }
-            if self
+            let fire = self
                 .player_state_comparison(ops, record.limitop_value)?
-                .holds(current, record.limit)
-            {
+                .holds(current, record.limit);
+            if fire {
                 count += 1;
             }
+            let index = usize::try_from(id.token() - 1)
+                .map_err(|_| self.inner.error(REGISTER, Failure::Identity))?;
+            updates.push(PlayerStateEventUpdate {
+                index,
+                trigger: record.trigger,
+                state_handle: record.state,
+                registration: id,
+                fire,
+            });
         }
         let count = count
             .checked_add(pending)
@@ -518,50 +549,35 @@ impl ObjectHost {
         self.reserve_event_delivery(count)?;
         Ok(Some(PlayerStateChange {
             player,
-            state,
             current,
-            ops,
+            updates,
         }))
     }
 
-    /// Records the new effective value for every matching registration and
+    /// Records the new effective value for every prepared registration and
     /// pushes the events reserved by [`Self::prepare_player_state_change`].
-    pub(crate) fn commit_player_state_change(
-        &mut self,
-        change: PlayerStateChange,
-    ) -> Result<(), Error> {
-        let registrations = self.admitted_triggers()?.player_state_registrations.len();
-        for slot in 0..registrations {
-            let id = self.player_state_registration_id(slot)?;
-            let record = self.player_state_record(id)?;
-            if record.player != change.player
-                || record.state_value != change.state
-                || record.last == change.current
+    /// Every fallible lookup and comparison happened during preparation, so the
+    /// caller can run this after its other writes without a failure path.
+    pub(crate) fn commit_player_state_change(&mut self, change: PlayerStateChange) {
+        for update in change.updates {
+            if let Entry::RegisteredPlayerStateEvent(stored) =
+                &mut self.inner.arena[update.index]
             {
-                continue;
+                stored.last = change.current;
             }
-            match self.inner.entry_mut(id) {
-                Ok(Entry::RegisteredPlayerStateEvent(stored)) => stored.last = change.current,
-                Ok(_) => return Err(self.inner.error(REGISTER, Failure::WrongFamily)),
-                Err(e) => return Err(self.inner.error(REGISTER, e.failure)),
-            }
-            if self
-                .player_state_comparison(change.ops, record.limitop_value)?
-                .holds(change.current, record.limit)
-            {
+            if update.fire {
                 self.push_reserved_event(
-                    record.trigger,
+                    update.trigger,
                     None,
                     super::super::EventSubject {
-                        player: Some(record.player),
-                        player_state: Some(record.state),
+                        player: Some(change.player),
+                        player_state: Some(update.state_handle),
                         ..Default::default()
                     },
-                    Some(id),
+                    Some(update.registration),
                 );
             }
         }
-        Ok(())
     }
 
     /// Queue one event per registration whose effective value changed outside
