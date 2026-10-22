@@ -86,6 +86,58 @@ questions. Local source hashes, all records and the recovered launch receipt
 are in ignored `.scratch/harvest-cycle-probe-v2`. The launch wrapper timed out
 while its existing container continued initialization; no duplicate was started.
 
+## Partial cargo and explicit return
+
+Three separate Human02-derived diagnostic maps used the same controlled
+worker, tree, depot and unordered control as the cycle above. Each ran on the
+same reviewed executable with `-classic`, and each reported RoC. At game time
+10.000 the tree had lost five life points, both resource counters remained
+zero, and the worker had not moved. The script then issued Stop, repeated
+`autoharvestlumber`, or moved toward the depot. At 10.250 it issued
+`returnresources`. All submitted calls returned true.
+
+| Intervening order | Effective order immediately afterward | First observed deposit | Lumber / gathered lumber |
+| --- | --- | --- | --- |
+| Stop | 0 | 12.813 | 5 / 5 |
+| Repeated nearby harvest | 852018 | 12.813 | 5 / 5 |
+| Move | 851986 | 12.625 | 5 / 5 |
+
+Each explicit return reported current order 852020 immediately after the call.
+At deposit the worker's order was zero; the tree still had life 45/50. The
+unordered worker, its tree and its owner's bank remained unchanged. This
+qualifies retained partial cargo across these three interruptions and a manual
+return that deposits and ends idle. It does not directly expose the cargo
+counter, qualify other interruptions, or establish death/removal behavior.
+The earlier automatic capacity return instead reported 852017 and resumed
+harvesting after deposit.
+
+An independent decode of the selected image's order-registry initializer
+(`0xb11550..0xb12c75`) distinguishes the names:
+
+| Registry name | Selected image identifier |
+| --- | ---: |
+| `harvest` | 852018 |
+| `autoharvestlumber` | 852022 |
+| `resumeharvesting` | 852017 |
+| `returnresources` | 852020 |
+
+Thus the submitted nearby-harvest command and the effective work order differ;
+automatic and explicit return also differ. These are evidence values, not
+production constants. Dispatch and current-order reporting must resolve their
+separate identities through the admitted registry.
+
+The stop, reissue and move map SHA-256 values respectively are
+`02c03fb6f69f6258d68ea73184d800e9384ca5a562de1679a22188aee1a41785`,
+`bd493185bcdab36869c90d2660961f2d93248442a692f5d59b4aa2cf4bc629eb`,
+and `faa0e20355dd162af73af256581aa1d4cae6c1d0a0f5a8a246b697c22cad4320`.
+All script parse/resolve and packed-member byte checks passed. The bounded
+collector validated all phase records and 98, 98 and 96 periodic samples;
+its six synthetic positive/refusal tests passed. Raw markers, hashes, scripts,
+launch receipts and results remain local in ignored
+`.scratch/partial-lumber-{stop,reissue,move}-probe/`; the registry receipt is
+`.scratch/harvest-order-source.json`. These diagnostic runs do not qualify
+rendered presentation, native Windows, or unchanged Human02 startup.
+
 ## Model presentation evidence
 
 The selected `UnitUI.slk` binds `hpea.file` to

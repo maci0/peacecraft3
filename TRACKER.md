@@ -18,6 +18,11 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   unit-color calls. It now refuses `IssueImmediateOrder` through
   `Blizzard.j:7817`; the source initialization next reaches nearby-lumber
   harvesting, whose complete runtime cycle is still being implemented.
+  Three controlled original-client runs now qualify partial lumber retention
+  across Stop, Move and repeated nearby harvest, followed by an explicit return
+  that credits both counters and ends idle. Automatic return resumes harvesting;
+  its registry identity differs from manual return. See
+  [worker harvest orders](docs/re-notes/worker-harvest-orders.md#partial-cargo-and-explicit-return).
   Campaign scripts now have source-validated, independent per-player VMs over
   the shared world, synchronous initial execution and game-clock wake delivery.
   The production-host fixture checks shared resource writes and timer ordering;
