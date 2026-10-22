@@ -294,10 +294,11 @@ Work timing requires the authored tree weapon's `cool`, `dmgpt` and `Backsw`.
 A unit without an admitted tree-targeting weapon is refused before tree
 selection; `Ahar.Dur` is not a timing fallback. Each swing applies
 `Ahar.DataA` damage to the tree and adds the same amount to carried lumber,
-capped at `Ahar.DataB`. A dead tree with a positive carry is deposited even
-when the carry is below capacity. The final partial swing and the decision to
-deposit incomplete carry on tree death are recreation choices; the controlled
-probe did not distinguish them from alternatives.
+capped at `Ahar.DataB`. A dead tree with at least one whole lumber carried is
+deposited even when below capacity. Sub-unit carry is not deposited; fractional
+damage/yield behavior remains unqualified. The edited-damage observation above
+qualifies a full final hit past the remaining capacity for its tested values;
+depositing incomplete carry on tree death remains a recreation choice.
 
 The worker's selected `upgradeList` admits its authored upgrades. For each
 upgrade with an applied player level, the runtime resolves the active object,
@@ -326,6 +327,10 @@ worker with no remaining reachable tree stops searching. Unit death currently
 retains cargo, while unit removal discards it and retires the worker record.
 Cargo-retention evidence covers only Stop, Move and reissue, so death retention
 and removal discard are unqualified recreation choices.
+Hiding currently retires the active worker while retaining its partial cargo,
+so a later reveal and explicit return cannot silently lose already earned
+lumber. A synthetic hide/reveal/return regression covers that invariant; native
+hide/resume order and cargo behavior remain unqualified.
 
 Tree deaths caused by an engine-tick swing reserve and push their registered
 death events into the delivery queue at the tick boundary; they do not run

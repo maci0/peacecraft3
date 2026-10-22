@@ -452,11 +452,7 @@ impl ObjectHost {
         };
         let mut worker = state.workers[index].clone();
         let record = match self.executed_unit(unit) {
-            Ok(record)
-                if record.shown && !record.combat.as_ref().is_some_and(|combat| combat.dead) =>
-            {
-                record
-            }
+            Ok(record) if !record.combat.as_ref().is_some_and(|combat| combat.dead) => record,
             _ => {
                 self.harvest
                     .as_mut()
@@ -466,6 +462,10 @@ impl ObjectHost {
                 return Ok(());
             }
         };
+        if !record.shown {
+            self.cancel_harvest(unit);
+            return Ok(());
+        }
         if let Some(paused_at) = record.paused_since {
             worker.paused_at.get_or_insert(paused_at);
             let state = self.harvest.as_mut().expect("admitted");

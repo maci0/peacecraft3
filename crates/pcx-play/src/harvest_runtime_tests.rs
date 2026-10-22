@@ -765,6 +765,43 @@ fn stop_preserves_partial_cargo_across_reissue_and_manual_return() {
 }
 
 #[test]
+fn hiding_a_loaded_worker_preserves_cargo_for_return_after_reveal() {
+    let (mut vm, tree) = open_harvest();
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    let gathered = player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED");
+    start_harvest(&mut vm, worker);
+    tick(&mut vm, 0.5);
+    assert_eq!(tree_life(&mut vm, tree), 71.0);
+    vm.host()
+        .inner
+        .native("ShowUnit", &[Value::Handle(worker), Value::Bool(false)])
+        .unwrap();
+    tick(&mut vm, 1.5);
+    assert_eq!(vm.host().inner.harvest_worker_count(worker), 0);
+    assert_eq!(vm.host().inner.harvest_cargo(worker), Some(9.0));
+    assert_eq!(tree_life(&mut vm, tree), 71.0);
+    assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"), bank);
+    vm.host()
+        .inner
+        .native("ShowUnit", &[Value::Handle(worker), Value::Bool(true)])
+        .unwrap();
+    assert_eq!(issue_id(&mut vm, worker, 901), Value::Bool(true));
+    tick(&mut vm, 2.0);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"),
+        bank + 9
+    );
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED"),
+        gathered + 9
+    );
+    assert_eq!(tree_life(&mut vm, tree), 71.0);
+    assert_eq!(current_order(&mut vm, worker), 0);
+}
+
+#[test]
 fn removal_retires_partial_harvest_cargo_and_worker() {
     let (mut vm, tree) = open_harvest();
     let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
