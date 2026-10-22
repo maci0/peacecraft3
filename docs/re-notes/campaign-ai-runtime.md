@@ -33,8 +33,11 @@ establish working campaign AI.
 
 The runtime must keep each player's AI globals and continuations separate
 while using the session's existing world, handles and deterministic clock.
-The existing script VM is the execution path to reuse. Shared-world ownership,
-AI-native gameplay behavior and cross-program callback invocation remain open.
+The existing script VM supplies the private shared-world execution foundation
+below. AI-native gameplay behavior and cross-program callback invocation remain
+open. The [world-query evidence](campaign-ai-world-queries.md) distinguishes
+player-dependent costs, completed-unit counts and upgrade queries from the
+remaining production and targeting systems.
 
 ## Private execution foundation
 
