@@ -15,7 +15,10 @@ indices and applicable aliases. Their common ability code identifies the invento
 class without copying that code. Shipped `UI/WorldEditStrings.txt` labels these
 fields Item Capacity, Drop Items On Death, Can Use Items, Can Get Items and Can
 Drop Items. Per-level values come from the selected ability rows, with typed W3A
-map overrides retained. The source metadata supplies the capacity bound.
+map overrides retained. A `Data` override applies only when its second selector
+equals that field's metadata `data` ordinal; a mismatched pointer refuses instead
+of falling back or fabricating a value. The source metadata supplies the capacity
+bound.
 Missing, ambiguous, malformed or unsupported input refuses admission or use.
 A unit with a complete known ability list lacking this component has no slots;
 an unadmitted ability list remains unknown.

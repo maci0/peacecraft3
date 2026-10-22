@@ -1372,7 +1372,7 @@ fn dead_retained_max_life_drop_keeps_zero_life_and_restores_maximum() {
         vec![pcx_objects::Mod {
             field: *b"inv2",
             value_type: pcx_objects::ValueType::Int,
-            selectors: Some([1, 0]),
+            selectors: Some([1, 2]),
             value: pcx_objects::Value::Int(0),
             end_word: 0,
         }],
@@ -1892,7 +1892,7 @@ fn dead_retained_intelligence_drop_rounds_mana_and_keeps_it_nonzero() {
         vec![pcx_objects::Mod {
             field: *b"inv2",
             value_type: pcx_objects::ValueType::Int,
-            selectors: Some([1, 0]),
+            selectors: Some([1, 2]),
             value: pcx_objects::Value::Int(0),
             end_word: 0,
         }],
