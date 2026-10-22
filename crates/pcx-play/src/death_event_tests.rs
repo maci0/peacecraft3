@@ -463,6 +463,10 @@ fn death_host(common: &str, map: &str) -> (Arc<ParsedMapContext>, ObjectHost) {
         .unwrap();
     host.admit_destructable_catalog(life_catalog()).unwrap();
     let host = host
+        .with_destructable_restore(crate::playercolor_host::RestoreLifePolicy::synthetic(
+            0.0, 0.125, 0.75,
+        ))
+        .unwrap()
         .with_trigger_admission(trigger_limits(8, 0))
         .unwrap()
         .with_trigger_conditions(4)
@@ -517,6 +521,9 @@ function positive takes nothing returns nothing
 endfunction
 function restore takes nothing returns nothing
  call DestructableRestoreLife(D,GetDestructableMaxLife(D),false)
+endfunction
+function restore_amount takes real amount returns nothing
+ call DestructableRestoreLife(D,amount,false)
 endfunction
 function widget_now takes nothing returns widget
  return GetTriggerWidget()
@@ -590,6 +597,7 @@ fn restoration_requires_the_life_argument_and_refuses_unqualified_forms_atomical
     vm.call("setup", &[]).unwrap();
     vm.call("kill", &[]).unwrap();
     let tree = id(&vm.global("D"));
+    let trigger = id(&vm.global("T"));
     let before = vm.host().inner.destructable_state(tree).unwrap();
     let maximum = before.max_life.unwrap();
     for args in [
@@ -599,12 +607,12 @@ fn restoration_requires_the_life_argument_and_refuses_unqualified_forms_atomical
             Value::Real(f32::NAN),
             Value::Bool(false),
         ],
+        vec![Value::Handle(tree), Value::Real(maximum), Value::Bool(true)],
         vec![
-            Value::Handle(tree),
-            Value::Real(maximum / 2.0),
+            Value::Handle(trigger),
+            Value::Real(maximum),
             Value::Bool(false),
         ],
-        vec![Value::Handle(tree), Value::Real(maximum), Value::Bool(true)],
     ] {
         assert!(
             vm.host()
@@ -615,11 +623,52 @@ fn restoration_requires_the_life_argument_and_refuses_unqualified_forms_atomical
         assert_eq!(vm.host().inner.destructable_state(tree).unwrap(), before);
         assert!(vm.host().inner.take_fired_event().is_none());
     }
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "DestructableRestoreLife",
+                &[Value::Null, Value::Real(maximum), Value::Bool(false)],
+            )
+            .unwrap(),
+        Value::Null
+    );
+    assert_eq!(vm.host().inner.destructable_state(tree).unwrap(), before);
     vm.call("restore", &[]).unwrap();
     let restored = vm.host().inner.destructable_state(tree).unwrap();
     assert_eq!(restored.life, Some(maximum));
     assert!(!restored.dead);
     assert_eq!(vm.global("hits"), Value::Int(1));
+}
+
+#[test]
+fn source_threshold_and_floor_restore_dead_targets_without_duplicate_deaths() {
+    let (_ctx, mut vm) = vm_for(DEATH_MAP);
+    vm.call("setup", &[]).unwrap();
+    let tree = id(&vm.global("D"));
+    let life = |vm: &mut OwnedVm<OwnedLocalizedHost<ObjectHost>>| {
+        vm.host().inner.destructable_state(tree).unwrap()
+    };
+    vm.call("restore_amount", &[Value::Real(25.0)]).unwrap();
+    assert_eq!(life(&mut vm).life, Some(50.0));
+    assert_eq!(vm.global("hits"), Value::Int(0));
+    for (request, expected) in [
+        (0.0, 50.0),
+        (25.0, 25.0),
+        (100.0, 50.0),
+        (-50.0, 0.75),
+        (0.0625, 50.0),
+        (0.25, 0.75),
+        (0.9, 0.9),
+    ] {
+        vm.call("kill", &[]).unwrap();
+        let deaths = vm.global("hits");
+        vm.call("restore_amount", &[Value::Real(request)]).unwrap();
+        let state = life(&mut vm);
+        assert_eq!(state.life, Some(expected), "request={request}");
+        assert!(!state.dead);
+        assert_eq!(vm.global("hits"), deaths);
+    }
 }
 
 #[test]

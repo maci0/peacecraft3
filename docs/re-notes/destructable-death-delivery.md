@@ -40,13 +40,15 @@ infallible at commit because their layers are already retained.
 The selected `common.j` declares restoration as `(destructable, real life,
 boolean birth)`. The initial synthetic fixture incorrectly omitted `life`;
 the selected Human01 factory gate exposed that mismatch. The corrected path
-supports the measured dead-target, full-catalog-life, `birth=false` case.
-Other amounts, live targets and birth animation refuse before mutation until
-their remaining behavior is admitted. The reviewed handler `0x48f6f0` forwards
-both arguments to `0x6d2a30`; that path also has a special near-zero amount and
-a lower-bound branch. Those values must be derived from image operands before
-extending the support boundary. Local disassembly remains under the ignored
-`.scratch/destructable-restore-native/` directory.
+reads the selected client's near-zero threshold and minimum life from the
+handler at `0x6d2a30` and its data operands. A dead target with `birth=false`
+restores to its catalog maximum for a near-zero request; otherwise the request
+is floored by that source minimum and capped at its catalog maximum. A live
+target remains unchanged. Restoration rearms the next death event without
+delivering one itself. `birth=true` still refuses because its presentation
+behavior is unqualified. Local disassembly remains under the ignored
+`.scratch/destructable-restore-native/` directory; the separate original RoC
+amount probe is under `.scratch/destructable-restore-amount-probe/`.
 
 A subsequent controlled run on the same reviewed client, with `-classic` and
 explicit RoC readback, sampled nine restoration cases on one script-created tree.
@@ -85,17 +87,19 @@ callback frames. Runaway nesting stops at the VM's existing spawn-depth budget.
 
 Synthetic owned-VM tests in `death_event_tests.rs` cover synchronous setters,
 kill and restore paths, event/widget/destructable responses, already-dead and
-positive-rearm behavior, engine-damage boundary delivery, both cross-family
+positive-rearm behavior, source-derived restore amounts and live no-op behavior,
+engine-damage boundary delivery, both cross-family
 nesting directions, false conditions, sleeping actions, callback errors, source
 and platform admission, the prepare/commit seam, and the shared nesting budget.
 
-- `cargo test -p pcx-play --lib -- --test-threads=1`: 1422 passed, 41 ignored.
-- `cargo clippy -p pcx-play --all-targets -- -D warnings`: pass.
+- `cargo test -p pcx-play --lib --locked --offline`: 1429 passed, 42 ignored.
+- `cargo test -p peacecraft3 --features test-fixtures --bin peacecraft3 --locked --offline`: 607 passed, 55 ignored.
+- Native and WASM strict Clippy for `pcx-play` and `peacecraft3`: pass.
 - `cargo fmt --all -- --check`: pass.
-- `cargo check --workspace --all-targets`: pass.
 
-The asset-backed campaign integration tests require their documented local
-environment and were not run for this slice. Native registration order,
+The selected Human01 chapter activation gate admits the reviewed executable
+and publishes 152 units; this checks production reader/startup wiring, not
+rendered restore presentation. Native registration order,
 unregistration and duplicate-identity behavior, item widgets, death animation
 and sound, rendered/collision parity and the 100-consecutive original baseline
 remain open. The life-setter probe receipt does not by itself qualify native

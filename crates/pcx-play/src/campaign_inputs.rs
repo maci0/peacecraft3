@@ -481,6 +481,7 @@ pub fn prepare(
             max_secondary: 256,
         }),
         numeric: Some(source.numeric),
+        destructable_restore: Some(source.destructable_restore),
         experience_handicap: Some(source.experience),
         hero_skills: Some(HeroSkillsInput {
             rules: source.hero,

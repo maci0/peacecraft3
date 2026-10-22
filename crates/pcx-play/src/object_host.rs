@@ -61,6 +61,7 @@ pub struct ObjectHost {
     initial_blight: Option<crate::terrain_blight::InitialBlight>,
     unit_placement: Option<crate::unit_placement::Placement>,
     destructable_catalog: Option<destructables::DestructableCatalog>,
+    destructable_restore: Option<destructables::RestoreLifePolicy>,
     placed_sources: std::collections::BTreeMap<HandleId, destructables::PlacedSource>,
     map_music: Option<music::State>,
     sound_environments: Option<environments::State>,
@@ -203,6 +204,7 @@ impl ObjectHost {
             initial_blight: None,
             unit_placement: None,
             destructable_catalog: None,
+            destructable_restore: None,
             placed_sources: std::collections::BTreeMap::new(),
             map_music: None,
             sound_environments: None,
@@ -1093,7 +1095,8 @@ pub use camera_setup::{AppliedCameraSetup, CameraDestination, CameraFieldRecord}
 mod destructables;
 pub use destructables::{
     DestructableBudget, DestructableCatalog, DestructableCreation, DestructableOrigin,
-    DestructableState, DestructableStats, PlacedDestructable, PlacedSource,
+    DestructableState, DestructableStats, PlacedDestructable, PlacedSource, RestoreLifeBinding,
+    RestoreLifePolicy,
 };
 
 #[path = "unit_host.rs"]

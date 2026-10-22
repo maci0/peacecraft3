@@ -6,6 +6,12 @@
 //! height, life total, pathing cell, or world object.
 use super::super::{Entry, Error, Failure, below};
 use super::ObjectHost;
+use crate::{
+    camera_margins::SourceWindow,
+    neutral_player::{RuleInputBudget, Sha256Digest, sha256},
+    neutral_rule_input::Pe,
+    scripts::AssetIdentity,
+};
 use pcx_objects::editor::{
     FieldDef, FieldKind, FieldSource, Overlay, SlkId,
     defaults::{DefaultTables, Family, Object, Unresolved},
@@ -58,6 +64,130 @@ const SHAPES: &[Shape] = &[
 #[derive(Clone, Copy, Debug)]
 pub struct DestructableBudget {
     pub max_records: usize,
+}
+
+/// The selected client's restore threshold and minimum life, read from the
+/// native path that handles the declared three-argument restore call.
+#[derive(Clone, Debug)]
+pub struct RestoreLifeBinding {
+    pub origin: AssetIdentity,
+    pub image_sha256: Sha256Digest,
+    pub body: SourceWindow,
+    pub zero_initializer: SourceWindow,
+    pub threshold: SourceWindow,
+    pub minimum: SourceWindow,
+    pub subtract_va: u32,
+    pub convert_va: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RestoreLifePolicy {
+    zero: f32,
+    threshold: f32,
+    minimum: f32,
+}
+
+impl RestoreLifePolicy {
+    pub fn read(
+        image: &[u8],
+        binding: RestoreLifeBinding,
+        budget: RuleInputBudget,
+    ) -> Result<Self, String> {
+        let fail =
+            |reason: &str| format!("{}: destructable restore: {reason}", binding.origin.source);
+        if image.len() > budget.image_bytes
+            || sha256(image) != binding.image_sha256
+            || [
+                &binding.origin.source,
+                &binding.origin.edition,
+                &binding.origin.version,
+            ]
+            .iter()
+            .any(|s| s.trim().is_empty())
+        {
+            return Err(fail("missing or mismatched client identity"));
+        }
+        let pe = Pe::parse(image, budget).map_err(|e| fail(&e.to_string()))?;
+        let body = pe
+            .window(&binding.body, true)
+            .map_err(|e| fail(&e.to_string()))?;
+        let init = pe
+            .window(&binding.zero_initializer, true)
+            .map_err(|e| fail(&e.to_string()))?;
+        let threshold = pe
+            .window(&binding.threshold, false)
+            .map_err(|e| fail(&e.to_string()))?;
+        let minimum = pe
+            .window(&binding.minimum, false)
+            .map_err(|e| fail(&e.to_string()))?;
+        let word = |bytes: &[u8], at: usize| -> Option<u32> {
+            Some(u32::from_le_bytes(
+                bytes.get(at..at.checked_add(4)?)?.try_into().ok()?,
+            ))
+        };
+        let addressed = |bytes: &[u8], at: usize, va: u32| word(bytes, at) == Some(va);
+        let call = |bytes: &[u8], at: usize, base: u32| -> Option<u32> {
+            (bytes.get(at) == Some(&0xe8)).then_some(
+                base.wrapping_add(at as u32 + 5)
+                    .wrapping_add(word(bytes, at + 1)?),
+            )
+        };
+        if body.len() != 0x75
+            || init.len() != 16
+            || threshold.len() != 4
+            || minimum.len() != 4
+            || body.get(0x28) != Some(&0x68)
+            || !addressed(
+                body,
+                0x29,
+                word(init, 3).ok_or_else(|| fail("truncated zero initializer"))?,
+            )
+            || body.get(0x33..0x37) != Some(&[0xf3, 0x0f, 0x10, 0x05])
+            || !addressed(body, 0x37, binding.threshold.va)
+            || body.get(0x40..0x45) != Some(&[0x25, 0xff, 0xff, 0xff, 0x7f])
+            || body.get(0x48..0x4e) != Some(&[0x0f, 0x2f, 0x45, 0x08, 0x76, 0x12])
+            || body.get(0x65..0x68) != Some(&[0x0f, 0x2f, 0x05])
+            || !addressed(body, 0x68, binding.minimum.va)
+            || body.get(0x6c) != Some(&0xa1)
+            || !addressed(body, 0x6d, binding.minimum.va)
+            || body.get(0x71..0x75) != Some(&[0x0f, 0x47, 0x45, 0xfc])
+            || init.first() != Some(&0x6a)
+            || init.get(2) != Some(&0x68)
+            || init.get(7) != Some(&0xe8)
+            || init.get(12..) != Some(&[0x83, 0xc4, 0x08, 0xc3])
+            || call(body, 0x2e, binding.body.va) != Some(binding.subtract_va)
+            || call(init, 7, binding.zero_initializer.va) != Some(binding.convert_va)
+        {
+            return Err(fail("unsupported restore or initializer operands"));
+        }
+        let threshold = f32::from_bits(word(threshold, 0).unwrap());
+        let minimum = f32::from_bits(word(minimum, 0).unwrap());
+        if !threshold.is_finite() || threshold <= 0.0 || !minimum.is_finite() || minimum <= 0.0 {
+            return Err(fail("invalid restore threshold or minimum"));
+        }
+        Ok(Self {
+            zero: f32::from(init[1] as i8),
+            threshold,
+            minimum,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn synthetic(zero: f32, threshold: f32, minimum: f32) -> Self {
+        Self {
+            zero,
+            threshold,
+            minimum,
+        }
+    }
+
+    fn life(self, requested: f32, maximum: f32) -> f32 {
+        if (requested - self.zero).abs() < self.threshold {
+            maximum
+        } else {
+            requested.max(self.minimum).min(maximum)
+        }
+    }
 }
 
 /// Where a destructable entered the session. Placed objects keep the authored
@@ -425,6 +555,16 @@ pub(super) struct Admission {
 }
 
 impl ObjectHost {
+    pub fn with_destructable_restore(mut self, policy: RestoreLifePolicy) -> Result<Self, Error> {
+        if self.destructable_restore.is_some() {
+            return Err(self.inner.error(
+                "DestructableRestoreLife",
+                Failure::DestructableState("restore policy already admitted"),
+            ));
+        }
+        self.destructable_restore = Some(policy);
+        Ok(self)
+    }
     /// Admit destructable creation on the shared arena.
     ///
     /// `CreateDestructable` is required. Each of the other three create natives
@@ -735,15 +875,28 @@ impl ObjectHost {
                 (life, life <= 0.0)
             }
             ("DestructableRestoreLife", [Value::Real(value), Value::Bool(birth)]) => {
-                if !state.dead || *birth || *value != ceiling || ceiling <= 0.0 {
+                if *birth {
                     return Err(self.inner.error(
                         name,
-                        Failure::DestructableState(
-                            "only full-life restoration of a dead target without birth animation is admitted",
-                        ),
+                        Failure::DestructableState("birth presentation is unsupported"),
                     ));
                 }
-                (ceiling, false)
+                let policy = self.destructable_restore.ok_or_else(|| {
+                    self.inner.error(
+                        name,
+                        Failure::DestructableState("restore source policy not admitted"),
+                    )
+                })?;
+                if !state.dead {
+                    return Ok(None);
+                }
+                if ceiling <= 0.0 {
+                    return Err(self.inner.error(
+                        name,
+                        Failure::DestructableState("catalog HP is not positive"),
+                    ));
+                }
+                (policy.life(*value, ceiling), false)
             }
             _ => return Err(self.inner.error(name, Failure::Signature)),
         };
@@ -916,9 +1069,9 @@ impl ObjectHost {
             return Err(self.inner.error(name, Failure::WrongFamily));
         }
         if DEATH_NATIVES.contains(&name) {
-            let plan = self
-                .plan_life(name, target, rest)?
-                .ok_or_else(|| self.inner.error(name, Failure::WrongFamily))?;
+            let Some(plan) = self.plan_life(name, target, rest)? else {
+                return Ok(Value::Null);
+            };
             let count = if plan.dead && !plan.was_dead {
                 self.death_event_count(id)
             } else {
@@ -1171,5 +1324,141 @@ fn finite_real(value: &Value) -> Result<f32, Failure> {
         _ => Err(Failure::DestructableState(
             "arguments do not match the destructable native declaration",
         )),
+    }
+}
+
+#[cfg(test)]
+mod restore_policy_tests {
+    use super::*;
+    use crate::pe_image::{
+        TEXT,
+        tests::{DATA, IMAGE_BASE, synthetic_image},
+    };
+
+    const BODY: u32 = IMAGE_BASE + 0x1000;
+    const INIT: u32 = IMAGE_BASE + 0x1100;
+    const THRESHOLD: u32 = IMAGE_BASE + 0x3000;
+    const MINIMUM: u32 = IMAGE_BASE + 0x3004;
+
+    fn image(zero: i8, threshold: f32, minimum: f32) -> (Vec<u8>, RestoreLifeBinding) {
+        let mut text = [0x90; 0x110];
+        let body = &mut text[..0x75];
+        body[0x28] = 0x68;
+        body[0x29..0x2d].copy_from_slice(&0x404000u32.to_le_bytes());
+        body[0x2e] = 0xe8;
+        body[0x2f..0x33].copy_from_slice(&(0x401800i32 - (BODY + 0x33) as i32).to_le_bytes());
+        body[0x33..0x37].copy_from_slice(&[0xf3, 0x0f, 0x10, 0x05]);
+        body[0x37..0x3b].copy_from_slice(&THRESHOLD.to_le_bytes());
+        body[0x40..0x45].copy_from_slice(&[0x25, 0xff, 0xff, 0xff, 0x7f]);
+        body[0x48..0x4e].copy_from_slice(&[0x0f, 0x2f, 0x45, 0x08, 0x76, 0x12]);
+        body[0x65..0x68].copy_from_slice(&[0x0f, 0x2f, 0x05]);
+        body[0x68..0x6c].copy_from_slice(&MINIMUM.to_le_bytes());
+        body[0x6c] = 0xa1;
+        body[0x6d..0x71].copy_from_slice(&MINIMUM.to_le_bytes());
+        body[0x71..0x75].copy_from_slice(&[0x0f, 0x47, 0x45, 0xfc]);
+        let init = &mut text[0x100..0x110];
+        init[..3].copy_from_slice(&[0x6a, zero as u8, 0x68]);
+        init[3..7].copy_from_slice(&0x404000u32.to_le_bytes());
+        init[7] = 0xe8;
+        init[8..12].copy_from_slice(&(0x401900i32 - (INIT + 12) as i32).to_le_bytes());
+        init[12..].copy_from_slice(&[0x83, 0xc4, 0x08, 0xc3]);
+        let mut data = [0; 8];
+        data[..4].copy_from_slice(&threshold.to_le_bytes());
+        data[4..].copy_from_slice(&minimum.to_le_bytes());
+        let mut bytes = synthetic_image(&[(TEXT, 0x1000, &text), (DATA, 0x3000, &data)]);
+        bytes[..2].copy_from_slice(b"MZ");
+        bytes[0x84..0x86].copy_from_slice(&0x14cu16.to_le_bytes());
+        bytes[0xd0..0xd4].copy_from_slice(&0x4000u32.to_le_bytes());
+        bytes[0x19c..0x1a0].copy_from_slice(&0x6000_0020u32.to_le_bytes());
+        bytes[0x1c4..0x1c8].copy_from_slice(&0xc000_0040u32.to_le_bytes());
+        let binding = RestoreLifeBinding {
+            origin: AssetIdentity {
+                edition: "synthetic".into(),
+                version: "synthetic".into(),
+                source: "synthetic client".into(),
+            },
+            image_sha256: sha256(&bytes),
+            body: SourceWindow {
+                va: BODY,
+                len: 0x75,
+                digest: sha256(&text[..0x75]),
+            },
+            zero_initializer: SourceWindow {
+                va: INIT,
+                len: 16,
+                digest: sha256(&text[0x100..]),
+            },
+            threshold: SourceWindow {
+                va: THRESHOLD,
+                len: 4,
+                digest: sha256(&data[..4]),
+            },
+            minimum: SourceWindow {
+                va: MINIMUM,
+                len: 4,
+                digest: sha256(&data[4..]),
+            },
+            subtract_va: 0x401800,
+            convert_va: 0x401900,
+        };
+        (bytes, binding)
+    }
+
+    #[test]
+    fn authored_threshold_and_floor_change_restore_amounts() {
+        let (bytes, binding) = image(0, 0.125, 0.75);
+        let policy = RestoreLifePolicy::read(
+            &bytes,
+            binding.clone(),
+            RuleInputBudget {
+                image_bytes: 1 << 20,
+                profile_bytes: 1024,
+                sections: 4,
+            },
+        )
+        .unwrap();
+        assert_eq!(policy.life(0.0625, 50.0), 50.0);
+        assert_eq!(policy.life(0.25, 50.0), 0.75);
+        assert_eq!(policy.life(-20.0, 50.0), 0.75);
+        assert_eq!(policy.life(100.0, 50.0), 50.0);
+        let (changed, _) = image(0, 0.25, 1.25);
+        assert!(
+            RestoreLifePolicy::read(
+                &changed,
+                binding,
+                RuleInputBudget {
+                    image_bytes: 1 << 20,
+                    profile_bytes: 1024,
+                    sections: 4
+                }
+            )
+            .is_err()
+        );
+        let (changed, binding) = image(0, 0.25, 1.25);
+        let changed_policy = RestoreLifePolicy::read(
+            &changed,
+            binding,
+            RuleInputBudget {
+                image_bytes: 1 << 20,
+                profile_bytes: 1024,
+                sections: 4,
+            },
+        )
+        .unwrap();
+        assert_eq!(changed_policy.life(0.2, 50.0), 50.0);
+        assert_eq!(changed_policy.life(0.5, 50.0), 1.25);
+        let (shifted, binding) = image(1, 0.125, 0.75);
+        let shifted_policy = RestoreLifePolicy::read(
+            &shifted,
+            binding,
+            RuleInputBudget {
+                image_bytes: 1 << 20,
+                profile_bytes: 1024,
+                sections: 4,
+            },
+        )
+        .unwrap();
+        assert_eq!(shifted_policy.life(1.0625, 50.0), 50.0);
+        assert_eq!(shifted_policy.life(0.0625, 50.0), 0.75);
     }
 }
