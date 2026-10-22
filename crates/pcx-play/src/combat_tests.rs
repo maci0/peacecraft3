@@ -3674,7 +3674,14 @@ fn wide_hero_fields(primary: &str) -> Vec<([u8; 4], ObjectField)> {
 
 #[test]
 fn campaign_targeting_hero_selection_uses_the_admitted_flag_and_newest_tie_break() {
-    for (enabled, expected_hero) in [(Some(true), true), (None, false), (Some(false), false)] {
+    for (enabled, newest_hero) in [
+        (Some(true), false),
+        (Some(true), true),
+        (None, false),
+        (None, true),
+        (Some(false), false),
+        (Some(false), true),
+    ] {
         let (hero, combat) = hero_rules();
         let (mut vm, a, b) = open_selected(&wide_hero_fields("STR"), Some(hero), combat);
         admit_targeting(&mut vm, 4, enabled);
@@ -3683,12 +3690,29 @@ fn campaign_targeting_hero_selection_uses_the_admitted_flag_and_newest_tie_break
             vm.host().inner.campaign_targeting_enabled(owner).unwrap(),
             Some(enabled.unwrap_or(false))
         );
-        let hero = create_for(&mut vm, b, *b"J001", 16.0, 48.0);
-        let ordinary = create_for(&mut vm, b, *b"u003", 16.0, 48.0);
+        let (hero, ordinary) = if newest_hero {
+            let ordinary = create_for(&mut vm, b, *b"u003", 16.0, 48.0);
+            (create_for(&mut vm, b, *b"J001", 16.0, 48.0), ordinary)
+        } else {
+            let hero = create_for(&mut vm, b, *b"J001", 16.0, 48.0);
+            (hero, create_for(&mut vm, b, *b"u003", 16.0, 48.0))
+        };
         step(&mut vm, 1.0 / 64.0);
         let target = acquired(&mut vm, a);
+        let expected_hero = enabled.unwrap_or(false) || newest_hero;
         assert_eq!(target, Some(if expected_hero { hero } else { ordinary }));
     }
+}
+
+#[test]
+fn campaign_targeting_false_keeps_a_nearer_hero_eligible() {
+    let (hero, combat) = hero_rules();
+    let (mut vm, a, b) = open_selected(&wide_hero_fields("STR"), Some(hero), combat);
+    admit_targeting(&mut vm, 4, Some(false));
+    let hero = create_for(&mut vm, b, *b"J001", 16.0, 40.0);
+    create_for(&mut vm, b, *b"u003", 16.0, 48.0);
+    step(&mut vm, 1.0 / 64.0);
+    assert_eq!(acquired(&mut vm, a), Some(hero));
 }
 
 #[test]
@@ -3743,8 +3767,9 @@ fn campaign_targeting_refuses_decisive_optional_bands_and_nonunit_specials() {
     }
 
     let (mut vm, a, b) = open(&wide_acquire());
+    let special = targeting_policy().unclassified_rawcodes[0];
     admit_targeting(&mut vm, 4, Some(true));
-    create_for(&mut vm, b, *b"pso1", 48.0, 48.0);
+    create_for(&mut vm, b, special, 48.0, 48.0);
     vm.host().inner.enable_combat_trace(8);
     let error = step_refused(&mut vm, 1.0 / 64.0);
     assert!(error.contains("campaign targeting"), "{error}");

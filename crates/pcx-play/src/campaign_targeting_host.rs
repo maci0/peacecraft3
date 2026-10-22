@@ -157,7 +157,7 @@ impl ObjectHost {
                 .executed_unit(candidate)
                 .map_err(|_| "candidate is not an executed unit")?;
             let rawcode = record.definition.rawcode;
-            if matches!(&rawcode, b"pso1" | b"pso2" | b"pso3") {
+            if policy.unclassified_rawcodes.contains(&rawcode) {
                 return Err("candidate is an unclassified special object");
             }
             let owner = self

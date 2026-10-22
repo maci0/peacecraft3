@@ -4,7 +4,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 
 - [~] Campaign targeting now has a selected-image policy reader, canonical
   per-player flags and a bounded automatic-acquisition consumer. The published
-  session fixture and combined 1,520 core / 610 app tests pass, with strict
+  session fixture and combined 1,521 core / 610 app tests pass, with strict
   native/WASM Clippy. The unchanged selected Continue startup passes; Human02's
   opening-minute gate advances past `SetTargetHeroes` to unsupported
   `SetUnitsFlee` at 7.218750 seconds (script line 1692). Full scoring, effect

@@ -170,8 +170,11 @@ promotion; the unsupported melee-mode transition remains outside this envelope.
 The production `MapStartupHost`/`MapScriptSession` fixture runs two independent
 programs, applies difficulty through the normal post-config callback, observes
 automatic acquisition in the published world, then flips flags after sleep while
-checking retained targets. Combined validation passes 1,520 core tests, 610 app
-tests and strict native/WASM Clippy. These tests do not establish rendered parity
+checking retained targets. Combined validation passes 1,521 core tests, 610 app
+tests and strict native/WASM Clippy. The special-object comparison set is
+decoded from the selected instructions, with nonstock fixtures covering its
+canonical FourCC order. Reversed creation and a nearer hero under false policy
+are covered explicitly. These tests do not establish rendered parity
 or every native attachment and score term.
 
 The unchanged selected Continue gate still publishes Human01's 152 units and
@@ -180,3 +183,4 @@ the red program's next `SetUnitsFlee` call at 7.218750 seconds, through
 `StartCampaignAI` at Human02 script line 1692. The opening-minute acceptance test
 remains failing; no campaign completion is claimed. Receipts are local under
 `.scratch/campaign-targeting-root-review/integration-*.log`.
+Final receipts are under the same directory's `final/` subdirectory.
