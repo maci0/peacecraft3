@@ -169,6 +169,36 @@ archive/member hashes remain local in `.scratch/harvest-active-upgrade-probe/`.
 This is a diagnostic resource-cycle observation, not unchanged chapter or
 presentation acceptance.
 
+## Edited tree damage and capacity boundary
+
+A separate diagnostic on the same reviewed client and RoC selection changed
+only `Ahar`'s `Har1` damage field to the experimental integer 7. Its W3A
+field and Data pointer were checked against the selected metadata. Capacity
+remained the selected value 10 and `Rhlh` research read zero throughout.
+The effective override is witnessed by tree life 50 → 43 at 5.500 seconds,
+then 43 → 36 at 6.625. The first observed deposit at 9.750 credited 10 lumber
+and 10 gathered lumber. The separate-owner control retained its position,
+zero order, tree life 50 and zero bank/gathered counters.
+
+Thus the final swing in this case still damages the tree by the full edited
+amount even though only three units of carry capacity remain. The observation
+supports the recreation's separate full tree hit and capacity-limited cargo
+update. It does not establish all edited damage amounts, fractional amounts,
+tree-depletion yields or upgrade combinations. Existing synthetic capacity-hit
+tests also distinguish full hits from clipping tree damage to remaining cargo.
+
+All 77 marker files validated, including 67 periodic checkpoints. Map SHA-256:
+`f2e3938686947684209168c48ce41e5624fdfa362183bff8b69052ac80bac9d3`;
+script SHA-256:
+`a2b53a98b4de3a85e0e67d360ec74c5063b19a81eb6c96c7625fc0a7af818fda`.
+The complete ability-file framing passed `pcx_objects::ObjectFile::parse`,
+and all packed members round-tripped. The collector's complete positive,
+unqualified and malformed synthetic cases passed. Raw markers, selected source
+hashes and the stopped reference run remain local under
+`.scratch/harvest-tree-damage-probe/r4/` and run `hdamage-261023s`.
+Earlier drafts had incomplete ability-file framing or collector defects;
+the exited r3 run supplied no gameplay qualification and remains preserved.
+
 ## Model presentation evidence
 
 The selected `UnitUI.slk` binds `hpea.file` to
