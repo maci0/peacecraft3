@@ -429,3 +429,29 @@ Xvfb/Vulkan software-rendered smoke also skips the cinematic into the mission
 view/HUD. No fresh original-client or browser rendering comparison was performed.
 Receipts remain in `.scratch/campaign-controls-20261020/` and
 `.scratch/campaign-time-of-day-root-20261020/controls-confirmed-20261020/`.
+
+## Fresh base-form Call to Arms off (2026-10-22, narrow slice)
+
+The combined root gate now reaches Human02 `war3map.j:821` after shield-off at
+line 815 passes; the failing request is `IssueImmediateOrder` with the authored
+`militiaoff` string for a fresh `hpea`. A local diagnostic probe on that base
+form returned `false`. The active `hmil` form and the morph-on request are not
+yet captured, so they remain unsupported rather than inferred.
+
+`ObjectHost::with_militia_ability` is a separate opt-in beside the Defend
+admission. It selects the authored `Amil` ability row from the caller's selected
+`DefaultTables`; the identifier is a named constant. The profile's `Order` and
+`Unorder` text and the rank-1 `DataA1`/`DataB1` base and active forms are read
+from those tables. Admission accepts the same single-level, non-hero, non-item,
+zero-cost/cooldown shape as the selected row, including absent `Requires` and
+`Requiresamount`. An absent `Amil` row leaves the admission off. A present but
+malformed row refuses with the table identity in the error context.
+
+Dispatch returns `false` only for a live base-form unit whose metadata-associated
+`abilList` names `Amil` and whose order text exactly matches the authored
+`Unorder`. Null and removed units return `false`; a non-unit handle refuses as
+the wrong family. The active form, other unit forms, the morph-on string and all
+unmatched text stay on the explicit unsupported path. No duration is read or
+consumed, no morph is applied, and no per-unit active state is created. This is
+the measured fresh-base off result only; Call to Arms behavior after it remains
+open.

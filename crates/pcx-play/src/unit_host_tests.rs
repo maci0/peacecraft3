@@ -1996,6 +1996,9 @@ impl ObjectCatalog for OrderCatalog {
             b"u001" => "Qord",
             b"u002" => "Zzzz, Qord",
             b"u003" => "qord",
+            b"v001" | b"v002" => "Amil",
+            b"v003" => "Zzzz",
+            b"v004" => "",
             _ => {
                 return Err(ResolutionProblem::MissingRawcode(pcx_objects::fourcc_text(
                     rawcode,
@@ -2020,6 +2023,114 @@ impl ObjectCatalog for OrderCatalog {
             fields,
         ))
     }
+}
+
+const MILITIA_HEADERS: &[&str] = &[
+    "alias",
+    "code",
+    "hero",
+    "item",
+    "checkDep",
+    "levels",
+    "reqLevel",
+    "levelSkip",
+    "Cool1",
+    "Cost1",
+    "DataA1",
+    "DataB1",
+];
+
+fn militia_tables(
+    levels: &str,
+    base: &str,
+    active: &str,
+    order: &str,
+    unorder: &str,
+) -> DefaultTables {
+    let row = [
+        "Amil", "Amil", "0", "0", "1", levels, "0", "0", "0", "0", base, active,
+    ];
+    let bytes = sylk(MILITIA_HEADERS, &[&row]);
+    let profile = format!("[Amil]\r\nOrder={order}\r\nUnorder={unorder}\r\n");
+    DefaultTables::from_bytes(
+        Identity {
+            install: "synthetic".into(),
+            edition_version: "fixture edition/version".into(),
+        },
+        &[(SlkId::AbilityData.path(), bytes.as_slice())],
+        &[("Units\\HumanAbilityFunc.txt", profile.as_bytes())],
+        pcx_objects::editor::EditorReadLimits {
+            max_listed_paths: 2,
+            max_asset_bytes: 64 << 10,
+            max_aggregate_input_bytes: 128 << 10,
+        },
+    )
+    .unwrap_or_else(|error| panic!("synthetic militia tables: {error}"))
+}
+
+fn militia_common() -> String {
+    let mut common = script_common("widget", true);
+    let globals = common.find("\nglobals\n").expect("globals");
+    common.insert_str(
+        globals + 1,
+        "native IssueImmediateOrder takes unit whichUnit, string order returns boolean\n\
+native RemoveUnit takes unit u returns nothing\n",
+    );
+    common
+}
+
+fn militia_vm(tables: &DefaultTables) -> OrderVm {
+    let common = militia_common();
+    let map = "globals\nplayer P = null\nunit BASE = null\nunit ACTIVE = null\nunit OTHER = null\nunit NOLIST = null\nendglobals\n\
+function main takes nothing returns nothing\n\
+set P = Player(4)\n\
+set BASE = CreateUnit(P, 'v001', 1.0, 2.0, 3.0)\n\
+set ACTIVE = CreateUnit(P, 'v002', 4.0, 5.0, 6.0)\n\
+set OTHER = CreateUnit(P, 'v003', 7.0, 8.0, 9.0)\n\
+set NOLIST = CreateUnit(P, 'v004', 10.0, 11.0, 12.0)\n\
+endfunction\n\
+function issue takes unit target, string text returns boolean\n\
+return IssueImmediateOrder(target, text)\n\
+endfunction\n\
+function remove takes unit target returns nothing\n\
+call RemoveUnit(target)\n\
+endfunction\n";
+    let ctx = context(302, &common, map, "unit-catalog");
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = Arc::new(OrderCatalog {
+        hits: Arc::new(AtomicUsize::new(0)),
+    });
+    let host = object(&ctx, 16)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(4))
+        .unwrap()
+        .with_militia_ability(tables)
+        .unwrap();
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    vm
+}
+
+fn militia_refusal(tables: &DefaultTables) -> String {
+    let common = militia_common();
+    let ctx = context(
+        302,
+        &common,
+        "function main takes nothing returns nothing\nendfunction\n",
+        "unit-catalog",
+    );
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = Arc::new(OrderCatalog {
+        hits: Arc::new(AtomicUsize::new(0)),
+    });
+    object(&ctx, 8)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(1))
+        .unwrap()
+        .with_militia_ability(tables)
+        .map(|_| String::new())
+        .unwrap_or_else(|error| error.to_string())
 }
 
 fn order_common() -> String {
@@ -2100,6 +2211,151 @@ fn research(vm: &mut OrderVm, tech: [u8; 4], level: i32) {
         &[Value::Int(i32::from_be_bytes(tech)), Value::Int(level)],
     )
     .unwrap();
+}
+
+#[test]
+fn militia_off_is_false_only_for_the_fresh_base_form_with_the_admitted_list() {
+    let tables = militia_tables("1", "v001", "v002", "militia", "militiaoff");
+    let mut vm = militia_vm(&tables);
+    assert_eq!(
+        issue(&mut vm, "BASE", "militiaoff").unwrap(),
+        Value::Bool(false)
+    );
+    assert!(issue(&mut vm, "BASE", "MILITIAOFF").is_err());
+    assert!(issue(&mut vm, "BASE", "militia").is_err());
+    assert!(issue(&mut vm, "BASE", "other").is_err());
+    assert!(issue(&mut vm, "ACTIVE", "militiaoff").is_err());
+    assert!(issue(&mut vm, "OTHER", "militiaoff").is_err());
+    assert!(issue(&mut vm, "NOLIST", "militiaoff").is_err());
+}
+
+#[test]
+fn militia_null_removed_and_wrong_family_contracts_are_explicit() {
+    let tables = militia_tables("1", "v001", "v002", "militia", "militiaoff");
+    let mut vm = militia_vm(&tables);
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrder",
+                &[Value::Null, Value::Str("militiaoff".into())]
+            )
+            .unwrap(),
+        Value::Bool(false)
+    );
+    let Value::Handle(base) = vm.global("BASE") else {
+        panic!("base")
+    };
+    vm.call("remove", &[Value::Handle(base)]).unwrap();
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrder",
+                &[Value::Handle(base), Value::Str("militiaoff".into())]
+            )
+            .unwrap(),
+        Value::Bool(false)
+    );
+    let Value::Handle(player) = vm.global("P") else {
+        panic!("player")
+    };
+    assert!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrder",
+                &[Value::Handle(player), Value::Str("militiaoff".into())]
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn militia_absent_class_keeps_the_order_unsupported() {
+    let good = &["Qord", "Qcls", "0", "0", "1", "1", "0", "0", "0", "0"];
+    let tables = order_tables(ORDER_HEADERS, good, "", "1");
+    let mut vm = militia_vm(&tables);
+    assert!(issue(&mut vm, "BASE", "militiaoff").is_err());
+}
+
+#[test]
+fn militia_malformed_class_refuses_with_its_source_context() {
+    for (levels, base, order, unorder, expected) in [
+        ("2", "v001", "militia", "militiaoff", "levels"),
+        ("1", "", "militia", "militiaoff", "DataA1"),
+        ("1", "v001", "militia", "militia", "same text"),
+        ("1", "v001", "militia", "militiaoff", "not an absent"),
+    ] {
+        let mut tables = militia_tables(levels, base, "v002", order, unorder);
+        if expected == "not an absent" {
+            let bytes = sylk(
+                MILITIA_HEADERS,
+                &[&[
+                    "Amil", "Amil", "0", "0", "1", levels, "0", "0", "0", "0", base, "v002",
+                ]],
+            );
+            let profile = "[Amil]\r\nOrder=militia\r\nUnorder=militiaoff\r\nRequires=Qtec\r\n";
+            tables = DefaultTables::from_bytes(
+                Identity {
+                    install: "synthetic".into(),
+                    edition_version: "fixture edition/version".into(),
+                },
+                &[(SlkId::AbilityData.path(), bytes.as_slice())],
+                &[("Units\\HumanAbilityFunc.txt", profile.as_bytes())],
+                pcx_objects::editor::EditorReadLimits {
+                    max_listed_paths: 2,
+                    max_asset_bytes: 64 << 10,
+                    max_aggregate_input_bytes: 128 << 10,
+                },
+            )
+            .unwrap();
+        }
+        let error = militia_refusal(&tables);
+        assert!(error.contains(expected), "{error}");
+        assert!(error.contains("militia ability \"Amil\""), "{error}");
+        assert!(error.contains("fixture edition/version"), "{error}");
+    }
+}
+
+#[test]
+fn militia_admission_precedes_unit_creation() {
+    let tables = militia_tables("1", "v001", "v002", "militia", "militiaoff");
+    let common = militia_common();
+    let ctx = context(
+        302,
+        &common,
+        "function main takes nothing returns nothing\nendfunction\n",
+        "unit-catalog",
+    );
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = Arc::new(OrderCatalog {
+        hits: Arc::new(AtomicUsize::new(0)),
+    });
+    let mut host = object(&ctx, 16)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(2))
+        .unwrap();
+    let player = host.native("Player", &[Value::Int(4)]).unwrap();
+    host.native(
+        "CreateUnit",
+        &[
+            player,
+            Value::Int(i32::from_be_bytes(*b"v001")),
+            Value::Real(0.0),
+            Value::Real(0.0),
+            Value::Real(0.0),
+        ],
+    )
+    .unwrap();
+    let Err(error) = host.with_militia_ability(&tables) else {
+        panic!("late admission succeeded");
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("admit militia before creating units")
+    );
 }
 
 fn refused_order(headers: &[&str], row: &[&str], amount: &str) -> String {

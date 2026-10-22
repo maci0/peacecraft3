@@ -10,10 +10,10 @@
 //! executed `ConvertUnitState` handle and finite value. It does not spend a
 //! resource or apply combat.
 //!
-//! `IssueImmediateOrder` is a separate Defend opt-in for one caller-named ability
-//! alias. Admission reads that alias from `DefaultTables` the caller already
-//! holds and keeps a snapshot. It does not open archives or scan every
-//! order pair.
+//! `IssueImmediateOrder` has two separate opt-ins. The Defend opt-in takes one
+//! caller-named ability alias; the Militia opt-in selects the authored `Amil`
+//! row. Admission reads the selected tables the caller already holds and keeps
+//! a snapshot. It does not open archives or scan every order pair.
 use super::super::{Entry, Error, Failure, below};
 use super::ObjectHost;
 use super::players::TechRead;
@@ -49,6 +49,8 @@ const STATE_KIND: &str = "unitstate";
 const KIND: &str = "unit";
 /// Binary class binding: `Agld` maps to the amount-owning `Agmb` class.
 const RESOURCE_ALIAS: &str = "Agld";
+/// Authored ability class for the source-backed Call to Arms off slice.
+const MILITIA_ALIAS: &str = "Amil";
 /// Caller bounds. Not a world, population, or rendering limit.
 #[derive(Clone, Copy, Debug)]
 pub struct UnitBudget {
@@ -174,6 +176,14 @@ struct DefendAbility {
     required_level: i32,
 }
 
+struct MilitiaAbility {
+    alias: String,
+    on: String,
+    off: String,
+    base: [u8; 4],
+    active: [u8; 4],
+}
+
 struct UnitStateLimits {
     max_records: usize,
     records: usize,
@@ -208,6 +218,8 @@ pub(super) struct Admission {
     resource_tables: Option<Arc<DefaultTables>>,
     /// Present after [`ObjectHost::with_defend_ability`].
     order: Option<DefendAbility>,
+    /// Present after [`ObjectHost::with_militia_ability`].
+    militia: Option<MilitiaAbility>,
     heroes: Option<hero::Admission>,
     models: Option<ModelLoader>,
 }
@@ -316,6 +328,7 @@ impl ObjectHost {
             resource_amounts: false,
             resource_tables: None,
             order: None,
+            militia: None,
             heroes: None,
             models: None,
         });
@@ -548,6 +561,72 @@ impl ObjectHost {
         Ok(self)
     }
 
+    /// Admit the authored Call to Arms off order for the source-backed `Amil`
+    /// class on units from [`Self::with_unit_catalog`].
+    ///
+    /// The class id is a named constant. The profile's `Order`/`Unorder` text
+    /// and the rank-1 `DataA1`/`DataB1` base and active forms come from the
+    /// selected tables. An absent class leaves this admission off; a present,
+    /// malformed class refuses with the table identity in the error context.
+    /// This retains only the off order and both unit forms; it does not read
+    /// `Dur1`, morph, or keep per-unit state. The declaration is non-constant
+    /// `unit, string -> boolean` and shares `CreateUnit`'s source. Admit this
+    /// behavior before creating units.
+    pub fn with_militia_ability(mut self, tables: &DefaultTables) -> Result<Self, Error> {
+        if self.units.is_none() || tables.object(Family::Ability, MILITIA_ALIAS).is_err() {
+            return Ok(self);
+        }
+        let create_source = {
+            let admitted = self
+                .units
+                .as_ref()
+                .ok_or_else(|| self.inner.error(ORDER, Failure::UnitState("not admitted")))?;
+            if admitted.militia.is_some() {
+                return Err(self
+                    .inner
+                    .error(ORDER, Failure::UnitState("militia already admitted")));
+            }
+            if admitted.records != 0 {
+                return Err(self.inner.error(
+                    ORDER,
+                    Failure::UnitState("admit militia before creating units"),
+                ));
+            }
+            admitted.declaration_source.clone()
+        };
+        Self::contract(
+            &self.inner,
+            ORDER,
+            &["unit", "string"],
+            "boolean",
+            false,
+            Some(KIND),
+        )?;
+        let native = self
+            .inner
+            .program
+            .natives()
+            .get(ORDER)
+            .ok_or_else(|| self.inner.error(ORDER, Failure::Signature))?;
+        if native.source != create_source {
+            return Err(self.inner.error(ORDER, Failure::Source));
+        }
+        let snapshot = read_militia_ability(tables).map_err(|reason| {
+            let mut error = self.inner.error(ORDER, Failure::UnitState(reason));
+            error.source_context.push_str(&format!(
+                "; militia ability {MILITIA_ALIAS:?}, object data {:?}",
+                tables.identity()
+            ));
+            error
+        })?;
+        let admitted = self
+            .units
+            .as_mut()
+            .ok_or_else(|| self.inner.error(ORDER, Failure::UnitState("not admitted")))?;
+        admitted.militia = Some(snapshot);
+        Ok(self)
+    }
+
     /// Same catalog allocation passed to [`Self::with_unit_catalog`].
     pub fn unit_catalog(&self) -> Result<Arc<dyn ObjectCatalog + Send + Sync>, Error> {
         Ok(Arc::clone(&self.admitted_units()?.catalog))
@@ -723,8 +802,13 @@ impl ObjectHost {
                 _ => {}
             }
         }
-        if name == ORDER && self.admitted_units().ok()?.order.is_some() {
-            return self.issue_immediate_order(args);
+        if name == ORDER {
+            if let Some(result) = self.militia_immediate_order(args) {
+                return Some(result);
+            }
+            if self.admitted_units().ok()?.order.is_some() {
+                return self.issue_immediate_order(args);
+            }
         }
         None
     }
@@ -1754,6 +1838,60 @@ impl ObjectHost {
         Ok(Value::Handle(id))
     }
 
+    /// The authored `militiaoff` request on the rank-1 base form.
+    ///
+    /// Only a successful base-form match returns a boolean. The active form,
+    /// an unrelated unit type, the morph-on text and every other order text
+    /// stay on the unsupported path. Null and removed units return false;
+    /// a non-unit handle refuses as the wrong family.
+    fn militia_immediate_order(&mut self, args: &[Value]) -> Option<Result<Value, Error>> {
+        let (alias, on, off, base, active) = {
+            let militia = self.units.as_ref()?.militia.as_ref()?;
+            (
+                militia.alias.as_str(),
+                militia.on.as_str(),
+                militia.off.as_str(),
+                militia.base,
+                militia.active,
+            )
+        };
+        let [unit, Value::Str(text)] = args else {
+            return None;
+        };
+        if text == on || text != off {
+            return None;
+        }
+        let unit = match unit {
+            Value::Null => return Some(Ok(Value::Bool(false))),
+            Value::Handle(unit) => *unit,
+            _ => return Some(Err(self.inner.error(ORDER, Failure::WrongFamily))),
+        };
+        let record = match self
+            .inner
+            .entry(unit)
+            .map_err(|error| self.inner.error(ORDER, error.failure))
+        {
+            Ok(Entry::Unit { record }) => record,
+            Ok(Entry::RemovedUnit { .. }) => return Some(Ok(Value::Bool(false))),
+            Ok(_) => return Some(Err(self.inner.error(ORDER, Failure::WrongFamily))),
+            Err(error) => return Some(Err(error)),
+        };
+        if record.definition.rawcode == active {
+            return None;
+        }
+        if record.definition.rawcode != base {
+            return None;
+        }
+        if !lists_admitted_alias(&record.definition, alias) {
+            return None;
+        }
+        let ability = one_fourcc(MILITIA_ALIAS).expect("named ability rawcode");
+        Some(
+            self.unit_ability_available(unit, ability)
+                .map(|_| Value::Bool(false)),
+        )
+    }
+
     fn issue_immediate_order(&mut self, args: &[Value]) -> Option<Result<Value, Error>> {
         let (on, off, tech, required_level, ability) = {
             let order = self.units.as_ref()?.order.as_ref()?;
@@ -1836,6 +1974,64 @@ impl ObjectHost {
             Err(error) => Some(Err(self.inner.error(ORDER, error.failure))),
         }
     }
+}
+
+fn read_militia_ability(tables: &DefaultTables) -> Result<MilitiaAbility, &'static str> {
+    let alias = MILITIA_ALIAS;
+    let object = tables
+        .object(Family::Ability, alias)
+        .map_err(|_| "militia ability is absent")?;
+    let alias_cell = present_cell(object.cell(SlkId::AbilityData, "alias"), "alias")?;
+    if alias_cell.text != alias {
+        return Err("militia alias spelling differs from the selected row");
+    }
+    let code_cell = present_cell(object.cell(SlkId::AbilityData, "code"), "code")?;
+    one_fourcc(code_cell.text).ok_or("militia code is not one fourcc")?;
+    require_int(object.cell(SlkId::AbilityData, "levels"), "levels", 1)?;
+    require_int(object.level_cell("Cost", 1), "Cost1", 0)?;
+    require_real_zero(object.level_cell("Cool", 1), "Cool1")?;
+    require_int(object.cell(SlkId::AbilityData, "reqLevel"), "reqLevel", 0)?;
+    require_int(object.cell(SlkId::AbilityData, "levelSkip"), "levelSkip", 0)?;
+    require_bool(object.cell(SlkId::AbilityData, "hero"), "hero", false)?;
+    require_bool(object.cell(SlkId::AbilityData, "item"), "item", false)?;
+    require_bool(
+        object.cell(SlkId::AbilityData, "checkDep"),
+        "checkDep",
+        true,
+    )?;
+    let on = one_assignment(object, "Order")?;
+    let off = one_assignment(object, "Unorder")?;
+    if on == off {
+        return Err("militia Order and Unorder are the same text");
+    }
+    let base_cell = present_cell(object.level_cell("DataA", 1), "DataA1")?;
+    let base = one_fourcc(base_cell.text).ok_or("militia DataA1 is not one fourcc")?;
+    let active_cell = present_cell(object.level_cell("DataB", 1), "DataB1")?;
+    let active = one_fourcc(active_cell.text).ok_or("militia DataB1 is not one fourcc")?;
+    if base == active {
+        return Err("militia DataA1 and DataB1 are the same form");
+    }
+    let requires = object.profile("Requires");
+    if !(requires.is_empty()
+        || requires.len() == 1
+            && requires[0].parse_error.is_none()
+            && requires[0].text.trim().is_empty())
+    {
+        return Err("militia Requires is not an absent or blank level");
+    }
+    let amount = object.profile("Requiresamount");
+    if !(amount.is_empty()
+        || amount.len() == 1 && amount[0].parse_error.is_none() && amount[0].text.trim().is_empty())
+    {
+        return Err("militia Requiresamount is not an absent or blank level");
+    }
+    Ok(MilitiaAbility {
+        alias: alias.to_string(),
+        on,
+        off,
+        base,
+        active,
+    })
 }
 
 fn read_defend_ability(tables: &DefaultTables, alias: &str) -> Result<DefendAbility, &'static str> {
@@ -2024,6 +2220,10 @@ fn column_problem(column: &'static str, problem: &'static str) -> &'static str {
         ("Unorder", "blank") => "blank Unorder",
         ("Unorder", "not-one") => "Unorder is not one text",
         ("Unorder", "ambiguous") => "Unorder has more than one assignment",
+        ("DataA1", "missing") => "missing DataA1",
+        ("DataA1", "blank") => "blank DataA1",
+        ("DataB1", "missing") => "missing DataB1",
+        ("DataB1", "blank") => "blank DataB1",
         ("Requires", "missing") => "missing Requires",
         ("Requires", "blank") => "blank Requires",
         ("Requires", "not-one") => "Requires is not one fourcc",

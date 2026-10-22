@@ -635,7 +635,8 @@ pub fn assemble(
         )?
         .with_unit_states(budgets.unit_states)?
         .with_resource_amounts(Arc::clone(&defend.tables))?
-        .with_defend_ability(&defend.tables, &defend.alias)?;
+        .with_defend_ability(&defend.tables, &defend.alias)?
+        .with_militia_ability(&defend.tables)?;
     // Retained SetUnitExploded flags only; explosion presentation is not implemented.
     object = object.with_unit_explosions(budgets.units.max_records)?;
     if let Some(rules) = resources {
