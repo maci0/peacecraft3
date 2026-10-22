@@ -215,6 +215,10 @@ fn speed(definition: &Definition) -> Result<f32, String> {
     balance_real(definition, "spd")
 }
 
+fn clamp_move_speed(speed: f32, (minimum, maximum): (f32, f32)) -> f32 {
+    speed.max(minimum).min(maximum)
+}
+
 /// One `UnitBalance` numeric column of a resolved unit definition, with map edits.
 pub(crate) fn balance_real(definition: &Definition, wanted: &str) -> Result<f32, String> {
     balance_real_with_marker(definition, wanted, None)
@@ -390,6 +394,8 @@ impl ObjectHost {
             ),
             ("GetUnitCurrentOrder", &["unit"][..], "integer", false),
             ("GetUnitMoveSpeed", &["unit"][..], "real", true),
+            ("GetUnitDefaultMoveSpeed", &["unit"][..], "real", true),
+            ("SetUnitMoveSpeed", &["unit", "real"][..], "nothing", false),
             ("SetUnitFacing", &["unit", "real"][..], "nothing", false),
             ("SetUnitPathing", &["unit", "boolean"][..], "nothing", false),
             (
@@ -448,13 +454,23 @@ impl ObjectHost {
             "" | "_" | "none" => false,
             _ => return Err(fail("movement class is not admitted".into())),
         };
+        let mut speed = movable
+            .then(|| speed(definition))
+            .transpose()
+            .map_err(fail)?;
+        if let (Some(value), Some(limits)) = (
+            speed.as_mut(),
+            self.unit_activity
+                .as_ref()
+                .and_then(|state| state.rules.move_speed_limits()),
+        ) {
+            let building = super::unit_types::structure(definition).map_err(fail)?;
+            *value = clamp_move_speed(*value, limits.for_building(building));
+        }
         Ok(Some(UnitActivity {
             held: false,
             movable,
-            speed: movable
-                .then(|| speed(definition))
-                .transpose()
-                .map_err(fail)?,
+            speed,
             motion: None,
             patrol: None,
             follow: None,
@@ -479,6 +495,12 @@ impl ObjectHost {
         if name == "SetUnitPathing" {
             return Some(self.pathing_native(args));
         }
+        if matches!(
+            name,
+            "GetUnitMoveSpeed" | "GetUnitDefaultMoveSpeed" | "SetUnitMoveSpeed"
+        ) {
+            return Some(self.move_speed_native(name, args));
+        }
         if matches!(name, "SetUnitPosition" | "SetUnitPositionLoc") {
             return Some(self.position_native(name, args));
         }
@@ -489,7 +511,7 @@ impl ObjectHost {
             state.rules.patrol,
             state.route_work,
         );
-        let getter = matches!(name, "GetUnitCurrentOrder" | "GetUnitMoveSpeed");
+        let getter = name == "GetUnitCurrentOrder";
         let location = matches!(name, "IssuePointOrderLoc" | "IssuePointOrderByIdLoc");
         let point = location || matches!(name, "IssuePointOrder" | "IssuePointOrderById");
         let by_id = matches!(
@@ -574,36 +596,19 @@ impl ObjectHost {
                 )
             })?;
             if getter {
-                return Ok(if name == "GetUnitCurrentOrder" {
-                    Value::Int(
-                        match self
-                            .summon_current_order(unit)
-                            .or_else(|| self.inventory_order(unit))
-                            .or_else(|| activity.patrol.map(|_| patrol))
-                            .or_else(|| activity.follow.map(|_| movement))
-                            .or_else(|| self.combat_attack_order(unit))
-                        {
-                            Some(attack) => attack,
-                            None if activity.moving() => movement,
-                            None => 0,
-                        },
-                    )
-                } else {
-                    if record.admitted_order.is_some_and(|(_, active)| active) {
-                        return Err(self.inner.error(
-                            name,
-                            Failure::UnitActivity(
-                                "active ability speed modifiers are not admitted".into(),
-                            ),
-                        ));
-                    }
-                    Value::Real(match activity.speed {
-                        Some(speed) => speed,
-                        None => speed(&record.definition).map_err(|detail| {
-                            self.inner.error(name, Failure::UnitActivity(detail))
-                        })?,
-                    })
-                });
+                return Ok(Value::Int(
+                    match self
+                        .summon_current_order(unit)
+                        .or_else(|| self.inventory_order(unit))
+                        .or_else(|| activity.patrol.map(|_| patrol))
+                        .or_else(|| activity.follow.map(|_| movement))
+                        .or_else(|| self.combat_attack_order(unit))
+                    {
+                        Some(attack) => attack,
+                        None if activity.moving() => movement,
+                        None => 0,
+                    },
+                ));
             }
             if record.paused_since.is_some() || record.combat.as_ref().is_some_and(|c| c.dead) {
                 return Ok(Value::Bool(false));
@@ -1233,6 +1238,118 @@ impl ObjectHost {
             }
         }
         Ok(progress.then_some(motion))
+    }
+
+    fn move_speed_native(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let fail = |detail: &str| self.inner.error(name, Failure::UnitActivity(detail.into()));
+        let setter = name == "SetUnitMoveSpeed";
+        let no_op = || {
+            if setter { Value::Null } else { Value::Real(0.) }
+        };
+        let (unit, requested) = if setter {
+            let [unit, speed] = args else {
+                return Err(fail("arguments do not match the declared native"));
+            };
+            let unit = match unit {
+                Value::Null => None,
+                Value::Handle(unit) => Some(*unit),
+                _ => return Err(fail("arguments do not match the declared native")),
+            };
+            let speed = speed
+                .as_real()
+                .filter(|speed| speed.is_finite())
+                .ok_or_else(|| fail("finite move speed required"))?;
+            (unit, Some(speed))
+        } else {
+            let [unit] = args else {
+                return Err(fail("arguments do not match the declared native"));
+            };
+            let unit = match unit {
+                Value::Null => None,
+                Value::Handle(unit) => Some(*unit),
+                _ => return Err(fail("arguments do not match the declared native")),
+            };
+            (unit, None)
+        };
+        let Some(unit) = unit else {
+            return Ok(no_op());
+        };
+        match self
+            .inner
+            .entry(unit)
+            .map_err(|error| self.inner.error(name, error.failure))?
+        {
+            Entry::Unit { .. } => {}
+            Entry::RemovedUnit { .. } => return Ok(no_op()),
+            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+        }
+        let limits = self
+            .unit_activity
+            .as_ref()
+            .and_then(|state| state.rules.move_speed_limits());
+        let record = self.executed_unit(unit)?;
+        if let Some(speed) = requested {
+            if record.admitted_order.is_some_and(|(_, active)| active) {
+                return Err(fail("active ability speed modifiers are not admitted"));
+            }
+            let limits = limits.ok_or_else(|| fail("move speed limits not admitted"))?;
+            let building =
+                super::unit_types::structure(&record.definition).map_err(|detail| fail(&detail))?;
+            let speed = clamp_move_speed(speed, limits.for_building(building));
+            let position = record
+                .position
+                .ok_or_else(|| fail("accepted position required"))?;
+            let activity = record
+                .activity
+                .as_ref()
+                .ok_or_else(|| fail("activity not initialized"))?;
+            let moving = activity.moving();
+            let now = self
+                .timer_game_time()
+                .ok_or_else(|| fail("clock not admitted"))?;
+            let mut animation = record.animation.clone();
+            if moving
+                && speed > 0.
+                && let Some(animation) = &mut animation
+            {
+                animation
+                    .select("walk", now, Some(speed))
+                    .map_err(|detail| self.inner.error(name, Failure::UnitAnimation(detail)))?;
+            }
+            let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
+                unreachable!("checked unit");
+            };
+            let activity = record.activity.as_mut().expect("checked activity");
+            activity.relocated(position, now);
+            activity.speed = Some(speed);
+            record.animation = animation;
+            return Ok(Value::Null);
+        }
+        if name == "GetUnitDefaultMoveSpeed" {
+            return speed(&record.definition)
+                .map(Value::Real)
+                .map_err(|detail| self.inner.error(name, Failure::UnitActivity(detail)));
+        }
+        if record.admitted_order.is_some_and(|(_, active)| active) {
+            return Err(fail("active ability speed modifiers are not admitted"));
+        }
+        let activity = record
+            .activity
+            .as_ref()
+            .ok_or_else(|| fail("activity not initialized"))?;
+        let speed = match activity.speed {
+            Some(speed) => match limits {
+                Some(limits) => {
+                    let building = super::unit_types::structure(&record.definition)
+                        .map_err(|detail| fail(&detail))?;
+                    clamp_move_speed(speed, limits.for_building(building))
+                }
+                None => speed,
+            },
+            None => speed(&record.definition)
+                .map_err(|detail| self.inner.error(name, Failure::UnitActivity(detail)))?,
+        };
+        Ok(Value::Real(speed))
     }
 
     fn pathing_native(&mut self, args: &[Value]) -> Result<Value, Error> {
