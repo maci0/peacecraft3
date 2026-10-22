@@ -1,0 +1,41 @@
+# Maximum states in SetUnitState
+
+The selected original `common.j` declares current life, maximum life, current
+mana and maximum mana through `ConvertUnitState`. Their initializers are the
+source of the enumerands; the recreation must continue to read those names
+and values from the admitted source.
+
+## Native dispatch evidence
+
+Reviewed client SHA-256:
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+The `SetUnitState` name is at file offset `0xa70c58`, VA `0xe71e58` using the
+image's actual section mapping. The registration at `0x49d5a8` names it and
+the next push selects handler `0x4abba0`.
+
+That handler resolves the unit, checks the state range and calls `0x69dd90`.
+The dispatch writes only the current-life case (unit virtual slot `0x124`)
+and current-mana case (`0x800ff0`, pool offset `0x1c0`). The maximum-life and
+maximum-mana cases return without a write. These correspond to the selected
+source globals at lines 436–439. The retained disassembly windows are local
+under `.scratch/campaign-continuation/set-unit-state-*.txt`.
+
+This is native-code evidence. A controlled original-runtime comparison is
+prepared separately; it has not yet supplied an observation for this note.
+Dedicated maximum-stat natives require their own admission and evidence.
+
+## Recreation correction
+
+`assign_unit_vital` currently replaces the maximum pools for those two state
+cases. That behavior contradicts the reviewed dispatch and allows a maximum
+write to invalidate the later removal of a held life bonus. The correction
+should preserve valid call acceptance and argument checking while leaving
+the maximum pools unchanged. Existing executed-request receipts can retain
+the requested value without presenting it as an effective world-state change.
+
+Synthetic tests that use these calls to construct arbitrary maximum pools
+must change too. Native behavior tests should assert the unchanged maxima;
+pool-failure tests should use an admitted source configuration that reaches
+the failure, or explicitly identify an internal fixture state. The admitted
+large-strength precision-loss case remains a separate reason to preflight
+sequential inventory cleanup.
