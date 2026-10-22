@@ -407,6 +407,7 @@ pub fn prepare(
     let item_sales = crate::item_sales::derive(&tables, &item_classes, client.clone())
         .map_err(|e| e.to_string())?;
     Ok(MapStartupInputs {
+        ai_source: Some(crate::campaign_ai::SourceNames::selected(image)?),
         item_classes: Some(item_classes),
         item_sales: Some(item_sales),
         item_use: None,

@@ -81,7 +81,7 @@ struct DeliveryContext {
     active: bool,
 }
 
-const RESPONSES: [&str; 21] = [
+const RESPONSES: [&str; 23] = [
     "GetSummoningUnit",
     "GetSummonedUnit",
     "GetLevelingUnit",
@@ -103,6 +103,8 @@ const RESPONSES: [&str; 21] = [
     "GetClickedButton",
     "GetTriggerPlayer",
     "GetEventPlayerState",
+    "GetTriggerWidget",
+    "GetTriggerDestructable",
 ];
 
 impl ObjectHost {
@@ -353,7 +355,17 @@ impl ObjectHost {
         if !RESPONSES.contains(&name) || !args.is_empty() {
             return None;
         }
-        self.inner.program.natives().get(name)?;
+        let native = self.inner.program.natives().get(name)?;
+        if matches!(name, "GetTriggerWidget" | "GetTriggerDestructable") {
+            let source = self
+                .triggers
+                .as_ref()
+                .and_then(|admitted| admitted.death_event_source.as_deref())?;
+            self.destructable_death_event_handle()?;
+            if native.source != source {
+                return Some(Err(self.inner.error(name, Failure::Source)));
+            }
+        }
         let subject = self.events.subject;
         if matches!(
             name,
@@ -401,6 +413,8 @@ impl ObjectHost {
             "GetClickedButton" => subject.button,
             "GetTriggerPlayer" => subject.player,
             "GetEventPlayerState" => subject.player_state,
+            "GetTriggerWidget" => subject.unit.or(subject.destructable),
+            "GetTriggerDestructable" => subject.destructable,
             "GetSpellTargetUnit" => subject.spell_target,
             _ if subject.unit.is_some() => subject.unit,
             // Fall through to range delivery, which owns its own responses.

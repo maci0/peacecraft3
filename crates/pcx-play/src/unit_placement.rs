@@ -537,30 +537,27 @@ impl Placement {
         Ok(self)
     }
 
-    /// Toggle one placed tree. `Ok(false)` means the state did not change.
-    pub fn set_placed_active(&mut self, creation: u32, active: bool) -> Result<bool, Error> {
+    /// Toggle one placed tree. `false` means the state did not change.
+    pub fn set_placed_active(&mut self, creation: u32, active: bool) -> bool {
         self.set_stationary_active(StationaryKey::Placed(creation), active)
     }
 
     /// Toggle one script-created destructable.
-    pub fn set_destructable_active(&mut self, id: HandleId, active: bool) -> Result<bool, Error> {
+    pub fn set_destructable_active(&mut self, id: HandleId, active: bool) -> bool {
         self.set_stationary_active(StationaryKey::Destructable(id), active)
     }
 
-    pub fn set_stationary_active(
-        &mut self,
-        key: StationaryKey,
-        active: bool,
-    ) -> Result<bool, Error> {
+    /// Toggle one retained stationary layer without allocating.
+    pub fn set_stationary_active(&mut self, key: StationaryKey, active: bool) -> bool {
         let Some(layer) = self.stationary.get_mut(&key) else {
-            return Ok(false);
+            return false;
         };
         if layer.active == active {
-            return Ok(false);
+            return false;
         }
         layer.active = active;
         self.recompose_key(key);
-        Ok(true)
+        true
     }
 
     /// Recompose one layer over its retained cells without allocating.

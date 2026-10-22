@@ -368,7 +368,7 @@ fn tree_metadata() -> Vec<&'static [&'static str]> {
     ]
 }
 
-fn life_catalog() -> DestructableCatalog {
+pub(super) fn life_catalog() -> DestructableCatalog {
     catalog_from(
         &[&["LTlt", "50", "tree,ground"]],
         &tree_metadata(),

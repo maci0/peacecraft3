@@ -49,7 +49,7 @@ These observations do not establish the upper clamp boundary or behavior of
 repeated out-of-range requests. The integral ordinary-unit examples do not
 distinguish raw from rounded ratio arithmetic.
 
-### Held maximum-life item
+### Held life and strength bonuses
 
 A third diagnostic retained the half-life setup and equipped the source
 Human02 `prvt` item on the target Blademaster before the baseline. The script
@@ -65,8 +65,17 @@ unmodified hero reached 360, and this holder reached 510. Scaling the whole
 described below also explains current life: the base-term change gives an
 intermediate maximum of 710 and current life 355, then the strength-term
 delta of -200 yields 155. This supports that composition for the tested item;
-it does not establish every passive ability, item removal after a handicap,
-or the behavior of held strength bonuses.
+it does not establish every passive ability or item removal after a handicap.
+
+A slot-verified `ckng` variant distinguishes held strength from flat life.
+Its source ability grants five points to each hero attribute. The target's
+baseline was life 725/725 and mana 345/345. The same-callback snapshots were
+**362.5/725 → 93/435**, with mana unchanged. All 28 markers qualified on RoC.
+The held strength contribution therefore participates in the tested handicap
+change, unlike `prvt`'s flat life contribution. The ordered reconstruction
+predicts an intermediate maximum of 685, rounded current life of 343, then a
+strength-contribution delta of -250 giving 93/435. Pickup, removal and attribute
+changes after applying the handicap still need their own qualification.
 
 ## Native-code evidence and composition inference
 
@@ -117,6 +126,7 @@ raw-versus-rounded pool ratios, timer-step coverage and fresh-creation order.
 | `hch-1023e` | `61802cd175e52ec9459913ede2073556b9593ba96d3b742a21d5c025be1139d7` | `ff0f228ca14a76a980b72b87f7d2a4684ecfc52c386055df161e35ec331dec2a` |
 | `hch-1023f` | `5a14da4371d89f06d674cc84d5a1bb1d044fa087cdb20f1ea0286f90b8464321` | `90f1562bb1c291ace71106ae11fe084963fd279efa8ad45aefcde3d04d8ddd87` |
 | `hheld-23b` | `409c7b5025220c67854d03e38b664f3b3468ba793a68bff8546bb1561cea7b9d` | `a355ecb77923ee790fa30793993578b4e0f8691c1b355854cdc90326b75b10ac` |
+| `hstr-23a` | `5ffeccea387ccc2567208a690b26e5af1580695843e41ce3fa7f6652c53ba95e` | `c6700b511681e4ba7db5c8aafd7ff1d11624c58cefffc6e9bec68616308e5646` |
 
 The held-item run is retained in
 `.scratch/player-health-handicap-held-probe-r2/`, including the inventory
@@ -124,6 +134,9 @@ check, packed-member hashes, raw markers and result. Seven synthetic checks
 pass, including the inventory qualification and earlier protocol checks. Its
 earlier variant was staged but never launched because its helper's non-null
 item return did not prove inventory ownership.
+The strength variant is retained under
+`.scratch/player-health-handicap-strength-probe/`, with seven passing synthetic
+checks and the same inventory qualification. Its client run is also stopped.
 
 Earlier offline drafts remain preserved. Run `hch-1023c` showed a load-error
 dialog and yielded no markers; renaming the probe's colliding global/function

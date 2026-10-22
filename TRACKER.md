@@ -11,13 +11,19 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   continuation before eager placed-world admission. Gathered gold/lumber
   counters (`Blizzard.j:7652,7654`) now use
   source-decoded setter scaling, unsigned getter division and the same
-  synchronous state-event path. The combined private checks passed 1406 core
-  tests, 606 app tests, strict native/WASM Clippy and formatting including the
-  gathered-counter and ranked/inventory Data-pointer imports. The unchanged
+  synchronous state-event path. The combined private checks passed 1427 core
+  tests, 607 app tests, strict native/WASM Clippy and formatting including the
+  gathered-counter, ranked/inventory Data-pointer and destructable-death imports. The unchanged
   Continue gate passes Human01 with 152 executed units and Human02's explicit
   unit-color calls. It now refuses `IssueImmediateOrder` through
   `Blizzard.j:7817`; the source initialization next reaches nearby-lumber
   harvesting, whose complete runtime cycle is still being implemented.
+  Campaign scripts now have source-validated, independent per-player VMs over
+  the shared world, synchronous initial execution and game-clock wake delivery.
+  The production-host fixture checks shared resource writes and timer ordering;
+  map callbacks from those programs still refuse before resource mutation.
+  The selected red/purple source fixtures reach unsupported `SetTargetHeroes`
+  and `SetHeroLevels`; this is not working campaign strategy or chapter completion.
   Controlled tree
   and original-gate probes qualify flags 4/7 for script-only admission; the
   placement correction passes those same private suites.
@@ -32,7 +38,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   unqualified. Receipts: `.scratch/campaign-continuation/intelligence-*.log`
   and `inventory-review-*.log`, `gathered-pointer-*.log`,
   `placed-flag-admission-*.log`, `unit-color-final-*.log`, and
-  `late-create-combined-*.log` in that directory.
+  `late-create-combined-*.log`, `restore-combined-*.log` and
+  `ai-combined-*.log` in that directory.
 
 - [x] Bind headless session admission to actual selected catalog/Misc contents.
   The readiness receipt keys every admitted catalog table/profile and the three
@@ -65,6 +72,29 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   effect, ownership transfers and isolated bound requests. It remains
   unimplemented; the separate XP-factor host is not its consumer. See
   [player-health-handicap.md](docs/re-notes/player-health-handicap.md).
+
+### 2026-10-23: Destructable death delivery
+
+The private host now derives the canonical widget-death event from the selected
+source global, delivers script-produced deaths synchronously through the shared
+reentrant frames, and queues engine-produced deaths for boundary delivery.
+Prepared damage reserves event capacity before changing tree life or collision.
+Nested death/player-state callbacks, sleep and abort context restoration have
+focused coverage. Missing event identity and malformed response contracts refuse.
+
+The selected-install gate exposed an incorrect two-argument restoration fixture;
+`DestructableRestoreLife` actually takes a real life amount before its birth flag.
+The corrected three-argument path supports the measured full-life restoration of
+a dead target without birth animation. Other restoration forms remain unsupported
+and refuse before mutation. The app fixture also now supplies a synthetic widget
+event identity instead of relying on an absent source constant.
+
+Combined validation passes 1423 core tests, 606 app tests, strict native/WASM
+Clippy and formatting. The real Continue gate publishes Human01 with 152 executed
+units and then stops at Human02's `IssueImmediateOrder` through `Blizzard.j:7817`.
+It is still a failing campaign acceptance gate. Retained receipts are
+`.scratch/campaign-continuation/restore-combined-*.log` and matching exit files.
+See [destructable death delivery](docs/re-notes/destructable-death-delivery.md).
 
 ### 2026-10-23: Late script destructable collision
 
@@ -2366,9 +2396,11 @@ actions, repeated-run stability and scheduler/world integration remain open.
 - [~] Unchanged Human01 passes three destructable death subscriptions through the
   production factory. Globals and `config` finish; `main` next refuses
   `GetRandomReal` at map span `186558..186584`.
-- [ ] Death detection/context/delivery, native random-stream fidelity, the
-  application world/clock, rendered gameplay and the 100-consecutive original
-  baseline remain open. See [the subscription scope](docs/re-notes/script-trigger-admission.md#widget-death-subscriptions).
+- [~] Destructable death detection, synchronous context delivery, collision
+  updates and engine-damage boundary queueing now pass synthetic tests. Native
+  ordering, unregistration, item widgets, rendered gameplay and the
+  100-consecutive original baseline remain open. See
+  [destructable death delivery](docs/re-notes/destructable-death-delivery.md).
 
 ### 2026-10-17 — selected primary random-generator evidence
 
@@ -4061,3 +4093,18 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   selected-`common.j` gate with `PEACECRAFT3_COMMON_J`, all exit 0. The app-owned
   map transition, save handoff and score presentation remain open; see
   [game exit](docs/re-notes/script-game-exit.md).
+
+### 2026-10-23: Destructable death delivery
+
+- [~] Destructable death subscriptions now share a prepared transition producer
+  across script setters, kill/restore and engine damage, with a prepare/commit
+  seam for harvest. The selected `EVENT_WIDGET_DEATH` identity is derived from
+  `ConvertWidgetEvent`; missing, foreign and non-stock declarations are refused,
+  while combat admission keeps the identity optional. Source-qualified
+  `GetTriggerWidget` / `GetTriggerDestructable` responses, synchronous callbacks,
+  cross-family nesting, sleeping actions, conditions, callback aborts and bounded
+  nesting are covered by synthetic owned-VM tests. Core 1,422 tests pass, plus
+  strict Clippy and formatting. Native ordering, unregistration, item widgets,
+  death presentation, rendered/collision parity and the original baseline remain
+  open. See
+  [destructable death delivery](docs/re-notes/destructable-death-delivery.md).

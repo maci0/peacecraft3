@@ -47,6 +47,7 @@ pub fn create_host(
 ) -> Result<MapStartupHost, MapStartupError> {
     let edition = ctx.sources.map.edition.clone();
     let tables = Arc::clone(&inputs.defend.tables);
+    let ai_source = inputs.ai_source.clone();
     let mut host = map_startup_host::assemble(ctx, inputs)?;
     crate::campaign_cache::attach(&mut host, cache)?;
     if no_occlusion {
@@ -60,6 +61,50 @@ pub fn create_host(
         })?;
     Ok::<_, MapStartupError>(match reader {
         Some(reader) => {
+            if let Some(names) = ai_source {
+                let ai_reader = Arc::clone(&reader);
+                let ai_context = Arc::clone(host.context());
+                let ai_edition = edition.clone();
+                host = host.with_ai_loader(move |filename| {
+                    let common = names.resolve(&ai_reader, &names.common)?;
+                    let selected_common = ai_context
+                        .scripts
+                        .digests
+                        .first()
+                        .and_then(|digest| ai_context.scripts.source(&digest.label))
+                        .ok_or("StartCampaignAI: admitted common.j source is missing")?;
+                    if common.bytes != selected_common.as_bytes() {
+                        return Err(
+                            "StartCampaignAI: pinned common.j differs from admitted map".into()
+                        );
+                    }
+                    let ai_common = names.resolve(&ai_reader, &names.ai_common)?;
+                    let ai_script = names.resolve(&ai_reader, filename)?;
+                    let (common_label, _) =
+                        crate::campaign_assets::identity(&common, &ai_edition, 16 << 10)?;
+                    let (ai_common_label, _) =
+                        crate::campaign_assets::identity(&ai_common, &ai_edition, 16 << 10)?;
+                    let (script_label, origin) =
+                        crate::campaign_assets::identity(&ai_script, &ai_edition, 16 << 10)?;
+                    crate::scripts::MapScripts::compile(
+                        origin,
+                        crate::scripts::ScriptAsset {
+                            label: &common_label,
+                            bytes: &common.bytes,
+                        },
+                        crate::scripts::ScriptAsset {
+                            label: &ai_common_label,
+                            bytes: &ai_common.bytes,
+                        },
+                        crate::scripts::ScriptAsset {
+                            label: &script_label,
+                            bytes: &ai_script.bytes,
+                        },
+                        None,
+                    )
+                    .map(Arc::new)
+                });
+            }
             let placement_reader = Arc::clone(&reader);
             let placement_context = Arc::clone(host.context());
             let catalog = crate::campaign_placement::Catalog::read(

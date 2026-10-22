@@ -80,6 +80,7 @@ pub(super) struct Rules {
     passive: i32,
     player_death: i32,
     unit_death: i32,
+    death_event: Option<HandleId>,
     unit_attacked: i32,
     player_attacked: i32,
     missiles: Vec<Missile>,
@@ -392,6 +393,14 @@ impl ObjectHost {
                 Self::contract(&self.inner, name, args, result, false, Some("unit"))?;
             }
         }
+        let death_event_source = self
+            .inner
+            .program
+            .natives()
+            .get("TriggerRegisterDeathEvent")
+            .or_else(|| self.inner.program.natives().get("ConvertWidgetEvent"))
+            .map_or_else(String::new, |n| n.source.clone());
+        let death_event = self.optional_widget_death_event(&death_event_source)?;
         self.combat = Some(Rules {
             rules,
             attack_order,
@@ -401,6 +410,7 @@ impl ObjectHost {
             player_death: self
                 .source_constant_enumerand("EVENT_PLAYER_UNIT_DEATH", "playerunitevent")?,
             unit_death: self.source_constant_enumerand("EVENT_UNIT_DEATH", "unitevent")?,
+            death_event,
             unit_attacked: self.source_constant_enumerand("EVENT_UNIT_ATTACKED", "unitevent")?,
             player_attacked: self
                 .source_constant_enumerand("EVENT_PLAYER_UNIT_ATTACKED", "playerunitevent")?,
@@ -834,7 +844,8 @@ impl ObjectHost {
             self.assign_hero_experience(hero, xp, false)?;
         }
         let rules = self.combat.as_ref().expect("combat");
-        let (player_death, unit_death) = (rules.player_death, rules.unit_death);
+        let (player_death, unit_death, death_event) =
+            (rules.player_death, rules.unit_death, rules.death_event);
         let subject = EventSubject {
             unit: Some(unit),
             source: killer,
@@ -857,7 +868,7 @@ impl ObjectHost {
                     fired.push((*trigger, None, Some(*unitevent), None));
                 }
                 Entry::RegisteredDeathEvent(r) if r.widget == unit => {
-                    fired.push((r.trigger, None, None, None));
+                    fired.push((r.trigger, None, death_event, None));
                 }
                 _ => {}
             }

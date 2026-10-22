@@ -4,8 +4,8 @@
 
 The private campaign continuation still refuses `IssueImmediateOrder` during
 initialization, before its later `StartCampaignAI` calls. The source path next
-reaches nearby-lumber harvesting. AI execution is not implemented by the source
-audit below.
+reaches nearby-lumber harvesting. The source audit below is distinct from the
+private execution foundation described in this note.
 
 The audit uses the existing `CampaignRecipe` reader with the reviewed
 1.29.2.9231 executable
@@ -34,7 +34,37 @@ establish working campaign AI.
 The runtime must keep each player's AI globals and continuations separate
 while using the session's existing world, handles and deterministic clock.
 The existing script VM is the execution path to reuse. Shared-world ownership,
-AI-native contracts, callback invocation and scheduling remain open.
+AI-native gameplay behavior and cross-program callback invocation remain open.
+
+## Private execution foundation
+
+The private continuation now loads the image-derived common, AI-common and
+requested script paths through the retained campaign reader. Exact lookup
+precedes the image-derived fallback prefix; only an absent member permits that
+fallback. The common source must equal the map's admitted common bytes.
+
+Each player retains a separate VM and sleeping continuations. Execution borrows
+the same complete world stack and restores it on return, sleep or refusal.
+Initial `main` runs synchronously; later wakes share the map game-clock scheduler
+with deterministic player/ticket ordering. Repeated starts retain the established
+context in the measured sleeping and completed cases. The AI-owned native
+declarations are checked for source, ambiguity, constant flags and scalar
+signatures before globals execute or the world is lent.
+
+A synthetic test through the actual `MapStartupHost` and `MapScriptSession`
+checks synchronous resource writes, independent programs, a map timer preceding
+their wakes, and world restoration after callback refusal. Player-state mutation
+from an AI program refuses before writing when map callback registrations are
+present; callbacks are not forwarded into the wrong VM. Unsupported AI gameplay
+natives report their exact names. The selected red/purple source fixtures reach
+`SetTargetHeroes` and `SetHeroLevels` in a synthetic normal-difficulty world;
+they are not a complete Human02 run, and the selected map does not start purple.
+
+Combined private receipts under `.scratch/campaign-continuation/ai-combined-*`
+record 1427 core tests and 607 app tests passed, strict native and WASM Clippy,
+and formatting. The real selected Continue test still refuses Human02's harvest
+order after Human01 publishes 152 executed units. Campaign strategy, construction,
+combat, cross-program callbacks and full chapter completion remain unqualified.
 
 ## Native loader path
 
@@ -112,6 +142,23 @@ its script SHA-256 is
 Three synthetic collector/stimulus tests passed. The earlier repeat run without
 the fresh-player control remains preserved separately; the controlled run is
 the evidence for the conclusion above. Both owned client runs were stopped.
+
+A further variant requested B again at map time 2.063 after A's final write
+had already been observed at 1.563. A has no further source operations after
+that write except returning from `main`. The repeated call left the bank at
+34 immediately and through the final 9.063 sample. The fresh-player B control
+again completed at 58. This supports retaining the established context in this
+completed-entrypoint path as well; failed initial loads, explicitly stopped AI
+and other start natives remain outside the measurement.
+
+All 12 markers qualified on RoC. The ignored
+`.scratch/campaign-ai-completed-repeat-probe/` retains the receipt, raw markers
+and four passing collector/stimulus checks. Map SHA-256:
+`9a17259e01e349949149ea3f42d0dc7c9faf5e51320c94264f602b0df4516746`;
+script SHA-256:
+`bcbe2f9edd8c17aef73c8b2771bad6c94bbea89fe574a5c2b7b961f7052d4eaa`.
+The owned client is stopped. The runtime's initially proposed completed-context
+refusal needs correction to match this measured case.
 
 ## Relationship to the earlier Human02 probes
 
