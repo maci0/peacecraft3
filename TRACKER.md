@@ -2,10 +2,16 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
-- [ ] Bind headless session admission to actual selected catalog/Misc contents.
-  Its current catalog identity is an install path; matching admission digests do
-  not prove equal source game rules across peers. Runtime provenance is retained,
-  but source-content equality and native lockstep remain separate open gates.
+- [x] Bind headless session admission to actual selected catalog/Misc contents.
+  The readiness receipt keys every admitted catalog table/profile and the three
+  stock Misc tables (`Units/MiscData.txt`, `Units/MiscGame.txt`,
+  `UI/MiscData.txt`) by normalized member path and SHA-256 (or explicit absence),
+  so relocated equal archives share identity and changed bytes at one path change
+  it or refuse. Executable, map, scripts, seed, mode, roster and explicit profile
+  remain distinct inputs. Core suite, strict Clippy, WASM lib, selected Human01
+  identity/startup gates pass. Other selected source reads (sound/label banks,
+  UI localization) are outside this catalog/Misc receipt; native lockstep remains
+  a separate open gate.
 
 - [~] Global `BlzGetAbilityCooldown` reads admitted source/map-edited durations,
   independently of learned units and live overrides. Core/app, selected-install,

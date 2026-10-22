@@ -512,6 +512,41 @@ fn selected_map_profile_is_explicit_in_identity_and_saves_stay_in_the_session() 
 
 #[test]
 #[ignore = "requires PCX_STARTUP_INSTALL, PCX_STARTUP_MAP and PCX_STARTUP_ADDON selected local files"]
+fn selected_unchanged_startup_identity_binds_catalog_content_not_install_path() {
+    let install = PathBuf::from(env("PCX_STARTUP_INSTALL"));
+    let map = PathBuf::from(env("PCX_STARTUP_MAP"));
+    let bytes = std::fs::read(&map).unwrap();
+    let label = map.display().to_string();
+    let seed = env("PCX_STARTUP_SEED").parse().unwrap();
+    let first = start(&install, selected_mode(), &label, &bytes, seed, None).unwrap();
+    let repeat = start(&install, selected_mode(), &label, &bytes, seed, None).unwrap();
+    assert_eq!(
+        first.admission_digest(),
+        repeat.admission_digest(),
+        "unchanged selected inputs must admit the same identity"
+    );
+    assert_eq!(
+        first.catalog_receipt(),
+        repeat.catalog_receipt(),
+        "unchanged selected sources must admit the same catalog receipt"
+    );
+    assert_eq!(
+        first.context.sources.catalog,
+        repeat.context.sources.catalog
+    );
+    let source = &first.context.sources.catalog.source;
+    assert!(
+        source.starts_with("sha256:") && source.len() == "sha256:".len() + 64,
+        "catalog identity must be the content receipt, not {source:?}"
+    );
+    assert!(
+        !source.contains(&install.display().to_string()),
+        "install path must not enter catalog identity: {source:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires PCX_STARTUP_INSTALL, PCX_STARTUP_MAP and PCX_STARTUP_ADDON selected local files"]
 fn selected_map_starts_orders_and_steps_identically_and_the_order_changes_the_outcome() {
     let install = PathBuf::from(env("PCX_STARTUP_INSTALL"));
     let map = PathBuf::from(env("PCX_STARTUP_MAP"));

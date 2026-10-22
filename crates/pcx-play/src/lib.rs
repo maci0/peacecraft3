@@ -114,6 +114,7 @@ pub mod script_trace;
 pub mod scripts;
 pub mod sound_environment;
 pub mod sound_parameters;
+pub mod source_receipt;
 pub mod startup_clock;
 pub mod terrain_blight;
 pub mod terrain_pathing;
