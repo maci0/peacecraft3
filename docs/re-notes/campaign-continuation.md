@@ -77,6 +77,13 @@ An explicit selected-install test also passed after replacing the launcher with
 a nonexistent install and the opposite edition: preparation retained the
 admitted executable origin and the resolver's original version constant.
 
+This executable lookup supports the native campaign menu's retained
+`InstallSource`, whose origin is the installation directory. A generic
+`MpqSource` origin is an archive filename, not an executable location; such a
+configuration cannot use this native startup producer and refuses during image
+loading. No executable is inferred from the current launcher as a fallback.
+Supporting other native providers needs an explicit retained executable input.
+
 The explicit selected-BJ victory stimulus activates the score OK control and
 admits `Maps\\Campaign\\Human02.w3m`. Its startup then refuses at
 `war3map.j:911` on the unsupported `SetResourceAmount` native. The selected gate
