@@ -97,6 +97,7 @@ pub struct ObjectHost {
     startup_settings: Option<StartupSettings>,
     startup_version: Option<HandleId>,
     game_difficulty: Option<HandleId>,
+    campaign_targeting: Option<targeting::State>,
     default_difficulty: Option<HandleId>,
     campaign_menu_race: Option<Option<HandleId>>,
     stock: Option<stock::State>,
@@ -264,6 +265,7 @@ impl ObjectHost {
             startup_settings: None,
             startup_version: None,
             game_difficulty: None,
+            campaign_targeting: None,
             default_difficulty: None,
             campaign_menu_race: None,
             stock: None,
@@ -1275,6 +1277,9 @@ pub use cinematic_scene::CinematicScene;
 #[path = "indicator_host.rs"]
 mod indicators;
 pub use indicators::{Indicator, MinimapPing};
+
+#[path = "campaign_targeting_host.rs"]
+mod targeting;
 
 #[path = "combat_host.rs"]
 mod combat;

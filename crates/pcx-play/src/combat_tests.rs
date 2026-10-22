@@ -3575,3 +3575,189 @@ fn melee_chase_routes_to_attack_reach_instead_of_the_occupied_target_centre() {
             .moving()
     );
 }
+
+fn targeting_policy() -> crate::campaign_targeting_policy::TargetingPolicy {
+    let mut policy = crate::campaign_targeting_policy::TargetingPolicy::fixture();
+    policy.hero_min_game_difficulty = 1;
+    policy.optional_damage_gate = 4;
+    policy.optional_level_gate = 4;
+    policy
+}
+
+fn admit_targeting(vm: &mut Vm, player: i32, enabled: Option<bool>) {
+    admit_targeting_with(vm, player, enabled, targeting_policy(), 1);
+}
+
+fn admit_targeting_with(
+    vm: &mut Vm,
+    player: i32,
+    enabled: Option<bool>,
+    policy: crate::campaign_targeting_policy::TargetingPolicy,
+    difficulty: i32,
+) {
+    let h = &mut vm.host().inner;
+    h.test_set_game_difficulty(difficulty);
+    h.set_neutral_aggressive(20);
+    let context = Arc::clone(h.player_context().unwrap());
+    h.admit_campaign_targeting(&context, policy).unwrap();
+    h.activate_campaign_ai_player(player).unwrap();
+    if let Some(enabled) = enabled {
+        h.set_ai_target_heroes(player, enabled).unwrap();
+    }
+}
+
+fn create_for(vm: &mut Vm, owner_of: HandleId, rawcode: [u8; 4], x: f32, y: f32) -> HandleId {
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(owner_of).unwrap().owner;
+    let Value::Handle(id) = h
+        .native(
+            "CreateUnit",
+            &[
+                Value::Handle(owner),
+                Value::Int(i32::from_be_bytes(rawcode)),
+                Value::Real(x),
+                Value::Real(y),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("unit")
+    };
+    id
+}
+
+fn acquired(vm: &mut Vm, unit: HandleId) -> Option<HandleId> {
+    vm.host()
+        .inner
+        .executed_unit(unit)
+        .unwrap()
+        .combat
+        .as_ref()
+        .unwrap()
+        .target
+}
+
+fn wide_acquire() -> Vec<([u8; 4], ObjectField)> {
+    let mut fields = armed("128", "normal");
+    fields
+        .iter_mut()
+        .find(|(id, _)| id == b"W005")
+        .unwrap()
+        .1
+        .value = Ok(FieldValue::Cell("256".into()));
+    fields
+}
+
+fn wide_hero_fields(primary: &str) -> Vec<([u8; 4], ObjectField)> {
+    let mut fields = hero_fields(primary);
+    fields
+        .iter_mut()
+        .find(|(id, _)| id == b"W005")
+        .unwrap()
+        .1
+        .value = Ok(FieldValue::Cell("256".into()));
+    fields
+}
+
+#[test]
+fn campaign_targeting_hero_selection_uses_the_admitted_flag_and_newest_tie_break() {
+    for (enabled, expected_hero) in [(Some(true), true), (None, false), (Some(false), false)] {
+        let (hero, combat) = hero_rules();
+        let (mut vm, a, b) = open_selected(&wide_hero_fields("STR"), Some(hero), combat);
+        admit_targeting(&mut vm, 4, enabled);
+        let owner = vm.host().inner.executed_unit(a).unwrap().owner;
+        assert_eq!(
+            vm.host().inner.campaign_targeting_enabled(owner).unwrap(),
+            Some(enabled.unwrap_or(false))
+        );
+        let hero = create_for(&mut vm, b, *b"J001", 16.0, 48.0);
+        let ordinary = create_for(&mut vm, b, *b"u003", 16.0, 48.0);
+        step(&mut vm, 1.0 / 64.0);
+        let target = acquired(&mut vm, a);
+        assert_eq!(target, Some(if expected_hero { hero } else { ordinary }));
+    }
+}
+
+#[test]
+fn campaign_targeting_flag_and_difficulty_are_scoped_to_the_attacking_player() {
+    let (hero, combat) = hero_rules();
+    let (mut vm, a, b) = open_selected(&wide_hero_fields("STR"), Some(hero), combat);
+    let mut policy = crate::campaign_targeting_policy::TargetingPolicy::fixture();
+    policy.hero_min_game_difficulty = 2;
+    policy.optional_level_gate = 4;
+    admit_targeting_with(&mut vm, 4, Some(false), policy, 1);
+    let h = &mut vm.host().inner;
+    h.activate_campaign_ai_player(1).unwrap();
+    h.set_ai_target_heroes(1, true).unwrap();
+    let owner = h.executed_unit(a).unwrap().owner;
+    let player = h.player_settings(owner).unwrap().number;
+    assert_eq!(h.campaign_targeting_enabled(owner).unwrap(), Some(false));
+    let hero = create_for(&mut vm, b, *b"J001", 16.0, 48.0);
+    let ordinary = create_for(&mut vm, b, *b"u003", 16.0, 48.0);
+    step(&mut vm, 1.0 / 64.0);
+    assert_eq!(acquired(&mut vm, a), Some(ordinary));
+
+    let h = &mut vm.host().inner;
+    h.set_ai_target_heroes(player, true).unwrap();
+    h.test_clear_combat_target(a);
+    step(&mut vm, 2.0 / 64.0);
+    assert_eq!(acquired(&mut vm, a), Some(ordinary));
+
+    let h = &mut vm.host().inner;
+    h.test_set_game_difficulty(2);
+    h.test_clear_combat_target(a);
+    step(&mut vm, 3.0 / 64.0);
+    assert_eq!(acquired(&mut vm, a), Some(hero));
+}
+
+#[test]
+fn campaign_targeting_refuses_decisive_optional_bands_and_nonunit_specials() {
+    for difficulty in [2, 4] {
+        let (mut vm, a, _) = open(&wide_acquire());
+        admit_targeting_with(
+            &mut vm,
+            4,
+            Some(true),
+            crate::campaign_targeting_policy::TargetingPolicy::fixture(),
+            difficulty,
+        );
+        step(&mut vm, 1.0 / 64.0);
+        assert_eq!(acquired(&mut vm, a), None);
+    }
+
+    let (mut vm, a, b) = open(&wide_acquire());
+    admit_targeting(&mut vm, 4, Some(true));
+    create_for(&mut vm, b, *b"pso1", 48.0, 48.0);
+    step(&mut vm, 1.0 / 64.0);
+    assert_eq!(acquired(&mut vm, a), None);
+}
+
+#[test]
+fn campaign_targeting_refuses_neutral_aggressive_candidates_and_keeps_explicit_targets() {
+    let (mut vm, a, _) = open(&wide_acquire());
+    admit_targeting(&mut vm, 4, Some(true));
+    vm.host().inner.set_neutral_aggressive(5);
+    step(&mut vm, 1.0 / 64.0);
+    assert_eq!(acquired(&mut vm, a), None);
+
+    let (mut vm, a, b) = open(&wide_acquire());
+    admit_targeting(&mut vm, 4, Some(true));
+    vm.host().inner.test_set_game_difficulty(2);
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(a),
+                    Value::Str("alpha".into()),
+                    Value::Handle(b)
+                ]
+            )
+            .unwrap(),
+        Value::Bool(true)
+    );
+    step(&mut vm, 1.0 / 64.0);
+    assert_eq!(acquired(&mut vm, a), Some(b));
+}

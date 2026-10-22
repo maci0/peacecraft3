@@ -97,6 +97,22 @@ impl AiWorld for AiResearchWorld {
     fn ai_unit_cost(&mut self, _player: i32, _unit: i32, _column: &str) -> Result<i32, String> {
         Err("unit costs are outside this research fixture".into())
     }
+
+    fn ai_activate_player(&mut self, player: i32) -> Result<bool, String> {
+        self.object
+            .activate_campaign_ai_player(player)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_deactivate_player(&mut self, player: i32) {
+        self.object.deactivate_campaign_ai_player(player);
+    }
+
+    fn ai_set_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+        self.object
+            .set_ai_target_heroes(player, enabled)
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[test]
