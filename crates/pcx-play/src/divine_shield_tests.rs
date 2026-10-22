@@ -555,14 +555,14 @@ fn cooldown_controls_share_the_cast_deadline_without_ending_protection() {
     }
 }
 
-fn deactivate_override(value: i32) -> Overlay {
+fn deactivate_override(value: i32, pointer: u32) -> Overlay {
     let mut overlay = Overlay::default();
     overlay.mods.insert(
         "AHds".into(),
         vec![pcx_objects::Mod {
             field: *b"fDec",
             value_type: pcx_objects::ValueType::Int,
-            selectors: Some([3, 0]),
+            selectors: Some([3, pointer]),
             value: pcx_objects::Value::Int(value as u32),
             end_word: 0,
         }],
@@ -572,7 +572,7 @@ fn deactivate_override(value: i32) -> Overlay {
 
 #[test]
 fn authored_deactivation_changes_only_the_shield_contribution() {
-    let (mut vm, hero) = open_with(deactivate_override(1));
+    let (mut vm, hero) = open_with(deactivate_override(1, 1));
     learn_rank_3(&mut vm, hero);
     vm.call("set_prot", &[Value::Bool(false)]).unwrap();
     assert_eq!(vm.call("shield_on", &[]).unwrap(), Value::Bool(true));
@@ -582,8 +582,16 @@ fn authored_deactivation_changes_only_the_shield_contribution() {
 }
 
 #[test]
+fn deactivation_override_with_a_mismatched_data_pointer_refuses_the_cast() {
+    let (mut vm, hero) = open_with(deactivate_override(1, 0));
+    learn_rank_3(&mut vm, hero);
+    let error = vm.call("shield_on", &[]).unwrap_err().to_string();
+    assert!(error.contains("data pointer 0 does not match metadata data column 1"));
+}
+
+#[test]
 fn malformed_source_and_arguments_leave_mana_and_deadline_unchanged() {
-    let (mut vm, hero) = open_with(deactivate_override(2));
+    let (mut vm, hero) = open_with(deactivate_override(2, 1));
     learn_rank_3(&mut vm, hero);
     vm.call("record_mana", &[]).unwrap();
     let before = vm.global("ObsMana");

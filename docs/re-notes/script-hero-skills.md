@@ -27,6 +27,13 @@ ordering. The private Human01 run reads stock `Units\MiscGame.txt`; its map has
 no `war3mapMisc.txt` or W3A overlay. This does not qualify every mode's profile
 selection policy.
 
+A ranked W3A edit whose loaded metadata column is `Data` applies only when its
+second selector equals that metadata record's `data` ordinal, which also selects
+the `DataA`..`DataE` cell. A mismatch refuses rather than falling back to stock or
+applying a different column. Non-`Data` ranked cells retain their selector-zero
+contract. Tooltip expansion, summoning, Divine Shield, Holy Light and inventory
+capacity share this rule through their ranked-cell readers.
+
 The Legacy executable SHA-256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`
 supplies the initial counter, point-pool clamp, skill-slot bound and first rank.

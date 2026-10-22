@@ -2305,6 +2305,16 @@ fn holy_tables_with(edits: &[(&str, &str)]) -> DefaultTables {
                 "1",
             ],
             &[
+                "fCnt",
+                "Data",
+                "AbilityData",
+                "-1",
+                "int",
+                "stats",
+                "1",
+                "1",
+            ],
+            &[
                 "fCos",
                 "Cost",
                 "AbilityData",
@@ -2869,19 +2879,19 @@ fn holy_nonfinite_and_negative_source_cells_refuse_before_effects_or_payment() {
 #[test]
 fn holy_ranked_map_edits_use_metadata_types_and_leave_other_ranks_authored() {
     let mut overlay = pcx_objects::editor::Overlay::default();
-    let real = |field, value_type, value| pcx_objects::Mod {
+    let real = |field, pointer, value_type, value| pcx_objects::Mod {
         field,
         value_type,
-        selectors: Some([1, 0]),
+        selectors: Some([1, pointer]),
         value: pcx_objects::Value::Real(value),
         end_word: 0,
     };
     overlay.mods.insert(
         "AHhb".into(),
         vec![
-            real(*b"fCoo", pcx_objects::ValueType::Unreal, 1.5),
-            real(*b"fRng", pcx_objects::ValueType::Unreal, 32.5),
-            real(*b"fAmt", pcx_objects::ValueType::Real, 20.25),
+            real(*b"fCoo", 0, pcx_objects::ValueType::Unreal, 1.5),
+            real(*b"fRng", 0, pcx_objects::ValueType::Unreal, 32.5),
+            real(*b"fAmt", 1, pcx_objects::ValueType::Real, 20.25),
             pcx_objects::Mod {
                 field: *b"fCos",
                 value_type: pcx_objects::ValueType::Int,
@@ -3226,6 +3236,49 @@ fn a_new_order_cancels_a_walking_cast_without_spending_mana() {
     step(&mut vm, 30.0);
     assert_eq!(holy_life(&mut vm, g), life);
     assert_eq!(holy_mana(&mut vm, h), mana);
+}
+
+#[test]
+fn holy_light_data_override_requires_the_metadata_data_pointer() {
+    let mut overlay = pcx_objects::editor::Overlay::default();
+    overlay.mods.insert(
+        "AHhb".into(),
+        vec![pcx_objects::Mod {
+            field: *b"fAmt",
+            value_type: pcx_objects::ValueType::Real,
+            selectors: Some([1, 0]),
+            value: pcx_objects::Value::Real(20.25),
+            end_word: 0,
+        }],
+    );
+    let (mut vm, [caster, target, _, _]) = holy_open_with_inputs(
+        "",
+        LEARNED,
+        NOTHING,
+        HOLY_ART_END_MS,
+        None,
+        holy_tables(),
+        overlay,
+    );
+    vm.call("prime", &[]).unwrap();
+    let mana = holy_mana(&mut vm, caster);
+    assert!(
+        vm.host()
+            .inner
+            .native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(caster),
+                    Value::Str("alpha".into()),
+                    Value::Handle(target)
+                ]
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("data pointer 0 does not match metadata data column 1")
+    );
+    assert_eq!(holy_life(&mut vm, target), 100.);
+    assert_eq!(holy_mana(&mut vm, caster), mana);
 }
 
 #[test]
