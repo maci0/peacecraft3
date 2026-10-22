@@ -143,5 +143,36 @@ The remaining route-score relationship is explicit: the client caches authored
 `rangeN1/2`, and a later `ratr` upgrade updates indexed node values, but the
 ordinary cache-to-node initialization and alternate node value are not yet
 qualified. The host's first-weapon range cannot silently replace that value.
-A matched flag-clear experiment is built and collector-tested offline; it has
-not run and supplies no flag-clearing behavior evidence yet.
+A matched flag-clear experiment supplies the bounded observations below.
+
+## Clearing before retreat initiation
+
+Two further seeded runs both start with the flee flag true, sleep for one
+second, and then write a second bank watermark. One retains the flag; the other
+clears it immediately before that write. The map scripts differ only in
+diagnostic filenames and the selected AI member. The AI programs additionally
+differ by the clear call (and a control comment). The staged members, executable
+and all retained marker hashes were checked.
+
+Both runs first observe the second bank watermark at 1.125 seconds and have
+identical samples through 1.219 seconds. At 1.313 seconds, the retaining control
+reports the source-registered movement order while the clearing run reports
+zero. Their positions still match at that sample. The control later retreats
+west and reaches the same terminal position as the earlier seeded true runs;
+the clearing run reaches the same terminal position as the earlier false runs.
+Both clients report RoC and are stopped.
+
+This timing clears the flag before the observed retreat order. It establishes
+an effect on subsequent initiation, not cancellation or retention of a route
+already in motion. Attack markers have no timestamps; no landed-hit chronology
+is inferred. The camera remains over unexplored terrain, so this is sampled
+world-state evidence rather than rendered movement comparison.
+
+Retaining map SHA-256:
+`75229ab49767f202dde9f0557480284f13ba69275f79d822143dad4e9be0ea84`;
+clearing map SHA-256:
+`62ac13d3a7bea76452567ab541d3d9c6262207e8a9133576a0513a31176a8fd2`.
+The 111/110 raw markers, 94/93 samples, staged-member receipts, source comparison
+and first-divergence summary remain local under `.scratch/flee-flag-clear-runs/`.
+The actual-wrapper collector passes ten offline tests, including malformed bank
+transitions, identities, reciprocal attack records and terminal-witness refusals.
