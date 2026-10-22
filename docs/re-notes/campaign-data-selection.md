@@ -43,8 +43,29 @@ edition/stat measurements in `ability-cancellation-orders.md`.
   the edition global `0x10db3e0` to the image's `%s_V%d` format, calling
   `0x433bb0` at `0x429042`.
 - It then passes the resulting namespace to `0x439fb0` for the existing archive
-  handles (`0x429054` through `0x4290ad`). This is an archive/source setup path;
-  the exact missing-member lookup/fallback policy still needs a separate trace.
+  handles (`0x429054` through `0x4290cb`). The handle indirection matters:
+  `0x429009`, `0x429010`, `0x429024` and `0x429017` index tables at
+  `0x10db170`, `0x10db178`, `0x10db180` and `0x10db188`, respectively.
+  Their entries point to archive-handle output locations from the base mount
+  path, rather than directly to archive-name strings.
+
+For this image, following those handle locations gives the namespace mounts
+below. The version column is the source version enumerand read by the native
+path; this table records the disassembly, not a production edition mapping.
+
+| Priority operand | Version 0 handle | Version 1 handle |
+| --- | --- | --- |
+| `0x0a` at `0x42905b` | War3 | War3x |
+| `0x0b` at `0x42909d` | War3Local | War3xLocal |
+| `0x0c` at `0x42907f` | War3Mod | War3Mod |
+| `0x0d` at `0x4290bb` | War3Mod | War3Mod |
+
+In particular, the version-zero priority-`0x0b` handle is `0x112def4`,
+populated by the base local-archive mount; it is not the War3x primary handle.
+Both higher-priority slots point to `0x112d898`, the War3Mod handle. A reader
+that collapses identical archive/namespace layers must retain the highest
+priority. Missing-member lookup/fallback remains a separate trace from this
+mount setup.
 
 The same edition global is returned by `VersionGet` (`0x4afb80`). The controlled
 same-map pair observed TFT/grunt HP 700 by default and RoC/grunt HP 680 with
