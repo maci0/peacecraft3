@@ -991,3 +991,33 @@ rendered-parity claim.
 Synthetic tests cover flight admission, ground-mask/occupancy/domain bypass,
 fly-mask refusal, air stamps leaving ground occupancy unchanged and scripted fly
 movement. Focused library tests, strict Clippy and formatting pass locally.
+
+## Placed destructable life and stationary death (2026-10-22)
+
+Selected `.doo` records in the reference census expose life bytes `0..=100` and
+`255`. Byte `0` creates a dead object, `1..=100` is the authored percentage of
+catalog HP, and `255` is full. Bytes `101..=254` are unobserved in that census;
+clamping them to full is a recreation inference pending native evidence, not a
+measured rule.
+
+Placed rows retain the complete authored record (type, variation, position,
+angle, all three scale components, flags and raw life byte) by handle. The
+script-facing creation fields remain a separate projection. Nonfinite position,
+angle or any scale component is refused before a row is produced. Life getters,
+setters, kill and damage also refuse while the selected catalog has no HP for a
+script-created record; they do not invent zero life or a zero maximum.
+
+Script-created destructables are admitted only before the stationary collision
+cache is built. Later creation is refused because this cache cannot rebuild
+stationary occupancy. Death and life mutation share one path, and a dead object
+swaps only its own live/dead footprint layer without erasing terrain bits or
+other overlapping stationary objects.
+
+The Human02 `.doo` stream contains `LTcr` records at `(-4608, -3264)` and
+`(-2112, -4800)`, while `CreateAllDestructables` allocates matching scripted
+destructables at those positions. The recreation currently admits both source
+identities and retains each `.doo` record's exact flags, creation number,
+variation, pose and raw life byte. No skip-by-flags admission rule is applied:
+how those raw flags control initial admission is awaiting a native
+flag/creation-count probe. Killing one identity therefore changes only that
+identity's stationary layer; duplicate identity policy remains open.

@@ -3,14 +3,14 @@ use crate::{
     map_admission::ParsedMapContext,
     playercolor_host::{
         DestructableCatalog, DestructableCreation, DestructableOrigin, DestructableState,
-        ObjectHost, PlacedDestructable,
+        ObjectHost, PlacedDestructable, PlacedSource,
     },
     unit_placement::{Budget, Footprint, Grid, Placement, Rules, StationaryKey, StationaryStamp},
 };
 use pcx_assets::{AssetPath, Resolver};
 use pcx_objects::editor::{
-    FieldSource, Overlay, SlkId,
-    defaults::{DefaultTables, Family},
+    FieldKind, FieldSource, Overlay, SlkId,
+    defaults::{DefaultTables, Family, Unresolved},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -104,7 +104,7 @@ impl Catalog {
             };
             if instance.position.iter().any(|v| !v.is_finite())
                 || !instance.angle.is_finite()
-                || !instance.scale[0].is_finite()
+                || instance.scale.iter().any(|v| !v.is_finite())
             {
                 return Err("nonfinite placed destructable pose".into());
             }
@@ -129,9 +129,19 @@ impl Catalog {
                 },
                 state: DestructableState {
                     dead,
-                    life,
-                    max_life: stats.max_life,
+                    life: Some(life),
+                    max_life: Some(stats.max_life),
                     ..DestructableState::default()
+                },
+                source: PlacedSource {
+                    creation_number: instance.creation_number,
+                    type_id: instance.type_id,
+                    variation: instance.variation,
+                    position: instance.position,
+                    angle: instance.angle,
+                    scale: instance.scale,
+                    flags: instance.flags,
+                    life: instance.life,
                 },
             });
         }
@@ -308,13 +318,25 @@ fn path(
         (Family::Destructable, SlkId::DestructableData, destructables),
         (Family::Doodad, SlkId::Doodads, decorations),
     ] {
-        let (base, mods) = overlay.new_object(name).unwrap_or((name, overlay.on(name)));
+        let custom = overlay.new_object(name);
+        let (base, mods) = custom.unwrap_or((name, overlay.on(name)));
         if overlay.new_object(base).is_some() {
             return Err(format!("{name}: custom stationary base chain"));
         }
-        let Ok(object) = tables.object(family, base) else {
-            continue;
+        let present = custom.is_some() || overlay.mods.contains_key(name);
+        let object = match tables.object(family, base) {
+            Ok(object) => object,
+            Err(Unresolved::Object { .. }) if !present => continue,
+            Err(error) => {
+                return Err(format!("{name}: malformed stationary record: {error}"));
+            }
         };
+        if object.rawcode() != base {
+            return Err(format!(
+                "{name}: stationary lookup resolved case-insensitively to {}",
+                object.rawcode()
+            ));
+        }
         if found.is_some() {
             return Err(format!("{name}: ambiguous stationary family"));
         }
@@ -331,12 +353,16 @@ fn path(
         let metadata = fields
             .next()
             .ok_or_else(|| format!("{name}: missing {column} metadata"))?;
-        if fields.next().is_some() || !matches!(metadata.index, -1 | 0) {
+        if fields.next().is_some()
+            || !matches!(metadata.index, -1 | 0)
+            || !metadata.measured
+            || metadata.kind != FieldKind::Token
+        {
             return Err(format!("{name}: unsupported {column} metadata"));
         }
         let value = if let Some(edit) = mods.iter().rev().find(|m| m.field == metadata.fourcc) {
             if edit.selectors.is_some_and(|s| s != [0, 0])
-                || edit.value_type != pcx_objects::ValueType::Str
+                || edit.value_type.word() != metadata.kind.wire_word()
             {
                 return Err(format!("{name}: unsupported {column} edit"));
             }
@@ -725,8 +751,8 @@ mod tests {
         let rows = catalog.placed().unwrap();
         assert_eq!(rows.len(), 5);
         for (row, life) in rows.iter().zip([0.0, 12.5, 50.0, 50.0, 50.0]) {
-            assert_eq!(row.state.max_life, 50.0);
-            assert_eq!(row.state.life, life);
+            assert_eq!(row.state.max_life, Some(50.0));
+            assert_eq!(row.state.life, Some(life));
             assert_eq!(row.state.dead, life == 0.0);
             assert_eq!(row.creation.objectid, i32::from_be_bytes(*b"LTlt"));
             assert_eq!(row.creation.x, 100.0);
@@ -735,6 +761,19 @@ mod tests {
         assert_eq!(
             rows[0].creation.origin,
             DestructableOrigin::Placed { creation_number: 1 }
+        );
+        assert_eq!(
+            rows[0].source,
+            PlacedSource {
+                creation_number: 1,
+                type_id: *b"LTlt",
+                variation: 0,
+                position: [100.0, 200.0, 0.0],
+                angle: 0.0,
+                scale: [1.0; 3],
+                flags: 0,
+                life: 0,
+            }
         );
         assert_eq!(
             rows[4].creation.origin,
@@ -759,6 +798,15 @@ mod tests {
             creation_number: 1,
         }];
         assert!(catalog.placed().is_err());
+        let mut catalog = catalog_with_life("50");
+        let mut row = doodad(1, 100);
+        row.scale[2] = f32::INFINITY;
+        catalog.doodads = vec![row];
+        let error = catalog.placed().unwrap_err();
+        assert!(
+            error.contains("nonfinite placed destructable pose"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -491,24 +491,37 @@ impl Placement {
         key: StationaryKey,
         active: bool,
     ) -> Result<bool, Error> {
-        let (changed, cells) = {
-            let Some(layer) = self.stationary.get_mut(&key) else {
-                return Ok(false);
-            };
-            let changed = layer.active != active;
-            let mut cells = Vec::new();
-            cells
-                .try_reserve(layer.live.len().saturating_add(layer.dead.len()))
-                .map_err(|_| fail("stationary cell allocation"))?;
-            cells.extend_from_slice(&layer.live);
-            cells.extend_from_slice(&layer.dead);
-            layer.active = active;
-            (changed, cells)
+        let Some(layer) = self.stationary.get_mut(&key) else {
+            return Ok(false);
         };
-        if changed {
-            self.recompose(&cells);
+        if layer.active == active {
+            return Ok(false);
         }
-        Ok(changed)
+        layer.active = active;
+        self.recompose_key(key);
+        Ok(true)
+    }
+
+    /// Recompose one layer over its retained cells without allocating.
+    fn recompose_key(&mut self, key: StationaryKey) {
+        let (Some(base), Some(layer)) = (&self.base_pathing, self.stationary.get(&key)) else {
+            return;
+        };
+        let stationary = &self.stationary;
+        let stationary_cells = &self.stationary_cells;
+        let pathing = &mut self.grid.pathing.cells;
+        for &i in layer.live.iter().chain(&layer.dead) {
+            let mut value = base.cells[i];
+            if let Some(keys) = stationary_cells.get(&i) {
+                for &(key, live) in keys {
+                    let layer = &stationary[&key];
+                    if layer.active == live {
+                        value |= layer.mask;
+                    }
+                }
+            }
+            pathing[i] = value;
+        }
     }
 
     fn recompose(&mut self, cells: &[usize]) {
