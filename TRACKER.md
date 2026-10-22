@@ -2,6 +2,15 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] Campaign targeting now has a selected-image policy reader, canonical
+  per-player flags and a bounded automatic-acquisition consumer. The published
+  session fixture and combined 1,520 core / 610 app tests pass, with strict
+  native/WASM Clippy. The unchanged selected Continue startup passes; Human02's
+  opening-minute gate advances past `SetTargetHeroes` to unsupported
+  `SetUnitsFlee` at 7.218750 seconds (script line 1692). Full scoring, effect
+  counter semantics, flee behavior and campaign completion remain unfinished.
+  See [campaign targeting](docs/re-notes/campaign-ai-targeting.md).
+
 - [~] Managed neutral-aggressive creep pursuit now consumes the authored
   `MaxGuardDistance`, returning beyond it without waiting for the chase timeout
   or incoming-attack resets. Other computer owners, released guards and explicit
@@ -9,7 +18,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   runtime arities are also corrected. Combined validation passes 1,507 core tests,
   609 app tests, strict native/WASM Clippy, formatting and selected Continue
   startup. Original-client creep-boundary parity and the Human02 opening minute
-  remain unqualified; `SetTargetHeroes` is still unsupported. See
+  remain unqualified; the latest frontier is recorded above. See
   [unit guards](docs/re-notes/script-unit-guards.md).
 
 - [~] Native campaign index, map admission and Continue retain one source recipe
@@ -27,7 +36,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   Continue gate now passes Human01 with 152 executed units and starts Human02
   with nearby-lumber harvest and health handicap admitted. A separate opening
   clock check reaches 7.218750 seconds, then refuses the red campaign program's
-  `SetTargetHeroes` through `StartCampaignAI` at Human02 line 1692. Startup passes;
+  `SetTargetHeroes` through `StartCampaignAI` at Human02 line 1692 in that earlier
+  gate; the latest frontier is recorded above. Startup passes;
   the opening-minute acceptance check still fails. These selected results are
   retained in `.scratch/campaign-continuation/health-harvest-final-selected.log`.
   The latest combined core suite passes 1487 tests and the app suite passes
@@ -43,8 +53,9 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   the shared world, synchronous initial execution and game-clock wake delivery.
   The production-host fixture checks shared resource writes and timer ordering;
   map callbacks from those programs still refuse before resource mutation.
-  The selected red/purple source fixtures reach unsupported `SetTargetHeroes`
-  and `SetHeroLevels`; this is not working campaign strategy or chapter completion.
+  The selected red/purple source fixtures without targeting-policy admission
+  still refuse `SetTargetHeroes` and `SetHeroLevels`; this is not working campaign
+  strategy or chapter completion.
   Controlled tree
   and original-gate probes qualify flags 4/7 for script-only admission; the
   placement correction passes those same private suites.

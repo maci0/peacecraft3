@@ -35,6 +35,8 @@ use peacecraft3::map_script_session::{MapScriptSession, ScriptSessionError};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
+const AI_COMMON: &str = "native GetAiPlayer takes nothing returns integer\nnative Sleep takes real seconds returns nothing\nnative StartThread takes code callback returns nothing\nnative GetUpgradeLevel takes integer id returns integer\nnative GetUnitGoldCost takes integer unitid returns integer\nnative GetUnitWoodCost takes integer unitid returns integer\nnative SetTargetHeroes takes boolean enabled returns nothing\n";
+
 const COMMON: &str = "\
 type agent extends handle
 type itemtype extends handle
@@ -634,6 +636,7 @@ pub(crate) fn host_inputs(
 ) -> MapStartupInputs {
     MapStartupInputs {
         ai_source: None,
+        targeting_policy: None,
         inventory: None,
         inventory_powerup: None,
         item_classes: None,
@@ -847,7 +850,7 @@ fn campaign_ai_uses_the_published_world_and_map_timer_order() {
         .admission
         .shared_context()
         .unwrap();
-    let ai_common = "native GetAiPlayer takes nothing returns integer\nnative Sleep takes real seconds returns nothing\nnative StartThread takes code callback returns nothing\nnative GetUpgradeLevel takes integer id returns integer\nnative GetUnitGoldCost takes integer unitid returns integer\nnative GetUnitWoodCost takes integer unitid returns integer\n";
+    let ai_common = AI_COMMON;
     let programs: std::collections::BTreeMap<_, _> = [
         ("red.ai", 17, 34),
         ("purple.ai", 29, 58),
@@ -1003,7 +1006,7 @@ fn campaign_ai_upgrade_queries_share_published_research_across_map_timer_and_sle
         .admission
         .shared_context()
         .unwrap();
-    let ai_common = "native GetAiPlayer takes nothing returns integer\nnative Sleep takes real seconds returns nothing\nnative StartThread takes code callback returns nothing\nnative GetUpgradeLevel takes integer id returns integer\nnative GetUnitGoldCost takes integer unitid returns integer\nnative GetUnitWoodCost takes integer unitid returns integer\n";
+    let ai_common = AI_COMMON;
     let programs: std::collections::BTreeMap<_, _> =
         [("red.ai", 17, 34), ("purple.ai", 29, 58)]
             .into_iter()
@@ -1164,7 +1167,7 @@ fn campaign_ai_unit_cost_reads_selected_catalog_and_live_player_tokens() {
         .admission
         .shared_context()
         .unwrap();
-    let ai_common = "native GetAiPlayer takes nothing returns integer\nnative Sleep takes real seconds returns nothing\nnative StartThread takes code callback returns nothing\nnative GetUpgradeLevel takes integer id returns integer\nnative GetUnitGoldCost takes integer unitid returns integer\nnative GetUnitWoodCost takes integer unitid returns integer\n";
+    let ai_common = AI_COMMON;
     let programs: std::collections::BTreeMap<_, _> = ["red.ai", "purple.ai"].into_iter().map(|name| {
         let body = "function cost takes nothing returns integer\nreturn GetUnitGoldCost('UNIT') + GetUnitWoodCost('UNIT') + GetUnitGoldCost('ZZZZ')\nendfunction\nfunction main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()), PLAYER_STATE_RESOURCE_GOLD, cost())\ncall Sleep(0.25)\ncall SetPlayerState(Player(GetAiPlayer()), PLAYER_STATE_RESOURCE_GOLD, cost())\nendfunction\n";
         let scripts = pcx_play::scripts::MapScripts::compile(
@@ -1874,5 +1877,7 @@ fn post_config_slot_input_reaches_players_created_in_main_without_minting_them_e
     );
 }
 
+#[path = "campaign_targeting_cases.rs"]
+mod campaign_targeting_cases;
 #[path = "unit_range_cases.rs"]
 mod unit_range_cases;

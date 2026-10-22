@@ -46,7 +46,7 @@ call TriggerAddCondition(T,Condition(function condition))
 call TriggerAddAction(T,function action)
 endfunction
 "#;
-struct Geometry;
+pub(super) struct Geometry;
 impl ObjectCatalog for Geometry {
     fn resolve(&self, rawcode: [u8; 4]) -> Result<Definition, ResolutionProblem> {
         if rawcode != *b"UNIT" {
@@ -111,7 +111,7 @@ impl ObjectCatalog for Geometry {
         })
     }
 }
-fn placement(source: Source) -> pcx_play::unit_placement::Placement {
+pub(super) fn placement(source: Source) -> pcx_play::unit_placement::Placement {
     use pcx_play::unit_placement::*;
     let mut image = vec![0; 0x800];
     for (at, value) in [
@@ -509,7 +509,7 @@ fn registry_fixture(
     )
 }
 
-fn activity_rules() -> (
+pub(super) fn activity_rules() -> (
     Arc<pcx_play::order_registry::Registry>,
     pcx_play::unit_activity::Rules,
 ) {

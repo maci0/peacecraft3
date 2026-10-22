@@ -283,6 +283,8 @@ pub mod sound_playback;
 
 pub struct MapStartupInputs {
     pub ai_source: Option<crate::campaign_ai::SourceNames>,
+    /// Checked client operands used by campaign automatic target selection.
+    pub targeting_policy: Option<crate::campaign_targeting_policy::TargetingPolicy>,
     pub enumeration: EnumContracts,
     pub rules: NeutralRuleSet,
     pub budgets: MapStartupBudgets,
@@ -579,6 +581,7 @@ pub fn assemble(
 ) -> Result<MapStartupHost, MapStartupError> {
     let MapStartupInputs {
         ai_source: _,
+        targeting_policy,
         enumeration,
         rules,
         budgets,
@@ -900,6 +903,9 @@ pub fn assemble(
                 max_units: budgets.units.max_records,
             },
         )?;
+    }
+    if let Some(policy) = targeting_policy {
+        object.admit_campaign_targeting(&context, policy)?;
     }
     if let Some(input) = terrain_pathing {
         object = object.with_terrain_pathing(input)?;

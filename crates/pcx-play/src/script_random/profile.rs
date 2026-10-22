@@ -737,8 +737,8 @@ impl Policy {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn fixture() -> Policy {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn fixture() -> Policy {
     Policy {
         origin: AssetIdentity {
             edition: "synthetic".into(),

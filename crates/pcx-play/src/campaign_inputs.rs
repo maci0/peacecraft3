@@ -409,6 +409,17 @@ pub fn prepare(
         .map_err(|e| e.to_string())?;
     Ok(MapStartupInputs {
         ai_source: Some(crate::campaign_ai::SourceNames::selected(image)?),
+        targeting_policy: Some(
+            crate::campaign_targeting_policy::TargetingPolicy::read(
+                image,
+                crate::neutral_player::RuleInputBudget {
+                    image_bytes: 32 << 20,
+                    profile_bytes: 64 << 10,
+                    sections: 96,
+                },
+            )
+            .map_err(|e| e.to_string())?,
+        ),
         item_classes: Some(item_classes),
         item_sales: Some(item_sales),
         item_use: None,

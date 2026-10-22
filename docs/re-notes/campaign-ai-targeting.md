@@ -145,5 +145,38 @@ the near coordinates does not. This supports newest-first enumeration among the
 tied near candidates. It contradicts a fixed ordinary-before-hero rule; it does
 not establish the native container, every spatial query's ordering, removal or
 transfer behavior, later retargeting, or score equality outside this envelope.
-The production consumer remains unfinished. Older notes proposing a class-based
-false-policy tie rule are superseded by this observation.
+Older notes proposing a class-based false-policy tie rule are superseded by this
+observation.
+
+## Admitted automatic acquisition
+
+The startup inputs now read the selected image's targeting operands and admit
+them on the same map context as the player arena. A campaign program activates
+its canonical player with the image-derived false default; `SetTargetHeroes`
+changes that player's flag. Failed initial execution retires the new targeting
+context, and repeated starts preserve the existing program and flag.
+
+Ordinary automatic acquisition consumes the policy and current admitted game
+difficulty. The supported comparison uses the hero contribution, center distance,
+and the bounded newest-created tie behavior above. This is a recreation of the
+qualified comparison, not the complete native score. Hold Position, explicit
+targets and retained targets keep their existing paths. Unsupported optional
+bands, multiple competing hero contributions, neutral-aggressive candidates and
+candidate effect history refuse with unit context before acquisition mutation.
+Destroyed or expired art does not prove that the native counter returned to zero.
+The ordinary initial Normal mode does not trigger the scorer's local difficulty
+promotion; the unsupported melee-mode transition remains outside this envelope.
+
+The production `MapStartupHost`/`MapScriptSession` fixture runs two independent
+programs, applies difficulty through the normal post-config callback, observes
+automatic acquisition in the published world, then flips flags after sleep while
+checking retained targets. Combined validation passes 1,520 core tests, 610 app
+tests and strict native/WASM Clippy. These tests do not establish rendered parity
+or every native attachment and score term.
+
+The unchanged selected Continue gate still publishes Human01's 152 units and
+starts Human02. Its opening-minute gate now passes `SetTargetHeroes` and refuses
+the red program's next `SetUnitsFlee` call at 7.218750 seconds, through
+`StartCampaignAI` at Human02 script line 1692. The opening-minute acceptance test
+remains failing; no campaign completion is claimed. Receipts are local under
+`.scratch/campaign-targeting-root-review/integration-*.log`.
