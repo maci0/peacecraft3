@@ -171,7 +171,7 @@ fn open_selected(
     heroes: Option<crate::hero_skills::Rules>,
     combat: CombatRules,
 ) -> (Vm, HandleId, HandleId) {
-    open_fixture(fields, heroes, combat, false, None)
+    open_fixture(fields, heroes, combat, false, None, None)
 }
 
 /// The same fixture with the source fgamestate clock and time-of-day admitted at hour 9.
@@ -179,7 +179,7 @@ fn open_clocked(
     fields: &[([u8; 4], ObjectField)],
     combat: CombatRules,
 ) -> (Vm, HandleId, HandleId) {
-    open_fixture(fields, None, combat, true, None)
+    open_fixture(fields, None, combat, true, None, None)
 }
 
 /// Clock declarations: the stock `CLOCK` handle and the stock dawn/dusk window.
@@ -217,6 +217,7 @@ fn open_fixture(
     combat: CombatRules,
     clock: bool,
     blight: Option<crate::terrain_blight::InitialBlight>,
+    resource: Option<Arc<DefaultTables>>,
 ) -> (Vm, HandleId, HandleId) {
     let mut extra = format!(
         "{}\n{}{DECLARATIONS}{}{}{}",
@@ -242,6 +243,10 @@ fn open_fixture(
     if blight.is_some() {
         extra.push_str("\nnative SetUnitPosition takes unit u, real x, real y returns nothing\n");
     }
+    if resource.is_some() {
+        extra.push('\n');
+        extra.push_str(super::resource::RESOURCE_FAMILY_NATIVES);
+    }
     let map = if heroes.is_some() {
         MAP.replacen("'u001'", "'H001'", 1)
     } else {
@@ -255,6 +260,10 @@ fn open_fixture(
             h
         }
     });
+    let h = match resource {
+        Some(tables) => h.with_resource_amounts(tables).unwrap(),
+        None => h,
+    };
     let (registry, activity) = super::activity::rules();
     let mut h = h
         .with_locations()
@@ -354,6 +363,52 @@ fn step(vm: &mut Vm, until: f64) {
         assert!(h.next_timer_expiry(next, &mut 100).unwrap().is_none());
         h.advance_unit_activity(next, &mut 65536).unwrap();
     }
+}
+
+#[test]
+fn killed_resource_unit_retains_amount_across_later_activity() {
+    let mut fields = armed("1", "normal");
+    fields.extend(super::resource::resource_fields("resource", "Agld,Avul"));
+    let (mut vm, a, _) = open_fixture(
+        &fields,
+        None,
+        rules(),
+        false,
+        None,
+        Some(super::resource::resource_tables()),
+    );
+    let amount = |vm: &mut Vm| vm.host().inner.executed_unit(a).unwrap().resource_amount;
+    assert_eq!(amount(&mut vm), Some(4242));
+    vm.host()
+        .inner
+        .native("SetResourceAmount", &[Value::Handle(a), Value::Int(777)])
+        .unwrap();
+    vm.host()
+        .inner
+        .native("KillUnit", &[Value::Handle(a)])
+        .unwrap();
+    assert!(
+        vm.host()
+            .inner
+            .executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .dead
+    );
+    assert_eq!(amount(&mut vm), Some(777));
+    step(&mut vm, 1.0);
+    assert_eq!(amount(&mut vm), Some(777));
+    vm.host()
+        .inner
+        .native("SetResourceAmount", &[Value::Handle(a), Value::Int(5)])
+        .unwrap();
+    vm.host()
+        .inner
+        .native("AddResourceAmount", &[Value::Handle(a), Value::Int(2)])
+        .unwrap();
+    assert_eq!(amount(&mut vm), Some(7));
 }
 
 #[test]

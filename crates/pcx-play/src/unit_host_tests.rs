@@ -2964,5 +2964,8 @@ mod group_orders;
 #[path = "unit_runtime_tests.rs"]
 mod runtime;
 
+#[path = "unit_resource_tests.rs"]
+mod resource;
+
 #[path = "inventory_tests.rs"]
 mod inventory;

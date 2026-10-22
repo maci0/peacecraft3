@@ -634,6 +634,7 @@ pub fn assemble(
             budgets.units,
         )?
         .with_unit_states(budgets.unit_states)?
+        .with_resource_amounts(Arc::clone(&defend.tables))?
         .with_defend_ability(&defend.tables, &defend.alias)?;
     // Retained SetUnitExploded flags only; explosion presentation is not implemented.
     object = object.with_unit_explosions(budgets.units.max_records)?;
