@@ -281,6 +281,26 @@ impl ObjectHost {
         Ok(self.executed_unit(unit)?.vitals)
     }
 
+    /// Test-only fixture mutation for pools that no admitted native can set.
+    #[cfg(test)]
+    pub(crate) fn set_test_maximum(
+        &mut self,
+        unit: HandleId,
+        max_life: Option<f32>,
+        max_mana: Option<f32>,
+    ) {
+        let Entry::Unit { record } = self.inner.entry_mut(unit).expect("fixture unit") else {
+            panic!("fixture unit");
+        };
+        let vitals = record.vitals.as_mut().expect("fixture vitals");
+        if let Some(maximum) = max_life {
+            vitals.max_life = maximum;
+        }
+        if let Some(maximum) = max_mana {
+            vitals.max_mana = maximum;
+        }
+    }
+
     /// Integrate each unit's life and mana regeneration from its own clock to `now`.
     /// Dead and nonpositive-life units do not regenerate. Errors leave every pool
     /// and clock unchanged, so a retry integrates the same spans.
@@ -491,8 +511,11 @@ impl ObjectHost {
         Ok((life, mana, bonus_life))
     }
 
-    /// `SetUnitState` on an admitted state: life and mana stay within their
-    /// maximum. True when the assignment leaves a living unit without life.
+    /// `SetUnitState` on an admitted state. Current life and mana stay within
+    /// their maximum. Assignments to the maximum states are retained as
+    /// executed requests but leave the live maxima unchanged, matching the
+    /// controlled native observations. True when the assignment leaves a
+    /// living unit without life.
     pub(super) fn assign_unit_vital(&mut self, unit: HandleId, enumerand: i32, value: f32) -> bool {
         let Some(states) = self.unit_vitals.as_ref().map(|r| r.states) else {
             return false;
@@ -505,15 +528,8 @@ impl ObjectHost {
         };
         match states.iter().position(|&s| s == enumerand) {
             Some(0) => v.life = value.min(v.max_life),
-            Some(1) => {
-                v.max_life = value;
-                v.life = v.life.min(value);
-            }
             Some(2) => v.mana = value.clamp(0.0, v.max_mana),
-            Some(3) => {
-                v.max_mana = value;
-                v.mana = v.mana.min(value);
-            }
+            Some(1 | 3) => {}
             _ => {}
         }
         v.life <= 0.0 && record.combat.as_ref().is_some_and(|c| !c.dead)

@@ -1,18 +1,26 @@
 use super::*;
 #[test]
-fn live_hero_vitals_follow_levels_and_preserve_explicit_maxima_and_deficits() {
+fn live_hero_vitals_follow_levels_ignore_maximum_writes_and_preserve_deficits() {
     let (hero, combat) = hero_rules();
     let (mut vm, a, b) = open_selected(&hero_fields("STR"), Some(hero), combat);
     let initial = vm.host().inner.unit_vitals(a).unwrap().unwrap();
     let ordinary = vm.host().inner.unit_vitals(b).unwrap().unwrap();
     let state = |vm: &mut Vm, name: &str| vm.global(name);
-    // Explicit maxima are independent of the retained base attribute contribution.
     for (name, value) in [
         ("UNIT_STATE_MAX_LIFE", 777.0),
-        ("UNIT_STATE_LIFE", 321.0),
         ("UNIT_STATE_MAX_MANA", 333.0),
-        ("UNIT_STATE_MANA", 117.0),
     ] {
+        let property = state(&mut vm, name);
+        vm.host()
+            .inner
+            .native(
+                "SetUnitState",
+                &[Value::Handle(a), property, Value::Real(value)],
+            )
+            .unwrap();
+    }
+    assert_eq!(vm.host().inner.unit_vitals(a).unwrap(), Some(initial));
+    for (name, value) in [("UNIT_STATE_LIFE", 321.0), ("UNIT_STATE_MANA", 60.0)] {
         let property = state(&mut vm, name);
         vm.host()
             .inner
@@ -33,14 +41,14 @@ fn live_hero_vitals_follow_levels_and_preserve_explicit_maxima_and_deficits() {
     };
     level(&mut vm, 4);
     let fourth = vm.host().inner.unit_vitals(a).unwrap().unwrap();
-    assert_eq!((fourth.max_life, fourth.life), (827.0, 371.0));
-    assert_eq!((fourth.max_mana, fourth.mana), (333.0, 117.0));
+    assert_eq!((fourth.max_life, fourth.life), (800.0, 371.0));
+    assert_eq!((fourth.max_mana, fourth.mana), (105.0, 60.0));
     level(&mut vm, 5);
     let fifth = vm.host().inner.unit_vitals(a).unwrap().unwrap();
-    assert_eq!((fifth.max_life, fifth.life), (902.0, 446.0));
-    assert_eq!((fifth.max_mana, fifth.mana), (348.0, 132.0));
-    assert_eq!(fifth.max_life - fifth.life, 777.0 - 321.0);
-    assert_eq!(fifth.max_mana - fifth.mana, 333.0 - 117.0);
+    assert_eq!((fifth.max_life, fifth.life), (875.0, 446.0));
+    assert_eq!((fifth.max_mana, fifth.mana), (120.0, 75.0));
+    assert_eq!(fifth.max_life - fifth.life, 800.0 - 371.0);
+    assert_eq!(fifth.max_mana - fifth.mana, 105.0 - 60.0);
     for n in [5, 4] {
         level(&mut vm, n);
         assert_eq!(vm.host().inner.unit_vitals(a).unwrap(), Some(fifth));

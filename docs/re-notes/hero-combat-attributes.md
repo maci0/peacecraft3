@@ -58,7 +58,8 @@ bonuses, XP awards and level-up effects remain separate work.
 ## Level/vitals integration
 
 Live level changes now stage life/mana contribution differences through the same
-attribute helper, preserving explicit maxima and absolute missing resources.
+attribute helper, preserving the absolute missing resources. Maximum-state
+`SetUnitState` requests are recorded but do not overwrite live maxima.
 See [Live hero vital updates](hero-vital-level-updates.md) for selected native
 current-resource evidence, tests and the explicitly unsupported living/dead
 minimum boundary. General item/ability attribute effects remain separate work.

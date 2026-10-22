@@ -54,7 +54,6 @@ const PRIMARY_DAMAGE: f32 = 1.75;
 const HERO_STR: f32 = 10.0;
 const HERO_LIFE: f32 = 500.0 + HERO_STR * LIFE_PER_STRENGTH;
 const LIFE_STATE: i32 = 0;
-const MAX_LIFE_STATE: i32 = 1;
 
 fn sylk(headers: &[&str], rows: &[&[&str]]) -> Vec<u8> {
     let mut text = String::from("ID;PWXL;N;E\r\n");
@@ -1621,8 +1620,8 @@ fn set_life(h: &mut ObjectHost, unit: HandleId, life: f32) {
     .unwrap();
 }
 
-fn set_max_life(h: &mut ObjectHost, unit: HandleId, maximum: f32) {
-    set_state(h, unit, MAX_LIFE_STATE, maximum);
+fn set_fixture_max_life(h: &mut ObjectHost, unit: HandleId, maximum: f32) {
+    h.set_test_maximum(unit, Some(maximum), None);
 }
 
 fn life_of(h: &ObjectHost, unit: HandleId) -> f32 {
@@ -1649,7 +1648,6 @@ fn advance_passive_regen(h: &mut ObjectHost, now: f64) {
 }
 
 const MANA_STATE: i32 = 2;
-const MAX_MANA_STATE: i32 = 3;
 
 fn set_state(h: &mut ObjectHost, unit: HandleId, state: i32, value: f32) {
     let state = h.native("ConvertUnitState", &[Value::Int(state)]).unwrap();
@@ -1664,8 +1662,8 @@ fn set_mana(h: &mut ObjectHost, unit: HandleId, mana: f32) {
     set_state(h, unit, MANA_STATE, mana);
 }
 
-fn set_max_mana(h: &mut ObjectHost, unit: HandleId, maximum: f32) {
-    set_state(h, unit, MAX_MANA_STATE, maximum);
+fn set_fixture_max_mana(h: &mut ObjectHost, unit: HandleId, maximum: f32) {
+    h.set_test_maximum(unit, None, Some(maximum));
 }
 
 fn mana_of(h: &ObjectHost, unit: HandleId) -> f32 {
@@ -2062,7 +2060,7 @@ fn non_hero_base_mana_regeneration_receives_and_loses_the_held_fraction() {
     let Fixture {
         mut h, ordinary, ..
     } = open_with_regens(0., Some("2"), 0.);
-    set_max_mana(&mut h, ordinary, 100.);
+    set_fixture_max_mana(&mut h, ordinary, 100.);
     set_mana(&mut h, ordinary, 0.);
     advance_passive_regen(&mut h, 1.);
     assert_close(mana_of(&h, ordinary), 2.0, "source base rate");
@@ -2309,7 +2307,7 @@ fn cleanup_refuses_an_oversized_strength_item_before_dropping_the_earlier_plain_
     assert_eq!(add(&mut h, hero, huge), Ok(Value::Bool(true)));
     assert_eq!(h.held_slot(hero, 0), Some(plain));
     assert_eq!(h.held_slot(hero, 1), Some(huge));
-    set_max_life(&mut h, hero, 100.);
+    set_fixture_max_life(&mut h, hero, 100.);
     set_life(&mut h, hero, 100.);
     let ground = item(&mut h, b"tstr", 64.);
     let _drop = register_drop(&mut h, hero);
@@ -2325,7 +2323,7 @@ fn cleanup_refuses_an_oversized_strength_item_before_dropping_the_earlier_plain_
     assert_eq!(h.held_slot(hero, 1), Some(huge));
     assert_eq!(h.inventory_order(hero), Some(pending));
     assert!(h.take_fired_event().is_none());
-    set_max_life(&mut h, hero, 30_000.);
+    set_fixture_max_life(&mut h, hero, 30_000.);
     set_life(&mut h, hero, 100.);
     h.forget_inventory_unit(hero, false).unwrap();
     assert_eq!(h.held_slot(hero, 0), None);
@@ -2338,7 +2336,7 @@ fn cleanup_refuses_an_oversized_strength_item_before_dropping_the_earlier_plain_
 fn cleanup_refuses_a_minimum_strength_removal_before_any_write() {
     let Fixture { mut h, hero, .. } = open();
     let debuff = item(&mut h, b"pmin", 0.);
-    set_max_life(&mut h, hero, 1.0e12);
+    set_fixture_max_life(&mut h, hero, 1.0e12);
     set_life(&mut h, hero, 5.0e11);
     assert_eq!(add(&mut h, hero, debuff), Ok(Value::Bool(true)));
     assert_eq!(h.held_slot(hero, 0), Some(debuff));
@@ -2360,7 +2358,7 @@ fn cleanup_preflights_sequential_strength_pools_before_dropping_either_item() {
     let second = item(&mut h, b"pstr", 0.);
     assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
     assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
-    set_max_life(&mut h, hero, 200.);
+    set_fixture_max_life(&mut h, hero, 200.);
     set_life(&mut h, hero, 100.);
     assert!(
         crate::inventory_powerup_host::reprice_life(100.0, 200.0, LIFE_PER_STRENGTH, -5).is_ok()
@@ -2384,7 +2382,7 @@ fn cleanup_preflights_sequential_strength_pools_before_dropping_either_item() {
     assert_eq!(h.held_slot(hero, 1), Some(second));
     assert_eq!(h.inventory_order(hero), Some(pending));
     assert!(h.take_fired_event().is_none());
-    set_max_life(&mut h, hero, 1_000.);
+    set_fixture_max_life(&mut h, hero, 1_000.);
     set_life(&mut h, hero, 100.);
     h.forget_inventory_unit(hero, false).unwrap();
     assert_eq!(h.held_slot(hero, 0), None);
@@ -2400,7 +2398,7 @@ fn cleanup_drops_sequential_fractional_max_life_without_spurious_refusal() {
     let second = item(&mut h, b"plon", 0.);
     assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
     assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
-    set_max_life(&mut h, hero, 100.6);
+    set_fixture_max_life(&mut h, hero, 100.6);
     set_life(&mut h, hero, 100.6);
     let _drop = register_drop(&mut h, hero);
     h.forget_inventory_unit(hero, false).unwrap();

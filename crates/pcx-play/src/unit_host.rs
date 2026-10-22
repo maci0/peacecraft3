@@ -7,7 +7,9 @@
 //! `i32::to_be_bytes`. `base_rawcode` is stored as the catalog returned it.
 //!
 //! `SetUnitState` is a separate opt-in on that same unit. It retains the
-//! executed `ConvertUnitState` handle and finite value. It does not spend a
+//! executed `ConvertUnitState` handle and finite value. Current life and mana
+//! assignments are clamped to the live maximum; maximum-life and maximum-mana
+//! requests are retained but leave the pools unchanged. It does not spend a
 //! resource or apply combat.
 //!
 //! `IssueImmediateOrder` has two separate opt-ins. The Defend opt-in takes one
@@ -74,7 +76,9 @@ pub struct UnitStateBudget {
 /// `unitstate` is the handle from the selected `ConvertUnitState` domain.
 /// The domain ordinal is not stored. `value` is the exact finite input:
 /// `0.0` is an assignment, and a handle absent from the unit's list has not
-/// been assigned. This is not a resource balance or a derived maximum.
+/// been assigned. A maximum-life or maximum-mana request keeps the exact
+/// input but does not overwrite the live maximum. This is not a resource
+/// balance or a derived maximum.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ExecutedUnitState {
     pub unitstate: HandleId,
