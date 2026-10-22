@@ -213,6 +213,22 @@ fn override_wins_and_archives_follow_explicit_priorities() {
         vec![low.layer(0), high.layer(73)],
     )
     .unwrap();
+    assert_eq!(resolver.source_for("TEXTURES/some.blp").unwrap().id, "user");
+    assert_eq!(resolver.source_for("SHARED").unwrap().id, "arbitrary-name");
+    assert_eq!(
+        resolver.source_for("only/low").unwrap().id,
+        "not-assumed-patch"
+    );
+    assert!(matches!(
+        resolver.source_for("absent"),
+        Err(Error::MissingAsset { .. })
+    ));
+    assert!(matches!(
+        resolver.source_for("../escape"),
+        Err(Error::Path(_))
+    ));
+    assert!(high_reads.lock().unwrap().is_empty());
+    assert!(low_reads.lock().unwrap().is_empty());
     let override_asset = resolver.resolve("textures/some.blp").unwrap();
     assert_eq!(override_asset.bytes, b"synthetic user bytes");
     assert_eq!(override_asset.provenance.source.id, "user");
