@@ -212,10 +212,7 @@ fn parse_campaigns(member: &str, text: &str) -> Result<(Vec<Campaign>, Vec<Chapt
     Ok((campaigns, chapters))
 }
 
-fn read_campaigns(
-    dir: &Path,
-    mode: &GameMode,
-) -> Result<(Arc<CampaignRecipe>, Vec<Campaign>, Vec<Chapter>), String> {
+fn read_campaigns(dir: &Path, mode: &GameMode) -> Result<Chapters, String> {
     let recipe = campaign_recipe(dir, *mode)?;
     let reader = recipe.base_resolver().map_err(|error| error.to_string())?;
     let member = index_member(mode);
@@ -224,7 +221,12 @@ fn read_campaigns(
         .map_err(|e| e.to_string())?;
     let text = std::str::from_utf8(&content.bytes).map_err(|e| e.to_string())?;
     let (campaigns, chapters) = parse_campaigns(member, text)?;
-    Ok((recipe, campaigns, chapters))
+    Ok(Chapters {
+        recipe: Some(recipe),
+        campaigns,
+        entries: chapters,
+        ..default()
+    })
 }
 
 fn refresh(launcher: Res<crate::launch_gui::Launcher>, mut chapters: ResMut<Chapters>) {
@@ -241,10 +243,10 @@ fn refresh(launcher: Res<crate::launch_gui::Launcher>, mut chapters: ResMut<Chap
         return;
     }
     match read_campaigns(&key.0, &key.1) {
-        Ok((recipe, campaigns, entries)) => {
-            chapters.recipe = Some(recipe);
-            chapters.campaigns = campaigns;
-            chapters.entries = entries;
+        Ok(index) => {
+            chapters.recipe = index.recipe;
+            chapters.campaigns = index.campaigns;
+            chapters.entries = index.entries;
             chapters.error = None;
         }
         Err(error) => {
