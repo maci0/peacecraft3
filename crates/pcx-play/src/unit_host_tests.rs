@@ -3529,6 +3529,44 @@ fn fresh_units_follow_the_owner_and_held_flat_maximum_life_is_unscaled() {
 }
 
 #[test]
+fn empty_owner_clamped_minimum_refuses_fresh_zero_life_unit_before_publication() {
+    let (mut h, _) = combat::powerup_host::health_fixture_hp1();
+    let empty = h.native("Player", &[Value::Int(5)]).unwrap();
+    h.native("SetPlayerHandicap", &[empty.clone(), Value::Real(0.0)])
+        .unwrap();
+    assert_eq!(
+        h.native("GetPlayerHandicap", std::slice::from_ref(&empty))
+            .unwrap(),
+        Value::Real(0.01)
+    );
+    let handles = h.inner().handles();
+    let units = h.executed_units().count();
+    let error = h
+        .native(
+            "CreateUnit",
+            &[
+                empty.clone(),
+                Value::Int(i32::from_be_bytes(*b"u001")),
+                Value::Real(88.0),
+                Value::Real(0.0),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("CreateUnit"), "{error}");
+    assert!(error.contains("projected maximum life"), "{error}");
+    assert_eq!(h.inner().handles(), handles);
+    assert_eq!(h.executed_units().count(), units);
+    assert!(h.take_fired_event().is_none());
+    assert_eq!(
+        h.native("GetPlayerHandicap", std::slice::from_ref(&empty))
+            .unwrap(),
+        Value::Real(0.01)
+    );
+}
+
+#[test]
 fn destructive_raw_factors_refuse_atomically_without_death_semantics() {
     let (mut h, hero) = health_vm();
     let ordinary = health_create(&mut h, 32.0);
