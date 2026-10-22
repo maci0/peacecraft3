@@ -147,6 +147,7 @@ pub fn placement_rules(
             one_initializer: window(0x401460, 16)?,
             two_initializer: window(0x401560, 16)?,
             ground_mask: window(0x67cebc, 5)?,
+            fly_mask: window(0x67cec3, 5)?,
         },
         BUDGET,
     )

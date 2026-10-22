@@ -154,7 +154,7 @@ pub(super) fn candidate(definition: &Definition, combat: Option<&Combat>) -> Res
         super::unit_positions::text(definition, pcx_objects::editor::SlkId::UnitData, "movetp")
             .map_err(str::to_owned)?;
     match movement {
-        "foot" | "horse" => Ok(true),
+        "foot" | "horse" | "fly" => Ok(true),
         "" | "_" | "none" => Ok(false),
         _ => Err("guard movement class is not admitted".into()),
     }

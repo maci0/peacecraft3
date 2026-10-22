@@ -7,6 +7,9 @@ writer `0x50f9c0`, evidence
 writes `MP3W`, version zero, width and height, then width×height bytes. Its nested
 loop advances x within each row and then y. It maps internal flag bits to file
 bits 2,4,8,32,64,128; those masks do not by themselves prove gameplay meanings.
+A later selected-executable analysis maps pathing enumerand `1` to mask `2` and
+enumerand `2` (`PATHING_TYPE_FLYABILITY`) to mask `4`; see
+`script-unit-world.md` for the instruction windows and current movement slice.
 
 `Pathing::parse()` requires this framing exactly, with overflow-safe dimensions,
 and retains all authored cell bytes. `Map::pathing()` exposes it and preserves

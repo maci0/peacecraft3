@@ -20,6 +20,7 @@ pub struct Binding {
     pub one_initializer: SourceWindow,
     pub two_initializer: SourceWindow,
     pub ground_mask: SourceWindow,
+    pub fly_mask: SourceWindow,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -39,6 +40,7 @@ pub struct Rules {
     one: f32,
     two: f32,
     mask: u8,
+    fly: u8,
 }
 
 impl Rules {
@@ -62,6 +64,7 @@ impl Rules {
             binding.one_initializer,
             binding.two_initializer,
             binding.ground_mask,
+            binding.fly_mask,
         ];
         if image.len() > budget.image_bytes
             || windows.iter().map(|w| u64::from(w.len)).sum::<u64>() + 12
@@ -153,15 +156,20 @@ impl Rules {
         {
             return Err(fail("unordered radius geometry"));
         }
-        let mask = code(&binding.ground_mask)?;
-        if mask.len() != 5 || mask[0] != 0xb9 {
-            return Err(fail("ground mask instruction"));
-        }
-        let mask = u8::try_from(u32::from_le_bytes(mask[1..].try_into().unwrap()))
-            .map_err(|_| fail("ground mask range"))?;
-        if mask == 0 {
-            return Err(fail("empty ground mask"));
-        }
+        let mask = |window: &SourceWindow, label: &str| -> Result<u8, Error> {
+            let bytes = code(window)?;
+            if bytes.len() != 5 || bytes[0] != 0xb9 {
+                return Err(fail(format!("{label} instruction")));
+            }
+            let value = u8::try_from(u32::from_le_bytes(bytes[1..].try_into().unwrap()))
+                .map_err(|_| fail(format!("{label} range")))?;
+            if value == 0 {
+                return Err(fail(format!("empty {label}")));
+            }
+            Ok(value)
+        };
+        let ground = mask(&binding.ground_mask, "ground mask")?;
+        let fly = mask(&binding.fly_mask, "fly mask")?;
         Ok(Self {
             binding,
             exponent,
@@ -169,7 +177,8 @@ impl Rules {
             thresholds,
             one,
             two,
-            mask,
+            mask: ground,
+            fly,
         })
     }
 
@@ -179,6 +188,10 @@ impl Rules {
 
     pub fn ground_mask(&self) -> u8 {
         self.mask
+    }
+
+    pub fn fly_mask(&self) -> u8 {
+        self.fly
     }
 
     pub fn binding(&self) -> &Binding {
@@ -273,12 +286,19 @@ pub struct Placement {
 
 type FootprintLoader = Box<dyn FnMut(&str) -> Result<Footprint, String> + Send + Sync>;
 
+#[derive(Clone, Copy)]
+struct Candidate {
+    creation: bool,
+    air: bool,
+}
+
 #[derive(Debug)]
 pub(crate) struct Prepared {
     pub position: [f32; 2],
     cells: Vec<usize>,
     footprint: Vec<usize>,
     active: bool,
+    air: bool,
 }
 
 #[cfg(test)]
@@ -441,6 +461,7 @@ impl Placement {
         Ok(cells)
     }
 
+    #[cfg(test)]
     pub(crate) fn prepare(
         &mut self,
         request: [f32; 2],
@@ -448,17 +469,49 @@ impl Placement {
         path: &str,
         face: f32,
     ) -> Result<Prepared, Error> {
+        self.prepare_class(request, radius, path, face, false)
+    }
+
+    pub(crate) fn prepare_class(
+        &mut self,
+        request: [f32; 2],
+        radius: Option<f32>,
+        path: &str,
+        face: f32,
+        air: bool,
+    ) -> Result<Prepared, Error> {
         self.ensure_footprint(path)?;
         self.stamps
             .try_reserve(1)
             .map_err(|_| fail("unit occupancy allocation"))?;
-        self.candidate(request, radius, path, face, None, true)?
-            .ok_or_else(|| fail("creation placement refused"))
+        self.candidate(
+            request,
+            radius,
+            path,
+            face,
+            None,
+            Candidate {
+                creation: true,
+                air,
+            },
+        )?
+        .ok_or_else(|| fail("creation placement refused"))
     }
 
+    #[cfg(test)]
     fn blocked(&self, i: usize, exclude: Option<&Prepared>) -> bool {
-        self.grid.pathing.cells[i] & self.rules.mask != 0
-            || (exclude.is_none_or(|p| p.active)
+        self.blocked_class(i, exclude, false)
+    }
+
+    fn blocked_class(&self, i: usize, exclude: Option<&Prepared>, air: bool) -> bool {
+        let mask = if air {
+            self.rules.fly_mask()
+        } else {
+            self.rules.ground_mask()
+        };
+        self.grid.pathing.cells[i] & mask != 0
+            || (!air
+                && exclude.is_none_or(|p| p.active)
                 && (self.occupied[i]
                     > u32::from(exclude.is_some_and(|p| p.cells.binary_search(&i).is_ok()))
                     || self.footprint_occupied[i]
@@ -474,8 +527,9 @@ impl Placement {
         path: &str,
         face: f32,
         exclude: Option<&Prepared>,
-        creation: bool,
+        options: Candidate,
     ) -> Result<Option<Prepared>, Error> {
+        let Candidate { creation, air } = options;
         if request.iter().any(|v| !v.is_finite()) {
             return Err(fail("nonfinite unit position"));
         }
@@ -518,10 +572,11 @@ impl Placement {
                     return Ok(false);
                 }
                 let cells = self.rectangle(cell, extents)?;
-                Ok(cells.iter().all(|&i| !self.blocked(i, exclude))
-                    && self
-                        .index(i64::from(cell[0]), i64::from(cell[1]))
-                        .is_some_and(|i| self.grid.domains[i] == wanted))
+                Ok(cells.iter().all(|&i| !self.blocked_class(i, exclude, air))
+                    && (air
+                        || self
+                            .index(i64::from(cell[0]), i64::from(cell[1]))
+                            .is_some_and(|i| self.grid.domains[i] == wanted)))
             };
             if !good(start)? {
                 if !creation {
@@ -628,6 +683,7 @@ impl Placement {
             cells,
             footprint,
             active: exclude.is_none_or(|p| p.active),
+            air,
         }))
     }
 
@@ -639,17 +695,20 @@ impl Placement {
             .map(|(_, p)| p)
             .ok_or_else(|| fail("unit occupancy is missing"))?;
         if stamp.active {
-            for &i in &stamp.cells {
-                self.occupied[i] -= 1;
-            }
-            for &i in &stamp.footprint {
-                self.footprint_occupied[i] -= 1;
+            if !stamp.air {
+                for &i in &stamp.cells {
+                    self.occupied[i] -= 1;
+                }
+                for &i in &stamp.footprint {
+                    self.footprint_occupied[i] -= 1;
+                }
             }
             stamp.active = false;
         }
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn prepare_show(
         &mut self,
         unit: HandleId,
@@ -658,24 +717,57 @@ impl Placement {
         path: &str,
         face: f32,
     ) -> Result<Prepared, Error> {
-        if !self.stamps.iter().any(|(id, p)| *id == unit && !p.active) {
-            return Err(fail("hidden unit occupancy required"));
-        }
-        self.ensure_footprint(path)?;
-        if let Some(prepared) = self.candidate(request, radius, path, face, None, false)? {
-            return Ok(prepared);
-        }
-        self.candidate(request, radius, path, face, None, true)?
-            .ok_or_else(|| fail("no admitted reveal placement"))
+        self.prepare_show_class(unit, request, radius, path, face, false)
     }
 
-    pub(crate) fn prepare_relocation(
+    pub(crate) fn prepare_show_class(
         &mut self,
         unit: HandleId,
         request: [f32; 2],
         radius: Option<f32>,
         path: &str,
         face: f32,
+        air: bool,
+    ) -> Result<Prepared, Error> {
+        if !self.stamps.iter().any(|(id, p)| *id == unit && !p.active) {
+            return Err(fail("hidden unit occupancy required"));
+        }
+        self.ensure_footprint(path)?;
+        if let Some(prepared) = self.candidate(
+            request,
+            radius,
+            path,
+            face,
+            None,
+            Candidate {
+                creation: false,
+                air,
+            },
+        )? {
+            return Ok(prepared);
+        }
+        self.candidate(
+            request,
+            radius,
+            path,
+            face,
+            None,
+            Candidate {
+                creation: true,
+                air,
+            },
+        )?
+        .ok_or_else(|| fail("no admitted reveal placement"))
+    }
+
+    pub(crate) fn prepare_relocation_class(
+        &mut self,
+        unit: HandleId,
+        request: [f32; 2],
+        radius: Option<f32>,
+        path: &str,
+        face: f32,
+        air: bool,
     ) -> Result<Prepared, Error> {
         self.ensure_footprint(path)?;
         let stamp = self
@@ -684,8 +776,18 @@ impl Placement {
             .find(|(id, _)| *id == unit)
             .map(|(_, stamp)| stamp)
             .ok_or_else(|| fail("unit occupancy is missing"))?;
-        self.candidate(request, radius, path, face, Some(stamp), true)?
-            .ok_or_else(|| fail("no admitted relocation placement"))
+        self.candidate(
+            request,
+            radius,
+            path,
+            face,
+            Some(stamp),
+            Candidate {
+                creation: true,
+                air,
+            },
+        )?
+        .ok_or_else(|| fail("no admitted relocation placement"))
     }
 
     pub(crate) fn prepare_motion(
@@ -703,7 +805,17 @@ impl Placement {
         if !stamp.footprint.is_empty() {
             return Err(fail("moving pathing textures are not admitted"));
         }
-        self.candidate(point, Some(radius), "_", 0.0, Some(stamp), false)
+        self.candidate(
+            point,
+            Some(radius),
+            "_",
+            0.0,
+            Some(stamp),
+            Candidate {
+                creation: false,
+                air: stamp.air,
+            },
+        )
     }
 
     pub(crate) fn segment_clear(
@@ -1158,6 +1270,7 @@ impl Placement {
         let old = self.stamps.iter().position(|(id, _)| *id == unit);
         if let Some(at) = old
             && self.stamps[at].1.active
+            && !self.stamps[at].1.air
         {
             for &i in &self.stamps[at].1.cells {
                 self.occupied[i] -= 1;
@@ -1166,7 +1279,7 @@ impl Placement {
                 self.footprint_occupied[i] -= 1;
             }
         }
-        if prepared.active {
+        if prepared.active && !prepared.air {
             for &i in &prepared.cells {
                 self.occupied[i] += 1;
             }

@@ -444,7 +444,7 @@ impl ObjectHost {
         let movement = super::unit_positions::text(definition, SlkId::UnitData, "movetp")
             .map_err(|e| fail(e.into()))?;
         let movable = match movement {
-            "foot" | "horse" => true,
+            "foot" | "horse" | "fly" => true,
             "" | "_" | "none" => false,
             _ => return Err(fail("movement class is not admitted".into())),
         };
@@ -1210,11 +1210,18 @@ impl ObjectHost {
             if on {
                 let position = position.ok_or_else(|| fail("accepted position required"))?;
                 let definition = self.executed_unit(unit)?.definition.clone();
-                let (radius, path) = super::unit_positions::geometry(&definition)
+                let geometry = super::unit_positions::geometry(&definition)
                     .map_err(|s| self.inner.error(name, Failure::UnitState(s)))?;
                 let placement = self.unit_placement.as_mut().expect("placement");
                 let prepared = placement
-                    .prepare_show(unit, position, radius, path, face)
+                    .prepare_show_class(
+                        unit,
+                        position,
+                        geometry.radius,
+                        geometry.path,
+                        face,
+                        geometry.air,
+                    )
                     .map_err(|e| {
                         self.inner
                             .error(name, Failure::UnitPlacement(e.to_string()))
@@ -1264,12 +1271,12 @@ impl ObjectHost {
         let (face, moving, previous) = (record.face, activity.moving(), record.position);
         let mut position = target;
         if occupies {
-            let (radius, path) = super::unit_positions::geometry(&record.definition)
+            let geometry = super::unit_positions::geometry(&record.definition)
                 .map_err(|s| self.inner.error(name, Failure::UnitState(s)))?;
-            let path = path.to_owned();
+            let (radius, path, air) = (geometry.radius, geometry.path.to_owned(), geometry.air);
             let placement = self.unit_placement.as_mut().expect("placement");
             let prepared = placement
-                .prepare_relocation(unit, target, radius, &path, face)
+                .prepare_relocation_class(unit, target, radius, &path, face, air)
                 .map_err(|e| {
                     self.inner
                         .error(name, Failure::UnitPlacement(e.to_string()))

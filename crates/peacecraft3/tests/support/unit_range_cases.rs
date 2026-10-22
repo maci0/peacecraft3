@@ -167,6 +167,7 @@ fn placement(source: Source) -> pcx_play::unit_placement::Placement {
     let one_initializer = put(0x280, &init(1));
     let two_initializer = put(0x2a0, &init(2));
     let ground_mask = put(0x2c0, &[0xb9, 8, 0, 0, 0]);
+    let fly_mask = put(0x2e0, &[0xb9, 4, 0, 0, 0]);
     for (at, value) in [(0x700, -8192.25f32), (0x704, 0.5), (0x708, 1.5)] {
         image[at..at + 4].copy_from_slice(&value.to_le_bytes());
     }
@@ -182,6 +183,7 @@ fn placement(source: Source) -> pcx_play::unit_placement::Placement {
             one_initializer,
             two_initializer,
             ground_mask,
+            fly_mask,
         },
         RuleInputBudget {
             image_bytes: 4096,
