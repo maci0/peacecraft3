@@ -235,6 +235,13 @@ fn upgrade_cell(
             });
         }
     };
+    if !matches!(field.index, -1 | 0) {
+        return Err(HarvestError::Malformed {
+            rawcode: alias.to_string(),
+            column: column.to_string(),
+            detail: format!("unsupported indexed upgrade metadata: {}", field.index),
+        });
+    }
     if !expected.accepts(field.kind) {
         return Err(HarvestError::Malformed {
             rawcode: alias.to_string(),

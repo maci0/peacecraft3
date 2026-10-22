@@ -1128,6 +1128,29 @@ fn ambiguous_upgrade_metadata_is_refused() {
     }
 }
 
+#[test]
+fn indexed_upgrade_metadata_is_not_read_as_a_scalar_capacity() {
+    let mut metadata = default_upgrade_metadata_rows();
+    metadata.iter_mut().find(|row| row[0] == "gba1").unwrap()[3] = "2";
+    let tables = tables_with_upgrade_metadata(
+        &[ahar_ability("7", "10", "30", "Ahar", "Ahar")],
+        &[vec!["hpea", "Peasant", "Ahar", "-"]],
+        &[],
+        &[vec![
+            "hpea", "2", "ground", "2", "0.433", "0.567", "90", "250", "tree", "1.7", "0.3", "0.6",
+            "70", "140",
+        ]],
+        &[vec!["Rhlh", "2", "rlum", "5", "5"]],
+        &metadata,
+    );
+    let error = apply_capacity_override(
+        &tables,
+        &capacity_override(Some([0, 0]), ValueType::Unreal, ObjectValue::Unreal(9.0)),
+    )
+    .expect_err("an indexed metadata column is not an admitted scalar");
+    assert!(matches!(error, HarvestError::Malformed { column, .. } if column == "base1"));
+}
+
 fn capacity_tables_without_upgrade_metadata() -> DefaultTables {
     tables_with_upgrade_metadata(
         &[ahar_ability("7", "10", "30", "Ahar", "Ahar")],
