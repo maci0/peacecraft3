@@ -17,7 +17,7 @@
 //! the authored `CampaignButtonTemplate` and placement inside the hosted frames
 //! is a labelled recreation choice (see `docs/re-notes/menu-entry.md`).
 use crate::launch::{Addon, AssetMode, Behaviour, GameMode};
-use bevy::{prelude::*, ui_widgets::Button};
+use bevy::{prelude::*, ui::InteractionDisabled, ui_widgets::Button};
 use pcx_assets::{ArchiveLayer, ContentSource, Resolver};
 use pcx_objects::editor::campaign_index::{CampaignSlot, IndexLimits, parse_campaign_index};
 use pcx_objects::editor::{EditorReadLimits, SlkId};
@@ -117,22 +117,24 @@ pub(crate) struct ChapterButton(pub usize);
 pub(crate) fn install(app: &mut App) {
     let inbox = ConfigurationInbox::default();
     peacecraft3::browser_configuration::install(app, inbox);
-    app.init_resource::<Chapters>().init_resource::<CampaignMenuState>().add_systems(
-        Update,
-        (
-            refresh,
-            populate,
-            launch,
-            request,
-            render_campaign_panel,
-            select_campaign,
-            launch_mission,
-        )
-            .chain()
-            .run_if(crate::button_actions::input_allowed)
-            .before(MapRequestSet::Deliver)
-            .before(crate::button_actions::clear),
-    );
+    app.init_resource::<Chapters>()
+        .init_resource::<CampaignMenuState>()
+        .add_systems(
+            Update,
+            (
+                refresh,
+                populate,
+                launch,
+                request,
+                render_campaign_panel,
+                select_campaign,
+                launch_mission,
+            )
+                .chain()
+                .run_if(crate::button_actions::input_allowed)
+                .before(MapRequestSet::Deliver)
+                .before(crate::button_actions::clear),
+        );
 }
 
 fn index_member(mode: &GameMode) -> &'static str {
@@ -425,7 +427,11 @@ fn select_campaign(
         let Ok(button) = buttons.get(*entity) else {
             continue;
         };
-        if button.0 < chapters.campaigns.len() {
+        if chapters
+            .campaigns
+            .get(button.0)
+            .is_some_and(|campaign| campaign.default_open)
+        {
             state.selected_campaign = Some(button.0);
         }
     }
@@ -449,6 +455,9 @@ fn launch_mission(
         let Some(campaign) = chapters.campaigns.get(mission.campaign) else {
             continue;
         };
+        if !campaign.default_open {
+            continue;
+        }
         let Some(mission) = campaign.missions.get(mission.mission) else {
             continue;
         };
@@ -546,20 +555,18 @@ fn spawn_campaign_button(
     commands: &mut Commands,
     panel: Entity,
     fdf: &crate::fdf::Fdf,
-    install: Option<&std::path::Path>,
-    fonts: &mut Assets<Font>,
     rect: crate::fdf::Rect,
-    text: String,
-    component: impl Bundle + Send + Sync + 'static,
+    label: impl Bundle,
+    component: impl Bundle,
+    enabled: bool,
 ) -> Result<(), String> {
-    let button = crate::glue_menu::button(fdf, "CampaignButtonTemplate")
-        .map_err(|e| e.to_string())?;
+    let button =
+        crate::glue_menu::button(fdf, "CampaignButtonTemplate").map_err(|e| e.to_string())?;
     let item = crate::glue_menu::Item {
         frame: "CampaignButtonTemplate".to_string(),
         rect,
         kind: crate::glue_menu::Kind::Button(Box::new(button)),
     };
-    let label = source_label(install, fdf, fonts, "MissionNameHeader", text)?;
     let wrapper = commands
         .spawn(Node {
             position_type: PositionType::Absolute,
@@ -568,6 +575,7 @@ fn spawn_campaign_button(
             ..default()
         })
         .id();
+    commands.entity(wrapper).insert(Pickable::IGNORE);
     commands.entity(panel).add_child(wrapper);
     crate::glue_menu::spawn(commands, wrapper, std::slice::from_ref(&item));
     let frame = "CampaignButtonTemplate".to_string();
@@ -575,17 +583,27 @@ fn spawn_campaign_button(
         let Some(children) = world.get::<Children>(wrapper) else {
             return;
         };
-        let Some(target) = children.iter().find_map(|child| {
+        let Some(target) = children.iter().find(|child| {
             world
-                .get::<Name>(child)
+                .get::<Name>(*child)
                 .is_some_and(|name| name.as_str() == frame)
-                .then_some(child)
         }) else {
             return;
         };
-        world.entity_mut(target).insert(component);
+        world.entity_mut(target).insert((
+            component,
+            crate::menu_screens::CampaignAction,
+            bevy::input_focus::tab_navigation::TabIndex::default(),
+        ));
+        if !enabled {
+            world.entity_mut(target).insert(InteractionDisabled);
+        }
+        // Dynamic rows own their placement; the generic FDF pass resolves the template origin.
+        world
+            .entity_mut(target)
+            .remove::<crate::menu_screens::ScreenPosition>();
         world.entity_mut(target).with_children(|button| {
-            button.spawn(label);
+            button.spawn((label, Pickable::IGNORE));
         });
     });
     Ok(())
@@ -619,53 +637,57 @@ fn build_campaign_panel(
     let top_start = crate::mainmenu::FRAME_H * 0.30;
     let row = |index: usize, left: f32| crate::fdf::Rect {
         left,
-        bottom: crate::mainmenu::FRAME_H - top_start - (index as f32 + 1.0) * button_h
+        bottom: crate::mainmenu::FRAME_H
+            - top_start
+            - (index as f32 + 1.0) * button_h
             - index as f32 * gap,
         width: button_w,
         height: button_h,
     };
     commands.entity(panel).despawn_related::<Children>();
-    let mut campaign_index = 0;
     for (index, campaign) in campaigns.iter().enumerate() {
-        if selected == Some(index) {
-            continue;
-        }
-        let rect = row(campaign_index, campaign_left);
-        match spawn_campaign_button(
+        let rect = row(index, campaign_left);
+        let label = source_label(
+            install,
+            fdf,
+            fonts,
+            "MissionNameHeader",
+            campaign.title.clone(),
+        )?;
+        spawn_campaign_button(
             commands,
             panel,
             fdf,
-            install,
-            fonts,
             rect,
-            campaign.title.clone(),
+            label,
             CampaignButton(index),
-        ) {
-            Ok(()) => campaign_index += 1,
-            Err(error) => warn!("campaign button: {error}"),
-        }
+            campaign.default_open,
+        )?;
     }
     if let Some(sel) = selected
         && let Some(campaign) = campaigns.get(sel)
     {
         for (index, mission) in campaign.missions.iter().enumerate() {
             let rect = row(index, mission_left);
-            match spawn_campaign_button(
+            let label = source_label(
+                install,
+                fdf,
+                fonts,
+                "MissionNameHeader",
+                format!("{}: {}", mission.header, mission.name),
+            )?;
+            spawn_campaign_button(
                 commands,
                 panel,
                 fdf,
-                install,
-                fonts,
                 rect,
-                format!("{}: {}", mission.header, mission.name),
+                label,
                 MissionButton {
                     campaign: sel,
                     mission: index,
                 },
-            ) {
-                Ok(()) => {}
-                Err(error) => warn!("campaign mission button: {error}"),
-            }
+                campaign.default_open,
+            )?;
         }
     }
     Ok(())
@@ -675,13 +697,16 @@ fn build_campaign_panel(
 fn render_campaign_panel(
     mut commands: Commands,
     launcher: Res<crate::launch_gui::Launcher>,
-    navigation: Res<crate::menu_screens::Navigation>,
+    mut navigation: ResMut<crate::menu_screens::Navigation>,
     mut chapters: ResMut<Chapters>,
     mut state: ResMut<CampaignMenuState>,
     mut fonts: ResMut<Assets<Font>>,
-    layers: Query<Entity, With<crate::launch_gui::MenuLayer>>,
-    panels: Query<Entity, With<CampaignPanel>>,
+    surfaces: (
+        Query<Entity, With<crate::launch_gui::MenuLayer>>,
+        Query<Entity, With<CampaignPanel>>,
+    ),
 ) {
+    let (layers, panels) = surfaces;
     let active = navigation.screen == crate::menu_screens::Screen::Campaign;
     let Some(dir) = crate::launch_gui::selected_install(&launcher) else {
         return;
@@ -694,20 +719,29 @@ fn render_campaign_panel(
         }
         return;
     }
-    let signature = (dir.clone(), launcher.mode(), chapters.revision, state.selected_campaign);
+    if let Some(error) = &chapters.error {
+        navigation.notice = format!("Campaign: {error}");
+    }
+    let signature = (
+        dir.clone(),
+        launcher.mode(),
+        chapters.revision,
+        state.selected_campaign,
+    );
     if state.built_for.as_ref() == Some(&signature) {
         return;
     }
-    let (fdf, _) = match crate::launch_gui::read_screen_fdf(
-        Some(&dir),
-        crate::menu_screens::Screen::Campaign,
-    ) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            chapters.error = Some(format!("campaign panel: {error}"));
-            return;
-        }
-    };
+    let (fdf, _) =
+        match crate::launch_gui::read_screen_fdf(Some(&dir), crate::menu_screens::Screen::Campaign)
+        {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                let error = format!("campaign panel: {error}");
+                navigation.notice = error.clone();
+                chapters.error = Some(error);
+                return;
+            }
+        };
     let panel = if let Ok(panel) = panels.single() {
         panel
     } else {
@@ -723,6 +757,7 @@ fn render_campaign_panel(
                     ..default()
                 },
                 CampaignPanel,
+                Pickable::IGNORE,
             ))
             .id();
         commands.entity(layer).add_child(panel);
@@ -737,7 +772,9 @@ fn render_campaign_panel(
         &chapters.campaigns,
         state.selected_campaign,
     ) {
-        chapters.error = Some(format!("campaign panel: {error}"));
+        let error = format!("campaign panel: {error}");
+        navigation.notice = error.clone();
+        chapters.error = Some(error);
         return;
     }
     state.built_for = Some(signature);
@@ -779,6 +816,8 @@ pub(crate) mod tests {
                 expansion,
             ))
             .init_resource::<crate::campaign_input::CampaignInput>()
+            .init_resource::<crate::menu_screens::Navigation>()
+            .init_resource::<Assets<Font>>()
             // The normal map-ground plugin declares this renderer capability too.
             .insert_resource(peacecraft3::map_ground::NoOcclusionPass);
         peacecraft3::map_requests::install(&mut app);
@@ -816,11 +855,7 @@ pub(crate) mod tests {
         // selecting a campaign never launches.
         let button = app
             .world_mut()
-            .spawn((
-                Button,
-                MissionButton { campaign, mission },
-                Node::default(),
-            ))
+            .spawn((Button, MissionButton { campaign, mission }, Node::default()))
             .id();
         app.world_mut().trigger(Activate { entity: button });
         for _ in 0..6 {
@@ -890,9 +925,13 @@ pub(crate) mod tests {
         let text = "[Index]\nCampaignList=\"One\"\n[One]\nDefaultOpen=banana\nMission0=\"H\",\"N\",\"Maps\\One.w3m\"\n";
         let error = parse_campaigns("member", text).unwrap_err();
         assert!(error.contains("DefaultOpen"), "{error}");
-        let absent = "[Index]\nCampaignList=\"One\"\n[One]\nMission0=\"H\",\"N\",\"Maps\\One.w3m\"\n";
+        let absent =
+            "[Index]\nCampaignList=\"One\"\n[One]\nMission0=\"H\",\"N\",\"Maps\\One.w3m\"\n";
         let (campaigns, _) = parse_campaigns("member", absent).unwrap();
-        assert!(!campaigns[0].default_open, "absent DefaultOpen stays closed");
+        assert!(
+            !campaigns[0].default_open,
+            "absent DefaultOpen stays closed"
+        );
     }
 
     #[test]
@@ -920,6 +959,74 @@ pub(crate) mod tests {
         let state = world.resource::<CampaignMenuState>();
         assert_eq!(state.selected_campaign, Some(0));
         let chapters = world.resource::<Chapters>();
-        assert!(chapters.pending.is_none(), "campaign selection must not launch");
+        assert!(
+            chapters.pending.is_none(),
+            "campaign selection must not launch"
+        );
+        let closed = world.spawn((Button, CampaignButton(1))).id();
+        world
+            .resource_mut::<crate::button_actions::ButtonActions>()
+            .entities = vec![closed];
+        world.run_system_once(select_campaign).unwrap();
+        assert_eq!(
+            world.resource::<CampaignMenuState>().selected_campaign,
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn dynamic_buttons_keep_their_row_position_and_do_not_intercept_label_hits() {
+        let fdf = crate::fdf::Fdf::parse(
+            "Frame \"TEXTBUTTON\" \"CampaignButtonTemplate\" {\n Width 0.1,\n Height 0.02,\n}\n",
+        )
+        .unwrap();
+        let rect = crate::fdf::Rect {
+            left: 0.2,
+            bottom: 0.3,
+            width: 0.1,
+            height: 0.02,
+        };
+        let mut world = World::new();
+        let panel = world.spawn_empty().id();
+        spawn_campaign_button(
+            &mut world.commands(),
+            panel,
+            &fdf,
+            rect,
+            Text::new("Synthetic campaign"),
+            CampaignButton(0),
+            false,
+        )
+        .unwrap();
+        world.flush();
+        let (entity, node) = world
+            .query_filtered::<(Entity, &Node), With<CampaignButton>>()
+            .single(&world)
+            .unwrap();
+        assert_eq!(
+            node.left,
+            Val::Percent(rect.left / crate::mainmenu::FRAME_W * 100.0)
+        );
+        assert!(
+            world
+                .get::<crate::menu_screens::ScreenPosition>(entity)
+                .is_none()
+        );
+        assert!(world.get::<InteractionDisabled>(entity).is_some());
+        assert!(
+            world
+                .get::<crate::menu_screens::CampaignAction>(entity)
+                .is_some()
+        );
+        assert!(
+            world
+                .get::<bevy::input_focus::tab_navigation::TabIndex>(entity)
+                .is_some()
+        );
+        let label = world
+            .query_filtered::<Entity, With<Text>>()
+            .single(&world)
+            .unwrap();
+        assert!(!world.get::<Pickable>(label).unwrap().is_hoverable);
     }
 }
