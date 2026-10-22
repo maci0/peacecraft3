@@ -23,6 +23,8 @@ const ARMOR_WINDOW: u32 = 0xbc9d40;
 const DAMAGE_WINDOW: u32 = 0xbc9c80;
 /// Registration call for the life-regeneration class (source `Arel`, base `AREB`).
 const LIFE_REGEN_WINDOW: u32 = 0xbca040;
+/// Registration call for the mana-regeneration class (source `AIrm`, base `Arem`).
+const MANA_REGEN_WINDOW: u32 = 0xbc9ec0;
 /// Registration call for the healing class (source `AIhe`). Its base comes from a call, so the
 /// window is longer than the immediate-base shape. Reviewed at `0xbf0520`.
 pub(crate) const HEAL_WINDOW: u32 = 0xbf0520;
@@ -59,10 +61,10 @@ impl StrengthEffect {
     }
 }
 
-/// Flat attributes, armor, attack damage and life regeneration from passive held items.
+/// Flat attributes, armor, attack damage and regeneration from passive held items.
 /// Unit strength also includes retained powerups. Armor points are added to unit armor
 /// while held; damage is a flat addition to the unit's attack damage.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AttributeBonus {
     pub strength: i32,
     pub agility: i32,
@@ -70,10 +72,20 @@ pub struct AttributeBonus {
     pub damage: i32,
     /// Life points per game second while held, separate from base regeneration eligibility.
     pub life_regen: i32,
+    /// Fraction of the unit's normal mana regeneration added while held.
+    pub mana_regen_fraction: f32,
 }
 
 #[derive(Clone, Debug)]
 struct Column {
+    field: [u8; 4],
+    data: u32,
+    aliases: Vec<String>,
+}
+
+/// A real-valued metadata column, such as the mana-regeneration fraction.
+#[derive(Clone, Debug)]
+struct FractionColumn {
     field: [u8; 4],
     data: u32,
     aliases: Vec<String>,
@@ -97,6 +109,7 @@ pub struct Rules {
     /// Healing registration, attached by `with_heal`. Absent until the healing window is read.
     heal: Option<AmountClass>,
     life_regen: Option<AmountClass>,
+    mana_regen: Option<FractionClass>,
 }
 
 /// One admitted scalar ability class and its metadata-selected amount column.
@@ -104,6 +117,13 @@ pub struct Rules {
 struct AmountClass {
     class: String,
     amount: Column,
+}
+
+/// One admitted real-valued ability class and its metadata-selected amount column.
+#[derive(Clone, Debug)]
+struct FractionClass {
+    class: String,
+    amount: FractionColumn,
 }
 
 impl Rules {
@@ -138,6 +158,7 @@ impl Rules {
         let armor = window(ARMOR_WINDOW)?;
         let damage = window(DAMAGE_WINDOW)?;
         let life_regen = window(LIFE_REGEN_WINDOW)?;
+        let mana_regen = window(MANA_REGEN_WINDOW)?;
         let heal = pe
             .read_from(HEAL_WINDOW, true)
             .map_err(|e| fail(&e.to_string()))?
@@ -159,6 +180,7 @@ impl Rules {
             [&powerup, &passive, &armor, &damage],
         )
         .and_then(|rules| rules.with_life_regen(&life_regen))
+        .and_then(|rules| rules.with_mana_regen(&mana_regen))
         .and_then(|rules| rules.with_heal(&heal, &base_code))
         .map_err(|e| fail(&e))
     }
@@ -173,6 +195,10 @@ impl Rules {
             || class == self.damage_class
             || self
                 .life_regen
+                .as_ref()
+                .is_some_and(|regen| regen.class == class)
+            || self
+                .mana_regen
                 .as_ref()
                 .is_some_and(|regen| regen.class == class)
         {
@@ -194,11 +220,39 @@ impl Rules {
             ]
             .contains(&&class)
             || self.heal.as_ref().is_some_and(|heal| heal.class == class)
+            || self
+                .mana_regen
+                .as_ref()
+                .is_some_and(|regen| regen.class == class)
         {
             return Err("life regeneration registration must name a distinct class".into());
         }
         let amount = column(&self.tables, b"Ihpr")?;
         self.life_regen = Some(AmountClass { class, amount });
+        Ok(self)
+    }
+
+    /// Attaches the real-valued mana-regeneration class.
+    pub(crate) fn with_mana_regen(mut self, window: &[u8]) -> Result<Self, String> {
+        let (class, _) = class_from_window(window)?;
+        if self.mana_regen.is_some()
+            || [
+                &self.powerup_class,
+                &self.passive_class,
+                &self.armor_class,
+                &self.damage_class,
+            ]
+            .contains(&&class)
+            || self
+                .life_regen
+                .as_ref()
+                .is_some_and(|regen| regen.class == class)
+            || self.heal.as_ref().is_some_and(|heal| heal.class == class)
+        {
+            return Err("mana regeneration registration must name a distinct class".into());
+        }
+        let amount = fraction_column(&self.tables, b"Imrp")?;
+        self.mana_regen = Some(FractionClass { class, amount });
         Ok(self)
     }
 
@@ -336,6 +390,7 @@ impl Rules {
             damage_class,
             heal: None,
             life_regen: None,
+            mana_regen: None,
         })
     }
 
@@ -376,7 +431,7 @@ impl Rules {
         Ok(Some(StrengthEffect { strength }))
     }
 
-    /// Passive attributes, armor, attack damage and life regeneration. `None` for powerups
+    /// Passive attributes, armor, attack damage and regeneration. `None` for powerups
     /// and usable items: a usable item is held without activation, so its abilities add no passive
     /// attribute here. Any passive ability outside the admitted classes, or an intelligence
     /// bonus, refuses.
@@ -443,6 +498,25 @@ impl Rules {
                     .ok_or("passive life regeneration overflows")?;
                 continue;
             }
+            if let Some(regen) = &self.mana_regen
+                && code == regen.class
+            {
+                if !regen.amount.aliases.iter().any(|a| a == alias) {
+                    return Err(format!(
+                        "mana regeneration metadata does not admit ability {alias}"
+                    ));
+                }
+                let fraction = self.fraction(alias, &regen.amount)?;
+                if fraction < 0.0 {
+                    return Err(format!("negative mana regeneration on {}", item.rawcode()));
+                }
+                let sum = held.mana_regen_fraction + fraction;
+                if !sum.is_finite() {
+                    return Err("passive mana regeneration overflows".into());
+                }
+                held.mana_regen_fraction = sum;
+                continue;
+            }
             if code != self.passive_class {
                 return Err(format!(
                     "unsupported passive ability {alias} with code {code} on {}",
@@ -467,6 +541,45 @@ impl Rules {
                 .ok_or("passive agility overflows")?;
         }
         Ok(Some(held))
+    }
+
+    /// Authored real fraction at the effect level, after the map's W3A override for that field.
+    fn fraction(&self, alias: &str, column: &FractionColumn) -> Result<f32, String> {
+        let mods = self
+            .overlay
+            .new_object(alias)
+            .map(|(_, m)| m)
+            .unwrap_or_else(|| self.overlay.on(alias));
+        if let Some(entry) = mods
+            .iter()
+            .rev()
+            .find(|m| m.field == column.field && m.selectors.is_none_or(|s| s[0] == EFFECT_LEVEL))
+        {
+            if entry.selectors.is_some_and(|s| s[1] != 0) {
+                return Err("indexed mana regeneration override unsupported".into());
+            }
+            return match entry.value {
+                pcx_objects::Value::Real(value) | pcx_objects::Value::Unreal(value)
+                    if value.is_finite() =>
+                {
+                    Ok(value)
+                }
+                _ => Err("nonreal mana regeneration override".into()),
+            };
+        }
+        let ability = self
+            .tables
+            .object(Family::Ability, alias)
+            .map_err(|e| e.to_string())?;
+        let letter =
+            char::from_u32(u32::from(b'A') + column.data - 1).ok_or("mana regeneration column")?;
+        let cell = ability
+            .cell(SlkId::AbilityData, &format!("Data{letter}{EFFECT_LEVEL}"))
+            .map_err(|e| e.to_string())?;
+        match cell.typed(FieldKind::Real).map_err(|e| e.to_string())? {
+            Value::Real(value) if value.is_finite() => Ok(value as f32),
+            _ => Err("mana regeneration field is not real".into()),
+        }
     }
 
     fn item_row(&self, definition: &Definition) -> Result<Object<'_>, String> {
@@ -670,6 +783,42 @@ fn column(tables: &DefaultTables, id: &[u8; 4]) -> Result<Column, String> {
         .map(|a| a.trim().to_owned())
         .collect();
     Ok(Column {
+        field: *id,
+        data,
+        aliases,
+    })
+}
+
+/// A real-valued metadata column: the same `Data` mapping as [`column`], with a real or unreal
+/// authored type instead of an integer type.
+fn fraction_column(tables: &DefaultTables, id: &[u8; 4]) -> Result<FractionColumn, String> {
+    let name = std::str::from_utf8(id).map_err(|_| "invalid fraction metadata id")?;
+    let metadata = tables
+        .metadata(*id)
+        .ok_or_else(|| format!("{name} metadata missing"))?;
+    let text = |key: &str| {
+        metadata
+            .attribute(key)
+            .map(|c| c.text.trim().to_owned())
+            .ok_or_else(|| format!("{name} metadata {key} missing"))
+    };
+    if text("field")? != "Data"
+        || text("slk")? != "AbilityData"
+        || !matches!(text("type")?.as_str(), "real" | "unreal")
+    {
+        return Err(format!("unsupported {name} metadata mapping"));
+    }
+    let data: u32 = text("data")?
+        .parse()
+        .map_err(|_| format!("invalid {name} data index"))?;
+    if !(1..=DATA_COLUMNS).contains(&data) {
+        return Err(format!("{name} data index outside column alphabet"));
+    }
+    let aliases = text("useSpecific")?
+        .split(',')
+        .map(|a| a.trim().to_owned())
+        .collect();
+    Ok(FractionColumn {
         field: *id,
         data,
         aliases,

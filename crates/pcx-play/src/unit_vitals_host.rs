@@ -441,7 +441,8 @@ impl ObjectHost {
     }
 
     /// Base life, mana and unconditional bonus life rates. Base life eligibility
-    /// does not gate hero strength or held-item regeneration.
+    /// does not gate hero strength or held-item regeneration. A held mana fraction
+    /// scales the base plus intelligence rate.
     fn regen_rates(&self, unit: HandleId, bonuses: &HeroVitals) -> Result<(f64, f64, f64), Error> {
         let record = self.executed_unit(unit)?;
         let vitals = record.vitals.expect("filtered to vitals");
@@ -464,10 +465,14 @@ impl ObjectHost {
             bonus_life += f64::from(derive("STR")?) * f64::from(bonuses.life_regen_per_strength);
             mana += f64::from(derive("INT")?) * f64::from(bonuses.mana_regen_per_intelligence);
         }
+        let mana_fraction = f64::from(bonus.mana_regen_fraction);
+        mana *= 1.0 + mana_fraction;
         if !(life.is_finite()
             && life >= 0.0
             && mana.is_finite()
             && mana >= 0.0
+            && mana_fraction.is_finite()
+            && mana_fraction >= 0.0
             && bonus_life.is_finite()
             && bonus_life >= 0.0)
         {
