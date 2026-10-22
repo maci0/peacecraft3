@@ -1,6 +1,6 @@
 use super::*;
-use pcx_objects::editor::defaults::{DefaultTables, Identity};
 use pcx_objects::editor::SlkId;
+use pcx_objects::editor::defaults::{DefaultTables, Identity};
 
 fn sylk(headers: &[&str], rows: &[Vec<&str>]) -> String {
     let mut s = String::from("ID;PWXL;N;E\r\n");
@@ -22,16 +22,36 @@ fn sylk(headers: &[&str], rows: &[Vec<&str>]) -> String {
 }
 
 const ABILITY_HEADERS: &[&str] = &[
-    "alias", "code", "levels", "reqLevel", "levelSkip",
-    "DataA1", "DataB1", "DataC1", "Rng1", "Area1", "Dur1",
+    "alias",
+    "code",
+    "levels",
+    "reqLevel",
+    "levelSkip",
+    "DataA1",
+    "DataB1",
+    "DataC1",
+    "Rng1",
+    "Area1",
+    "Dur1",
 ];
 const UNIT_HEADERS: &[&str] = &["unitAbilID", "comment(s)", "abilList", "heroAbilList"];
 const DEST_HEADERS: &[&str] = &["DestructableID", "comment", "targType", "HP"];
 fn weapon_headers() -> Vec<&'static str> {
     vec![
-        "unitWeapID", "weapsOn",
-        "targs1", "cool1", "dmgpt1", "backSw1", "rangeN1", "RngBuff1",
-        "targs2", "cool2", "dmgpt2", "backSw2", "rangeN2", "RngBuff2",
+        "unitWeapID",
+        "weapsOn",
+        "targs1",
+        "cool1",
+        "dmgpt1",
+        "backSw1",
+        "rangeN1",
+        "RngBuff1",
+        "targs2",
+        "cool2",
+        "dmgpt2",
+        "backSw2",
+        "rangeN2",
+        "RngBuff2",
     ]
 }
 
@@ -42,17 +62,32 @@ fn tables_with(
     weapon_rows: &[Vec<&str>],
 ) -> DefaultTables {
     let mut members: Vec<(String, Vec<u8>)> = Vec::new();
-    members.push((SlkId::AbilityData.path().to_string(), sylk(ABILITY_HEADERS, ability_rows).into_bytes()));
+    members.push((
+        SlkId::AbilityData.path().to_string(),
+        sylk(ABILITY_HEADERS, ability_rows).into_bytes(),
+    ));
     if !unit_rows.is_empty() {
-        members.push((SlkId::UnitAbilities.path().to_string(), sylk(UNIT_HEADERS, unit_rows).into_bytes()));
+        members.push((
+            SlkId::UnitAbilities.path().to_string(),
+            sylk(UNIT_HEADERS, unit_rows).into_bytes(),
+        ));
     }
     if !dest_rows.is_empty() {
-        members.push((SlkId::DestructableData.path().to_string(), sylk(DEST_HEADERS, dest_rows).into_bytes()));
+        members.push((
+            SlkId::DestructableData.path().to_string(),
+            sylk(DEST_HEADERS, dest_rows).into_bytes(),
+        ));
     }
     if !weapon_rows.is_empty() {
-        members.push((SlkId::UnitWeapons.path().to_string(), sylk(&weapon_headers(), weapon_rows).into_bytes()));
+        members.push((
+            SlkId::UnitWeapons.path().to_string(),
+            sylk(&weapon_headers(), weapon_rows).into_bytes(),
+        ));
     }
-    let owned: Vec<(&str, &[u8])> = members.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    let owned: Vec<(&str, &[u8])> = members
+        .iter()
+        .map(|(n, b)| (n.as_str(), b.as_slice()))
+        .collect();
     DefaultTables::from_bytes(
         Identity {
             install: "synthetic-install".into(),
@@ -69,8 +104,16 @@ fn tables_with(
     .unwrap()
 }
 
-fn ahar_ability(data_a: &'static str, data_b: &'static str, data_c: &'static str, alias: &'static str, code: &'static str) -> Vec<&'static str> {
-    vec![alias, code, "1", "0", "0", data_a, data_b, data_c, "200", "1000", "3.5"]
+fn ahar_ability(
+    data_a: &'static str,
+    data_b: &'static str,
+    data_c: &'static str,
+    alias: &'static str,
+    code: &'static str,
+) -> Vec<&'static str> {
+    vec![
+        alias, code, "1", "0", "0", data_a, data_b, data_c, "200", "1000", "3.5",
+    ]
 }
 
 fn stock_tables() -> DefaultTables {
@@ -87,8 +130,8 @@ fn stock_tables() -> DefaultTables {
     ];
     let dest_rows = vec![vec!["LTlt", "Tree Wall", "tree", "120"]];
     let weapon_rows = vec![vec![
-        "hpea", "2", "ground", "2", "0.433", "0.567", "90", "250",
-        "tree", "1.7", "0.3", "0.6", "70", "140",
+        "hpea", "2", "ground", "2", "0.433", "0.567", "90", "250", "tree", "1.7", "0.3", "0.6",
+        "70", "140",
     ]];
     tables_with(&ability_rows, &unit_rows, &dest_rows, &weapon_rows)
 }
@@ -96,7 +139,9 @@ fn stock_tables() -> DefaultTables {
 #[test]
 fn harvest_rules_read_source_cells() {
     let tables = stock_tables();
-    let rules = HarvestRules::from_tables(&tables, *b"hpea").unwrap().expect("Ahar");
+    let rules = HarvestRules::from_tables(&tables, *b"hpea")
+        .unwrap()
+        .expect("Ahar");
     assert_eq!(rules.ahar_alias, "Ahar");
     assert_eq!(rules.damage, 7.0);
     assert_eq!(rules.lumber_capacity, 25);
@@ -110,16 +155,22 @@ fn harvest_rules_read_source_cells() {
 #[test]
 fn unit_without_ahar_is_absent_not_numbers() {
     let tables = stock_tables();
-    assert!(HarvestRules::from_tables(&tables, *b"hnon").unwrap().is_none());
+    assert!(
+        HarvestRules::from_tables(&tables, *b"hnon")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
 fn custom_ahar_alias_reads_from_the_resolved_alias() {
-    let ability_rows = vec![ahar_ability("3", "11", "12", "MyHar", "Ahar")];
-    let unit_rows = vec![vec!["hpea", "Peasant", "MyHar", "-"]];
+    let ability_rows = vec![ahar_ability("3", "11", "12", "Harv", "Ahar")];
+    let unit_rows = vec![vec!["hpea", "Peasant", "Harv", "-"]];
     let tables = tables_with(&ability_rows, &unit_rows, &[], &[]);
-    let rules = HarvestRules::from_tables(&tables, *b"hpea").unwrap().expect("Ahar");
-    assert_eq!(rules.ahar_alias, "MyHar");
+    let rules = HarvestRules::from_tables(&tables, *b"hpea")
+        .unwrap()
+        .expect("Ahar");
+    assert_eq!(rules.ahar_alias, "Harv");
     assert_eq!(rules.damage, 3.0);
     assert_eq!(rules.lumber_capacity, 11);
     assert_eq!(rules.gold_capacity, 12);
@@ -131,7 +182,20 @@ fn case_different_code_is_not_ahar() {
     let ability_rows = vec![ahar_ability("1", "2", "3", "AHAR", "AHAR")];
     let unit_rows = vec![vec!["hpea", "Peasant", "AHAR", "-"]];
     let tables = tables_with(&ability_rows, &unit_rows, &[], &[]);
-    assert!(HarvestRules::from_tables(&tables, *b"hpea").unwrap().is_none());
+    assert!(
+        HarvestRules::from_tables(&tables, *b"hpea")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn non_four_byte_alias_is_refused() {
+    let ability_rows = vec![ahar_ability("1", "2", "3", "AharX", "Ahar")];
+    let unit_rows = vec![vec!["hpea", "Peasant", "AharX", "-"]];
+    let tables = tables_with(&ability_rows, &unit_rows, &[], &[]);
+    let err = HarvestRules::from_tables(&tables, *b"hpea").unwrap_err();
+    assert!(matches!(err, HarvestError::Malformed { .. }), "{err:?}");
 }
 
 #[test]
@@ -149,10 +213,10 @@ fn negative_capacity_is_refused() {
 #[test]
 fn ambiguous_harvest_aliases_are_refused() {
     let ability_rows = vec![
-        ahar_ability("1", "2", "3", "Aha", "Ahar"),
-        ahar_ability("4", "5", "6", "Ahb", "Ahar"),
+        ahar_ability("1", "2", "3", "Haab", "Ahar"),
+        ahar_ability("4", "5", "6", "Habc", "Ahar"),
     ];
-    let unit_rows = vec![vec!["hpea", "Peasant", "Aha,Ahb", "-"]];
+    let unit_rows = vec![vec!["hpea", "Peasant", "Haab,Habc", "-"]];
     let tables = tables_with(&ability_rows, &unit_rows, &[], &[]);
     let err = HarvestRules::from_tables(&tables, *b"hpea").unwrap_err();
     assert!(matches!(err, HarvestError::Ambiguous { .. }), "{err:?}");
@@ -183,7 +247,9 @@ fn depot_return_uses_exact_artn_bools() {
 
 #[test]
 fn depot_return_refuses_bool_2() {
-    let ability_rows = vec![vec!["Argl", "Artn", "1", "0", "0", "2", "1", "-", "-", "-", "-"]];
+    let ability_rows = vec![vec![
+        "Argl", "Artn", "1", "0", "0", "2", "1", "-", "-", "-", "-",
+    ]];
     let unit_rows = vec![vec!["htow", "Town Hall", "Argl", "-"]];
     let tables = tables_with(&ability_rows, &unit_rows, &[], &[]);
     let err = DepotReturn::from_tables(&tables, *b"htow").unwrap_err();
@@ -193,14 +259,33 @@ fn depot_return_refuses_bool_2() {
 #[test]
 fn work_weapon_selects_the_tree_slot_and_reads_source() {
     let tables = stock_tables();
-    let rules = HarvestRules::from_tables(&tables, *b"hpea").unwrap().expect("Ahar");
+    let rules = HarvestRules::from_tables(&tables, *b"hpea")
+        .unwrap()
+        .expect("Ahar");
     let weapon = rules.work_weapon.expect("tree weapon");
     assert_eq!(weapon.slot, 2);
     assert_eq!(weapon.cool, 1.7);
     assert_eq!(weapon.damage_point, 0.3);
     assert_eq!(weapon.backswing, 0.6);
     assert_eq!(weapon.range, 70.0);
-    assert_eq!(weapon.rng_buff, Some(140.0));
+}
+
+#[test]
+fn invalid_weapon_masks_are_refused() {
+    let ability_rows = vec![ahar_ability("7", "25", "30", "Ahar", "Ahar")];
+    let unit_rows = vec![vec!["hpea", "Peasant", "Ahar", "-"]];
+    for mask in ["-1", "4", "0x40000000"] {
+        let weapon_rows = vec![vec![
+            "hpea", mask, "tree", "2", "0.433", "0.567", "90", "250", "tree", "1.7", "0.3", "0.6",
+            "70", "140",
+        ]];
+        let tables = tables_with(&ability_rows, &unit_rows, &[], &weapon_rows);
+        let err = HarvestRules::from_tables(&tables, *b"hpea").unwrap_err();
+        assert!(
+            matches!(err, HarvestError::Malformed { .. }),
+            "mask {mask}: {err:?}"
+        );
+    }
 }
 
 #[test]
@@ -208,13 +293,15 @@ fn malformed_weapon_cool_is_refused_with_context() {
     let ability_rows = vec![ahar_ability("7", "25", "30", "Ahar", "Ahar")];
     let unit_rows = vec![vec!["hpea", "Peasant", "Ahar", "-"]];
     let weapon_rows = vec![vec![
-        "hpea", "2", "ground", "2", "0.433", "0.567", "90", "250",
-        "tree", "x", "0.3", "0.6", "70", "140",
+        "hpea", "2", "ground", "2", "0.433", "0.567", "90", "250", "tree", "x", "0.3", "0.6", "70",
+        "140",
     ]];
     let tables = tables_with(&ability_rows, &unit_rows, &[], &weapon_rows);
     let err = HarvestRules::from_tables(&tables, *b"hpea").unwrap_err();
     match err {
-        HarvestError::Malformed { rawcode, column, .. } => {
+        HarvestError::Malformed {
+            rawcode, column, ..
+        } => {
             assert_eq!(rawcode, "hpea");
             assert_eq!(column, "cool2");
         }
@@ -227,8 +314,8 @@ fn ambiguous_tree_weapon_slots_are_refused() {
     let ability_rows = vec![ahar_ability("7", "25", "30", "Ahar", "Ahar")];
     let unit_rows = vec![vec!["hpea", "Peasant", "Ahar", "-"]];
     let weapon_rows = vec![vec![
-        "hpea", "2", "tree", "2", "0.433", "0.567", "90", "250",
-        "tree", "1.7", "0.3", "0.6", "70", "140",
+        "hpea", "3", "tree", "2", "0.433", "0.567", "90", "250", "tree", "1.7", "0.3", "0.6", "70",
+        "140",
     ]];
     let tables = tables_with(&ability_rows, &unit_rows, &[], &weapon_rows);
     let err = HarvestRules::from_tables(&tables, *b"hpea").unwrap_err();
