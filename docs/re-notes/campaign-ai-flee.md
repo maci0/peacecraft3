@@ -53,4 +53,5 @@ Both owned clients are stopped; their sources, captures, raw markers and audit
 receipts remain local under `.scratch/flee-original-runs/r6/`. Earlier drafts
 with invalid version helpers or duplicate observer globals are preserved as failed
 loads and supply no gameplay evidence. Production `SetUnitsFlee` behavior remains
-unsupported; these observations rule out treating it as a harmless no-op here.
+unsupported. A seeded matched repeat is needed before attributing the movement
+difference solely to the flag or deciding whether a no-op could reproduce it.
