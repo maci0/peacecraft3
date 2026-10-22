@@ -19,6 +19,8 @@ const POWERUP_WINDOW: u32 = 0xbca0e0;
 const PASSIVE_WINDOW: u32 = 0xbc9ce0;
 /// Registration call for the passive armor class (source `AIde`, base `APbo`).
 const ARMOR_WINDOW: u32 = 0xbc9d40;
+/// Registration call for the held maximum-life class (source `AIml`, base `APbo`).
+const MAX_LIFE_WINDOW: u32 = 0xbc9f40;
 /// Registration call for the passive flat attack-damage class (source `AIat`, base `APbo`).
 const DAMAGE_WINDOW: u32 = 0xbc9c80;
 /// Registration call for the life-regeneration class (source `Arel`, base `AREB`).
@@ -61,15 +63,17 @@ impl StrengthEffect {
     }
 }
 
-/// Flat attributes, armor, attack damage and regeneration from passive held items.
-/// Unit strength also includes retained powerups. Armor points are added to unit armor
-/// while held; damage is a flat addition to the unit's attack damage.
+/// Flat attributes, armor, attack damage, maximum life and regeneration from passive held
+/// items. Unit strength also includes retained powerups. Armor points are added to unit armor
+/// while held; damage is a flat addition to the unit's attack damage; maximum life applies to
+/// any unit with vitals.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AttributeBonus {
     pub strength: i32,
     pub agility: i32,
     pub armor: i32,
     pub damage: i32,
+    pub max_life: i32,
     /// Life points per game second while held, separate from base regeneration eligibility.
     pub life_regen: i32,
     /// Fraction of the unit's normal mana regeneration added while held.
@@ -106,6 +110,8 @@ pub struct Rules {
     intelligence: Column,
     armor: Column,
     damage: Column,
+    /// Held maximum-life registration, attached by `with_max_life`.
+    max_life: Option<AmountClass>,
     /// Healing registration, attached by `with_heal`. Absent until the healing window is read.
     heal: Option<AmountClass>,
     life_regen: Option<AmountClass>,
@@ -157,6 +163,7 @@ impl Rules {
         let passive = window(PASSIVE_WINDOW)?;
         let armor = window(ARMOR_WINDOW)?;
         let damage = window(DAMAGE_WINDOW)?;
+        let max_life = window(MAX_LIFE_WINDOW)?;
         let life_regen = window(LIFE_REGEN_WINDOW)?;
         let mana_regen = window(MANA_REGEN_WINDOW)?;
         let heal = pe
@@ -179,6 +186,7 @@ impl Rules {
             digest,
             [&powerup, &passive, &armor, &damage],
         )
+        .and_then(|rules| rules.with_max_life(&max_life))
         .and_then(|rules| rules.with_life_regen(&life_regen))
         .and_then(|rules| rules.with_mana_regen(&mana_regen))
         .and_then(|rules| rules.with_heal(&heal, &base_code))
@@ -194,6 +202,10 @@ impl Rules {
             || class == self.armor_class
             || class == self.damage_class
             || self
+                .max_life
+                .as_ref()
+                .is_some_and(|max_life| max_life.class == class)
+            || self
                 .life_regen
                 .as_ref()
                 .is_some_and(|regen| regen.class == class)
@@ -206,6 +218,38 @@ impl Rules {
         }
         let amount = column(&self.tables, b"Ihpg")?;
         self.heal = Some(AmountClass { class, amount });
+        Ok(self)
+    }
+
+    /// Attaches the held maximum-life class. Its registration must name the passive base
+    /// `APbo`, and its amount comes from the integer `Ilif` metadata column.
+    pub(crate) fn with_max_life(mut self, window: &[u8]) -> Result<Self, String> {
+        let (class, base) = class_from_window(window)?;
+        if base != "APbo" {
+            return Err("maximum-life registration must name base APbo".into());
+        }
+        if self.max_life.is_some()
+            || [
+                &self.powerup_class,
+                &self.passive_class,
+                &self.armor_class,
+                &self.damage_class,
+            ]
+            .contains(&&class)
+            || self
+                .life_regen
+                .as_ref()
+                .is_some_and(|regen| regen.class == class)
+            || self
+                .mana_regen
+                .as_ref()
+                .is_some_and(|regen| regen.class == class)
+            || self.heal.as_ref().is_some_and(|heal| heal.class == class)
+        {
+            return Err("maximum-life registration must name a distinct class".into());
+        }
+        let amount = column(&self.tables, b"Ilif")?;
+        self.max_life = Some(AmountClass { class, amount });
         Ok(self)
     }
 
@@ -224,6 +268,10 @@ impl Rules {
                 .mana_regen
                 .as_ref()
                 .is_some_and(|regen| regen.class == class)
+            || self
+                .max_life
+                .as_ref()
+                .is_some_and(|max_life| max_life.class == class)
         {
             return Err("life regeneration registration must name a distinct class".into());
         }
@@ -247,6 +295,10 @@ impl Rules {
                 .life_regen
                 .as_ref()
                 .is_some_and(|regen| regen.class == class)
+            || self
+                .max_life
+                .as_ref()
+                .is_some_and(|max_life| max_life.class == class)
             || self.heal.as_ref().is_some_and(|heal| heal.class == class)
         {
             return Err("mana regeneration registration must name a distinct class".into());
@@ -388,6 +440,7 @@ impl Rules {
             passive_class,
             armor_class,
             damage_class,
+            max_life: None,
             heal: None,
             life_regen: None,
             mana_regen: None,
@@ -431,10 +484,10 @@ impl Rules {
         Ok(Some(StrengthEffect { strength }))
     }
 
-    /// Passive attributes, armor, attack damage and regeneration. `None` for powerups
-    /// and usable items: a usable item is held without activation, so its abilities add no passive
-    /// attribute here. Any passive ability outside the admitted classes, or an intelligence
-    /// bonus, refuses.
+    /// Passive attributes, armor, attack damage, maximum life and regeneration. `None` for
+    /// powerups and usable items: a usable item is held without activation, so its abilities add
+    /// no passive attribute here. Any passive ability outside the admitted classes, or an
+    /// intelligence bonus, refuses.
     pub fn held_attributes(
         &self,
         definition: &Definition,
@@ -478,6 +531,22 @@ impl Rules {
                     .damage
                     .checked_add(points)
                     .ok_or("passive damage overflows")?;
+                continue;
+            }
+            if let Some(max_life) = &self.max_life
+                && code == max_life.class
+            {
+                if !max_life.amount.aliases.iter().any(|a| a == alias) {
+                    return Err(format!("max-life metadata does not admit ability {alias}"));
+                }
+                let points = self.amount(alias, &max_life.amount)?;
+                if points < 0 {
+                    return Err(format!("negative max-life on {}", item.rawcode()));
+                }
+                held.max_life = held
+                    .max_life
+                    .checked_add(points)
+                    .ok_or("passive max-life overflows")?;
                 continue;
             }
             if let Some(regen) = &self.life_regen

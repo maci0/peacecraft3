@@ -677,6 +677,7 @@ fn armor_points_come_from_the_admitted_source_row() {
             agility: 0,
             armor: 3,
             damage: 0,
+            max_life: 0,
             life_regen: 0,
             mana_regen_fraction: 0.0,
         }
@@ -700,6 +701,202 @@ fn negative_authored_armor_refuses() {
         .held_attributes(&catalog_item("parm"))
         .unwrap_err();
     assert!(err.contains("negative armor"), "{err}");
+}
+
+/// Maximum-life fixture: `plif` holds `AIml` admitted by `Ilif`; `plx` holds `AIl9`, which is not.
+fn max_life_rules(amount: &str) -> Rules {
+    let items = sylk(
+        &[
+            "itemID",
+            "abilList",
+            "powerup",
+            "usable",
+            "perishable",
+            "uses",
+        ],
+        &[
+            &["plif", "AIl1", "0", "0", "0", "-"],
+            &["plxx", "AIl9", "0", "0", "0", "-"],
+        ],
+    );
+    let abilities = sylk(
+        &["alias", "code", "levels", "DataA1", "DataB1", "DataC1"],
+        &[
+            &["AIl1", "AIml", "1", amount, "0", "0"],
+            &["AIl9", "AIml", "1", "9", "0", "0"],
+        ],
+    );
+    let meta = sylk(
+        &["ID", "field", "slk", "index", "type", "data", "useSpecific"],
+        &[
+            &["Iagi", "Data", "AbilityData", "-1", "int", "1", "AIsm,AIxm"],
+            &["Iint", "Data", "AbilityData", "-1", "int", "2", "AIsm,AIxm"],
+            &["Istr", "Data", "AbilityData", "-1", "int", "3", "AIsm,AIxm"],
+            &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1"],
+            &["Iatt", "Data", "AbilityData", "-1", "int", "1", "AIat,AItf"],
+            &["Ilif", "Data", "AbilityData", "-1", "int", "1", "AIl1,AIl2"],
+        ],
+    );
+    let tables = Arc::new(
+        DefaultTables::from_bytes(
+            Identity {
+                install: "synthetic max life".into(),
+                edition_version: "fixture".into(),
+            },
+            &[
+                (SlkId::ItemData.path(), &items),
+                (SlkId::AbilityData.path(), &abilities),
+                (SlkId::AbilityMetaData.path(), &meta),
+            ],
+            &[],
+            EditorReadLimits {
+                max_listed_paths: 4,
+                max_asset_bytes: 65536,
+                max_aggregate_input_bytes: 131072,
+            },
+        )
+        .unwrap(),
+    );
+    Rules::decode(
+        tables,
+        Overlay::default(),
+        AssetIdentity {
+            source: "synthetic".into(),
+            edition: "synthetic".into(),
+            version: "test".into(),
+        },
+        [0; 32],
+        [
+            &window("AIsm", "AIxm"),
+            &window("AIab", "APbo"),
+            &window("AIde", "APbo"),
+            &window("AIat", "APbo"),
+        ],
+    )
+    .unwrap()
+    .with_max_life(&window("AIml", "APbo"))
+    .unwrap()
+}
+
+#[test]
+fn max_life_points_come_from_the_admitted_ilif_row() {
+    let held = max_life_rules("37")
+        .held_attributes(&catalog_item("plif"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.max_life, 37);
+}
+
+#[test]
+fn max_life_w3a_override_on_ilif_wins() {
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AIl1".into(), vec![int_mod(b"Ilif", Some([1, 0]), 41)]);
+    let tables = {
+        let items = sylk(
+            &[
+                "itemID",
+                "abilList",
+                "powerup",
+                "usable",
+                "perishable",
+                "uses",
+            ],
+            &[&["plif", "AIl1", "0", "0", "0", "-"]],
+        );
+        let abilities = sylk(
+            &["alias", "code", "levels", "DataA1", "DataB1", "DataC1"],
+            &[&["AIl1", "AIml", "1", "37", "0", "0"]],
+        );
+        let meta = sylk(
+            &["ID", "field", "slk", "index", "type", "data", "useSpecific"],
+            &[
+                &["Iagi", "Data", "AbilityData", "-1", "int", "1", "AIsm,AIxm"],
+                &["Iint", "Data", "AbilityData", "-1", "int", "2", "AIsm,AIxm"],
+                &["Istr", "Data", "AbilityData", "-1", "int", "3", "AIsm,AIxm"],
+                &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1"],
+                &["Iatt", "Data", "AbilityData", "-1", "int", "1", "AIat,AItf"],
+                &["Ilif", "Data", "AbilityData", "-1", "int", "1", "AIl1"],
+            ],
+        );
+        Arc::new(
+            DefaultTables::from_bytes(
+                Identity {
+                    install: "synthetic max life".into(),
+                    edition_version: "fixture".into(),
+                },
+                &[
+                    (SlkId::ItemData.path(), &items),
+                    (SlkId::AbilityData.path(), &abilities),
+                    (SlkId::AbilityMetaData.path(), &meta),
+                ],
+                &[],
+                EditorReadLimits {
+                    max_listed_paths: 4,
+                    max_asset_bytes: 65536,
+                    max_aggregate_input_bytes: 131072,
+                },
+            )
+            .unwrap(),
+        )
+    };
+    let held = Rules::decode(
+        tables,
+        overlay,
+        AssetIdentity {
+            source: "synthetic".into(),
+            edition: "synthetic".into(),
+            version: "test".into(),
+        },
+        [0; 32],
+        [
+            &window("AIsm", "AIxm"),
+            &window("AIab", "APbo"),
+            &window("AIde", "APbo"),
+            &window("AIat", "APbo"),
+        ],
+    )
+    .unwrap()
+    .with_max_life(&window("AIml", "APbo"))
+    .unwrap()
+    .held_attributes(&catalog_item("plif"))
+    .unwrap()
+    .unwrap();
+    assert_eq!(held.max_life, 41);
+}
+
+#[test]
+fn negative_authored_max_life_refuses() {
+    let err = max_life_rules("-2")
+        .held_attributes(&catalog_item("plif"))
+        .unwrap_err();
+    assert!(err.contains("negative max-life"), "{err}");
+}
+
+#[test]
+fn max_life_row_outside_the_ilif_admission_refuses() {
+    let err = max_life_rules("37")
+        .held_attributes(&catalog_item("plxx"))
+        .unwrap_err();
+    assert!(
+        err.contains("max-life metadata does not admit ability AIl9"),
+        "{err}"
+    );
+}
+
+#[test]
+fn max_life_registration_requires_the_passive_base_and_a_distinct_class() {
+    let wrong_base = rules(&Tome::default(), Overlay::default(), "AIsm")
+        .unwrap()
+        .with_max_life(&window("AIml", "AIxn"))
+        .unwrap_err();
+    assert!(wrong_base.contains("base APbo"), "{wrong_base}");
+    let duplicate = rules(&Tome::default(), Overlay::default(), "AIsm")
+        .unwrap()
+        .with_max_life(&window("AIsm", "APbo"))
+        .unwrap_err();
+    assert!(duplicate.contains("distinct class"), "{duplicate}");
 }
 
 fn damage_tome<'a>(amount: &'a str) -> Tome<'a> {
@@ -824,6 +1021,7 @@ fn flat_damage_comes_from_the_admitted_iatt_column() {
             agility: 0,
             armor: 0,
             damage: 15,
+            max_life: 0,
             life_regen: 0,
             mana_regen_fraction: 0.0,
         }

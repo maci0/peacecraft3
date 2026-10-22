@@ -105,6 +105,10 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["preg", "Arel", "0", "0", "0", "-"],
             &["pman", "AIrm", "0", "0", "0", "-"],
             &["pmax", "AImx", "0", "0", "0", "-"],
+            &["plif", "AIl1", "0", "0", "0", "-"],
+            &["plsm", "AIl2", "0", "0", "0", "-"],
+            &["plmx", "AIl3", "0", "0", "0", "-"],
+            &["plon", "AIl4", "0", "0", "0", "-"],
         ],
     );
     let abilities = sylk(
@@ -179,6 +183,22 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "-",
                 "_",
             ],
+            &["AIl1", "AIml", "1", "37", "0", "0", "0", "0", "-", "-", "_"],
+            &["AIl2", "AIml", "1", "7", "0", "0", "0", "0", "-", "-", "_"],
+            &[
+                "AIl3",
+                "AIml",
+                "1",
+                "2147483647",
+                "0",
+                "0",
+                "0",
+                "0",
+                "-",
+                "-",
+                "_",
+            ],
+            &["AIl4", "AIml", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
         ],
     );
     let metadata = sylk(
@@ -294,6 +314,16 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "int",
                 "1",
                 "AIh1,AIh2,AIh3",
+                "",
+            ],
+            &[
+                "Ilif",
+                "Data",
+                "AbilityData",
+                "-1",
+                "int",
+                "1",
+                "AIl1,AIl2,AIl3,AIl4,AIl5",
                 "",
             ],
         ],
@@ -444,6 +474,20 @@ fn open_with_regens(
     mana_regen: Option<&str>,
     mana_per_intelligence: f32,
 ) -> Fixture {
+    open_with_regens_overlay(
+        Overlay::default(),
+        strength_regen,
+        mana_regen,
+        mana_per_intelligence,
+    )
+}
+
+fn open_with_regens_overlay(
+    overlay: Overlay,
+    strength_regen: f32,
+    mana_regen: Option<&str>,
+    mana_per_intelligence: f32,
+) -> Fixture {
     let (hero_rules, combat) = hero_rules();
     // `uabi` supplies the one ability list; the hero fixture's own `abilList` would be ambiguous.
     let mut fields: Vec<_> = hero_fields("STR")
@@ -482,7 +526,7 @@ fn open_with_regens(
     let (registry, activity) = super::inventory::order_inputs();
     let inventory = InventoryRules::read(
         Arc::clone(&tables),
-        Overlay::default(),
+        overlay.clone(),
         Arc::clone(&registry),
         &[(
             "synthetic MiscGame",
@@ -493,7 +537,7 @@ fn open_with_regens(
     .unwrap();
     let tome = TomeRules::decode(
         Arc::clone(&tables),
-        Overlay::default(),
+        overlay.clone(),
         origin.clone(),
         [0; 32],
         [
@@ -509,6 +553,8 @@ fn open_with_regens(
     .with_life_regen(&registration("Arel", "AREB"))
     .unwrap()
     .with_mana_regen(&registration("AIrm", "Arem"))
+    .unwrap()
+    .with_max_life(&registration("AIml", "APbo"))
     .unwrap();
     let mut h = h
         .with_order_registry(registry)
@@ -522,7 +568,7 @@ fn open_with_regens(
         .with_hero_skills(
             tables,
             origin,
-            Overlay::default(),
+            overlay.clone(),
             hero_rules,
             HeroBudget {
                 abilities_per_unit: 8,
@@ -563,7 +609,7 @@ fn open_with_regens(
         .with_inventory_powerup(tome)
         .unwrap()
         .with_item_use(
-            crate::item_use_rules::Rules::new(powerup_tables(), Overlay::default()),
+            crate::item_use_rules::Rules::new(powerup_tables(), overlay.clone()),
             8,
         )
         .unwrap();
@@ -802,7 +848,7 @@ fn grant_keeps_the_life_percentage_not_the_absolute_missing_amount() {
             h.unit_vitals(hero).unwrap().unwrap().life,
             h.unit_vitals(hero).unwrap().unwrap().max_life
         ),
-        (max / 2.0, max)
+        (463.0, max)
     );
 }
 
@@ -924,7 +970,7 @@ fn equipping_passive_strength_reprices_life_by_ratio_and_derives_damage_and_armo
     let passive = item(&mut h, b"pstr", 0.0);
     assert_eq!(add(&mut h, hero, passive), Ok(Value::Bool(true)));
     let max = HERO_LIFE + PASSIVE_STRENGTH * LIFE_PER_STRENGTH;
-    assert_eq!(strength_and_agility(&mut h, hero), (max / 2.0, max));
+    assert_eq!(strength_and_agility(&mut h, hero), (438.0, max));
     assert_eq!(
         damage(&h, hero),
         (HERO_STR + PASSIVE_STRENGTH) * PRIMARY_DAMAGE
@@ -1110,6 +1156,133 @@ fn armor_transfer_moves_the_points_to_the_receiver() {
     assert_eq!(add(&mut h, ordinary, armor), Ok(Value::Bool(true)));
     assert_eq!(h.held_armor_bonus(hero).unwrap(), 0);
     assert_eq!(h.held_armor_bonus(ordinary).unwrap(), 1);
+}
+
+#[test]
+fn held_max_life_stacks_on_a_hero_and_rounds_the_retained_ratio() {
+    let Fixture { mut h, hero, .. } = open();
+    set_life(&mut h, hero, HERO_LIFE / 2.0);
+    let first = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    assert_eq!(max_life_of(&h, hero), HERO_LIFE + 37.0);
+    assert_eq!(life_of(&h, hero), 394.0);
+    let second = item(&mut h, b"plsm", 0.0);
+    assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
+    assert_eq!(max_life_of(&h, hero), HERO_LIFE + 44.0);
+    assert_eq!(life_of(&h, hero), 398.0);
+}
+
+#[test]
+fn held_max_life_applies_to_a_non_hero_and_transfers_the_pool() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    let hero_max = max_life_of(&h, hero);
+    let ordinary_max = max_life_of(&h, ordinary);
+    let item = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(true)));
+    assert_eq!(max_life_of(&h, hero), hero_max + 37.0);
+    assert_eq!(max_life_of(&h, ordinary), ordinary_max);
+    assert_eq!(add(&mut h, ordinary, item), Ok(Value::Bool(true)));
+    assert_eq!(max_life_of(&h, hero), hero_max);
+    assert_eq!(max_life_of(&h, ordinary), ordinary_max + 37.0);
+}
+
+#[test]
+fn dropping_held_max_life_restores_the_pool_and_rounds_the_ratio() {
+    let Fixture { mut h, hero, .. } = open();
+    set_life(&mut h, hero, HERO_LIFE / 2.0);
+    let item = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(true)));
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(item)],
+    )
+    .unwrap();
+    assert_eq!(max_life_of(&h, hero), HERO_LIFE);
+    assert_eq!(life_of(&h, hero), HERO_LIFE / 2.0);
+}
+
+#[test]
+fn cleanup_drops_held_max_life_and_restores_the_pool() {
+    let Fixture { mut h, hero, .. } = open();
+    set_life(&mut h, hero, HERO_LIFE / 2.0);
+    let item = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(true)));
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(max_life_of(&h, hero), HERO_LIFE);
+    assert_eq!(life_of(&h, hero), HERO_LIFE / 2.0);
+    assert_eq!(h.held_slot(hero, 0), None);
+}
+
+#[test]
+fn held_max_life_total_overflow_refuses_transfer_without_writes() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    let donor = item(&mut h, b"plmx", 0.);
+    let receiver = item(&mut h, b"plon", 0.);
+    assert_eq!(add(&mut h, hero, donor), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut h, ordinary, receiver), Ok(Value::Bool(true)));
+    let before = snapshot_records(&h, &[hero, ordinary]);
+    let _pickup = register_pickup(&mut h, ordinary);
+    let _drop = register_drop(&mut h, hero);
+    assert!(
+        add(&mut h, ordinary, donor)
+            .unwrap_err()
+            .contains("held passive bonus overflows")
+    );
+    assert_records_unchanged(&h, &[hero, ordinary], &before);
+    assert_eq!(h.held_slot(hero, 0), Some(donor));
+    assert_eq!(h.held_slot(ordinary, 0), Some(receiver));
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn held_max_life_on_a_typed_override_uses_the_override_amount() {
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "AIl1".into(),
+        vec![pcx_objects::Mod {
+            field: *b"Ilif",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: Some([1, 0]),
+            value: pcx_objects::Value::Int(41),
+            end_word: 0,
+        }],
+    );
+    let Fixture { mut h, hero, .. } = open_with_regens_overlay(overlay, 0., None, 0.);
+    let item = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(true)));
+    assert_eq!(max_life_of(&h, hero), HERO_LIFE + 41.0);
+}
+
+#[test]
+fn held_max_life_keeps_a_living_holder_at_one_life() {
+    let Fixture { mut h, hero, .. } = open();
+    set_life(&mut h, hero, 0.1);
+    let item = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(true)));
+    assert_eq!(max_life_of(&h, hero), HERO_LIFE + 37.0);
+    assert_eq!(life_of(&h, hero), 1.0);
+}
+
+#[test]
+fn dead_unit_cannot_pick_up_max_life() {
+    let Fixture { mut h, hero, .. } = open();
+    let before = max_life_of(&h, hero);
+    h.kill_unit(hero, None).unwrap();
+    let item = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(false)));
+    assert_eq!(max_life_of(&h, hero), before);
+    assert_eq!(
+        h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(item)]),
+        Ok(Value::Bool(false))
+    );
 }
 
 #[test]
@@ -1365,6 +1538,10 @@ fn set_max_life(h: &mut ObjectHost, unit: HandleId, maximum: f32) {
 
 fn life_of(h: &ObjectHost, unit: HandleId) -> f32 {
     h.unit_vitals(unit).unwrap().unwrap().life
+}
+
+fn max_life_of(h: &ObjectHost, unit: HandleId) -> f32 {
+    h.unit_vitals(unit).unwrap().unwrap().max_life
 }
 
 fn prepare_passive_regen(h: &mut ObjectHost, units: &[HandleId]) {
