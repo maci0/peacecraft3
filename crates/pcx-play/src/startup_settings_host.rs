@@ -430,9 +430,13 @@ impl ObjectHost {
         }
         if matches!(name, "GetGameDifficulty" | "SetGameDifficulty") {
             self.game_difficulty?;
-            return Some(match args {
-                [] => Ok(Value::Handle(self.game_difficulty.expect("admitted"))),
-                [Value::Handle(id)] if self.inner.symbolic_value(*id, "gamedifficulty").is_ok() => {
+            return Some(match (name, args) {
+                ("GetGameDifficulty", []) => {
+                    Ok(Value::Handle(self.game_difficulty.expect("admitted")))
+                }
+                ("SetGameDifficulty", [Value::Handle(id)])
+                    if self.inner.symbolic_value(*id, "gamedifficulty").is_ok() =>
+                {
                     self.game_difficulty = Some(*id);
                     Ok(Value::Null)
                 }
