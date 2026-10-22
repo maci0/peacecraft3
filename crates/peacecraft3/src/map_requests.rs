@@ -34,10 +34,15 @@ pub struct MapBindings {
     pub common: BoundScript,
     pub blizzard: BoundScript,
     pub catalog_identity: AssetIdentity,
+    pub catalog_label: String,
+    pub catalog_sources: Vec<pcx_assets::SourceInfo>,
+    pub required_catalog_tables: Vec<pcx_objects::editor::path::SlkId>,
     pub catalog: BoundCatalog,
     pub required_fields: Vec<[u8; 4]>,
     pub budget: MapAdmissionBudget,
     pub max_map_file_bytes: usize,
+    /// The exact limits that admitted this binding, retained for an authored transition.
+    pub limits: crate::map_binding::BindingLimits,
 }
 #[derive(Message)]
 pub struct MapRequest {
