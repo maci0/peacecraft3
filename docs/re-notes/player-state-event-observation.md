@@ -37,6 +37,18 @@ synchronous notification before the action was attached. Other player states,
 all six comparison operators, nested delivery and native Windows execution
 remain separate gates.
 
+A follow-up changed only that action-registration order and its diagnostic run
+identifier. Its map SHA-256 is
+`09259f599252dcc1e123a07db6d8357f0236d088572513c0f0b47090bcac96e9`.
+With the action attached first, registration at an already-equal gold value did
+not execute the action, nor did repeating the same value. Both subsequent
+checkpoints still recorded zero initial-condition actions. The per-change
+notifications above repeated unchanged. This qualifies silent initial seeding
+for the tested gold/equality case; other states and operators remain open.
+
 All 15 checkpoints and their hashes are retained locally in ignored
 `.scratch/player-state-probe/result.json`; generated map/script bytes remain
 local. The private original-client container was stopped after collection.
+The follow-up's 15 checkpoints are in the ignored
+`.scratch/player-state-initial-probe/result.json`, and its container was also
+stopped after collection.
