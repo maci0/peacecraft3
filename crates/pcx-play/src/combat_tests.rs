@@ -1655,7 +1655,7 @@ mod guard_positions;
 
 #[cfg(test)]
 #[path = "inventory_powerup_host_tests.rs"]
-mod powerup_host;
+pub(super) mod powerup_host;
 
 #[test]
 fn set_unit_exploded_then_kill_unit_retains_the_flag_through_the_death_path() {

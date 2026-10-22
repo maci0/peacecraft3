@@ -13,8 +13,18 @@ pub struct Grant {
 
 /// Nearest integer with half upward, matching the reviewed helper at `0x9a1d70`: add one half
 /// (`0x10db0a8`) then floor (`0x9a1520`).
-fn round_life(value: f32) -> f32 {
+pub(super) fn round_life(value: f32) -> f32 {
     (value + 0.5).floor()
+}
+
+/// One health component after the owner's handicap factor. The native unit-pool
+/// callback rounds the scaled component before it computes the pool delta.
+pub(super) fn scale_life_component(value: f32, factor: f32) -> f32 {
+    if factor == 1.0 {
+        value
+    } else {
+        round_life(value * factor)
+    }
 }
 
 /// Life pools after a signed strength change, keeping the current/max ratio.
@@ -26,11 +36,27 @@ pub fn reprice_life(
     life_per_strength: f32,
     strength_delta: i32,
 ) -> Result<(f32, f32), String> {
+    reprice_life_scaled(life, max_life, life_per_strength, strength_delta, 1.0)
+}
+
+/// Strength life change after the owner's health handicap. `factor` scales the
+/// strength hit-point component, not flat held maximum-life bonuses.
+pub(crate) fn reprice_life_scaled(
+    life: f32,
+    max_life: f32,
+    life_per_strength: f32,
+    strength_delta: i32,
+    factor: f32,
+) -> Result<(f32, f32), String> {
     let fail = |why: &str| format!("strength life change: {why}");
-    if !life.is_finite() || !max_life.is_finite() || !life_per_strength.is_finite() {
+    if !life.is_finite()
+        || !max_life.is_finite()
+        || !life_per_strength.is_finite()
+        || !factor.is_finite()
+    {
         return Err(fail("non-finite life value"));
     }
-    let change = round_life(strength_delta as f32 * life_per_strength);
+    let change = scale_life_component(strength_delta as f32 * life_per_strength, factor);
     change_life_pools(life, max_life, change).map_err(|e| fail(&e))
 }
 
@@ -115,12 +141,19 @@ pub fn grant_strength(
     life_per_strength: f32,
     effect: StrengthEffect,
     dead: bool,
+    health_handicap: f32,
 ) -> Result<Grant, String> {
     let strength = retained
         .checked_add(effect.strength())
         .ok_or_else(|| "powerup strength grant: retained strength overflows".to_string())?;
-    let (life, max_life) = reprice_life(life, max_life, life_per_strength, effect.strength())
-        .map_err(|e| format!("powerup strength grant: {e}"))?;
+    let (life, max_life) = reprice_life_scaled(
+        life,
+        max_life,
+        life_per_strength,
+        effect.strength(),
+        health_handicap,
+    )
+    .map_err(|e| format!("powerup strength grant: {e}"))?;
     let (life, max_life) = clamp_life_pools(life, max_life, dead);
     Ok(Grant {
         strength,
@@ -139,7 +172,7 @@ mod tests {
 
     #[test]
     fn percentage_of_life_is_kept_when_maximum_grows() {
-        let grant = grant_strength(0, 50.0, 100.0, 25.0, effect(2), false).unwrap();
+        let grant = grant_strength(0, 50.0, 100.0, 25.0, effect(2), false, 1.0).unwrap();
         assert_eq!(
             grant,
             Grant {
@@ -152,7 +185,7 @@ mod tests {
 
     #[test]
     fn retained_strength_accumulates_across_grants() {
-        let first = grant_strength(0, 100.0, 100.0, 25.0, effect(1), false).unwrap();
+        let first = grant_strength(0, 100.0, 100.0, 25.0, effect(1), false, 1.0).unwrap();
         let second = grant_strength(
             first.strength,
             first.life,
@@ -160,6 +193,7 @@ mod tests {
             25.0,
             effect(1),
             false,
+            1.0,
         )
         .unwrap();
         assert_eq!(
@@ -175,18 +209,18 @@ mod tests {
     #[test]
     fn zero_strength_keeps_pools_and_refuses_bad_pools_atomically() {
         assert_eq!(
-            grant_strength(3, 40.0, 80.0, 25.0, effect(0), false).unwrap(),
+            grant_strength(3, 40.0, 80.0, 25.0, effect(0), false, 1.0).unwrap(),
             Grant {
                 strength: 3,
                 life: 40.0,
                 max_life: 80.0
             }
         );
-        assert!(grant_strength(0, 90.0, 80.0, 25.0, effect(1), false).is_err());
-        assert!(grant_strength(0, 10.0, 0.0, 25.0, effect(1), false).is_err());
-        assert!(grant_strength(0, f32::NAN, 80.0, 25.0, effect(1), false).is_err());
-        assert!(grant_strength(i32::MAX, 10.0, 80.0, 25.0, effect(1), false).is_err());
-        assert!(grant_strength(0, 10.0, 80.0, -100.0, effect(1), false).is_err());
+        assert!(grant_strength(0, 90.0, 80.0, 25.0, effect(1), false, 1.0).is_err());
+        assert!(grant_strength(0, 10.0, 0.0, 25.0, effect(1), false, 1.0).is_err());
+        assert!(grant_strength(0, f32::NAN, 80.0, 25.0, effect(1), false, 1.0).is_err());
+        assert!(grant_strength(i32::MAX, 10.0, 80.0, 25.0, effect(1), false, 1.0).is_err());
+        assert!(grant_strength(0, 10.0, 80.0, -100.0, effect(1), false, 1.0).is_err());
     }
 
     #[test]
@@ -214,9 +248,9 @@ mod tests {
 
     #[test]
     fn grants_clamp_tiny_living_life_to_one_and_dead_life_to_zero() {
-        let living = grant_strength(0, 0.1, 100.0, 25.0, effect(1), false).unwrap();
+        let living = grant_strength(0, 0.1, 100.0, 25.0, effect(1), false, 1.0).unwrap();
         assert_eq!(living.life, 1.0);
-        let dead = grant_strength(0, 0.1, 100.0, 25.0, effect(1), true).unwrap();
+        let dead = grant_strength(0, 0.1, 100.0, 25.0, effect(1), true, 1.0).unwrap();
         assert_eq!(dead.life, 0.0);
     }
 }

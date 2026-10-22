@@ -53,6 +53,8 @@ pub struct PlayerSettings {
     pub state_requests: Vec<(HandleId, i32)>,
     /// Assigned, source-clamped XP factor. None is unknown initial player state.
     pub experience_handicap: Option<f32>,
+    /// Assigned, source-clamped health factor. None means the reset default is not admitted.
+    pub health_handicap: Option<f32>,
 }
 /// Caller bound on stored `(player, techid)` records. Not a native or build limit.
 #[derive(Clone, Copy, Debug)]
@@ -94,6 +96,7 @@ pub(super) struct Players {
     state_requests: Option<RecordLimits>,
     resources: Option<Resources>,
     experience_handicap: Option<crate::player_handicap::Rules>,
+    health_handicap: Option<crate::player_handicap::HealthRules>,
     slot_states: Option<Vec<(i32, HandleId)>>,
     controllers: Option<controllers::Controllers>,
     current_research: Option<Vec<ResearchObservation>>,
@@ -242,6 +245,7 @@ impl ObjectHost {
             state_requests: None,
             resources: None,
             experience_handicap: None,
+            health_handicap: None,
             slot_states: None,
             controllers: None,
             current_research: None,
@@ -1240,6 +1244,10 @@ impl ObjectHost {
             players.experience_handicap.as_ref()?;
             return Some(self.experience_handicap_native(name, args));
         }
+        if matches!(name, "SetPlayerHandicap" | "GetPlayerHandicap") {
+            players.health_handicap.as_ref()?;
+            return Some(self.health_handicap_native(name, args));
+        }
         if name == GET_PLAYER_STATE {
             players.resources.as_ref()?;
             return Some(self.get_player_state(args));
@@ -1329,6 +1337,10 @@ impl ObjectHost {
                 alliances: Vec::new(),
                 state_requests: Vec::new(),
                 experience_handicap: None,
+                health_handicap: players
+                    .health_handicap
+                    .as_ref()
+                    .map(|rules| rules.null_result()),
             });
             return Ok(Value::Handle(id));
         }

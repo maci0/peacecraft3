@@ -144,7 +144,25 @@ identifier allowed the next map to load. Run `hch-1023d` then ended before the
 setter because of a diagnostic timer-step gap. Neither supplies health-handicap
 results. Parse/resolve success alone did not establish native script acceptance.
 
-The reference clients are stopped. No health-handicap production implementation,
-new rendered comparison or native Windows run was completed here. Alternate
-hero attributes, non-integral pool rounding, other held-item interactions,
-revival and the initial factor's production admission remain open.
+## Implementation status
+
+`SetPlayerHandicap` and `GetPlayerHandicap` now use the source-qualified setter,
+getter, initializer and threshold operands. The setter applies its raw requested
+factor to existing owned units before storing the clamped player factor. Base HP
+uses the ratio update; the strength HP term, including held or permanent
+strength, follows as a direct pool delta; flat held maximum-life bonuses stay
+unscaled. Unit creation uses the owner's stored factor, while ownership transfer
+retains both the fitted factor and current maxima.
+
+Native still drives the raw factor into unit pools, so zero and negative requests
+produce zero maximums and dead pools while the stored factor clamps to the source
+minimum. A request within the source threshold neither changes pools nor stores a
+new factor. Runtime tests cover existing units, threshold repeats, fresh units,
+flat held life, raw zero/negative requests, ownership transfer and scaled
+powerup/level strength gains. The implementation refuses unsupported unit
+projections before mutation.
+
+Remaining open questions are alternate hero attributes, non-integral pool
+rounding beyond the admitted rounder, fate of units revived after a negative
+factor, other held-item combinations, and the native reset path's wider caller
+set. This work did not run a rendered comparison or a native Windows client.

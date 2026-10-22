@@ -247,3 +247,193 @@ fn wide_and_signed_integer_initializers_follow_the_selected_conversion() {
     assert_eq!(r.clamp(0.0), -2.0);
     assert_eq!(r.clamp(-10.0), -7.5);
 }
+
+pub(crate) fn health_fixture() -> (
+    Vec<u8>,
+    HealthBinding,
+    crate::script_numeric::Binding,
+    RuleInputBudget,
+) {
+    let (mut image, mut numeric, mut budget) = crate::script_numeric::tests::fixture();
+    let loc = |offset: u32| 0x301000 + offset;
+    let field = loc(0x1a10);
+    let mut setter = vec![0; 192];
+    for (at, data) in [
+        (
+            0,
+            &[
+                0x55, 0x8b, 0xec, 0x83, 0xec, 0x0c, 0x56, 0xff, 0x75, 0x08, 0xe8, 0xc1, 0x91, 0xfd,
+                0xff,
+            ][..],
+        ),
+        (
+            15,
+            &[
+                0x8b, 0xf0, 0x83, 0xc4, 0x04, 0x85, 0xf6, 0x0f, 0x84, 0x9f, 0x00, 0x00, 0x00, 0x8b,
+                0x8e, 0x5c, 0x03, 0x00, 0x00, 0x8d, 0x45, 0xfc, 0x57, 0x8b, 0x7d, 0x0c, 0x57, 0x50,
+                0x8d, 0x45, 0xf4, 0x89, 0x4d, 0xfc, 0x50, 0xe8, 0xd9, 0x6a, 0x4f, 0x00, 0xf3, 0x0f,
+                0x10, 0x05, 0x54, 0xb0, 0x0d, 0x01, 0x83, 0xc4, 0x0c,
+            ],
+        ),
+        (
+            66,
+            &[
+                0x8b, 0x00, 0x25, 0xff, 0xff, 0xff, 0x7f, 0x89, 0x45, 0xfc, 0x0f, 0x2f, 0x45, 0xfc,
+                0x77, 0x68,
+            ],
+        ),
+        (
+            82,
+            &[
+                0x8b, 0x07, 0x6a, 0x1f, 0x6a, 0x06, 0x89, 0x45, 0xf8, 0x0f, 0xb6, 0x46, 0x30, 0x6a,
+                0x04, 0x50, 0x6a, 0x18, 0x8d, 0x45, 0xf8, 0x50, 0x68, 0x70, 0x9f, 0x48, 0x00, 0xe8,
+                0xee, 0x53, 0x1e, 0x00, 0x8b, 0x07, 0x83, 0xc4, 0x1c,
+            ],
+        ),
+        (
+            119,
+            &[
+                0xf3, 0x0f, 0x10, 0x05, 0x58, 0xb0, 0x0d, 0x01, 0x89, 0x45, 0xfc, 0xf3, 0x0f, 0x10,
+                0x4d, 0xfc, 0x0f, 0x2f, 0xc1, 0x76, 0x07, 0xb8, 0x58, 0xb0, 0x0d, 0x01, 0xeb, 0x12,
+            ],
+        ),
+        (
+            147,
+            &[
+                0x0f, 0x2f, 0x0d, 0x54, 0xd8, 0x12, 0x01, 0xb8, 0x54, 0xd8, 0x12, 0x01, 0x8d, 0x4d,
+                0xfc, 0x0f, 0x46, 0xc1,
+            ],
+        ),
+        (
+            165,
+            &[
+                0x8b, 0x00, 0x8d, 0x8e, 0x58, 0x03, 0x00, 0x00, 0x89, 0x45, 0xfc, 0x8d, 0x55, 0xfc,
+                0x8b, 0x01, 0x6a, 0x01, 0x52, 0xff, 0x10, 0x5f, 0x5e, 0x8b, 0xe5, 0x5d, 0xc3,
+            ],
+        ),
+    ] {
+        setter[at..at + data.len()].copy_from_slice(data);
+    }
+    for (at, value) in [
+        (11, loc(0x1900).wrapping_sub(loc(0x1800) + 15)),
+        (59, loc(0x1a00)),
+        (141, loc(0x1a04)),
+        (155, field),
+    ] {
+        setter[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    let mut getter = vec![0; 33];
+    for (at, data) in [
+        (
+            0,
+            &[
+                0x55, 0x8b, 0xec, 0xff, 0x75, 0x08, 0xe8, 0xd5, 0xe1, 0xfe, 0xff, 0x83, 0xc4, 0x04,
+                0x85, 0xc0,
+            ][..],
+        ),
+        (16, &[0x75, 0x07, 0xa1, 0x10, 0xd8, 0x12, 0x01, 0x5d, 0xc3]),
+        (25, &[0x8b, 0x80, 0x5c, 0x03, 0x00, 0x00, 0x5d]),
+        (32, &[0xc3]),
+    ] {
+        getter[at..at + data.len()].copy_from_slice(data);
+    }
+    for (at, value) in [
+        (7, loc(0x1800).wrapping_sub(loc(0x1900) + 11)),
+        (19, field.wrapping_add(4)),
+    ] {
+        getter[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    let init = |value: u8, at: u32, dest: u32| {
+        [
+            vec![0x6a, value, 0x68],
+            dest.to_le_bytes().to_vec(),
+            vec![0xe8],
+            numeric
+                .math_i32_to_real
+                .va
+                .wrapping_sub(at + 12)
+                .to_le_bytes()
+                .to_vec(),
+            vec![0x83, 0xc4, 8, 0xc3],
+        ]
+        .concat()
+    };
+    let mut put = |offset: usize, data: &[u8]| {
+        image[0x200 + offset..0x200 + offset + data.len()].copy_from_slice(data);
+        SourceWindow {
+            va: loc(offset as u32),
+            len: data.len() as u32,
+            digest: sha256(data),
+        }
+    };
+    let setter = put(0x1800, &setter);
+    let getter = put(0x1900, &getter);
+    let maximum_initializer = put(0x1940, &init(100, loc(0x1940), field));
+    let null_initializer = put(0x1950, &init(1, loc(0x1950), field.wrapping_add(4)));
+    put(0x1a00, &0.001_f32.to_le_bytes());
+    put(0x1a04, &0.01_f32.to_le_bytes());
+    numeric.image_sha256 = sha256(&image);
+    budget.profile_bytes = 8192;
+    let binding = HealthBinding {
+        origin: numeric.origin.clone(),
+        image_sha256: sha256(&image),
+        setter,
+        getter,
+        maximum_initializer,
+        null_initializer,
+    };
+    (image, binding, numeric, budget)
+}
+
+pub(crate) fn health_rules() -> (HealthRules, NumericPolicy) {
+    let (image, binding, numeric, budget) = health_fixture();
+    let numeric = NumericPolicy::read(&image, numeric, budget, 32).unwrap();
+    (
+        HealthRules::read(&image, binding, &numeric, budget).unwrap(),
+        numeric,
+    )
+}
+
+#[test]
+fn health_source_operands_drive_limits_null_result_and_threshold() {
+    let (r, _) = health_rules();
+    assert_eq!(r.clamp(-1.0), 0.01);
+    assert_eq!(r.clamp(0.6), 0.6);
+    assert_eq!(r.clamp(250.0), 100.0);
+    assert_eq!(r.null_result(), 1.0);
+    assert!(!r.changes(1.0, 1.0));
+    assert!(!r.changes(1.0, 1.000_5));
+    assert!(r.changes(1.0, 1.001));
+    assert!(r.changes(1.0, 0.998));
+}
+
+#[test]
+fn health_changed_limits_and_shape_refuse() {
+    for change in 0..5 {
+        let (mut image, mut binding, mut numeric, budget) = health_fixture();
+        match change {
+            0 => image[0x1c00..0x1c04].copy_from_slice(&0.0_f32.to_le_bytes()),
+            1 => image[0x1c04..0x1c08].copy_from_slice(&200.0_f32.to_le_bytes()),
+            2 => image[0x1a00 + 66] ^= 1,
+            3 => image[0x1b42] = 37,
+            4 => binding.origin.source.clear(),
+            _ => unreachable!(),
+        }
+        binding.image_sha256 = sha256(&image);
+        numeric.image_sha256 = sha256(&image);
+        for w in [
+            &mut binding.setter,
+            &mut binding.getter,
+            &mut binding.maximum_initializer,
+            &mut binding.null_initializer,
+        ] {
+            let at = 0x200 + (w.va - 0x301000) as usize;
+            w.digest = sha256(&image[at..at + w.len as usize]);
+        }
+        let numeric = NumericPolicy::read(&image, numeric, budget, 32).unwrap();
+        assert!(
+            HealthRules::read(&image, binding, &numeric, budget).is_err(),
+            "mutant {change}"
+        );
+    }
+}

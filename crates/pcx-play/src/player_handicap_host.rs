@@ -60,6 +60,146 @@ impl ObjectHost {
         Ok(self)
     }
 
+    /// Admit the health wrapper and its source-backed limits. Existing player
+    /// rows receive the null-player result; no unit pools change at admission.
+    pub fn with_player_health_handicap(
+        mut self,
+        rules: crate::player_handicap::HealthRules,
+    ) -> Result<Self, Error> {
+        let name = "SetPlayerHandicap";
+        let players = self.players.as_ref().ok_or_else(|| {
+            self.inner
+                .error(name, Failure::PlayerState("players required"))
+        })?;
+        if players.health_handicap.is_some() {
+            return Err(self.inner.error(
+                name,
+                Failure::PlayerState("health handicap already admitted"),
+            ));
+        }
+        if self
+            .numeric
+            .as_ref()
+            .is_none_or(|n| n.image_sha256() != rules.image_sha256())
+        {
+            return Err(self.inner.error(
+                name,
+                Failure::PlayerState("matching selected numeric policy required"),
+            ));
+        }
+        let source = &self
+            .inner
+            .program
+            .natives()
+            .get("Player")
+            .expect("players admitted")
+            .source;
+        for (native, args, result) in [
+            (name, &["player", "real"][..], "nothing"),
+            ("GetPlayerHandicap", &["player"][..], "real"),
+        ] {
+            Self::contract(&self.inner, native, args, result, true, Some("player"))?;
+            if &self
+                .inner
+                .program
+                .natives()
+                .get(native)
+                .expect("checked contract")
+                .source
+                != source
+            {
+                return Err(self.inner.error(native, Failure::Source));
+            }
+        }
+        let players = self.players.as_mut().expect("checked players");
+        let initial = rules.null_result();
+        for row in &mut players.rows {
+            if row.health_handicap.is_none() {
+                row.health_handicap = Some(initial);
+            }
+        }
+        players.health_handicap = Some(rules);
+        Ok(self)
+    }
+
+    pub(super) fn health_handicap_native(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Value, Error> {
+        if name == "GetPlayerHandicap" {
+            let [player] = args else {
+                return Err(self.inner.error(name, Failure::PlayerArguments));
+            };
+            if *player == Value::Null {
+                return Ok(Value::Real(
+                    self.players
+                        .as_ref()
+                        .expect("players admitted")
+                        .health_handicap
+                        .as_ref()
+                        .expect("rules admitted")
+                        .null_result(),
+                ));
+            }
+            let at = self.player_index(player, name)?;
+            return self.players.as_ref().expect("players admitted").rows[at]
+                .health_handicap
+                .map(Value::Real)
+                .ok_or_else(|| {
+                    self.inner.error(
+                        name,
+                        Failure::PlayerState("initial health handicap is not derived"),
+                    )
+                });
+        }
+        let [player, value] = args else {
+            return Err(self.inner.error(name, Failure::PlayerArguments));
+        };
+        let value = match value {
+            Value::Real(v) => *v,
+            Value::Int(v) => self
+                .numeric
+                .as_ref()
+                .expect("numeric admission")
+                .integer(*v)
+                .map_err(|e| self.inner.error(name, Failure::Expression(e)))?,
+            _ => return Err(self.inner.error(name, Failure::PlayerArguments)),
+        };
+        if *player == Value::Null {
+            return Ok(Value::Null);
+        }
+        let at = self.player_index(player, name)?;
+        let (owner, stored, requested) = {
+            let players = self.players.as_ref().expect("players admitted");
+            let rules = players.health_handicap.as_ref().expect("rules admitted");
+            let row = &players.rows[at];
+            (
+                row.identity,
+                row.health_handicap.unwrap_or(rules.null_result()),
+                value,
+            )
+        };
+        let rules = self
+            .players
+            .as_ref()
+            .expect("players admitted")
+            .health_handicap
+            .as_ref()
+            .expect("rules admitted");
+        if rules.changes(stored, requested) {
+            self.apply_owner_health_handicap(owner, requested)?;
+            let players = self.players.as_mut().expect("players admitted");
+            let clamped = players
+                .health_handicap
+                .as_ref()
+                .expect("rules admitted")
+                .clamp(requested);
+            players.rows[at].health_handicap = Some(clamped);
+        }
+        Ok(Value::Null)
+    }
+
     pub(super) fn experience_handicap_native(
         &mut self,
         name: &str,
