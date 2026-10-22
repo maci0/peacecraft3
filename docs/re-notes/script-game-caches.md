@@ -118,8 +118,12 @@ current learning rules. Source changes that make the snapshot unsupported refuse
 
 Every unit/item definition, slot, record/charge policy and arena reservation is
 checked before publishing the unit. Prepared items attach directly to their
-saved slots. This avoids a second pickup or automatic powerup grant. The saved
-pools already include passive bonuses, and removing a restored passive item
+saved slots. This avoids a second pickup or automatic powerup grant. Restore
+rebuilds full life and mana maxima from the receiving map's unit definition,
+restored hero progress and permanent strength, and prepared current-map item
+definitions before publishing any handle. The saved pool bits remain readable
+for existing PC3UNIT payloads but do not set the restored pools. Combined
+passives and all pool changes are checked before publication; later item removal
 uses the ordinary repricing path. Pending orders, pause, animation phase,
 spell/item cooldowns and queued events are not copied into a new chapter.
 Regeneration starts on the receiving host's clock.
@@ -212,9 +216,21 @@ results remain local in `.scratch/cross-map-cache-probe/transition-a/` in
 the main checkout. These Wine observations do not qualify native Windows
 or a general restore-pool policy beyond the sampled life case.
 
-Pool preservation, explicit item-flag preservation, omission of transient state
-and the no-pickup-event path are recreation choices still requiring an original
-client comparison. The native cached inventory loop observed here covers six
+The original-client same-map RoC probe at
+`.scratch/same-map-store-restore-probe/result.json` records a plain hero at
+312.5/1250 life and 123.75/495 mana restoring to 1250/1250 and 495/495.
+With held maximum-life and intelligence items, 350/1400 and 146.25/585
+restore to 1400/1400 and 585/585; removing each item returns the corresponding
+maximum to its source-derived base. The paired cross-map probe at
+`.scratch/cross-map-cache-probe/selector1-transition/result.json` records a
+source item bonus of 150 in A and a typed receiving-map bonus of 200 in B;
+the restored B hero is full at 1450/1450 and returns to 1250/1250 on removal.
+Those observations qualify life and mana for the tested hero/item cases, not
+non-hero restoration, multi-item rounding order, the native cache layout or
+every cached state. The same full-pool projection for non-heroes and slot-order
+application of multiple passives are recreation choices. Explicit item-flag
+preservation, omission of transient state and the no-pickup-event path remain
+recreation choices. The native cached inventory loop observed here covers six
 slots; the recreation currently uses the admitted inventory policy rather than
 copying that measured limit into code. The native hero payload and its remaining
 mask are not fully decoded. XP and other unimplemented hero state, native W3V
@@ -229,8 +245,9 @@ the existing storage policy, with no new resource knob. An older build cannot
 read a version-2 profile; no original W3V file is modified.
 
 Synthetic tests cover persistence into a new host, owner/position arguments,
-clock rebasing, permanent strength, sparse slots, charge overrides, passive
-removal, typed flushes, v1 compatibility, malformed payloads and refusals without
+clock rebasing, permanent strength, sparse slots, charge overrides, receiving-map
+passives, full restored pools, passive removal, typed flushes, v1 compatibility,
+malformed payloads and refusals without
 partial creation for slot, source/client, item/charge policy and injected held
 powerup failures. The final private-target checks pass: 1,151 pcx-play package
 tests (44 ignored), strict all-target clippy, the WASM library check and the

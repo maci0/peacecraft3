@@ -1815,16 +1815,6 @@ impl ObjectHost {
         }
         record.activity = self.prepare_unit_activity(&record.definition)?;
         record.vitals = self.prepare_unit_vitals(&record.definition)?;
-        if let Some(saved) = saved {
-            let vitals = record.vitals.as_mut().ok_or_else(|| {
-                self.inner.error(
-                    "RestoreUnit",
-                    Failure::GameCache("cached unit vital admission missing".into()),
-                )
-            })?;
-            [vitals.life, vitals.max_life, vitals.mana, vitals.max_mana] =
-                saved.pools.map(f32::from_bits);
-        }
         record.combat = self.prepare_unit_combat(&record.definition)?;
         if let Some(loader) = self.units.as_mut().and_then(|u| u.models.as_mut()) {
             let model = loader(&record.definition)
@@ -1864,6 +1854,10 @@ impl ObjectHost {
         let inventory = saved
             .map(|saved| self.prepare_cached_inventory(&record, &saved.items))
             .transpose()?;
+        if let Some(prepared) = &inventory {
+            record.vitals =
+                Some(self.prepare_cached_restored_vitals(&record, prepared.definitions())?);
+        }
         let id = self.inner.allocate(
             Entry::Unit {
                 record: Box::new(record),

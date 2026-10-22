@@ -3029,8 +3029,8 @@ repeated, and the public site package was not rebuilt.
 ### 2026-10-21 — modeled campaign unit caches
 
 - [x] Store/restore/query/flush unit values in the existing profile. Preserve
-  modeled hero progress, permanent strength, pools, sparse item slots, charge
-  overrides and explicit item flags. Validate source/client identity, current
+  modeled hero progress, permanent strength, source-rebuilt full pools, sparse
+  item slots, charge overrides and explicit item flags. Validate source/client identity, current
   ability rules and creation policies before publishing a restored unit.
 - [x] Read old primitive profiles; use version 2 only when unit values exist.
   Full pcx-play tests: 1,151 passed, 44 ignored with required local fixtures.

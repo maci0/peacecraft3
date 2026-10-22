@@ -43,6 +43,12 @@ pub(super) struct Admission {
 
 pub(super) struct CachedInventory(Vec<(usize, ExecutedItem, i32)>);
 
+impl CachedInventory {
+    pub(super) fn definitions(&self) -> impl Iterator<Item = &Definition> {
+        self.0.iter().map(|(_, item, _)| &item.definition)
+    }
+}
+
 impl ObjectHost {
     pub(super) fn prepare_cached_inventory(
         &mut self,
