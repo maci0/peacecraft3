@@ -64,8 +64,8 @@ native nesting and deletion-edge behavior remain unverified. Stored ground x/y
 are retained while an item is held. Initial item invulnerability is unknown until
 an explicit setter establishes it. Automatic-use powerup effects refuse before
 movement rather than accepting an acquisition that cannot execute. Item use,
-passive item stat effects, consumable effects, drag/drop/give orders and inventory
-HUD interaction remain separate consumers. Ground item rendering/picking is
+unimplemented passive families (life, mana and attack speed), consumable effects,
+drag/drop/give orders and inventory HUD interaction remain separate consumers. Ground item rendering/picking is
 verified separately from these host tests.
 
 Synthetic tests cover changed capacity and permission overrides, full and empty

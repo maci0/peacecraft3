@@ -223,6 +223,8 @@ fn read_combat(d: &Definition) -> Result<Combat, String> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct HeroBonuses {
     pub damage: f32,
+    /// Flat attack damage from held passive items, applied once per attack.
+    pub held_damage: f32,
     pub armor: f32,
     pub speed: f32,
 }
@@ -237,6 +239,7 @@ impl ObjectHost {
         if !definition.rawcode[0].is_ascii_uppercase() {
             return Ok(HeroBonuses {
                 damage: 0.0,
+                held_damage: bonus.damage as f32,
                 armor: 0.0,
                 speed: 1.0,
             });
@@ -257,6 +260,7 @@ impl ObjectHost {
         }
         Ok(HeroBonuses {
             damage,
+            held_damage: bonus.damage as f32,
             armor,
             speed,
         })
@@ -912,7 +916,8 @@ impl ObjectHost {
         // Hero armor derives from agility; held armor points are a separate item bonus.
         let armor =
             armor + self.hero_combat_bonuses(target)?.armor + self.held_armor_bonus(target)? as f32;
-        let primary_damage = self.hero_combat_bonuses(source)?.damage;
+        let bonuses = self.hero_combat_bonuses(source)?;
+        let primary_damage = bonuses.damage + bonuses.held_damage;
         let mut roll = weapon.base;
         for _ in 0..weapon.dice.max(0) {
             roll += self.draw_random_integer(1, weapon.sides.max(1), name)?;

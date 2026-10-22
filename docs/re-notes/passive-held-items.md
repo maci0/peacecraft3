@@ -1,12 +1,14 @@
-# Passive held items: source audit, implemented hero attribute family, refusals
+# Passive held items: source audit, implemented attribute families, refusals
 
 ## Implemented behavior
 
 A held passive item (`ItemData` `usable=0` and `powerup=0`) contributes the strength and agility
-of its `AIab`-class abilities while held. The unit total is the retained powerup strength plus
-the held passive totals, derived on demand from the held slots, so no add/remove state exists.
+of its `AIab`-class abilities, flat armor from `AIde`, and flat attack damage from `AIat` while
+held. The unit total is the retained powerup strength plus the held passive totals, derived on
+demand from the held slots, so no add/remove state exists.
 
-- Derived: damage (primary STR), armor and speed (AGI), and the level-up life delta.
+- Derived: damage (primary STR plus held flat damage), armor and speed (AGI), and the level-up
+  life delta.
 - Equip and drop reprice life by the strength change with the current/max ratio policy, the
   same native path the powerup grant uses (`b3dd30` → `b3fd00` → mode 1 `6be8c0`).
 - Transfer is a drop from the holder followed by an equip on the receiver. A non-hero receiver
@@ -25,8 +27,8 @@ transfer, death and level results are what the tests check.
 
 - Registration: the passive constructor is the window at `0xbc9ce0` (`push 0x11b6694`,
   `push "APbo"`, `push "AIab"`, `call 0x7f6360`, `add esp,0xc`, `ret`), the same layout as the
-  powerup window `0xbca0e0` (`AIsm`, base `AIxm`). `Rules::read` decodes both windows from the
-  reviewed client (SHA-256 `3f2ed012…`, `REVIEWED_IMAGE`).
+  powerup window `0xbca0e0` (`AIsm`, base `AIxm`). `Rules::read` decodes the powerup, passive,
+  armor and damage windows from the reviewed client (SHA-256 `3f2ed012…`, `REVIEWED_IMAGE`).
 - Attribute metadata: `Iagi`, `Iint` and `Istr` `useSpecific` lists must admit the item's
   ability alias. Amounts come from `Data{column}1` through `W3A` overlays. No ID or amount is
   written in code.
@@ -55,15 +57,19 @@ Census gate `local_original_held_item_census_partitions_every_row` (`PCX_TOME_CL
 and, over all 273 rows, `none=140 supported=39 refused=94`. The 39 includes the 26 empty-list
 passive rows (no effect). Refusals are all passive rows with an ability list (13 + 94 = 107):
 
+The counts below predate the armor and damage families and are retained as the initial audit;
+rerun `local_original_held_item_census_partitions_every_row` for current counts.
+
 | refusal | rows |
 |---|---|
-| passive ability of a family other than `AIab` (damage, life, mana, armor, attack speed, and others) | 79 |
+| passive ability of a family other than `AIab` (life, mana, attack speed, and others) | 79 |
 | `AIab` row with an intelligence bonus (mana path unqualified) | 12 |
 | `AIab` alias not admitted by the attribute metadata | 3 |
 
-Campaign placement impact is not measured. These are catalog facts. The consequence for play is
-that picking up any of the 94 refused rows now fails the pickup call. That is a loud,
-diagnosed refusal, not a silent wrong stat.
+Campaign placement impact is not measured. These are catalog facts. The table is the initial
+audit, before armor and damage rows were admitted; rerun the gate for current counts. A row still
+outside the admitted families fails the pickup call with a diagnostic instead of applying a
+silent wrong stat.
 
 ## Original-source gates
 
@@ -82,10 +88,11 @@ diagnosed refusal, not a silent wrong stat.
   delta. It is a faithful derivation, not a measured observation.
 - Intelligence bonuses and their mana pool (`b3feb0` route unqualified).
 - Usable item activation (`UnitUseItem`) and its charges.
-- Passive families other than `AIab`: damage (`AIat`), life (`AIml`), mana (`AImm`), armor (`AIsb`),
-  attack speed (`AIas`), and the rest of the 79 refused rows.
-- Non-hero passive equip: the recreation gives no life or stat change, which matches only the
-  observable structure of hero-only attributes. Native behavior for non-heroes is not verified.
+- Passive families other than `AIab`, `AIde` and `AIat`: life (`AIml`), mana (`AImm`), armor
+  (`AIsb`), attack speed (`AIas`), and the rest of the refused rows.
+- Non-hero passive equip: strength and agility still produce no hero pools, while armor and flat
+  damage are accepted for any unit. Native behavior for non-hero strength/agility is not
+  verified.
 - Powerup `get_items` gating and non-hero powerup targets remain documented gaps in
   `inventory-powerup.md`. They are fidelity gaps, not permission gates.
 
@@ -112,3 +119,25 @@ diagnosed refusal, not a silent wrong stat.
   The damage test runs `roll_damage` with the held item, then after the drop. Overflow of the held armor
   sum is guarded (`checked_add`) but not tested.
 - Non-hero refusal: now applies only to nonzero strength or agility. Non-hero armor is accepted.
+
+## Damage family (`AIat`, Item Attack Damage Bonus): implemented and tested
+
+- Registration: window `0xbc9c80` (`push "APbo"`, `push "AIat"`, `call 0x7f6360`), the same
+  reviewed layout and base as `AIab` and `AIde`. `Rules::read` decodes it as the fourth window;
+  all four classes must be distinct.
+- Amounts: metadata row `Iatt` (`field Data`, `slk AbilityData`, `data 1` = `DataA`), whose
+  `useSpecific` list admits the item's ability alias. Shipped aliases include `AItf` (15) and
+  `AIat` (20); the amount is read from `DataA1`, never a constant, and typed W3A overrides win.
+- Held effect: flat attack damage, summed over held passive items and derived per unit (hero or
+  not). Negative amounts, aliases outside `Iatt`, and an overflowing sum refuse the pickup before
+  any write.
+- Damage hook: `combat_host.rs` carries the held total as `HeroBonuses.held_damage` and adds it
+  once to `roll_damage`, after the primary-attribute damage. It is not derived from strength, so
+  it does not change the attribute query or the life pools.
+- Tests: parser (`flat_damage_comes_from_the_admitted_iatt_column`,
+  `w3a_override_on_the_iatt_field_wins_at_effect_level`,
+  `damage_row_outside_the_iatt_admission_refuses`, `negative_or_malformed_authored_damage_refuses`,
+  `repeated_damage_aliases_overflow_atomically`, `damage_registration_must_name_a_distinct_class`);
+  host (`held_flat_damage_stacks_transfers_and_removes`, `death_drops_held_flat_damage`,
+  `damage_row_outside_admission_and_overflow_refuse_atomically`,
+  `held_flat_damage_changes_real_damage`).
