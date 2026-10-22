@@ -14,6 +14,8 @@ use pcx_script::HandleId;
 mod blight;
 #[path = "unit_buff_host_tests.rs"]
 mod buffs;
+#[path = "divine_shield_tests.rs"]
+mod divine_shield;
 #[path = "unit_sleep_tests.rs"]
 mod natural_sleep;
 #[path = "patrol_combat_tests.rs"]

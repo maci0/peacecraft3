@@ -51,6 +51,22 @@ pub(super) struct State {
     rules: Option<Rules>,
 }
 
+#[cfg(test)]
+impl ObjectHost {
+    /// Seed shield rules directly (bypassing the order-registry admission path)
+    /// for harness tests that exercise the cast/expiry/protection mechanics.
+    pub(crate) fn seed_divine_shield_for_test(&mut self, order: i32, unorder: i32) {
+        self.divine_shield = State {
+            rules: Some(Rules {
+                order,
+                unorder,
+                ready_at: BTreeMap::new(),
+                active: BTreeMap::new(),
+            }),
+        };
+    }
+}
+
 impl ObjectHost {
     fn shield_error(&self, detail: String) -> Error {
         self.inner.error(NATIVE, Failure::HeroSkills(detail))
@@ -123,7 +139,9 @@ impl ObjectHost {
                 .parse::<f32>()
                 .map_err(|detail| self.shield_error(format!("invalid {stem}{rank}: {detail}")))?;
             if !value.is_finite() || value < 0.0 {
-                return Err(self.shield_error(format!("{stem}{rank} must be finite and nonnegative")));
+                return Err(
+                    self.shield_error(format!("{stem}{rank} must be finite and nonnegative"))
+                );
             }
             Ok(value)
         };
@@ -204,7 +222,7 @@ impl ObjectHost {
     }
 
     /// Casts Divine Shield on `caster`. Returns `true` when a shield is applied.
-    pub(super) fn cast_divine_shield(&mut self, caster: HandleId) -> Result<bool, Error> {
+    pub(crate) fn cast_divine_shield(&mut self, caster: HandleId) -> Result<bool, Error> {
         let now = self
             .timer_game_time()
             .ok_or_else(|| self.shield_error("clock missing".into()))?;
@@ -241,7 +259,7 @@ impl ObjectHost {
     /// `undivineshield`: the native probe returns false both for a fresh unit and
     /// for one with an active shield, so this reports false and performs no
     /// cancel side-effect. Ex expiry remains the only removal path.
-    pub(super) fn uncast_divine_shield(&mut self, caster: HandleId) -> Result<bool, Error> {
+    pub(crate) fn uncast_divine_shield(&mut self, caster: HandleId) -> Result<bool, Error> {
         let Some(now) = self.timer_game_time() else {
             return Ok(false);
         };
