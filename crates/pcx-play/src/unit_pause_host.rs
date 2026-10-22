@@ -45,7 +45,7 @@ impl ObjectHost {
                 Value::Handle(unit) => *unit,
                 _ => return Err(self.inner.error(name, Failure::WrongFamily)),
             };
-            if matches!(self.inner.entry(unit)?, Entry::RemovedUnit) {
+            if matches!(self.inner.entry(unit)?, Entry::RemovedUnit { .. }) {
                 return Ok(if pause.is_some() {
                     Value::Null
                 } else {

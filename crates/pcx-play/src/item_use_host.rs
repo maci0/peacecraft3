@@ -277,7 +277,7 @@ impl ObjectHost {
             .ok_or_else(|| fail("item use is not admitted".into()))?;
         match self.inner.entry(unit)? {
             Entry::Unit { .. } => {}
-            Entry::RemovedUnit => return Err(fail("absent unit".into())),
+            Entry::RemovedUnit { .. } => return Err(fail("absent unit".into())),
             _ => return Err(self.inner.error("item use", Failure::WrongFamily)),
         }
         let record = self

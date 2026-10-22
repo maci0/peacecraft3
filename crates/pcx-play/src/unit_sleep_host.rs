@@ -100,7 +100,7 @@ impl ObjectHost {
                 Value::Handle(id) => *id,
                 _ => return Err(self.inner.error(name, Failure::WrongFamily)),
             };
-            if matches!(self.inner.entry(id)?, Entry::RemovedUnit) {
+            if matches!(self.inner.entry(id)?, Entry::RemovedUnit { .. }) {
                 return Ok(empty);
             }
             let state = self.executed_unit(id)?.sleep.ok_or_else(|| {

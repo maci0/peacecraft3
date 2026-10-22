@@ -131,6 +131,90 @@ fn region_membership_fires_enter_and_leave_with_the_moving_unit() {
 }
 
 #[test]
+fn removed_unit_location_survives_synchronous_removal_then_retires_on_clock_advance() {
+    let (mut vm, a, _) = open();
+    let h = &mut vm.host().inner;
+    let snapshot = h.native("GetUnitLoc", &[Value::Handle(a)]).unwrap();
+    h.native("RemoveUnit", &[Value::Handle(a)]).unwrap();
+    let immediate = h.native("GetUnitLoc", &[Value::Handle(a)]).unwrap();
+    assert_ne!(immediate, Value::Null);
+    assert_eq!(
+        h.native("GetLocationX", &[immediate]).unwrap(),
+        Value::Real(16.0)
+    );
+    assert!(h.executed_unit(a).is_err());
+    assert!(!h.executed_units().any(|(unit, _)| unit == a));
+    tick(&mut vm, 1.0);
+    let h = &mut vm.host().inner;
+    let Value::Handle(before) = h
+        .native("Location", &[Value::Real(1.0), Value::Real(2.0)])
+        .unwrap()
+    else {
+        panic!("location handle");
+    };
+    for _ in 0..3 {
+        assert_eq!(
+            h.native("GetUnitLoc", &[Value::Handle(a)]).unwrap(),
+            Value::Null
+        );
+        assert_eq!(h.native("GetUnitLoc", &[Value::Null]).unwrap(), Value::Null);
+    }
+    let Value::Handle(after) = h
+        .native("Location", &[Value::Real(1.0), Value::Real(2.0)])
+        .unwrap()
+    else {
+        panic!("location handle");
+    };
+    assert_eq!(
+        after.token(),
+        before.token() + 1,
+        "null queries allocate nothing"
+    );
+    assert_eq!(
+        h.native("GetLocationX", &[snapshot]).unwrap(),
+        Value::Real(16.0)
+    );
+}
+
+#[test]
+fn null_location_natives_preserve_their_argument_and_family_checks() {
+    let (mut vm, a, _) = open();
+    let h = &mut vm.host().inner;
+    for name in ["GetLocationX", "GetLocationY"] {
+        assert_eq!(h.native(name, &[Value::Null]).unwrap(), Value::Real(0.0));
+        assert!(h.native(name, &[Value::Handle(a)]).is_err());
+        assert!(h.native(name, &[]).is_err());
+        assert!(h.native(name, &[Value::Null, Value::Null]).is_err());
+    }
+    h.native("RemoveLocation", &[Value::Null]).unwrap();
+    h.native(
+        "MoveLocation",
+        &[Value::Null, Value::Real(2.0), Value::Real(3.0)],
+    )
+    .unwrap();
+    for args in [
+        vec![Value::Null],
+        vec![Value::Null, Value::Real(1.0)],
+        vec![Value::Null, Value::Bool(false), Value::Real(1.0)],
+        vec![Value::Null, Value::Real(f32::NAN), Value::Real(1.0)],
+        vec![Value::Null, Value::Real(1.0), Value::Real(f32::INFINITY)],
+        vec![Value::Null, Value::Real(1.0), Value::Real(1.0), Value::Null],
+    ] {
+        assert!(h.native("MoveLocation", &args).is_err());
+    }
+    let location = h
+        .native("Location", &[Value::Real(1.0), Value::Real(2.0)])
+        .unwrap();
+    assert!(h.native("GetUnitLoc", &[location]).is_err());
+    assert!(h.native("GetUnitLoc", &[]).is_err());
+    assert!(h.native("GetUnitLoc", &[Value::Int(0)]).is_err());
+    assert!(
+        h.native("RemoveLocation", &[Value::Null, Value::Null])
+            .is_err()
+    );
+}
+
+#[test]
 fn pause_freezes_turn_progress_and_resumes_the_remaining_interval() {
     let (mut vm, unit, _) = open();
     vm.host()

@@ -556,7 +556,7 @@ impl ObjectHost {
                     self.inner
                         .entry(unit)
                         .map_err(|e| self.inner.error(name, e.failure))?,
-                    Entry::RemovedUnit
+                    Entry::RemovedUnit { .. }
                 )
             {
                 return Ok(Value::Bool(false));

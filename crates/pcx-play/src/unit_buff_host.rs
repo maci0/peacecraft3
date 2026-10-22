@@ -150,7 +150,7 @@ impl ObjectHost {
         let fail = |failure| self.inner.error(native, failure);
         match self.inner.entry(unit).map_err(|e| fail(e.failure))? {
             Entry::Unit { .. } => Ok(Some(())),
-            Entry::RemovedUnit => Ok(None),
+            Entry::RemovedUnit { .. } => Ok(None),
             _ => Err(fail(Failure::WrongFamily)),
         }
     }
@@ -252,7 +252,7 @@ impl ObjectHost {
                 .entry(id)
                 .map_err(|e| self.inner.error(name, e.failure))?
             {
-                Entry::RemovedUnit => return Ok(Value::Null),
+            Entry::RemovedUnit { .. } => return Ok(Value::Null),
                 Entry::Unit { .. } => {}
                 _ => return Err(self.inner.error(name, Failure::WrongFamily)),
             }

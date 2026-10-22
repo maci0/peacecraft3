@@ -266,7 +266,9 @@ enum Entry {
         record: Box<objects::ExecutedUnit>,
     },
     /// A unit after `RemoveUnit`; its handle stays allocated.
-    RemovedUnit,
+    RemovedUnit {
+        location: Option<(f64, [f32; 2])>,
+    },
     RemovedItem,
     /// `None` after `DestroyFogModifier`.
     FogModifier(Option<objects::FogModifier>),
@@ -653,7 +655,7 @@ impl EnumHost {
             Entry::Effect { live: false, .. } => {
                 return Err(self.error("arena", Failure::Identity));
             }
-            Entry::Unit { .. } | Entry::RemovedUnit => "unit",
+            Entry::Unit { .. } | Entry::RemovedUnit { .. } => "unit",
             Entry::FogModifier(Some(_)) => "fogmodifier",
             Entry::FogModifier(None) => return Err(self.error("arena", Failure::Identity)),
             Entry::Trigger { .. } | Entry::DeadTrigger => "trigger",

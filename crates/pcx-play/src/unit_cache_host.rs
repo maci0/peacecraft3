@@ -36,7 +36,7 @@ impl ObjectHost {
             };
             if matches!(
                 self.inner.entry(unit).map_err(|e| e.to_string())?,
-                Entry::RemovedUnit
+                Entry::RemovedUnit { .. }
             ) {
                 return Ok(Value::Bool(false));
             }

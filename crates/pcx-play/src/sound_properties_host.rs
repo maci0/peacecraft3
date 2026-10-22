@@ -138,7 +138,7 @@ impl ObjectHost {
         let Some(unit) = self.sound_properties(id)?.attached_unit else {
             return Ok(None);
         };
-        if matches!(self.inner.entry(unit)?, Entry::RemovedUnit) {
+        if matches!(self.inner.entry(unit)?, Entry::RemovedUnit { .. }) {
             return Ok(None);
         }
         let record = self.executed_unit(unit)?;
