@@ -60,6 +60,12 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   removal cleanup pass core/app, selected Human01, Clippy and WASM checks. Native item group
   propagation/transfer timing and other ability classes remain open.
 
+- [~] Human02's easy-difficulty health-handicap behavior is measured on the
+  selected RoC client, including existing/fresh units, a hero-specific pool
+  effect, ownership transfers and isolated bound requests. It remains
+  unimplemented; the separate XP-factor host is not its consumer. See
+  [player-health-handicap.md](docs/re-notes/player-health-handicap.md).
+
 ### 2026-10-23: Late script destructable collision
 
 Script-created live and dead destructables now join the stationary collision
