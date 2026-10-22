@@ -61,7 +61,7 @@ impl ObjectHost {
                 Value::Null => return Ok(Value::Bool(false)),
                 Value::Handle(id) => match self.inner.entry(*id)? {
                     Entry::Unit { record } => record,
-                    Entry::RemovedUnit => return Ok(Value::Bool(false)),
+                    Entry::RemovedUnit { .. } => return Ok(Value::Bool(false)),
                     _ => return Err(self.inner.error(name, Failure::WrongFamily)),
                 },
                 _ => return Err(self.inner.error(name, Failure::WrongFamily)),

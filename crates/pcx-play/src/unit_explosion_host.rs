@@ -98,7 +98,7 @@ impl ObjectHost {
             return Err(self.inner.error(NATIVE, Failure::Arguments));
         };
         let id = self.unit(unit, NATIVE)?;
-        if matches!(self.inner.entry(id)?, Entry::RemovedUnit) {
+        if matches!(self.inner.entry(id)?, Entry::RemovedUnit { .. }) {
             return Err(self.inner.error(NATIVE, Failure::Identity));
         }
         let admitted = self

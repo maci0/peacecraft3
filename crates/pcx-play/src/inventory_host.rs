@@ -734,7 +734,7 @@ impl ObjectHost {
             _ => return Ok(Value::Bool(false)),
         };
         match self.inner.entry(unit)? {
-            Entry::RemovedUnit => return Ok(Value::Bool(false)),
+            Entry::RemovedUnit { .. } => return Ok(Value::Bool(false)),
             Entry::Unit { .. } => {}
             _ => return Err(self.inner.error(name, Failure::WrongFamily)),
         }
@@ -771,7 +771,7 @@ impl ObjectHost {
         let target = match target_arg {
             None => unit,
             Some(t) => match self.inner.entry(t)? {
-                Entry::RemovedUnit => return Ok(Value::Bool(false)),
+                Entry::RemovedUnit { .. } => return Ok(Value::Bool(false)),
                 Entry::Unit { .. } => t,
                 _ => return Err(self.inner.error(name, Failure::WrongFamily)),
             },
@@ -888,7 +888,7 @@ impl ObjectHost {
         };
         if name.starts_with("Unit") {
             match self.inner.entry(*first)? {
-                Entry::RemovedUnit => return Ok(null()),
+                Entry::RemovedUnit { .. } => return Ok(null()),
                 Entry::Unit { .. } => {}
                 _ => return Err(self.inner.error(name, Failure::WrongFamily)),
             }

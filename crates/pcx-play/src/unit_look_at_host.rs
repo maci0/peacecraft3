@@ -67,7 +67,7 @@ impl ObjectHost {
                 Value::Handle(id) => *id,
                 _ => return Err(self.inner.error(name, Failure::WrongFamily)),
             };
-            if matches!(self.inner.entry(unit)?, Entry::RemovedUnit) {
+            if matches!(self.inner.entry(unit)?, Entry::RemovedUnit { .. }) {
                 return Ok(Value::Null);
             }
             let record = self.executed_unit(unit)?;
@@ -77,7 +77,7 @@ impl ObjectHost {
                     Value::Handle(id) => *id,
                     _ => return Err(self.inner.error(name, Failure::WrongFamily)),
                 };
-                if matches!(self.inner.entry(target)?, Entry::RemovedUnit) {
+                if matches!(self.inner.entry(target)?, Entry::RemovedUnit { .. }) {
                     return Ok(Value::Null);
                 }
                 self.executed_unit(target)?;

@@ -166,6 +166,80 @@ fn selected_campaign_escape_returns_control_through_the_authored_trigger() {
             quest.failed
         );
     }
+
+    // Diagnostic stimulus: replay the map's footman destination orders after skip.
+    // The real EnterRect actions must finish even though their target Uther is gone.
+    let uther = startup.session.global("udg_Uther").unwrap();
+    assert_eq!(
+        startup
+            .session
+            .host()
+            .unwrap()
+            .native("GetUnitLoc", &[uther])
+            .unwrap(),
+        Value::Null
+    );
+    let mut callbacks = Vec::new();
+    for (unit, rect, trigger) in [
+        (
+            "udg_StartingFootman01",
+            "gg_rct_Footman_01_End",
+            "gg_trg___Footman01_End_Movement",
+        ),
+        (
+            "udg_StartingFootman02",
+            "gg_rct_Footman_02_End",
+            "gg_trg___Footman02_End_Movement",
+        ),
+    ] {
+        let unit = startup.session.global(unit).unwrap();
+        let Some(Value::Handle(rect)) = startup.session.global(rect) else {
+            panic!("authored destination rectangle");
+        };
+        let trigger = startup.session.global(trigger).unwrap();
+        let host = startup.session.host().unwrap();
+        assert_eq!(
+            host.native("IsTriggerEnabled", std::slice::from_ref(&trigger))
+                .unwrap(),
+            Value::Bool(true)
+        );
+        let bounds = host.objects().rectangle_bounds(rect).unwrap();
+        let target = [(bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0];
+        assert_eq!(
+            host.native(
+                "IssuePointOrder",
+                &[
+                    unit.clone(),
+                    Value::Str("move".into()),
+                    Value::Real(target[0]),
+                    Value::Real(target[1])
+                ]
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        callbacks.push((trigger, unit));
+    }
+    startup
+        .step_clock(256)
+        .expect("post-skip region callbacks must finish");
+    let callbacks = callbacks
+        .into_iter()
+        .map(|(trigger, unit)| {
+            let enabled = startup
+                .session
+                .host()
+                .unwrap()
+                .native("IsTriggerEnabled", &[trigger])
+                .unwrap();
+            eprintln!("FOOTMAN callback for {unit:?}: enabled={enabled:?}");
+            enabled
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        callbacks.contains(&Value::Bool(false)),
+        "a real footman EnterRect callback must have run"
+    );
 }
 
 /// Observes the unchanged opening, without injecting control, pause, alliances or orders.

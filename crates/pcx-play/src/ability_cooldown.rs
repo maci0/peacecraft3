@@ -50,7 +50,7 @@ impl ObjectHost {
             [Value::Handle(unit)] => *unit,
             _ => return Err(self.inner.error(name, Failure::Signature)),
         };
-        if matches!(self.inner.entry(unit)?, Entry::RemovedUnit) {
+        if matches!(self.inner.entry(unit)?, Entry::RemovedUnit { .. }) {
             return Ok(Value::Null);
         }
         self.created_unit(unit, name)?;
@@ -80,7 +80,7 @@ impl ObjectHost {
             Value::Handle(unit) => *unit,
             _ => return Err(fail("unit identity required")),
         };
-        if matches!(self.inner.entry(unit)?, Entry::RemovedUnit) {
+        if matches!(self.inner.entry(unit)?, Entry::RemovedUnit { .. }) {
             return Ok(absent);
         }
         let ability = ability.to_be_bytes();
@@ -232,7 +232,7 @@ impl ObjectHost {
             Value::Handle(unit) => *unit,
             _ => return Err(fail("unit identity required")),
         };
-        if matches!(self.inner.entry(unit)?, Entry::RemovedUnit) {
+        if matches!(self.inner.entry(unit)?, Entry::RemovedUnit { .. }) {
             return Ok(absent);
         }
         let ability = ability.to_be_bytes();

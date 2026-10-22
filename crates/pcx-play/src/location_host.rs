@@ -110,23 +110,40 @@ impl ObjectHost {
                     .map(Value::Handle);
             }
             if name == "GetUnitLoc" {
-                let [Value::Handle(unit)] = args else {
-                    return Err(self.inner.error(name, Failure::Signature));
+                let unit = match args {
+                    [Value::Null] => return Ok(Value::Null),
+                    [Value::Handle(unit)] => *unit,
+                    _ => return Err(self.inner.error(name, Failure::Signature)),
                 };
-                let point = self
-                    .executed_unit(*unit)
+                let point = match self
+                    .inner
+                    .entry(unit)
                     .map_err(|e| self.inner.error(name, e.failure))?
-                    .position
-                    .ok_or_else(|| {
+                {
+                    Entry::Unit { record } => record.position.ok_or_else(|| {
                         self.inner.error(
                             name,
                             Failure::UnitActivity("accepted unit position required".into()),
                         )
-                    })?;
+                    })?,
+                    // The original retains the location through synchronous removal.
+                    // Retiring it on clock advance models the observed deferred boundary.
+                    Entry::RemovedUnit {
+                        location: Some((at, point)),
+                    } if self.timer_game_time() == Some(*at) => *point,
+                    Entry::RemovedUnit { .. } => return Ok(Value::Null),
+                    _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+                };
                 return self
                     .inner
                     .allocate(Entry::Location { point: Some(point) }, name)
                     .map(Value::Handle);
+            }
+            if matches!(args, [Value::Null]) && matches!(name, "GetLocationX" | "GetLocationY") {
+                return Ok(Value::Real(0.0));
+            }
+            if name == "RemoveLocation" && matches!(args, [Value::Null]) {
+                return Ok(Value::Null);
             }
             let point = match args {
                 [_, Value::Real(x), Value::Real(y)] if name == "MoveLocation" => {
@@ -135,6 +152,9 @@ impl ObjectHost {
                 [_] if name != "MoveLocation" => None,
                 _ => return Err(self.inner.error(name, Failure::Signature)),
             };
+            if name == "MoveLocation" && args[0] == Value::Null {
+                return Ok(Value::Null);
+            }
             let old = self.location_point(&args[0], name)?;
             if matches!(name, "GetLocationX" | "GetLocationY") {
                 return Ok(Value::Real(old[usize::from(name == "GetLocationY")]));

@@ -615,7 +615,7 @@ impl ObjectHost {
         };
         // A removed unit fails the handle gate of the native wrapper, so it reads zero.
         // Dead units pass that gate, and their combat state is not consulted here.
-        if matches!(self.inner.entry(unit)?, Entry::RemovedUnit) {
+        if matches!(self.inner.entry(unit)?, Entry::RemovedUnit { .. }) {
             return Ok(Value::Int(0));
         }
         let record = self.created_unit(unit, name)?;
