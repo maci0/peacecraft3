@@ -7,12 +7,17 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   selected Human01 preparation gate passes, including recipe identity and later
   launcher-change isolation. Human02 now passes the absent-research and held
   mana-regeneration paths, and the `prvt` / `AIlf` (`AIml`) held maximum-life
-  passive passes the selected continuation, which now refuses the intelligence
-  effect on `ckng`. Private checks pass 1342 core and 606 app tests, strict
-  Clippy, WASM and formatting. Pool-clamp review corrections and held INT are
-  still in progress. The continuation remains private; full chapter
+  passive and the held intelligence effect on `ckng` pass the selected
+  continuation. It now refuses an unsupported effective `GetPlayerState`
+  query in `AdjustPlayerStateSimpleBJ` (`Blizzard.j:7644`). Private checks pass
+  1361 core and 606 app tests, strict native/WASM Clippy and formatting.
+  Pool-clamp corrections and ignored maximum-state writes are integrated.
+  A controlled native `Ilif` override exposes a W3A Data-pointer correction
+  still in progress; same-map native cache restore also returns full life
+  in the sampled case, unlike the current saved-pool recreation policy.
+  The continuation remains private; full chapter
   completion, Windows snapshot runtime and native passive composition remain
-  unqualified. Receipts: `.scratch/campaign-continuation/max-life-*.log`.
+  unqualified. Receipts: `.scratch/campaign-continuation/intelligence-*.log`.
 
 - [x] Bind headless session admission to actual selected catalog/Misc contents.
   The readiness receipt keys every admitted catalog table/profile and the three
