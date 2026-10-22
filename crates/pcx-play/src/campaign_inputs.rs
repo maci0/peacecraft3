@@ -35,16 +35,6 @@ pub fn client_identity(image: &[u8], source: &str) -> AssetIdentity {
 /// Zoom index the application camera also selects for its near clip.
 const GAME_CAMERA_ZOOM: usize = 0;
 
-/// The native profile resolver selects a versioned custom-game table: `Custom_V0`
-/// for Reign of Chaos and `Custom_V1` for The Frozen Throne.
-pub(crate) fn misc_game_member(expansion: bool) -> &'static str {
-    if expansion {
-        "Custom_V1/Units/MiscGame.txt"
-    } else {
-        "Custom_V0/Units/MiscGame.txt"
-    }
-}
-
 /// Fresh single-player policy: the sole authored human slot is the local client.
 /// Explicit seed and selected edition are game inputs, not map-derived defaults.
 #[cfg_attr(
@@ -136,7 +126,7 @@ pub fn prepare_new_game(
     )?);
     let day_cycle = pcx_objects::editor::misc::DayCycle::read(&day_profiles, 8 << 20)?;
     let game_misc = reader
-        .resolve_bounded(misc_game_member(expansion), 4 << 20)
+        .resolve_bounded("Units/MiscGame.txt", 4 << 20)
         .map_err(|e| e.to_string())?;
     let (game_label, _) =
         campaign_assets::identity(&game_misc, &context.sources.map.edition, 16 << 10)?;
@@ -789,18 +779,6 @@ fn holy_light_art(
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn misc_game_member_selects_the_matching_game_version() {
-        assert_eq!(
-            super::misc_game_member(false),
-            "Custom_V0/Units/MiscGame.txt"
-        );
-        assert_eq!(
-            super::misc_game_member(true),
-            "Custom_V1/Units/MiscGame.txt"
-        );
-    }
-
     #[test]
     fn conversion_names_come_from_selected_constants_and_refuse_ambiguity() {
         let common = |extra: &str| {
