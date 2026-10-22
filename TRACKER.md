@@ -14,8 +14,10 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   synchronous state-event path. The combined private checks passed 1389 core
   tests, 606 app tests, strict native/WASM Clippy and formatting including the
   gathered-counter and ranked/inventory Data-pointer imports. The unchanged
-  Continue gate refuses Human01 `LTg1` creation 1823, whose placed flag
-  `0x04` is outside the measured admission set; a controlled probe is pending.
+  Continue gate passes Human01 with 152 executed units and now reaches
+  Human02's unsupported `SetUnitColor` (`Blizzard.j:7757`). Controlled tree
+  and original-gate probes qualify flags 4/7 for script-only admission; the
+  placement correction passes those same private suites.
   Pool-clamp corrections and ignored maximum-state writes are integrated.
   The native-qualified inventory W3A Data-pointer correction and combined-tome
   overflow preflight are integrated privately. Same-map native cache restore
@@ -25,7 +27,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   The continuation remains private; full chapter
   completion, Windows snapshot runtime and native passive composition remain
   unqualified. Receipts: `.scratch/campaign-continuation/intelligence-*.log`
-  and `inventory-review-*.log`, `gathered-pointer-*.log` in that directory.
+  and `inventory-review-*.log`, `gathered-pointer-*.log`,
+  `placed-flag-admission-*.log` in that directory.
 
 - [x] Bind headless session admission to actual selected catalog/Misc contents.
   The readiness receipt keys every admitted catalog table/profile and the three

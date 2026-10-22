@@ -101,13 +101,13 @@ impl Catalog {
             return Ok(PlacedRole::Decoration);
         };
         match instance.flags {
-            0 | 3 => Ok(PlacedRole::ScriptOnly),
+            0 | 3 | 4 | 7 => Ok(PlacedRole::ScriptOnly),
             2 | 6 => Ok(PlacedRole::Automatic(stats)),
             flags => {
                 let name = std::str::from_utf8(&instance.type_id)
                     .map_err(|_| "non-UTF8 placed destructable identity")?;
                 Err(format!(
-                    "{name} creation {}: unqualified placed destructable flags {flags:#04x}; measured 0x00, 0x02, 0x03, 0x06",
+                    "{name} creation {}: unqualified placed destructable flags {flags:#04x}; measured 0x00, 0x02, 0x03, 0x04, 0x06, 0x07",
                     instance.creation_number
                 ))
             }
@@ -861,6 +861,8 @@ mod tests {
             doodad_with(3, *b"LTlt", 3, 100),
             doodad_with(4, *b"LTlt", 6, 100),
             doodad_with(5, *b"LOsm", 0, 100),
+            doodad_with(6, *b"LTlt", 4, 0),
+            doodad_with(7, *b"LTlt", 7, 100),
         ];
         let rows = catalog.placed().unwrap();
         assert_eq!(
@@ -879,7 +881,7 @@ mod tests {
                 .iter()
                 .map(|source| (source.creation_number, source.flags))
                 .collect::<Vec<_>>(),
-            [(1, 0), (3, 3)]
+            [(1, 0), (3, 3), (6, 4), (7, 7)]
         );
         assert!(matches!(
             catalog.role(&catalog.doodads[4]).unwrap(),
@@ -890,7 +892,7 @@ mod tests {
     #[test]
     fn placed_flags_refuse_unmeasured_values_with_source_context() {
         let mut catalog = catalog_with_life("50");
-        for flags in [4, 7, 1] {
+        for flags in [1, 5, 8, u8::MAX] {
             catalog.doodads = vec![doodad_with(37, *b"LTlt", flags, 100)];
             let error = catalog.placed().unwrap_err();
             assert!(

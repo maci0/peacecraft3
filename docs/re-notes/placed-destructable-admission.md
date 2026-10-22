@@ -88,3 +88,29 @@ Raw markers, source receipts and `result.json` remain local under
 reference run is stopped. Destructable death-event delivery in the recreation
 still needs its own implementation and tests; the native receipt does not
 qualify that host path.
+
+## Flags 4 and 7, including the Human01 gate
+
+A third controlled RoC run retains the same four `LTlt` poses and records,
+testing flags 7, 4, 2 and 6. Flags 7 and 4 each enumerate zero preexisting
+objects, then one after script creation. Controls 2 and 6 each enumerate one
+before and two after creation; no script handle equals a preexisting handle.
+All six bounded markers validate. Map SHA-256 is
+`a7941373cc182ba9d367b69bf47d59c9b2ed4926fe7401923ec1aacea1bbe64b`.
+
+An independent RoC run retains the exact Human01 `LTg1` creation 1823 at
+`(2048, 128, 25.25)`, with authored flag 4 and raw life 0. Its selected catalog
+class is debris. With authored creation calls omitted, enumeration at that
+original pose finds zero destructables. All three bounded markers validate.
+The original script separately calls `CreateDeadDestructableZ` for this gate.
+Diagnostic map SHA-256 is
+`6f4a31ce5ca9af6845a28def309215e91a09cd31c358892e1dd4cfa0dd196e96`;
+the retained record SHA-256 is
+`7d4883dc8e4ccd20821368a84925d2d3d35b6c18db8011177eddf0d2cfc92b26`.
+
+The recreation consequently leaves flags 4 and 7 to script creation alongside
+0 and 3, and keeps automatic admission for 2 and 6. This extends the measured
+set rather than asserting a universal mask. Other flag values still refuse.
+Both runs use the reviewed image above. Receipts and raw markers remain local
+under `.scratch/placed-tree-flags-probe/r3/` in the main checkout. Enumeration
+absence does not qualify rendered visibility, pathing or hidden native state.
