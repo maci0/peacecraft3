@@ -76,6 +76,13 @@ Bevy `Overflow::scroll_y`/`MouseWheel` input pattern used by the settings lists 
 keeping the focused row in view. This viewport is a labelled recreation geometry,
 and no scrollbar art or asset values are invented.
 
+After a panel rebuild the keyboard focus is re-anchored into the menu's modal tab
+group (the `TabNavigationPlugin` only cycles within a modal group when the current
+focus is already a member, and a rebuild despawns the clicked row). The re-anchor
+preserves a still-valid focus already inside the panel, otherwise focuses the
+first enabled row — preferring a mission row when a campaign is selected — so Tab
+can reach the deep mission rows.
+
 ## Open fidelity questions
 
 - Difficulty: the `DifficultySelect` popup has no authored `MenuItem` choice in
