@@ -124,6 +124,25 @@ uses the ordinary repricing path. Pending orders, pause, animation phase,
 spell/item cooldowns and queued events are not copied into a new chapter.
 Regeneration starts on the receiving host's clock.
 
+### Open passive-source interaction
+
+The current recreation stores already-boosted pools alongside held item
+rawcodes, charges and flags, but no identity for the passive contribution.
+Restoration resolves those item definitions against the receiving map and
+publishes the saved pools unchanged. A receiving map can validly override the
+same item's `Ilif` amount: an old pool containing one amount can then be
+repriced on drop using a different amount. Client/install/edition checks do
+not discriminate per-map ability overrides.
+
+This is a code-path consistency gap, not a measured native cache policy.
+The correction must establish how the original restores current pools and
+current-map item effects before choosing whether to rederive pools or retain
+more saved state. A blanket refusal of changed maps would not establish the
+required cross-map behavior. A controlled comparison needs both a same-map
+restore and a second map with a typed override of the held item's amount,
+using the same persisted native cache. No original W3V bytes are part of the
+recreation's private profile format.
+
 Pool preservation, explicit item-flag preservation, omission of transient state
 and the no-pickup-event path are recreation choices still requiring an original
 client comparison. The native cached inventory loop observed here covers six
